@@ -322,4 +322,28 @@ void main() {
       expect(bom.first.totalLength.meters, closeTo(5.000, 1e-9));
     });
   });
+
+  group('bomToCsv', () {
+    test('header + one row per line, lengths to 2 dp', () {
+      final bom = buildBom(
+        net: _net,
+        sizing: _sizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      final csv = bomToCsv(bom);
+      final lines = csv.trim().split('\n');
+      expect(lines.first, 'service,kind,nominal_dn_mm,length_m,segments');
+      expect(lines.length, bom.length + 1);
+      // run line: coldWater,run,25,8.75,2
+      expect(lines, contains('coldWater,run,25,8.75,2'));
+      // riser line: coldWater,riser,50,3.50,1
+      expect(lines, contains('coldWater,riser,50,3.50,1'));
+    });
+
+    test('empty bom → header only', () {
+      expect(bomToCsv(const []).trim(),
+          'service,kind,nominal_dn_mm,length_m,segments');
+    });
+  });
 }

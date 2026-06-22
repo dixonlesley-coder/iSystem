@@ -106,3 +106,23 @@ Length totalLengthForService(List<BomLine> bom, ServiceType service) {
   }
   return Length(meters);
 }
+
+/// Render [bom] as CSV (one header row + one row per line). Lengths are in
+/// metres to two decimals. Pure — the app handles the file IO.
+String bomToCsv(List<BomLine> bom) {
+  final buffer = StringBuffer('service,kind,nominal_dn_mm,length_m,segments\n');
+  for (final line in bom) {
+    buffer
+      ..write(line.service.name)
+      ..write(',')
+      ..write(line.kind.name)
+      ..write(',')
+      ..write(line.diameterMm)
+      ..write(',')
+      ..write(line.totalLength.meters.toStringAsFixed(2))
+      ..write(',')
+      ..write(line.segmentCount)
+      ..write('\n');
+  }
+  return buffer.toString();
+}

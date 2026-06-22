@@ -1,6 +1,10 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -478,8 +482,39 @@ class _ResultsSection extends ConsumerWidget {
         ],
         _kv(context, 'Pressure zones', '${zones.length}'),
         _kv(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
+        if (bom.isNotEmpty) ...[
+          const SizedBox(height: MechXSpacing.xs),
+          for (final line in bom)
+            _kv(
+              context,
+              '${line.diameterMm}${line.service.regime == FlowRegime.air ? ' Ø' : ' DN'}'
+                  ' · ${serviceLabel(line.service)}'
+                  ' ${line.kind == EdgeKind.riser ? 'riser' : 'run'}',
+              '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
+            ),
+          const SizedBox(height: MechXSpacing.sm),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MechXButton(
+              label: 'Export BOM (CSV)',
+              onPressed: () => _exportBom(bom),
+            ),
+          ),
+        ],
       ],
     );
+  }
+
+  Future<void> _exportBom(List<BomLine> bom) async {
+    final path = await FilePicker.saveFile(
+      dialogTitle: 'Export bill of materials',
+      fileName: 'mechx-bom.csv',
+      type: FileType.custom,
+      allowedExtensions: const ['csv'],
+    );
+    if (path == null) return;
+    final full = path.endsWith('.csv') ? path : '$path.csv';
+    await File(full).writeAsString(bomToCsv(bom));
   }
 
   Widget _kv(BuildContext context, String key, String value) {
