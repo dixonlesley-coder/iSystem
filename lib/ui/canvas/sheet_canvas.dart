@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -5,6 +6,7 @@ import '../../store/calibration_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
+import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/solve_store.dart';
 import '../theme/design_tokens.dart';
@@ -62,7 +64,10 @@ class SheetCanvas extends ConsumerWidget {
     final floorIndex =
         state.currentIndex < levelCount ? state.currentIndex : levelCount - 1;
 
-    return Stack(
+    return Focus(
+      canRequestFocus: false,
+      onKeyEvent: (_, event) => _onKey(ref, event),
+      child: Stack(
       children: [
         Positioned.fill(
           child: CanvasView(
@@ -115,7 +120,46 @@ class SheetCanvas extends ConsumerWidget {
             child: Center(child: _CalibrateHint()),
           ),
       ],
+      ),
     );
+  }
+
+  /// Delete removes the current selection; Escape cancels a pending action or
+  /// clears the selection. Bubbled up from the focused canvas (which ignores
+  /// these keys). Text fields live outside this subtree, so editing is safe.
+  KeyEventResult _onKey(WidgetRef ref, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+
+    if (key == LogicalKeyboardKey.delete ||
+        key == LogicalKeyboardKey.backspace) {
+      final sel = ref.read(selectionProvider);
+      if (sel.isEmpty) return KeyEventResult.ignored;
+      final net = ref.read(networkControllerProvider.notifier);
+      if (sel.isNode) {
+        net.deleteNode(sel.nodeId!);
+      } else if (sel.isEdge) {
+        net.deleteEdge(sel.edgeId!);
+      }
+      ref.read(selectionProvider.notifier).clear();
+      return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.escape) {
+      if (ref.read(calibrationControllerProvider).isActive) {
+        ref.read(calibrationControllerProvider.notifier).cancel();
+        return KeyEventResult.handled;
+      }
+      if (ref.read(networkControllerProvider).pendingPoint != null) {
+        ref.read(networkControllerProvider.notifier).cancelPending();
+        return KeyEventResult.handled;
+      }
+      if (!ref.read(selectionProvider).isEmpty) {
+        ref.read(selectionProvider.notifier).clear();
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
   }
 }
 

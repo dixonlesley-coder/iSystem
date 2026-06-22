@@ -19,6 +19,18 @@ import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_text_field.dart';
 
+/// All services offered in the draw palette / edge editor, in a sensible order.
+const List<ServiceType> kDrawServices = [
+  ServiceType.coldWater,
+  ServiceType.hotWater,
+  ServiceType.drainage,
+  ServiceType.vent,
+  ServiceType.rainwater,
+  ServiceType.duct,
+  ServiceType.fireSprinkler,
+  ServiceType.fireHydrant,
+];
+
 /// Right inspector: project details, per-floor heights (the vertical
 /// length source of truth, §10), and the per-sheet scale-calibration status.
 class ProjectPanel extends ConsumerWidget {
@@ -283,14 +295,6 @@ class _GlyphButtonState extends State<_GlyphButton> {
 class _DrawSection extends ConsumerWidget {
   const _DrawSection();
 
-  static const List<ServiceType> _services = [
-    ServiceType.coldWater,
-    ServiceType.hotWater,
-    ServiceType.drainage,
-    ServiceType.vent,
-    ServiceType.duct,
-  ];
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final drawing = ref.watch(networkControllerProvider);
@@ -321,7 +325,7 @@ class _DrawSection extends ConsumerWidget {
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
           children: [
-            for (final s in _services)
+            for (final s in kDrawServices)
               _ServiceChip(
                 service: s,
                 selected: drawing.service == s,
@@ -633,14 +637,6 @@ String fixtureLabel(PlumbingFixture f) => switch (f) {
 class _SelectionSection extends ConsumerWidget {
   const _SelectionSection();
 
-  static const List<ServiceType> _services = [
-    ServiceType.coldWater,
-    ServiceType.hotWater,
-    ServiceType.drainage,
-    ServiceType.vent,
-    ServiceType.duct,
-  ];
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final selection = ref.watch(selectionProvider);
@@ -770,7 +766,7 @@ class _SelectionSection extends ConsumerWidget {
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
           children: [
-            for (final s in _services)
+            for (final s in kDrawServices)
               _ServiceChip(
                 service: s,
                 selected: edge.service == s,
