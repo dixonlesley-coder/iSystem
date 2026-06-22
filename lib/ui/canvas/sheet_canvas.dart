@@ -6,10 +6,12 @@ import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../../store/solve_store.dart';
 import '../theme/mechx_theme.dart';
 import 'calibration_overlay.dart';
 import 'canvas_view.dart';
 import 'drawing_overlay.dart';
+import 'heatmap_layer.dart';
 import 'network_layer.dart';
 
 /// Builds the content widget for a sheet. This is the seam where pdfrx (PDFium)
@@ -49,6 +51,7 @@ class SheetCanvas extends ConsumerWidget {
     final content = ref.watch(sheetContentBuilderProvider)(context, sheet);
     final calibrating = ref.watch(calibrationControllerProvider).isActive;
     final drawing = ref.watch(networkControllerProvider).isDrawing;
+    final showHeatmap = ref.watch(showHeatmapProvider);
 
     // Map the current sheet to a building floor (positional default for now).
     final levelCount = ref.watch(projectControllerProvider).building.levelCount;
@@ -68,6 +71,14 @@ class SheetCanvas extends ConsumerWidget {
               .setViewport(sheet.id, vt),
           child: content,
         ),
+        if (showHeatmap)
+          Positioned.fill(
+            child: HeatmapLayer(
+              sheetId: sheet.id,
+              floorIndex: floorIndex,
+              contentSize: sheet.sizePx,
+            ),
+          ),
         Positioned.fill(
           child: NetworkLayer(sheetId: sheet.id, floorIndex: floorIndex),
         ),

@@ -8,6 +8,7 @@ import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
+import '../../store/solve_store.dart';
 import '../canvas/service_style.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -86,6 +87,10 @@ class ProjectPanel extends ConsumerWidget {
 
               // ── Sizing ────────────────────────────────────────────────────
               const _SizingSection(),
+              const SizedBox(height: MechXSpacing.lg),
+
+              // ── Network results ───────────────────────────────────────────
+              const _ResultsSection(),
               const SizedBox(height: MechXSpacing.lg),
 
               // ── Scale calibration ─────────────────────────────────────────
@@ -364,6 +369,60 @@ class _SizingSection extends ConsumerWidget {
           style: type.caption.copyWith(color: colors.textMuted),
         ),
       ],
+    );
+  }
+}
+
+class _ResultsSection extends ConsumerWidget {
+  const _ResultsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final show = ref.watch(showHeatmapProvider);
+    final solution = ref.watch(solveProvider);
+    final pump = ref.watch(pumpDutyProvider);
+    final zones = ref.watch(zonesProvider);
+    final bom = ref.watch(bomProvider);
+    final totalLength =
+        bom.fold<double>(0, (sum, line) => sum + line.totalLength.meters);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _SectionLabel('Network'),
+        const SizedBox(height: MechXSpacing.sm),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: MechXButton(
+            label: show ? 'Hide heatmap' : 'Show heatmap',
+            primary: show,
+            onPressed: () => ref.read(showHeatmapProvider.notifier).toggle(),
+          ),
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        _kv(context, 'Pump head',
+            solution == null ? '—' : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m'),
+        _kv(context, 'Motor',
+            pump == null ? '—' : '${pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
+        _kv(context, 'Pressure zones', '${zones.length}'),
+        _kv(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
+      ],
+    );
+  }
+
+  Widget _kv(BuildContext context, String key, String value) {
+    final colors = context.colors;
+    final type = context.type;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(key, style: type.caption.copyWith(color: colors.textMuted)),
+          ),
+          Text(value, style: type.mono.copyWith(color: colors.textSecondary)),
+        ],
+      ),
     );
   }
 }
