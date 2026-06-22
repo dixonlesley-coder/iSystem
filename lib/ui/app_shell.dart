@@ -1,9 +1,14 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/pdf_import.dart';
+import '../data/project_document.dart';
 import '../store/app_state.dart';
+import '../store/network_store.dart';
+import '../store/project_store.dart';
 import '../store/sheets_store.dart';
 import 'canvas/sheet_canvas.dart';
 import 'inspector/project_panel.dart';
@@ -78,6 +83,48 @@ class _TopBar extends ConsumerWidget {
     }
   }
 
+  Future<void> _saveProject(WidgetRef ref) async {
+    final project = ref.read(projectControllerProvider);
+    final doc = ProjectDocument(
+      projectName: project.name,
+      floors: project.floors,
+      calibrations: project.calibrations,
+      sheets: ref.read(sheetsControllerProvider).sheets,
+      network: ref.read(networkControllerProvider).network,
+    );
+    final path = await FilePicker.saveFile(
+      dialogTitle: 'Save MechX project',
+      fileName: '${project.name}.mechx',
+      type: FileType.custom,
+      allowedExtensions: const ['mechx'],
+    );
+    if (path == null) return;
+    final full = path.endsWith('.mechx') ? path : '$path.mechx';
+    await File(full).writeAsString(doc.encode());
+  }
+
+  Future<void> _openProject(WidgetRef ref) async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['mechx', 'json'],
+      allowMultiple: false,
+    );
+    final path = result?.files.single.path;
+    if (path == null) return;
+    try {
+      final doc = ProjectDocument.decode(await File(path).readAsString());
+      ref.read(projectControllerProvider.notifier).load(
+            name: doc.projectName,
+            floors: doc.floors,
+            calibrations: doc.calibrations,
+          );
+      ref.read(sheetsControllerProvider.notifier).loadSheets(doc.sheets);
+      ref.read(networkControllerProvider.notifier).loadNetwork(doc.network);
+    } catch (_) {
+      // Malformed file — leave the current project untouched.
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
@@ -85,6 +132,7 @@ class _TopBar extends ConsumerWidget {
     final state = ref.watch(sheetsControllerProvider);
     final brightness = ref.watch(brightnessProvider);
     final showSchematic = ref.watch(showSchematicProvider);
+    final projectName = ref.watch(projectControllerProvider).name;
 
     final current = state.current;
     final vt = current == null ? null : state.viewportFor(current.id);
@@ -101,11 +149,16 @@ class _TopBar extends ConsumerWidget {
           children: [
             Text('MechX', style: type.title.copyWith(color: colors.textPrimary)),
             const SizedBox(width: MechXSpacing.sm),
-            Text(
-              'Untitled project',
-              style: type.body.copyWith(color: colors.textMuted),
+            Flexible(
+              child: Text(
+                projectName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: type.body.copyWith(color: colors.textMuted),
+              ),
             ),
             const Spacer(),
+            // Actions sit flush-right.
             Container(
               padding: const EdgeInsets.symmetric(
                 horizontal: MechXSpacing.sm,
@@ -123,7 +176,17 @@ class _TopBar extends ConsumerWidget {
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
-              label: 'Open PDF…',
+              label: 'Open',
+              onPressed: () => _openProject(ref),
+            ),
+            const SizedBox(width: MechXSpacing.xs),
+            MechXButton(
+              label: 'Save',
+              onPressed: () => _saveProject(ref),
+            ),
+            const SizedBox(width: MechXSpacing.sm),
+            MechXButton(
+              label: 'Import PDF',
               onPressed: () => _pickAndLoadPdf(ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
@@ -136,7 +199,8 @@ class _TopBar extends ConsumerWidget {
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
               label: brightness == Brightness.dark ? 'Dark' : 'Light',
-              onPressed: () => ref.read(brightnessProvider.notifier).toggle(),
+              onPressed: () =>
+                  ref.read(brightnessProvider.notifier).toggle(),
             ),
           ],
         ),

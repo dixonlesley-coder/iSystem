@@ -4,6 +4,8 @@ import 'package:mechx/app.dart';
 import 'package:mechx/store/calibration_store.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'test_util.dart';
+
 void main() {
   group('CalibrationController', () {
     ProviderContainer makeContainer() {
@@ -61,6 +63,7 @@ void main() {
 
   testWidgets('calibrate tool: button → overlay → two taps → distance card',
       (tester) async {
+    setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump(); // first-layout fit
 

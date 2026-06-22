@@ -4,6 +4,8 @@ import 'package:mechx/app.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx_engine/network/network.dart';
 
+import 'test_util.dart';
+
 void main() {
   group('NetworkController', () {
     ProviderContainer makeContainer() {
@@ -110,6 +112,7 @@ void main() {
 
   testWidgets('draw palette renders; Run tool activates without error',
       (tester) async {
+    setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 

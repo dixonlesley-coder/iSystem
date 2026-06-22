@@ -2,8 +2,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 
+import 'test_util.dart';
+
 void main() {
   testWidgets('boots into the shell and lists the demo sheets', (tester) async {
+    setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
@@ -17,6 +20,7 @@ void main() {
   });
 
   testWidgets('clicking a sheet in the rail switches the canvas', (tester) async {
+    setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
@@ -28,6 +32,7 @@ void main() {
   });
 
   testWidgets('top bar shows a zoom percentage after the canvas fits', (tester) async {
+    setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump(); // run the post-frame fit
     await tester.pump(); // rebuild with the emitted transform

@@ -2,9 +2,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 
+import 'test_util.dart';
+
 void main() {
   testWidgets('project panel shows sections, floors, and adds a level',
       (tester) async {
+    setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
@@ -23,6 +26,7 @@ void main() {
   });
 
   testWidgets('uncalibrated sheet shows a calibration prompt', (tester) async {
+    setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
     expect(find.textContaining('Not calibrated'), findsOneWidget);

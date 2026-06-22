@@ -51,6 +51,19 @@ class ProjectController extends Notifier<ProjectState> {
 
   void setName(String name) => state = state.copyWith(name: name);
 
+  /// Replace the whole project (used when opening a saved document).
+  void load({
+    required String name,
+    required List<Floor> floors,
+    required Map<String, ScaleCalibration> calibrations,
+  }) {
+    state = ProjectState(
+      name: name,
+      floors: floors.isEmpty ? state.floors : floors,
+      calibrations: calibrations,
+    );
+  }
+
   void addFloor() {
     final next = Floor('Level ${state.floors.length}', const Length(3.5));
     state = state.copyWith(floors: [...state.floors, next]);

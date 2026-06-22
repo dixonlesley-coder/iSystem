@@ -191,6 +191,27 @@ class NetworkController extends Notifier<DrawingState> {
     if (state.network.nodes.isEmpty && state.network.edges.isEmpty) return;
     _commit(const Network());
   }
+
+  /// Replace the network (used when opening a saved document). Resets history
+  /// and advances the id counter past any loaded ids to avoid collisions.
+  void loadNetwork(Network net) {
+    _undo.clear();
+    _redo.clear();
+    _seq = _maxLoadedSeq(net) + 1;
+    state = DrawingState(network: net, service: state.service);
+  }
+
+  int _maxLoadedSeq(Network net) {
+    var max = -1;
+    for (final id in [
+      ...net.nodes.map((n) => n.id),
+      ...net.edges.map((e) => e.id),
+    ]) {
+      final value = int.tryParse(id.replaceAll(RegExp(r'[^0-9]'), ''));
+      if (value != null && value > max) max = value;
+    }
+    return max;
+  }
 }
 
 final networkControllerProvider =
