@@ -136,18 +136,21 @@ class MechXTypography {
     required this.mono,
   });
 
+  static const String fontFamily = 'Roboto';
+  static const String monoFamily = 'Roboto Mono';
+
   static const MechXTypography standard = MechXTypography(
-    display: TextStyle(fontSize: 26, height: 1.2, fontWeight: FontWeight.w600, letterSpacing: -0.2),
-    title: TextStyle(fontSize: 18, height: 1.25, fontWeight: FontWeight.w600, letterSpacing: -0.1),
-    subtitle: TextStyle(fontSize: 15, height: 1.3, fontWeight: FontWeight.w600),
-    body: TextStyle(fontSize: 14, height: 1.4, fontWeight: FontWeight.w400),
-    label: TextStyle(fontSize: 12.5, height: 1.3, fontWeight: FontWeight.w500, letterSpacing: 0.1),
-    caption: TextStyle(fontSize: 11.5, height: 1.3, fontWeight: FontWeight.w400, letterSpacing: 0.2),
+    display: TextStyle(fontFamily: fontFamily, fontSize: 26, height: 1.2, fontWeight: FontWeight.w600, letterSpacing: -0.2),
+    title: TextStyle(fontFamily: fontFamily, fontSize: 18, height: 1.25, fontWeight: FontWeight.w600, letterSpacing: -0.1),
+    subtitle: TextStyle(fontFamily: fontFamily, fontSize: 15, height: 1.3, fontWeight: FontWeight.w600),
+    body: TextStyle(fontFamily: fontFamily, fontSize: 14, height: 1.4, fontWeight: FontWeight.w400),
+    label: TextStyle(fontFamily: fontFamily, fontSize: 12.5, height: 1.3, fontWeight: FontWeight.w500, letterSpacing: 0.1),
+    caption: TextStyle(fontFamily: fontFamily, fontSize: 11.5, height: 1.3, fontWeight: FontWeight.w400, letterSpacing: 0.2),
     mono: TextStyle(
+      fontFamily: monoFamily,
       fontSize: 13,
       height: 1.3,
       fontWeight: FontWeight.w500,
-      fontFamilyFallback: ['Consolas', 'Menlo', 'monospace'],
       fontFeatures: [FontFeature.tabularFigures()],
     ),
   );

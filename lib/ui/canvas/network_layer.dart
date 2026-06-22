@@ -147,6 +147,7 @@ class _NetworkPainter extends CustomPainter {
       text: TextSpan(
         text: text,
         style: const TextStyle(
+          fontFamily: 'Roboto',
           fontSize: 10.5,
           color: Color(0xFFFFFFFF),
           fontWeight: FontWeight.w600,

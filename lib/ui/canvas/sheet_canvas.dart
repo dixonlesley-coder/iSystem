@@ -60,16 +60,18 @@ class SheetCanvas extends ConsumerWidget {
 
     return Stack(
       children: [
-        CanvasView(
-          // Fresh CanvasView per sheet, seeded from that sheet's stored viewport.
-          key: ValueKey(sheet.id),
-          contentSize: sheet.sizePx,
-          initialTransform: state.viewportFor(sheet.id),
-          background: colors.canvas,
-          onTransformChanged: (vt) => ref
-              .read(sheetsControllerProvider.notifier)
-              .setViewport(sheet.id, vt),
-          child: content,
+        Positioned.fill(
+          child: CanvasView(
+            // Fresh CanvasView per sheet, seeded from its stored viewport.
+            key: ValueKey(sheet.id),
+            contentSize: sheet.sizePx,
+            initialTransform: state.viewportFor(sheet.id),
+            background: colors.canvas,
+            onTransformChanged: (vt) => ref
+                .read(sheetsControllerProvider.notifier)
+                .setViewport(sheet.id, vt),
+            child: content,
+          ),
         ),
         if (showHeatmap)
           Positioned.fill(
@@ -124,6 +126,7 @@ class PlaceholderSheetPage extends StatelessWidget {
             Text(
               sheet.name,
               style: const TextStyle(
+                fontFamily: 'Roboto',
                 fontSize: 40,
                 height: 1.2,
                 fontWeight: FontWeight.w600,
@@ -135,7 +138,7 @@ class PlaceholderSheetPage extends StatelessWidget {
             Text(
               '${sheet.sizePx.width.round()} × ${sheet.sizePx.height.round()} px'
               '   ·   PDF import in P1',
-              style: const TextStyle(fontSize: 18, color: _ink),
+              style: const TextStyle(fontFamily: 'Roboto', fontSize: 18, color: _ink),
             ),
           ],
         ),

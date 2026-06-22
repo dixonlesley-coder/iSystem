@@ -200,17 +200,29 @@ class _CanvasViewState extends State<CanvasView> {
               _viewportSize = constraints.biggest;
               _maybeFitOnFirstLayout();
               final vt = _current;
-              return ClipRect(
-                child: ColoredBox(
-                  color: widget.background,
-                  child: Transform.translate(
-                    offset: vt.offset,
-                    child: Transform.scale(
-                      scale: vt.scale,
-                      alignment: Alignment.topLeft,
-                      child: SizedBox.fromSize(
-                        size: widget.contentSize,
-                        child: RepaintBoundary(child: widget.child),
+              return SizedBox.expand(
+                child: ClipRect(
+                  child: ColoredBox(
+                    color: widget.background,
+                    child: Transform.translate(
+                      offset: vt.offset,
+                      child: Transform.scale(
+                        scale: vt.scale,
+                        alignment: Alignment.topLeft,
+                        // OverflowBox lets the content take its true pixel size
+                        // (rather than being clamped to the viewport) so it
+                        // scales 1:1 with the world-space overlays.
+                        child: OverflowBox(
+                          alignment: Alignment.topLeft,
+                          minWidth: 0,
+                          maxWidth: double.infinity,
+                          minHeight: 0,
+                          maxHeight: double.infinity,
+                          child: SizedBox.fromSize(
+                            size: widget.contentSize,
+                            child: RepaintBoundary(child: widget.child),
+                          ),
+                        ),
                       ),
                     ),
                   ),

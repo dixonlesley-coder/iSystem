@@ -238,6 +238,6 @@ class _StatusBar extends ConsumerWidget {
 
   Widget _dot(Color color) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.sm),
-        child: Text('·', style: TextStyle(color: color)),
+        child: Text('·', style: TextStyle(fontFamily: 'Roboto', color: color)),
       );
 }

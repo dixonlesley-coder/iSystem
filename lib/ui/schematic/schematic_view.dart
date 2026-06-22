@@ -345,6 +345,7 @@ class _SchematicPainter extends CustomPainter {
       text: TextSpan(
         text: text,
         style: TextStyle(
+          fontFamily: 'Roboto',
           fontSize: fontSize,
           color: color,
           fontWeight: fontWeight,

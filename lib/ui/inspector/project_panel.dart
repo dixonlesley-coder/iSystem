@@ -266,7 +266,7 @@ class _GlyphButtonState extends State<_GlyphButton> {
           ),
           child: Text(
             widget.glyph,
-            style: TextStyle(fontSize: 16, height: 1.0, color: fg),
+            style: TextStyle(fontFamily: 'Roboto', fontSize: 16, height: 1.0, color: fg),
           ),
         ),
       ),

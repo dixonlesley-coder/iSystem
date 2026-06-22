@@ -60,6 +60,7 @@ class _ErrorPage extends StatelessWidget {
           child: Text(
             message,
             style: const TextStyle(
+              fontFamily: 'Roboto',
               fontSize: 14,
               color: Color(0xFFB00020),
             ),
