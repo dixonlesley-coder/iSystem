@@ -436,6 +436,7 @@ class _ResultsSection extends ConsumerWidget {
     final zones = ref.watch(zonesProvider);
     final zoneStatics = ref.watch(zoneStaticsProvider);
     final bom = ref.watch(bomProvider);
+    final fittings = ref.watch(fittingsProvider);
     final worstZone = zoneStatics.isEmpty
         ? 0.0
         : zoneStatics
@@ -515,12 +516,15 @@ class _ResultsSection extends ConsumerWidget {
                   ' ${line.kind == EdgeKind.riser ? 'riser' : 'run'}',
               '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
             ),
+          if (fittings.isNotEmpty)
+            _kv(context, 'Fittings (est.)',
+                '${fittings.fold<int>(0, (s, f) => s + f.count)}'),
           const SizedBox(height: MechXSpacing.sm),
           Align(
             alignment: Alignment.centerLeft,
             child: MechXButton(
               label: 'Export BOM (CSV)',
-              onPressed: () => _exportBom(bom),
+              onPressed: () => _exportBom(bom, fittings),
             ),
           ),
         ],
@@ -528,7 +532,8 @@ class _ResultsSection extends ConsumerWidget {
     );
   }
 
-  Future<void> _exportBom(List<BomLine> bom) async {
+  Future<void> _exportBom(
+      List<BomLine> bom, List<FittingLine> fittings) async {
     final path = await FilePicker.saveFile(
       dialogTitle: 'Export bill of materials',
       fileName: 'mechx-bom.csv',
@@ -537,7 +542,13 @@ class _ResultsSection extends ConsumerWidget {
     );
     if (path == null) return;
     final full = path.endsWith('.csv') ? path : '$path.csv';
-    await File(full).writeAsString(bomToCsv(bom));
+    final csv = StringBuffer()
+      ..writeln('# Pipe / duct')
+      ..write(bomToCsv(bom))
+      ..writeln()
+      ..writeln('# Fittings (estimated)')
+      ..write(fittingsToCsv(fittings));
+    await File(full).writeAsString(csv.toString());
   }
 
   Widget _kv(BuildContext context, String key, String value) {

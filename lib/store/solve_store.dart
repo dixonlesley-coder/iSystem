@@ -291,6 +291,14 @@ final bomProvider = Provider<List<BomLine>>((ref) {
   );
 });
 
+/// Estimated fittings (elbows/tees/crosses/reducers) for the sized network.
+final fittingsProvider = Provider<List<FittingLine>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final sizing = ref.watch(sizingProvider);
+  if (sizing.isEmpty) return const [];
+  return buildFittings(net: net, sizing: sizing);
+});
+
 /// Whether to overlay the pressure heatmap on the canvas.
 final showHeatmapProvider =
     NotifierProvider<ShowHeatmapController, bool>(ShowHeatmapController.new);

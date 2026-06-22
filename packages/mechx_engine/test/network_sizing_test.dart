@@ -150,6 +150,35 @@ void main() {
     });
   });
 
+  test('autoSizeNetwork sizes drainage by accumulated DFU (branch vs stack)',
+      () {
+    // src --t(run/branch)-- h --b1/b2 (branches to two fixtures), and a riser.
+    const net = Network(
+      nodes: [
+        NetNode(id: 's', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'h', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+        NetNode(id: 'f1', sheetId: 's1', x: 200, y: -20, floorIndex: 0),
+        NetNode(id: 'f2', sheetId: 's1', x: 200, y: 20, floorIndex: 0),
+      ],
+      edges: [
+        NetEdge(id: 't', fromId: 's', toId: 'h', service: ServiceType.drainage),
+        NetEdge(id: 'b1', fromId: 'h', toId: 'f1', service: ServiceType.drainage),
+        NetEdge(id: 'b2', fromId: 'h', toId: 'f2', service: ServiceType.drainage),
+      ],
+    );
+    final sized = autoSizeNetwork(
+      net,
+      const SizingContext(),
+      leafDemand: const {},
+      nodeDrainageUnits: const {'f1': 4.0, 'f2': 4.0}, // two WCs (flush tank)
+    );
+    // Trunk carries 8 DFU → branch table row (≤12) = 75 mm; a single fixture
+    // branch carries 4 DFU → (≤6) = 65 mm.
+    expect(sized['t']!.diameter.inMillimeters, 75);
+    expect(sized['b1']!.diameter.inMillimeters, 65);
+    expect(sized['t']!.service, ServiceType.drainage);
+  });
+
   test('sizeNetwork sizes every edge with an accumulated flow', () {
     const net = Network(
       nodes: [

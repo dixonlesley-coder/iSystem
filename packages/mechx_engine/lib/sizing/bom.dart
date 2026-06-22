@@ -98,6 +98,108 @@ List<BomLine> buildBom({
   return lines;
 }
 
+// ── Fittings ──────────────────────────────────────────────────────────────────
+
+/// Kind of pipe/duct fitting inferred from network topology.
+enum FittingType { elbow, tee, cross, reducer }
+
+/// One grouped fittings row: count of [type] at [diameterMm] for [service].
+class FittingLine {
+  final ServiceType service;
+  final FittingType type;
+  final int diameterMm;
+  final int count;
+
+  const FittingLine({
+    required this.service,
+    required this.type,
+    required this.diameterMm,
+    required this.count,
+  });
+}
+
+/// Estimate fittings from node topology + per-edge sizes. At each node, per
+/// service, the count of incident SIZED edges implies a fitting:
+///   2 → elbow · 3 → tee · 4 → cross · >4 → (k−2) tees.
+/// A node whose incident edges have more than one diameter also adds
+/// (distinctDiameters − 1) reducers. Fitting size = the largest incident
+/// diameter. This is a takeoff ESTIMATE (straight in-line couplings on a
+/// polyline vertex are counted as elbows).
+List<FittingLine> buildFittings({
+  required Network net,
+  required Map<String, EdgeSizing> sizing,
+}) {
+  // node → service → list of incident edge diameters (mm), sized edges only.
+  final byNode = <String, Map<ServiceType, List<int>>>{};
+  for (final edge in net.edges) {
+    final es = sizing[edge.id];
+    if (es == null) continue;
+    final mm = es.diameter.inMillimeters.round();
+    for (final nodeId in [edge.fromId, edge.toId]) {
+      (byNode[nodeId] ??= {}).putIfAbsent(edge.service, () => []).add(mm);
+    }
+  }
+
+  final acc = <({ServiceType service, FittingType type, int mm}), int>{};
+  void add(ServiceType s, FittingType t, int mm, int n) {
+    final key = (service: s, type: t, mm: mm);
+    acc[key] = (acc[key] ?? 0) + n;
+  }
+
+  byNode.forEach((_, services) {
+    services.forEach((service, diameters) {
+      final k = diameters.length;
+      final mm = diameters.reduce((a, b) => a > b ? a : b); // largest incident
+      if (k == 2) {
+        add(service, FittingType.elbow, mm, 1);
+      } else if (k == 3) {
+        add(service, FittingType.tee, mm, 1);
+      } else if (k == 4) {
+        add(service, FittingType.cross, mm, 1);
+      } else if (k > 4) {
+        add(service, FittingType.tee, mm, k - 2);
+      }
+      final distinct = diameters.toSet().length;
+      if (distinct > 1) add(service, FittingType.reducer, mm, distinct - 1);
+    });
+  });
+
+  final lines = [
+    for (final e in acc.entries)
+      FittingLine(
+        service: e.key.service,
+        type: e.key.type,
+        diameterMm: e.key.mm,
+        count: e.value,
+      ),
+  ];
+  lines.sort((a, b) {
+    final svc = a.service.index.compareTo(b.service.index);
+    if (svc != 0) return svc;
+    final t = a.type.index.compareTo(b.type.index);
+    if (t != 0) return t;
+    return a.diameterMm.compareTo(b.diameterMm);
+  });
+  return lines;
+}
+
+/// Render [fittings] as CSV (header + one row per line).
+String fittingsToCsv(List<FittingLine> fittings) {
+  final buffer = StringBuffer('service,fitting,nominal_dn_mm,count\n');
+  for (final f in fittings) {
+    buffer
+      ..write(f.service.name)
+      ..write(',')
+      ..write(f.type.name)
+      ..write(',')
+      ..write(f.diameterMm)
+      ..write(',')
+      ..write(f.count)
+      ..write('\n');
+  }
+  return buffer.toString();
+}
+
 /// Convenience: sums [BomLine.totalLength] for all lines belonging to [service].
 Length totalLengthForService(List<BomLine> bom, ServiceType service) {
   var meters = 0.0;

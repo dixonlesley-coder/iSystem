@@ -10,12 +10,17 @@
 /// Pure Dart, zero Flutter imports.
 library;
 
+import '../hydraulics.dart';
 import '../network/network.dart';
 import '../standards/sni.dart';
 import '../units.dart';
 import 'drainage_sizing.dart' as drain;
 import 'duct_sizing.dart' as duct;
 import 'water_supply_sizing.dart' as water;
+
+/// Default drainage fixture units assumed at a sanitary terminal that has no
+/// assigned fixture type (≈ a lavatory-plus). // VERIFY against SNI 8153.
+const double kDefaultLeafDfu = 2.0;
 
 /// Duct cross-section shape and the sizing method used for air services.
 enum DuctShape { round, rectangular }
@@ -267,14 +272,18 @@ Map<String, EdgeSizing> autoSizeNetwork(
   required Map<ServiceType, FlowRate> leafDemand,
   Map<ServiceType, double> leafFixtureUnits = const {},
   Map<String, double> nodeFixtureUnits = const {},
+  Map<String, double> nodeDrainageUnits = const {},
   Map<String, FlowRate> nodeFlowDemand = const {},
   FlushSystem flushSystem = FlushSystem.flushTank,
 }) {
   const profile = SniProfile();
   final allFlows = <String, FlowRate>{};
+  final sanitary = <String, EdgeSizing>{}; // DFU-sized drainage/vent edges
 
   bool isWaterSupply(ServiceType s) =>
       s == ServiceType.coldWater || s == ServiceType.hotWater;
+  bool isSanitary(ServiceType s) =>
+      s == ServiceType.drainage || s == ServiceType.vent;
 
   for (final service in net.edges.map((e) => e.service).toSet()) {
     final demand = leafDemand[service] ?? const FlowRate(0);
@@ -313,7 +322,24 @@ Map<String, EdgeSizing> autoSizeNetwork(
       final leaves = component.where((n) => degree(n) == 1).toList();
       final root = leaves.isNotEmpty ? leaves.first : component.first;
 
-      if (useUbap) {
+      if (isSanitary(service)) {
+        // Accumulate DRAINAGE FIXTURE UNITS and size each edge from the code
+        // capacity table (branch vs stack), not from Manning flow.
+        final terminalUnits = <String, double>{
+          for (final leaf in leaves)
+            if (leaf != root) leaf: nodeDrainageUnits[leaf] ?? kDefaultLeafDfu,
+        };
+        final edgeUnits = accumulateFixtureUnits(
+          net: net,
+          service: service,
+          rootId: root,
+          terminalUnits: terminalUnits,
+        );
+        for (final entry in edgeUnits.entries) {
+          final edge = net.edges.firstWhere((e) => e.id == entry.key);
+          sanitary[entry.key] = _sizeSanitaryEdge(edge, entry.value, ctx);
+        }
+      } else if (useUbap) {
         // Per-fixture UBAP when a node carries a fixture type; else the flat
         // default for that water service.
         final terminalUnits = <String, double>{
@@ -351,5 +377,31 @@ Map<String, EdgeSizing> autoSizeNetwork(
     }
   }
 
-  return sizeNetwork(net, allFlows, ctx);
+  final result = sizeNetwork(net, allFlows, ctx);
+  result.addAll(sanitary); // DFU-sized drainage/vent
+  return result;
+}
+
+/// Build an [EdgeSizing] for a drainage/vent edge from its accumulated [dfu]
+/// using the code capacity tables. Drainage edges report a reference full-bore
+/// Manning velocity (for self-cleansing); vents have no flow velocity.
+EdgeSizing _sizeSanitaryEdge(NetEdge edge, double dfu, SizingContext ctx) {
+  final isStack = edge.kind == EdgeKind.riser;
+  final Diameter d = edge.service == ServiceType.vent
+      ? drain.ventDiameterForDfu(dfu)
+      : drain.drainDiameterForDfu(dfu, isStack: isStack);
+  final v = edge.service == ServiceType.vent
+      ? const Velocity(0)
+      : manningVelocity(
+          manningN: ctx.drainageManningN,
+          hydraulicRadius: Length(d.meters / 4.0),
+          slope: ctx.drainageSlope,
+        );
+  return EdgeSizing(
+    edgeId: edge.id,
+    service: edge.service,
+    flow: const FlowRate(0),
+    diameter: d,
+    velocity: v,
+  );
 }

@@ -20,7 +20,88 @@ library;
 import 'dart:math' as math;
 
 import '../hydraulics.dart';
+import '../standards/sni.dart';
 import '../units.dart';
+
+// ── Drainage / vent fixture units + code capacity tables ──────────────────────
+//
+// Sanitary systems are sized by accumulated Drainage Fixture Units (DFU), not by
+// Manning flow: each pipe carries the DFU of the fixtures it drains and a code
+// table maps DFU → minimum diameter. Vents are sized the same way (no slope).
+//
+// VERIFY — all DFU loads and the DFU→diameter thresholds below against
+// SNI 8153:2015 (Tabel beban unit alat plambing & kapasitas pipa). The values
+// here follow common UPC/IPC practice as a sound starting point.
+
+/// Drainage Fixture Unit load contributed by [fixture] to the sanitary system.
+/// // VERIFY against SNI 8153 Tabel.
+double drainageFixtureUnit(PlumbingFixture fixture) {
+  switch (fixture) {
+    case PlumbingFixture.waterClosetFlushValve:
+      return 8; // VERIFY
+    case PlumbingFixture.waterClosetFlushTank:
+      return 4; // VERIFY
+    case PlumbingFixture.urinalFlushTank:
+      return 4; // VERIFY
+    case PlumbingFixture.lavatory:
+      return 1; // VERIFY
+    case PlumbingFixture.shower:
+      return 2; // VERIFY
+    case PlumbingFixture.bathtub:
+      return 2; // VERIFY
+    case PlumbingFixture.kitchenSink:
+      return 2; // VERIFY
+    case PlumbingFixture.hoseBibb:
+      return 0; // no sanitary drain
+  }
+}
+
+// Threshold tables: (maxDfu, diameterMm) ascending; pick the first row whose
+// maxDfu ≥ the accumulated DFU.
+const List<(double, double)> _branchDfuTable = [
+  (1, 40),
+  (3, 50),
+  (6, 65),
+  (12, 75),
+  (20, 75),
+  (160, 100),
+  (360, 125),
+  (620, 150),
+];
+const List<(double, double)> _stackDfuTable = [
+  (2, 40),
+  (10, 50),
+  (24, 65),
+  (42, 75),
+  (240, 100),
+  (540, 125),
+  (960, 150),
+];
+const List<(double, double)> _ventDfuTable = [
+  (8, 32),
+  (24, 40),
+  (84, 50),
+  (256, 75),
+  (600, 100),
+];
+
+double _lookup(List<(double, double)> table, double dfu) {
+  for (final (maxDfu, mm) in table) {
+    if (dfu <= maxDfu) return mm;
+  }
+  return table.last.$2; // overloaded — caller should flag
+}
+
+/// Minimum sanitary diameter for [dfu] drainage fixture units, choosing the
+/// stack (vertical) or horizontal-branch table via [isStack].
+/// // VERIFY against SNI 8153 capacity tables.
+Diameter drainDiameterForDfu(double dfu, {required bool isStack}) =>
+    Diameter.mm(_lookup(isStack ? _stackDfuTable : _branchDfuTable, dfu));
+
+/// Minimum vent diameter for [dfu] drainage fixture units (developed-length
+/// refinement is a // VERIFY TODO). // VERIFY against SNI 8153 vent table.
+Diameter ventDiameterForDfu(double dfu) =>
+    Diameter.mm(_lookup(_ventDfuTable, dfu));
 
 // ── Partial-full hydraulics ───────────────────────────────────────────────────
 

@@ -11,10 +11,47 @@ library;
 
 import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart';
+import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
 void main() {
+  // ── DFU loads + capacity tables (sanitary sizing) ────────────────────────────
+
+  group('drainage fixture units + DFU capacity tables', () {
+    test('DFU loads: WC valve 8, lavatory 1, hose bibb 0', () {
+      expect(drainageFixtureUnit(PlumbingFixture.waterClosetFlushValve), 8);
+      expect(drainageFixtureUnit(PlumbingFixture.lavatory), 1);
+      expect(drainageFixtureUnit(PlumbingFixture.hoseBibb), 0);
+    });
+
+    test('branch diameter rises with DFU (40→65→100 mm)', () {
+      expect(drainDiameterForDfu(1, isStack: false).inMillimeters, 40);
+      expect(drainDiameterForDfu(6, isStack: false).inMillimeters, 65);
+      expect(drainDiameterForDfu(150, isStack: false).inMillimeters, 100);
+    });
+
+    test('stack table differs from branch (10 DFU → 50 mm stack)', () {
+      expect(drainDiameterForDfu(10, isStack: true).inMillimeters, 50);
+      expect(drainDiameterForDfu(240, isStack: true).inMillimeters, 100);
+    });
+
+    test('vent diameter by DFU (8→32, 84→50, 256→75 mm)', () {
+      expect(ventDiameterForDfu(8).inMillimeters, 32);
+      expect(ventDiameterForDfu(84).inMillimeters, 50);
+      expect(ventDiameterForDfu(256).inMillimeters, 75);
+    });
+
+    test('diameter is monotonic non-decreasing in DFU', () {
+      var prev = 0.0;
+      for (final dfu in [0.5, 1, 3, 6, 12, 20, 160, 360]) {
+        final d = drainDiameterForDfu(dfu.toDouble(), isStack: false).inMillimeters;
+        expect(d, greaterThanOrEqualTo(prev));
+        prev = d;
+      }
+    });
+  });
+
   // ── partial-full capacity factor ─────────────────────────────────────────────
 
   group('partialFullCapacityFactor (true Manning partial-full)', () {

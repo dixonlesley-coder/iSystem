@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/drainage_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
@@ -59,6 +60,11 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     for (final n in net.nodes)
       if (n.airflow != null) n.id: n.airflow!,
   };
+  // Per-fixture drainage units (drives sanitary drainage/vent sizing).
+  final nodeDrainageUnits = <String, double>{
+    for (final n in net.nodes)
+      if (n.fixture != null) n.id: drainageFixtureUnit(n.fixture!),
+  };
   // If any assigned WC uses a flush valve, size the supply on the valve curve.
   final anyFlushValve = net.nodes.any(
       (n) => n.fixture == PlumbingFixture.waterClosetFlushValve);
@@ -69,6 +75,7 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     leafDemand: kDefaultLeafDemand,
     leafFixtureUnits: kDefaultLeafFixtureUnits,
     nodeFixtureUnits: nodeFixtureUnits,
+    nodeDrainageUnits: nodeDrainageUnits,
     nodeFlowDemand: nodeFlowDemand,
     flushSystem:
         anyFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank,

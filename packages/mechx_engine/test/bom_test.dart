@@ -323,6 +323,65 @@ void main() {
     });
   });
 
+  group('buildFittings', () {
+    // _net: n0{e1,e3}, n1{e1,e2}, n2{e2}, n3{e3}. e1,e2=DN25 runs; e3=DN50 riser.
+    //   n0 → 2 edges (25,50): elbow@50 + reducer@50
+    //   n1 → 2 edges (25,25): elbow@25
+    //   n2,n3 → 1 edge: nothing
+    test('infers elbows/tees/reducers from node degree + size change', () {
+      final fittings = buildFittings(net: _net, sizing: _sizing);
+      int countOf(FittingType t, int mm) => fittings
+          .where((f) => f.type == t && f.diameterMm == mm)
+          .fold(0, (s, f) => s + f.count);
+      expect(countOf(FittingType.elbow, 25), 1); // n1
+      expect(countOf(FittingType.elbow, 50), 1); // n0 (largest incident = 50)
+      expect(countOf(FittingType.reducer, 50), 1); // n0: 25↔50
+      expect(countOf(FittingType.tee, 25), 0);
+    });
+
+    test('a tee node yields one tee', () {
+      const tee = Network(
+        nodes: [
+          NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          NetNode(id: 'h', sheetId: 's1', x: 10, y: 0, floorIndex: 0),
+          NetNode(id: 'b', sheetId: 's1', x: 20, y: 0, floorIndex: 0),
+          NetNode(id: 'c', sheetId: 's1', x: 10, y: 10, floorIndex: 0),
+        ],
+        edges: [
+          NetEdge(id: 'e1', fromId: 'a', toId: 'h', service: ServiceType.coldWater),
+          NetEdge(id: 'e2', fromId: 'h', toId: 'b', service: ServiceType.coldWater),
+          NetEdge(id: 'e3', fromId: 'h', toId: 'c', service: ServiceType.coldWater),
+        ],
+      );
+      const s = EdgeSizing(
+        edgeId: 'x',
+        service: ServiceType.coldWater,
+        flow: FlowRate(0.001),
+        diameter: Diameter(0.025),
+        velocity: Velocity(1),
+      );
+      final fittings = buildFittings(
+        net: tee,
+        sizing: {
+          'e1': s,
+          'e2': s,
+          'e3': s,
+        },
+      );
+      expect(
+        fittings.where((f) => f.type == FittingType.tee).single.count,
+        1,
+      );
+    });
+
+    test('fittingsToCsv has a header and one row per line', () {
+      final csv = fittingsToCsv(buildFittings(net: _net, sizing: _sizing));
+      final lines = csv.trim().split('\n');
+      expect(lines.first, 'service,fitting,nominal_dn_mm,count');
+      expect(lines.length, greaterThan(1));
+    });
+  });
+
   group('bomToCsv', () {
     test('header + one row per line, lengths to 2 dp', () {
       final bom = buildBom(
