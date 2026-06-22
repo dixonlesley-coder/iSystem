@@ -4,8 +4,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/supply_design.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -23,6 +25,50 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_text_field.dart';
+
+/// Gather the live design results into a calc report and write it to a Markdown
+/// file chosen by the user.
+Future<void> exportCalcReport(WidgetRef ref) async {
+  final project = ref.read(projectControllerProvider);
+  final strategy = ref.read(feedStrategyProvider);
+  final downfeed = ref.read(downfeedProvider);
+  final balance = ref.read(airBalanceProvider);
+  const profile = SniProfile();
+
+  final data = CalcReportData(
+    projectName: project.name,
+    date: DateTime.now().toIso8601String().split('T').first,
+    standardsName: profile.name,
+    standardsRevision: profile.revision,
+    verifyItems: profile.verifyChecklist,
+    building: project.building,
+    feedStrategy:
+        strategy == FeedStrategy.upfeed ? 'Upfeed pump' : 'Roof-tank downfeed',
+    targetResidual:
+        SupplyDesignCriteria.recommended().targetFixtureResidualPressure,
+    pump: ref.read(pumpDutyProvider),
+    boosterHead: downfeed?.boosterHeadRequired,
+    gravitySufficient: downfeed?.gravitySufficient ?? false,
+    zones: ref.read(zoneStaticsProvider),
+    sprinkler: ref.read(sprinklerDesignProvider),
+    standpipe: ref.read(standpipeDesignProvider),
+    fan: ref.read(ductFanProvider),
+    supplyAirflowLps: balance?.supplyLps ?? 0,
+    returnAirflowLps: balance?.returnLps ?? 0,
+    bom: ref.read(bomProvider),
+    fittings: ref.read(fittingsProvider),
+  );
+
+  final path = await FilePicker.saveFile(
+    dialogTitle: 'Export calculation report',
+    fileName: '${project.name}-report.md',
+    type: FileType.custom,
+    allowedExtensions: const ['md'],
+  );
+  if (path == null) return;
+  final full = path.endsWith('.md') ? path : '$path.md';
+  await File(full).writeAsString(buildCalcReportMarkdown(data));
+}
 
 /// All services offered in the draw palette / edge editor, in a sensible order.
 const List<ServiceType> kDrawServices = [
@@ -70,6 +116,14 @@ class ProjectPanel extends ConsumerWidget {
               MechXTextField(
                 value: project.name,
                 onChanged: ctrl.setName,
+              ),
+              const SizedBox(height: MechXSpacing.sm),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: MechXButton(
+                  label: 'Export calc report (MD)',
+                  onPressed: () => exportCalcReport(ref),
+                ),
               ),
               const SizedBox(height: MechXSpacing.lg),
 
