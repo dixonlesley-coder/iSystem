@@ -33,6 +33,7 @@ class AppShell extends StatelessWidget {
           children: [
             const _TopBar(),
             Container(height: 1, color: colors.border),
+            const _ErrorBanner(),
             Expanded(
               child: Row(
                 children: [
@@ -120,8 +121,12 @@ class _TopBar extends ConsumerWidget {
           );
       ref.read(sheetsControllerProvider.notifier).loadSheets(doc.sheets);
       ref.read(networkControllerProvider.notifier).loadNetwork(doc.network);
-    } catch (_) {
-      // Malformed file — leave the current project untouched.
+      ref.read(loadErrorProvider.notifier).clear();
+    } on ProjectDocumentException catch (e) {
+      // Malformed/incompatible file — surface why, leave the project untouched.
+      ref.read(loadErrorProvider.notifier).set(e.message);
+    } catch (e) {
+      ref.read(loadErrorProvider.notifier).set('Could not open project: $e');
     }
   }
 
@@ -304,4 +309,56 @@ class _StatusBar extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.sm),
         child: Text('·', style: TextStyle(fontFamily: 'Roboto', color: color)),
       );
+}
+
+/// A thin, dismissible banner that surfaces a transient load error (e.g. a
+/// project that failed to open) instead of failing silently.
+class _ErrorBanner extends ConsumerWidget {
+  const _ErrorBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final message = ref.watch(loadErrorProvider);
+    if (message == null) return const SizedBox.shrink();
+    final colors = context.colors;
+    final type = context.type;
+    return Container(
+      width: double.infinity,
+      color: colors.danger.withAlpha(38),
+      padding: const EdgeInsets.symmetric(
+        horizontal: MechXSpacing.md,
+        vertical: MechXSpacing.xs,
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            margin: const EdgeInsets.only(right: MechXSpacing.sm),
+            decoration: BoxDecoration(
+              color: colors.danger,
+              borderRadius: const BorderRadius.all(Radius.circular(4)),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              message,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: type.caption.copyWith(color: colors.textPrimary),
+            ),
+          ),
+          const SizedBox(width: MechXSpacing.sm),
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => ref.read(loadErrorProvider.notifier).clear(),
+              child: Text('Dismiss',
+                  style: type.label.copyWith(color: colors.danger)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

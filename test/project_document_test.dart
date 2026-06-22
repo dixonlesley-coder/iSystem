@@ -103,4 +103,53 @@ void main() {
     final json = doc.toJson()..remove('version');
     expect(ProjectDocument.fromJson(json).version, ProjectDocument.currentVersion);
   });
+
+  test('unknown enum values fall back instead of throwing (forward compat)', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(100, 100))],
+      network: Network(
+        nodes: [
+          NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          NetNode(id: 'b', sheetId: 's1', x: 9, y: 0, floorIndex: 0),
+        ],
+        edges: [
+          NetEdge(id: 'e', fromId: 'a', toId: 'b', service: ServiceType.duct),
+        ],
+      ),
+    );
+    final json = doc.toJson();
+    // Simulate a newer build's unknown enum names.
+    (json['network']['edges'][0] as Map)['service'] = 'plasmaConduit';
+    (json['network']['nodes'][0] as Map)['role'] = 'antigravity';
+    final decoded = ProjectDocument.fromJson(json);
+    expect(decoded.network.edges[0].service, ServiceType.coldWater); // fallback
+    expect(decoded.network.nodes[0].role, NodeRole.main); // fallback
+  });
+
+  test('a newer file version is rejected with a clear message', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    final json = doc.toJson()..['version'] = ProjectDocument.currentVersion + 1;
+    expect(
+      () => ProjectDocument.fromJson(json),
+      throwsA(isA<ProjectDocumentException>()),
+    );
+  });
+
+  test('malformed JSON / wrong shape throws ProjectDocumentException', () {
+    expect(() => ProjectDocument.decode('}{ not json'),
+        throwsA(isA<ProjectDocumentException>()));
+    expect(() => ProjectDocument.decode('[1,2,3]'),
+        throwsA(isA<ProjectDocumentException>()));
+    expect(() => ProjectDocument.decode('{"hello":"world"}'),
+        throwsA(isA<ProjectDocumentException>()));
+  });
 }

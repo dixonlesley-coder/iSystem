@@ -64,6 +64,19 @@ class OccupancyController extends Notifier<Occupancy> {
 /// Default service to use as the supply (for source auto-pick / solve).
 const ServiceType kSupplyService = ServiceType.coldWater;
 
+/// A transient, user-facing error message (e.g. a failed project open). Null
+/// when there is nothing to show; the shell renders it as a dismissible banner.
+final loadErrorProvider =
+    NotifierProvider<LoadErrorController, String?>(LoadErrorController.new);
+
+class LoadErrorController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? message) => state = message;
+  void clear() => state = null;
+}
+
 /// App-wide light/dark brightness. Defaults to dark (the restrained, low-glare
 /// default for a drawing tool). Persisted to the project file later.
 final brightnessProvider = NotifierProvider<BrightnessController, Brightness>(

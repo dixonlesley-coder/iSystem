@@ -9,6 +9,37 @@ import 'package:mechx_engine/units.dart';
 
 import '../store/models/sheet.dart';
 
+/// Thrown by [ProjectDocument.decode]/[ProjectDocument.fromJson] when a file is
+/// not a readable MechX document (malformed JSON, missing required structure,
+/// or a newer schema this build can't read). Carries a human-readable [message]
+/// the UI can surface.
+class ProjectDocumentException implements Exception {
+  final String message;
+  const ProjectDocumentException(this.message);
+  @override
+  String toString() => 'ProjectDocumentException: $message';
+}
+
+/// Resolve [name] to a [values] entry, falling back to [fallback] when the name
+/// is unknown — so a `.mechx` written by a newer build (with an enum value this
+/// build doesn't have) loads with a sensible default instead of throwing.
+T _enumOr<T extends Enum>(List<T> values, Object? name, T fallback) {
+  if (name is! String) return fallback;
+  for (final v in values) {
+    if (v.name == name) return v;
+  }
+  return fallback;
+}
+
+/// Like [_enumOr] but returns null for an unknown/absent name (optional fields).
+T? _enumOrNull<T extends Enum>(List<T> values, Object? name) {
+  if (name is! String) return null;
+  for (final v in values) {
+    if (v.name == name) return v;
+  }
+  return null;
+}
+
 /// Versioned MechX project document — the on-disk format (a `.mechx` JSON file).
 /// Pure (de)serialization only; callers handle file IO. A `version` header is
 /// written from day one so the format can migrate.
@@ -85,6 +116,19 @@ class ProjectDocument {
   String encode() => const JsonEncoder.withIndent('  ').convert(toJson());
 
   factory ProjectDocument.fromJson(Map<String, dynamic> json) {
+    final version = (json['version'] as num?)?.toInt() ?? currentVersion;
+    if (version > currentVersion) {
+      throw ProjectDocumentException(
+        'This project was saved by a newer MechX (file format v$version; '
+        'this build reads up to v$currentVersion). Please update MechX.',
+      );
+    }
+    // Future versions < currentVersion would be migrated here before parsing.
+    if (json['project'] is! Map) {
+      throw const ProjectDocumentException(
+        'Not a MechX project file (missing "project" section).',
+      );
+    }
     final project = json['project'] as Map<String, dynamic>;
     final floors = [
       for (final f in project['floors'] as List)
@@ -116,14 +160,12 @@ class ProjectDocument {
           x: (n['x'] as num).toDouble(),
           y: (n['y'] as num).toDouble(),
           floorIndex: (n['floor'] as num).toInt(),
-          role: n['role'] == null
-              ? NodeRole.main
-              : NodeRole.values.byName(n['role'] as String),
+          role: _enumOr(NodeRole.values, n['role'], NodeRole.main),
           elevation:
               n['elev_m'] == null ? null : Length((n['elev_m'] as num).toDouble()),
           fixture: n['fixture'] == null
               ? null
-              : PlumbingFixture.values.byName(n['fixture'] as String),
+              : _enumOrNull(PlumbingFixture.values, n['fixture']),
           airflow: n['airflow_lps'] == null
               ? null
               : FlowRate.litersPerSecond((n['airflow_lps'] as num).toDouble()),
@@ -135,13 +177,14 @@ class ProjectDocument {
           id: (e as Map)['id'] as String,
           fromId: e['from'] as String,
           toId: e['to'] as String,
-          service: ServiceType.values.byName(e['service'] as String),
-          kind: EdgeKind.values.byName(e['kind'] as String),
+          service:
+              _enumOr(ServiceType.values, e['service'], ServiceType.coldWater),
+          kind: _enumOr(EdgeKind.values, e['kind'], EdgeKind.run),
         ),
     ];
     return ProjectDocument(
-      version: (json['version'] as num?)?.toInt() ?? currentVersion,
-      projectName: project['name'] as String,
+      version: version,
+      projectName: project['name'] as String? ?? 'Untitled project',
       floors: floors,
       calibrations: calibrations,
       sheets: sheets,
@@ -149,6 +192,23 @@ class ProjectDocument {
     );
   }
 
-  factory ProjectDocument.decode(String source) =>
-      ProjectDocument.fromJson(jsonDecode(source) as Map<String, dynamic>);
+  factory ProjectDocument.decode(String source) {
+    final Object? raw;
+    try {
+      raw = jsonDecode(source);
+    } on FormatException catch (e) {
+      throw ProjectDocumentException('File is not valid JSON: ${e.message}');
+    }
+    if (raw is! Map<String, dynamic>) {
+      throw const ProjectDocumentException('Not a MechX project file.');
+    }
+    try {
+      return ProjectDocument.fromJson(raw);
+    } on ProjectDocumentException {
+      rethrow;
+    } catch (e) {
+      // Any structural/type error → a friendly, surfaceable message.
+      throw ProjectDocumentException('Could not read project: $e');
+    }
+  }
 }
