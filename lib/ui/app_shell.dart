@@ -7,6 +7,7 @@ import '../store/app_state.dart';
 import '../store/sheets_store.dart';
 import 'canvas/sheet_canvas.dart';
 import 'inspector/project_panel.dart';
+import 'schematic/schematic_view.dart';
 import 'sheets/sheet_rail.dart';
 import 'theme/design_tokens.dart';
 import 'theme/mechx_theme.dart';
@@ -32,7 +33,14 @@ class AppShell extends StatelessWidget {
                 children: [
                   const SheetRail(),
                   Container(width: 1, color: colors.border),
-                  const Expanded(child: SheetCanvas()),
+                  Expanded(
+                    child: Consumer(
+                      builder: (context, ref, _) =>
+                          ref.watch(showSchematicProvider)
+                              ? const SchematicView()
+                              : const SheetCanvas(),
+                    ),
+                  ),
                   Container(width: 1, color: colors.border),
                   const ProjectPanel(),
                 ],
@@ -76,6 +84,7 @@ class _TopBar extends ConsumerWidget {
     final type = context.type;
     final state = ref.watch(sheetsControllerProvider);
     final brightness = ref.watch(brightnessProvider);
+    final showSchematic = ref.watch(showSchematicProvider);
 
     final current = state.current;
     final vt = current == null ? null : state.viewportFor(current.id);
@@ -116,6 +125,13 @@ class _TopBar extends ConsumerWidget {
             MechXButton(
               label: 'Open PDF…',
               onPressed: () => _pickAndLoadPdf(ref),
+            ),
+            const SizedBox(width: MechXSpacing.sm),
+            MechXButton(
+              label: showSchematic ? 'Plan' : 'Schematic',
+              primary: showSchematic,
+              onPressed: () =>
+                  ref.read(showSchematicProvider.notifier).toggle(),
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(

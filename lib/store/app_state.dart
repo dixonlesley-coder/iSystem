@@ -16,3 +16,15 @@ class BrightnessController extends Notifier<Brightness> {
 
   void set(Brightness brightness) => state = brightness;
 }
+
+/// Whether the main area shows the generated schematic diagram instead of the
+/// plan canvas.
+final showSchematicProvider =
+    NotifierProvider<ShowSchematicController, bool>(ShowSchematicController.new);
+
+class ShowSchematicController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void toggle() => state = !state;
+}

@@ -4,6 +4,7 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/calibration_store.dart';
+import '../../store/fire_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
@@ -91,6 +92,10 @@ class ProjectPanel extends ConsumerWidget {
 
               // ── Network results ───────────────────────────────────────────
               const _ResultsSection(),
+              const SizedBox(height: MechXSpacing.lg),
+
+              // ── Fire protection ───────────────────────────────────────────
+              const _FireSection(),
               const SizedBox(height: MechXSpacing.lg),
 
               // ── Scale calibration ─────────────────────────────────────────
@@ -423,6 +428,67 @@ class _ResultsSection extends ConsumerWidget {
           Text(value, style: type.mono.copyWith(color: colors.textSecondary)),
         ],
       ),
+    );
+  }
+}
+
+class _FireSection extends ConsumerWidget {
+  const _FireSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final sprinkler = ref.watch(sprinklerDesignProvider);
+    final standpipe = ref.watch(standpipeDesignProvider);
+
+    Widget kv(String key, String value) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(key,
+                    style: type.caption.copyWith(color: colors.textMuted)),
+              ),
+              Text(value,
+                  style: type.mono.copyWith(color: colors.textSecondary)),
+            ],
+          ),
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _SectionLabel('Fire'),
+        const SizedBox(height: MechXSpacing.sm),
+        kv('Sprinkler flow',
+            '${sprinkler.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),
+        kv('Sprinkler heads', '${sprinkler.sprinklerCount}'),
+        kv('Standpipe flow',
+            '${standpipe.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),
+        kv('Fire pump',
+            '${standpipe.pumpHead.meters.toStringAsFixed(0)} m · ${standpipe.pumpShaftPower.inKiloWatts.toStringAsFixed(1)} kW'),
+        const SizedBox(height: MechXSpacing.xs),
+        Row(
+          children: [
+            Container(
+              width: 7,
+              height: 7,
+              margin: const EdgeInsets.only(right: MechXSpacing.xs),
+              decoration: BoxDecoration(
+                color: colors.warning,
+                borderRadius: const BorderRadius.all(Radius.circular(4)),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                'Draft — SNI 03-3989 / 1745 / 6570 values unverified',
+                style: type.caption.copyWith(color: colors.textMuted),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
