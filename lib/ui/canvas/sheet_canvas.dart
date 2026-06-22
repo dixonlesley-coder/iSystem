@@ -7,6 +7,7 @@ import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/solve_store.dart';
+import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'calibration_overlay.dart';
 import 'canvas_view.dart';
@@ -52,6 +53,8 @@ class SheetCanvas extends ConsumerWidget {
     final calibrating = ref.watch(calibrationControllerProvider).isActive;
     final drawing = ref.watch(networkControllerProvider).isDrawing;
     final showHeatmap = ref.watch(showHeatmapProvider);
+    final calibrated =
+        ref.watch(projectControllerProvider).calibrationFor(sheet.id) != null;
 
     // Map the current sheet to a building floor (positional default for now).
     final levelCount = ref.watch(projectControllerProvider).building.levelCount;
@@ -94,7 +97,68 @@ class SheetCanvas extends ConsumerWidget {
           ),
         if (calibrating)
           Positioned.fill(child: CalibrationOverlay(sheetId: sheet.id)),
+        // First-run nudge: until the sheet has a scale, horizontal runs measure
+        // zero length, so guide the user to set one (one tap starts calibrate).
+        if (!calibrated && !calibrating)
+          const Positioned(
+            top: MechXSpacing.md,
+            left: 0,
+            right: 0,
+            child: Center(child: _CalibrateHint()),
+          ),
       ],
+    );
+  }
+}
+
+/// A small, tappable nudge shown over an uncalibrated sheet. Tapping starts the
+/// two-point scale calibration — the same action as the inspector's SCALE
+/// button, surfaced where the user is already looking.
+class _CalibrateHint extends ConsumerWidget {
+  const _CalibrateHint();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => ref.read(calibrationControllerProvider.notifier).start(),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: MechXSpacing.sm + 2,
+            vertical: MechXSpacing.xs + 1,
+          ),
+          decoration: BoxDecoration(
+            color: colors.surface.withAlpha(240),
+            borderRadius: MechXRadii.control,
+            border: Border.all(color: colors.warning),
+            boxShadow: const [
+              BoxShadow(
+                  color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 7,
+                height: 7,
+                margin: const EdgeInsets.only(right: MechXSpacing.xs),
+                decoration: BoxDecoration(
+                  color: colors.warning,
+                  borderRadius: const BorderRadius.all(Radius.circular(4)),
+                ),
+              ),
+              Text(
+                'Set drawing scale to measure runs',
+                style: type.label.copyWith(color: colors.textPrimary),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

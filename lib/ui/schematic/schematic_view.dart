@@ -200,13 +200,11 @@ class _SchematicPainter extends CustomPainter {
       // Faint horizontal grid line at the top edge of each band.
       canvas.drawLine(Offset(0, top), Offset(size.width, top), gridPaint);
 
-      // Floor label: name + elevation.
+      // Floor label: name + elevation. One consistent decimal place across all
+      // bands (+0.0 m, +4.0 m, +7.5 m) — no mixed precision.
       final floor = building.floors[i];
       final elevM = building.elevationOf(i).meters;
-      // Show whole-number elevations without decimals.
-      final elevStr =
-          elevM % 1 == 0 ? '${elevM.toStringAsFixed(0)} m' : '${elevM.toStringAsFixed(2)} m';
-      final label = '${floor.name}  +$elevStr';
+      final label = '${floor.name}  +${elevM.toStringAsFixed(1)} m';
 
       _drawText(
         canvas,

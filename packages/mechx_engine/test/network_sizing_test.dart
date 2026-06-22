@@ -102,29 +102,10 @@ void main() {
 
   group('accumulateFixtureUnits + UBAP demand path (diversified water supply)',
       () {
-    // Chain of fixtures on one cold-water branch: src—e1—a—e2—b—e3—c—e4—d.
-    // a,b,c,d are fixtures (4 leaves beyond the src root after chaining).
-    const net = Network(
-      nodes: [
-        NetNode(id: 'src', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
-        NetNode(id: 'a', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
-        NetNode(id: 'b', sheetId: 's1', x: 200, y: 0, floorIndex: 0),
-        NetNode(id: 'c', sheetId: 's1', x: 300, y: 0, floorIndex: 0),
-        NetNode(id: 'd', sheetId: 's1', x: 400, y: 0, floorIndex: 0),
-      ],
-      edges: [
-        NetEdge(id: 'e1', fromId: 'src', toId: 'a', service: ServiceType.coldWater),
-        NetEdge(id: 'e2', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
-        NetEdge(id: 'e3', fromId: 'b', toId: 'c', service: ServiceType.coldWater),
-        NetEdge(id: 'e4', fromId: 'c', toId: 'd', service: ServiceType.coldWater),
-      ],
-    );
-
     test('trunk flow = Hunter(total UBAP), NOT the sum of peak fixture flows',
         () {
-      // Only 'd' is a leaf besides the 'src' root in this chain, so put the
-      // fixture load on every interior+leaf node via a tee instead. Use a
-      // 4-leaf tee so multiple fixtures stack on the trunk.
+      // A 4-leaf tee so multiple fixtures stack on the trunk: src—t—h, then
+      // h branches to four fixtures f1..f4.
       const tee = Network(
         nodes: [
           NetNode(id: 'src', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
