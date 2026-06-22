@@ -216,7 +216,7 @@ solved node values into a grid — it computes no physics.
 | **P2** ✅ | Drawing (incl. risers). Pure network model (nodes/edges/services/lengths), drawing controller (run polylines w/ snapping, risers, undo/redo/clear), canvas network render + rubber-band overlay, and the inspector draw palette (tool/service/undo). 109 tests. | — |
 | **P3** ✅ | SNI sizing engine. Three independent §7 paths (duct/water/drainage, parallel agents), a network dispatcher with **branching flow accumulation** + `autoSizeNetwork`, **grille/diffuser face-velocity sizing** (noise-driven), and a live on-canvas sizing display (DN/Ø labels) with an inspector toggle. Engine 145 tests, app 45. | — |
 | **P4** ✅ | Node-pressure solver (the §12 keystone), pump duty, downfeed zoning, BOM aggregator, pressure heatmap (generated render of the solve), auto schematic riser diagram. Live inspector results. | **MVP = P0–P4 ✅** |
-| **P5** ✅ | Fire protection — sprinkler density/area sizing, standpipe/hydrant flow + fire-pump duty; inspector fire panel. SNI 03-3989/1745/6570 values `// VERIFY`. | — |
+| **P5** ✅ | Fire protection — sprinkler density/area sizing, standpipe/hydrant flow + fire-pump duty; inspector fire panel. SNI 03-3989-2000 (sprinkler) + SNI 03-1745-2000 (standpipe) values seeded from web research; `// VERIFY` retained on engineering assumptions only. | — |
 
 Commit per logical unit; keep tests passing continuously. **Pause at each phase
 boundary for review.**
@@ -236,6 +236,8 @@ boundary for review.**
 | 2026-06-22 | **Canvas: pure `ViewportTransform` + controlled `CanvasView`** | Polish-critical math is headless-testable; gestures = wheel zoom-to-cursor, **left-click & middle-drag pan**, trackpad pinch, keyboard (Ctrl±/0, F, arrows). Per-sheet viewport restore via the store. |
 | 2026-06-22 | **P1 length source-of-truth as pure engine geometry** (`geometry/scale_calibration.dart`, `geometry/building.dart`) | §10/§12.3: horizontal length = px × calibration; vertical riser = floor-elevation delta. Editable via `project_store`; never measured from a PDF. |
 | 2026-06-22 | **Calibrate tool = testable controller + canvas overlay** | `calibration_store` is a pure state machine (idle→pick→pick→distance); the overlay maps taps to sheet/world coords via the live `ViewportTransform` and writes `ScaleCalibration` to the project. Two-point flow widget-tested. |
+| 2026-06-22 | **Versioned project file `.mechx`** (`data/project_document.dart`) | JSON with a `version` header from day one (§12.7); round-trips name, floors, per-sheet calibrations, sheets, network. Open/Save/Import wired into the top bar. |
+| 2026-06-22 | **Seeded SNI fire values** from web research — sprinkler density/area (SNI 03-3989-2000: Ringan 2.25 mm/min @84 m², Sedang 5 @72/144, head coverage 20/12/9 m²) and standpipe flow/residual (SNI 03-1745-2000: 550+250 gpm ≤1250 cap, 6.9/4.5 bar Class I/II, 100 mm min riser) | Flips fire constants from placeholders to cited values; `// VERIFY` retained only on engineering assumptions (Berat density mid-range, friction allowance, pump efficiency) and occupancy→class mapping. |
 
 ## 16. Testing strategy
 

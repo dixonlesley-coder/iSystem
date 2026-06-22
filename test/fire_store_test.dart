@@ -13,8 +13,11 @@ void main() {
     expect(sprinkler.sprinklerCount, greaterThan(0));
 
     final standpipe = c.read(standpipeDesignProvider);
-    // single riser → 500 L/min = 8.333 L/s
-    expect(standpipe.requiredFlow.inLitersPerSecond, closeTo(8.333, 0.05));
+    // single riser → 550 gpm (SNI 03-1745-2000) = 550 × 3.785411784 / 60 L/s
+    expect(
+      standpipe.requiredFlow.inLitersPerSecond,
+      closeTo(550.0 * 3.785411784 / 60.0, 1e-6),
+    );
     expect(standpipe.pumpHead.meters, greaterThan(0));
   });
 

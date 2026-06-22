@@ -1,147 +1,82 @@
 /// Tests for the §P5 fire standpipe / hydrant + fire-pump sizing module.
 ///
-/// ─────────────────────────────── IMPORTANT NOTICE ───────────────────────────
-/// All design constants used here (flow per riser, residual pressure) are
-/// UNVERIFIED PLACEHOLDERS based on general fire-protection practice.
-/// They must be validated against SNI 03-1745-2000 (standpipe/hydrant) and
-/// SNI 03-6570-2001 (fire pump) before production use.
-/// ─────────────────────────────────────────────────────────────────────────────
+/// Design constants are sourced from SNI 03-1745-2000 (standpipe/hydrant) and
+/// SNI 03-6570-2001 (fire pump):
+///   • Flow: 550 gpm most-remote riser + 250 gpm per additional riser, ≤1250
+///     gpm cap (converted to L/min via the US gallon = 3.785411784 L).
+///   • Residual: 6.9 bar (690 kPa) Class I/III, 4.5 bar (450 kPa) Class II.
+///   • Minimum Class I/III riser diameter: 100 mm.
 ///
-/// Hand-computed arithmetic
-/// ────────────────────────
-/// Physical constants used throughout (from hydraulics.dart):
-///   g   = 9.81 m/s²
-///   ρ   = 1000 kg/m³
-///   ρ·g = 9 810 N/m³
-///
-/// ── Case A: risers = 2, buildingHeight = 40 m, frictionAllowance = 15 m,
-///            pumpEfficiency = 0.70  ──────────────────────────────────────────
-///
-///   requiredFlow
-///     = 500 + 250 × (2 − 1) = 750 L/min
-///     = 750 / 60 000 m³/s   = 0.012 500 m³/s   (12.5 L/s)
-///
-///   topResidualPressure = 450 kPa = 450 000 Pa   // VERIFY
-///
-///   residualHead = 450 000 / (1 000 × 9.81)
-///               = 450 000 / 9 810
-///               = 45.871 56… m
-///
-///   pumpHead = 40 + 15 + 45.871 56…
-///            = 100.871 56… m
-///
-///   hydraulicPower = ρ · g · Q · H
-///                  = 1 000 × 9.81 × 0.012 500 × 100.871 56…
-///                  = 9 810 × 0.012 500 × 100.871 56…
-///
-///   Exact cancellation (the 9 810 in the power formula cancels with the
-///   9 810 in headFromPressure, leaving the contribution of the residual-
-///   pressure term as simply 450 000 × Q):
-///
-///     P_hyd = ρ·g·Q·(h_static + h_friction + P_res/(ρ·g))
-///           = ρ·g·Q·(55) + Q·P_res
-///           = 9 810 × 0.012 500 × 55 + 0.012 500 × 450 000
-///           = 6 741.5625 + 5 625.0
-///           = 12 366.5625 W
-///
-///   Re-check with the direct product:
-///     9 810 × 0.012 500 = 122.625
-///     122.625 × 100.871 56… :
-///       122.625 × 100 = 12 262.5
-///       residualHead contribution:
-///         122.625 × 45.871 56… = 122.625 × (450 000 / 9 810)
-///                               = 122.625 × 45.871 56…
-///         = (9 810 × 0.012 500) × (450 000 / 9 810)
-///         = 0.012 500 × 450 000
-///         = 5 625.0
-///       frictionAllowance contribution:
-///         122.625 × 15 = 1 838.375   [1 837.875 → recheck]
-///         122.625 × 15 = 1 839.375
-///       staticLift contribution:
-///         122.625 × 40 = 4 905.0
-///     Sum = 4 905.0 + 1 839.375 + 5 625.0 = 12 369.375 W
-///
-///   The correct value is 12 369.375 W.
-///
-///   Verification:
-///     122.625 × 55 = 122.625 × 50 + 122.625 × 5
-///                  = 6 131.25 + 613.125
-///                  = 6 744.375
-///     6 744.375 + 5 625.0 = 12 369.375 W  ✓
-///
-///   shaftPower = 12 369.375 / 0.70 = 17 670.535 714… W
-///
-/// ── Case B: risers = 1 (single-riser minimum) ─────────────────────────────
-///
-///   requiredFlow = 500 L/min = 500/60 000 m³/s = 0.008 333… m³/s (8.333 L/s)
-///
-/// ── Case C: risers = 4 (flow cap applies) ─────────────────────────────────
-///
-///   Uncapped = 500 + 250 × 3 = 1 250 L/min → exactly at cap → 1 250 L/min
-///   requiredFlow = 1 250 / 60 000 = 0.020 833… m³/s (20.833 L/s)
-///
-/// ── Case D: risers = 6 (above cap) ───────────────────────────────────────
-///
-///   Uncapped = 500 + 250 × 5 = 1 750 L/min → capped at 1 250 L/min
-///   requiredFlow = 1 250 L/min (same as case C)
+/// Expected values are derived from those constants in-test (no magic numbers)
+/// using ρ·g = 1000 × 9.81 = 9810 N/m³ to match hydraulics.dart.
 library;
 
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
+/// ρ·g for water in the engine's hydraulic kernel (1000 kg/m³ × 9.81 m/s²).
+const double rhoG = 1000.0 * 9.81; // 9810 N/m³
+
+/// US liquid gallon in litres (matches the engine's private conversion).
+const double gal = 3.785411784;
+
 void main() {
-  // ── Constants ──────────────────────────────────────────────────────────────
+  // ── Constants (SNI 03-1745-2000) ─────────────────────────────────────────────
 
-  group('placeholder constants (// VERIFY against SNI)', () {
-    test('kFirstRiserFlowLpm is 500', () {
-      expect(kFirstRiserFlowLpm, equals(500.0));
+  group('design constants (SNI 03-1745-2000)', () {
+    test('kFirstRiserFlowLpm is 550 gpm', () {
+      expect(kFirstRiserFlowLpm, closeTo(550.0 * gal, 1e-9)); // ≈ 2082 L/min
     });
 
-    test('kAdditionalRiserFlowLpm is 250', () {
-      expect(kAdditionalRiserFlowLpm, equals(250.0));
+    test('kAdditionalRiserFlowLpm is 250 gpm', () {
+      expect(kAdditionalRiserFlowLpm, closeTo(250.0 * gal, 1e-9)); // ≈ 946
     });
 
-    test('kMaxStandpipeFlowLpm is 1250', () {
-      expect(kMaxStandpipeFlowLpm, equals(1250.0));
+    test('kMaxStandpipeFlowLpm is 1250 gpm', () {
+      expect(kMaxStandpipeFlowLpm, closeTo(1250.0 * gal, 1e-9)); // ≈ 4732
     });
 
-    test('kTopResidualPressureKpa is 450', () {
-      expect(kTopResidualPressureKpa, equals(450.0));
+    test('residual pressures: 690 kPa Class I/III, 450 kPa Class II', () {
+      expect(kResidualPressureClassIKpa, equals(690.0));
+      expect(kResidualPressureClassIIKpa, equals(450.0));
+      expect(residualPressureKpa(StandpipeClass.classI), equals(690.0));
+      expect(residualPressureKpa(StandpipeClass.classIII), equals(690.0));
+      expect(residualPressureKpa(StandpipeClass.classII), equals(450.0));
+    });
+
+    test('minimum Class I/III riser diameter is 100 mm', () {
+      expect(kMinRiserDiameterMm, equals(100.0));
     });
   });
 
   // ── standpipeFlow ──────────────────────────────────────────────────────────
 
   group('standpipeFlow — flow demand by riser count', () {
-    test('1 riser → 500 L/min (8.333 L/s)', () {
-      // Q = 500 + 250 × 0 = 500 L/min = 500/60 000 m³/s
+    test('1 riser → 550 gpm', () {
       final q = standpipeFlow(1);
-      expect(q.inLitersPerSecond, closeTo(500.0 / 60.0, 1e-9));
+      expect(q.inLitersPerMinute, closeTo(550.0 * gal, 1e-9));
     });
 
-    test('2 risers → 750 L/min (12.5 L/s)', () {
-      // Q = 500 + 250 × 1 = 750 L/min = 750/60 000 m³/s = 0.01250 m³/s
+    test('2 risers → 800 gpm (550 + 250)', () {
       final q = standpipeFlow(2);
-      expect(q.inLitersPerSecond, closeTo(12.5, 1e-9));
+      expect(q.inLitersPerMinute, closeTo(800.0 * gal, 1e-9));
     });
 
-    test('3 risers → 1000 L/min (16.667 L/s)', () {
-      // Q = 500 + 250 × 2 = 1000 L/min
+    test('3 risers → 1050 gpm', () {
       final q = standpipeFlow(3);
-      expect(q.inLitersPerSecond, closeTo(1000.0 / 60.0, 1e-9));
+      expect(q.inLitersPerMinute, closeTo(1050.0 * gal, 1e-9));
     });
 
-    test('4 risers → 1250 L/min (cap; 20.833 L/s)', () {
-      // Q = 500 + 250 × 3 = 1250 L/min → exactly at cap
+    test('4 risers → 1250 gpm (cap; uncapped 1300 → clamped)', () {
+      // 550 + 250×3 = 1300 gpm → clamped to the 1250 gpm cap.
       final q = standpipeFlow(4);
-      expect(q.inLitersPerSecond, closeTo(1250.0 / 60.0, 1e-9));
+      expect(q.inLitersPerMinute, closeTo(1250.0 * gal, 1e-9));
     });
 
-    test('6 risers → 1250 L/min (cap still applies)', () {
-      // Uncapped: 500 + 250 × 5 = 1750 → clamped to 1250 L/min
+    test('6 risers → 1250 gpm (cap still applies)', () {
       final q = standpipeFlow(6);
-      expect(q.inLitersPerSecond, closeTo(1250.0 / 60.0, 1e-9));
+      expect(q.inLitersPerMinute, closeTo(1250.0 * gal, 1e-9));
     });
 
     test('result for 4 and 6 risers is the same (cap)', () {
@@ -152,12 +87,19 @@ void main() {
     });
   });
 
-  // ── Case A: two risers, 40 m building ─────────────────────────────────────
+  // ── Case A: two risers, 40 m building, Class I ────────────────────────────
 
-  group(
-      'designStandpipe — Case A: 2 risers, 40 m, friction 15 m, η = 0.70',
+  group('designStandpipe — Case A: 2 risers, 40 m, friction 15 m, η = 0.70',
       () {
     late FireStandpipeDesign design;
+
+    // Expected values derived from the SNI constants.
+    const qLpm = kFirstRiserFlowLpm + kAdditionalRiserFlowLpm; // 2 risers
+    const qM3s = qLpm / 60000.0;
+    const residualHead = kResidualPressureClassIKpa * 1000.0 / rhoG; // m
+    const expHead = 40.0 + 15.0 + residualHead;
+    const expHyd = rhoG * qM3s * expHead;
+    const expShaft = expHyd / 0.70;
 
     setUp(() {
       design = designStandpipe(
@@ -168,42 +110,32 @@ void main() {
       );
     });
 
-    // requiredFlow ────────────────────────────────────────────────────────────
-    test('requiredFlow is 750 L/min = 12.5 L/s', () {
-      // 500 + 250 × 1 = 750 L/min = 12.5 L/s
-      expect(design.requiredFlow.inLitersPerSecond, closeTo(12.5, 1e-9));
+    test('defaults to Class I', () {
+      expect(design.standpipeClass, StandpipeClass.classI);
     });
 
-    // topResidualPressure ─────────────────────────────────────────────────────
-    test('topResidualPressure is 450 kPa // VERIFY', () {
-      expect(
-        design.topResidualPressure.inKiloPascals,
-        closeTo(450.0, 1e-9),
-      );
+    test('requiredFlow is 800 gpm', () {
+      expect(design.requiredFlow.inLitersPerMinute, closeTo(800.0 * gal, 1e-9));
     });
 
-    // pumpHead ────────────────────────────────────────────────────────────────
-    test('pumpHead ≈ 100.872 m  (40 + 15 + 450000/9810)', () {
-      // residualHead = 450 000 / 9 810 = 45.871 56… m
-      // pumpHead     = 40 + 15 + 45.871 56… = 100.871 56… m
-      expect(design.pumpHead.meters, closeTo(100.8716, 5e-4));
+    test('topResidualPressure is 690 kPa (Class I)', () {
+      expect(design.topResidualPressure.inKiloPascals, closeTo(690.0, 1e-9));
     });
 
-    // pumpHydraulicPower ──────────────────────────────────────────────────────
-    test('pumpHydraulicPower ≈ 12 369.375 W', () {
-      // P_hyd = ρ·g·Q·H
-      //       = 9810 × 0.01250 × 100.87156…
-      //       = 122.625 × 100.87156…
-      //       = 122.625 × 55 + 0.01250 × 450 000
-      //       = 6 744.375 + 5 625.0
-      //       = 12 369.375 W
-      expect(design.pumpHydraulicPower.watts, closeTo(12369.375, 0.05));
+    test('minRiserDiameter is 100 mm', () {
+      expect(design.minRiserDiameter.inMillimeters, closeTo(100.0, 1e-9));
     });
 
-    // pumpShaftPower ──────────────────────────────────────────────────────────
-    test('pumpShaftPower ≈ 17 670.536 W  (12369.375 / 0.70)', () {
-      // 12 369.375 / 0.70 = 17 670.535 714… W
-      expect(design.pumpShaftPower.watts, closeTo(17670.536, 0.05));
+    test('pumpHead = 40 + 15 + 690000/9810', () {
+      expect(design.pumpHead.meters, closeTo(expHead, 1e-6));
+    });
+
+    test('pumpHydraulicPower = ρ·g·Q·H', () {
+      expect(design.pumpHydraulicPower.watts, closeTo(expHyd, 1e-3));
+    });
+
+    test('pumpShaftPower = hydraulicPower / 0.70', () {
+      expect(design.pumpShaftPower.watts, closeTo(expShaft, 1e-3));
     });
 
     test('pumpShaftPower > pumpHydraulicPower (efficiency < 1)', () {
@@ -212,48 +144,32 @@ void main() {
         greaterThan(design.pumpHydraulicPower.watts),
       );
     });
-
-    test('pumpShaftPower ≈ hydraulicPower / 0.70', () {
-      expect(
-        design.pumpShaftPower.watts,
-        closeTo(design.pumpHydraulicPower.watts / 0.70, 0.01),
-      );
-    });
-
-    test('pumpHydraulicPower in kW ≈ 12.369 kW', () {
-      expect(design.pumpHydraulicPower.inKiloWatts, closeTo(12.369, 0.05));
-    });
-
-    test('pumpShaftPower in kW ≈ 17.671 kW', () {
-      expect(design.pumpShaftPower.inKiloWatts, closeTo(17.671, 0.05));
-    });
   });
 
-  // ── Case B: single riser ──────────────────────────────────────────────────
+  // ── Case B: single riser, Class II ────────────────────────────────────────
 
-  group('designStandpipe — Case B: 1 riser (minimum), 30 m building', () {
+  group('designStandpipe — Case B: 1 riser (minimum), 30 m, Class II', () {
     late FireStandpipeDesign design;
 
     setUp(() {
       design = designStandpipe(
         risers: 1,
         buildingHeight: const Length(30),
+        standpipeClass: StandpipeClass.classII,
       );
     });
 
-    test('requiredFlow is 500 L/min = 8.333 L/s', () {
-      // Q = 500 L/min = 500/60 L/s = 8.3333… L/s
-      expect(design.requiredFlow.inLitersPerSecond, closeTo(500.0 / 60.0, 1e-9));
+    test('requiredFlow is 550 gpm', () {
+      expect(design.requiredFlow.inLitersPerMinute, closeTo(550.0 * gal, 1e-9));
     });
 
-    test('topResidualPressure is 450 kPa // VERIFY', () {
+    test('topResidualPressure is 450 kPa (Class II)', () {
       expect(design.topResidualPressure.inKiloPascals, closeTo(450.0, 1e-9));
     });
 
-    test('pumpHead = 30 + 15 + 45.872 ≈ 90.872 m', () {
-      // residualHead = 450 000 / 9 810 = 45.8716… m
-      // pumpHead     = 30 + 15 + 45.8716… = 90.8716… m
-      expect(design.pumpHead.meters, closeTo(90.8716, 5e-4));
+    test('pumpHead = 30 + 15 + 450000/9810', () {
+      const expHead = 30.0 + 15.0 + 450000.0 / rhoG;
+      expect(design.pumpHead.meters, closeTo(expHead, 1e-6));
     });
 
     test('pumpHydraulicPower is positive', () {
@@ -271,39 +187,25 @@ void main() {
   // ── Case C / D: flow cap (≥ 4 risers) ────────────────────────────────────
 
   group('designStandpipe — Case C/D: flow cap (≥ 4 risers)', () {
-    test('4 risers → requiredFlow = 1250 L/min (20.833 L/s)', () {
-      final design = designStandpipe(
-        risers: 4,
-        buildingHeight: const Length(50),
-      );
-      // 500 + 250 × 3 = 1250 L/min → exactly at cap
+    test('4 risers → requiredFlow = 1250 gpm', () {
+      final design = designStandpipe(risers: 4, buildingHeight: const Length(50));
       expect(
-        design.requiredFlow.inLitersPerSecond,
-        closeTo(1250.0 / 60.0, 1e-9),
+        design.requiredFlow.inLitersPerMinute,
+        closeTo(1250.0 * gal, 1e-9),
       );
     });
 
-    test('6 risers → requiredFlow still 1250 L/min (cap enforced)', () {
-      final design = designStandpipe(
-        risers: 6,
-        buildingHeight: const Length(50),
-      );
-      // Uncapped: 1750 L/min → capped to 1250 L/min
+    test('6 risers → requiredFlow still 1250 gpm (cap enforced)', () {
+      final design = designStandpipe(risers: 6, buildingHeight: const Length(50));
       expect(
-        design.requiredFlow.inLitersPerSecond,
-        closeTo(1250.0 / 60.0, 1e-9),
+        design.requiredFlow.inLitersPerMinute,
+        closeTo(1250.0 * gal, 1e-9),
       );
     });
 
     test('4-riser and 6-riser designs have identical requiredFlow', () {
-      final d4 = designStandpipe(
-        risers: 4,
-        buildingHeight: const Length(50),
-      );
-      final d6 = designStandpipe(
-        risers: 6,
-        buildingHeight: const Length(50),
-      );
+      final d4 = designStandpipe(risers: 4, buildingHeight: const Length(50));
+      final d6 = designStandpipe(risers: 6, buildingHeight: const Length(50));
       expect(
         d4.requiredFlow.cubicMetersPerSecond,
         closeTo(d6.requiredFlow.cubicMetersPerSecond, 1e-12),
@@ -315,26 +217,14 @@ void main() {
 
   group('designStandpipe — sanity across configurations', () {
     test('taller building → larger pumpHead', () {
-      final low = designStandpipe(
-        risers: 2,
-        buildingHeight: const Length(20),
-      );
-      final high = designStandpipe(
-        risers: 2,
-        buildingHeight: const Length(60),
-      );
+      final low = designStandpipe(risers: 2, buildingHeight: const Length(20));
+      final high = designStandpipe(risers: 2, buildingHeight: const Length(60));
       expect(high.pumpHead.meters, greaterThan(low.pumpHead.meters));
     });
 
     test('more risers (uncapped) → larger hydraulicPower', () {
-      final r2 = designStandpipe(
-        risers: 2,
-        buildingHeight: const Length(40),
-      );
-      final r3 = designStandpipe(
-        risers: 3,
-        buildingHeight: const Length(40),
-      );
+      final r2 = designStandpipe(risers: 2, buildingHeight: const Length(40));
+      final r3 = designStandpipe(risers: 3, buildingHeight: const Length(40));
       expect(
         r3.pumpHydraulicPower.watts,
         greaterThan(r2.pumpHydraulicPower.watts),
@@ -355,18 +245,19 @@ void main() {
       expect(eta80.pumpShaftPower.watts, lessThan(eta65.pumpShaftPower.watts));
     });
 
-    test('topResidualPressure is always 450 kPa // VERIFY', () {
-      for (final risers in [1, 2, 4]) {
-        final design = designStandpipe(
-          risers: risers,
-          buildingHeight: const Length(30),
-        );
-        expect(
-          design.topResidualPressure.inKiloPascals,
-          closeTo(450.0, 1e-9),
-          reason: 'Failed for risers = $risers',
-        );
-      }
+    test('Class I residual (690 kPa) exceeds Class II (450 kPa) → higher head',
+        () {
+      final classI = designStandpipe(
+        risers: 2,
+        buildingHeight: const Length(30),
+        standpipeClass: StandpipeClass.classI,
+      );
+      final classII = designStandpipe(
+        risers: 2,
+        buildingHeight: const Length(30),
+        standpipeClass: StandpipeClass.classII,
+      );
+      expect(classI.pumpHead.meters, greaterThan(classII.pumpHead.meters));
     });
   });
 }

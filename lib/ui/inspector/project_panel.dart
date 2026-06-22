@@ -482,7 +482,7 @@ class _FireSection extends ConsumerWidget {
             ),
             Expanded(
               child: Text(
-                'Draft — SNI 03-3989 / 1745 / 6570 values unverified',
+                'SNI 03-3989 / 1745 / 6570 · single-riser draft demand',
                 style: type.caption.copyWith(color: colors.textMuted),
               ),
             ),
