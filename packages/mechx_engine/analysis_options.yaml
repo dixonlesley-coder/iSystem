@@ -1,0 +1,19 @@
+# Strict, self-contained analysis for the pure engine (no external lint pkg so
+# `dart pub get` stays dependency-light). The engine must analyze clean.
+analyzer:
+  language:
+    strict-casts: true
+    strict-raw-types: true
+  errors:
+    # Treat unawaited futures etc. seriously; tighten as the engine grows.
+    todo: ignore
+
+linter:
+  rules:
+    - avoid_print
+    - prefer_final_locals
+    - prefer_const_constructors
+    - prefer_const_declarations
+    - unnecessary_this
+    - directives_ordering
+    - always_declare_return_types

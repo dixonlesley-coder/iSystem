@@ -1,0 +1,13 @@
+name: mechx_engine
+description: >-
+  Pure-Dart MEP calculation engine for MechX — SI typed quantities, hydraulic
+  formula kernel, pressure scalar-field, and pluggable SNI standards data.
+  Contains zero Flutter imports and is runnable standalone with `dart test`.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dev_dependencies:
+  test: ^1.25.0

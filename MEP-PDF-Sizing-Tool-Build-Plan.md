@@ -1,0 +1,212 @@
+# MEP PDF Sizing Tool — Build Plan (authoritative spec)
+
+> **Status:** living document. This is the source of truth. If a decision
+> changes, update this file *in the same commit* as the code change.
+>
+> **Provenance note:** This plan was reconstructed from the project kickoff
+> brief (the original 6 hand-off files were not available, so the build plan and
+> the drafted engine/standards/test files were authored from scratch — see
+> [§15 Decisions log](#15-decisions-log)). SNI values are draft placeholders
+> tagged `// VERIFY` until transcribed from official SNI PDFs.
+
+---
+
+## 1. Overview & goal
+
+An **offline, native Windows desktop application** for MEP (mechanical /
+electrical / plumbing) design. An engineer:
+
+1. loads **PDF floor plans**,
+2. **calibrates each sheet's scale** and sets **per-floor heights**,
+3. **drags duct / pipe elements** onto the plans,
+
+and the app then automatically:
+
+- **sizes** ducts, pipes, pumps and fire systems to **Indonesian SNI** standards,
+- **solves the network** (node pressures / flows),
+- **auto-draws schematic riser diagrams**,
+- shows a **live pressure heatmap**, and
+- outputs a **Bill of Materials (BOM)**,
+
+all with **no internet connection**.
+
+## 2. Product scope
+
+Services covered, in MVP build order (see [§13](#13-open-decisions--chosen-defaults)):
+ducts (HVAC) · clean/cold water · wastewater + vent → then rainwater, recycle,
+pumps → then fire protection (sprinkler / hydrant / fire pump).
+
+## 3. Stack — decided, not re-litigated
+
+| Concern | Choice |
+|---|---|
+| Framework / target | **Flutter, Windows desktop**, compiled native (develop on any OS, ship Windows) |
+| Calc engine | **Pure-Dart**, **zero Flutter imports**, in package `mechx_engine` |
+| PDF rendering | `pdfrx` (PDFium) |
+| Persistence | `drift` (SQLite) + versioned project files |
+| State | Riverpod with undo/redo |
+| Tests | `package:test` (engine), `flutter_test` (UI) |
+
+**Explicitly NOT used:** web stack, Electron, WinUI, default Material/Fluent
+theme, cloud, login, telemetry, browser storage.
+
+## 4. Polish bar (acceptance criteria — not aspiration)
+
+A screen is not "done" until it meets all of these:
+
+- **Instant launch + viewport restore** — no spinner.
+- **60/120 fps pan/zoom**, zero dropped frames on drag.
+- **Direct manipulation** with snap feedback.
+- **Native input** — scroll/pinch zoom, middle-drag pan, full keyboard shortcuts.
+- **Async calc off the UI thread** — *no* modal "calculating…".
+- **8pt grid, one type scale, light/dark.**
+- **Motion that orients** — nothing decorative.
+
+## 5. Module map / architecture
+
+```
+MechX/                              (Flutter app, package: mechx)
+├─ lib/
+│  ├─ main.dart                     app entry (P0 shell)
+│  ├─ ui/                           screens, canvas, design system   (P0+)
+│  ├─ data/                         drift schema, project file IO     (P0+)
+│  └─ store/                        Riverpod providers, undo/redo      (P0+)
+├─ test/                            widget / integration tests
+├─ packages/
+│  └─ mechx_engine/                 PURE-DART engine (no Flutter)
+│     ├─ lib/
+│     │  ├─ units.dart              SI typed quantities
+│     │  ├─ hydraulics.dart         hydraulic-formula kernel
+│     │  ├─ pressure_field.dart     heatmap scalar-field kernel
+│     │  ├─ sizing/                 SNI sizing paths (ducts/water/...)  (P3+)
+│     │  └─ standards/
+│     │     └─ sni.dart             pluggable SNI standards data
+│     └─ test/
+│        ├─ hydraulics_test.dart    seed correctness anchors
+│        └─ pressure_field_test.dart
+└─ MEP-PDF-Sizing-Tool-Build-Plan.md (this file)
+```
+
+**Why a separate engine package** (deviation from a literal `lib/engine/`): the
+guardrails demand a *pure-Dart* engine that runs under `dart test` with
+`package:test` and >90% coverage. `dart test` cannot run inside a Flutter
+package (the Flutter SDK dependency breaks pure-Dart resolution), so the engine
+lives in its own pure package the app consumes by path. Fully reversible; see
+[§15](#15-decisions-log).
+
+## 6. Domain model & units
+
+- **One internal unit system: SI.** Convert only at the UI boundary.
+- **Typed quantities, never bare numbers across modules** (`units.dart`):
+  `Length`, `Diameter`, `Area`, `Velocity`, `FlowRate`, `Pressure`, `Head`,
+  `Power`, `Roughness` — zero-cost Dart 3 `extension type`s over `double`.
+- Construct from engineering units via static helpers (`Diameter.mm`,
+  `FlowRate.litersPerSecond`, `Pressure.kiloPascals`…); read via `inXxx` getters.
+
+## 7. The three sizing code paths (kept separate — §12)
+
+A shared "size a pipe" function silently breaks drainage and fire. The engine
+exposes the *primitives* separately and the sizing layer composes the correct
+path per service:
+
+| Path | Method | Kernel entry points |
+|---|---|---|
+| **Pressurized** (supply, fire feed) | demand → velocity → friction | `reynolds`, `frictionFactor*`, `headLossDarcy`, `headLossHazenWilliams` |
+| **Gravity** (drainage) | Manning partial-full + stack capacity | `manningVelocity`, `manningFlowFull` |
+| **Fire** | density/area + standpipe residual | (P5) builds on pressurized + dedicated residual checks |
+
+## 8. Standards as pluggable data + the VERIFY list
+
+- `standards/sni.dart` implements `StandardsProfile`; the engine depends on the
+  **interface**, never the concrete numbers — standards are swappable data.
+- Every draft value is wrapped in `StandardValue<T>` carrying
+  `{value, unit, citation, verified}` and tagged `// VERIFY`. Until
+  `verified == true`, the **UI/output must show it as UNVERIFIED** and must not
+  present it as authoritative.
+- **Top of the verify list** (per [§13.4](#13-open-decisions--chosen-defaults)):
+  1. **SNI 8153 max fixture static pressure** (the zoning/booster trigger).
+  2. **SNI 8153 demand curve** (fixture-units → probable simultaneous flow).
+  `SniProfile.verifyChecklist` returns the outstanding items, most-critical first.
+
+## 9. One solve feeds everything (no parallel calculations — §12)
+
+The **schematic diagram** and the **pressure heatmap** are *generated renders of
+the solved network*, never independent calculations that could disagree with the
+sizing numbers. A single node-pressure/flow solve feeds: sizing, pump duty, the
+auto diagram, and the heatmap. `pressure_field.dart` only *interpolates* already
+solved node values into a grid — it computes no physics.
+
+## 10. Geometry & length — single source of truth
+
+- **Horizontal length = pixels × calibrated scale** (per sheet).
+- **Vertical (riser) length = floor-elevation delta** (per-floor heights).
+- **Never** measure riser length from a PDF. Geometry + floor elevations are the
+  authoritative source for every length the engine consumes.
+
+## 11. Persistence & versioning
+
+- **Versioned project file format + DB schema from day one** (`drift`/SQLite).
+- Project files carry a schema/version header; migrations are explicit.
+- Viewport / last-open state persisted for instant restore (§4).
+
+## 12. Architecture guardrails (non-negotiable)
+
+1. Engine is **pure** (no Flutter imports), **>90% test coverage**, seeded with
+   SNI/textbook worked examples.
+2. **One unit system internally (SI)**; convert only at the UI boundary; typed
+   quantities, never bare numbers between modules.
+3. **Geometry + floor elevations are the single source of truth for length**
+   ([§10](#10-geometry--length--single-source-of-truth)).
+4. **Gravity, pressurized, and fire are SEPARATE sizing code paths**
+   ([§7](#7-the-three-sizing-code-paths-kept-separate--12)).
+5. **Diagram + heatmap are generated renders of the one solve**
+   ([§9](#9-one-solve-feeds-everything-no-parallel-calculations--12)).
+6. **Standards are pluggable data**; `// VERIFY` values are flagged as
+   unverified in UI/output ([§8](#8-standards-as-pluggable-data--the-verify-list)).
+7. **Versioned project file format + DB schema from day one.**
+
+## 13. Open decisions & chosen defaults
+
+1. **MVP service order:** ducts + clean water + wastewater (+vent) first;
+   rainwater/recycle/pumps in P4; fire in P5.
+2. **Source architecture template:** ground water tank → transfer pump → roof
+   tank → gravity downfeed + top-zone booster.
+3. **Heatmap default:** residual-pressure metric, per-zone colour scaling;
+   fill-ratio (not pressure) for gravity drainage.
+4. **VERIFY priority:** pull SNI 8153 **max-fixture-pressure** (zoning trigger)
+   and the **demand-curve** table to the top of the verify list — flag to the
+   user, do not guess.
+
+## 14. Phase plan
+
+| Phase | Scope | Gate |
+|---|---|---|
+| **Step 1** ✅ | Scaffold + pure engine + seed tests green | *all seed tests pass* |
+| **P0 Shell** | Flutter scaffold, custom design tokens, PDF render via pdfrx, multi-sheet nav, pannable/zoomable canvas hitting §4 | review stop |
+| **P1** | Project details + per-floor heights + scale calibration | — |
+| **P2** | Drawing (incl. risers) | — |
+| **P3** | SNI sizing engine (ducts + clean water first) | — |
+| **P4** | Network solve + pumps + zoning + auto diagram + pressure heatmap + BOM | **MVP = P0–P4** |
+| **P5** | Fire protection (sprinkler/hydrant/fire pump) + depth (parallelizable once engine+network exist) | — |
+
+Commit per logical unit; keep tests passing continuously. **Pause at each phase
+boundary for review.**
+
+## 15. Decisions log
+
+| Date | Decision | Rationale |
+|---|---|---|
+| 2026-06-22 | Authored build plan + engine/standards/test files **from scratch** | The original 6 hand-off files were not provided; user approved authoring drafts. SNI numbers are placeholders. |
+| 2026-06-22 | Package name **`mechx`** (app) / **`mechx_engine`** (engine) | User choice; matches repo. |
+| 2026-06-22 | Engine lives in **pure-Dart package `packages/mechx_engine`**, not literal `lib/engine/` | Required to satisfy "pure-Dart engine + `dart test` + `package:test` + >90% coverage" (Flutter packages can't run `dart test`). Reversible. |
+| 2026-06-22 | Internal quantities are Dart 3 `extension type`s | Zero-cost typed-quantity guardrail (§12.2). |
+| 2026-06-22 | Toolchain installed in CI/dev container: **Flutter 3.44.2 / Dart 3.12.2** | Linux dev/test only; Windows `.exe` build happens on the engineer's machine. |
+
+## 16. Testing strategy
+
+- **Engine:** `package:test`, run with `dart test` in `packages/mechx_engine`.
+  Seed suites hand-compute expected values from first principles and are the
+  correctness anchor. Target **>90% coverage** (`dart test --coverage`).
+- **UI:** `flutter_test` widget/integration tests; golden tests for the design
+  system once it exists (P0).
+- **Continuous green:** no phase advances on red.
