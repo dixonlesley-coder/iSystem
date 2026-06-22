@@ -49,6 +49,26 @@ const List<double> standardDuctDiametersMm = <double>[
   1000,
 ];
 
+/// Standard rectangular duct side lengths (mm), ascending. Used by
+/// [sizeRectangularByVelocity] to round each side up to a buildable size.
+const List<double> standardDuctSidesMm = <double>[
+  100,
+  150,
+  200,
+  250,
+  300,
+  350,
+  400,
+  450,
+  500,
+  600,
+  700,
+  800,
+  900,
+  1000,
+  1200,
+];
+
 // ── Result type ───────────────────────────────────────────────────────────────
 
 /// Outcome of a duct-sizing calculation.
@@ -82,21 +102,22 @@ const double _galvSteelRoughness = 9.0e-5;
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-/// Darcy–Weisbach friction pressure drop per unit length (Pa/m) for a
-/// circular duct carrying airflow [q] of diameter [d].
+/// Darcy–Weisbach friction pressure drop per unit length (Pa/m) for a circular
+/// duct carrying airflow [q] of diameter [d].
 ///
-/// Formula: Δp/L = f · (1/D) · (ρ v² / 2)
-///
-/// where f is the Swamee–Jain approximation of the Colebrook–White friction
+/// Formula: Δp/L = f · (1/D) · (ρ v² / 2), with f the Swamee–Jain friction
 /// factor, ρ = [_airDensity], ν = [_airKinematicViscosity],
-/// ε = [_galvSteelRoughness].
-double _frictionPaPerMetre(FlowRate q, Diameter d) {
+/// ε = [_galvSteelRoughness]. Public so the fan-static solve can sum it along a
+/// duct run.
+double ductFrictionPaPerMetre(FlowRate q, Diameter d) {
   final v = velocityFromFlow(q, d);
   final re = reynolds(v, d, kinematicViscosity: _airKinematicViscosity);
   final relRoughness = _galvSteelRoughness / d.meters;
   final f = frictionFactorSwameeJain(re, relRoughness);
   return f * (1.0 / d.meters) * (_airDensity * v.metersPerSecond * v.metersPerSecond / 2.0);
 }
+
+double _frictionPaPerMetre(FlowRate q, Diameter d) => ductFrictionPaPerMetre(q, d);
 
 // ── Public sizing functions ───────────────────────────────────────────────────
 
@@ -193,4 +214,69 @@ Diameter rectangularEquivalentDiameter(Length a, Length b) {
       math.pow(aSi * bSi, 0.625) /
       math.pow(aSi + bSi, 0.25);
   return Diameter(deMetre.toDouble());
+}
+
+/// Outcome of a rectangular duct-sizing calculation.
+final class RectangularDuctResult {
+  /// Chosen duct width and height (standard sides, ≥ the ideal cross-section).
+  final Length width;
+  final Length height;
+
+  /// Circular-equivalent diameter of the chosen W×H (for friction/labelling).
+  final Diameter equivalentDiameter;
+
+  /// True mean velocity through the rectangular cross-section at the airflow.
+  final Velocity actualVelocity;
+
+  /// Friction pressure loss per metre (Pa/m), via the equivalent diameter.
+  final double frictionPerMetrePa;
+
+  const RectangularDuctResult({
+    required this.width,
+    required this.height,
+    required this.equivalentDiameter,
+    required this.actualVelocity,
+    required this.frictionPerMetrePa,
+  });
+}
+
+/// Size a rectangular duct so the mean velocity stays at or below [maxVelocity]
+/// at the given width:height [aspectRatio] (W/H, ≥ 1).
+///
+/// Algorithm: required area A = Q / v_max; with W = aspect·H and A = W·H,
+/// H = √(A/aspect), W = aspect·H. Each side is rounded UP to the next standard
+/// side so the actual area ≥ A (velocity stays under the limit). Friction is
+/// computed from the circular-equivalent diameter.
+RectangularDuctResult sizeRectangularByVelocity({
+  required FlowRate airflow,
+  required Velocity maxVelocity,
+  double aspectRatio = 1.5,
+}) {
+  assert(airflow.cubicMetersPerSecond > 0, 'airflow must be positive');
+  assert(maxVelocity.metersPerSecond > 0, 'maxVelocity must be positive');
+  assert(aspectRatio >= 1.0, 'aspectRatio (W/H) must be ≥ 1');
+
+  final reqArea = airflow.cubicMetersPerSecond / maxVelocity.metersPerSecond;
+  final hIdealMm = math.sqrt(reqArea / aspectRatio) * 1000.0;
+  final wIdealMm = aspectRatio * math.sqrt(reqArea / aspectRatio) * 1000.0;
+
+  double roundUp(double mm) => standardDuctSidesMm.firstWhere(
+        (s) => s >= mm,
+        orElse: () => standardDuctSidesMm.last,
+      );
+
+  final w = Length(roundUp(wIdealMm) / 1000.0);
+  final h = Length(roundUp(hIdealMm) / 1000.0);
+  final actualArea = w.meters * h.meters;
+  final v = Velocity(airflow.cubicMetersPerSecond / actualArea);
+  final de = rectangularEquivalentDiameter(w, h);
+  final friction = ductFrictionPaPerMetre(airflow, de);
+
+  return RectangularDuctResult(
+    width: w,
+    height: h,
+    equivalentDiameter: de,
+    actualVelocity: v,
+    frictionPerMetrePa: friction,
+  );
 }

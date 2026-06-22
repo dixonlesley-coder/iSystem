@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/bom.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -118,6 +119,10 @@ class ProjectPanel extends ConsumerWidget {
 
               // ── Fire protection ───────────────────────────────────────────
               const _FireSection(),
+              const SizedBox(height: MechXSpacing.lg),
+
+              // ── HVAC / ducting ────────────────────────────────────────────
+              const _HvacSection(),
               const SizedBox(height: MechXSpacing.lg),
 
               // ── Scale calibration ─────────────────────────────────────────
@@ -759,6 +764,39 @@ class _SelectionSection extends ConsumerWidget {
                 ),
             ],
           ),
+          const SizedBox(height: MechXSpacing.sm),
+          Text('Air terminal (diffuser) airflow',
+              style: context.type.caption
+                  .copyWith(color: context.colors.textMuted)),
+          const SizedBox(height: MechXSpacing.xs),
+          Row(
+            children: [
+              _GlyphButton(
+                glyph: '−',
+                onTap: () {
+                  final lps = (node.airflow?.inLitersPerSecond ?? 0) - 5;
+                  ctrl.setNodeAirflow(
+                      node.id, lps <= 0 ? null : FlowRate.litersPerSecond(lps));
+                },
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              Text(
+                node.airflow == null
+                    ? '—'
+                    : '${node.airflow!.inLitersPerSecond.toStringAsFixed(0)} L/s',
+                style: context.type.mono
+                    .copyWith(color: context.colors.textSecondary),
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              _GlyphButton(
+                glyph: '+',
+                onTap: () {
+                  final lps = (node.airflow?.inLitersPerSecond ?? 0) + 5;
+                  ctrl.setNodeAirflow(node.id, FlowRate.litersPerSecond(lps));
+                },
+              ),
+            ],
+          ),
         ],
         const SizedBox(height: MechXSpacing.sm),
         Align(
@@ -820,6 +858,89 @@ class _SelectionSection extends ConsumerWidget {
             },
           ),
         ),
+      ],
+    );
+  }
+}
+
+/// HVAC / duct sizing controls + fan duty readout (the air-path analogue of the
+/// Network section).
+class _HvacSection extends ConsumerWidget {
+  const _HvacSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final settings = ref.watch(ductSettingsProvider);
+    final ctrl = ref.read(ductSettingsProvider.notifier);
+    final fan = ref.watch(ductFanProvider);
+
+    Widget kv(String k, String v) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(k,
+                    style: type.caption.copyWith(color: colors.textMuted)),
+              ),
+              Text(v, style: type.mono.copyWith(color: colors.textSecondary)),
+            ],
+          ),
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _SectionLabel('HVAC · ducting'),
+        const SizedBox(height: MechXSpacing.sm),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            _Pill(
+              label: 'Round',
+              selected: settings.shape == DuctShape.round,
+              onTap: () => ctrl.setShape(DuctShape.round),
+            ),
+            _Pill(
+              label: 'Rectangular',
+              selected: settings.shape == DuctShape.rectangular,
+              onTap: () => ctrl.setShape(DuctShape.rectangular),
+            ),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.xs),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            _Pill(
+              label: 'Velocity',
+              selected: settings.method == DuctSizingMethod.velocity,
+              onTap: () => ctrl.setMethod(DuctSizingMethod.velocity),
+            ),
+            _Pill(
+              label: 'Equal friction',
+              selected: settings.method == DuctSizingMethod.equalFriction,
+              onTap: () => ctrl.setMethod(DuctSizingMethod.equalFriction),
+            ),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        if (fan == null)
+          Text('Draw a duct network and assign diffuser airflows.',
+              style: type.caption.copyWith(color: colors.textMuted))
+        else ...[
+          kv('Trunk airflow',
+              '${fan.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s'),
+          kv('Fan static',
+              '${fan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa'),
+          kv('Fan power',
+              '${fan.shaftPower.inKiloWatts.toStringAsFixed(2)} kW'),
+          kv('Fan motor',
+              '${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
+        ],
       ],
     );
   }

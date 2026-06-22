@@ -65,6 +65,8 @@ class ProjectDocument {
                 'role': n.role.name,
                 if (n.elevation != null) 'elev_m': n.elevation!.meters,
                 if (n.fixture != null) 'fixture': n.fixture!.name,
+                if (n.airflow != null)
+                  'airflow_lps': n.airflow!.inLitersPerSecond,
               },
           ],
           'edges': [
@@ -122,6 +124,9 @@ class ProjectDocument {
           fixture: n['fixture'] == null
               ? null
               : PlumbingFixture.values.byName(n['fixture'] as String),
+          airflow: n['airflow_lps'] == null
+              ? null
+              : FlowRate.litersPerSecond((n['airflow_lps'] as num).toDouble()),
         ),
     ];
     final edges = [

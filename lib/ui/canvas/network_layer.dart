@@ -105,8 +105,14 @@ class _NetworkPainter extends CustomPainter {
         );
         final s = sizing[e.id];
         if (s != null) {
-          final mm = s.diameter.inMillimeters.round();
-          final label = e.service.regime == FlowRegime.air ? 'Ø$mm' : 'DN$mm';
+          final String label;
+          if (s.isRectangular) {
+            label = '${s.width!.inMillimeters.round()}'
+                '×${s.height!.inMillimeters.round()}';
+          } else {
+            final mm = s.diameter.inMillimeters.round();
+            label = e.service.regime == FlowRegime.air ? 'Ø$mm' : 'DN$mm';
+          }
           _label(canvas, (pa + pb) / 2, label);
         }
       } else {

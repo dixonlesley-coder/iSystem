@@ -253,6 +253,24 @@ class NetworkController extends Notifier<DrawingState> {
     ));
   }
 
+  /// Assign the design [airflow] at a node, marking it an air terminal
+  /// (diffuser/grille). Pass null to clear it.
+  void setNodeAirflow(String id, FlowRate? airflow) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    _replaceNode(NetNode(
+      id: node.id,
+      sheetId: node.sheetId,
+      x: node.x,
+      y: node.y,
+      floorIndex: node.floorIndex,
+      role: airflow == null ? node.role : NodeRole.fixture,
+      elevation: node.elevation,
+      fixture: node.fixture,
+      airflow: airflow,
+    ));
+  }
+
   /// Set an explicit absolute [elevation] override on a node (e.g. a roof tank
   /// on a stand, or a basement plant). Pass null to revert to the role default.
   void setNodeElevation(String id, Length? elevation) {

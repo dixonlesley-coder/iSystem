@@ -66,9 +66,13 @@ class NetNode {
   /// basement plant datum). When set it wins over [role]-derived elevation.
   final Length? elevation;
 
-  /// Plumbing fixture served at this node (for [NodeRole.fixture] terminals).
-  /// Drives the per-fixture UBAP demand used to size the supply upstream.
+  /// Plumbing fixture served at this node (for [NodeRole.fixture] terminals on
+  /// a water service). Drives the per-fixture UBAP demand upstream.
   final PlumbingFixture? fixture;
+
+  /// Design airflow at this node (for an air-terminal — diffuser/grille — on a
+  /// duct service). Drives the accumulated duct airflow demand upstream.
+  final FlowRate? airflow;
 
   const NetNode({
     required this.id,
@@ -79,6 +83,7 @@ class NetNode {
     this.role = NodeRole.main,
     this.elevation,
     this.fixture,
+    this.airflow,
   });
 
   NetNode copyWith({
@@ -89,6 +94,7 @@ class NetNode {
     NodeRole? role,
     Length? elevation,
     PlumbingFixture? fixture,
+    FlowRate? airflow,
   }) =>
       NetNode(
         id: id,
@@ -99,6 +105,7 @@ class NetNode {
         role: role ?? this.role,
         elevation: elevation ?? this.elevation,
         fixture: fixture ?? this.fixture,
+        airflow: airflow ?? this.airflow,
       );
 }
 

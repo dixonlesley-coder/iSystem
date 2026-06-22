@@ -42,6 +42,7 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
   final net = ref.watch(networkControllerProvider).network;
   if (net.edges.isEmpty) return const {};
   final occupancy = ref.watch(occupancyProvider);
+  final ducts = ref.watch(ductSettingsProvider);
   const profile = SniProfile();
 
   // Real per-fixture UBAP where the user has assigned a fixture type; nodes
@@ -51,16 +52,22 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
       if (n.fixture != null)
         n.id: profile.fixtureUnitLoad(n.fixture!, occupancy: occupancy),
   };
+  // Per-diffuser airflow where assigned (drives the duct air path).
+  final nodeFlowDemand = <String, FlowRate>{
+    for (final n in net.nodes)
+      if (n.airflow != null) n.id: n.airflow!,
+  };
   // If any assigned WC uses a flush valve, size the supply on the valve curve.
   final anyFlushValve = net.nodes.any(
       (n) => n.fixture == PlumbingFixture.waterClosetFlushValve);
 
   return autoSizeNetwork(
     net,
-    const SizingContext(),
+    SizingContext(ductShape: ducts.shape, ductMethod: ducts.method),
     leafDemand: kDefaultLeafDemand,
     leafFixtureUnits: kDefaultLeafFixtureUnits,
     nodeFixtureUnits: nodeFixtureUnits,
+    nodeFlowDemand: nodeFlowDemand,
     flushSystem:
         anyFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank,
   );

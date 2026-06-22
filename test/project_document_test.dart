@@ -34,7 +34,15 @@ void main() {
             role: NodeRole.plant,
             elevation: Length(30),
           ),
-          NetNode(id: 'n1', sheetId: 's1', x: 110, y: 20, floorIndex: 0),
+          NetNode(
+            id: 'n1',
+            sheetId: 's1',
+            x: 110,
+            y: 20,
+            floorIndex: 0,
+            role: NodeRole.fixture,
+            airflow: FlowRate(0.045), // 45 L/s
+          ),
           NetNode(
             id: 'n2',
             sheetId: 's1',
@@ -76,7 +84,8 @@ void main() {
     expect(decoded.network.nodes[0].elevation?.meters, 30);
     expect(decoded.network.nodes[2].role, NodeRole.fixture);
     expect(decoded.network.nodes[2].fixture, PlumbingFixture.lavatory);
-    expect(decoded.network.nodes[1].role, NodeRole.main);
+    expect(decoded.network.nodes[1].role, NodeRole.fixture);
+    expect(decoded.network.nodes[1].airflow?.inLitersPerSecond, closeTo(45, 1e-9));
     expect(decoded.network.nodes[1].fixture, isNull);
     expect(decoded.network.edges.length, 2);
     expect(decoded.network.edges[0].service, ServiceType.coldWater);

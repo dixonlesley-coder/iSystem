@@ -1,9 +1,11 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/network/duct_static.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/network/zoning.dart';
 import 'package:mechx_engine/sizing/bom.dart';
+import 'package:mechx_engine/sizing/fan.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
@@ -159,6 +161,56 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
   }
   if (flow.cubicMetersPerSecond <= 0) return null;
   return sizePump(flow: flow, head: solution.requiredPumpHead);
+});
+
+/// Fan duty for the supply/return duct system: total airflow at the trunk
+/// (largest-flow duct) against the fan total static pressure from the index
+/// run. Null when there's no duct network sized.
+final ductFanProvider = Provider<FanDuty?>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+
+  final ductEdges =
+      net.edges.where((e) => e.service == ServiceType.duct).toList();
+  if (ductEdges.isEmpty) return null;
+
+  // Trunk airflow = the largest sized duct flow.
+  var airflow = const FlowRate(0);
+  final edgeFlows = <String, FlowRate>{};
+  for (final e in ductEdges) {
+    final s = sizing[e.id];
+    if (s == null) continue;
+    edgeFlows[e.id] = s.flow;
+    if (s.flow.cubicMetersPerSecond > airflow.cubicMetersPerSecond) {
+      airflow = s.flow;
+    }
+  }
+  if (airflow.cubicMetersPerSecond <= 0) return null;
+
+  // Fan node: a plant (AHU) on the duct subgraph, else any duct node
+  // (deterministic) — the index-run static is the same magnitude regardless.
+  final ductNodeIds = <String>{
+    for (final e in ductEdges) ...[e.fromId, e.toId],
+  };
+  String fan = ductNodeIds.reduce((a, b) => a.compareTo(b) < 0 ? a : b);
+  for (final id in ductNodeIds) {
+    if (net.nodeById(id)?.role == NodeRole.plant) {
+      fan = id;
+      break;
+    }
+  }
+
+  final stat = solveDuctStatic(
+    net: net,
+    service: ServiceType.duct,
+    fanNodeId: fan,
+    edgeFlows: edgeFlows,
+    sizing: sizing,
+    calibrationBySheet: project.calibrations,
+    building: project.building,
+  );
+  return sizeFan(airflow: airflow, totalStaticPressure: stat.totalStaticPressure);
 });
 
 /// Pressure zones for the building under the SNI max-fixture-pressure limit.

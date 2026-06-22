@@ -17,6 +17,11 @@ import 'drainage_sizing.dart' as drain;
 import 'duct_sizing.dart' as duct;
 import 'water_supply_sizing.dart' as water;
 
+/// Duct cross-section shape and the sizing method used for air services.
+enum DuctShape { round, rectangular }
+
+enum DuctSizingMethod { velocity, equalFriction }
+
 /// Design parameters shared across a sizing run.
 class SizingContext {
   final Velocity maxSupplyVelocity;
@@ -26,6 +31,12 @@ class SizingContext {
   final double drainageManningN;
   final PipeMaterial pipeMaterial;
 
+  /// HVAC duct preferences.
+  final DuctShape ductShape;
+  final DuctSizingMethod ductMethod;
+  final double ductEqualFrictionPa; // target Pa/m for the equal-friction method
+  final double ductAspectRatio; // W:H for rectangular ducts
+
   const SizingContext({
     this.maxSupplyVelocity = const Velocity(2.0),
     this.maxDuctVelocity = const Velocity(5.0),
@@ -33,16 +44,25 @@ class SizingContext {
     this.drainageFillRatio = 0.5,
     this.drainageManningN = 0.010,
     this.pipeMaterial = PipeMaterial.pvc,
+    this.ductShape = DuctShape.round,
+    this.ductMethod = DuctSizingMethod.velocity,
+    this.ductEqualFrictionPa = 1.0,
+    this.ductAspectRatio = 1.5,
   });
 }
 
 /// Sizing outcome for one edge.
+///
+/// [diameter] is the circular size, or the circular-equivalent for a
+/// rectangular duct; [width]/[height] are set only for rectangular ducts.
 class EdgeSizing {
   final String edgeId;
   final ServiceType service;
   final FlowRate flow;
   final Diameter diameter;
   final Velocity velocity;
+  final Length? width;
+  final Length? height;
 
   const EdgeSizing({
     required this.edgeId,
@@ -50,7 +70,12 @@ class EdgeSizing {
     required this.flow,
     required this.diameter,
     required this.velocity,
+    this.width,
+    this.height,
   });
+
+  /// True when this edge is a rectangular duct (carries W×H).
+  bool get isRectangular => width != null && height != null;
 }
 
 /// Accumulate downstream demand onto every edge of [service], treating the
@@ -158,10 +183,31 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
         velocity: r.velocity,
       );
     case FlowRegime.air:
-      final r = duct.sizeByVelocity(
-        airflow: flow,
-        maxVelocity: ctx.maxDuctVelocity,
-      );
+      if (ctx.ductShape == DuctShape.rectangular) {
+        final r = duct.sizeRectangularByVelocity(
+          airflow: flow,
+          maxVelocity: ctx.maxDuctVelocity,
+          aspectRatio: ctx.ductAspectRatio,
+        );
+        return EdgeSizing(
+          edgeId: edge.id,
+          service: edge.service,
+          flow: flow,
+          diameter: r.equivalentDiameter,
+          velocity: r.actualVelocity,
+          width: r.width,
+          height: r.height,
+        );
+      }
+      final r = ctx.ductMethod == DuctSizingMethod.equalFriction
+          ? duct.sizeByEqualFriction(
+              airflow: flow,
+              targetPaPerMetre: ctx.ductEqualFrictionPa,
+            )
+          : duct.sizeByVelocity(
+              airflow: flow,
+              maxVelocity: ctx.maxDuctVelocity,
+            );
       return EdgeSizing(
         edgeId: edge.id,
         service: edge.service,
@@ -221,6 +267,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   required Map<ServiceType, FlowRate> leafDemand,
   Map<ServiceType, double> leafFixtureUnits = const {},
   Map<String, double> nodeFixtureUnits = const {},
+  Map<String, FlowRate> nodeFlowDemand = const {},
   FlushSystem flushSystem = FlushSystem.flushTank,
 }) {
   const profile = SniProfile();
@@ -286,9 +333,11 @@ Map<String, EdgeSizing> autoSizeNetwork(
           );
         }
       } else {
+        // Per-node flow where set (e.g. a diffuser's airflow); else the flat
+        // default for the service.
         final terminalDemand = <String, FlowRate>{
           for (final leaf in leaves)
-            if (leaf != root) leaf: demand,
+            if (leaf != root) leaf: nodeFlowDemand[leaf] ?? demand,
         };
         allFlows.addAll(
           accumulateFlows(

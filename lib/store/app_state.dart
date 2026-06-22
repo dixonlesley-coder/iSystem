@@ -1,7 +1,35 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/sni.dart';
+
+/// HVAC duct preferences (shape + sizing method) driving the air code path.
+@immutable
+class DuctSettings {
+  final DuctShape shape;
+  final DuctSizingMethod method;
+  const DuctSettings({
+    this.shape = DuctShape.round,
+    this.method = DuctSizingMethod.velocity,
+  });
+
+  DuctSettings copyWith({DuctShape? shape, DuctSizingMethod? method}) =>
+      DuctSettings(shape: shape ?? this.shape, method: method ?? this.method);
+}
+
+final ductSettingsProvider =
+    NotifierProvider<DuctSettingsController, DuctSettings>(
+  DuctSettingsController.new,
+);
+
+class DuctSettingsController extends Notifier<DuctSettings> {
+  @override
+  DuctSettings build() => const DuctSettings();
+
+  void setShape(DuctShape s) => state = state.copyWith(shape: s);
+  void setMethod(DuctSizingMethod m) => state = state.copyWith(method: m);
+}
 
 /// How the building is fed (drives the supply solve): an upfeed pump pushing
 /// water up from a low plant, or a roof tank distributing by gravity downward.
