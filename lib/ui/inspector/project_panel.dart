@@ -7,6 +7,7 @@ import '../../store/calibration_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../../store/sizing_store.dart';
 import '../canvas/service_style.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -81,6 +82,10 @@ class ProjectPanel extends ConsumerWidget {
 
               // ── Draw ──────────────────────────────────────────────────────
               const _DrawSection(),
+              const SizedBox(height: MechXSpacing.lg),
+
+              // ── Sizing ────────────────────────────────────────────────────
+              const _SizingSection(),
               const SizedBox(height: MechXSpacing.lg),
 
               // ── Scale calibration ─────────────────────────────────────────
@@ -317,6 +322,46 @@ class _DrawSection extends ConsumerWidget {
             MechXButton(label: 'Redo', onPressed: ctrl.redo),
             MechXButton(label: 'Clear', onPressed: ctrl.clear),
           ],
+        ),
+      ],
+    );
+  }
+}
+
+class _SizingSection extends ConsumerWidget {
+  const _SizingSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final show = ref.watch(showSizingProvider);
+    final sized = ref.watch(sizingProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _SectionLabel('Sizing'),
+        const SizedBox(height: MechXSpacing.sm),
+        Row(
+          children: [
+            MechXButton(
+              label: show ? 'Hide sizes' : 'Show sizes',
+              primary: show,
+              onPressed: () => ref.read(showSizingProvider.notifier).toggle(),
+            ),
+            const Spacer(),
+            Text(
+              '${sized.length} sized',
+              style: type.caption.copyWith(color: colors.textMuted),
+            ),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.xs),
+        Text(
+          'Auto-sized to SNI velocity limits (per-branch flow). '
+          'Default terminal demands — refine per fixture later.',
+          style: type.caption.copyWith(color: colors.textMuted),
         ),
       ],
     );

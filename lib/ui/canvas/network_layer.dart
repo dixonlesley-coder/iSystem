@@ -3,9 +3,11 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart';
 
 import '../../store/network_store.dart';
 import '../../store/sheets_store.dart';
+import '../../store/sizing_store.dart';
 import 'service_style.dart';
 import 'viewport.dart';
 
@@ -23,6 +25,9 @@ class NetworkLayer extends ConsumerWidget {
     final net = ref.watch(networkControllerProvider).network;
     final transform = ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
         const ViewportTransform();
+    final sizing = ref.watch(showSizingProvider)
+        ? ref.watch(sizingProvider)
+        : const <String, EdgeSizing>{};
     return IgnorePointer(
       child: CustomPaint(
         size: Size.infinite,
@@ -31,6 +36,7 @@ class NetworkLayer extends ConsumerWidget {
           sheetId: sheetId,
           floorIndex: floorIndex,
           transform: transform,
+          sizing: sizing,
         ),
       ),
     );
@@ -42,12 +48,14 @@ class _NetworkPainter extends CustomPainter {
   final String sheetId;
   final int floorIndex;
   final ViewportTransform transform;
+  final Map<String, EdgeSizing> sizing;
 
   _NetworkPainter({
     required this.net,
     required this.sheetId,
     required this.floorIndex,
     required this.transform,
+    required this.sizing,
   });
 
   bool _onThisFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
@@ -62,15 +70,23 @@ class _NetworkPainter extends CustomPainter {
 
       if (e.kind == EdgeKind.run) {
         if (!_onThisFloor(a) || !_onThisFloor(b)) continue;
+        final pa = transform.worldToScreen(Offset(a.x, a.y));
+        final pb = transform.worldToScreen(Offset(b.x, b.y));
         canvas.drawLine(
-          transform.worldToScreen(Offset(a.x, a.y)),
-          transform.worldToScreen(Offset(b.x, b.y)),
+          pa,
+          pb,
           Paint()
             ..color = color
             ..strokeWidth = 2.5
             ..strokeCap = StrokeCap.round
             ..style = PaintingStyle.stroke,
         );
+        final s = sizing[e.id];
+        if (s != null) {
+          final mm = s.diameter.inMillimeters.round();
+          final label = e.service.regime == FlowRegime.air ? 'Ø$mm' : 'DN$mm';
+          _label(canvas, (pa + pb) / 2, label);
+        }
       } else {
         final lowFloor = math.min(a.floorIndex, b.floorIndex);
         for (final n in [a, b]) {
@@ -126,10 +142,35 @@ class _NetworkPainter extends CustomPainter {
     canvas.drawPath(path, Paint()..color = color);
   }
 
+  void _label(Canvas canvas, Offset center, String text) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: const TextStyle(
+          fontSize: 10.5,
+          color: Color(0xFFFFFFFF),
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final rect = Rect.fromCenter(
+      center: center,
+      width: tp.width + 8,
+      height: tp.height + 4,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(3)),
+      Paint()..color = const Color(0xD915171B),
+    );
+    tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
+  }
+
   @override
   bool shouldRepaint(_NetworkPainter old) =>
       old.net != net ||
       old.transform != transform ||
       old.floorIndex != floorIndex ||
-      old.sheetId != sheetId;
+      old.sheetId != sheetId ||
+      old.sizing != sizing;
 }

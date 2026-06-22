@@ -214,7 +214,7 @@ solved node values into a grid — it computes no physics.
 | **P0 Shell** 🟡 | Custom design system, multi-sheet nav, pannable/zoomable canvas (✅ done & tested); **pdfrx PDF render** (⬜ next, behind the `sheetContentBuilderProvider` seam) | review stop |
 | **P1** ✅ | Project details + per-floor heights + scale calibration. Pure geometry (calibration + elevations), editable project/floor state + inspector UI, pdfrx PDF import + render (2.4.4, "Open PDF…" → sheet-per-page), and the on-canvas mark-a-known-distance calibrate tool. All logic tested (95 total). | — |
 | **P2** ✅ | Drawing (incl. risers). Pure network model (nodes/edges/services/lengths), drawing controller (run polylines w/ snapping, risers, undo/redo/clear), canvas network render + rubber-band overlay, and the inspector draw palette (tool/service/undo). 109 tests. | — |
-| **P3** | SNI sizing engine (ducts + clean water first) | — |
+| **P3** ✅ | SNI sizing engine. Three independent §7 paths (duct/water/drainage, parallel agents), a network dispatcher with **branching flow accumulation** + `autoSizeNetwork`, **grille/diffuser face-velocity sizing** (noise-driven), and a live on-canvas sizing display (DN/Ø labels) with an inspector toggle. Engine 145 tests, app 45. | — |
 | **P4** | Network solve + pumps + zoning + auto diagram + pressure heatmap + BOM | **MVP = P0–P4** |
 | **P5** | Fire protection (sprinkler/hydrant/fire pump) + depth (parallelizable once engine+network exist) | — |
 
