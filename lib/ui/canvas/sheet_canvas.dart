@@ -3,10 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/calibration_store.dart';
 import '../../store/models/sheet.dart';
+import '../../store/network_store.dart';
+import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../theme/mechx_theme.dart';
 import 'calibration_overlay.dart';
 import 'canvas_view.dart';
+import 'drawing_overlay.dart';
+import 'network_layer.dart';
 
 /// Builds the content widget for a sheet. This is the seam where pdfrx (PDFium)
 /// rendering slots in: a future provider override returns a PDF-page widget for
@@ -44,6 +48,12 @@ class SheetCanvas extends ConsumerWidget {
 
     final content = ref.watch(sheetContentBuilderProvider)(context, sheet);
     final calibrating = ref.watch(calibrationControllerProvider).isActive;
+    final drawing = ref.watch(networkControllerProvider).isDrawing;
+
+    // Map the current sheet to a building floor (positional default for now).
+    final levelCount = ref.watch(projectControllerProvider).building.levelCount;
+    final floorIndex =
+        state.currentIndex < levelCount ? state.currentIndex : levelCount - 1;
 
     return Stack(
       children: [
@@ -58,6 +68,17 @@ class SheetCanvas extends ConsumerWidget {
               .setViewport(sheet.id, vt),
           child: content,
         ),
+        Positioned.fill(
+          child: NetworkLayer(sheetId: sheet.id, floorIndex: floorIndex),
+        ),
+        if (drawing)
+          Positioned.fill(
+            child: DrawingOverlay(
+              sheetId: sheet.id,
+              floorIndex: floorIndex,
+              levelCount: levelCount,
+            ),
+          ),
         if (calibrating)
           Positioned.fill(child: CalibrationOverlay(sheetId: sheet.id)),
       ],

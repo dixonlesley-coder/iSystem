@@ -1,10 +1,13 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/calibration_store.dart';
+import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../canvas/service_style.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
@@ -74,6 +77,10 @@ class ProjectPanel extends ConsumerWidget {
                 alignment: Alignment.centerLeft,
                 child: MechXButton(label: '+  Add level', onPressed: ctrl.addFloor),
               ),
+              const SizedBox(height: MechXSpacing.lg),
+
+              // ── Draw ──────────────────────────────────────────────────────
+              const _DrawSection(),
               const SizedBox(height: MechXSpacing.lg),
 
               // ── Scale calibration ─────────────────────────────────────────
@@ -245,6 +252,125 @@ class _GlyphButtonState extends State<_GlyphButton> {
           child: Text(
             widget.glyph,
             style: TextStyle(fontSize: 16, height: 1.0, color: fg),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DrawSection extends ConsumerWidget {
+  const _DrawSection();
+
+  static const List<ServiceType> _services = [
+    ServiceType.coldWater,
+    ServiceType.hotWater,
+    ServiceType.drainage,
+    ServiceType.vent,
+    ServiceType.duct,
+  ];
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final drawing = ref.watch(networkControllerProvider);
+    final ctrl = ref.read(networkControllerProvider.notifier);
+
+    Widget tool(String label, DrawTool t) => MechXButton(
+          label: label,
+          primary: drawing.tool == t,
+          onPressed: () => ctrl.setTool(t),
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _SectionLabel('Draw'),
+        const SizedBox(height: MechXSpacing.sm),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            tool('Select', DrawTool.select),
+            tool('Run', DrawTool.drawRun),
+            tool('Riser', DrawTool.drawRiser),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            for (final s in _services)
+              _ServiceChip(
+                service: s,
+                selected: drawing.service == s,
+                onTap: () => ctrl.setService(s),
+              ),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            MechXButton(label: 'Undo', onPressed: ctrl.undo),
+            MechXButton(label: 'Redo', onPressed: ctrl.redo),
+            MechXButton(label: 'Clear', onPressed: ctrl.clear),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _ServiceChip extends StatelessWidget {
+  final ServiceType service;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ServiceChip({
+    required this.service,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: MechXSpacing.sm,
+            vertical: MechXSpacing.xs,
+          ),
+          decoration: BoxDecoration(
+            color: selected ? colors.accentMuted : colors.background,
+            borderRadius: MechXRadii.control,
+            border: Border.all(color: selected ? colors.accent : colors.border),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 9,
+                height: 9,
+                decoration: BoxDecoration(
+                  color: serviceColor(service),
+                  borderRadius: const BorderRadius.all(Radius.circular(2)),
+                ),
+              ),
+              const SizedBox(width: MechXSpacing.xs),
+              Text(
+                serviceLabel(service),
+                style: type.label.copyWith(
+                  color: selected ? colors.textPrimary : colors.textSecondary,
+                ),
+              ),
+            ],
           ),
         ),
       ),

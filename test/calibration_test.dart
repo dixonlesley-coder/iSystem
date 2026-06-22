@@ -64,6 +64,7 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump(); // first-layout fit
 
+    await tester.ensureVisible(find.text('Calibrate scale'));
     await tester.tap(find.text('Calibrate scale'));
     await tester.pump();
     expect(find.textContaining('first point'), findsOneWidget);
