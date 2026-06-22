@@ -14,7 +14,9 @@ import 'network_store.dart';
 /// SNI Hunter curve instead (see [kDefaultLeafFixtureUnits]); the flow figures
 /// here only apply to the non-water services.
 const Map<ServiceType, FlowRate> kDefaultLeafDemand = {
-  ServiceType.duct: FlowRate(0.05), // 50 L/s per diffuser
+  ServiceType.duct: FlowRate(0.05), // 50 L/s per supply diffuser
+  ServiceType.returnAir: FlowRate(0.05), // per return grille
+  ServiceType.exhaust: FlowRate(0.03), // per exhaust grille
   ServiceType.coldWater: FlowRate(0.0002), // fallback only (UBAP path used)
   ServiceType.hotWater: FlowRate(0.0002),
   ServiceType.drainage: FlowRate(0.0008), // 0.8 L/s per fixture

@@ -12,7 +12,9 @@ enum ServiceType {
   drainage,
   vent,
   rainwater,
-  duct,
+  duct, // HVAC supply air
+  returnAir, // HVAC return air
+  exhaust, // HVAC exhaust air
   fireSprinkler,
   fireHydrant,
 }
@@ -33,8 +35,14 @@ extension ServiceRegime on ServiceType {
         ServiceType.vent ||
         ServiceType.rainwater =>
           FlowRegime.gravity,
-        ServiceType.duct => FlowRegime.air,
+        ServiceType.duct ||
+        ServiceType.returnAir ||
+        ServiceType.exhaust =>
+          FlowRegime.air,
       };
+
+  /// True for the HVAC air services (supply / return / exhaust).
+  bool get isAir => regime == FlowRegime.air;
 }
 
 /// A horizontal [run] (length from the sheet's calibrated scale) or a vertical

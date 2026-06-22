@@ -163,62 +163,117 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
   return sizePump(flow: flow, head: solution.requiredPumpHead);
 });
 
-/// Fan duty for the supply/return duct system: total airflow at the trunk
-/// (largest-flow duct) against the fan total static pressure from the index
-/// run. Null when there's no duct network sized.
-final ductFanProvider = Provider<FanDuty?>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
-  final sizing = ref.watch(sizingProvider);
-  final project = ref.watch(projectControllerProvider);
+/// Trunk airflow + index-run static for one air [service]. Zero when the
+/// service has no sized edges.
+({FlowRate trunk, Pressure stat}) _airSystem(
+  Network net,
+  Map<String, EdgeSizing> sizing,
+  ProjectState project,
+  ServiceType service,
+) {
+  final edges = net.edges.where((e) => e.service == service).toList();
+  if (edges.isEmpty) return (trunk: const FlowRate(0), stat: const Pressure(0));
 
-  final ductEdges =
-      net.edges.where((e) => e.service == ServiceType.duct).toList();
-  if (ductEdges.isEmpty) return null;
-
-  // Trunk airflow = the largest sized duct flow.
-  var airflow = const FlowRate(0);
-  final edgeFlows = <String, FlowRate>{};
-  for (final e in ductEdges) {
+  var trunk = const FlowRate(0);
+  final flows = <String, FlowRate>{};
+  for (final e in edges) {
     final s = sizing[e.id];
     if (s == null) continue;
-    edgeFlows[e.id] = s.flow;
-    if (s.flow.cubicMetersPerSecond > airflow.cubicMetersPerSecond) {
-      airflow = s.flow;
+    flows[e.id] = s.flow;
+    if (s.flow.cubicMetersPerSecond > trunk.cubicMetersPerSecond) {
+      trunk = s.flow;
     }
   }
-  if (airflow.cubicMetersPerSecond <= 0) return null;
+  if (trunk.cubicMetersPerSecond <= 0) {
+    return (trunk: const FlowRate(0), stat: const Pressure(0));
+  }
 
-  // Fan node: a plant (AHU) on the duct subgraph, else any duct node
-  // (deterministic) — the index-run static is the same magnitude regardless.
-  final ductNodeIds = <String>{
-    for (final e in ductEdges) ...[e.fromId, e.toId],
+  final ids = <String>{
+    for (final e in edges) ...[e.fromId, e.toId],
   };
-  String fan = ductNodeIds.reduce((a, b) => a.compareTo(b) < 0 ? a : b);
-  for (final id in ductNodeIds) {
+  var fan = ids.reduce((a, b) => a.compareTo(b) < 0 ? a : b);
+  for (final id in ids) {
     if (net.nodeById(id)?.role == NodeRole.plant) {
       fan = id;
       break;
     }
   }
-
-  final stat = solveDuctStatic(
+  final s = solveDuctStatic(
     net: net,
-    service: ServiceType.duct,
+    service: service,
     fanNodeId: fan,
-    edgeFlows: edgeFlows,
+    edgeFlows: flows,
     sizing: sizing,
     calibrationBySheet: project.calibrations,
     building: project.building,
   );
-  return sizeFan(airflow: airflow, totalStaticPressure: stat.totalStaticPressure);
+  return (trunk: trunk, stat: s.totalStaticPressure);
+}
+
+/// Fan duty for the air system: supply trunk airflow against the SUM of the
+/// supply and return index-run statics (the AHU fan sees both). Null when
+/// there's no sized air network.
+final ductFanProvider = Provider<FanDuty?>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+
+  final supply = _airSystem(net, sizing, project, ServiceType.duct);
+  final ret = _airSystem(net, sizing, project, ServiceType.returnAir);
+  final airflow = supply.trunk.cubicMetersPerSecond > 0
+      ? supply.trunk
+      : ret.trunk; // return-only systems still get a fan
+  if (airflow.cubicMetersPerSecond <= 0) return null;
+
+  return sizeFan(
+    airflow: airflow,
+    totalStaticPressure: Pressure(supply.stat.pascals + ret.stat.pascals),
+  );
 });
 
-/// Pressure zones for the building under the SNI max-fixture-pressure limit.
+/// Supply vs return trunk airflow (L/s) for the air-balance readout. Null when
+/// there's no sized air network.
+final airBalanceProvider = Provider<({double supplyLps, double returnLps})?>(
+  (ref) {
+    final net = ref.watch(networkControllerProvider).network;
+    final sizing = ref.watch(sizingProvider);
+    final project = ref.watch(projectControllerProvider);
+    final s = _airSystem(net, sizing, project, ServiceType.duct);
+    final r = _airSystem(net, sizing, project, ServiceType.returnAir);
+    if (s.trunk.cubicMetersPerSecond <= 0 &&
+        r.trunk.cubicMetersPerSecond <= 0) {
+      return null;
+    }
+    return (
+      supplyLps: s.trunk.inLitersPerSecond,
+      returnLps: r.trunk.inLitersPerSecond,
+    );
+  },
+);
+
+/// Pressure zones for a downfeed building. Zones are bounded so the lowest
+/// fixture stays under the SNI max-fixture-pressure limit AFTER the PRV holds
+/// the target residual at the zone top — i.e. the effective span ceiling is
+/// (max-fixture − target-residual).
 final zonesProvider = Provider<List<PressureZone>>((ref) {
   final building = ref.watch(projectControllerProvider).building;
-  return computeDownfeedZones(
+  final maxFix = const SniProfile().maxFixtureStaticPressure.value;
+  final effective = Pressure(
+    (maxFix.pascals - _targetResidual.pascals).clamp(1.0, double.infinity),
+  );
+  return computeDownfeedZones(building: building, maxStaticPressure: effective);
+});
+
+/// Per-zone PRV static profile (top residual → bottom static, within-limit) for
+/// a downfeed system holding [_targetResidual] at each zone top.
+final zoneStaticsProvider = Provider<List<DownfeedZoneStatic>>((ref) {
+  final building = ref.watch(projectControllerProvider).building;
+  final zones = ref.watch(zonesProvider);
+  return downfeedZoneStatics(
     building: building,
-    maxStaticPressure: const SniProfile().maxFixtureStaticPressure.value,
+    zones: zones,
+    prvSetpoint: _targetResidual,
+    maxStatic: const SniProfile().maxFixtureStaticPressure.value,
   );
 });
 

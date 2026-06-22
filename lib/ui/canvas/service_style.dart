@@ -9,6 +9,8 @@ Color serviceColor(ServiceType service) => switch (service) {
       ServiceType.vent => const Color(0xFF2BB6A3),
       ServiceType.rainwater => const Color(0xFF3AA0E5),
       ServiceType.duct => const Color(0xFF8A7BD8),
+      ServiceType.returnAir => const Color(0xFF6F8FC0),
+      ServiceType.exhaust => const Color(0xFF5B6470),
       ServiceType.fireSprinkler => const Color(0xFFD93838),
       ServiceType.fireHydrant => const Color(0xFFB02525),
     };
@@ -19,7 +21,9 @@ String serviceLabel(ServiceType service) => switch (service) {
       ServiceType.drainage => 'Drainage',
       ServiceType.vent => 'Vent',
       ServiceType.rainwater => 'Rainwater',
-      ServiceType.duct => 'Duct',
+      ServiceType.duct => 'Supply air',
+      ServiceType.returnAir => 'Return air',
+      ServiceType.exhaust => 'Exhaust',
       ServiceType.fireSprinkler => 'Sprinkler',
       ServiceType.fireHydrant => 'Hydrant',
     };

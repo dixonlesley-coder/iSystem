@@ -32,6 +32,8 @@ const List<ServiceType> kDrawServices = [
   ServiceType.vent,
   ServiceType.rainwater,
   ServiceType.duct,
+  ServiceType.returnAir,
+  ServiceType.exhaust,
   ServiceType.fireSprinkler,
   ServiceType.fireHydrant,
 ];
@@ -432,7 +434,14 @@ class _ResultsSection extends ConsumerWidget {
     final downfeed = ref.watch(downfeedProvider);
     final pump = ref.watch(pumpDutyProvider);
     final zones = ref.watch(zonesProvider);
+    final zoneStatics = ref.watch(zoneStaticsProvider);
     final bom = ref.watch(bomProvider);
+    final worstZone = zoneStatics.isEmpty
+        ? 0.0
+        : zoneStatics
+            .map((z) => z.bottomStatic.inKiloPascals)
+            .reduce((a, b) => a > b ? a : b);
+    final zonesOk = zoneStatics.every((z) => z.withinLimit);
     final totalLength =
         bom.fold<double>(0, (sum, line) => sum + line.totalLength.meters);
 
@@ -484,8 +493,17 @@ class _ResultsSection extends ConsumerWidget {
                     ? 'gravity OK'
                     : '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m',
           ),
+          _kv(
+            context,
+            'PRV zones',
+            zoneStatics.isEmpty
+                ? '${zones.length}'
+                : '${zones.length} · worst ${worstZone.toStringAsFixed(0)} kPa'
+                    ' ${zonesOk ? 'OK' : 'over'}',
+          ),
         ],
-        _kv(context, 'Pressure zones', '${zones.length}'),
+        if (strategy == FeedStrategy.upfeed)
+          _kv(context, 'Pressure zones', '${zones.length}'),
         _kv(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
         if (bom.isNotEmpty) ...[
           const SizedBox(height: MechXSpacing.xs),
@@ -875,6 +893,7 @@ class _HvacSection extends ConsumerWidget {
     final settings = ref.watch(ductSettingsProvider);
     final ctrl = ref.read(ductSettingsProvider.notifier);
     final fan = ref.watch(ductFanProvider);
+    final balance = ref.watch(airBalanceProvider);
 
     Widget kv(String k, String v) => Padding(
           padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
@@ -941,9 +960,24 @@ class _HvacSection extends ConsumerWidget {
           kv('Fan motor',
               '${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
         ],
+        if (balance != null) ...[
+          const SizedBox(height: MechXSpacing.xs),
+          kv('Supply air', '${balance.supplyLps.toStringAsFixed(0)} L/s'),
+          kv('Return air', '${balance.returnLps.toStringAsFixed(0)} L/s'),
+          kv('Air balance', _balanceLabel(balance.supplyLps, balance.returnLps)),
+        ],
       ],
     );
   }
+}
+
+String _balanceLabel(double supplyLps, double returnLps) {
+  if (returnLps <= 0) return 'no return drawn';
+  if (supplyLps <= 0) return 'exhaust only';
+  final deltaPct = (supplyLps - returnLps) / supplyLps * 100;
+  if (deltaPct.abs() < 1) return 'balanced';
+  final sign = deltaPct > 0 ? '+' : '';
+  return '$sign${deltaPct.toStringAsFixed(0)}% supply';
 }
 
 /// A compact selectable pill used by the selection editor (role / fixture).

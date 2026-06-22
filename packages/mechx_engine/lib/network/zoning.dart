@@ -58,6 +58,63 @@ class PressureZone {
 double maxZoneHeightMetres(Pressure maxStatic) =>
     headFromPressure(maxStatic).meters;
 
+// ── PRV zone statics ─────────────────────────────────────────────────────────
+
+/// Static-pressure profile of one downfeed zone fed through a PRV (or the tank
+/// for the top zone).
+class DownfeedZoneStatic {
+  final PressureZone zone;
+
+  /// Residual maintained just downstream of the PRV at the zone's top
+  /// (the PRV setpoint).
+  final Pressure topResidual;
+
+  /// Static pressure at the zone's lowest fixture — the worst case in the zone.
+  final Pressure bottomStatic;
+
+  /// True when [bottomStatic] stays at or below the project limit.
+  final bool withinLimit;
+
+  const DownfeedZoneStatic({
+    required this.zone,
+    required this.topResidual,
+    required this.bottomStatic,
+    required this.withinLimit,
+  });
+}
+
+/// For each downfeed [zone], the static pressure at its lowest fixture when the
+/// zone is fed through a PRV set to [prvSetpoint] (the residual held at the zone
+/// top), and whether that stays at or below [maxStatic].
+///
+/// Feed elevation is the ceiling main at the zone's top floor; the bottom
+/// fixture sits at fixture height on the zone's lowest floor:
+///   bottomStatic = prvSetpoint + ρg·(ceiling(top) − fixture(bottom)).
+List<DownfeedZoneStatic> downfeedZoneStatics({
+  required BuildingLevels building,
+  required List<PressureZone> zones,
+  required Pressure prvSetpoint,
+  required Pressure maxStatic,
+  MountingHeights mounting = const MountingHeights(),
+}) {
+  final out = <DownfeedZoneStatic>[];
+  for (final z in zones) {
+    final feed = building.ceilingElevationOf(z.topFloorIndex, mounting).meters;
+    final bottom =
+        building.fixtureElevationOf(z.bottomFloorIndex, mounting).meters;
+    final span = (feed - bottom).clamp(0.0, double.infinity);
+    final bottomStatic =
+        Pressure(prvSetpoint.pascals + pressureFromHead(Head(span)).pascals);
+    out.add(DownfeedZoneStatic(
+      zone: z,
+      topResidual: prvSetpoint,
+      bottomStatic: bottomStatic,
+      withinLimit: bottomStatic.pascals <= maxStatic.pascals,
+    ));
+  }
+  return out;
+}
+
 // ── Core algorithm ─────────────────────────────────────────────────────────
 
 /// Partition [building] into downfeed pressure zones so that the static head

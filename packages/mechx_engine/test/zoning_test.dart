@@ -192,4 +192,47 @@ void main() {
       }
     });
   });
+
+  group('downfeedZoneStatics (PRV per-zone profile)', () {
+    test('bottom static = PRV setpoint + ρg·(ceiling(top) − fixture(bottom))',
+        () {
+      // Effective ceiling for zoning = maxFixtureStatic − PRV setpoint, so each
+      // zone's bottom fixture stays under the real limit.
+      const maxFixtureStatic = Pressure(392266); // ~4 kgf/cm²
+      const prv = Pressure(225000); // ~2.25 bar setpoint
+      const effectiveCeiling = Pressure(392266 - 225000);
+      final zones = computeDownfeedZones(
+        building: _tenFloorBuilding,
+        maxStaticPressure: effectiveCeiling,
+      );
+      final statics = downfeedZoneStatics(
+        building: _tenFloorBuilding,
+        zones: zones,
+        prvSetpoint: prv,
+        maxStatic: maxFixtureStatic,
+      );
+      expect(statics, hasLength(zones.length));
+      // Every zone must stay within the real fixture limit.
+      for (final s in statics) {
+        expect(s.withinLimit, isTrue,
+            reason: 'zone ${s.zone} exceeds the limit');
+        expect(s.bottomStatic.pascals,
+            greaterThanOrEqualTo(prv.pascals)); // never below the PRV setpoint
+        expect(s.topResidual.pascals, prv.pascals);
+      }
+    });
+
+    test('a tank far above a tall zone breaches the limit (flagged)', () {
+      // One zone spanning all 10 floors (no zoning) with a high PRV setpoint
+      // must exceed the limit at the bottom.
+      const zones = [PressureZone(9, 0)];
+      final statics = downfeedZoneStatics(
+        building: _tenFloorBuilding,
+        zones: zones,
+        prvSetpoint: const Pressure(225000),
+        maxStatic: const Pressure(392266),
+      );
+      expect(statics.single.withinLimit, isFalse);
+    });
+  });
 }
