@@ -115,6 +115,16 @@ path per service:
 | **Gravity** (drainage) | Manning partial-full + stack capacity | `manningVelocity`, `manningFlowFull` |
 | **Fire** | density/area + standpipe residual | (P5) builds on pressurized + dedicated residual checks |
 
+**Supply pump-head sizing** (`sizing/supply_design.dart`, pressurized path):
+`H_pump = H_static + H_friction + H_residual`, where `H_static` is the
+floor-elevation rise to the critical fixture (§10), `H_friction` the critical-path
+loss, and `H_residual` the **design target residual pressure** at the fixture.
+That target is an **engineer-set design choice (NOT an SNI value)**: recommended
+**2.25 bar** within a **2.0–2.5 bar** comfort band — deliberately above the SNI
+minimums (~0.49–0.98 bar) and below the practical max (~3.92 bar) / mandatory
+pressure-relief threshold (4.9 bar), so fixtures perform well without forcing a
+PRV/zone on lower floors.
+
 ## 8. Standards as pluggable data + the VERIFY list
 
 - `standards/sni.dart` implements `StandardsProfile`; the engine depends on the
@@ -221,6 +231,7 @@ boundary for review.**
 | 2026-06-22 | Internal quantities are Dart 3 `extension type`s | Zero-cost typed-quantity guardrail (§12.2). |
 | 2026-06-22 | Toolchain installed in CI/dev container: **Flutter 3.44.2 / Dart 3.12.2** | Linux dev/test only; Windows `.exe` build happens on the engineer's machine. |
 | 2026-06-22 | **Seeded SNI 8153:2015 supply values** from web research (pressures, velocities, demand method/curve, UBAP table) | `verified` flags reflect verbatim-text vs secondary provenance; `StandardValue` gained `sourceUrl`/`note`; `verified==true` only for literal SNI text. |
+| 2026-06-22 | **Design target residual pressure = 2.25 bar** (band 2.0–2.5), seeds `sizing/supply_design.dart` + `computeRequiredPumpHead` | Engineer-set design choice (not SNI); sits between SNI min and the PRV/relief ceiling; drives pump-head sizing. |
 
 ## 16. Testing strategy
 
