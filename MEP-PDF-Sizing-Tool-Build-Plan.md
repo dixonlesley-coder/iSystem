@@ -212,7 +212,7 @@ solved node values into a grid — it computes no physics.
 |---|---|---|
 | **Step 1** ✅ | Scaffold + pure engine + seed tests green | *all seed tests pass* |
 | **P0 Shell** 🟡 | Custom design system, multi-sheet nav, pannable/zoomable canvas (✅ done & tested); **pdfrx PDF render** (⬜ next, behind the `sheetContentBuilderProvider` seam) | review stop |
-| **P1** 🟡 | Project details + per-floor heights + scale calibration (✅ pure geometry, editable project/floor state, inspector UI, calibration model — all tested); **pdfrx PDF import + render + on-canvas calibrate tool** (⬜ next, delegated) | — |
+| **P1** 🟡 | Project details + per-floor heights + scale calibration (✅ geometry, project/floor state, inspector UI, calibration model — tested); **pdfrx PDF import + render** (✅ pdfrx 2.4.4 + file_picker, "Open PDF…" → sheet-per-page, behind the seam); **on-canvas calibrate tool** (⬜ building) | — |
 | **P2** | Drawing (incl. risers) | — |
 | **P3** | SNI sizing engine (ducts + clean water first) | — |
 | **P4** | Network solve + pumps + zoning + auto diagram + pressure heatmap + BOM | **MVP = P0–P4** |

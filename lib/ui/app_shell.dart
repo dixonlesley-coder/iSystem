@@ -1,6 +1,8 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../data/pdf_import.dart';
 import '../store/app_state.dart';
 import '../store/sheets_store.dart';
 import 'canvas/sheet_canvas.dart';
@@ -48,6 +50,26 @@ class AppShell extends StatelessWidget {
 class _TopBar extends ConsumerWidget {
   const _TopBar();
 
+  Future<void> _pickAndLoadPdf(WidgetRef ref) async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['pdf'],
+      allowMultiple: false,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final path = result.files.single.path;
+    if (path == null || path.isEmpty) return;
+
+    try {
+      final sheets = await importPdf(path);
+      if (sheets.isEmpty) return;
+      ref.read(sheetsControllerProvider.notifier).loadSheets(sheets);
+    } catch (_) {
+      // Silently ignore import errors in the UI; a real app would show a
+      // dialog here.  The canvas will simply keep the current sheets.
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
@@ -89,6 +111,11 @@ class _TopBar extends ConsumerWidget {
                 zoom,
                 style: type.mono.copyWith(color: colors.textSecondary),
               ),
+            ),
+            const SizedBox(width: MechXSpacing.sm),
+            MechXButton(
+              label: 'Open PDF…',
+              onPressed: () => _pickAndLoadPdf(ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
