@@ -212,7 +212,7 @@ solved node values into a grid — it computes no physics.
 |---|---|---|
 | **Step 1** ✅ | Scaffold + pure engine + seed tests green | *all seed tests pass* |
 | **P0 Shell** 🟡 | Custom design system, multi-sheet nav, pannable/zoomable canvas (✅ done & tested); **pdfrx PDF render** (⬜ next, behind the `sheetContentBuilderProvider` seam) | review stop |
-| **P1** | Project details + per-floor heights + scale calibration | — |
+| **P1** 🟡 | Project details + per-floor heights + scale calibration (✅ pure geometry, editable project/floor state, inspector UI, calibration model — all tested); **pdfrx PDF import + render + on-canvas calibrate tool** (⬜ next, delegated) | — |
 | **P2** | Drawing (incl. risers) | — |
 | **P3** | SNI sizing engine (ducts + clean water first) | — |
 | **P4** | Network solve + pumps + zoning + auto diagram + pressure heatmap + BOM | **MVP = P0–P4** |
@@ -234,6 +234,7 @@ boundary for review.**
 | 2026-06-22 | **Design target residual pressure = 2.25 bar** (band 2.0–2.5), seeds `sizing/supply_design.dart` + `computeRequiredPumpHead` | Engineer-set design choice (not SNI); sits between SNI min and the PRV/relief ceiling; drives pump-head sizing. |
 | 2026-06-22 | **P0 uses `WidgetsApp`, not `MaterialApp`** | Honours §4 "no default Material theme"; MechX owns its visual language via `MechXTheme`. |
 | 2026-06-22 | **Canvas: pure `ViewportTransform` + controlled `CanvasView`** | Polish-critical math is headless-testable; gestures = wheel zoom-to-cursor, **left-click & middle-drag pan**, trackpad pinch, keyboard (Ctrl±/0, F, arrows). Per-sheet viewport restore via the store. |
+| 2026-06-22 | **P1 length source-of-truth as pure engine geometry** (`geometry/scale_calibration.dart`, `geometry/building.dart`) | §10/§12.3: horizontal length = px × calibration; vertical riser = floor-elevation delta. Editable via `project_store`; never measured from a PDF. |
 
 ## 16. Testing strategy
 

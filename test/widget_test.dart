@@ -7,8 +7,8 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
-    // rail navigation
-    expect(find.text('Level 1'), findsOneWidget); // rail only (not current)
+    // rail navigation (sheet names are distinct from floor names)
+    expect(find.text('First Floor'), findsOneWidget); // rail only (not current)
     expect(find.text('Roof Plan'), findsOneWidget);
     // current sheet name shows in BOTH the rail and the page watermark
     expect(find.text('Ground Floor'), findsWidgets);
@@ -20,11 +20,11 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
-    await tester.tap(find.text('Level 1'));
+    await tester.tap(find.text('First Floor'));
     await tester.pump();
 
-    // now 'Level 1' is the current sheet → also rendered on the page watermark
-    expect(find.text('Level 1'), findsWidgets);
+    // now 'First Floor' is the current sheet → also rendered on the page
+    expect(find.text('First Floor'), findsWidgets);
   });
 
   testWidgets('top bar shows a zoom percentage after the canvas fits', (tester) async {

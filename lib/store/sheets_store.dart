@@ -46,7 +46,7 @@ class SheetsController extends Notifier<SheetsState> {
   // import (P1) replaces them.
   static const List<Sheet> _demoSheets = [
     Sheet(id: 's1', name: 'Ground Floor', sizePx: Size(1684, 1190)),
-    Sheet(id: 's2', name: 'Level 1', sizePx: Size(1684, 1190)),
+    Sheet(id: 's2', name: 'First Floor', sizePx: Size(1684, 1190)),
     Sheet(id: 's3', name: 'Roof Plan', sizePx: Size(1190, 1684)),
   ];
 

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../store/app_state.dart';
 import '../store/sheets_store.dart';
 import 'canvas/sheet_canvas.dart';
+import 'inspector/project_panel.dart';
 import 'sheets/sheet_rail.dart';
 import 'theme/design_tokens.dart';
 import 'theme/mechx_theme.dart';
@@ -30,6 +31,8 @@ class AppShell extends StatelessWidget {
                   const SheetRail(),
                   Container(width: 1, color: colors.border),
                   const Expanded(child: SheetCanvas()),
+                  Container(width: 1, color: colors.border),
+                  const ProjectPanel(),
                 ],
               ),
             ),
