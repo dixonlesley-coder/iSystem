@@ -294,6 +294,31 @@ class NetworkController extends Notifier<DrawingState> {
     _commit(Network(nodes: nodes, edges: state.network.edges));
   }
 
+  /// Snapshot the current network onto the undo stack — call once at the start
+  /// of a drag so the whole move collapses into a single undo step.
+  void pushUndoSnapshot() {
+    _undo.add(state.network);
+    if (_undo.length > 200) _undo.removeAt(0);
+    _redo.clear();
+  }
+
+  /// Move a node to ([x], [y]) in sheet/world pixels WITHOUT recording undo
+  /// (live drag). Pair with [pushUndoSnapshot] at drag start.
+  void moveNode(String id, double x, double y) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    final nodes = [
+      for (final n in state.network.nodes)
+        if (n.id == id) n.copyWith(x: x, y: y) else n,
+    ];
+    state = DrawingState(
+      network: Network(nodes: nodes, edges: state.network.edges),
+      service: state.service,
+      tool: state.tool,
+      pendingPoint: state.pendingPoint,
+    );
+  }
+
   /// Replace the network (used when opening a saved document). Resets history
   /// and advances the id counter past any loaded ids to avoid collisions.
   void loadNetwork(Network net) {

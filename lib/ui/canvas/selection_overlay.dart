@@ -32,8 +32,61 @@ class NetworkSelectionOverlay extends ConsumerWidget {
             const ViewportTransform();
     final sel = ref.read(selectionProvider.notifier);
 
+    // On-floor node drag handles (opaque, small) sit above the translucent tap
+    // layer: dragging a handle moves the node; tapping it selects it; anywhere
+    // else, the tap layer selects/clears and drags fall through to canvas pan.
+    final handles = <Widget>[
+      for (final n in net.nodes)
+        if (_onFloor(n))
+          _dragHandle(ref, n.id, transform.worldToScreen(Offset(n.x, n.y)),
+              transform.scale),
+    ];
+
     // Translucent (not opaque) so a tap selects, but drag-pan and scroll-zoom
     // still reach the CanvasView underneath.
+    return Stack(
+      children: [
+        Positioned.fill(child: _tapLayer(net, transform, sel)),
+        ...handles,
+      ],
+    );
+  }
+
+  Widget _dragHandle(
+      WidgetRef ref, String id, Offset screen, double scale) {
+    const r = 12.0;
+    return Positioned(
+      left: screen.dx - r,
+      top: screen.dy - r,
+      width: r * 2,
+      height: r * 2,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.move,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => ref.read(selectionProvider.notifier).selectNode(id),
+          onPanStart: (_) {
+            ref.read(selectionProvider.notifier).selectNode(id);
+            ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+          },
+          onPanUpdate: (d) {
+            final node =
+                ref.read(networkControllerProvider).network.nodeById(id);
+            if (node == null) return;
+            ref.read(networkControllerProvider.notifier).moveNode(
+                  id,
+                  node.x + d.delta.dx / scale,
+                  node.y + d.delta.dy / scale,
+                );
+          },
+          child: const SizedBox.expand(),
+        ),
+      ),
+    );
+  }
+
+  Widget _tapLayer(Network net, ViewportTransform transform,
+      SelectionController sel) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTapUp: (details) {

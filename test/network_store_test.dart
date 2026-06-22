@@ -182,6 +182,25 @@ void main() {
       n.undo();
       expect(c.read(networkControllerProvider).network.edges.length, 2);
     });
+
+    test('node drag moves the node and is a single undo step', () {
+      final c = makeContainer();
+      final n = twoRunChain(c);
+      final id = c.read(networkControllerProvider).network.nodes.first.id;
+      // one snapshot, then several live moves (as during a drag)
+      n.pushUndoSnapshot();
+      n.moveNode(id, 5, 5);
+      n.moveNode(id, 40, 40);
+      n.moveNode(id, 250, 120);
+      final moved = c.read(networkControllerProvider).network.nodeById(id)!;
+      expect(moved.x, 250);
+      expect(moved.y, 120);
+      // a single undo reverts the whole drag back to the original position
+      n.undo();
+      final reverted = c.read(networkControllerProvider).network.nodeById(id)!;
+      expect(reverted.x, 0);
+      expect(reverted.y, 0);
+    });
   });
 
   testWidgets('draw palette renders; Run tool activates without error',
