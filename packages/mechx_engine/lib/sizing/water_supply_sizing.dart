@@ -55,12 +55,18 @@ class WaterSupplySizingResult {
   /// Darcy–Weisbach friction head loss per metre of pipe run (m/m).
   final Head headLossPerMetre;
 
+  /// `true` when even the largest DN in the table cannot keep velocity within
+  /// the limit (flow too large for the series): the returned [velocity] then
+  /// EXCEEDS the limit and the caller must split the flow or extend the table.
+  final bool overVelocity;
+
   const WaterSupplySizingResult({
     required this.diameter,
     required this.velocity,
     required this.reynolds,
     required this.frictionFactor,
     required this.headLossPerMetre,
+    this.overVelocity = false,
   });
 }
 
@@ -84,14 +90,19 @@ WaterSupplySizingResult sizeForFlow({
 }) {
   const profile = SniProfile();
   final maxV = maxVelocity ?? profile.maxSupplyVelocity.value;
+  assert(flow.cubicMetersPerSecond >= 0, 'flow must be non-negative');
+  assert(maxV.metersPerSecond > 0, 'maxVelocity must be positive');
 
-  // Diameter selection — pressurized path only.
+  // Diameter selection — pressurized path only. Velocity falls as D rises, so
+  // the first DN that satisfies the limit is the smallest adequate size.
   Diameter chosen = Diameter.mm(standardPipeDiametersMm.last);
+  var overVelocity = true;
   for (final nominalMm in standardPipeDiametersMm) {
     final candidate = Diameter.mm(nominalMm);
     final candidateVelocity = velocityFromFlow(flow, candidate);
     if (candidateVelocity.metersPerSecond <= maxV.metersPerSecond) {
       chosen = candidate;
+      overVelocity = false;
       break;
     }
   }
@@ -114,6 +125,7 @@ WaterSupplySizingResult sizeForFlow({
     reynolds: re,
     frictionFactor: ff,
     headLossPerMetre: hlPerMetre,
+    overVelocity: overVelocity,
   );
 }
 

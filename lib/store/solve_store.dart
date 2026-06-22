@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/network/zoning.dart';
@@ -24,7 +25,7 @@ final solveProvider = Provider<PressureSolution?>((ref) {
   final coldEdges =
       net.edges.where((e) => e.service == ServiceType.coldWater).toList();
   if (coldEdges.isEmpty) return null;
-  final source = _pickSource(coldEdges);
+  final source = _pickSource(net, coldEdges, project.building);
   if (source == null) return null;
 
   final edgeFlows = <String, FlowRate>{
@@ -45,20 +46,54 @@ final solveProvider = Provider<PressureSolution?>((ref) {
   );
 });
 
-/// Pick a source node for the solve: prefer a leaf (degree 1) of the cold-water
-/// subgraph (the supply entry / most-remote end), else the first node seen.
-String? _pickSource(List<NetEdge> edges) {
+/// Pick the supply source for the solve. The source is the pump/tank entry, NOT
+/// an arbitrary fixture: choosing the wrong leaf would invert the tree and
+/// mis-assign static lift. Preference order over the cold-water subgraph:
+///   1. an explicit [NodeRole.plant] node (the tank/pump);
+///   2. otherwise the LOWEST-elevation node — the supply entry for an upfeed
+///      system (water rises from the riser base to the fixtures).
+/// Ties break on a degree-1 leaf, then the first node seen (deterministic).
+String? _pickSource(Network net, List<NetEdge> edges, BuildingLevels building) {
+  final ids = <String>{
+    for (final e in edges) ...[e.fromId, e.toId],
+  };
+  if (ids.isEmpty) return null;
+
   final degree = <String, int>{};
-  String? first;
   for (final e in edges) {
-    first ??= e.fromId;
     degree[e.fromId] = (degree[e.fromId] ?? 0) + 1;
     degree[e.toId] = (degree[e.toId] ?? 0) + 1;
   }
-  for (final entry in degree.entries) {
-    if (entry.value == 1) return entry.key;
+
+  final candidates = ids.map((id) => net.nodeById(id)).whereType<NetNode>();
+
+  // 1. An explicit plant node wins (the lowest, if several).
+  final plants = candidates.where((n) => n.role == NodeRole.plant).toList();
+  if (plants.isNotEmpty) {
+    plants.sort((a, b) => nodeElevation(a, building)
+        .meters
+        .compareTo(nodeElevation(b, building).meters));
+    return plants.first.id;
   }
-  return first;
+
+  // 2. Lowest-elevation node; tie-break to a leaf, then deterministic order.
+  NetNode? best;
+  for (final n in candidates) {
+    if (best == null) {
+      best = n;
+      continue;
+    }
+    final ne = nodeElevation(n, building).meters;
+    final be = nodeElevation(best, building).meters;
+    if (ne < be ||
+        (ne == be && (degree[n.id] ?? 0) < (degree[best.id] ?? 0)) ||
+        (ne == be &&
+            (degree[n.id] ?? 0) == (degree[best.id] ?? 0) &&
+            n.id.compareTo(best.id) < 0)) {
+      best = n;
+    }
+  }
+  return best?.id;
 }
 
 /// Pump duty for the cold-water system: the solved required head at the trunk

@@ -4,8 +4,9 @@
 /// (shown in comments) and verified against the engine's [manningFlowFull] /
 /// [manningVelocity] primitives in `hydraulics.dart`.
 ///
-/// Key capacity model:  Q_usable = Q_full_bore × fillRatio  (linear, exact at
-/// fillRatio ∈ {0.5, 1.0} for circular pipes; conservative otherwise).
+/// Capacity model: TRUE partial-full circular hydraulics —
+/// Q(r)/Q_full = [(θ−sinθ)/2π]·[(θ−sinθ)/θ]^(2/3), θ = 2·acos(1−2r).
+/// Exact at r=0.5 (0.5) and r=1.0 (1.0); ≈0.912 at r=0.75.
 library;
 
 import 'package:mechx_engine/hydraulics.dart';
@@ -14,6 +15,37 @@ import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
 void main() {
+  // ── partial-full capacity factor ─────────────────────────────────────────────
+
+  group('partialFullCapacityFactor (true Manning partial-full)', () {
+    test('half-full → 0.5', () {
+      expect(partialFullCapacityFactor(0.5), closeTo(0.5, 1e-9));
+    });
+    test('full → 1.0', () {
+      expect(partialFullCapacityFactor(1.0), closeTo(1.0, 1e-12));
+    });
+    test('three-quarter full ≈ 0.912 (capacity outpaces depth)', () {
+      expect(partialFullCapacityFactor(0.75), closeTo(0.9120, 1e-3));
+    });
+    test('rises monotonically up to ~0.8 (well below the hump)', () {
+      double prev = 0;
+      for (final r in [0.1, 0.25, 0.5, 0.75, 0.8]) {
+        final f = partialFullCapacityFactor(r);
+        expect(f, greaterThan(prev));
+        prev = f;
+      }
+    });
+    test('capacity peaks above full bore near r≈0.94 then returns to 1.0', () {
+      // Classic partial-full hump: Q/Q_full ≈ 1.076 at d/D≈0.94, exactly 1.0
+      // at full. So the peak exceeds 1.0 and full-bore is below the peak.
+      final peak = partialFullCapacityFactor(0.94);
+      expect(peak, greaterThan(1.0));
+      expect(peak, closeTo(1.076, 5e-3));
+      expect(partialFullCapacityFactor(1.0), closeTo(1.0, 1e-12));
+      expect(partialFullCapacityFactor(1.0), lessThan(peak));
+    });
+  });
+
   // ── constants under test ────────────────────────────────────────────────────
 
   group('standardDrainDiametersMm', () {

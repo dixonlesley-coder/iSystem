@@ -7,9 +7,13 @@ import 'network_store.dart';
 
 /// Default per-terminal demand by service, used to auto-size the drawn network
 /// until per-fixture loads are assigned. (Pragmatic placeholders.)
+///
+/// Water-supply services are sized from accumulated fixture UNITS through the
+/// SNI Hunter curve instead (see [kDefaultLeafFixtureUnits]); the flow figures
+/// here only apply to the non-water services.
 const Map<ServiceType, FlowRate> kDefaultLeafDemand = {
   ServiceType.duct: FlowRate(0.05), // 50 L/s per diffuser
-  ServiceType.coldWater: FlowRate(0.0002), // 0.2 L/s per fixture
+  ServiceType.coldWater: FlowRate(0.0002), // fallback only (UBAP path used)
   ServiceType.hotWater: FlowRate(0.0002),
   ServiceType.drainage: FlowRate(0.0008), // 0.8 L/s per fixture
   ServiceType.vent: FlowRate(0.0004),
@@ -18,9 +22,20 @@ const Map<ServiceType, FlowRate> kDefaultLeafDemand = {
   ServiceType.fireHydrant: FlowRate(0.005),
 };
 
+/// Default fixture-unit (UBAP) load per water-supply terminal. Each drawn
+/// terminal is treated as a representative fixture (~2 UBAP, between a lavatory
+/// and a flush-tank WC) until per-fixture types are assigned. Accumulated down
+/// the tree and converted via the Hunter curve, this yields a DIVERSIFIED design
+/// flow rather than a sum of peak fixture flows.
+const Map<ServiceType, double> kDefaultLeafFixtureUnits = {
+  ServiceType.coldWater: 2.0,
+  ServiceType.hotWater: 2.0,
+};
+
 /// Live sizing of the drawn network — recomputed whenever the network changes.
 /// Each edge is routed to the correct §7 path and sized for its accumulated
-/// (per-branch) flow.
+/// (per-branch) demand: water supply via accumulated fixture units → Hunter
+/// curve; other services via accumulated flows.
 final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
   final net = ref.watch(networkControllerProvider).network;
   if (net.edges.isEmpty) return const {};
@@ -28,6 +43,7 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     net,
     const SizingContext(),
     leafDemand: kDefaultLeafDemand,
+    leafFixtureUnits: kDefaultLeafFixtureUnits,
   );
 });
 

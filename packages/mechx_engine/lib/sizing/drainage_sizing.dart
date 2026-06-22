@@ -1,23 +1,41 @@
 /// Gravity-drainage pipe sizing — the §7 "gravity" code path.
 ///
 /// Implements Manning-based minimum-diameter selection for drain pipes flowing
-/// at a specified fill ratio. The usable capacity model is:
+/// at a specified fill ratio. The usable capacity uses the TRUE partial-full
+/// circular-pipe hydraulics (not a linear fill-ratio scaling):
 ///
-///   Q_usable = Q_full_bore × fillRatio
+///   Q(θ)/Q_full = [(θ − sinθ)/2π] · [(θ − sinθ)/θ]^(2/3),
+///     where θ = 2·acos(1 − 2·r) is the central angle for depth ratio r.
 ///
-/// This is exact at fillRatio = 0.5 (hydraulic radius of a half-full circular
-/// pipe equals D/4, same as the full-bore value) and at fillRatio = 1.0
-/// (definition). For intermediate ratios the linear interpolation is
-/// conservative near r ≤ 0.5 and slightly non-conservative between 0.5 and
-/// 1.0, but all practical drain-sizing standards use r = 0.5 or r = 0.75 at
-/// most, so the model is fit for purpose in the §7 gravity path.
+/// This is exact across the whole range — 0.5 at half-full (where R = D/4 =
+/// R_full so velocity is unchanged) and 1.0 at full bore — and correctly
+/// captures that capacity rises faster than depth (e.g. Q/Q_full ≈ 0.912 at
+/// r = 0.75, not 0.75).
 ///
-/// References: Manning equation; BS EN 12056-2 / SNI annex on gravity sewers.
+/// References: Manning equation; partial-full circular conduit relations;
+/// BS EN 12056-2 / SNI annex on gravity sewers.
 /// Pure Dart, zero Flutter imports (§12: engine is framework-free).
 library;
 
+import 'dart:math' as math;
+
 import '../hydraulics.dart';
 import '../units.dart';
+
+// ── Partial-full hydraulics ───────────────────────────────────────────────────
+
+/// Ratio Q(r)/Q_full for a circular pipe flowing at depth ratio r = [fillRatio]
+/// (depth / diameter), from the exact Manning partial-full relations.
+///
+/// Returns 0.5 at r = 0.5 and 1.0 at r = 1.0; ≈0.912 at r = 0.75.
+double partialFullCapacityFactor(double fillRatio) {
+  assert(fillRatio > 0 && fillRatio <= 1.0, 'fillRatio must be in (0, 1]');
+  if (fillRatio >= 1.0) return 1.0;
+  final theta = 2.0 * math.acos(1.0 - 2.0 * fillRatio); // central angle (rad)
+  final areaRatio = (theta - math.sin(theta)) / (2.0 * math.pi);
+  final radiusRatio = (theta - math.sin(theta)) / theta;
+  return areaRatio * math.pow(radiusRatio, 2.0 / 3.0).toDouble();
+}
 
 // ── Standard diameters ──────────────────────────────────────────────────────
 
@@ -50,9 +68,13 @@ final class DrainageSizingResult {
   final Diameter diameter;
 
   /// Full-bore Manning discharge for the selected pipe at the design slope and
-  /// Manning n. Equals the usable capacity divided by [fillRatio] supplied to
-  /// [sizeForFlow].
+  /// Manning n.
   final FlowRate fullBoreCapacity;
+
+  /// Usable discharge at the design fill ratio:
+  /// `fullBoreCapacity × partialFullCapacityFactor(fillRatio)`. This is what the
+  /// selected pipe can actually carry at the design depth (≥ the design flow).
+  final FlowRate usableCapacity;
 
   /// Full-bore Manning mean velocity for the selected pipe. Used to check
   /// [selfCleansing].
@@ -68,6 +90,7 @@ final class DrainageSizingResult {
   const DrainageSizingResult({
     required this.diameter,
     required this.fullBoreCapacity,
+    required this.usableCapacity,
     required this.fullBoreVelocity,
     required this.selfCleansing,
   });
@@ -99,9 +122,10 @@ final class DrainageSizingResult {
 ///
 /// ## Self-cleansing
 /// The returned [DrainageSizingResult.selfCleansing] flag is `true` when the
-/// full-bore velocity ≥ 0.6 m/s. This is a conservative check: at half-full
-/// the actual velocity is approximately 90 % of the full-bore value, so pipes
-/// that pass at full-bore almost always self-cleanse at the design fill level.
+/// full-bore velocity ≥ 0.6 m/s. At half-full the actual velocity EQUALS the
+/// full-bore value (hydraulic radius is identical, R = D/4), and between half-
+/// full and ~0.8 it is slightly higher, so a pipe that passes at full bore
+/// self-cleanses at the design fill level.
 DrainageSizingResult sizeForFlow({
   required FlowRate flow,
   required double slope,
@@ -111,9 +135,11 @@ DrainageSizingResult sizeForFlow({
   assert(fillRatio > 0 && fillRatio <= 1.0, 'fillRatio must be in (0, 1]');
   assert(slope > 0, 'slope must be positive');
   assert(manningN > 0, 'manningN must be positive');
+  assert(flow.cubicMetersPerSecond >= 0, 'flow must be non-negative');
 
-  // The required full-bore capacity so that Q_usable = flow at the fill ratio.
-  final double requiredFullBore = flow.cubicMetersPerSecond / fillRatio;
+  // Required full-bore capacity so the TRUE partial-full discharge ≥ flow.
+  final double fillFactor = partialFullCapacityFactor(fillRatio);
+  final double requiredFullBore = flow.cubicMetersPerSecond / fillFactor;
 
   // Walk ascending diameters; pick the first that meets the requirement.
   Diameter? chosen;
@@ -143,6 +169,7 @@ DrainageSizingResult sizeForFlow({
   return DrainageSizingResult(
     diameter: selected,
     fullBoreCapacity: qFull,
+    usableCapacity: FlowRate(qFull.cubicMetersPerSecond * fillFactor),
     fullBoreVelocity: vFull,
     selfCleansing: selfCleansing,
   );

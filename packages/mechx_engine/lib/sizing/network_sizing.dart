@@ -96,6 +96,50 @@ Map<String, FlowRate> accumulateFlows({
   return edgeFlow;
 }
 
+/// Accumulate downstream fixture-unit (UBAP) load onto every edge of [service]
+/// as a tree rooted at [rootId]. [terminalUnits] maps node ids to the fixture
+/// units introduced AT that node. Returns edgeId → total UBAP carried by that
+/// edge (the sum over the subtree on the far side from the root).
+///
+/// Water supply must be sized from ACCUMULATED fixture units passed through the
+/// Hunter/UBAP demand curve (diversified simultaneous demand), NOT from a sum
+/// of peak fixture flows — hence units are accumulated here and converted to a
+/// flow per edge by the caller.
+Map<String, double> accumulateFixtureUnits({
+  required Network net,
+  required ServiceType service,
+  required String rootId,
+  required Map<String, double> terminalUnits,
+}) {
+  final adjacency = <String, List<({String edgeId, String other})>>{};
+  for (final e in net.edges) {
+    if (e.service != service) continue;
+    (adjacency[e.fromId] ??= []).add((edgeId: e.id, other: e.toId));
+    (adjacency[e.toId] ??= []).add((edgeId: e.id, other: e.fromId));
+  }
+
+  final edgeUnits = <String, double>{};
+  final visited = <String>{};
+
+  double subtreeUnits(String node) {
+    visited.add(node);
+    var sum = terminalUnits[node] ?? 0.0;
+    final links = adjacency[node];
+    if (links != null) {
+      for (final link in links) {
+        if (visited.contains(link.other)) continue;
+        final child = subtreeUnits(link.other);
+        edgeUnits[link.edgeId] = child;
+        sum += child;
+      }
+    }
+    return sum;
+  }
+
+  subtreeUnits(rootId);
+  return edgeUnits;
+}
+
 /// Size one [edge] carrying [flow] via the correct §7 path (selected by the
 /// edge's service regime — pressurized / air / gravity).
 EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
@@ -159,20 +203,36 @@ Map<String, EdgeSizing> sizeNetwork(
 }
 
 /// Auto-size the whole drawn network with a default demand policy: per service,
-/// split into connected components, root each at one of its leaves, apply
-/// [leafDemand] at every *other* leaf (fixtures/diffusers/drains), accumulate
-/// down the branches, and size every edge. A pragmatic default until per-fixture
-/// loads are assigned; branching is handled exactly (each leg sized for its own
-/// subtree). Edges with no demand are left unsized.
+/// split into connected components, root each at one of its leaves, apply demand
+/// at every *other* leaf, accumulate down the branches, and size every edge.
+/// Branching is handled exactly (each leg sized for its own subtree); edges with
+/// no demand are left unsized.
+///
+/// Demand model per service:
+///   • Water supply (cold/hot) with an entry in [leafFixtureUnits]: accumulate
+///     fixture UNITS down the tree and convert each edge's total via the
+///     Hunter/UBAP curve ([flushSystem]) — diversified simultaneous demand,
+///     NOT a sum of peak fixture flows.
+///   • Everything else (or water without fixture-unit data): accumulate the
+///     flat [leafDemand] flows.
 Map<String, EdgeSizing> autoSizeNetwork(
   Network net,
   SizingContext ctx, {
   required Map<ServiceType, FlowRate> leafDemand,
+  Map<ServiceType, double> leafFixtureUnits = const {},
+  FlushSystem flushSystem = FlushSystem.flushTank,
 }) {
+  const profile = SniProfile();
   final allFlows = <String, FlowRate>{};
+
+  bool isWaterSupply(ServiceType s) =>
+      s == ServiceType.coldWater || s == ServiceType.hotWater;
 
   for (final service in net.edges.map((e) => e.service).toSet()) {
     final demand = leafDemand[service] ?? const FlowRate(0);
+    final useUbap =
+        isWaterSupply(service) && leafFixtureUnits.containsKey(service);
+    final fuPerLeaf = leafFixtureUnits[service] ?? 0.0;
 
     final adjacency = <String, List<({String edgeId, String other})>>{};
     final nodes = <String>{};
@@ -204,18 +264,38 @@ Map<String, EdgeSizing> autoSizeNetwork(
       }
       final leaves = component.where((n) => degree(n) == 1).toList();
       final root = leaves.isNotEmpty ? leaves.first : component.first;
-      final terminalDemand = <String, FlowRate>{
-        for (final leaf in leaves)
-          if (leaf != root) leaf: demand,
-      };
-      allFlows.addAll(
-        accumulateFlows(
+
+      if (useUbap) {
+        final terminalUnits = <String, double>{
+          for (final leaf in leaves)
+            if (leaf != root) leaf: fuPerLeaf,
+        };
+        final edgeUnits = accumulateFixtureUnits(
           net: net,
           service: service,
           rootId: root,
-          terminalDemand: terminalDemand,
-        ),
-      );
+          terminalUnits: terminalUnits,
+        );
+        for (final entry in edgeUnits.entries) {
+          allFlows[entry.key] = profile.probableFlowForFixtureUnits(
+            entry.value,
+            system: flushSystem,
+          );
+        }
+      } else {
+        final terminalDemand = <String, FlowRate>{
+          for (final leaf in leaves)
+            if (leaf != root) leaf: demand,
+        };
+        allFlows.addAll(
+          accumulateFlows(
+            net: net,
+            service: service,
+            rootId: root,
+            terminalDemand: terminalDemand,
+          ),
+        );
+      }
     }
   }
 

@@ -57,6 +57,31 @@ void main() {
       expect(cw, closeTo(sj, 0.0015));
     });
 
+    test('laminar regime uses f = 64/Re (Re ≤ 2300)', () {
+      // Re = 2000 → 64/2000 = 0.032, regardless of roughness.
+      expect(frictionFactorSwameeJain(2000, 1e-3), closeTo(64.0 / 2000.0, 1e-12));
+      expect(frictionFactorColebrook(2000, 1e-3), closeTo(64.0 / 2000.0, 1e-12));
+    });
+
+    test('zero flow → zero friction (no NaN/Inf at Re=0)', () {
+      expect(frictionFactorSwameeJain(0, 1e-3), 0.0);
+      expect(frictionFactorColebrook(0, 1e-3), 0.0);
+      // ...and a zero-flow Hazen–Williams loss is exactly 0.
+      final hf = headLossHazenWilliams(
+        flow: const FlowRate(0),
+        length: const Length(50),
+        diameter: Diameter.mm(50),
+        hazenWilliamsC: 150,
+      );
+      expect(hf.meters, 0.0);
+    });
+
+    test('turbulent Colebrook stays finite and positive', () {
+      final f = frictionFactorColebrook(5e5, 1e-4);
+      expect(f.isFinite, isTrue);
+      expect(f, greaterThan(0));
+    });
+
     test('Darcy–Weisbach head loss (f=0.02, L=100, DN50, v=2) ≈ 8.155 m', () {
       final hf = headLossDarcy(
         frictionFactor: 0.02,

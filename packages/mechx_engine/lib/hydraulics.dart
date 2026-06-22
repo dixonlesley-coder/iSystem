@@ -38,15 +38,22 @@ double _log10(num x) => math.log(x) / math.ln10;
 
 // ── Geometry ───────────────────────────────────────────────────────────────
 
+/// Upper Reynolds bound of the laminar regime in a circular pipe. Below this
+/// the friction factor is `64/Re` (Hagen–Poiseuille), not Colebrook-family.
+const double laminarReynoldsLimit = 2300.0;
+
 /// Cross-sectional area of a circular pipe of inside [diameter].
-Area circularArea(Diameter diameter) =>
-    Area(math.pi * diameter.meters * diameter.meters / 4.0);
+Area circularArea(Diameter diameter) {
+  assert(diameter.meters > 0, 'diameter must be positive');
+  return Area(math.pi * diameter.meters * diameter.meters / 4.0);
+}
 
 /// Mean velocity for a given volumetric [flow] in a circular pipe of inside
 /// [diameter] (continuity: v = Q / A).
-Velocity velocityFromFlow(FlowRate flow, Diameter diameter) => Velocity(
-      flow.cubicMetersPerSecond / circularArea(diameter).squareMeters,
-    );
+Velocity velocityFromFlow(FlowRate flow, Diameter diameter) {
+  assert(diameter.meters > 0, 'diameter must be positive');
+  return Velocity(flow.cubicMetersPerSecond / circularArea(diameter).squareMeters);
+}
 
 /// Volumetric flow for a given mean [velocity] in a circular pipe of inside
 /// [diameter] (Q = v · A).
@@ -61,30 +68,50 @@ double reynolds(
   Velocity velocity,
   Diameter diameter, {
   double kinematicViscosity = defaultKinematicViscosity,
-}) =>
-    velocity.metersPerSecond * diameter.meters / kinematicViscosity;
+}) {
+  assert(diameter.meters > 0, 'diameter must be positive');
+  assert(kinematicViscosity > 0, 'kinematic viscosity must be positive');
+  return velocity.metersPerSecond * diameter.meters / kinematicViscosity;
+}
 
-/// Darcy friction factor via the Swamee–Jain explicit approximation of the
-/// Colebrook–White equation. Valid for 5·10³ < Re < 10⁸ and
-/// 10⁻⁶ < ε/D < 10⁻². [relativeRoughness] is ε/D (dimensionless).
+/// Darcy friction factor for full-bore flow at [reynolds] with relative
+/// roughness ε/D = [relativeRoughness].
+///
+/// Regime-aware: laminar flow (`Re ≤ laminarReynoldsLimit`) uses the exact
+/// Hagen–Poiseuille `f = 64/Re`; turbulent flow uses the Swamee–Jain explicit
+/// approximation of Colebrook–White (valid 5·10³ < Re < 10⁸,
+/// 10⁻⁶ < ε/D < 10⁻²). `Re = 0` (no flow) returns 0 — there is no friction
+/// without flow, and callers fold this into a zero head loss.
 double frictionFactorSwameeJain(double reynolds, double relativeRoughness) {
-  final denom =
-      _log10(relativeRoughness / 3.7 + 5.74 / _pow(reynolds, 0.9));
+  assert(reynolds >= 0, 'Reynolds number must be non-negative');
+  if (reynolds <= 0) return 0.0;
+  if (reynolds <= laminarReynoldsLimit) return 64.0 / reynolds;
+  final denom = _log10(relativeRoughness / 3.7 + 5.74 / _pow(reynolds, 0.9));
   return 0.25 / (denom * denom);
 }
 
 /// Darcy friction factor by iterating the implicit Colebrook–White equation,
-/// seeded with [frictionFactorSwameeJain]. Converges in a handful of passes.
+/// seeded with [frictionFactorSwameeJain]. Laminar/zero-flow are delegated to
+/// the seed (exact `64/Re` or 0); the turbulent fixed-point iterates to a tight
+/// tolerance and exits early once converged.
 double frictionFactorColebrook(
   double reynolds,
   double relativeRoughness, {
   int iterations = 16,
+  double tolerance = 1e-10,
 }) {
+  // Laminar / no-flow: the explicit form is already exact — don't iterate
+  // (the Colebrook fixed-point divides by Re·√f and would blow up at Re = 0).
+  if (reynolds <= laminarReynoldsLimit) {
+    return frictionFactorSwameeJain(reynolds, relativeRoughness);
+  }
   var f = frictionFactorSwameeJain(reynolds, relativeRoughness);
   for (var i = 0; i < iterations; i++) {
     final rhs = -2.0 *
         _log10(relativeRoughness / 3.7 + 2.51 / (reynolds * math.sqrt(f)));
-    f = 1.0 / (rhs * rhs);
+    final next = 1.0 / (rhs * rhs);
+    if ((next - f).abs() <= tolerance) return next;
+    f = next;
   }
   return f;
 }
@@ -114,6 +141,8 @@ Head headLossHazenWilliams({
   required Diameter diameter,
   required double hazenWilliamsC,
 }) {
+  assert(diameter.meters > 0, 'diameter must be positive');
+  assert(hazenWilliamsC > 0, 'Hazen–Williams C must be positive');
   final q = flow.cubicMetersPerSecond;
   final d = diameter.meters;
   final hf = 10.67 *
@@ -132,10 +161,14 @@ Velocity manningVelocity({
   required double manningN,
   required Length hydraulicRadius,
   required double slope,
-}) =>
-    Velocity(
-      (1.0 / manningN) * _pow(hydraulicRadius.meters, 2.0 / 3.0) * math.sqrt(slope),
-    );
+}) {
+  assert(manningN > 0, "Manning's n must be positive");
+  assert(slope >= 0, 'slope must be non-negative');
+  assert(hydraulicRadius.meters >= 0, 'hydraulic radius must be non-negative');
+  return Velocity(
+    (1.0 / manningN) * _pow(hydraulicRadius.meters, 2.0 / 3.0) * math.sqrt(slope),
+  );
+}
 
 /// Full-bore Manning discharge for a circular pipe (R = D/4, A = πD²/4). This
 /// is the capacity bound; partial-full drainage sizing scales it by the
@@ -200,5 +233,7 @@ Head headFromPressure(
   Pressure pressure, {
   double density = defaultWaterDensity,
   double gravity = standardGravity,
-}) =>
-    Head(pressure.pascals / (density * gravity));
+}) {
+  assert(density > 0 && gravity > 0, 'density and gravity must be positive');
+  return Head(pressure.pascals / (density * gravity));
+}

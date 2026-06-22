@@ -149,6 +149,21 @@ void main() {
         }
       }
     });
+
+    test('flush-valve ≥ flush-tank across the WHOLE range (cross-curve)', () {
+      // Sweep finely, including between the explicit chart anchors, so a valve
+      // point dipping below the tank curve in the 200–1000 band is caught.
+      for (var fu = 10.0; fu <= 1000.0; fu += 10.0) {
+        final valve = profile
+            .probableFlowForFixtureUnits(fu, system: FlushSystem.flushValve)
+            .cubicMetersPerSecond;
+        final tank = profile
+            .probableFlowForFixtureUnits(fu, system: FlushSystem.flushTank)
+            .cubicMetersPerSecond;
+        expect(valve, greaterThanOrEqualTo(tank - 1e-12),
+            reason: 'valve < tank at $fu UBAP');
+      }
+    });
   });
 
   group('verify checklist (provenance contract)', () {

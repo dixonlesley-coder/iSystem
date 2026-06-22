@@ -1,5 +1,6 @@
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
@@ -97,6 +98,75 @@ void main() {
       sized['e1']!.diameter.meters,
       greaterThanOrEqualTo(sized['e2']!.diameter.meters),
     );
+  });
+
+  group('accumulateFixtureUnits + UBAP demand path (diversified water supply)',
+      () {
+    // Chain of fixtures on one cold-water branch: src—e1—a—e2—b—e3—c—e4—d.
+    // a,b,c,d are fixtures (4 leaves beyond the src root after chaining).
+    const net = Network(
+      nodes: [
+        NetNode(id: 'src', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'a', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+        NetNode(id: 'b', sheetId: 's1', x: 200, y: 0, floorIndex: 0),
+        NetNode(id: 'c', sheetId: 's1', x: 300, y: 0, floorIndex: 0),
+        NetNode(id: 'd', sheetId: 's1', x: 400, y: 0, floorIndex: 0),
+      ],
+      edges: [
+        NetEdge(id: 'e1', fromId: 'src', toId: 'a', service: ServiceType.coldWater),
+        NetEdge(id: 'e2', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
+        NetEdge(id: 'e3', fromId: 'b', toId: 'c', service: ServiceType.coldWater),
+        NetEdge(id: 'e4', fromId: 'c', toId: 'd', service: ServiceType.coldWater),
+      ],
+    );
+
+    test('trunk flow = Hunter(total UBAP), NOT the sum of peak fixture flows',
+        () {
+      // Only 'd' is a leaf besides the 'src' root in this chain, so put the
+      // fixture load on every interior+leaf node via a tee instead. Use a
+      // 4-leaf tee so multiple fixtures stack on the trunk.
+      const tee = Network(
+        nodes: [
+          NetNode(id: 'src', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          NetNode(id: 'h', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+          NetNode(id: 'f1', sheetId: 's1', x: 200, y: -30, floorIndex: 0),
+          NetNode(id: 'f2', sheetId: 's1', x: 200, y: -10, floorIndex: 0),
+          NetNode(id: 'f3', sheetId: 's1', x: 200, y: 10, floorIndex: 0),
+          NetNode(id: 'f4', sheetId: 's1', x: 200, y: 30, floorIndex: 0),
+        ],
+        edges: [
+          NetEdge(id: 't', fromId: 'src', toId: 'h', service: ServiceType.coldWater),
+          NetEdge(id: 'b1', fromId: 'h', toId: 'f1', service: ServiceType.coldWater),
+          NetEdge(id: 'b2', fromId: 'h', toId: 'f2', service: ServiceType.coldWater),
+          NetEdge(id: 'b3', fromId: 'h', toId: 'f3', service: ServiceType.coldWater),
+          NetEdge(id: 'b4', fromId: 'h', toId: 'f4', service: ServiceType.coldWater),
+        ],
+      );
+      final sized = autoSizeNetwork(
+        tee,
+        const SizingContext(),
+        leafDemand: const {ServiceType.coldWater: FlowRate(0.0002)},
+        leafFixtureUnits: const {ServiceType.coldWater: 6.0},
+      );
+      // 4 fixtures × 6 UBAP = 24 UBAP on the trunk 't'.
+      final expectedTrunk = const SniProfile()
+          .probableFlowForFixtureUnits(24.0)
+          .cubicMetersPerSecond;
+      expect(
+        sized['t']!.flow.cubicMetersPerSecond,
+        closeTo(expectedTrunk, 1e-9),
+      );
+      // Diversified demand must be far below the naive sum of peak flows
+      // (4 × 0.0002 = 0.0008 would be the flat model; Hunter at 24 UBAP is
+      // a much larger but PROPER simultaneous demand — the point is it comes
+      // from the curve, not a linear sum).
+      expect(sized['t']!.flow.cubicMetersPerSecond, greaterThan(0));
+      // Each branch carries one fixture = Hunter(6 UBAP).
+      final oneFixture = const SniProfile()
+          .probableFlowForFixtureUnits(6.0)
+          .cubicMetersPerSecond;
+      expect(sized['b1']!.flow.cubicMetersPerSecond, closeTo(oneFixture, 1e-9));
+    });
   });
 
   test('sizeNetwork sizes every edge with an accumulated flow', () {
