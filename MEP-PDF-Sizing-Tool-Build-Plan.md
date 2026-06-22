@@ -119,14 +119,33 @@ path per service:
 
 - `standards/sni.dart` implements `StandardsProfile`; the engine depends on the
   **interface**, never the concrete numbers — standards are swappable data.
-- Every draft value is wrapped in `StandardValue<T>` carrying
-  `{value, unit, citation, verified}` and tagged `// VERIFY`. Until
-  `verified == true`, the **UI/output must show it as UNVERIFIED** and must not
-  present it as authoritative.
-- **Top of the verify list** (per [§13.4](#13-open-decisions--chosen-defaults)):
-  1. **SNI 8153 max fixture static pressure** (the zoning/booster trigger).
-  2. **SNI 8153 demand curve** (fixture-units → probable simultaneous flow).
-  `SniProfile.verifyChecklist` returns the outstanding items, most-critical first.
+- Every value is wrapped in `StandardValue<T>` carrying
+  `{value, unit, citation, verified, sourceUrl, note}`. `verified == true` means
+  the figure was found in the **SNI text itself** and corroborated; `false`
+  means a placeholder OR a real figure sourced only from **secondary literature**
+  (clause not yet confirmed against the official PDF). The UI/output must show
+  every `verified == false` value as **UNVERIFIED**. `SniProfile.verifyChecklist`
+  returns the outstanding items, most-critical first.
+
+**Seeding status (SNI 8153:2015, researched 2026-06 from the archive.org full
+text + Indonesian engineering literature):**
+
+| Value | Figure | `verified` | Basis |
+|---|---|---|---|
+| Min pressure at fixture outlet | 0.50 kgf/cm² (49.03 kPa) | ✅ | verbatim SNI text |
+| Min pressure at flush valve | 1 kgf/cm² (98.07 kPa) | ✅ | verbatim SNI text |
+| Mandatory pressure-relief threshold | >5 kgf/cm² (490.33 kPa) | ✅ | verbatim SNI text |
+| Demand method (UBAP + Hunter curve) | — | ✅ | confirmed prescribed method |
+| Max fixture pressure (zoning target) | ~4 kgf/cm² (392.27 kPa) | ⚠️ | secondary design guidance |
+| Max supply velocity | 2.0 m/s | ⚠️ | secondary consensus |
+| Demand-curve point **values** (Gambar 1) | two branches | ⚠️ | chart read-offs (UPC-2012 lineage) |
+| UBAP fixture-unit table (Tabel 3) | per fixture/occupancy | ⚠️ | secondary sources |
+| Drain velocity cap | 3.0 m/s | ⚠️ | not an SNI clause (slope+UBAP based) |
+
+> The two ⚠️ items called out in [§13.4](#13-open-decisions--chosen-defaults)
+> (max fixture pressure, demand curve) are now seeded with **real, sourced**
+> figures but remain flagged until confirmed against the official SNI PDF.
+> NB: **SNI 8153:2025** now supersedes the 2015 edition.
 
 ## 9. One solve feeds everything (no parallel calculations — §12)
 
@@ -201,6 +220,7 @@ boundary for review.**
 | 2026-06-22 | Engine lives in **pure-Dart package `packages/mechx_engine`**, not literal `lib/engine/` | Required to satisfy "pure-Dart engine + `dart test` + `package:test` + >90% coverage" (Flutter packages can't run `dart test`). Reversible. |
 | 2026-06-22 | Internal quantities are Dart 3 `extension type`s | Zero-cost typed-quantity guardrail (§12.2). |
 | 2026-06-22 | Toolchain installed in CI/dev container: **Flutter 3.44.2 / Dart 3.12.2** | Linux dev/test only; Windows `.exe` build happens on the engineer's machine. |
+| 2026-06-22 | **Seeded SNI 8153:2015 supply values** from web research (pressures, velocities, demand method/curve, UBAP table) | `verified` flags reflect verbatim-text vs secondary provenance; `StandardValue` gained `sourceUrl`/`note`; `verified==true` only for literal SNI text. |
 
 ## 16. Testing strategy
 

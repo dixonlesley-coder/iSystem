@@ -44,37 +44,109 @@ void main() {
     });
   });
 
-  group('demand curve interpolation', () {
-    test('endpoints clamp', () {
+  group('demand method', () {
+    test('UBAP + Hunter curve, method verified', () {
+      expect(profile.demandMethod.verified, isTrue);
+      expect(profile.demandMethod.value, contains('UBAP'));
+    });
+  });
+
+  group('UBAP fixture-unit loads (Tabel 3)', () {
+    test('flush-valve WC depends on occupancy', () {
+      expect(
+        profile.fixtureUnitLoad(PlumbingFixture.waterClosetFlushValve),
+        6.0, // private (default)
+      );
+      expect(
+        profile.fixtureUnitLoad(PlumbingFixture.waterClosetFlushValve,
+            occupancy: Occupancy.public),
+        10.0,
+      );
+    });
+
+    test('flush-tank WC: assembly higher than private', () {
+      expect(profile.fixtureUnitLoad(PlumbingFixture.waterClosetFlushTank), 2.5);
+      expect(
+        profile.fixtureUnitLoad(PlumbingFixture.waterClosetFlushTank,
+            occupancy: Occupancy.assembly),
+        3.5,
+      );
+    });
+
+    test('lavatory / shower / bathtub fixed loads', () {
+      expect(profile.fixtureUnitLoad(PlumbingFixture.lavatory), 1.0);
+      expect(profile.fixtureUnitLoad(PlumbingFixture.shower), 2.0);
+      expect(profile.fixtureUnitLoad(PlumbingFixture.bathtub), 4.0);
+    });
+
+    test('every fixture has a positive load for every occupancy', () {
+      for (final f in PlumbingFixture.values) {
+        for (final o in Occupancy.values) {
+          expect(profile.fixtureUnitLoad(f, occupancy: o), greaterThan(0));
+        }
+      }
+    });
+  });
+
+  group('demand curve (Gambar 1, two branches)', () {
+    test('endpoints clamp to the curve ends', () {
       expect(profile.probableFlowForFixtureUnits(0).cubicMetersPerSecond, 0.0);
       expect(
         profile.probableFlowForFixtureUnits(100000).inLitersPerSecond,
-        closeTo(13.0, 1e-9),
+        closeTo(27.233, 1e-2), // clamps to 3000 UBAP → 1634 L/min
       );
     });
 
-    test('exact table point (100 FU → ~3.0 L/s)', () {
+    test('flush-tank read-off (100 UBAP → ~3.03 L/s)', () {
       expect(
         profile.probableFlowForFixtureUnits(100).inLitersPerSecond,
-        closeTo(3.0, 1e-9),
+        closeTo(3.0333, 1e-3),
       );
     });
 
-    test('linear interpolation between points (75 FU)', () {
-      // halfway between 50 FU (1.9 L/s) and 100 FU (3.0 L/s) → 2.45 L/s
+    test('flush-valve read-off (100 UBAP → ~4.03 L/s)', () {
+      expect(
+        profile
+            .probableFlowForFixtureUnits(100, system: FlushSystem.flushValve)
+            .inLitersPerSecond,
+        closeTo(4.0333, 1e-3),
+      );
+    });
+
+    test('linear interpolation between points (75 UBAP, tank → 2.43 L/s)', () {
       expect(
         profile.probableFlowForFixtureUnits(75).inLitersPerSecond,
-        closeTo(2.45, 1e-9),
+        closeTo(2.4333, 1e-3),
       );
     });
 
-    test('monotonic non-decreasing', () {
-      var prev = -1.0;
-      for (final fu in [0, 10, 50, 100, 200, 500, 1000]) {
-        final q = profile.probableFlowForFixtureUnits(fu.toDouble())
-            .cubicMetersPerSecond;
-        expect(q, greaterThanOrEqualTo(prev));
-        prev = q;
+    test('flush-valve demands more than flush-tank at low UBAP', () {
+      final valve = profile
+          .probableFlowForFixtureUnits(50, system: FlushSystem.flushValve)
+          .cubicMetersPerSecond;
+      final tank = profile.probableFlowForFixtureUnits(50).cubicMetersPerSecond;
+      expect(valve, greaterThan(tank));
+    });
+
+    test('branches converge above ~1000 UBAP', () {
+      final valve = profile
+          .probableFlowForFixtureUnits(1000, system: FlushSystem.flushValve)
+          .cubicMetersPerSecond;
+      final tank =
+          profile.probableFlowForFixtureUnits(1000).cubicMetersPerSecond;
+      expect(valve, closeTo(tank, 1e-12));
+    });
+
+    test('both branches are monotonic non-decreasing', () {
+      for (final system in FlushSystem.values) {
+        var prev = -1.0;
+        for (final fu in [0, 10, 50, 100, 200, 500, 1000, 2000, 3000]) {
+          final q = profile
+              .probableFlowForFixtureUnits(fu.toDouble(), system: system)
+              .cubicMetersPerSecond;
+          expect(q, greaterThanOrEqualTo(prev));
+          prev = q;
+        }
       }
     });
   });

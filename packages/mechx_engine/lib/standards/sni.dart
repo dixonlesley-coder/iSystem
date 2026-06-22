@@ -65,6 +65,26 @@ class StandardValue<T> {
 /// Pipe materials the engine knows roughness/HW-C for.
 enum PipeMaterial { pvc, hdpe, copper, galvanizedIron, ductileIron, steel }
 
+/// Flush-system type — the SNI demand curve (Gambar 1) has separate flush-tank
+/// and flush-valve branches; they converge above ~1000 UBAP.
+enum FlushSystem { flushTank, flushValve }
+
+/// Occupancy class for UBAP fixture-unit loads (SNI 8153:2015 Tabel 3 columns):
+/// pribadi (private) / umum (public) / tempat berkumpul (assembly).
+enum Occupancy { private, public, assembly }
+
+/// Plumbing fixtures with assigned UBAP (unit beban alat plambing) loads.
+enum PlumbingFixture {
+  waterClosetFlushValve, // kloset, katup gelontor
+  waterClosetFlushTank, // kloset, tangki gelontor
+  urinalFlushTank, // peturasan, tangki gelontor
+  lavatory, // wastafel / bak cuci tangan
+  shower,
+  bathtub, // bak rendam
+  kitchenSink, // bak cuci dapur
+  hoseBibb, // keran taman
+}
+
 /// Interface every standards profile satisfies. Keeps standards swappable.
 abstract interface class StandardsProfile {
   String get name;
@@ -85,8 +105,21 @@ abstract interface class StandardsProfile {
   StandardValue<Velocity> get maxSupplyVelocity;
   StandardValue<Velocity> get maxDrainVelocity;
 
-  /// Probable simultaneous flow for a total fixture-unit load (demand curve).
-  FlowRate probableFlowForFixtureUnits(double fixtureUnits);
+  /// The demand-estimation method this profile prescribes.
+  StandardValue<String> get demandMethod;
+
+  /// Fixture-unit (UBAP) load for [fixture] at the given [occupancy].
+  double fixtureUnitLoad(
+    PlumbingFixture fixture, {
+    Occupancy occupancy = Occupancy.private,
+  });
+
+  /// Probable simultaneous flow for a total fixture-unit load (demand curve),
+  /// on the given flush [system] branch.
+  FlowRate probableFlowForFixtureUnits(
+    double fixtureUnits, {
+    FlushSystem system = FlushSystem.flushTank,
+  });
 
   /// Hazen–Williams C for [material] (pressurized friction).
   double hazenWilliamsC(PipeMaterial material);
@@ -200,37 +233,95 @@ class SniProfile implements StandardsProfile {
 
   // ── Demand (fixture units → flow) ─────────────────────────────────────────
 
-  /// Fixture-unit → probable-flow demand curve (Hunter-style). Monotonic;
-  /// [probableFlowForFixtureUnits] interpolates linearly between points.
-  // VERIFY (TOP PRIORITY): SNI 8153:2015 demand-curve values (Hunter / Noerbambang).
-  // Placeholder pending the demand-curve research pass — flush-valve vs
-  // flush-tank branches and the UBAP fixture-unit table land in the next commit.
-  static const List<(double fixtureUnits, FlowRate flow)> _demandCurve = [
+  @override
+  StandardValue<String> get demandMethod => const StandardValue(
+        'UBAP (unit beban alat plambing) + kurva perkiraan beban (Hunter curve)',
+        unit: 'method',
+        citation: '$_doc — demand-estimation method',
+        sourceUrl: _archiveUrl,
+        verified: true,
+        note: 'SNI 8153:2015 prescribes the fixture-unit (UBAP) + Hunter demand '
+            'curve method (Noerbambang & Morimura; UPC 2012 basis); it supersedes '
+            'SNI 03-6481-2000 & 03-7065-2005. The METHOD is confirmed; the curve '
+            'point VALUES and the UBAP table below are secondary / chart read-offs '
+            'and remain UNVERIFIED.',
+      );
+
+  @override
+  double fixtureUnitLoad(
+    PlumbingFixture fixture, {
+    Occupancy occupancy = Occupancy.private,
+  }) =>
+      // SNI 8153:2015 Tabel 3 (UBAP). Secondary-sourced (literal table not yet
+      // confirmed) — flagged via the demand-curve entry in verifyChecklist.
+      // VERIFY against the official Tabel 3.
+      switch ((fixture, occupancy)) {
+        (PlumbingFixture.waterClosetFlushValve, Occupancy.private) => 6.0,
+        (PlumbingFixture.waterClosetFlushValve, _) => 10.0,
+        (PlumbingFixture.waterClosetFlushTank, Occupancy.assembly) => 3.5,
+        (PlumbingFixture.waterClosetFlushTank, _) => 2.5,
+        (PlumbingFixture.urinalFlushTank, Occupancy.assembly) => 3.0,
+        (PlumbingFixture.urinalFlushTank, _) => 2.0,
+        (PlumbingFixture.lavatory, _) => 1.0,
+        (PlumbingFixture.shower, _) => 2.0,
+        (PlumbingFixture.bathtub, _) => 4.0,
+        (PlumbingFixture.kitchenSink, _) => 2.0,
+        (PlumbingFixture.hoseBibb, _) => 2.5,
+      };
+
+  // SNI 8153:2015 Gambar 1 "kurva perkiraan beban" — flush-TANK branch.
+  // VERIFY: chart read-offs from the Hunter / UPC-2012 curve lineage
+  // (L/min → m³/s); not a literal digitisation of Gambar 1. Secondary literal
+  // anchor point: 314 UBAP → 400 L/min.
+  static const List<(double ubap, FlowRate flow)> _demandTank = [
     (0, FlowRate(0.0)),
-    (10, FlowRate(0.0006)), // ≈0.6 L/s
-    (50, FlowRate(0.0019)), // ≈1.9 L/s
-    (100, FlowRate(0.0030)), // ≈3.0 L/s
-    (200, FlowRate(0.0048)), // ≈4.8 L/s
-    (500, FlowRate(0.0085)), // ≈8.5 L/s
-    (1000, FlowRate(0.0130)), // ≈13.0 L/s
+    (10, FlowRate(0.0005)), //   30 L/min
+    (25, FlowRate(0.00088333)), //   53 L/min
+    (50, FlowRate(0.00183333)), //  110 L/min
+    (100, FlowRate(0.00303333)), //  182 L/min
+    (200, FlowRate(0.00473333)), //  284 L/min
+    (314, FlowRate(0.00666667)), //  400 L/min (secondary literal)
+    (500, FlowRate(0.00788333)), //  473 L/min
+    (1000, FlowRate(0.01311667)), //  787 L/min
+    (2000, FlowRate(0.02025)), // 1215 L/min
+    (3000, FlowRate(0.02723333)), // 1634 L/min
+  ];
+
+  // Gambar 1 — flush-VALVE branch (higher demand at low UBAP; merges with the
+  // tank branch above ~1000 UBAP). Same provenance caveat as the tank branch.
+  static const List<(double ubap, FlowRate flow)> _demandValve = [
+    (0, FlowRate(0.0)),
+    (10, FlowRate(0.00088333)), //   53 L/min
+    (25, FlowRate(0.00151667)), //   91 L/min
+    (50, FlowRate(0.00258333)), //  155 L/min
+    (100, FlowRate(0.00403333)), //  242 L/min
+    (200, FlowRate(0.00593333)), //  356 L/min
+    (500, FlowRate(0.00896667)), //  538 L/min
+    (1000, FlowRate(0.01311667)), //  787 L/min
+    (2000, FlowRate(0.02025)), // 1215 L/min
+    (3000, FlowRate(0.02723333)), // 1634 L/min
   ];
 
   @override
-  FlowRate probableFlowForFixtureUnits(double fixtureUnits) {
-    if (fixtureUnits <= _demandCurve.first.$1) return _demandCurve.first.$2;
-    if (fixtureUnits >= _demandCurve.last.$1) return _demandCurve.last.$2;
-    for (var i = 1; i < _demandCurve.length; i++) {
-      final (fuHi, qHi) = _demandCurve[i];
-      if (fixtureUnits <= fuHi) {
-        final (fuLo, qLo) = _demandCurve[i - 1];
-        final t = (fixtureUnits - fuLo) / (fuHi - fuLo);
+  FlowRate probableFlowForFixtureUnits(
+    double fixtureUnits, {
+    FlushSystem system = FlushSystem.flushTank,
+  }) {
+    final curve = system == FlushSystem.flushValve ? _demandValve : _demandTank;
+    if (fixtureUnits <= curve.first.$1) return curve.first.$2;
+    if (fixtureUnits >= curve.last.$1) return curve.last.$2;
+    for (var i = 1; i < curve.length; i++) {
+      final (xHi, yHi) = curve[i];
+      if (fixtureUnits <= xHi) {
+        final (xLo, yLo) = curve[i - 1];
+        final t = (fixtureUnits - xLo) / (xHi - xLo);
         return FlowRate(
-          qLo.cubicMetersPerSecond +
-              t * (qHi.cubicMetersPerSecond - qLo.cubicMetersPerSecond),
+          yLo.cubicMetersPerSecond +
+              t * (yHi.cubicMetersPerSecond - yLo.cubicMetersPerSecond),
         );
       }
     }
-    return _demandCurve.last.$2;
+    return curve.last.$2;
   }
 
   // ── Material properties (physical engineering references, not SNI-specific) ─
