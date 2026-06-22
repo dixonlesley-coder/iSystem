@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/calibration_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../theme/design_tokens.dart';
@@ -101,7 +102,7 @@ class ProjectPanel extends ConsumerWidget {
                     Expanded(
                       child: Text(
                         calibration == null
-                            ? 'Not calibrated — calibrate after PDF import'
+                            ? 'Not calibrated — mark a known distance'
                             : '1 px = ${calibration.metersPerPixel.toStringAsExponential(2)} m',
                         style: type.caption.copyWith(color: colors.textSecondary),
                       ),
@@ -109,6 +110,19 @@ class ProjectPanel extends ConsumerWidget {
                   ],
                 ),
               ),
+              if (currentSheet != null) ...[
+                const SizedBox(height: MechXSpacing.sm),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: MechXButton(
+                    label: calibration == null
+                        ? 'Calibrate scale'
+                        : 'Re-calibrate',
+                    onPressed: () =>
+                        ref.read(calibrationControllerProvider.notifier).start(),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

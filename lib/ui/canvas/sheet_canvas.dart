@@ -1,9 +1,11 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../store/calibration_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/sheets_store.dart';
 import '../theme/mechx_theme.dart';
+import 'calibration_overlay.dart';
 import 'canvas_view.dart';
 
 /// Builds the content widget for a sheet. This is the seam where pdfrx (PDFium)
@@ -41,16 +43,24 @@ class SheetCanvas extends ConsumerWidget {
     }
 
     final content = ref.watch(sheetContentBuilderProvider)(context, sheet);
+    final calibrating = ref.watch(calibrationControllerProvider).isActive;
 
-    return CanvasView(
-      // A fresh CanvasView per sheet, seeded from that sheet's stored viewport.
-      key: ValueKey(sheet.id),
-      contentSize: sheet.sizePx,
-      initialTransform: state.viewportFor(sheet.id),
-      background: colors.canvas,
-      onTransformChanged: (vt) =>
-          ref.read(sheetsControllerProvider.notifier).setViewport(sheet.id, vt),
-      child: content,
+    return Stack(
+      children: [
+        CanvasView(
+          // Fresh CanvasView per sheet, seeded from that sheet's stored viewport.
+          key: ValueKey(sheet.id),
+          contentSize: sheet.sizePx,
+          initialTransform: state.viewportFor(sheet.id),
+          background: colors.canvas,
+          onTransformChanged: (vt) => ref
+              .read(sheetsControllerProvider.notifier)
+              .setViewport(sheet.id, vt),
+          child: content,
+        ),
+        if (calibrating)
+          Positioned.fill(child: CalibrationOverlay(sheetId: sheet.id)),
+      ],
     );
   }
 }

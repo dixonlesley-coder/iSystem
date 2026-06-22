@@ -212,7 +212,7 @@ solved node values into a grid — it computes no physics.
 |---|---|---|
 | **Step 1** ✅ | Scaffold + pure engine + seed tests green | *all seed tests pass* |
 | **P0 Shell** 🟡 | Custom design system, multi-sheet nav, pannable/zoomable canvas (✅ done & tested); **pdfrx PDF render** (⬜ next, behind the `sheetContentBuilderProvider` seam) | review stop |
-| **P1** 🟡 | Project details + per-floor heights + scale calibration (✅ geometry, project/floor state, inspector UI, calibration model — tested); **pdfrx PDF import + render** (✅ pdfrx 2.4.4 + file_picker, "Open PDF…" → sheet-per-page, behind the seam); **on-canvas calibrate tool** (⬜ building) | — |
+| **P1** ✅ | Project details + per-floor heights + scale calibration. Pure geometry (calibration + elevations), editable project/floor state + inspector UI, pdfrx PDF import + render (2.4.4, "Open PDF…" → sheet-per-page), and the on-canvas mark-a-known-distance calibrate tool. All logic tested (95 total). | — |
 | **P2** | Drawing (incl. risers) | — |
 | **P3** | SNI sizing engine (ducts + clean water first) | — |
 | **P4** | Network solve + pumps + zoning + auto diagram + pressure heatmap + BOM | **MVP = P0–P4** |
@@ -235,6 +235,7 @@ boundary for review.**
 | 2026-06-22 | **P0 uses `WidgetsApp`, not `MaterialApp`** | Honours §4 "no default Material theme"; MechX owns its visual language via `MechXTheme`. |
 | 2026-06-22 | **Canvas: pure `ViewportTransform` + controlled `CanvasView`** | Polish-critical math is headless-testable; gestures = wheel zoom-to-cursor, **left-click & middle-drag pan**, trackpad pinch, keyboard (Ctrl±/0, F, arrows). Per-sheet viewport restore via the store. |
 | 2026-06-22 | **P1 length source-of-truth as pure engine geometry** (`geometry/scale_calibration.dart`, `geometry/building.dart`) | §10/§12.3: horizontal length = px × calibration; vertical riser = floor-elevation delta. Editable via `project_store`; never measured from a PDF. |
+| 2026-06-22 | **Calibrate tool = testable controller + canvas overlay** | `calibration_store` is a pure state machine (idle→pick→pick→distance); the overlay maps taps to sheet/world coords via the live `ViewportTransform` and writes `ScaleCalibration` to the project. Two-point flow widget-tested. |
 
 ## 16. Testing strategy
 
