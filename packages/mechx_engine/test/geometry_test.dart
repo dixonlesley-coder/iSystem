@@ -49,5 +49,34 @@ void main() {
       expect(levels.totalHeight.meters, closeTo(11.0, 1e-12));
       expect(levels.levelCount, 3);
     });
+
+    test('floorHeightOf returns each level height', () {
+      expect(levels.floorHeightOf(0).meters, closeTo(4.0, 1e-12));
+      expect(levels.floorHeightOf(2).meters, closeTo(3.5, 1e-12));
+    });
+
+    test('ceiling elevation = floor surface + height − ceilingDrop (0.3)', () {
+      // ground ceiling = 0 + 4.0 − 0.3 = 3.7; level-2 = 7.5 + 3.5 − 0.3 = 10.7
+      expect(levels.ceilingElevationOf(0).meters, closeTo(3.7, 1e-12));
+      expect(levels.ceilingElevationOf(2).meters, closeTo(10.7, 1e-12));
+    });
+
+    test('fixture elevation = floor surface + fixtureHeight (1.1)', () {
+      expect(levels.fixtureElevationOf(0).meters, closeTo(1.1, 1e-12));
+      expect(levels.fixtureElevationOf(1).meters, closeTo(5.1, 1e-12)); // 4+1.1
+    });
+
+    test('custom mounting heights override the defaults', () {
+      const m = MountingHeights(
+        ceilingDrop: Length(0.5),
+        fixtureHeight: Length(0.9),
+      );
+      expect(levels.ceilingElevationOf(0, m).meters, closeTo(3.5, 1e-12));
+      expect(levels.fixtureElevationOf(0, m).meters, closeTo(0.9, 1e-12));
+    });
+
+    test('roof elevation aliases total height', () {
+      expect(levels.roofElevation.meters, closeTo(11.0, 1e-12));
+    });
   });
 }

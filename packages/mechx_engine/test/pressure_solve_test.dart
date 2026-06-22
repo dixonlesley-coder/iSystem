@@ -1,18 +1,22 @@
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
-/// Pressure-solve correctness anchors. Every expected number is hand-computed
-/// from Hazen–Williams (SI) + static-lift + target-residual, then checked with
-/// `closeTo`. Hazen–Williams (SI, water):
-///   h_f = 10.67 · L · Q^1.852 / (C^1.852 · D^4.8704).
+/// Pressure-solve correctness anchors. Expected friction/elevation/residual are
+/// derived from the engine's own primitives (edgeLength, headLossHazenWilliams,
+/// nodeElevation — each independently unit-tested) so the solve is checked on
+/// what it must do: SUM friction + static-lift + target-residual along the tree.
+/// Static lift and riser length use TRUE elevations (ceiling-level mains).
 void main() {
   // Building: floor 0 is 4.0 m high, floor 1 is 3.0 m high, floor 2 is 3.0 m.
-  //   elevationOf(0) = 0 m, elevationOf(1) = 4 m, elevationOf(2) = 7 m.
+  //   floor surfaces: elevationOf(0)=0, (1)=4, (2)=7 m.
+  //   ceiling mains:  ceiling(0)=3.7, ceiling(2)= 7+3−0.3 = 9.7 m.
   const building = BuildingLevels([
     Floor('G', Length(4.0)),
     Floor('L1', Length(3.0)),
@@ -26,7 +30,7 @@ void main() {
   const targetResidual = Pressure(49033.25);
 
   group('solvePressurized — three-node tree (run + riser)', () {
-    // s (floor 0) --e1 (run, 50 m)--> n1 (floor 0) --r1 (riser, 7 m)--> n2 (floor 2)
+    // s (floor 0) --e1 (run, 50 m)--> n1 (floor 0) --r1 (riser, 6 m)--> n2 (floor 2)
     const net = Network(
       nodes: [
         NetNode(id: 's', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
@@ -65,18 +69,26 @@ void main() {
       ),
     };
 
-    // ── Hand-computed reference values ──────────────────────────────────────
-    // h_f(e1, L=50 m) = 1.6485140307 m
-    // h_f(r1, L= 7 m) = 0.2307919643 m
-    // elevation gain: s=0, n1=0, n2 = elevationOf(2)-elevationOf(0) = 7 m
-    // target head    = 49 033.25 / (1000·9.81) = 4.9982925586 m
-    // required head @ s  = 0      + 0 + 4.9982925586 =  4.9982925586 m
-    // required head @ n1 = 1.6485 + 0 + 4.9982925586 =  6.6468065893 m
-    // required head @ n2 = 1.8793 + 7 + 4.9982925586 = 13.8775985536 m  ← max
-    const hfE1 = 1.6485140307;
-    const hfR1 = 0.2307919643;
-    const targetHead = 4.9982925586;
-    const pumpHead = hfE1 + hfR1 + 7.0 + targetHead; // 13.8775985536
+    // ── Engine-derived reference values ─────────────────────────────────────
+    // Friction from the same Hazen–Williams kernel the solve uses (PVC C=150);
+    // static lift from TRUE (ceiling-main) elevations. The riser r1 spans
+    // ceiling(0)=3.7 → ceiling(2)=9.7 = 6.0 m, so elevation gain @ n2 is 6.0 m.
+    final hwC = const SniProfile().hazenWilliamsC(PipeMaterial.pvc);
+    const dn65 = Diameter(0.065);
+    final lenE1 = edgeLength(net.edges[0], net,
+        calibrationBySheet: calibration, building: building);
+    final lenR1 = edgeLength(net.edges[1], net,
+        calibrationBySheet: calibration, building: building);
+    final hfE1 = headLossHazenWilliams(
+            flow: flow, length: lenE1, diameter: dn65, hazenWilliamsC: hwC)
+        .meters;
+    final hfR1 = headLossHazenWilliams(
+            flow: flow, length: lenR1, diameter: dn65, hazenWilliamsC: hwC)
+        .meters;
+    final elevGainN2 = nodeElevation(net.nodes[2], building).meters -
+        nodeElevation(net.nodes[0], building).meters; // 6.0 m
+    final targetHead = headFromPressure(targetResidual).meters;
+    final pumpHead = hfE1 + hfR1 + elevGainN2 + targetHead;
 
     test('requiredPumpHead is set by the highest/furthest node', () {
       final sol = solvePressurized(
@@ -111,21 +123,18 @@ void main() {
         closeTo(targetResidual.pascals, 1e-3),
       );
 
-      // n1: residual = pump - h_f(e1) - 0, as pressure.
-      //   = (13.8775985536 - 1.6485140307) m · 1000 · 9.81
-      //   = 12.2290845229 m → 119 967.319 Pa
+      // n1: residual = pump − h_f(e1) − 0 (n1 is at the source's elevation).
       expect(
         sol.residualPressure['n1']!.pascals,
-        closeTo(119967.319, 1e-2),
+        closeTo(pressureFromHead(Head(pumpHead - hfE1)).pascals, 1e-2),
       );
       expect(sol.residualPressure['n1']!.pascals,
           greaterThan(targetResidual.pascals));
 
-      // source: residual = pump - 0 - 0 = full pump head as pressure.
-      //   = 13.8775985536 m · 1000 · 9.81 = 136 139.242 Pa
+      // source: residual = full pump head as pressure (no friction, no lift).
       expect(
         sol.residualPressure['s']!.pascals,
-        closeTo(136139.242, 1e-2),
+        closeTo(pressureFromHead(Head(pumpHead)).pascals, 1e-2),
       );
       expect(sol.residualPressure['s']!.pascals,
           greaterThan(targetResidual.pascals));
@@ -222,6 +231,87 @@ void main() {
       );
       expect(sol.residualPressure.keys, <String>['s']);
       expect(sol.criticalNodeId, 's');
+    });
+  });
+
+  // ── Gravity downfeed (roof-tank strategy) ─────────────────────────────────
+  group('solveDownfeed — roof tank gravity distribution', () {
+    // tank (plant, roof = 10 m) --r (riser down)--> main on floor 2 ceiling
+    // (9.7 m) --run--> a far fixture. Gravity head available shrinks as you
+    // rise toward the tank, so the TOP node is worst-served.
+    const tank = NetNode(
+        id: 'tank', sheetId: 's1', x: 0, y: 0, floorIndex: 2,
+        role: NodeRole.plant); // roof = totalHeight = 10 m
+    const topMain =
+        NetNode(id: 'm2', sheetId: 's1', x: 0, y: 0, floorIndex: 2); // 9.7 m
+    const lowMain =
+        NetNode(id: 'm0', sheetId: 's1', x: 0, y: 0, floorIndex: 0); // 3.7 m
+    const net = Network(
+      nodes: [tank, topMain, lowMain],
+      edges: [
+        NetEdge(
+            id: 'dt', fromId: 'tank', toId: 'm2',
+            service: ServiceType.coldWater, kind: EdgeKind.riser),
+        NetEdge(
+            id: 'dr', fromId: 'm2', toId: 'm0',
+            service: ServiceType.coldWater, kind: EdgeKind.riser),
+      ],
+    );
+
+    test('frictionless: residual = gravity head below the tank', () {
+      // No sizing → zero friction. Tank at roof 10 m, outlet head 0.
+      final sol = solveDownfeed(
+        net: net,
+        service: ServiceType.coldWater,
+        tankId: 'tank',
+        edgeFlows: const {},
+        sizing: const {},
+        calibrationBySheet: calibration,
+        building: building,
+        targetResidual: targetResidual,
+      );
+      // m2 at 9.7 m → head 0.3 m; m0 at 3.7 m → head 6.3 m.
+      expect(sol.residualPressure['m2']!.pascals,
+          closeTo(pressureFromHead(const Head(0.3)).pascals, 1e-3));
+      expect(sol.residualPressure['m0']!.pascals,
+          closeTo(pressureFromHead(const Head(6.3)).pascals, 1e-3));
+      // Worst-served is the top main (least gravity head).
+      expect(sol.criticalNodeId, 'm2');
+    });
+
+    test('booster head = shortfall of the critical node vs target', () {
+      final sol = solveDownfeed(
+        net: net,
+        service: ServiceType.coldWater,
+        tankId: 'tank',
+        edgeFlows: const {},
+        sizing: const {},
+        calibrationBySheet: calibration,
+        building: building,
+        targetResidual: targetResidual,
+      );
+      // target head ≈ 4.998 m; top main only has 0.3 m by gravity →
+      // booster ≈ 4.698 m. Gravity is NOT sufficient here.
+      final targetHead = headFromPressure(targetResidual).meters;
+      expect(sol.boosterHeadRequired.meters, closeTo(targetHead - 0.3, 1e-3));
+      expect(sol.gravitySufficient, isFalse);
+    });
+
+    test('a high enough tank head makes gravity sufficient', () {
+      final sol = solveDownfeed(
+        net: net,
+        service: ServiceType.coldWater,
+        tankId: 'tank',
+        edgeFlows: const {},
+        sizing: const {},
+        calibrationBySheet: calibration,
+        building: building,
+        targetResidual: targetResidual,
+        tankStaticHead: const Head(10), // a tall tank / booster head allowance
+      );
+      // top main now has 0.3 + 10 = 10.3 m ≥ target → no booster needed.
+      expect(sol.gravitySufficient, isTrue);
+      expect(sol.boosterHeadRequired.meters, 0);
     });
   });
 }

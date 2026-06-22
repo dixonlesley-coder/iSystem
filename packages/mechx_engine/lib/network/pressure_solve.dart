@@ -118,7 +118,7 @@ PressureSolution solvePressurized({
 
   final sourceElevation = source == null
       ? const Length(0)
-      : building.elevationOf(source.floorIndex);
+      : nodeElevation(source, building);
 
   // BFS from the source; each visited node records cumulative friction +
   // elevation gain along its (unique, tree) path back to the source.
@@ -158,7 +158,7 @@ PressureSolution solvePressurized({
       final neighbour = net.nodeById(link.other);
       final neighbourElevation = neighbour == null
           ? sourceElevation
-          : building.elevationOf(neighbour.floorIndex);
+          : nodeElevation(neighbour, building);
 
       costs[link.other] = _NodeCost(
         Head(currentCost.friction.meters + edgeFriction),
@@ -193,5 +193,145 @@ PressureSolution solvePressurized({
     residualPressure: residualPressure,
     requiredPumpHead: Head(requiredPumpHead),
     criticalNodeId: criticalNodeId,
+  );
+}
+
+/// Result of [solveDownfeed]: gravity-fed residual pressure at every reachable
+/// node, the worst-served (critical) node, and any booster head still needed to
+/// guarantee the target residual there.
+class DownfeedSolution {
+  /// Residual (flowing) pressure at each reachable node id, by gravity from the
+  /// tank, after friction. Can be negative where gravity cannot deliver.
+  final Map<String, Pressure> residualPressure;
+
+  /// Id of the worst-served node (least residual) — excludes the tank itself;
+  /// typically the highest / most-distant fixture, nearest the tank.
+  final String criticalNodeId;
+
+  /// Residual at [criticalNodeId].
+  final Pressure minResidual;
+
+  /// Extra head a booster pump (or a higher tank) must add so the critical node
+  /// meets the target residual. Zero when gravity already suffices.
+  final Head boosterHeadRequired;
+
+  const DownfeedSolution({
+    required this.residualPressure,
+    required this.criticalNodeId,
+    required this.minResidual,
+    required this.boosterHeadRequired,
+  });
+
+  /// True when gravity alone meets the target residual everywhere.
+  bool get gravitySufficient => boosterHeadRequired.meters <= 0;
+}
+
+/// Solve a gravity DOWNFEED distribution fed from a roof tank at [tankId]
+/// (the strategy chosen for this project).
+///
+/// The tank provides head purely by elevation: residual at a node is the
+/// gravity head from the tank down to the node, plus the tank's own water depth
+/// [tankStaticHead], minus Hazen–Williams friction along the path. Because the
+/// tank is the high point, the WORST-served node is the one with the LEAST
+/// residual — the highest / most-distant fixture, which is nearest the tank and
+/// so gains the least gravity head. When that falls below [targetResidual],
+/// [DownfeedSolution.boosterHeadRequired] reports the shortfall (a booster pump
+/// or a higher tank is then needed for that upper zone).
+///
+/// Shares the tree/`// VERIFY`/missing-data semantics of [solvePressurized]:
+/// the [service] subgraph is treated as a tree rooted at the tank; unsized or
+/// unflowed edges add zero friction.
+DownfeedSolution solveDownfeed({
+  required Network net,
+  required ServiceType service,
+  required String tankId,
+  required Map<String, FlowRate> edgeFlows,
+  required Map<String, EdgeSizing> sizing,
+  required Map<String, ScaleCalibration> calibrationBySheet,
+  required BuildingLevels building,
+  required Pressure targetResidual,
+  Head tankStaticHead = const Head(0),
+  PipeMaterial material = PipeMaterial.pvc,
+}) {
+  const profile = SniProfile();
+  final hwC = profile.hazenWilliamsC(material);
+  final targetHead = headFromPressure(targetResidual);
+
+  final tank = net.nodeById(tankId);
+  final tankElevation =
+      tank == null ? building.roofElevation : nodeElevation(tank, building);
+
+  // Adjacency over THIS service only.
+  final adjacency = <String, List<({NetEdge edge, String other})>>{};
+  for (final e in net.edges) {
+    if (e.service != service) continue;
+    (adjacency[e.fromId] ??= <({NetEdge edge, String other})>[])
+        .add((edge: e, other: e.toId));
+    (adjacency[e.toId] ??= <({NetEdge edge, String other})>[])
+        .add((edge: e, other: e.fromId));
+  }
+
+  // BFS from the tank accumulating cumulative friction along the tree path.
+  final friction = <String, double>{tankId: 0.0};
+  final queue = <String>[tankId];
+  var head = 0;
+  while (head < queue.length) {
+    final current = queue[head];
+    head++;
+    final currentFriction = friction[current]!;
+    final links = adjacency[current];
+    if (links == null) continue;
+    for (final link in links) {
+      if (friction.containsKey(link.other)) continue; // visited (tree)
+      final edge = link.edge;
+      var edgeFriction = 0.0;
+      final edgeSizing = sizing[edge.id];
+      if (edgeSizing != null) {
+        final flow = edgeFlows[edge.id] ?? const FlowRate(0);
+        final length = edgeLength(
+          edge,
+          net,
+          calibrationBySheet: calibrationBySheet,
+          building: building,
+        );
+        edgeFriction = headLossHazenWilliams(
+          flow: flow,
+          length: length,
+          diameter: edgeSizing.diameter,
+          hazenWilliamsC: hwC,
+        ).meters;
+      }
+      friction[link.other] = currentFriction + edgeFriction;
+      queue.add(link.other);
+    }
+  }
+
+  // residual(node) = tankStaticHead + (tankElev − nodeElev) − friction, as head.
+  final residualPressure = <String, Pressure>{};
+  var minResidualHead = double.infinity;
+  String? criticalNodeId;
+  friction.forEach((nodeId, f) {
+    final n = net.nodeById(nodeId);
+    final nElev = n == null ? tankElevation : nodeElevation(n, building);
+    final residualHead =
+        tankStaticHead.meters + (tankElevation.meters - nElev.meters) - f;
+    residualPressure[nodeId] = pressureFromHead(Head(residualHead));
+    if (nodeId != tankId && residualHead < minResidualHead) {
+      minResidualHead = residualHead;
+      criticalNodeId = nodeId;
+    }
+  });
+  if (criticalNodeId == null) {
+    // Only the tank is reachable (degenerate).
+    criticalNodeId = tankId;
+    minResidualHead = tankStaticHead.meters;
+  }
+
+  final deficit = targetHead.meters - minResidualHead;
+  return DownfeedSolution(
+    residualPressure: residualPressure,
+    criticalNodeId: criticalNodeId!,
+    minResidual: pressureFromHead(Head(minResidualHead)),
+    boosterHeadRequired: Head(deficit > 0 ? deficit : 0),
   );
 }

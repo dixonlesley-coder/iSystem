@@ -61,6 +61,8 @@ class ProjectDocument {
                 'x': n.x,
                 'y': n.y,
                 'floor': n.floorIndex,
+                'role': n.role.name,
+                if (n.elevation != null) 'elev_m': n.elevation!.meters,
               },
           ],
           'edges': [
@@ -110,6 +112,11 @@ class ProjectDocument {
           x: (n['x'] as num).toDouble(),
           y: (n['y'] as num).toDouble(),
           floorIndex: (n['floor'] as num).toInt(),
+          role: n['role'] == null
+              ? NodeRole.main
+              : NodeRole.values.byName(n['role'] as String),
+          elevation:
+              n['elev_m'] == null ? null : Length((n['elev_m'] as num).toDouble()),
         ),
     ];
     final edges = [

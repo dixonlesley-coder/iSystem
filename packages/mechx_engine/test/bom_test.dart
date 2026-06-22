@@ -18,11 +18,11 @@
 ///                      length  = 100 × 0.05 = 5.000 m
 ///   e2  n1→n2  run    pixel-dist = √((100-100)²+(75-0)²) = 75 px
 ///                      length  = 75  × 0.05 = 3.750 m
-///   e3  n3→n0  riser  floors 1→0 → riserLength(1,0) = elevationOf(1)−elevationOf(0)
+///   e3  n3→n0  riser  ceiling-to-ceiling, floors 1→0 (both default mains)
 ///                      BuildingLevels: floor-0 height=4.0 m, floor-1 height=3.5 m
-///                      elevationOf(0) = 0.0 m
-///                      elevationOf(1) = 4.0 m   (cumulative after floor-0)
-///                      riserLength    = |4.0 − 0.0| = 4.000 m
+///                      ceiling(0) = 0.0 + 4.0 − 0.3 = 3.7 m
+///                      ceiling(1) = 4.0 + 3.5 − 0.3 = 7.2 m
+///                      length     = |7.2 − 3.7| = 3.500 m  (= level-1 height)
 ///
 /// Sizing map
 ///   e1 → Diameter(0.025)  → inMillimeters = 25.0 → round() = 25
@@ -31,9 +31,9 @@
 ///
 /// Expected BOM lines (sorted by service, kind, diameterMm)
 ///   BomLine(coldWater, run,   25, totalLength=8.750 m, segmentCount=2)
-///   BomLine(coldWater, riser, 50, totalLength=4.000 m, segmentCount=1)
+///   BomLine(coldWater, riser, 50, totalLength=3.500 m, segmentCount=1)
 ///
-/// totalLengthForService(coldWater) = 8.750 + 4.000 = 12.750 m
+/// totalLengthForService(coldWater) = 8.750 + 3.500 = 12.250 m
 library;
 
 import 'package:mechx_engine/geometry/building.dart';
@@ -211,8 +211,9 @@ void main() {
     });
 
     // ── riser group ──────────────────────────────────────────────────────────
-    // e3: riserLength(1, 0) = |elevationOf(1) − elevationOf(0)| = |4.0 − 0.0|
-    //   = 4.000 m,  segmentCount = 1
+    // e3: ceiling-to-ceiling riser, floors 1→0, both default mains.
+    //   ceiling(0) = 4.0 − 0.3 = 3.7 m;  ceiling(1) = 4.0 + 3.5 − 0.3 = 7.2 m
+    //   length = |7.2 − 3.7| = 3.500 m (= level-1 floor height),  count = 1
     group('riser line (DN50)', () {
       late BomLine riserLine;
       setUp(() {
@@ -223,8 +224,8 @@ void main() {
         expect(riserLine.segmentCount, 1);
       });
 
-      test('totalLength is 4.000 m', () {
-        expect(riserLine.totalLength.meters, closeTo(4.000, 1e-9));
+      test('totalLength is 3.500 m (ceiling-to-ceiling)', () {
+        expect(riserLine.totalLength.meters, closeTo(3.500, 1e-9));
       });
 
       test('service is coldWater', () {
@@ -268,8 +269,8 @@ void main() {
   });
 
   group('totalLengthForService', () {
-    // run (8.750 m) + riser (4.000 m) = 12.750 m
-    test('sums all lines for coldWater → 12.750 m', () {
+    // run (8.750 m) + riser (3.500 m) = 12.250 m
+    test('sums all lines for coldWater → 12.250 m', () {
       final bom = buildBom(
         net: _net,
         sizing: _sizing,
@@ -278,7 +279,7 @@ void main() {
       );
       final total =
           totalLengthForService(bom, ServiceType.coldWater);
-      expect(total.meters, closeTo(12.750, 1e-9));
+      expect(total.meters, closeTo(12.250, 1e-9));
     });
 
     test('returns zero for a service with no BomLines', () {
