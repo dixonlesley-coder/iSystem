@@ -211,7 +211,7 @@ solved node values into a grid — it computes no physics.
 | Phase | Scope | Gate |
 |---|---|---|
 | **Step 1** ✅ | Scaffold + pure engine + seed tests green | *all seed tests pass* |
-| **P0 Shell** | Flutter scaffold, custom design tokens, PDF render via pdfrx, multi-sheet nav, pannable/zoomable canvas hitting §4 | review stop |
+| **P0 Shell** 🟡 | Custom design system, multi-sheet nav, pannable/zoomable canvas (✅ done & tested); **pdfrx PDF render** (⬜ next, behind the `sheetContentBuilderProvider` seam) | review stop |
 | **P1** | Project details + per-floor heights + scale calibration | — |
 | **P2** | Drawing (incl. risers) | — |
 | **P3** | SNI sizing engine (ducts + clean water first) | — |
@@ -232,6 +232,8 @@ boundary for review.**
 | 2026-06-22 | Toolchain installed in CI/dev container: **Flutter 3.44.2 / Dart 3.12.2** | Linux dev/test only; Windows `.exe` build happens on the engineer's machine. |
 | 2026-06-22 | **Seeded SNI 8153:2015 supply values** from web research (pressures, velocities, demand method/curve, UBAP table) | `verified` flags reflect verbatim-text vs secondary provenance; `StandardValue` gained `sourceUrl`/`note`; `verified==true` only for literal SNI text. |
 | 2026-06-22 | **Design target residual pressure = 2.25 bar** (band 2.0–2.5), seeds `sizing/supply_design.dart` + `computeRequiredPumpHead` | Engineer-set design choice (not SNI); sits between SNI min and the PRV/relief ceiling; drives pump-head sizing. |
+| 2026-06-22 | **P0 uses `WidgetsApp`, not `MaterialApp`** | Honours §4 "no default Material theme"; MechX owns its visual language via `MechXTheme`. |
+| 2026-06-22 | **Canvas: pure `ViewportTransform` + controlled `CanvasView`** | Polish-critical math is headless-testable; gestures = wheel zoom-to-cursor, **left-click & middle-drag pan**, trackpad pinch, keyboard (Ctrl±/0, F, arrows). Per-sheet viewport restore via the store. |
 
 ## 16. Testing strategy
 
