@@ -1,7 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/project_store.dart';
+import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/units.dart';
 
 void main() {
   ProviderContainer makeContainer() {
@@ -64,5 +66,40 @@ void main() {
     final s = c.read(projectControllerProvider);
     expect(s.calibrationFor('s1')?.metersPerPixel, 0.02);
     expect(s.calibrationFor('s2'), isNull);
+  });
+
+  test('floor + calibration edits are undoable / redoable', () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    final before = c.read(projectControllerProvider).floors.length;
+
+    n.addFloor();
+    expect(c.read(projectControllerProvider).floors.length, before + 1);
+    expect(n.canUndo, isTrue);
+
+    n.setFloorHeight(0, const Length(2.0));
+    expect(c.read(projectControllerProvider).floors[0].height.meters, 2.0);
+
+    n.undo(); // revert height
+    expect(c.read(projectControllerProvider).floors[0].height.meters, 4.0);
+    n.undo(); // revert addFloor
+    expect(c.read(projectControllerProvider).floors.length, before);
+
+    n.redo(); // re-add the floor
+    expect(c.read(projectControllerProvider).floors.length, before + 1);
+  });
+
+  test('load() clears undo history (opened doc is a fresh baseline)', () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    n.addFloor();
+    expect(n.canUndo, isTrue);
+    n.load(
+      name: 'Opened',
+      floors: const [Floor('G', Length(3))],
+      calibrations: const {},
+    );
+    expect(n.canUndo, isFalse);
+    expect(c.read(projectControllerProvider).name, 'Opened');
   });
 }

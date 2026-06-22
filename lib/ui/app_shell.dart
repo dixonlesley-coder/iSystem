@@ -86,12 +86,14 @@ class _TopBar extends ConsumerWidget {
 
   Future<void> _saveProject(WidgetRef ref) async {
     final project = ref.read(projectControllerProvider);
+    final sheetsState = ref.read(sheetsControllerProvider);
     final doc = ProjectDocument(
       projectName: project.name,
       floors: project.floors,
       calibrations: project.calibrations,
-      sheets: ref.read(sheetsControllerProvider).sheets,
+      sheets: sheetsState.sheets,
       network: ref.read(networkControllerProvider).network,
+      viewports: sheetsState.viewports,
     );
     final path = await FilePicker.saveFile(
       dialogTitle: 'Save MechX project',
@@ -119,7 +121,9 @@ class _TopBar extends ConsumerWidget {
             floors: doc.floors,
             calibrations: doc.calibrations,
           );
-      ref.read(sheetsControllerProvider.notifier).loadSheets(doc.sheets);
+      ref
+          .read(sheetsControllerProvider.notifier)
+          .loadSheets(doc.sheets, viewports: doc.viewports);
       ref.read(networkControllerProvider.notifier).loadNetwork(doc.network);
       ref.read(loadErrorProvider.notifier).clear();
     } on ProjectDocumentException catch (e) {

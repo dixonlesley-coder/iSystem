@@ -130,6 +130,34 @@ class SheetCanvas extends ConsumerWidget {
   KeyEventResult _onKey(WidgetRef ref, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
+    final mod = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+
+    // Unified undo/redo across network edits then project edits (Ctrl/Cmd+Z,
+    // Ctrl+Shift+Z or Ctrl+Y to redo).
+    if (mod && key == LogicalKeyboardKey.keyZ && !shift) {
+      final net = ref.read(networkControllerProvider.notifier);
+      final proj = ref.read(projectControllerProvider.notifier);
+      if (net.canUndo) {
+        net.undo();
+      } else if (proj.canUndo) {
+        proj.undo();
+      }
+      return KeyEventResult.handled;
+    }
+    if (mod &&
+        ((key == LogicalKeyboardKey.keyZ && shift) ||
+            key == LogicalKeyboardKey.keyY)) {
+      final net = ref.read(networkControllerProvider.notifier);
+      final proj = ref.read(projectControllerProvider.notifier);
+      if (net.canRedo) {
+        net.redo();
+      } else if (proj.canRedo) {
+        proj.redo();
+      }
+      return KeyEventResult.handled;
+    }
 
     if (key == LogicalKeyboardKey.delete ||
         key == LogicalKeyboardKey.backspace) {

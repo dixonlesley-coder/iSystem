@@ -39,6 +39,9 @@ class ProjectController extends Notifier<ProjectState> {
   static const double _minHeight = 0.5;
   static const double _maxHeight = 20.0;
 
+  final List<ProjectState> _undo = [];
+  final List<ProjectState> _redo = [];
+
   @override
   ProjectState build() => const ProjectState(
         name: 'Untitled project',
@@ -49,14 +52,43 @@ class ProjectController extends Notifier<ProjectState> {
         ],
       );
 
-  void setName(String name) => state = state.copyWith(name: name);
+  bool get canUndo => _undo.isNotEmpty;
+  bool get canRedo => _redo.isNotEmpty;
 
-  /// Replace the whole project (used when opening a saved document).
+  /// Snapshot the current state before a mutation so it can be undone.
+  void _snapshot() {
+    _undo.add(state);
+    if (_undo.length > 200) _undo.removeAt(0);
+    _redo.clear();
+  }
+
+  void undo() {
+    if (_undo.isEmpty) return;
+    _redo.add(state);
+    state = _undo.removeLast();
+  }
+
+  void redo() {
+    if (_redo.isEmpty) return;
+    _undo.add(state);
+    state = _redo.removeLast();
+  }
+
+  void setName(String name) {
+    if (name == state.name) return;
+    _snapshot();
+    state = state.copyWith(name: name);
+  }
+
+  /// Replace the whole project (used when opening a saved document). Clears
+  /// history — an opened document is a fresh baseline.
   void load({
     required String name,
     required List<Floor> floors,
     required Map<String, ScaleCalibration> calibrations,
   }) {
+    _undo.clear();
+    _redo.clear();
     state = ProjectState(
       name: name,
       floors: floors.isEmpty ? state.floors : floors,
@@ -65,6 +97,7 @@ class ProjectController extends Notifier<ProjectState> {
   }
 
   void addFloor() {
+    _snapshot();
     final next = Floor('Level ${state.floors.length}', const Length(3.5));
     state = state.copyWith(floors: [...state.floors, next]);
   }
@@ -73,12 +106,14 @@ class ProjectController extends Notifier<ProjectState> {
     if (index < 0 || index >= state.floors.length || state.floors.length <= 1) {
       return;
     }
+    _snapshot();
     final floors = [...state.floors]..removeAt(index);
     state = state.copyWith(floors: floors);
   }
 
   void renameFloor(int index, String name) {
     if (index < 0 || index >= state.floors.length) return;
+    _snapshot();
     final floors = [...state.floors];
     floors[index] = floors[index].copyWith(name: name);
     state = state.copyWith(floors: floors);
@@ -86,6 +121,7 @@ class ProjectController extends Notifier<ProjectState> {
 
   void setFloorHeight(int index, Length height) {
     if (index < 0 || index >= state.floors.length) return;
+    _snapshot();
     final clamped =
         height.meters.clamp(_minHeight, _maxHeight).toDouble();
     final floors = [...state.floors];
@@ -100,6 +136,7 @@ class ProjectController extends Notifier<ProjectState> {
   }
 
   void setCalibration(String sheetId, ScaleCalibration calibration) {
+    _snapshot();
     final next = Map<String, ScaleCalibration>.from(state.calibrations)
       ..[sheetId] = calibration;
     state = state.copyWith(calibrations: next);

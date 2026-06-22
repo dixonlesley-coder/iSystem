@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:flutter/widgets.dart' show Size;
+import 'package:flutter/widgets.dart' show Offset, Size;
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -8,6 +8,7 @@ import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../store/models/sheet.dart';
+import '../ui/canvas/viewport.dart';
 
 /// Thrown by [ProjectDocument.decode]/[ProjectDocument.fromJson] when a file is
 /// not a readable MechX document (malformed JSON, missing required structure,
@@ -53,6 +54,9 @@ class ProjectDocument {
   final List<Sheet> sheets;
   final Network network;
 
+  /// Per-sheet pan/zoom, so a reopened project restores each view (§4).
+  final Map<String, ViewportTransform> viewports;
+
   const ProjectDocument({
     this.version = currentVersion,
     required this.projectName,
@@ -60,6 +64,7 @@ class ProjectDocument {
     required this.calibrations,
     required this.sheets,
     required this.network,
+    this.viewports = const {},
   });
 
   Map<String, dynamic> toJson() => {
@@ -84,6 +89,14 @@ class ProjectDocument {
               'h': s.sizePx.height,
             },
         ],
+        'viewports': {
+          for (final e in viewports.entries)
+            e.key: {
+              'scale': e.value.scale,
+              'dx': e.value.offset.dx,
+              'dy': e.value.offset.dy,
+            },
+        },
         'network': {
           'nodes': [
             for (final n in network.nodes)
@@ -182,6 +195,21 @@ class ProjectDocument {
           kind: _enumOr(EdgeKind.values, e['kind'], EdgeKind.run),
         ),
     ];
+    final viewports = <String, ViewportTransform>{};
+    final rawViewports = json['viewports'];
+    if (rawViewports is Map) {
+      rawViewports.forEach((key, v) {
+        if (v is Map && v['scale'] is num) {
+          viewports[key as String] = ViewportTransform(
+            scale: (v['scale'] as num).toDouble(),
+            offset: Offset(
+              (v['dx'] as num?)?.toDouble() ?? 0,
+              (v['dy'] as num?)?.toDouble() ?? 0,
+            ),
+          );
+        }
+      });
+    }
     return ProjectDocument(
       version: version,
       projectName: project['name'] as String? ?? 'Untitled project',
@@ -189,6 +217,7 @@ class ProjectDocument {
       calibrations: calibrations,
       sheets: sheets,
       network: Network(nodes: nodes, edges: edges),
+      viewports: viewports,
     );
   }
 

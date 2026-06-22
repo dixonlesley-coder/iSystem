@@ -53,8 +53,11 @@ class SheetsController extends Notifier<SheetsState> {
   @override
   SheetsState build() => const SheetsState(sheets: _demoSheets);
 
-  void loadSheets(List<Sheet> sheets) =>
-      state = SheetsState(sheets: sheets, currentIndex: 0, viewports: const {});
+  void loadSheets(
+    List<Sheet> sheets, {
+    Map<String, ViewportTransform> viewports = const {},
+  }) =>
+      state = SheetsState(sheets: sheets, currentIndex: 0, viewports: viewports);
 
   void selectSheet(int index) {
     if (index < 0 || index >= state.sheets.length || index == state.currentIndex) {
