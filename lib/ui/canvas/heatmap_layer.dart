@@ -31,8 +31,8 @@ class HeatmapLayer extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final solution = ref.watch(solveProvider);
-    if (solution == null) return const SizedBox.shrink();
+    final residual = ref.watch(residualByNodeProvider);
+    if (residual.isEmpty) return const SizedBox.shrink();
     final net = ref.watch(networkControllerProvider).network;
     final transform = ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
         const ViewportTransform();
@@ -40,8 +40,8 @@ class HeatmapLayer extends ConsumerWidget {
     final nodes = <FieldNode>[
       for (final n in net.nodes)
         if (n.sheetId == sheetId && n.floorIndex == floorIndex)
-          if (solution.residualPressure[n.id] != null)
-            FieldNode(n.x, n.y, solution.residualPressure[n.id]!.inKiloPascals),
+          if (residual[n.id] != null)
+            FieldNode(n.x, n.y, residual[n.id]!.inKiloPascals),
     ];
     if (nodes.isEmpty) return const SizedBox.shrink();
 

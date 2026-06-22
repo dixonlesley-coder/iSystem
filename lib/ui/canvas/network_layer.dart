@@ -6,10 +6,14 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 
 import '../../store/network_store.dart';
+import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
 import 'service_style.dart';
 import 'viewport.dart';
+
+/// Accent used to highlight the current selection.
+const Color _kSelection = Color(0xFF4C8DFF);
 
 /// Always-on render of the drawn network for the current sheet/floor, painted
 /// in screen space via the sheet's viewport transform. Pointer-transparent so
@@ -28,6 +32,7 @@ class NetworkLayer extends ConsumerWidget {
     final sizing = ref.watch(showSizingProvider)
         ? ref.watch(sizingProvider)
         : const <String, EdgeSizing>{};
+    final selection = ref.watch(selectionProvider);
     return IgnorePointer(
       child: CustomPaint(
         size: Size.infinite,
@@ -37,6 +42,8 @@ class NetworkLayer extends ConsumerWidget {
           floorIndex: floorIndex,
           transform: transform,
           sizing: sizing,
+          selectedNodeId: selection.nodeId,
+          selectedEdgeId: selection.edgeId,
         ),
       ),
     );
@@ -49,6 +56,8 @@ class _NetworkPainter extends CustomPainter {
   final int floorIndex;
   final ViewportTransform transform;
   final Map<String, EdgeSizing> sizing;
+  final String? selectedNodeId;
+  final String? selectedEdgeId;
 
   _NetworkPainter({
     required this.net,
@@ -56,6 +65,8 @@ class _NetworkPainter extends CustomPainter {
     required this.floorIndex,
     required this.transform,
     required this.sizing,
+    required this.selectedNodeId,
+    required this.selectedEdgeId,
   });
 
   bool _onThisFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
@@ -72,6 +83,17 @@ class _NetworkPainter extends CustomPainter {
         if (!_onThisFloor(a) || !_onThisFloor(b)) continue;
         final pa = transform.worldToScreen(Offset(a.x, a.y));
         final pb = transform.worldToScreen(Offset(b.x, b.y));
+        if (e.id == selectedEdgeId) {
+          canvas.drawLine(
+            pa,
+            pb,
+            Paint()
+              ..color = _kSelection.withAlpha(120)
+              ..strokeWidth = 7
+              ..strokeCap = StrokeCap.round
+              ..style = PaintingStyle.stroke,
+          );
+        }
         canvas.drawLine(
           pa,
           pb,
@@ -91,30 +113,73 @@ class _NetworkPainter extends CustomPainter {
         final lowFloor = math.min(a.floorIndex, b.floorIndex);
         for (final n in [a, b]) {
           if (_onThisFloor(n)) {
-            _riserMarker(
-              canvas,
-              transform.worldToScreen(Offset(n.x, n.y)),
-              color,
-              up: n.floorIndex == lowFloor,
-            );
+            final mp = transform.worldToScreen(Offset(n.x, n.y));
+            if (e.id == selectedEdgeId) {
+              canvas.drawCircle(mp, 11,
+                  Paint()..color = _kSelection.withAlpha(90));
+            }
+            _riserMarker(canvas, mp, color, up: n.floorIndex == lowFloor);
           }
         }
       }
     }
 
-    // Nodes on top.
+    // Nodes on top, drawn with a role-distinct glyph and a selection ring.
     for (final n in net.nodes) {
       if (!_onThisFloor(n)) continue;
       final p = transform.worldToScreen(Offset(n.x, n.y));
-      canvas.drawCircle(p, 3, Paint()..color = const Color(0xFF15171B));
-      canvas.drawCircle(
-        p,
-        3,
-        Paint()
-          ..color = const Color(0xFFFFFFFF)
-          ..strokeWidth = 1
-          ..style = PaintingStyle.stroke,
-      );
+      final selected = n.id == selectedNodeId;
+      if (selected) {
+        canvas.drawCircle(p, 9, Paint()..color = _kSelection.withAlpha(70));
+        canvas.drawCircle(
+          p,
+          9,
+          Paint()
+            ..color = _kSelection
+            ..strokeWidth = 1.5
+            ..style = PaintingStyle.stroke,
+        );
+      }
+      _nodeGlyph(canvas, p, n.role);
+    }
+  }
+
+  /// Draws a node glyph by role: plant = filled square (tank/pump), fixture =
+  /// hollow ring, main/junction = small filled dot.
+  void _nodeGlyph(Canvas canvas, Offset p, NodeRole role) {
+    const dark = Color(0xFF15171B);
+    const light = Color(0xFFFFFFFF);
+    switch (role) {
+      case NodeRole.plant:
+        final r = Rect.fromCenter(center: p, width: 9, height: 9);
+        canvas.drawRect(r, Paint()..color = dark);
+        canvas.drawRect(
+          r,
+          Paint()
+            ..color = light
+            ..strokeWidth = 1.5
+            ..style = PaintingStyle.stroke,
+        );
+      case NodeRole.fixture:
+        canvas.drawCircle(p, 4.5, Paint()..color = dark);
+        canvas.drawCircle(
+          p,
+          4.5,
+          Paint()
+            ..color = light
+            ..strokeWidth = 1.5
+            ..style = PaintingStyle.stroke,
+        );
+      case NodeRole.main:
+        canvas.drawCircle(p, 3, Paint()..color = dark);
+        canvas.drawCircle(
+          p,
+          3,
+          Paint()
+            ..color = light
+            ..strokeWidth = 1
+            ..style = PaintingStyle.stroke,
+        );
     }
   }
 
@@ -173,5 +238,7 @@ class _NetworkPainter extends CustomPainter {
       old.transform != transform ||
       old.floorIndex != floorIndex ||
       old.sheetId != sheetId ||
-      old.sizing != sizing;
+      old.sizing != sizing ||
+      old.selectedNodeId != selectedNodeId ||
+      old.selectedEdgeId != selectedEdgeId;
 }

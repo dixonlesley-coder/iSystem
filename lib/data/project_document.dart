@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart' show Size;
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../store/models/sheet.dart';
@@ -63,6 +64,7 @@ class ProjectDocument {
                 'floor': n.floorIndex,
                 'role': n.role.name,
                 if (n.elevation != null) 'elev_m': n.elevation!.meters,
+                if (n.fixture != null) 'fixture': n.fixture!.name,
               },
           ],
           'edges': [
@@ -117,6 +119,9 @@ class ProjectDocument {
               : NodeRole.values.byName(n['role'] as String),
           elevation:
               n['elev_m'] == null ? null : Length((n['elev_m'] as num).toDouble()),
+          fixture: n['fixture'] == null
+              ? null
+              : PlumbingFixture.values.byName(n['fixture'] as String),
         ),
     ];
     final edges = [

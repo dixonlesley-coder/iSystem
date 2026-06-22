@@ -1,6 +1,8 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/sni.dart';
+import 'package:mechx_engine/units.dart';
 
 /// Active canvas tool.
 enum DrawTool { select, drawRun, drawRiser }
@@ -190,6 +192,106 @@ class NetworkController extends Notifier<DrawingState> {
   void clear() {
     if (state.network.nodes.isEmpty && state.network.edges.isEmpty) return;
     _commit(const Network());
+  }
+
+  // ── Editing (used by the select tool) ───────────────────────────────────────
+
+  /// Remove [id] and every edge touching it.
+  void deleteNode(String id) {
+    if (state.network.nodeById(id) == null) return;
+    final nodes = state.network.nodes.where((n) => n.id != id).toList();
+    final edges = state.network.edges
+        .where((e) => e.fromId != id && e.toId != id)
+        .toList();
+    _commit(Network(nodes: nodes, edges: edges));
+  }
+
+  /// Remove edge [id], pruning any junction ([NodeRole.main]) node it leaves
+  /// isolated. Fixture/plant nodes are kept (they carry meaning on their own).
+  void deleteEdge(String id) {
+    if (!state.network.edges.any((e) => e.id == id)) return;
+    final edges = state.network.edges.where((e) => e.id != id).toList();
+    final used = <String>{
+      for (final e in edges) ...[e.fromId, e.toId],
+    };
+    final nodes = state.network.nodes
+        .where((n) => used.contains(n.id) || n.role != NodeRole.main)
+        .toList();
+    _commit(Network(nodes: nodes, edges: edges));
+  }
+
+  /// Change a node's vertical [role]. Leaving [NodeRole.fixture] clears its
+  /// fixture type.
+  void setNodeRole(String id, NodeRole role) {
+    final node = state.network.nodeById(id);
+    if (node == null || node.role == role) return;
+    _replaceNode(NetNode(
+      id: node.id,
+      sheetId: node.sheetId,
+      x: node.x,
+      y: node.y,
+      floorIndex: node.floorIndex,
+      role: role,
+      elevation: node.elevation,
+      fixture: role == NodeRole.fixture ? node.fixture : null,
+    ));
+  }
+
+  /// Assign (or clear) the plumbing [fixture] at a node, marking it a fixture.
+  void setNodeFixture(String id, PlumbingFixture? fixture) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    _replaceNode(NetNode(
+      id: node.id,
+      sheetId: node.sheetId,
+      x: node.x,
+      y: node.y,
+      floorIndex: node.floorIndex,
+      role: NodeRole.fixture,
+      elevation: node.elevation,
+      fixture: fixture,
+    ));
+  }
+
+  /// Set an explicit absolute [elevation] override on a node (e.g. a roof tank
+  /// on a stand, or a basement plant). Pass null to revert to the role default.
+  void setNodeElevation(String id, Length? elevation) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    _replaceNode(NetNode(
+      id: node.id,
+      sheetId: node.sheetId,
+      x: node.x,
+      y: node.y,
+      floorIndex: node.floorIndex,
+      role: node.role,
+      elevation: elevation,
+      fixture: node.fixture,
+    ));
+  }
+
+  /// Change the service an edge carries.
+  void setEdgeService(String id, ServiceType service) {
+    final idx = state.network.edges.indexWhere((e) => e.id == id);
+    if (idx < 0 || state.network.edges[idx].service == service) return;
+    final e = state.network.edges[idx];
+    final edges = [...state.network.edges];
+    edges[idx] = NetEdge(
+      id: e.id,
+      fromId: e.fromId,
+      toId: e.toId,
+      service: service,
+      kind: e.kind,
+    );
+    _commit(Network(nodes: state.network.nodes, edges: edges));
+  }
+
+  void _replaceNode(NetNode updated) {
+    final nodes = [
+      for (final n in state.network.nodes)
+        if (n.id == updated.id) updated else n,
+    ];
+    _commit(Network(nodes: nodes, edges: state.network.edges));
   }
 
   /// Replace the network (used when opening a saved document). Resets history

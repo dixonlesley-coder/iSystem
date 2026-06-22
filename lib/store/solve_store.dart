@@ -4,56 +4,100 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/network/zoning.dart';
 import 'package:mechx_engine/sizing/bom.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'app_state.dart';
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sizing_store.dart';
 
-/// Live node-pressure solve for the cold-water network — the single solve that
-/// feeds the pump-head readout and the pressure heatmap (§12). Recomputes
-/// whenever the network, sizing, or building change. Null when there's no
-/// cold-water network to solve.
+Pressure get _targetResidual =>
+    SupplyDesignCriteria.recommended().targetFixtureResidualPressure;
+
+List<NetEdge> _supplyEdges(Network net) =>
+    net.edges.where((e) => e.service == kSupplyService).toList();
+
+Map<String, FlowRate> _supplyFlows(
+    List<NetEdge> edges, Map<String, EdgeSizing> sizing) {
+  return {
+    for (final e in edges)
+      if (sizing[e.id] != null) e.id: sizing[e.id]!.flow,
+  };
+}
+
+/// UPFEED node-pressure solve (pump pushing up from a low plant). Null when the
+/// strategy is downfeed or there is no supply network.
 final solveProvider = Provider<PressureSolution?>((ref) {
+  if (ref.watch(feedStrategyProvider) != FeedStrategy.upfeed) return null;
   final net = ref.watch(networkControllerProvider).network;
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
-
-  final coldEdges =
-      net.edges.where((e) => e.service == ServiceType.coldWater).toList();
-  if (coldEdges.isEmpty) return null;
-  final source = _pickSource(net, coldEdges, project.building);
+  final edges = _supplyEdges(net);
+  if (edges.isEmpty) return null;
+  final source = _pickSource(net, edges, project.building, preferHighest: false);
   if (source == null) return null;
-
-  final edgeFlows = <String, FlowRate>{
-    for (final e in coldEdges)
-      if (sizing[e.id] != null) e.id: sizing[e.id]!.flow,
-  };
 
   return solvePressurized(
     net: net,
-    service: ServiceType.coldWater,
+    service: kSupplyService,
     sourceId: source,
-    edgeFlows: edgeFlows,
+    edgeFlows: _supplyFlows(edges, sizing),
     sizing: sizing,
     calibrationBySheet: project.calibrations,
     building: project.building,
-    targetResidual:
-        SupplyDesignCriteria.recommended().targetFixtureResidualPressure,
+    targetResidual: _targetResidual,
   );
 });
 
-/// Pick the supply source for the solve. The source is the pump/tank entry, NOT
-/// an arbitrary fixture: choosing the wrong leaf would invert the tree and
-/// mis-assign static lift. Preference order over the cold-water subgraph:
-///   1. an explicit [NodeRole.plant] node (the tank/pump);
-///   2. otherwise the LOWEST-elevation node — the supply entry for an upfeed
-///      system (water rises from the riser base to the fixtures).
-/// Ties break on a degree-1 leaf, then the first node seen (deterministic).
-String? _pickSource(Network net, List<NetEdge> edges, BuildingLevels building) {
+/// DOWNFEED gravity solve (roof tank distributing down). Null when the strategy
+/// is upfeed or there is no supply network.
+final downfeedProvider = Provider<DownfeedSolution?>((ref) {
+  if (ref.watch(feedStrategyProvider) != FeedStrategy.downfeed) return null;
+  final net = ref.watch(networkControllerProvider).network;
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+  final edges = _supplyEdges(net);
+  if (edges.isEmpty) return null;
+  final tank = _pickSource(net, edges, project.building, preferHighest: true);
+  if (tank == null) return null;
+
+  return solveDownfeed(
+    net: net,
+    service: kSupplyService,
+    tankId: tank,
+    edgeFlows: _supplyFlows(edges, sizing),
+    sizing: sizing,
+    calibrationBySheet: project.calibrations,
+    building: project.building,
+    targetResidual: _targetResidual,
+  );
+});
+
+/// Residual pressure at every solved node, regardless of feed strategy — the
+/// single field the heatmap renders (§12).
+final residualByNodeProvider = Provider<Map<String, Pressure>>((ref) {
+  final up = ref.watch(solveProvider);
+  if (up != null) return up.residualPressure;
+  final down = ref.watch(downfeedProvider);
+  if (down != null) return down.residualPressure;
+  return const {};
+});
+
+/// Pick the supply source/tank. The source is the pump/tank entry, NOT an
+/// arbitrary fixture: the wrong leaf would invert the tree and mis-assign static
+/// lift. Preference: an explicit [NodeRole.plant] node, else the extreme-
+/// elevation node — LOWEST for upfeed (riser base), HIGHEST for downfeed (roof
+/// tank). [preferHighest] selects the direction.
+String? _pickSource(
+  Network net,
+  List<NetEdge> edges,
+  BuildingLevels building, {
+  required bool preferHighest,
+}) {
   final ids = <String>{
     for (final e in edges) ...[e.fromId, e.toId],
   };
@@ -66,26 +110,27 @@ String? _pickSource(Network net, List<NetEdge> edges, BuildingLevels building) {
   }
 
   final candidates = ids.map((id) => net.nodeById(id)).whereType<NetNode>();
+  double elev(NetNode n) => nodeElevation(n, building).meters;
+  bool better(double a, double b) => preferHighest ? a > b : a < b;
 
-  // 1. An explicit plant node wins (the lowest, if several).
+  // 1. An explicit plant node wins (the extreme one for this strategy).
   final plants = candidates.where((n) => n.role == NodeRole.plant).toList();
   if (plants.isNotEmpty) {
-    plants.sort((a, b) => nodeElevation(a, building)
-        .meters
-        .compareTo(nodeElevation(b, building).meters));
+    plants.sort((a, b) =>
+        preferHighest ? elev(b).compareTo(elev(a)) : elev(a).compareTo(elev(b)));
     return plants.first.id;
   }
 
-  // 2. Lowest-elevation node; tie-break to a leaf, then deterministic order.
+  // 2. Extreme-elevation node; tie-break to a leaf, then deterministic order.
   NetNode? best;
   for (final n in candidates) {
     if (best == null) {
       best = n;
       continue;
     }
-    final ne = nodeElevation(n, building).meters;
-    final be = nodeElevation(best, building).meters;
-    if (ne < be ||
+    final ne = elev(n);
+    final be = elev(best);
+    if (better(ne, be) ||
         (ne == be && (degree[n.id] ?? 0) < (degree[best.id] ?? 0)) ||
         (ne == be &&
             (degree[n.id] ?? 0) == (degree[best.id] ?? 0) &&
@@ -96,8 +141,8 @@ String? _pickSource(Network net, List<NetEdge> edges, BuildingLevels building) {
   return best?.id;
 }
 
-/// Pump duty for the cold-water system: the solved required head at the trunk
-/// (largest-flow) cold-water flow. Null when there's nothing to pump.
+/// Pump duty for an UPFEED supply at the trunk (largest-flow) cold-water flow.
+/// Null in downfeed (gravity-fed) or when there's nothing to pump.
 final pumpDutyProvider = Provider<PumpDuty?>((ref) {
   final solution = ref.watch(solveProvider);
   if (solution == null) return null;
@@ -105,7 +150,7 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
   final net = ref.watch(networkControllerProvider).network;
   var flow = const FlowRate(0);
   for (final e in net.edges) {
-    if (e.service != ServiceType.coldWater) continue;
+    if (e.service != kSupplyService) continue;
     final s = sizing[e.id];
     if (s != null &&
         s.flow.cubicMetersPerSecond > flow.cubicMetersPerSecond) {

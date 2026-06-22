@@ -14,6 +14,7 @@ import 'canvas_view.dart';
 import 'drawing_overlay.dart';
 import 'heatmap_layer.dart';
 import 'network_layer.dart';
+import 'selection_overlay.dart';
 
 /// Builds the content widget for a sheet. This is the seam where pdfrx (PDFium)
 /// rendering slots in: a future provider override returns a PDF-page widget for
@@ -93,6 +94,13 @@ class SheetCanvas extends ConsumerWidget {
               sheetId: sheet.id,
               floorIndex: floorIndex,
               levelCount: levelCount,
+            ),
+          ),
+        if (!drawing && !calibrating)
+          Positioned.fill(
+            child: NetworkSelectionOverlay(
+              sheetId: sheet.id,
+              floorIndex: floorIndex,
             ),
           ),
         if (calibrating)

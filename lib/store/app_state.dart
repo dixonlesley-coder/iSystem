@@ -1,5 +1,40 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/sni.dart';
+
+/// How the building is fed (drives the supply solve): an upfeed pump pushing
+/// water up from a low plant, or a roof tank distributing by gravity downward.
+enum FeedStrategy { upfeed, downfeed }
+
+/// Active feed strategy. Defaults to roof-tank downfeed (the project's chosen
+/// strategy); switch to upfeed for pumped ground/basement supply.
+final feedStrategyProvider =
+    NotifierProvider<FeedStrategyController, FeedStrategy>(
+  FeedStrategyController.new,
+);
+
+class FeedStrategyController extends Notifier<FeedStrategy> {
+  @override
+  FeedStrategy build() => FeedStrategy.downfeed;
+
+  void set(FeedStrategy s) => state = s;
+}
+
+/// Building occupancy class (private dwelling / public / assembly) — selects the
+/// SNI fixture-unit loads used to size the water supply.
+final occupancyProvider =
+    NotifierProvider<OccupancyController, Occupancy>(OccupancyController.new);
+
+class OccupancyController extends Notifier<Occupancy> {
+  @override
+  Occupancy build() => Occupancy.private;
+
+  void set(Occupancy o) => state = o;
+}
+
+/// Default service to use as the supply (for source auto-pick / solve).
+const ServiceType kSupplyService = ServiceType.coldWater;
 
 /// App-wide light/dark brightness. Defaults to dark (the restrained, low-glare
 /// default for a drawing tool). Persisted to the project file later.

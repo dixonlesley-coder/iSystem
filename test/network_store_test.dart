@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/sni.dart';
 
 import 'test_util.dart';
 
@@ -107,6 +108,79 @@ void main() {
       n.setService(ServiceType.duct);
       expect(c.read(networkControllerProvider).service, ServiceType.duct);
       expect(c.read(networkControllerProvider).pendingPoint, isNull);
+    });
+
+    // ── Editing via the select tool ─────────────────────────────────────────
+
+    NetworkController twoRunChain(ProviderContainer c) {
+      final n = c.read(networkControllerProvider.notifier);
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0)); // n0
+      n.placeRunPoint('s1', 0, const Offset(100, 0)); // n1, edge e
+      n.placeRunPoint('s1', 0, const Offset(200, 0)); // n2, edge e
+      n.setTool(DrawTool.select);
+      return n;
+    }
+
+    test('deleteNode removes the node and its incident edges', () {
+      final c = makeContainer();
+      final n = twoRunChain(c);
+      final mid = c.read(networkControllerProvider).network.nodes[1].id;
+      n.deleteNode(mid);
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 2); // n0, n2 remain
+      expect(net.edges, isEmpty); // both edges touched the mid node
+    });
+
+    test('deleteEdge removes the edge and prunes isolated junctions', () {
+      final c = makeContainer();
+      final n = twoRunChain(c);
+      final firstEdge = c.read(networkControllerProvider).network.edges.first.id;
+      n.deleteEdge(firstEdge);
+      final net = c.read(networkControllerProvider).network;
+      expect(net.edges.length, 1);
+      // The endpoint left isolated by removing the first edge is pruned.
+      expect(net.nodes.length, 2);
+    });
+
+    test('setNodeRole / setNodeFixture update the node; role change clears type',
+        () {
+      final c = makeContainer();
+      final n = twoRunChain(c);
+      final id = c.read(networkControllerProvider.notifier);
+      final nodeId = c.read(networkControllerProvider).network.nodes.last.id;
+      n.setNodeFixture(nodeId, PlumbingFixture.lavatory);
+      var node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.role, NodeRole.fixture);
+      expect(node.fixture, PlumbingFixture.lavatory);
+      // changing role away from fixture clears the fixture
+      id.setNodeRole(nodeId, NodeRole.main);
+      node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.role, NodeRole.main);
+      expect(node.fixture, isNull);
+    });
+
+    test('setEdgeService re-services an edge', () {
+      final c = makeContainer();
+      final n = twoRunChain(c);
+      final edgeId = c.read(networkControllerProvider).network.edges.first.id;
+      n.setEdgeService(edgeId, ServiceType.hotWater);
+      final edge = c
+          .read(networkControllerProvider)
+          .network
+          .edges
+          .firstWhere((e) => e.id == edgeId);
+      expect(edge.service, ServiceType.hotWater);
+    });
+
+    test('edits are undoable', () {
+      final c = makeContainer();
+      final n = twoRunChain(c);
+      final mid = c.read(networkControllerProvider).network.nodes[1].id;
+      n.deleteNode(mid);
+      expect(c.read(networkControllerProvider).network.edges, isEmpty);
+      n.undo();
+      expect(c.read(networkControllerProvider).network.edges.length, 2);
     });
   });
 

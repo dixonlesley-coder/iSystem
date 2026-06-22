@@ -1,12 +1,15 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/fire_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
+import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
 import '../../store/solve_store.dart';
@@ -85,6 +88,9 @@ class ProjectPanel extends ConsumerWidget {
               // ── Draw ──────────────────────────────────────────────────────
               const _DrawSection(),
               const SizedBox(height: MechXSpacing.lg),
+
+              // ── Selection (only shown when something is selected) ─────────
+              const _SelectionSection(),
 
               // ── Sizing ────────────────────────────────────────────────────
               const _SizingSection(),
@@ -369,14 +375,37 @@ class _SizingSection extends ConsumerWidget {
         ),
         const SizedBox(height: MechXSpacing.xs),
         Text(
-          'Auto-sized to SNI velocity limits (per-branch flow). '
-          'Default terminal demands — refine per fixture later.',
+          'Auto-sized to SNI velocity limits. Water supply uses accumulated '
+          'fixture units via the Hunter demand curve; assign fixture types per '
+          'node.',
           style: type.caption.copyWith(color: colors.textMuted),
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        Text('Occupancy',
+            style: type.caption.copyWith(color: colors.textMuted)),
+        const SizedBox(height: MechXSpacing.xs),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            for (final o in Occupancy.values)
+              _Pill(
+                label: _occupancyLabel(o),
+                selected: ref.watch(occupancyProvider) == o,
+                onTap: () => ref.read(occupancyProvider.notifier).set(o),
+              ),
+          ],
         ),
       ],
     );
   }
 }
+
+String _occupancyLabel(Occupancy o) => switch (o) {
+      Occupancy.private => 'Residential',
+      Occupancy.public => 'Office / public',
+      Occupancy.assembly => 'Assembly / mall',
+    };
 
 class _ResultsSection extends ConsumerWidget {
   const _ResultsSection();
@@ -384,7 +413,10 @@ class _ResultsSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final show = ref.watch(showHeatmapProvider);
+    final strategy = ref.watch(feedStrategyProvider);
+    final stratCtrl = ref.read(feedStrategyProvider.notifier);
     final solution = ref.watch(solveProvider);
+    final downfeed = ref.watch(downfeedProvider);
     final pump = ref.watch(pumpDutyProvider);
     final zones = ref.watch(zonesProvider);
     final bom = ref.watch(bomProvider);
@@ -396,6 +428,23 @@ class _ResultsSection extends ConsumerWidget {
       children: [
         const _SectionLabel('Network'),
         const SizedBox(height: MechXSpacing.sm),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            _Pill(
+              label: 'Upfeed pump',
+              selected: strategy == FeedStrategy.upfeed,
+              onTap: () => stratCtrl.set(FeedStrategy.upfeed),
+            ),
+            _Pill(
+              label: 'Roof-tank downfeed',
+              selected: strategy == FeedStrategy.downfeed,
+              onTap: () => stratCtrl.set(FeedStrategy.downfeed),
+            ),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
         Align(
           alignment: Alignment.centerLeft,
           child: MechXButton(
@@ -405,10 +454,24 @@ class _ResultsSection extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: MechXSpacing.sm),
-        _kv(context, 'Pump head',
-            solution == null ? '—' : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m'),
-        _kv(context, 'Motor',
-            pump == null ? '—' : '${pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
+        if (strategy == FeedStrategy.upfeed) ...[
+          _kv(context, 'Pump head',
+              solution == null ? '—' : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m'),
+          _kv(context, 'Motor',
+              pump == null ? '—' : '${pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
+        ] else ...[
+          _kv(context, 'Top residual',
+              downfeed == null ? '—' : '${downfeed.minResidual.inKiloPascals.toStringAsFixed(0)} kPa'),
+          _kv(
+            context,
+            'Booster',
+            downfeed == null
+                ? '—'
+                : downfeed.gravitySufficient
+                    ? 'gravity OK'
+                    : '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m',
+          ),
+        ],
         _kv(context, 'Pressure zones', '${zones.length}'),
         _kv(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
       ],
@@ -541,6 +604,231 @@ class _ServiceChip extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _roleLabel(NodeRole r) => switch (r) {
+      NodeRole.main => 'Junction',
+      NodeRole.fixture => 'Fixture',
+      NodeRole.plant => 'Source / tank',
+    };
+
+String fixtureLabel(PlumbingFixture f) => switch (f) {
+      PlumbingFixture.waterClosetFlushValve => 'WC · valve',
+      PlumbingFixture.waterClosetFlushTank => 'WC · tank',
+      PlumbingFixture.urinalFlushTank => 'Urinal',
+      PlumbingFixture.lavatory => 'Lavatory',
+      PlumbingFixture.shower => 'Shower',
+      PlumbingFixture.bathtub => 'Bathtub',
+      PlumbingFixture.kitchenSink => 'Kitchen sink',
+      PlumbingFixture.hoseBibb => 'Hose bibb',
+    };
+
+/// Inspector editor for the current canvas selection (node or edge). Renders
+/// nothing when nothing is selected.
+class _SelectionSection extends ConsumerWidget {
+  const _SelectionSection();
+
+  static const List<ServiceType> _services = [
+    ServiceType.coldWater,
+    ServiceType.hotWater,
+    ServiceType.drainage,
+    ServiceType.vent,
+    ServiceType.duct,
+  ];
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final selection = ref.watch(selectionProvider);
+    if (selection.isEmpty) return const SizedBox.shrink();
+
+    final net = ref.watch(networkControllerProvider).network;
+    final ctrl = ref.read(networkControllerProvider.notifier);
+    final selCtrl = ref.read(selectionProvider.notifier);
+
+    Widget? body;
+    if (selection.isNode) {
+      final node = net.nodeById(selection.nodeId!);
+      if (node != null) {
+        body = _nodeEditor(context, ref, node, ctrl, selCtrl);
+      }
+    } else if (selection.isEdge) {
+      NetEdge? edge;
+      for (final e in net.edges) {
+        if (e.id == selection.edgeId) {
+          edge = e;
+          break;
+        }
+      }
+      if (edge != null) {
+        body = _edgeEditor(context, ref, edge, net, ctrl, selCtrl);
+      }
+    }
+    if (body == null) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(child: _SectionLabel('Selection')),
+            _GlyphButton(glyph: '×', onTap: selCtrl.clear),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        body,
+        const SizedBox(height: MechXSpacing.lg),
+      ],
+    );
+  }
+
+  Widget _nodeEditor(BuildContext context, WidgetRef ref, NetNode node,
+      NetworkController ctrl, SelectionController selCtrl) {
+    final project = ref.watch(projectControllerProvider);
+    final elev = nodeElevation(node, project.building).meters;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Node · floor ${node.floorIndex + 1} · elev '
+            '${elev.toStringAsFixed(1)} m',
+            style: context.type.caption.copyWith(color: context.colors.textMuted)),
+        const SizedBox(height: MechXSpacing.sm),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            for (final r in NodeRole.values)
+              _Pill(
+                label: _roleLabel(r),
+                selected: node.role == r,
+                onTap: () => ctrl.setNodeRole(node.id, r),
+              ),
+          ],
+        ),
+        if (node.role == NodeRole.fixture) ...[
+          const SizedBox(height: MechXSpacing.sm),
+          Text('Fixture type',
+              style: context.type.caption
+                  .copyWith(color: context.colors.textMuted)),
+          const SizedBox(height: MechXSpacing.xs),
+          Wrap(
+            spacing: MechXSpacing.xs,
+            runSpacing: MechXSpacing.xs,
+            children: [
+              for (final f in PlumbingFixture.values)
+                _Pill(
+                  label: fixtureLabel(f),
+                  selected: node.fixture == f,
+                  onTap: () => ctrl.setNodeFixture(node.id, f),
+                ),
+            ],
+          ),
+        ],
+        const SizedBox(height: MechXSpacing.sm),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: MechXButton(
+            label: 'Delete node',
+            onPressed: () {
+              ctrl.deleteNode(node.id);
+              selCtrl.clear();
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _edgeEditor(BuildContext context, WidgetRef ref, NetEdge edge,
+      Network net, NetworkController ctrl, SelectionController selCtrl) {
+    final project = ref.watch(projectControllerProvider);
+    final sizing = ref.watch(sizingProvider)[edge.id];
+    final len = edgeLength(
+      edge,
+      net,
+      calibrationBySheet: project.calibrations,
+      building: project.building,
+    ).meters;
+    final kind = edge.kind == EdgeKind.riser ? 'Riser / drop' : 'Run';
+    final sizeStr = sizing == null
+        ? '—'
+        : '${edge.service.regime == FlowRegime.air ? 'Ø' : 'DN'}'
+            '${sizing.diameter.inMillimeters.round()}';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('$kind · ${len.toStringAsFixed(2)} m · $sizeStr',
+            style: context.type.caption.copyWith(color: context.colors.textMuted)),
+        const SizedBox(height: MechXSpacing.sm),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            for (final s in _services)
+              _ServiceChip(
+                service: s,
+                selected: edge.service == s,
+                onTap: () => ctrl.setEdgeService(edge.id, s),
+              ),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: MechXButton(
+            label: 'Delete ${edge.kind == EdgeKind.riser ? 'riser' : 'run'}',
+            onPressed: () {
+              ctrl.deleteEdge(edge.id);
+              selCtrl.clear();
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A compact selectable pill used by the selection editor (role / fixture).
+class _Pill extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _Pill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: MechXSpacing.sm,
+            vertical: MechXSpacing.xs,
+          ),
+          decoration: BoxDecoration(
+            color: selected ? colors.accentMuted : colors.background,
+            borderRadius: MechXRadii.control,
+            border: Border.all(color: selected ? colors.accent : colors.border),
+          ),
+          child: Text(
+            label,
+            style: type.label.copyWith(
+              color: selected ? colors.textPrimary : colors.textSecondary,
+            ),
           ),
         ),
       ),

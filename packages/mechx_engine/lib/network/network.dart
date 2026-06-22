@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import '../geometry/building.dart';
 import '../geometry/scale_calibration.dart';
+import '../standards/sni.dart';
 import '../units.dart';
 
 /// Service a network element carries.
@@ -65,6 +66,10 @@ class NetNode {
   /// basement plant datum). When set it wins over [role]-derived elevation.
   final Length? elevation;
 
+  /// Plumbing fixture served at this node (for [NodeRole.fixture] terminals).
+  /// Drives the per-fixture UBAP demand used to size the supply upstream.
+  final PlumbingFixture? fixture;
+
   const NetNode({
     required this.id,
     required this.sheetId,
@@ -73,6 +78,7 @@ class NetNode {
     required this.floorIndex,
     this.role = NodeRole.main,
     this.elevation,
+    this.fixture,
   });
 
   NetNode copyWith({
@@ -82,6 +88,7 @@ class NetNode {
     int? floorIndex,
     NodeRole? role,
     Length? elevation,
+    PlumbingFixture? fixture,
   }) =>
       NetNode(
         id: id,
@@ -91,6 +98,7 @@ class NetNode {
         floorIndex: floorIndex ?? this.floorIndex,
         role: role ?? this.role,
         elevation: elevation ?? this.elevation,
+        fixture: fixture ?? this.fixture,
       );
 }
 

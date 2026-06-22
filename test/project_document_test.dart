@@ -5,6 +5,7 @@ import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
 void main() {
@@ -24,9 +25,25 @@ void main() {
       ],
       network: Network(
         nodes: [
-          NetNode(id: 'n0', sheetId: 's1', x: 10, y: 20, floorIndex: 0),
+          NetNode(
+            id: 'n0',
+            sheetId: 's1',
+            x: 10,
+            y: 20,
+            floorIndex: 0,
+            role: NodeRole.plant,
+            elevation: Length(30),
+          ),
           NetNode(id: 'n1', sheetId: 's1', x: 110, y: 20, floorIndex: 0),
-          NetNode(id: 'n2', sheetId: 's1', x: 110, y: 20, floorIndex: 1),
+          NetNode(
+            id: 'n2',
+            sheetId: 's1',
+            x: 110,
+            y: 20,
+            floorIndex: 1,
+            role: NodeRole.fixture,
+            fixture: PlumbingFixture.lavatory,
+          ),
         ],
         edges: [
           NetEdge(id: 'e0', fromId: 'n0', toId: 'n1', service: ServiceType.coldWater),
@@ -54,6 +71,13 @@ void main() {
     expect(decoded.sheets.first.pdfPath, isNull);
     expect(decoded.network.nodes.length, 3);
     expect(decoded.network.nodes[1].x, 110);
+    // node role / explicit elevation / fixture type round-trip
+    expect(decoded.network.nodes[0].role, NodeRole.plant);
+    expect(decoded.network.nodes[0].elevation?.meters, 30);
+    expect(decoded.network.nodes[2].role, NodeRole.fixture);
+    expect(decoded.network.nodes[2].fixture, PlumbingFixture.lavatory);
+    expect(decoded.network.nodes[1].role, NodeRole.main);
+    expect(decoded.network.nodes[1].fixture, isNull);
     expect(decoded.network.edges.length, 2);
     expect(decoded.network.edges[0].service, ServiceType.coldWater);
     expect(decoded.network.edges[1].kind, EdgeKind.riser);

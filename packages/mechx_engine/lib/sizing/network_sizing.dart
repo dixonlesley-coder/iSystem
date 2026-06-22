@@ -220,6 +220,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   SizingContext ctx, {
   required Map<ServiceType, FlowRate> leafDemand,
   Map<ServiceType, double> leafFixtureUnits = const {},
+  Map<String, double> nodeFixtureUnits = const {},
   FlushSystem flushSystem = FlushSystem.flushTank,
 }) {
   const profile = SniProfile();
@@ -266,9 +267,11 @@ Map<String, EdgeSizing> autoSizeNetwork(
       final root = leaves.isNotEmpty ? leaves.first : component.first;
 
       if (useUbap) {
+        // Per-fixture UBAP when a node carries a fixture type; else the flat
+        // default for that water service.
         final terminalUnits = <String, double>{
           for (final leaf in leaves)
-            if (leaf != root) leaf: fuPerLeaf,
+            if (leaf != root) leaf: nodeFixtureUnits[leaf] ?? fuPerLeaf,
         };
         final edgeUnits = accumulateFixtureUnits(
           net: net,

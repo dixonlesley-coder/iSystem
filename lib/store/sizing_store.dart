@@ -1,8 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'app_state.dart';
 import 'network_store.dart';
 
 /// Default per-terminal demand by service, used to auto-size the drawn network
@@ -39,11 +41,28 @@ const Map<ServiceType, double> kDefaultLeafFixtureUnits = {
 final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
   final net = ref.watch(networkControllerProvider).network;
   if (net.edges.isEmpty) return const {};
+  final occupancy = ref.watch(occupancyProvider);
+  const profile = SniProfile();
+
+  // Real per-fixture UBAP where the user has assigned a fixture type; nodes
+  // without a type fall back to the flat default in autoSizeNetwork.
+  final nodeFixtureUnits = <String, double>{
+    for (final n in net.nodes)
+      if (n.fixture != null)
+        n.id: profile.fixtureUnitLoad(n.fixture!, occupancy: occupancy),
+  };
+  // If any assigned WC uses a flush valve, size the supply on the valve curve.
+  final anyFlushValve = net.nodes.any(
+      (n) => n.fixture == PlumbingFixture.waterClosetFlushValve);
+
   return autoSizeNetwork(
     net,
     const SizingContext(),
     leafDemand: kDefaultLeafDemand,
     leafFixtureUnits: kDefaultLeafFixtureUnits,
+    nodeFixtureUnits: nodeFixtureUnits,
+    flushSystem:
+        anyFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank,
   );
 });
 
