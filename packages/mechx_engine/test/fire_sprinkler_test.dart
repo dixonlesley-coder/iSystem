@@ -11,7 +11,6 @@
 library;
 
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
-import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
 void main() {
