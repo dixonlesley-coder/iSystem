@@ -5,11 +5,20 @@
 /// [StandardsProfile]; the sizing layer depends on the interface, never on the
 /// concrete numbers.
 ///
-/// PLACEHOLDER POLICY: every value here whose [StandardValue.verified] is
-/// `false` (and is also tagged `// VERIFY` in source) is a DRAFT placeholder.
-/// It MUST be surfaced in the UI/output as UNVERIFIED and must NOT be presented
-/// as authoritative. Real values get transcribed from official SNI PDFs and
-/// flipped to `verified: true` with an exact clause citation.
+/// PROVENANCE POLICY:
+///   • `verified == true`  — the value was found in the SNI text itself
+///     (verbatim phrasing surfaced and corroborated across independent sources)
+///     and may be presented as the SNI requirement. Carries a `citation`,
+///     `sourceUrl`, and (often) the verbatim `note`.
+///   • `verified == false` — either a raw placeholder OR a real figure sourced
+///     only from secondary literature citing SNI (clause not yet confirmed
+///     against the official PDF). It MUST be surfaced in the UI/output as
+///     UNVERIFIED and must NOT be presented as authoritative. `note` records
+///     the caveat; flip to `verified: true` once confirmed against the
+///     official SNI document.
+///
+/// Sources seeded 2026-06 from the SNI 8153:2015 full text on archive.org plus
+/// corroborating Indonesian engineering literature (see `sourceUrl`s).
 ///
 /// Zero Flutter imports.
 library;
@@ -17,24 +26,33 @@ library;
 import '../units.dart';
 
 /// A provenance-tagged value from a published standard. Carries enough to both
-/// compute with (`value`) and to be honest about (`citation`, `verified`).
+/// compute with (`value`) and to be honest about (`citation`, `verified`,
+/// `sourceUrl`, `note`).
 class StandardValue<T> {
   final T value;
 
   /// Human-readable unit label for display, e.g. "kPa", "L/s", "m/s".
   final String unit;
 
-  /// Source citation, e.g. "SNI 8153:2015 §7.3 Tabel 5".
+  /// Source citation, e.g. "SNI 8153:2015 — tekanan minimum alat plambing".
   final String citation;
 
-  /// `false` ⇒ placeholder; the UI/output must mark it UNVERIFIED.
+  /// `false` ⇒ unverified (placeholder or secondary-only); UI must mark it so.
   final bool verified;
+
+  /// Web source backing the value (where it was read/corroborated).
+  final String? sourceUrl;
+
+  /// Verbatim text, conversion, or caveat — the honesty surface for the value.
+  final String? note;
 
   const StandardValue(
     this.value, {
     required this.unit,
     required this.citation,
     this.verified = false,
+    this.sourceUrl,
+    this.note,
   });
 
   bool get isUnverified => !verified;
@@ -52,9 +70,12 @@ abstract interface class StandardsProfile {
   String get name;
   String get revision;
 
-  /// Maximum static pressure permitted at a fixture — the trigger for breaking
-  /// a supply system into pressure zones / boosters.
+  /// Practical maximum static pressure targeted at a fixture — the design
+  /// trigger for breaking a supply system into pressure zones / boosters.
   StandardValue<Pressure> get maxFixtureStaticPressure;
+
+  /// Hard threshold above which a pressure-relief device is mandatory.
+  StandardValue<Pressure> get mandatoryPressureReliefThreshold;
 
   /// Minimum residual (flowing) pressure required at the most-remote fixture.
   StandardValue<Pressure> get minResidualPressureFlushValve;
@@ -78,32 +99,112 @@ abstract interface class StandardsProfile {
   List<StandardValue<Object?>> get verifyChecklist;
 }
 
-/// Draft SNI profile. See PLACEHOLDER POLICY above.
+/// SNI profile, seeded from SNI 8153:2015 research (see PROVENANCE POLICY).
 class SniProfile implements StandardsProfile {
   const SniProfile();
+
+  // Shared citation/source constants. 1 kgf/cm² = 98 066.5 Pa exactly;
+  // 1 m water column = 9 806.65 Pa.
+  static const String _doc = 'SNI 8153:2015';
+  static const String _archiveUrl =
+      'https://archive.org/details/SNI81532015SistemPlambingPadaBangunanGedung';
 
   @override
   String get name => 'SNI — Standar Nasional Indonesia';
 
   @override
   String get revision =>
-      'draft profile v0.1 — placeholders pending transcription from official SNI PDFs';
+      'SNI 8153:2015 supply values seeded 2026-06 (pressures from verbatim '
+      'text; velocity/demand from secondary sources, pending official PDF). '
+      'NB: SNI 8153:2025 now supersedes the 2015 edition.';
 
-  // ── TOP-PRIORITY VERIFY ITEMS (zoning trigger + demand curve, per §13.4) ──
+  // ── Pressure (water supply) ───────────────────────────────────────────────
 
   @override
   StandardValue<Pressure> get maxFixtureStaticPressure => const StandardValue(
-        // VERIFY (TOP PRIORITY): SNI 8153:2015 max static pressure at a fixture
-        // — the booster/zoning trigger. Placeholder 500 kPa (5 bar).
-        Pressure(500000.0),
+        // Design target ~4 kgf/cm². The HARD relief trigger is 5 kgf/cm² — see
+        // mandatoryPressureReliefThreshold. Kept as the zoning design maximum.
+        Pressure(392266.0), // 4.0 kgf/cm² = 40 m water column
         unit: 'kPa',
-        citation: 'SNI 8153:2015 — max static fixture pressure (zoning trigger)',
-        verified: false,
+        citation: '$_doc — practical max fixture pressure (zoning design target)',
+        sourceUrl: _archiveUrl,
+        verified: false, // VERIFY: ~4 kgf/cm² is secondary design guidance only
+        note: 'Design maximum ≈4 kgf/cm² (≈392 kPa) per secondary sources citing '
+            'SNI 8153:2015; the mandatory pressure-relief threshold is 5 kgf/cm² '
+            '(see mandatoryPressureReliefThreshold). Confirm against official PDF.',
       );
+
+  @override
+  StandardValue<Pressure> get mandatoryPressureReliefThreshold =>
+      const StandardValue(
+        Pressure(490332.5), // 5.0 kgf/cm² = 50 m water column
+        unit: 'kPa',
+        citation: '$_doc — mandatory pressure-relief threshold (>5 kgf/cm²)',
+        sourceUrl: _archiveUrl,
+        verified: true,
+        note: 'Verbatim: bila tekanan air lebih dari 5 kg/cm² atau 50 m kolom air '
+            'harus dilengkapi katup pelepas tekan / kran menutup sendiri / tabung '
+            'udara untuk mencegah bahaya tekanan, pukulan air, dan suara pipa. '
+            'Clause no. unconfirmed.',
+      );
+
+  @override
+  StandardValue<Pressure> get minResidualPressureFlushValve =>
+      const StandardValue(
+        Pressure(98066.5), // 1.0 kgf/cm²
+        unit: 'kPa',
+        citation: '$_doc — min pressure at direct flush valve (katup penggelontor)',
+        sourceUrl: _archiveUrl,
+        verified: true,
+        note: 'Verbatim: tekanan pada katup penggelontor langsung sekurang-kurangnya '
+            '1 kg/cm² (≈98 kPa). Clause no. unconfirmed.',
+      );
+
+  @override
+  StandardValue<Pressure> get minResidualPressureFaucet => const StandardValue(
+        Pressure(49033.25), // 0.50 kgf/cm² = 5 m water column
+        unit: 'kPa',
+        citation: '$_doc — min pressure at fixture outlet (titik aliran keluar)',
+        sourceUrl: _archiveUrl,
+        verified: true,
+        note: 'Verbatim: tekanan minimum pada setiap saat di titik aliran keluar '
+            'unit alat plambing adalah 0,50 kg/cm² atau 5 m kolom air (≈49 kPa). '
+            'Clause no. unconfirmed.',
+      );
+
+  // ── Velocity ──────────────────────────────────────────────────────────────
+
+  @override
+  StandardValue<Velocity> get maxSupplyVelocity => const StandardValue(
+        Velocity(2.0),
+        unit: 'm/s',
+        citation: '$_doc — max water velocity in supply pipes',
+        sourceUrl: _archiveUrl,
+        verified: false, // VERIFY: secondary consensus, clause not confirmed
+        note: 'Design velocity range 0,9–2,0 m/detik; 2,0 m/s is the consistently '
+            'cited maximum (Noerbambang/Morimura basis, also SNI 03-7065-2005) '
+            'across ≥8 Indonesian studies. Confirm clause against official PDF.',
+      );
+
+  @override
+  StandardValue<Velocity> get maxDrainVelocity => const StandardValue(
+        Velocity(3.0),
+        unit: 'm/s',
+        citation: 'general plumbing practice (NOT an SNI 8153:2015 clause)',
+        verified: false, // VERIFY: SNI 8153 sizes drains by slope + UBAP, not velocity
+        note: 'SNI 8153:2015 sizes building drains by slope (kemiringan) and '
+            'fixture-unit loading, not an explicit velocity cap. 3,0 m/s is a '
+            'general-practice upper bound; self-cleansing minimum ≈0,6 m/s. '
+            'Replace if an explicit SNI drainage velocity limit is confirmed.',
+      );
+
+  // ── Demand (fixture units → flow) ─────────────────────────────────────────
 
   /// Fixture-unit → probable-flow demand curve (Hunter-style). Monotonic;
   /// [probableFlowForFixtureUnits] interpolates linearly between points.
-  // VERIFY (TOP PRIORITY): SNI 8153:2015 demand-curve table values.
+  // VERIFY (TOP PRIORITY): SNI 8153:2015 demand-curve values (Hunter / Noerbambang).
+  // Placeholder pending the demand-curve research pass — flush-valve vs
+  // flush-tank branches and the UBAP fixture-unit table land in the next commit.
   static const List<(double fixtureUnits, FlowRate flow)> _demandCurve = [
     (0, FlowRate(0.0)),
     (10, FlowRate(0.0006)), // ≈0.6 L/s
@@ -132,46 +233,7 @@ class SniProfile implements StandardsProfile {
     return _demandCurve.last.$2;
   }
 
-  // ── Other supply parameters ───────────────────────────────────────────────
-
-  @override
-  StandardValue<Pressure> get minResidualPressureFlushValve =>
-      const StandardValue(
-        // VERIFY: SNI 8153:2015 minimum residual pressure at a flush valve.
-        Pressure(100000.0), // 100 kPa (1 bar)
-        unit: 'kPa',
-        citation: 'SNI 8153:2015 — min residual pressure, flush valve',
-        verified: false,
-      );
-
-  @override
-  StandardValue<Pressure> get minResidualPressureFaucet => const StandardValue(
-        // VERIFY: SNI 8153:2015 minimum residual pressure at a faucet/outlet.
-        Pressure(50000.0), // 50 kPa (0.5 bar)
-        unit: 'kPa',
-        citation: 'SNI 8153:2015 — min residual pressure, faucet',
-        verified: false,
-      );
-
-  @override
-  StandardValue<Velocity> get maxSupplyVelocity => const StandardValue(
-        // VERIFY: SNI 8153:2015 max design velocity in supply pipework.
-        Velocity(2.0),
-        unit: 'm/s',
-        citation: 'SNI 8153:2015 — max supply velocity',
-        verified: false,
-      );
-
-  @override
-  StandardValue<Velocity> get maxDrainVelocity => const StandardValue(
-        // VERIFY: SNI drainage max velocity (scour vs. erosion window).
-        Velocity(3.0),
-        unit: 'm/s',
-        citation: 'SNI 8153:2015 — max gravity-drain velocity',
-        verified: false,
-      );
-
-  // ── Material properties (physical references, not SNI-specific) ───────────
+  // ── Material properties (physical engineering references, not SNI-specific) ─
 
   @override
   double hazenWilliamsC(PipeMaterial material) => switch (material) {
@@ -193,19 +255,23 @@ class SniProfile implements StandardsProfile {
         PipeMaterial.steel => const Roughness(4.5e-5),
       };
 
+  // ── Verify checklist (UI surfaces these as still-unverified) ──────────────
+
   @override
-  List<StandardValue<Object?>> get verifyChecklist => [
-        // Ordered most-critical first (§13.4): zoning trigger, then demand.
+  List<StandardValue<Object?>> get verifyChecklist => <StandardValue<Object?>>[
+        // Ordered most-critical first (§13.4): zoning target, then demand.
         maxFixtureStaticPressure,
         const StandardValue<Object?>(
-          'fixture-unit → flow demand curve',
+          'fixture-unit → flow demand curve (Hunter / Noerbambang)',
           unit: 'table',
-          citation: 'SNI 8153:2015 — Hunter demand curve',
+          citation: '$_doc — demand curve',
+          sourceUrl: _archiveUrl,
           verified: false,
         ),
-        minResidualPressureFlushValve,
-        minResidualPressureFaucet,
         maxSupplyVelocity,
         maxDrainVelocity,
+        mandatoryPressureReliefThreshold,
+        minResidualPressureFlushValve,
+        minResidualPressureFaucet,
       ].where((v) => v.isUnverified).toList();
 }
