@@ -9,17 +9,31 @@ import '../data/pdf_import.dart';
 import '../data/project_document.dart';
 import '../data/recovery.dart';
 import '../store/app_state.dart';
+import '../store/electrical_store.dart';
+import '../store/layer_store.dart';
 import '../store/project_store.dart';
 import '../store/sheets_store.dart';
-import 'canvas/sheet_canvas.dart';
+import '../update/update_banner.dart';
+import '../update/version_label.dart';
+import 'commercial/commercial_hub.dart';
+import 'electrical/electrical_palette.dart';
+import 'electrical/electrical_view.dart';
+import 'inspector/collapsible_inspector.dart';
 import 'inspector/project_panel.dart';
+import 'layout/layout_canvas.dart';
+import 'review/review_hub.dart';
 import 'schematic/schematic_view.dart';
+import 'shell/nav_rail.dart';
+import 'shell/preferences_screen.dart';
+import 'shell/projects_screen.dart';
 import 'sheets/sheet_rail.dart';
 import 'theme/design_tokens.dart';
 import 'theme/mechx_theme.dart';
 import 'widgets/mechx_button.dart';
 
-/// Top-level P0 layout: top bar · (sheet rail | canvas) · status bar.
+/// Top-level layout (PanelMaker-style chrome): a left navigation rail beside a
+/// slim top bar · body · status-bar column. The rail picks the [ShellSection];
+/// the body is the workspace (Plan / Schematic / Electrical) or a hub/screen.
 /// No Material Scaffold — a restrained, custom shell (§4).
 class AppShell extends StatelessWidget {
   const AppShell({super.key});
@@ -27,35 +41,155 @@ class AppShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return ColoredBox(
-      color: colors.background,
-      child: SafeArea(
-        child: Column(
-          children: [
-            const _TopBar(),
-            Container(height: 1, color: colors.border),
-            const _RecoveryBanner(),
-            const _ErrorBanner(),
-            Expanded(
-              child: Row(
-                children: [
-                  const SheetRail(),
-                  Container(width: 1, color: colors.border),
-                  Expanded(
-                    child: Consumer(
-                      builder: (context, ref, _) =>
-                          ref.watch(showSchematicProvider)
-                              ? const SchematicView()
-                              : const SheetCanvas(),
-                    ),
+    // The auto-update banner is stacked on top as a non-layout overlay (renders
+    // nothing when idle/offline/no update).
+    return Stack(
+      children: [
+        ColoredBox(
+          color: colors.background,
+          child: SafeArea(
+            // PanelMaker-style chrome: a left navigation rail beside the
+            // top-bar + body + status-bar column.
+            child: Row(
+              children: [
+                const NavRail(),
+                Container(width: 1, color: colors.border),
+                Expanded(
+                  child: Column(
+                    children: [
+                      const _TopBar(),
+                      Container(height: 1, color: colors.border),
+                      const _RecoveryBanner(),
+                      const _ErrorBanner(),
+                      const Expanded(child: _ShellBody()),
+                      Container(height: 1, color: colors.border),
+                      const _StatusBar(),
+                    ],
                   ),
-                  Container(width: 1, color: colors.border),
-                  const ProjectPanel(),
-                ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        const UpdateBannerOverlay(),
+      ],
+    );
+  }
+}
+
+/// Routes the centre area by the active [ShellSection]. `design` shows the
+/// workspace (Plan / Schematic / Electrical, driven by [workspaceViewProvider]
+/// exactly as before); the other sections show their own screens.
+class _ShellBody extends ConsumerWidget {
+  const _ShellBody();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final section = ref.watch(shellSectionProvider);
+    switch (section) {
+      case ShellSection.review:
+        return const ReviewHub();
+      case ShellSection.commercial:
+        return const CommercialHub();
+      case ShellSection.projects:
+        return const ProjectsScreen();
+      case ShellSection.preferences:
+        return const PreferencesScreen();
+      case ShellSection.design:
+        return const _DesignWorkspace();
+    }
+  }
+}
+
+/// The Design workspace area. The abstract electrical workspace
+/// ([WorkspaceView.electrical]) and the mechanical riser
+/// ([WorkspaceView.schematic]) own the whole area. The "Layout" view
+/// ([WorkspaceView.plan], relabelled in the rail) is the UNIFIED canvas — the
+/// shared PDF with plumbing · HVAC · electrical layers — flanked by the sheet
+/// rail and a layer-aware inspector (the DRAW tools when a mechanical layer is
+/// active, the electrical Loads palette when Electrical is).
+class _DesignWorkspace extends ConsumerWidget {
+  const _DesignWorkspace();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final view = ref.watch(workspaceViewProvider);
+    if (view == WorkspaceView.electrical) {
+      return const ElectricalView();
+    }
+    if (view == WorkspaceView.schematic) {
+      return Row(
+        children: [
+          const SheetRail(),
+          Container(width: 1, color: colors.border),
+          const Expanded(child: SchematicView()),
+          // The collapsible wrapper carries its own left border, so the canvas
+          // reclaims the full width when the inspector is collapsed.
+          const CollapsibleInspector(
+            expandedWidth: ProjectPanel.width,
+            child: ProjectPanel(),
+          ),
+        ],
+      );
+    }
+    // Layout (unified canvas).
+    final active = ref.watch(activeDisciplineProvider);
+    return Row(
+      children: [
+        const SheetRail(),
+        Container(width: 1, color: colors.border),
+        const Expanded(child: LayoutCanvas()),
+        // Layer-aware inspector (collapsible): the electrical Loads palette when
+        // Electrical is the active layer, else the mechanical DRAW/project
+        // inspector. Either way it collapses to a thin strip so the canvas wins.
+        if (active == DisciplineLayer.electrical)
+          const CollapsibleInspector(
+            expandedWidth: ProjectPanel.width,
+            child: _ElectricalInspectorColumn(),
+          )
+        else
+          const CollapsibleInspector(
+            expandedWidth: ProjectPanel.width,
+            child: ProjectPanel(),
+          ),
+      ],
+    );
+  }
+}
+
+/// The right inspector shown when Electrical is the active Layout layer: the
+/// Loads palette (drag onto the canvas) — the electrical editing toolset.
+class _ElectricalInspectorColumn extends StatelessWidget {
+  const _ElectricalInspectorColumn();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return SizedBox(
+      width: ProjectPanel.width,
+      child: ColoredBox(
+        color: colors.surface,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(MechXSpacing.md,
+                  MechXSpacing.md, MechXSpacing.md, MechXSpacing.xs),
+              child: Text('Electrical layer',
+                  style: type.subtitle.copyWith(color: colors.textPrimary)),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.md),
+              child: Text(
+                'Drag a load onto a panel to add a way, or onto the plan to '
+                'place it. Double-click to edit; right-click for the menu.',
+                style: type.caption.copyWith(color: colors.textMuted),
               ),
             ),
-            Container(height: 1, color: colors.border),
-            const _StatusBar(),
+            const SizedBox(height: MechXSpacing.sm),
+            const Expanded(child: ElectricalPalette()),
           ],
         ),
       ),
@@ -96,7 +230,7 @@ class _TopBar extends ConsumerWidget {
     final project = ref.read(projectControllerProvider);
     final doc = buildDocument(ref.read);
     final path = await FilePicker.saveFile(
-      dialogTitle: 'Save MechX project',
+      dialogTitle: 'Save iSystem project',
       fileName: '${project.name}.mechx',
       type: FileType.custom,
       allowedExtensions: const ['mechx'],
@@ -150,7 +284,6 @@ class _TopBar extends ConsumerWidget {
     final type = context.type;
     final state = ref.watch(sheetsControllerProvider);
     final brightness = ref.watch(brightnessProvider);
-    final showSchematic = ref.watch(showSchematicProvider);
     final projectName = ref.watch(projectControllerProvider).name;
 
     final current = state.current;
@@ -166,7 +299,8 @@ class _TopBar extends ConsumerWidget {
         ),
         child: Row(
           children: [
-            Text('MechX', style: type.title.copyWith(color: colors.textPrimary)),
+            Text('iSystem',
+                style: type.title.copyWith(color: colors.textPrimary)),
             const SizedBox(width: MechXSpacing.sm),
             Flexible(
               child: Text(
@@ -207,13 +341,6 @@ class _TopBar extends ConsumerWidget {
             MechXButton(
               label: 'Import PDF',
               onPressed: () => _pickAndLoadPdf(ref),
-            ),
-            const SizedBox(width: MechXSpacing.sm),
-            MechXButton(
-              label: showSchematic ? 'Plan' : 'Schematic',
-              primary: showSchematic,
-              onPressed: () =>
-                  ref.read(showSchematicProvider.notifier).toggle(),
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
@@ -310,6 +437,9 @@ class _StatusBar extends ConsumerWidget {
                       style: caption.copyWith(color: colors.textMuted),
                     ),
                   ),
+                  // App version (hidden in tests — no platform channel — so
+                  // the golden screenshots stay byte-identical).
+                  const VersionLabel(),
                 ],
               ),
             ),

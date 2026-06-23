@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../store/app_state.dart';
+import '../store/electrical_store.dart';
 import '../store/fire_store.dart';
 import '../store/history_store.dart';
 import '../store/network_store.dart';
@@ -68,6 +69,8 @@ ProjectDocument buildDocument(ProviderReader read) {
       fireHazard: read(fireHazardProvider),
       brightness: read(brightnessProvider),
     ),
+    // The electrical sub-model (v2) round-trips alongside the plumbing project.
+    electrical: read(electricalProjectProvider),
   );
 }
 
@@ -99,6 +102,10 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(rainfallIntensityProvider.notifier).set(s.rainfallMmPerHr);
   read(fireHazardProvider.notifier).set(s.fireHazard);
   read(brightnessProvider.notifier).set(s.brightness);
+  // Restore the electrical project (v2 files carry one; older files / projects
+  // with no electrical design fall back to the built-in sample).
+  read(electricalProjectProvider.notifier)
+      .setProject(doc.electrical ?? sampleElectricalProject());
 }
 
 /// Start the periodic autosave loop: every [interval], snapshot the current

@@ -1,11 +1,16 @@
-# MechX
+# iSystem
 
 Offline, native **Windows desktop** application for **MEP** (mechanical /
 electrical / plumbing) design. Load PDF floor plans, calibrate scale, set
 per-floor heights, drag duct/pipe elements, and the app auto-sizes everything to
-**Indonesian SNI** standards — sizing pumps and fire systems, auto-drawing
-schematic risers, showing a live pressure heatmap, and producing a Bill of
+**Indonesian SNI / PUIL** standards — sizing pumps and fire systems, auto-drawing
+schematic risers, showing a live pressure heatmap, designing the **electrical**
+panels/feeders (cables, breakers, busbars, earthing), and producing a Bill of
 Materials. No internet connection required.
+
+> Formerly **MechX** (M+P); the electrical ("E") domain was merged in, so the
+> product is now **iSystem**. The internal Dart packages (`mechx_engine`, the
+> `mechx` app package) keep their names; only the product/UI branding changed.
 
 > **Spec:** [`MEP-PDF-Sizing-Tool-Build-Plan.md`](MEP-PDF-Sizing-Tool-Build-Plan.md)
 > is the authoritative, living source of truth. Read it first.

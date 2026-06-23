@@ -1,5 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/duct_products.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 
 /// Distinct, legible line colour per service (readable on the light/dark canvas).
 Color serviceColor(ServiceType service) => switch (service) {
@@ -27,3 +29,11 @@ String serviceLabel(ServiceType service) => switch (service) {
       ServiceType.fireSprinkler => 'Sprinkler',
       ServiceType.fireHydrant => 'Hydrant',
     };
+
+/// Human-readable material label for an edge's chosen pipe/duct product, or
+/// null when no material is set. Uses the catalog's own [labelFor]/[ductLabelFor].
+String? edgeMaterialLabel(NetEdge edge) {
+  if (edge.pipeProduct != null) return labelFor(edge.pipeProduct!);
+  if (edge.ductProduct != null) return ductLabelFor(edge.ductProduct!);
+  return null;
+}

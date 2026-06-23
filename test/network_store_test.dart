@@ -1,8 +1,15 @@
+import 'package:flutter/gestures.dart' show kSecondaryButton;
+import 'package:flutter/rendering.dart' show RenderBox;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/selection_store.dart';
+import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/ui/canvas/selection_overlay.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/duct_products.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -267,6 +274,126 @@ void main() {
     });
   });
 
+  group('drag-drop palette + per-segment material/size', () {
+    ProviderContainer makeContainer() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    test('addSegment drops a default-length run of the active service', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setService(ServiceType.duct);
+      n.addSegment('s1', 0, const Offset(200, 200));
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 2);
+      expect(net.edges.length, 1);
+      expect(net.edges.single.service, ServiceType.duct);
+      // The two endpoints straddle the drop point horizontally.
+      final xs = net.nodes.map((nd) => nd.x).toList()..sort();
+      expect(xs.first, lessThan(200));
+      expect(xs.last, greaterThan(200));
+      expect(net.nodes.every((nd) => nd.y == 200), isTrue);
+    });
+
+    test('addSegment service override wins over the active service', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setService(ServiceType.coldWater);
+      n.addSegment('s1', 0, const Offset(0, 0), service: ServiceType.duct);
+      expect(c.read(networkControllerProvider).network.edges.single.service,
+          ServiceType.duct);
+    });
+
+    test('addFitting drops a junction; addTerminal drops a fixture', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addFitting('s1', 0, const Offset(10, 10));
+      n.addTerminal('s1', 0, const Offset(20, 20),
+          fixture: PlumbingFixture.lavatory);
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 2);
+      final fitting = net.nodes.firstWhere((nd) => nd.role == NodeRole.main);
+      final terminal =
+          net.nodes.firstWhere((nd) => nd.role == NodeRole.fixture);
+      expect(fitting.fixture, isNull);
+      expect(terminal.fixture, PlumbingFixture.lavatory);
+    });
+
+    test('setEdgePipeProduct / setEdgeDuctProduct / setEdgeSizeOverride', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(0, 0), service: ServiceType.coldWater);
+      final id = c.read(networkControllerProvider).network.edges.single.id;
+
+      n.setEdgePipeProduct(id, PipeProduct.pprPn16);
+      expect(c.read(networkControllerProvider).network.edges.single.pipeProduct,
+          PipeProduct.pprPn16);
+
+      n.setEdgeSizeOverride(id, Diameter.mm(50));
+      expect(
+          c
+              .read(networkControllerProvider)
+              .network
+              .edges
+              .single
+              .sizeOverride
+              ?.inMillimeters,
+          closeTo(50, 1e-9));
+
+      n.setEdgeDuctProduct(id, DuctProduct.bjls);
+      expect(c.read(networkControllerProvider).network.edges.single.ductProduct,
+          DuctProduct.bjls);
+
+      // Clearing with null nulls the fields.
+      n.setEdgePipeProduct(id, null);
+      n.setEdgeSizeOverride(id, null);
+      n.setEdgeDuctProduct(id, null);
+      final e = c.read(networkControllerProvider).network.edges.single;
+      expect(e.pipeProduct, isNull);
+      expect(e.sizeOverride, isNull);
+      expect(e.ductProduct, isNull);
+    });
+
+    test('endNodeDragWithSnap merges a dropped endpoint onto a nearby node', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // Two separate segments whose near endpoints are close together.
+      n.addSegment('s1', 0, const Offset(100, 0), spanPx: 100); // nodes ~ (50,0)-(150,0)
+      n.addSegment('s1', 0, const Offset(300, 0), spanPx: 100); // ~ (250,0)-(350,0)
+      var net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 4);
+      expect(net.edges.length, 2);
+
+      // Drag the right end of segment 1 (x≈150) onto the left end of segment 2
+      // (x≈250). Find the node at x≈150 and move it next to x≈250.
+      final dragged =
+          net.nodes.firstWhere((nd) => (nd.x - 150).abs() < 1e-6);
+      final target = net.nodes.firstWhere((nd) => (nd.x - 250).abs() < 1e-6);
+      n.pushUndoSnapshot();
+      n.moveNode(dragged.id, target.x + 2, target.y); // within snap radius
+      n.endNodeDragWithSnap(dragged.id, 14);
+
+      net = c.read(networkControllerProvider).network;
+      // The dragged node is gone (merged into the target); edges re-pointed.
+      expect(net.nodeById(dragged.id), isNull);
+      expect(net.nodes.length, 3);
+      expect(net.edges.length, 2); // both edges survive, now sharing a node
+      expect(net.edgesAt(target.id).length, 2);
+    });
+
+    test('endNodeDragWithSnap is a no-op with nothing nearby', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(0, 0));
+      final before = c.read(networkControllerProvider).network.nodes.length;
+      final id = c.read(networkControllerProvider).network.nodes.first.id;
+      n.endNodeDragWithSnap(id, 14);
+      expect(c.read(networkControllerProvider).network.nodes.length, before);
+    });
+  });
+
   testWidgets('draw palette renders; Run tool activates without error',
       (tester) async {
     setDesktopSurface(tester);
@@ -287,5 +414,68 @@ void main() {
     await tester.pump();
     await tester.tapAt(const Offset(400, 320));
     await tester.pump();
+  });
+
+  testWidgets('palette cards render in the inspector', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+
+    expect(find.text('PALETTE'), findsOneWidget);
+    expect(find.text('Pipe segment'), findsOneWidget);
+    expect(find.text('Duct segment'), findsOneWidget);
+    expect(find.text('Fitting'), findsOneWidget);
+    expect(find.text('Terminal'), findsOneWidget);
+  });
+
+  testWidgets('right-clicking a drawn segment opens the size/material menu',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50)); // first-frame fit
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    final ctrl = container.read(networkControllerProvider.notifier);
+    // A horizontal cold-water run across the ground-floor sheet.
+    ctrl.setService(ServiceType.coldWater);
+    ctrl.setTool(DrawTool.drawRun);
+    ctrl.placeRunPoint('s1', 0, const Offset(360, 360));
+    ctrl.placeRunPoint('s1', 0, const Offset(1040, 360));
+    ctrl.setTool(DrawTool.select);
+    await tester.pump();
+
+    final edgeId = container.read(networkControllerProvider).network.edges.first.id;
+    final transform =
+        container.read(sheetsControllerProvider).viewportFor('s1');
+    expect(transform, isNotNull);
+    // Mid-segment in the overlay's LOCAL space, then to GLOBAL via its box.
+    final localMid = transform!.worldToScreen(const Offset(700, 360));
+    final overlayBox = tester.renderObject<RenderBox>(
+        find.byType(NetworkSelectionOverlay).first);
+    final globalMid = overlayBox.localToGlobal(localMid);
+
+    final gesture =
+        await tester.startGesture(globalMid, buttons: kSecondaryButton);
+    await gesture.up();
+    await tester.pump();
+
+    // The pipe menu offers Set size + Pipe material; selection followed.
+    expect(find.text('SET SIZE'), findsOneWidget);
+    expect(find.text('PIPE MATERIAL'), findsOneWidget);
+    expect(container.read(selectionProvider).edgeId, edgeId);
+
+    // Pick 2" → DN50 (npsLabel(2.0) == '2"', mm 50).
+    await tester.tap(find.text('2"   DN50'));
+    await tester.pump();
+
+    final edge =
+        container.read(networkControllerProvider).network.edges.first;
+    expect(edge.sizeOverride?.inMillimeters, closeTo(50, 1e-6));
+    // Menu dismissed after the pick.
+    expect(find.text('SET SIZE'), findsNothing);
   });
 }

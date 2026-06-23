@@ -72,10 +72,12 @@ void main() {
     await tester.pump();
     expect(find.textContaining('first point'), findsOneWidget);
 
-    // two taps at distinct points inside the canvas overlay
-    await tester.tapAt(const Offset(330, 300));
+    // Two taps at distinct points inside the canvas overlay. The canvas now sits
+    // right of the navigation rail + sheet rail (≈ x > 482 on the test surface),
+    // so the points are chosen well inside that region.
+    await tester.tapAt(const Offset(600, 400));
     await tester.pump();
-    await tester.tapAt(const Offset(420, 300));
+    await tester.tapAt(const Offset(720, 400));
     await tester.pump();
 
     expect(find.text('Known distance'), findsOneWidget);

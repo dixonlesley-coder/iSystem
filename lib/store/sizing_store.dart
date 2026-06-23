@@ -85,6 +85,13 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     ),
   };
 
+  // Manual per-segment nominal-size overrides (right-click "Set size"): the
+  // edge keeps its accumulated flow but is sized to the chosen diameter.
+  final sizeOverrides = <String, Diameter>{
+    for (final e in net.edges)
+      if (e.sizeOverride != null) e.id: e.sizeOverride!,
+  };
+
   return autoSizeNetwork(
     net,
     SizingContext(ductShape: ducts.shape, ductMethod: ducts.method),
@@ -93,6 +100,7 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     nodeFixtureUnits: nodeFixtureUnits,
     nodeDrainageUnits: nodeDrainageUnits,
     nodeFlowDemand: nodeFlowDemand,
+    sizeOverrides: sizeOverrides,
     flushSystem:
         anyFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank,
     // Geometry lets looped (ring) mains balance their flow split against REAL

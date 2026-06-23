@@ -1,8 +1,11 @@
-# CLAUDE.md — MechX
+# CLAUDE.md — iSystem (formerly MechX)
 
-Guidance for working in this repository. MechX is an **offline native Windows
-desktop Flutter app** for MEP (mechanical / electrical / plumbing) design of
-Indonesian (**SNI**-standard) buildings. An engineer loads PDF floor plans,
+Guidance for working in this repository. iSystem (the merged M+E+P product;
+formerly **MechX**, which was M+P) is an **offline native Windows desktop
+Flutter app** for MEP (mechanical / electrical / plumbing) design of Indonesian
+(**SNI / PUIL**-standard) buildings. NOTE: the product/UI is branded "iSystem",
+but the internal Dart packages (`mechx_engine` engine, `mechx` app), the
+`MechX*` class names, and the Windows `BINARY_NAME=mechx` are deliberately kept. An engineer loads PDF floor plans,
 calibrates each sheet's scale, sets per-floor heights, draws duct/pipe/fire
 elements, and MechX auto-sizes everything to SNI rules, sizes pumps/fans/fire
 systems, draws a schematic riser diagram, shows a live pressure heatmap, and
@@ -168,8 +171,121 @@ report export**; versioned `.mechx` save/open with viewport restore;
 
 ## Known gaps / TODO (see decisions log for detail)
 
-- Electrical ("E") domain — intentionally out of scope here (handled in another
-  repo).
+- Electrical ("E") domain — **now in scope**: this repo is being merged into the
+  single M+E+P app **iSystem** (see the §15 decisions-log "Project merge" row).
+  The electrical engine is being ported to pure Dart under
+  `packages/mechx_engine/lib/electrical/` from the sibling **PanelMaker** (PUIL)
+  spec. Landed so far: **A1** — SI typed quantities for current/voltage/VA/var/Ω/J
+  in `units.dart`; **A2** — `standards/puil.dart` (`ElectricalStandardsProfile`
+  interface + `PuilProfile`, reusing `StandardValue`/`VerificationStatus` from
+  `sni.dart`; all values `secondarySource`, nothing `sniVerbatim` until the
+  official PUIL PDF is checked); **A3 part 1** — `electrical/` Tier-1 sizing:
+  `load_kind.dart` (LoadKind + defaults), `results.dart`, and `sizing.dart`
+  (`loadCurrent`, `deratingFactor`, `voltageDrop`, `selectBreaker`, `sizeCable`),
+  all consuming `PuilProfile`; **A3 part 2a** — `electrical/busbar.dart`
+  (`sizeBusbar` + `sizeNeutralPeBars`; busbar table added to `PuilProfile`);
+  **A3 part 2b** — `electrical/earthing.dart` (`EarthingSystem`/`RcdType`,
+  `recommendedRcdType`, `sizeGrounding` cable make-up, `computeEarthing`,
+  `circuitRcd`); **A4** — `electrical/{model,panel_results,compute}.dart`: the
+  `ElectricalProject`/`Panel`/`Circuit` model (circuit carries the A5 link fields
+  `sourceEquipmentId`/`flaOverrideA`) + `computePanel`/`computeSystem` (per-circuit
+  sizing, phase balance, incomer/busbar + section split, bottom-up diversified
+  demand over the feeder tree with cycle detection, cumulative voltage drop,
+  earthing). A4 advanced passes (fault/PF/transformer/sources/arc-flash/harmonics/
+  containment/enclosure/occupancy/metering/SPD/lightning) are **deferred to A8**.
+  **A5** (`electrical/load_list.dart`: MechX `PumpDuty`/`FanDuty` → `ElectricalCircuit`
+  with derived `flaOverrideA`), **A6** (`.mechx` electrical sub-model + version 1→2,
+  tolerant load), and **A7** (`lib/store/electrical_store.dart` + `lib/ui/electrical/`
+  + plan/schematic/electrical view switch + goldens) have landed, and the two
+  integration **seams are wired**: `lib/store/electrical_feed.dart` reads the live
+  pump/fan/fire-pump duty providers → A5 `buildEquipmentCircuits` →
+  `ElectricalProjectController.syncMepEquipment` (the MEP→E auto-feed), and
+  `buildDocument`/`applyDocument` round-trip the electrical project in `.mechx`.
+  The product-string **rebrand to "iSystem"** is done (in-app labels + window
+  title; the internal package names + `MechX*` classes + Windows `BINARY_NAME`
+  stay). The full PanelMaker engine is now ported AND the **A8 advanced passes
+  are wired** via `electrical/advanced_study.dart` (`computeAdvancedStudy` →
+  `AdvancedStudy`; `electricalAdvancedProvider`) over additive model fields
+  (`starterType`, panel backup tiers, project `sources`/dual-tx/occupancy/site)
+  that round-trip in `.mechx` — the `computeSystem`/`computePanel` core untouched.
+  An **MEP materials catalog** (`standards/pipe_products.dart` PPR/PVC/cast-iron/
+  acoustic-PVC/HDPE + `standards/duct_products.dart` BJLS auto-thickness + PU)
+  backs the mechanical canvas. **Wave 4 (UI) — the two canvas editors landed**
+  (one shared direct-manipulation language): the **mechanical drag-drop canvas**
+  (`ui/canvas/segment_palette.dart` + `drop_overlay.dart` + `edge_context_menu.dart`)
+  — drag pipe-segment/fitting/terminal/duct cards onto the calibrated canvas,
+  drag edge endpoints to resize+snap to fittings (`endNodeDragWithSnap`), right-
+  click to set **nominal size in inches** (NPS ladder → additive `NetEdge.sizeOverride`,
+  honoured by `autoSizeNetwork(sizeOverrides:)` via continuity v=Q/A) or pick a
+  pipe/duct **material** (`NetEdge.pipeProduct`/`ductProduct`, `.mechx`-persisted);
+  and the **electrical canvas editor** (`ui/electrical/electrical_view.dart`) —
+  `Draggable<LoadKind>` palette → panel `DragTarget` (`addCircuit`), double-click
+  inspector, right-click Edit/Duplicate/Delete, add-panel/+Way, and a read-only
+  **Advanced-study** card over `electricalAdvancedProvider`. All edits route
+  through the store's field-preserving `_withProject`; calc core untouched.
+  **Wave 5 — PanelMaker-faithful electrical canvas + left-nav shell landed**: the
+  electrical workspace is now a **single-line spatial canvas** (`ui/electrical/electrical_canvas.dart`,
+  a port of PanelMaker `BuildingSingleLine.tsx`) — panels as nodes wired by feeders,
+  zoom-LOD (summary card ↔ internal R-S-T busbar+breakers), loads hanging below,
+  Loads palette (`Draggable<LoadKind>`), outlet-drag-to-feeder, minimap, zoom controls,
+  Single-line / Power one-line tabs + canvas toolbar; additive `ElectricalPanel.x/y`
+  (no math change). The app shell is now PanelMaker's **248-px left navigation rail**
+  (`ui/shell/nav_rail.dart`): DESIGN (Plan/Schematic/Electrical, still driven by
+  `workspaceViewProvider`) · Review · Commercial · pinned Projects/Preferences,
+  replacing the top-bar view switch (`ShellSection`).
+  **iOS / Apple-HIG visual polish landed** (token refresh in `ui/theme/design_tokens.dart`
+  — systemBlue accent, grouped backgrounds + label tiers + hairline separators, continuous
+  radii, soft `MechXShadow`, SF-like Roboto scale; `MechXButton` = the iOS filled/tinted
+  hierarchy), token-driven so it propagates app-wide. **Electrical Layout view landed**
+  (`ui/electrical/electrical_layout_view.dart`, a 3rd `_Tab.layout`): the calibrated **PDF
+  floor plan as canvas** with panels/loads placed on it → **cable length from geometry**
+  (`electricalResultProvider` threads the mechanical `projectControllerProvider`'s
+  `calibrations`+`building` into `computeSystem`; placed→geo, unplaced→manual, default
+  byte-identical), a co-equal projection of the *same* model as Single-line (add/move/delete
+  in either → both update), an **unplaced tray**, **multi-floor** sheet selector, zoom-LOD,
+  and an "Electrical layer" chip.
+  **Mechanical vertical riser mode landed** (`ui/schematic/schematic_view.dart`): the elevation
+  surface now has **Auto** (read-only generated diagram) + **Edit** modes — floors stacked by true
+  elevation, a Riser palette, drag-to-place across floors (`placeRiserAt`), drag-sideways to move
+  (`moveRiserHorizontal`, length stays the elevation delta), right-click to size (shared
+  `edge_context_menu`); mirrors the Plan/electrical direct-manipulation language.
+  **Unified one-PDF layered Layout canvas landed — the convergence** (`lib/store/layer_store.dart`
+  + `lib/ui/layout/{layout_canvas,layer_switcher,electrical_layer}.dart`): the mechanical Plan
+  and the electrical Layout merged into ONE **Layout** workspace on one shared PDF/viewport with
+  a **Plumbing · HVAC · Electrical** layer switcher + visibility toggles. The active layer edits
+  (DRAW inspector scoped to its services for Plumbing/HVAC via `isAir`; the Loads palette +
+  place/move for Electrical); visible-but-inactive layers render **faded/ghosted** for
+  coordination; hidden layers omitted; both ride the same sheet viewport + §10 geometry. Left-nav
+  **"Plan" → "Layout"** (the `WorkspaceView.plan` enum kept); `ElectricalView` dropped its
+  redundant Layout tab (Single-line + Power one-line stay); the riser elevation stays the
+  Schematic view. This closes the M+E+P convergence: one calibrated PDF substrate, disciplines
+  as layers, geometry-derived lengths, with the abstract Single-line / Power-one-line / riser
+  views as companions.
+  **Canvas-focus UI + sizing folds LIVE + full catalogue landed (parallel batch):** the floor
+  picker is now a **slim numbered rail** (`sheet_rail.dart`) and the right inspector is
+  **collapsible** (chevron; both the DRAW/ProjectPanel and the electrical Loads column, on
+  Layout + Schematic) so the PDF canvas is the largest region. The **two sizing-mutating folds**
+  are folded into `computePanel` and **wired live**: **busbar short-circuit withstand** (Fold 1,
+  IEC 61439-1 adiabatic; opt-in `computeSystem(originFaultLevel, busbarClearingTimeS)`, default
+  omitted ⇒ byte-identical — the store passes 16 kA at a realistic **0.1 s** clearing time) and
+  **triplen-harmonic neutral oversize** (Fold 2, IEC 60364-5-52; always-on, self-guarding to ×1.0
+  for linear panels). The **full multi-brand parts catalogue** is ported verbatim into
+  `electrical/catalog_data/**` + `catalog.dart` — **534 globally-unique parts** across Schneider /
+  Mitsubishi / LS / ABB / Legrand / Chint + generic cables (matchers/`bom.dart`/`quotation.dart`
+  unchanged). The **Windows release pipeline** is verified rebrand-correct (`release.yml` +
+  `installer/iSystem.iss`, feed URL via `${GITHUB_REPOSITORY}`); version `1.0.0+1`, first publish
+  awaits user sign-off.
+  Remaining: **Wave 4b**
+  (electrical drawings/SLD-GA-one-line export + commercial UI + workflow/i18n), the
+  per-segment material→hydraulic-solve fold, exposing Fold-1 fault-level/clearing-time as project
+  settings, and cutting the first release (`v1.0.0`).
+- **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
+  (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
+  → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),
+  and an offline-tolerant in-app updater in `lib/update/` (Riverpod + a
+  MechXTheme banner). Version source of truth = `pubspec.yaml`. The web env has
+  no Flutter SDK — a `.claude/` SessionStart hook installs Flutter 3.44.3 so the
+  gate runs; `flutter build windows`/`iscc` only run on the Windows CI runner.
 - Native PDF *drawing* export (DXF drawing export and the Markdown calc report
   are done; both convert to PDF externally).
 - Multi-select / copy-paste / measurement-annotation; per-outlet roof-area UI

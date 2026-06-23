@@ -41,6 +41,14 @@ dependencies:
   pdfrx: ^2.4.4
   file_picker: ^11.0.2
 
+  # Auto-update (Workstream B): the update check is the ONLY network call.
+  # `http` GETs the GitHub Releases feed; `package_info_plus` reads the running
+  # app version (source of truth = pubspec `version`); `crypto` verifies the
+  # downloaded installer's SHA-256 before launching it.
+  http: ^1.2.0
+  package_info_plus: ^8.0.0
+  crypto: ^3.0.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

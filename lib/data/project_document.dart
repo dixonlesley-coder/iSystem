@@ -1,11 +1,14 @@
 import 'dart:convert';
 
 import 'package:flutter/widgets.dart' show Brightness, Offset, Size;
+import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/duct_products.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -107,11 +110,15 @@ class DesignSettings {
       );
 }
 
-/// Versioned MechX project document — the on-disk format (a `.mechx` JSON file).
+/// Versioned iSystem project document — the on-disk format (a `.mechx` JSON file;
+/// the extension is kept for backward compatibility).
 /// Pure (de)serialization only; callers handle file IO. A `version` header is
 /// written from day one so the format can migrate.
 class ProjectDocument {
-  static const int currentVersion = 1;
+  /// Bumped to 2 when the optional electrical sub-model ([electrical]) was
+  /// added. The addition is ADDITIVE — a v1 file (no `electrical` key) loads
+  /// fine with [electrical] == null, so no migration step is needed.
+  static const int currentVersion = 2;
 
   final int version;
   final String projectName;
@@ -129,6 +136,10 @@ class ProjectDocument {
   /// Non-network design inputs (occupancy, feed, ducts, rainfall, fire, theme).
   final DesignSettings settings;
 
+  /// Optional electrical sub-model (panels + earthing system). Added in v2;
+  /// null for a v1 file or a project with no electrical design yet.
+  final ElectricalProject? electrical;
+
   const ProjectDocument({
     this.version = currentVersion,
     required this.projectName,
@@ -139,6 +150,7 @@ class ProjectDocument {
     this.viewports = const {},
     this.sheetFloors = const {},
     this.settings = const DesignSettings(),
+    this.electrical,
   });
 
   Map<String, dynamic> toJson() => {
@@ -175,6 +187,7 @@ class ProjectDocument {
           for (final e in sheetFloors.entries) e.key: e.value,
         },
         'settings': settings.toJson(),
+        if (electrical != null) 'electrical': electrical!.toJson(),
         'network': {
           'nodes': [
             for (final n in network.nodes)
@@ -199,6 +212,10 @@ class ProjectDocument {
                 'to': e.toId,
                 'service': e.service.name,
                 'kind': e.kind.name,
+                if (e.pipeProduct != null) 'pipe_product': e.pipeProduct!.name,
+                if (e.ductProduct != null) 'duct_product': e.ductProduct!.name,
+                if (e.sizeOverride != null)
+                  'size_override_mm': e.sizeOverride!.inMillimeters,
               },
           ],
         },
@@ -217,7 +234,7 @@ class ProjectDocument {
     // Future versions < currentVersion would be migrated here before parsing.
     if (json['project'] is! Map) {
       throw const ProjectDocumentException(
-        'Not a MechX project file (missing "project" section).',
+        'Not an iSystem project file (missing "project" section).',
       );
     }
     final project = json['project'] as Map<String, dynamic>;
@@ -271,6 +288,11 @@ class ProjectDocument {
           service:
               _enumOr(ServiceType.values, e['service'], ServiceType.coldWater),
           kind: _enumOr(EdgeKind.values, e['kind'], EdgeKind.run),
+          pipeProduct: _enumOrNull(PipeProduct.values, e['pipe_product']),
+          ductProduct: _enumOrNull(DuctProduct.values, e['duct_product']),
+          sizeOverride: e['size_override_mm'] == null
+              ? null
+              : Diameter.mm((e['size_override_mm'] as num).toDouble()),
         ),
     ];
     final viewports = <String, ViewportTransform>{};
@@ -299,6 +321,11 @@ class ProjectDocument {
     final settings = rawSettings is Map
         ? DesignSettings.fromJson(rawSettings)
         : const DesignSettings();
+    // Optional electrical sub-model (v2+). Absent on a v1 file ⇒ null, no throw.
+    final rawElectrical = json['electrical'];
+    final electrical = rawElectrical is Map<String, dynamic>
+        ? ElectricalProject.fromJson(rawElectrical)
+        : null;
     return ProjectDocument(
       version: version,
       projectName: project['name'] as String? ?? 'Untitled project',
@@ -309,6 +336,7 @@ class ProjectDocument {
       viewports: viewports,
       sheetFloors: sheetFloors,
       settings: settings,
+      electrical: electrical,
     );
   }
 
@@ -320,7 +348,7 @@ class ProjectDocument {
       throw ProjectDocumentException('File is not valid JSON: ${e.message}');
     }
     if (raw is! Map<String, dynamic>) {
-      throw const ProjectDocumentException('Not a MechX project file.');
+      throw const ProjectDocumentException('Not an iSystem project file.');
     }
     try {
       return ProjectDocument.fromJson(raw);

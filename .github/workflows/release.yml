@@ -1,0 +1,194 @@
+name: Release
+
+# Builds the native-Windows iSystem installer (Inno Setup) and — on a version
+# tag (vX.Y.Z) or a manual publish — uploads it plus the auto-update feed
+# (latest.json) to a GitHub Release, which the in-app updater (lib/update/)
+# reads.
+#
+# Cut a release one of two ways:
+#   1. Push a tag matching the pubspec version:
+#        git tag v1.2.0 && git push origin v1.2.0
+#   2. Run this workflow manually (workflow_dispatch) with publish=true — it
+#      creates and pushes the tag from the pubspec `version` itself. (A push made
+#      with GITHUB_TOKEN does not re-trigger workflows, so this cannot recurse.)
+# Without publish (a manual run with publish=false) it only builds — the
+# installer is attached as a workflow artifact for testing, nothing is published.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish a GitHub Release (download + auto-update feed)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # the workflow creates the tag/release and uploads assets
+
+# Serialise releases. Two runs publishing the SAME version concurrently race on
+# the release assets, which can leave a release with NO installer/latest.json and
+# break auto-update. Queue them instead of running in parallel; never cancel a
+# publish midway (mirrors PanelMaker's release guard).
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PUBLISH_INPUT: ${{ inputs.publish }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.3
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # The full gate must pass before we ship — same as CI, belt and braces.
+      - name: Engine tests (pure Dart)
+        working-directory: packages/mechx_engine
+        run: dart test
+
+      - name: App tests (incl. goldens)
+        run: flutter test
+
+      - name: Analyze (must be clean)
+        run: flutter analyze
+
+      # Read the version from pubspec.yaml (source of truth). On a tag push,
+      # prefer the tag (strip the leading v) but assert it matches the pubspec.
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          PUBSPEC_VERSION="$(grep -E '^version:' pubspec.yaml | head -1 | sed -E 's/^version:[[:space:]]*//; s/\+.*$//' | tr -d '[:space:]')"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+            if [[ "${TAG_VERSION}" != "${PUBSPEC_VERSION}" ]]; then
+              echo "::error::Tag v${TAG_VERSION} does not match pubspec version ${PUBSPEC_VERSION}." >&2
+              exit 1
+            fi
+            VERSION="${TAG_VERSION}"
+          else
+            VERSION="${PUBSPEC_VERSION}"
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved version: ${VERSION}"
+
+      - name: Build Windows (release)
+        run: flutter build windows --release
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          # iscc is on PATH after choco install (ProgramData\chocolatey\bin).
+          iscc "/dAppVersion=${VERSION}" installer/iSystem.iss
+          ls -la build/installer
+
+      # Compute the installer SHA-256 and write the auto-update feed. The url is
+      # the stable `releases/latest/download/...` path the in-app updater polls
+      # (kDefaultFeedUrl), so it always resolves to the newest published asset.
+      - name: Write latest.json (auto-update feed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          SETUP="build/installer/iSystem-${VERSION}-setup.exe"
+          SHA="$(certutil -hashfile "${SETUP//\//\\}" SHA256 | sed -n '2p' | tr -d '[:space:]' | tr 'A-F' 'a-f')"
+          REPO="${GITHUB_REPOSITORY}"
+          URL="https://github.com/${REPO}/releases/latest/download/iSystem-${VERSION}-setup.exe"
+          cat > build/installer/latest.json <<EOF
+          {
+            "version": "${VERSION}",
+            "url": "${URL}",
+            "sha256": "${SHA}",
+            "notes": "iSystem ${VERSION}"
+          }
+          EOF
+          echo "latest.json:"
+          cat build/installer/latest.json
+
+      # Decide whether to publish: always on a tag push, or a manual publish=true.
+      - name: Determine publish mode
+        id: mode
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* || "${PUBLISH_INPUT:-}" == "true" ]]; then
+            echo "publish=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "publish=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      # On a manual publish, create + push the tag (a published release needs its
+      # tag to exist; GitHub rejects a tagless non-draft release). Pushes made
+      # with GITHUB_TOKEN don't re-trigger workflows, so this can't recurse.
+      - name: Create and push tag (manual publish)
+        if: steps.mode.outputs.publish == 'true' && !startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "Tag v${VERSION} already exists locally"
+          else
+            git tag "v${VERSION}"
+          fi
+          git push origin "v${VERSION}" || echo "Tag v${VERSION} already on remote"
+
+      # Pre-create the GitHub Release so the uploads below only UPLOAD to it
+      # (never race to create it — PanelMaker hit a race where parallel uploads
+      # each tried to create the release and assets were dropped).
+      - name: Create GitHub Release (if absent)
+        if: steps.mode.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "Release v${VERSION} already exists"
+          else
+            gh release create "v${VERSION}" --title "${VERSION}" --notes "iSystem ${VERSION}"
+          fi
+
+      - name: Upload release assets
+        if: steps.mode.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          gh release upload "v${VERSION}" \
+            "build/installer/iSystem-${VERSION}-setup.exe" \
+            "build/installer/latest.json" \
+            --clobber
+
+      # Always keep the installer + feed as workflow artifacts (handy for an
+      # unpublished test build).
+      - name: Upload installer as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iSystem-windows
+          path: |
+            build/installer/*.exe
+            build/installer/latest.json
+          if-no-files-found: ignore

@@ -1,6 +1,8 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/duct_products.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -172,6 +174,76 @@ class NetworkController extends Notifier<DrawingState> {
     _commit(Network(nodes: nodes, edges: [...state.network.edges, edge]));
   }
 
+  /// Place a riser of [service] at horizontal position [worldX] on [floorIndex]
+  /// spanning to the floor ABOVE, INDEPENDENT of the active tool (used by the
+  /// editable vertical/elevation view's palette drop). Both endpoint nodes share
+  /// [worldX]; the riser's vertical length is the §10 floor-to-floor elevation
+  /// delta (computed by `edgeLength`), NOT a pixel distance. Returns the new
+  /// edge id, or null when there is no floor above. Records one undo step.
+  String? placeRiserAt(
+    String sheetId,
+    int floorIndex,
+    double worldX,
+    int levelCount, {
+    ServiceType? service,
+    double y = 0,
+  }) {
+    if (floorIndex < 0 || floorIndex + 1 >= levelCount) return null;
+    final svc = service ?? state.service;
+    final lowerId = _id('n');
+    final upperId = _id('n');
+    final lower = NetNode(
+        id: lowerId,
+        sheetId: sheetId,
+        x: worldX,
+        y: y,
+        floorIndex: floorIndex);
+    final upper = NetNode(
+        id: upperId,
+        sheetId: sheetId,
+        x: worldX,
+        y: y,
+        floorIndex: floorIndex + 1);
+    final edgeId = _id('e');
+    final edge = NetEdge(
+      id: edgeId,
+      fromId: lowerId,
+      toId: upperId,
+      service: svc,
+      kind: EdgeKind.riser,
+    );
+    _commit(Network(
+      nodes: [...state.network.nodes, lower, upper],
+      edges: [...state.network.edges, edge],
+    ));
+    return edgeId;
+  }
+
+  /// Move BOTH endpoint nodes of a riser [edgeId] to horizontal [worldX] WITHOUT
+  /// recording undo (live drag — pair with [pushUndoSnapshot] at drag start).
+  /// Only the x changes: the floors (and so the §10 elevation delta that is the
+  /// riser's true length) are untouched, so dragging a riser sideways never
+  /// alters its length.
+  void moveRiserHorizontal(String edgeId, double worldX) {
+    final idx = state.network.edges.indexWhere((e) => e.id == edgeId);
+    if (idx < 0) return;
+    final edge = state.network.edges[idx];
+    if (edge.kind != EdgeKind.riser) return;
+    final nodes = [
+      for (final n in state.network.nodes)
+        if (n.id == edge.fromId || n.id == edge.toId)
+          n.copyWith(x: worldX)
+        else
+          n,
+    ];
+    state = DrawingState(
+      network: Network(nodes: nodes, edges: state.network.edges),
+      service: state.service,
+      tool: state.tool,
+      pendingPoint: state.pendingPoint,
+    );
+  }
+
   void undo() {
     if (_undo.isEmpty) return;
     _redo.add(state.network);
@@ -300,15 +372,176 @@ class NetworkController extends Notifier<DrawingState> {
     final idx = state.network.edges.indexWhere((e) => e.id == id);
     if (idx < 0 || state.network.edges[idx].service == service) return;
     final e = state.network.edges[idx];
+    _replaceEdge(e.copyWith(service: service));
+  }
+
+  /// Replace an edge in-place (one undo step). No-op if [updated]'s id is gone.
+  void _replaceEdge(NetEdge updated) {
+    final idx = state.network.edges.indexWhere((e) => e.id == updated.id);
+    if (idx < 0) return;
     final edges = [...state.network.edges];
-    edges[idx] = NetEdge(
-      id: e.id,
-      fromId: e.fromId,
-      toId: e.toId,
-      service: service,
-      kind: e.kind,
-    );
+    edges[idx] = updated;
     _commit(Network(nodes: state.network.nodes, edges: edges));
+  }
+
+  /// Set (or clear, with null) the pipe **product** for a segment — a per-edge
+  /// material label / BOM concern (sizing routing is unchanged).
+  void setEdgePipeProduct(String id, PipeProduct? product) {
+    final idx = state.network.edges.indexWhere((e) => e.id == id);
+    if (idx < 0) return;
+    final e = state.network.edges[idx];
+    if (e.pipeProduct == product) return;
+    _replaceEdge(
+      product == null
+          ? e.copyWith(clearPipeProduct: true)
+          : e.copyWith(pipeProduct: product),
+    );
+  }
+
+  /// Set (or clear, with null) the duct **product** for an air segment.
+  void setEdgeDuctProduct(String id, DuctProduct? product) {
+    final idx = state.network.edges.indexWhere((e) => e.id == id);
+    if (idx < 0) return;
+    final e = state.network.edges[idx];
+    if (e.ductProduct == product) return;
+    _replaceEdge(
+      product == null
+          ? e.copyWith(clearDuctProduct: true)
+          : e.copyWith(ductProduct: product),
+    );
+  }
+
+  /// Set (or clear, with null) the manual nominal-size override for a segment.
+  void setEdgeSizeOverride(String id, Diameter? size) {
+    final idx = state.network.edges.indexWhere((e) => e.id == id);
+    if (idx < 0) return;
+    final e = state.network.edges[idx];
+    if (e.sizeOverride?.meters == size?.meters) return;
+    _replaceEdge(
+      size == null
+          ? e.copyWith(clearSizeOverride: true)
+          : e.copyWith(sizeOverride: size),
+    );
+  }
+
+  // ── Drag-and-drop palette (drop a segment / fitting / terminal) ─────────────
+
+  /// Default horizontal span (world px) of a dropped segment, before snapping.
+  static const double _defaultSegmentSpanPx = 120;
+
+  /// Drop a default-length horizontal SEGMENT of [service] centred on [world]:
+  /// two nodes a default span apart joined by a run, each endpoint snapping to a
+  /// nearby existing node within [snapRadius]. Records one undo step.
+  void addSegment(
+    String sheetId,
+    int floorIndex,
+    Offset world, {
+    ServiceType? service,
+    double snapRadius = 12,
+    double? spanPx,
+  }) {
+    final svc = service ?? state.service;
+    final half = (spanPx ?? _defaultSegmentSpanPx) / 2;
+    final aWorld = Offset(world.dx - half, world.dy);
+    final bWorld = Offset(world.dx + half, world.dy);
+
+    final nodes = [...state.network.nodes];
+    String resolve(Offset p) {
+      final snapped = _snap(nodes, sheetId, floorIndex, p, snapRadius);
+      if (snapped != null) return snapped;
+      final id = _id('n');
+      nodes.add(
+          NetNode(id: id, sheetId: sheetId, x: p.dx, y: p.dy, floorIndex: floorIndex));
+      return id;
+    }
+
+    final aId = resolve(aWorld);
+    final bId = resolve(bWorld);
+    if (aId == bId) return; // both snapped to the same node — nothing to add
+    final edge = NetEdge(id: _id('e'), fromId: aId, toId: bId, service: svc);
+    _commit(Network(nodes: nodes, edges: [...state.network.edges, edge]));
+  }
+
+  /// Drop a FITTING — a bare junction ([NodeRole.main]) — at [world]. Records
+  /// one undo step.
+  void addFitting(String sheetId, int floorIndex, Offset world) {
+    final node = NetNode(
+      id: _id('n'),
+      sheetId: sheetId,
+      x: world.dx,
+      y: world.dy,
+      floorIndex: floorIndex,
+    );
+    _commit(Network(
+      nodes: [...state.network.nodes, node],
+      edges: state.network.edges,
+    ));
+  }
+
+  /// Drop a TERMINAL — a [NodeRole.fixture] node, optionally carrying a
+  /// [fixture] so it bears demand — at [world]. Records one undo step.
+  void addTerminal(
+    String sheetId,
+    int floorIndex,
+    Offset world, {
+    PlumbingFixture? fixture,
+  }) {
+    final node = NetNode(
+      id: _id('n'),
+      sheetId: sheetId,
+      x: world.dx,
+      y: world.dy,
+      floorIndex: floorIndex,
+      role: NodeRole.fixture,
+      fixture: fixture,
+    );
+    _commit(Network(
+      nodes: [...state.network.nodes, node],
+      edges: state.network.edges,
+    ));
+  }
+
+  /// Call at the END of a node drag: if the node now lands within
+  /// [snapRadiusWorld] of ANOTHER node on the same sheet/floor, MERGE the two —
+  /// re-point every edge that referenced the dragged node to the target, drop
+  /// the dragged node, and drop any edge that became a self-loop (zero length).
+  /// This is how a dragged segment endpoint "connects/snaps to a fitting".
+  /// Records one undo step (pair with [pushUndoSnapshot]/[moveNode] live drag).
+  void endNodeDragWithSnap(String nodeId, double snapRadiusWorld) {
+    final dragged = state.network.nodeById(nodeId);
+    if (dragged == null) return;
+
+    // Nearest OTHER node on the same sheet/floor within the snap radius.
+    final r2 = snapRadiusWorld * snapRadiusWorld;
+    String? targetId;
+    var best = r2;
+    for (final n in state.network.nodes) {
+      if (n.id == nodeId) continue;
+      if (n.sheetId != dragged.sheetId || n.floorIndex != dragged.floorIndex) {
+        continue;
+      }
+      final dx = n.x - dragged.x;
+      final dy = n.y - dragged.y;
+      final d2 = dx * dx + dy * dy;
+      if (d2 <= best) {
+        best = d2;
+        targetId = n.id;
+      }
+    }
+    if (targetId == null) return; // nothing to snap to
+
+    final target = targetId;
+    // Re-point edges, dropping self-loops left by the merge.
+    final edges = <NetEdge>[];
+    for (final e in state.network.edges) {
+      final from = e.fromId == nodeId ? target : e.fromId;
+      final to = e.toId == nodeId ? target : e.toId;
+      if (from == to) continue; // collapsed self-loop — drop it
+      edges.add(
+          (from == e.fromId && to == e.toId) ? e : e.copyWith(fromId: from, toId: to));
+    }
+    final nodes = state.network.nodes.where((n) => n.id != nodeId).toList();
+    _commit(Network(nodes: nodes, edges: edges));
   }
 
   /// Copy every horizontal RUN (and the nodes it touches) on

@@ -16,7 +16,7 @@ void main() {
     // current sheet name shows in BOTH the rail and the page watermark
     expect(find.text('Ground Floor'), findsWidgets);
     // app chrome
-    expect(find.text('MechX'), findsOneWidget);
+    expect(find.text('iSystem'), findsOneWidget);
   });
 
   testWidgets('clicking a sheet in the rail switches the canvas', (tester) async {

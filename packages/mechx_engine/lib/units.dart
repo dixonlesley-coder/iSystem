@@ -85,3 +85,71 @@ extension type const Roughness(double meters) {
 
   double get inMillimeters => meters * 1000.0;
 }
+
+// ---------------------------------------------------------------------------
+// Electrical quantities (the "E" domain — PUIL / IEC sizing).
+//
+// Same guardrail as the mechanical quantities above: stored in SI base units,
+// constructed from / displayed in engineering units only at the boundary.
+// Real (active) power reuses the existing [Power] (W); the electrical types
+// below add the dimensions that have no mechanical analogue. Keeping apparent
+// power (VA), reactive power (var) and active power (W) as *distinct* types
+// means a kVA can never be silently summed with a kW.
+// ---------------------------------------------------------------------------
+
+/// Electric current in amperes (A). Design/load current `Ib`, breaker rating
+/// `In`, full-load amps; fault levels are quoted in kA.
+extension type const Current(double amperes) {
+  /// From milliamperes (e.g. RCD trip thresholds: 30 mA).
+  static Current milliamperes(double mA) => Current(mA / 1000.0);
+
+  /// From kiloamperes (e.g. prospective short-circuit current).
+  static Current kiloamperes(double kA) => Current(kA * 1000.0);
+
+  double get inMilliamperes => amperes * 1000.0;
+  double get inKiloamperes => amperes / 1000.0;
+}
+
+/// Electric potential in volts (V). Phase/line voltage, MV supply.
+extension type const Voltage(double volts) {
+  /// From kilovolts (e.g. 20 kV MV supply).
+  static Voltage kilovolts(double kV) => Voltage(kV * 1000.0);
+
+  double get inKilovolts => volts / 1000.0;
+}
+
+/// Apparent power in volt-amperes (VA). Distinct from [Power] (W, active) so a
+/// kVA can't be confused with a kW. Transformer / supply / daya tersambung.
+extension type const ApparentPower(double voltAmperes) {
+  /// From kilovolt-amperes (kVA).
+  static ApparentPower kilovoltAmperes(double kVA) =>
+      ApparentPower(kVA * 1000.0);
+
+  double get inKilovoltAmperes => voltAmperes / 1000.0;
+}
+
+/// Reactive power in volt-amperes reactive (var). Power-factor correction.
+extension type const ReactivePower(double voltAmperesReactive) {
+  /// From kilovar (kvar) — capacitor-bank steps.
+  static ReactivePower kilovar(double kvar) =>
+      ReactivePower(kvar * 1000.0);
+
+  double get inKilovar => voltAmperesReactive / 1000.0;
+}
+
+/// Electrical resistance / impedance magnitude in ohms (Ω). Conductor
+/// resistance, earth-fault loop impedance `Zs`, source impedance.
+extension type const Resistance(double ohms) {
+  /// From milliohms (conductor / loop impedances are typically small).
+  static Resistance milliohms(double mOhm) => Resistance(mOhm / 1000.0);
+
+  double get inMilliohms => ohms * 1000.0;
+}
+
+/// Energy in joules (J). Daily consumption, battery autonomy; quoted in kWh.
+extension type const Energy(double joules) {
+  /// From kilowatt-hours (1 kWh = 3.6 MJ).
+  static Energy kilowattHours(double kWh) => Energy(kWh * 3.6e6);
+
+  double get inKilowattHours => joules / 3.6e6;
+}
