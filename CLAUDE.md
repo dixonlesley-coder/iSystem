@@ -233,12 +233,19 @@ report export**; versioned `.mechx` save/open with viewport restore;
   (`ui/shell/nav_rail.dart`): DESIGN (Plan/Schematic/Electrical, still driven by
   `workspaceViewProvider`) · Review · Commercial · pinned Projects/Preferences,
   replacing the top-bar view switch (`ShellSection`).
-  Remaining (**next, the user-spec'd convergence**): ONE shared calibrated **PDF
-  substrate with per-discipline layers** (plumbing · HVAC · electrical); an electrical
-  **Layout** view (place panels/loads on the PDF → **cable length from geometry**,
-  multi-floor, zoom-out auto-compact) as a co-equal projection of the *same* model as
-  Single-line (add a node in either view → it appears in both — positions differ, identity/topology shared);
-  mechanical **parity + a vertical riser-placement/sizing mode**. Plus **Wave 4b**
+  **iOS / Apple-HIG visual polish landed** (token refresh in `ui/theme/design_tokens.dart`
+  — systemBlue accent, grouped backgrounds + label tiers + hairline separators, continuous
+  radii, soft `MechXShadow`, SF-like Roboto scale; `MechXButton` = the iOS filled/tinted
+  hierarchy), token-driven so it propagates app-wide. **Electrical Layout view landed**
+  (`ui/electrical/electrical_layout_view.dart`, a 3rd `_Tab.layout`): the calibrated **PDF
+  floor plan as canvas** with panels/loads placed on it → **cable length from geometry**
+  (`electricalResultProvider` threads the mechanical `projectControllerProvider`'s
+  `calibrations`+`building` into `computeSystem`; placed→geo, unplaced→manual, default
+  byte-identical), a co-equal projection of the *same* model as Single-line (add/move/delete
+  in either → both update), an **unplaced tray**, **multi-floor** sheet selector, zoom-LOD,
+  and an "Electrical layer" chip.
+  Remaining (**next**): the shared-substrate **layer switcher** (plumbing · HVAC · electrical
+  on ONE canvas) + the mechanical **vertical riser-placement/sizing mode**. Plus **Wave 4b**
   (electrical drawings/SLD-GA-one-line export + commercial UI + workflow/i18n), the two
   deferred sizing-mutating folds (busbar withstand · harmonics neutral oversize), the
   per-segment material→hydraulic-solve fold, and the full catalogue dataset.
