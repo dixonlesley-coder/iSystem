@@ -210,12 +210,23 @@ report export**; versioned `.mechx` save/open with viewport restore;
   that round-trip in `.mechx` — the `computeSystem`/`computePanel` core untouched.
   An **MEP materials catalog** (`standards/pipe_products.dart` PPR/PVC/cast-iron/
   acoustic-PVC/HDPE + `standards/duct_products.dart` BJLS auto-thickness + PU)
-  backs the upcoming mechanical canvas. Remaining: **Wave 4 (UI)** — the
-  electrical canvas editor + a mechanical **drag-and-drop palette** (pipe
-  segments/fittings/ducts with materials, drag-to-resize+snap, right-click size
-  in inches) sharing one interaction language, + electrical drawings/export +
-  commercial UI + workflow/i18n; plus the two deferred sizing-mutating folds
-  (busbar withstand · harmonics neutral oversize) and the full catalogue dataset.
+  backs the mechanical canvas. **Wave 4 (UI) — the two canvas editors landed**
+  (one shared direct-manipulation language): the **mechanical drag-drop canvas**
+  (`ui/canvas/segment_palette.dart` + `drop_overlay.dart` + `edge_context_menu.dart`)
+  — drag pipe-segment/fitting/terminal/duct cards onto the calibrated canvas,
+  drag edge endpoints to resize+snap to fittings (`endNodeDragWithSnap`), right-
+  click to set **nominal size in inches** (NPS ladder → additive `NetEdge.sizeOverride`,
+  honoured by `autoSizeNetwork(sizeOverrides:)` via continuity v=Q/A) or pick a
+  pipe/duct **material** (`NetEdge.pipeProduct`/`ductProduct`, `.mechx`-persisted);
+  and the **electrical canvas editor** (`ui/electrical/electrical_view.dart`) —
+  `Draggable<LoadKind>` palette → panel `DragTarget` (`addCircuit`), double-click
+  inspector, right-click Edit/Duplicate/Delete, add-panel/+Way, and a read-only
+  **Advanced-study** card over `electricalAdvancedProvider`. All edits route
+  through the store's field-preserving `_withProject`; calc core untouched.
+  Remaining (**Wave 4b**): electrical drawings/SLD-GA-one-line export + commercial
+  UI + workflow/i18n; plus the two deferred sizing-mutating folds (busbar
+  withstand · harmonics neutral oversize), the per-segment material→hydraulic-solve
+  fold, and the full catalogue dataset.
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),
