@@ -153,6 +153,65 @@ class ElectricalCircuit {
   bool get isFeeder =>
       loadKind == LoadKind.feeder || feedsPanelId != null;
 
+  /// Field-wise copy — every field carries through unless overridden. Purely
+  /// additive (used by the app's edit intents); the engine never mutates inputs.
+  /// Pass a `() => null` sentinel via the dedicated clear flags to null an
+  /// optional field, since a plain `null` argument means "keep".
+  ElectricalCircuit copyWith({
+    String? id,
+    String? name,
+    CircuitRole? role,
+    double? loadW,
+    double? cosPhi,
+    Length? length,
+    LoadKind? loadKind,
+    bool? isLighting,
+    double? demandFactor,
+    double? motorKw,
+    bool clearMotorKw = false,
+    int? phases,
+    bool clearPhases = false,
+    bool? lifeSafety,
+    String? cableType,
+    bool clearCableType = false,
+    String? laying,
+    double? cableOverrideMm2,
+    Current? breakerOverrideA,
+    int? groupingCountOverride,
+    PhaseLine? phaseOverride,
+    bool? busbarBreakBefore,
+    String? feedsPanelId,
+    String? sourceEquipmentId,
+    Current? flaOverrideA,
+    StarterType? starterType,
+  }) =>
+      ElectricalCircuit(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        role: role ?? this.role,
+        loadW: loadW ?? this.loadW,
+        cosPhi: cosPhi ?? this.cosPhi,
+        length: length ?? this.length,
+        loadKind: loadKind ?? this.loadKind,
+        isLighting: isLighting ?? this.isLighting,
+        demandFactor: demandFactor ?? this.demandFactor,
+        motorKw: clearMotorKw ? null : (motorKw ?? this.motorKw),
+        phases: clearPhases ? null : (phases ?? this.phases),
+        lifeSafety: lifeSafety ?? this.lifeSafety,
+        cableType: clearCableType ? null : (cableType ?? this.cableType),
+        laying: laying ?? this.laying,
+        cableOverrideMm2: cableOverrideMm2 ?? this.cableOverrideMm2,
+        breakerOverrideA: breakerOverrideA ?? this.breakerOverrideA,
+        groupingCountOverride:
+            groupingCountOverride ?? this.groupingCountOverride,
+        phaseOverride: phaseOverride ?? this.phaseOverride,
+        busbarBreakBefore: busbarBreakBefore ?? this.busbarBreakBefore,
+        feedsPanelId: feedsPanelId ?? this.feedsPanelId,
+        sourceEquipmentId: sourceEquipmentId ?? this.sourceEquipmentId,
+        flaOverrideA: flaOverrideA ?? this.flaOverrideA,
+        starterType: starterType ?? this.starterType,
+      );
+
   /// Serialize to a plain JSON map (enums by `.name`, typed quantities as raw
   /// SI doubles). Optional fields are omitted when null so a smaller file
   /// results and round-trips cleanly.
@@ -303,6 +362,58 @@ class ElectricalPanel {
     this.heatW,
     this.circuits = const [],
   });
+
+  /// Field-wise copy — every field carries through unless overridden. Purely
+  /// additive (used by the app's edit intents); the engine never mutates inputs.
+  ElectricalPanel copyWith({
+    String? id,
+    String? name,
+    String? tag,
+    bool clearTag = false,
+    ElectricalSystem? system,
+    Voltage? voltage,
+    double? ambientTempC,
+    double? groundTempC,
+    double? depthM,
+    CableInstallMethod? installMethod,
+    ConductorInsulation? insulation,
+    ConductorMaterial? material,
+    int? groupingCount,
+    double? diversityFactor,
+    String? occupancy,
+    PanelSource? sourceType,
+    String? fedByCircuitId,
+    bool clearFedByCircuitId = false,
+    bool? essential,
+    bool? upsBacked,
+    bool? submeter,
+    Power? heatW,
+    List<ElectricalCircuit>? circuits,
+  }) =>
+      ElectricalPanel(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        tag: clearTag ? null : (tag ?? this.tag),
+        system: system ?? this.system,
+        voltage: voltage ?? this.voltage,
+        ambientTempC: ambientTempC ?? this.ambientTempC,
+        groundTempC: groundTempC ?? this.groundTempC,
+        depthM: depthM ?? this.depthM,
+        installMethod: installMethod ?? this.installMethod,
+        insulation: insulation ?? this.insulation,
+        material: material ?? this.material,
+        groupingCount: groupingCount ?? this.groupingCount,
+        diversityFactor: diversityFactor ?? this.diversityFactor,
+        occupancy: occupancy ?? this.occupancy,
+        sourceType: sourceType ?? this.sourceType,
+        fedByCircuitId:
+            clearFedByCircuitId ? null : (fedByCircuitId ?? this.fedByCircuitId),
+        essential: essential ?? this.essential,
+        upsBacked: upsBacked ?? this.upsBacked,
+        submeter: submeter ?? this.submeter,
+        heatW: heatW ?? this.heatW,
+        circuits: circuits ?? this.circuits,
+      );
 
   /// Serialize to a plain JSON map (enums by `.name`, typed quantities as raw
   /// SI doubles).
