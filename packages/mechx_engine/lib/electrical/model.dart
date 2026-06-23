@@ -16,6 +16,7 @@ import '../standards/puil.dart'
 import '../units.dart';
 import 'control/starter.dart' show StarterType;
 import 'earthing.dart' show EarthingSystem;
+import 'geo_length.dart' show LayoutPos;
 import 'load_kind.dart' show LoadKind;
 import 'sources.dart'
     show
@@ -123,6 +124,16 @@ class ElectricalCircuit {
   /// sizing in `compute.dart` does not read it.
   final StarterType? starterType;
 
+  /// Where this circuit's LOAD sits on the calibrated PDF layout (the geo
+  /// substrate). When set — together with the panel's [ElectricalPanel.layoutPos]
+  /// — the cable run length is derived from real geometry (`resolveCircuitLength`
+  /// / `electricalCableLength`), the panel→load route. For a FEEDER the load is
+  /// the sub-panel (`feedsPanelId`), so its geo length is panel→sub-panel and
+  /// uses the target panel's [ElectricalPanel.layoutPos] rather than this field.
+  /// Null = not placed ⇒ the manual [length] is used. Additive — a different
+  /// space from any single-line canvas coordinate.
+  final LayoutPos? loadPos;
+
   const ElectricalCircuit({
     required this.id,
     required this.name,
@@ -147,6 +158,7 @@ class ElectricalCircuit {
     this.sourceEquipmentId,
     this.flaOverrideA,
     this.starterType,
+    this.loadPos,
   });
 
   /// True when this way is a feeder (explicit kind or it feeds a panel).
@@ -184,6 +196,8 @@ class ElectricalCircuit {
     String? sourceEquipmentId,
     Current? flaOverrideA,
     StarterType? starterType,
+    LayoutPos? loadPos,
+    bool clearLoadPos = false,
   }) =>
       ElectricalCircuit(
         id: id ?? this.id,
@@ -210,6 +224,7 @@ class ElectricalCircuit {
         sourceEquipmentId: sourceEquipmentId ?? this.sourceEquipmentId,
         flaOverrideA: flaOverrideA ?? this.flaOverrideA,
         starterType: starterType ?? this.starterType,
+        loadPos: clearLoadPos ? null : (loadPos ?? this.loadPos),
       );
 
   /// Serialize to a plain JSON map (enums by `.name`, typed quantities as raw
@@ -241,6 +256,7 @@ class ElectricalCircuit {
         if (sourceEquipmentId != null) 'sourceEquipmentId': sourceEquipmentId,
         if (flaOverrideA != null) 'flaOverrideA': flaOverrideA!.amperes,
         if (starterType != null) 'starterType': starterType!.name,
+        if (loadPos != null) 'loadPos': loadPos!.toJson(),
       };
 
   /// Tolerant decode: unknown enum names fall back to the field default,
@@ -274,6 +290,9 @@ class ElectricalCircuit {
             ? null
             : Current((json['flaOverrideA'] as num).toDouble()),
         starterType: _enumOrNull(StarterType.values, json['starterType']),
+        loadPos: json['loadPos'] is Map<String, dynamic>
+            ? LayoutPos.fromJson(json['loadPos'] as Map<String, dynamic>)
+            : null,
       );
 }
 
@@ -343,6 +362,16 @@ class ElectricalPanel {
   final double? x;
   final double? y;
 
+  /// Where this panel sits on the calibrated PDF layout (the geo substrate):
+  /// a sheet + floor + sheet-pixel position. When set, a placed circuit's cable
+  /// run length is derived from real geometry (panel→load), instead of the
+  /// manual circuit [ElectricalCircuit.length]. Additive — a DIFFERENT space
+  /// from the abstract single-line [x]/[y] above ([x]/[y] are schematic-canvas
+  /// world pixels; [layoutPos] is a calibrated PDF sheet/floor placement). The
+  /// engine core never reads it; the geo resolver / Layout wave do. Null = the
+  /// panel is not placed on the layout.
+  final LayoutPos? layoutPos;
+
   final List<ElectricalCircuit> circuits;
 
   const ElectricalPanel({
@@ -368,6 +397,7 @@ class ElectricalPanel {
     this.heatW,
     this.x,
     this.y,
+    this.layoutPos,
     this.circuits = const [],
   });
 
@@ -399,6 +429,8 @@ class ElectricalPanel {
     double? x,
     double? y,
     bool clearPosition = false,
+    LayoutPos? layoutPos,
+    bool clearLayoutPos = false,
     List<ElectricalCircuit>? circuits,
   }) =>
       ElectricalPanel(
@@ -425,6 +457,7 @@ class ElectricalPanel {
         heatW: heatW ?? this.heatW,
         x: clearPosition ? null : (x ?? this.x),
         y: clearPosition ? null : (y ?? this.y),
+        layoutPos: clearLayoutPos ? null : (layoutPos ?? this.layoutPos),
         circuits: circuits ?? this.circuits,
       );
 
@@ -453,6 +486,7 @@ class ElectricalPanel {
         if (heatW != null) 'heatW': heatW!.watts,
         if (x != null) 'x': x,
         if (y != null) 'y': y,
+        if (layoutPos != null) 'layoutPos': layoutPos!.toJson(),
         'circuits': [for (final c in circuits) c.toJson()],
       };
 
@@ -502,6 +536,9 @@ class ElectricalPanel {
             : Power((json['heatW'] as num).toDouble()),
         x: (json['x'] as num?)?.toDouble(),
         y: (json['y'] as num?)?.toDouble(),
+        layoutPos: json['layoutPos'] is Map<String, dynamic>
+            ? LayoutPos.fromJson(json['layoutPos'] as Map<String, dynamic>)
+            : null,
         circuits: [
           for (final c in (json['circuits'] as List? ?? const []))
             ElectricalCircuit.fromJson(c as Map<String, dynamic>),
