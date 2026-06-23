@@ -28,7 +28,7 @@ import 'update_check.dart';
 /// current release's feed without hard-coding a version. Keep the owner/repo in
 /// sync with the release workflow (it writes the URL from `GITHUB_REPOSITORY`).
 const String kDefaultFeedUrl =
-    'https://github.com/dixonlesley-coder/MechX/releases/latest/download/latest.json';
+    'https://github.com/dixonlesley-coder/iSystem/releases/latest/download/latest.json';
 
 /// How long to wait on any single network call before treating it as offline.
 const Duration kUpdateTimeout = Duration(seconds: 15);

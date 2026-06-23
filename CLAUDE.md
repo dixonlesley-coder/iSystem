@@ -183,9 +183,22 @@ report export**; versioned `.mechx` save/open with viewport restore;
   (`sizeBusbar` + `sizeNeutralPeBars`; busbar table added to `PuilProfile`);
   **A3 part 2b** — `electrical/earthing.dart` (`EarthingSystem`/`RcdType`,
   `recommendedRcdType`, `sizeGrounding` cable make-up, `computeEarthing`,
-  `circuitRcd`). A3 sizing primitives complete. Next: the **A4 panel/system
-  orchestrator** (feeder tree + demand aggregation + busbar section split), then
-  the **A5 unified MEP-equipment → load-list feed**.
+  `circuitRcd`); **A4** — `electrical/{model,panel_results,compute}.dart`: the
+  `ElectricalProject`/`Panel`/`Circuit` model (circuit carries the A5 link fields
+  `sourceEquipmentId`/`flaOverrideA`) + `computePanel`/`computeSystem` (per-circuit
+  sizing, phase balance, incomer/busbar + section split, bottom-up diversified
+  demand over the feeder tree with cycle detection, cumulative voltage drop,
+  earthing). A4 advanced passes (fault/PF/transformer/sources/arc-flash/harmonics/
+  containment/enclosure/occupancy/metering/SPD/lightning) are **deferred to A8**.
+  Next: **A5** (MEP pump/fan duty → electrical load list, deriving FLA), **A6**
+  (`.mechx` electrical sub-model + version bump), **A7** (Flutter Electrical UI).
+- **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
+  (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
+  → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),
+  and an offline-tolerant in-app updater in `lib/update/` (Riverpod + a
+  MechXTheme banner). Version source of truth = `pubspec.yaml`. The web env has
+  no Flutter SDK — a `.claude/` SessionStart hook installs Flutter 3.44.3 so the
+  gate runs; `flutter build windows`/`iscc` only run on the Windows CI runner.
 - Native PDF *drawing* export (DXF drawing export and the Markdown calc report
   are done; both convert to PDF externally).
 - Multi-select / copy-paste / measurement-annotation; per-outlet roof-area UI
