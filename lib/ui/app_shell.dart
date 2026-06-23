@@ -9,6 +9,8 @@ import '../data/pdf_import.dart';
 import '../data/project_document.dart';
 import '../data/recovery.dart';
 import '../store/app_state.dart';
+import '../update/update_banner.dart';
+import '../update/version_label.dart';
 import '../store/project_store.dart';
 import '../store/sheets_store.dart';
 import 'canvas/sheet_canvas.dart';
@@ -27,38 +29,46 @@ class AppShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return ColoredBox(
-      color: colors.background,
-      child: SafeArea(
-        child: Column(
-          children: [
-            const _TopBar(),
-            Container(height: 1, color: colors.border),
-            const _RecoveryBanner(),
-            const _ErrorBanner(),
-            Expanded(
-              child: Row(
-                children: [
-                  const SheetRail(),
-                  Container(width: 1, color: colors.border),
-                  Expanded(
-                    child: Consumer(
-                      builder: (context, ref, _) =>
-                          ref.watch(showSchematicProvider)
-                              ? const SchematicView()
-                              : const SheetCanvas(),
-                    ),
+    // The shell laid out exactly as before, with the auto-update banner stacked
+    // on top as a non-layout overlay (renders nothing when idle/offline/no
+    // update, so the golden screenshots stay byte-identical).
+    return Stack(
+      children: [
+        ColoredBox(
+          color: colors.background,
+          child: SafeArea(
+            child: Column(
+              children: [
+                const _TopBar(),
+                Container(height: 1, color: colors.border),
+                const _RecoveryBanner(),
+                const _ErrorBanner(),
+                Expanded(
+                  child: Row(
+                    children: [
+                      const SheetRail(),
+                      Container(width: 1, color: colors.border),
+                      Expanded(
+                        child: Consumer(
+                          builder: (context, ref, _) =>
+                              ref.watch(showSchematicProvider)
+                                  ? const SchematicView()
+                                  : const SheetCanvas(),
+                        ),
+                      ),
+                      Container(width: 1, color: colors.border),
+                      const ProjectPanel(),
+                    ],
                   ),
-                  Container(width: 1, color: colors.border),
-                  const ProjectPanel(),
-                ],
-              ),
+                ),
+                Container(height: 1, color: colors.border),
+                const _StatusBar(),
+              ],
             ),
-            Container(height: 1, color: colors.border),
-            const _StatusBar(),
-          ],
+          ),
         ),
-      ),
+        const UpdateBannerOverlay(),
+      ],
     );
   }
 }
@@ -310,6 +320,9 @@ class _StatusBar extends ConsumerWidget {
                       style: caption.copyWith(color: colors.textMuted),
                     ),
                   ),
+                  // App version (hidden in tests — no platform channel — so
+                  // the golden screenshots stay byte-identical).
+                  const VersionLabel(),
                 ],
               ),
             ),
