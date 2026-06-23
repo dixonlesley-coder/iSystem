@@ -1,0 +1,525 @@
+/// The UNIFIED Layout canvas — the convergence piece. ONE pannable/zoomable PDF
+/// sheet (the shared substrate), with the plumbing, HVAC and electrical
+/// disciplines drawn as LAYERS on it. A layer switcher picks the ACTIVE
+/// (editable) discipline; the others render faded for coordination (or are
+/// hidden when toggled off).
+///
+/// "Same PDF, work on it at different layers": the active discipline's overlays
+/// are interactive (the mechanical drawing/selection/drop overlays scoped to its
+/// services, or the electrical palette-drop + drag-to-place); the faded layers
+/// are display-only.
+///
+/// It REUSES the mechanical [CanvasView] + sheet content + the mechanical
+/// overlays (driving the shared `sheetsControllerProvider` viewport, so the
+/// electrical layer rides the SAME pan/zoom), and the electrical-on-PDF
+/// rendering ([ElectricalLayoutLayer]). The electrical edit overlays (the
+/// circuit inspector + context menus) are hosted here, mirroring the standalone
+/// electrical view.
+///
+/// Styled with MechXTheme — no Material.
+library;
+
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/load_kind.dart';
+
+import '../../store/calibration_store.dart';
+import '../../store/electrical_store.dart';
+import '../../store/history_store.dart';
+import '../../store/layer_store.dart';
+import '../../store/network_store.dart';
+import '../../store/project_store.dart';
+import '../../store/selection_store.dart';
+import '../../store/sheets_store.dart';
+import '../../store/solve_store.dart';
+import '../canvas/calibration_overlay.dart';
+import '../canvas/canvas_view.dart';
+import '../canvas/drawing_overlay.dart';
+import '../canvas/drop_overlay.dart';
+import '../canvas/heatmap_layer.dart';
+import '../canvas/network_layer.dart';
+import '../canvas/selection_overlay.dart';
+import '../canvas/sheet_canvas.dart' show sheetContentBuilderProvider;
+import '../canvas/viewport.dart';
+import '../electrical/electrical_inspector.dart';
+import '../theme/design_tokens.dart';
+import '../theme/mechx_theme.dart';
+import 'electrical_layer.dart';
+import 'layer_switcher.dart';
+
+/// The unified Layout workspace: a top bar (layer switcher + sheet/floor
+/// selector) over the shared-substrate canvas, with the electrical edit overlays
+/// hosted on top.
+class LayoutCanvas extends ConsumerStatefulWidget {
+  const LayoutCanvas({super.key});
+
+  @override
+  ConsumerState<LayoutCanvas> createState() => _LayoutCanvasState();
+}
+
+class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
+  /// The electrical circuit/panel open in the inspector / a context menu.
+  ElectricalEditTarget? _editing;
+  ElectricalPanelMenuTarget? _panelMenu;
+  ElectricalEditTarget? _circuitMenu;
+  Offset _menuAt = Offset.zero;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Focus(
+      canRequestFocus: false,
+      onKeyEvent: (_, event) => _onKey(event),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ColoredBox(
+              color: colors.canvas,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const _LayoutTopBar(),
+                  Container(height: 1, color: colors.border),
+                  Expanded(child: _SharedSheet(host: this)),
+                ],
+              ),
+            ),
+          ),
+          // Electrical edit overlays (scrim + menus + inspector), hosted here.
+          if (_editing != null || _panelMenu != null || _circuitMenu != null)
+            Positioned.fill(
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (_) => _closeOverlays(),
+                child: const SizedBox.expand(),
+              ),
+            ),
+          if (_circuitMenu != null) _buildCircuitMenu(),
+          if (_panelMenu != null) _buildPanelMenu(),
+          if (_editing != null) _buildInspector(),
+        ],
+      ),
+    );
+  }
+
+  // ── Electrical edit-overlay callbacks (handed to the electrical layer) ──────
+
+  ElectricalProjectController get _ctrl =>
+      ref.read(electricalProjectProvider.notifier);
+
+  Offset _toLocal(Offset global) {
+    final box = context.findRenderObject() as RenderBox?;
+    return box?.globalToLocal(global) ?? global;
+  }
+
+  Offset _canvasCenter() {
+    final box = context.findRenderObject() as RenderBox?;
+    final size = box?.size ?? const Size(800, 600);
+    return Offset(size.width / 2, size.height / 2);
+  }
+
+  void _closeOverlays() {
+    if (_editing != null || _panelMenu != null || _circuitMenu != null) {
+      setState(() {
+        _editing = null;
+        _panelMenu = null;
+        _circuitMenu = null;
+      });
+    }
+  }
+
+  void onEditPanel(String panelId) {
+    final project = ref.read(electricalProjectProvider);
+    final panel = project.panels.where((p) => p.id == panelId).firstOrNull;
+    final first =
+        panel?.circuits.where((c) => c.loadKind != LoadKind.feeder).firstOrNull;
+    if (panel != null && first != null) {
+      setState(() => _editing = ElectricalEditTarget(panelId, first.id));
+    } else {
+      onPanelMenu(panelId, _canvasCenter());
+    }
+  }
+
+  void onEditCircuit(String panelId, String circuitId) =>
+      setState(() => _editing = ElectricalEditTarget(panelId, circuitId));
+
+  void onPanelMenu(String panelId, Offset globalPos) {
+    setState(() {
+      _panelMenu = ElectricalPanelMenuTarget(panelId);
+      _circuitMenu = null;
+      _editing = null;
+      _menuAt = _toLocal(globalPos);
+    });
+  }
+
+  void onCircuitMenu(String panelId, String circuitId, Offset globalPos) {
+    setState(() {
+      _circuitMenu = ElectricalEditTarget(panelId, circuitId);
+      _panelMenu = null;
+      _editing = null;
+      _menuAt = _toLocal(globalPos);
+    });
+  }
+
+  Widget _buildCircuitMenu() => Positioned(
+        left: _menuAt.dx,
+        top: _menuAt.dy,
+        child: ElectricalCircuitMenu(
+          target: _circuitMenu!,
+          controller: _ctrl,
+          onEdit: () => setState(() {
+            _editing = _circuitMenu;
+            _circuitMenu = null;
+          }),
+          onDone: () => setState(() => _circuitMenu = null),
+        ),
+      );
+
+  Widget _buildPanelMenu() {
+    final menu = _panelMenu!;
+    final project = ref.read(electricalProjectProvider);
+    final panel =
+        project.panels.where((p) => p.id == menu.panelId).firstOrNull;
+    if (panel == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      left: _menuAt.dx,
+      top: _menuAt.dy,
+      child: ElectricalPanelMenu(
+        panel: panel,
+        controller: _ctrl,
+        onOpen: () {
+          final first = panel.circuits
+              .where((c) => c.loadKind != LoadKind.feeder)
+              .firstOrNull;
+          setState(() {
+            _panelMenu = null;
+            if (first != null) {
+              _editing = ElectricalEditTarget(panel.id, first.id);
+            }
+          });
+        },
+        onDone: () => setState(() => _panelMenu = null),
+      ),
+    );
+  }
+
+  Widget _buildInspector() {
+    final target = _editing!;
+    final project = ref.watch(electricalProjectProvider);
+    final panel =
+        project.panels.where((p) => p.id == target.panelId).firstOrNull;
+    final circuit =
+        panel?.circuits.where((c) => c.id == target.circuitId).firstOrNull;
+    if (panel == null || circuit == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      top: 0,
+      right: 0,
+      bottom: 0,
+      child: ElectricalCircuitInspector(
+        key: ValueKey('${target.panelId}/${target.circuitId}'),
+        panel: panel,
+        circuit: circuit,
+        controller: _ctrl,
+        onClose: _closeOverlays,
+      ),
+    );
+  }
+
+  // ── Keyboard (delete / undo / redo / escape), shared with the Plan canvas ───
+
+  KeyEventResult _onKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    final mod = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+
+    if (mod && key == LogicalKeyboardKey.keyZ && !shift) {
+      ref.read(historyProvider.notifier).undo();
+      return KeyEventResult.handled;
+    }
+    if (mod &&
+        ((key == LogicalKeyboardKey.keyZ && shift) ||
+            key == LogicalKeyboardKey.keyY)) {
+      ref.read(historyProvider.notifier).redo();
+      return KeyEventResult.handled;
+    }
+
+    // Delete only acts on the mechanical selection (the active mechanical layer).
+    final activeMechanical =
+        ref.read(activeDisciplineProvider).isMechanical;
+    if (activeMechanical &&
+        (key == LogicalKeyboardKey.delete ||
+            key == LogicalKeyboardKey.backspace)) {
+      final sel = ref.read(selectionProvider);
+      if (sel.isEmpty) return KeyEventResult.ignored;
+      final net = ref.read(networkControllerProvider.notifier);
+      if (sel.isNode) {
+        net.deleteNode(sel.nodeId!);
+      } else if (sel.isEdge) {
+        net.deleteEdge(sel.edgeId!);
+      }
+      ref.read(selectionProvider.notifier).clear();
+      return KeyEventResult.handled;
+    }
+
+    if (key == LogicalKeyboardKey.escape) {
+      if (_editing != null || _panelMenu != null || _circuitMenu != null) {
+        _closeOverlays();
+        return KeyEventResult.handled;
+      }
+      if (ref.read(calibrationControllerProvider).isActive) {
+        ref.read(calibrationControllerProvider.notifier).cancel();
+        return KeyEventResult.handled;
+      }
+      if (ref.read(networkControllerProvider).pendingPoint != null) {
+        ref.read(networkControllerProvider.notifier).cancelPending();
+        return KeyEventResult.handled;
+      }
+      if (!ref.read(selectionProvider).isEmpty) {
+        ref.read(selectionProvider.notifier).clear();
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Top bar: the layer switcher + the sheet/floor selector.
+// ════════════════════════════════════════════════════════════════════════════
+
+class _LayoutTopBar extends ConsumerWidget {
+  const _LayoutTopBar();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final sheets = ref.watch(sheetsControllerProvider);
+    final levelCount = ref.watch(projectControllerProvider).building.levelCount;
+    final current = sheets.current;
+
+    // Sheet switching lives in the flanking sheet rail (the same multi-sheet
+    // rail the mechanical canvas uses); this bar carries the LAYER switcher and
+    // the active sheet / floor context. The switcher scrolls horizontally and
+    // the trailing context truncates, so the bar never overflows on a narrow
+    // canvas column.
+    return Container(
+      color: colors.surface,
+      padding: const EdgeInsets.symmetric(
+          horizontal: MechXSpacing.md, vertical: MechXSpacing.xs + 2),
+      child: Row(
+        children: [
+          Flexible(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: const LayerSwitcher(),
+            ),
+          ),
+          const SizedBox(width: MechXSpacing.sm),
+          if (current != null)
+            Flexible(
+              child: Text(
+                '${current.name}  ·  Floor '
+                '${sheets.floorFor(current.id, levelCount) + 1} of $levelCount',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+                style: type.caption.copyWith(color: colors.textMuted),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// The shared sheet: ONE CanvasView + the mechanical overlays (layer-filtered) +
+// the electrical layer, all on the same `sheetsControllerProvider` viewport.
+// ════════════════════════════════════════════════════════════════════════════
+
+class _SharedSheet extends ConsumerWidget {
+  final _LayoutCanvasState host;
+  const _SharedSheet({required this.host});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final sheetsState = ref.watch(sheetsControllerProvider);
+    final sheet = sheetsState.current;
+
+    if (sheet == null) {
+      return ColoredBox(
+        color: colors.canvas,
+        child: Center(
+          child: Text('No sheet loaded',
+              style: context.type.body.copyWith(color: colors.textMuted)),
+        ),
+      );
+    }
+
+    final content = ref.watch(sheetContentBuilderProvider)(context, sheet);
+    final calibrating = ref.watch(calibrationControllerProvider).isActive;
+    final drawing = ref.watch(networkControllerProvider).isDrawing;
+    final showHeatmap = ref.watch(showHeatmapProvider);
+    final calibrated =
+        ref.watch(projectControllerProvider).calibrationFor(sheet.id) != null;
+
+    final levelCount = ref.watch(projectControllerProvider).building.levelCount;
+    final floorIndex = sheetsState.floorFor(sheet.id, levelCount);
+
+    final active = ref.watch(activeDisciplineProvider);
+    final visible = ref.watch(layerVisibilityProvider);
+    final mechanicalActive = active.isMechanical;
+    final electricalActive = active == DisciplineLayer.electrical;
+    final electricalVisible = visible.contains(DisciplineLayer.electrical);
+    // Any mechanical layer visible? (Plumbing or HVAC.)
+    final mechanicalVisible = visible.contains(DisciplineLayer.plumbing) ||
+        visible.contains(DisciplineLayer.hvac);
+
+    // The shared viewport transform (persisted per-sheet) is what the electrical
+    // layer reads, so both disciplines ride the SAME pan/zoom.
+    final vt = sheetsState.viewportFor(sheet.id) ?? const ViewportTransform();
+
+    return Stack(
+      children: [
+        // The PDF sheet, pannable/zoomable — drives the shared viewport.
+        Positioned.fill(
+          child: CanvasView(
+            key: ValueKey('layout-shared-${sheet.id}'),
+            contentSize: sheet.sizePx,
+            initialTransform: sheetsState.viewportFor(sheet.id),
+            background: colors.canvas,
+            onTransformChanged: (t) => ref
+                .read(sheetsControllerProvider.notifier)
+                .setViewport(sheet.id, t),
+            child: content,
+          ),
+        ),
+        // Heatmap (mechanical solve) — only when a mechanical layer is visible.
+        if (showHeatmap && mechanicalVisible)
+          Positioned.fill(
+            child: HeatmapLayer(
+              sheetId: sheet.id,
+              floorIndex: floorIndex,
+              contentSize: sheet.sizePx,
+            ),
+          ),
+        // Mechanical network — layer-filtered (faded/hidden per discipline).
+        if (mechanicalVisible)
+          Positioned.fill(
+            child: NetworkLayer(
+              sheetId: sheet.id,
+              floorIndex: floorIndex,
+              layerFiltered: true,
+            ),
+          ),
+        // Electrical layer — interactive when active, faded when a coordination
+        // layer, hidden when toggled off.
+        if (electricalVisible)
+          Positioned.fill(
+            child: ElectricalLayoutLayer(
+              transform: vt,
+              sheetId: sheet.id,
+              floorIndex: floorIndex,
+              interactive: electricalActive,
+              onEditPanel: host.onEditPanel,
+              onEditCircuit: host.onEditCircuit,
+              onPanelMenu: host.onPanelMenu,
+              onCircuitMenu: host.onCircuitMenu,
+            ),
+          ),
+        // Mechanical drawing / drop / selection overlays — ONLY when a mechanical
+        // layer is active (so editing routes to the active discipline).
+        if (mechanicalActive && drawing)
+          Positioned.fill(
+            child: DrawingOverlay(
+              sheetId: sheet.id,
+              floorIndex: floorIndex,
+              levelCount: levelCount,
+            ),
+          ),
+        if (mechanicalActive && !drawing && !calibrating)
+          Positioned.fill(
+            child: DropOverlay(sheetId: sheet.id, floorIndex: floorIndex),
+          ),
+        if (mechanicalActive && !drawing && !calibrating)
+          Positioned.fill(
+            child: NetworkSelectionOverlay(
+              sheetId: sheet.id,
+              floorIndex: floorIndex,
+            ),
+          ),
+        if (calibrating)
+          Positioned.fill(child: CalibrationOverlay(sheetId: sheet.id)),
+        // First-run calibrate nudge.
+        if (!calibrated && !calibrating)
+          const Positioned(
+            top: MechXSpacing.md,
+            left: 0,
+            right: 0,
+            child: Center(child: _CalibrateHint()),
+          ),
+      ],
+    );
+  }
+}
+
+/// A small tappable nudge over an uncalibrated sheet — starts scale calibration.
+class _CalibrateHint extends ConsumerWidget {
+  const _CalibrateHint();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => ref.read(calibrationControllerProvider.notifier).start(),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: MechXSpacing.sm + 2,
+            vertical: MechXSpacing.xs + 1,
+          ),
+          decoration: BoxDecoration(
+            color: colors.surface.withAlpha(240),
+            borderRadius: MechXRadii.control,
+            border: Border.all(color: colors.warning),
+            boxShadow: const [
+              BoxShadow(
+                  color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 7,
+                height: 7,
+                margin: const EdgeInsets.only(right: MechXSpacing.xs),
+                decoration: BoxDecoration(
+                  color: colors.warning,
+                  borderRadius: const BorderRadius.all(Radius.circular(4)),
+                ),
+              ),
+              Text(
+                'Set drawing scale to measure runs',
+                style: type.label.copyWith(color: colors.textPrimary),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

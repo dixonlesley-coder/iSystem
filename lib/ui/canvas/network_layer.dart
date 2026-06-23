@@ -7,6 +7,7 @@ import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 
+import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
@@ -20,11 +21,27 @@ const Color _kSelection = Color(0xFF4C8DFF);
 /// Always-on render of the drawn network for the current sheet/floor, painted
 /// in screen space via the sheet's viewport transform. Pointer-transparent so
 /// the canvas keeps panning/zooming underneath.
+///
+/// On the unified Layout canvas it is layer-aware: pass [layerFiltered] so each
+/// edge/node is drawn only when its discipline ([disciplineOf]) is visible, and
+/// faded ([fadedDisciplines]) when its discipline isn't the active one. The
+/// plain mechanical Plan leaves both unset → every service drawn full-opacity
+/// (unchanged behaviour).
 class NetworkLayer extends ConsumerWidget {
   final String sheetId;
   final int floorIndex;
 
-  const NetworkLayer({super.key, required this.sheetId, required this.floorIndex});
+  /// When true, the painter honours the discipline visibility / fade sets below
+  /// (the unified canvas). When false (the legacy Plan), all services draw at
+  /// full opacity.
+  final bool layerFiltered;
+
+  const NetworkLayer({
+    super.key,
+    required this.sheetId,
+    required this.floorIndex,
+    this.layerFiltered = false,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -35,6 +52,15 @@ class NetworkLayer extends ConsumerWidget {
         ? ref.watch(sizingProvider)
         : const <String, EdgeSizing>{};
     final selection = ref.watch(selectionProvider);
+
+    // Layer filtering (unified canvas only).
+    Set<DisciplineLayer> visible = DisciplineLayer.values.toSet();
+    DisciplineLayer? active;
+    if (layerFiltered) {
+      visible = ref.watch(layerVisibilityProvider);
+      active = ref.watch(activeDisciplineProvider);
+    }
+
     return IgnorePointer(
       child: CustomPaint(
         size: Size.infinite,
@@ -46,11 +72,18 @@ class NetworkLayer extends ConsumerWidget {
           sizing: sizing,
           selectedNodeId: selection.nodeId,
           selectedEdgeId: selection.edgeId,
+          layerFiltered: layerFiltered,
+          visibleDisciplines: visible,
+          activeDiscipline: active,
         ),
       ),
     );
   }
 }
+
+/// Opacity applied to a service whose discipline is visible but not the active
+/// (editable) layer — ghosted for coordination, not for editing.
+const double _kFadedAlpha = 0.28;
 
 class _NetworkPainter extends CustomPainter {
   final Network net;
@@ -61,6 +94,12 @@ class _NetworkPainter extends CustomPainter {
   final String? selectedNodeId;
   final String? selectedEdgeId;
 
+  /// Discipline-layer filtering (unified canvas). When [layerFiltered] is false
+  /// the other two fields are ignored and every service draws full-opacity.
+  final bool layerFiltered;
+  final Set<DisciplineLayer> visibleDisciplines;
+  final DisciplineLayer? activeDiscipline;
+
   _NetworkPainter({
     required this.net,
     required this.sheetId,
@@ -69,9 +108,47 @@ class _NetworkPainter extends CustomPainter {
     required this.sizing,
     required this.selectedNodeId,
     required this.selectedEdgeId,
+    this.layerFiltered = false,
+    this.visibleDisciplines = const {},
+    this.activeDiscipline,
   });
 
   bool _onThisFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
+
+  /// Whether a service's discipline should be drawn at all (visibility).
+  bool _serviceVisible(ServiceType s) =>
+      !layerFiltered || visibleDisciplines.contains(disciplineOf(s));
+
+  /// The opacity multiplier for a service: 1.0 when not layer-filtered or when
+  /// its discipline is the active one; [_kFadedAlpha] when it's a visible-but-
+  /// inactive coordination layer.
+  double _serviceOpacity(ServiceType s) {
+    if (!layerFiltered) return 1.0;
+    return disciplineOf(s) == activeDiscipline ? 1.0 : _kFadedAlpha;
+  }
+
+  // serviceColor + the node ink/light are opaque, so scaling the 255 alpha by
+  // [opacity] is the fade (avoids the deprecated `.alpha` getter).
+  Color _fade(Color base, double opacity) =>
+      opacity >= 1.0 ? base : base.withAlpha((255 * opacity).round());
+
+  /// A node's discipline visibility/opacity is taken from the edges touching it
+  /// (a node carries no service); a node with no edge is treated as visible at
+  /// full opacity so freestanding fittings/fixtures aren't lost.
+  ({bool visible, double opacity}) _nodeLayer(NetNode n) {
+    if (!layerFiltered) return (visible: true, opacity: 1.0);
+    var visible = false;
+    var active = false;
+    var touched = false;
+    for (final e in net.edges) {
+      if (e.fromId != n.id && e.toId != n.id) continue;
+      touched = true;
+      if (visibleDisciplines.contains(disciplineOf(e.service))) visible = true;
+      if (disciplineOf(e.service) == activeDiscipline) active = true;
+    }
+    if (!touched) return (visible: true, opacity: 1.0);
+    return (visible: visible, opacity: active ? 1.0 : _kFadedAlpha);
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -79,7 +156,9 @@ class _NetworkPainter extends CustomPainter {
       final a = net.nodeById(e.fromId);
       final b = net.nodeById(e.toId);
       if (a == null || b == null) continue;
-      final color = serviceColor(e.service);
+      if (!_serviceVisible(e.service)) continue;
+      final opacity = _serviceOpacity(e.service);
+      final color = _fade(serviceColor(e.service), opacity);
 
       if (e.kind == EdgeKind.run) {
         if (!_onThisFloor(a) || !_onThisFloor(b)) continue;
@@ -105,8 +184,10 @@ class _NetworkPainter extends CustomPainter {
             ..strokeCap = StrokeCap.round
             ..style = PaintingStyle.stroke,
         );
+        // Suppress sizing labels on a faded (coordination) layer to keep the
+        // active layer's annotation readable.
         final s = sizing[e.id];
-        if (s != null) {
+        if (s != null && opacity >= 1.0) {
           String label;
           if (s.isRectangular) {
             label = '${s.width!.inMillimeters.round()}'
@@ -137,6 +218,8 @@ class _NetworkPainter extends CustomPainter {
     // Nodes on top, drawn with a role-distinct glyph and a selection ring.
     for (final n in net.nodes) {
       if (!_onThisFloor(n)) continue;
+      final layer = _nodeLayer(n);
+      if (!layer.visible) continue;
       final p = transform.worldToScreen(Offset(n.x, n.y));
       final selected = n.id == selectedNodeId;
       if (selected) {
@@ -150,15 +233,16 @@ class _NetworkPainter extends CustomPainter {
             ..style = PaintingStyle.stroke,
         );
       }
-      _nodeGlyph(canvas, p, n.role);
+      _nodeGlyph(canvas, p, n.role, layer.opacity);
     }
   }
 
   /// Draws a node glyph by role: plant = filled square (tank/pump), fixture =
-  /// hollow ring, main/junction = small filled dot.
-  void _nodeGlyph(Canvas canvas, Offset p, NodeRole role) {
-    const dark = Color(0xFF15171B);
-    const light = Color(0xFFFFFFFF);
+  /// hollow ring, main/junction = small filled dot. [opacity] fades it on a
+  /// coordination (inactive) layer.
+  void _nodeGlyph(Canvas canvas, Offset p, NodeRole role, double opacity) {
+    final dark = _fade(const Color(0xFF15171B), opacity);
+    final light = _fade(const Color(0xFFFFFFFF), opacity);
     switch (role) {
       case NodeRole.plant:
         final r = Rect.fromCenter(center: p, width: 9, height: 9);
@@ -279,5 +363,11 @@ class _NetworkPainter extends CustomPainter {
       old.sheetId != sheetId ||
       old.sizing != sizing ||
       old.selectedNodeId != selectedNodeId ||
-      old.selectedEdgeId != selectedEdgeId;
+      old.selectedEdgeId != selectedEdgeId ||
+      old.layerFiltered != layerFiltered ||
+      old.activeDiscipline != activeDiscipline ||
+      !_sameSet(old.visibleDisciplines, visibleDisciplines);
+
+  static bool _sameSet(Set<DisciplineLayer> a, Set<DisciplineLayer> b) =>
+      a.length == b.length && a.containsAll(b);
 }

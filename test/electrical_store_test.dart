@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/electrical_store.dart';
+import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
@@ -661,9 +662,11 @@ void main() {
     });
   });
 
-  group('ElectricalView Layout tab', () {
-    testWidgets('the Layout tab renders the PDF substrate + floor selector',
-        (tester) async {
+  // Electrical placement now lives on the UNIFIED Layout canvas (the Electrical
+  // discipline layer over the shared PDF), reached via the Layout design view.
+  group('unified Layout canvas — electrical layer', () {
+    testWidgets('placing a panel + selecting the Electrical layer shows the '
+        'marker on the shared sheet', (tester) async {
       setDesktopSurface(tester);
       await tester.pumpWidget(const ProviderScope(child: MechXApp()));
       await tester.pump();
@@ -672,47 +675,52 @@ void main() {
         tester.element(find.byType(MechXApp)),
         listen: false,
       );
+      // Stay on the Layout design view (the default), make Electrical the active
+      // layer, and place the sample MDP on demo sheet s1 (floor 0).
       container
-          .read(workspaceViewProvider.notifier)
-          .set(WorkspaceView.electrical);
-      await tester.pump();
-
-      // Switch to the Layout tab.
-      final layoutTab = find.text('Layout');
-      expect(layoutTab, findsOneWidget);
-      await tester.tap(layoutTab);
-      await tester.pump();
-
-      // The electrical-layer chip + the sheet rail (demo sheets) render.
-      expect(find.text('Electrical layer'), findsOneWidget);
-      expect(find.text('Ground Floor'), findsWidgets);
-      // The Loads palette is shared with the single-line canvas.
-      expect(find.text('Loads'), findsWidgets);
-    });
-
-    testWidgets('placing a panel on the layout via the store shows its marker',
-        (tester) async {
-      setDesktopSurface(tester);
-      await tester.pumpWidget(const ProviderScope(child: MechXApp()));
-      await tester.pump();
-
-      final container = ProviderScope.containerOf(
-        tester.element(find.byType(MechXApp)),
-        listen: false,
-      );
-      container
-          .read(workspaceViewProvider.notifier)
-          .set(WorkspaceView.electrical);
-      // Place the sample MDP on demo sheet s1 (the first sheet → floor 0).
+          .read(activeDisciplineProvider.notifier)
+          .set(DisciplineLayer.electrical);
       container.read(electricalProjectProvider.notifier).setPanelLayoutPos(
           'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 400, y: 300));
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
-      await tester.tap(find.text('Layout'));
+      // The layer switcher offers the three disciplines; the placed MDP marker
+      // shows on the sheet (by its tag); the Loads palette is the inspector.
+      expect(find.text('Plumbing'), findsWidgets);
+      expect(find.text('HVAC'), findsWidgets);
+      expect(find.text('Electrical'), findsWidgets);
+      expect(find.text('MDP'), findsWidgets);
+      expect(find.text('Loads'), findsWidgets);
+    });
+
+    testWidgets('a placed panel is hidden when the Electrical layer is toggled '
+        'off', (tester) async {
+      setDesktopSurface(tester);
+      await tester.pumpWidget(const ProviderScope(child: MechXApp()));
       await tester.pump();
 
-      // The placed MDP marker shows on the sheet (by its tag).
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(MechXApp)),
+        listen: false,
+      );
+      container
+          .read(activeDisciplineProvider.notifier)
+          .set(DisciplineLayer.plumbing); // electrical is now a faded layer
+      container.read(electricalProjectProvider.notifier).setPanelLayoutPos(
+          'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 400, y: 300));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      // Faded but still drawn.
       expect(find.text('MDP'), findsWidgets);
+
+      // Hide the electrical layer → its marker is gone.
+      container
+          .read(layerVisibilityProvider.notifier)
+          .toggle(DisciplineLayer.electrical);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('MDP'), findsNothing);
     });
   });
 }

@@ -33,7 +33,7 @@ void main() {
     expect(find.byType(NavRail), findsOneWidget);
     expect(find.text('DESIGN'), findsOneWidget);
     for (final label in const [
-      'Plan',
+      'Layout', // "Plan" relabelled — the unified shared-PDF canvas
       'Schematic',
       'Electrical',
       'Review',
@@ -41,7 +41,14 @@ void main() {
       'Projects',
       'Preferences',
     ]) {
-      expect(find.text(label), findsOneWidget, reason: 'rail item "$label"');
+      // Scope to the rail — labels like "Electrical" also appear in the unified
+      // Layout canvas's layer switcher.
+      expect(
+        find.descendant(
+            of: find.byType(NavRail), matching: find.text(label)),
+        findsOneWidget,
+        reason: 'rail item "$label"',
+      );
     }
   });
 
@@ -56,33 +63,29 @@ void main() {
       listen: false,
     );
 
-    // Default: design section, plan view.
+    // Default: design section, Layout view (enum value still `plan`).
     expect(container.read(shellSectionProvider), ShellSection.design);
     expect(container.read(workspaceViewProvider), WorkspaceView.plan);
 
-    // Scope to the rail subtree — labels like "Plan" can also appear elsewhere
-    // (e.g. a "Roof Plan" sheet name).
-    TextStyle styleOf(String label) => tester
-        .widget<Text>(
-          find.descendant(
-            of: find.byType(NavRail),
-            matching: find.text(label),
-          ),
-        )
-        .style!;
+    // Scope to the rail subtree — labels like "Layout"/"Electrical" also appear
+    // elsewhere (the unified canvas's layer switcher / a sheet name).
+    Finder railText(String label) =>
+        find.descendant(of: find.byType(NavRail), matching: find.text(label));
+    TextStyle styleOf(String label) =>
+        tester.widget<Text>(railText(label)).style!;
 
     // The active item reads bolder than an inactive sibling.
-    expect(styleOf('Plan').fontWeight, FontWeight.w600);
+    expect(styleOf('Layout').fontWeight, FontWeight.w600);
     expect(styleOf('Schematic').fontWeight, FontWeight.w500);
 
     // Selecting Electrical drives the workspace provider (the screenshots test
     // contract) and moves the highlight — no off-by-one onto a neighbour.
-    await tester.tap(find.text('Electrical'));
+    await tester.tap(railText('Electrical'));
     await tester.pump();
     expect(container.read(workspaceViewProvider), WorkspaceView.electrical);
     expect(container.read(shellSectionProvider), ShellSection.design);
     expect(styleOf('Electrical').fontWeight, FontWeight.w600);
-    expect(styleOf('Plan').fontWeight, FontWeight.w500);
+    expect(styleOf('Layout').fontWeight, FontWeight.w500);
   });
 
   testWidgets('switching to a non-design section changes the body',
@@ -127,7 +130,7 @@ void main() {
     // Sanity: none of the rail labels contain a non-ASCII symbol that Roboto
     // would tofu.
     for (final label in const [
-      'Plan',
+      'Layout',
       'Schematic',
       'Electrical',
       'Review',
