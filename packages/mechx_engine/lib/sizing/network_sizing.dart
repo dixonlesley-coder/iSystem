@@ -7,10 +7,17 @@
 /// trunk carries the total. This is how branching ducts / pipes / drains size
 /// correctly.
 ///
+/// LOOPS: a component with more edges than (nodes − 1) has parallel paths whose
+/// flow split a unique-path accumulation can't resolve. For PRESSURIZED and AIR
+/// services [autoSizeNetwork] balances such a ring/grid with Hardy–Cross
+/// (`hardy_cross.dart`) and sizes each edge from its share. Gravity services
+/// keep the tree path (physical drainage rings are nonsensical).
+///
 /// Pure Dart, zero Flutter imports.
 library;
 
 import '../hydraulics.dart';
+import '../network/hardy_cross.dart';
 import '../network/network.dart';
 import '../standards/sni.dart';
 import '../units.dart';
@@ -391,6 +398,68 @@ Map<String, EdgeSizing> autoSizeNetwork(
       }
       final leaves = component.where((n) => degree(n) == 1).toList();
       final root = pickRoot(component, leaves);
+
+      // ── Looped (ring/grid) PRESSURIZED or AIR component → Hardy–Cross ───────
+      // A tree has (nodes − 1) edges; more means parallel paths whose flow split
+      // the unique-path accumulation can't resolve. Balance the split with
+      // Hardy–Cross and size each edge from its share. Gravity services
+      // (drainage/vent/rainwater) keep the tree path — physical rings there are
+      // nonsensical. The resistance uses planar PIXEL length (calibration-
+      // invariant for a same-sheet loop) under a uniform-diameter first-pass
+      // assumption; risers count as short connectors. // VERIFY: a full design
+      // re-balances against the sized diameters.
+      final componentSet = component.toSet();
+      final componentEdges = net.edges
+          .where((e) =>
+              e.service == service &&
+              componentSet.contains(e.fromId) &&
+              componentSet.contains(e.toId))
+          .toList();
+      final isLooped = componentEdges.length > component.length - 1;
+      final regime = service.regime;
+      if (isLooped &&
+          (regime == FlowRegime.pressurized || regime == FlowRegime.air)) {
+        final demandFlow = <String, double>{};
+        for (final n in component) {
+          if (n == root) continue;
+          double f;
+          if (useUbap) {
+            final ubap = nodeFixtureUnits[n] ?? (degree(n) == 1 ? fuPerLeaf : 0.0);
+            f = ubap <= 0
+                ? 0.0
+                : profile
+                    .probableFlowForFixtureUnits(ubap, system: flushSystem)
+                    .cubicMetersPerSecond;
+          } else {
+            final explicit = nodeFlowDemand[n];
+            f = explicit != null
+                ? explicit.cubicMetersPerSecond
+                : (degree(n) == 1 ? demand.cubicMetersPerSecond : 0.0);
+          }
+          if (f != 0) demandFlow[n] = f;
+        }
+        final pxById = <String, double>{
+          for (final e in componentEdges)
+            e.id: () {
+              final px = runPixelLength(e, net);
+              return px > 1.0 ? px : 1.0;
+            }(),
+        };
+        final balanced = balanceFlows(
+          edges: [
+            for (final e in componentEdges)
+              (id: e.id, from: e.fromId, to: e.toId),
+          ],
+          root: root,
+          demand: demandFlow,
+          resistance: (id) => pxById[id]!,
+          exponent: regime == FlowRegime.air ? 2.0 : 1.852,
+        );
+        for (final entry in balanced.edgeFlow.entries) {
+          allFlows[entry.key] = FlowRate(entry.value.abs());
+        }
+        continue;
+      }
 
       if (isSanitary(service)) {
         // Accumulate DRAINAGE FIXTURE UNITS and size each edge from the code

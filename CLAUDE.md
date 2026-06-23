@@ -169,8 +169,12 @@ report export**; versioned `.mechx` save/open with viewport restore;
 - Multi-select / copy-paste / measurement-annotation; per-outlet roof-area UI
   for storm (rainfall intensity is tunable; roof area is a fixed default);
   user fixture libraries.
-- Looped networks: `pressure_solve` / `accumulateFlows` assume a **tree**; a
-  drawn ring main is mis-solved (Hardy-Cross is out of scope, documented).
+- Looped networks: ring/grid **pressurized & air** mains are now balanced with
+  Hardy-Cross (`network/hardy_cross.dart`) at sizing time and the balanced flows
+  feed the heatmap; the split uses planar pixel geometry under a uniform-diameter
+  first pass (a full design re-balances against the sized diameters — `// VERIFY`).
+  Gravity loops (drainage/vent/rainwater) still use the tree path (physical rings
+  there are nonsensical).
 - SNI verification debt: several values remain `verified == false` (see
   `SniProfile.verifyChecklist`) — they MUST surface as UNVERIFIED in any report.
 - App lifecycle: the root `ProviderContainer` and autosave `Timer` in `main`
@@ -179,6 +183,11 @@ report export**; versioned `.mechx` save/open with viewport restore;
 
 ## Sizing-engine invariants (don't regress)
 
+- **Looped sizing (`autoSizeNetwork`)**: a component with > (nodes − 1) edges is
+  looped; for pressurized/air services its flows are split with Hardy-Cross
+  (`balanceFlows`, length-based resistance) instead of unique-path accumulation,
+  so no ring edge wrongly carries the full load. Trees take the exact same code
+  path as before. Don't route gravity loops through Hardy-Cross.
 - **Network rooting (`autoSizeNetwork`)**: each service component is rooted at
   its *source* — a `plant`, else a non-fixture/non-demand entry leaf, else the
   busiest demand-free junction. The root's own demand never traverses an edge,

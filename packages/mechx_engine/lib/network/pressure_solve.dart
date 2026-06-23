@@ -12,14 +12,16 @@
 /// The pump must overcome both PLUS deliver a target residual at the worst
 /// (critical) node; every other node then sees ≥ that residual.
 ///
-/// TREE ASSUMPTION (documented, deliberate): the [service] subgraph is treated
-/// as acyclic and rooted at the source — each reachable node has exactly one
-/// path from the source, so friction/elevation accumulate unambiguously. A
-/// BFS that skips already-visited nodes makes any extra chord edges in a loop
-/// invisible to the solve. LOOPED networks (rings, grids) need flow-balancing
-/// (Hardy–Cross / global linear solve) to split flow between parallel paths —
-/// that is OUT OF SCOPE here. Feed this solver a distribution tree (the same
-/// shape `accumulateFlows` in the sizing layer assumes).
+/// TREE TRAVERSAL (node heads): the BFS walks a spanning tree of the [service]
+/// subgraph from the source, accumulating friction/elevation along each node's
+/// tree path; chord edges in a loop are skipped for this walk. This is exact for
+/// a tree, and stays correct for LOOPS provided the [edgeFlows] handed in are
+/// already loop-BALANCED — the sizing layer balances ring/grid pressurized & air
+/// flows with Hardy–Cross (`hardy_cross.dart`) before sizing, and the solve
+/// consumes those per-edge flows, so head loss around each loop ≈ 0 and the node
+/// head is path-independent (the tree path gives the true value). // VERIFY: the
+/// split is balanced against PIXEL geometry under a uniform-diameter first pass;
+/// a full design iterates the balance against the sized diameters.
 ///
 /// FRICTION vs STATIC LIFT — NOT double-counted. A riser edge contributes its
 /// vertical run to FRICTION via [edgeLength] (a riser's length is the

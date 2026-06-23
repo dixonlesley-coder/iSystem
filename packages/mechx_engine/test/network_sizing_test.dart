@@ -322,6 +322,56 @@ void main() {
     expect(sized['feed']!.flow.cubicMetersPerSecond, closeTo(0.15, 1e-9));
   });
 
+  test('a looped duct ring splits flow (Hardy-Cross), not mis-accumulated', () {
+    // A square ring: src(plant) feeds node A; A and C both reach the demand at
+    // the far corner via two legs. src—A, then a ring A—B—C and A—D—C, with the
+    // draw at C. The two parallel legs must SHARE the load (each edge < total),
+    // which the old tree accumulation (ignoring the chord) could not do.
+    const net = Network(
+      nodes: [
+        NetNode(
+          id: 's',
+          sheetId: 's1',
+          x: 0,
+          y: 100,
+          floorIndex: 0,
+          role: NodeRole.plant,
+        ),
+        NetNode(id: 'A', sheetId: 's1', x: 100, y: 100, floorIndex: 0),
+        NetNode(id: 'B', sheetId: 's1', x: 200, y: 0, floorIndex: 0),
+        NetNode(id: 'C', sheetId: 's1', x: 300, y: 100, floorIndex: 0),
+        NetNode(id: 'D', sheetId: 's1', x: 200, y: 200, floorIndex: 0),
+      ],
+      edges: [
+        NetEdge(id: 'feed', fromId: 's', toId: 'A', service: ServiceType.duct),
+        NetEdge(id: 'AB', fromId: 'A', toId: 'B', service: ServiceType.duct),
+        NetEdge(id: 'BC', fromId: 'B', toId: 'C', service: ServiceType.duct),
+        NetEdge(id: 'AD', fromId: 'A', toId: 'D', service: ServiceType.duct),
+        NetEdge(id: 'DC', fromId: 'D', toId: 'C', service: ServiceType.duct),
+      ],
+    );
+    final sized = autoSizeNetwork(
+      net,
+      const SizingContext(),
+      leafDemand: const {ServiceType.duct: FlowRate(0)},
+      nodeFlowDemand: const {'C': FlowRate(0.40)},
+    );
+    final feed = sized['feed']!.flow.cubicMetersPerSecond;
+    final ab = sized['AB']!.flow.cubicMetersPerSecond;
+    final bc = sized['BC']!.flow.cubicMetersPerSecond;
+    final ad = sized['AD']!.flow.cubicMetersPerSecond;
+    final dc = sized['DC']!.flow.cubicMetersPerSecond;
+    // The feeder carries the whole draw.
+    expect(feed, closeTo(0.40, 1e-6));
+    // The draw at C is split across the two symmetric legs (≈ half each), and
+    // continuity holds: the two legs into C sum to the draw.
+    expect(bc + dc, closeTo(0.40, 1e-6));
+    expect(ab, closeTo(0.20, 1e-3));
+    expect(ad, closeTo(0.20, 1e-3));
+    // Crucially, no single ring edge carries the full load.
+    expect(ab, lessThan(feed));
+  });
+
   test('sizeNetwork sizes every edge with an accumulated flow', () {
     const net = Network(
       nodes: [
