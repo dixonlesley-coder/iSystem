@@ -122,6 +122,14 @@ abstract interface class ElectricalStandardsProfile {
   /// IEC reference soil thermal resistivity (K·m/W) → factor 1.0.
   double get soilThermalResistivityReferenceKmW;
 
+  /// Buried-run ground-temperature correction table (°C → factor), per
+  /// insulation (IEC 60364-5-52 Table B.52.15, ground reference 20 °C). Used
+  /// INSTEAD of the air ambient table for buried runs.
+  Map<double, double> groundTempFactors(ConductorInsulation insulation);
+
+  /// Buried-run depth-of-laying correction table (m → factor), reference 0.5 m.
+  Map<double, double> get depthOfLayingFactors;
+
   // ── Protection ────────────────────────────────────────────────────────────
   /// Standard MCB ratings (A), IEC 60898.
   List<double> get mcbRatingsA;
@@ -396,6 +404,28 @@ class PuilProfile implements ElectricalStandardsProfile {
 
   @override
   double get soilThermalResistivityReferenceKmW => 2.5;
+
+  // Buried-run ground-temperature factors (IEC 60364-5-52 Table B.52.15).
+  static final Map<double, double> _groundTempPvc = {
+    10: 1.1, 15: 1.05, 20: 1.0, 25: 0.95, 30: 0.89, 35: 0.84, 40: 0.77,
+    45: 0.71, 50: 0.63,
+  };
+  static final Map<double, double> _groundTempXlpe = {
+    10: 1.07, 15: 1.04, 20: 1.0, 25: 0.96, 30: 0.93, 35: 0.89, 40: 0.85,
+    45: 0.8, 50: 0.76,
+  };
+  // Depth-of-laying factors (m → factor), reference depth 0.5 m.
+  static final Map<double, double> _depthFactors = {
+    0.5: 1.0, 0.6: 0.98, 0.8: 0.96, 1.0: 0.95, 1.25: 0.94, 1.5: 0.93,
+    1.75: 0.93, 2.0: 0.92,
+  };
+
+  @override
+  Map<double, double> groundTempFactors(ConductorInsulation insulation) =>
+      insulation == ConductorInsulation.xlpe ? _groundTempXlpe : _groundTempPvc;
+
+  @override
+  Map<double, double> get depthOfLayingFactors => _depthFactors;
 
   // ── Protection ────────────────────────────────────────────────────────────
 

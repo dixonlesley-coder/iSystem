@@ -176,8 +176,11 @@ report export**; versioned `.mechx` save/open with viewport restore;
   in `units.dart`; **A2** — `standards/puil.dart` (`ElectricalStandardsProfile`
   interface + `PuilProfile`, reusing `StandardValue`/`VerificationStatus` from
   `sni.dart`; all values `secondarySource`, nothing `sniVerbatim` until the
-  official PUIL PDF is checked). Next: A3 (Tier-1 sizing — load current, cable,
-  breaker, voltage drop, busbar, earthing/RCD) in `electrical/`.
+  official PUIL PDF is checked); **A3 part 1** — `electrical/` Tier-1 sizing:
+  `load_kind.dart` (LoadKind + defaults), `results.dart`, and `sizing.dart`
+  (`loadCurrent`, `deratingFactor`, `voltageDrop`, `selectBreaker`, `sizeCable`),
+  all consuming `PuilProfile`. Next: busbar + earthing/RCD, then the A4 panel/
+  system orchestrator and the A5 unified MEP-equipment → load-list feed.
 - Native PDF *drawing* export (DXF drawing export and the Markdown calc report
   are done; both convert to PDF externally).
 - Multi-select / copy-paste / measurement-annotation; per-outlet roof-area UI
