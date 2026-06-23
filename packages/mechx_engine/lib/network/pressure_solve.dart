@@ -19,9 +19,11 @@
 /// already loop-BALANCED — the sizing layer balances ring/grid pressurized & air
 /// flows with Hardy–Cross (`hardy_cross.dart`) before sizing, and the solve
 /// consumes those per-edge flows, so head loss around each loop ≈ 0 and the node
-/// head is path-independent (the tree path gives the true value). // VERIFY: the
-/// split is balanced against PIXEL geometry under a uniform-diameter first pass;
-/// a full design iterates the balance against the sized diameters.
+/// head is path-independent (the tree path gives the true value). The sizing
+/// balance splits ring flow by resistance ∝ real edge length at a consistent
+/// ring diameter (the stable design basis); the residual loop-vs-tree friction
+/// from per-segment diameter differences is second-order. // VERIFY for a final
+/// design with strongly non-uniform ring segments.
 ///
 /// FRICTION vs STATIC LIFT — NOT double-counted. A riser edge contributes its
 /// vertical run to FRICTION via [edgeLength] (a riser's length is the

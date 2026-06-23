@@ -8,6 +8,7 @@ import 'package:mechx_engine/units.dart';
 
 import 'app_state.dart';
 import 'network_store.dart';
+import 'project_store.dart';
 
 /// Roof catchment assumed per rainwater outlet until a per-outlet area is
 /// assigned. // VERIFY — refine with a real roof plan.
@@ -51,6 +52,7 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
   if (net.edges.isEmpty) return const {};
   final occupancy = ref.watch(occupancyProvider);
   final ducts = ref.watch(ductSettingsProvider);
+  final project = ref.watch(projectControllerProvider);
   const profile = SniProfile();
 
   // Real per-fixture UBAP where the user has assigned a fixture type; nodes
@@ -93,6 +95,10 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     nodeFlowDemand: nodeFlowDemand,
     flushSystem:
         anyFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank,
+    // Geometry lets looped (ring) mains balance their flow split against REAL
+    // edge lengths — runs via calibration, risers via the §10 elevation delta.
+    building: project.building,
+    calibrationBySheet: project.calibrations,
   );
 });
 

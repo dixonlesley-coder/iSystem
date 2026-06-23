@@ -1,3 +1,5 @@
+import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/sni.dart';
@@ -370,6 +372,82 @@ void main() {
     expect(ad, closeTo(0.20, 1e-3));
     // Crucially, no single ring edge carries the full load.
     expect(ab, lessThan(feed));
+  });
+
+  test('a riser leg in a loop balances on its REAL length when geometry is given',
+      () {
+    // A loop with two paths from A to the draw at B (both on floor 0):
+    //   • direct ground run A→B, and
+    //   • up-over-down A→A'(riser)→B'(run, floor 1)→B(riser).
+    // In PIXELS the two paths are ~equal (risers have zero planar length), so
+    // without geometry the split is ~50/50. With building + calibration the two
+    // risers add their REAL floor height, so the direct ground path carries
+    // clearly more. Proves riser length comes from the §10 elevation delta.
+    const net = Network(
+      nodes: [
+        NetNode(
+          id: 'P',
+          sheetId: 's1',
+          x: -50,
+          y: 0,
+          floorIndex: 0,
+          role: NodeRole.plant,
+        ),
+        NetNode(id: 'A', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'B', sheetId: 's1', x: 200, y: 0, floorIndex: 0),
+        NetNode(id: 'A2', sheetId: 's1', x: 0, y: 0, floorIndex: 1),
+        NetNode(id: 'B2', sheetId: 's1', x: 200, y: 0, floorIndex: 1),
+      ],
+      edges: [
+        NetEdge(id: 'feed', fromId: 'P', toId: 'A', service: ServiceType.duct),
+        NetEdge(id: 'AB', fromId: 'A', toId: 'B', service: ServiceType.duct),
+        NetEdge(
+          id: 'AA2',
+          fromId: 'A',
+          toId: 'A2',
+          service: ServiceType.duct,
+          kind: EdgeKind.riser,
+        ),
+        NetEdge(
+            id: 'A2B2', fromId: 'A2', toId: 'B2', service: ServiceType.duct),
+        NetEdge(
+          id: 'B2B',
+          fromId: 'B2',
+          toId: 'B',
+          service: ServiceType.duct,
+          kind: EdgeKind.riser,
+        ),
+      ],
+    );
+    const demand = {'B': FlowRate(0.30)};
+
+    final pixel = autoSizeNetwork(net, const SizingContext(),
+        leafDemand: const {ServiceType.duct: FlowRate(0)},
+        nodeFlowDemand: demand);
+    final geo = autoSizeNetwork(
+      net,
+      const SizingContext(),
+      leafDemand: const {ServiceType.duct: FlowRate(0)},
+      nodeFlowDemand: demand,
+      building: const BuildingLevels([
+        Floor('G', Length(4.0)),
+        Floor('L1', Length(3.0)),
+      ]),
+      calibrationBySheet: const {'s1': ScaleCalibration(0.02)},
+    );
+
+    double ab(Map<String, EdgeSizing> s) => s['AB']!.flow.cubicMetersPerSecond;
+    double up(Map<String, EdgeSizing> s) => s['B2B']!.flow.cubicMetersPerSecond;
+
+    // Continuity into B holds either way.
+    expect(ab(pixel) + up(pixel), closeTo(0.30, 1e-6));
+    expect(ab(geo) + up(geo), closeTo(0.30, 1e-6));
+    // Pixel-only: planar paths are ~equal ⇒ ~50/50.
+    expect(ab(pixel), closeTo(0.15, 5e-3));
+    // With real riser length the direct ground path carries clearly more, and
+    // the split genuinely differs from the geometry-blind one.
+    expect(ab(geo), greaterThan(0.17));
+    expect(ab(geo), greaterThan(ab(pixel) + 0.02));
   });
 
   test('sizeNetwork sizes every edge with an accumulated flow', () {

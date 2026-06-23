@@ -16,6 +16,8 @@
 /// Pure Dart, zero Flutter imports.
 library;
 
+import '../geometry/building.dart';
+import '../geometry/scale_calibration.dart';
 import '../hydraulics.dart';
 import '../network/hardy_cross.dart';
 import '../network/network.dart';
@@ -276,6 +278,13 @@ Map<String, EdgeSizing> sizeNetwork(
 ///     NOT a sum of peak fixture flows.
 ///   • Everything else (or water without fixture-unit data): accumulate the
 ///     flat [leafDemand] flows.
+///
+/// LOOPS: a looped pressurized/air component is split with Hardy–Cross instead,
+/// using resistance ∝ edge LENGTH at a consistent ring diameter (the stable,
+/// standard basis — iterating resistance against velocity-sized diameters is
+/// unstable, see the inline note). Pass [building] + [calibrationBySheet] so the
+/// split uses REAL edge lengths (runs via calibration, risers via elevation
+/// delta); without them it falls back to calibration-invariant pixel length.
 Map<String, EdgeSizing> autoSizeNetwork(
   Network net,
   SizingContext ctx, {
@@ -285,6 +294,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
   Map<String, double> nodeDrainageUnits = const {},
   Map<String, FlowRate> nodeFlowDemand = const {},
   FlushSystem flushSystem = FlushSystem.flushTank,
+  BuildingLevels? building,
+  Map<String, ScaleCalibration> calibrationBySheet = const {},
 }) {
   const profile = SniProfile();
   final allFlows = <String, FlowRate>{};
@@ -404,10 +415,18 @@ Map<String, EdgeSizing> autoSizeNetwork(
       // the unique-path accumulation can't resolve. Balance the split with
       // Hardy–Cross and size each edge from its share. Gravity services
       // (drainage/vent/rainwater) keep the tree path — physical rings there are
-      // nonsensical. The resistance uses planar PIXEL length (calibration-
-      // invariant for a same-sheet loop) under a uniform-diameter first-pass
-      // assumption; risers count as short connectors. // VERIFY: a full design
-      // re-balances against the sized diameters.
+      // nonsensical.
+      //
+      // The split uses resistance ∝ EDGE LENGTH at a consistent ring diameter
+      // (standard ring-main practice). We deliberately do NOT iterate resistance
+      // against the sized-to-velocity diameters: with D ∝ √Q the Hazen–Williams
+      // resistance becomes k ∝ L·Q^−2.435, so head loss h_f ∝ L·Q^−0.583
+      // DECREASES with flow — an unstable equilibrium that drives the longer leg
+      // to zero. The length split is the stable, standard design basis.
+      //
+      // L is the REAL length when geometry is supplied — runs via calibration,
+      // RISERS via the §10 elevation delta — else the calibration-invariant
+      // pixel length (riser → nominal connector).
       final componentSet = component.toSet();
       final componentEdges = net.edges
           .where((e) =>
@@ -438,10 +457,20 @@ Map<String, EdgeSizing> autoSizeNetwork(
           }
           if (f != 0) demandFlow[n] = f;
         }
-        final pxById = <String, double>{
+
+        final lengthById = <String, double>{
           for (final e in componentEdges)
             e.id: () {
-              final px = runPixelLength(e, net);
+              if (building != null) {
+                final l = edgeLength(
+                  e,
+                  net,
+                  calibrationBySheet: calibrationBySheet,
+                  building: building,
+                ).meters;
+                if (l > 0) return l;
+              }
+              final px = runPixelLength(e, net); // 0 for a riser
               return px > 1.0 ? px : 1.0;
             }(),
         };
@@ -452,7 +481,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
           ],
           root: root,
           demand: demandFlow,
-          resistance: (id) => pxById[id]!,
+          resistance: (id) => lengthById[id]!,
           exponent: regime == FlowRegime.air ? 2.0 : 1.852,
         );
         for (final entry in balanced.edgeFlow.entries) {
