@@ -7,8 +7,11 @@ import 'package:mechx/app.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
+import 'package:mechx_engine/electrical/geo_length.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 
 /// Renders each UI state to a real PNG via the golden pipeline (headless).
@@ -89,5 +92,26 @@ void main() {
     container.read(workspaceViewProvider.notifier).set(WorkspaceView.electrical);
     await tester.pump(const Duration(milliseconds: 250));
     await expectLater(app, matchesGoldenFile('goldens/05_electrical.png'));
+
+    // Electrical LAYOUT tab — panels + loads placed on the calibrated PDF
+    // floor plan, cable length derived from geometry. Calibrate the sheet and
+    // place the MDP + a few loads, then switch to the Layout tab.
+    container
+        .read(projectControllerProvider.notifier)
+        .setCalibration('s1', const ScaleCalibration(0.01));
+    final elec = container.read(electricalProjectProvider.notifier);
+    elec.setPanelLayoutPos(
+        'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 560, y: 380));
+    elec.setLoadPos('mdp', 'mdp-c1',
+        const LayoutPos(sheetId: 's1', floorIndex: 0, x: 980, y: 560));
+    elec.setLoadPos('mdp', 'mdp-c3',
+        const LayoutPos(sheetId: 's1', floorIndex: 0, x: 1180, y: 360));
+    elec.setLoadPos('mdp', 'mdp-c4',
+        const LayoutPos(sheetId: 's1', floorIndex: 0, x: 760, y: 760));
+    await tester.pump();
+    await tester.tap(find.text('Layout').first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await expectLater(app, matchesGoldenFile('goldens/06_electrical_layout.png'));
   });
 }
