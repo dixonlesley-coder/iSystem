@@ -18,6 +18,7 @@ import '../update/version_label.dart';
 import 'commercial/commercial_hub.dart';
 import 'electrical/electrical_palette.dart';
 import 'electrical/electrical_view.dart';
+import 'inspector/collapsible_inspector.dart';
 import 'inspector/project_panel.dart';
 import 'layout/layout_canvas.dart';
 import 'review/review_hub.dart';
@@ -123,8 +124,12 @@ class _DesignWorkspace extends ConsumerWidget {
           const SheetRail(),
           Container(width: 1, color: colors.border),
           const Expanded(child: SchematicView()),
-          Container(width: 1, color: colors.border),
-          const ProjectPanel(),
+          // The collapsible wrapper carries its own left border, so the canvas
+          // reclaims the full width when the inspector is collapsed.
+          const CollapsibleInspector(
+            expandedWidth: ProjectPanel.width,
+            child: ProjectPanel(),
+          ),
         ],
       );
     }
@@ -135,13 +140,19 @@ class _DesignWorkspace extends ConsumerWidget {
         const SheetRail(),
         Container(width: 1, color: colors.border),
         const Expanded(child: LayoutCanvas()),
-        Container(width: 1, color: colors.border),
-        // Layer-aware inspector: the electrical Loads palette when Electrical is
-        // the active layer, else the mechanical DRAW/project inspector.
+        // Layer-aware inspector (collapsible): the electrical Loads palette when
+        // Electrical is the active layer, else the mechanical DRAW/project
+        // inspector. Either way it collapses to a thin strip so the canvas wins.
         if (active == DisciplineLayer.electrical)
-          const _ElectricalInspectorColumn()
+          const CollapsibleInspector(
+            expandedWidth: ProjectPanel.width,
+            child: _ElectricalInspectorColumn(),
+          )
         else
-          const ProjectPanel(),
+          const CollapsibleInspector(
+            expandedWidth: ProjectPanel.width,
+            child: ProjectPanel(),
+          ),
       ],
     );
   }
