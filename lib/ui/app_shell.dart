@@ -15,15 +15,22 @@ import '../store/sheets_store.dart';
 import '../update/update_banner.dart';
 import '../update/version_label.dart';
 import 'canvas/sheet_canvas.dart';
+import 'commercial/commercial_hub.dart';
 import 'electrical/electrical_view.dart';
 import 'inspector/project_panel.dart';
+import 'review/review_hub.dart';
 import 'schematic/schematic_view.dart';
+import 'shell/nav_rail.dart';
+import 'shell/preferences_screen.dart';
+import 'shell/projects_screen.dart';
 import 'sheets/sheet_rail.dart';
 import 'theme/design_tokens.dart';
 import 'theme/mechx_theme.dart';
 import 'widgets/mechx_button.dart';
 
-/// Top-level P0 layout: top bar · (sheet rail | canvas) · status bar.
+/// Top-level layout (PanelMaker-style chrome): a left navigation rail beside a
+/// slim top bar · body · status-bar column. The rail picks the [ShellSection];
+/// the body is the workspace (Plan / Schematic / Electrical) or a hub/screen.
 /// No Material Scaffold — a restrained, custom shell (§4).
 class AppShell extends StatelessWidget {
   const AppShell({super.key});
@@ -31,53 +38,90 @@ class AppShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    // The shell laid out exactly as before, with the auto-update banner stacked
-    // on top as a non-layout overlay (renders nothing when idle/offline/no
-    // update, so the golden screenshots stay byte-identical).
+    // The auto-update banner is stacked on top as a non-layout overlay (renders
+    // nothing when idle/offline/no update).
     return Stack(
       children: [
         ColoredBox(
           color: colors.background,
           child: SafeArea(
-            child: Column(
+            // PanelMaker-style chrome: a left navigation rail beside the
+            // top-bar + body + status-bar column.
+            child: Row(
               children: [
-                const _TopBar(),
-                Container(height: 1, color: colors.border),
-                const _RecoveryBanner(),
-                const _ErrorBanner(),
+                const NavRail(),
+                Container(width: 1, color: colors.border),
                 Expanded(
-                  child: Consumer(
-                    builder: (context, ref, _) {
-                      final view = ref.watch(workspaceViewProvider);
-                      // The electrical workspace owns the whole centre area (its
-                      // own project, not the plumbing inspector); plan + schematic
-                      // keep the sheet rail and the project inspector.
-                      if (view == WorkspaceView.electrical) {
-                        return const ElectricalView();
-                      }
-                      return Row(
-                        children: [
-                          const SheetRail(),
-                          Container(width: 1, color: colors.border),
-                          Expanded(
-                            child: view == WorkspaceView.schematic
-                                ? const SchematicView()
-                                : const SheetCanvas(),
-                          ),
-                          Container(width: 1, color: colors.border),
-                          const ProjectPanel(),
-                        ],
-                      );
-                    },
+                  child: Column(
+                    children: [
+                      const _TopBar(),
+                      Container(height: 1, color: colors.border),
+                      const _RecoveryBanner(),
+                      const _ErrorBanner(),
+                      const Expanded(child: _ShellBody()),
+                      Container(height: 1, color: colors.border),
+                      const _StatusBar(),
+                    ],
                   ),
                 ),
-                Container(height: 1, color: colors.border),
-                const _StatusBar(),
               ],
             ),
           ),
         ),
         const UpdateBannerOverlay(),
+      ],
+    );
+  }
+}
+
+/// Routes the centre area by the active [ShellSection]. `design` shows the
+/// workspace (Plan / Schematic / Electrical, driven by [workspaceViewProvider]
+/// exactly as before); the other sections show their own screens.
+class _ShellBody extends ConsumerWidget {
+  const _ShellBody();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final section = ref.watch(shellSectionProvider);
+    switch (section) {
+      case ShellSection.review:
+        return const ReviewHub();
+      case ShellSection.commercial:
+        return const CommercialHub();
+      case ShellSection.projects:
+        return const ProjectsScreen();
+      case ShellSection.preferences:
+        return const PreferencesScreen();
+      case ShellSection.design:
+        return const _DesignWorkspace();
+    }
+  }
+}
+
+/// The Design workspace area — the prior centre layout, unchanged: the
+/// electrical workspace owns the whole area (its own project, not the plumbing
+/// inspector); plan + schematic keep the sheet rail and the project inspector.
+class _DesignWorkspace extends ConsumerWidget {
+  const _DesignWorkspace();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final view = ref.watch(workspaceViewProvider);
+    if (view == WorkspaceView.electrical) {
+      return const ElectricalView();
+    }
+    return Row(
+      children: [
+        const SheetRail(),
+        Container(width: 1, color: colors.border),
+        Expanded(
+          child: view == WorkspaceView.schematic
+              ? const SchematicView()
+              : const SheetCanvas(),
+        ),
+        Container(width: 1, color: colors.border),
+        const ProjectPanel(),
       ],
     );
   }
@@ -170,7 +214,6 @@ class _TopBar extends ConsumerWidget {
     final type = context.type;
     final state = ref.watch(sheetsControllerProvider);
     final brightness = ref.watch(brightnessProvider);
-    final view = ref.watch(workspaceViewProvider);
     final projectName = ref.watch(projectControllerProvider).name;
 
     final current = state.current;
@@ -230,8 +273,6 @@ class _TopBar extends ConsumerWidget {
               onPressed: () => _pickAndLoadPdf(ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
-            _ViewSwitch(active: view),
-            const SizedBox(width: MechXSpacing.sm),
             MechXButton(
               label: brightness == Brightness.dark ? 'Dark' : 'Light',
               onPressed: () =>
@@ -239,42 +280,6 @@ class _TopBar extends ConsumerWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// A small segmented control to choose the centre workspace view
-/// (plan / schematic / electrical) — three [MechXButton]s in a bordered group.
-class _ViewSwitch extends ConsumerWidget {
-  final WorkspaceView active;
-  const _ViewSwitch({required this.active});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final colors = context.colors;
-    final ctrl = ref.read(workspaceViewProvider.notifier);
-    Widget seg(WorkspaceView v) => MechXButton(
-          label: v.label,
-          primary: v == active,
-          onPressed: () => ctrl.set(v),
-        );
-    return Container(
-      padding: const EdgeInsets.all(MechXSpacing.xxs),
-      decoration: BoxDecoration(
-        color: colors.background,
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: colors.border),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          seg(WorkspaceView.plan),
-          const SizedBox(width: MechXSpacing.xxs),
-          seg(WorkspaceView.schematic),
-          const SizedBox(width: MechXSpacing.xxs),
-          seg(WorkspaceView.electrical),
-        ],
       ),
     );
   }
