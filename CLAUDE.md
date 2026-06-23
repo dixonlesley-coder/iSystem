@@ -161,13 +161,33 @@ report export**; versioned `.mechx` save/open with viewport restore;
 
 - Electrical ("E") domain — intentionally out of scope here (handled in another
   repo).
-- Native PDF/DXF *drawing* export (the calc report is Markdown; converts to PDF
-  externally).
+- Native PDF *drawing* export (DXF drawing export and the Markdown calc report
+  are done; both convert to PDF externally).
 - Single global undo timeline (undo is currently per-domain).
-- Multi-select / copy-paste / measurement-annotation; explicit (non-positional)
-  sheet→floor mapping; per-outlet roof-area + rainfall UI for storm; user
-  fixture libraries.
+- Multi-select / copy-paste / measurement-annotation; per-outlet roof-area UI
+  for storm (rainfall intensity is tunable; roof area is a fixed default);
+  user fixture libraries.
 - Looped networks: `pressure_solve` / `accumulateFlows` assume a **tree**; a
   drawn ring main is mis-solved (Hardy-Cross is out of scope, documented).
 - SNI verification debt: several values remain `verified == false` (see
   `SniProfile.verifyChecklist`) — they MUST surface as UNVERIFIED in any report.
+- App lifecycle: the root `ProviderContainer` and autosave `Timer` in `main`
+  live for the whole process and are not explicitly disposed (fine for a
+  single-window desktop app; revisit if multi-window).
+
+## Sizing-engine invariants (don't regress)
+
+- **Network rooting (`autoSizeNetwork`)**: each service component is rooted at
+  its *source* — a `plant`, else a non-fixture/non-demand entry leaf, else the
+  busiest demand-free junction. The root's own demand never traverses an edge,
+  so a fixture must never be chosen as root or its load vanishes. Demand is
+  collected from *every* demand-bearing node (including inline degree-2
+  fixtures/diffusers), not just leaves.
+- **Units in reports**: typed quantities store SI base units (Pressure in Pa);
+  a `StandardValue.unit` is a display label (e.g. "kPa"). Never print
+  `value`+`unit` together — surface the human-readable `note`. (See
+  `calc_report.dart` / `StandardValue.toString`.)
+- **Persistence**: design settings (occupancy, feed, ducts, rainfall, fire
+  hazard, theme) round-trip via `DesignSettings` in the `.mechx` file; autosave
+  only writes recovery when the work differs from the last clean Save
+  (`lastSavedSignatureProvider`), so a saved project leaves no phantom recovery.

@@ -9,7 +9,6 @@ import '../data/pdf_import.dart';
 import '../data/project_document.dart';
 import '../data/recovery.dart';
 import '../store/app_state.dart';
-import '../store/network_store.dart';
 import '../store/project_store.dart';
 import '../store/sheets_store.dart';
 import 'canvas/sheet_canvas.dart';
@@ -79,26 +78,23 @@ class _TopBar extends ConsumerWidget {
 
     try {
       final sheets = await importPdf(path);
-      if (sheets.isEmpty) return;
+      if (sheets.isEmpty) {
+        ref
+            .read(loadErrorProvider.notifier)
+            .set('That PDF had no importable pages.');
+        return;
+      }
       ref.read(sheetsControllerProvider.notifier).loadSheets(sheets);
-    } catch (_) {
-      // Silently ignore import errors in the UI; a real app would show a
-      // dialog here.  The canvas will simply keep the current sheets.
+      ref.read(loadErrorProvider.notifier).clear();
+    } catch (e) {
+      // Surface the failure instead of silently keeping the old sheets.
+      ref.read(loadErrorProvider.notifier).set('Could not import PDF: $e');
     }
   }
 
   Future<void> _saveProject(WidgetRef ref) async {
     final project = ref.read(projectControllerProvider);
-    final sheetsState = ref.read(sheetsControllerProvider);
-    final doc = ProjectDocument(
-      projectName: project.name,
-      floors: project.floors,
-      calibrations: project.calibrations,
-      sheets: sheetsState.sheets,
-      network: ref.read(networkControllerProvider).network,
-      viewports: sheetsState.viewports,
-      sheetFloors: sheetsState.sheetFloors,
-    );
+    final doc = buildDocument(ref.read);
     final path = await FilePicker.saveFile(
       dialogTitle: 'Save MechX project',
       fileName: '${project.name}.mechx',
@@ -107,8 +103,16 @@ class _TopBar extends ConsumerWidget {
     );
     if (path == null) return;
     final full = path.endsWith('.mechx') ? path : '$path.mechx';
-    await File(full).writeAsString(doc.encode());
-    // The work is now safely on disk — drop any recovery snapshot/offer.
+    final encoded = doc.encode();
+    try {
+      await File(full).writeAsString(encoded);
+    } catch (e) {
+      ref.read(loadErrorProvider.notifier).set('Could not save project: $e');
+      return;
+    }
+    // The work is now safely on disk — record it as the clean baseline and
+    // drop any recovery snapshot/offer.
+    ref.read(lastSavedSignatureProvider.notifier).set(encoded);
     await clearRecovery();
     ref.read(recoveryDocProvider.notifier).clear();
   }
@@ -123,17 +127,14 @@ class _TopBar extends ConsumerWidget {
     if (path == null) return;
     try {
       final doc = ProjectDocument.decode(await File(path).readAsString());
-      ref.read(projectControllerProvider.notifier).load(
-            name: doc.projectName,
-            floors: doc.floors,
-            calibrations: doc.calibrations,
-          );
-      ref.read(sheetsControllerProvider.notifier).loadSheets(
-            doc.sheets,
-            viewports: doc.viewports,
-            sheetFloors: doc.sheetFloors,
-          );
-      ref.read(networkControllerProvider.notifier).loadNetwork(doc.network);
+      applyDocument(ref.read, doc);
+      // The just-loaded state is the clean baseline; capture its canonical
+      // encoding so autosave won't immediately mirror it to recovery.
+      ref
+          .read(lastSavedSignatureProvider.notifier)
+          .set(buildDocument(ref.read).encode());
+      await clearRecovery();
+      ref.read(recoveryDocProvider.notifier).clear();
       ref.read(loadErrorProvider.notifier).clear();
     } on ProjectDocumentException catch (e) {
       // Malformed/incompatible file — surface why, leave the project untouched.
@@ -360,17 +361,10 @@ class _RecoveryBanner extends ConsumerWidget {
             label: 'Restore',
             primary: true,
             onPressed: () {
-              ref.read(projectControllerProvider.notifier).load(
-                    name: doc.projectName,
-                    floors: doc.floors,
-                    calibrations: doc.calibrations,
-                  );
-              ref.read(sheetsControllerProvider.notifier).loadSheets(
-                    doc.sheets,
-                    viewports: doc.viewports,
-                    sheetFloors: doc.sheetFloors,
-                  );
-              ref.read(networkControllerProvider.notifier).loadNetwork(doc.network);
+              // Restore the full snapshot (drawing + settings). We deliberately
+              // do NOT mark it as the clean baseline: recovered work is still
+              // unsaved, so autosave should keep mirroring it after dismiss.
+              applyDocument(ref.read, doc);
               dismiss();
             },
           ),

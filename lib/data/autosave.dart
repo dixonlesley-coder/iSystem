@@ -2,11 +2,19 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../store/app_state.dart';
+import '../store/fire_store.dart';
 import '../store/network_store.dart';
 import '../store/project_store.dart';
 import '../store/sheets_store.dart';
 import 'project_document.dart';
 import 'recovery.dart';
+
+/// A generic provider reader satisfied by BOTH `WidgetRef.read` and
+/// `ProviderContainer.read`. It lets the persistence glue (build/apply a
+/// document) run unchanged from a widget (Save/Open) and from the headless
+/// autosave loop.
+typedef ProviderReader = T Function<T>(ProviderListenable<T> provider);
 
 /// A recovery document found on launch (previous session ended without a clean
 /// exit). Non-null ⇒ the shell offers to restore it.
@@ -23,32 +31,94 @@ class RecoveryController extends Notifier<ProjectDocument?> {
   void clear() => state = null;
 }
 
-/// Build a [ProjectDocument] from the current live state in [c].
-ProjectDocument buildDocument(ProviderContainer c) {
-  final project = c.read(projectControllerProvider);
-  final sheets = c.read(sheetsControllerProvider);
-  final network = c.read(networkControllerProvider).network;
+/// Encoded JSON of the last state written to a real `.mechx` file (Save) or
+/// loaded from one (Open) — the "clean" baseline. The autosave loop compares
+/// against it so it never re-writes a recovery snapshot for work that is
+/// already saved (which would resurrect a phantom recovery banner next launch).
+final lastSavedSignatureProvider =
+    NotifierProvider<LastSavedController, String?>(LastSavedController.new);
+
+class LastSavedController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? signature) => state = signature;
+}
+
+/// Build a [ProjectDocument] from the live state reachable via [read].
+ProjectDocument buildDocument(ProviderReader read) {
+  final project = read(projectControllerProvider);
+  final sheets = read(sheetsControllerProvider);
+  final ducts = read(ductSettingsProvider);
   return ProjectDocument(
     projectName: project.name,
     floors: project.floors,
     calibrations: project.calibrations,
     sheets: sheets.sheets,
-    network: network,
+    network: read(networkControllerProvider).network,
     viewports: sheets.viewports,
     sheetFloors: sheets.sheetFloors,
+    settings: DesignSettings(
+      occupancy: read(occupancyProvider),
+      upfeed: read(feedStrategyProvider) == FeedStrategy.upfeed,
+      ductShape: ducts.shape,
+      ductMethod: ducts.method,
+      rainfallMmPerHr: read(rainfallIntensityProvider),
+      fireHazard: read(fireHazardProvider),
+      brightness: read(brightnessProvider),
+    ),
   );
 }
 
+/// Load [doc] into every live store/provider reachable via [read] — the drawn
+/// project AND the non-network design settings (occupancy, feed, ducts,
+/// rainfall, fire hazard, theme). Used by both Open and crash-recovery restore.
+void applyDocument(ProviderReader read, ProjectDocument doc) {
+  read(projectControllerProvider.notifier).load(
+        name: doc.projectName,
+        floors: doc.floors,
+        calibrations: doc.calibrations,
+      );
+  read(sheetsControllerProvider.notifier).loadSheets(
+        doc.sheets,
+        viewports: doc.viewports,
+        sheetFloors: doc.sheetFloors,
+      );
+  read(networkControllerProvider.notifier).loadNetwork(doc.network);
+  final s = doc.settings;
+  read(occupancyProvider.notifier).set(s.occupancy);
+  read(feedStrategyProvider.notifier)
+      .set(s.upfeed ? FeedStrategy.upfeed : FeedStrategy.downfeed);
+  read(ductSettingsProvider.notifier)
+    ..setShape(s.ductShape)
+    ..setMethod(s.ductMethod);
+  read(rainfallIntensityProvider.notifier).set(s.rainfallMmPerHr);
+  read(fireHazardProvider.notifier).set(s.fireHazard);
+  read(brightnessProvider.notifier).set(s.brightness);
+}
+
 /// Start the periodic autosave loop: every [interval], snapshot the current
-/// work to the recovery file (only once there's a drawn network worth saving).
-/// Returns the timer so the caller can cancel it.
+/// work to the recovery file — but only once there's a drawn network worth
+/// saving AND the work differs from the last clean save (so a saved project
+/// never leaves a stale recovery snapshot behind). Returns the timer so the
+/// caller can cancel it.
 Timer startAutosave(
   ProviderContainer c, {
   Duration interval = const Duration(seconds: 15),
 }) {
+  String? lastWritten; // last content we mirrored to the recovery file
   return Timer.periodic(interval, (_) {
     final network = c.read(networkControllerProvider).network;
     if (network.nodes.isEmpty) return; // nothing worth recovering yet
-    writeRecovery(buildDocument(c));
+    final doc = buildDocument(c.read);
+    final encoded = doc.encode();
+    // Skip when the work already matches the last clean Save (no phantom
+    // recovery), or when we've already mirrored this exact content.
+    if (encoded == c.read(lastSavedSignatureProvider) ||
+        encoded == lastWritten) {
+      return;
+    }
+    lastWritten = encoded;
+    writeRecovery(doc);
   });
 }

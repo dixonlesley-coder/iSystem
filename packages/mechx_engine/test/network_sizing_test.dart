@@ -179,6 +179,149 @@ void main() {
     expect(sized['t']!.service, ServiceType.drainage);
   });
 
+  test('rooting at a plant keeps every fixture-leaf load (no root-drop)', () {
+    // A bare manifold: three fixture leaves on a hub, fed by a plant. The hub
+    // is the only non-fixture node, the plant is the marked source. Each branch
+    // must carry its fixture's demand, and the plant feeder must carry the sum —
+    // i.e. NO terminal's load is dropped by the choice of root.
+    const net = Network(
+      nodes: [
+        NetNode(
+          id: 'p',
+          sheetId: 's1',
+          x: 0,
+          y: 0,
+          floorIndex: 0,
+          role: NodeRole.plant,
+        ),
+        NetNode(id: 'h', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+        NetNode(
+          id: 'f1',
+          sheetId: 's1',
+          x: 200,
+          y: -30,
+          floorIndex: 0,
+          role: NodeRole.fixture,
+        ),
+        NetNode(
+          id: 'f2',
+          sheetId: 's1',
+          x: 200,
+          y: 0,
+          floorIndex: 0,
+          role: NodeRole.fixture,
+        ),
+        NetNode(
+          id: 'f3',
+          sheetId: 's1',
+          x: 200,
+          y: 30,
+          floorIndex: 0,
+          role: NodeRole.fixture,
+        ),
+      ],
+      edges: [
+        NetEdge(id: 'feed', fromId: 'p', toId: 'h', service: ServiceType.duct),
+        NetEdge(id: 'b1', fromId: 'h', toId: 'f1', service: ServiceType.duct),
+        NetEdge(id: 'b2', fromId: 'h', toId: 'f2', service: ServiceType.duct),
+        NetEdge(id: 'b3', fromId: 'h', toId: 'f3', service: ServiceType.duct),
+      ],
+    );
+    final sized = autoSizeNetwork(
+      net,
+      const SizingContext(),
+      leafDemand: const {ServiceType.duct: FlowRate(0.1)},
+    );
+    expect(sized['b1']!.flow.cubicMetersPerSecond, closeTo(0.1, 1e-9));
+    expect(sized['b2']!.flow.cubicMetersPerSecond, closeTo(0.1, 1e-9));
+    expect(sized['b3']!.flow.cubicMetersPerSecond, closeTo(0.1, 1e-9));
+    expect(sized['feed']!.flow.cubicMetersPerSecond, closeTo(0.3, 1e-9));
+  });
+
+  test('a bare fixture manifold roots at the hub, dropping no fixture load', () {
+    // Same star but with NO plant: three fixture leaves on a hub. The only safe
+    // root is the hub (rooting at a fixture leaf would silently lose its load),
+    // so all three branches still carry their demand.
+    const net = Network(
+      nodes: [
+        NetNode(id: 'h', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+        NetNode(
+          id: 'f1',
+          sheetId: 's1',
+          x: 200,
+          y: -30,
+          floorIndex: 0,
+          role: NodeRole.fixture,
+        ),
+        NetNode(
+          id: 'f2',
+          sheetId: 's1',
+          x: 200,
+          y: 0,
+          floorIndex: 0,
+          role: NodeRole.fixture,
+        ),
+        NetNode(
+          id: 'f3',
+          sheetId: 's1',
+          x: 200,
+          y: 30,
+          floorIndex: 0,
+          role: NodeRole.fixture,
+        ),
+      ],
+      edges: [
+        NetEdge(id: 'b1', fromId: 'h', toId: 'f1', service: ServiceType.duct),
+        NetEdge(id: 'b2', fromId: 'h', toId: 'f2', service: ServiceType.duct),
+        NetEdge(id: 'b3', fromId: 'h', toId: 'f3', service: ServiceType.duct),
+      ],
+    );
+    final sized = autoSizeNetwork(
+      net,
+      const SizingContext(),
+      leafDemand: const {ServiceType.duct: FlowRate(0.1)},
+    );
+    expect(sized['b1']!.flow.cubicMetersPerSecond, closeTo(0.1, 1e-9));
+    expect(sized['b2']!.flow.cubicMetersPerSecond, closeTo(0.1, 1e-9));
+    expect(sized['b3']!.flow.cubicMetersPerSecond, closeTo(0.1, 1e-9));
+  });
+
+  test('an inline (interior) demand node contributes its load upstream', () {
+    // Chain p(plant) — mid — end, where the MID node carries an explicit airflow
+    // even though it is a degree-2 pass-through. Its demand must be accumulated
+    // onto the upstream feeder, not dropped for being a non-leaf.
+    const net = Network(
+      nodes: [
+        NetNode(
+          id: 'p',
+          sheetId: 's1',
+          x: 0,
+          y: 0,
+          floorIndex: 0,
+          role: NodeRole.plant,
+        ),
+        NetNode(id: 'mid', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+        NetNode(id: 'end', sheetId: 's1', x: 200, y: 0, floorIndex: 0),
+      ],
+      edges: [
+        NetEdge(id: 'feed', fromId: 'p', toId: 'mid', service: ServiceType.duct),
+        NetEdge(id: 'run', fromId: 'mid', toId: 'end', service: ServiceType.duct),
+      ],
+    );
+    final sized = autoSizeNetwork(
+      net,
+      const SizingContext(),
+      leafDemand: const {ServiceType.duct: FlowRate(0)},
+      nodeFlowDemand: const {
+        'mid': FlowRate(0.05),
+        'end': FlowRate(0.10),
+      },
+    );
+    // feeder = mid (0.05) + end (0.10); run = end (0.10).
+    expect(sized['run']!.flow.cubicMetersPerSecond, closeTo(0.10, 1e-9));
+    expect(sized['feed']!.flow.cubicMetersPerSecond, closeTo(0.15, 1e-9));
+  });
+
   test('sizeNetwork sizes every edge with an accumulated flow', () {
     const net = Network(
       nodes: [

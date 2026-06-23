@@ -142,8 +142,9 @@ const List<double> standardDrainDiametersMm = [
 /// Output of [sizeForFlow]: the chosen pipe and its performance at full bore.
 ///
 /// All velocity and capacity values are **full-bore** figures. The *usable*
-/// capacity at the design fill ratio is `fullBoreCapacity × fillRatio` (the
-/// linear capacity model applied at the sizing stage).
+/// capacity at the design fill ratio is `fullBoreCapacity ×
+/// partialFullCapacityFactor(fillRatio)` — the TRUE partial-full circular-pipe
+/// hydraulics (see the library header), not a linear fill-ratio scaling.
 final class DrainageSizingResult {
   /// Selected nominal diameter from [standardDrainDiametersMm].
   final Diameter diameter;

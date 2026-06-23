@@ -4,6 +4,7 @@ import 'package:mechx/app.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/standards/sni.dart';
+import 'package:mechx_engine/units.dart';
 
 import 'test_util.dart';
 
@@ -158,6 +159,34 @@ void main() {
       node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
       expect(node.role, NodeRole.main);
       expect(node.fixture, isNull);
+    });
+
+    test('setNodeRole leaving fixture clears the air-terminal airflow', () {
+      final c = makeContainer();
+      final n = twoRunChain(c);
+      final nodeId = c.read(networkControllerProvider).network.nodes.last.id;
+      n.setNodeAirflow(nodeId, FlowRate.litersPerSecond(45));
+      var node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.role, NodeRole.fixture);
+      expect(node.airflow?.inLitersPerSecond, closeTo(45, 1e-9));
+      // Switching to a non-terminal role drops the terminal payload (airflow),
+      // mirroring how it drops a plumbing fixture type.
+      n.setNodeRole(nodeId, NodeRole.plant);
+      node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.role, NodeRole.plant);
+      expect(node.airflow, isNull);
+    });
+
+    test('setNodeElevation keeps a node air terminal airflow', () {
+      final c = makeContainer();
+      final n = twoRunChain(c);
+      final nodeId = c.read(networkControllerProvider).network.nodes.last.id;
+      n.setNodeAirflow(nodeId, FlowRate.litersPerSecond(60));
+      n.setNodeElevation(nodeId, const Length(12));
+      final node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.elevation?.meters, 12);
+      expect(node.airflow?.inLitersPerSecond, closeTo(60, 1e-9),
+          reason: 'an elevation edit must not drop the airflow');
     });
 
     test('setEdgeService re-services an edge', () {

@@ -450,21 +450,31 @@ class _DrawSection extends ConsumerWidget {
           onPressed: () => ctrl.setTool(t),
         );
 
-    // Duplicate the current floor's runs to the next floor/sheet (positional
-    // sheet→floor mapping). Enabled only when a next floor + sheet exist.
+    // Duplicate the current floor's runs to the sheet ONE FLOOR UP. The
+    // destination is resolved by the sheet→floor MAPPING, not by list position:
+    // a sheet may carry an explicit floor override, so a sheet's list index need
+    // not equal its floor index. Enabled only when such a destination sheet
+    // exists for the next floor.
     final current = sheets.current;
     final fromFloor =
         current == null ? 0 : sheets.floorFor(current.id, levelCount);
     final toFloor = fromFloor + 1;
-    final canDuplicate = current != null &&
-        toFloor < levelCount &&
-        toFloor < sheets.sheets.length;
+    String? toSheetId;
+    if (current != null && toFloor < levelCount) {
+      for (final s in sheets.sheets) {
+        if (sheets.floorFor(s.id, levelCount) == toFloor) {
+          toSheetId = s.id;
+          break;
+        }
+      }
+    }
+    final canDuplicate = current != null && toSheetId != null;
     void duplicateFloor() {
-      if (!canDuplicate) return;
+      if (current == null || toSheetId == null) return;
       ctrl.duplicateFloor(
         fromSheetId: current.id,
         fromFloor: fromFloor,
-        toSheetId: sheets.sheets[toFloor].id,
+        toSheetId: toSheetId,
         toFloor: toFloor,
       );
     }

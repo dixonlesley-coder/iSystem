@@ -106,8 +106,14 @@ String buildCalcReportMarkdown(CalcReportData d) {
         'is used for a submission:');
     b.writeln();
     for (final v in unverified) {
-      final note = v.note == null ? '' : ' — ${v.note}';
-      b.writeln('- **${v.citation}**: ${v.value} ${v.unit}$note');
+      // Print the citation plus the human-readable `note` (which carries the
+      // correctly-scaled value, e.g. "≈392 kPa"). We deliberately do NOT print
+      // the raw `value`+`unit` pair: typed quantities store SI base units
+      // (Pressure in Pa) while `unit` is a display label (kPa), so pairing them
+      // would mis-scale numbers by 1000×. Fall back to value+unit only when no
+      // note is supplied (those entries are non-numeric, e.g. the demand curve).
+      final detail = v.note ?? '${v.value} ${v.unit}';
+      b.writeln('- **${v.citation}** — $detail');
     }
   }
   b.writeln();

@@ -220,11 +220,13 @@ class NetworkController extends Notifier<DrawingState> {
     _commit(Network(nodes: nodes, edges: edges));
   }
 
-  /// Change a node's vertical [role]. Leaving [NodeRole.fixture] clears its
-  /// fixture type.
+  /// Change a node's vertical [role]. Leaving [NodeRole.fixture] clears the
+  /// terminal payload (plumbing fixture AND air-terminal airflow); both denote a
+  /// terminal, so neither survives a switch to a main/plant role.
   void setNodeRole(String id, NodeRole role) {
     final node = state.network.nodeById(id);
     if (node == null || node.role == role) return;
+    final keepTerminal = role == NodeRole.fixture;
     _replaceNode(NetNode(
       id: node.id,
       sheetId: node.sheetId,
@@ -233,7 +235,8 @@ class NetworkController extends Notifier<DrawingState> {
       floorIndex: node.floorIndex,
       role: role,
       elevation: node.elevation,
-      fixture: role == NodeRole.fixture ? node.fixture : null,
+      fixture: keepTerminal ? node.fixture : null,
+      airflow: keepTerminal ? node.airflow : null,
     ));
   }
 
@@ -285,6 +288,7 @@ class NetworkController extends Notifier<DrawingState> {
       role: node.role,
       elevation: elevation,
       fixture: node.fixture,
+      airflow: node.airflow,
     ));
   }
 

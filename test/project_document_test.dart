@@ -1,4 +1,4 @@
-import 'package:flutter/widgets.dart' show Offset, Size;
+import 'package:flutter/widgets.dart' show Brightness, Offset, Size;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/models/sheet.dart';
@@ -6,6 +6,8 @@ import 'package:mechx/ui/canvas/viewport.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/fire_sprinkler.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -99,6 +101,54 @@ void main() {
     expect(decoded.viewports['s1']?.scale, 0.5);
     expect(decoded.viewports['s1']?.offset, const Offset(12, 34));
     expect(decoded.sheetFloors['p#0'], 1);
+  });
+
+  test('design settings round-trip (occupancy, feed, ducts, rainfall, fire, theme)',
+      () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      settings: DesignSettings(
+        occupancy: Occupancy.assembly,
+        upfeed: true,
+        ductShape: DuctShape.rectangular,
+        ductMethod: DuctSizingMethod.equalFriction,
+        rainfallMmPerHr: 275,
+        fireHazard: FireHazardClass.ordinaryHazard2,
+        brightness: Brightness.light,
+      ),
+    );
+    final decoded = ProjectDocument.decode(doc.encode());
+    final s = decoded.settings;
+    expect(s.occupancy, Occupancy.assembly);
+    expect(s.upfeed, isTrue);
+    expect(s.ductShape, DuctShape.rectangular);
+    expect(s.ductMethod, DuctSizingMethod.equalFriction);
+    expect(s.rainfallMmPerHr, 275);
+    expect(s.fireHazard, FireHazardClass.ordinaryHazard2);
+    expect(s.brightness, Brightness.light);
+  });
+
+  test('a file with no settings block loads provider defaults', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    final json = doc.toJson()..remove('settings');
+    final s = ProjectDocument.fromJson(json).settings;
+    expect(s.occupancy, Occupancy.private);
+    expect(s.upfeed, isFalse);
+    expect(s.ductShape, DuctShape.round);
+    expect(s.ductMethod, DuctSizingMethod.velocity);
+    expect(s.rainfallMmPerHr, 200);
+    expect(s.fireHazard, FireHazardClass.ordinaryHazard1);
+    expect(s.brightness, Brightness.dark);
   });
 
   test('tolerates a missing version (defaults to current)', () {

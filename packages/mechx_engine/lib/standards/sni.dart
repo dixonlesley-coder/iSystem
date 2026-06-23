@@ -58,8 +58,15 @@ class StandardValue<T> {
   bool get isUnverified => !verified;
 
   @override
-  String toString() =>
-      '$value $unit${verified ? '' : ' [UNVERIFIED]'} ($citation)';
+  String toString() {
+    final tag = verified ? '' : ' [UNVERIFIED]';
+    // Prefer the human-readable `note` (correctly scaled) over the raw
+    // `value`+`unit` pair: typed quantities store SI base units (Pressure in
+    // Pa) while `unit` is a display label (kPa), so the pair mis-scales by
+    // 1000×. Non-numeric entries (no note) print the value as-is.
+    final detail = note ?? '$value $unit';
+    return '$citation$tag — $detail';
+  }
 }
 
 /// Pipe materials the engine knows roughness/HW-C for.

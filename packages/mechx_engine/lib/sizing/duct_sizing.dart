@@ -117,8 +117,6 @@ double ductFrictionPaPerMetre(FlowRate q, Diameter d) {
   return f * (1.0 / d.meters) * (_airDensity * v.metersPerSecond * v.metersPerSecond / 2.0);
 }
 
-double _frictionPaPerMetre(FlowRate q, Diameter d) => ductFrictionPaPerMetre(q, d);
-
 // ── Public sizing functions ───────────────────────────────────────────────────
 
 /// Size a circular duct so the mean air velocity stays at or below
@@ -157,7 +155,7 @@ DuctSizingResult sizeByVelocity({
 
   final chosen = Diameter.mm(chosenMm);
   final actualVelocity = velocityFromFlow(airflow, chosen);
-  final friction = _frictionPaPerMetre(airflow, chosen);
+  final friction = ductFrictionPaPerMetre(airflow, chosen);
 
   return DuctSizingResult(
     diameter: chosen,
@@ -182,7 +180,7 @@ DuctSizingResult sizeByEqualFriction({
 
   for (final sizeMm in standardDuctDiametersMm) {
     final d = Diameter.mm(sizeMm);
-    final friction = _frictionPaPerMetre(airflow, d);
+    final friction = ductFrictionPaPerMetre(airflow, d);
     if (friction <= targetPaPerMetre) {
       final actualVelocity = velocityFromFlow(airflow, d);
       return DuctSizingResult(

@@ -1,9 +1,11 @@
 import 'dart:convert';
 
-import 'package:flutter/widgets.dart' show Offset, Size;
+import 'package:flutter/widgets.dart' show Brightness, Offset, Size;
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/fire_sprinkler.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -41,6 +43,70 @@ T? _enumOrNull<T extends Enum>(List<T> values, Object? name) {
   return null;
 }
 
+/// Persisted design inputs that are NOT part of the drawn network but still
+/// drive sizing/solve and presentation: occupancy class, feed strategy, duct
+/// preferences, design rainfall, fire hazard class, and theme brightness.
+///
+/// Every field defaults to its provider's initial value, so a `.mechx` written
+/// by an older build (no `settings` block) loads with today's defaults rather
+/// than throwing. `feedStrategy` is stored as a bool to keep this data layer
+/// free of the app's `FeedStrategy` enum; the app layer maps the two.
+class DesignSettings {
+  final Occupancy occupancy;
+
+  /// `true` ⇒ upfeed pump; `false` ⇒ roof-tank downfeed.
+  final bool upfeed;
+
+  final DuctShape ductShape;
+  final DuctSizingMethod ductMethod;
+  final double rainfallMmPerHr;
+  final FireHazardClass fireHazard;
+  final Brightness brightness;
+
+  const DesignSettings({
+    this.occupancy = Occupancy.private,
+    this.upfeed = false,
+    this.ductShape = DuctShape.round,
+    this.ductMethod = DuctSizingMethod.velocity,
+    this.rainfallMmPerHr = 200.0,
+    this.fireHazard = FireHazardClass.ordinaryHazard1,
+    this.brightness = Brightness.dark,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'occupancy': occupancy.name,
+        'upfeed': upfeed,
+        'ductShape': ductShape.name,
+        'ductMethod': ductMethod.name,
+        'rainfall_mmhr': rainfallMmPerHr,
+        'fireHazard': fireHazard.name,
+        'brightness': brightness == Brightness.dark ? 'dark' : 'light',
+      };
+
+  /// Tolerant decode: every field falls back to its default on an
+  /// unknown/absent value (forward/backward compatible).
+  factory DesignSettings.fromJson(Map<dynamic, dynamic> json) => DesignSettings(
+        occupancy:
+            _enumOr(Occupancy.values, json['occupancy'], Occupancy.private),
+        upfeed: json['upfeed'] == true,
+        ductShape:
+            _enumOr(DuctShape.values, json['ductShape'], DuctShape.round),
+        ductMethod: _enumOr(
+          DuctSizingMethod.values,
+          json['ductMethod'],
+          DuctSizingMethod.velocity,
+        ),
+        rainfallMmPerHr: (json['rainfall_mmhr'] as num?)?.toDouble() ?? 200.0,
+        fireHazard: _enumOr(
+          FireHazardClass.values,
+          json['fireHazard'],
+          FireHazardClass.ordinaryHazard1,
+        ),
+        brightness:
+            json['brightness'] == 'light' ? Brightness.light : Brightness.dark,
+      );
+}
+
 /// Versioned MechX project document — the on-disk format (a `.mechx` JSON file).
 /// Pure (de)serialization only; callers handle file IO. A `version` header is
 /// written from day one so the format can migrate.
@@ -60,6 +126,9 @@ class ProjectDocument {
   /// Explicit sheet → building-floor overrides.
   final Map<String, int> sheetFloors;
 
+  /// Non-network design inputs (occupancy, feed, ducts, rainfall, fire, theme).
+  final DesignSettings settings;
+
   const ProjectDocument({
     this.version = currentVersion,
     required this.projectName,
@@ -69,6 +138,7 @@ class ProjectDocument {
     required this.network,
     this.viewports = const {},
     this.sheetFloors = const {},
+    this.settings = const DesignSettings(),
   });
 
   Map<String, dynamic> toJson() => {
@@ -104,6 +174,7 @@ class ProjectDocument {
         'sheetFloors': {
           for (final e in sheetFloors.entries) e.key: e.value,
         },
+        'settings': settings.toJson(),
         'network': {
           'nodes': [
             for (final n in network.nodes)
@@ -224,6 +295,10 @@ class ProjectDocument {
         if (v is num) sheetFloors[key as String] = v.toInt();
       });
     }
+    final rawSettings = json['settings'];
+    final settings = rawSettings is Map
+        ? DesignSettings.fromJson(rawSettings)
+        : const DesignSettings();
     return ProjectDocument(
       version: version,
       projectName: project['name'] as String? ?? 'Untitled project',
@@ -233,6 +308,7 @@ class ProjectDocument {
       network: Network(nodes: nodes, edges: edges),
       viewports: viewports,
       sheetFloors: sheetFloors,
+      settings: settings,
     );
   }
 

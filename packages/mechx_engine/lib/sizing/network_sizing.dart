@@ -255,10 +255,12 @@ Map<String, EdgeSizing> sizeNetwork(
 }
 
 /// Auto-size the whole drawn network with a default demand policy: per service,
-/// split into connected components, root each at one of its leaves, apply demand
-/// at every *other* leaf, accumulate down the branches, and size every edge.
-/// Branching is handled exactly (each leg sized for its own subtree); edges with
-/// no demand are left unsized.
+/// split into connected components, root each at its SOURCE (a plant, else a
+/// non-demand entry leaf), apply demand at every other demand-bearing node
+/// (terminals plus any inline fixture/diffuser), accumulate down the branches,
+/// and size every edge. Branching is handled exactly (each leg sized for its
+/// own subtree, the source connection for the total); edges with no demand are
+/// left unsized.
 ///
 /// Demand model per service:
 ///   • Water supply (cold/hot) with an entry in [leafFixtureUnits]: accumulate
@@ -303,6 +305,72 @@ Map<String, EdgeSizing> autoSizeNetwork(
     }
 
     int degree(String n) => adjacency[n]?.length ?? 0;
+    NodeRole? roleOf(String n) => net.nodeById(n)?.role;
+
+    // The explicit per-node demand keys relevant to THIS service decide which
+    // nodes "bear demand" (and so must not be chosen as the source root).
+    final explicitDemandKeys = isSanitary(service)
+        ? nodeDrainageUnits.keys.toSet()
+        : useUbap
+            ? nodeFixtureUnits.keys.toSet()
+            : nodeFlowDemand.keys.toSet();
+
+    // Pick the root (= source/sink) for a component. Accumulation gives every
+    // edge the demand on its far side from the root, so the root's own demand
+    // never traverses an edge — the root MUST therefore be a node that carries
+    // no terminal load, or that load would silently vanish. Preference:
+    //   1. an explicit plant (the marked source/sink);
+    //   2. a non-fixture leaf bearing no demand (the drawn supply/outlet entry);
+    //   3. the busiest interior junction bearing no demand (a manifold/collection
+    //      hub — rooting here keeps EVERY terminal's load, whereas falling back
+    //      to a fixture leaf would drop that fixture's demand);
+    //   4. any leaf, else any node (degenerate component).
+    String pickRoot(List<String> component, List<String> leaves) {
+      for (final id in component) {
+        if (roleOf(id) == NodeRole.plant) return id;
+      }
+      for (final id in leaves) {
+        if (roleOf(id) != NodeRole.fixture && !explicitDemandKeys.contains(id)) {
+          return id;
+        }
+      }
+      String? hub;
+      var hubDegree = 1;
+      for (final id in component) {
+        final d = degree(id);
+        if (d > hubDegree &&
+            roleOf(id) != NodeRole.fixture &&
+            !explicitDemandKeys.contains(id)) {
+          hub = id;
+          hubDegree = d;
+        }
+      }
+      if (hub != null) return hub;
+      return leaves.isNotEmpty ? leaves.first : component.first;
+    }
+
+    // Build the terminal-demand map over EVERY demand-bearing node except the
+    // root: a node with an explicit entry contributes it (even mid-run — an
+    // inline fixture/diffuser is a degree-2 node), and a leaf with no entry
+    // contributes the flat default. Pure interior junctions contribute nothing.
+    Map<String, V> terminalMap<V>(
+      List<String> component,
+      String root,
+      Map<String, V> explicit,
+      V defaultForLeaf,
+    ) {
+      final out = <String, V>{};
+      for (final n in component) {
+        if (n == root) continue;
+        final e = explicit[n];
+        if (e != null) {
+          out[n] = e;
+        } else if (degree(n) == 1) {
+          out[n] = defaultForLeaf;
+        }
+      }
+      return out;
+    }
 
     final seen = <String>{};
     for (final start in nodes) {
@@ -322,15 +390,13 @@ Map<String, EdgeSizing> autoSizeNetwork(
         }
       }
       final leaves = component.where((n) => degree(n) == 1).toList();
-      final root = leaves.isNotEmpty ? leaves.first : component.first;
+      final root = pickRoot(component, leaves);
 
       if (isSanitary(service)) {
         // Accumulate DRAINAGE FIXTURE UNITS and size each edge from the code
         // capacity table (branch vs stack), not from Manning flow.
-        final terminalUnits = <String, double>{
-          for (final leaf in leaves)
-            if (leaf != root) leaf: nodeDrainageUnits[leaf] ?? kDefaultLeafDfu,
-        };
+        final terminalUnits =
+            terminalMap(component, root, nodeDrainageUnits, kDefaultLeafDfu);
         final edgeUnits = accumulateFixtureUnits(
           net: net,
           service: service,
@@ -344,10 +410,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
       } else if (service == ServiceType.rainwater) {
         // Accumulate storm runoff and size each downpipe from the rainwater
         // capacity table (not Manning).
-        final terminalDemand = <String, FlowRate>{
-          for (final leaf in leaves)
-            if (leaf != root) leaf: nodeFlowDemand[leaf] ?? demand,
-        };
+        final terminalDemand =
+            terminalMap(component, root, nodeFlowDemand, demand);
         final flows = accumulateFlows(
           net: net,
           service: service,
@@ -367,10 +431,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
       } else if (useUbap) {
         // Per-fixture UBAP when a node carries a fixture type; else the flat
         // default for that water service.
-        final terminalUnits = <String, double>{
-          for (final leaf in leaves)
-            if (leaf != root) leaf: nodeFixtureUnits[leaf] ?? fuPerLeaf,
-        };
+        final terminalUnits =
+            terminalMap(component, root, nodeFixtureUnits, fuPerLeaf);
         final edgeUnits = accumulateFixtureUnits(
           net: net,
           service: service,
@@ -386,10 +448,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
       } else {
         // Per-node flow where set (e.g. a diffuser's airflow); else the flat
         // default for the service.
-        final terminalDemand = <String, FlowRate>{
-          for (final leaf in leaves)
-            if (leaf != root) leaf: nodeFlowDemand[leaf] ?? demand,
-        };
+        final terminalDemand =
+            terminalMap(component, root, nodeFlowDemand, demand);
         allFlows.addAll(
           accumulateFlows(
             net: net,
