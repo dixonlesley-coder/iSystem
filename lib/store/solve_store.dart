@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/duct_static.dart';
@@ -6,6 +8,7 @@ import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/network/zoning.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/fan.dart';
+import 'package:mechx_engine/sizing/hot_water.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
@@ -288,6 +291,39 @@ final bomProvider = Provider<List<BomLine>>((ref) {
     sizing: sizing,
     calibrationBySheet: project.calibrations,
     building: project.building,
+  );
+});
+
+/// Hot-water recirculation design for the drawn hot-water network: the loop is
+/// the total hot-water pipe length, heat loss is estimated per metre, and the
+/// return diameter defaults to the smallest hot-water size. Null when there's
+/// no hot-water network.
+final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+  final hwEdges =
+      net.edges.where((e) => e.service == ServiceType.hotWater).toList();
+  if (hwEdges.isEmpty) return null;
+
+  var lenM = 0.0;
+  var minDia = double.infinity;
+  for (final e in hwEdges) {
+    lenM += edgeLength(
+      e,
+      net,
+      calibrationBySheet: project.calibrations,
+      building: project.building,
+    ).meters;
+    final s = sizing[e.id];
+    if (s != null) minDia = math.min(minDia, s.diameter.meters);
+  }
+  if (lenM <= 0) return null;
+  final loop = Length(lenM);
+  return sizeHotWaterRecirculation(
+    heatLoss: heatLossFromLength(loopLength: loop),
+    loopLength: loop,
+    returnDiameter: minDia.isFinite ? Diameter(minDia) : Diameter.mm(20),
   );
 });
 

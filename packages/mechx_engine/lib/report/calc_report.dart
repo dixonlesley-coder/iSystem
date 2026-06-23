@@ -14,6 +14,7 @@ import '../sizing/bom.dart';
 import '../sizing/fan.dart';
 import '../sizing/fire_sprinkler.dart';
 import '../sizing/fire_standpipe.dart';
+import '../sizing/hot_water.dart';
 import '../sizing/pump.dart';
 import '../standards/sni.dart';
 import '../units.dart';
@@ -35,6 +36,7 @@ class CalcReportData {
   final Head? boosterHead; // downfeed shortfall (null if n/a)
   final bool gravitySufficient;
   final List<DownfeedZoneStatic> zones;
+  final HotWaterRecircDesign? hotWaterRecirc;
 
   final SprinklerDesign? sprinkler;
   final FireStandpipeDesign? standpipe;
@@ -59,6 +61,7 @@ class CalcReportData {
     this.boosterHead,
     this.gravitySufficient = false,
     this.zones = const [],
+    this.hotWaterRecirc,
     this.sprinkler,
     this.standpipe,
     this.fan,
@@ -138,6 +141,13 @@ String buildCalcReportMarkdown(CalcReportData d) {
   if (d.boosterHead != null) {
     b.writeln('- Downfeed: '
         '${d.gravitySufficient ? '**gravity sufficient**' : 'booster **+${d.boosterHead!.meters.toStringAsFixed(1)} m**'}');
+  }
+  final hwr = d.hotWaterRecirc;
+  if (hwr != null) {
+    b.writeln('- Hot-water recirculation: '
+        '**${hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2)} L/s** · '
+        'loop ${hwr.loopHead.meters.toStringAsFixed(1)} m · '
+        'pump ${hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW');
   }
   if (d.zones.isNotEmpty) {
     b.writeln();

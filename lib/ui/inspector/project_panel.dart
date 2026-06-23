@@ -50,6 +50,7 @@ Future<void> exportCalcReport(WidgetRef ref) async {
     boosterHead: downfeed?.boosterHeadRequired,
     gravitySufficient: downfeed?.gravitySufficient ?? false,
     zones: ref.read(zoneStaticsProvider),
+    hotWaterRecirc: ref.read(hotWaterRecircProvider),
     sprinkler: ref.read(sprinklerDesignProvider),
     standpipe: ref.read(standpipeDesignProvider),
     fan: ref.read(ductFanProvider),
@@ -491,6 +492,7 @@ class _ResultsSection extends ConsumerWidget {
     final zoneStatics = ref.watch(zoneStaticsProvider);
     final bom = ref.watch(bomProvider);
     final fittings = ref.watch(fittingsProvider);
+    final hwr = ref.watch(hotWaterRecircProvider);
     final worstZone = zoneStatics.isEmpty
         ? 0.0
         : zoneStatics
@@ -559,6 +561,9 @@ class _ResultsSection extends ConsumerWidget {
         ],
         if (strategy == FeedStrategy.upfeed)
           _kv(context, 'Pressure zones', '${zones.length}'),
+        if (hwr != null)
+          _kv(context, 'HW recirc',
+              '${hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2)} L/s · ${hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
         _kv(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
         if (bom.isNotEmpty) ...[
           const SizedBox(height: MechXSpacing.xs),

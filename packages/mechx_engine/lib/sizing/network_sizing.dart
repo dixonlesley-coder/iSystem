@@ -16,6 +16,7 @@ import '../standards/sni.dart';
 import '../units.dart';
 import 'drainage_sizing.dart' as drain;
 import 'duct_sizing.dart' as duct;
+import 'storm_sizing.dart' as storm;
 import 'water_supply_sizing.dart' as water;
 
 /// Default drainage fixture units assumed at a sanitary terminal that has no
@@ -279,6 +280,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   const profile = SniProfile();
   final allFlows = <String, FlowRate>{};
   final sanitary = <String, EdgeSizing>{}; // DFU-sized drainage/vent edges
+  final stormSizing = <String, EdgeSizing>{}; // rainwater downpipes
 
   bool isWaterSupply(ServiceType s) =>
       s == ServiceType.coldWater || s == ServiceType.hotWater;
@@ -339,6 +341,29 @@ Map<String, EdgeSizing> autoSizeNetwork(
           final edge = net.edges.firstWhere((e) => e.id == entry.key);
           sanitary[entry.key] = _sizeSanitaryEdge(edge, entry.value, ctx);
         }
+      } else if (service == ServiceType.rainwater) {
+        // Accumulate storm runoff and size each downpipe from the rainwater
+        // capacity table (not Manning).
+        final terminalDemand = <String, FlowRate>{
+          for (final leaf in leaves)
+            if (leaf != root) leaf: nodeFlowDemand[leaf] ?? demand,
+        };
+        final flows = accumulateFlows(
+          net: net,
+          service: service,
+          rootId: root,
+          terminalDemand: terminalDemand,
+        );
+        for (final entry in flows.entries) {
+          final r = storm.sizeRainwaterDownpipe(entry.value);
+          stormSizing[entry.key] = EdgeSizing(
+            edgeId: entry.key,
+            service: service,
+            flow: entry.value,
+            diameter: r.diameter,
+            velocity: velocityFromFlow(entry.value, r.diameter),
+          );
+        }
       } else if (useUbap) {
         // Per-fixture UBAP when a node carries a fixture type; else the flat
         // default for that water service.
@@ -379,6 +404,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
 
   final result = sizeNetwork(net, allFlows, ctx);
   result.addAll(sanitary); // DFU-sized drainage/vent
+  result.addAll(stormSizing); // capacity-table rainwater downpipes
   return result;
 }
 

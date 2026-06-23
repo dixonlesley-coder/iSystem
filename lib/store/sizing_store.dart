@@ -2,11 +2,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/storm_sizing.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'app_state.dart';
 import 'network_store.dart';
+
+/// Roof catchment assumed per rainwater outlet until a per-outlet area is
+/// assigned. // VERIFY — refine with a real roof plan.
+const double kDefaultRoofAreaPerOutlet = 100.0;
 
 /// Default per-terminal demand by service, used to auto-size the drawn network
 /// until per-fixture loads are assigned. (Pragmatic placeholders.)
@@ -69,10 +74,19 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
   final anyFlushValve = net.nodes.any(
       (n) => n.fixture == PlumbingFixture.waterClosetFlushValve);
 
+  // Rainwater leaves drain a default roof area at the design storm intensity.
+  final leafDemand = <ServiceType, FlowRate>{
+    ...kDefaultLeafDemand,
+    ServiceType.rainwater: rainwaterDesignFlow(
+      intensityMmPerHr: kDefaultRainfallMmPerHr,
+      roofAreaM2: kDefaultRoofAreaPerOutlet,
+    ),
+  };
+
   return autoSizeNetwork(
     net,
     SizingContext(ductShape: ducts.shape, ductMethod: ducts.method),
-    leafDemand: kDefaultLeafDemand,
+    leafDemand: leafDemand,
     leafFixtureUnits: kDefaultLeafFixtureUnits,
     nodeFixtureUnits: nodeFixtureUnits,
     nodeDrainageUnits: nodeDrainageUnits,

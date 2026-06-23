@@ -4,8 +4,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../data/autosave.dart';
 import '../data/pdf_import.dart';
 import '../data/project_document.dart';
+import '../data/recovery.dart';
 import '../store/app_state.dart';
 import '../store/network_store.dart';
 import '../store/project_store.dart';
@@ -33,6 +35,7 @@ class AppShell extends StatelessWidget {
           children: [
             const _TopBar(),
             Container(height: 1, color: colors.border),
+            const _RecoveryBanner(),
             const _ErrorBanner(),
             Expanded(
               child: Row(
@@ -104,6 +107,9 @@ class _TopBar extends ConsumerWidget {
     if (path == null) return;
     final full = path.endsWith('.mechx') ? path : '$path.mechx';
     await File(full).writeAsString(doc.encode());
+    // The work is now safely on disk — drop any recovery snapshot/offer.
+    await clearRecovery();
+    ref.read(recoveryDocProvider.notifier).clear();
   }
 
   Future<void> _openProject(WidgetRef ref) async {
@@ -313,6 +319,62 @@ class _StatusBar extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.sm),
         child: Text('·', style: TextStyle(fontFamily: 'Roboto', color: color)),
       );
+}
+
+/// Offers to restore a crash-recovery snapshot from a previous session that
+/// ended without a clean exit. Restore loads it; Dismiss discards it.
+class _RecoveryBanner extends ConsumerWidget {
+  const _RecoveryBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final doc = ref.watch(recoveryDocProvider);
+    if (doc == null) return const SizedBox.shrink();
+    final colors = context.colors;
+    final type = context.type;
+
+    Future<void> dismiss() async {
+      await clearRecovery();
+      ref.read(recoveryDocProvider.notifier).clear();
+    }
+
+    return Container(
+      width: double.infinity,
+      color: colors.accent.withAlpha(30),
+      padding: const EdgeInsets.symmetric(
+        horizontal: MechXSpacing.md,
+        vertical: MechXSpacing.xs,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Recover unsaved work from your last session?',
+              style: type.caption.copyWith(color: colors.textPrimary),
+            ),
+          ),
+          MechXButton(
+            label: 'Restore',
+            primary: true,
+            onPressed: () {
+              ref.read(projectControllerProvider.notifier).load(
+                    name: doc.projectName,
+                    floors: doc.floors,
+                    calibrations: doc.calibrations,
+                  );
+              ref
+                  .read(sheetsControllerProvider.notifier)
+                  .loadSheets(doc.sheets, viewports: doc.viewports);
+              ref.read(networkControllerProvider.notifier).loadNetwork(doc.network);
+              dismiss();
+            },
+          ),
+          const SizedBox(width: MechXSpacing.sm),
+          MechXButton(label: 'Dismiss', onPressed: dismiss),
+        ],
+      ),
+    );
+  }
 }
 
 /// A thin, dismissible banner that surfaces a transient load error (e.g. a
