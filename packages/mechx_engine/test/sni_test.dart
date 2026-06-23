@@ -177,6 +177,30 @@ void main() {
         isFalse,
       );
     });
+
+    test('provenance tiers categorise the debt precisely', () {
+      // Verbatim-confirmed SNI clauses are sniVerbatim and never unverified.
+      expect(profile.mandatoryPressureReliefThreshold.status,
+          VerificationStatus.sniVerbatim);
+      expect(profile.minResidualPressureFaucet.status,
+          VerificationStatus.sniVerbatim);
+      // Real but secondary-sourced figures pending the official clause.
+      expect(profile.maxSupplyVelocity.status,
+          VerificationStatus.secondarySource);
+      expect(profile.maxFixtureStaticPressure.status,
+          VerificationStatus.secondarySource);
+      // Drainage velocity is explicitly NOT an SNI clause.
+      expect(profile.maxDrainVelocity.status,
+          VerificationStatus.notAnSniClause);
+      // verified ⇔ sniVerbatim.
+      for (final v in [
+        profile.mandatoryPressureReliefThreshold,
+        profile.maxSupplyVelocity,
+        profile.maxDrainVelocity,
+      ]) {
+        expect(v.verified, v.status == VerificationStatus.sniVerbatim);
+      }
+    });
   });
 
   group('material properties', () {

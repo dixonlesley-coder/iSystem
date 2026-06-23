@@ -25,8 +25,29 @@ library;
 
 import '../units.dart';
 
+/// Provenance tier for a standard value — the precise honesty surface (§12.6).
+/// Splitting the old binary unverified flag tells the engineer WHY a value is
+/// not yet authoritative, so the verification debt is actionable rather than a
+/// flat "unverified" bucket.
+enum VerificationStatus {
+  /// Confirmed against the SNI text itself (verbatim phrasing surfaced and
+  /// corroborated). May be presented as the SNI requirement.
+  sniVerbatim,
+
+  /// A real figure corroborated by independent secondary sources citing SNI,
+  /// but the official clause is NOT yet confirmed against the SNI PDF. Use it,
+  /// but confirm the clause before a submission.
+  secondarySource,
+
+  /// Explicitly NOT an SNI clause — a general engineering-practice value used
+  /// where SNI prescribes a different method (e.g. drains sized by slope, not a
+  /// velocity cap). Cannot become [sniVerbatim] by checking SNI; replace only
+  /// if an actual SNI clause is found.
+  notAnSniClause,
+}
+
 /// A provenance-tagged value from a published standard. Carries enough to both
-/// compute with (`value`) and to be honest about (`citation`, `verified`,
+/// compute with (`value`) and to be honest about (`citation`, `status`,
 /// `sourceUrl`, `note`).
 class StandardValue<T> {
   final T value;
@@ -40,6 +61,11 @@ class StandardValue<T> {
   /// `false` ⇒ unverified (placeholder or secondary-only); UI must mark it so.
   final bool verified;
 
+  /// Precise provenance tier (the honesty surface). Defaults from [verified]:
+  /// verbatim when verified, else a secondary source. Pass it explicitly to flag
+  /// a value that is deliberately NOT an SNI clause.
+  final VerificationStatus status;
+
   /// Web source backing the value (where it was read/corroborated).
   final String? sourceUrl;
 
@@ -51,9 +77,13 @@ class StandardValue<T> {
     required this.unit,
     required this.citation,
     this.verified = false,
+    VerificationStatus? status,
     this.sourceUrl,
     this.note,
-  });
+  }) : status = status ??
+            (verified
+                ? VerificationStatus.sniVerbatim
+                : VerificationStatus.secondarySource);
 
   bool get isUnverified => !verified;
 
@@ -231,7 +261,9 @@ class SniProfile implements StandardsProfile {
         Velocity(3.0),
         unit: 'm/s',
         citation: 'general plumbing practice (NOT an SNI 8153:2015 clause)',
-        verified: false, // VERIFY: SNI 8153 sizes drains by slope + UBAP, not velocity
+        verified: false,
+        // Not an SNI clause: SNI 8153 sizes drains by slope + UBAP, not velocity.
+        status: VerificationStatus.notAnSniClause,
         note: 'SNI 8153:2015 sizes building drains by slope (kemiringan) and '
             'fixture-unit loading, not an explicit velocity cap. 3,0 m/s is a '
             'general-practice upper bound; self-cleansing minimum ≈0,6 m/s. '

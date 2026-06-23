@@ -175,8 +175,12 @@ report export**; versioned `.mechx` save/open with viewport restore;
   first pass (a full design re-balances against the sized diameters — `// VERIFY`).
   Gravity loops (drainage/vent/rainwater) still use the tree path (physical rings
   there are nonsensical).
-- SNI verification debt: several values remain `verified == false` (see
-  `SniProfile.verifyChecklist`) — they MUST surface as UNVERIFIED in any report.
+- SNI verification debt: values carry a `VerificationStatus` tier —
+  `sniVerbatim` (confirmed against the SNI text), `secondarySource` (real but
+  pending the official clause), or `notAnSniClause` (deliberately general
+  practice). Anything not `sniVerbatim` stays `verified == false` and MUST
+  surface (with its tier) in any report. Genuine verbatim confirmation requires
+  the official SNI PDF — do NOT flip a flag from a secondary source.
 - App lifecycle: the root `ProviderContainer` and autosave `Timer` in `main`
   live for the whole process and are not explicitly disposed (fine for a
   single-window desktop app; revisit if multi-window).

@@ -61,6 +61,9 @@ void main() {
     final firstUnverified =
         profile.verifyChecklist.firstWhere((v) => v.isUnverified);
     expect(md, contains(firstUnverified.citation));
+    // The provenance TIER is surfaced, not just a flat "unverified".
+    expect(md, contains('secondary source'));
+    expect(md, contains('not an SNI clause'));
   });
 
   test('building + BOM rows appear', () {

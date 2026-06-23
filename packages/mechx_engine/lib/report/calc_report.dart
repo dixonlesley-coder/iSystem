@@ -72,6 +72,15 @@ class CalcReportData {
   });
 }
 
+/// A short, honest label for an unverified value's provenance tier.
+String _statusTag(VerificationStatus s) => switch (s) {
+      VerificationStatus.sniVerbatim => '',
+      VerificationStatus.secondarySource =>
+        ' _(secondary source — confirm against the SNI clause)_',
+      VerificationStatus.notAnSniClause =>
+        ' _(not an SNI clause — general engineering practice)_',
+    };
+
 String _service(ServiceType s) => switch (s) {
       ServiceType.coldWater => 'Cold water',
       ServiceType.hotWater => 'Hot water',
@@ -113,7 +122,7 @@ String buildCalcReportMarkdown(CalcReportData d) {
       // would mis-scale numbers by 1000×. Fall back to value+unit only when no
       // note is supplied (those entries are non-numeric, e.g. the demand curve).
       final detail = v.note ?? '${v.value} ${v.unit}';
-      b.writeln('- **${v.citation}** — $detail');
+      b.writeln('- **${v.citation}**${_statusTag(v.status)} — $detail');
     }
   }
   b.writeln();
