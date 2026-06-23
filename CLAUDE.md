@@ -159,6 +159,12 @@ report export**; versioned `.mechx` save/open with viewport restore;
   for orchestration-level tests.
 - Add-only / minimal edits; match surrounding style; never push to a branch
   other than the assigned feature branch.
+- **Keep the docs current after every feature.** When a feature lands, before
+  committing it: (1) append a dated row to the **§15 decisions log** in
+  `MEP-PDF-Sizing-Tool-Build-Plan.md` (the authoritative running history), and
+  (2) update this file's **Feature state** / **Known gaps** / **Sizing-engine
+  invariants** sections as needed. Treat the doc update as part of the feature,
+  in the same commit — a feature is not done until its history is recorded.
 
 ## Known gaps / TODO (see decisions log for detail)
 
