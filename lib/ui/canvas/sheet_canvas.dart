@@ -59,10 +59,10 @@ class SheetCanvas extends ConsumerWidget {
     final calibrated =
         ref.watch(projectControllerProvider).calibrationFor(sheet.id) != null;
 
-    // Map the current sheet to a building floor (positional default for now).
+    // Map the current sheet to a building floor (explicit override or
+    // positional default).
     final levelCount = ref.watch(projectControllerProvider).building.levelCount;
-    final floorIndex =
-        state.currentIndex < levelCount ? state.currentIndex : levelCount - 1;
+    final floorIndex = state.floorFor(sheet.id, levelCount);
 
     return Focus(
       canRequestFocus: false,

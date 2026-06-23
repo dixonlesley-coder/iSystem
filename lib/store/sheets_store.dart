@@ -14,10 +14,15 @@ class SheetsState {
   final int currentIndex;
   final Map<String, ViewportTransform> viewports;
 
+  /// Explicit sheet → building-floor mapping. When a sheet isn't listed, its
+  /// floor defaults to its position in [sheets] (one plan per floor).
+  final Map<String, int> sheetFloors;
+
   const SheetsState({
     this.sheets = const [],
     this.currentIndex = 0,
     this.viewports = const {},
+    this.sheetFloors = const {},
   });
 
   bool get isEmpty => sheets.isEmpty;
@@ -29,15 +34,25 @@ class SheetsState {
   /// (the canvas will fit-to-view on first show).
   ViewportTransform? viewportFor(String sheetId) => viewports[sheetId];
 
+  /// The building floor a sheet maps to: an explicit override, else the sheet's
+  /// positional index — both clamped to the building's [levelCount].
+  int floorFor(String sheetId, int levelCount) {
+    final pos = sheets.indexWhere((s) => s.id == sheetId);
+    final base = sheetFloors[sheetId] ?? (pos < 0 ? 0 : pos);
+    return base.clamp(0, levelCount - 1);
+  }
+
   SheetsState copyWith({
     List<Sheet>? sheets,
     int? currentIndex,
     Map<String, ViewportTransform>? viewports,
+    Map<String, int>? sheetFloors,
   }) =>
       SheetsState(
         sheets: sheets ?? this.sheets,
         currentIndex: currentIndex ?? this.currentIndex,
         viewports: viewports ?? this.viewports,
+        sheetFloors: sheetFloors ?? this.sheetFloors,
       );
 }
 
@@ -56,8 +71,21 @@ class SheetsController extends Notifier<SheetsState> {
   void loadSheets(
     List<Sheet> sheets, {
     Map<String, ViewportTransform> viewports = const {},
+    Map<String, int> sheetFloors = const {},
   }) =>
-      state = SheetsState(sheets: sheets, currentIndex: 0, viewports: viewports);
+      state = SheetsState(
+        sheets: sheets,
+        currentIndex: 0,
+        viewports: viewports,
+        sheetFloors: sheetFloors,
+      );
+
+  /// Map [sheetId] to building floor [floorIndex] (explicit override).
+  void setSheetFloor(String sheetId, int floorIndex) {
+    final next = Map<String, int>.from(state.sheetFloors)
+      ..[sheetId] = floorIndex;
+    state = state.copyWith(sheetFloors: next);
+  }
 
   void selectSheet(int index) {
     if (index < 0 || index >= state.sheets.length || index == state.currentIndex) {

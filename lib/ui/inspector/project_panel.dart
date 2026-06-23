@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
+import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
@@ -71,6 +72,30 @@ Future<void> exportCalcReport(WidgetRef ref) async {
   await File(full).writeAsString(buildCalcReportMarkdown(data));
 }
 
+/// Export the current sheet/floor's drawn network as a DXF drawing file.
+Future<void> exportDrawingDxf(WidgetRef ref) async {
+  final sheets = ref.read(sheetsControllerProvider);
+  final sheet = sheets.current;
+  if (sheet == null) return;
+  final levelCount = ref.read(projectControllerProvider).building.levelCount;
+  final floorIndex = sheets.floorFor(sheet.id, levelCount);
+  final dxf = networkToDxf(
+    net: ref.read(networkControllerProvider).network,
+    sizing: ref.read(sizingProvider),
+    sheetId: sheet.id,
+    floorIndex: floorIndex,
+  );
+  final path = await FilePicker.saveFile(
+    dialogTitle: 'Export drawing (DXF)',
+    fileName: '${sheet.name}.dxf',
+    type: FileType.custom,
+    allowedExtensions: const ['dxf'],
+  );
+  if (path == null) return;
+  final full = path.endsWith('.dxf') ? path : '$path.dxf';
+  await File(full).writeAsString(dxf);
+}
+
 /// All services offered in the draw palette / edge editor, in a sensible order.
 const List<ServiceType> kDrawServices = [
   ServiceType.coldWater,
@@ -119,12 +144,19 @@ class ProjectPanel extends ConsumerWidget {
                 onChanged: ctrl.setName,
               ),
               const SizedBox(height: MechXSpacing.sm),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: MechXButton(
-                  label: 'Export calc report (MD)',
-                  onPressed: () => exportCalcReport(ref),
-                ),
+              Wrap(
+                spacing: MechXSpacing.xs,
+                runSpacing: MechXSpacing.xs,
+                children: [
+                  MechXButton(
+                    label: 'Export calc report (MD)',
+                    onPressed: () => exportCalcReport(ref),
+                  ),
+                  MechXButton(
+                    label: 'Export drawing (DXF)',
+                    onPressed: () => exportDrawingDxf(ref),
+                  ),
+                ],
               ),
               const SizedBox(height: MechXSpacing.lg),
 
@@ -181,6 +213,49 @@ class ProjectPanel extends ConsumerWidget {
               // ── HVAC / ducting ────────────────────────────────────────────
               const _HvacSection(),
               const SizedBox(height: MechXSpacing.lg),
+
+              // ── Sheet → floor mapping ─────────────────────────────────────
+              if (currentSheet != null) ...[
+                _SectionLabel('Sheet'),
+                const SizedBox(height: MechXSpacing.sm),
+                Builder(builder: (context) {
+                  final sheetsState = ref.watch(sheetsControllerProvider);
+                  final floor =
+                      sheetsState.floorFor(currentSheet.id, building.levelCount);
+                  final floorName = building.floors[floor].name;
+                  return Row(
+                    children: [
+                      Expanded(
+                        child: Text('Maps to floor',
+                            style:
+                                type.caption.copyWith(color: colors.textMuted)),
+                      ),
+                      _GlyphButton(
+                        glyph: '−',
+                        onTap: floor > 0
+                            ? () => ref
+                                .read(sheetsControllerProvider.notifier)
+                                .setSheetFloor(currentSheet.id, floor - 1)
+                            : null,
+                      ),
+                      const SizedBox(width: MechXSpacing.xs),
+                      Text(floorName,
+                          style:
+                              type.mono.copyWith(color: colors.textSecondary)),
+                      const SizedBox(width: MechXSpacing.xs),
+                      _GlyphButton(
+                        glyph: '+',
+                        onTap: floor < building.levelCount - 1
+                            ? () => ref
+                                .read(sheetsControllerProvider.notifier)
+                                .setSheetFloor(currentSheet.id, floor + 1)
+                            : null,
+                      ),
+                    ],
+                  );
+                }),
+                const SizedBox(height: MechXSpacing.lg),
+              ],
 
               // ── Scale calibration ─────────────────────────────────────────
               _SectionLabel('Scale'),
@@ -379,7 +454,7 @@ class _DrawSection extends ConsumerWidget {
     // sheet→floor mapping). Enabled only when a next floor + sheet exist.
     final current = sheets.current;
     final fromFloor =
-        sheets.currentIndex < levelCount ? sheets.currentIndex : levelCount - 1;
+        current == null ? 0 : sheets.floorFor(current.id, levelCount);
     final toFloor = fromFloor + 1;
     final canDuplicate = current != null &&
         toFloor < levelCount &&
@@ -496,6 +571,29 @@ class _SizingSection extends ConsumerWidget {
                 selected: ref.watch(occupancyProvider) == o,
                 onTap: () => ref.read(occupancyProvider.notifier).set(o),
               ),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        Row(
+          children: [
+            Expanded(
+              child: Text('Rainfall (storm)',
+                  style: type.caption.copyWith(color: colors.textMuted)),
+            ),
+            _GlyphButton(
+              glyph: '−',
+              onTap: () =>
+                  ref.read(rainfallIntensityProvider.notifier).nudge(-25),
+            ),
+            const SizedBox(width: MechXSpacing.xs),
+            Text('${ref.watch(rainfallIntensityProvider).round()} mm/hr',
+                style: type.mono.copyWith(color: colors.textSecondary)),
+            const SizedBox(width: MechXSpacing.xs),
+            _GlyphButton(
+              glyph: '+',
+              onTap: () =>
+                  ref.read(rainfallIntensityProvider.notifier).nudge(25),
+            ),
           ],
         ),
       ],

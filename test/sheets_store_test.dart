@@ -50,4 +50,20 @@ void main() {
     expect(s.currentIndex, 0);
     expect(s.viewportFor('s1'), isNull);
   });
+
+  test('floorFor: positional default, explicit override, clamped', () {
+    final c = makeContainer();
+    final ctrl = c.read(sheetsControllerProvider.notifier);
+    // 3 demo sheets s1,s2,s3 → positional floors 0,1,2 within a 3-floor model.
+    var s = c.read(sheetsControllerProvider);
+    expect(s.floorFor('s1', 3), 0);
+    expect(s.floorFor('s2', 3), 1);
+    expect(s.floorFor('s3', 3), 2);
+    // explicit override
+    ctrl.setSheetFloor('s3', 0);
+    s = c.read(sheetsControllerProvider);
+    expect(s.floorFor('s3', 3), 0);
+    // clamped to the building's level count
+    expect(s.floorFor('s2', 1), 0); // positional 1 → clamp to 0 when 1 level
+  });
 }

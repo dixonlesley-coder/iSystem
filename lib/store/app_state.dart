@@ -64,6 +64,18 @@ class OccupancyController extends Notifier<Occupancy> {
 /// Default service to use as the supply (for source auto-pick / solve).
 const ServiceType kSupplyService = ServiceType.coldWater;
 
+/// Design rainfall intensity (mm/hr) driving storm/rainwater sizing.
+final rainfallIntensityProvider =
+    NotifierProvider<RainfallController, double>(RainfallController.new);
+
+class RainfallController extends Notifier<double> {
+  @override
+  double build() => 200.0; // VERIFY against the local design storm
+
+  void set(double v) => state = v.clamp(50.0, 600.0).toDouble();
+  void nudge(double delta) => set(state + delta);
+}
+
 /// A transient, user-facing error message (e.g. a failed project open). Null
 /// when there is nothing to show; the shell renders it as a dismissible banner.
 final loadErrorProvider =

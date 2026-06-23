@@ -97,6 +97,7 @@ class _TopBar extends ConsumerWidget {
       sheets: sheetsState.sheets,
       network: ref.read(networkControllerProvider).network,
       viewports: sheetsState.viewports,
+      sheetFloors: sheetsState.sheetFloors,
     );
     final path = await FilePicker.saveFile(
       dialogTitle: 'Save MechX project',
@@ -127,9 +128,11 @@ class _TopBar extends ConsumerWidget {
             floors: doc.floors,
             calibrations: doc.calibrations,
           );
-      ref
-          .read(sheetsControllerProvider.notifier)
-          .loadSheets(doc.sheets, viewports: doc.viewports);
+      ref.read(sheetsControllerProvider.notifier).loadSheets(
+            doc.sheets,
+            viewports: doc.viewports,
+            sheetFloors: doc.sheetFloors,
+          );
       ref.read(networkControllerProvider.notifier).loadNetwork(doc.network);
       ref.read(loadErrorProvider.notifier).clear();
     } on ProjectDocumentException catch (e) {
@@ -362,9 +365,11 @@ class _RecoveryBanner extends ConsumerWidget {
                     floors: doc.floors,
                     calibrations: doc.calibrations,
                   );
-              ref
-                  .read(sheetsControllerProvider.notifier)
-                  .loadSheets(doc.sheets, viewports: doc.viewports);
+              ref.read(sheetsControllerProvider.notifier).loadSheets(
+                    doc.sheets,
+                    viewports: doc.viewports,
+                    sheetFloors: doc.sheetFloors,
+                  );
               ref.read(networkControllerProvider.notifier).loadNetwork(doc.network);
               dismiss();
             },

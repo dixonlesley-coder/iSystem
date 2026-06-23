@@ -27,6 +27,7 @@ void main() {
       viewports: {
         's1': ViewportTransform(scale: 0.5, offset: Offset(12, 34)),
       },
+      sheetFloors: {'p#0': 1},
       network: Network(
         nodes: [
           NetNode(
@@ -94,9 +95,10 @@ void main() {
     expect(decoded.network.edges.length, 2);
     expect(decoded.network.edges[0].service, ServiceType.coldWater);
     expect(decoded.network.edges[1].kind, EdgeKind.riser);
-    // viewport round-trips
+    // viewport + sheet→floor mapping round-trip
     expect(decoded.viewports['s1']?.scale, 0.5);
     expect(decoded.viewports['s1']?.offset, const Offset(12, 34));
+    expect(decoded.sheetFloors['p#0'], 1);
   });
 
   test('tolerates a missing version (defaults to current)', () {

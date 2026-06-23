@@ -57,6 +57,9 @@ class ProjectDocument {
   /// Per-sheet pan/zoom, so a reopened project restores each view (§4).
   final Map<String, ViewportTransform> viewports;
 
+  /// Explicit sheet → building-floor overrides.
+  final Map<String, int> sheetFloors;
+
   const ProjectDocument({
     this.version = currentVersion,
     required this.projectName,
@@ -65,6 +68,7 @@ class ProjectDocument {
     required this.sheets,
     required this.network,
     this.viewports = const {},
+    this.sheetFloors = const {},
   });
 
   Map<String, dynamic> toJson() => {
@@ -96,6 +100,9 @@ class ProjectDocument {
               'dx': e.value.offset.dx,
               'dy': e.value.offset.dy,
             },
+        },
+        'sheetFloors': {
+          for (final e in sheetFloors.entries) e.key: e.value,
         },
         'network': {
           'nodes': [
@@ -210,6 +217,13 @@ class ProjectDocument {
         }
       });
     }
+    final sheetFloors = <String, int>{};
+    final rawFloors = json['sheetFloors'];
+    if (rawFloors is Map) {
+      rawFloors.forEach((key, v) {
+        if (v is num) sheetFloors[key as String] = v.toInt();
+      });
+    }
     return ProjectDocument(
       version: version,
       projectName: project['name'] as String? ?? 'Untitled project',
@@ -218,6 +232,7 @@ class ProjectDocument {
       sheets: sheets,
       network: Network(nodes: nodes, edges: edges),
       viewports: viewports,
+      sheetFloors: sheetFloors,
     );
   }
 

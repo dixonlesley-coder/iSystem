@@ -35,6 +35,7 @@ ProjectDocument buildDocument(ProviderContainer c) {
     sheets: sheets.sheets,
     network: network,
     viewports: sheets.viewports,
+    sheetFloors: sheets.sheetFloors,
   );
 }
 

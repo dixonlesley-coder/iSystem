@@ -78,7 +78,7 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
   final leafDemand = <ServiceType, FlowRate>{
     ...kDefaultLeafDemand,
     ServiceType.rainwater: rainwaterDesignFlow(
-      intensityMmPerHr: kDefaultRainfallMmPerHr,
+      intensityMmPerHr: ref.watch(rainfallIntensityProvider),
       roofAreaM2: kDefaultRoofAreaPerOutlet,
     ),
   };
