@@ -61,8 +61,13 @@ jobs:
         working-directory: packages/mechx_engine
         run: dart test
 
-      - name: App tests (incl. goldens)
-        run: flutter test
+      # Golden screenshots are platform-locked to their Linux generation host
+      # (font anti-aliasing differs ~2% on windows-latest), so they are tagged
+      # `golden` and excluded here — the Linux CI gate (ci.yml on ubuntu) runs
+      # the full `flutter test` and enforces them. This gate still runs every
+      # logic/widget test.
+      - name: App tests (logic + widget; goldens enforced on the Linux CI gate)
+        run: flutter test --exclude-tags golden
 
       - name: Analyze (must be clean)
         run: flutter analyze

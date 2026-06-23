@@ -1,0 +1,10 @@
+# Test tags. The `golden` tag marks the pixel-screenshot suite
+# (test/screenshots_test.dart), which is platform-sensitive: goldens are
+# generated on Linux and font anti-aliasing differs on other platforms (~2%
+# pixel diff on windows-latest). The canonical Linux CI gate (.github/workflows/
+# ci.yml on ubuntu) runs the full `flutter test` and enforces them; the Windows
+# release gate (release.yml) runs `flutter test --exclude-tags golden` so a
+# release is never blocked by a cross-platform rendering diff.
+tags:
+  golden:
+    description: Platform-sensitive golden screenshot tests; enforced on the Linux CI gate, excluded from the Windows release build.
