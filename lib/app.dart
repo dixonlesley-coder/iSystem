@@ -16,7 +16,7 @@ class MechXApp extends ConsumerWidget {
     final theme = MechXThemeData.forBrightness(ref.watch(brightnessProvider));
 
     return WidgetsApp(
-      title: 'MechX',
+      title: 'iSystem',
       debugShowCheckedModeBanner: false,
       color: theme.colors.accent,
       pageRouteBuilder: <T>(RouteSettings settings, WidgetBuilder builder) =>

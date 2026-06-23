@@ -1,8 +1,11 @@
-# CLAUDE.md — MechX
+# CLAUDE.md — iSystem (formerly MechX)
 
-Guidance for working in this repository. MechX is an **offline native Windows
-desktop Flutter app** for MEP (mechanical / electrical / plumbing) design of
-Indonesian (**SNI**-standard) buildings. An engineer loads PDF floor plans,
+Guidance for working in this repository. iSystem (the merged M+E+P product;
+formerly **MechX**, which was M+P) is an **offline native Windows desktop
+Flutter app** for MEP (mechanical / electrical / plumbing) design of Indonesian
+(**SNI / PUIL**-standard) buildings. NOTE: the product/UI is branded "iSystem",
+but the internal Dart packages (`mechx_engine` engine, `mechx` app), the
+`MechX*` class names, and the Windows `BINARY_NAME=mechx` are deliberately kept. An engineer loads PDF floor plans,
 calibrates each sheet's scale, sets per-floor heights, draws duct/pipe/fire
 elements, and MechX auto-sizes everything to SNI rules, sizes pumps/fans/fire
 systems, draws a schematic riser diagram, shows a live pressure heatmap, and
@@ -198,9 +201,11 @@ report export**; versioned `.mechx` save/open with viewport restore;
   pump/fan/fire-pump duty providers → A5 `buildEquipmentCircuits` →
   `ElectricalProjectController.syncMepEquipment` (the MEP→E auto-feed), and
   `buildDocument`/`applyDocument` round-trip the electrical project in `.mechx`.
-  Remaining: **A8** (the deferred advanced passes) and the product-string rebrand
-  to "iSystem" (the in-app "MechX" labels + window title; internal package
-  `mechx_engine` and the Windows `BINARY_NAME` stay).
+  The product-string **rebrand to "iSystem"** is done (in-app labels + window
+  title; the internal package names + `MechX*` classes + Windows `BINARY_NAME`
+  stay). Remaining: **A8** (the deferred advanced passes — fault/Zs/ADS,
+  selectivity, PF/capacitor, transformer/MV, sources, arc-flash, harmonics,
+  containment, enclosure, occupancy library, metering, SPD, lightning).
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),

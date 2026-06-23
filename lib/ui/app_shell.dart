@@ -116,7 +116,7 @@ class _TopBar extends ConsumerWidget {
     final project = ref.read(projectControllerProvider);
     final doc = buildDocument(ref.read);
     final path = await FilePicker.saveFile(
-      dialogTitle: 'Save MechX project',
+      dialogTitle: 'Save iSystem project',
       fileName: '${project.name}.mechx',
       type: FileType.custom,
       allowedExtensions: const ['mechx'],
@@ -186,7 +186,8 @@ class _TopBar extends ConsumerWidget {
         ),
         child: Row(
           children: [
-            Text('MechX', style: type.title.copyWith(color: colors.textPrimary)),
+            Text('iSystem',
+                style: type.title.copyWith(color: colors.textPrimary)),
             const SizedBox(width: MechXSpacing.sm),
             Flexible(
               child: Text(

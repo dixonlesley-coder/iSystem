@@ -108,7 +108,8 @@ class DesignSettings {
       );
 }
 
-/// Versioned MechX project document — the on-disk format (a `.mechx` JSON file).
+/// Versioned iSystem project document — the on-disk format (a `.mechx` JSON file;
+/// the extension is kept for backward compatibility).
 /// Pure (de)serialization only; callers handle file IO. A `version` header is
 /// written from day one so the format can migrate.
 class ProjectDocument {
@@ -227,7 +228,7 @@ class ProjectDocument {
     // Future versions < currentVersion would be migrated here before parsing.
     if (json['project'] is! Map) {
       throw const ProjectDocumentException(
-        'Not a MechX project file (missing "project" section).',
+        'Not an iSystem project file (missing "project" section).',
       );
     }
     final project = json['project'] as Map<String, dynamic>;
@@ -336,7 +337,7 @@ class ProjectDocument {
       throw ProjectDocumentException('File is not valid JSON: ${e.message}');
     }
     if (raw is! Map<String, dynamic>) {
-      throw const ProjectDocumentException('Not a MechX project file.');
+      throw const ProjectDocumentException('Not an iSystem project file.');
     }
     try {
       return ProjectDocument.fromJson(raw);
