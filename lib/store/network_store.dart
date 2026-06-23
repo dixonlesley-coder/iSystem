@@ -4,6 +4,8 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'history_store.dart';
+
 /// Active canvas tool.
 enum DrawTool { select, drawRun, drawRiser }
 
@@ -44,6 +46,7 @@ class NetworkController extends Notifier<DrawingState> {
     _undo.add(state.network);
     if (_undo.length > 200) _undo.removeAt(0);
     _redo.clear();
+    ref.read(historyProvider.notifier).record(UndoDomain.network);
     state = DrawingState(
       network: next,
       service: state.service,
@@ -378,6 +381,7 @@ class NetworkController extends Notifier<DrawingState> {
     _undo.add(state.network);
     if (_undo.length > 200) _undo.removeAt(0);
     _redo.clear();
+    ref.read(historyProvider.notifier).record(UndoDomain.network);
   }
 
   /// Move a node to ([x], [y]) in sheet/world pixels WITHOUT recording undo

@@ -16,6 +16,7 @@ import 'package:mechx_engine/units.dart';
 import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/fire_store.dart';
+import '../../store/history_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
@@ -541,8 +542,14 @@ class _DrawSection extends ConsumerWidget {
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
           children: [
-            MechXButton(label: 'Undo', onPressed: ctrl.undo),
-            MechXButton(label: 'Redo', onPressed: ctrl.redo),
+            MechXButton(
+              label: 'Undo',
+              onPressed: ref.read(historyProvider.notifier).undo,
+            ),
+            MechXButton(
+              label: 'Redo',
+              onPressed: ref.read(historyProvider.notifier).redo,
+            ),
             MechXButton(label: 'Clear', onPressed: ctrl.clear),
             MechXButton(
               label: 'Ortho',

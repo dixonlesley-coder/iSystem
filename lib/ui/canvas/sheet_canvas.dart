@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/calibration_store.dart';
+import '../../store/history_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -134,28 +135,16 @@ class SheetCanvas extends ConsumerWidget {
         HardwareKeyboard.instance.isMetaPressed;
     final shift = HardwareKeyboard.instance.isShiftPressed;
 
-    // Unified undo/redo across network edits then project edits (Ctrl/Cmd+Z,
-    // Ctrl+Shift+Z or Ctrl+Y to redo).
+    // Single global undo/redo timeline across all domains (Ctrl/Cmd+Z,
+    // Ctrl+Shift+Z or Ctrl+Y to redo) — reverts the genuinely most-recent edit.
     if (mod && key == LogicalKeyboardKey.keyZ && !shift) {
-      final net = ref.read(networkControllerProvider.notifier);
-      final proj = ref.read(projectControllerProvider.notifier);
-      if (net.canUndo) {
-        net.undo();
-      } else if (proj.canUndo) {
-        proj.undo();
-      }
+      ref.read(historyProvider.notifier).undo();
       return KeyEventResult.handled;
     }
     if (mod &&
         ((key == LogicalKeyboardKey.keyZ && shift) ||
             key == LogicalKeyboardKey.keyY)) {
-      final net = ref.read(networkControllerProvider.notifier);
-      final proj = ref.read(projectControllerProvider.notifier);
-      if (net.canRedo) {
-        net.redo();
-      } else if (proj.canRedo) {
-        proj.redo();
-      }
+      ref.read(historyProvider.notifier).redo();
       return KeyEventResult.handled;
     }
 

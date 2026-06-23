@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../store/app_state.dart';
 import '../store/fire_store.dart';
+import '../store/history_store.dart';
 import '../store/network_store.dart';
 import '../store/project_store.dart';
 import '../store/sheets_store.dart';
@@ -85,6 +86,9 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
         sheetFloors: doc.sheetFloors,
       );
   read(networkControllerProvider.notifier).loadNetwork(doc.network);
+  // An opened/restored document is a fresh baseline — clear the global timeline
+  // to match the per-domain controllers clearing their own stacks on load.
+  read(historyProvider.notifier).reset();
   final s = doc.settings;
   read(occupancyProvider.notifier).set(s.occupancy);
   read(feedStrategyProvider.notifier)

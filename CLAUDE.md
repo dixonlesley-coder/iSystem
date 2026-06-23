@@ -146,9 +146,12 @@ report export**; versioned `.mechx` save/open with viewport restore;
 - **Riverpod**: `Notifier`/`NotifierProvider` for mutable state, `Provider` for
   derived values. Controllers expose intent methods; widgets `ref.watch` state
   and `ref.read(...).notifier` for actions.
-- **Undo**: `NetworkController` and `ProjectController` each snapshot before
-  mutating; a unified Ctrl/Cmd+Z in `sheet_canvas.dart` undoes network then
-  project. (A single global timeline is still a TODO.)
+- **Undo**: `NetworkController` and `ProjectController` each keep a local
+  snapshot stack, but every forward mutation also records its domain on a
+  **single global timeline** (`store/history_store.dart`). Ctrl/Cmd+Z (and the
+  Draw-panel Undo/Redo) call `historyProvider`, which pops the timeline and
+  drives the owning controller's local revert — so undo reverts the genuinely
+  most-recent edit across domains. `applyDocument` resets the timeline on load.
 - **Tests are the spec.** Engine seed suites hand-compute expected values from
   first principles (see the arithmetic comments) — keep that. When a formula
   changes, update the test's derivation, don't just relax tolerances. Prefer
@@ -163,7 +166,6 @@ report export**; versioned `.mechx` save/open with viewport restore;
   repo).
 - Native PDF *drawing* export (DXF drawing export and the Markdown calc report
   are done; both convert to PDF externally).
-- Single global undo timeline (undo is currently per-domain).
 - Multi-select / copy-paste / measurement-annotation; per-outlet roof-area UI
   for storm (rainfall intensity is tunable; roof area is a fixed default);
   user fixture libraries.

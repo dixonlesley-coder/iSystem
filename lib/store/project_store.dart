@@ -4,6 +4,8 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'history_store.dart';
+
 /// Editable project: name, the building's [floors] (the source of truth for
 /// riser/vertical length, §10), and per-sheet [calibrations] (px → real length,
 /// §10 horizontal length). Sizing reads elevations + calibration from here.
@@ -55,11 +57,14 @@ class ProjectController extends Notifier<ProjectState> {
   bool get canUndo => _undo.isNotEmpty;
   bool get canRedo => _redo.isNotEmpty;
 
-  /// Snapshot the current state before a mutation so it can be undone.
+  /// Snapshot the current state before a mutation so it can be undone, and
+  /// record the action on the global timeline (so a unified undo reverts the
+  /// most-recent edit across domains, not all project edits first).
   void _snapshot() {
     _undo.add(state);
     if (_undo.length > 200) _undo.removeAt(0);
     _redo.clear();
+    ref.read(historyProvider.notifier).record(UndoDomain.project);
   }
 
   void undo() {
