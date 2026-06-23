@@ -3,11 +3,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
+import 'package:mechx_engine/electrical/earthing.dart';
+import 'package:mechx_engine/electrical/load_kind.dart';
+import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/puil.dart'
+    show CableInstallMethod, ConductorInsulation, ConductorMaterial;
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -210,5 +215,162 @@ void main() {
         throwsA(isA<ProjectDocumentException>()));
     expect(() => ProjectDocument.decode('{"hello":"world"}'),
         throwsA(isA<ProjectDocumentException>()));
+  });
+
+  test('v2 electrical sub-model round-trips through encode/decode', () {
+    const doc = ProjectDocument(
+      projectName: 'Tower E',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      electrical: ElectricalProject(
+        id: 'ep1',
+        name: 'Building electrical',
+        earthingSystem: EarthingSystem.tt,
+        panels: [
+          ElectricalPanel(
+            id: 'mdp',
+            name: 'Main Distribution',
+            tag: 'MDP',
+            system: ElectricalSystem.threePhase,
+            voltage: Voltage(400),
+            ambientTempC: 35,
+            installMethod: CableInstallMethod.tray,
+            insulation: ConductorInsulation.xlpe,
+            material: ConductorMaterial.copper,
+            groupingCount: 3,
+            diversityFactor: 0.8,
+            occupancy: 'office',
+            sourceType: PanelSource.utility,
+            circuits: [
+              ElectricalCircuit(
+                id: 'c1',
+                name: 'Lighting',
+                role: CircuitRole.branch,
+                loadW: 3600,
+                cosPhi: 0.9,
+                length: Length(25),
+                loadKind: LoadKind.lighting,
+                isLighting: true,
+                phases: 1,
+                phaseOverride: PhaseLine.l2,
+                breakerOverrideA: Current(16),
+              ),
+              ElectricalCircuit(
+                id: 'c2',
+                name: 'Feeder to SP-1',
+                role: CircuitRole.branch,
+                loadKind: LoadKind.feeder,
+                length: Length(40),
+                feedsPanelId: 'sp1',
+                sourceEquipmentId: 'pump-101',
+                flaOverrideA: Current(22.5),
+                busbarBreakBefore: true,
+              ),
+            ],
+          ),
+          ElectricalPanel(
+            id: 'sp1',
+            name: 'Sub Panel 1',
+            tag: 'SP-1',
+            system: ElectricalSystem.singlePhase,
+            voltage: Voltage(220),
+            sourceType: PanelSource.feeder,
+            fedByCircuitId: 'c2',
+          ),
+        ],
+      ),
+    );
+
+    final decoded = ProjectDocument.decode(doc.encode());
+    expect(decoded.version, ProjectDocument.currentVersion);
+    expect(decoded.version, 2);
+
+    final e = decoded.electrical;
+    expect(e, isNotNull);
+    expect(e!.id, 'ep1');
+    expect(e.name, 'Building electrical');
+    expect(e.earthingSystem, EarthingSystem.tt);
+    expect(e.panels.length, 2);
+
+    final mdp = e.panels[0];
+    expect(mdp.id, 'mdp');
+    expect(mdp.tag, 'MDP');
+    expect(mdp.system, ElectricalSystem.threePhase);
+    expect(mdp.voltage.volts, 400);
+    expect(mdp.ambientTempC, 35);
+    expect(mdp.installMethod, CableInstallMethod.tray);
+    expect(mdp.insulation, ConductorInsulation.xlpe);
+    expect(mdp.material, ConductorMaterial.copper);
+    expect(mdp.groupingCount, 3);
+    expect(mdp.diversityFactor, 0.8);
+    expect(mdp.occupancy, 'office');
+    expect(mdp.sourceType, PanelSource.utility);
+    expect(mdp.circuits.length, 2);
+
+    final c1 = mdp.circuits[0];
+    expect(c1.id, 'c1');
+    expect(c1.loadW, 3600);
+    expect(c1.cosPhi, 0.9);
+    expect(c1.length.meters, 25);
+    expect(c1.loadKind, LoadKind.lighting);
+    expect(c1.isLighting, isTrue);
+    expect(c1.phases, 1);
+    expect(c1.phaseOverride, PhaseLine.l2);
+    expect(c1.breakerOverrideA?.amperes, 16);
+
+    final c2 = mdp.circuits[1];
+    expect(c2.loadKind, LoadKind.feeder);
+    expect(c2.isFeeder, isTrue);
+    expect(c2.length.meters, 40);
+    expect(c2.feedsPanelId, 'sp1');
+    expect(c2.sourceEquipmentId, 'pump-101');
+    expect(c2.flaOverrideA?.amperes, 22.5);
+    expect(c2.busbarBreakBefore, isTrue);
+    // Optional fields not set stay null.
+    expect(c2.motorKw, isNull);
+    expect(c2.phaseOverride, isNull);
+
+    final sp1 = e.panels[1];
+    expect(sp1.system, ElectricalSystem.singlePhase);
+    expect(sp1.voltage.volts, 220);
+    expect(sp1.sourceType, PanelSource.feeder);
+    expect(sp1.fedByCircuitId, 'c2');
+    expect(sp1.circuits, isEmpty);
+  });
+
+  test('a v1 file (no electrical key) loads with electrical == null', () {
+    final v1Json = <String, dynamic>{
+      'version': 1,
+      'project': {
+        'name': 'Legacy',
+        'floors': [
+          {'name': 'G', 'height_m': 3.0},
+        ],
+        'calibrations': <String, dynamic>{},
+      },
+      'sheets': <dynamic>[],
+      'network': {'nodes': <dynamic>[], 'edges': <dynamic>[]},
+    };
+    final decoded = ProjectDocument.fromJson(v1Json);
+    expect(decoded.version, 1);
+    expect(decoded.projectName, 'Legacy');
+    expect(decoded.electrical, isNull);
+  });
+
+  test('a v3 (newer) file is rejected with ProjectDocumentException', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    final json = doc.toJson()..['version'] = 3;
+    expect(
+      () => ProjectDocument.fromJson(json),
+      throwsA(isA<ProjectDocumentException>()),
+    );
   });
 }
