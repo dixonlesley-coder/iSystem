@@ -272,13 +272,17 @@ report export**; versioned `.mechx` save/open with viewport restore;
   for linear panels). The **full multi-brand parts catalogue** is ported verbatim into
   `electrical/catalog_data/**` + `catalog.dart` — **534 globally-unique parts** across Schneider /
   Mitsubishi / LS / ABB / Legrand / Chint + generic cables (matchers/`bom.dart`/`quotation.dart`
-  unchanged). The **Windows release pipeline** is verified rebrand-correct (`release.yml` +
-  `installer/iSystem.iss`, feed URL via `${GITHUB_REPOSITORY}`); version `1.0.0+1`, first publish
-  awaits user sign-off.
+  unchanged). **`v1.0.0` is SHIPPED** — the work was merged to the default branch
+  (`claude/laughing-carson-4vhyf7`) via PRs #1/#2/#3 and the Release workflow published
+  `iSystem-1.0.0-setup.exe` + `latest.json` (feed sha256 matches the installer). Two first-release
+  CI fixes the Windows runner exposed: goldens are platform-locked (~2% font-AA diff on Windows) so
+  the screenshot suite is tagged `golden` and the **release** gate runs `flutter test
+  --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
+  `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Remaining: **Wave 4b**
   (electrical drawings/SLD-GA-one-line export + commercial UI + workflow/i18n), the
-  per-segment material→hydraulic-solve fold, exposing Fold-1 fault-level/clearing-time as project
-  settings, and cutting the first release (`v1.0.0`).
+  per-segment material→hydraulic-solve fold, and exposing Fold-1 fault-level/clearing-time as
+  project settings.
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),
