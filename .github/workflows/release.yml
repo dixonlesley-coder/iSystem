@@ -105,7 +105,10 @@ jobs:
           set -euo pipefail
           VERSION="${{ steps.ver.outputs.version }}"
           # iscc is on PATH after choco install (ProgramData\chocolatey\bin).
-          iscc "/dAppVersion=${VERSION}" installer/iSystem.iss
+          # MSYS_NO_PATHCONV=1: Git-Bash otherwise rewrites the leading-slash
+          # `/dAppVersion=...` define into a Windows path, so iscc sees two
+          # filenames ("You may not specify more than one script filename").
+          MSYS_NO_PATHCONV=1 iscc "/dAppVersion=${VERSION}" installer/iSystem.iss
           ls -la build/installer
 
       # Compute the installer SHA-256 and write the auto-update feed. The url is
