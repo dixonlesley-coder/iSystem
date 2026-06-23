@@ -244,8 +244,13 @@ report export**; versioned `.mechx` save/open with viewport restore;
   byte-identical), a co-equal projection of the *same* model as Single-line (add/move/delete
   in either → both update), an **unplaced tray**, **multi-floor** sheet selector, zoom-LOD,
   and an "Electrical layer" chip.
+  **Mechanical vertical riser mode landed** (`ui/schematic/schematic_view.dart`): the elevation
+  surface now has **Auto** (read-only generated diagram) + **Edit** modes — floors stacked by true
+  elevation, a Riser palette, drag-to-place across floors (`placeRiserAt`), drag-sideways to move
+  (`moveRiserHorizontal`, length stays the elevation delta), right-click to size (shared
+  `edge_context_menu`); mirrors the Plan/electrical direct-manipulation language.
   Remaining (**next**): the shared-substrate **layer switcher** (plumbing · HVAC · electrical
-  on ONE canvas) + the mechanical **vertical riser-placement/sizing mode**. Plus **Wave 4b**
+  on ONE canvas) — the last convergence piece. Plus **Wave 4b**
   (electrical drawings/SLD-GA-one-line export + commercial UI + workflow/i18n), the two
   deferred sizing-mutating folds (busbar withstand · harmonics neutral oversize), the
   per-segment material→hydraulic-solve fold, and the full catalogue dataset.

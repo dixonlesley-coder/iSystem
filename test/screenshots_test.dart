@@ -113,5 +113,18 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     await expectLater(app, matchesGoldenFile('goldens/06_electrical_layout.png'));
+
+    // Vertical riser EDIT mode — the editable elevation: floors stacked by true
+    // elevation, risers placed across them and sized (length = elevation delta).
+    container.read(workspaceViewProvider.notifier).set(WorkspaceView.schematic);
+    final levels = container.read(projectControllerProvider).building.levelCount;
+    final netCtrl = container.read(networkControllerProvider.notifier);
+    netCtrl.placeRiserAt('s1', 0, 700, levels, service: ServiceType.hotWater);
+    netCtrl.placeRiserAt('s1', 1, 1040, levels, service: ServiceType.drainage);
+    await tester.pump();
+    await tester.tap(find.text('Edit').first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await expectLater(app, matchesGoldenFile('goldens/07_riser_edit.png'));
   });
 }
