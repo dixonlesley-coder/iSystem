@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
+import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
@@ -96,6 +97,31 @@ Future<void> exportDrawingDxf(WidgetRef ref) async {
   await File(full).writeAsString(dxf);
 }
 
+/// Export the current sheet/floor's drawn network as a native (vector) PDF.
+Future<void> exportDrawingPdf(WidgetRef ref) async {
+  final sheets = ref.read(sheetsControllerProvider);
+  final sheet = sheets.current;
+  if (sheet == null) return;
+  final levelCount = ref.read(projectControllerProvider).building.levelCount;
+  final floorIndex = sheets.floorFor(sheet.id, levelCount);
+  final bytes = networkToPdf(
+    net: ref.read(networkControllerProvider).network,
+    sizing: ref.read(sizingProvider),
+    sheetId: sheet.id,
+    floorIndex: floorIndex,
+    title: sheet.name,
+  );
+  final path = await FilePicker.saveFile(
+    dialogTitle: 'Export drawing (PDF)',
+    fileName: '${sheet.name}.pdf',
+    type: FileType.custom,
+    allowedExtensions: const ['pdf'],
+  );
+  if (path == null) return;
+  final full = path.endsWith('.pdf') ? path : '$path.pdf';
+  await File(full).writeAsBytes(bytes);
+}
+
 /// All services offered in the draw palette / edge editor, in a sensible order.
 const List<ServiceType> kDrawServices = [
   ServiceType.coldWater,
@@ -155,6 +181,10 @@ class ProjectPanel extends ConsumerWidget {
                   MechXButton(
                     label: 'Export drawing (DXF)',
                     onPressed: () => exportDrawingDxf(ref),
+                  ),
+                  MechXButton(
+                    label: 'Export drawing (PDF)',
+                    onPressed: () => exportDrawingPdf(ref),
                   ),
                 ],
               ),
