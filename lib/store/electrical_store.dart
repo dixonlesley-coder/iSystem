@@ -15,6 +15,7 @@ library;
 
 import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
@@ -64,6 +65,18 @@ final electricalResultProvider = Provider<ElectricalSystemResult>(
   (ref) => computeSystem(const PuilProfile(), ref.watch(electricalProjectProvider)),
 );
 
+/// Derived: the bundled A8 advanced study (fault / supply / PF / control /
+/// harmonics / arc-flash / containment / enclosure / metering / SPD / lightning
+/// / electrode / power-one-line / BOM), recomputed by the pure engine over the
+/// live project + its A4 result. Read-only for the UI; never mutates the core.
+final electricalAdvancedProvider = Provider<AdvancedStudy>(
+  (ref) => computeAdvancedStudy(
+    const PuilProfile(),
+    ref.watch(electricalProjectProvider),
+    ref.watch(electricalResultProvider),
+  ),
+);
+
 @immutable
 class ElectricalProjectController extends Notifier<ElectricalProject> {
   @override
@@ -73,19 +86,36 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void setProject(ElectricalProject project) => state = project;
 
   /// Rename the project.
-  void setName(String name) => state = ElectricalProject(
-        id: state.id,
-        name: name,
-        panels: state.panels,
-        earthingSystem: state.earthingSystem,
-      );
+  void setName(String name) => state = _withProject(name: name);
 
   /// Set the installation earthing system (drives RCD policy + main earthing).
-  void setEarthingSystem(EarthingSystem system) => state = ElectricalProject(
+  void setEarthingSystem(EarthingSystem system) =>
+      state = _withProject(earthingSystem: system);
+
+  /// Rebuild the project carrying every field through, overriding only those
+  /// supplied — so an edit to one field never silently drops the additive A8
+  /// fields (sources / sites / dual-transformer / occupancy). A local helper
+  /// instead of a model `copyWith` to keep the engine model edit purely additive.
+  ElectricalProject _withProject({
+    String? name,
+    EarthingSystem? earthingSystem,
+    List<ElectricalPanel>? panels,
+  }) =>
+      ElectricalProject(
         id: state.id,
-        name: state.name,
-        panels: state.panels,
-        earthingSystem: system,
+        name: name ?? state.name,
+        panels: panels ?? state.panels,
+        earthingSystem: earthingSystem ?? state.earthingSystem,
+        sources: state.sources,
+        dualTransformer: state.dualTransformer,
+        occupancy: state.occupancy,
+        soilResistivityOhmM: state.soilResistivityOhmM,
+        groundFlashDensity: state.groundFlashDensity,
+        externalLps: state.externalLps,
+        overheadSupply: state.overheadSupply,
+        buildingLengthM: state.buildingLengthM,
+        buildingWidthM: state.buildingWidthM,
+        buildingHeightM: state.buildingHeightM,
       );
 
   /// Restore the built-in sample project.
@@ -99,10 +129,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void syncMepEquipment(List<ElectricalCircuit> circuits) {
     const mepPanelId = 'mep-equipment';
     final others = state.panels.where((p) => p.id != mepPanelId).toList();
-    state = ElectricalProject(
-      id: state.id,
-      name: state.name,
-      earthingSystem: state.earthingSystem,
+    state = _withProject(
       panels: circuits.isEmpty
           ? others
           : [

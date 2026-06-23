@@ -3,9 +3,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
+import 'package:mechx_engine/electrical/control/starter.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -338,6 +340,99 @@ void main() {
     expect(sp1.sourceType, PanelSource.feeder);
     expect(sp1.fedByCircuitId, 'c2');
     expect(sp1.circuits, isEmpty);
+  });
+
+  test('v2 electrical advanced fields (sources, sites, panel/circuit flags) '
+      'round-trip through encode/decode', () {
+    const doc = ProjectDocument(
+      projectName: 'Tower A8',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      electrical: ElectricalProject(
+        id: 'ep2',
+        name: 'Advanced electrical',
+        earthingSystem: EarthingSystem.tnS,
+        dualTransformer: true,
+        occupancy: 'commercial',
+        soilResistivityOhmM: 120,
+        groundFlashDensity: 11,
+        externalLps: true,
+        overheadSupply: true,
+        buildingLengthM: 45,
+        buildingWidthM: 28,
+        buildingHeightM: 22,
+        sources: ElectricalSources(
+          generator: GeneratorSource(
+            kva: ApparentPower(200000),
+            backupFraction: 0.5,
+            mode: GeneratorMode.prime,
+            transfer: GeneratorTransfer.manual,
+          ),
+          solar: SolarSource(panelWp: 600, panels: 40, dcAcRatio: 1.3),
+          battery: BatterySource(
+            chemistry: BatteryChemistry.leadAcid,
+            autonomyHours: 3,
+          ),
+          hybridInverter: true,
+        ),
+        panels: [
+          ElectricalPanel(
+            id: 'mdp',
+            name: 'MDP',
+            voltage: Voltage(400),
+            essential: true,
+            upsBacked: true,
+            submeter: true,
+            heatW: Power(450),
+            circuits: [
+              ElectricalCircuit(
+                id: 'c1',
+                name: 'Chiller',
+                loadKind: LoadKind.hvac,
+                motorKw: 22,
+                length: Length(30),
+                starterType: StarterType.softStarter,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    final decoded = ProjectDocument.decode(doc.encode());
+    final e = decoded.electrical;
+    expect(e, isNotNull);
+    expect(e!.dualTransformer, isTrue);
+    expect(e.occupancy, 'commercial');
+    expect(e.soilResistivityOhmM, 120);
+    expect(e.groundFlashDensity, 11);
+    expect(e.externalLps, isTrue);
+    expect(e.overheadSupply, isTrue);
+    expect(e.buildingLengthM, 45);
+    expect(e.buildingWidthM, 28);
+    expect(e.buildingHeightM, 22);
+
+    final s = e.sources;
+    expect(s, isNotNull);
+    expect(s!.generator!.kva!.voltAmperes, 200000);
+    expect(s.generator!.backupFraction, 0.5);
+    expect(s.generator!.mode, GeneratorMode.prime);
+    expect(s.generator!.transfer, GeneratorTransfer.manual);
+    expect(s.solar!.panelWp, 600);
+    expect(s.solar!.panels, 40);
+    expect(s.solar!.dcAcRatio, 1.3);
+    expect(s.battery!.chemistry, BatteryChemistry.leadAcid);
+    expect(s.battery!.autonomyHours, 3);
+    expect(s.hybridInverter, isTrue);
+
+    final mdp = e.panels.single;
+    expect(mdp.essential, isTrue);
+    expect(mdp.upsBacked, isTrue);
+    expect(mdp.submeter, isTrue);
+    expect(mdp.heatW!.watts, 450);
+    expect(mdp.circuits.single.starterType, StarterType.softStarter);
   });
 
   test('a v1 file (no electrical key) loads with electrical == null', () {

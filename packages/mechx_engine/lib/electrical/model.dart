@@ -14,8 +14,18 @@ library;
 import '../standards/puil.dart'
     show CableInstallMethod, ConductorInsulation, ConductorMaterial;
 import '../units.dart';
+import 'control/starter.dart' show StarterType;
 import 'earthing.dart' show EarthingSystem;
 import 'load_kind.dart' show LoadKind;
+import 'sources.dart'
+    show
+        BatteryChemistry,
+        BatterySource,
+        ElectricalSources,
+        GeneratorMode,
+        GeneratorSource,
+        GeneratorTransfer,
+        SolarSource;
 
 /// A circuit's role on its panel: the incoming device, or an outgoing way.
 enum CircuitRole { incomer, branch }
@@ -106,6 +116,13 @@ class ElectricalCircuit {
   /// computed design current). A5 populates it from the M/P equipment duty.
   final Current? flaOverrideA;
 
+  /// Motor-starter / control scheme for this way (DOL / star-delta / VFD …),
+  /// when it is a motor or pump circuit. Drives the A8 control-assembly pass
+  /// (`applyStarterTemplate`); absent = no explicit starter (the advanced study
+  /// then skips a control assembly for the circuit). Additive — the core A4
+  /// sizing in `compute.dart` does not read it.
+  final StarterType? starterType;
+
   const ElectricalCircuit({
     required this.id,
     required this.name,
@@ -129,6 +146,7 @@ class ElectricalCircuit {
     this.feedsPanelId,
     this.sourceEquipmentId,
     this.flaOverrideA,
+    this.starterType,
   });
 
   /// True when this way is a feeder (explicit kind or it feeds a panel).
@@ -163,6 +181,7 @@ class ElectricalCircuit {
         if (feedsPanelId != null) 'feedsPanelId': feedsPanelId,
         if (sourceEquipmentId != null) 'sourceEquipmentId': sourceEquipmentId,
         if (flaOverrideA != null) 'flaOverrideA': flaOverrideA!.amperes,
+        if (starterType != null) 'starterType': starterType!.name,
       };
 
   /// Tolerant decode: unknown enum names fall back to the field default,
@@ -195,6 +214,7 @@ class ElectricalCircuit {
         flaOverrideA: json['flaOverrideA'] == null
             ? null
             : Current((json['flaOverrideA'] as num).toDouble()),
+        starterType: _enumOrNull(StarterType.values, json['starterType']),
       );
 }
 
@@ -242,6 +262,22 @@ class ElectricalPanel {
   /// The parent circuit id feeding this panel (when [sourceType] is feeder).
   final String? fedByCircuitId;
 
+  /// Essential (genset-backed) board: its aggregate demand sets the standby
+  /// generator backup. Carried for the A8 sources / power-one-line pass.
+  final bool essential;
+
+  /// Critical / UPS-backed board: backed by the battery bank in the A8 sources
+  /// pass (the topmost-flagged-demand tier).
+  final bool upsBacked;
+
+  /// Tenant sub-metered board — picks direct vs CT revenue metering in the A8
+  /// metering pass.
+  final bool submeter;
+
+  /// Optional measured / specified internal heat dissipation (W). When set it
+  /// overrides the A8 enclosure pass's control-device heat estimate.
+  final Power? heatW;
+
   final List<ElectricalCircuit> circuits;
 
   const ElectricalPanel({
@@ -261,6 +297,10 @@ class ElectricalPanel {
     this.occupancy,
     this.sourceType = PanelSource.utility,
     this.fedByCircuitId,
+    this.essential = false,
+    this.upsBacked = false,
+    this.submeter = false,
+    this.heatW,
     this.circuits = const [],
   });
 
@@ -283,6 +323,10 @@ class ElectricalPanel {
         if (occupancy != null) 'occupancy': occupancy,
         'sourceType': sourceType.name,
         if (fedByCircuitId != null) 'fedByCircuitId': fedByCircuitId,
+        'essential': essential,
+        'upsBacked': upsBacked,
+        'submeter': submeter,
+        if (heatW != null) 'heatW': heatW!.watts,
         'circuits': [for (final c in circuits) c.toJson()],
       };
 
@@ -324,6 +368,12 @@ class ElectricalPanel {
           PanelSource.utility,
         ),
         fedByCircuitId: json['fedByCircuitId'] as String?,
+        essential: json['essential'] == true,
+        upsBacked: json['upsBacked'] == true,
+        submeter: json['submeter'] == true,
+        heatW: json['heatW'] == null
+            ? null
+            : Power((json['heatW'] as num).toDouble()),
         circuits: [
           for (final c in (json['circuits'] as List? ?? const []))
             ElectricalCircuit.fromJson(c as Map<String, dynamic>),
@@ -341,23 +391,84 @@ class ElectricalProject {
   final List<ElectricalPanel> panels;
   final EarthingSystem earthingSystem;
 
+  /// Distributed energy sources (generator / solar PV / battery), when the
+  /// building has any. Drives the A8 sources + power-one-line pass; null = none.
+  final ElectricalSources? sources;
+
+  /// Force a dual-transformer MV supply (split bus + N.O. coupler) even below
+  /// the LV ceiling (hotels / data centres). A8 supply pass.
+  final bool dualTransformer;
+
+  /// Building occupancy class (residential / office / commercial …) for the A8
+  /// occupancy demand library. Null = not set.
+  final String? occupancy;
+
+  /// Measured / assumed soil resistivity (Ω·m) for the A8 earth-electrode design.
+  /// Null = the electrode pass is skipped.
+  final double? soilResistivityOhmM;
+
+  /// Local ground flash density Ng (flashes/km²/yr) for the A8 lightning screen.
+  /// Null = the lightning screen is skipped.
+  final double? groundFlashDensity;
+
+  /// Building has an external Lightning Protection System (forces an origin
+  /// Type 1 SPD). A8 SPD pass.
+  final bool externalLps;
+
+  /// Supply arrives via an overhead line (direct-strike exposure → origin
+  /// Type 1 SPD). A8 SPD pass.
+  final bool overheadSupply;
+
+  /// Building footprint length (m) for the A8 lightning collection area.
+  final double? buildingLengthM;
+
+  /// Building footprint width (m) for the A8 lightning collection area.
+  final double? buildingWidthM;
+
+  /// Building height (m) for the A8 lightning collection area.
+  final double? buildingHeightM;
+
   const ElectricalProject({
     this.id = '',
     this.name = '',
     this.panels = const [],
     this.earthingSystem = EarthingSystem.tnCs,
+    this.sources,
+    this.dualTransformer = false,
+    this.occupancy,
+    this.soilResistivityOhmM,
+    this.groundFlashDensity,
+    this.externalLps = false,
+    this.overheadSupply = false,
+    this.buildingLengthM,
+    this.buildingWidthM,
+    this.buildingHeightM,
   });
 
-  /// Serialize to a plain JSON map. Enums by `.name`; the panels recurse.
+  /// Serialize to a plain JSON map. Enums by `.name`; the panels recurse;
+  /// optional fields are omitted when null so the file stays small + round-trips.
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
         'earthingSystem': earthingSystem.name,
+        if (sources != null) 'sources': _sourcesToJson(sources!),
+        'dualTransformer': dualTransformer,
+        if (occupancy != null) 'occupancy': occupancy,
+        if (soilResistivityOhmM != null)
+          'soilResistivityOhmM': soilResistivityOhmM,
+        if (groundFlashDensity != null)
+          'groundFlashDensity': groundFlashDensity,
+        'externalLps': externalLps,
+        'overheadSupply': overheadSupply,
+        if (buildingLengthM != null) 'buildingLengthM': buildingLengthM,
+        if (buildingWidthM != null) 'buildingWidthM': buildingWidthM,
+        if (buildingHeightM != null) 'buildingHeightM': buildingHeightM,
         'panels': [for (final p in panels) p.toJson()],
       };
 
   /// Tolerant decode: an unknown earthing system falls back to PLN PME
-  /// practice; a missing/non-list `panels` yields an empty list; never throws.
+  /// practice; a missing/non-list `panels` yields an empty list; absent optional
+  /// fields stay null/false; never throws.
   static ElectricalProject fromJson(Map<String, dynamic> json) =>
       ElectricalProject(
         id: json['id'] as String? ?? '',
@@ -367,11 +478,97 @@ class ElectricalProject {
           json['earthingSystem'],
           EarthingSystem.tnCs,
         ),
+        sources: json['sources'] is Map<String, dynamic>
+            ? _sourcesFromJson(json['sources'] as Map<String, dynamic>)
+            : null,
+        dualTransformer: json['dualTransformer'] == true,
+        occupancy: json['occupancy'] as String?,
+        soilResistivityOhmM:
+            (json['soilResistivityOhmM'] as num?)?.toDouble(),
+        groundFlashDensity: (json['groundFlashDensity'] as num?)?.toDouble(),
+        externalLps: json['externalLps'] == true,
+        overheadSupply: json['overheadSupply'] == true,
+        buildingLengthM: (json['buildingLengthM'] as num?)?.toDouble(),
+        buildingWidthM: (json['buildingWidthM'] as num?)?.toDouble(),
+        buildingHeightM: (json['buildingHeightM'] as num?)?.toDouble(),
         panels: [
           for (final p in (json['panels'] as List? ?? const []))
             ElectricalPanel.fromJson(p as Map<String, dynamic>),
         ],
       );
+}
+
+/// Serialize an [ElectricalSources] to JSON. `sources.dart` carries no codec
+/// (it is an engine input the integration layer wires on), so the project owns
+/// the mapping. Enums by `.name`, optional sub-sources omitted when absent.
+Map<String, dynamic> _sourcesToJson(ElectricalSources s) => {
+      if (s.generator != null) 'generator': {
+          if (s.generator!.kva != null)
+            'kva': s.generator!.kva!.voltAmperes,
+          'backupFraction': s.generator!.backupFraction,
+          'mode': s.generator!.mode.name,
+          'transfer': s.generator!.transfer.name,
+        },
+      if (s.solar != null) 'solar': {
+          'panelWp': s.solar!.panelWp,
+          'panels': s.solar!.panels,
+          'dcAcRatio': s.solar!.dcAcRatio,
+        },
+      if (s.battery != null) 'battery': {
+          'chemistry': s.battery!.chemistry.name,
+          'autonomyHours': s.battery!.autonomyHours,
+        },
+      if (s.hybridInverter != null) 'hybridInverter': s.hybridInverter,
+    };
+
+/// Tolerant decode of an [ElectricalSources] — unknown enum names fall back to
+/// the source default; absent sub-sources stay null.
+ElectricalSources _sourcesFromJson(Map<String, dynamic> json) {
+  GeneratorSource? generator;
+  final g = json['generator'];
+  if (g is Map<String, dynamic>) {
+    generator = GeneratorSource(
+      kva: g['kva'] == null
+          ? null
+          : ApparentPower((g['kva'] as num).toDouble()),
+      backupFraction: (g['backupFraction'] as num?)?.toDouble() ?? 1.0,
+      mode: _enumOr(GeneratorMode.values, g['mode'], GeneratorMode.standby),
+      transfer: _enumOr(
+        GeneratorTransfer.values,
+        g['transfer'],
+        GeneratorTransfer.ats,
+      ),
+    );
+  }
+  SolarSource? solar;
+  final so = json['solar'];
+  if (so is Map<String, dynamic>) {
+    solar = SolarSource(
+      panelWp: (so['panelWp'] as num?)?.toInt() ?? 550,
+      panels: (so['panels'] as num?)?.toInt() ?? 0,
+      dcAcRatio: (so['dcAcRatio'] as num?)?.toDouble() ?? 1.2,
+    );
+  }
+  BatterySource? battery;
+  final b = json['battery'];
+  if (b is Map<String, dynamic>) {
+    battery = BatterySource(
+      chemistry: _enumOr(
+        BatteryChemistry.values,
+        b['chemistry'],
+        BatteryChemistry.lifepo4,
+      ),
+      autonomyHours: (b['autonomyHours'] as num?)?.toDouble() ?? 0,
+    );
+  }
+  return ElectricalSources(
+    generator: generator,
+    solar: solar,
+    battery: battery,
+    hybridInverter: json['hybridInverter'] is bool
+        ? json['hybridInverter'] as bool
+        : null,
+  );
 }
 
 /// Resolve an enum [name] to a [values] entry, falling back to [fallback] when
