@@ -15,6 +15,7 @@ import '../theme/mechx_theme.dart';
 import 'calibration_overlay.dart';
 import 'canvas_view.dart';
 import 'drawing_overlay.dart';
+import 'drop_overlay.dart';
 import 'heatmap_layer.dart';
 import 'network_layer.dart';
 import 'selection_overlay.dart';
@@ -101,6 +102,14 @@ class SheetCanvas extends ConsumerWidget {
               floorIndex: floorIndex,
               levelCount: levelCount,
             ),
+          ),
+        // Palette drop target: maps a dropped card to world coords and adds the
+        // matching element. Pointer-translucent when idle, so taps/drags still
+        // reach the selection overlay + canvas; sits UNDER the selection overlay
+        // so its handles win. Active only while editing (not drawing/calibrating).
+        if (!drawing && !calibrating)
+          Positioned.fill(
+            child: DropOverlay(sheetId: sheet.id, floorIndex: floorIndex),
           ),
         if (!drawing && !calibrating)
           Positioned.fill(

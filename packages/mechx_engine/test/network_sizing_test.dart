@@ -1,7 +1,10 @@
+import 'dart:math' as math;
+
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -466,5 +469,104 @@ void main() {
       const SizingContext(),
     );
     expect(sized['e']!.diameter.inMillimeters, 65);
+  });
+
+  group('manual size override (sizeOverrides)', () {
+    const net = Network(
+      nodes: [
+        NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'b', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+      ],
+      edges: [
+        NetEdge(id: 'e', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
+      ],
+    );
+
+    test('default (no overrides) is unchanged: 5 L/s water → DN65', () {
+      final sized = sizeNetwork(net, const {'e': FlowRate(0.005)},
+          const SizingContext());
+      expect(sized['e']!.diameter.inMillimeters, 65);
+    });
+
+    test(
+        'override forces the chosen DN and recomputes velocity from the flow '
+        '(v = Q / A, first principles)', () {
+      // Force the same 5 L/s edge to NPS 2" → DN50 (npsToMm(2.0) == 50).
+      final dn50mm = npsToMm(2.0);
+      expect(dn50mm, 50.0); // designator sanity
+      const flow = FlowRate(0.005); // 5 L/s = 0.005 m³/s
+
+      final sized = sizeNetwork(
+        net,
+        const {'e': flow},
+        const SizingContext(),
+        sizeOverrides: {'e': Diameter.mm(dn50mm)},
+      );
+      final s = sized['e']!;
+
+      // Diameter is exactly the override.
+      expect(s.diameter.inMillimeters, closeTo(50.0, 1e-9));
+      // Flow is preserved (the override changes the size, not the demand).
+      expect(s.flow.cubicMetersPerSecond, 0.005);
+
+      // Hand-derive the expected velocity from first principles:
+      //   d = 0.050 m  →  A = π·d²/4 = π·0.050²/4
+      //                     = π·0.0025/4 = 0.0019634954084936207 m²
+      //   v = Q / A    = 0.005 / 0.0019634954084936207
+      //                = 2.5464790894703255 m/s
+      const d = 0.050;
+      const area = math.pi * d * d / 4.0;
+      const expectedV = 0.005 / area;
+      expect(expectedV, closeTo(2.5464790894703255, 1e-12)); // pin the value
+      expect(s.velocity.metersPerSecond, closeTo(expectedV, 1e-12));
+    });
+
+    test('applySizeOverride is the pure helper used by sizeNetwork', () {
+      const base = EdgeSizing(
+        edgeId: 'e',
+        service: ServiceType.coldWater,
+        flow: FlowRate(0.005),
+        diameter: Diameter(0.065),
+        velocity: Velocity(1.0),
+      );
+      final out = applySizeOverride(base, Diameter.mm(50));
+      // v = Q/A at d=50 mm (same arithmetic as above).
+      const expectedV = 0.005 / (math.pi * 0.050 * 0.050 / 4.0);
+      expect(out.diameter.inMillimeters, closeTo(50, 1e-9));
+      expect(out.flow.cubicMetersPerSecond, 0.005);
+      expect(out.velocity.metersPerSecond, closeTo(expectedV, 1e-12));
+    });
+
+    test('autoSizeNetwork threads sizeOverrides end-to-end', () {
+      // A single duct edge with a diffuser airflow; override it to DN300.
+      const ductNet = Network(
+        nodes: [
+          NetNode(id: 'r', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          NetNode(
+            id: 'd',
+            sheetId: 's1',
+            x: 100,
+            y: 0,
+            floorIndex: 0,
+            role: NodeRole.fixture,
+            airflow: FlowRate(0.5), // 500 L/s
+          ),
+        ],
+        edges: [
+          NetEdge(id: 'e', fromId: 'r', toId: 'd', service: ServiceType.duct),
+        ],
+      );
+      final auto = autoSizeNetwork(
+        ductNet,
+        const SizingContext(),
+        leafDemand: const {ServiceType.duct: FlowRate(0.5)},
+        nodeFlowDemand: const {'d': FlowRate(0.5)},
+        sizeOverrides: {'e': Diameter.mm(300)},
+      );
+      expect(auto['e']!.diameter.inMillimeters, closeTo(300, 1e-9));
+      // v = 0.5 / (π·0.3²/4) = 7.073553... m/s
+      const expectedV = 0.5 / (math.pi * 0.300 * 0.300 / 4.0);
+      expect(auto['e']!.velocity.metersPerSecond, closeTo(expectedV, 1e-9));
+    });
   });
 }
