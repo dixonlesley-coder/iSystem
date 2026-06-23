@@ -1,43 +1,42 @@
-/// The Electrical ("E") workspace — an INTERACTIVE editor over the sized
-/// electrical system. It keeps the A7 read-only rendering (panel schedule /
-/// supply / warnings) and layers direct-manipulation editing on top, in the
-/// same language PanelMaker uses:
+/// The Electrical ("E") workspace — a single-line SPATIAL CANVAS, a faithful
+/// port of PanelMaker's `BuildingSingleLine.tsx`. Panels are boxes on a
+/// pannable / zoomable canvas wired by feeder lines, with each panel's loads
+/// hanging below it and zoom-driven level-of-detail (summary card → full
+/// internal R-S-T busbar). A left Loads palette drops ways onto panels (or
+/// floating loads onto blank canvas), double-click edits, right-click opens a
+/// context menu, dragging a panel's outlet onto another panel creates a feeder,
+/// and the view has a toolbar (Issues / Service & Earthing / Add panel /
+/// Import / Export), Single-line / Power-one-line tabs, a minimap, zoom
+/// controls and a gesture-help legend.
 ///
-///  • a **palette** of load cards (`Draggable<LoadKind>`, defaults from
-///    `loadDefaults`) — drop one on a panel card (a `DragTarget`) to add a way;
-///  • **double-click** a schedule row → a custom inspector panel to edit the
-///    circuit's fields; **right-click** → a custom Edit / Duplicate / Delete menu;
-///  • an **add-panel** affordance and a per-panel **"+"** add-circuit button;
-///  • an **advanced-study** section (read-only) summarising the A8 passes.
-///
-/// Styled entirely with MechXTheme tokens (grouped inset lists, monospaced
-/// figures via Roboto Mono). No Material/Fluent — overlays are a `Stack` layer,
-/// the context menu / inspector are custom panels, right-click is a `Listener`
-/// on the secondary button. The pure A4 engine does all the calculation; this
-/// widget only reads its result records and drives the store's edit intents.
+/// The interactive editing surfaces (the circuit inspector drawer, the context
+/// menus) and the read-only A8 advanced study are reused here. Styled entirely
+/// with MechXTheme — no Material; overlays are a `Stack` layer + the root
+/// `Overlay`. The pure A4 engine does all calculation; this widget reads its
+/// result records and drives the store's edit intents.
 library;
 
-import 'package:flutter/gestures.dart' show kSecondaryButton;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
-import 'package:mechx_engine/electrical/arc_flash.dart' show PpeCategoryInfo;
 import 'package:mechx_engine/electrical/earthing.dart';
-import 'package:mechx_engine/electrical/harmonics.dart' show ThdBandLabel;
 import 'package:mechx_engine/electrical/lightning.dart' show LpsLevelLabel;
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/metering.dart' show MeteringKindLabel;
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
-import 'package:mechx_engine/electrical/results.dart';
 import 'package:mechx_engine/electrical/spd.dart' show SpdTypeLabel;
 import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
-import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import 'electrical_canvas.dart';
+import 'electrical_format.dart';
+import 'electrical_palette.dart';
+import 'panel_geometry.dart';
+import 'power_oneline_view.dart';
 
 /// Identifies the circuit currently open in the inspector / context menu.
 class _CircuitRef {
@@ -46,7 +45,10 @@ class _CircuitRef {
   const _CircuitRef(this.panelId, this.circuitId);
 }
 
-/// Renders the electrical system and hosts the interactive editing overlays.
+/// Which tab the workspace shows.
+enum _Tab { singleLine, powerOneLine }
+
+/// Renders the electrical single-line canvas and hosts the editing overlays.
 class ElectricalView extends ConsumerStatefulWidget {
   const ElectricalView({super.key});
 
@@ -55,21 +57,37 @@ class ElectricalView extends ConsumerStatefulWidget {
 }
 
 class _ElectricalViewState extends ConsumerState<ElectricalView> {
+  final GlobalKey<ElectricalCanvasState> _canvasKey =
+      GlobalKey<ElectricalCanvasState>();
+
+  _Tab _tab = _Tab.singleLine;
+
   /// The circuit whose inspector panel is open (null = closed).
   _CircuitRef? _editing;
 
-  /// The circuit whose right-click context menu is open + where to anchor it.
-  _CircuitRef? _menuFor;
+  /// An open right-click context menu (panel or circuit) + its anchor.
+  _PanelMenuState? _panelMenu;
+  _CircuitRef? _circuitMenu;
   Offset _menuAt = Offset.zero;
 
-  /// Whether the advanced-study section is expanded.
-  bool _showAdvanced = true;
+  /// Whether the advanced-study drawer is open.
+  bool _showAdvanced = false;
+
+  /// Whether the gesture-help popover is open.
+  bool _showHelp = false;
+
+  /// Whether the Service & Earthing inspector is open.
+  bool _showService = false;
+
+  ElectricalProjectController get _controller =>
+      ref.read(electricalProjectProvider.notifier);
 
   void _closeOverlays() {
-    if (_editing != null || _menuFor != null) {
+    if (_editing != null || _panelMenu != null || _circuitMenu != null) {
       setState(() {
         _editing = null;
-        _menuFor = null;
+        _panelMenu = null;
+        _circuitMenu = null;
       });
     }
   }
@@ -81,68 +99,36 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     final project = ref.watch(electricalProjectProvider);
     final advanced = ref.watch(electricalAdvancedProvider);
 
-    final panels = [
-      for (final id in result.order)
-        if (result.panels[id] != null) result.panels[id]!,
-    ];
-
-    final report = ColoredBox(
-      color: colors.canvas,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(MechXSpacing.lg),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1080),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _Header(
-                  projectName: project.name,
-                  onAddPanel: _addPanel,
-                ),
-                const SizedBox(height: MechXSpacing.md),
-                _Palette(),
-                const SizedBox(height: MechXSpacing.md),
-                _SupplyCard(supply: result.supply, earthing: result.earthing),
-                const SizedBox(height: MechXSpacing.lg),
-                if (result.warnings.isNotEmpty) ...[
-                  _WarningsCard(warnings: result.warnings),
-                  const SizedBox(height: MechXSpacing.lg),
-                ],
-                for (final panel in panels) ...[
-                  _PanelCard(
-                    panel: panel,
-                    onDropLoad: (kind) =>
-                        _onDropLoad(panel.panelId, kind),
-                    onAddCircuit: () => _onAddCircuit(panel.panelId),
-                    onEditRow: (cid) =>
-                        setState(() => _editing = _CircuitRef(panel.panelId, cid)),
-                    onMenuRow: (cid, at) => setState(() {
-                      _menuFor = _CircuitRef(panel.panelId, cid);
-                      _menuAt = at;
-                    }),
-                  ),
-                  const SizedBox(height: MechXSpacing.lg),
-                ],
-                _AdvancedCard(
-                  advanced: advanced,
-                  result: result,
-                  expanded: _showAdvanced,
-                  onToggle: () =>
-                      setState(() => _showAdvanced = !_showAdvanced),
-                ),
-              ],
-            ),
-          ),
+    final body = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Toolbar(
+          warningCount: result.warnings.length,
+          tab: _tab,
+          onTab: (t) => setState(() => _tab = t),
+          onIssues: () => setState(() => _showAdvanced = false),
+          onService: _openService,
+          onAddPanel: _addPanel,
+          onImport: () {},
+          onExport: () {},
+          onToggleAdvanced: () =>
+              setState(() => _showAdvanced = !_showAdvanced),
+          advancedOpen: _showAdvanced,
         ),
-      ),
+        Container(height: 1, color: colors.border),
+        Expanded(
+          child: _tab == _Tab.singleLine
+              ? _buildCanvasArea(project, result)
+              : PowerOneLineView(oneLine: advanced.powerOneLine),
+        ),
+      ],
     );
 
     return Stack(
       children: [
-        Positioned.fill(child: report),
-        // Tap-away scrim behind any open overlay.
-        if (_editing != null || _menuFor != null)
+        Positioned.fill(child: ColoredBox(color: colors.canvas, child: body)),
+        // Tap-away scrim behind any open menu / inspector.
+        if (_editing != null || _panelMenu != null || _circuitMenu != null)
           Positioned.fill(
             child: Listener(
               onPointerDown: (_) => _closeOverlays(),
@@ -150,48 +136,239 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               child: const SizedBox.expand(),
             ),
           ),
-        if (_menuFor != null) _buildContextMenu(),
+        if (_circuitMenu != null) _buildCircuitMenu(),
+        if (_panelMenu != null) _buildPanelMenu(),
         if (_editing != null) _buildInspector(),
+        if (_showAdvanced)
+          _AdvancedDrawer(
+            advanced: advanced,
+            result: result,
+            onClose: () => setState(() => _showAdvanced = false),
+          ),
+        if (_showService)
+          _ServiceInspector(onClose: () => setState(() => _showService = false)),
       ],
     );
   }
 
+  Widget _buildCanvasArea(
+      ElectricalProject project, ElectricalSystemResult result) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const ElectricalPalette(),
+        Expanded(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: ElectricalCanvas(
+                  key: _canvasKey,
+                  onEditPanel: (panelId) {
+                    // Open the inspector on the panel's first editable way.
+                    final panel = project.panels
+                        .where((p) => p.id == panelId)
+                        .firstOrNull;
+                    final first = panel?.circuits
+                        .where((c) => c.loadKind != LoadKind.feeder)
+                        .firstOrNull;
+                    if (panel != null && first != null) {
+                      setState(() =>
+                          _editing = _CircuitRef(panelId, first.id));
+                    } else {
+                      _openPanelMenu(panelId, _canvasCenter());
+                    }
+                  },
+                  onEditCircuit: (panelId, circuitId) => setState(
+                      () => _editing = _CircuitRef(panelId, circuitId)),
+                  onPanelMenu: _openPanelMenu,
+                  onCircuitMenu: (panelId, circuitId, gp) => setState(() {
+                    _circuitMenu = _CircuitRef(panelId, circuitId);
+                    _menuAt = _toLocal(gp);
+                  }),
+                  onRequestService: _openService,
+                ),
+              ),
+              // Hint banner (top-right).
+              Positioned(
+                top: MechXSpacing.sm,
+                right: MechXSpacing.md,
+                child: _HintChip(
+                  text:
+                      'Zoom in on a panel to see its components; zoom out for a summary. Double-click to edit.',
+                ),
+              ),
+              // Zoom controls (bottom-left).
+              Positioned(
+                left: MechXSpacing.md,
+                bottom: MechXSpacing.md,
+                child: _ZoomControls(
+                  onIn: () => _canvasKey.currentState?.zoomIn(),
+                  onOut: () => _canvasKey.currentState?.zoomOut(),
+                  onFit: () => _canvasKey.currentState?.fitView(),
+                ),
+              ),
+              // Minimap (bottom-right).
+              Positioned(
+                right: MechXSpacing.md,
+                bottom: MechXSpacing.md,
+                child: _MiniMap(
+                  project: project,
+                  result: result,
+                ),
+              ),
+              // Gesture-help (?) (top-left).
+              Positioned(
+                left: MechXSpacing.md,
+                top: MechXSpacing.sm,
+                child: _HelpButton(
+                  open: _showHelp,
+                  onToggle: () => setState(() => _showHelp = !_showHelp),
+                ),
+              ),
+              if (_showHelp)
+                Positioned(
+                  left: MechXSpacing.md,
+                  top: 48,
+                  child: _CanvasHelp(
+                      onClose: () => setState(() => _showHelp = false)),
+                ),
+              // Empty-state setup card.
+              if (project.panels.isEmpty)
+                Positioned.fill(
+                  child: Center(
+                    child: _EmptyState(
+                      onSetUp: _openService,
+                      onAddPanel: _addPanel,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Geometry helpers ────────────────────────────────────────────────────────
+
+  Offset _toLocal(Offset global) {
+    final box = context.findRenderObject() as RenderBox?;
+    return box?.globalToLocal(global) ?? global;
+  }
+
+  Offset _canvasCenter() {
+    final box = context.findRenderObject() as RenderBox?;
+    final size = box?.size ?? const Size(800, 600);
+    return Offset(size.width / 2, size.height / 2);
+  }
+
   // ── Edit-intent wiring ──────────────────────────────────────────────────────
-
-  ElectricalProjectController get _controller =>
-      ref.read(electricalProjectProvider.notifier);
-
-  void _onDropLoad(String panelId, LoadKind kind) =>
-      _controller.addCircuit(panelId, kind: kind);
-
-  void _onAddCircuit(String panelId) =>
-      _controller.addCircuit(panelId, kind: LoadKind.general);
 
   void _addPanel() {
     final n = ref.read(electricalProjectProvider).panels.length + 1;
-    _controller.addPanel(name: 'Sub-panel $n', tag: 'SP-$n');
+    _controller.addPanelAt(
+        name: 'Sub-panel $n', tag: 'SP-$n', x: 80 + n * 40, y: 80 + n * 40);
+  }
+
+  void _openService() {
+    setState(() {
+      _panelMenu = null;
+      _circuitMenu = null;
+      _editing = null;
+      _showAdvanced = false;
+      _showService = true;
+    });
+  }
+
+  void _openPanelMenu(String panelId, Offset globalPos) {
+    setState(() {
+      _panelMenu = _PanelMenuState(panelId);
+      _circuitMenu = null;
+      _menuAt = _toLocal(globalPos);
+    });
   }
 
   // ── Overlays ────────────────────────────────────────────────────────────────
 
-  Widget _buildContextMenu() {
-    final ref0 = _menuFor!;
+  Widget _buildCircuitMenu() {
+    final ref0 = _circuitMenu!;
     return Positioned(
       left: _menuAt.dx,
       top: _menuAt.dy,
       child: _ContextMenu(
-        onEdit: () => setState(() {
-          _editing = ref0;
-          _menuFor = null;
-        }),
-        onDuplicate: () {
-          _controller.duplicateCircuit(ref0.panelId, ref0.circuitId);
-          setState(() => _menuFor = null);
-        },
-        onDelete: () {
-          _controller.deleteCircuit(ref0.panelId, ref0.circuitId);
-          setState(() => _menuFor = null);
-        },
+        items: [
+          _MenuAction('Edit', () => setState(() {
+                _editing = ref0;
+                _circuitMenu = null;
+              })),
+          _MenuAction('Duplicate', () {
+            _controller.duplicateCircuit(ref0.panelId, ref0.circuitId);
+            setState(() => _circuitMenu = null);
+          }),
+          _MenuAction('Delete', () {
+            _controller.deleteCircuit(ref0.panelId, ref0.circuitId);
+            setState(() => _circuitMenu = null);
+          }, danger: true),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPanelMenu() {
+    final menu = _panelMenu!;
+    final project = ref.read(electricalProjectProvider);
+    final panel = project.panels.where((p) => p.id == menu.panelId).firstOrNull;
+    if (panel == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      left: _menuAt.dx,
+      top: _menuAt.dy,
+      child: _ContextMenu(
+        items: [
+          _MenuAction('Open panel', () {
+            final first = panel.circuits
+                .where((c) => c.loadKind != LoadKind.feeder)
+                .firstOrNull;
+            setState(() {
+              _panelMenu = null;
+              if (first != null) {
+                _editing = _CircuitRef(panel.id, first.id);
+              }
+            });
+          }),
+          _MenuAction(
+            panel.essential ? 'Unmark essential' : 'Mark essential',
+            () {
+              _controller.setPanelEssential(panel.id, !panel.essential);
+              setState(() => _panelMenu = null);
+            },
+          ),
+          _MenuAction(
+            panel.upsBacked ? 'Unmark critical (UPS)' : 'Mark critical (UPS)',
+            () {
+              _controller.setPanelUpsBacked(panel.id, !panel.upsBacked);
+              setState(() => _panelMenu = null);
+            },
+          ),
+          _MenuAction(
+            panel.submeter ? 'Remove submeter' : 'Add submeter',
+            () {
+              _controller.setPanelSubmeter(panel.id, !panel.submeter);
+              setState(() => _panelMenu = null);
+            },
+          ),
+          if (panel.fedByCircuitId != null)
+            _MenuAction('Disconnect feeder', () {
+              _controller.disconnectFeeder(panel.id);
+              setState(() => _panelMenu = null);
+            }),
+          _MenuAction('Delete panel', () {
+            _controller.deletePanel(panel.id);
+            setState(() => _panelMenu = null);
+          }, danger: true),
+        ],
       ),
     );
   }
@@ -203,7 +380,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     final circuit =
         panel?.circuits.where((c) => c.id == ref0.circuitId).firstOrNull;
     if (panel == null || circuit == null) {
-      // The circuit was deleted underneath us — close.
       WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
       return const SizedBox.shrink();
     }
@@ -222,83 +398,84 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   }
 }
 
-// ── Header ──────────────────────────────────────────────────────────────────
-
-class _Header extends StatelessWidget {
-  final String projectName;
-  final VoidCallback onAddPanel;
-  const _Header({required this.projectName, required this.onAddPanel});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Text('Electrical',
-            style: type.display.copyWith(color: colors.textPrimary)),
-        const SizedBox(width: MechXSpacing.sm),
-        Flexible(
-          child: Text(
-            projectName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: type.body.copyWith(color: colors.textMuted),
-          ),
-        ),
-        const Spacer(),
-        _TextButton(label: '+ Panel', onTap: onAddPanel),
-        const SizedBox(width: MechXSpacing.md),
-        Text(
-          'PUIL 2011 / IEC 60364',
-          style: type.caption.copyWith(color: colors.textMuted),
-        ),
-      ],
-    );
-  }
+class _PanelMenuState {
+  final String panelId;
+  const _PanelMenuState(this.panelId);
 }
 
-// ── Palette ───────────────────────────────────────────────────────────────────
+// ── Toolbar ───────────────────────────────────────────────────────────────────
 
-/// The load palette — one draggable card per [LoadKind] (excluding the
-/// auto-managed feeder), each showing the standards-derived cos φ + demand.
-/// Drag a card onto a panel card to add a way of that kind.
-class _Palette extends StatelessWidget {
-  // Order chosen for the typical workflow; feeder is created by linking panels.
-  static const _kinds = <LoadKind>[
-    LoadKind.lighting,
-    LoadKind.socket,
-    LoadKind.hvac,
-    LoadKind.motor,
-    LoadKind.pump,
-    LoadKind.heating,
-    LoadKind.ups,
-    LoadKind.evCharger,
-    LoadKind.welding,
-    LoadKind.general,
-    LoadKind.spare,
-  ];
+class _Toolbar extends StatelessWidget {
+  final int warningCount;
+  final _Tab tab;
+  final ValueChanged<_Tab> onTab;
+  final VoidCallback onIssues;
+  final VoidCallback onService;
+  final VoidCallback onAddPanel;
+  final VoidCallback onImport;
+  final VoidCallback onExport;
+  final VoidCallback onToggleAdvanced;
+  final bool advancedOpen;
+
+  const _Toolbar({
+    required this.warningCount,
+    required this.tab,
+    required this.onTab,
+    required this.onIssues,
+    required this.onService,
+    required this.onAddPanel,
+    required this.onImport,
+    required this.onExport,
+    required this.onToggleAdvanced,
+    required this.advancedOpen,
+  });
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final type = context.type;
-    return _Card(
-      title: 'Loads',
-      trailing: 'drag onto a panel',
-      child: Wrap(
-        spacing: MechXSpacing.sm,
-        runSpacing: MechXSpacing.sm,
+    return Container(
+      color: colors.surface,
+      padding: const EdgeInsets.symmetric(
+          horizontal: MechXSpacing.md, vertical: MechXSpacing.sm),
+      child: Row(
         children: [
-          for (final k in _kinds) _PaletteCard(kind: k),
-          Padding(
-            padding: const EdgeInsets.only(left: MechXSpacing.xs),
-            child: Align(
-              alignment: Alignment.center,
-              child: Text(
-                'cos phi / demand from PUIL load defaults',
-                style: type.caption.copyWith(color: colors.textMuted),
+          // Tabs (left).
+          _TabButton(
+            label: 'Single-line',
+            selected: tab == _Tab.singleLine,
+            onTap: () => onTab(_Tab.singleLine),
+          ),
+          const SizedBox(width: MechXSpacing.xs),
+          _TabButton(
+            label: 'Power one-line',
+            selected: tab == _Tab.powerOneLine,
+            onTap: () => onTab(_Tab.powerOneLine),
+          ),
+          const Spacer(),
+          // Actions (right) — horizontally scrollable so a narrow window never
+          // overflows the toolbar.
+          Flexible(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              reverse: true,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _Btn(
+                    label:
+                        warningCount > 0 ? 'Issues ($warningCount)' : 'Issues',
+                    danger: warningCount > 0,
+                    onTap: onToggleAdvanced,
+                  ),
+                  const SizedBox(width: MechXSpacing.xs),
+                  _Btn(label: 'Service & Earthing', onTap: onService),
+                  const SizedBox(width: MechXSpacing.xs),
+                  _Btn(label: '+ Panel', onTap: onAddPanel),
+                  const SizedBox(width: MechXSpacing.xs),
+                  _Btn(label: 'Import loads', onTap: onImport, muted: true),
+                  const SizedBox(width: MechXSpacing.xs),
+                  _Btn(label: 'Export', onTap: onExport, muted: true),
+                ],
               ),
             ),
           ),
@@ -308,177 +485,689 @@ class _Palette extends StatelessWidget {
   }
 }
 
-class _PaletteCard extends StatelessWidget {
-  final LoadKind kind;
-  const _PaletteCard({required this.kind});
-
-  @override
-  Widget build(BuildContext context) {
-    final d = loadDefaults[kind];
-    final label = d?.label ?? kind.name;
-    final sub = d == null
-        ? ''
-        : 'pf ${_a(d.cosPhi)} / df ${_a(d.demandFactor)}';
-
-    final card = _PaletteChrome(label: label, sub: sub);
-    return Draggable<LoadKind>(
-      data: kind,
-      dragAnchorStrategy: pointerDragAnchorStrategy,
-      feedback: _DragFeedback(label: label),
-      childWhenDragging: Opacity(opacity: 0.4, child: card),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.grab,
-        child: card,
-      ),
-    );
-  }
-}
-
-class _PaletteChrome extends StatelessWidget {
+class _TabButton extends StatelessWidget {
   final String label;
-  final String sub;
-  const _PaletteChrome({required this.label, required this.sub});
+  final bool selected;
+  final VoidCallback onTap;
+  const _TabButton(
+      {required this.label, required this.selected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MechXSpacing.sm + 2,
-        vertical: MechXSpacing.xs + 2,
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+              horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 2),
+          decoration: BoxDecoration(
+            color: selected ? colors.accentMuted : const Color(0x00000000),
+            borderRadius: MechXRadii.control,
+            border: Border.all(
+                color: selected ? colors.accent : const Color(0x00000000)),
+          ),
+          child: Text(label,
+              style: type.label.copyWith(
+                  color:
+                      selected ? colors.textPrimary : colors.textSecondary)),
+        ),
       ),
+    );
+  }
+}
+
+class _Btn extends StatefulWidget {
+  final String label;
+  final VoidCallback onTap;
+  final bool danger;
+  final bool muted;
+  const _Btn(
+      {required this.label,
+      required this.onTap,
+      this.danger = false,
+      this.muted = false});
+
+  @override
+  State<_Btn> createState() => _BtnState();
+}
+
+class _BtnState extends State<_Btn> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final fg = widget.danger
+        ? colors.danger
+        : widget.muted
+            ? colors.textMuted
+            : colors.textSecondary;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+              horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 1),
+          decoration: BoxDecoration(
+            color: _hover ? colors.surfaceHover : const Color(0x00000000),
+            borderRadius: MechXRadii.control,
+            border: Border.all(color: colors.border),
+          ),
+          child: Text(widget.label, style: type.label.copyWith(color: fg)),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Canvas chrome (hint, zoom, minimap, help) ───────────────────────────────
+
+class _HintChip extends StatelessWidget {
+  final String text;
+  const _HintChip({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 320),
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+            horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs),
+        decoration: BoxDecoration(
+          color: colors.surface.withAlpha(220),
+          borderRadius: MechXRadii.control,
+          border: Border.all(color: colors.border),
+        ),
+        child: Text(text,
+            style: context.type.caption.copyWith(color: colors.textMuted)),
+      ),
+    );
+  }
+}
+
+class _ZoomControls extends StatelessWidget {
+  final VoidCallback onIn;
+  final VoidCallback onOut;
+  final VoidCallback onFit;
+  const _ZoomControls(
+      {required this.onIn, required this.onOut, required this.onFit});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Container(
       decoration: BoxDecoration(
-        color: colors.background,
+        color: colors.surface,
         borderRadius: MechXRadii.control,
         border: Border.all(color: colors.border),
       ),
-      child: Column(
+      child: Row(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: type.label.copyWith(color: colors.textPrimary)),
-          if (sub.isNotEmpty)
-            Text(sub, style: type.caption.copyWith(color: colors.textMuted)),
+          _IconBtn(glyph: '+', onTap: onIn),
+          _Sep(),
+          _IconBtn(glyph: '-', onTap: onOut),
+          _Sep(),
+          _IconBtn(glyph: 'fit', onTap: onFit),
         ],
       ),
     );
   }
 }
 
-class _DragFeedback extends StatelessWidget {
-  final String label;
-  const _DragFeedback({required this.label});
+class _Sep extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) =>
+      Container(width: 1, height: 22, color: context.colors.border);
+}
 
+class _IconBtn extends StatefulWidget {
+  final String glyph;
+  final VoidCallback onTap;
+  const _IconBtn({required this.glyph, required this.onTap});
+
+  @override
+  State<_IconBtn> createState() => _IconBtnState();
+}
+
+class _IconBtnState extends State<_IconBtn> {
+  bool _hover = false;
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final type = context.type;
-    return Transform.translate(
-      offset: const Offset(8, 8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.sm + 2,
-          vertical: MechXSpacing.xs + 2,
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          width: widget.glyph.length > 1 ? 34 : 28,
+          height: 28,
+          alignment: Alignment.center,
+          color: _hover ? colors.surfaceHover : const Color(0x00000000),
+          child: Text(widget.glyph,
+              style: context.type.label.copyWith(color: colors.textSecondary)),
         ),
-        decoration: BoxDecoration(
-          color: colors.accent,
-          borderRadius: MechXRadii.control,
-          border: Border.all(color: colors.accent),
-        ),
-        child: Text(label,
-            style: type.label.copyWith(color: const Color(0xFFFFFFFF))),
       ),
     );
   }
 }
 
-// ── Cards ────────────────────────────────────────────────────────────────────
+class _HelpButton extends StatelessWidget {
+  final bool open;
+  final VoidCallback onToggle;
+  const _HelpButton({required this.open, required this.onToggle});
 
-/// A titled, bordered card on the surface colour — the grouped-inset container.
-class _Card extends StatelessWidget {
-  final String title;
-  final String? trailing;
-  final Widget? action;
-  final Widget child;
-  const _Card({
-    required this.title,
-    this.trailing,
-    this.action,
-    required this.child,
-  });
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onToggle,
+        child: Container(
+          width: 26,
+          height: 26,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: open ? colors.accent : colors.surface,
+            shape: BoxShape.circle,
+            border: Border.all(color: colors.border),
+          ),
+          child: Text('?',
+              style: context.type.label.copyWith(
+                  color: open
+                      ? const Color(0xFFFFFFFF)
+                      : colors.textSecondary)),
+        ),
+      ),
+    );
+  }
+}
+
+class _CanvasHelp extends StatelessWidget {
+  final VoidCallback onClose;
+  const _CanvasHelp({required this.onClose});
+
+  // Ported verbatim from PanelMaker's CanvasHelp HELP_ITEMS.
+  static const _items = <String>[
+    'Double-click a component to edit its size, type or label',
+    'Right-click a component for compatible replacement parts',
+    'Drag a card from the palette onto a panel to add a way',
+    "Drag a panel's round outlet onto another panel to feed it",
+    'Drag a load onto a panel to wire it (creates the MCB)',
+    'Select a panel or floating load and press Delete; right-click a way to delete it',
+    'Drag the empty canvas to pan; scroll to zoom; panels reveal their internals up close',
+  ];
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
     return Container(
+      width: 310,
+      padding: const EdgeInsets.all(MechXSpacing.md),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        border: Border.all(color: colors.border),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x33000000), blurRadius: 16, offset: Offset(0, 4)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text('Canvas guide',
+                    style:
+                        type.subtitle.copyWith(color: colors.textPrimary)),
+              ),
+              MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: onClose,
+                  child: Text('Close',
+                      style: type.label.copyWith(color: colors.textMuted)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          for (final item in _items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 5,
+                    height: 5,
+                    margin: const EdgeInsets.only(top: 6, right: MechXSpacing.sm),
+                    decoration: BoxDecoration(
+                      color: colors.accent,
+                      borderRadius: const BorderRadius.all(Radius.circular(3)),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(item,
+                        style: type.caption
+                            .copyWith(color: colors.textSecondary)),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A small static minimap (bottom-right): every panel as a coloured rectangle.
+class _MiniMap extends StatelessWidget {
+  final ElectricalProject project;
+  final ElectricalSystemResult result;
+  const _MiniMap({required this.project, required this.result});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Container(
+      width: 150,
+      height: 100,
+      decoration: BoxDecoration(
+        color: colors.surface.withAlpha(230),
+        borderRadius: MechXRadii.control,
+        border: Border.all(color: colors.border),
+      ),
+      child: ClipRRect(
+        borderRadius: MechXRadii.control,
+        child: CustomPaint(
+          painter: _MiniMapPainter(
+            project: project,
+            result: result,
+            accent: colors.accent,
+            muted: colors.textMuted,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniMapPainter extends CustomPainter {
+  final ElectricalProject project;
+  final ElectricalSystemResult result;
+  final Color accent;
+  final Color muted;
+  _MiniMapPainter({
+    required this.project,
+    required this.result,
+    required this.accent,
+    required this.muted,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final positions = autoLayout(project, result);
+    if (positions.isEmpty) return;
+    var minX = double.infinity, minY = double.infinity;
+    var maxX = -double.infinity, maxY = -double.infinity;
+    positions.forEach((id, p) {
+      minX = minX < p.dx ? minX : p.dx;
+      minY = minY < p.dy ? minY : p.dy;
+      maxX = maxX > p.dx ? maxX : p.dx;
+      maxY = maxY > p.dy ? maxY : p.dy;
+    });
+    final spanX = (maxX - minX).abs() + 200;
+    final spanY = (maxY - minY).abs() + 160;
+    final scale = (size.width / spanX).clamp(0.0, size.height / spanY) * 0.9;
+    final ox = (size.width - spanX * scale) / 2;
+    final oy = (size.height - spanY * scale) / 2;
+    positions.forEach((id, p) {
+      final x = ox + (p.dx - minX + 80) * scale;
+      final y = oy + (p.dy - minY + 60) * scale;
+      canvas.drawRect(
+        Rect.fromLTWH(x, y, 14, 8),
+        Paint()..color = accent,
+      );
+    });
+  }
+
+  @override
+  bool shouldRepaint(_MiniMapPainter old) =>
+      old.project != project || old.result != result;
+}
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+
+class _EmptyState extends StatelessWidget {
+  final VoidCallback onSetUp;
+  final VoidCallback onAddPanel;
+  const _EmptyState({required this.onSetUp, required this.onAddPanel});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Container(
+      width: 360,
+      padding: const EdgeInsets.all(MechXSpacing.lg),
       decoration: BoxDecoration(
         color: colors.surface,
         borderRadius: MechXRadii.card,
         border: Border.all(color: colors.border),
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              MechXSpacing.md,
-              MechXSpacing.md,
-              MechXSpacing.md,
-              MechXSpacing.sm,
+          Text('Set up your service',
+              style: type.title.copyWith(color: colors.textPrimary)),
+          const SizedBox(height: MechXSpacing.xs),
+          Text(
+            'Add a distribution panel, then drag loads from the palette onto it. '
+            'Set the supply phase and earthing from Service & Earthing.',
+            style: type.body.copyWith(color: colors.textSecondary),
+          ),
+          const SizedBox(height: MechXSpacing.md),
+          Row(
+            children: [
+              _Btn(label: '+ Panel', onTap: onAddPanel),
+              const SizedBox(width: MechXSpacing.sm),
+              _Btn(label: 'Service & Earthing', onTap: onSetUp),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Service inspector ─────────────────────────────────────────────────────────
+
+class _ServiceInspector extends ConsumerWidget {
+  final VoidCallback onClose;
+  const _ServiceInspector({required this.onClose});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final project = ref.watch(electricalProjectProvider);
+    final ctrl = ref.read(electricalProjectProvider.notifier);
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onClose,
+            child: ColoredBox(color: const Color(0x33000000)),
+          ),
+        ),
+        Positioned(
+          top: 0,
+          right: 0,
+          bottom: 0,
+          child: Container(
+            width: 340,
+            decoration: BoxDecoration(
+              color: colors.surface,
+              border: Border(left: BorderSide(color: colors.border)),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  child: Text(title,
-                      style: type.subtitle.copyWith(color: colors.textPrimary)),
-                ),
-                if (trailing != null)
-                  Padding(
-                    padding: const EdgeInsets.only(right: MechXSpacing.sm),
-                    child: Text(trailing!,
-                        style: type.caption.copyWith(color: colors.textMuted)),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(MechXSpacing.md,
+                      MechXSpacing.md, MechXSpacing.sm, MechXSpacing.sm),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text('Service & Earthing',
+                            style: type.subtitle
+                                .copyWith(color: colors.textPrimary)),
+                      ),
+                      _TextButton(label: 'Close', onTap: onClose),
+                    ],
                   ),
-                ?action,
+                ),
+                Container(height: 1, color: colors.border),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(MechXSpacing.md),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _Field(
+                          label: 'Earthing system',
+                          child: _EnumPicker<EarthingSystem>(
+                            value: project.earthingSystem,
+                            options: EarthingSystem.values,
+                            label: (e) => e.label,
+                            onChanged: ctrl.setEarthingSystem,
+                          ),
+                        ),
+                        Text(
+                          project.earthingSystem.note,
+                          style: type.caption
+                              .copyWith(color: colors.textMuted),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
-          Container(height: 1, color: colors.border),
-          Padding(
-            padding: const EdgeInsets.all(MechXSpacing.md),
-            child: child,
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
 
-/// The project supply + earthing summary.
-class _SupplyCard extends StatelessWidget {
-  final SupplySummary supply;
-  final EarthingResult earthing;
-  const _SupplyCard({required this.supply, required this.earthing});
+// ── Advanced study drawer (read-only A8) ────────────────────────────────────
+
+class _AdvancedDrawer extends StatelessWidget {
+  final AdvancedStudy advanced;
+  final ElectricalSystemResult result;
+  final VoidCallback onClose;
+  const _AdvancedDrawer({
+    required this.advanced,
+    required this.result,
+    required this.onClose,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return _Card(
-      title: 'Supply & earthing',
-      trailing: supply.system.label,
-      child: Wrap(
-        spacing: MechXSpacing.xl,
-        runSpacing: MechXSpacing.sm,
+    final colors = context.colors;
+    final type = context.type;
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onClose,
+            child: ColoredBox(color: const Color(0x33000000)),
+          ),
+        ),
+        Positioned(
+          top: 0,
+          right: 0,
+          bottom: 0,
+          child: Container(
+            width: 420,
+            decoration: BoxDecoration(
+              color: colors.surface,
+              border: Border(left: BorderSide(color: colors.border)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(MechXSpacing.md,
+                      MechXSpacing.md, MechXSpacing.sm, MechXSpacing.sm),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text('Issues & advanced study',
+                            style: type.subtitle
+                                .copyWith(color: colors.textPrimary)),
+                      ),
+                      _TextButton(label: 'Close', onTap: onClose),
+                    ],
+                  ),
+                ),
+                Container(height: 1, color: colors.border),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(MechXSpacing.md),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (result.warnings.isNotEmpty) ...[
+                          Text('Warnings (${result.warnings.length})',
+                              style: type.label
+                                  .copyWith(color: colors.textPrimary)),
+                          const SizedBox(height: MechXSpacing.xs),
+                          for (final w in result.warnings)
+                            _WarningRow(warning: w),
+                          const SizedBox(height: MechXSpacing.md),
+                        ],
+                        _AdvancedBody(advanced: advanced, result: result),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AdvancedBody extends StatelessWidget {
+  final AdvancedStudy advanced;
+  final ElectricalSystemResult result;
+  const _AdvancedBody({required this.advanced, required this.result});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final supply = advanced.supply;
+    final pf = advanced.powerFactor;
+    final fault = advanced.fault;
+
+    final metrics = <_Metric>[
+      _Metric(
+          label: 'Supply',
+          value: supply.lvOrMv == SupplyLevel.mv &&
+                  supply.transformerKva != null
+              ? 'MV · ${fmtNum(supply.transformerKva!)} kVA${supply.units > 1 ? ' x${supply.units}' : ''}'
+              : 'LV direct'),
+      _Metric(
+          label: 'Daya',
+          value:
+              '${(advanced.recommendedDayaVa / 1000).toStringAsFixed(1)} kVA'),
+      _Metric(label: 'Origin Isc', value: '${fmtNum(fault.originFaultkA)} kA'),
+      _Metric(
+        label: 'Power factor',
+        value: pf.needed
+            ? '${fmtNum(pf.existingPf)} -> ${fmtNum(pf.targetPf)}'
+            : '${fmtNum(pf.existingPf)} (OK)',
+      ),
+      if (pf.needed)
+        _Metric(
+            label: 'Capacitor',
+            value:
+                '${fmtNum(pf.bankKvar)} kvar${pf.steps > 0 ? ' / ${pf.steps} steps' : ''}'),
+      if (advanced.lightning != null)
+        _Metric(
+            label: 'Lightning',
+            value: advanced.lightning!.lpsRequired
+                ? 'LPS ${advanced.lightning!.level?.label ?? 'req'}'
+                : 'not required'),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Advanced study',
+            style: type.label.copyWith(color: colors.textPrimary)),
+        const SizedBox(height: MechXSpacing.sm),
+        Wrap(spacing: MechXSpacing.xl, runSpacing: MechXSpacing.sm, children: metrics),
+        const SizedBox(height: MechXSpacing.md),
+        // Per-panel matrix.
+        for (final id in result.order)
+          if (result.panels[id] != null)
+            _PanelAdvancedRow(
+              panel: result.panels[id]!,
+              advanced: advanced,
+            ),
+        const SizedBox(height: MechXSpacing.sm),
+        Text(
+          'Estimates — verify against PUIL 2011 / IEC 60364. '
+          '${advanced.verifyItems.length} value(s) pending verification.',
+          style: type.caption.copyWith(color: colors.textMuted),
+        ),
+      ],
+    );
+  }
+}
+
+class _PanelAdvancedRow extends StatelessWidget {
+  final ElectricalPanelResult panel;
+  final AdvancedStudy advanced;
+  const _PanelAdvancedRow({required this.panel, required this.advanced});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final fault = advanced.fault.panels[panel.panelId];
+    final encl = advanced.enclosure[panel.panelId];
+    final spd = advanced.spd[panel.panelId];
+    final meter = advanced.metering[panel.panelId];
+    final bits = <String>[
+      if (fault != null)
+        '${fmtNum(fault.prospectiveFaultkA)} kA${fault.incomerAdequate ? '' : ' !'}',
+      if (encl != null)
+        '${fmtNum(encl.widthMm)}x${fmtNum(encl.heightMm)}x${fmtNum(encl.depthMm)}',
+      if (spd != null) spd.type.label,
+      if (meter != null) meter.metering.label,
+    ];
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs + 1),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _Metric(label: 'Connected', value: _kw(supply.connectedW)),
-          _Metric(label: 'Demand', value: _kw(supply.demandW)),
-          _Metric(
-              label: 'Apparent', value: _kva(supply.demandVa.inKilovoltAmperes)),
-          _Metric(label: 'Voltage', value: '${supply.voltage.volts.round()} V'),
-          _Metric(label: 'Earthing', value: earthing.label),
-          _Metric(
-            label: 'RCD policy',
-            value: earthing.requiresRcd ? 'RCD on all finals' : 'Per circuit',
+          SizedBox(
+            width: 96,
+            child: Text(panel.tag ?? panel.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: type.body.copyWith(color: colors.textPrimary)),
+          ),
+          Expanded(
+            child: Text(bits.join(' · '),
+                style: type.caption.copyWith(color: colors.textSecondary)),
           ),
         ],
       ),
@@ -486,7 +1175,6 @@ class _SupplyCard extends StatelessWidget {
   }
 }
 
-/// A label-over-value figure block; the value is monospaced for tabular reading.
 class _Metric extends StatelessWidget {
   final String label;
   final String value;
@@ -513,339 +1201,9 @@ class _Metric extends StatelessWidget {
   }
 }
 
-/// One distribution panel: header, summary metrics, then the load schedule.
-/// A [DragTarget] for a [LoadKind] dropped from the palette.
-class _PanelCard extends StatelessWidget {
-  final ElectricalPanelResult panel;
-  final ValueChanged<LoadKind> onDropLoad;
-  final VoidCallback onAddCircuit;
-  final ValueChanged<String> onEditRow;
-  final void Function(String circuitId, Offset globalPos) onMenuRow;
-
-  const _PanelCard({
-    required this.panel,
-    required this.onDropLoad,
-    required this.onAddCircuit,
-    required this.onEditRow,
-    required this.onMenuRow,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final tag = panel.tag;
-    final title =
-        tag != null && tag.isNotEmpty ? '$tag · ${panel.name}' : panel.name;
-
-    return DragTarget<LoadKind>(
-      onAcceptWithDetails: (d) => onDropLoad(d.data),
-      builder: (context, candidate, rejected) {
-        final hovering = candidate.isNotEmpty;
-        return _DropHighlight(
-          active: hovering,
-          child: _Card(
-            title: title,
-            trailing: '${panel.system.label} · ${panel.circuits.length} ways',
-            action: _TextButton(label: '+ Way', onTap: onAddCircuit),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Panel summary metrics.
-                Wrap(
-                  spacing: MechXSpacing.xl,
-                  runSpacing: MechXSpacing.sm,
-                  children: [
-                    _Metric(
-                      label: 'Incomer',
-                      value:
-                          '${_amp(panel.incomer.breaker.ratingA.amperes)} · ${panel.incomer.poles}P',
-                    ),
-                    _Metric(label: 'Busbar', value: _busbar(panel.busbar)),
-                    _Metric(label: 'Connected', value: _kw(panel.connectedW)),
-                    _Metric(label: 'Demand', value: _kw(panel.demandW)),
-                    _Metric(
-                        label: 'Demand current',
-                        value: _amp(panel.demandCurrent.amperes)),
-                    if (panel.system == ElectricalSystem.threePhase)
-                      _Metric(
-                        label: 'Phase balance',
-                        value:
-                            'L1 ${_a(panel.phaseBalance.l1)} · L2 ${_a(panel.phaseBalance.l2)} · '
-                            'L3 ${_a(panel.phaseBalance.l3)}  (${_a(panel.imbalancePercent)}%)',
-                      ),
-                  ],
-                ),
-                const SizedBox(height: MechXSpacing.md),
-                _ScheduleTable(
-                  circuits: panel.circuits,
-                  onEditRow: onEditRow,
-                  onMenuRow: onMenuRow,
-                ),
-                if (panel.warnings.isNotEmpty) ...[
-                  const SizedBox(height: MechXSpacing.sm),
-                  for (final w in panel.warnings)
-                    _WarningRow(warning: w, compact: true),
-                ],
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// Wraps a card with an accent ring when a palette card is hovering over it.
-class _DropHighlight extends StatelessWidget {
-  final bool active;
-  final Widget child;
-  const _DropHighlight({required this.active, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return AnimatedContainer(
-      duration: MechXMotion.fast,
-      decoration: BoxDecoration(
-        borderRadius: MechXRadii.card,
-        border: Border.all(
-          color: active ? colors.accent : const Color(0x00000000),
-          width: 2,
-        ),
-      ),
-      child: child,
-    );
-  }
-}
-
-/// The per-panel load schedule (one row per outgoing way).
-class _ScheduleTable extends StatelessWidget {
-  final List<ElectricalCircuitResult> circuits;
-  final ValueChanged<String> onEditRow;
-  final void Function(String circuitId, Offset globalPos) onMenuRow;
-  const _ScheduleTable({
-    required this.circuits,
-    required this.onEditRow,
-    required this.onMenuRow,
-  });
-
-  // Relative column widths — name is the only flexible column.
-  static const _w = <int>[34, 9, 11, 22, 7, 8, 9];
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    if (circuits.isEmpty) {
-      return Text('No outgoing ways. Drag a load here or use "+ Way".',
-          style: context.type.caption.copyWith(color: colors.textMuted));
-    }
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.background,
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: colors.border),
-      ),
-      child: Column(
-        children: [
-          const _ScheduleHeader(),
-          for (var i = 0; i < circuits.length; i++)
-            _ScheduleRow(
-              circuit: circuits[i],
-              shaded: i.isOdd,
-              onEdit: () => onEditRow(circuits[i].circuitId),
-              onMenu: (pos) => onMenuRow(circuits[i].circuitId, pos),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ScheduleHeader extends StatelessWidget {
-  const _ScheduleHeader();
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    Widget head(String t, int flex, {TextAlign align = TextAlign.left}) =>
-        Expanded(
-          flex: flex,
-          child: Text(
-            t,
-            textAlign: align,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: type.caption.copyWith(
-              color: colors.textMuted,
-              letterSpacing: 0.6,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        );
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MechXSpacing.sm,
-        vertical: MechXSpacing.xs + 1,
-      ),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: colors.border)),
-      ),
-      child: Row(
-        children: [
-          head('CIRCUIT', _ScheduleTable._w[0]),
-          head('Ib', _ScheduleTable._w[1], align: TextAlign.right),
-          const SizedBox(width: MechXSpacing.sm),
-          head('BREAKER', _ScheduleTable._w[2]),
-          head('CABLE', _ScheduleTable._w[3]),
-          head('Vd%', _ScheduleTable._w[4], align: TextAlign.right),
-          head('cumVd%', _ScheduleTable._w[5], align: TextAlign.right),
-          head('RCD / ph', _ScheduleTable._w[6], align: TextAlign.right),
-        ],
-      ),
-    );
-  }
-}
-
-class _ScheduleRow extends StatefulWidget {
-  final ElectricalCircuitResult circuit;
-  final bool shaded;
-  final VoidCallback onEdit;
-  final ValueChanged<Offset> onMenu;
-  const _ScheduleRow({
-    required this.circuit,
-    required this.shaded,
-    required this.onEdit,
-    required this.onMenu,
-  });
-
-  @override
-  State<_ScheduleRow> createState() => _ScheduleRowState();
-}
-
-class _ScheduleRowState extends State<_ScheduleRow> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    final circuit = widget.circuit;
-
-    final mono = type.mono.copyWith(color: colors.textSecondary);
-    final name = type.body.copyWith(color: colors.textPrimary);
-
-    final vd = circuit.voltageDrop;
-    final vdColor = vd.withinLimit ? colors.textSecondary : colors.danger;
-    final cumColor = circuit.cumulativeDropPercent <= vd.limitPercent + 1e-9
-        ? colors.textMuted
-        : colors.danger;
-
-    final rcdLabel = circuit.rcd.required
-        ? '${circuit.rcd.ratingMa}mA${circuit.rcd.type != null ? ' ${_rcdType(circuit.rcd.type!)}' : ''}'
-        : '-';
-
-    Widget cell(Widget w, int flex, {Alignment align = Alignment.centerLeft}) =>
-        Expanded(flex: flex, child: Align(alignment: align, child: w));
-
-    final bg = widget.shaded
-        ? colors.surfaceHover
-        : (_hover ? colors.surfaceHover : const Color(0x00000000));
-
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: Listener(
-        onPointerDown: (e) {
-          if (e.buttons == kSecondaryButton) {
-            widget.onMenu(e.position);
-          }
-        },
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onDoubleTap: widget.onEdit,
-          child: AnimatedContainer(
-            duration: MechXMotion.instant,
-            padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm,
-              vertical: MechXSpacing.xs + 2,
-            ),
-            color: bg,
-            child: Row(
-              children: [
-                cell(
-                  Text(circuit.name,
-                      maxLines: 1, overflow: TextOverflow.ellipsis, style: name),
-                  _ScheduleTable._w[0],
-                ),
-                cell(
-                  Text(_a(circuit.designCurrent.amperes), style: mono),
-                  _ScheduleTable._w[1],
-                  align: Alignment.centerRight,
-                ),
-                const SizedBox(width: MechXSpacing.sm),
-                cell(
-                  Text(_breaker(circuit.breaker),
-                      maxLines: 1, overflow: TextOverflow.ellipsis, style: mono),
-                  _ScheduleTable._w[2],
-                ),
-                cell(
-                  Text(circuit.grounding.cableSpec,
-                      maxLines: 1, overflow: TextOverflow.ellipsis, style: mono),
-                  _ScheduleTable._w[3],
-                ),
-                cell(
-                  Text(_a(vd.dropPercent), style: mono.copyWith(color: vdColor)),
-                  _ScheduleTable._w[4],
-                  align: Alignment.centerRight,
-                ),
-                cell(
-                  Text(_a(circuit.cumulativeDropPercent),
-                      style: mono.copyWith(color: cumColor)),
-                  _ScheduleTable._w[5],
-                  align: Alignment.centerRight,
-                ),
-                cell(
-                  Text('$rcdLabel · ${circuit.phase.label}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: mono),
-                  _ScheduleTable._w[6],
-                  align: Alignment.centerRight,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The consolidated project warnings list.
-class _WarningsCard extends StatelessWidget {
-  final List<ElectricalWarning> warnings;
-  const _WarningsCard({required this.warnings});
-
-  @override
-  Widget build(BuildContext context) {
-    return _Card(
-      title: 'Warnings',
-      trailing: '${warnings.length}',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final w in warnings) _WarningRow(warning: w),
-        ],
-      ),
-    );
-  }
-}
-
 class _WarningRow extends StatelessWidget {
   final ElectricalWarning warning;
-  final bool compact;
-  const _WarningRow({required this.warning, this.compact = false});
+  const _WarningRow({required this.warning});
 
   @override
   Widget build(BuildContext context) {
@@ -857,8 +1215,7 @@ class _WarningRow extends StatelessWidget {
       WarningSeverity.info => colors.textMuted,
     };
     return Padding(
-      padding: EdgeInsets.symmetric(
-          vertical: compact ? MechXSpacing.xxs : MechXSpacing.xs),
+      padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -872,276 +1229,48 @@ class _WarningRow extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: Text(
-              warning.message,
-              style: (compact ? type.caption : type.body)
-                  .copyWith(color: colors.textSecondary),
-            ),
+            child: Text(warning.message,
+                style: type.caption.copyWith(color: colors.textSecondary)),
           ),
         ],
       ),
-    );
-  }
-}
-
-// ── Advanced study ────────────────────────────────────────────────────────────
-
-/// A compact, read-only summary of the A8 advanced study (fault / supply / PF /
-/// arc-flash / harmonics / containment / enclosure / metering / SPD / lightning).
-class _AdvancedCard extends StatelessWidget {
-  final AdvancedStudy advanced;
-  final ElectricalSystemResult result;
-  final bool expanded;
-  final VoidCallback onToggle;
-  const _AdvancedCard({
-    required this.advanced,
-    required this.result,
-    required this.expanded,
-    required this.onToggle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return _Card(
-      title: 'Advanced study',
-      trailing: expanded ? 'PUIL / IEC / IEEE-1584' : null,
-      action: _TextButton(
-        label: expanded ? 'Hide' : 'Show',
-        onTap: onToggle,
-      ),
-      child: expanded
-          ? _buildBody(context)
-          : Text(
-              'Fault, supply, power factor, arc-flash, harmonics, containment, '
-              'enclosure, metering, SPD and lightning passes.',
-              style: context.type.caption.copyWith(color: colors.textMuted),
-            ),
-    );
-  }
-
-  Widget _buildBody(BuildContext context) {
-    final supply = advanced.supply;
-    final pf = advanced.powerFactor;
-    final fault = advanced.fault;
-
-    // Project-level metrics.
-    final projectMetrics = <_Metric>[
-      _Metric(
-          label: 'Supply',
-          value: supply.lvOrMv == SupplyLevel.mv && supply.transformerKva != null
-              ? 'MV · ${_a(supply.transformerKva!)} kVA${supply.units > 1 ? ' x${supply.units}' : ''}'
-              : 'LV direct'),
-      _Metric(label: 'Daya', value: '${(advanced.recommendedDayaVa / 1000).toStringAsFixed(1)} kVA'),
-      _Metric(label: 'Origin Isc', value: '${_a(fault.originFaultkA)} kA'),
-      _Metric(
-        label: 'Power factor',
-        value: pf.needed
-            ? '${_a(pf.existingPf)} -> ${_a(pf.targetPf)}'
-            : '${_a(pf.existingPf)} (OK)',
-      ),
-      if (pf.needed)
-        _Metric(
-            label: 'Capacitor',
-            value:
-                '${_a(pf.bankKvar)} kvar${pf.steps > 0 ? ' / ${pf.steps} steps' : ''}${pf.detuned ? ' detuned' : ''}'),
-    ];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Wrap(
-          spacing: MechXSpacing.xl,
-          runSpacing: MechXSpacing.sm,
-          children: projectMetrics,
-        ),
-        if (advanced.lightning != null || advanced.electrode != null) ...[
-          const SizedBox(height: MechXSpacing.sm),
-          Wrap(
-            spacing: MechXSpacing.xl,
-            runSpacing: MechXSpacing.sm,
-            children: [
-              if (advanced.lightning != null)
-                _Metric(
-                  label: 'Lightning',
-                  value: advanced.lightning!.lpsRequired
-                      ? 'LPS ${advanced.lightning!.level?.label ?? 'req'}'
-                      : 'not required',
-                ),
-              if (advanced.electrode != null)
-                _Metric(
-                  label: 'Electrode',
-                  value: '${advanced.electrode!.rodCount} rods',
-                ),
-            ],
-          ),
-        ],
-        const SizedBox(height: MechXSpacing.md),
-        Container(height: 1, color: context.colors.border),
-        const SizedBox(height: MechXSpacing.sm),
-        _AdvancedPanelTable(advanced: advanced, result: result),
-        const SizedBox(height: MechXSpacing.sm),
-        Text(
-          'Estimates — verify against PUIL 2011 / IEC 60364. '
-          '${advanced.verifyItems.length} value(s) pending verification.',
-          style: context.type.caption.copyWith(color: context.colors.textMuted),
-        ),
-      ],
-    );
-  }
-}
-
-/// A per-panel matrix of the advanced passes (one row per panel).
-class _AdvancedPanelTable extends StatelessWidget {
-  final AdvancedStudy advanced;
-  final ElectricalSystemResult result;
-  const _AdvancedPanelTable({required this.advanced, required this.result});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-
-    // A padded cell keeps adjacent columns from touching; every column is
-    // left-aligned with a small right gap so the matrix reads cleanly.
-    Widget head(String t, int flex) => Expanded(
-          flex: flex,
-          child: Padding(
-            padding: const EdgeInsets.only(right: MechXSpacing.sm),
-            child: Text(t,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: type.caption.copyWith(
-                  color: colors.textMuted,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.5,
-                )),
-          ),
-        );
-
-    Widget cell(String t, int flex) => Expanded(
-          flex: flex,
-          child: Padding(
-            padding: const EdgeInsets.only(right: MechXSpacing.sm),
-            child: Text(t,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: type.mono.copyWith(color: colors.textSecondary)),
-          ),
-        );
-
-    final rows = <Widget>[];
-    for (final id in result.order) {
-      final panel = result.panels[id];
-      if (panel == null) continue;
-      final encl = advanced.enclosure[id];
-      final arc = advanced.arcFlash[id];
-      final harm = advanced.harmonics[id];
-      final cont = advanced.containment[id];
-      final spd = advanced.spd[id];
-      final meter = advanced.metering[id];
-      final pf = advanced.fault.panels[id];
-
-      rows.add(Padding(
-        padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs + 1),
-        child: Row(
-          children: [
-            Expanded(
-              flex: 22,
-              child: Padding(
-                padding: const EdgeInsets.only(right: MechXSpacing.sm),
-                child: Text(panel.tag ?? panel.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: type.body.copyWith(color: colors.textPrimary)),
-              ),
-            ),
-            cell(
-                pf != null
-                    ? '${_a(pf.prospectiveFaultkA)} kA${pf.incomerAdequate ? '' : ' !'}'
-                    : '-',
-                13),
-            cell(
-                arc != null
-                    ? _ppeShort(arc.incidentEnergyCalCm2, arc.ppeCategory.label)
-                    : '-',
-                16),
-            cell(harm != null ? harm.thdBand.label : 'low', 10),
-            cell(cont != null ? '${_a(cont.tray.widthMm)} mm' : '-', 11),
-            cell(
-                encl != null
-                    ? '${_a(encl.widthMm)}x${_a(encl.heightMm)}x${_a(encl.depthMm)}'
-                    : '-',
-                20),
-            cell(meter?.metering.label ?? '-', 9),
-            cell(spd?.type.label ?? '-', 11),
-          ],
-        ),
-      ));
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
-          child: Row(
-            children: [
-              head('PANEL', 22),
-              head('FAULT', 13),
-              head('ARC PPE', 16),
-              head('THD', 10),
-              head('TRAY', 11),
-              head('ENCLOSURE', 20),
-              head('METER', 9),
-              head('SPD', 11),
-            ],
-          ),
-        ),
-        ...rows,
-      ],
     );
   }
 }
 
 // ── Context menu ──────────────────────────────────────────────────────────────
 
-/// A small custom right-click menu (no Material `showMenu`). Anchored by the
-/// parent `Positioned`.
+class _MenuAction {
+  final String label;
+  final VoidCallback onTap;
+  final bool danger;
+  const _MenuAction(this.label, this.onTap, {this.danger = false});
+}
+
 class _ContextMenu extends StatelessWidget {
-  final VoidCallback onEdit;
-  final VoidCallback onDuplicate;
-  final VoidCallback onDelete;
-  const _ContextMenu({
-    required this.onEdit,
-    required this.onDuplicate,
-    required this.onDelete,
-  });
+  final List<_MenuAction> items;
+  const _ContextMenu({required this.items});
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     return Container(
-      width: 168,
+      width: 188,
       decoration: BoxDecoration(
         color: colors.surface,
         borderRadius: MechXRadii.control,
         border: Border.all(color: colors.border),
-        boxShadow: [
+        boxShadow: const [
           BoxShadow(
-            color: const Color(0x33000000),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
+              color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
         ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _MenuItem(label: 'Edit', onTap: onEdit),
-          _MenuItem(label: 'Duplicate', onTap: onDuplicate),
-          _MenuItem(label: 'Delete', onTap: onDelete, danger: true),
+          for (final item in items)
+            _MenuItem(label: item.label, onTap: item.onTap, danger: item.danger),
         ],
       ),
     );
@@ -1152,7 +1281,8 @@ class _MenuItem extends StatefulWidget {
   final String label;
   final VoidCallback onTap;
   final bool danger;
-  const _MenuItem({required this.label, required this.onTap, this.danger = false});
+  const _MenuItem(
+      {required this.label, required this.onTap, this.danger = false});
 
   @override
   State<_MenuItem> createState() => _MenuItemState();
@@ -1174,26 +1304,20 @@ class _MenuItemState extends State<_MenuItem> {
         onTap: widget.onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm + 2,
-            vertical: MechXSpacing.xs + 3,
-          ),
+              horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 3),
           color: _hover ? colors.surfaceHover : const Color(0x00000000),
-          child: Text(
-            widget.label,
-            style: type.body.copyWith(
-              color: widget.danger ? colors.danger : colors.textPrimary,
-            ),
-          ),
+          child: Text(widget.label,
+              style: type.body.copyWith(
+                color: widget.danger ? colors.danger : colors.textPrimary,
+              )),
         ),
       ),
     );
   }
 }
 
-// ── Circuit inspector ─────────────────────────────────────────────────────────
+// ── Circuit inspector (the Wave-4 drawer, reused) ───────────────────────────
 
-/// A right-side drawer to edit one circuit's fields. Custom MechXTheme panel —
-/// no Material dialog. Edits route straight through the store's [setCircuit].
 class _CircuitInspector extends StatelessWidget {
   final ElectricalPanel panel;
   final ElectricalCircuit circuit;
@@ -1230,29 +1354,23 @@ class _CircuitInspector extends StatelessWidget {
       decoration: BoxDecoration(
         color: colors.surface,
         border: Border(left: BorderSide(color: colors.border)),
-        boxShadow: [
+        boxShadow: const [
           BoxShadow(
-            color: const Color(0x22000000),
-            blurRadius: 16,
-            offset: const Offset(-2, 0),
-          ),
+              color: Color(0x22000000), blurRadius: 16, offset: Offset(-2, 0)),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(
-              MechXSpacing.md,
-              MechXSpacing.md,
-              MechXSpacing.sm,
-              MechXSpacing.sm,
-            ),
+            padding: const EdgeInsets.fromLTRB(MechXSpacing.md, MechXSpacing.md,
+                MechXSpacing.sm, MechXSpacing.sm),
             child: Row(
               children: [
                 Expanded(
                   child: Text('Edit circuit',
-                      style: type.subtitle.copyWith(color: colors.textPrimary)),
+                      style:
+                          type.subtitle.copyWith(color: colors.textPrimary)),
                 ),
                 _TextButton(label: 'Close', onTap: onClose),
               ],
@@ -1269,9 +1387,8 @@ class _CircuitInspector extends StatelessWidget {
                     label: 'Name',
                     child: _Text(
                       value: circuit.name,
-                      onChanged: (v) => controller.setCircuit(
-                          panel.id, circuit.id,
-                          name: v),
+                      onChanged: (v) =>
+                          controller.setCircuit(panel.id, circuit.id, name: v),
                     ),
                   ),
                   _Field(
@@ -1292,9 +1409,8 @@ class _CircuitInspector extends StatelessWidget {
                         LoadKind.spare,
                       ],
                       label: (k) => loadDefaults[k]?.label ?? k.name,
-                      onChanged: (k) => controller.setCircuit(
-                          panel.id, circuit.id,
-                          loadKind: k),
+                      onChanged: (k) =>
+                          controller.setCircuit(panel.id, circuit.id, loadKind: k),
                     ),
                   ),
                   if (_isMotor)
@@ -1398,7 +1514,8 @@ class _CircuitInspector extends StatelessWidget {
   }
 }
 
-/// A label-over-control row used inside the inspector.
+// ── Reused field primitives ─────────────────────────────────────────────────
+
 class _Field extends StatelessWidget {
   final String label;
   final Widget child;
@@ -1427,7 +1544,6 @@ class _Field extends StatelessWidget {
   }
 }
 
-/// A minimal text input (rebuilt on the incoming value via its key by callers).
 class _Text extends StatefulWidget {
   final String value;
   final ValueChanged<String> onChanged;
@@ -1464,9 +1580,7 @@ class _TextState extends State<_Text> {
       onTap: _focus.requestFocus,
       child: Container(
         padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.sm,
-          vertical: MechXSpacing.xs + 2,
-        ),
+            horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 2),
         decoration: BoxDecoration(
           color: colors.background,
           borderRadius: MechXRadii.control,
@@ -1488,7 +1602,6 @@ class _TextState extends State<_Text> {
   }
 }
 
-/// A numeric text input — parses on change, ignores non-numeric input.
 class _Num extends StatefulWidget {
   final double value;
   final ValueChanged<double> onChanged;
@@ -1528,9 +1641,7 @@ class _NumState extends State<_Num> {
       onTap: _focus.requestFocus,
       child: Container(
         padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.sm,
-          vertical: MechXSpacing.xs + 2,
-        ),
+            horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 2),
         decoration: BoxDecoration(
           color: colors.background,
           borderRadius: MechXRadii.control,
@@ -1556,7 +1667,6 @@ class _NumState extends State<_Num> {
   }
 }
 
-/// A horizontal segmented picker for an enum-like value (no Material dropdown).
 class _EnumPicker<T> extends StatelessWidget {
   final T value;
   final List<T> options;
@@ -1603,28 +1713,22 @@ class _Chip extends StatelessWidget {
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
-            vertical: MechXSpacing.xs + 1,
-          ),
+              horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 1),
           decoration: BoxDecoration(
             color: selected ? colors.accent : colors.background,
             borderRadius: MechXRadii.control,
-            border:
-                Border.all(color: selected ? colors.accent : colors.border),
+            border: Border.all(color: selected ? colors.accent : colors.border),
           ),
-          child: Text(
-            label,
-            style: type.label.copyWith(
-              color: selected ? const Color(0xFFFFFFFF) : colors.textSecondary,
-            ),
-          ),
+          child: Text(label,
+              style: type.label.copyWith(
+                color: selected ? const Color(0xFFFFFFFF) : colors.textSecondary,
+              )),
         ),
       ),
     );
   }
 }
 
-/// A label + on/off toggle row (custom switch).
 class _ToggleRow extends StatelessWidget {
   final String label;
   final bool value;
@@ -1661,8 +1765,7 @@ class _ToggleRow extends StatelessWidget {
                 borderRadius: const BorderRadius.all(Radius.circular(10)),
               ),
               child: Align(
-                alignment:
-                    value ? Alignment.centerRight : Alignment.centerLeft,
+                alignment: value ? Alignment.centerRight : Alignment.centerLeft,
                 child: Container(
                   width: 16,
                   height: 16,
@@ -1680,7 +1783,6 @@ class _ToggleRow extends StatelessWidget {
   }
 }
 
-/// A small bordered text button (local; matches the report's restrained chrome).
 class _TextButton extends StatefulWidget {
   final String label;
   final VoidCallback onTap;
@@ -1706,9 +1808,7 @@ class _TextButtonState extends State<_TextButton> {
         child: AnimatedContainer(
           duration: MechXMotion.fast,
           padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm + 2,
-            vertical: MechXSpacing.xs + 1,
-          ),
+              horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 1),
           decoration: BoxDecoration(
             color: _hover ? colors.surfaceHover : const Color(0x00000000),
             borderRadius: MechXRadii.control,
@@ -1721,43 +1821,3 @@ class _TextButtonState extends State<_TextButton> {
     );
   }
 }
-
-// ── Formatting helpers (display boundary — convert SI → engineering units) ────
-
-String _a(double v) =>
-    v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
-
-String _amp(double a) => '${_a(a)} A';
-
-String _kw(double w) => '${(w / 1000).toStringAsFixed(1)} kW';
-
-String _kva(double kva) => '${kva.toStringAsFixed(1)} kVA';
-
-String _breaker(BreakerResult b) {
-  final cls = b.deviceClass == BreakerClass.mccb ? 'MCCB' : 'MCB';
-  final curve = b.curve.name.toUpperCase();
-  return '${_a(b.ratingA.amperes)}A $cls·$curve';
-}
-
-/// A compact arc-flash cell: the PPE category's leading token (e.g. "CAT 2",
-/// "No PPE", "No safe") plus the incident energy in cal/cm².
-String _ppeShort(double energyCalCm2, String fullLabel) {
-  final lead = fullLabel.startsWith('CAT')
-      ? fullLabel.substring(0, 5).trim()
-      : (fullLabel.startsWith('No safe') ? 'de-energize' : 'No PPE');
-  return '$lead · ${_a(energyCalCm2)}';
-}
-
-String _busbar(BusbarResult b) {
-  if (b.widthMm > 0 && b.thicknessMm > 0) {
-    return '${_a(b.widthMm)}×${_a(b.thicknessMm)} mm';
-  }
-  return '${_a(b.csaMm2)} mm2';
-}
-
-String _rcdType(RcdType t) => switch (t) {
-      RcdType.ac => 'AC',
-      RcdType.a => 'A',
-      RcdType.f => 'F',
-      RcdType.b => 'B',
-    };
