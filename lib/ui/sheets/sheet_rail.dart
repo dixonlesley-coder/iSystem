@@ -6,12 +6,17 @@ import '../../store/sheets_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 
-/// Left rail: multi-sheet navigation. Lists every sheet; the current one is
-/// highlighted; clicking switches (restoring that sheet's viewport).
+/// Left rail: multi-sheet navigation, slimmed to a compact tile strip so the
+/// canvas gets the real estate. Each sheet is a small page thumbnail stamped
+/// with its index and a terse, truncated label; the current one is highlighted
+/// (the status bar carries the full sheet name). Clicking switches (restoring
+/// that sheet's viewport).
 class SheetRail extends ConsumerWidget {
   const SheetRail({super.key});
 
-  static const double width = 232;
+  /// Narrow — just wide enough for a page thumbnail + a short label. Down from
+  /// the old 232-px wide-card list.
+  static const double width = 76;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -26,25 +31,22 @@ class SheetRail extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Terse header: a count badge (the word "Sheets" doesn't fit the
+            // slim rail; the status bar already names the active sheet).
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                MechXSpacing.md,
-                MechXSpacing.md,
-                MechXSpacing.md,
+                MechXSpacing.xs,
                 MechXSpacing.sm,
+                MechXSpacing.xs,
+                MechXSpacing.xs,
               ),
-              child: Row(
-                children: [
-                  Text(
-                    'Sheets',
-                    style: type.subtitle.copyWith(color: colors.textPrimary),
-                  ),
-                  const Spacer(),
-                  Text(
-                    '${state.sheets.length}',
-                    style: type.caption.copyWith(color: colors.textMuted),
-                  ),
-                ],
+              child: Text(
+                '${state.sheets.length} SHT',
+                textAlign: TextAlign.center,
+                style: type.caption.copyWith(
+                  color: colors.textMuted,
+                  letterSpacing: 0.5,
+                ),
               ),
             ),
             Container(height: 1, color: colors.border),
@@ -95,7 +97,7 @@ class _RailItemState extends State<_RailItem> {
     final bg = widget.selected
         ? colors.accentMuted
         : (_hover ? colors.surfaceHover : const Color(0x00000000));
-    final nameColor =
+    final labelColor =
         widget.selected ? colors.textPrimary : colors.textSecondary;
 
     return MouseRegion(
@@ -106,48 +108,47 @@ class _RailItemState extends State<_RailItem> {
         onTap: widget.onTap,
         child: Container(
           margin: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
+            horizontal: MechXSpacing.xs,
             vertical: MechXSpacing.xxs,
           ),
           padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
-            vertical: MechXSpacing.sm,
+            horizontal: MechXSpacing.xxs,
+            vertical: MechXSpacing.xs,
           ),
           decoration: BoxDecoration(
             color: bg,
             borderRadius: MechXRadii.control,
           ),
-          child: Row(
+          child: Column(
             children: [
-              // page glyph
+              // A mini page thumbnail with the sheet index centred on it.
               Container(
-                width: 26,
-                height: 34,
+                width: 34,
+                height: 42,
+                alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: colors.canvas,
                   borderRadius: const BorderRadius.all(Radius.circular(3)),
                   border: Border.all(
                     color: widget.selected ? colors.accent : colors.border,
+                    width: widget.selected ? 1.5 : 1,
+                  ),
+                ),
+                child: Text(
+                  '${widget.index + 1}',
+                  style: type.mono.copyWith(
+                    color: widget.selected ? colors.accent : colors.textMuted,
                   ),
                 ),
               ),
-              const SizedBox(width: MechXSpacing.sm),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.sheet.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: type.body.copyWith(color: nameColor),
-                    ),
-                    Text(
-                      'Sheet ${widget.index + 1}',
-                      style: type.caption.copyWith(color: colors.textMuted),
-                    ),
-                  ],
-                ),
+              const SizedBox(height: MechXSpacing.xxs),
+              // Terse label, truncated to fit the slim rail.
+              Text(
+                widget.sheet.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: type.caption.copyWith(color: labelColor),
               ),
             ],
           ),
