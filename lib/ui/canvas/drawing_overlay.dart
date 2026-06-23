@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../store/network_store.dart';
 import '../../store/sheets_store.dart';
 import 'service_style.dart';
+import 'snapping.dart';
 import 'viewport.dart';
 
 /// Interaction layer active while a draw tool is selected. Maps taps to
@@ -32,9 +33,16 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
   Widget build(BuildContext context) {
     final drawing = ref.watch(networkControllerProvider);
     final notifier = ref.read(networkControllerProvider.notifier);
+    final ortho = ref.watch(orthoProvider);
     final transform = ref.watch(sheetsControllerProvider).viewportFor(widget.sheetId) ??
         const ViewportTransform();
     final snapWorld = 12 / transform.scale; // keep snap ≈12 screen px
+
+    // Ortho-snapped cursor for the rubber-band preview.
+    final pending = drawing.pendingPoint;
+    final previewHover = (ortho && pending != null && _hoverWorld != null)
+        ? orthoSnap(pending, _hoverWorld!)
+        : _hoverWorld;
 
     return MouseRegion(
       cursor: SystemMouseCursors.precise,
@@ -43,9 +51,10 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTapUp: (details) {
-          final world = transform.screenToWorld(details.localPosition);
+          var world = transform.screenToWorld(details.localPosition);
           switch (drawing.tool) {
             case DrawTool.drawRun:
+              if (ortho && pending != null) world = orthoSnap(pending, world);
               notifier.placeRunPoint(
                 widget.sheetId,
                 widget.floorIndex,
@@ -68,7 +77,7 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
           size: Size.infinite,
           painter: _RubberBandPainter(
             pending: drawing.pendingPoint,
-            hover: _hoverWorld,
+            hover: previewHover,
             transform: transform,
             color: serviceColor(drawing.service),
             active: drawing.tool == DrawTool.drawRun,

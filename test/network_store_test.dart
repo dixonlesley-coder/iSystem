@@ -183,6 +183,41 @@ void main() {
       expect(c.read(networkControllerProvider).network.edges.length, 2);
     });
 
+    test('duplicateFloor copies the floor runs to another sheet/floor', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(100, 0));
+      n.placeRunPoint('s1', 0, const Offset(200, 0));
+      final before = c.read(networkControllerProvider).network;
+      final runsBefore = before.edges.where((e) => e.kind == EdgeKind.run).length;
+
+      n.duplicateFloor(
+        fromSheetId: 's1',
+        fromFloor: 0,
+        toSheetId: 's2',
+        toFloor: 1,
+      );
+      final after = c.read(networkControllerProvider).network;
+      // 3 nodes + 2 run edges copied onto s2/floor 1.
+      final s2 = after.nodes.where((n) => n.sheetId == 's2').toList();
+      expect(s2.length, 3);
+      expect(s2.every((node) => node.floorIndex == 1), isTrue);
+      expect(after.edges.length, before.edges.length + 2);
+      // original untouched
+      expect(after.nodes.where((node) => node.sheetId == 's1').length, 3);
+      expect(runsBefore, 2);
+    });
+
+    test('duplicateFloor is a no-op when the source floor has no runs', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.duplicateFloor(
+          fromSheetId: 's1', fromFloor: 0, toSheetId: 's2', toFloor: 1);
+      expect(c.read(networkControllerProvider).network.nodes, isEmpty);
+    });
+
     test('node drag moves the node and is a single undo step', () {
       final c = makeContainer();
       final n = twoRunChain(c);

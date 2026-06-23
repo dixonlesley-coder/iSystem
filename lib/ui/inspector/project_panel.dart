@@ -365,12 +365,34 @@ class _DrawSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final drawing = ref.watch(networkControllerProvider);
     final ctrl = ref.read(networkControllerProvider.notifier);
+    final ortho = ref.watch(orthoProvider);
+    final sheets = ref.watch(sheetsControllerProvider);
+    final levelCount = ref.watch(projectControllerProvider).building.levelCount;
 
     Widget tool(String label, DrawTool t) => MechXButton(
           label: label,
           primary: drawing.tool == t,
           onPressed: () => ctrl.setTool(t),
         );
+
+    // Duplicate the current floor's runs to the next floor/sheet (positional
+    // sheet→floor mapping). Enabled only when a next floor + sheet exist.
+    final current = sheets.current;
+    final fromFloor =
+        sheets.currentIndex < levelCount ? sheets.currentIndex : levelCount - 1;
+    final toFloor = fromFloor + 1;
+    final canDuplicate = current != null &&
+        toFloor < levelCount &&
+        toFloor < sheets.sheets.length;
+    void duplicateFloor() {
+      if (!canDuplicate) return;
+      ctrl.duplicateFloor(
+        fromSheetId: current.id,
+        fromFloor: fromFloor,
+        toSheetId: sheets.sheets[toFloor].id,
+        toFloor: toFloor,
+      );
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -407,6 +429,16 @@ class _DrawSection extends ConsumerWidget {
             MechXButton(label: 'Undo', onPressed: ctrl.undo),
             MechXButton(label: 'Redo', onPressed: ctrl.redo),
             MechXButton(label: 'Clear', onPressed: ctrl.clear),
+            MechXButton(
+              label: 'Ortho',
+              primary: ortho,
+              onPressed: () => ref.read(orthoProvider.notifier).toggle(),
+            ),
+            if (canDuplicate)
+              MechXButton(
+                label: 'Duplicate floor up',
+                onPressed: duplicateFloor,
+              ),
           ],
         ),
       ],

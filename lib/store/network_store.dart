@@ -304,6 +304,62 @@ class NetworkController extends Notifier<DrawingState> {
     _commit(Network(nodes: state.network.nodes, edges: edges));
   }
 
+  /// Copy every horizontal RUN (and the nodes it touches) on
+  /// [fromSheetId]/[fromFloor] onto [toSheetId]/[toFloor] with fresh ids —
+  /// "same layout on the next floor". Risers are not copied (they span floors).
+  /// No-op if the source floor has no runs.
+  void duplicateFloor({
+    required String fromSheetId,
+    required int fromFloor,
+    required String toSheetId,
+    required int toFloor,
+  }) {
+    final old = state.network;
+    final clones = <String, String>{}; // old node id → new node id
+    final addedNodes = <NetNode>[];
+    final addedEdges = <NetEdge>[];
+
+    String cloneNode(NetNode n) {
+      final existing = clones[n.id];
+      if (existing != null) return existing;
+      final id = _id('n');
+      clones[n.id] = id;
+      addedNodes.add(NetNode(
+        id: id,
+        sheetId: toSheetId,
+        x: n.x,
+        y: n.y,
+        floorIndex: toFloor,
+        role: n.role,
+        elevation: n.elevation,
+        fixture: n.fixture,
+        airflow: n.airflow,
+      ));
+      return id;
+    }
+
+    for (final e in old.edges) {
+      if (e.kind != EdgeKind.run) continue;
+      final a = old.nodeById(e.fromId);
+      final b = old.nodeById(e.toId);
+      if (a == null || b == null) continue;
+      if (a.sheetId != fromSheetId || a.floorIndex != fromFloor) continue;
+      if (b.sheetId != fromSheetId || b.floorIndex != fromFloor) continue;
+      addedEdges.add(NetEdge(
+        id: _id('e'),
+        fromId: cloneNode(a),
+        toId: cloneNode(b),
+        service: e.service,
+        kind: EdgeKind.run,
+      ));
+    }
+    if (addedEdges.isEmpty) return;
+    _commit(Network(
+      nodes: [...old.nodes, ...addedNodes],
+      edges: [...old.edges, ...addedEdges],
+    ));
+  }
+
   void _replaceNode(NetNode updated) {
     final nodes = [
       for (final n in state.network.nodes)
@@ -361,3 +417,14 @@ class NetworkController extends Notifier<DrawingState> {
 
 final networkControllerProvider =
     NotifierProvider<NetworkController, DrawingState>(NetworkController.new);
+
+/// Whether run drawing snaps to the nearest 45° (ortho). Default on.
+final orthoProvider =
+    NotifierProvider<OrthoController, bool>(OrthoController.new);
+
+class OrthoController extends Notifier<bool> {
+  @override
+  bool build() => true;
+
+  void toggle() => state = !state;
+}
