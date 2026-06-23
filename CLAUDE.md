@@ -171,4 +171,3 @@ report export**; versioned `.mechx` save/open with viewport restore;
   drawn ring main is mis-solved (Hardy-Cross is out of scope, documented).
 - SNI verification debt: several values remain `verified == false` (see
   `SniProfile.verifyChecklist`) — they MUST surface as UNVERIFIED in any report.
-</content>
