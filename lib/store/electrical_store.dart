@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
+import 'package:mechx_engine/electrical/fault.dart' show defaultLvUtilityFaultKa;
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
@@ -87,6 +88,17 @@ final electricalProjectProvider =
 /// circuit), so a project with no layout placements is byte-identical to before.
 /// This cross-store dependency is intentional: the electrical Layout view is a
 /// projection onto the same substrate the mechanical canvas calibrates.
+/// The protective clearing time (seconds) the live app assumes when sizing
+/// busbars for short-circuit WITHSTAND (Fold 1). The engine default (1 s) is the
+/// rated-`Icw` basis; for actual conductor withstand sizing the *disconnection*
+/// time governs, and ~0.1 s is a realistic, conservative LV figure (a high fault
+/// is cleared by the incomer's instantaneous trip in tens of ms). At 1 s the
+/// adiabatic floor over-sizes every utility-fed bus (~200 mm² at 16 kA); 0.1 s
+/// upsizes only where genuinely needed. Tunable — a later pass may expose this
+/// and the origin fault level as project settings.
+/// // VERIFY against the assembly's declared Icw / the upstream device let-through.
+const double _liveBusbarClearingTimeS = 0.1;
+
 final electricalResultProvider = Provider<ElectricalSystemResult>(
   (ref) {
     final geo = ref.watch(projectControllerProvider);
@@ -95,6 +107,11 @@ final electricalResultProvider = Provider<ElectricalSystemResult>(
       ref.watch(electricalProjectProvider),
       calibrationBySheet: geo.calibrations,
       building: geo.building,
+      // Fold 1 — busbar short-circuit withstand: floor each bus to survive the
+      // prospective fault (origin 16 kA, consistent with the fault study) for
+      // the assumed clearing time, not merely to carry the load current.
+      originFaultLevel: const Current(defaultLvUtilityFaultKa * 1000),
+      busbarClearingTimeS: _liveBusbarClearingTimeS,
     );
   },
 );

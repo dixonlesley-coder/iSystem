@@ -261,10 +261,24 @@ report export**; versioned `.mechx` save/open with viewport restore;
   Schematic view. This closes the M+E+P convergence: one calibrated PDF substrate, disciplines
   as layers, geometry-derived lengths, with the abstract Single-line / Power-one-line / riser
   views as companions.
+  **Canvas-focus UI + sizing folds LIVE + full catalogue landed (parallel batch):** the floor
+  picker is now a **slim numbered rail** (`sheet_rail.dart`) and the right inspector is
+  **collapsible** (chevron; both the DRAW/ProjectPanel and the electrical Loads column, on
+  Layout + Schematic) so the PDF canvas is the largest region. The **two sizing-mutating folds**
+  are folded into `computePanel` and **wired live**: **busbar short-circuit withstand** (Fold 1,
+  IEC 61439-1 adiabatic; opt-in `computeSystem(originFaultLevel, busbarClearingTimeS)`, default
+  omitted ⇒ byte-identical — the store passes 16 kA at a realistic **0.1 s** clearing time) and
+  **triplen-harmonic neutral oversize** (Fold 2, IEC 60364-5-52; always-on, self-guarding to ×1.0
+  for linear panels). The **full multi-brand parts catalogue** is ported verbatim into
+  `electrical/catalog_data/**` + `catalog.dart` — **534 globally-unique parts** across Schneider /
+  Mitsubishi / LS / ABB / Legrand / Chint + generic cables (matchers/`bom.dart`/`quotation.dart`
+  unchanged). The **Windows release pipeline** is verified rebrand-correct (`release.yml` +
+  `installer/iSystem.iss`, feed URL via `${GITHUB_REPOSITORY}`); version `1.0.0+1`, first publish
+  awaits user sign-off.
   Remaining: **Wave 4b**
-  (electrical drawings/SLD-GA-one-line export + commercial UI + workflow/i18n), the two
-  deferred sizing-mutating folds (busbar withstand · harmonics neutral oversize), the
-  per-segment material→hydraulic-solve fold, and the full catalogue dataset.
+  (electrical drawings/SLD-GA-one-line export + commercial UI + workflow/i18n), the
+  per-segment material→hydraulic-solve fold, exposing Fold-1 fault-level/clearing-time as project
+  settings, and cutting the first release (`v1.0.0`).
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),
