@@ -203,9 +203,19 @@ report export**; versioned `.mechx` save/open with viewport restore;
   `buildDocument`/`applyDocument` round-trip the electrical project in `.mechx`.
   The product-string **rebrand to "iSystem"** is done (in-app labels + window
   title; the internal package names + `MechX*` classes + Windows `BINARY_NAME`
-  stay). Remaining: **A8** (the deferred advanced passes — fault/Zs/ADS,
-  selectivity, PF/capacitor, transformer/MV, sources, arc-flash, harmonics,
-  containment, enclosure, occupancy library, metering, SPD, lightning).
+  stay). The full PanelMaker engine is now ported AND the **A8 advanced passes
+  are wired** via `electrical/advanced_study.dart` (`computeAdvancedStudy` →
+  `AdvancedStudy`; `electricalAdvancedProvider`) over additive model fields
+  (`starterType`, panel backup tiers, project `sources`/dual-tx/occupancy/site)
+  that round-trip in `.mechx` — the `computeSystem`/`computePanel` core untouched.
+  An **MEP materials catalog** (`standards/pipe_products.dart` PPR/PVC/cast-iron/
+  acoustic-PVC/HDPE + `standards/duct_products.dart` BJLS auto-thickness + PU)
+  backs the upcoming mechanical canvas. Remaining: **Wave 4 (UI)** — the
+  electrical canvas editor + a mechanical **drag-and-drop palette** (pipe
+  segments/fittings/ducts with materials, drag-to-resize+snap, right-click size
+  in inches) sharing one interaction language, + electrical drawings/export +
+  commercial UI + workflow/i18n; plus the two deferred sizing-mutating folds
+  (busbar withstand · harmonics neutral oversize) and the full catalogue dataset.
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),
