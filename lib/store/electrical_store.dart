@@ -18,11 +18,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
+import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
+
+import 'project_store.dart';
 
 /// The outcome of a [ElectricalProjectController.connectFeeder] attempt — a
 /// success, or a refusal carrying a plain-language reason to surface (mirrors
@@ -72,9 +75,28 @@ final electricalProjectProvider =
 );
 
 /// Derived: the sized whole-project result, recomputed by the pure A4 engine
-/// whenever the project changes. Read-only for the UI.
+/// whenever the project (or the shared geometry it is placed on) changes.
+/// Read-only for the UI.
+///
+/// GEO WIRING (the W6 Layout payoff): the live per-sheet calibration + building
+/// floors from the MECHANICAL `projectControllerProvider` (the ONE shared
+/// calibrated PDF substrate — §10 geometry-is-truth) are threaded into
+/// `computeSystem`, so a circuit whose panel + load are PLACED on the calibrated
+/// layout sizes on its real geometric run length (`resolveCircuitLength`).
+/// Unplaced circuits keep their manual `length` (the engine falls back per
+/// circuit), so a project with no layout placements is byte-identical to before.
+/// This cross-store dependency is intentional: the electrical Layout view is a
+/// projection onto the same substrate the mechanical canvas calibrates.
 final electricalResultProvider = Provider<ElectricalSystemResult>(
-  (ref) => computeSystem(const PuilProfile(), ref.watch(electricalProjectProvider)),
+  (ref) {
+    final geo = ref.watch(projectControllerProvider);
+    return computeSystem(
+      const PuilProfile(),
+      ref.watch(electricalProjectProvider),
+      calibrationBySheet: geo.calibrations,
+      building: geo.building,
+    );
+  },
 );
 
 /// Derived: the bundled A8 advanced study (fault / supply / PF / control /
@@ -486,6 +508,66 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       circuits: [circuit],
     );
     state = _withProject(panels: [...state.panels, panel]);
+  }
+
+  // ── Geo-layout intents (Wave 6) ────────────────────────────────────────────
+  // The Layout view places panels + loads on the calibrated PDF substrate. These
+  // edit the GEO placement (`layoutPos` / `loadPos`) — a SEPARATE space from the
+  // abstract single-line `x`/`y` above (a node can carry both). All additive and
+  // funnelled through the per-panel/per-circuit replacers; the engine derives the
+  // cable run length from the placement (`resolveCircuitLength`).
+
+  /// Place / move a panel on the calibrated layout (or clear with a null [pos]).
+  /// No-op when the id is unknown.
+  void setPanelLayoutPos(String panelId, LayoutPos? pos) => _replacePanel(
+        panelId,
+        (p) => pos == null
+            ? p.copyWith(clearLayoutPos: true)
+            : p.copyWith(layoutPos: pos),
+      );
+
+  /// Place / move one circuit's LOAD on the calibrated layout (or clear with a
+  /// null [pos]). No-op when either id is unknown.
+  void setLoadPos(String panelId, String circuitId, LayoutPos? pos) =>
+      _replaceCircuit(
+        panelId,
+        circuitId,
+        (c) => pos == null
+            ? c.copyWith(clearLoadPos: true)
+            : c.copyWith(loadPos: pos),
+      );
+
+  /// Add a new way to [panelId] already PLACED on the layout at [pos] — the
+  /// drag-a-palette-card-onto-the-sheet-near-a-panel gesture. Same standards
+  /// defaults as [addCircuit]; the circuit is created with its `loadPos` so its
+  /// run length is geo-derived immediately.
+  void addLoadAtLayout(
+    String panelId, {
+    required LoadKind kind,
+    required LayoutPos pos,
+    String? name,
+    int? phases,
+    double? loadW,
+    double? motorKw,
+  }) {
+    final d = loadDefaults[kind];
+    final isMotor = kind == LoadKind.motor || kind == LoadKind.pump;
+    final circuit = ElectricalCircuit(
+      id: _freshId('c'),
+      name: name ?? (d?.label ?? 'Circuit'),
+      loadKind: kind,
+      cosPhi: d?.cosPhi ?? 0.85,
+      demandFactor: d?.demandFactor ?? 1,
+      isLighting: kind == LoadKind.lighting,
+      phases: phases,
+      motorKw: isMotor ? (motorKw ?? 3.0) : null,
+      loadW: isMotor || kind == LoadKind.spare || kind == LoadKind.feeder
+          ? 0
+          : (loadW ?? 2000),
+      length: const Length(20),
+      loadPos: pos,
+    );
+    _replacePanel(panelId, (p) => p.copyWith(circuits: [...p.circuits, circuit]));
   }
 
   /// Monotonic id source for new panels / circuits (deterministic per process,
