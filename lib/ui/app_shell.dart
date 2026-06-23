@@ -10,14 +10,16 @@ import '../data/project_document.dart';
 import '../data/recovery.dart';
 import '../store/app_state.dart';
 import '../store/electrical_store.dart';
+import '../store/layer_store.dart';
 import '../store/project_store.dart';
 import '../store/sheets_store.dart';
 import '../update/update_banner.dart';
 import '../update/version_label.dart';
-import 'canvas/sheet_canvas.dart';
 import 'commercial/commercial_hub.dart';
+import 'electrical/electrical_palette.dart';
 import 'electrical/electrical_view.dart';
 import 'inspector/project_panel.dart';
+import 'layout/layout_canvas.dart';
 import 'review/review_hub.dart';
 import 'schematic/schematic_view.dart';
 import 'shell/nav_rail.dart';
@@ -98,9 +100,13 @@ class _ShellBody extends ConsumerWidget {
   }
 }
 
-/// The Design workspace area — the prior centre layout, unchanged: the
-/// electrical workspace owns the whole area (its own project, not the plumbing
-/// inspector); plan + schematic keep the sheet rail and the project inspector.
+/// The Design workspace area. The abstract electrical workspace
+/// ([WorkspaceView.electrical]) and the mechanical riser
+/// ([WorkspaceView.schematic]) own the whole area. The "Layout" view
+/// ([WorkspaceView.plan], relabelled in the rail) is the UNIFIED canvas — the
+/// shared PDF with plumbing · HVAC · electrical layers — flanked by the sheet
+/// rail and a layer-aware inspector (the DRAW tools when a mechanical layer is
+/// active, the electrical Loads palette when Electrical is).
 class _DesignWorkspace extends ConsumerWidget {
   const _DesignWorkspace();
 
@@ -111,18 +117,71 @@ class _DesignWorkspace extends ConsumerWidget {
     if (view == WorkspaceView.electrical) {
       return const ElectricalView();
     }
+    if (view == WorkspaceView.schematic) {
+      return Row(
+        children: [
+          const SheetRail(),
+          Container(width: 1, color: colors.border),
+          const Expanded(child: SchematicView()),
+          Container(width: 1, color: colors.border),
+          const ProjectPanel(),
+        ],
+      );
+    }
+    // Layout (unified canvas).
+    final active = ref.watch(activeDisciplineProvider);
     return Row(
       children: [
         const SheetRail(),
         Container(width: 1, color: colors.border),
-        Expanded(
-          child: view == WorkspaceView.schematic
-              ? const SchematicView()
-              : const SheetCanvas(),
-        ),
+        const Expanded(child: LayoutCanvas()),
         Container(width: 1, color: colors.border),
-        const ProjectPanel(),
+        // Layer-aware inspector: the electrical Loads palette when Electrical is
+        // the active layer, else the mechanical DRAW/project inspector.
+        if (active == DisciplineLayer.electrical)
+          const _ElectricalInspectorColumn()
+        else
+          const ProjectPanel(),
       ],
+    );
+  }
+}
+
+/// The right inspector shown when Electrical is the active Layout layer: the
+/// Loads palette (drag onto the canvas) — the electrical editing toolset.
+class _ElectricalInspectorColumn extends StatelessWidget {
+  const _ElectricalInspectorColumn();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return SizedBox(
+      width: ProjectPanel.width,
+      child: ColoredBox(
+        color: colors.surface,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(MechXSpacing.md,
+                  MechXSpacing.md, MechXSpacing.md, MechXSpacing.xs),
+              child: Text('Electrical layer',
+                  style: type.subtitle.copyWith(color: colors.textPrimary)),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.md),
+              child: Text(
+                'Drag a load onto a panel to add a way, or onto the plan to '
+                'place it. Double-click to edit; right-click for the menu.',
+                style: type.caption.copyWith(color: colors.textMuted),
+              ),
+            ),
+            const SizedBox(height: MechXSpacing.sm),
+            const Expanded(child: ElectricalPalette()),
+          ],
+        ),
+      ),
     );
   }
 }

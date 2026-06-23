@@ -34,7 +34,6 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'electrical_canvas.dart';
 import 'electrical_format.dart';
-import 'electrical_layout_view.dart';
 import 'electrical_palette.dart';
 import 'panel_geometry.dart';
 import 'power_oneline_view.dart';
@@ -46,8 +45,10 @@ class _CircuitRef {
   const _CircuitRef(this.panelId, this.circuitId);
 }
 
-/// Which tab the workspace shows.
-enum _Tab { singleLine, layout, powerOneLine }
+/// Which tab the workspace shows. (Spatial placement on the PDF moved to the
+/// unified Layout canvas — the Electrical layer there — so this is the two
+/// abstract projections.)
+enum _Tab { singleLine, powerOneLine }
 
 /// Renders the electrical single-line canvas and hosts the editing overlays.
 class ElectricalView extends ConsumerStatefulWidget {
@@ -120,7 +121,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         Expanded(
           child: switch (_tab) {
             _Tab.singleLine => _buildCanvasArea(project, result),
-            _Tab.layout => _buildLayoutArea(),
             _Tab.powerOneLine =>
               PowerOneLineView(oneLine: advanced.powerOneLine),
           },
@@ -250,34 +250,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           ),
         ),
       ],
-    );
-  }
-
-  /// The Layout tab: panels + loads placed on the calibrated PDF sheet, sized on
-  /// real geometry. Reuses the SAME inspector + context menus as the single-line
-  /// canvas (it edits the one shared model).
-  Widget _buildLayoutArea() {
-    return ElectricalLayoutView(
-      onEditPanel: (panelId) {
-        final project = ref.read(electricalProjectProvider);
-        final panel =
-            project.panels.where((p) => p.id == panelId).firstOrNull;
-        final first = panel?.circuits
-            .where((c) => c.loadKind != LoadKind.feeder)
-            .firstOrNull;
-        if (panel != null && first != null) {
-          setState(() => _editing = _CircuitRef(panelId, first.id));
-        } else {
-          _openPanelMenu(panelId, _canvasCenter());
-        }
-      },
-      onEditCircuit: (panelId, circuitId) =>
-          setState(() => _editing = _CircuitRef(panelId, circuitId)),
-      onPanelMenu: _openPanelMenu,
-      onCircuitMenu: (panelId, circuitId, gp) => setState(() {
-        _circuitMenu = _CircuitRef(panelId, circuitId);
-        _menuAt = _toLocal(gp);
-      }),
     );
   }
 
@@ -476,12 +448,6 @@ class _Toolbar extends StatelessWidget {
             label: 'Single-line',
             selected: tab == _Tab.singleLine,
             onTap: () => onTab(_Tab.singleLine),
-          ),
-          const SizedBox(width: MechXSpacing.xs),
-          _TabButton(
-            label: 'Layout',
-            selected: tab == _Tab.layout,
-            onTap: () => onTab(_Tab.layout),
           ),
           const SizedBox(width: MechXSpacing.xs),
           _TabButton(

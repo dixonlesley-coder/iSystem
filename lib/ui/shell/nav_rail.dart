@@ -78,7 +78,11 @@ class NavRail extends ConsumerWidget {
           const SizedBox(height: MechXSpacing.xxs),
           _NavItem(
             glyph: _Glyph.plan,
-            label: 'Plan',
+            // "Plan" relabelled to "Layout": this design view is now the unified
+            // shared-PDF canvas (plumbing · HVAC · electrical layers). The
+            // [WorkspaceView] enum value stays `plan` to avoid churn (and keep
+            // the screenshot test seam valid).
+            label: 'Layout',
             active: designActive(WorkspaceView.plan),
             onTap: () => openDesign(WorkspaceView.plan),
           ),
