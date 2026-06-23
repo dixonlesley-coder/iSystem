@@ -2,6 +2,12 @@ import 'package:flutter/widgets.dart';
 
 /// MechX design tokens — the single source for spacing, radii, motion, colour,
 /// and type. Restrained and custom; deliberately NOT Material's defaults (§4).
+///
+/// The palette + radii + type follow Apple's Human Interface Guidelines (iOS):
+/// the system colour set (systemBlue accent, grouped backgrounds, label tiers,
+/// hairline separators), continuous-feel corner radii, soft elevation shadows,
+/// and an SF-like type scale (negative tracking on large text, a clear weight
+/// hierarchy). Rendered with Roboto (the bundled, offline, goldens-safe face).
 
 /// 8pt spacing grid (with a 4pt half-step). Use these everywhere; never
 /// hard-code pixel gaps.
@@ -19,12 +25,40 @@ abstract final class MechXSpacing {
   static double units(double n) => unit * n;
 }
 
+/// Corner radii — iOS-scale (controls ~9, cards ~14, large surfaces ~20), plus
+/// a fully-rounded [pill] for segmented controls / switches / sidebar items.
 abstract final class MechXRadii {
-  static const Radius sm = Radius.circular(4);
-  static const Radius md = Radius.circular(8);
-  static const Radius lg = Radius.circular(12);
-  static const BorderRadius card = BorderRadius.all(md);
-  static const BorderRadius control = BorderRadius.all(sm);
+  static const Radius sm = Radius.circular(6);
+  static const Radius md = Radius.circular(9);
+  static const Radius lg = Radius.circular(14);
+  static const Radius xl = Radius.circular(20);
+  static const Radius pill = Radius.circular(999);
+  static const BorderRadius card = BorderRadius.all(lg);
+  static const BorderRadius control = BorderRadius.all(md);
+  static const BorderRadius large = BorderRadius.all(xl);
+  static const BorderRadius rounded = BorderRadius.all(pill);
+}
+
+/// Soft, iOS-style elevation. Shadows are subtle and warm-neutral — they hint
+/// layering without the heavy drop-shadows of Material.
+abstract final class MechXShadow {
+  /// A resting card / floating control (palette, toolbar chip group).
+  static const List<BoxShadow> card = [
+    BoxShadow(color: Color(0x0F000000), blurRadius: 10, offset: Offset(0, 2)),
+    BoxShadow(color: Color(0x14000000), blurRadius: 1, offset: Offset(0, 0.5)),
+  ];
+
+  /// A transient popover / menu / inspector that floats above content.
+  static const List<BoxShadow> popover = [
+    BoxShadow(color: Color(0x1F000000), blurRadius: 28, offset: Offset(0, 12)),
+    BoxShadow(color: Color(0x14000000), blurRadius: 4, offset: Offset(0, 1)),
+  ];
+
+  /// The raised selected segment inside an iOS segmented control.
+  static const List<BoxShadow> segment = [
+    BoxShadow(color: Color(0x1A000000), blurRadius: 6, offset: Offset(0, 2)),
+    BoxShadow(color: Color(0x0D000000), blurRadius: 1, offset: Offset(0, 0.5)),
+  ];
 }
 
 /// Motion that orients — short, eased, never decorative (§4).
@@ -76,46 +110,52 @@ class MechXColors {
     required this.success,
   });
 
+  /// iOS light — systemGroupedBackground behind white cells, systemBlue accent,
+  /// label / secondaryLabel / tertiaryLabel tiers, hairline separators.
   static const MechXColors light = MechXColors(
     brightness: Brightness.light,
-    background: Color(0xFFF6F7F9),
-    surface: Color(0xFFFFFFFF),
-    surfaceHover: Color(0xFFEEF1F5),
-    border: Color(0xFFE1E5EB),
-    canvas: Color(0xFFEAEDF1),
+    background: Color(0xFFF2F2F7), // systemGroupedBackground
+    surface: Color(0xFFFFFFFF), // secondarySystemGroupedBackground
+    surfaceHover: Color(0xFFE8E8ED), // systemGray5/6 fill
+    border: Color(0xFFD7D7DC), // separator
+    canvas: Color(0xFFE7E7EC), // behind the drawing sheets
     sheetPaper: Color(0xFFFFFFFF),
-    gridLine: Color(0xFFD6DBE2),
-    textPrimary: Color(0xFF1A1C20),
-    textSecondary: Color(0xFF565C66),
-    textMuted: Color(0xFF878E99),
-    accent: Color(0xFF2D6CDF),
-    accentMuted: Color(0xFFBCCFF4),
-    warning: Color(0xFFB07A12),
-    danger: Color(0xFFC0392B),
-    success: Color(0xFF2E7D52),
+    gridLine: Color(0xFFDBDBE1),
+    textPrimary: Color(0xFF1C1C1E), // label
+    textSecondary: Color(0xFF6C6C70), // secondaryLabel
+    textMuted: Color(0xFF9A9AA0), // tertiaryLabel
+    accent: Color(0xFF007AFF), // systemBlue
+    accentMuted: Color(0xFFD6E6FF), // tinted-button fill
+    warning: Color(0xFFF08C00), // systemOrange (text-contrast tuned)
+    danger: Color(0xFFFF3B30), // systemRed
+    success: Color(0xFF30A46C), // systemGreen (text-contrast tuned)
   );
 
+  /// iOS dark — elevated grey cells on a near-black grouped background,
+  /// systemBlue (dark) accent, the dark label tiers.
   static const MechXColors dark = MechXColors(
     brightness: Brightness.dark,
-    background: Color(0xFF111317),
-    surface: Color(0xFF181B20),
-    surfaceHover: Color(0xFF20242B),
-    border: Color(0xFF2A2F37),
-    canvas: Color(0xFF0C0E11),
+    background: Color(0xFF1C1C1E), // systemGroupedBackground (dark)
+    surface: Color(0xFF2C2C2E), // secondarySystemGroupedBackground (dark)
+    surfaceHover: Color(0xFF3A3A3C), // systemGray5 (dark)
+    border: Color(0xFF38383A), // separator (dark)
+    canvas: Color(0xFF0E0E10), // near-black behind the design canvas
     sheetPaper: Color(0xFFF3F4F6),
-    gridLine: Color(0xFF242932),
-    textPrimary: Color(0xFFE9EBEF),
-    textSecondary: Color(0xFFA2A9B4),
-    textMuted: Color(0xFF6E7682),
-    accent: Color(0xFF5B8DEF),
-    accentMuted: Color(0xFF2B3D5F),
-    warning: Color(0xFFD9A441),
-    danger: Color(0xFFE5675A),
-    success: Color(0xFF54B888),
+    gridLine: Color(0xFF2A2A2C),
+    textPrimary: Color(0xFFF5F5F7), // label (dark)
+    textSecondary: Color(0xFFAEAEB2), // secondaryLabel (dark)
+    textMuted: Color(0xFF8E8E93), // tertiaryLabel (dark)
+    accent: Color(0xFF0A84FF), // systemBlue (dark)
+    accentMuted: Color(0xFF1C3A5E), // tinted-button fill (dark)
+    warning: Color(0xFFFF9F0A), // systemOrange (dark)
+    danger: Color(0xFFFF453A), // systemRed (dark)
+    success: Color(0xFF30D158), // systemGreen (dark)
   );
 }
 
 /// One type scale (color-less; callers apply a colour from [MechXColors]).
+/// An SF-like scale rendered in Roboto: negative tracking on large text, a
+/// clear weight hierarchy, comfortable line heights.
 @immutable
 class MechXTypography {
   final TextStyle display;
@@ -140,12 +180,12 @@ class MechXTypography {
   static const String monoFamily = 'Roboto Mono';
 
   static const MechXTypography standard = MechXTypography(
-    display: TextStyle(fontFamily: fontFamily, fontSize: 26, height: 1.2, fontWeight: FontWeight.w600, letterSpacing: -0.2),
-    title: TextStyle(fontFamily: fontFamily, fontSize: 18, height: 1.25, fontWeight: FontWeight.w600, letterSpacing: -0.1),
-    subtitle: TextStyle(fontFamily: fontFamily, fontSize: 15, height: 1.3, fontWeight: FontWeight.w600),
-    body: TextStyle(fontFamily: fontFamily, fontSize: 14, height: 1.4, fontWeight: FontWeight.w400),
-    label: TextStyle(fontFamily: fontFamily, fontSize: 12.5, height: 1.3, fontWeight: FontWeight.w500, letterSpacing: 0.1),
-    caption: TextStyle(fontFamily: fontFamily, fontSize: 11.5, height: 1.3, fontWeight: FontWeight.w400, letterSpacing: 0.2),
+    display: TextStyle(fontFamily: fontFamily, fontSize: 28, height: 1.16, fontWeight: FontWeight.w700, letterSpacing: -0.5),
+    title: TextStyle(fontFamily: fontFamily, fontSize: 19, height: 1.2, fontWeight: FontWeight.w600, letterSpacing: -0.4),
+    subtitle: TextStyle(fontFamily: fontFamily, fontSize: 15.5, height: 1.27, fontWeight: FontWeight.w600, letterSpacing: -0.2),
+    body: TextStyle(fontFamily: fontFamily, fontSize: 14.5, height: 1.4, fontWeight: FontWeight.w400, letterSpacing: -0.1),
+    label: TextStyle(fontFamily: fontFamily, fontSize: 13, height: 1.3, fontWeight: FontWeight.w500, letterSpacing: -0.05),
+    caption: TextStyle(fontFamily: fontFamily, fontSize: 12, height: 1.3, fontWeight: FontWeight.w500, letterSpacing: 0.1),
     mono: TextStyle(
       fontFamily: monoFamily,
       fontSize: 13,

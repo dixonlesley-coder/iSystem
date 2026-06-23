@@ -64,10 +64,15 @@ void main() {
     await expectLater(app, matchesGoldenFile('goldens/01_plan_dark.png'));
 
     container.read(brightnessProvider.notifier).toggle();
-    await tester.pump(const Duration(milliseconds: 250));
+    // One frame to rebuild (AnimatedContainers pick up the new theme target),
+    // then advance past the colour cross-fade so the golden captures the
+    // settled light palette rather than the first frame of the transition.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     await expectLater(app, matchesGoldenFile('goldens/02_plan_light.png'));
     container.read(brightnessProvider.notifier).toggle();
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300)); // settle back to dark
 
     container.read(showHeatmapProvider.notifier).toggle();
     await tester.pump(const Duration(milliseconds: 250));
