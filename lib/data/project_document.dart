@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/widgets.dart' show Brightness, Offset, Size;
+import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -111,7 +112,10 @@ class DesignSettings {
 /// Pure (de)serialization only; callers handle file IO. A `version` header is
 /// written from day one so the format can migrate.
 class ProjectDocument {
-  static const int currentVersion = 1;
+  /// Bumped to 2 when the optional electrical sub-model ([electrical]) was
+  /// added. The addition is ADDITIVE — a v1 file (no `electrical` key) loads
+  /// fine with [electrical] == null, so no migration step is needed.
+  static const int currentVersion = 2;
 
   final int version;
   final String projectName;
@@ -129,6 +133,10 @@ class ProjectDocument {
   /// Non-network design inputs (occupancy, feed, ducts, rainfall, fire, theme).
   final DesignSettings settings;
 
+  /// Optional electrical sub-model (panels + earthing system). Added in v2;
+  /// null for a v1 file or a project with no electrical design yet.
+  final ElectricalProject? electrical;
+
   const ProjectDocument({
     this.version = currentVersion,
     required this.projectName,
@@ -139,6 +147,7 @@ class ProjectDocument {
     this.viewports = const {},
     this.sheetFloors = const {},
     this.settings = const DesignSettings(),
+    this.electrical,
   });
 
   Map<String, dynamic> toJson() => {
@@ -175,6 +184,7 @@ class ProjectDocument {
           for (final e in sheetFloors.entries) e.key: e.value,
         },
         'settings': settings.toJson(),
+        if (electrical != null) 'electrical': electrical!.toJson(),
         'network': {
           'nodes': [
             for (final n in network.nodes)
@@ -299,6 +309,11 @@ class ProjectDocument {
     final settings = rawSettings is Map
         ? DesignSettings.fromJson(rawSettings)
         : const DesignSettings();
+    // Optional electrical sub-model (v2+). Absent on a v1 file ⇒ null, no throw.
+    final rawElectrical = json['electrical'];
+    final electrical = rawElectrical is Map<String, dynamic>
+        ? ElectricalProject.fromJson(rawElectrical)
+        : null;
     return ProjectDocument(
       version: version,
       projectName: project['name'] as String? ?? 'Untitled project',
@@ -309,6 +324,7 @@ class ProjectDocument {
       viewports: viewports,
       sheetFloors: sheetFloors,
       settings: settings,
+      electrical: electrical,
     );
   }
 

@@ -134,6 +134,68 @@ class ElectricalCircuit {
   /// True when this way is a feeder (explicit kind or it feeds a panel).
   bool get isFeeder =>
       loadKind == LoadKind.feeder || feedsPanelId != null;
+
+  /// Serialize to a plain JSON map (enums by `.name`, typed quantities as raw
+  /// SI doubles). Optional fields are omitted when null so a smaller file
+  /// results and round-trips cleanly.
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'role': role.name,
+        'loadW': loadW,
+        'cosPhi': cosPhi,
+        'length': length.meters,
+        'loadKind': loadKind.name,
+        'isLighting': isLighting,
+        'demandFactor': demandFactor,
+        if (motorKw != null) 'motorKw': motorKw,
+        if (phases != null) 'phases': phases,
+        'lifeSafety': lifeSafety,
+        if (cableType != null) 'cableType': cableType,
+        if (laying != null) 'laying': laying,
+        if (cableOverrideMm2 != null) 'cableOverrideMm2': cableOverrideMm2,
+        if (breakerOverrideA != null)
+          'breakerOverrideA': breakerOverrideA!.amperes,
+        if (groupingCountOverride != null)
+          'groupingCountOverride': groupingCountOverride,
+        if (phaseOverride != null) 'phaseOverride': phaseOverride!.name,
+        'busbarBreakBefore': busbarBreakBefore,
+        if (feedsPanelId != null) 'feedsPanelId': feedsPanelId,
+        if (sourceEquipmentId != null) 'sourceEquipmentId': sourceEquipmentId,
+        if (flaOverrideA != null) 'flaOverrideA': flaOverrideA!.amperes,
+      };
+
+  /// Tolerant decode: unknown enum names fall back to the field default,
+  /// absent optional fields stay null, never throws on a missing value.
+  static ElectricalCircuit fromJson(Map<String, dynamic> json) =>
+      ElectricalCircuit(
+        id: json['id'] as String? ?? '',
+        name: json['name'] as String? ?? '',
+        role: _enumOr(CircuitRole.values, json['role'], CircuitRole.branch),
+        loadW: (json['loadW'] as num?)?.toDouble() ?? 0,
+        cosPhi: (json['cosPhi'] as num?)?.toDouble() ?? 0.85,
+        length: Length((json['length'] as num?)?.toDouble() ?? 0),
+        loadKind: _enumOr(LoadKind.values, json['loadKind'], LoadKind.general),
+        isLighting: json['isLighting'] == true,
+        demandFactor: (json['demandFactor'] as num?)?.toDouble() ?? 1,
+        motorKw: (json['motorKw'] as num?)?.toDouble(),
+        phases: (json['phases'] as num?)?.toInt(),
+        lifeSafety: json['lifeSafety'] == true,
+        cableType: json['cableType'] as String?,
+        laying: json['laying'] as String?,
+        cableOverrideMm2: (json['cableOverrideMm2'] as num?)?.toDouble(),
+        breakerOverrideA: json['breakerOverrideA'] == null
+            ? null
+            : Current((json['breakerOverrideA'] as num).toDouble()),
+        groupingCountOverride: (json['groupingCountOverride'] as num?)?.toInt(),
+        phaseOverride: _enumOrNull(PhaseLine.values, json['phaseOverride']),
+        busbarBreakBefore: json['busbarBreakBefore'] == true,
+        feedsPanelId: json['feedsPanelId'] as String?,
+        sourceEquipmentId: json['sourceEquipmentId'] as String?,
+        flaOverrideA: json['flaOverrideA'] == null
+            ? null
+            : Current((json['flaOverrideA'] as num).toDouble()),
+      );
 }
 
 /// A distribution panel / board. Mirrors PanelMaker `PanelInput` (core fields).
@@ -201,6 +263,72 @@ class ElectricalPanel {
     this.fedByCircuitId,
     this.circuits = const [],
   });
+
+  /// Serialize to a plain JSON map (enums by `.name`, typed quantities as raw
+  /// SI doubles).
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        if (tag != null) 'tag': tag,
+        'system': system.name,
+        'voltage': voltage.volts,
+        'ambientTempC': ambientTempC,
+        'groundTempC': groundTempC,
+        'depthM': depthM,
+        'installMethod': installMethod.name,
+        'insulation': insulation.name,
+        'material': material.name,
+        'groupingCount': groupingCount,
+        'diversityFactor': diversityFactor,
+        if (occupancy != null) 'occupancy': occupancy,
+        'sourceType': sourceType.name,
+        if (fedByCircuitId != null) 'fedByCircuitId': fedByCircuitId,
+        'circuits': [for (final c in circuits) c.toJson()],
+      };
+
+  /// Tolerant decode: unknown enum names fall back to the field default.
+  static ElectricalPanel fromJson(Map<String, dynamic> json) => ElectricalPanel(
+        id: json['id'] as String? ?? '',
+        name: json['name'] as String? ?? '',
+        tag: json['tag'] as String?,
+        system: _enumOr(
+          ElectricalSystem.values,
+          json['system'],
+          ElectricalSystem.threePhase,
+        ),
+        voltage: Voltage((json['voltage'] as num?)?.toDouble() ?? 400),
+        ambientTempC: (json['ambientTempC'] as num?)?.toDouble() ?? 30,
+        groundTempC: (json['groundTempC'] as num?)?.toDouble() ?? 20,
+        depthM: (json['depthM'] as num?)?.toDouble() ?? 0.5,
+        installMethod: _enumOr(
+          CableInstallMethod.values,
+          json['installMethod'],
+          CableInstallMethod.conduit,
+        ),
+        insulation: _enumOr(
+          ConductorInsulation.values,
+          json['insulation'],
+          ConductorInsulation.pvc,
+        ),
+        material: _enumOr(
+          ConductorMaterial.values,
+          json['material'],
+          ConductorMaterial.copper,
+        ),
+        groupingCount: (json['groupingCount'] as num?)?.toInt() ?? 1,
+        diversityFactor: (json['diversityFactor'] as num?)?.toDouble() ?? 1,
+        occupancy: json['occupancy'] as String?,
+        sourceType: _enumOr(
+          PanelSource.values,
+          json['sourceType'],
+          PanelSource.utility,
+        ),
+        fedByCircuitId: json['fedByCircuitId'] as String?,
+        circuits: [
+          for (final c in (json['circuits'] as List? ?? const []))
+            ElectricalCircuit.fromJson(c as Map<String, dynamic>),
+        ],
+      );
 }
 
 /// Where a panel takes its supply from.
@@ -219,4 +347,50 @@ class ElectricalProject {
     this.panels = const [],
     this.earthingSystem = EarthingSystem.tnCs,
   });
+
+  /// Serialize to a plain JSON map. Enums by `.name`; the panels recurse.
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'earthingSystem': earthingSystem.name,
+        'panels': [for (final p in panels) p.toJson()],
+      };
+
+  /// Tolerant decode: an unknown earthing system falls back to PLN PME
+  /// practice; a missing/non-list `panels` yields an empty list; never throws.
+  static ElectricalProject fromJson(Map<String, dynamic> json) =>
+      ElectricalProject(
+        id: json['id'] as String? ?? '',
+        name: json['name'] as String? ?? '',
+        earthingSystem: _enumOr(
+          EarthingSystem.values,
+          json['earthingSystem'],
+          EarthingSystem.tnCs,
+        ),
+        panels: [
+          for (final p in (json['panels'] as List? ?? const []))
+            ElectricalPanel.fromJson(p as Map<String, dynamic>),
+        ],
+      );
+}
+
+/// Resolve an enum [name] to a [values] entry, falling back to [fallback] when
+/// the name is unknown/absent — so a `.mechx` written by a newer build (with an
+/// enum value this build doesn't have) loads with a sensible default instead of
+/// throwing. Pure Dart; mirrors the app-layer `_enumOr`.
+T _enumOr<T extends Enum>(List<T> values, Object? name, T fallback) {
+  if (name is! String) return fallback;
+  for (final v in values) {
+    if (v.name == name) return v;
+  }
+  return fallback;
+}
+
+/// Like [_enumOr] but returns null for an unknown/absent name (optional fields).
+T? _enumOrNull<T extends Enum>(List<T> values, Object? name) {
+  if (name is! String) return null;
+  for (final v in values) {
+    if (v.name == name) return v;
+  }
+  return null;
 }
