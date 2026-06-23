@@ -49,6 +49,16 @@ enum BreakerCurve { b, c, d }
 /// Breaker frame class — ≤63 A is an MCB, above it an MCCB.
 enum BreakerClass { mcb, mccb }
 
+/// A standard copper flat-bar size + its continuous rating.
+class CopperBarSize {
+  final double widthMm;
+  final double thicknessMm;
+  final double csaMm2;
+  final Current ampacityA;
+  const CopperBarSize(
+      this.widthMm, this.thicknessMm, this.csaMm2, this.ampacityA);
+}
+
 /// The pluggable electrical-standards interface. The sizing layer depends on
 /// THIS, never on the concrete PUIL numbers, so another jurisdiction's profile
 /// can be swapped in. Mirrors `StandardsProfile`'s shape for the M+P domain.
@@ -161,6 +171,22 @@ abstract interface class ElectricalStandardsProfile {
 
   /// Target maximum earth-electrode resistance (Ω). PUIL ≈ 5 Ω.
   StandardValue<Resistance> get maxEarthResistance;
+
+  // ── Busbar ────────────────────────────────────────────────────────────────
+  /// Standard copper flat-bar sizes + continuous ratings (single bar, ~30 °C
+  /// rise, painted), ascending by ampacity.
+  List<CopperBarSize> get copperBusbarTable;
+
+  /// Conservative continuous current density (A/mm²) for sizing a bar beyond the
+  /// tabulated sizes.
+  double get copperCurrentDensityAPerMm2;
+
+  /// Max outgoing ways on one busbar section before the panel bus is split.
+  int get maxWaysPerBusbar;
+
+  /// Max continuous current one section carries before splitting (the largest
+  /// practical single bar's rating).
+  Current get maxBusbarSectionCurrentA;
 
   /// Unverified values, most safety-critical first, for the report's
   /// "verify against the official PUIL PDF" section.
@@ -505,6 +531,36 @@ class PuilProfile implements ElectricalStandardsProfile {
             'Confirm against site Wenner survey + the PUIL clause.',
       );
 
+  // ── Busbar (IEC 61439-1 — engineering estimates) ──────────────────────────
+
+  static const List<CopperBarSize> _copperBusbar = [
+    CopperBarSize(12, 2, 24, Current(110)),
+    CopperBarSize(15, 3, 45, Current(170)),
+    CopperBarSize(20, 3, 60, Current(200)),
+    CopperBarSize(25, 3, 75, Current(230)),
+    CopperBarSize(20, 5, 100, Current(270)),
+    CopperBarSize(25, 5, 125, Current(310)),
+    CopperBarSize(30, 5, 150, Current(370)),
+    CopperBarSize(40, 5, 200, Current(460)),
+    CopperBarSize(50, 5, 250, Current(550)),
+    CopperBarSize(50, 10, 500, Current(800)),
+    CopperBarSize(60, 10, 600, Current(930)),
+    CopperBarSize(80, 10, 800, Current(1180)),
+    CopperBarSize(100, 10, 1000, Current(1430)),
+  ];
+
+  @override
+  List<CopperBarSize> get copperBusbarTable => _copperBusbar;
+
+  @override
+  double get copperCurrentDensityAPerMm2 => 1.3;
+
+  @override
+  int get maxWaysPerBusbar => 12;
+
+  @override
+  Current get maxBusbarSectionCurrentA => _copperBusbar.last.ampacityA;
+
   // ── Verify checklist (report surfaces these as still-unverified) ──────────
 
   @override
@@ -514,6 +570,16 @@ class PuilProfile implements ElectricalStandardsProfile {
         maxVoltageDropLighting,
         maxEarthResistance,
         continuousLoadFactor,
+        const StandardValue<Object?>(
+          'copper busbar continuous ratings (single bar, ~30 °C rise)',
+          unit: 'table',
+          citation: 'IEC 61439-1 — engineering estimate (not a PUIL clause)',
+          verified: false,
+          status: VerificationStatus.notAnSniClause,
+          note: 'Approximate single-bar ratings (~1.3–1.6 A/mm²); a general '
+              'engineering reference, not a PUIL/SNI table. Verify against the '
+              'manufacturer / a type-tested assembly.',
+        ),
         const StandardValue<Object?>(
           'cable ampacity (KHA) tables — Cu/PVC + Cu/XLPE × method B1/C/E/D',
           unit: 'table',

@@ -85,3 +85,37 @@ class CableResult {
     required this.appliedRule,
   });
 }
+
+/// Sized panel busbar — a standard flat copper bar, or (beyond the table) a
+/// density-estimated section ([widthMm]/[thicknessMm] = 0 in that case).
+class BusbarResult {
+  final double widthMm;
+  final double thicknessMm;
+  final double csaMm2;
+  final Current ampacityA;
+  final Current totalCurrentA;
+
+  const BusbarResult({
+    required this.widthMm,
+    required this.thicknessMm,
+    required this.csaMm2,
+    required this.ampacityA,
+    required this.totalCurrentA,
+  });
+}
+
+/// Neutral + protective-earth (PE) bar sizing derived from the phase bar.
+class NeutralPeBars {
+  /// Full-size neutral (= phase bar).
+  final double neutralCsaMm2;
+  final Current neutralAmpacityA;
+
+  /// PE bar per IEC 60364-5-54 §543 (S | 16 | S/2), floored at 6 mm².
+  final double peCsaMm2;
+
+  const NeutralPeBars({
+    required this.neutralCsaMm2,
+    required this.neutralAmpacityA,
+    required this.peCsaMm2,
+  });
+}
