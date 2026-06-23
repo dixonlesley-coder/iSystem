@@ -172,8 +172,12 @@ report export**; versioned `.mechx` save/open with viewport restore;
   single M+E+P app **iSystem** (see the §15 decisions-log "Project merge" row).
   The electrical engine is being ported to pure Dart under
   `packages/mechx_engine/lib/electrical/` from the sibling **PanelMaker** (PUIL)
-  spec, with a `PuilProfile` mirroring `SniProfile`'s provenance tiers. A1 (SI
-  typed quantities for current/voltage/VA/var/Ω/J) has landed in `units.dart`.
+  spec. Landed so far: **A1** — SI typed quantities for current/voltage/VA/var/Ω/J
+  in `units.dart`; **A2** — `standards/puil.dart` (`ElectricalStandardsProfile`
+  interface + `PuilProfile`, reusing `StandardValue`/`VerificationStatus` from
+  `sni.dart`; all values `secondarySource`, nothing `sniVerbatim` until the
+  official PUIL PDF is checked). Next: A3 (Tier-1 sizing — load current, cable,
+  breaker, voltage drop, busbar, earthing/RCD) in `electrical/`.
 - Native PDF *drawing* export (DXF drawing export and the Markdown calc report
   are done; both convert to PDF externally).
 - Multi-select / copy-paste / measurement-annotation; per-outlet roof-area UI
