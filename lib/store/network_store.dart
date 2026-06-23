@@ -174,6 +174,76 @@ class NetworkController extends Notifier<DrawingState> {
     _commit(Network(nodes: nodes, edges: [...state.network.edges, edge]));
   }
 
+  /// Place a riser of [service] at horizontal position [worldX] on [floorIndex]
+  /// spanning to the floor ABOVE, INDEPENDENT of the active tool (used by the
+  /// editable vertical/elevation view's palette drop). Both endpoint nodes share
+  /// [worldX]; the riser's vertical length is the §10 floor-to-floor elevation
+  /// delta (computed by `edgeLength`), NOT a pixel distance. Returns the new
+  /// edge id, or null when there is no floor above. Records one undo step.
+  String? placeRiserAt(
+    String sheetId,
+    int floorIndex,
+    double worldX,
+    int levelCount, {
+    ServiceType? service,
+    double y = 0,
+  }) {
+    if (floorIndex < 0 || floorIndex + 1 >= levelCount) return null;
+    final svc = service ?? state.service;
+    final lowerId = _id('n');
+    final upperId = _id('n');
+    final lower = NetNode(
+        id: lowerId,
+        sheetId: sheetId,
+        x: worldX,
+        y: y,
+        floorIndex: floorIndex);
+    final upper = NetNode(
+        id: upperId,
+        sheetId: sheetId,
+        x: worldX,
+        y: y,
+        floorIndex: floorIndex + 1);
+    final edgeId = _id('e');
+    final edge = NetEdge(
+      id: edgeId,
+      fromId: lowerId,
+      toId: upperId,
+      service: svc,
+      kind: EdgeKind.riser,
+    );
+    _commit(Network(
+      nodes: [...state.network.nodes, lower, upper],
+      edges: [...state.network.edges, edge],
+    ));
+    return edgeId;
+  }
+
+  /// Move BOTH endpoint nodes of a riser [edgeId] to horizontal [worldX] WITHOUT
+  /// recording undo (live drag — pair with [pushUndoSnapshot] at drag start).
+  /// Only the x changes: the floors (and so the §10 elevation delta that is the
+  /// riser's true length) are untouched, so dragging a riser sideways never
+  /// alters its length.
+  void moveRiserHorizontal(String edgeId, double worldX) {
+    final idx = state.network.edges.indexWhere((e) => e.id == edgeId);
+    if (idx < 0) return;
+    final edge = state.network.edges[idx];
+    if (edge.kind != EdgeKind.riser) return;
+    final nodes = [
+      for (final n in state.network.nodes)
+        if (n.id == edge.fromId || n.id == edge.toId)
+          n.copyWith(x: worldX)
+        else
+          n,
+    ];
+    state = DrawingState(
+      network: Network(nodes: nodes, edges: state.network.edges),
+      service: state.service,
+      tool: state.tool,
+      pendingPoint: state.pendingPoint,
+    );
+  }
+
   void undo() {
     if (_undo.isEmpty) return;
     _redo.add(state.network);
