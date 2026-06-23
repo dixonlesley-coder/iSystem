@@ -121,6 +121,188 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Restore the built-in sample project.
   void resetToSample() => state = sampleElectricalProject();
 
+  // ── Edit intents (the interactive editor) ──────────────────────────────────
+  // Every method rebuilds the panel list immutably and routes through
+  // [_withProject] so the additive A8 project fields (sources / dual-transformer
+  // / occupancy / site) are never silently dropped.
+
+  /// Replace one panel within the list (by id), preserving order. No-op when the
+  /// id is unknown. The single funnel every per-panel edit routes through.
+  void _replacePanel(String panelId, ElectricalPanel Function(ElectricalPanel) f) {
+    var changed = false;
+    final panels = [
+      for (final p in state.panels)
+        if (p.id == panelId) (changed = true, f(p)).$2 else p,
+    ];
+    if (changed) state = _withProject(panels: panels);
+  }
+
+  /// Replace one circuit on one panel (by id), preserving order. No-op when
+  /// either id is unknown.
+  void _replaceCircuit(String panelId, String circuitId,
+      ElectricalCircuit Function(ElectricalCircuit) f) {
+    _replacePanel(
+      panelId,
+      (p) => p.copyWith(circuits: [
+        for (final c in p.circuits)
+          if (c.id == circuitId) f(c) else c,
+      ]),
+    );
+  }
+
+  /// Append a fresh-id circuit of [kind] to [panelId], with standards-derived
+  /// defaults (cos φ / demand factor / curve from [loadDefaults]) and a sensible
+  /// default load so the engine sizes it immediately.
+  void addCircuit(String panelId, {required LoadKind kind, String? name}) {
+    final d = loadDefaults[kind];
+    final isMotor = kind == LoadKind.motor || kind == LoadKind.pump;
+    final circuit = ElectricalCircuit(
+      id: _freshId('c'),
+      name: name ?? (d?.label ?? 'Circuit'),
+      loadKind: kind,
+      cosPhi: d?.cosPhi ?? 0.85,
+      demandFactor: d?.demandFactor ?? 1,
+      isLighting: kind == LoadKind.lighting,
+      // A motor-like way carries a kW default; everything else a watt default.
+      // A spare way is zero-demand by definition.
+      motorKw: isMotor ? 3.0 : null,
+      loadW: isMotor || kind == LoadKind.spare || kind == LoadKind.feeder
+          ? 0
+          : 2000,
+      length: const Length(20),
+    );
+    _replacePanel(panelId, (p) => p.copyWith(circuits: [...p.circuits, circuit]));
+  }
+
+  /// Field-wise edit of one circuit — only the supplied fields change. Pass the
+  /// `clear*` flags to null an optional field.
+  void setCircuit(
+    String panelId,
+    String circuitId, {
+    String? name,
+    LoadKind? loadKind,
+    double? loadW,
+    double? motorKw,
+    bool clearMotorKw = false,
+    double? cosPhi,
+    double? demandFactor,
+    Length? length,
+    int? phases,
+    bool clearPhases = false,
+    bool? lifeSafety,
+    bool? isLighting,
+    String? cableType,
+    bool clearCableType = false,
+  }) {
+    _replaceCircuit(
+      panelId,
+      circuitId,
+      (c) => c.copyWith(
+        name: name,
+        loadKind: loadKind,
+        loadW: loadW,
+        motorKw: motorKw,
+        clearMotorKw: clearMotorKw,
+        cosPhi: cosPhi,
+        demandFactor: demandFactor,
+        length: length,
+        phases: phases,
+        clearPhases: clearPhases,
+        lifeSafety: lifeSafety,
+        isLighting: isLighting,
+        cableType: cableType,
+        clearCableType: clearCableType,
+      ),
+    );
+  }
+
+  /// Delete one circuit from a panel.
+  void deleteCircuit(String panelId, String circuitId) {
+    _replacePanel(
+      panelId,
+      (p) => p.copyWith(circuits: [
+        for (final c in p.circuits)
+          if (c.id != circuitId) c,
+      ]),
+    );
+  }
+
+  /// Duplicate one circuit (fresh id, "(copy)" name), inserted just after it.
+  /// A duplicated feeder drops its `feedsPanelId` (a feeder targets one panel).
+  void duplicateCircuit(String panelId, String circuitId) {
+    _replacePanel(panelId, (p) {
+      final out = <ElectricalCircuit>[];
+      for (final c in p.circuits) {
+        out.add(c);
+        if (c.id == circuitId) {
+          out.add(c.copyWith(
+            id: _freshId('c'),
+            name: '${c.name} (copy)',
+            feedsPanelId: c.feedsPanelId == null ? null : '',
+          ));
+        }
+      }
+      return p.copyWith(circuits: out);
+    });
+  }
+
+  /// Add a new (empty) panel. When [fedByCircuitId] is given it is a fed
+  /// sub-board; otherwise a utility-fed board.
+  void addPanel({
+    required String name,
+    String? tag,
+    ElectricalSystem system = ElectricalSystem.threePhase,
+    Voltage voltage = const Voltage(400),
+    String? fedByCircuitId,
+  }) {
+    final panel = ElectricalPanel(
+      id: _freshId('panel'),
+      name: name,
+      tag: tag,
+      system: system,
+      voltage: voltage,
+      sourceType:
+          fedByCircuitId != null ? PanelSource.feeder : PanelSource.utility,
+      fedByCircuitId: fedByCircuitId,
+    );
+    state = _withProject(panels: [...state.panels, panel]);
+  }
+
+  /// Delete a panel by id.
+  void deletePanel(String id) {
+    state = _withProject(
+      panels: [
+        for (final p in state.panels)
+          if (p.id != id) p,
+      ],
+    );
+  }
+
+  /// Rename a panel.
+  void renamePanel(String id, String name) =>
+      _replacePanel(id, (p) => p.copyWith(name: name));
+
+  /// Set a panel's diversity factor (clamped 0–1).
+  void setPanelDiversity(String id, double factor) => _replacePanel(
+      id, (p) => p.copyWith(diversityFactor: factor.clamp(0.0, 1.0)));
+
+  /// Toggle the essential (genset-backed) flag.
+  void setPanelEssential(String id, bool value) =>
+      _replacePanel(id, (p) => p.copyWith(essential: value));
+
+  /// Toggle the UPS / critical-backed flag.
+  void setPanelUpsBacked(String id, bool value) =>
+      _replacePanel(id, (p) => p.copyWith(upsBacked: value));
+
+  /// Toggle the tenant sub-metered flag.
+  void setPanelSubmeter(String id, bool value) =>
+      _replacePanel(id, (p) => p.copyWith(submeter: value));
+
+  /// Monotonic id source for new panels / circuits (deterministic per process,
+  /// distinct across calls — sufficient for in-memory editing).
+  static int _idSeq = 0;
+  String _freshId(String prefix) => '$prefix-${DateTime.now().microsecondsSinceEpoch}-${_idSeq++}';
+
   /// Fold the MechX-sized MEP equipment (A5) into a dedicated "MEP Equipment"
   /// panel, upserted by a fixed id so re-syncing replaces it cleanly (the
   /// circuits already carry `sourceEquipmentId`). Empty [circuits] removes the
