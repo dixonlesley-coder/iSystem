@@ -188,6 +188,17 @@ abstract interface class ElectricalStandardsProfile {
   /// practical single bar's rating).
   Current get maxBusbarSectionCurrentA;
 
+  // ── Busbar short-circuit withstand (IEC 61439-1 §9.3 — engineering data) ────
+  /// One-second short-time withstand current *density* for a bare copper bar
+  /// (A/mm²). A short circuit is adiabatic, so the rated short-time withstand
+  /// current scales as Icw(t) = density·CSA / √t (IEC 61439-1 §9.3.2). Used to
+  /// floor a bar at the section the prospective fault demands.
+  double get busbarShortTimeDensityAPerMm2;
+
+  /// IEC 61439-1 Table 7 peak factor n (= Ipk / Irms) for a prospective rms
+  /// short-circuit current (kA) — folds in the worst-case DC-offset asymmetry.
+  double busbarPeakFactor(double faultKa);
+
   /// Unverified values, most safety-critical first, for the report's
   /// "verify against the official PUIL PDF" section.
   List<StandardValue<Object?>> get verifyChecklist;
@@ -561,6 +572,34 @@ class PuilProfile implements ElectricalStandardsProfile {
   @override
   Current get maxBusbarSectionCurrentA => _copperBusbar.last.ampacityA;
 
+  // ── Busbar short-circuit withstand (IEC 61439-1 §9.3) ──────────────────────
+
+  // One-second adiabatic short-time withstand density for a bare copper bar
+  // (A/mm²). ~80 A/mm² is conservative within the commonly quoted 80–110 band:
+  // the density that lifts copper from ~70 °C to the short-circuit limit
+  // (~200–300 °C) in one second; Icw scales as 1/√t (IEC 61439-1 §9.3.2).
+  @override
+  double get busbarShortTimeDensityAPerMm2 => 80;
+
+  // IEC 61439-1 Table 7: n = Ipk/Irms by prospective rms fault band (inclusive
+  // upper bound): ≤5→1.5, ≤10→1.7, ≤20→2.0, ≤50→2.1, else 2.2. Higher faults are
+  // fed from stiffer (more reactive) sources, so the asymmetry (n) rises.
+  static const List<({double maxKa, double n})> _peakFactorTable = [
+    (maxKa: 5, n: 1.5),
+    (maxKa: 10, n: 1.7),
+    (maxKa: 20, n: 2.0),
+    (maxKa: 50, n: 2.1),
+    (maxKa: double.infinity, n: 2.2),
+  ];
+
+  @override
+  double busbarPeakFactor(double faultKa) {
+    for (final band in _peakFactorTable) {
+      if (faultKa <= band.maxKa) return band.n;
+    }
+    return 2.2; // unreachable — the last band is open-ended.
+  }
+
   // ── Verify checklist (report surfaces these as still-unverified) ──────────
 
   @override
@@ -579,6 +618,19 @@ class PuilProfile implements ElectricalStandardsProfile {
           note: 'Approximate single-bar ratings (~1.3–1.6 A/mm²); a general '
               'engineering reference, not a PUIL/SNI table. Verify against the '
               'manufacturer / a type-tested assembly.',
+        ),
+        const StandardValue<Object?>(
+          'busbar short-circuit withstand — 1 s copper short-time density '
+              '(~80 A/mm²) + IEC 61439-1 Table 7 peak factor',
+          unit: 'A/mm² + table',
+          citation: 'IEC 61439-1 §9.3 / Table 7 — engineering estimate '
+              '(not a PUIL clause)',
+          verified: false,
+          status: VerificationStatus.notAnSniClause,
+          note: 'Adiabatic 1-second copper short-time withstand density '
+              '(~80–110 A/mm² band; 80 conservative) and the Table 7 '
+              'Ipk/Irms peak factors. Verify against a type-tested assembly '
+              'Icw/Ipk declaration.',
         ),
         const StandardValue<Object?>(
           'cable ampacity (KHA) tables — Cu/PVC + Cu/XLPE × method B1/C/E/D',

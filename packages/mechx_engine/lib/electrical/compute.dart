@@ -24,8 +24,12 @@ import '../geometry/scale_calibration.dart';
 import '../standards/puil.dart';
 import '../units.dart';
 import 'busbar.dart';
+import 'control/starter.dart' show StarterType;
 import 'earthing.dart';
+import 'fault.dart' show Impedance, conductorImpedance, downstreamFaultA,
+    sourceImpedanceFromIsc;
 import 'geo_length.dart';
+import 'harmonics.dart' show neutralOversizeFactor;
 import 'load_kind.dart';
 import 'model.dart';
 import 'panel_results.dart';
@@ -283,6 +287,8 @@ List<BusbarSectionResult> splitBusbarSections(
   required Current maxSectionCurrentA,
   required ElectricalSystem system,
   double minCsaMm2 = 0,
+  double faultKa = 0,
+  double clearingTimeS = busbarDefaultClearingTimeS,
 }) {
   final cap = math.max(1, maxWays);
   final sections = <BusbarSectionResult>[];
@@ -297,7 +303,8 @@ List<BusbarSectionResult> splitBusbarSections(
       circuitIds: group.map((w) => w.id).toList(),
       ways: group.length,
       sectionCurrent: Current(currentA),
-      busbar: sizeBusbar(profile, Current(currentA), minCsaMm2: minCsaMm2),
+      busbar: sizeBusbar(profile, Current(currentA),
+          minCsaMm2: minCsaMm2, faultKa: faultKa, clearingTimeS: clearingTimeS),
       manualBreak: groupManual,
     ));
     group = [];
@@ -346,6 +353,17 @@ class ComputePanelOptions {
   /// Installation earthing system (drives RCD policy).
   final EarthingSystem earthingSystem;
 
+  /// Prospective 3-phase symmetrical fault current at this panel's bus (A),
+  /// propagated down the feeder tree by `computeSystem`. When > 0 the busbar
+  /// short-circuit-withstand fold (FOLD 1) floors the bar's cross-section at the
+  /// fault's Icw demand; null/0 ⇒ no withstand floor (byte-identical sizing).
+  final Current? faultLevelA;
+
+  /// Representative protective-device clearing time (s) for the busbar Icw check
+  /// (a fault clears within this time, so Icw scales by 1/√t). Defaults to the
+  /// conventional 1-second assembly-Icw basis.
+  final double busbarClearingTimeS;
+
   /// Site soil thermal resistivity (K·m/W) — derates buried runs.
   final double? soilThermalResistivityKmW;
 
@@ -368,6 +386,8 @@ class ComputePanelOptions {
     this.feederLoadW = const {},
     this.panelSystems = const {},
     this.earthingSystem = EarthingSystem.tnCs,
+    this.faultLevelA,
+    this.busbarClearingTimeS = busbarDefaultClearingTimeS,
     this.soilThermalResistivityKmW,
     this.calibrationBySheet = const {},
     this.building,
@@ -405,15 +425,54 @@ double _effectiveLoadW(ElectricalCircuit c, ComputePanelOptions opts) {
   return circuitConnectedW(c);
 }
 
+/// The panel's SINGLE-PHASE non-linear demand share (0–1) for the triplen-
+/// neutral oversize (FOLD 2): the design-current-weighted fraction of the
+/// panel's load that is single-phase AND non-linear (the triplen harmonics that
+/// sum arithmetically in the shared neutral). Spare ways carry no load. Mirrors
+/// PanelMaker `computeHarmonics` singlePhaseFraction. 0 ⇒ no oversize.
+double _singlePhaseNonLinearFraction(List<_CircuitComputation> comps) {
+  var total = 0.0;
+  var singlePhaseNonLinear = 0.0;
+  for (final cm in comps) {
+    if (cm.result.loadKind == LoadKind.spare) continue;
+    final w = math.max(0.0, cm.result.designCurrent.amperes);
+    total += w;
+    if (cm.nonLinear && !cm.threePhase) singlePhaseNonLinear += w;
+  }
+  if (total <= 0) return 0;
+  return roundTo(singlePhaseNonLinear / total, 3);
+}
+
+/// Format a double without a trailing `.0` for whole numbers (warning text only).
+String _num(double v) =>
+    v == v.roundToDouble() ? v.toInt().toString() : v.toString();
+
 /// Internal per-circuit computation bundle.
 class _CircuitComputation {
   final ElectricalCircuitResult result;
   final List<ElectricalWarning> warnings;
   final double effectiveLoadW;
   final bool threePhase;
+
+  /// True when the circuit draws non-linear (harmonic-rich) current — a VFD /
+  /// soft-starter motor front-end, or a UPS / welding rectifier load. Drives the
+  /// panel's triplen-neutral oversize (FOLD 2). Mirrors PanelMaker `isNonLinear`.
+  final bool nonLinear;
+
   const _CircuitComputation(
-      this.result, this.warnings, this.effectiveLoadW, this.threePhase);
+      this.result, this.warnings, this.effectiveLoadW, this.threePhase,
+      this.nonLinear);
 }
+
+/// Whether a circuit draws non-linear current (harmonic-rich): a VFD or
+/// soft-starter motor front-end, or a UPS / welding rectifier load. DOL /
+/// star-delta / reversing motors are linear inductive loads (not counted).
+/// Faithful to PanelMaker `engine/harmonics.ts isNonLinear`.
+bool _circuitIsNonLinear(ElectricalCircuit c) =>
+    c.starterType == StarterType.vfd ||
+    c.starterType == StarterType.softStarter ||
+    c.loadKind == LoadKind.ups ||
+    c.loadKind == LoadKind.welding;
 
 _CircuitComputation _computeCircuit(
   ElectricalStandardsProfile profile,
@@ -614,7 +673,8 @@ _CircuitComputation _computeCircuit(
     rcd: rcd,
   );
 
-  return _CircuitComputation(result, warnings, loadW, threePhase);
+  return _CircuitComputation(
+      result, warnings, loadW, threePhase, _circuitIsNonLinear(c));
 }
 
 // ── panel computation ───────────────────────────────────────────────────────
@@ -711,15 +771,43 @@ ElectricalPanelResult computePanel(
     ));
   }
 
+  // FOLD 1 — busbar short-circuit withstand: when the prospective fault at this
+  // bus is known (propagated by `computeSystem`), the bar (main + every section)
+  // is floored at the cross-section the fault's Icw demands, so it grows to
+  // SURVIVE the fault, not merely carry the load. faultKa = 0 ⇒ no floor.
+  final faultKa = opts.faultLevelA != null && opts.faultLevelA!.amperes > 0
+      ? opts.faultLevelA!.amperes / 1000.0
+      : 0.0;
+  final clearingTimeS = opts.busbarClearingTimeS;
+
   // Main bus rated for the incoming device (IEC 61439-1), not just demand.
   final busbar = sizeBusbar(
     profile,
     Current(demandCurrentA),
     minAmpacityA: incomerBreaker.ratingA,
+    faultKa: faultKa,
+    clearingTimeS: clearingTimeS,
   );
-  final neutralPe = sizeNeutralPeBars(busbar.csaMm2, busbar.ampacityA);
 
-  // Split the panel bus into capacity-bounded sections.
+  // FOLD 2 — harmonics triplen-neutral oversize: a panel whose SINGLE-PHASE
+  // non-linear (VFD/soft-starter/UPS/welding) share crosses the triplen
+  // threshold carries summed 3rd-harmonic current in the shared neutral that can
+  // exceed the phase current, so the neutral bar is oversized (IEC 60364-5-52
+  // §523.6.3 / Annex E). A linear panel has no non-linear load ⇒ factor 1.0 ⇒
+  // the neutral is byte-identical to the phase bar (the regression guard).
+  final triplenFraction = _singlePhaseNonLinearFraction(comps);
+  final nFactor = roundTo(neutralOversizeFactor(triplenFraction), 2);
+  final neutralPe = sizeNeutralPeBars(
+    busbar.csaMm2,
+    busbar.ampacityA,
+    profile: profile,
+    neutralOversizeFactor: nFactor,
+    triplenFraction: triplenFraction,
+  );
+
+  // Split the panel bus into capacity-bounded sections (each floored at the same
+  // withstand cross-section as the main bus — a smaller section bar can fail
+  // withstand even when the main bus passes).
   final busbarSections = splitBusbarSections(
     profile,
     [
@@ -740,7 +828,57 @@ ElectricalPanelResult computePanel(
     maxWays: profile.maxWaysPerBusbar,
     maxSectionCurrentA: profile.maxBusbarSectionCurrentA,
     system: panel.system,
+    faultKa: faultKa,
+    clearingTimeS: clearingTimeS,
   );
+
+  // Warn when even the largest standard bar cannot withstand the fault.
+  if (busbar.withstand != null && !busbar.withstand!.adequate) {
+    warnings.add(ElectricalWarning(
+      code: 'busbar-withstand-inadequate',
+      severity: WarningSeverity.error,
+      message:
+          '${panel.name}: even the largest standard bar (${busbar.csaMm2} mm², '
+          'Icw ${busbar.withstand!.icwKa} kA) is below the '
+          '${busbar.withstand!.faultKa} kA prospective fault — use parallel '
+          'bars, brace the run, or add upstream current limiting.',
+      panelId: panel.id,
+    ));
+  }
+  // A section bar carries its own (smaller) load, so it can fail withstand even
+  // when the main bus passes — warn per inadequate section.
+  for (final section in busbarSections) {
+    final w = section.busbar.withstand;
+    if (w != null && !w.adequate) {
+      final where = busbarSections.length > 1
+          ? '${panel.name} busbar section ${section.index}'
+          : panel.name;
+      warnings.add(ElectricalWarning(
+        code: 'busbar-withstand-inadequate',
+        severity: WarningSeverity.error,
+        message:
+            '$where: bar ${section.busbar.csaMm2} mm² (Icw ${w.icwKa} kA) is '
+            'below the ${w.faultKa} kA prospective fault — use parallel bars, '
+            'brace the run, or add upstream current limiting.',
+        panelId: panel.id,
+      ));
+    }
+  }
+  // Surface the harmonic neutral oversize (a recommendation that never reaches
+  // the schedule does not get built).
+  if (neutralPe.neutralOversizeFactor > 1) {
+    warnings.add(ElectricalWarning(
+      code: 'harmonics-neutral-oversize',
+      severity: WarningSeverity.warning,
+      message:
+          '${panel.name}: single-phase non-linear load '
+          '(${(triplenFraction * 100).round()}%) raises triplen-harmonic '
+          'neutral current to ~${neutralPe.neutralOversizeFactor}x phase — '
+          'neutral bar oversized to ${_num(neutralPe.neutralCsaMm2)} mm² '
+          '(phase bar ${_num(busbar.csaMm2)} mm²).',
+      panelId: panel.id,
+    ));
+  }
 
   final demandW = connectedW * panel.diversityFactor;
 
@@ -775,13 +913,28 @@ ElectricalPanelResult computePanel(
 /// system. The ONLY constructor of [ElectricalSystemResult]. Ported from
 /// `computeSystem.ts` (core slice).
 ///
-/// DEFERRED to A8: fault propagation, selectivity, PF/capacitor, MV/transformer
-/// supply, energy sources, arc-flash, harmonics, SPD, lightning, metering.
+/// The cumulative voltage-drop pass and earthing design run as before.
+///
+/// FOLD 1 (busbar withstand) is OPT-IN: pass [originFaultLevel] (the prospective
+/// 3-phase symmetrical fault the supply origin delivers, default null) to
+/// propagate Isc root→leaf down the feeder tree (decaying through each already-
+/// sized feeder cable's series impedance, exactly as `faultStudy` does) and
+/// floor every panel's busbar (main + sections) at the cross-section the fault's
+/// short-circuit withstand (Icw) demands. With the default `null` no withstand
+/// floor is applied and the busbars are byte-identical to before — the
+/// regression guard for projects that don't request the fault-withstand fold.
+/// [busbarClearingTimeS] sets the Icw fault duration (default 1 s).
+///
+/// FOLD 2 (harmonics triplen-neutral oversize) is ALWAYS-ON but self-guarding:
+/// a panel with no single-phase non-linear load gets factor 1.0 ⇒ its neutral
+/// bar is byte-identical to the phase bar.
 ElectricalSystemResult computeSystem(
   ElectricalStandardsProfile profile,
   ElectricalProject project, {
   Map<String, ScaleCalibration> calibrationBySheet = const {},
   BuildingLevels? building,
+  Current? originFaultLevel,
+  double busbarClearingTimeS = busbarDefaultClearingTimeS,
 }) {
   final panels = project.panels;
   final byId = {for (final p in panels) p.id: p};
@@ -891,11 +1044,69 @@ ElectricalSystemResult computeSystem(
     }
   }
 
+  // FOLD 1 — prospective-fault propagation (only when an origin fault is given).
+  // Root-first, so a parent's bus fault + source impedance are known before its
+  // child's: the child decays the parent fault through the feeder cable's series
+  // impedance, exactly as `faultStudy`. The feeder's sized CSA comes from the
+  // parent result (already computed in this root-first loop). child id → fault A.
+  final applyWithstand =
+      originFaultLevel != null && originFaultLevel.amperes > 0;
+  final originIscA = applyWithstand ? originFaultLevel.amperes : 0.0;
+  final panelFaultA = <String, double>{};
+  final panelSourceZ = <String, Impedance>{};
+
+  // The feeder circuit id feeding each child panel (parent way).
+  final feederCircuitOf = <String, String>{}; // child panel id → feeder id
+  for (final p in panels) {
+    for (final c in p.circuits) {
+      if (c.feedsPanelId != null) feederCircuitOf[c.feedsPanelId!] = c.id;
+    }
+  }
+
   // Size every panel (root-first is fine for the core; demand is precomputed).
   final results = <String, ElectricalPanelResult>{};
   for (final id in postOrder.reversed) {
     final panel = byId[id];
     if (panel == null) continue;
+
+    // Prospective fault + source impedance at this bus (FOLD 1), when enabled.
+    Current? faultLevelA;
+    if (applyWithstand) {
+      final lineVoltageV = panel.voltage.volts;
+      final parentId = parentOf[id];
+      final feederId = feederCircuitOf[id];
+      final double faultA;
+      final Impedance sourceZ;
+      if (parentId == null || feederId == null) {
+        // Root / utility-fed panel — the full origin fault.
+        faultA = originIscA;
+        sourceZ = sourceImpedanceFromIsc(originIscA, lineVoltageV);
+      } else {
+        final upstreamIscA = panelFaultA[parentId] ?? originIscA;
+        final upstreamSourceZ = panelSourceZ[parentId] ??
+            sourceImpedanceFromIsc(originIscA, lineVoltageV);
+        final feederResult = results[parentId]
+            ?.circuits
+            .where((c) => c.circuitId == feederId)
+            .firstOrNull;
+        final feederModel =
+            byId[parentId]?.circuits.where((c) => c.id == feederId).firstOrNull;
+        final csa = feederResult?.cable.csaMm2 ?? 0;
+        final runs = (feederResult?.cable.runsPerPhase ?? 1) > 1
+            ? feederResult!.cable.runsPerPhase!
+            : 1;
+        final lengthM = feederModel?.length.meters ?? 0;
+        final single =
+            conductorImpedance(profile, csa, lengthM, panel.material);
+        final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
+        sourceZ = upstreamSourceZ + feederZ;
+        faultA = downstreamFaultA(lineVoltageV, sourceZ, upstreamIscA);
+      }
+      panelFaultA[id] = faultA;
+      panelSourceZ[id] = sourceZ;
+      faultLevelA = Current(faultA);
+    }
+
     results[id] = computePanel(
       profile,
       panel,
@@ -903,6 +1114,8 @@ ElectricalSystemResult computeSystem(
         feederLoadW: feederLoadWByPanel[id] ?? const {},
         panelSystems: panelSystems,
         earthingSystem: project.earthingSystem,
+        faultLevelA: faultLevelA,
+        busbarClearingTimeS: busbarClearingTimeS,
         calibrationBySheet: calibrationBySheet,
         building: building,
         panelById: byId,

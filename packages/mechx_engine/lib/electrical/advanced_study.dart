@@ -10,9 +10,16 @@
 /// `sources` → `power_oneline` / `control/starter` / `bom`). It constructs none
 /// of the A4 result records and mutates neither the project nor the system.
 ///
-/// The two sizing-MUTATING passes (the busbar short-circuit-withstand floor from
-/// the fault kA, and the harmonics neutral oversize folded onto the bar) are
-/// only REPORTED here — see the TODO below; they belong in `computePanel`.
+/// The two sizing-MUTATING folds now live in `computePanel`/`computeSystem`
+/// (`compute.dart`), NOT here:
+///   - FOLD 1 (busbar short-circuit withstand) floors each panel's busbar at the
+///     cross-section the prospective fault's Icw demands. It is opt-in: pass
+///     `computeSystem(..., originFaultLevel: …)` to propagate Isc and apply it.
+///   - FOLD 2 (harmonics triplen-neutral oversize) grows the neutral bar from
+///     the panel's single-phase non-linear share; it is always-on but
+///     self-guarding (a linear panel keeps a full-size neutral).
+/// This study still REPORTS the fault / harmonics estimates (for the report +
+/// UI), but no longer needs to re-derive the conductor sizes.
 ///
 /// Provenance honesty: every sub-result's `verifyItems` is aggregated into
 /// [AdvancedStudy.verifyItems] (de-duplicated, order-preserving) so the calc
@@ -20,13 +27,6 @@
 ///
 /// Pure + deterministic — zero Flutter imports.
 library;
-
-// TODO (follow-up): fold withstand floor + harmonics neutral oversize into
-// computePanel. The busbar short-circuit-withstand floor (from
-// `fault.panels[id].prospectiveFaultkA`) and the harmonics triplen-neutral
-// oversize (from `harmonics[id].recommendedNeutralCsaMm2`) are REPORTED in this
-// study only; they would re-size the bar / neutral, which is core A4 work and
-// must not be done in this derived pass.
 
 import '../standards/puil.dart' show ElectricalStandardsProfile;
 import '../units.dart';
