@@ -23,6 +23,7 @@ import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
 import '../../store/solve_store.dart';
+import '../canvas/segment_palette.dart';
 import '../canvas/service_style.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -563,6 +564,8 @@ class _DrawSection extends ConsumerWidget {
               ),
           ],
         ),
+        const SizedBox(height: MechXSpacing.lg),
+        const SegmentPalette(),
       ],
     );
   }
@@ -1093,12 +1096,24 @@ class _SelectionSection extends ConsumerWidget {
         ? '—'
         : '${edge.service.regime == FlowRegime.air ? 'Ø' : 'DN'}'
             '${sizing.diameter.inMillimeters.round()}';
+    final material = edgeMaterialLabel(edge);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('$kind · ${len.toStringAsFixed(2)} m · $sizeStr',
+        Text('$kind · ${len.toStringAsFixed(2)} m · $sizeStr'
+            '${edge.sizeOverride != null ? ' (set)' : ''}',
             style: context.type.caption.copyWith(color: context.colors.textMuted)),
+        if (material != null) ...[
+          const SizedBox(height: MechXSpacing.xxs),
+          Text('Material: $material',
+              style: context.type.caption
+                  .copyWith(color: context.colors.textSecondary)),
+        ],
+        const SizedBox(height: MechXSpacing.xxs),
+        Text('Right-click the segment to set its size and material.',
+            style:
+                context.type.caption.copyWith(color: context.colors.textMuted)),
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
@@ -1113,15 +1128,23 @@ class _SelectionSection extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: MechXSpacing.sm),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: MechXButton(
-            label: 'Delete ${edge.kind == EdgeKind.riser ? 'riser' : 'run'}',
-            onPressed: () {
-              ctrl.deleteEdge(edge.id);
-              selCtrl.clear();
-            },
-          ),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            if (edge.sizeOverride != null)
+              MechXButton(
+                label: 'Clear size override',
+                onPressed: () => ctrl.setEdgeSizeOverride(edge.id, null),
+              ),
+            MechXButton(
+              label: 'Delete ${edge.kind == EdgeKind.riser ? 'riser' : 'run'}',
+              onPressed: () {
+                ctrl.deleteEdge(edge.id);
+                selCtrl.clear();
+              },
+            ),
+          ],
         ),
       ],
     );

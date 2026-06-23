@@ -13,6 +13,8 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/duct_products.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/puil.dart'
     show CableInstallMethod, ConductorInsulation, ConductorMaterial;
 import 'package:mechx_engine/standards/sni.dart';
@@ -137,6 +139,86 @@ void main() {
     expect(s.rainfallMmPerHr, 275);
     expect(s.fireHazard, FireHazardClass.ordinaryHazard2);
     expect(s.brightness, Brightness.light);
+  });
+
+  test('per-segment pipe/duct product + size override round-trip', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(100, 100))],
+      network: Network(
+        nodes: [
+          NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          NetNode(id: 'b', sheetId: 's1', x: 9, y: 0, floorIndex: 0),
+          NetNode(id: 'c', sheetId: 's1', x: 18, y: 0, floorIndex: 0),
+          NetNode(id: 'd', sheetId: 's1', x: 27, y: 0, floorIndex: 0),
+        ],
+        edges: [
+          // Pipe with material + manual size override.
+          NetEdge(
+            id: 'e0',
+            fromId: 'a',
+            toId: 'b',
+            service: ServiceType.coldWater,
+            pipeProduct: PipeProduct.pprPn16,
+            sizeOverride: Diameter(0.05), // 50 mm
+          ),
+          // Duct with a duct product.
+          NetEdge(
+            id: 'e1',
+            fromId: 'b',
+            toId: 'c',
+            service: ServiceType.duct,
+            ductProduct: DuctProduct.bjls,
+          ),
+          // A plain edge keeps its fields null.
+          NetEdge(id: 'e2', fromId: 'c', toId: 'd', service: ServiceType.vent),
+        ],
+      ),
+    );
+
+    final decoded = ProjectDocument.decode(doc.encode());
+    final e0 = decoded.network.edges[0];
+    final e1 = decoded.network.edges[1];
+    final e2 = decoded.network.edges[2];
+    expect(e0.pipeProduct, PipeProduct.pprPn16);
+    expect(e0.sizeOverride?.inMillimeters, closeTo(50, 1e-9));
+    expect(e0.ductProduct, isNull);
+    expect(e1.ductProduct, DuctProduct.bjls);
+    expect(e1.pipeProduct, isNull);
+    expect(e1.sizeOverride, isNull);
+    expect(e2.pipeProduct, isNull);
+    expect(e2.ductProduct, isNull);
+    expect(e2.sizeOverride, isNull);
+  });
+
+  test('an edge with no material/override fields loads them as null', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(100, 100))],
+      network: Network(
+        nodes: [
+          NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          NetNode(id: 'b', sheetId: 's1', x: 9, y: 0, floorIndex: 0),
+        ],
+        edges: [
+          NetEdge(id: 'e', fromId: 'a', toId: 'b', service: ServiceType.duct),
+        ],
+      ),
+    );
+    // An old file omits the keys entirely → tolerant null load.
+    final json = doc.toJson();
+    final edge = (json['network'] as Map)['edges'] as List;
+    expect((edge.single as Map).containsKey('pipe_product'), isFalse);
+    expect((edge.single as Map).containsKey('size_override_mm'), isFalse);
+    final decoded = ProjectDocument.fromJson(json);
+    final e = decoded.network.edges.single;
+    expect(e.pipeProduct, isNull);
+    expect(e.ductProduct, isNull);
+    expect(e.sizeOverride, isNull);
   });
 
   test('a file with no settings block loads provider defaults', () {

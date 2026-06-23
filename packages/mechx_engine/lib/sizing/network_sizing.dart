@@ -247,18 +247,40 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
   }
 }
 
+/// Apply a manual nominal-size [override] to an auto-computed [sizing],
+/// returning a new [EdgeSizing] that carries the same flow but the overridden
+/// circular diameter, with **velocity recomputed from the carried flow** by
+/// continuity (v = Q / A, A = π·(d/2)²). The clear width/height are dropped
+/// (the override is a single circular nominal size). Pure.
+EdgeSizing applySizeOverride(EdgeSizing sizing, Diameter override) => EdgeSizing(
+      edgeId: sizing.edgeId,
+      service: sizing.service,
+      flow: sizing.flow,
+      diameter: override,
+      // v = Q / A at the overridden diameter (continuity); see velocityFromFlow.
+      velocity: override.meters > 0
+          ? velocityFromFlow(sizing.flow, override)
+          : const Velocity(0),
+    );
+
 /// Size every edge that has an accumulated [edgeFlows] entry. Edges with no
-/// flow (not reached from a root / no demand) are skipped.
+/// flow (not reached from a root / no demand) are skipped. An edge id present
+/// in [sizeOverrides] keeps its carried flow but uses the overridden diameter,
+/// with velocity recomputed from that flow ([applySizeOverride]).
 Map<String, EdgeSizing> sizeNetwork(
   Network net,
   Map<String, FlowRate> edgeFlows,
-  SizingContext ctx,
-) {
+  SizingContext ctx, {
+  Map<String, Diameter> sizeOverrides = const {},
+}) {
   final result = <String, EdgeSizing>{};
   for (final edge in net.edges) {
     final flow = edgeFlows[edge.id];
     if (flow == null) continue;
-    result[edge.id] = sizeEdge(edge, flow, ctx);
+    final sized = sizeEdge(edge, flow, ctx);
+    final override = sizeOverrides[edge.id];
+    result[edge.id] =
+        override == null ? sized : applySizeOverride(sized, override);
   }
   return result;
 }
@@ -285,6 +307,10 @@ Map<String, EdgeSizing> sizeNetwork(
 /// unstable, see the inline note). Pass [building] + [calibrationBySheet] so the
 /// split uses REAL edge lengths (runs via calibration, risers via elevation
 /// delta); without them it falls back to calibration-invariant pixel length.
+/// Per-edge manual nominal-size overrides ([sizeOverrides], edgeId → diameter):
+/// an edge with an entry keeps its accumulated flow but is sized to the given
+/// diameter, with velocity recomputed from that flow ([applySizeOverride]).
+/// Default empty ⇒ byte-identical behaviour to before.
 Map<String, EdgeSizing> autoSizeNetwork(
   Network net,
   SizingContext ctx, {
@@ -293,6 +319,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   Map<String, double> nodeFixtureUnits = const {},
   Map<String, double> nodeDrainageUnits = const {},
   Map<String, FlowRate> nodeFlowDemand = const {},
+  Map<String, Diameter> sizeOverrides = const {},
   FlushSystem flushSystem = FlushSystem.flushTank,
   BuildingLevels? building,
   Map<String, ScaleCalibration> calibrationBySheet = const {},
@@ -560,9 +587,19 @@ Map<String, EdgeSizing> autoSizeNetwork(
     }
   }
 
-  final result = sizeNetwork(net, allFlows, ctx);
-  result.addAll(sanitary); // DFU-sized drainage/vent
-  result.addAll(stormSizing); // capacity-table rainwater downpipes
+  final result = sizeNetwork(net, allFlows, ctx, sizeOverrides: sizeOverrides);
+  // DFU-sized drainage/vent and capacity-table rainwater downpipes are built
+  // directly (not via sizeNetwork), so apply any override to them here too.
+  for (final entry in sanitary.entries) {
+    final override = sizeOverrides[entry.key];
+    result[entry.key] =
+        override == null ? entry.value : applySizeOverride(entry.value, override);
+  }
+  for (final entry in stormSizing.entries) {
+    final override = sizeOverrides[entry.key];
+    result[entry.key] =
+        override == null ? entry.value : applySizeOverride(entry.value, override);
+  }
   return result;
 }
 

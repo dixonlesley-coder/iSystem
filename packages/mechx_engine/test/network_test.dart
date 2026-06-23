@@ -1,6 +1,8 @@
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/duct_products.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
@@ -127,6 +129,74 @@ void main() {
       expect(net.nodeById('z'), isNull);
       expect(net.edgesAt('a').length, 1);
       expect(net.edgesAt('b').single.id, 'e1');
+    });
+  });
+
+  group('NetEdge additive material/override fields + copyWith', () {
+    test('defaults are null (back-compat)', () {
+      const e = NetEdge(
+          id: 'e', fromId: 'a', toId: 'b', service: ServiceType.coldWater);
+      expect(e.pipeProduct, isNull);
+      expect(e.ductProduct, isNull);
+      expect(e.sizeOverride, isNull);
+    });
+
+    test('copyWith carries id + every field, replacing only what is passed', () {
+      const e = NetEdge(
+        id: 'e1',
+        fromId: 'a',
+        toId: 'b',
+        service: ServiceType.coldWater,
+        kind: EdgeKind.riser,
+        pipeProduct: PipeProduct.pprPn16,
+        sizeOverride: Diameter(0.05),
+      );
+      // No-arg copy is value-identical.
+      final same = e.copyWith();
+      expect(same.id, 'e1');
+      expect(same.fromId, 'a');
+      expect(same.toId, 'b');
+      expect(same.service, ServiceType.coldWater);
+      expect(same.kind, EdgeKind.riser);
+      expect(same.pipeProduct, PipeProduct.pprPn16);
+      expect(same.sizeOverride?.meters, 0.05);
+      expect(same.ductProduct, isNull);
+
+      // Replace selected fields; the rest carry through.
+      final moved = e.copyWith(fromId: 'x', toId: 'y');
+      expect(moved.id, 'e1');
+      expect(moved.fromId, 'x');
+      expect(moved.toId, 'y');
+      expect(moved.pipeProduct, PipeProduct.pprPn16); // carried
+      expect(moved.sizeOverride?.meters, 0.05); // carried
+
+      // Set a duct product.
+      final ducted = e.copyWith(ductProduct: DuctProduct.bjls);
+      expect(ducted.ductProduct, DuctProduct.bjls);
+      expect(ducted.pipeProduct, PipeProduct.pprPn16); // still carried
+    });
+
+    test('clear flags null out optional fields', () {
+      const e = NetEdge(
+        id: 'e1',
+        fromId: 'a',
+        toId: 'b',
+        service: ServiceType.duct,
+        pipeProduct: PipeProduct.pprPn16,
+        ductProduct: DuctProduct.bjls,
+        sizeOverride: Diameter(0.08),
+      );
+      final cleared = e.copyWith(
+        clearPipeProduct: true,
+        clearDuctProduct: true,
+        clearSizeOverride: true,
+      );
+      expect(cleared.pipeProduct, isNull);
+      expect(cleared.ductProduct, isNull);
+      expect(cleared.sizeOverride, isNull);
+      // Untouched structural fields survive.
+      expect(cleared.id, 'e1');
+      expect(cleared.service, ServiceType.duct);
     });
   });
 }

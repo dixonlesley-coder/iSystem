@@ -4,6 +4,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/duct_products.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 
 import '../../store/network_store.dart';
 import '../../store/selection_store.dart';
@@ -105,7 +107,7 @@ class _NetworkPainter extends CustomPainter {
         );
         final s = sizing[e.id];
         if (s != null) {
-          final String label;
+          String label;
           if (s.isRectangular) {
             label = '${s.width!.inMillimeters.round()}'
                 '×${s.height!.inMillimeters.round()}';
@@ -113,6 +115,8 @@ class _NetworkPainter extends CustomPainter {
             final mm = s.diameter.inMillimeters.round();
             label = e.service.regime == FlowRegime.air ? 'Ø$mm' : 'DN$mm';
           }
+          final tag = _productTag(e, s);
+          if (tag != null) label = '$label  $tag';
           _label(canvas, (pa + pb) / 2, label);
         }
       } else {
@@ -211,6 +215,35 @@ class _NetworkPainter extends CustomPainter {
     }
     path.close();
     canvas.drawPath(path, Paint()..color = color);
+  }
+
+  /// Compact ASCII-safe material tag for an edge ("PPR16", "PVC-AW", "BJLS 0.6",
+  /// "PU"), or null when no material is set. BJLS shows its auto sheet thickness
+  /// derived from the sized largest side. No symbol glyphs (Roboto-safe).
+  String? _productTag(NetEdge e, EdgeSizing s) {
+    final pp = e.pipeProduct;
+    if (pp != null) {
+      return switch (pp) {
+        PipeProduct.pprPn10 => 'PPR10',
+        PipeProduct.pprPn16 => 'PPR16',
+        PipeProduct.pprPn20 => 'PPR20',
+        PipeProduct.pvcAw => 'PVC-AW',
+        PipeProduct.pvcD => 'PVC-D',
+        PipeProduct.pvcJis => 'PVC-JIS',
+        PipeProduct.castIron => 'CI',
+        PipeProduct.acousticPvc => 'PVC-AC',
+        PipeProduct.hdpe => 'HDPE',
+      };
+    }
+    final dp = e.ductProduct;
+    if (dp != null) {
+      if (dp == DuctProduct.pu) return 'PU';
+      final largest = s.isRectangular
+          ? math.max(s.width!.inMillimeters, s.height!.inMillimeters)
+          : s.diameter.inMillimeters;
+      return 'BJLS ${bjlsThicknessMm(largest).toStringAsFixed(2)}';
+    }
+    return null;
   }
 
   void _label(Canvas canvas, Offset center, String text) {

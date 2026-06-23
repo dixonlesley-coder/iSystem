@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import '../geometry/building.dart';
 import '../geometry/scale_calibration.dart';
+import '../standards/duct_products.dart';
+import '../standards/pipe_products.dart';
 import '../standards/sni.dart';
 import '../units.dart';
 
@@ -148,13 +150,60 @@ class NetEdge {
   final ServiceType service;
   final EdgeKind kind;
 
+  /// Optional pipe **product** specified for this segment (PPR PN10/16/20, PVC
+  /// AW/D/JIS, cast iron, acoustic PVC, HDPE). A per-segment material label /
+  /// BOM concern — the sizing routing is still by [ServiceType.regime]. `null`
+  /// for an unset edge or a duct (air) segment.
+  final PipeProduct? pipeProduct;
+
+  /// Optional duct **product** specified for an air segment (BJLS / PU). `null`
+  /// for an unset edge or a pipe segment.
+  final DuctProduct? ductProduct;
+
+  /// Optional manual nominal-size override (diameter). When set, the sizing
+  /// engine uses this diameter for the edge and recomputes its velocity from the
+  /// carried flow (see `autoSizeNetwork(sizeOverrides:)`). `null` ⇒ auto-sized.
+  final Diameter? sizeOverride;
+
   const NetEdge({
     required this.id,
     required this.fromId,
     required this.toId,
     required this.service,
     this.kind = EdgeKind.run,
+    this.pipeProduct,
+    this.ductProduct,
+    this.sizeOverride,
   });
+
+  /// A copy with selected fields replaced. To CLEAR an optional field, pass the
+  /// matching `clearX: true` flag (a plain `null` argument means "unchanged",
+  /// since the named params can't distinguish absent from null).
+  NetEdge copyWith({
+    String? fromId,
+    String? toId,
+    ServiceType? service,
+    EdgeKind? kind,
+    PipeProduct? pipeProduct,
+    bool clearPipeProduct = false,
+    DuctProduct? ductProduct,
+    bool clearDuctProduct = false,
+    Diameter? sizeOverride,
+    bool clearSizeOverride = false,
+  }) =>
+      NetEdge(
+        id: id,
+        fromId: fromId ?? this.fromId,
+        toId: toId ?? this.toId,
+        service: service ?? this.service,
+        kind: kind ?? this.kind,
+        pipeProduct:
+            clearPipeProduct ? null : (pipeProduct ?? this.pipeProduct),
+        ductProduct:
+            clearDuctProduct ? null : (ductProduct ?? this.ductProduct),
+        sizeOverride:
+            clearSizeOverride ? null : (sizeOverride ?? this.sizeOverride),
+      );
 }
 
 /// The drawn network — the single graph that sizing (P3) and the node-pressure

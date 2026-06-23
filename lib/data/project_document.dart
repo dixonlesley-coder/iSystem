@@ -7,6 +7,8 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/duct_products.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -210,6 +212,10 @@ class ProjectDocument {
                 'to': e.toId,
                 'service': e.service.name,
                 'kind': e.kind.name,
+                if (e.pipeProduct != null) 'pipe_product': e.pipeProduct!.name,
+                if (e.ductProduct != null) 'duct_product': e.ductProduct!.name,
+                if (e.sizeOverride != null)
+                  'size_override_mm': e.sizeOverride!.inMillimeters,
               },
           ],
         },
@@ -282,6 +288,11 @@ class ProjectDocument {
           service:
               _enumOr(ServiceType.values, e['service'], ServiceType.coldWater),
           kind: _enumOr(EdgeKind.values, e['kind'], EdgeKind.run),
+          pipeProduct: _enumOrNull(PipeProduct.values, e['pipe_product']),
+          ductProduct: _enumOrNull(DuctProduct.values, e['duct_product']),
+          sizeOverride: e['size_override_mm'] == null
+              ? null
+              : Diameter.mm((e['size_override_mm'] as num).toDouble()),
         ),
     ];
     final viewports = <String, ViewportTransform>{};
