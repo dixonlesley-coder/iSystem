@@ -420,7 +420,13 @@ void main() {
       await tester.pump();
 
       final before = container.read(electricalProjectProvider).panels.length;
-      await tester.tap(find.text('+ Panel').first);
+      // The toolbar's '+ Panel' lives in a horizontally-scrollable row; under
+      // the left-nav rail the canvas is narrower, so scroll it into view before
+      // tapping rather than assuming a fixed position.
+      final addPanel = find.text('+ Panel').first;
+      await tester.ensureVisible(addPanel);
+      await tester.pump();
+      await tester.tap(addPanel);
       await tester.pump();
       expect(container.read(electricalProjectProvider).panels.length,
           before + 1);

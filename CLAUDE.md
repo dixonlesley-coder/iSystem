@@ -223,10 +223,25 @@ report export**; versioned `.mechx` save/open with viewport restore;
   inspector, right-click Edit/Duplicate/Delete, add-panel/+Way, and a read-only
   **Advanced-study** card over `electricalAdvancedProvider`. All edits route
   through the store's field-preserving `_withProject`; calc core untouched.
-  Remaining (**Wave 4b**): electrical drawings/SLD-GA-one-line export + commercial
-  UI + workflow/i18n; plus the two deferred sizing-mutating folds (busbar
-  withstand · harmonics neutral oversize), the per-segment material→hydraulic-solve
-  fold, and the full catalogue dataset.
+  **Wave 5 — PanelMaker-faithful electrical canvas + left-nav shell landed**: the
+  electrical workspace is now a **single-line spatial canvas** (`ui/electrical/electrical_canvas.dart`,
+  a port of PanelMaker `BuildingSingleLine.tsx`) — panels as nodes wired by feeders,
+  zoom-LOD (summary card ↔ internal R-S-T busbar+breakers), loads hanging below,
+  Loads palette (`Draggable<LoadKind>`), outlet-drag-to-feeder, minimap, zoom controls,
+  Single-line / Power one-line tabs + canvas toolbar; additive `ElectricalPanel.x/y`
+  (no math change). The app shell is now PanelMaker's **248-px left navigation rail**
+  (`ui/shell/nav_rail.dart`): DESIGN (Plan/Schematic/Electrical, still driven by
+  `workspaceViewProvider`) · Review · Commercial · pinned Projects/Preferences,
+  replacing the top-bar view switch (`ShellSection`).
+  Remaining (**next, the user-spec'd convergence**): ONE shared calibrated **PDF
+  substrate with per-discipline layers** (plumbing · HVAC · electrical); an electrical
+  **Layout** view (place panels/loads on the PDF → **cable length from geometry**,
+  multi-floor, zoom-out auto-compact) as a co-equal projection of the *same* model as
+  Single-line (add a node in either view → it appears in both — positions differ, identity/topology shared);
+  mechanical **parity + a vertical riser-placement/sizing mode**. Plus **Wave 4b**
+  (electrical drawings/SLD-GA-one-line export + commercial UI + workflow/i18n), the two
+  deferred sizing-mutating folds (busbar withstand · harmonics neutral oversize), the
+  per-segment material→hydraulic-solve fold, and the full catalogue dataset.
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),
