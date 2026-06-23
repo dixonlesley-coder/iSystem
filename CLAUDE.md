@@ -193,11 +193,13 @@ report export**; versioned `.mechx` save/open with viewport restore;
   **A5** (`electrical/load_list.dart`: MechX `PumpDuty`/`FanDuty` → `ElectricalCircuit`
   with derived `flaOverrideA`), **A6** (`.mechx` electrical sub-model + version 1→2,
   tolerant load), and **A7** (`lib/store/electrical_store.dart` + `lib/ui/electrical/`
-  + plan/schematic/electrical view switch + goldens) have landed. Two integration
-  **seams** are wired next: the app's pump/fan duty providers → A5 `buildEquipmentCircuits`
-  → the electrical store (auto-feed), and `buildDocument`/`applyDocument` ↔ A6's
-  serialization. Then **A8** (the deferred advanced passes) and the product-string
-  rebrand to "iSystem" (the in-app "MechX" labels + window title; internal package
+  + plan/schematic/electrical view switch + goldens) have landed, and the two
+  integration **seams are wired**: `lib/store/electrical_feed.dart` reads the live
+  pump/fan/fire-pump duty providers → A5 `buildEquipmentCircuits` →
+  `ElectricalProjectController.syncMepEquipment` (the MEP→E auto-feed), and
+  `buildDocument`/`applyDocument` round-trip the electrical project in `.mechx`.
+  Remaining: **A8** (the deferred advanced passes) and the product-string rebrand
+  to "iSystem" (the in-app "MechX" labels + window title; internal package
   `mechx_engine` and the Windows `BINARY_NAME` stay).
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`

@@ -90,6 +90,33 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
 
   /// Restore the built-in sample project.
   void resetToSample() => state = sampleElectricalProject();
+
+  /// Fold the MechX-sized MEP equipment (A5) into a dedicated "MEP Equipment"
+  /// panel, upserted by a fixed id so re-syncing replaces it cleanly (the
+  /// circuits already carry `sourceEquipmentId`). Empty [circuits] removes the
+  /// panel. This is the unified payoff: a pump/fan/fire-pump the mechanical
+  /// engine sized appears here as a sized electrical circuit, no re-entry.
+  void syncMepEquipment(List<ElectricalCircuit> circuits) {
+    const mepPanelId = 'mep-equipment';
+    final others = state.panels.where((p) => p.id != mepPanelId).toList();
+    state = ElectricalProject(
+      id: state.id,
+      name: state.name,
+      earthingSystem: state.earthingSystem,
+      panels: circuits.isEmpty
+          ? others
+          : [
+              ...others,
+              ElectricalPanel(
+                id: mepPanelId,
+                name: 'MEP Equipment',
+                tag: 'MEP',
+                voltage: const Voltage(400),
+                circuits: circuits,
+              ),
+            ],
+    );
+  }
 }
 
 /// A small, representative built-in project: a 3-phase main distribution panel
