@@ -1,4 +1,3 @@
-import 'package:flutter/gestures.dart' show kSecondaryButton;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
@@ -257,43 +256,133 @@ void main() {
     });
   });
 
-  group('ElectricalView interactive editor', () {
-    testWidgets('palette is present and a "+ Way" adds a circuit', (tester) async {
-      setDesktopSurface(tester);
-      await tester.pumpWidget(const ProviderScope(child: MechXApp()));
-      await tester.pump();
+  group('Spatial-canvas intents (Wave 5)', () {
+    test('setPanelPosition moves a panel; auto-layout falls back when null', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
 
-      final container = ProviderScope.containerOf(
-        tester.element(find.byType(MechXApp)),
-        listen: false,
-      );
-      container.read(workspaceViewProvider.notifier).set(WorkspaceView.electrical);
-      await tester.pump();
+      // Seeded panels start with no saved layout.
+      var mdp = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp');
+      expect(mdp.x, isNull);
+      expect(mdp.y, isNull);
 
-      // The palette card titled "Loads" renders.
-      expect(find.text('Loads'), findsOneWidget);
-      // Add-panel affordance.
-      expect(find.text('+ Panel'), findsWidgets);
-
-      final before = container
-          .read(electricalResultProvider)
-          .panels['mdp']!
-          .circuits
-          .length;
-
-      // Tap the first "+ Way" button (MDP card, the first panel).
-      await tester.tap(find.text('+ Way').first);
-      await tester.pump();
-
-      final after = container
-          .read(electricalResultProvider)
-          .panels['mdp']!
-          .circuits
-          .length;
-      expect(after, before + 1);
+      ctrl.setPanelPosition('mdp', 320, 144);
+      mdp = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp');
+      expect(mdp.x, 320);
+      expect(mdp.y, 144);
     });
 
-    testWidgets('right-click a row opens the menu; Edit opens the inspector',
+    test('addPanelAt + addFloatingLoad place a sized board at a position', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      ctrl.addPanelAt(name: 'Yard board', tag: 'YB-1', x: 500, y: 200);
+      final added = c.read(electricalProjectProvider).panels.last;
+      expect(added.x, 500);
+      expect(added.y, 200);
+      // The new board sizes (it appears with an incomer).
+      final r = c.read(electricalResultProvider).panels[added.id];
+      expect(r, isNotNull);
+      expect(r!.incomer.breaker.ratingA.amperes, greaterThan(0));
+
+      final beforeCount = c.read(electricalProjectProvider).panels.length;
+      ctrl.addFloatingLoad(kind: LoadKind.socket, x: 640, y: 360, loadW: 2400);
+      expect(c.read(electricalProjectProvider).panels.length, beforeCount + 1);
+      final float = c.read(electricalProjectProvider).panels.last;
+      expect(float.x, 640);
+      expect(float.circuits.single.loadW, 2400);
+      // It sizes too.
+      expect(
+          c.read(electricalResultProvider).panels[float.id]!.circuits.single
+              .designCurrent.amperes,
+          greaterThan(0));
+    });
+
+    test('connectFeeder wires a parent way + sets the child incomer', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      // Add a fresh utility board to feed from the MDP.
+      ctrl.addPanelAt(name: 'Pump room', tag: 'PR-1', x: 400, y: 400);
+      final target = c.read(electricalProjectProvider).panels.last;
+      expect(target.fedByCircuitId, isNull);
+
+      final waysBefore = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp')
+          .circuits
+          .length;
+      final res = ctrl.connectFeeder('mdp', target.id);
+      expect(res.connected, isTrue);
+
+      final mdp = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp');
+      expect(mdp.circuits.length, waysBefore + 1);
+      final feeder =
+          mdp.circuits.firstWhere((w) => w.feedsPanelId == target.id);
+      final fed = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == target.id);
+      expect(fed.fedByCircuitId, feeder.id);
+      expect(fed.sourceType, PanelSource.feeder);
+    });
+
+    test('connectFeeder refuses self / second-parent / cycle', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      // Self-feed.
+      expect(ctrl.connectFeeder('mdp', 'mdp').connected, isFalse);
+
+      // lp1 is already fed by the MDP feeder in the sample → second parent.
+      ctrl.addPanelAt(name: 'Other', tag: 'OT', x: 0, y: 0);
+      final other = c.read(electricalProjectProvider).panels.last;
+      final hasParent = ctrl.connectFeeder(other.id, 'lp1');
+      expect(hasParent.connected, isFalse);
+      expect(hasParent.reason, contains('already fed'));
+
+      // Cycle: lp1 -> mdp would loop (mdp already feeds lp1).
+      final cycle = ctrl.connectFeeder('lp1', 'mdp');
+      expect(cycle.connected, isFalse);
+      expect(cycle.reason, contains('loop'));
+    });
+
+    test('disconnectFeeder drops the way + makes the child utility-fed', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      // lp1 is fed by mdp-f1 in the sample.
+      final waysBefore = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp')
+          .circuits
+          .length;
+      ctrl.disconnectFeeder('lp1');
+
+      final mdp = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp');
+      expect(mdp.circuits.length, waysBefore - 1);
+      expect(mdp.circuits.where((w) => w.feedsPanelId == 'lp1'), isEmpty);
+      final lp1 = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'lp1');
+      expect(lp1.fedByCircuitId, isNull);
+      expect(lp1.sourceType, PanelSource.utility);
+    });
+
+    test('panel x/y round-trips through the model JSON codec', () {
+      const panel = ElectricalPanel(id: 'p', name: 'P', x: 240, y: 96);
+      final back = ElectricalPanel.fromJson(panel.toJson());
+      expect(back.x, 240);
+      expect(back.y, 96);
+    });
+  });
+
+  group('ElectricalView canvas', () {
+    testWidgets('the palette + canvas render in the electrical workspace',
         (tester) async {
       setDesktopSurface(tester);
       await tester.pumpWidget(const ProviderScope(child: MechXApp()));
@@ -303,31 +392,20 @@ void main() {
         tester.element(find.byType(MechXApp)),
         listen: false,
       );
-      container.read(workspaceViewProvider.notifier).set(WorkspaceView.electrical);
+      container
+          .read(workspaceViewProvider.notifier)
+          .set(WorkspaceView.electrical);
       await tester.pump();
 
-      // Secondary-button press on the chiller row (the Listener checks
-      // kSecondaryButton) opens the custom context menu. Scroll it into view
-      // first — the palette + cards push the first panel's rows below the fold.
-      await tester.ensureVisible(find.text('Chiller / HVAC').first);
-      await tester.pump();
-      final center = tester.getCenter(find.text('Chiller / HVAC').first);
-      final pointer = await tester.startGesture(center, buttons: kSecondaryButton);
-      await pointer.up();
-      await tester.pump();
-
-      // The custom context menu is shown.
-      expect(find.text('Duplicate'), findsOneWidget);
-      expect(find.text('Delete'), findsOneWidget);
-
-      // Choosing "Edit" opens the inspector drawer.
-      await tester.tap(find.text('Edit'));
-      await tester.pump();
-      expect(find.text('Edit circuit'), findsOneWidget);
-      expect(find.text('Run length (m)'.toUpperCase()), findsOneWidget);
+      // The Loads palette renders, the Single-line tab is present.
+      expect(find.text('Loads'), findsWidgets);
+      expect(find.text('Single-line'), findsOneWidget);
+      expect(find.text('Power one-line'), findsOneWidget);
+      // The sample panels are on the canvas.
+      expect(find.text('Main Distribution Panel'), findsOneWidget);
     });
 
-    testWidgets('right-click Delete removes the way', (tester) async {
+    testWidgets('+ Panel toolbar action grows the system', (tester) async {
       setDesktopSurface(tester);
       await tester.pumpWidget(const ProviderScope(child: MechXApp()));
       await tester.pump();
@@ -336,30 +414,37 @@ void main() {
         tester.element(find.byType(MechXApp)),
         listen: false,
       );
-      container.read(workspaceViewProvider.notifier).set(WorkspaceView.electrical);
+      container
+          .read(workspaceViewProvider.notifier)
+          .set(WorkspaceView.electrical);
       await tester.pump();
 
-      final before = container
-          .read(electricalResultProvider)
-          .panels['mdp']!
-          .circuits
-          .length;
+      final before = container.read(electricalProjectProvider).panels.length;
+      await tester.tap(find.text('+ Panel').first);
+      await tester.pump();
+      expect(container.read(electricalProjectProvider).panels.length,
+          before + 1);
+    });
 
-      await tester.ensureVisible(find.text('Water heater').first);
-      await tester.pump();
-      final center = tester.getCenter(find.text('Water heater').first);
-      final pointer = await tester.startGesture(center, buttons: kSecondaryButton);
-      await pointer.up();
-      await tester.pump();
-      await tester.tap(find.text('Delete'));
+    testWidgets('switching to the Power one-line tab renders it',
+        (tester) async {
+      setDesktopSurface(tester);
+      await tester.pumpWidget(const ProviderScope(child: MechXApp()));
       await tester.pump();
 
-      final after = container
-          .read(electricalResultProvider)
-          .panels['mdp']!
-          .circuits
-          .length;
-      expect(after, before - 1);
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(MechXApp)),
+        listen: false,
+      );
+      container
+          .read(workspaceViewProvider.notifier)
+          .set(WorkspaceView.electrical);
+      await tester.pump();
+
+      await tester.tap(find.text('Power one-line'));
+      await tester.pump();
+      // The sample has no sources → the empty-state copy shows.
+      expect(find.text('No energy sources'), findsOneWidget);
     });
   });
 }

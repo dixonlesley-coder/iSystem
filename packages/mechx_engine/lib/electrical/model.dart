@@ -337,6 +337,12 @@ class ElectricalPanel {
   /// overrides the A8 enclosure pass's control-device heat estimate.
   final Power? heatW;
 
+  /// Canvas layout position (world px) on the single-line spatial canvas. Purely
+  /// a UI concern — the engine never reads it; null = auto-layout. Additive (the
+  /// Wave-5 electrical canvas; mirrors PanelMaker's React Flow node position).
+  final double? x;
+  final double? y;
+
   final List<ElectricalCircuit> circuits;
 
   const ElectricalPanel({
@@ -360,6 +366,8 @@ class ElectricalPanel {
     this.upsBacked = false,
     this.submeter = false,
     this.heatW,
+    this.x,
+    this.y,
     this.circuits = const [],
   });
 
@@ -388,6 +396,9 @@ class ElectricalPanel {
     bool? upsBacked,
     bool? submeter,
     Power? heatW,
+    double? x,
+    double? y,
+    bool clearPosition = false,
     List<ElectricalCircuit>? circuits,
   }) =>
       ElectricalPanel(
@@ -412,6 +423,8 @@ class ElectricalPanel {
         upsBacked: upsBacked ?? this.upsBacked,
         submeter: submeter ?? this.submeter,
         heatW: heatW ?? this.heatW,
+        x: clearPosition ? null : (x ?? this.x),
+        y: clearPosition ? null : (y ?? this.y),
         circuits: circuits ?? this.circuits,
       );
 
@@ -438,6 +451,8 @@ class ElectricalPanel {
         'upsBacked': upsBacked,
         'submeter': submeter,
         if (heatW != null) 'heatW': heatW!.watts,
+        if (x != null) 'x': x,
+        if (y != null) 'y': y,
         'circuits': [for (final c in circuits) c.toJson()],
       };
 
@@ -485,6 +500,8 @@ class ElectricalPanel {
         heatW: json['heatW'] == null
             ? null
             : Power((json['heatW'] as num).toDouble()),
+        x: (json['x'] as num?)?.toDouble(),
+        y: (json['y'] as num?)?.toDouble(),
         circuits: [
           for (final c in (json['circuits'] as List? ?? const []))
             ElectricalCircuit.fromJson(c as Map<String, dynamic>),

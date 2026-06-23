@@ -24,6 +24,18 @@ import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 
+/// The outcome of a [ElectricalProjectController.connectFeeder] attempt — a
+/// success, or a refusal carrying a plain-language reason to surface (mirrors
+/// PanelMaker's `connectPanelAsFeeder` 'connected' | 'has-parent' | 'cycle').
+class ConnectFeederResult {
+  final bool connected;
+  final String? reason;
+  const ConnectFeederResult.connected()
+      : connected = true,
+        reason = null;
+  const ConnectFeederResult.refused(String this.reason) : connected = false;
+}
+
 /// Which whole-area workspace the center of the shell shows. Generalises the old
 /// binary plan/schematic toggle into a three-way selection (plan / schematic /
 /// electrical).
@@ -153,7 +165,14 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Append a fresh-id circuit of [kind] to [panelId], with standards-derived
   /// defaults (cos φ / demand factor / curve from [loadDefaults]) and a sensible
   /// default load so the engine sizes it immediately.
-  void addCircuit(String panelId, {required LoadKind kind, String? name}) {
+  void addCircuit(
+    String panelId, {
+    required LoadKind kind,
+    String? name,
+    int? phases,
+    double? loadW,
+    double? motorKw,
+  }) {
     final d = loadDefaults[kind];
     final isMotor = kind == LoadKind.motor || kind == LoadKind.pump;
     final circuit = ElectricalCircuit(
@@ -163,12 +182,14 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       cosPhi: d?.cosPhi ?? 0.85,
       demandFactor: d?.demandFactor ?? 1,
       isLighting: kind == LoadKind.lighting,
+      phases: phases,
       // A motor-like way carries a kW default; everything else a watt default.
-      // A spare way is zero-demand by definition.
-      motorKw: isMotor ? 3.0 : null,
+      // A spare way is zero-demand by definition. Palette cards may seed an
+      // explicit power; otherwise the kind's sensible default applies.
+      motorKw: isMotor ? (motorKw ?? 3.0) : null,
       loadW: isMotor || kind == LoadKind.spare || kind == LoadKind.feeder
           ? 0
-          : 2000,
+          : (loadW ?? 2000),
       length: const Length(20),
     );
     _replacePanel(panelId, (p) => p.copyWith(circuits: [...p.circuits, circuit]));
@@ -297,6 +318,175 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Toggle the tenant sub-metered flag.
   void setPanelSubmeter(String id, bool value) =>
       _replacePanel(id, (p) => p.copyWith(submeter: value));
+
+  // ── Spatial-canvas intents (Wave 5) ────────────────────────────────────────
+  // Layout positions + feeder topology edits for the single-line canvas. All
+  // additive (only `x`/`y` + the existing feeder fields move) and funnelled
+  // through the per-panel/per-project replacers.
+
+  /// Set a panel's canvas position (world px) — the live-drag intent (mirrors
+  /// the mechanical canvas `moveNode`). No-op when the id is unknown.
+  void setPanelPosition(String id, double x, double y) =>
+      _replacePanel(id, (p) => p.copyWith(x: x, y: y));
+
+  /// Add a new panel at a canvas position. When [fedByCircuitId] is given it is
+  /// a fed sub-board; otherwise a utility-fed board.
+  void addPanelAt({
+    required String name,
+    required double x,
+    required double y,
+    String? tag,
+    ElectricalSystem system = ElectricalSystem.threePhase,
+    Voltage voltage = const Voltage(400),
+    String? fedByCircuitId,
+  }) {
+    final panel = ElectricalPanel(
+      id: _freshId('panel'),
+      name: name,
+      tag: tag,
+      system: system,
+      voltage: voltage,
+      sourceType:
+          fedByCircuitId != null ? PanelSource.feeder : PanelSource.utility,
+      fedByCircuitId: fedByCircuitId,
+      x: x,
+      y: y,
+    );
+    state = _withProject(panels: [...state.panels, panel]);
+  }
+
+  /// Connect [fromPanelId] → [toPanelId] as a feeder: append a feeder way on the
+  /// source panel and point the target's incomer at it. Mirrors PanelMaker's
+  /// `connectPanelAsFeeder` refusal logic (no self-feed, no second parent, no
+  /// cycle) and returns a [ConnectFeederResult] explaining a refusal.
+  ConnectFeederResult connectFeeder(String fromPanelId, String toPanelId) {
+    if (fromPanelId == toPanelId) {
+      return const ConnectFeederResult.refused('A panel cannot feed itself.');
+    }
+    final from = state.panels.where((p) => p.id == fromPanelId).firstOrNull;
+    final to = state.panels.where((p) => p.id == toPanelId).firstOrNull;
+    if (from == null || to == null) {
+      return const ConnectFeederResult.refused('Panel not found.');
+    }
+    if (to.fedByCircuitId != null) {
+      return ConnectFeederResult.refused(
+          '${to.tag ?? to.name} is already fed by another panel. '
+          'Disconnect it first.');
+    }
+    // A cycle results if the source is reachable downstream of the target.
+    if (_isDescendant(target: fromPanelId, of: toPanelId)) {
+      return const ConnectFeederResult.refused(
+          'That would create a feeder loop (the target already feeds this panel).');
+    }
+    final feederId = _freshId('c');
+    final feeder = ElectricalCircuit(
+      id: feederId,
+      name: 'Feeder to ${to.tag ?? to.name}',
+      loadKind: LoadKind.feeder,
+      feedsPanelId: toPanelId,
+      length: const Length(20),
+    );
+    final panels = [
+      for (final p in state.panels)
+        if (p.id == fromPanelId)
+          p.copyWith(circuits: [...p.circuits, feeder])
+        else if (p.id == toPanelId)
+          p.copyWith(
+            sourceType: PanelSource.feeder,
+            fedByCircuitId: feederId,
+          )
+        else
+          p,
+    ];
+    state = _withProject(panels: panels);
+    return const ConnectFeederResult.connected();
+  }
+
+  /// True when [target] is reachable by following feeders downstream from [of]
+  /// (used to reject a feeder that would close a loop).
+  bool _isDescendant({required String target, required String of}) {
+    final seen = <String>{};
+    final stack = <String>[of];
+    while (stack.isNotEmpty) {
+      final id = stack.removeLast();
+      if (!seen.add(id)) continue;
+      final panel = state.panels.where((p) => p.id == id).firstOrNull;
+      if (panel == null) continue;
+      for (final c in panel.circuits) {
+        final fed = c.feedsPanelId;
+        if (fed == null) continue;
+        if (fed == target) return true;
+        stack.add(fed);
+      }
+    }
+    return false;
+  }
+
+  /// Disconnect the feeder into [panelId]: drop the parent's feeder way and make
+  /// the panel utility-fed again. No-op when the panel isn't fed.
+  void disconnectFeeder(String panelId) {
+    final to = state.panels.where((p) => p.id == panelId).firstOrNull;
+    if (to == null || to.fedByCircuitId == null) return;
+    final feederId = to.fedByCircuitId;
+    final panels = [
+      for (final p in state.panels)
+        if (p.id == panelId)
+          p.copyWith(
+            sourceType: PanelSource.utility,
+            clearFedByCircuitId: true,
+          )
+        else
+          p.copyWith(circuits: [
+            for (final c in p.circuits)
+              if (c.id != feederId) c,
+          ]),
+    ];
+    state = _withProject(panels: panels);
+  }
+
+  /// Add a floating load (a final circuit) as a one-way sub-panel placed at a
+  /// canvas position. Mirrors PanelMaker's drop-on-blank-canvas: a standalone
+  /// load becomes its own (utility-fed) tiny board until wired to a feeder.
+  void addFloatingLoad({
+    required LoadKind kind,
+    required double x,
+    required double y,
+    String? name,
+    int? phases,
+    double? loadW,
+    double? motorKw,
+  }) {
+    final d = loadDefaults[kind];
+    final panelId = _freshId('panel');
+    final isMotor = kind == LoadKind.motor || kind == LoadKind.pump;
+    final threePhase = phases == 3;
+    final circuit = ElectricalCircuit(
+      id: _freshId('c'),
+      name: name ?? (d?.label ?? 'Load'),
+      loadKind: kind,
+      cosPhi: d?.cosPhi ?? 0.85,
+      demandFactor: d?.demandFactor ?? 1,
+      isLighting: kind == LoadKind.lighting,
+      phases: phases,
+      motorKw: isMotor ? (motorKw ?? 3.0) : null,
+      loadW: isMotor || kind == LoadKind.spare ? 0 : (loadW ?? 2000),
+      length: const Length(20),
+    );
+    final panel = ElectricalPanel(
+      id: panelId,
+      name: name ?? (d?.label ?? 'Load'),
+      tag: null,
+      // The drop-on-blank gesture makes a tiny standalone board; its system
+      // follows the dropped load's phase (default 1φ) until the user wires it.
+      system:
+          threePhase ? ElectricalSystem.threePhase : ElectricalSystem.singlePhase,
+      voltage: threePhase ? const Voltage(400) : const Voltage(220),
+      x: x,
+      y: y,
+      circuits: [circuit],
+    );
+    state = _withProject(panels: [...state.panels, panel]);
+  }
 
   /// Monotonic id source for new panels / circuits (deterministic per process,
   /// distinct across calls — sufficient for in-memory editing).
