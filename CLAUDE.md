@@ -249,8 +249,19 @@ report export**; versioned `.mechx` save/open with viewport restore;
   elevation, a Riser palette, drag-to-place across floors (`placeRiserAt`), drag-sideways to move
   (`moveRiserHorizontal`, length stays the elevation delta), right-click to size (shared
   `edge_context_menu`); mirrors the Plan/electrical direct-manipulation language.
-  Remaining (**next**): the shared-substrate **layer switcher** (plumbing · HVAC · electrical
-  on ONE canvas) — the last convergence piece. Plus **Wave 4b**
+  **Unified one-PDF layered Layout canvas landed — the convergence** (`lib/store/layer_store.dart`
+  + `lib/ui/layout/{layout_canvas,layer_switcher,electrical_layer}.dart`): the mechanical Plan
+  and the electrical Layout merged into ONE **Layout** workspace on one shared PDF/viewport with
+  a **Plumbing · HVAC · Electrical** layer switcher + visibility toggles. The active layer edits
+  (DRAW inspector scoped to its services for Plumbing/HVAC via `isAir`; the Loads palette +
+  place/move for Electrical); visible-but-inactive layers render **faded/ghosted** for
+  coordination; hidden layers omitted; both ride the same sheet viewport + §10 geometry. Left-nav
+  **"Plan" → "Layout"** (the `WorkspaceView.plan` enum kept); `ElectricalView` dropped its
+  redundant Layout tab (Single-line + Power one-line stay); the riser elevation stays the
+  Schematic view. This closes the M+E+P convergence: one calibrated PDF substrate, disciplines
+  as layers, geometry-derived lengths, with the abstract Single-line / Power-one-line / riser
+  views as companions.
+  Remaining: **Wave 4b**
   (electrical drawings/SLD-GA-one-line export + commercial UI + workflow/i18n), the two
   deferred sizing-mutating folds (busbar withstand · harmonics neutral oversize), the
   per-segment material→hydraulic-solve fold, and the full catalogue dataset.

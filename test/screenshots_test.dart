@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/electrical_store.dart';
+import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sizing_store.dart';
@@ -93,9 +94,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 250));
     await expectLater(app, matchesGoldenFile('goldens/05_electrical.png'));
 
-    // Electrical LAYOUT tab — panels + loads placed on the calibrated PDF
-    // floor plan, cable length derived from geometry. Calibrate the sheet and
-    // place the MDP + a few loads, then switch to the Layout tab.
+    // Unified LAYOUT canvas, Electrical layer — panels + loads placed on the
+    // calibrated PDF floor plan, cable length from geometry. Calibrate the
+    // sheet, place the MDP + a few loads, then open the Layout workspace with
+    // the Electrical discipline active (plumbing/HVAC ghost underneath).
     container
         .read(projectControllerProvider.notifier)
         .setCalibration('s1', const ScaleCalibration(0.01));
@@ -108,8 +110,8 @@ void main() {
         const LayoutPos(sheetId: 's1', floorIndex: 0, x: 1180, y: 360));
     elec.setLoadPos('mdp', 'mdp-c4',
         const LayoutPos(sheetId: 's1', floorIndex: 0, x: 760, y: 760));
-    await tester.pump();
-    await tester.tap(find.text('Layout').first);
+    container.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
+    container.read(activeDisciplineProvider.notifier).set(DisciplineLayer.electrical);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     await expectLater(app, matchesGoldenFile('goldens/06_electrical_layout.png'));
