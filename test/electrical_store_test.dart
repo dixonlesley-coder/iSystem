@@ -1,11 +1,18 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/electrical_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
+import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/sources.dart';
+import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/units.dart';
 
 import 'test_util.dart';
 
@@ -451,6 +458,261 @@ void main() {
       await tester.pump();
       // The sample has no sources → the empty-state copy shows.
       expect(find.text('No energy sources'), findsOneWidget);
+    });
+  });
+
+  group('Geo-layout intents (Wave 6)', () {
+    // A one-panel, one-circuit project with a deliberately long MANUAL length, so
+    // placing it on a calibrated layout (a short geo run) measurably shortens the
+    // run the engine sizes against.
+    void seed(ProviderContainer c) {
+      c.read(electricalProjectProvider.notifier).setProject(
+            const ElectricalProject(
+              id: 'geo',
+              name: 'Geo project',
+              panels: [
+                ElectricalPanel(
+                  id: 'mdp',
+                  name: 'MDP',
+                  circuits: [
+                    ElectricalCircuit(
+                      id: 'c1',
+                      name: 'Big load',
+                      loadKind: LoadKind.general,
+                      loadW: 8000,
+                      cosPhi: 0.85,
+                      length: Length(90), // manual fallback (long)
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+      // Calibrate sheet s1: 1 px = 1 cm (so 300 px = 3.0 m planar).
+      c
+          .read(projectControllerProvider.notifier)
+          .setCalibration('s1', const ScaleCalibration(0.01));
+    }
+
+    double dropOf(ProviderContainer c) => c
+        .read(electricalResultProvider)
+        .panels['mdp']!
+        .circuits
+        .single
+        .voltageDrop
+        .dropPercent;
+
+    test('placing a panel + load drives the run length from geometry', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      seed(c);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      // With nothing placed, the run uses the 90 m manual length.
+      final manualDrop = dropOf(c);
+
+      // Place the panel + its load on the same floor, 300 px = 3.0 m apart.
+      ctrl.setPanelLayoutPos(
+          'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 0, y: 0));
+      ctrl.setLoadPos('mdp', 'c1',
+          const LayoutPos(sheetId: 's1', floorIndex: 0, x: 300, y: 0));
+
+      // Both placements landed on the model.
+      final p = c.read(electricalProjectProvider).panels.single;
+      expect(p.layoutPos, isNotNull);
+      expect(p.circuits.single.loadPos, isNotNull);
+
+      // The geo run (3 m) is far shorter than the manual 90 m → smaller drop.
+      final geoDrop = dropOf(c);
+      expect(geoDrop, lessThan(manualDrop));
+      expect(geoDrop, lessThan(manualDrop * 0.2));
+    });
+
+    test('moving the placed load updates the geo length (drop grows)', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      seed(c);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ctrl.setPanelLayoutPos(
+          'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 0, y: 0));
+
+      // Load 3 m away.
+      ctrl.setLoadPos('mdp', 'c1',
+          const LayoutPos(sheetId: 's1', floorIndex: 0, x: 300, y: 0));
+      final near = dropOf(c);
+
+      // Drag it to 30 m away (3000 px) — a longer run, a bigger drop.
+      ctrl.setLoadPos('mdp', 'c1',
+          const LayoutPos(sheetId: 's1', floorIndex: 0, x: 3000, y: 0));
+      final far = dropOf(c);
+      expect(far, greaterThan(near));
+    });
+
+    test('an unplaced circuit keeps its manual length (geo not applied)', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      seed(c);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      final before = dropOf(c);
+      // Place the PANEL only — the load has no loadPos, so the manual length
+      // still governs and the result is unchanged.
+      ctrl.setPanelLayoutPos(
+          'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 0, y: 0));
+      expect(dropOf(c), before);
+    });
+
+    test('addLoadAtLayout creates a placed, geo-sized way on a panel', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      seed(c);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ctrl.setPanelLayoutPos(
+          'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 0, y: 0));
+
+      final before = c.read(electricalProjectProvider).panels.single.circuits.length;
+      ctrl.addLoadAtLayout(
+        'mdp',
+        kind: LoadKind.socket,
+        pos: const LayoutPos(sheetId: 's1', floorIndex: 0, x: 200, y: 0),
+        loadW: 2400,
+      );
+      final added = c.read(electricalProjectProvider).panels.single.circuits.last;
+      expect(c.read(electricalProjectProvider).panels.single.circuits.length,
+          before + 1);
+      expect(added.loadPos, isNotNull);
+      // It sizes (appears in the result with a breaker).
+      final r = c.read(electricalResultProvider).panels['mdp']!.circuits
+          .firstWhere((rc) => rc.circuitId == added.id);
+      expect(r.breaker.ratingA.amperes, greaterThan(0));
+    });
+
+    test('setLoadPos / setPanelLayoutPos with null clears the placement', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      seed(c);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ctrl.setPanelLayoutPos(
+          'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 0, y: 0));
+      ctrl.setLoadPos('mdp', 'c1',
+          const LayoutPos(sheetId: 's1', floorIndex: 0, x: 300, y: 0));
+      expect(c.read(electricalProjectProvider).panels.single.layoutPos, isNotNull);
+
+      ctrl.setLoadPos('mdp', 'c1', null);
+      ctrl.setPanelLayoutPos('mdp', null);
+      final p = c.read(electricalProjectProvider).panels.single;
+      expect(p.layoutPos, isNull);
+      expect(p.circuits.single.loadPos, isNull);
+    });
+
+    test('the geo placement is a DISTINCT space from the single-line x/y', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      seed(c);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      // Set both the abstract single-line position AND a geo placement.
+      ctrl.setPanelPosition('mdp', 640, 480);
+      ctrl.setPanelLayoutPos(
+          'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 12, y: 34));
+
+      final p = c.read(electricalProjectProvider).panels.single;
+      expect(p.x, 640); // single-line schematic coord untouched
+      expect(p.y, 480);
+      expect(p.layoutPos!.x, 12); // geo placement is separate
+      expect(p.layoutPos!.y, 34);
+    });
+
+    test('.mechx round-trip preserves layoutPos / loadPos', () {
+      final doc = ProjectDocument(
+        projectName: 'Geo doc',
+        floors: const [Floor('Ground', Length(4.0))],
+        calibrations: const {'s1': ScaleCalibration(0.01)},
+        sheets: const [],
+        network: const Network(),
+        electrical: const ElectricalProject(
+          id: 'ep',
+          name: 'Geo electrical',
+          panels: [
+            ElectricalPanel(
+              id: 'mdp',
+              name: 'MDP',
+              layoutPos: LayoutPos(sheetId: 's1', floorIndex: 0, x: 7, y: 8),
+              circuits: [
+                ElectricalCircuit(
+                  id: 'c1',
+                  name: 'Load',
+                  loadKind: LoadKind.socket,
+                  loadW: 2000,
+                  loadPos: LayoutPos(sheetId: 's1', floorIndex: 0, x: 9, y: 10),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+
+      final decoded = ProjectDocument.decode(doc.encode());
+      final panel = decoded.electrical!.panels.single;
+      expect(panel.layoutPos,
+          const LayoutPos(sheetId: 's1', floorIndex: 0, x: 7, y: 8));
+      expect(panel.circuits.single.loadPos,
+          const LayoutPos(sheetId: 's1', floorIndex: 0, x: 9, y: 10));
+    });
+  });
+
+  group('ElectricalView Layout tab', () {
+    testWidgets('the Layout tab renders the PDF substrate + floor selector',
+        (tester) async {
+      setDesktopSurface(tester);
+      await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+      await tester.pump();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(MechXApp)),
+        listen: false,
+      );
+      container
+          .read(workspaceViewProvider.notifier)
+          .set(WorkspaceView.electrical);
+      await tester.pump();
+
+      // Switch to the Layout tab.
+      final layoutTab = find.text('Layout');
+      expect(layoutTab, findsOneWidget);
+      await tester.tap(layoutTab);
+      await tester.pump();
+
+      // The electrical-layer chip + the sheet rail (demo sheets) render.
+      expect(find.text('Electrical layer'), findsOneWidget);
+      expect(find.text('Ground Floor'), findsWidgets);
+      // The Loads palette is shared with the single-line canvas.
+      expect(find.text('Loads'), findsWidgets);
+    });
+
+    testWidgets('placing a panel on the layout via the store shows its marker',
+        (tester) async {
+      setDesktopSurface(tester);
+      await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+      await tester.pump();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(MechXApp)),
+        listen: false,
+      );
+      container
+          .read(workspaceViewProvider.notifier)
+          .set(WorkspaceView.electrical);
+      // Place the sample MDP on demo sheet s1 (the first sheet → floor 0).
+      container.read(electricalProjectProvider.notifier).setPanelLayoutPos(
+          'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 400, y: 300));
+      await tester.pump();
+
+      await tester.tap(find.text('Layout'));
+      await tester.pump();
+
+      // The placed MDP marker shows on the sheet (by its tag).
+      expect(find.text('MDP'), findsWidgets);
     });
   });
 }
