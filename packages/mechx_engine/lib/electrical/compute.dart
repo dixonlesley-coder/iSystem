@@ -19,10 +19,13 @@ library;
 
 import 'dart:math' as math;
 
+import '../geometry/building.dart';
+import '../geometry/scale_calibration.dart';
 import '../standards/puil.dart';
 import '../units.dart';
 import 'busbar.dart';
 import 'earthing.dart';
+import 'geo_length.dart';
 import 'load_kind.dart';
 import 'model.dart';
 import 'panel_results.dart';
@@ -346,11 +349,29 @@ class ComputePanelOptions {
   /// Site soil thermal resistivity (K·m/W) — derates buried runs.
   final double? soilThermalResistivityKmW;
 
+  // ── Geo cable-length inputs (additive; omitted ⇒ manual lengths) ───────────
+  /// Per-sheet pixel↔metre calibration for geo-derived cable length. Empty (the
+  /// default) ⇒ every circuit uses its manual [ElectricalCircuit.length], so the
+  /// computation is byte-identical to a non-geo project.
+  final Map<String, ScaleCalibration> calibrationBySheet;
+
+  /// Building floor elevations for the vertical (riser/drop) component of a
+  /// geo cable run (§10). Null ⇒ geo length is not resolved (manual length wins).
+  final BuildingLevels? building;
+
+  /// All project panels keyed by id, so a feeder's geo length can target the
+  /// fed sub-panel's [ElectricalPanel.layoutPos] (panel→sub-panel run). Empty ⇒
+  /// feeders fall back to their manual length.
+  final Map<String, ElectricalPanel> panelById;
+
   const ComputePanelOptions({
     this.feederLoadW = const {},
     this.panelSystems = const {},
     this.earthingSystem = EarthingSystem.tnCs,
     this.soilThermalResistivityKmW,
+    this.calibrationBySheet = const {},
+    this.building,
+    this.panelById = const {},
   });
 }
 
@@ -405,6 +426,20 @@ _CircuitComputation _computeCircuit(
   final def = loadDefaults[c.loadKind]!;
   final isFeeder = c.isFeeder;
   final warnings = <ElectricalWarning>[];
+
+  // Effective run length: geo-derived when this circuit + the panel are placed
+  // on the calibrated layout (and `building`/`calibrationBySheet` were supplied),
+  // else the manual `c.length`. With the default (empty) geo inputs this is
+  // exactly `c.length`, so non-geo projects compute identically.
+  final effectiveLength = opts.building == null
+      ? c.length
+      : resolveCircuitLength(
+          c,
+          panel,
+          calibrationBySheet: opts.calibrationBySheet,
+          building: opts.building!,
+          panelById: opts.panelById,
+        );
 
   // A feeder's phase follows the panel it FEEDS: a single-phase sub-board takes
   // a single-phase feeder even from a three-phase parent.
@@ -483,7 +518,7 @@ _CircuitComputation _computeCircuit(
     method: installMethod,
     threePhase: threePhase,
     vd: CableVoltageDropConstraint(
-      length: c.length,
+      length: effectiveLength,
       cosPhi: c.cosPhi,
       threePhase: threePhase,
       voltage: Voltage(useVoltageV),
@@ -495,7 +530,7 @@ _CircuitComputation _computeCircuit(
   final vd = voltageDrop(
     profile,
     current: Current(ib.amperes / runsPerPhase),
-    length: c.length,
+    length: effectiveLength,
     csaMm2: cable.csaMm2,
     cosPhi: c.cosPhi,
     threePhase: threePhase,
@@ -744,8 +779,10 @@ ElectricalPanelResult computePanel(
 /// supply, energy sources, arc-flash, harmonics, SPD, lightning, metering.
 ElectricalSystemResult computeSystem(
   ElectricalStandardsProfile profile,
-  ElectricalProject project,
-) {
+  ElectricalProject project, {
+  Map<String, ScaleCalibration> calibrationBySheet = const {},
+  BuildingLevels? building,
+}) {
   final panels = project.panels;
   final byId = {for (final p in panels) p.id: p};
   final warnings = <ElectricalWarning>[];
@@ -866,6 +903,9 @@ ElectricalSystemResult computeSystem(
         feederLoadW: feederLoadWByPanel[id] ?? const {},
         panelSystems: panelSystems,
         earthingSystem: project.earthingSystem,
+        calibrationBySheet: calibrationBySheet,
+        building: building,
+        panelById: byId,
       ),
     );
   }
