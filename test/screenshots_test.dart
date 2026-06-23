@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
@@ -74,8 +75,14 @@ void main() {
     container.read(showHeatmapProvider.notifier).toggle();
     await tester.pump();
 
-    container.read(showSchematicProvider.notifier).toggle();
+    container.read(workspaceViewProvider.notifier).set(WorkspaceView.schematic);
     await tester.pump(const Duration(milliseconds: 250));
     await expectLater(app, matchesGoldenFile('goldens/04_schematic.png'));
+
+    // Electrical workspace — renders the built-in sample electrical project
+    // through the pure A4 engine (panel schedule + summaries + warnings).
+    container.read(workspaceViewProvider.notifier).set(WorkspaceView.electrical);
+    await tester.pump(const Duration(milliseconds: 250));
+    await expectLater(app, matchesGoldenFile('goldens/05_electrical.png'));
   });
 }

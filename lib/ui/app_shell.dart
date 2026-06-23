@@ -9,11 +9,13 @@ import '../data/pdf_import.dart';
 import '../data/project_document.dart';
 import '../data/recovery.dart';
 import '../store/app_state.dart';
+import '../store/electrical_store.dart';
 import '../store/project_store.dart';
 import '../store/sheets_store.dart';
 import '../update/update_banner.dart';
 import '../update/version_label.dart';
 import 'canvas/sheet_canvas.dart';
+import 'electrical/electrical_view.dart';
 import 'inspector/project_panel.dart';
 import 'schematic/schematic_view.dart';
 import 'sheets/sheet_rail.dart';
@@ -44,21 +46,29 @@ class AppShell extends StatelessWidget {
                 const _RecoveryBanner(),
                 const _ErrorBanner(),
                 Expanded(
-                  child: Row(
-                    children: [
-                      const SheetRail(),
-                      Container(width: 1, color: colors.border),
-                      Expanded(
-                        child: Consumer(
-                          builder: (context, ref, _) =>
-                              ref.watch(showSchematicProvider)
-                                  ? const SchematicView()
-                                  : const SheetCanvas(),
-                        ),
-                      ),
-                      Container(width: 1, color: colors.border),
-                      const ProjectPanel(),
-                    ],
+                  child: Consumer(
+                    builder: (context, ref, _) {
+                      final view = ref.watch(workspaceViewProvider);
+                      // The electrical workspace owns the whole centre area (its
+                      // own project, not the plumbing inspector); plan + schematic
+                      // keep the sheet rail and the project inspector.
+                      if (view == WorkspaceView.electrical) {
+                        return const ElectricalView();
+                      }
+                      return Row(
+                        children: [
+                          const SheetRail(),
+                          Container(width: 1, color: colors.border),
+                          Expanded(
+                            child: view == WorkspaceView.schematic
+                                ? const SchematicView()
+                                : const SheetCanvas(),
+                          ),
+                          Container(width: 1, color: colors.border),
+                          const ProjectPanel(),
+                        ],
+                      );
+                    },
                   ),
                 ),
                 Container(height: 1, color: colors.border),
@@ -160,7 +170,7 @@ class _TopBar extends ConsumerWidget {
     final type = context.type;
     final state = ref.watch(sheetsControllerProvider);
     final brightness = ref.watch(brightnessProvider);
-    final showSchematic = ref.watch(showSchematicProvider);
+    final view = ref.watch(workspaceViewProvider);
     final projectName = ref.watch(projectControllerProvider).name;
 
     final current = state.current;
@@ -219,12 +229,7 @@ class _TopBar extends ConsumerWidget {
               onPressed: () => _pickAndLoadPdf(ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
-            MechXButton(
-              label: showSchematic ? 'Plan' : 'Schematic',
-              primary: showSchematic,
-              onPressed: () =>
-                  ref.read(showSchematicProvider.notifier).toggle(),
-            ),
+            _ViewSwitch(active: view),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
               label: brightness == Brightness.dark ? 'Dark' : 'Light',
@@ -233,6 +238,42 @@ class _TopBar extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// A small segmented control to choose the centre workspace view
+/// (plan / schematic / electrical) — three [MechXButton]s in a bordered group.
+class _ViewSwitch extends ConsumerWidget {
+  final WorkspaceView active;
+  const _ViewSwitch({required this.active});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final ctrl = ref.read(workspaceViewProvider.notifier);
+    Widget seg(WorkspaceView v) => MechXButton(
+          label: v.label,
+          primary: v == active,
+          onPressed: () => ctrl.set(v),
+        );
+    return Container(
+      padding: const EdgeInsets.all(MechXSpacing.xxs),
+      decoration: BoxDecoration(
+        color: colors.background,
+        borderRadius: MechXRadii.control,
+        border: Border.all(color: colors.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          seg(WorkspaceView.plan),
+          const SizedBox(width: MechXSpacing.xxs),
+          seg(WorkspaceView.schematic),
+          const SizedBox(width: MechXSpacing.xxs),
+          seg(WorkspaceView.electrical),
+        ],
       ),
     );
   }
