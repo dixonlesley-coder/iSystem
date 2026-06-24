@@ -34,6 +34,7 @@ import 'fixture_library_editor.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
+import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_text_field.dart';
 
 /// Gather the live design results into a calc report and write it to a Markdown
@@ -442,6 +443,7 @@ class _GlyphButton extends StatefulWidget {
 
 class _GlyphButtonState extends State<_GlyphButton> {
   bool _hover = false;
+  bool _down = false;
 
   @override
   Widget build(BuildContext context) {
@@ -452,24 +454,44 @@ class _GlyphButtonState extends State<_GlyphButton> {
         : widget.danger
             ? (_hover ? colors.danger : colors.textMuted)
             : (_hover ? colors.textPrimary : colors.textSecondary);
+    final glyph = AnimatedScale(
+      scale: _down && enabled ? 0.9 : 1.0,
+      duration: MechXMotion.press,
+      curve: MechXMotion.standard,
+      child: AnimatedContainer(
+        duration: MechXMotion.hover,
+        curve: MechXMotion.standard,
+        width: 24,
+        height: 24,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color:
+              _hover && enabled ? colors.surfaceHover : const Color(0x00000000),
+          borderRadius: MechXRadii.control,
+        ),
+        child: Text(
+          widget.glyph,
+          style:
+              TextStyle(fontFamily: 'Roboto', fontSize: 16, height: 1.0, color: fg),
+        ),
+      ),
+    );
     return MouseRegion(
       cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: 24,
-          height: 24,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: _hover && enabled ? colors.surfaceHover : const Color(0x00000000),
-            borderRadius: MechXRadii.control,
-          ),
-          child: Text(
-            widget.glyph,
-            style: TextStyle(fontFamily: 'Roboto', fontSize: 16, height: 1.0, color: fg),
-          ),
+      onExit: (_) => setState(() {
+        _hover = false;
+        _down = false;
+      }),
+      child: MechXFocusRing(
+        enabled: enabled,
+        onActivated: widget.onTap,
+        child: GestureDetector(
+          onTap: widget.onTap,
+          onTapDown: enabled ? (_) => setState(() => _down = true) : null,
+          onTapUp: enabled ? (_) => setState(() => _down = false) : null,
+          onTapCancel: enabled ? () => setState(() => _down = false) : null,
+          child: glyph,
         ),
       ),
     );
@@ -935,37 +957,46 @@ class _ServiceChip extends StatelessWidget {
     final type = context.type;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
-            vertical: MechXSpacing.xs,
-          ),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : colors.background,
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: selected ? colors.accent : colors.border),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 9,
-                height: 9,
-                decoration: BoxDecoration(
-                  color: serviceColor(service),
-                  borderRadius: const BorderRadius.all(Radius.circular(2)),
-                ),
+      child: MechXFocusRing(
+        onActivated: onTap,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              // Compensate the heavier selected border so the chip never jumps.
+              horizontal: MechXSpacing.sm - (selected ? 1 : 0),
+              vertical: MechXSpacing.xs - (selected ? 1 : 0),
+            ),
+            decoration: BoxDecoration(
+              color: selected ? colors.accentMuted : colors.background,
+              borderRadius: MechXRadii.control,
+              border: Border.all(
+                color: selected ? colors.accent : colors.border,
+                width: selected ? 2 : 1,
               ),
-              const SizedBox(width: MechXSpacing.xs),
-              Text(
-                serviceLabel(service),
-                style: type.label.copyWith(
-                  color: selected ? colors.textPrimary : colors.textSecondary,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(
+                    color: serviceColor(service),
+                    borderRadius: const BorderRadius.all(Radius.circular(2)),
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(width: MechXSpacing.xs),
+                Text(
+                  serviceLabel(service),
+                  style: type.label.copyWith(
+                    color:
+                        selected ? colors.textPrimary : colors.textSecondary,
+                    fontWeight: selected ? FontWeight.w600 : null,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1439,22 +1470,30 @@ class _Pill extends StatelessWidget {
     final type = context.type;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
-            vertical: MechXSpacing.xs,
-          ),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : colors.background,
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: selected ? colors.accent : colors.border),
-          ),
-          child: Text(
-            label,
-            style: type.label.copyWith(
-              color: selected ? colors.textPrimary : colors.textSecondary,
+      child: MechXFocusRing(
+        onActivated: onTap,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              // Compensate the heavier selected border so the pill never jumps.
+              horizontal: MechXSpacing.sm - (selected ? 1 : 0),
+              vertical: MechXSpacing.xs - (selected ? 1 : 0),
+            ),
+            decoration: BoxDecoration(
+              color: selected ? colors.accentMuted : colors.background,
+              borderRadius: MechXRadii.control,
+              border: Border.all(
+                color: selected ? colors.accent : colors.border,
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: Text(
+              label,
+              style: type.label.copyWith(
+                color: selected ? colors.textPrimary : colors.textSecondary,
+                fontWeight: selected ? FontWeight.w600 : null,
+              ),
             ),
           ),
         ),
