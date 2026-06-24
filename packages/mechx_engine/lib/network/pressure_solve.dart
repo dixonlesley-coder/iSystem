@@ -39,6 +39,15 @@
 /// Hazen–Williams loss exactly zero. Either way an unsized/unflowed edge adds
 /// 0 to the friction accumulation (documented, intentional).
 ///
+/// PER-EDGE MATERIAL — the Hazen–Williams C is resolved per edge: an edge
+/// carrying a [NetEdge.pipeProduct] uses that product's C
+/// ([hazenWilliamsCFor]); an edge with no product falls back to the
+/// service-wide C derived from the [material] parameter
+/// ([SniProfile.hazenWilliamsC]). Only the C value is swapped — the friction
+/// law stays Hazen–Williams (this is the pressurized regime; guardrail §12.4
+/// keeps gravity/pressurized/air separate, so NO Darcy/roughness is introduced
+/// here). With no edge product set the result is byte-identical to today.
+///
 /// Pure Dart, ZERO Flutter imports.
 library;
 
@@ -46,6 +55,7 @@ import '../geometry/building.dart';
 import '../geometry/scale_calibration.dart';
 import '../hydraulics.dart';
 import '../sizing/network_sizing.dart';
+import '../standards/pipe_products.dart';
 import '../standards/sni.dart';
 import '../units.dart';
 import 'network.dart';
@@ -151,11 +161,15 @@ PressureSolution solvePressurized({
           calibrationBySheet: calibrationBySheet,
           building: building,
         );
+        // Per-edge C: the edge's pipe product if set, else the service-wide C.
+        final edgeC = edge.pipeProduct != null
+            ? hazenWilliamsCFor(edge.pipeProduct!)
+            : hwC;
         edgeFriction = headLossHazenWilliams(
           flow: flow,
           length: length,
           diameter: edgeSizing.diameter,
-          hazenWilliamsC: hwC,
+          hazenWilliamsC: edgeC,
         ).meters;
       }
 
@@ -298,11 +312,15 @@ DownfeedSolution solveDownfeed({
           calibrationBySheet: calibrationBySheet,
           building: building,
         );
+        // Per-edge C: the edge's pipe product if set, else the service-wide C.
+        final edgeC = edge.pipeProduct != null
+            ? hazenWilliamsCFor(edge.pipeProduct!)
+            : hwC;
         edgeFriction = headLossHazenWilliams(
           flow: flow,
           length: length,
           diameter: edgeSizing.diameter,
-          hazenWilliamsC: hwC,
+          hazenWilliamsC: edgeC,
         ).meters;
       }
       friction[link.other] = currentFriction + edgeFriction;

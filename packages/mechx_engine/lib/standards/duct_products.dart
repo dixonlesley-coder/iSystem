@@ -24,6 +24,7 @@
 /// Zero Flutter imports.
 library;
 
+import '../units.dart';
 import 'sni.dart' show StandardValue, VerificationStatus;
 
 /// A duct **product** an engineer specifies per segment.
@@ -39,6 +40,31 @@ enum DuctProduct {
 String ductLabelFor(DuctProduct product) => switch (product) {
       DuctProduct.bjls => 'BJLS (galvanized steel)',
       DuctProduct.pu => 'PU pre-insulated panel',
+    };
+
+// ── Per-product absolute wall roughness ε (Darcy–Weisbach / Colebrook) ──────
+
+/// Galvanised-steel duct roughness ε. Matches `duct_sizing._galvSteelRoughness`
+/// (9.0 × 10⁻⁵ m, the value the duct-sizing air-friction kernel uses by
+/// default), so a BJLS segment reproduces the existing galvanised-steel result
+/// exactly.
+const Roughness _bjlsRoughness = Roughness(9.0e-5); // 0.09 mm, galvanised steel
+
+/// PU pre-insulated panel roughness ε. The rigid PU sandwich panel has a
+/// smoother bore than galvanised sheet, so its air friction is lower.
+///
+// VERIFY: no official ε figure for PU pre-insulated ductwork in SMACNA /
+// SNI 03-6572; 3.0 × 10⁻⁵ m (0.03 mm) is a representative smooth-panel value
+// (secondarySource — between drawn plastic and galvanised steel). Confirm
+// against the PU panel manufacturer datasheet before a submission.
+const Roughness _puRoughness = Roughness(3.0e-5); // 0.03 mm, smooth PU panel
+
+/// Absolute wall roughness ε for a duct [product], for the Darcy–Weisbach air
+/// friction in [ductFrictionPaPerMetre]. BJLS matches the galvanised-steel
+/// default; PU is smoother (lower friction).
+Roughness ductRoughnessFor(DuctProduct product) => switch (product) {
+      DuctProduct.bjls => _bjlsRoughness,
+      DuctProduct.pu => _puRoughness,
     };
 
 // ── BJLS automatic gauge (sheet thickness) by duct size ────────────────────
@@ -130,5 +156,17 @@ final List<StandardValue<Object?>> ductProductsVerifyChecklist =
     note: 'PU = polyurethane pre-insulated rigid sandwich panel; fixed-ish '
         'board thickness (common 20 / 25 / 30 mm), not gauge-selected by duct '
         'size. Default 20 mm. VERIFY against the panel manufacturer datasheet.',
+  ),
+  const StandardValue<Object?>(
+    'PU pre-insulated panel air roughness (ε ≈ 0.03 mm)',
+    unit: 'mm',
+    citation: 'Representative smooth-panel value (NOT confirmed verbatim)',
+    verified: false,
+    status: VerificationStatus.secondarySource,
+    note: 'PU duct absolute wall roughness ε ≈ 3.0e-5 m (0.03 mm) — smoother '
+        'than galvanised steel (ε ≈ 0.09 mm), so PU air friction is lower. No '
+        'official PU figure in SMACNA / SNI 03-6572; representative value. '
+        'Now feeds the fan-static (Darcy) solve. VERIFY against the PU panel '
+        'manufacturer datasheet.',
   ),
 ];
