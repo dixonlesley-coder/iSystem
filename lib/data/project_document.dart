@@ -66,6 +66,12 @@ class DesignSettings {
   final FireHazardClass fireHazard;
   final Brightness brightness;
 
+  /// UI language code: `'en'` (English, the default) or `'id'` (Bahasa
+  /// Indonesia). Stored as a string to keep this data layer free of the app's
+  /// `AppLocale` enum (the app layer maps the two), mirroring `upfeed`. Tolerant
+  /// on load: a missing/unknown code falls back to `'en'`.
+  final String localeCode;
+
   const DesignSettings({
     this.occupancy = Occupancy.private,
     this.upfeed = false,
@@ -74,6 +80,7 @@ class DesignSettings {
     this.rainfallMmPerHr = 200.0,
     this.fireHazard = FireHazardClass.ordinaryHazard1,
     this.brightness = Brightness.dark,
+    this.localeCode = 'en',
   });
 
   Map<String, dynamic> toJson() => {
@@ -84,6 +91,7 @@ class DesignSettings {
         'rainfall_mmhr': rainfallMmPerHr,
         'fireHazard': fireHazard.name,
         'brightness': brightness == Brightness.dark ? 'dark' : 'light',
+        'locale': localeCode,
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -107,6 +115,8 @@ class DesignSettings {
         ),
         brightness:
             json['brightness'] == 'light' ? Brightness.light : Brightness.dark,
+        // Tolerant: only the known codes are accepted; anything else → 'en'.
+        localeCode: json['locale'] == 'id' ? 'id' : 'en',
       );
 }
 
