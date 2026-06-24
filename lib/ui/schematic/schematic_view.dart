@@ -42,6 +42,7 @@ import '../canvas/viewport.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/mechx_focus_ring.dart';
 
 // ---------------------------------------------------------------------------
 // Public widget
@@ -178,23 +179,31 @@ class _TabButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 2),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : const Color(0x00000000),
-            borderRadius: MechXRadii.control,
-            border: Border.all(
-                color: selected ? colors.accent : const Color(0x00000000)),
-          ),
-          child: Text(label,
+    return MechXFocusRing(
+      onActivated: onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 2),
+            decoration: BoxDecoration(
+              color: selected ? colors.accentMuted : const Color(0x00000000),
+              borderRadius: MechXRadii.control,
+              border: Border.all(
+                  color: selected ? colors.accent : const Color(0x00000000)),
+            ),
+            child: AnimatedDefaultTextStyle(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
               style: type.label.copyWith(
-                  color:
-                      selected ? colors.textPrimary : colors.textSecondary)),
+                  color: selected ? colors.textPrimary : colors.textSecondary),
+              child: Text(label),
+            ),
+          ),
         ),
       ),
     );
@@ -213,33 +222,44 @@ class _ServiceChip extends StatelessWidget {
     final colors = context.colors;
     final type = context.type;
     final swatch = serviceColor(service);
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 1),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : colors.background,
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: selected ? colors.accent : colors.border),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 9,
-                height: 9,
-                decoration: BoxDecoration(color: swatch, shape: BoxShape.circle),
-              ),
-              const SizedBox(width: MechXSpacing.xs),
-              Text(serviceLabel(service),
+    return MechXFocusRing(
+      onActivated: onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 1),
+            decoration: BoxDecoration(
+              color: selected ? colors.accentMuted : colors.background,
+              borderRadius: MechXRadii.control,
+              border:
+                  Border.all(color: selected ? colors.accent : colors.border),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration:
+                      BoxDecoration(color: swatch, shape: BoxShape.circle),
+                ),
+                const SizedBox(width: MechXSpacing.xs),
+                AnimatedDefaultTextStyle(
+                  duration: MechXMotion.hover,
+                  curve: MechXMotion.standard,
                   style: type.label.copyWith(
                       color: selected
                           ? colors.textPrimary
-                          : colors.textSecondary)),
-            ],
+                          : colors.textSecondary),
+                  child: Text(serviceLabel(service)),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1064,14 +1084,16 @@ class _EditSchematicPainter extends CustomPainter {
       final toS = transform.worldToScreen(_worldOf(b));
 
       if (edge.id == selectedEdgeId) {
-        // Selection halo behind the line.
+        // Selection halo behind the line — a soft, blurred glow so the
+        // selection 'floats' (Apple-soft) rather than reading as a hard band.
         canvas.drawLine(
           fromS,
           toS,
           Paint()
-            ..color = colors.accent.withAlpha(90)
-            ..strokeWidth = 8
-            ..strokeCap = StrokeCap.round,
+            ..color = colors.accent.withAlpha(64)
+            ..strokeWidth = 7
+            ..strokeCap = StrokeCap.round
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
         );
       }
 
@@ -1254,22 +1276,42 @@ class _IconBtn extends StatefulWidget {
 
 class _IconBtnState extends State<_IconBtn> {
   bool _hover = false;
+  bool _down = false;
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: widget.glyph.length > 1 ? 34 : 28,
-          height: 28,
-          alignment: Alignment.center,
-          color: _hover ? colors.surfaceHover : const Color(0x00000000),
-          child: Text(widget.glyph,
-              style: context.type.label.copyWith(color: colors.textSecondary)),
+    return MechXFocusRing(
+      onActivated: widget.onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() {
+          _hover = false;
+          _down = false;
+        }),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          onTapDown: (_) => setState(() => _down = true),
+          onTapUp: (_) => setState(() => _down = false),
+          onTapCancel: () => setState(() => _down = false),
+          child: AnimatedScale(
+            scale: _down ? 0.95 : 1.0,
+            duration: MechXMotion.press,
+            curve: MechXMotion.standard,
+            child: AnimatedContainer(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
+              width: widget.glyph.length > 1 ? 34 : 28,
+              height: 28,
+              alignment: Alignment.center,
+              color: _down
+                  ? colors.accentMuted
+                  : (_hover ? colors.surfaceHover : const Color(0x00000000)),
+              child: Text(widget.glyph,
+                  style:
+                      context.type.label.copyWith(color: colors.textSecondary)),
+            ),
+          ),
         ),
       ),
     );
@@ -1284,23 +1326,29 @@ class _HelpButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onToggle,
-        child: Container(
-          width: 26,
-          height: 26,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: open ? colors.accent : colors.surface,
-            shape: BoxShape.circle,
-            border: Border.all(color: colors.border),
+    return MechXFocusRing(
+      onActivated: onToggle,
+      borderRadius: MechXRadii.rounded,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onToggle,
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            width: 26,
+            height: 26,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: open ? colors.accent : colors.surface,
+              shape: BoxShape.circle,
+              border: Border.all(color: colors.border),
+            ),
+            child: Text('?',
+                style: context.type.label.copyWith(
+                    color:
+                        open ? const Color(0xFFFFFFFF) : colors.textSecondary)),
           ),
-          child: Text('?',
-              style: context.type.label.copyWith(
-                  color:
-                      open ? const Color(0xFFFFFFFF) : colors.textSecondary)),
         ),
       ),
     );
