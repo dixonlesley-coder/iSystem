@@ -30,6 +30,7 @@ import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
+import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -37,6 +38,7 @@ import '../widgets/mechx_focus_ring.dart';
 import 'electrical_canvas.dart';
 import 'electrical_export.dart';
 import 'electrical_format.dart';
+import 'electrical_inspector.dart' show ElectricalTextButton;
 import 'electrical_palette.dart';
 import 'panel_geometry.dart';
 import 'power_oneline_view.dart';
@@ -244,7 +246,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               Positioned(
                 left: MechXSpacing.md,
                 bottom: MechXSpacing.md,
-                child: _ZoomControls(
+                child: ZoomControls(
                   onIn: () => _canvasKey.currentState?.zoomIn(),
                   onOut: () => _canvasKey.currentState?.zoomOut(),
                   onFit: () => _canvasKey.currentState?.fitView(),
@@ -635,11 +637,19 @@ class _BtnState extends State<_Btn> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    // The toolbar button speaks the canonical MechXButton "gray button"
+    // language: a soft fill (no border) that lifts to the accent tint on hover
+    // and deepens on press. danger / muted only recolour the label.
     final fg = widget.danger
         ? colors.danger
         : widget.muted
         ? colors.textMuted
-        : colors.textSecondary;
+        : colors.textPrimary;
+    final bg = _down
+        ? colors.accentMuted
+        : (_hover
+            ? Color.lerp(colors.surfaceHover, colors.accentMuted, 0.5)!
+            : colors.surfaceHover);
     return MechXFocusRing(
       onActivated: widget.onTap,
       child: MouseRegion(
@@ -662,15 +672,18 @@ class _BtnState extends State<_Btn> {
               duration: MechXMotion.hover,
               curve: MechXMotion.standard,
               padding: const EdgeInsets.symmetric(
-                horizontal: MechXSpacing.sm + 2,
-                vertical: MechXSpacing.xs + 1,
+                horizontal: MechXSpacing.sm + 4,
+                vertical: MechXSpacing.xs + 2,
               ),
               decoration: BoxDecoration(
-                color: _hover ? colors.surfaceHover : const Color(0x00000000),
+                color: bg,
                 borderRadius: MechXRadii.control,
-                border: Border.all(color: colors.border),
               ),
-              child: Text(widget.label, style: type.label.copyWith(color: fg)),
+              child: Text(
+                widget.label,
+                style: type.label
+                    .copyWith(color: fg, fontWeight: FontWeight.w500),
+              ),
             ),
           ),
         ),
@@ -720,101 +733,6 @@ class _HintChipState extends State<_HintChip> {
             child: Text(
               widget.text,
               style: context.type.caption.copyWith(color: colors.textMuted),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ZoomControls extends StatelessWidget {
-  final VoidCallback onIn;
-  final VoidCallback onOut;
-  final VoidCallback onFit;
-  const _ZoomControls({
-    required this.onIn,
-    required this.onOut,
-    required this.onFit,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: colors.border),
-        boxShadow: MechXShadow.card,
-      ),
-      child: ClipRRect(
-        borderRadius: MechXRadii.control,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _IconBtn(glyph: '+', onTap: onIn),
-            _Sep(),
-            _IconBtn(glyph: '-', onTap: onOut),
-            _Sep(),
-            _IconBtn(glyph: 'fit', onTap: onFit),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Sep extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) =>
-      Container(width: 1, height: 22, color: context.colors.border);
-}
-
-class _IconBtn extends StatefulWidget {
-  final String glyph;
-  final VoidCallback onTap;
-  const _IconBtn({required this.glyph, required this.onTap});
-
-  @override
-  State<_IconBtn> createState() => _IconBtnState();
-}
-
-class _IconBtnState extends State<_IconBtn> {
-  bool _hover = false;
-  bool _down = false;
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return MechXFocusRing(
-      onActivated: widget.onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() {
-          _hover = false;
-          _down = false;
-        }),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          onTapDown: (_) => setState(() => _down = true),
-          onTapUp: (_) => setState(() => _down = false),
-          onTapCancel: () => setState(() => _down = false),
-          child: AnimatedScale(
-            scale: _down ? 0.97 : 1.0,
-            duration: MechXMotion.press,
-            curve: MechXMotion.standard,
-            child: AnimatedContainer(
-              duration: MechXMotion.hover,
-              curve: MechXMotion.standard,
-              width: widget.glyph.length > 1 ? 34 : 28,
-              height: 28,
-              alignment: Alignment.center,
-              color: _hover ? colors.surfaceHover : const Color(0x00000000),
-              child: Text(
-                widget.glyph,
-                style: context.type.label.copyWith(color: colors.textSecondary),
-              ),
             ),
           ),
         ),
@@ -1333,7 +1251,7 @@ class _ServiceInspector extends ConsumerWidget {
                       style: type.subtitle.copyWith(color: colors.textPrimary),
                     ),
                   ),
-                  _TextButton(label: 'Close', onTap: onClose),
+                  ElectricalTextButton(label: 'Close', onTap: onClose),
                 ],
               ),
             ),
@@ -1445,7 +1363,7 @@ class _AdvancedDrawer extends StatelessWidget {
                       style: type.subtitle.copyWith(color: colors.textPrimary),
                     ),
                   ),
-                  _TextButton(label: 'Close', onTap: onClose),
+                  ElectricalTextButton(label: 'Close', onTap: onClose),
                 ],
               ),
             ),
@@ -1840,7 +1758,7 @@ class _CircuitInspector extends StatelessWidget {
                       style: type.subtitle.copyWith(color: colors.textPrimary),
                     ),
                   ),
-                  _TextButton(label: 'Close', onTap: onClose),
+                  ElectricalTextButton(label: 'Close', onTap: onClose),
                 ],
               ),
             ),
@@ -2340,45 +2258,3 @@ class _ToggleRow extends StatelessWidget {
   }
 }
 
-class _TextButton extends StatefulWidget {
-  final String label;
-  final VoidCallback onTap;
-  const _TextButton({required this.label, required this.onTap});
-
-  @override
-  State<_TextButton> createState() => _TextButtonState();
-}
-
-class _TextButtonState extends State<_TextButton> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.fast,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm + 2,
-            vertical: MechXSpacing.xs + 1,
-          ),
-          decoration: BoxDecoration(
-            color: _hover ? colors.surfaceHover : const Color(0x00000000),
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: colors.border),
-          ),
-          child: Text(
-            widget.label,
-            style: type.label.copyWith(color: colors.textSecondary),
-          ),
-        ),
-      ),
-    );
-  }
-}

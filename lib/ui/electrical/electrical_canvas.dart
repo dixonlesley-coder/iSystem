@@ -1936,9 +1936,11 @@ class _CanvasDropTargetState extends State<_CanvasDropTarget> {
       },
       builder: (context, candidate, rejected) {
         if (!_active) return const IgnorePointer(child: SizedBox.expand());
+        // Matches the mechanical drop overlay's tint + rounded affordance.
         return DecoratedBox(
           decoration: BoxDecoration(
-            color: context.colors.accent.withAlpha(14),
+            color: context.colors.accent.withAlpha(18),
+            borderRadius: MechXRadii.card,
             border: Border.all(
               color: context.colors.accent.withAlpha(110),
               width: 1.5,

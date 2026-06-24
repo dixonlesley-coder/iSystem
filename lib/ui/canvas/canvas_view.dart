@@ -39,10 +39,13 @@ class CanvasView extends StatefulWidget {
   });
 
   @override
-  State<CanvasView> createState() => _CanvasViewState();
+  State<CanvasView> createState() => CanvasViewState();
 }
 
-class _CanvasViewState extends State<CanvasView> {
+/// Public so a host can drive zoom imperatively via a [GlobalKey] (the shared
+/// on-canvas [ZoomControls]). The canvas owns its live transform, so the
+/// buttons go through these methods rather than the persisted store.
+class CanvasViewState extends State<CanvasView> {
   ViewportTransform? _transform;
   Size _viewportSize = Size.zero;
   final FocusNode _focus = FocusNode(debugLabel: 'canvas');
@@ -82,6 +85,23 @@ class _CanvasViewState extends State<CanvasView> {
       if (!mounted || _transform != null || _viewportSize.isEmpty) return;
       _emit(ViewportTransform.fit(widget.contentSize, _viewportSize));
     });
+  }
+
+  // ── Imperative zoom (driven by the shared on-canvas ZoomControls) ────────────
+
+  void zoomIn() {
+    if (_viewportSize.isEmpty) return;
+    _emit(_current.zoomedBy(1.2, _viewportSize.center(Offset.zero)));
+  }
+
+  void zoomOut() {
+    if (_viewportSize.isEmpty) return;
+    _emit(_current.zoomedBy(1 / 1.2, _viewportSize.center(Offset.zero)));
+  }
+
+  void fitView() {
+    if (_viewportSize.isEmpty) return;
+    _emit(ViewportTransform.fit(widget.contentSize, _viewportSize));
   }
 
   // ── Pointer (mouse) ────────────────────────────────────────────────────────

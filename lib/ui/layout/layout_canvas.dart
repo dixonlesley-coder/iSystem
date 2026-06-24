@@ -44,6 +44,7 @@ import '../canvas/network_layer.dart';
 import '../canvas/selection_overlay.dart';
 import '../canvas/sheet_canvas.dart' show sheetContentBuilderProvider;
 import '../canvas/viewport.dart';
+import '../canvas/zoom_controls.dart';
 import '../electrical/electrical_inspector.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -66,6 +67,13 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   ElectricalPanelMenuTarget? _panelMenu;
   ElectricalEditTarget? _circuitMenu;
   Offset _menuAt = Offset.zero;
+
+  /// One [CanvasView] key per sheet id (so switching sheets still resets the
+  /// per-sheet viewport) — gives the on-canvas zoom controls an imperative
+  /// handle to the live canvas transform.
+  final Map<String, GlobalKey<CanvasViewState>> _canvasKeys = {};
+  GlobalKey<CanvasViewState> canvasKeyFor(String id) =>
+      _canvasKeys.putIfAbsent(id, () => GlobalKey<CanvasViewState>());
 
   @override
   Widget build(BuildContext context) {
@@ -408,11 +416,38 @@ class _SharedSheet extends ConsumerWidget {
     final sheet = sheetsState.current;
 
     if (sheet == null) {
+      final type = context.type;
+      // A branded empty-state card (matching the electrical workspace's), not
+      // bare text — so an empty canvas reads as one app in both workspaces.
       return ColoredBox(
         color: colors.canvas,
         child: Center(
-          child: Text('No sheet loaded',
-              style: context.type.body.copyWith(color: colors.textMuted)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: Container(
+              padding: const EdgeInsets.all(MechXSpacing.lg),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                borderRadius: MechXRadii.card,
+                border: Border.all(color: colors.border),
+                boxShadow: MechXShadow.card,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('No sheet loaded',
+                      style: type.title.copyWith(color: colors.textPrimary)),
+                  const SizedBox(height: MechXSpacing.xs),
+                  Text(
+                    'Import a PDF floor plan to begin — then calibrate its '
+                    'scale and draw on the Plumbing, HVAC and Electrical layers.',
+                    style: type.body.copyWith(color: colors.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       );
     }
@@ -446,7 +481,7 @@ class _SharedSheet extends ConsumerWidget {
         // The PDF sheet, pannable/zoomable — drives the shared viewport.
         Positioned.fill(
           child: CanvasView(
-            key: ValueKey('layout-shared-${sheet.id}'),
+            key: host.canvasKeyFor(sheet.id),
             contentSize: sheet.sizePx,
             initialTransform: sheetsState.viewportFor(sheet.id),
             background: colors.canvas,
@@ -533,6 +568,17 @@ class _SharedSheet extends ConsumerWidget {
             right: 0,
             child: Center(child: _CalibrateHint()),
           ),
+        // On-canvas zoom controls (bottom-left) — the same cluster the
+        // electrical canvas shows, so both workspaces share the affordance.
+        Positioned(
+          left: MechXSpacing.md,
+          bottom: MechXSpacing.md,
+          child: ZoomControls(
+            onIn: () => host.canvasKeyFor(sheet.id).currentState?.zoomIn(),
+            onOut: () => host.canvasKeyFor(sheet.id).currentState?.zoomOut(),
+            onFit: () => host.canvasKeyFor(sheet.id).currentState?.fitView(),
+          ),
+        ),
       ],
     );
   }
