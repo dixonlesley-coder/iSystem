@@ -985,6 +985,12 @@ class _SelectionSection extends ConsumerWidget {
     final ctrl = ref.read(networkControllerProvider.notifier);
     final selCtrl = ref.read(selectionProvider.notifier);
 
+    // Multi-selection: a count header + Copy / Paste / Delete actions (the
+    // single-element editor is shown only for a single selection).
+    if (selection.isMulti) {
+      return _multiSelectionSection(context, ref, selection, ctrl, selCtrl);
+    }
+
     Widget? body;
     if (selection.isNode) {
       final node = net.nodeById(selection.nodeId!);
@@ -1016,6 +1022,64 @@ class _SelectionSection extends ConsumerWidget {
         ),
         const SizedBox(height: MechXSpacing.sm),
         body,
+        const SizedBox(height: MechXSpacing.lg),
+      ],
+    );
+  }
+
+  Widget _multiSelectionSection(BuildContext context, WidgetRef ref,
+      Selection selection, NetworkController ctrl, SelectionController selCtrl) {
+    final colors = context.colors;
+    final type = context.type;
+    final n = selection.nodeIds.length;
+    final m = selection.edgeIds.length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(child: _SectionLabel('Selection')),
+            _GlyphButton(glyph: '×', onTap: selCtrl.clear),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        Text(
+          '$n ${n == 1 ? 'node' : 'nodes'} / $m ${m == 1 ? 'edge' : 'edges'} '
+          'selected',
+          style: type.caption.copyWith(color: colors.textMuted),
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            MechXButton(
+              label: 'Copy',
+              onPressed: () =>
+                  ctrl.copySelection(selection.nodeIds, selection.edgeIds),
+            ),
+            MechXButton(
+              label: 'Paste',
+              onPressed: () {
+                final sheet = ref.read(sheetsControllerProvider).current;
+                if (sheet == null) return;
+                final levelCount =
+                    ref.read(projectControllerProvider).building.levelCount;
+                final floorIndex = ref
+                    .read(sheetsControllerProvider)
+                    .floorFor(sheet.id, levelCount);
+                ctrl.paste(sheetId: sheet.id, floorIndex: floorIndex);
+              },
+            ),
+            MechXButton(
+              label: 'Delete',
+              onPressed: () {
+                ctrl.deleteMany(selection.nodeIds, selection.edgeIds);
+                selCtrl.clear();
+              },
+            ),
+          ],
+        ),
         const SizedBox(height: MechXSpacing.lg),
       ],
     );

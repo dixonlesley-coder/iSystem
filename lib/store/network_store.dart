@@ -7,9 +7,19 @@ import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'history_store.dart';
+import 'selection_store.dart';
 
 /// Active canvas tool.
 enum DrawTool { select, drawRun, drawRiser }
+
+/// A value-copy of a slice of the network held on the in-memory clipboard for
+/// copy/paste. Holds deep copies of the chosen nodes and the edges among them.
+@immutable
+class _Clipboard {
+  final List<NetNode> nodes;
+  final List<NetEdge> edges;
+  const _Clipboard(this.nodes, this.edges);
+}
 
 /// Editable drawing state: the [network], the active [tool] + [service], and
 /// the transient [pendingPoint] (the first endpoint of a run being drawn, in
@@ -36,11 +46,17 @@ class NetworkController extends Notifier<DrawingState> {
   final List<Network> _redo = [];
   int _seq = 0;
 
+  /// In-memory copy/paste clipboard (NOT persisted to the .mechx file).
+  _Clipboard? _clipboard;
+
   @override
   DrawingState build() => const DrawingState();
 
   bool get canUndo => _undo.isNotEmpty;
   bool get canRedo => _redo.isNotEmpty;
+
+  /// Whether the clipboard holds something to paste.
+  bool get hasClipboard => _clipboard != null && _clipboard!.nodes.isNotEmpty;
 
   String _id(String prefix) => '$prefix${_seq++}';
 
@@ -622,6 +638,123 @@ class NetworkController extends Notifier<DrawingState> {
       nodes: [...old.nodes, ...addedNodes],
       edges: [...old.edges, ...addedEdges],
     ));
+  }
+
+  // ── Multi-select copy / paste / delete ──────────────────────────────────────
+
+  /// Copy the [nodeIds]/[edgeIds] selection onto the in-memory clipboard. The
+  /// node set is the chosen nodes PLUS both endpoints of every chosen edge; only
+  /// edges whose BOTH endpoints fall in that node set are kept (danglers — and a
+  /// riser with only one endpoint selected — are dropped). Deep value-copies are
+  /// stored so later edits don't mutate the clipboard. No-op (clears nothing)
+  /// when the selection has no nodes/edges to copy.
+  void copySelection(Set<String> nodeIds, Set<String> edgeIds) {
+    final net = state.network;
+    // The node set: the chosen nodes PLUS both endpoints of each chosen edge.
+    final keptIds = <String>{...nodeIds};
+    for (final e in net.edges) {
+      if (!edgeIds.contains(e.id)) continue;
+      keptIds.add(e.fromId);
+      keptIds.add(e.toId);
+    }
+    // Keep only chosen edges whose BOTH endpoints are in the node set (drop
+    // danglers; a riser counts only when both its endpoints are selected).
+    final keptEdges = <NetEdge>[
+      for (final e in net.edges)
+        if (edgeIds.contains(e.id) &&
+            keptIds.contains(e.fromId) &&
+            keptIds.contains(e.toId))
+          e.copyWith(),
+    ];
+    final keptNodes = <NetNode>[
+      for (final n in net.nodes)
+        if (keptIds.contains(n.id)) n.copyWith(),
+    ];
+    if (keptNodes.isEmpty) {
+      _clipboard = null;
+      return;
+    }
+    _clipboard = _Clipboard(keptNodes, keptEdges);
+  }
+
+  /// Paste the clipboard onto [sheetId]/[floorIndex], offset by [offsetWorld],
+  /// with fresh ids (mirrors [duplicateFloor]'s clone-map pattern). Every
+  /// NetNode field is carried via copyWith. Records ONE undo step. Sets the new
+  /// ids as the multi-selection and returns them (empty when nothing pasted).
+  ({Set<String> nodeIds, Set<String> edgeIds}) paste({
+    required String sheetId,
+    required int floorIndex,
+    Offset offsetWorld = const Offset(24, 24),
+  }) {
+    final clip = _clipboard;
+    if (clip == null || clip.nodes.isEmpty) {
+      return (nodeIds: <String>{}, edgeIds: <String>{});
+    }
+    final clones = <String, String>{}; // old node id → new node id
+    final addedNodes = <NetNode>[];
+    for (final n in clip.nodes) {
+      final id = _id('n');
+      clones[n.id] = id;
+      // Build a fresh node with the new id, carrying EVERY NetNode field
+      // (copyWith can't change the id, so construct directly).
+      addedNodes.add(NetNode(
+        id: id,
+        sheetId: sheetId,
+        x: n.x + offsetWorld.dx,
+        y: n.y + offsetWorld.dy,
+        floorIndex: floorIndex,
+        role: n.role,
+        elevation: n.elevation,
+        fixture: n.fixture,
+        airflow: n.airflow,
+        customFixtureId: n.customFixtureId,
+        roofAreaM2: n.roofAreaM2,
+      ));
+    }
+    final addedEdges = <NetEdge>[];
+    final newEdgeIds = <String>{};
+    for (final e in clip.edges) {
+      final from = clones[e.fromId];
+      final to = clones[e.toId];
+      if (from == null || to == null) continue;
+      final eid = _id('e');
+      newEdgeIds.add(eid);
+      addedEdges.add(NetEdge(
+        id: eid,
+        fromId: from,
+        toId: to,
+        service: e.service,
+        kind: e.kind,
+        pipeProduct: e.pipeProduct,
+        ductProduct: e.ductProduct,
+        sizeOverride: e.sizeOverride,
+      ));
+    }
+    _commit(Network(
+      nodes: [...state.network.nodes, ...addedNodes],
+      edges: [...state.network.edges, ...addedEdges],
+    ));
+    final newNodeIds = clones.values.toSet();
+    ref.read(selectionProvider.notifier).setMulti(newNodeIds, newEdgeIds);
+    return (nodeIds: newNodeIds, edgeIds: newEdgeIds);
+  }
+
+  /// Remove every node in [nodeIds] (and all edges touching them) PLUS every
+  /// edge in [edgeIds], in ONE undo step. No-op when nothing matches.
+  void deleteMany(Set<String> nodeIds, Set<String> edgeIds) {
+    if (nodeIds.isEmpty && edgeIds.isEmpty) return;
+    final net = state.network;
+    final hasNode = net.nodes.any((n) => nodeIds.contains(n.id));
+    final hasEdge = net.edges.any((e) => edgeIds.contains(e.id));
+    if (!hasNode && !hasEdge) return;
+    final nodes = net.nodes.where((n) => !nodeIds.contains(n.id)).toList();
+    final edges = net.edges
+        .where((e) =>
+            !edgeIds.contains(e.id) &&
+            !nodeIds.contains(e.fromId) &&
+            !nodeIds.contains(e.toId))
+        .toList();
+    _commit(Network(nodes: nodes, edges: edges));
   }
 
   void _replaceNode(NetNode updated) {

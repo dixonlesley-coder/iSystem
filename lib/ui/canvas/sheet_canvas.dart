@@ -68,7 +68,7 @@ class SheetCanvas extends ConsumerWidget {
 
     return Focus(
       canRequestFocus: false,
-      onKeyEvent: (_, event) => _onKey(ref, event),
+      onKeyEvent: (_, event) => _onKey(ref, event, sheet.id, floorIndex),
       child: Stack(
       children: [
         Positioned.fill(
@@ -135,9 +135,11 @@ class SheetCanvas extends ConsumerWidget {
   }
 
   /// Delete removes the current selection; Escape cancels a pending action or
-  /// clears the selection. Bubbled up from the focused canvas (which ignores
-  /// these keys). Text fields live outside this subtree, so editing is safe.
-  KeyEventResult _onKey(WidgetRef ref, KeyEvent event) {
+  /// clears the selection; Ctrl/Cmd+C / +V copy & paste the selection. Bubbled
+  /// up from the focused canvas (which ignores these keys). Text fields live
+  /// outside this subtree, so editing is safe.
+  KeyEventResult _onKey(
+      WidgetRef ref, KeyEvent event, String sheetId, int floorIndex) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
     final mod = HardwareKeyboard.instance.isControlPressed ||
@@ -157,12 +159,32 @@ class SheetCanvas extends ConsumerWidget {
       return KeyEventResult.handled;
     }
 
+    // Copy / paste the selection.
+    if (mod && key == LogicalKeyboardKey.keyC) {
+      final sel = ref.read(selectionProvider);
+      final nodeIds =
+          sel.nodeIds.isEmpty ? {if (sel.nodeId != null) sel.nodeId!} : sel.nodeIds;
+      final edgeIds =
+          sel.edgeIds.isEmpty ? {if (sel.edgeId != null) sel.edgeId!} : sel.edgeIds;
+      if (nodeIds.isEmpty && edgeIds.isEmpty) return KeyEventResult.ignored;
+      ref.read(networkControllerProvider.notifier).copySelection(nodeIds, edgeIds);
+      return KeyEventResult.handled;
+    }
+    if (mod && key == LogicalKeyboardKey.keyV) {
+      ref
+          .read(networkControllerProvider.notifier)
+          .paste(sheetId: sheetId, floorIndex: floorIndex);
+      return KeyEventResult.handled;
+    }
+
     if (key == LogicalKeyboardKey.delete ||
         key == LogicalKeyboardKey.backspace) {
       final sel = ref.read(selectionProvider);
       if (sel.isEmpty) return KeyEventResult.ignored;
       final net = ref.read(networkControllerProvider.notifier);
-      if (sel.isNode) {
+      if (sel.isMulti) {
+        net.deleteMany(sel.nodeIds, sel.edgeIds);
+      } else if (sel.isNode) {
         net.deleteNode(sel.nodeId!);
       } else if (sel.isEdge) {
         net.deleteEdge(sel.edgeId!);

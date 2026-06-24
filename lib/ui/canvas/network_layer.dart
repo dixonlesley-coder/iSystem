@@ -72,6 +72,8 @@ class NetworkLayer extends ConsumerWidget {
           sizing: sizing,
           selectedNodeId: selection.nodeId,
           selectedEdgeId: selection.edgeId,
+          selectedNodeIds: selection.nodeIds,
+          selectedEdgeIds: selection.edgeIds,
           layerFiltered: layerFiltered,
           visibleDisciplines: visible,
           activeDiscipline: active,
@@ -94,6 +96,11 @@ class _NetworkPainter extends CustomPainter {
   final String? selectedNodeId;
   final String? selectedEdgeId;
 
+  /// The full multi-selection sets — any node/edge whose id is in these gets the
+  /// same highlight ring/halo as the primary (the primary's id is also in them).
+  final Set<String> selectedNodeIds;
+  final Set<String> selectedEdgeIds;
+
   /// Discipline-layer filtering (unified canvas). When [layerFiltered] is false
   /// the other two fields are ignored and every service draws full-opacity.
   final bool layerFiltered;
@@ -108,12 +115,22 @@ class _NetworkPainter extends CustomPainter {
     required this.sizing,
     required this.selectedNodeId,
     required this.selectedEdgeId,
+    this.selectedNodeIds = const {},
+    this.selectedEdgeIds = const {},
     this.layerFiltered = false,
     this.visibleDisciplines = const {},
     this.activeDiscipline,
   });
 
   bool _onThisFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
+
+  /// An edge is highlighted when it's the primary OR in the multi-selection set.
+  bool _edgeSelected(String id) =>
+      id == selectedEdgeId || selectedEdgeIds.contains(id);
+
+  /// A node is highlighted when it's the primary OR in the multi-selection set.
+  bool _nodeSelected(String id) =>
+      id == selectedNodeId || selectedNodeIds.contains(id);
 
   /// Whether a service's discipline should be drawn at all (visibility).
   bool _serviceVisible(ServiceType s) =>
@@ -164,7 +181,7 @@ class _NetworkPainter extends CustomPainter {
         if (!_onThisFloor(a) || !_onThisFloor(b)) continue;
         final pa = transform.worldToScreen(Offset(a.x, a.y));
         final pb = transform.worldToScreen(Offset(b.x, b.y));
-        if (e.id == selectedEdgeId) {
+        if (_edgeSelected(e.id)) {
           canvas.drawLine(
             pa,
             pb,
@@ -205,7 +222,7 @@ class _NetworkPainter extends CustomPainter {
         for (final n in [a, b]) {
           if (_onThisFloor(n)) {
             final mp = transform.worldToScreen(Offset(n.x, n.y));
-            if (e.id == selectedEdgeId) {
+            if (_edgeSelected(e.id)) {
               canvas.drawCircle(mp, 11,
                   Paint()..color = _kSelection.withAlpha(90));
             }
@@ -221,7 +238,7 @@ class _NetworkPainter extends CustomPainter {
       final layer = _nodeLayer(n);
       if (!layer.visible) continue;
       final p = transform.worldToScreen(Offset(n.x, n.y));
-      final selected = n.id == selectedNodeId;
+      final selected = _nodeSelected(n.id);
       if (selected) {
         canvas.drawCircle(p, 9, Paint()..color = _kSelection.withAlpha(70));
         canvas.drawCircle(
@@ -364,10 +381,15 @@ class _NetworkPainter extends CustomPainter {
       old.sizing != sizing ||
       old.selectedNodeId != selectedNodeId ||
       old.selectedEdgeId != selectedEdgeId ||
+      !_sameStrSet(old.selectedNodeIds, selectedNodeIds) ||
+      !_sameStrSet(old.selectedEdgeIds, selectedEdgeIds) ||
       old.layerFiltered != layerFiltered ||
       old.activeDiscipline != activeDiscipline ||
       !_sameSet(old.visibleDisciplines, visibleDisciplines);
 
   static bool _sameSet(Set<DisciplineLayer> a, Set<DisciplineLayer> b) =>
+      a.length == b.length && a.containsAll(b);
+
+  static bool _sameStrSet(Set<String> a, Set<String> b) =>
       a.length == b.length && a.containsAll(b);
 }

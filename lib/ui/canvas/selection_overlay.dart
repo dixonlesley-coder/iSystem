@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -10,9 +11,17 @@ import '../../store/sheets_store.dart';
 import 'edge_context_menu.dart';
 import 'viewport.dart';
 
+/// Accent used for the rubber-band marquee fill/stroke (matches the drawing
+/// overlay's band painter + the selection highlight).
+const Color _kBand = Color(0xFF4C8DFF);
+
 /// Interaction layer active while the Select tool is chosen: a tap picks the
 /// nearest node (then edge) on this floor and writes it to [selectionProvider];
-/// a tap on empty space clears the selection.
+/// a plain tap on empty space clears the selection; a Shift-tap toggles an
+/// element in/out of the multi-selection. A left-drag STARTING OVER EMPTY SPACE
+/// (or with Shift held) draws a rubber-band marquee that multi-selects every
+/// on-floor node + run edge inside it. (Canvas panning still works via
+/// middle-drag; only empty-space left-drag is repurposed as the marquee.)
 class NetworkSelectionOverlay extends ConsumerWidget {
   final String sheetId;
   final int floorIndex;
@@ -31,7 +40,6 @@ class NetworkSelectionOverlay extends ConsumerWidget {
     final transform =
         ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
             const ViewportTransform();
-    final sel = ref.read(selectionProvider.notifier);
     final selection = ref.watch(selectionProvider);
 
     // On-floor node drag handles (opaque, small) sit above the translucent tap
@@ -72,7 +80,12 @@ class NetworkSelectionOverlay extends ConsumerWidget {
     // still reach the CanvasView underneath.
     return Stack(
       children: [
-        Positioned.fill(child: _tapLayer(context, ref, net, transform, sel)),
+        Positioned.fill(
+          child: _SelectionGestureLayer(
+            sheetId: sheetId,
+            floorIndex: floorIndex,
+          ),
+        ),
         ...handles,
         ...resizeHandles,
       ],
@@ -169,30 +182,124 @@ class NetworkSelectionOverlay extends ConsumerWidget {
     );
   }
 
-  Widget _tapLayer(BuildContext context, WidgetRef ref, Network net,
-      ViewportTransform transform, SelectionController sel) {
+}
+
+/// Whether [n] lives on this sheet/floor.
+bool _isOnFloor(NetNode n, String sheetId, int floorIndex) =>
+    n.sheetId == sheetId && n.floorIndex == floorIndex;
+
+/// Nearest node id on this floor within the node hit radius, or null.
+String? _nodeAt(Network net, ViewportTransform transform, Offset world,
+    String sheetId, int floorIndex) {
+  final nodeHitR = 13 / transform.scale; // ≈13 screen px
+  String? node;
+  var best = nodeHitR * nodeHitR;
+  for (final n in net.nodes) {
+    if (!_isOnFloor(n, sheetId, floorIndex)) continue;
+    final dx = n.x - world.dx;
+    final dy = n.y - world.dy;
+    final d2 = dx * dx + dy * dy;
+    if (d2 <= best) {
+      best = d2;
+      node = n.id;
+    }
+  }
+  return node;
+}
+
+/// Nearest edge id within the edge hit radius (runs by segment distance,
+/// risers by their endpoint marker), or null.
+String? _edgeAt(Network net, ViewportTransform transform, Offset world,
+    String sheetId, int floorIndex) {
+  final edgeHitR = 8 / transform.scale;
+  String? edge;
+  var best = edgeHitR;
+  for (final e in net.edges) {
+    final a = net.nodeById(e.fromId);
+    final b = net.nodeById(e.toId);
+    if (a == null || b == null) continue;
+    if (e.kind == EdgeKind.run) {
+      if (!_isOnFloor(a, sheetId, floorIndex) ||
+          !_isOnFloor(b, sheetId, floorIndex)) {
+        continue;
+      }
+      final d = _distToSegment(world, Offset(a.x, a.y), Offset(b.x, b.y));
+      if (d <= best) {
+        best = d;
+        edge = e.id;
+      }
+    } else {
+      for (final n in [a, b]) {
+        if (!_isOnFloor(n, sheetId, floorIndex)) continue;
+        final d = (Offset(n.x, n.y) - world).distance;
+        if (d <= best) {
+          best = d;
+          edge = e.id;
+        }
+      }
+    }
+  }
+  return edge;
+}
+
+/// The tap + secondary-tap + rubber-band marquee gesture layer. Translucent so
+/// scroll-zoom + middle-drag pan still reach the CanvasView beneath; a left-drag
+/// starting over empty space (or with Shift) draws the marquee.
+class _SelectionGestureLayer extends ConsumerStatefulWidget {
+  final String sheetId;
+  final int floorIndex;
+
+  const _SelectionGestureLayer({
+    required this.sheetId,
+    required this.floorIndex,
+  });
+
+  @override
+  ConsumerState<_SelectionGestureLayer> createState() =>
+      _SelectionGestureLayerState();
+}
+
+class _SelectionGestureLayerState
+    extends ConsumerState<_SelectionGestureLayer> {
+  /// The marquee anchor + current corner in screen px while dragging, else null.
+  Offset? _bandStart;
+  Offset? _bandNow;
+
+  String get _sheetId => widget.sheetId;
+  int get _floor => widget.floorIndex;
+
+  @override
+  Widget build(BuildContext context) {
+    final transform = ref.watch(sheetsControllerProvider).viewportFor(_sheetId) ??
+        const ViewportTransform();
+
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTapUp: (details) {
+        final net = ref.read(networkControllerProvider).network;
+        final sel = ref.read(selectionProvider.notifier);
+        final shift = HardwareKeyboard.instance.isShiftPressed;
         final world = transform.screenToWorld(details.localPosition);
-        final node = _nodeAt(net, transform, world);
+        final node = _nodeAt(net, transform, world, _sheetId, _floor);
         if (node != null) {
-          sel.selectNode(node);
+          shift ? sel.toggleNode(node) : sel.selectNode(node);
           return;
         }
-        final edge = _edgeAt(net, transform, world);
+        final edge = _edgeAt(net, transform, world, _sheetId, _floor);
         if (edge != null) {
-          sel.selectEdge(edge);
-        } else {
+          shift ? sel.toggleEdge(edge) : sel.selectEdge(edge);
+        } else if (!shift) {
           sel.clear();
         }
       },
       // Right-click an edge → custom MechXTheme context menu (size / material /
       // delete). A right-click on empty space just clears the selection.
       onSecondaryTapUp: (details) {
+        final net = ref.read(networkControllerProvider).network;
+        final sel = ref.read(selectionProvider.notifier);
         final world = transform.screenToWorld(details.localPosition);
-        if (_nodeAt(net, transform, world) != null) return;
-        final edge = _edgeAt(net, transform, world);
+        if (_nodeAt(net, transform, world, _sheetId, _floor) != null) return;
+        final edge = _edgeAt(net, transform, world, _sheetId, _floor);
         if (edge == null) {
           sel.clear();
           return;
@@ -200,58 +307,86 @@ class NetworkSelectionOverlay extends ConsumerWidget {
         sel.selectEdge(edge);
         showEdgeContextMenu(context, ref, edge, details.globalPosition);
       },
-      child: const SizedBox.expand(),
+      // Rubber-band marquee — only starts over EMPTY space (or with Shift), so a
+      // left-drag on a populated area doesn't accidentally marquee. Canvas pan is
+      // still available via middle-drag.
+      onPanStart: (details) {
+        final net = ref.read(networkControllerProvider).network;
+        final world = transform.screenToWorld(details.localPosition);
+        final overEmpty =
+            _nodeAt(net, transform, world, _sheetId, _floor) == null &&
+                _edgeAt(net, transform, world, _sheetId, _floor) == null;
+        if (overEmpty || HardwareKeyboard.instance.isShiftPressed) {
+          setState(() {
+            _bandStart = details.localPosition;
+            _bandNow = details.localPosition;
+          });
+        }
+      },
+      onPanUpdate: (details) {
+        if (_bandStart == null) return;
+        setState(() => _bandNow = details.localPosition);
+      },
+      onPanEnd: (_) {
+        final start = _bandStart;
+        final now = _bandNow;
+        setState(() {
+          _bandStart = null;
+          _bandNow = null;
+        });
+        if (start == null || now == null) return;
+        final net = ref.read(networkControllerProvider).network;
+        final a = transform.screenToWorld(start);
+        final b = transform.screenToWorld(now);
+        final rect = Rect.fromPoints(a, b);
+        final nodeIds = <String>{};
+        for (final n in net.nodes) {
+          if (!_isOnFloor(n, _sheetId, _floor)) continue;
+          if (rect.contains(Offset(n.x, n.y))) nodeIds.add(n.id);
+        }
+        // A run edge is captured when BOTH endpoints fall inside the rect.
+        final edgeIds = <String>{};
+        for (final e in net.edges) {
+          if (e.kind != EdgeKind.run) continue;
+          if (nodeIds.contains(e.fromId) && nodeIds.contains(e.toId)) {
+            edgeIds.add(e.id);
+          }
+        }
+        ref.read(selectionProvider.notifier).setMulti(nodeIds, edgeIds);
+      },
+      child: CustomPaint(
+        size: Size.infinite,
+        painter: _MarqueePainter(start: _bandStart, now: _bandNow),
+        child: const SizedBox.expand(),
+      ),
+    );
+  }
+}
+
+/// Paints the translucent rubber-band rectangle (screen space) while dragging.
+class _MarqueePainter extends CustomPainter {
+  final Offset? start;
+  final Offset? now;
+
+  _MarqueePainter({required this.start, required this.now});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (start == null || now == null) return;
+    final rect = Rect.fromPoints(start!, now!);
+    canvas.drawRect(rect, Paint()..color = _kBand.withAlpha(38));
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..color = _kBand
+        ..strokeWidth = 1
+        ..style = PaintingStyle.stroke,
     );
   }
 
-  /// Nearest node id on this floor within the node hit radius, or null.
-  String? _nodeAt(Network net, ViewportTransform transform, Offset world) {
-    final nodeHitR = 13 / transform.scale; // ≈13 screen px
-    String? node;
-    var best = nodeHitR * nodeHitR;
-    for (final n in net.nodes) {
-      if (!_onFloor(n)) continue;
-      final dx = n.x - world.dx;
-      final dy = n.y - world.dy;
-      final d2 = dx * dx + dy * dy;
-      if (d2 <= best) {
-        best = d2;
-        node = n.id;
-      }
-    }
-    return node;
-  }
-
-  /// Nearest edge id within the edge hit radius (runs by segment distance,
-  /// risers by their endpoint marker), or null.
-  String? _edgeAt(Network net, ViewportTransform transform, Offset world) {
-    final edgeHitR = 8 / transform.scale;
-    String? edge;
-    var best = edgeHitR;
-    for (final e in net.edges) {
-      final a = net.nodeById(e.fromId);
-      final b = net.nodeById(e.toId);
-      if (a == null || b == null) continue;
-      if (e.kind == EdgeKind.run) {
-        if (!_onFloor(a) || !_onFloor(b)) continue;
-        final d = _distToSegment(world, Offset(a.x, a.y), Offset(b.x, b.y));
-        if (d <= best) {
-          best = d;
-          edge = e.id;
-        }
-      } else {
-        for (final n in [a, b]) {
-          if (!_onFloor(n)) continue;
-          final d = (Offset(n.x, n.y) - world).distance;
-          if (d <= best) {
-            best = d;
-            edge = e.id;
-          }
-        }
-      }
-    }
-    return edge;
-  }
+  @override
+  bool shouldRepaint(_MarqueePainter old) =>
+      old.start != start || old.now != now;
 }
 
 /// Shortest distance from [p] to the segment [a]–[b] (world units).
