@@ -19,6 +19,18 @@ void main() {
     expect(AppLocale.id.displayName, 'Bahasa Indonesia');
   });
 
+  testWidgets('context.strings degrades to EN when no MechXStrings ancestor',
+      (tester) async {
+    // A widget pumped in isolation (no MechXStrings provider) must still
+    // resolve strings — falling back to English rather than throwing.
+    late String resolved;
+    await tester.pumpWidget(Builder(builder: (context) {
+      resolved = context.strings(StringKey.values.first);
+      return const SizedBox();
+    }));
+    expect(resolved, debugEnStrings()[StringKey.values.first]);
+  });
+
   test('AppLocale round-trips through the design settings', () {
     for (final loc in AppLocale.values) {
       final settings = DesignSettings(localeCode: loc.name);

@@ -27,6 +27,7 @@ import '../../store/sizing_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/segment_palette.dart';
 import '../canvas/service_style.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
@@ -167,7 +168,7 @@ class ProjectPanel extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _SectionLabel('Project'),
+              _SectionLabel(context.strings(StringKey.inspectorProject)),
               const SizedBox(height: MechXSpacing.sm),
               MechXTextField(
                 value: project.name,
@@ -179,15 +180,15 @@ class ProjectPanel extends ConsumerWidget {
                 runSpacing: MechXSpacing.xs,
                 children: [
                   MechXButton(
-                    label: 'Export calc report (MD)',
+                    label: context.strings(StringKey.inspectorExportCalcReportMd),
                     onPressed: () => exportCalcReport(ref),
                   ),
                   MechXButton(
-                    label: 'Export drawing (DXF)',
+                    label: context.strings(StringKey.inspectorExportDrawingDxf),
                     onPressed: () => exportDrawingDxf(ref),
                   ),
                   MechXButton(
-                    label: 'Export drawing (PDF)',
+                    label: context.strings(StringKey.inspectorExportDrawingPdf),
                     onPressed: () => exportDrawingPdf(ref),
                   ),
                 ],
@@ -197,7 +198,9 @@ class ProjectPanel extends ConsumerWidget {
               // ── Building / floor heights ──────────────────────────────────
               Row(
                 children: [
-                  Expanded(child: _SectionLabel('Building')),
+                  Expanded(
+                      child: _SectionLabel(
+                          context.strings(StringKey.inspectorBuilding))),
                   Text(
                     '${building.totalHeight.meters.toStringAsFixed(1)} m · '
                     '${building.levelCount} levels',
@@ -221,7 +224,9 @@ class ProjectPanel extends ConsumerWidget {
               const SizedBox(height: MechXSpacing.sm),
               Align(
                 alignment: Alignment.centerLeft,
-                child: MechXButton(label: '+  Add level', onPressed: ctrl.addFloor),
+                child: MechXButton(
+                    label: context.strings(StringKey.inspectorAddLevel),
+                    onPressed: ctrl.addFloor),
               ),
               const SizedBox(height: MechXSpacing.lg),
 
@@ -250,7 +255,7 @@ class ProjectPanel extends ConsumerWidget {
 
               // ── Sheet → floor mapping ─────────────────────────────────────
               if (currentSheet != null) ...[
-                _SectionLabel('Sheet'),
+                _SectionLabel(context.strings(StringKey.inspectorSheet)),
                 const SizedBox(height: MechXSpacing.sm),
                 Builder(builder: (context) {
                   final sheetsState = ref.watch(sheetsControllerProvider);
@@ -260,7 +265,8 @@ class ProjectPanel extends ConsumerWidget {
                   return Row(
                     children: [
                       Expanded(
-                        child: Text('Maps to floor',
+                        child: Text(
+                            context.strings(StringKey.inspectorMapsToFloor),
                             style:
                                 type.caption.copyWith(color: colors.textMuted)),
                       ),
