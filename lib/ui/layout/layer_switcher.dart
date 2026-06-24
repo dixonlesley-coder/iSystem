@@ -90,11 +90,14 @@ class _LayerSegmentState extends State<_LayerSegment> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    // The selected segment uses the app-wide tinted-fill language (accentMuted
+    // + accent hairline + primary label), matching the DRAW service pills, the
+    // electrical tabs, and the inspector chips — instead of white-on-accent.
     final fg = widget.active
-        ? const Color(0xFFFFFFFF)
+        ? colors.textPrimary
         : (widget.visible ? colors.textSecondary : colors.textMuted);
     final bg = widget.active
-        ? colors.accent
+        ? colors.accentMuted
         : (_hover ? colors.surfaceHover : const Color(0x00000000));
 
     return Padding(
@@ -115,6 +118,9 @@ class _LayerSegmentState extends State<_LayerSegment> {
             decoration: BoxDecoration(
               color: bg,
               borderRadius: MechXRadii.control,
+              border: Border.all(
+                color: widget.active ? colors.accent : const Color(0x00000000),
+              ),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,

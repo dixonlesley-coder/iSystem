@@ -655,7 +655,7 @@ class _BtnState extends State<_Btn> {
           onTapUp: (_) => setState(() => _down = false),
           onTapCancel: () => setState(() => _down = false),
           child: AnimatedScale(
-            scale: _down ? 0.96 : 1.0,
+            scale: _down ? 0.97 : 1.0,
             duration: MechXMotion.press,
             curve: MechXMotion.standard,
             child: AnimatedContainer(
@@ -801,7 +801,7 @@ class _IconBtnState extends State<_IconBtn> {
           onTapUp: (_) => setState(() => _down = false),
           onTapCancel: () => setState(() => _down = false),
           child: AnimatedScale(
-            scale: _down ? 0.96 : 1.0,
+            scale: _down ? 0.97 : 1.0,
             duration: MechXMotion.press,
             curve: MechXMotion.standard,
             child: AnimatedContainer(
