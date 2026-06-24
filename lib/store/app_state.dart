@@ -105,6 +105,31 @@ class BrightnessController extends Notifier<Brightness> {
   void set(Brightness brightness) => state = brightness;
 }
 
+/// The app's UI language. `en` = English (the default), `id` = Bahasa Indonesia.
+/// Persisted to the project file via `DesignSettings.locale`.
+enum AppLocale { en, id }
+
+extension AppLocaleLabel on AppLocale {
+  /// The human-readable name of this locale, shown in the language toggle.
+  String get displayName => switch (this) {
+        AppLocale.en => 'English',
+        AppLocale.id => 'Bahasa Indonesia',
+      };
+}
+
+/// App-wide UI language. Defaults to English so the default rendered text (and
+/// the golden screenshots) is unchanged. Persisted to the project file later.
+/// Mirrors [brightnessProvider]'s shape exactly.
+final localeProvider =
+    NotifierProvider<LocaleController, AppLocale>(LocaleController.new);
+
+class LocaleController extends Notifier<AppLocale> {
+  @override
+  AppLocale build() => AppLocale.en;
+
+  void set(AppLocale locale) => state = locale;
+}
+
 /// Whether the main area shows the generated schematic diagram instead of the
 /// plan canvas.
 final showSchematicProvider =

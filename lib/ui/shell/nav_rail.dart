@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/electrical_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 
@@ -47,6 +48,7 @@ class NavRail extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
+    final strings = context.strings;
     final section = ref.watch(shellSectionProvider);
     final view = ref.watch(workspaceViewProvider);
 
@@ -74,7 +76,8 @@ class NavRail extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _GroupLabel('DESIGN', style: type.caption.copyWith(color: colors.textMuted)),
+          _GroupLabel(strings(StringKey.navGroupDesign),
+              style: type.caption.copyWith(color: colors.textMuted)),
           const SizedBox(height: MechXSpacing.xxs),
           _NavItem(
             glyph: _Glyph.plan,
@@ -82,45 +85,45 @@ class NavRail extends ConsumerWidget {
             // shared-PDF canvas (plumbing · HVAC · electrical layers). The
             // [WorkspaceView] enum value stays `plan` to avoid churn (and keep
             // the screenshot test seam valid).
-            label: 'Layout',
+            label: strings(StringKey.navLayout),
             active: designActive(WorkspaceView.plan),
             onTap: () => openDesign(WorkspaceView.plan),
           ),
           _NavItem(
             glyph: _Glyph.schematic,
-            label: 'Schematic',
+            label: strings(StringKey.navSchematic),
             active: designActive(WorkspaceView.schematic),
             onTap: () => openDesign(WorkspaceView.schematic),
           ),
           _NavItem(
             glyph: _Glyph.electrical,
-            label: 'Electrical',
+            label: strings(StringKey.navElectrical),
             active: designActive(WorkspaceView.electrical),
             onTap: () => openDesign(WorkspaceView.electrical),
           ),
           const SizedBox(height: MechXSpacing.sm),
           _NavItem(
             glyph: _Glyph.review,
-            label: 'Review',
+            label: strings(StringKey.navReview),
             active: section == ShellSection.review,
             onTap: () => sectionCtrl.set(ShellSection.review),
           ),
           _NavItem(
             glyph: _Glyph.commercial,
-            label: 'Commercial',
+            label: strings(StringKey.navCommercial),
             active: section == ShellSection.commercial,
             onTap: () => sectionCtrl.set(ShellSection.commercial),
           ),
           const Spacer(),
           _NavItem(
             glyph: _Glyph.projects,
-            label: 'Projects',
+            label: strings(StringKey.navProjects),
             active: section == ShellSection.projects,
             onTap: () => sectionCtrl.set(ShellSection.projects),
           ),
           _NavItem(
             glyph: _Glyph.preferences,
-            label: 'Preferences',
+            label: strings(StringKey.navPreferences),
             active: section == ShellSection.preferences,
             onTap: () => sectionCtrl.set(ShellSection.preferences),
           ),

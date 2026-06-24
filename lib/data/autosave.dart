@@ -68,6 +68,7 @@ ProjectDocument buildDocument(ProviderReader read) {
       rainfallMmPerHr: read(rainfallIntensityProvider),
       fireHazard: read(fireHazardProvider),
       brightness: read(brightnessProvider),
+      localeCode: read(localeProvider).name,
     ),
     // The electrical sub-model (v2) round-trips alongside the plumbing project.
     electrical: read(electricalProjectProvider),
@@ -102,6 +103,8 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(rainfallIntensityProvider.notifier).set(s.rainfallMmPerHr);
   read(fireHazardProvider.notifier).set(s.fireHazard);
   read(brightnessProvider.notifier).set(s.brightness);
+  read(localeProvider.notifier)
+      .set(s.localeCode == 'id' ? AppLocale.id : AppLocale.en);
   // Restore the electrical project (v2 files carry one; older files / projects
   // with no electrical design fall back to the built-in sample).
   read(electricalProjectProvider.notifier)
