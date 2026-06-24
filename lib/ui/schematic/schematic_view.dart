@@ -162,6 +162,13 @@ class _Toolbar extends StatelessWidget {
                 ),
               ),
             ),
+            // The riser drag source is pinned at the toolbar's right — drag it
+            // down onto a floor to drop a riser (no separate palette panel, so
+            // the elevation canvas keeps the full width; the ? help explains).
+            const SizedBox(width: MechXSpacing.sm),
+            Container(width: 1, height: 22, color: colors.border),
+            const SizedBox(width: MechXSpacing.sm),
+            _RiserCard(service: service),
           ],
         ],
       ),
@@ -677,8 +684,6 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
             ],
           ),
         ),
-        Container(width: 1, color: colors.border),
-        _RiserPalette(service: widget.service),
       ],
     );
   }
@@ -694,40 +699,6 @@ class _RiserDragData {
 // ---------------------------------------------------------------------------
 // Riser palette
 // ---------------------------------------------------------------------------
-
-class _RiserPalette extends StatelessWidget {
-  final ServiceType service;
-  const _RiserPalette({required this.service});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return Container(
-      width: 184,
-      color: colors.surface,
-      padding: const EdgeInsets.all(MechXSpacing.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(context.strings(StringKey.schematicPalette),
-              style: type.caption.copyWith(
-                color: colors.textMuted,
-                letterSpacing: 0.8,
-                fontWeight: FontWeight.w600,
-              )),
-          const SizedBox(height: MechXSpacing.xs),
-          Text(
-            context.strings(StringKey.schematicPaletteHelp),
-            style: type.caption.copyWith(color: colors.textMuted),
-          ),
-          const SizedBox(height: MechXSpacing.sm),
-          _RiserCard(service: service),
-        ],
-      ),
-    );
-  }
-}
 
 class _RiserCard extends StatelessWidget {
   final ServiceType service;
