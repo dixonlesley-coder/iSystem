@@ -24,6 +24,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 
+import '../../store/annotation_store.dart';
 import '../../store/calibration_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/history_store.dart';
@@ -38,6 +39,7 @@ import '../canvas/canvas_view.dart';
 import '../canvas/drawing_overlay.dart';
 import '../canvas/drop_overlay.dart';
 import '../canvas/heatmap_layer.dart';
+import '../canvas/measurement_overlay.dart';
 import '../canvas/network_layer.dart';
 import '../canvas/selection_overlay.dart';
 import '../canvas/sheet_canvas.dart' show sheetContentBuilderProvider;
@@ -252,16 +254,44 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       return KeyEventResult.handled;
     }
 
-    // Delete only acts on the mechanical selection (the active mechanical layer).
-    final activeMechanical =
-        ref.read(activeDisciplineProvider).isMechanical;
+    // Copy / paste / delete only act on the mechanical selection (the active
+    // mechanical layer). The current sheet/floor mirror what _SharedSheet uses.
+    final activeMechanical = ref.read(activeDisciplineProvider).isMechanical;
+    if (activeMechanical && mod && key == LogicalKeyboardKey.keyC) {
+      final sel = ref.read(selectionProvider);
+      final nodeIds = sel.nodeIds.isEmpty
+          ? {if (sel.nodeId != null) sel.nodeId!}
+          : sel.nodeIds;
+      final edgeIds = sel.edgeIds.isEmpty
+          ? {if (sel.edgeId != null) sel.edgeId!}
+          : sel.edgeIds;
+      if (nodeIds.isEmpty && edgeIds.isEmpty) return KeyEventResult.ignored;
+      ref
+          .read(networkControllerProvider.notifier)
+          .copySelection(nodeIds, edgeIds);
+      return KeyEventResult.handled;
+    }
+    if (activeMechanical && mod && key == LogicalKeyboardKey.keyV) {
+      final sheet = ref.read(sheetsControllerProvider).current;
+      if (sheet == null) return KeyEventResult.ignored;
+      final levelCount =
+          ref.read(projectControllerProvider).building.levelCount;
+      final floorIndex =
+          ref.read(sheetsControllerProvider).floorFor(sheet.id, levelCount);
+      ref
+          .read(networkControllerProvider.notifier)
+          .paste(sheetId: sheet.id, floorIndex: floorIndex);
+      return KeyEventResult.handled;
+    }
     if (activeMechanical &&
         (key == LogicalKeyboardKey.delete ||
             key == LogicalKeyboardKey.backspace)) {
       final sel = ref.read(selectionProvider);
       if (sel.isEmpty) return KeyEventResult.ignored;
       final net = ref.read(networkControllerProvider.notifier);
-      if (sel.isNode) {
+      if (sel.isMulti) {
+        net.deleteMany(sel.nodeIds, sel.edgeIds);
+      } else if (sel.isNode) {
         net.deleteNode(sel.nodeId!);
       } else if (sel.isEdge) {
         net.deleteEdge(sel.edgeId!);
@@ -385,6 +415,7 @@ class _SharedSheet extends ConsumerWidget {
     // Any mechanical layer visible? (Plumbing or HVAC.)
     final mechanicalVisible = visible.contains(DisciplineLayer.plumbing) ||
         visible.contains(DisciplineLayer.hvac);
+    final measureMode = ref.watch(measureModeProvider);
 
     // The shared viewport transform (persisted per-sheet) is what the electrical
     // layer reads, so both disciplines ride the SAME pan/zoom.
@@ -438,8 +469,20 @@ class _SharedSheet extends ConsumerWidget {
               onCircuitMenu: host.onCircuitMenu,
             ),
           ),
+        // Measurement annotations — saved dimensions always render (when a
+        // mechanical layer is visible); the measure tool captures taps only when
+        // active (and never while drawing/calibrating).
+        if (mechanicalVisible && !calibrating)
+          Positioned.fill(
+            child: MeasurementOverlay(
+              sheetId: sheet.id,
+              floorIndex: floorIndex,
+              active: mechanicalActive && measureMode && !drawing,
+            ),
+          ),
         // Mechanical drawing / drop / selection overlays — ONLY when a mechanical
-        // layer is active (so editing routes to the active discipline).
+        // layer is active (so editing routes to the active discipline). The
+        // selection/drop overlays stand down while the measure tool is on.
         if (mechanicalActive && drawing)
           Positioned.fill(
             child: DrawingOverlay(
@@ -448,11 +491,11 @@ class _SharedSheet extends ConsumerWidget {
               levelCount: levelCount,
             ),
           ),
-        if (mechanicalActive && !drawing && !calibrating)
+        if (mechanicalActive && !drawing && !calibrating && !measureMode)
           Positioned.fill(
             child: DropOverlay(sheetId: sheet.id, floorIndex: floorIndex),
           ),
-        if (mechanicalActive && !drawing && !calibrating)
+        if (mechanicalActive && !drawing && !calibrating && !measureMode)
           Positioned.fill(
             child: NetworkSelectionOverlay(
               sheetId: sheet.id,

@@ -21,6 +21,62 @@ import 'test_util.dart';
 /// immutably (through `_withProject`) and the pure A4 engine re-sizes off the
 /// result. Every test reads `electricalResultProvider` to prove the change took.
 void main() {
+  group('Fold-1 fault-level + clearing-time project settings', () {
+    test('default project leaves both null (byte-identical fallback)', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final p = c.read(electricalProjectProvider);
+      expect(p.originFaultLevelA, isNull);
+      expect(p.busbarClearingTimeS, isNull);
+    });
+
+    test('setters mutate without dropping other project fields', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      final before = c.read(electricalProjectProvider);
+      ctrl.setOriginFaultLevel(const Current(25000));
+      ctrl.setBusbarClearingTime(0.2);
+      final after = c.read(electricalProjectProvider);
+      expect(after.originFaultLevelA!.amperes, 25000);
+      expect(after.busbarClearingTimeS, 0.2);
+      expect(after.earthingSystem, before.earthingSystem);
+      expect(after.panels.length, before.panels.length);
+    });
+
+    test('non-positive inputs are ignored', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ctrl.setOriginFaultLevel(const Current(0));
+      ctrl.setBusbarClearingTime(0);
+      final p = c.read(electricalProjectProvider);
+      expect(p.originFaultLevelA, isNull);
+      expect(p.busbarClearingTimeS, isNull);
+    });
+
+    test('null resets a once-set value back to default', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ctrl.setOriginFaultLevel(const Current(25000));
+      ctrl.setOriginFaultLevel(null);
+      expect(c.read(electricalProjectProvider).originFaultLevelA, isNull);
+    });
+
+    test('a higher fault level recomputes a busbar at least as large', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      final base =
+          c.read(electricalResultProvider).panels['mdp']!.busbar.csaMm2;
+      ctrl.setOriginFaultLevel(Current.kiloamperes(50));
+      final hi =
+          c.read(electricalResultProvider).panels['mdp']!.busbar.csaMm2;
+      expect(hi, greaterThanOrEqualTo(base));
+    });
+  });
+
   group('ElectricalProjectController edit intents', () {
     test('addCircuit appends a sized way with standards-derived defaults', () {
       final c = ProviderContainer();

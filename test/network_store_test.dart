@@ -168,6 +168,38 @@ void main() {
       expect(node.fixture, isNull);
     });
 
+    test('custom fixture and built-in fixture are mutually exclusive', () {
+      final c = makeContainer();
+      final n = twoRunChain(c);
+      final nodeId = c.read(networkControllerProvider).network.nodes.last.id;
+
+      // Assign a built-in fixture, then a custom one: the built-in is cleared.
+      n.setNodeFixture(nodeId, PlumbingFixture.lavatory);
+      n.setNodeCustomFixture(nodeId, 'cf-1');
+      var node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.role, NodeRole.fixture);
+      expect(node.customFixtureId, 'cf-1');
+      expect(node.fixture, isNull);
+
+      // Now assign a built-in fixture: the custom one is cleared.
+      n.setNodeFixture(nodeId, PlumbingFixture.shower);
+      node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.fixture, PlumbingFixture.shower);
+      expect(node.customFixtureId, isNull);
+
+      // Clearing the custom fixture (null) reverts to no custom reference and
+      // preserves other fields (e.g. roofAreaM2 set below).
+      n.setNodeRoofArea(nodeId, 75);
+      n.setNodeCustomFixture(nodeId, 'cf-2');
+      node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.customFixtureId, 'cf-2');
+      expect(node.roofAreaM2, 75); // survives the custom-fixture assignment
+      n.setNodeCustomFixture(nodeId, null);
+      node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.customFixtureId, isNull);
+      expect(node.roofAreaM2, 75);
+    });
+
     test('setNodeRole leaving fixture clears the air-terminal airflow', () {
       final c = makeContainer();
       final n = twoRunChain(c);
@@ -477,5 +509,36 @@ void main() {
     expect(edge.sizeOverride?.inMillimeters, closeTo(50, 1e-6));
     // Menu dismissed after the pick.
     expect(find.text('SET SIZE'), findsNothing);
+  });
+
+  test('node edits preserve customFixtureId + roofAreaM2 (no data loss)', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final n = c.read(networkControllerProvider.notifier);
+    n.setService(ServiceType.coldWater);
+    n.setTool(DrawTool.drawRun);
+    n.placeRunPoint('s1', 0, const Offset(0, 0));
+    n.placeRunPoint('s1', 0, const Offset(100, 0));
+    final id = c.read(networkControllerProvider).network.nodes.first.id;
+    NetNode node() => c.read(networkControllerProvider).network.nodeById(id)!;
+
+    n.setNodeRoofArea(id, 250);
+    n.setNodeCustomFixture(id, 'cf-1');
+    expect(node().roofAreaM2, 250);
+    expect(node().customFixtureId, 'cf-1');
+
+    // An airflow edit must not drop the roof area or custom fixture.
+    n.setNodeAirflow(id, FlowRate.litersPerSecond(30));
+    expect(node().roofAreaM2, 250, reason: 'airflow edit dropped roofAreaM2');
+    expect(node().customFixtureId, 'cf-1',
+        reason: 'airflow edit dropped customFixtureId');
+    expect(node().airflow!.inLitersPerSecond, 30);
+
+    // An elevation edit must preserve both too.
+    n.setNodeElevation(id, const Length(3));
+    expect(node().roofAreaM2, 250, reason: 'elevation edit dropped roofAreaM2');
+    expect(node().customFixtureId, 'cf-1',
+        reason: 'elevation edit dropped customFixtureId');
+    expect(node().elevation!.meters, 3);
   });
 }

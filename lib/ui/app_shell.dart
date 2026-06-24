@@ -27,6 +27,7 @@ import 'shell/nav_rail.dart';
 import 'shell/preferences_screen.dart';
 import 'shell/projects_screen.dart';
 import 'sheets/sheet_rail.dart';
+import 'strings/app_strings.dart';
 import 'theme/design_tokens.dart';
 import 'theme/mechx_theme.dart';
 import 'widgets/mechx_button.dart';
@@ -177,14 +178,13 @@ class _ElectricalInspectorColumn extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(MechXSpacing.md,
                   MechXSpacing.md, MechXSpacing.md, MechXSpacing.xs),
-              child: Text('Electrical layer',
+              child: Text(context.strings(StringKey.shellElectricalLayer),
                   style: type.subtitle.copyWith(color: colors.textPrimary)),
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.md),
               child: Text(
-                'Drag a load onto a panel to add a way, or onto the plan to '
-                'place it. Double-click to edit; right-click for the menu.',
+                context.strings(StringKey.shellElectricalLayerHelp),
                 style: type.caption.copyWith(color: colors.textMuted),
               ),
             ),
@@ -329,22 +329,24 @@ class _TopBar extends ConsumerWidget {
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
-              label: 'Open',
+              label: context.strings(StringKey.shellOpen),
               onPressed: () => _openProject(ref),
             ),
             const SizedBox(width: MechXSpacing.xs),
             MechXButton(
-              label: 'Save',
+              label: context.strings(StringKey.shellSave),
               onPressed: () => _saveProject(ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
-              label: 'Import PDF',
+              label: context.strings(StringKey.shellImportPdf),
               onPressed: () => _pickAndLoadPdf(ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
-              label: brightness == Brightness.dark ? 'Dark' : 'Light',
+              label: brightness == Brightness.dark
+                  ? context.strings(StringKey.shellDark)
+                  : context.strings(StringKey.shellLight),
               onPressed: () =>
                   ref.read(brightnessProvider.notifier).toggle(),
             ),
@@ -383,7 +385,7 @@ class _StatusBar extends ConsumerWidget {
                 children: [
                   Flexible(
                     child: Text(
-                      sheet?.name ?? 'No sheet',
+                      sheet?.name ?? context.strings(StringKey.shellNoSheet),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: caption.copyWith(color: colors.textSecondary),
@@ -397,7 +399,7 @@ class _StatusBar extends ConsumerWidget {
                     ),
                     _dot(colors.textMuted),
                     Text(
-                      'Uncalibrated',
+                      context.strings(StringKey.shellUncalibrated),
                       style: caption.copyWith(color: colors.textMuted),
                     ),
                   ],
@@ -421,7 +423,7 @@ class _StatusBar extends ConsumerWidget {
                   ),
                   Flexible(
                     child: Text(
-                      'SNI 8153:2015 (draft)',
+                      context.strings(StringKey.shellStandardsProvenance),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: caption.copyWith(color: colors.textMuted),
@@ -430,7 +432,7 @@ class _StatusBar extends ConsumerWidget {
                   _dot(colors.textMuted),
                   Flexible(
                     child: Text(
-                      'scroll zoom · drag pan · F fit · Ctrl+0 100%',
+                      context.strings(StringKey.shellViewportHints),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       softWrap: false,
@@ -483,12 +485,12 @@ class _RecoveryBanner extends ConsumerWidget {
         children: [
           Expanded(
             child: Text(
-              'Recover unsaved work from your last session?',
+              context.strings(StringKey.shellRecoverPrompt),
               style: type.caption.copyWith(color: colors.textPrimary),
             ),
           ),
           MechXButton(
-            label: 'Restore',
+            label: context.strings(StringKey.shellRestore),
             primary: true,
             onPressed: () {
               // Restore the full snapshot (drawing + settings). We deliberately
@@ -499,7 +501,9 @@ class _RecoveryBanner extends ConsumerWidget {
             },
           ),
           const SizedBox(width: MechXSpacing.sm),
-          MechXButton(label: 'Dismiss', onPressed: dismiss),
+          MechXButton(
+              label: context.strings(StringKey.shellDismiss),
+              onPressed: dismiss),
         ],
       ),
     );
@@ -548,7 +552,7 @@ class _ErrorBanner extends ConsumerWidget {
             cursor: SystemMouseCursors.click,
             child: GestureDetector(
               onTap: () => ref.read(loadErrorProvider.notifier).clear(),
-              child: Text('Dismiss',
+              child: Text(context.strings(StringKey.shellDismiss),
                   style: type.label.copyWith(color: colors.danger)),
             ),
           ),

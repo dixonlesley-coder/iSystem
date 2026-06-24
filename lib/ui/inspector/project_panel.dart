@@ -13,10 +13,12 @@ import 'package:mechx_engine/sizing/supply_design.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/fire_store.dart';
+import '../../store/fixture_library_store.dart';
 import '../../store/history_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
@@ -27,6 +29,8 @@ import '../../store/sizing_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/segment_palette.dart';
 import '../canvas/service_style.dart';
+import '../strings/app_strings.dart';
+import 'fixture_library_editor.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
@@ -67,7 +71,7 @@ Future<void> exportCalcReport(WidgetRef ref) async {
   );
 
   final path = await FilePicker.saveFile(
-    dialogTitle: 'Export calculation report',
+    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleCalcReport),
     fileName: '${project.name}-report.md',
     type: FileType.custom,
     allowedExtensions: const ['md'],
@@ -91,7 +95,7 @@ Future<void> exportDrawingDxf(WidgetRef ref) async {
     floorIndex: floorIndex,
   );
   final path = await FilePicker.saveFile(
-    dialogTitle: 'Export drawing (DXF)',
+    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingDxf),
     fileName: '${sheet.name}.dxf',
     type: FileType.custom,
     allowedExtensions: const ['dxf'],
@@ -116,7 +120,7 @@ Future<void> exportDrawingPdf(WidgetRef ref) async {
     title: sheet.name,
   );
   final path = await FilePicker.saveFile(
-    dialogTitle: 'Export drawing (PDF)',
+    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingPdf),
     fileName: '${sheet.name}.pdf',
     type: FileType.custom,
     allowedExtensions: const ['pdf'],
@@ -167,7 +171,7 @@ class ProjectPanel extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _SectionLabel('Project'),
+              _SectionLabel(context.strings(StringKey.inspectorProject)),
               const SizedBox(height: MechXSpacing.sm),
               MechXTextField(
                 value: project.name,
@@ -179,15 +183,15 @@ class ProjectPanel extends ConsumerWidget {
                 runSpacing: MechXSpacing.xs,
                 children: [
                   MechXButton(
-                    label: 'Export calc report (MD)',
+                    label: context.strings(StringKey.inspectorExportCalcReportMd),
                     onPressed: () => exportCalcReport(ref),
                   ),
                   MechXButton(
-                    label: 'Export drawing (DXF)',
+                    label: context.strings(StringKey.inspectorExportDrawingDxf),
                     onPressed: () => exportDrawingDxf(ref),
                   ),
                   MechXButton(
-                    label: 'Export drawing (PDF)',
+                    label: context.strings(StringKey.inspectorExportDrawingPdf),
                     onPressed: () => exportDrawingPdf(ref),
                   ),
                 ],
@@ -197,7 +201,9 @@ class ProjectPanel extends ConsumerWidget {
               // ── Building / floor heights ──────────────────────────────────
               Row(
                 children: [
-                  Expanded(child: _SectionLabel('Building')),
+                  Expanded(
+                      child: _SectionLabel(
+                          context.strings(StringKey.inspectorBuilding))),
                   Text(
                     '${building.totalHeight.meters.toStringAsFixed(1)} m · '
                     '${building.levelCount} levels',
@@ -221,7 +227,9 @@ class ProjectPanel extends ConsumerWidget {
               const SizedBox(height: MechXSpacing.sm),
               Align(
                 alignment: Alignment.centerLeft,
-                child: MechXButton(label: '+  Add level', onPressed: ctrl.addFloor),
+                child: MechXButton(
+                    label: context.strings(StringKey.inspectorAddLevel),
+                    onPressed: ctrl.addFloor),
               ),
               const SizedBox(height: MechXSpacing.lg),
 
@@ -250,7 +258,7 @@ class ProjectPanel extends ConsumerWidget {
 
               // ── Sheet → floor mapping ─────────────────────────────────────
               if (currentSheet != null) ...[
-                _SectionLabel('Sheet'),
+                _SectionLabel(context.strings(StringKey.inspectorSheet)),
                 const SizedBox(height: MechXSpacing.sm),
                 Builder(builder: (context) {
                   final sheetsState = ref.watch(sheetsControllerProvider);
@@ -260,7 +268,8 @@ class ProjectPanel extends ConsumerWidget {
                   return Row(
                     children: [
                       Expanded(
-                        child: Text('Maps to floor',
+                        child: Text(
+                            context.strings(StringKey.inspectorMapsToFloor),
                             style:
                                 type.caption.copyWith(color: colors.textMuted)),
                       ),
@@ -499,10 +508,15 @@ class _DrawSection extends ConsumerWidget {
       });
     }
 
+    final measureMode = ref.watch(measureModeProvider);
     Widget tool(String label, DrawTool t) => MechXButton(
           label: label,
-          primary: drawing.tool == t,
-          onPressed: () => ctrl.setTool(t),
+          // While the measure tool is on, no draw tool reads as active.
+          primary: drawing.tool == t && !measureMode,
+          onPressed: () {
+            ctrl.setTool(t);
+            ref.read(measureModeProvider.notifier).set(false);
+          },
         );
 
     // Duplicate the current floor's runs to the sheet ONE FLOOR UP. The
@@ -546,6 +560,17 @@ class _DrawSection extends ConsumerWidget {
             tool('Select', DrawTool.select),
             tool('Run', DrawTool.drawRun),
             tool('Riser', DrawTool.drawRiser),
+            // Measure is a separate mode (annotation, not a network element);
+            // turning it on collapses the draw tool to Select.
+            MechXButton(
+              label: 'Measure',
+              primary: measureMode,
+              onPressed: () {
+                final on = !measureMode;
+                ref.read(measureModeProvider.notifier).set(on);
+                if (on) ctrl.setTool(DrawTool.select);
+              },
+            ),
           ],
         ),
         const SizedBox(height: MechXSpacing.sm),
@@ -786,7 +811,9 @@ class _ResultsSection extends ConsumerWidget {
             alignment: Alignment.centerLeft,
             child: MechXButton(
               label: 'Export BOM (CSV)',
-              onPressed: () => _exportBom(bom, fittings),
+              onPressed: () => _exportBom(bom, fittings,
+                  MechXStringsData(ref.read(localeProvider))(
+                      StringKey.exportTitleBom)),
             ),
           ),
         ],
@@ -794,10 +821,10 @@ class _ResultsSection extends ConsumerWidget {
     );
   }
 
-  Future<void> _exportBom(
-      List<BomLine> bom, List<FittingLine> fittings) async {
+  Future<void> _exportBom(List<BomLine> bom, List<FittingLine> fittings,
+      String dialogTitle) async {
     final path = await FilePicker.saveFile(
-      dialogTitle: 'Export bill of materials',
+      dialogTitle: dialogTitle,
       fileName: 'mechx-bom.csv',
       type: FileType.custom,
       allowedExtensions: const ['csv'],
@@ -977,6 +1004,12 @@ class _SelectionSection extends ConsumerWidget {
     final ctrl = ref.read(networkControllerProvider.notifier);
     final selCtrl = ref.read(selectionProvider.notifier);
 
+    // Multi-selection: a count header + Copy / Paste / Delete actions (the
+    // single-element editor is shown only for a single selection).
+    if (selection.isMulti) {
+      return _multiSelectionSection(context, ref, selection, ctrl, selCtrl);
+    }
+
     Widget? body;
     if (selection.isNode) {
       final node = net.nodeById(selection.nodeId!);
@@ -1008,6 +1041,64 @@ class _SelectionSection extends ConsumerWidget {
         ),
         const SizedBox(height: MechXSpacing.sm),
         body,
+        const SizedBox(height: MechXSpacing.lg),
+      ],
+    );
+  }
+
+  Widget _multiSelectionSection(BuildContext context, WidgetRef ref,
+      Selection selection, NetworkController ctrl, SelectionController selCtrl) {
+    final colors = context.colors;
+    final type = context.type;
+    final n = selection.nodeIds.length;
+    final m = selection.edgeIds.length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(child: _SectionLabel('Selection')),
+            _GlyphButton(glyph: '×', onTap: selCtrl.clear),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        Text(
+          '$n ${n == 1 ? 'node' : 'nodes'} / $m ${m == 1 ? 'edge' : 'edges'} '
+          'selected',
+          style: type.caption.copyWith(color: colors.textMuted),
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            MechXButton(
+              label: 'Copy',
+              onPressed: () =>
+                  ctrl.copySelection(selection.nodeIds, selection.edgeIds),
+            ),
+            MechXButton(
+              label: 'Paste',
+              onPressed: () {
+                final sheet = ref.read(sheetsControllerProvider).current;
+                if (sheet == null) return;
+                final levelCount =
+                    ref.read(projectControllerProvider).building.levelCount;
+                final floorIndex = ref
+                    .read(sheetsControllerProvider)
+                    .floorFor(sheet.id, levelCount);
+                ctrl.paste(sheetId: sheet.id, floorIndex: floorIndex);
+              },
+            ),
+            MechXButton(
+              label: 'Delete',
+              onPressed: () {
+                ctrl.deleteMany(selection.nodeIds, selection.edgeIds);
+                selCtrl.clear();
+              },
+            ),
+          ],
+        ),
         const SizedBox(height: MechXSpacing.lg),
       ],
     );
@@ -1050,10 +1141,37 @@ class _SelectionSection extends ConsumerWidget {
               for (final f in PlumbingFixture.values)
                 _Pill(
                   label: fixtureLabel(f),
-                  selected: node.fixture == f,
+                  selected:
+                      node.customFixtureId == null && node.fixture == f,
                   onTap: () => ctrl.setNodeFixture(node.id, f),
                 ),
             ],
+          ),
+          // User-defined fixture library — shown only when non-empty so the
+          // built-in-only goldens are unchanged. A selected custom pill clears
+          // the built-in fixture (mutual exclusivity, handled in the store).
+          if (ref.watch(fixtureLibraryProvider).isNotEmpty) ...[
+            const SizedBox(height: MechXSpacing.xs),
+            Wrap(
+              spacing: MechXSpacing.xs,
+              runSpacing: MechXSpacing.xs,
+              children: [
+                for (final cf in ref.watch(fixtureLibraryProvider))
+                  _Pill(
+                    label: cf.name,
+                    selected: node.customFixtureId == cf.id,
+                    onTap: () => ctrl.setNodeCustomFixture(node.id, cf.id),
+                  ),
+              ],
+            ),
+          ],
+          const SizedBox(height: MechXSpacing.xs),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MechXButton(
+              label: 'Manage fixtures…',
+              onPressed: () => showFixtureLibraryEditor(context, ref),
+            ),
           ),
           const SizedBox(height: MechXSpacing.sm),
           Text('Air terminal (diffuser) airflow',
@@ -1085,6 +1203,36 @@ class _SelectionSection extends ConsumerWidget {
                   final lps = (node.airflow?.inLitersPerSecond ?? 0) + 5;
                   ctrl.setNodeAirflow(node.id, FlowRate.litersPerSecond(lps));
                 },
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Text('Rainwater outlet roof area',
+              style: context.type.caption
+                  .copyWith(color: context.colors.textMuted)),
+          const SizedBox(height: MechXSpacing.xs),
+          Row(
+            children: [
+              _GlyphButton(
+                glyph: '−',
+                onTap: () {
+                  final a = (node.roofAreaM2 ?? 0) - 50;
+                  ctrl.setNodeRoofArea(node.id, a <= 0 ? null : a);
+                },
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              Text(
+                node.roofAreaM2 == null
+                    ? '—'
+                    : '${node.roofAreaM2!.toStringAsFixed(0)} m2',
+                style: context.type.mono
+                    .copyWith(color: context.colors.textSecondary),
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              _GlyphButton(
+                glyph: '+',
+                onTap: () => ctrl.setNodeRoofArea(
+                    node.id, (node.roofAreaM2 ?? 0) + 50),
               ),
             ],
           ),

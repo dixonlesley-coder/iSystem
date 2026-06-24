@@ -593,6 +593,19 @@ class ElectricalProject {
   /// Building height (m) for the A8 lightning collection area.
   final double? buildingHeightM;
 
+  /// Prospective 3φ symmetrical short-circuit current at the supply origin (A),
+  /// the basis for the Fold-1 busbar short-circuit-withstand sizing. Null = the
+  /// app default (`defaultLvUtilityFaultKa`, 16 kA). Additive — the engine core
+  /// reads it via the `originFaultLevel` argument the store passes to
+  /// `computeSystem`, not from this field directly, so an unset project sizes
+  /// byte-identically to the previous hardcoded default.
+  final Current? originFaultLevelA;
+
+  /// Protective-device clearing time (s) used for the Fold-1 busbar withstand
+  /// thermal check (Icw(t) = density·CSA / √t). Null = the app default (0.1 s).
+  /// Additive — see [originFaultLevelA].
+  final double? busbarClearingTimeS;
+
   const ElectricalProject({
     this.id = '',
     this.name = '',
@@ -608,6 +621,8 @@ class ElectricalProject {
     this.buildingLengthM,
     this.buildingWidthM,
     this.buildingHeightM,
+    this.originFaultLevelA,
+    this.busbarClearingTimeS,
   });
 
   /// Serialize to a plain JSON map. Enums by `.name`; the panels recurse;
@@ -628,6 +643,10 @@ class ElectricalProject {
         if (buildingLengthM != null) 'buildingLengthM': buildingLengthM,
         if (buildingWidthM != null) 'buildingWidthM': buildingWidthM,
         if (buildingHeightM != null) 'buildingHeightM': buildingHeightM,
+        if (originFaultLevelA != null)
+          'originFaultLevelA': originFaultLevelA!.amperes,
+        if (busbarClearingTimeS != null)
+          'busbarClearingTimeS': busbarClearingTimeS,
         'panels': [for (final p in panels) p.toJson()],
       };
 
@@ -656,6 +675,11 @@ class ElectricalProject {
         buildingLengthM: (json['buildingLengthM'] as num?)?.toDouble(),
         buildingWidthM: (json['buildingWidthM'] as num?)?.toDouble(),
         buildingHeightM: (json['buildingHeightM'] as num?)?.toDouble(),
+        originFaultLevelA: json['originFaultLevelA'] == null
+            ? null
+            : Current((json['originFaultLevelA'] as num).toDouble()),
+        busbarClearingTimeS:
+            (json['busbarClearingTimeS'] as num?)?.toDouble(),
         panels: [
           for (final p in (json['panels'] as List? ?? const []))
             ElectricalPanel.fromJson(p as Map<String, dynamic>),

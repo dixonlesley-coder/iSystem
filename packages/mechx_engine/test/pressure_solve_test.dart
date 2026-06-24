@@ -4,6 +4,7 @@ import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -312,6 +313,228 @@ void main() {
       // top main now has 0.3 + 10 = 10.3 m ≥ target → no booster needed.
       expect(sol.gravitySufficient, isTrue);
       expect(sol.boosterHeadRequired.meters, 0);
+    });
+  });
+
+  // ── Per-edge pipe-material fold (NetEdge.pipeProduct → Hazen–Williams C) ────
+  //
+  // A two-edge supply tree: s --e1 (run, 50 m)--> n1 --r1 (riser, 6 m)--> n2.
+  // Both DN65, 5 L/s. The fold swaps ONLY the Hazen–Williams C per edge:
+  //   • no product set      → service-wide C (PVC C=150) — byte-identical today.
+  //   • castIron on e1      → e1 uses C=110 (rougher) → MORE friction.
+  //   • a C=150 product     → equals the default PVC C=150 exactly.
+  group('per-edge pipeProduct folds into the Hazen–Williams C', () {
+    const flow = FlowRate(0.005);
+    const dn65 = Diameter(0.065);
+    const edgeFlows = <String, FlowRate>{'e1': flow, 'r1': flow};
+    final sizing = <String, EdgeSizing>{
+      'e1': const EdgeSizing(
+        edgeId: 'e1',
+        service: ServiceType.coldWater,
+        flow: flow,
+        diameter: dn65,
+        velocity: Velocity(1.507),
+      ),
+      'r1': const EdgeSizing(
+        edgeId: 'r1',
+        service: ServiceType.coldWater,
+        flow: flow,
+        diameter: dn65,
+        velocity: Velocity(1.507),
+      ),
+    };
+
+    // Build a net whose e1 optionally carries a pipe product.
+    Network netWith({PipeProduct? e1Product}) => Network(
+          nodes: const [
+            NetNode(id: 's', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+            NetNode(id: 'n1', sheetId: 's1', x: 500, y: 0, floorIndex: 0),
+            NetNode(id: 'n2', sheetId: 's1', x: 500, y: 0, floorIndex: 2),
+          ],
+          edges: [
+            NetEdge(
+              id: 'e1',
+              fromId: 's',
+              toId: 'n1',
+              service: ServiceType.coldWater,
+              pipeProduct: e1Product,
+            ),
+            const NetEdge(
+              id: 'r1',
+              fromId: 'n1',
+              toId: 'n2',
+              service: ServiceType.coldWater,
+              kind: EdgeKind.riser,
+            ),
+          ],
+        );
+
+    PressureSolution solve(Network net) => solvePressurized(
+          net: net,
+          service: ServiceType.coldWater,
+          sourceId: 's',
+          edgeFlows: edgeFlows,
+          sizing: sizing,
+          calibrationBySheet: calibration,
+          building: building,
+          targetResidual: targetResidual,
+        );
+
+    test('no product set → byte-identical to the service-wide C default', () {
+      // The default-path solve (param material = PVC) vs the same net with no
+      // edge products — every node residual + pump head must match exactly.
+      final plain = solve(netWith());
+      final noProduct = solve(netWith(e1Product: null));
+      expect(noProduct.requiredPumpHead.meters,
+          equals(plain.requiredPumpHead.meters));
+      expect(noProduct.criticalNodeId, plain.criticalNodeId);
+      for (final id in const ['s', 'n1', 'n2']) {
+        expect(noProduct.residualPressure[id]!.pascals,
+            equals(plain.residualPressure[id]!.pascals));
+      }
+    });
+
+    test('a lower-C product on e1 (cast iron, C≈110) raises friction', () {
+      final plain = solve(netWith()); // PVC C=150 default
+      final cast = solve(netWith(e1Product: PipeProduct.castIron));
+
+      // Cast iron is rougher → strictly higher required pump head.
+      expect(cast.requiredPumpHead.meters,
+          greaterThan(plain.requiredPumpHead.meters));
+
+      // The required pump head with cast iron equals: hand-computed
+      // h_f(e1 @ C=110) + h_f(r1 @ PVC 150) + elevation gain @ n2 + target head.
+      final cElev = nodeElevation(netWith().nodes[2], building).meters -
+          nodeElevation(netWith().nodes[0], building).meters; // 6.0 m
+      final lenE1 = edgeLength(netWith().edges[0], netWith(),
+          calibrationBySheet: calibration, building: building);
+      final lenR1 = edgeLength(netWith().edges[1], netWith(),
+          calibrationBySheet: calibration, building: building);
+      final cCast = hazenWilliamsCFor(PipeProduct.castIron); // 110
+      final cPvc = const SniProfile().hazenWilliamsC(PipeMaterial.pvc); // 150
+      final hfE1 = headLossHazenWilliams(
+              flow: flow, length: lenE1, diameter: dn65, hazenWilliamsC: cCast)
+          .meters;
+      final hfR1 = headLossHazenWilliams(
+              flow: flow, length: lenR1, diameter: dn65, hazenWilliamsC: cPvc)
+          .meters;
+      final targetHead = headFromPressure(targetResidual).meters;
+      expect(cast.requiredPumpHead.meters,
+          closeTo(hfE1 + hfR1 + cElev + targetHead, 1e-9));
+    });
+
+    test('a C=150 product (PPR PN16) equals the default PVC C=150', () {
+      // PPR PN16 has HW-C=150, the same as the PVC service default, so the
+      // per-edge C swap is a no-op: identical result.
+      expect(hazenWilliamsCFor(PipeProduct.pprPn16),
+          const SniProfile().hazenWilliamsC(PipeMaterial.pvc));
+      final plain = solve(netWith());
+      final ppr = solve(netWith(e1Product: PipeProduct.pprPn16));
+      expect(ppr.requiredPumpHead.meters,
+          closeTo(plain.requiredPumpHead.meters, 1e-12));
+    });
+  });
+
+  // ── Per-edge pipe-material fold in the gravity DOWNFEED solve ───────────────
+  group('per-edge pipeProduct folds into solveDownfeed friction', () {
+    const flow = FlowRate(0.005);
+    const dn65 = Diameter(0.065);
+    // tank (roof) --dt (riser)--> m2, with a 50 m horizontal run dr to a far
+    // fixture m0r where the per-edge product is applied (a sized run carries
+    // friction; a riser of equal-elevation nodes would not).
+    Network netWith({PipeProduct? runProduct}) => Network(
+          nodes: const [
+            NetNode(
+                id: 'tank',
+                sheetId: 's1',
+                x: 0,
+                y: 0,
+                floorIndex: 2,
+                role: NodeRole.plant),
+            NetNode(id: 'm2', sheetId: 's1', x: 0, y: 0, floorIndex: 2),
+            NetNode(id: 'm0r', sheetId: 's1', x: 500, y: 0, floorIndex: 2),
+          ],
+          edges: [
+            const NetEdge(
+                id: 'dt',
+                fromId: 'tank',
+                toId: 'm2',
+                service: ServiceType.coldWater,
+                kind: EdgeKind.riser),
+            NetEdge(
+              id: 'dr',
+              fromId: 'm2',
+              toId: 'm0r',
+              service: ServiceType.coldWater,
+              pipeProduct: runProduct,
+            ),
+          ],
+        );
+    const edgeFlows = <String, FlowRate>{'dt': flow, 'dr': flow};
+    final sizing = <String, EdgeSizing>{
+      'dr': const EdgeSizing(
+        edgeId: 'dr',
+        service: ServiceType.coldWater,
+        flow: flow,
+        diameter: dn65,
+        velocity: Velocity(1.507),
+      ),
+    };
+
+    DownfeedSolution solve(Network net) => solveDownfeed(
+          net: net,
+          service: ServiceType.coldWater,
+          tankId: 'tank',
+          edgeFlows: edgeFlows,
+          sizing: sizing,
+          calibrationBySheet: calibration,
+          building: building,
+          targetResidual: targetResidual,
+        );
+
+    test('no product → byte-identical to the default C', () {
+      final plain = solve(netWith());
+      final noProduct = solve(netWith(runProduct: null));
+      for (final id in const ['tank', 'm2', 'm0r']) {
+        expect(noProduct.residualPressure[id]!.pascals,
+            equals(plain.residualPressure[id]!.pascals));
+      }
+      expect(noProduct.boosterHeadRequired.meters,
+          equals(plain.boosterHeadRequired.meters));
+    });
+
+    test('cast iron on the run lowers the far-node residual (more friction)',
+        () {
+      final plain = solve(netWith());
+      final cast = solve(netWith(runProduct: PipeProduct.castIron));
+      // More friction along dr → m0r residual strictly lower with cast iron.
+      expect(cast.residualPressure['m0r']!.pascals,
+          lessThan(plain.residualPressure['m0r']!.pascals));
+
+      // m0r residual = (tankElev − m0rElev) − h_f(dr @ C=110). Both at floor 2,
+      // so the tank-to-m2 elevation is the only gravity head; the run is level.
+      final lenDr = edgeLength(netWith().edges[1], netWith(),
+          calibrationBySheet: calibration, building: building);
+      final hfCast = headLossHazenWilliams(
+              flow: flow,
+              length: lenDr,
+              diameter: dn65,
+              hazenWilliamsC: hazenWilliamsCFor(PipeProduct.castIron))
+          .meters;
+      final hfPvc = headLossHazenWilliams(
+              flow: flow,
+              length: lenDr,
+              diameter: dn65,
+              hazenWilliamsC: const SniProfile().hazenWilliamsC(PipeMaterial.pvc))
+          .meters;
+      // The residual drop from PVC→cast equals the extra friction (hfCast−hfPvc)
+      // expressed as a pressure.
+      final dropHead = hfCast - hfPvc;
+      expect(
+        plain.residualPressure['m0r']!.pascals -
+            cast.residualPressure['m0r']!.pascals,
+        closeTo(pressureFromHead(Head(dropHead)).pascals, 1e-6),
+      );
     });
   });
 }

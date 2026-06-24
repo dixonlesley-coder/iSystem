@@ -279,10 +279,43 @@ report export**; versioned `.mechx` save/open with viewport restore;
   the screenshot suite is tagged `golden` and the **release** gate runs `flutter test
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
-  Remaining: **Wave 4b**
-  (electrical drawings/SLD-GA-one-line export + commercial UI + workflow/i18n), the
-  per-segment material→hydraulic-solve fold, and exposing Fold-1 fault-level/clearing-time as
-  project settings.
+  **Wave 4b (electrical drawings export) landed**: pure-engine
+  `report/electrical_calc_report.dart` (Markdown over the sized system + power one-line
+  + verify items) and `report/electrical_dxf_export.dart` (R12 DXF single-line —
+  panels as boxes at their schematic x/y, feeders as LINEs, labels as TEXT; + a
+  power-one-line variant), wired behind an Export menu on the electrical toolbar
+  (`ui/electrical/electrical_export.dart`). The **per-segment material→hydraulic-solve
+  fold landed** (see Sizing-engine invariants) and **Fold-1 fault level + clearing time
+  are now project settings** (additive `ElectricalProject.originFaultLevelA` +
+  `busbarClearingTimeS`, edited in the Service & Earthing inspector, `.mechx`-persisted,
+  defaulting to 16 kA / 0.1 s so an untouched project is byte-identical).
+  **Wave 4b commercial + i18n landed too:** a **Commercial workspace**
+  (`lib/store/commercial_store.dart` + `lib/ui/commercial/**`) — electrical BOM over
+  `fullCatalog()`, an editable pricelist (`sku→price`, kept OUT of the catalogue), and a
+  costed quotation (labour/overhead/contingency/margin) with CSV/Markdown export
+  (pure `electrical/commercial_export.dart`); and a **Material-free EN/ID i18n**
+  mechanism (`AppLocale`/`localeProvider` + `ui/strings/app_strings.dart`'s `MechXStrings`
+  InheritedWidget + `context.strings`, a Preferences language toggle; string batches so far =
+  nav-rail + Preferences, then the whole **Commercial workspace** + the electrical **Export menu**
+  + the Fold-1 Service & Earthing fields (26 more keys), then the **DESIGN-workspace chrome**
+  (app shell top-bar/banners/status-bar + Schematic Auto/Edit toolbar + the `project_panel`
+  inspector) — all EN byte-identical so goldens are unchanged. `MechXStrings.of` now degrades to
+  EN when no provider ancestor is present (so widgets pumped standalone never throw). Both
+  round-trip additively in
+  `DesignSettings` (pricelist+markups; `localeCode`, tolerant unknown→en), no version bump.
+  **Electrical export now has full mechanical parity** — `report/electrical_pdf_export.dart`
+  adds a native vector-PDF single-line (single A3 page, no third-party dep; panels as stroked
+  rects at their schematic x/y, feeders as lines, labels as text, auto-fitted) alongside the DXF
+  + Markdown, wired as a 'PDF (vector)' row in the toolbar Export menu.
+  The i18n mechanism also gained **parameterized templates** — `MechXStringsData.format(key,
+  {…})` substitutes `{name}` placeholders (EN+ID templates carry identical placeholders, pinned
+  by a test) — and the Commercial workspace's dynamic captions (BOM/pricelist leads, unpriced
+  count, labour-rate/amount/hours labels) now use it.
+  The **export OS save-dialog titles** (all 10, across mechanical/electrical/commercial) are now
+  localized too — the export fns resolve the active locale via `ref.read(localeProvider)`, so no
+  signature/call-site churn. Remaining in **Wave 4b** (deferred, incremental): only the
+  heatmap/plan-canvas on-overlay abbreviation labels (`DN50 · 3.5 m`-style, golden-locked, low
+  prose value) are still literals.
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),
@@ -292,9 +325,21 @@ report export**; versioned `.mechx` save/open with viewport restore;
   gate runs; `flutter build windows`/`iscc` only run on the Windows CI runner.
 - Native PDF *drawing* export (DXF drawing export and the Markdown calc report
   are done; both convert to PDF externally).
-- Multi-select / copy-paste / measurement-annotation; per-outlet roof-area UI
-  for storm (rainfall intensity is tunable; roof area is a fixed default);
-  user fixture libraries.
+- **Landed (parallel batch):** **multi-select + copy/paste** (additive
+  `Selection.nodeIds/edgeIds` sets + rubber-band marquee/shift-click in
+  `selection_overlay`, in-memory clipboard `copySelection`/`paste`/`deleteMany` in
+  `network_store` with fresh-id remap + single undo step, Ctrl/Cmd+C/V + multi-delete,
+  `isMulti` inspector header); **user fixture libraries** (pure-engine `CustomFixture`
+  + `fixture_library_store`/`fixture_library_editor`, `DesignSettings.fixtureLibrary`
+  round-trip, `sizing_store` resolves `NetNode.customFixtureId` → UBAP/DFU/flush loads,
+  inspector custom pills, built-in path byte-identical when empty); **per-outlet
+  roof-area** (`NetNode.roofAreaM2` → per-outlet rainwater flow in `nodeFlowDemand`,
+  inspector stepper, null ⇒ byte-identical). **Measurement annotations** also landed
+  (`store/annotation_store.dart` `Measurement` + `measurementsProvider`/`measureModeProvider`;
+  `ui/canvas/measurement_overlay.dart` — a DRAW-panel **Measure** tool: two-click dimension
+  lines on the calibrated sheet with the real length via `ScaleCalibration.lengthForPixels`,
+  secondary-click to delete; round-trips in `.mechx` as a top-level `measurements` list,
+  tolerant/absent ⇒ empty). This **closes the Known-gaps editing list**.
 - Looped networks: ring/grid **pressurized & air** mains are balanced with
   Hardy-Cross (`network/hardy_cross.dart`) at sizing time and the balanced flows
   feed the heatmap. The split uses resistance ∝ **real edge length** at a
@@ -335,6 +380,15 @@ report export**; versioned `.mechx` save/open with viewport restore;
   a `StandardValue.unit` is a display label (e.g. "kPa"). Never print
   `value`+`unit` together — surface the human-readable `note`. (See
   `calc_report.dart` / `StandardValue.toString`.)
+- **Per-segment material → solve**: `pressure_solve` (`solvePressurized`/`solveDownfeed`)
+  honours `edge.pipeProduct` via a per-edge Hazen–Williams C (`hazenWilliamsCFor`, still
+  pure H-W — only the C is swapped, never Darcy on the pressurized path); `duct_static`
+  honours `edge.ductProduct` via a per-edge Darcy roughness (`ductRoughnessFor` →
+  `ductFrictionPaPerMetre(roughness:)`). A null product falls back to the service default
+  ⇒ **byte-identical**. PN/pressure-class is NOT folded into hydraulics (a mechanical
+  rating, no head-loss term). Fold-1 busbar withstand fault level + clearing time come from
+  `ElectricalProject.originFaultLevelA`/`busbarClearingTimeS` (Service & Earthing inspector),
+  with the store falling back to 16 kA / 0.1 s when unset.
 - **Persistence**: design settings (occupancy, feed, ducts, rainfall, fire
   hazard, theme) round-trip via `DesignSettings` in the `.mechx` file; autosave
   only writes recovery when the work differs from the last clean Save

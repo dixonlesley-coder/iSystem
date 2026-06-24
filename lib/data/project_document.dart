@@ -7,11 +7,13 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/custom_fixture.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../store/annotation_store.dart';
 import '../store/models/sheet.dart';
 import '../ui/canvas/viewport.dart';
 
@@ -66,6 +68,33 @@ class DesignSettings {
   final FireHazardClass fireHazard;
   final Brightness brightness;
 
+  /// UI language code: `'en'` (English, the default) or `'id'` (Bahasa
+  /// Indonesia). Stored as a string to keep this data layer free of the app's
+  /// `AppLocale` enum (the app layer maps the two), mirroring `upfeed`. Tolerant
+  /// on load: a missing/unknown code falls back to `'en'`.
+  final String localeCode;
+
+  /// Commercial pricelist: catalogue `sku → unit price`. Prices are NEVER baked
+  /// into the committed parts catalogue (a separate concern, see
+  /// `electrical/costing.dart`), so they live with the project. Defaults to
+  /// empty — a project that has never been priced loads with no prices.
+  final Map<String, double> priceList;
+
+  /// Commercial quote settings: labour rate per hour + overhead / contingency /
+  /// margin percentages used to turn the priced material estimate into a sell
+  /// price (`electrical/quotation.dart`). The defaults mirror the engine's
+  /// `buildQuotation` defaults so an untouched project quotes identically.
+  final double labourRatePerHour;
+  final double overheadPct;
+  final double contingencyPct;
+  final double marginPct;
+
+  /// User-defined fixture library: custom plumbing fixture types (with their
+  /// UBAP supply + DFU drainage loads) the project's nodes can reference by id
+  /// (`NetNode.customFixtureId`). Defaults to empty — a project that never
+  /// defined a custom fixture loads with none, byte-identical to before.
+  final List<CustomFixture> fixtureLibrary;
+
   const DesignSettings({
     this.occupancy = Occupancy.private,
     this.upfeed = false,
@@ -74,6 +103,13 @@ class DesignSettings {
     this.rainfallMmPerHr = 200.0,
     this.fireHazard = FireHazardClass.ordinaryHazard1,
     this.brightness = Brightness.dark,
+    this.localeCode = 'en',
+    this.priceList = const {},
+    this.labourRatePerHour = 150000,
+    this.overheadPct = 10,
+    this.contingencyPct = 5,
+    this.marginPct = 15,
+    this.fixtureLibrary = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -84,6 +120,15 @@ class DesignSettings {
         'rainfall_mmhr': rainfallMmPerHr,
         'fireHazard': fireHazard.name,
         'brightness': brightness == Brightness.dark ? 'dark' : 'light',
+        'locale': localeCode,
+        // Commercial settings (additive; absent on an older file → defaults).
+        'priceList': priceList,
+        'labourRatePerHour': labourRatePerHour,
+        'overheadPct': overheadPct,
+        'contingencyPct': contingencyPct,
+        'marginPct': marginPct,
+        // User fixture library (additive; absent on an older file → empty).
+        'fixtureLibrary': [for (final f in fixtureLibrary) f.toJson()],
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -107,7 +152,39 @@ class DesignSettings {
         ),
         brightness:
             json['brightness'] == 'light' ? Brightness.light : Brightness.dark,
+        // Tolerant: only the known codes are accepted; anything else → 'en'.
+        localeCode: json['locale'] == 'id' ? 'id' : 'en',
+        priceList: _priceListFromJson(json['priceList']),
+        labourRatePerHour:
+            (json['labourRatePerHour'] as num?)?.toDouble() ?? 150000,
+        overheadPct: (json['overheadPct'] as num?)?.toDouble() ?? 10,
+        contingencyPct: (json['contingencyPct'] as num?)?.toDouble() ?? 5,
+        marginPct: (json['marginPct'] as num?)?.toDouble() ?? 15,
+        fixtureLibrary: _fixtureLibraryFromJson(json['fixtureLibrary']),
       );
+
+  /// Tolerantly read the fixture library: a non-list (or absent) value yields an
+  /// empty library; each entry that fails to decode (missing id/name) is dropped.
+  static List<CustomFixture> _fixtureLibraryFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <CustomFixture>[];
+    for (final e in raw) {
+      final f = CustomFixture.fromJson(e);
+      if (f != null) out.add(f);
+    }
+    return out;
+  }
+
+  /// Tolerantly read a `sku → unit price` map: a non-map (or absent) value, a
+  /// non-string key, or a non-numeric / non-positive price is dropped.
+  static Map<String, double> _priceListFromJson(Object? raw) {
+    if (raw is! Map) return const {};
+    final out = <String, double>{};
+    raw.forEach((k, v) {
+      if (k is String && v is num && v > 0) out[k] = v.toDouble();
+    });
+    return out;
+  }
 }
 
 /// Versioned iSystem project document — the on-disk format (a `.mechx` JSON file;
@@ -136,6 +213,10 @@ class ProjectDocument {
   /// Non-network design inputs (occupancy, feed, ducts, rainfall, fire, theme).
   final DesignSettings settings;
 
+  /// Measurement annotations (dimension lines on the calibrated sheets). Not part
+  /// of the network — purely an overlay; defaults empty.
+  final List<Measurement> measurements;
+
   /// Optional electrical sub-model (panels + earthing system). Added in v2;
   /// null for a v1 file or a project with no electrical design yet.
   final ElectricalProject? electrical;
@@ -151,6 +232,7 @@ class ProjectDocument {
     this.sheetFloors = const {},
     this.settings = const DesignSettings(),
     this.electrical,
+    this.measurements = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -187,6 +269,7 @@ class ProjectDocument {
           for (final e in sheetFloors.entries) e.key: e.value,
         },
         'settings': settings.toJson(),
+        'measurements': [for (final m in measurements) m.toJson()],
         if (electrical != null) 'electrical': electrical!.toJson(),
         'network': {
           'nodes': [
@@ -202,6 +285,9 @@ class ProjectDocument {
                 if (n.fixture != null) 'fixture': n.fixture!.name,
                 if (n.airflow != null)
                   'airflow_lps': n.airflow!.inLitersPerSecond,
+                if (n.customFixtureId != null)
+                  'customFixtureId': n.customFixtureId,
+                if (n.roofAreaM2 != null) 'roof_area_m2': n.roofAreaM2,
               },
           ],
           'edges': [
@@ -277,6 +363,8 @@ class ProjectDocument {
           airflow: n['airflow_lps'] == null
               ? null
               : FlowRate.litersPerSecond((n['airflow_lps'] as num).toDouble()),
+          customFixtureId: n['customFixtureId'] as String?,
+          roofAreaM2: (n['roof_area_m2'] as num?)?.toDouble(),
         ),
     ];
     final edges = [
@@ -326,6 +414,12 @@ class ProjectDocument {
     final electrical = rawElectrical is Map<String, dynamic>
         ? ElectricalProject.fromJson(rawElectrical)
         : null;
+    // Measurement annotations (additive; absent on an older file ⇒ empty). Each
+    // malformed entry is dropped rather than throwing.
+    final measurements = <Measurement>[
+      for (final m in (json['measurements'] as List? ?? const []))
+        ?Measurement.fromJson(m),
+    ];
     return ProjectDocument(
       version: version,
       projectName: project['name'] as String? ?? 'Untitled project',
@@ -337,6 +431,7 @@ class ProjectDocument {
       sheetFloors: sheetFloors,
       settings: settings,
       electrical: electrical,
+      measurements: measurements,
     );
   }
 

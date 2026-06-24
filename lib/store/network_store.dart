@@ -7,9 +7,19 @@ import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'history_store.dart';
+import 'selection_store.dart';
 
 /// Active canvas tool.
 enum DrawTool { select, drawRun, drawRiser }
+
+/// A value-copy of a slice of the network held on the in-memory clipboard for
+/// copy/paste. Holds deep copies of the chosen nodes and the edges among them.
+@immutable
+class _Clipboard {
+  final List<NetNode> nodes;
+  final List<NetEdge> edges;
+  const _Clipboard(this.nodes, this.edges);
+}
 
 /// Editable drawing state: the [network], the active [tool] + [service], and
 /// the transient [pendingPoint] (the first endpoint of a run being drawn, in
@@ -36,11 +46,17 @@ class NetworkController extends Notifier<DrawingState> {
   final List<Network> _redo = [];
   int _seq = 0;
 
+  /// In-memory copy/paste clipboard (NOT persisted to the .mechx file).
+  _Clipboard? _clipboard;
+
   @override
   DrawingState build() => const DrawingState();
 
   bool get canUndo => _undo.isNotEmpty;
   bool get canRedo => _redo.isNotEmpty;
+
+  /// Whether the clipboard holds something to paste.
+  bool get hasClipboard => _clipboard != null && _clipboard!.nodes.isNotEmpty;
 
   String _id(String prefix) => '$prefix${_seq++}';
 
@@ -315,19 +331,32 @@ class NetworkController extends Notifier<DrawingState> {
     ));
   }
 
-  /// Assign (or clear) the plumbing [fixture] at a node, marking it a fixture.
+  /// Assign (or clear) the built-in plumbing [fixture] at a node, marking it a
+  /// fixture. Selecting a built-in fixture clears any custom fixture (the two
+  /// are mutually exclusive); copyWith preserves the node's other fields.
   void setNodeFixture(String id, PlumbingFixture? fixture) {
     final node = state.network.nodeById(id);
     if (node == null) return;
-    _replaceNode(NetNode(
-      id: node.id,
-      sheetId: node.sheetId,
-      x: node.x,
-      y: node.y,
-      floorIndex: node.floorIndex,
+    if (fixture == null) {
+      // Clear the built-in fixture (and any custom fixture): the constructor
+      // default for `fixture` is null. Preserve roofAreaM2.
+      _replaceNode(NetNode(
+        id: node.id,
+        sheetId: node.sheetId,
+        x: node.x,
+        y: node.y,
+        floorIndex: node.floorIndex,
+        role: node.role,
+        elevation: node.elevation,
+        airflow: node.airflow,
+        roofAreaM2: node.roofAreaM2,
+      ));
+      return;
+    }
+    _replaceNode(node.copyWith(
       role: NodeRole.fixture,
-      elevation: node.elevation,
       fixture: fixture,
+      clearCustomFixtureId: true,
     ));
   }
 
@@ -346,6 +375,8 @@ class NetworkController extends Notifier<DrawingState> {
       elevation: node.elevation,
       fixture: node.fixture,
       airflow: airflow,
+      customFixtureId: node.customFixtureId,
+      roofAreaM2: node.roofAreaM2,
     ));
   }
 
@@ -364,6 +395,44 @@ class NetworkController extends Notifier<DrawingState> {
       elevation: elevation,
       fixture: node.fixture,
       airflow: node.airflow,
+      customFixtureId: node.customFixtureId,
+      roofAreaM2: node.roofAreaM2,
+    ));
+  }
+
+  /// Assign a user-defined custom fixture type [customFixtureId] to a node (the
+  /// app resolves the id to its UBAP load). Pass null to clear it. Marks the node
+  /// a fixture terminal when set. Uses copyWith so other node fields survive.
+  void setNodeCustomFixture(String id, String? customFixtureId) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    // Assigning a custom fixture clears the built-in [fixture] (mutual
+    // exclusivity). The fresh constructor (with `fixture` omitted) is how we
+    // clear it — copyWith has no clear-fixture flag — while preserving the
+    // node's other fields (roofAreaM2, airflow, elevation).
+    _replaceNode(NetNode(
+      id: node.id,
+      sheetId: node.sheetId,
+      x: node.x,
+      y: node.y,
+      floorIndex: node.floorIndex,
+      role: customFixtureId == null ? node.role : NodeRole.fixture,
+      elevation: node.elevation,
+      fixture: customFixtureId == null ? node.fixture : null,
+      airflow: node.airflow,
+      customFixtureId: customFixtureId,
+      roofAreaM2: node.roofAreaM2,
+    ));
+  }
+
+  /// Set the catchment [roofAreaM2] (m²) draining to a rainwater outlet node, for
+  /// storm sizing. Pass null to revert to the flat default catchment.
+  void setNodeRoofArea(String id, double? roofAreaM2) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    _replaceNode(node.copyWith(
+      roofAreaM2: roofAreaM2,
+      clearRoofAreaM2: roofAreaM2 == null,
     ));
   }
 
@@ -574,6 +643,8 @@ class NetworkController extends Notifier<DrawingState> {
         elevation: n.elevation,
         fixture: n.fixture,
         airflow: n.airflow,
+        customFixtureId: n.customFixtureId,
+        roofAreaM2: n.roofAreaM2,
       ));
       return id;
     }
@@ -598,6 +669,123 @@ class NetworkController extends Notifier<DrawingState> {
       nodes: [...old.nodes, ...addedNodes],
       edges: [...old.edges, ...addedEdges],
     ));
+  }
+
+  // ── Multi-select copy / paste / delete ──────────────────────────────────────
+
+  /// Copy the [nodeIds]/[edgeIds] selection onto the in-memory clipboard. The
+  /// node set is the chosen nodes PLUS both endpoints of every chosen edge; only
+  /// edges whose BOTH endpoints fall in that node set are kept (danglers — and a
+  /// riser with only one endpoint selected — are dropped). Deep value-copies are
+  /// stored so later edits don't mutate the clipboard. No-op (clears nothing)
+  /// when the selection has no nodes/edges to copy.
+  void copySelection(Set<String> nodeIds, Set<String> edgeIds) {
+    final net = state.network;
+    // The node set: the chosen nodes PLUS both endpoints of each chosen edge.
+    final keptIds = <String>{...nodeIds};
+    for (final e in net.edges) {
+      if (!edgeIds.contains(e.id)) continue;
+      keptIds.add(e.fromId);
+      keptIds.add(e.toId);
+    }
+    // Keep only chosen edges whose BOTH endpoints are in the node set (drop
+    // danglers; a riser counts only when both its endpoints are selected).
+    final keptEdges = <NetEdge>[
+      for (final e in net.edges)
+        if (edgeIds.contains(e.id) &&
+            keptIds.contains(e.fromId) &&
+            keptIds.contains(e.toId))
+          e.copyWith(),
+    ];
+    final keptNodes = <NetNode>[
+      for (final n in net.nodes)
+        if (keptIds.contains(n.id)) n.copyWith(),
+    ];
+    if (keptNodes.isEmpty) {
+      _clipboard = null;
+      return;
+    }
+    _clipboard = _Clipboard(keptNodes, keptEdges);
+  }
+
+  /// Paste the clipboard onto [sheetId]/[floorIndex], offset by [offsetWorld],
+  /// with fresh ids (mirrors [duplicateFloor]'s clone-map pattern). Every
+  /// NetNode field is carried via copyWith. Records ONE undo step. Sets the new
+  /// ids as the multi-selection and returns them (empty when nothing pasted).
+  ({Set<String> nodeIds, Set<String> edgeIds}) paste({
+    required String sheetId,
+    required int floorIndex,
+    Offset offsetWorld = const Offset(24, 24),
+  }) {
+    final clip = _clipboard;
+    if (clip == null || clip.nodes.isEmpty) {
+      return (nodeIds: <String>{}, edgeIds: <String>{});
+    }
+    final clones = <String, String>{}; // old node id → new node id
+    final addedNodes = <NetNode>[];
+    for (final n in clip.nodes) {
+      final id = _id('n');
+      clones[n.id] = id;
+      // Build a fresh node with the new id, carrying EVERY NetNode field
+      // (copyWith can't change the id, so construct directly).
+      addedNodes.add(NetNode(
+        id: id,
+        sheetId: sheetId,
+        x: n.x + offsetWorld.dx,
+        y: n.y + offsetWorld.dy,
+        floorIndex: floorIndex,
+        role: n.role,
+        elevation: n.elevation,
+        fixture: n.fixture,
+        airflow: n.airflow,
+        customFixtureId: n.customFixtureId,
+        roofAreaM2: n.roofAreaM2,
+      ));
+    }
+    final addedEdges = <NetEdge>[];
+    final newEdgeIds = <String>{};
+    for (final e in clip.edges) {
+      final from = clones[e.fromId];
+      final to = clones[e.toId];
+      if (from == null || to == null) continue;
+      final eid = _id('e');
+      newEdgeIds.add(eid);
+      addedEdges.add(NetEdge(
+        id: eid,
+        fromId: from,
+        toId: to,
+        service: e.service,
+        kind: e.kind,
+        pipeProduct: e.pipeProduct,
+        ductProduct: e.ductProduct,
+        sizeOverride: e.sizeOverride,
+      ));
+    }
+    _commit(Network(
+      nodes: [...state.network.nodes, ...addedNodes],
+      edges: [...state.network.edges, ...addedEdges],
+    ));
+    final newNodeIds = clones.values.toSet();
+    ref.read(selectionProvider.notifier).setMulti(newNodeIds, newEdgeIds);
+    return (nodeIds: newNodeIds, edgeIds: newEdgeIds);
+  }
+
+  /// Remove every node in [nodeIds] (and all edges touching them) PLUS every
+  /// edge in [edgeIds], in ONE undo step. No-op when nothing matches.
+  void deleteMany(Set<String> nodeIds, Set<String> edgeIds) {
+    if (nodeIds.isEmpty && edgeIds.isEmpty) return;
+    final net = state.network;
+    final hasNode = net.nodes.any((n) => nodeIds.contains(n.id));
+    final hasEdge = net.edges.any((e) => edgeIds.contains(e.id));
+    if (!hasNode && !hasEdge) return;
+    final nodes = net.nodes.where((n) => !nodeIds.contains(n.id)).toList();
+    final edges = net.edges
+        .where((e) =>
+            !edgeIds.contains(e.id) &&
+            !nodeIds.contains(e.fromId) &&
+            !nodeIds.contains(e.toId))
+        .toList();
+    _commit(Network(nodes: nodes, edges: edges));
   }
 
   void _replaceNode(NetNode updated) {

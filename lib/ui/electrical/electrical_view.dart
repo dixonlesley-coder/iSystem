@@ -30,9 +30,11 @@ import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'electrical_canvas.dart';
+import 'electrical_export.dart';
 import 'electrical_format.dart';
 import 'electrical_palette.dart';
 import 'panel_geometry.dart';
@@ -81,6 +83,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   /// Whether the Service & Earthing inspector is open.
   bool _showService = false;
 
+  /// Whether the Export menu (SLD / report / power one-line) is open.
+  bool _showExportMenu = false;
+
   ElectricalProjectController get _controller =>
       ref.read(electricalProjectProvider.notifier);
 
@@ -92,6 +97,13 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         _circuitMenu = null;
       });
     }
+  }
+
+  /// Close the export menu and run the chosen export action against the live
+  /// providers (the file dialog + IO live in `electrical_export.dart`).
+  void _runExport(Future<void> Function(WidgetRef) action) {
+    setState(() => _showExportMenu = false);
+    action(ref);
   }
 
   @override
@@ -112,7 +124,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           onService: _openService,
           onAddPanel: _addPanel,
           onImport: () {},
-          onExport: () {},
+          onExport: () => setState(() => _showExportMenu = !_showExportMenu),
           onToggleAdvanced: () =>
               setState(() => _showAdvanced = !_showAdvanced),
           advancedOpen: _showAdvanced,
@@ -132,12 +144,29 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       children: [
         Positioned.fill(child: ColoredBox(color: colors.canvas, child: body)),
         // Tap-away scrim behind any open menu / inspector.
-        if (_editing != null || _panelMenu != null || _circuitMenu != null)
+        if (_editing != null ||
+            _panelMenu != null ||
+            _circuitMenu != null ||
+            _showExportMenu)
           Positioned.fill(
             child: Listener(
-              onPointerDown: (_) => _closeOverlays(),
+              onPointerDown: (_) {
+                _closeOverlays();
+                if (_showExportMenu) setState(() => _showExportMenu = false);
+              },
               behavior: HitTestBehavior.translucent,
               child: const SizedBox.expand(),
+            ),
+          ),
+        if (_showExportMenu)
+          Positioned(
+            top: 48,
+            right: MechXSpacing.md,
+            child: _ExportMenu(
+              onSld: () => _runExport(exportElectricalSldDxf),
+              onSldPdf: () => _runExport(exportElectricalSldPdf),
+              onReport: () => _runExport(exportElectricalCalcReport),
+              onPowerOneLine: () => _runExport(exportPowerOneLineDxf),
             ),
           ),
         if (_circuitMenu != null) _buildCircuitMenu(),
@@ -780,6 +809,101 @@ class _CanvasHelp extends StatelessWidget {
   }
 }
 
+/// The Export popover (anchored under the toolbar's Export button) — single-line
+/// DXF, electrical report (Markdown) and power one-line DXF.
+class _ExportMenu extends StatelessWidget {
+  final VoidCallback onSld;
+  final VoidCallback onSldPdf;
+  final VoidCallback onReport;
+  final VoidCallback onPowerOneLine;
+  const _ExportMenu({
+    required this.onSld,
+    required this.onSldPdf,
+    required this.onReport,
+    required this.onPowerOneLine,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Container(
+      width: 260,
+      padding: const EdgeInsets.all(MechXSpacing.xs),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        border: Border.all(color: colors.border),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x33000000), blurRadius: 16, offset: Offset(0, 4)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _ExportRow(
+            label: context.strings(StringKey.electricalExportSld),
+            sub: context.strings(StringKey.electricalExportSldDxf),
+            onTap: onSld,
+          ),
+          _ExportRow(
+            label: context.strings(StringKey.electricalExportSld),
+            sub: context.strings(StringKey.electricalExportSldPdf),
+            onTap: onSldPdf,
+          ),
+          _ExportRow(
+            label: context.strings(StringKey.electricalExportReport),
+            sub: context.strings(StringKey.electricalExportReportSub),
+            onTap: onReport,
+          ),
+          _ExportRow(
+            label: context.strings(StringKey.electricalExportPowerOneLine),
+            sub: context.strings(StringKey.electricalExportPowerOneLineSub),
+            onTap: onPowerOneLine,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ExportRow extends StatelessWidget {
+  final String label;
+  final String sub;
+  final VoidCallback onTap;
+  const _ExportRow(
+      {required this.label, required this.sub, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+              horizontal: MechXSpacing.sm, vertical: MechXSpacing.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(label,
+                  style: type.label.copyWith(color: colors.textPrimary)),
+              const SizedBox(height: 2),
+              Text(sub,
+                  style: type.caption.copyWith(color: colors.textMuted)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// A small static minimap (bottom-right): every panel as a coloured rectangle.
 class _MiniMap extends StatelessWidget {
   final ElectricalProject project;
@@ -970,6 +1094,39 @@ class _ServiceInspector extends ConsumerWidget {
                           project.earthingSystem.note,
                           style: type.caption
                               .copyWith(color: colors.textMuted),
+                        ),
+                        const SizedBox(height: MechXSpacing.md),
+                        _Field(
+                          label: context.strings(
+                              StringKey.electricalOriginFaultLevel),
+                          child: _Num(
+                            value: project.originFaultLevelA != null
+                                ? project.originFaultLevelA!.amperes / 1000
+                                : 16,
+                            onChanged: (v) =>
+                                ctrl.setOriginFaultLevel(Current(v * 1000)),
+                          ),
+                        ),
+                        Text(
+                          context.strings(
+                              StringKey.electricalOriginFaultLevelNote),
+                          style:
+                              type.caption.copyWith(color: colors.textMuted),
+                        ),
+                        const SizedBox(height: MechXSpacing.md),
+                        _Field(
+                          label: context.strings(
+                              StringKey.electricalBusbarClearingTime),
+                          child: _Num(
+                            value: project.busbarClearingTimeS ?? 0.1,
+                            onChanged: ctrl.setBusbarClearingTime,
+                          ),
+                        ),
+                        Text(
+                          context.strings(
+                              StringKey.electricalBusbarClearingTimeNote),
+                          style:
+                              type.caption.copyWith(color: colors.textMuted),
                         ),
                       ],
                     ),

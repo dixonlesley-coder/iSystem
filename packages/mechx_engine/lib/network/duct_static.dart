@@ -9,6 +9,12 @@
 /// The fan total static = max node static + [terminalLoss] (the diffuser/grille
 /// drop at the index terminal).
 ///
+/// PER-EDGE MATERIAL — each edge's Darcy air friction uses the wall roughness ε
+/// of its [NetEdge.ductProduct] ([ductRoughnessFor]); an edge with no product
+/// passes `null`, keeping `ductFrictionPaPerMetre`'s galvanised-steel default,
+/// so the default path is byte-identical to today. A smoother product (PU)
+/// lowers that edge's friction.
+///
 /// Shares the tree / missing-data semantics of the pressure solve: unsized or
 /// unflowed edges add zero friction. Pure Dart, zero Flutter imports.
 library;
@@ -17,6 +23,7 @@ import '../geometry/building.dart';
 import '../geometry/scale_calibration.dart';
 import '../sizing/duct_sizing.dart';
 import '../sizing/network_sizing.dart';
+import '../standards/duct_products.dart';
 import '../units.dart';
 import 'network.dart';
 
@@ -82,7 +89,13 @@ DuctStaticSolution solveDuctStatic({
           calibrationBySheet: calibrationBySheet,
           building: building,
         );
-        edgePa = ductFrictionPaPerMetre(flow, edgeSizing.diameter) *
+        edgePa = ductFrictionPaPerMetre(
+              flow,
+              edgeSizing.diameter,
+              roughness: edge.ductProduct == null
+                  ? null
+                  : ductRoughnessFor(edge.ductProduct!),
+            ) *
             length.meters *
             fittingFactor;
       }

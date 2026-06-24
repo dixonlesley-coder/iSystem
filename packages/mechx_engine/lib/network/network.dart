@@ -84,6 +84,19 @@ class NetNode {
   /// duct service). Drives the accumulated duct airflow demand upstream.
   final FlowRate? airflow;
 
+  /// Id of a user-defined custom fixture type (see the app's fixture library)
+  /// served at this node. When set it overrides the built-in [fixture] for the
+  /// per-fixture demand lookup; the app resolves the id to its UBAP load. Null =
+  /// no custom fixture (use the built-in [fixture]). Additive — the engine core
+  /// never reads it directly (the integration layer resolves the load).
+  final String? customFixtureId;
+
+  /// Catchment roof area (m²) draining to this node, for a rainwater outlet on a
+  /// storm service. When set it overrides the storm sizing's flat default
+  /// catchment for this outlet; null = use the default. Additive — a null value
+  /// keeps storm sizing byte-identical.
+  final double? roofAreaM2;
+
   const NetNode({
     required this.id,
     required this.sheetId,
@@ -94,6 +107,8 @@ class NetNode {
     this.elevation,
     this.fixture,
     this.airflow,
+    this.customFixtureId,
+    this.roofAreaM2,
   });
 
   NetNode copyWith({
@@ -105,6 +120,10 @@ class NetNode {
     Length? elevation,
     PlumbingFixture? fixture,
     FlowRate? airflow,
+    String? customFixtureId,
+    bool clearCustomFixtureId = false,
+    double? roofAreaM2,
+    bool clearRoofAreaM2 = false,
   }) =>
       NetNode(
         id: id,
@@ -116,6 +135,9 @@ class NetNode {
         elevation: elevation ?? this.elevation,
         fixture: fixture ?? this.fixture,
         airflow: airflow ?? this.airflow,
+        customFixtureId:
+            clearCustomFixtureId ? null : (customFixtureId ?? this.customFixtureId),
+        roofAreaM2: clearRoofAreaM2 ? null : (roofAreaM2 ?? this.roofAreaM2),
       );
 }
 

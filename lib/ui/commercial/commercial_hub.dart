@@ -1,41 +1,120 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/commercial_export.dart';
 
-import '../../store/solve_store.dart';
+import '../../store/app_state.dart';
+import '../../store/commercial_store.dart';
+import '../../store/project_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
-import '../widgets/hub_scaffold.dart';
+import '../theme/mechx_theme.dart';
+import '../widgets/mechx_button.dart';
+import 'electrical_bom_view.dart';
+import 'pricelist_screen.dart';
+import 'quotation_view.dart';
 
-/// The Commercial hub — BOM, pricing and quotation live here.
-///
-/// For this pass it surfaces the existing bill of materials count and points at
-/// the CSV export already wired into the app; the priced quotation UI arrives in
-/// a later wave. This is the durable shell PanelMaker's "Commercial" group maps
-/// onto.
+/// The Commercial workspace — the electrical BOM, the pricelist editor and the
+/// priced quotation, with CSV / Markdown export. Built over the pure engine
+/// commercial pipeline (BOM → cost → quotation); prices live with the project,
+/// never the catalogue.
 class CommercialHub extends ConsumerWidget {
   const CommercialHub({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final bom = ref.watch(bomProvider);
-    final fittings = ref.watch(fittingsProvider);
+    final colors = context.colors;
+    final type = context.type;
 
-    return HubScaffold(
-      title: 'Commercial',
-      lead: 'Bill of materials, pricing and the proposal come together here. '
-          'The priced quotation is on the way; the BOM is already live.',
-      children: [
-        HubStatRow(
-          stats: [
-            ('BOM lines', '${bom.length}'),
-            ('Fitting lines', '${fittings.length}'),
-          ],
+    return ColoredBox(
+      color: colors.background,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(MechXSpacing.xl),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 920),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(context.strings(StringKey.commercialHubTitle),
+                    style: type.display.copyWith(color: colors.textPrimary)),
+                const SizedBox(height: MechXSpacing.sm),
+                Text(
+                  context.strings(StringKey.commercialHubLead),
+                  style: type.body.copyWith(color: colors.textSecondary),
+                ),
+                const SizedBox(height: MechXSpacing.lg),
+                const _ExportBar(),
+                const SizedBox(height: MechXSpacing.lg),
+                const ElectricalBomView(),
+                const SizedBox(height: MechXSpacing.xl),
+                const PricelistScreen(),
+                const SizedBox(height: MechXSpacing.xl),
+                const QuotationView(),
+              ],
+            ),
+          ),
         ),
-        const SizedBox(height: MechXSpacing.lg),
-        const HubNote(
-          'Export the bill of materials as CSV from the BOM panel for takeoff '
-          'and costing in your spreadsheet of choice.',
+      ),
+    );
+  }
+}
+
+/// The CSV / Markdown export actions for the commercial documents.
+class _ExportBar extends ConsumerWidget {
+  const _ExportBar();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Wrap(
+      spacing: MechXSpacing.sm,
+      runSpacing: MechXSpacing.sm,
+      children: [
+        MechXButton(
+          label: context.strings(StringKey.commercialExportBomCsv),
+          onPressed: () => _exportBomCsv(ref),
+        ),
+        MechXButton(
+          label: context.strings(StringKey.commercialExportProposalMd),
+          primary: true,
+          onPressed: () => _exportProposalMarkdown(ref),
         ),
       ],
     );
+  }
+
+  Future<void> _exportBomCsv(WidgetRef ref) async {
+    final name = ref.read(projectControllerProvider).name;
+    final csv = costEstimateToCsv(ref.read(electricalCostProvider));
+    final path = await FilePicker.saveFile(
+      dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleElectricalBom),
+      fileName: '$name-electrical-bom.csv',
+      type: FileType.custom,
+      allowedExtensions: const ['csv'],
+    );
+    if (path == null) return;
+    final full = path.endsWith('.csv') ? path : '$path.csv';
+    await File(full).writeAsString(csv);
+  }
+
+  Future<void> _exportProposalMarkdown(WidgetRef ref) async {
+    final name = ref.read(projectControllerProvider).name;
+    final md = quotationToMarkdown(
+      ref.read(electricalQuotationProvider),
+      ref.read(electricalCostProvider),
+      projectName: name,
+    );
+    final path = await FilePicker.saveFile(
+      dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleElectricalProposal),
+      fileName: '$name-electrical-proposal.md',
+      type: FileType.custom,
+      allowedExtensions: const ['md'],
+    );
+    if (path == null) return;
+    final full = path.endsWith('.md') ? path : '$path.md';
+    await File(full).writeAsString(md);
   }
 }

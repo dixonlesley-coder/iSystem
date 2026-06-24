@@ -9,6 +9,7 @@ library;
 
 import 'package:mechx_engine/electrical/bom.dart';
 import 'package:mechx_engine/electrical/catalog.dart';
+import 'package:mechx_engine/electrical/commercial_export.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/costing.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
@@ -292,6 +293,161 @@ void main() {
       expect(q.labourHours, closeTo(4.5, 1e-9));
       expect(q.labourSubtotal, closeTo(450000, 1e-9));
       expect(q.grandTotal, closeTo(450000, 1e-9));
+    });
+  });
+
+  // ── (5) Full pipeline: buildBom(fullCatalog) → estimateCost → buildQuotation ─
+  //
+  // Wire the whole commercial chain over a real sized system + the FULL
+  // catalogue (the Commercial workspace's exact path), asserting the boundary
+  // behaviours the UI relies on.
+  group('(5) full commercial pipeline', () {
+    // A small 3φ panel with a mix of ways so the BOM has several lines.
+    const panel = ElectricalPanel(
+      id: 'MDP',
+      name: 'MDP',
+      voltage: Voltage(400),
+      circuits: [
+        ElectricalCircuit(
+          id: 'c1',
+          name: 'Lighting',
+          loadKind: LoadKind.lighting,
+          isLighting: true,
+          loadW: 2400,
+          cosPhi: 0.9,
+          length: Length(20),
+        ),
+        ElectricalCircuit(
+          id: 'c2',
+          name: 'Sockets',
+          loadKind: LoadKind.socket,
+          loadW: 3600,
+          cosPhi: 0.9,
+          length: Length(18),
+        ),
+        ElectricalCircuit(
+          id: 'c3',
+          name: 'HVAC',
+          loadKind: LoadKind.hvac,
+          loadW: 9000,
+          cosPhi: 0.85,
+          length: Length(25),
+        ),
+      ],
+    );
+
+    ElectricalSystemResult sized() {
+      final r = computePanel(profile, panel);
+      return ElectricalSystemResult(
+        projectId: 'p',
+        panels: {'MDP': r},
+        order: const ['MDP'],
+        totalDemandW: r.demandW,
+        supply: SupplySummary(
+          connectedW: r.connectedW,
+          demandW: r.demandW,
+          demandVa: const ApparentPower(0),
+          system: panel.system,
+          voltage: panel.voltage,
+        ),
+        earthing: computeEarthing(profile,
+            system: EarthingSystem.tnCs, supplyPeMm2: 16),
+        warnings: const [],
+      );
+    }
+
+    test('empty pricelist → grandTotal 0 and EVERY line unmatched', () {
+      final bom = buildBom(sized(), parts: fullCatalog());
+      expect(bom.lines, isNotEmpty);
+
+      final cost = estimateCost(bom, const {});
+      expect(cost.grandTotal, 0);
+      // No price ⇒ no line can be matched.
+      expect(cost.unmatchedCount, bom.lines.length);
+      expect(cost.lines.every((l) => !l.matched), isTrue);
+
+      // A quotation off a zero material base with the engine default markups is
+      // still zero (every percentage applies to a zero prime cost).
+      final q = buildQuotation(cost, bom: bom, labourRate: 0);
+      expect(q.materialSubtotal, 0);
+      expect(q.grandTotal, 0);
+    });
+
+    test('all-zero markups + zero labour → grandTotal == material subtotal', () {
+      final bom = buildBom(sized(), parts: fullCatalog());
+
+      // Price every catalogue-matched line at a flat 1000 so the material
+      // subtotal is a known, non-zero figure.
+      final priceList = <String, double>{
+        for (final l in bom.lines)
+          if (l.sku != null) l.sku!: 1000,
+      };
+      final cost = estimateCost(bom, priceList);
+      expect(cost.grandTotal, greaterThan(0));
+
+      final q = buildQuotation(
+        cost,
+        bom: bom,
+        labourHours: 0,
+        labourRate: 0,
+        overheadPct: 0,
+        contingencyPct: 0,
+        marginPct: 0,
+      );
+      expect(q.materialSubtotal, closeTo(cost.grandTotal, 1e-9));
+      expect(q.labourSubtotal, 0);
+      expect(q.overhead, 0);
+      expect(q.contingency, 0);
+      expect(q.margin, 0);
+      expect(q.grandTotal, closeTo(cost.grandTotal, 1e-9));
+    });
+
+    test('margin == sell − base (true gross margin)', () {
+      final bom = buildBom(sized(), parts: fullCatalog());
+      final priceList = <String, double>{
+        for (final l in bom.lines)
+          if (l.sku != null) l.sku!: 1000,
+      };
+      final cost = estimateCost(bom, priceList);
+
+      final q = buildQuotation(
+        cost,
+        bom: bom,
+        labourHours: 2,
+        labourRate: 100000,
+        overheadPct: 8,
+        contingencyPct: 4,
+        marginPct: 18,
+      );
+      // The defining identity: profit is sell minus the cost base.
+      expect(q.margin, closeTo(q.grandTotal - q.marginBase, 1e-6));
+      // And the cost base is prime + overhead + contingency.
+      final prime = q.materialSubtotal + q.labourSubtotal;
+      expect(q.marginBase, closeTo(prime + q.overhead + q.contingency, 1e-6));
+    });
+
+    test('exporters render the priced BOM (CSV) + proposal (Markdown)', () {
+      final bom = buildBom(sized(), parts: fullCatalog());
+      final priceList = <String, double>{
+        for (final l in bom.lines)
+          if (l.sku != null) l.sku!: 1000,
+      };
+      final cost = estimateCost(bom, priceList);
+      final q = buildQuotation(cost, bom: bom);
+
+      final csv = costEstimateToCsv(cost);
+      // Header + one row per line + a trailing subtotal row.
+      final csvLines = csv.trim().split('\n');
+      expect(csvLines.first, startsWith('qty,category,description'));
+      expect(csvLines.length, cost.lines.length + 2);
+      expect(csv, contains('Material subtotal'));
+
+      final md = quotationToMarkdown(q, cost, projectName: 'Tower A');
+      expect(md, contains('# Electrical proposal — Tower A'));
+      expect(md, contains('Grand total'));
+
+      final pl = priceListToCsv(priceList);
+      expect(pl.split('\n').first, 'sku,unit_price');
     });
   });
 }
