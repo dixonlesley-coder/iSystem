@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../store/app_state.dart';
+import '../store/commercial_store.dart';
 import '../store/electrical_store.dart';
 import '../store/fire_store.dart';
 import '../store/history_store.dart';
@@ -52,6 +53,7 @@ ProjectDocument buildDocument(ProviderReader read) {
   final project = read(projectControllerProvider);
   final sheets = read(sheetsControllerProvider);
   final ducts = read(ductSettingsProvider);
+  final commercial = read(commercialSettingsProvider);
   return ProjectDocument(
     projectName: project.name,
     floors: project.floors,
@@ -68,6 +70,12 @@ ProjectDocument buildDocument(ProviderReader read) {
       rainfallMmPerHr: read(rainfallIntensityProvider),
       fireHazard: read(fireHazardProvider),
       brightness: read(brightnessProvider),
+      // Commercial settings (pricelist + quote markups) round-trip too.
+      priceList: commercial.priceList,
+      labourRatePerHour: commercial.labourRatePerHour,
+      overheadPct: commercial.overheadPct,
+      contingencyPct: commercial.contingencyPct,
+      marginPct: commercial.marginPct,
     ),
     // The electrical sub-model (v2) round-trips alongside the plumbing project.
     electrical: read(electricalProjectProvider),
@@ -102,6 +110,15 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(rainfallIntensityProvider.notifier).set(s.rainfallMmPerHr);
   read(fireHazardProvider.notifier).set(s.fireHazard);
   read(brightnessProvider.notifier).set(s.brightness);
+  // Restore the commercial settings (pricelist + quote markups). Absent on an
+  // older file ⇒ defaults (empty pricelist, engine-default markups).
+  read(commercialSettingsProvider.notifier).set(CommercialSettings(
+    priceList: s.priceList,
+    labourRatePerHour: s.labourRatePerHour,
+    overheadPct: s.overheadPct,
+    contingencyPct: s.contingencyPct,
+    marginPct: s.marginPct,
+  ));
   // Restore the electrical project (v2 files carry one; older files / projects
   // with no electrical design fall back to the built-in sample).
   read(electricalProjectProvider.notifier)

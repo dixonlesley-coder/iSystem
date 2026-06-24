@@ -66,6 +66,21 @@ class DesignSettings {
   final FireHazardClass fireHazard;
   final Brightness brightness;
 
+  /// Commercial pricelist: catalogue `sku → unit price`. Prices are NEVER baked
+  /// into the committed parts catalogue (a separate concern, see
+  /// `electrical/costing.dart`), so they live with the project. Defaults to
+  /// empty — a project that has never been priced loads with no prices.
+  final Map<String, double> priceList;
+
+  /// Commercial quote settings: labour rate per hour + overhead / contingency /
+  /// margin percentages used to turn the priced material estimate into a sell
+  /// price (`electrical/quotation.dart`). The defaults mirror the engine's
+  /// `buildQuotation` defaults so an untouched project quotes identically.
+  final double labourRatePerHour;
+  final double overheadPct;
+  final double contingencyPct;
+  final double marginPct;
+
   const DesignSettings({
     this.occupancy = Occupancy.private,
     this.upfeed = false,
@@ -74,6 +89,11 @@ class DesignSettings {
     this.rainfallMmPerHr = 200.0,
     this.fireHazard = FireHazardClass.ordinaryHazard1,
     this.brightness = Brightness.dark,
+    this.priceList = const {},
+    this.labourRatePerHour = 150000,
+    this.overheadPct = 10,
+    this.contingencyPct = 5,
+    this.marginPct = 15,
   });
 
   Map<String, dynamic> toJson() => {
@@ -84,6 +104,12 @@ class DesignSettings {
         'rainfall_mmhr': rainfallMmPerHr,
         'fireHazard': fireHazard.name,
         'brightness': brightness == Brightness.dark ? 'dark' : 'light',
+        // Commercial settings (additive; absent on an older file → defaults).
+        'priceList': priceList,
+        'labourRatePerHour': labourRatePerHour,
+        'overheadPct': overheadPct,
+        'contingencyPct': contingencyPct,
+        'marginPct': marginPct,
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -107,7 +133,24 @@ class DesignSettings {
         ),
         brightness:
             json['brightness'] == 'light' ? Brightness.light : Brightness.dark,
+        priceList: _priceListFromJson(json['priceList']),
+        labourRatePerHour:
+            (json['labourRatePerHour'] as num?)?.toDouble() ?? 150000,
+        overheadPct: (json['overheadPct'] as num?)?.toDouble() ?? 10,
+        contingencyPct: (json['contingencyPct'] as num?)?.toDouble() ?? 5,
+        marginPct: (json['marginPct'] as num?)?.toDouble() ?? 15,
       );
+
+  /// Tolerantly read a `sku → unit price` map: a non-map (or absent) value, a
+  /// non-string key, or a non-numeric / non-positive price is dropped.
+  static Map<String, double> _priceListFromJson(Object? raw) {
+    if (raw is! Map) return const {};
+    final out = <String, double>{};
+    raw.forEach((k, v) {
+      if (k is String && v is num && v > 0) out[k] = v.toDouble();
+    });
+    return out;
+  }
 }
 
 /// Versioned iSystem project document — the on-disk format (a `.mechx` JSON file;
