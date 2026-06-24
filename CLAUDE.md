@@ -298,8 +298,12 @@ report export**; versioned `.mechx` save/open with viewport restore;
   InheritedWidget + `context.strings`, a Preferences language toggle, first string batch
   with EN byte-identical so goldens are unchanged). Both round-trip additively in
   `DesignSettings` (pricelist+markups; `localeCode`, tolerant unknown→en), no version bump.
-  Remaining in **Wave 4b** (deferred, incremental): electrical SLD/GA *vector*-PDF export
-  (DXF + Markdown done) and deeper string migration beyond the first batch.
+  **Electrical export now has full mechanical parity** — `report/electrical_pdf_export.dart`
+  adds a native vector-PDF single-line (single A3 page, no third-party dep; panels as stroked
+  rects at their schematic x/y, feeders as lines, labels as text, auto-fitted) alongside the DXF
+  + Markdown, wired as a 'PDF (vector)' row in the toolbar Export menu.
+  Remaining in **Wave 4b** (deferred, incremental): deeper string migration beyond the first
+  batches (mechanism + nav/preferences + Commercial/electrical-export are done).
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),
