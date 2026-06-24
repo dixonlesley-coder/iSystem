@@ -42,8 +42,11 @@ enum _Glyph { plan, schematic, electrical, review, commercial, projects, prefere
 class NavRail extends ConsumerWidget {
   const NavRail({super.key});
 
-  /// Matches PanelMaker's 248-px navbar.
-  static const double width = 248;
+  /// A COMPACT icon+caption rail (was a 248-px labelled list) so the calibrated
+  /// canvas — the app's focal point — gets the real estate. Each destination is a
+  /// centred glyph over a small caption (the iPadOS / Finder compact-sidebar
+  /// idiom): labels are kept for clarity, the canvas gains ~168 px.
+  static const double width = 80;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -71,7 +74,7 @@ class NavRail extends ConsumerWidget {
       width: width,
       color: colors.surface,
       padding: const EdgeInsets.symmetric(
-        horizontal: MechXSpacing.sm,
+        horizontal: MechXSpacing.xs,
         vertical: MechXSpacing.sm,
       ),
       child: Column(
@@ -142,13 +145,15 @@ class _GroupLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(
-          MechXSpacing.sm,
-          MechXSpacing.xs,
-          MechXSpacing.sm,
-          MechXSpacing.xxs,
+        padding: const EdgeInsets.only(
+          top: MechXSpacing.xxs,
+          bottom: MechXSpacing.xxs,
         ),
-        child: Text(text, style: style.copyWith(letterSpacing: 0.6)),
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: style.copyWith(letterSpacing: 0.6, fontSize: 9),
+        ),
       );
 }
 
@@ -202,30 +207,34 @@ class _NavItemState extends State<_NavItem> {
               duration: MechXMotion.appear,
               curve: MechXMotion.standard,
               padding: const EdgeInsets.symmetric(
-                horizontal: MechXSpacing.sm,
+                horizontal: MechXSpacing.xxs,
                 vertical: MechXSpacing.sm,
               ),
               decoration: BoxDecoration(
                 color: bg,
                 borderRadius: MechXRadii.control,
               ),
-              child: Row(
+              // Compact rail: glyph centred over a small caption (labels kept
+              // for clarity; long ones wrap to a second line).
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   CustomPaint(
-                    size: const Size(18, 18),
+                    size: const Size(22, 22),
                     painter: _GlyphPainter(widget.glyph, fg),
                   ),
-                  const SizedBox(width: MechXSpacing.sm + 2),
-                  Expanded(
-                    child: Text(
-                      widget.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: type.label.copyWith(
-                        color: fg,
-                        fontWeight:
-                            widget.active ? FontWeight.w600 : FontWeight.w500,
-                      ),
+                  const SizedBox(height: MechXSpacing.xxs + 2),
+                  Text(
+                    widget.label,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: type.caption.copyWith(
+                      fontSize: 10.5,
+                      height: 1.1,
+                      color: fg,
+                      fontWeight:
+                          widget.active ? FontWeight.w600 : FontWeight.w500,
                     ),
                   ),
                 ],
