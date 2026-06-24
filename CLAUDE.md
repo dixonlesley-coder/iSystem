@@ -307,10 +307,13 @@ report export**; versioned `.mechx` save/open with viewport restore;
   adds a native vector-PDF single-line (single A3 page, no third-party dep; panels as stroked
   rects at their schematic x/y, feeders as lines, labels as text, auto-fitted) alongside the DXF
   + Markdown, wired as a 'PDF (vector)' row in the toolbar Export menu.
+  The i18n mechanism also gained **parameterized templates** — `MechXStringsData.format(key,
+  {…})` substitutes `{name}` placeholders (EN+ID templates carry identical placeholders, pinned
+  by a test) — and the Commercial workspace's dynamic captions (BOM/pricelist leads, unpriced
+  count, labour-rate/amount/hours labels) now use it.
   Remaining in **Wave 4b** (deferred, incremental): the tail of the string migration — the
-  heatmap/plan-canvas on-overlay labels, plus dynamic/interpolated captions (counts, units,
-  currency woven into labels) and the context-less OS file-dialog titles, all left as literals
-  for now.
+  heatmap/plan-canvas on-overlay labels and the remaining dynamic/on-canvas captions, plus the
+  context-less OS file-dialog titles, all left as literals for now.
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),

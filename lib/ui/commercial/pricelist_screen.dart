@@ -41,8 +41,8 @@ class PricelistScreen extends ConsumerWidget {
             style: type.title.copyWith(color: colors.textPrimary)),
         const SizedBox(height: MechXSpacing.xxs),
         Text(
-          'Unit prices for the catalogue parts your design uses. Stored with the '
-          'project, never in the catalogue. $priced of ${skus.length} priced.',
+          context.strings.format(StringKey.commercialPricelistLead,
+              {'priced': priced, 'total': skus.length}),
           style: type.caption.copyWith(color: colors.textMuted),
         ),
         const SizedBox(height: MechXSpacing.sm),

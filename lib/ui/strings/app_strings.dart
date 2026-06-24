@@ -45,15 +45,21 @@ enum StringKey {
   commercialColMatch,
   commercialMatched,
   commercialUnmatched,
+  commercialBomLead, // {lines} {unmatched}
 
   // Commercial workspace — pricelist.
   commercialPricelistTitle,
   commercialColUnit,
   commercialColUnitPrice,
+  commercialPricelistLead, // {priced} {total}
 
   // Commercial workspace — quotation.
   commercialQuotationTitle,
   commercialAllPriced,
+  commercialUnpricedExcluded, // {n}
+  commercialLabourRate, // {cur}
+  commercialColAmount, // {cur}
+  commercialLabourHours, // {hours}
   commercialQuoteSettings,
   commercialOverheadPct,
   commercialContingencyPct,
@@ -238,15 +244,26 @@ const Map<StringKey, String> _en = {
   StringKey.commercialColMatch: 'Match',
   StringKey.commercialMatched: 'matched',
   StringKey.commercialUnmatched: 'unmatched',
+  StringKey.commercialBomLead:
+      '{lines} line(s) from the sized electrical model, matched '
+          'to the parts catalogue. {unmatched} line(s) have no catalogue match.',
 
   // Commercial workspace — pricelist.
   StringKey.commercialPricelistTitle: 'Pricelist',
   StringKey.commercialColUnit: 'Unit',
   StringKey.commercialColUnitPrice: 'Unit price',
+  StringKey.commercialPricelistLead:
+      'Unit prices for the catalogue parts your design uses. Stored with the '
+          'project, never in the catalogue. {priced} of {total} priced.',
 
   // Commercial workspace — quotation.
   StringKey.commercialQuotationTitle: 'Quotation',
   StringKey.commercialAllPriced: 'All catalogue-matched lines are priced.',
+  StringKey.commercialUnpricedExcluded:
+      '{n} line(s) are unpriced and excluded from the material subtotal.',
+  StringKey.commercialLabourRate: 'Labour rate ({cur} / h)',
+  StringKey.commercialColAmount: 'Amount ({cur})',
+  StringKey.commercialLabourHours: 'Labour ({hours} h)',
   StringKey.commercialQuoteSettings: 'Quote settings',
   StringKey.commercialOverheadPct: 'Overhead (%)',
   StringKey.commercialContingencyPct: 'Contingency (%)',
@@ -454,15 +471,26 @@ const Map<StringKey, String> _id = {
   StringKey.commercialColMatch: 'Kecocokan',
   StringKey.commercialMatched: 'cocok',
   StringKey.commercialUnmatched: 'tidak cocok',
+  StringKey.commercialBomLead:
+      '{lines} baris dari model kelistrikan terhitung, dicocokkan ke katalog '
+          'komponen. {unmatched} baris tanpa kecocokan katalog.',
 
   // Commercial workspace — pricelist.
   StringKey.commercialPricelistTitle: 'Daftar Harga',
   StringKey.commercialColUnit: 'Satuan',
   StringKey.commercialColUnitPrice: 'Harga satuan',
+  StringKey.commercialPricelistLead:
+      'Harga satuan untuk komponen katalog yang dipakai desain Anda. Disimpan '
+          'bersama proyek, bukan di katalog. {priced} dari {total} diberi harga.',
 
   // Commercial workspace — quotation.
   StringKey.commercialQuotationTitle: 'Penawaran',
   StringKey.commercialAllPriced: 'Semua baris yang cocok katalog telah diberi harga.',
+  StringKey.commercialUnpricedExcluded:
+      '{n} baris belum diberi harga dan dikecualikan dari subtotal material.',
+  StringKey.commercialLabourRate: 'Tarif tenaga kerja ({cur} / jam)',
+  StringKey.commercialColAmount: 'Jumlah ({cur})',
+  StringKey.commercialLabourHours: 'Tenaga kerja ({hours} jam)',
   StringKey.commercialQuoteSettings: 'Pengaturan penawaran',
   StringKey.commercialOverheadPct: 'Overhead (%)',
   StringKey.commercialContingencyPct: 'Kontingensi (%)',
@@ -650,6 +678,18 @@ class MechXStringsData {
   /// Resolve [key]: the active locale's value, or the English fallback so the
   /// app never renders a blank for an as-yet-untranslated key.
   String call(StringKey key) => _map[key] ?? _en[key]!;
+
+  /// Resolve a parameterized [key] whose template carries `{name}` placeholders,
+  /// substituting each entry of [params] (e.g. `format(k, {'n': 3})` turns
+  /// `'{n} items'` into `'3 items'`). Unknown placeholders are left intact and
+  /// unused params ignored, so a template + call can never throw. Falls back to
+  /// English like [call] — keep the `{name}` placeholders identical across the EN
+  /// and ID templates so both substitute correctly.
+  String format(StringKey key, Map<String, Object?> params) {
+    var out = _map[key] ?? _en[key]!;
+    params.forEach((k, v) => out = out.replaceAll('{$k}', '$v'));
+    return out;
+  }
 }
 
 /// Inherited string table. Mirrors [MechXTheme]: provided once above the shell

@@ -33,8 +33,8 @@ class QuotationView extends ConsumerWidget {
         const SizedBox(height: MechXSpacing.xxs),
         Text(
           cost.unmatchedCount > 0
-              ? '${cost.unmatchedCount} line(s) are unpriced and excluded from '
-                  'the material subtotal.'
+              ? context.strings.format(StringKey.commercialUnpricedExcluded,
+                  {'n': cost.unmatchedCount})
               : context.strings(StringKey.commercialAllPriced),
           style: type.caption.copyWith(color: colors.textMuted),
         ),
@@ -55,7 +55,8 @@ class QuotationView extends ConsumerWidget {
                   style: type.subtitle.copyWith(color: colors.textPrimary)),
               const SizedBox(height: MechXSpacing.sm),
               _NumberRow(
-                label: 'Labour rate ($cur / h)',
+                label: context.strings
+                    .format(StringKey.commercialLabourRate, {'cur': cur}),
                 value: settings.labourRatePerHour,
                 onChanged: ctrl.setLabourRate,
               ),
@@ -84,12 +85,19 @@ class QuotationView extends ConsumerWidget {
           columns: [
             CommercialColumn(context.strings(StringKey.commercialColItem),
                 flex: 6),
-            CommercialColumn('Amount ($cur)', flex: 4, alignEnd: true),
+            CommercialColumn(
+                context.strings
+                    .format(StringKey.commercialColAmount, {'cur': cur}),
+                flex: 4,
+                alignEnd: true),
           ],
           rows: [
             _money(context.strings(StringKey.commercialItemMaterial),
                 q.materialSubtotal),
-            _money('Labour (${_fmt(q.labourHours)} h)', q.labourSubtotal),
+            _money(
+                context.strings.format(StringKey.commercialLabourHours,
+                    {'hours': _fmt(q.labourHours)}),
+                q.labourSubtotal),
             _money(context.strings(StringKey.commercialItemOverhead),
                 q.overhead),
             _money(context.strings(StringKey.commercialItemContingency),

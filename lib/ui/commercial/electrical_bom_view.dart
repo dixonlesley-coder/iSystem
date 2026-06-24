@@ -31,8 +31,8 @@ class ElectricalBomView extends ConsumerWidget {
             style: type.title.copyWith(color: colors.textPrimary)),
         const SizedBox(height: MechXSpacing.xxs),
         Text(
-          '${bom.lines.length} line(s) from the sized electrical model, matched '
-          'to the parts catalogue. $unmatched line(s) have no catalogue match.',
+          context.strings.format(StringKey.commercialBomLead,
+              {'lines': bom.lines.length, 'unmatched': unmatched}),
           style: type.caption.copyWith(color: colors.textMuted),
         ),
         const SizedBox(height: MechXSpacing.sm),

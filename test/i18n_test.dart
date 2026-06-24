@@ -19,6 +19,35 @@ void main() {
     expect(AppLocale.id.displayName, 'Bahasa Indonesia');
   });
 
+  test('format substitutes {name} placeholders (EN and ID)', () {
+    const en = MechXStringsData(AppLocale.en);
+    const id = MechXStringsData(AppLocale.id);
+    final enText =
+        en.format(StringKey.commercialBomLead, {'lines': 12, 'unmatched': 3});
+    expect(enText, contains('12 line(s)'));
+    expect(enText, contains('3 line(s) have no catalogue match'));
+    expect(enText, isNot(contains('{'))); // every placeholder substituted
+    final idText =
+        id.format(StringKey.commercialBomLead, {'lines': 12, 'unmatched': 3});
+    expect(idText, contains('12'));
+    expect(idText, isNot(contains('{')));
+  });
+
+  test('every {placeholder} in an EN template appears in its ID template', () {
+    final placeholder = RegExp(r'\{(\w+)\}');
+    final en = debugEnStrings();
+    final id = debugIdStrings();
+    for (final key in StringKey.values) {
+      final enP =
+          placeholder.allMatches(en[key]!).map((m) => m.group(1)).toSet();
+      if (enP.isEmpty) continue;
+      final idP =
+          placeholder.allMatches(id[key]!).map((m) => m.group(1)).toSet();
+      expect(idP, enP,
+          reason: 'ID template for $key must carry the same placeholders as EN');
+    }
+  });
+
   testWidgets('context.strings degrades to EN when no MechXStrings ancestor',
       (tester) async {
     // A widget pumped in isolation (no MechXStrings provider) must still
