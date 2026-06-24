@@ -53,8 +53,10 @@ class PreferencesScreen extends ConsumerWidget {
 
 /// A single settings row: a title + current value on the left, an action on the
 /// right, in a bordered card. Mirrors the existing Appearance card styling so
-/// both settings read consistently.
-class _SettingCard extends StatelessWidget {
+/// both settings read consistently. Hovering the card gently lifts its border +
+/// fill (a coordination affordance), eased on the `hover` idiom; the action's
+/// own hover/press/focus feedback lives in [MechXButton].
+class _SettingCard extends StatefulWidget {
   final String title;
   final String value;
   final Widget action;
@@ -66,34 +68,51 @@ class _SettingCard extends StatelessWidget {
   });
 
   @override
+  State<_SettingCard> createState() => _SettingCardState();
+}
+
+class _SettingCardState extends State<_SettingCard> {
+  bool _hover = false;
+
+  @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(MechXSpacing.md),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.card,
-        border: Border.all(color: colors.border),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title,
-                    style: type.subtitle.copyWith(color: colors.textPrimary)),
-                const SizedBox(height: MechXSpacing.xxs),
-                Text(value,
-                    style: type.caption.copyWith(color: colors.textMuted)),
-              ],
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: AnimatedContainer(
+        duration: MechXMotion.hover,
+        curve: MechXMotion.standard,
+        width: double.infinity,
+        padding: const EdgeInsets.all(MechXSpacing.md),
+        decoration: BoxDecoration(
+          color: _hover
+              ? Color.lerp(colors.surface, colors.surfaceHover, 0.5)!
+              : colors.surface,
+          borderRadius: MechXRadii.card,
+          border:
+              Border.all(color: _hover ? colors.textMuted : colors.border),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.title,
+                      style:
+                          type.subtitle.copyWith(color: colors.textPrimary)),
+                  const SizedBox(height: MechXSpacing.xxs),
+                  Text(widget.value,
+                      style: type.caption.copyWith(color: colors.textMuted)),
+                ],
+              ),
             ),
-          ),
-          action,
-        ],
+            widget.action,
+          ],
+        ),
       ),
     );
   }

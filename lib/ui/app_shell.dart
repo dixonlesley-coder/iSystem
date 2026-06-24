@@ -31,6 +31,7 @@ import 'strings/app_strings.dart';
 import 'theme/design_tokens.dart';
 import 'theme/mechx_theme.dart';
 import 'widgets/mechx_button.dart';
+import 'widgets/mechx_focus_ring.dart';
 
 /// Top-level layout (PanelMaker-style chrome): a left navigation rail beside a
 /// slim top bar · body · status-bar column. The rail picks the [ShellSection];
@@ -301,7 +302,9 @@ class _TopBar extends ConsumerWidget {
           children: [
             Text('iSystem',
                 style: type.title.copyWith(color: colors.textPrimary)),
-            const SizedBox(width: MechXSpacing.sm),
+            // A hairline middot sets the product title apart from the project
+            // name — a clearer path-style hierarchy than a bare gap.
+            _titleDot(colors.textMuted),
             Flexible(
               child: Text(
                 projectName,
@@ -311,7 +314,9 @@ class _TopBar extends ConsumerWidget {
               ),
             ),
             const Spacer(),
-            // Actions sit flush-right.
+            // Actions sit flush-right. The zoom read-out is a quiet pill: a
+            // soft tinted fill carries it, no hairline border — less visual
+            // mass than a fully-outlined chip (HIG).
             Container(
               padding: const EdgeInsets.symmetric(
                 horizontal: MechXSpacing.sm,
@@ -320,7 +325,6 @@ class _TopBar extends ConsumerWidget {
               decoration: BoxDecoration(
                 color: colors.background,
                 borderRadius: MechXRadii.control,
-                border: Border.all(color: colors.border),
               ),
               child: Text(
                 zoom,
@@ -355,6 +359,11 @@ class _TopBar extends ConsumerWidget {
       ),
     );
   }
+
+  Widget _titleDot(Color color) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.sm),
+        child: Text('·', style: TextStyle(fontFamily: 'Roboto', color: color)),
+      );
 }
 
 class _StatusBar extends ConsumerWidget {
@@ -457,6 +466,30 @@ class _StatusBar extends ConsumerWidget {
       );
 }
 
+/// Eases a shell banner in and out: the height collapses ([AnimatedSize]) and
+/// the content cross-fades ([AnimatedSwitcher]) on the `appear` idiom, so a
+/// banner glides in/out instead of popping. When [child] is null it resolves to
+/// a zero-size box (no phantom layout space when idle — goldens stay identical).
+class _AnimatedBanner extends StatelessWidget {
+  final Widget? child;
+  const _AnimatedBanner({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSize(
+      duration: MechXMotion.appear,
+      curve: MechXMotion.standard,
+      alignment: Alignment.topCenter,
+      child: AnimatedSwitcher(
+        duration: MechXMotion.appear,
+        switchInCurve: MechXMotion.standard,
+        switchOutCurve: MechXMotion.standard,
+        child: child ?? const SizedBox(width: double.infinity),
+      ),
+    );
+  }
+}
+
 /// Offers to restore a crash-recovery snapshot from a previous session that
 /// ended without a clean exit. Restore loads it; Dismiss discards it.
 class _RecoveryBanner extends ConsumerWidget {
@@ -465,7 +498,6 @@ class _RecoveryBanner extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final doc = ref.watch(recoveryDocProvider);
-    if (doc == null) return const SizedBox.shrink();
     final colors = context.colors;
     final type = context.type;
 
@@ -474,38 +506,44 @@ class _RecoveryBanner extends ConsumerWidget {
       ref.read(recoveryDocProvider.notifier).clear();
     }
 
-    return Container(
-      width: double.infinity,
-      color: colors.accent.withAlpha(30),
-      padding: const EdgeInsets.symmetric(
-        horizontal: MechXSpacing.md,
-        vertical: MechXSpacing.xs,
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              context.strings(StringKey.shellRecoverPrompt),
-              style: type.caption.copyWith(color: colors.textPrimary),
+    return _AnimatedBanner(
+      child: doc == null
+          ? null
+          : Container(
+              key: const ValueKey('recovery-banner'),
+              width: double.infinity,
+              color: colors.accent.withAlpha(30),
+              padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.md,
+                vertical: MechXSpacing.xs,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      context.strings(StringKey.shellRecoverPrompt),
+                      style: type.caption.copyWith(color: colors.textPrimary),
+                    ),
+                  ),
+                  MechXButton(
+                    label: context.strings(StringKey.shellRestore),
+                    primary: true,
+                    onPressed: () {
+                      // Restore the full snapshot (drawing + settings). We
+                      // deliberately do NOT mark it as the clean baseline:
+                      // recovered work is still unsaved, so autosave should keep
+                      // mirroring it after dismiss.
+                      applyDocument(ref.read, doc);
+                      dismiss();
+                    },
+                  ),
+                  const SizedBox(width: MechXSpacing.sm),
+                  MechXButton(
+                      label: context.strings(StringKey.shellDismiss),
+                      onPressed: dismiss),
+                ],
+              ),
             ),
-          ),
-          MechXButton(
-            label: context.strings(StringKey.shellRestore),
-            primary: true,
-            onPressed: () {
-              // Restore the full snapshot (drawing + settings). We deliberately
-              // do NOT mark it as the clean baseline: recovered work is still
-              // unsaved, so autosave should keep mirroring it after dismiss.
-              applyDocument(ref.read, doc);
-              dismiss();
-            },
-          ),
-          const SizedBox(width: MechXSpacing.sm),
-          MechXButton(
-              label: context.strings(StringKey.shellDismiss),
-              onPressed: dismiss),
-        ],
-      ),
     );
   }
 }
@@ -518,45 +556,111 @@ class _ErrorBanner extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final message = ref.watch(loadErrorProvider);
-    if (message == null) return const SizedBox.shrink();
     final colors = context.colors;
     final type = context.type;
-    return Container(
-      width: double.infinity,
-      color: colors.danger.withAlpha(38),
-      padding: const EdgeInsets.symmetric(
-        horizontal: MechXSpacing.md,
-        vertical: MechXSpacing.xs,
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 7,
-            height: 7,
-            margin: const EdgeInsets.only(right: MechXSpacing.sm),
-            decoration: BoxDecoration(
-              color: colors.danger,
-              borderRadius: const BorderRadius.all(Radius.circular(4)),
+    return _AnimatedBanner(
+      child: message == null
+          ? null
+          : Container(
+              key: const ValueKey('error-banner'),
+              width: double.infinity,
+              color: colors.danger.withAlpha(38),
+              padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.md,
+                vertical: MechXSpacing.xs,
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    margin: const EdgeInsets.only(right: MechXSpacing.sm),
+                    decoration: BoxDecoration(
+                      color: colors.danger,
+                      borderRadius:
+                          const BorderRadius.all(Radius.circular(4)),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      message,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: type.caption.copyWith(color: colors.textPrimary),
+                    ),
+                  ),
+                  const SizedBox(width: MechXSpacing.sm),
+                  _DismissLink(
+                    label: context.strings(StringKey.shellDismiss),
+                    color: colors.danger,
+                    onTap: () => ref.read(loadErrorProvider.notifier).clear(),
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+/// A small text-link affordance (the error banner's Dismiss): brightens toward
+/// the primary label on hover and dims on press, easing on the `hover` idiom —
+/// so the link reads as tappable. Keyboard-focusable + Enter/Space via the
+/// shared focus ring.
+class _DismissLink extends StatefulWidget {
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _DismissLink({
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  State<_DismissLink> createState() => _DismissLinkState();
+}
+
+class _DismissLinkState extends State<_DismissLink> {
+  bool _hover = false;
+  bool _down = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final type = context.type;
+    final colors = context.colors;
+    final fg = _down
+        ? Color.lerp(widget.color, const Color(0xFF000000), 0.18)!
+        : (_hover
+            ? Color.lerp(widget.color, colors.textPrimary, 0.25)!
+            : widget.color);
+    return MechXFocusRing(
+      onActivated: widget.onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() {
+          _hover = false;
+          _down = false;
+        }),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          onTapDown: (_) => setState(() => _down = true),
+          onTapUp: (_) => setState(() => _down = false),
+          onTapCancel: () => setState(() => _down = false),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: MechXSpacing.xs,
+              vertical: MechXSpacing.xxs,
+            ),
+            child: AnimatedDefaultTextStyle(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
+              style: type.label.copyWith(color: fg),
+              child: Text(widget.label),
             ),
           ),
-          Expanded(
-            child: Text(
-              message,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: type.caption.copyWith(color: colors.textPrimary),
-            ),
-          ),
-          const SizedBox(width: MechXSpacing.sm),
-          MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              onTap: () => ref.read(loadErrorProvider.notifier).clear(),
-              child: Text(context.strings(StringKey.shellDismiss),
-                  style: type.label.copyWith(color: colors.danger)),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

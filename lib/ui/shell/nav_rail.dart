@@ -7,6 +7,7 @@ import '../../store/electrical_store.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/mechx_focus_ring.dart';
 
 /// The top-level destination chosen in the left navigation rail. `design` shows
 /// the workspace area (Plan / Schematic / Electrical, driven by
@@ -184,43 +185,51 @@ class _NavItemState extends State<_NavItem> {
 
     return Padding(
       padding: const EdgeInsets.only(bottom: MechXSpacing.xxs),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          child: AnimatedContainer(
-            duration: MechXMotion.fast,
-            curve: MechXMotion.standard,
-            padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm,
-              vertical: MechXSpacing.sm,
-            ),
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: MechXRadii.control,
-            ),
-            child: Row(
-              children: [
-                CustomPaint(
-                  size: const Size(18, 18),
-                  painter: _GlyphPainter(widget.glyph, fg),
-                ),
-                const SizedBox(width: MechXSpacing.sm + 2),
-                Expanded(
-                  child: Text(
-                    widget.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: type.label.copyWith(
-                      color: fg,
-                      fontWeight:
-                          widget.active ? FontWeight.w600 : FontWeight.w500,
+      child: MechXFocusRing(
+        borderRadius: const BorderRadius.all(MechXRadii.md),
+        onActivated: widget.onTap,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: AnimatedContainer(
+              // Selection / hover eases in (HIG: the highlight glides, never
+              // pops) — pair the appear idiom with the standard curve. The
+              // accent-tinted fill stays the selection cue (no content-shifting
+              // stripe, so at-rest pixels are unchanged).
+              duration: MechXMotion.appear,
+              curve: MechXMotion.standard,
+              padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm,
+                vertical: MechXSpacing.sm,
+              ),
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: MechXRadii.control,
+              ),
+              child: Row(
+                children: [
+                  CustomPaint(
+                    size: const Size(18, 18),
+                    painter: _GlyphPainter(widget.glyph, fg),
+                  ),
+                  const SizedBox(width: MechXSpacing.sm + 2),
+                  Expanded(
+                    child: Text(
+                      widget.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: type.label.copyWith(
+                        color: fg,
+                        fontWeight:
+                            widget.active ? FontWeight.w600 : FontWeight.w500,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
