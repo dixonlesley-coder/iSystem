@@ -15,9 +15,10 @@ import '../widgets/mechx_focus_ring.dart';
 class SheetRail extends ConsumerWidget {
   const SheetRail({super.key});
 
-  /// Narrow — just wide enough for a page thumbnail + a short label. Down from
-  /// the old 232-px wide-card list.
-  static const double width = 76;
+  /// Narrow — just wide enough for a page thumbnail + a short label. Trimmed
+  /// from the old 232-px wide-card list to 76, then to 64 to hand the canvas
+  /// the last ~12 px.
+  static const double width = 64;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
