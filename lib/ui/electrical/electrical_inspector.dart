@@ -189,7 +189,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
                   Expanded(
                     child: Text(
                       'Edit circuit',
-                      style: type.subtitle.copyWith(color: colors.textPrimary),
+                      style: type.title.copyWith(color: colors.textPrimary),
                     ),
                   ),
                   ElectricalTextButton(label: 'Close', onTap: onClose),

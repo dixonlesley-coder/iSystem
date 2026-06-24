@@ -1249,7 +1249,7 @@ class _ServiceInspector extends ConsumerWidget {
                   Expanded(
                     child: Text(
                       'Service & Earthing',
-                      style: type.subtitle.copyWith(color: colors.textPrimary),
+                      style: type.title.copyWith(color: colors.textPrimary),
                     ),
                   ),
                   ElectricalTextButton(label: 'Close', onTap: onClose),
@@ -1361,7 +1361,7 @@ class _AdvancedDrawer extends StatelessWidget {
                   Expanded(
                     child: Text(
                       'Issues & advanced study',
-                      style: type.subtitle.copyWith(color: colors.textPrimary),
+                      style: type.title.copyWith(color: colors.textPrimary),
                     ),
                   ),
                   ElectricalTextButton(label: 'Close', onTap: onClose),
