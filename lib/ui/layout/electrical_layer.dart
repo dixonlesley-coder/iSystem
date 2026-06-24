@@ -79,12 +79,25 @@ class ElectricalLayoutLayer extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Ease the coordination fade: when the active discipline switches, the
+    // layer's markers + wiring cross-fade between full opacity and the faded
+    // coordination alpha over MechXMotion.appear (instead of snapping). The
+    // endpoints are byte-identical to the old instant values.
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(
+          end: interactive ? 1.0 : kElectricalFadedAlpha),
+      duration: MechXMotion.appear,
+      curve: MechXMotion.standard,
+      builder: (context, opacity, _) => _buildLayer(context, ref, opacity),
+    );
+  }
+
+  Widget _buildLayer(BuildContext context, WidgetRef ref, double opacity) {
     final colors = context.colors;
     final project = ref.watch(electricalProjectProvider);
     final result = ref.watch(electricalResultProvider);
     final ctrl = ref.read(electricalProjectProvider.notifier);
     final vt = transform;
-    final opacity = interactive ? 1.0 : kElectricalFadedAlpha;
 
     bool onSheet(LayoutPos? pos) =>
         pos != null && pos.sheetId == sheetId && pos.floorIndex == floorIndex;
@@ -549,7 +562,13 @@ class _PanelMarkerState extends State<_PanelMarker> {
               behavior: HitTestBehavior.opaque,
               onTap: widget.onTap,
               onDoubleTap: widget.onDoubleTap,
-              child: body,
+              // Subtle hover/drop lift signalling the marker is interactive.
+              child: AnimatedScale(
+                scale: (_hover || _dropHover) ? 1.03 : 1.0,
+                duration: MechXMotion.hover,
+                curve: MechXMotion.standard,
+                child: body,
+              ),
             ),
           ),
         );
@@ -662,7 +681,13 @@ class _LoadMarkerState extends State<_LoadMarker> {
           behavior: HitTestBehavior.opaque,
           onTap: widget.onTap,
           onDoubleTap: widget.onDoubleTap,
-          child: body,
+          // Subtle hover lift signalling the marker is interactive.
+          child: AnimatedScale(
+            scale: _hover ? 1.03 : 1.0,
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            child: body,
+          ),
         ),
       ),
     );
@@ -796,14 +821,23 @@ class _SheetDropTargetState extends ConsumerState<_SheetDropTarget> {
         _drop(d.data, world);
       },
       builder: (context, candidate, rejected) {
-        if (!_active) return const IgnorePointer(child: SizedBox.expand());
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            color: context.colors.accent.withAlpha(12),
-            border: Border.all(
-                color: context.colors.accent.withAlpha(110), width: 1.5),
+        // Cross-fade the drop highlight in/out instead of popping; idle is
+        // pointer-ignored so the canvas keeps panning.
+        return IgnorePointer(
+          ignoring: !_active,
+          child: AnimatedOpacity(
+            opacity: _active ? 1.0 : 0.0,
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: context.colors.accent.withAlpha(12),
+                border: Border.all(
+                    color: context.colors.accent.withAlpha(110), width: 1.5),
+              ),
+              child: const SizedBox.expand(),
+            ),
           ),
-          child: const SizedBox.expand(),
         );
       },
     );
@@ -1089,14 +1123,22 @@ class _TrayDropTargetState extends ConsumerState<_TrayDropTarget> {
         d.data.place(pos, widget.controller);
       },
       builder: (context, candidate, rejected) {
-        if (!_active) return const IgnorePointer(child: SizedBox.expand());
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            color: context.colors.success.withAlpha(12),
-            border: Border.all(
-                color: context.colors.success.withAlpha(120), width: 1.5),
+        // Cross-fade the tray drop highlight in/out instead of popping.
+        return IgnorePointer(
+          ignoring: !_active,
+          child: AnimatedOpacity(
+            opacity: _active ? 1.0 : 0.0,
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: context.colors.success.withAlpha(12),
+                border: Border.all(
+                    color: context.colors.success.withAlpha(120), width: 1.5),
+              ),
+              child: const SizedBox.expand(),
+            ),
           ),
-          child: const SizedBox.expand(),
         );
       },
     );

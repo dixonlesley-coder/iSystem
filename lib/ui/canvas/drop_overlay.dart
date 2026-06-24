@@ -56,18 +56,26 @@ class DropOverlay extends ConsumerWidget {
       builder: (context, candidate, rejected) {
         final active = candidate.isNotEmpty;
         // Translucent fill while a card hovers, so the user sees the canvas is a
-        // valid drop zone; fully transparent (and pointer-ignored) otherwise.
-        if (!active) return const IgnorePointer(child: SizedBox.expand());
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            color: context.colors.accent.withAlpha(18),
-            border: Border.all(
-              color: context.colors.accent.withAlpha(120),
-              width: 1.5,
+        // valid drop zone; cross-fades in/out (rather than popping) and is
+        // pointer-ignored when idle so the canvas keeps panning/zooming.
+        return IgnorePointer(
+          ignoring: !active,
+          child: AnimatedOpacity(
+            opacity: active ? 1.0 : 0.0,
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: context.colors.accent.withAlpha(18),
+                border: Border.all(
+                  color: context.colors.accent.withAlpha(120),
+                  width: 1.5,
+                ),
+                borderRadius: MechXRadii.card,
+              ),
+              child: const SizedBox.expand(),
             ),
-            borderRadius: MechXRadii.card,
           ),
-          child: const SizedBox.expand(),
         );
       },
     );

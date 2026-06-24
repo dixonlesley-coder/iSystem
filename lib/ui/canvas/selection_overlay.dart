@@ -8,6 +8,7 @@ import 'package:mechx_engine/network/network.dart';
 import '../../store/network_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
+import '../theme/design_tokens.dart';
 import 'edge_context_menu.dart';
 import 'viewport.dart';
 
@@ -139,41 +140,104 @@ class NetworkSelectionOverlay extends ConsumerWidget {
       top: screen.dy - r,
       width: r * 2,
       height: r * 2,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.resizeUpLeftDownRight,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onPanStart: (_) =>
-              ref.read(networkControllerProvider.notifier).pushUndoSnapshot(),
-          onPanUpdate: (d) {
-            final node =
-                ref.read(networkControllerProvider).network.nodeById(nodeId);
-            if (node == null) return;
-            ref.read(networkControllerProvider.notifier).moveNode(
-                  nodeId,
-                  node.x + d.delta.dx / scale,
-                  node.y + d.delta.dy / scale,
-                );
-          },
-          onPanEnd: (_) {
-            ref
-                .read(networkControllerProvider.notifier)
-                .endNodeDragWithSnap(nodeId, snapWorld);
-            // Keep the (still-present) edge selected after a snap/merge.
-            if (ref.read(networkControllerProvider).network.edges
-                .any((e) => e.id == edgeId)) {
-              ref.read(selectionProvider.notifier).selectEdge(edgeId);
-            }
-          },
-          child: Center(
-            child: Container(
+      child: _ResizeHandle(
+        nodeId: nodeId,
+        edgeId: edgeId,
+        scale: scale,
+        snapWorld: snapWorld,
+      ),
+    );
+  }
+
+}
+
+/// The draggable endpoint dot for a selected run. Tracks its own press state so
+/// it scales down a touch (with a deeper shadow) on grab — a tactile "I've got
+/// it" cue — then settles back on release. Press feedback is transient motion;
+/// the at-rest dot is identical to before.
+class _ResizeHandle extends ConsumerStatefulWidget {
+  final String nodeId;
+  final String edgeId;
+  final double scale;
+  final double snapWorld;
+
+  const _ResizeHandle({
+    required this.nodeId,
+    required this.edgeId,
+    required this.scale,
+    required this.snapWorld,
+  });
+
+  @override
+  ConsumerState<_ResizeHandle> createState() => _ResizeHandleState();
+}
+
+class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
+  bool _pressing = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeUpLeftDownRight,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (_) {
+          setState(() => _pressing = true);
+          ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+        },
+        onPanUpdate: (d) {
+          final node = ref
+              .read(networkControllerProvider)
+              .network
+              .nodeById(widget.nodeId);
+          if (node == null) return;
+          ref.read(networkControllerProvider.notifier).moveNode(
+                widget.nodeId,
+                node.x + d.delta.dx / widget.scale,
+                node.y + d.delta.dy / widget.scale,
+              );
+        },
+        onPanEnd: (_) {
+          setState(() => _pressing = false);
+          ref
+              .read(networkControllerProvider.notifier)
+              .endNodeDragWithSnap(widget.nodeId, widget.snapWorld);
+          // Keep the (still-present) edge selected after a snap/merge.
+          if (ref
+              .read(networkControllerProvider)
+              .network
+              .edges
+              .any((e) => e.id == widget.edgeId)) {
+            ref.read(selectionProvider.notifier).selectEdge(widget.edgeId);
+          }
+        },
+        onPanCancel: () => setState(() => _pressing = false),
+        child: Center(
+          child: AnimatedScale(
+            scale: _pressing ? 0.85 : 1.0,
+            duration: MechXMotion.press,
+            curve: MechXMotion.standard,
+            child: AnimatedContainer(
+              duration: MechXMotion.press,
+              curve: MechXMotion.standard,
               width: 10,
               height: 10,
-              decoration: const BoxDecoration(
-                color: Color(0xFF4C8DFF),
+              decoration: BoxDecoration(
+                color: const Color(0xFF4C8DFF),
                 shape: BoxShape.circle,
-                border: Border.fromBorderSide(
+                border: const Border.fromBorderSide(
                     BorderSide(color: Color(0xFFFFFFFF), width: 1.5)),
+                // Shadow only while grabbed (at rest it matches the original
+                // flat dot, so no static pixel change).
+                boxShadow: _pressing
+                    ? const [
+                        BoxShadow(
+                          color: Color(0x55000000),
+                          blurRadius: 6,
+                          offset: Offset(0, 1),
+                        ),
+                      ]
+                    : null,
               ),
             ),
           ),
@@ -181,7 +245,6 @@ class NetworkSelectionOverlay extends ConsumerWidget {
       ),
     );
   }
-
 }
 
 /// Whether [n] lives on this sheet/floor.
