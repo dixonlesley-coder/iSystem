@@ -1086,6 +1086,38 @@ class _ServiceInspector extends ConsumerWidget {
                           style: type.caption
                               .copyWith(color: colors.textMuted),
                         ),
+                        const SizedBox(height: MechXSpacing.md),
+                        _Field(
+                          label: 'Origin fault level (kA)',
+                          child: _Num(
+                            value: project.originFaultLevelA != null
+                                ? project.originFaultLevelA!.amperes / 1000
+                                : 16,
+                            onChanged: (v) =>
+                                ctrl.setOriginFaultLevel(Current(v * 1000)),
+                          ),
+                        ),
+                        Text(
+                          'Prospective 3-phase fault at the supply origin. Drives '
+                          'Fold-1 busbar short-circuit withstand sizing. Default '
+                          '16 kA. VERIFY against the PLN / upstream let-through.',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted),
+                        ),
+                        const SizedBox(height: MechXSpacing.md),
+                        _Field(
+                          label: 'Busbar clearing time (s)',
+                          child: _Num(
+                            value: project.busbarClearingTimeS ?? 0.1,
+                            onChanged: ctrl.setBusbarClearingTime,
+                          ),
+                        ),
+                        Text(
+                          'Protective-device clearing time for the withstand '
+                          'thermal check (smaller = less oversize). Default 0.1 s.',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted),
+                        ),
                       ],
                     ),
                   ),

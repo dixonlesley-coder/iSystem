@@ -94,24 +94,31 @@ final electricalProjectProvider =
 /// time governs, and ~0.1 s is a realistic, conservative LV figure (a high fault
 /// is cleared by the incomer's instantaneous trip in tens of ms). At 1 s the
 /// adiabatic floor over-sizes every utility-fed bus (~200 mm² at 16 kA); 0.1 s
-/// upsizes only where genuinely needed. Tunable — a later pass may expose this
-/// and the origin fault level as project settings.
+/// upsizes only where genuinely needed. This is now the FALLBACK default — the
+/// fault level + clearing time are project settings (Service & Earthing
+/// inspector); a project that leaves them unset uses this 0.1 s and the 16 kA
+/// origin default below, preserving the prior byte-identical behaviour.
 /// // VERIFY against the assembly's declared Icw / the upstream device let-through.
 const double _liveBusbarClearingTimeS = 0.1;
 
 final electricalResultProvider = Provider<ElectricalSystemResult>(
   (ref) {
     final geo = ref.watch(projectControllerProvider);
+    final project = ref.watch(electricalProjectProvider);
     return computeSystem(
       const PuilProfile(),
-      ref.watch(electricalProjectProvider),
+      project,
       calibrationBySheet: geo.calibrations,
       building: geo.building,
       // Fold 1 — busbar short-circuit withstand: floor each bus to survive the
-      // prospective fault (origin 16 kA, consistent with the fault study) for
-      // the assumed clearing time, not merely to carry the load current.
-      originFaultLevel: const Current(defaultLvUtilityFaultKa * 1000),
-      busbarClearingTimeS: _liveBusbarClearingTimeS,
+      // prospective fault for the clearing time, not merely to carry the load
+      // current. The fault level + clearing time are project settings (Service &
+      // Earthing inspector); when unset they fall back to the app defaults
+      // (16 kA / 0.1 s), so an untouched project sizes byte-identically.
+      originFaultLevel: project.originFaultLevelA ??
+          const Current(defaultLvUtilityFaultKa * 1000),
+      busbarClearingTimeS:
+          project.busbarClearingTimeS ?? _liveBusbarClearingTimeS,
     );
   },
 );
@@ -143,6 +150,25 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void setEarthingSystem(EarthingSystem system) =>
       state = _withProject(earthingSystem: system);
 
+  /// Set the prospective origin fault level (Fold-1 busbar short-circuit
+  /// withstand). Null resets to the app default (16 kA). Non-positive values are
+  /// ignored (the engine guards faultKa ≤ 0, but we avoid persisting garbage).
+  void setOriginFaultLevel(Current? a) {
+    if (a != null && a.amperes <= 0) return;
+    state = a == null
+        ? _withProject(clearOriginFaultLevelA: true)
+        : _withProject(originFaultLevelA: a);
+  }
+
+  /// Set the busbar clearing time (s) for the Fold-1 withstand thermal check.
+  /// Null resets to the app default (0.1 s). Non-positive values are ignored.
+  void setBusbarClearingTime(double? s) {
+    if (s != null && s <= 0) return;
+    state = s == null
+        ? _withProject(clearBusbarClearingTimeS: true)
+        : _withProject(busbarClearingTimeS: s);
+  }
+
   /// Rebuild the project carrying every field through, overriding only those
   /// supplied — so an edit to one field never silently drops the additive A8
   /// fields (sources / sites / dual-transformer / occupancy). A local helper
@@ -151,6 +177,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     String? name,
     EarthingSystem? earthingSystem,
     List<ElectricalPanel>? panels,
+    Current? originFaultLevelA,
+    bool clearOriginFaultLevelA = false,
+    double? busbarClearingTimeS,
+    bool clearBusbarClearingTimeS = false,
   }) =>
       ElectricalProject(
         id: state.id,
@@ -167,6 +197,12 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         buildingLengthM: state.buildingLengthM,
         buildingWidthM: state.buildingWidthM,
         buildingHeightM: state.buildingHeightM,
+        originFaultLevelA: clearOriginFaultLevelA
+            ? null
+            : (originFaultLevelA ?? state.originFaultLevelA),
+        busbarClearingTimeS: clearBusbarClearingTimeS
+            ? null
+            : (busbarClearingTimeS ?? state.busbarClearingTimeS),
       );
 
   /// Restore the built-in sample project.
