@@ -16,6 +16,8 @@ import 'package:mechx_engine/electrical/load_kind.dart';
 
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/palette_card.dart';
+import '../widgets/section_label.dart';
 
 /// The drag payload — what a palette card drops.
 @immutable
@@ -117,17 +119,14 @@ class ElectricalPalette extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
+          const Padding(
+            padding: EdgeInsets.fromLTRB(
               MechXSpacing.md,
               MechXSpacing.md,
               MechXSpacing.md,
               MechXSpacing.xs,
             ),
-            child: Text(
-              'Loads',
-              style: type.subtitle.copyWith(color: colors.textPrimary),
-            ),
+            child: MechXSectionLabel('Loads'),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.md),
@@ -140,115 +139,39 @@ class ElectricalPalette extends StatelessWidget {
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(
-                MechXSpacing.sm,
+                MechXSpacing.md,
                 0,
-                MechXSpacing.sm,
+                MechXSpacing.md,
                 MechXSpacing.md,
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  for (final g in _groups) ...[
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                        MechXSpacing.xs,
-                        MechXSpacing.sm,
-                        0,
-                        MechXSpacing.xs,
+                  for (var i = 0; i < _groups.length; i++) ...[
+                    // The first group's items sit under the "Loads" header
+                    // above; later groups get their own section label.
+                    if (i > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(
+                          top: MechXSpacing.sm,
+                          bottom: MechXSpacing.xs,
+                        ),
+                        child: MechXSectionLabel(_groups[i].title),
                       ),
-                      child: Text(
-                        g.title.toUpperCase(),
-                        style: type.caption.copyWith(
-                          color: colors.textMuted,
-                          letterSpacing: 0.8,
-                          fontWeight: FontWeight.w600,
+                    for (final c in _groups[i].cards)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+                        child: PaletteCard<PaletteLoad>(
+                          label: c.label,
+                          swatch: c.load.kind == LoadKind.feeder
+                              ? colors.success
+                              : colors.accent,
+                          data: c.load,
+                          fillWidth: true,
                         ),
                       ),
-                    ),
-                    for (final c in g.cards) _PaletteCard(card: c),
                   ],
                 ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PaletteCard extends StatefulWidget {
-  final _Card card;
-  const _PaletteCard({required this.card});
-
-  @override
-  State<_PaletteCard> createState() => _PaletteCardState();
-}
-
-class _PaletteCardState extends State<_PaletteCard> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
-      child: Draggable<PaletteLoad>(
-        data: widget.card.load,
-        dragAnchorStrategy: pointerDragAnchorStrategy,
-        feedback: _chrome(context, dragging: true, hover: true),
-        childWhenDragging: Opacity(
-          opacity: 0.4,
-          child: _chrome(context, dragging: false),
-        ),
-        child: MouseRegion(
-          cursor: SystemMouseCursors.grab,
-          onEnter: (_) => setState(() => _hover = true),
-          onExit: (_) => setState(() => _hover = false),
-          child: _chrome(context, dragging: false, hover: _hover),
-        ),
-      ),
-    );
-  }
-
-  Widget _chrome(
-    BuildContext context, {
-    required bool dragging,
-    bool hover = false,
-  }) {
-    final colors = context.colors;
-    final type = context.type;
-    final isSource = widget.card.load.kind == LoadKind.feeder;
-    final dot = isSource ? colors.success : colors.accent;
-    final lit = dragging || hover;
-    return AnimatedContainer(
-      duration: MechXMotion.hover,
-      curve: MechXMotion.standard,
-      padding: const EdgeInsets.symmetric(
-        horizontal: MechXSpacing.sm,
-        vertical: MechXSpacing.xs + 1,
-      ),
-      decoration: BoxDecoration(
-        color: lit ? colors.surfaceHover : colors.background,
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: lit ? colors.accent : colors.border),
-        boxShadow: dragging ? MechXShadow.popover : null,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: MechXSpacing.xs + 2),
-          Flexible(
-            child: Text(
-              widget.card.label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: type.label.copyWith(
-                color: lit ? colors.textPrimary : colors.textSecondary,
               ),
             ),
           ),

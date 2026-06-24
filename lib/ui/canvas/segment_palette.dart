@@ -5,7 +5,8 @@ import 'package:mechx_engine/network/network.dart';
 import '../../store/network_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
-import '../widgets/mechx_focus_ring.dart';
+import '../widgets/palette_card.dart';
+import '../widgets/section_label.dart';
 import 'service_style.dart';
 
 /// What a palette card drops onto the canvas. The drop overlay reads [kind] to
@@ -37,7 +38,7 @@ class SegmentPalette extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionLabel('Palette'),
+        const MechXSectionLabel('Palette'),
         const SizedBox(height: MechXSpacing.xs),
         Text(
           'Drag onto the canvas to drop. Segments use the active service.',
@@ -48,29 +49,29 @@ class SegmentPalette extends ConsumerWidget {
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
           children: [
-            _PaletteCard(
+            PaletteCard<PaletteItem>(
               label: 'Pipe segment',
               swatch: serviceColor(activeService),
-              item: const PaletteItem(PaletteItemKind.pipeSegment),
+              data: const PaletteItem(PaletteItemKind.pipeSegment),
             ),
-            _PaletteCard(
+            PaletteCard<PaletteItem>(
               label: 'Duct segment',
               swatch: serviceColor(ServiceType.duct),
-              item: const PaletteItem(
+              data: const PaletteItem(
                 PaletteItemKind.ductSegment,
                 service: ServiceType.duct,
               ),
               dotShape: BoxShape.rectangle,
             ),
-            _PaletteCard(
+            PaletteCard<PaletteItem>(
               label: 'Fitting',
               swatch: context.colors.textSecondary,
-              item: const PaletteItem(PaletteItemKind.fitting),
+              data: const PaletteItem(PaletteItemKind.fitting),
             ),
-            _PaletteCard(
+            PaletteCard<PaletteItem>(
               label: 'Terminal',
               swatch: context.colors.textSecondary,
-              item: const PaletteItem(PaletteItemKind.terminal),
+              data: const PaletteItem(PaletteItemKind.terminal),
               dotHollow: true,
             ),
           ],
@@ -80,118 +81,3 @@ class SegmentPalette extends ConsumerWidget {
   }
 }
 
-/// A draggable palette chip. Uses [Draggable] (in widgets.dart) with a small
-/// feedback chip; the drag payload is the [PaletteItem] the drop overlay reads.
-/// Hovering lifts the chip a touch and a keyboard focus ring shows it's
-/// reachable (the chip is drag-only, so the ring carries no Enter/Space action).
-class _PaletteCard extends StatefulWidget {
-  final String label;
-  final Color swatch;
-  final PaletteItem item;
-  final BoxShape dotShape;
-  final bool dotHollow;
-
-  const _PaletteCard({
-    required this.label,
-    required this.swatch,
-    required this.item,
-    this.dotShape = BoxShape.circle,
-    this.dotHollow = false,
-  });
-
-  @override
-  State<_PaletteCard> createState() => _PaletteCardState();
-}
-
-class _PaletteCardState extends State<_PaletteCard> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final chip = _chip(context, dragging: false);
-    return MechXFocusRing(
-      child: Draggable<PaletteItem>(
-        data: widget.item,
-        dragAnchorStrategy: pointerDragAnchorStrategy,
-        feedback: _chip(context, dragging: true),
-        childWhenDragging: Opacity(opacity: 0.4, child: chip),
-        child: MouseRegion(
-          cursor: SystemMouseCursors.grab,
-          onEnter: (_) => setState(() => _hover = true),
-          onExit: (_) => setState(() => _hover = false),
-          child: AnimatedScale(
-            scale: _hover ? 1.03 : 1.0,
-            duration: MechXMotion.hover,
-            curve: MechXMotion.standard,
-            child: chip,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _chip(BuildContext context, {required bool dragging}) {
-    final colors = context.colors;
-    final type = context.type;
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MechXSpacing.sm,
-        vertical: MechXSpacing.xs,
-      ),
-      decoration: BoxDecoration(
-        color: dragging ? colors.surfaceHover : colors.background,
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: dragging ? colors.accent : colors.border),
-        boxShadow: dragging
-            ? const [
-                BoxShadow(
-                    color: Color(0x33000000),
-                    blurRadius: 10,
-                    offset: Offset(0, 3)),
-              ]
-            : null,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(
-              color: widget.dotHollow ? const Color(0x00000000) : widget.swatch,
-              shape: widget.dotShape,
-              borderRadius: widget.dotShape == BoxShape.rectangle
-                  ? const BorderRadius.all(Radius.circular(2))
-                  : null,
-              border: widget.dotHollow
-                  ? Border.all(color: widget.swatch, width: 1.5)
-                  : null,
-            ),
-          ),
-          const SizedBox(width: MechXSpacing.xs),
-          Text(
-            widget.label,
-            style: type.label.copyWith(color: colors.textSecondary),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Local copy of the inspector's section label (kept private to the canvas
-/// palette so it has no cross-file dependency).
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  const _SectionLabel(this.text);
-
-  @override
-  Widget build(BuildContext context) => Text(
-        text.toUpperCase(),
-        style: context.type.caption.copyWith(
-          color: context.colors.textMuted,
-          letterSpacing: 0.8,
-          fontWeight: FontWeight.w600,
-        ),
-      );
-}
