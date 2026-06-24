@@ -194,10 +194,12 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     ElectricalProject project,
     ElectricalSystemResult result,
   ) {
+    final colors = context.colors;
+    // The Loads palette sits on the RIGHT — consistent with the inspector/DRAW
+    // column in every other workspace (Layout, Schematic). The canvas leads.
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const ElectricalPalette(),
         Expanded(
           child: Stack(
             children: [
@@ -284,6 +286,8 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             ],
           ),
         ),
+        Container(width: 1, color: colors.border),
+        const ElectricalPalette(),
       ],
     );
   }

@@ -1,6 +1,10 @@
-/// The left Loads palette for the electrical single-line canvas — grouped
+/// The Loads palette for the electrical single-line canvas — grouped
 /// draggable cards ported from PanelMaker's `SLD_PALETTE`. Drag a card onto a
 /// panel to add a way, or onto blank canvas to add a floating load / sub-panel.
+///
+/// Borderless: the placement owns the separator (the canvas-side hairline in
+/// `ElectricalView`, the [CollapsibleInspector] border in the unified Layout),
+/// so the column sits flush on the right like every other inspector.
 ///
 /// Each card carries a [PaletteLoad] payload (kind + optional phase + default
 /// power). cos φ / demand factor come from `loadDefaults` so the palette never
@@ -109,10 +113,7 @@ class ElectricalPalette extends StatelessWidget {
     final type = context.type;
     return Container(
       width: 188,
-      decoration: BoxDecoration(
-        color: colors.surface,
-        border: Border(right: BorderSide(color: colors.border)),
-      ),
+      color: colors.surface,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
