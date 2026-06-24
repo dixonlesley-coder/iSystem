@@ -11,6 +11,7 @@ import 'package:mechx_engine/electrical/power_oneline.dart';
 
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/section_label.dart';
 
 class PowerOneLineView extends StatelessWidget {
   final PowerOneLine? oneLine;
@@ -78,7 +79,7 @@ class PowerOneLineView extends StatelessWidget {
                 const SizedBox(height: MechXSpacing.lg),
                 // Connections.
                 if (ol.edges.isNotEmpty) ...[
-                  _SectionLabel('Connections'),
+                  MechXSectionLabel('Connections'),
                   const SizedBox(height: MechXSpacing.xs),
                   for (final e in ol.edges)
                     _Row(
@@ -90,7 +91,7 @@ class PowerOneLineView extends StatelessWidget {
                 ],
                 // Interlocks.
                 if (ol.interlocks.isNotEmpty) ...[
-                  _SectionLabel('Source interlocks'),
+                  MechXSectionLabel('Source interlocks'),
                   const SizedBox(height: MechXSpacing.xs),
                   for (final il in ol.interlocks)
                     _Interlock(
@@ -242,17 +243,3 @@ class _Interlock extends StatelessWidget {
   }
 }
 
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  const _SectionLabel(this.text);
-
-  @override
-  Widget build(BuildContext context) => Text(
-        text.toUpperCase(),
-        style: context.type.caption.copyWith(
-          color: context.colors.textMuted,
-          letterSpacing: 0.8,
-          fontWeight: FontWeight.w600,
-        ),
-      );
-}

@@ -35,6 +35,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/section_label.dart';
 import '../widgets/mechx_text_field.dart';
 
 /// Gather the live design results into a calc report and write it to a Markdown
@@ -172,7 +173,7 @@ class ProjectPanel extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _SectionLabel(context.strings(StringKey.inspectorProject)),
+              MechXSectionLabel(context.strings(StringKey.inspectorProject)),
               const SizedBox(height: MechXSpacing.sm),
               MechXTextField(
                 value: project.name,
@@ -203,7 +204,7 @@ class ProjectPanel extends ConsumerWidget {
               Row(
                 children: [
                   Expanded(
-                      child: _SectionLabel(
+                      child: MechXSectionLabel(
                           context.strings(StringKey.inspectorBuilding))),
                   const SizedBox(width: MechXSpacing.xs),
                   Flexible(
@@ -265,7 +266,7 @@ class ProjectPanel extends ConsumerWidget {
 
               // ── Sheet → floor mapping ─────────────────────────────────────
               if (currentSheet != null) ...[
-                _SectionLabel(context.strings(StringKey.inspectorSheet)),
+                MechXSectionLabel(context.strings(StringKey.inspectorSheet)),
                 const SizedBox(height: MechXSpacing.sm),
                 Builder(builder: (context) {
                   final sheetsState = ref.watch(sheetsControllerProvider);
@@ -308,7 +309,7 @@ class ProjectPanel extends ConsumerWidget {
               ],
 
               // ── Scale calibration ─────────────────────────────────────────
-              _SectionLabel('Scale'),
+              MechXSectionLabel('Scale'),
               const SizedBox(height: MechXSpacing.sm),
               Container(
                 padding: const EdgeInsets.all(MechXSpacing.sm),
@@ -360,21 +361,6 @@ class ProjectPanel extends ConsumerWidget {
       ),
     );
   }
-}
-
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  const _SectionLabel(this.text);
-
-  @override
-  Widget build(BuildContext context) => Text(
-        text.toUpperCase(),
-        style: context.type.caption.copyWith(
-          color: context.colors.textMuted,
-          letterSpacing: 0.8,
-          fontWeight: FontWeight.w600,
-        ),
-      );
 }
 
 class _FloorRow extends StatelessWidget {
@@ -579,7 +565,7 @@ class _DrawSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionLabel('Draw'),
+        const MechXSectionLabel('Draw'),
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
@@ -660,7 +646,7 @@ class _SizingSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionLabel('Sizing'),
+        const MechXSectionLabel('Sizing'),
         const SizedBox(height: MechXSpacing.sm),
         Row(
           children: [
@@ -761,7 +747,7 @@ class _ResultsSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionLabel('Network'),
+        const MechXSectionLabel('Network'),
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
@@ -930,7 +916,7 @@ class _FireSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionLabel('Fire'),
+        const MechXSectionLabel('Fire'),
         const SizedBox(height: MechXSpacing.sm),
         kv('Sprinkler flow',
             '${sprinkler.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),
@@ -1090,7 +1076,7 @@ class _SelectionSection extends ConsumerWidget {
       children: [
         Row(
           children: [
-            Expanded(child: _SectionLabel('Selection')),
+            Expanded(child: MechXSectionLabel('Selection')),
             _GlyphButton(glyph: '×', onTap: selCtrl.clear),
           ],
         ),
@@ -1112,7 +1098,7 @@ class _SelectionSection extends ConsumerWidget {
       children: [
         Row(
           children: [
-            Expanded(child: _SectionLabel('Selection')),
+            Expanded(child: MechXSectionLabel('Selection')),
             _GlyphButton(glyph: '×', onTap: selCtrl.clear),
           ],
         ),
@@ -1416,7 +1402,7 @@ class _HvacSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionLabel('HVAC · ducting'),
+        const MechXSectionLabel('HVAC · ducting'),
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,

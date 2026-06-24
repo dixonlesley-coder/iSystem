@@ -40,12 +40,17 @@ class _PaletteCardState<T extends Object> extends State<PaletteCard<T>> {
 
   @override
   Widget build(BuildContext context) {
-    final chip = _chip(context, dragging: false);
+    final chip = _chip(context, dragging: false, fill: widget.fillWidth);
     return MechXFocusRing(
       child: Draggable<T>(
         data: widget.data,
         dragAnchorStrategy: pointerDragAnchorStrategy,
-        feedback: _chip(context, dragging: true),
+        // The drag feedback is ALWAYS compact (min-width): the Overlay lays the
+        // feedback out under loose constraints, where a fillWidth Row(max)+
+        // Expanded would balloon to the full width (and can trip the RenderFlex
+        // unbounded assertion). The chip hugs its content while it follows the
+        // cursor, regardless of the in-list fillWidth.
+        feedback: _chip(context, dragging: true, fill: false),
         childWhenDragging: Opacity(opacity: 0.4, child: chip),
         child: MouseRegion(
           cursor: SystemMouseCursors.grab,
@@ -62,7 +67,11 @@ class _PaletteCardState<T extends Object> extends State<PaletteCard<T>> {
     );
   }
 
-  Widget _chip(BuildContext context, {required bool dragging}) {
+  Widget _chip(
+    BuildContext context, {
+    required bool dragging,
+    required bool fill,
+  }) {
     final colors = context.colors;
     final type = context.type;
     final label = Text(
@@ -90,7 +99,7 @@ class _PaletteCardState<T extends Object> extends State<PaletteCard<T>> {
             : null,
       ),
       child: Row(
-        mainAxisSize: widget.fillWidth ? MainAxisSize.max : MainAxisSize.min,
+        mainAxisSize: fill ? MainAxisSize.max : MainAxisSize.min,
         children: [
           Container(
             width: 10,
@@ -107,9 +116,9 @@ class _PaletteCardState<T extends Object> extends State<PaletteCard<T>> {
             ),
           ),
           const SizedBox(width: MechXSpacing.xs),
-          // In a full-width list the label flexes (ellipsis on overflow); in a
-          // compact Wrap the chip hugs its content.
-          if (widget.fillWidth) Expanded(child: label) else label,
+          // In a full-width list the label flexes (ellipsis on overflow); the
+          // compact (feedback / Wrap) form hugs its content.
+          if (fill) Expanded(child: label) else label,
         ],
       ),
     );
