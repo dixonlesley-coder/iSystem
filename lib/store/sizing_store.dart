@@ -79,10 +79,17 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
       else if (n.fixture != null)
         n.id: profile.fixtureUnitLoad(n.fixture!, occupancy: occupancy),
   };
-  // Per-diffuser airflow where assigned (drives the duct air path).
+  final intensity = ref.watch(rainfallIntensityProvider);
+  // Per-diffuser airflow where assigned (drives the duct air path), plus the
+  // per-outlet rainwater design flow for any rainwater node carrying a roof-area
+  // override (it wins over the flat default leaf demand for that outlet).
   final nodeFlowDemand = <String, FlowRate>{
     for (final n in net.nodes)
       if (n.airflow != null) n.id: n.airflow!,
+    for (final n in net.nodes)
+      if (n.roofAreaM2 != null)
+        n.id: rainwaterDesignFlow(
+            intensityMmPerHr: intensity, roofAreaM2: n.roofAreaM2!),
   };
   // Per-fixture drainage units (drives sanitary drainage/vent sizing). A
   // resolved custom fixture's drainageUnits wins over the built-in table.
@@ -99,11 +106,12 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
       n.fixture == PlumbingFixture.waterClosetFlushValve ||
       (customFor(n)?.isFlushValve ?? false));
 
-  // Rainwater leaves drain a default roof area at the design storm intensity.
+  // Rainwater leaves drain a default roof area at the design storm intensity
+  // (per-outlet roof areas, when set, override this via nodeFlowDemand above).
   final leafDemand = <ServiceType, FlowRate>{
     ...kDefaultLeafDemand,
     ServiceType.rainwater: rainwaterDesignFlow(
-      intensityMmPerHr: ref.watch(rainfallIntensityProvider),
+      intensityMmPerHr: intensity,
       roofAreaM2: kDefaultRoofAreaPerOutlet,
     ),
   };

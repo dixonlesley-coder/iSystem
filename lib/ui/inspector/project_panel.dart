@@ -1189,6 +1189,36 @@ class _SelectionSection extends ConsumerWidget {
               ),
             ],
           ),
+          const SizedBox(height: MechXSpacing.sm),
+          Text('Rainwater outlet roof area',
+              style: context.type.caption
+                  .copyWith(color: context.colors.textMuted)),
+          const SizedBox(height: MechXSpacing.xs),
+          Row(
+            children: [
+              _GlyphButton(
+                glyph: '−',
+                onTap: () {
+                  final a = (node.roofAreaM2 ?? 0) - 50;
+                  ctrl.setNodeRoofArea(node.id, a <= 0 ? null : a);
+                },
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              Text(
+                node.roofAreaM2 == null
+                    ? '—'
+                    : '${node.roofAreaM2!.toStringAsFixed(0)} m2',
+                style: context.type.mono
+                    .copyWith(color: context.colors.textSecondary),
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              _GlyphButton(
+                glyph: '+',
+                onTap: () => ctrl.setNodeRoofArea(
+                    node.id, (node.roofAreaM2 ?? 0) + 50),
+              ),
+            ],
+          ),
         ],
         const SizedBox(height: MechXSpacing.sm),
         Align(

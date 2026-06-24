@@ -103,4 +103,41 @@ void main() {
     c.read(showSizingProvider.notifier).toggle();
     expect(c.read(showSizingProvider), isTrue);
   });
+
+  // Builds a single rainwater run s1/floor0 (0,0)→(1000,0); returns the
+  // container, the run edge id, and the far (outlet) node id.
+  ({ProviderContainer c, String edgeId, String outletId}) rainwaterRun() {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final n = c.read(networkControllerProvider.notifier);
+    n.setService(ServiceType.rainwater);
+    n.setTool(DrawTool.drawRun);
+    n.placeRunPoint('s1', 0, const Offset(0, 0));
+    n.placeRunPoint('s1', 0, const Offset(1000, 0));
+    final net = c.read(networkControllerProvider).network;
+    final edge = net.edges.firstWhere((e) => e.service == ServiceType.rainwater);
+    final outlet = net.nodes.firstWhere((nd) => nd.x == 1000);
+    return (c: c, edgeId: edge.id, outletId: outlet.id);
+  }
+
+  test('per-outlet roof area drives a larger downpipe than the flat default',
+      () {
+    final r = rainwaterRun();
+    final base = r.c.read(sizingProvider)[r.edgeId]!.flow.cubicMetersPerSecond;
+    // A much larger catchment than kDefaultRoofAreaPerOutlet (100 m²).
+    r.c.read(networkControllerProvider.notifier).setNodeRoofArea(r.outletId, 800);
+    final big = r.c.read(sizingProvider)[r.edgeId]!.flow.cubicMetersPerSecond;
+    expect(big, greaterThan(base));
+  });
+
+  test('clearing the roof-area override returns to the default (byte-identical)',
+      () {
+    final r = rainwaterRun();
+    final dia = r.c.read(sizingProvider)[r.edgeId]!.diameter.inMillimeters;
+    final ctrl = r.c.read(networkControllerProvider.notifier);
+    ctrl.setNodeRoofArea(r.outletId, 800);
+    ctrl.setNodeRoofArea(r.outletId, null);
+    final back = r.c.read(sizingProvider)[r.edgeId]!.diameter.inMillimeters;
+    expect(back, dia);
+  });
 }
