@@ -39,6 +39,7 @@ import '../../store/sizing_store.dart';
 import '../canvas/edge_context_menu.dart';
 import '../canvas/service_style.dart';
 import '../canvas/viewport.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 
@@ -123,13 +124,13 @@ class _Toolbar extends StatelessWidget {
       child: Row(
         children: [
           _TabButton(
-            label: 'Auto',
+            label: context.strings(StringKey.schematicAuto),
             selected: mode == _Mode.auto,
             onTap: () => onMode(_Mode.auto),
           ),
           const SizedBox(width: MechXSpacing.xs),
           _TabButton(
-            label: 'Edit',
+            label: context.strings(StringKey.schematicEdit),
             selected: mode == _Mode.edit,
             onTap: () => onMode(_Mode.edit),
           ),
@@ -143,7 +144,7 @@ class _Toolbar extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('Riser service',
+                    Text(context.strings(StringKey.schematicRiserService),
                         style: context.type.caption
                             .copyWith(color: colors.textMuted)),
                     const SizedBox(width: MechXSpacing.sm),
@@ -264,7 +265,7 @@ class _AutoElevation extends ConsumerWidget {
     if (network.nodes.isEmpty) {
       return Center(
         child: Text(
-          'No network drawn',
+          context.strings(StringKey.schematicNoNetwork),
           style: type.body.copyWith(color: colors.textMuted),
         ),
       );
@@ -618,9 +619,8 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                   child: IgnorePointer(
                     child: Center(
                       child: _Banner(
-                        text:
-                            'Add a second floor (Project panel) to place risers — '
-                            'a riser spans a floor-to-floor elevation delta.',
+                        text: context
+                            .strings(StringKey.schematicAddFloorBanner),
                       ),
                     ),
                   ),
@@ -686,7 +686,7 @@ class _RiserPalette extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('PALETTE',
+          Text(context.strings(StringKey.schematicPalette),
               style: type.caption.copyWith(
                 color: colors.textMuted,
                 letterSpacing: 0.8,
@@ -694,9 +694,7 @@ class _RiserPalette extends StatelessWidget {
               )),
           const SizedBox(height: MechXSpacing.xs),
           Text(
-            'Drag onto a floor to drop a riser to the floor above. Its length is '
-            'the elevation delta. Drag a riser sideways to move it; right-click '
-            'to set its size.',
+            context.strings(StringKey.schematicPaletteHelp),
             style: type.caption.copyWith(color: colors.textMuted),
           ),
           const SizedBox(height: MechXSpacing.sm),
@@ -742,7 +740,7 @@ class _RiserCard extends StatelessWidget {
           // A small vertical bar — a riser glyph.
           Container(width: 3, height: 16, color: swatch),
           const SizedBox(width: MechXSpacing.sm),
-          Text('Riser',
+          Text(context.strings(StringKey.schematicRiser),
               style: type.label.copyWith(color: colors.textSecondary)),
         ],
       ),
@@ -1313,19 +1311,19 @@ class _ElevationHelp extends StatelessWidget {
   final VoidCallback onClose;
   const _ElevationHelp({required this.onClose});
 
-  static const _items = <String>[
-    'Drag the Riser card onto a floor to place a riser to the floor above',
-    'A riser length is the floor-to-floor elevation delta, never a PDF distance',
-    'Drag a riser sideways to reposition it; its length does not change',
-    'Right-click a riser to set its nominal size in inches or pick a material',
-    'Select a riser and press Delete to remove it',
-    'Middle-drag or scroll to pan; Ctrl+scroll or pinch to zoom',
-  ];
-
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    final strings = context.strings;
+    final items = <String>[
+      strings(StringKey.schematicHelp1),
+      strings(StringKey.schematicHelp2),
+      strings(StringKey.schematicHelp3),
+      strings(StringKey.schematicHelp4),
+      strings(StringKey.schematicHelp5),
+      strings(StringKey.schematicHelp6),
+    ];
     return Container(
       width: 320,
       padding: const EdgeInsets.all(MechXSpacing.md),
@@ -1342,21 +1340,21 @@ class _ElevationHelp extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text('Elevation guide',
+                child: Text(strings(StringKey.schematicElevationGuide),
                     style: type.subtitle.copyWith(color: colors.textPrimary)),
               ),
               MouseRegion(
                 cursor: SystemMouseCursors.click,
                 child: GestureDetector(
                   onTap: onClose,
-                  child: Text('Close',
+                  child: Text(strings(StringKey.schematicClose),
                       style: type.label.copyWith(color: colors.textMuted)),
                 ),
               ),
             ],
           ),
           const SizedBox(height: MechXSpacing.sm),
-          for (final item in _items)
+          for (final item in items)
             Padding(
               padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
               child: Row(
