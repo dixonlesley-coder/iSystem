@@ -279,10 +279,18 @@ report export**; versioned `.mechx` save/open with viewport restore;
   the screenshot suite is tagged `golden` and the **release** gate runs `flutter test
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
-  Remaining: **Wave 4b**
-  (electrical drawings/SLD-GA-one-line export + commercial UI + workflow/i18n), the
-  per-segment material→hydraulic-solve fold, and exposing Fold-1 fault-level/clearing-time as
-  project settings.
+  **Wave 4b (electrical drawings export) landed**: pure-engine
+  `report/electrical_calc_report.dart` (Markdown over the sized system + power one-line
+  + verify items) and `report/electrical_dxf_export.dart` (R12 DXF single-line —
+  panels as boxes at their schematic x/y, feeders as LINEs, labels as TEXT; + a
+  power-one-line variant), wired behind an Export menu on the electrical toolbar
+  (`ui/electrical/electrical_export.dart`). The **per-segment material→hydraulic-solve
+  fold landed** (see Sizing-engine invariants) and **Fold-1 fault level + clearing time
+  are now project settings** (additive `ElectricalProject.originFaultLevelA` +
+  `busbarClearingTimeS`, edited in the Service & Earthing inspector, `.mechx`-persisted,
+  defaulting to 16 kA / 0.1 s so an untouched project is byte-identical).
+  Remaining in **Wave 4b**: commercial UI (BOM/quotation screens over the catalogue) and
+  workflow/i18n (EN/ID).
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),
@@ -335,6 +343,15 @@ report export**; versioned `.mechx` save/open with viewport restore;
   a `StandardValue.unit` is a display label (e.g. "kPa"). Never print
   `value`+`unit` together — surface the human-readable `note`. (See
   `calc_report.dart` / `StandardValue.toString`.)
+- **Per-segment material → solve**: `pressure_solve` (`solvePressurized`/`solveDownfeed`)
+  honours `edge.pipeProduct` via a per-edge Hazen–Williams C (`hazenWilliamsCFor`, still
+  pure H-W — only the C is swapped, never Darcy on the pressurized path); `duct_static`
+  honours `edge.ductProduct` via a per-edge Darcy roughness (`ductRoughnessFor` →
+  `ductFrictionPaPerMetre(roughness:)`). A null product falls back to the service default
+  ⇒ **byte-identical**. PN/pressure-class is NOT folded into hydraulics (a mechanical
+  rating, no head-loss term). Fold-1 busbar withstand fault level + clearing time come from
+  `ElectricalProject.originFaultLevelA`/`busbarClearingTimeS` (Service & Earthing inspector),
+  with the store falling back to 16 kA / 0.1 s when unset.
 - **Persistence**: design settings (occupancy, feed, ducts, rainfall, fire
   hazard, theme) round-trip via `DesignSettings` in the `.mechx` file; autosave
   only writes recovery when the work differs from the last clean Save
