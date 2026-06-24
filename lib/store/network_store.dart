@@ -375,6 +375,8 @@ class NetworkController extends Notifier<DrawingState> {
       elevation: node.elevation,
       fixture: node.fixture,
       airflow: airflow,
+      customFixtureId: node.customFixtureId,
+      roofAreaM2: node.roofAreaM2,
     ));
   }
 
@@ -393,6 +395,8 @@ class NetworkController extends Notifier<DrawingState> {
       elevation: elevation,
       fixture: node.fixture,
       airflow: node.airflow,
+      customFixtureId: node.customFixtureId,
+      roofAreaM2: node.roofAreaM2,
     ));
   }
 
@@ -639,6 +643,8 @@ class NetworkController extends Notifier<DrawingState> {
         elevation: n.elevation,
         fixture: n.fixture,
         airflow: n.airflow,
+        customFixtureId: n.customFixtureId,
+        roofAreaM2: n.roofAreaM2,
       ));
       return id;
     }

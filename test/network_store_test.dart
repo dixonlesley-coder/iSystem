@@ -510,4 +510,35 @@ void main() {
     // Menu dismissed after the pick.
     expect(find.text('SET SIZE'), findsNothing);
   });
+
+  test('node edits preserve customFixtureId + roofAreaM2 (no data loss)', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final n = c.read(networkControllerProvider.notifier);
+    n.setService(ServiceType.coldWater);
+    n.setTool(DrawTool.drawRun);
+    n.placeRunPoint('s1', 0, const Offset(0, 0));
+    n.placeRunPoint('s1', 0, const Offset(100, 0));
+    final id = c.read(networkControllerProvider).network.nodes.first.id;
+    NetNode node() => c.read(networkControllerProvider).network.nodeById(id)!;
+
+    n.setNodeRoofArea(id, 250);
+    n.setNodeCustomFixture(id, 'cf-1');
+    expect(node().roofAreaM2, 250);
+    expect(node().customFixtureId, 'cf-1');
+
+    // An airflow edit must not drop the roof area or custom fixture.
+    n.setNodeAirflow(id, FlowRate.litersPerSecond(30));
+    expect(node().roofAreaM2, 250, reason: 'airflow edit dropped roofAreaM2');
+    expect(node().customFixtureId, 'cf-1',
+        reason: 'airflow edit dropped customFixtureId');
+    expect(node().airflow!.inLitersPerSecond, 30);
+
+    // An elevation edit must preserve both too.
+    n.setNodeElevation(id, const Length(3));
+    expect(node().roofAreaM2, 250, reason: 'elevation edit dropped roofAreaM2');
+    expect(node().customFixtureId, 'cf-1',
+        reason: 'elevation edit dropped customFixtureId');
+    expect(node().elevation!.meters, 3);
+  });
 }

@@ -86,8 +86,11 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
   final nodeFlowDemand = <String, FlowRate>{
     for (final n in net.nodes)
       if (n.airflow != null) n.id: n.airflow!,
+    // A roof-area outlet (storm) — guarded so a duct diffuser's airflow on the
+    // same node id is never silently overwritten (the two are different services
+    // and never co-occur in practice, but the map key is the node id).
     for (final n in net.nodes)
-      if (n.roofAreaM2 != null)
+      if (n.roofAreaM2 != null && n.airflow == null)
         n.id: rainwaterDesignFlow(
             intensityMmPerHr: intensity, roofAreaM2: n.roofAreaM2!),
   };
