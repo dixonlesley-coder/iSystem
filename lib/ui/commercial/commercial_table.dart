@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 
@@ -83,7 +84,7 @@ class CommercialTable extends StatelessWidget {
           if (rows.isEmpty)
             Padding(
               padding: const EdgeInsets.all(MechXSpacing.md),
-              child: Text('No items.',
+              child: Text(context.strings(StringKey.commercialNoItems),
                   style: type.body.copyWith(color: colors.textMuted)),
             ),
           for (var i = 0; i < rows.length; i++)

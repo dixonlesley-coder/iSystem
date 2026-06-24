@@ -4,6 +4,7 @@ import 'package:mechx_engine/electrical/bom.dart';
 import 'package:mechx_engine/electrical/catalog.dart';
 
 import '../../store/commercial_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'commercial_table.dart';
@@ -26,7 +27,7 @@ class ElectricalBomView extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Bill of materials',
+        Text(context.strings(StringKey.commercialBomTitle),
             style: type.title.copyWith(color: colors.textPrimary)),
         const SizedBox(height: MechXSpacing.xxs),
         Text(
@@ -36,12 +37,17 @@ class ElectricalBomView extends ConsumerWidget {
         ),
         const SizedBox(height: MechXSpacing.sm),
         CommercialTable(
-          columns: const [
-            CommercialColumn('Qty', flex: 2, alignEnd: true),
-            CommercialColumn('Part', flex: 8),
-            CommercialColumn('Brand', flex: 4),
-            CommercialColumn('SKU', flex: 4),
-            CommercialColumn('Match', flex: 3),
+          columns: [
+            CommercialColumn(context.strings(StringKey.commercialColQty),
+                flex: 2, alignEnd: true),
+            CommercialColumn(context.strings(StringKey.commercialColPart),
+                flex: 8),
+            CommercialColumn(context.strings(StringKey.commercialColBrand),
+                flex: 4),
+            CommercialColumn(context.strings(StringKey.commercialColSku),
+                flex: 4),
+            CommercialColumn(context.strings(StringKey.commercialColMatch),
+                flex: 3),
           ],
           rows: [
             for (final l in bom.lines) _row(context, l, parts[l.sku]),
@@ -60,7 +66,9 @@ class ElectricalBomView extends ConsumerWidget {
       CommercialCell.text(part?.manufacturer ?? '-'),
       CommercialCell.text(line.sku ?? '-'),
       CommercialCell.text(
-        matched ? 'matched' : 'unmatched',
+        matched
+            ? context.strings(StringKey.commercialMatched)
+            : context.strings(StringKey.commercialUnmatched),
         color: matched ? colors.success : colors.warning,
       ),
     ]);

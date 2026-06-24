@@ -7,6 +7,7 @@ import 'package:mechx_engine/electrical/commercial_export.dart';
 
 import '../../store/commercial_store.dart';
 import '../../store/project_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
@@ -37,13 +38,11 @@ class CommercialHub extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('Commercial',
+                Text(context.strings(StringKey.commercialHubTitle),
                     style: type.display.copyWith(color: colors.textPrimary)),
                 const SizedBox(height: MechXSpacing.sm),
                 Text(
-                  'The electrical bill of materials, your pricelist and the '
-                  'priced proposal. Edit prices below and the quotation updates '
-                  'live.',
+                  context.strings(StringKey.commercialHubLead),
                   style: type.body.copyWith(color: colors.textSecondary),
                 ),
                 const SizedBox(height: MechXSpacing.lg),
@@ -74,11 +73,11 @@ class _ExportBar extends ConsumerWidget {
       runSpacing: MechXSpacing.sm,
       children: [
         MechXButton(
-          label: 'Export BOM (CSV)',
+          label: context.strings(StringKey.commercialExportBomCsv),
           onPressed: () => _exportBomCsv(ref),
         ),
         MechXButton(
-          label: 'Export proposal (Markdown)',
+          label: context.strings(StringKey.commercialExportProposalMd),
           primary: true,
           onPressed: () => _exportProposalMarkdown(ref),
         ),

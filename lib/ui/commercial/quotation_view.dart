@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/commercial_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_text_field.dart';
@@ -27,14 +28,14 @@ class QuotationView extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Quotation',
+        Text(context.strings(StringKey.commercialQuotationTitle),
             style: type.title.copyWith(color: colors.textPrimary)),
         const SizedBox(height: MechXSpacing.xxs),
         Text(
           cost.unmatchedCount > 0
               ? '${cost.unmatchedCount} line(s) are unpriced and excluded from '
                   'the material subtotal.'
-              : 'All catalogue-matched lines are priced.',
+              : context.strings(StringKey.commercialAllPriced),
           style: type.caption.copyWith(color: colors.textMuted),
         ),
         const SizedBox(height: MechXSpacing.sm),
@@ -50,7 +51,7 @@ class QuotationView extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Quote settings',
+              Text(context.strings(StringKey.commercialQuoteSettings),
                   style: type.subtitle.copyWith(color: colors.textPrimary)),
               const SizedBox(height: MechXSpacing.sm),
               _NumberRow(
@@ -59,17 +60,17 @@ class QuotationView extends ConsumerWidget {
                 onChanged: ctrl.setLabourRate,
               ),
               _NumberRow(
-                label: 'Overhead (%)',
+                label: context.strings(StringKey.commercialOverheadPct),
                 value: settings.overheadPct,
                 onChanged: ctrl.setOverheadPct,
               ),
               _NumberRow(
-                label: 'Contingency (%)',
+                label: context.strings(StringKey.commercialContingencyPct),
                 value: settings.contingencyPct,
                 onChanged: ctrl.setContingencyPct,
               ),
               _NumberRow(
-                label: 'Margin (%)',
+                label: context.strings(StringKey.commercialMarginPct),
                 value: settings.marginPct,
                 onChanged: ctrl.setMarginPct,
               ),
@@ -81,19 +82,24 @@ class QuotationView extends ConsumerWidget {
         // The costed roll-up.
         CommercialTable(
           columns: [
-            const CommercialColumn('Item', flex: 6),
+            CommercialColumn(context.strings(StringKey.commercialColItem),
+                flex: 6),
             CommercialColumn('Amount ($cur)', flex: 4, alignEnd: true),
           ],
           rows: [
-            _money('Material', q.materialSubtotal),
+            _money(context.strings(StringKey.commercialItemMaterial),
+                q.materialSubtotal),
             _money('Labour (${_fmt(q.labourHours)} h)', q.labourSubtotal),
-            _money('Overhead', q.overhead),
-            _money('Contingency', q.contingency),
-            _money('Margin', q.margin),
+            _money(context.strings(StringKey.commercialItemOverhead),
+                q.overhead),
+            _money(context.strings(StringKey.commercialItemContingency),
+                q.contingency),
+            _money(context.strings(StringKey.commercialItemMargin), q.margin),
             CommercialRow(
               emphasized: true,
               cells: [
-                CommercialCell.text('Grand total'),
+                CommercialCell.text(
+                    context.strings(StringKey.commercialItemGrandTotal)),
                 CommercialCell.text(_fmt(q.grandTotal)),
               ],
             ),
