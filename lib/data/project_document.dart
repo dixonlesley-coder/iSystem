@@ -255,6 +255,9 @@ class ProjectDocument {
                 if (n.fixture != null) 'fixture': n.fixture!.name,
                 if (n.airflow != null)
                   'airflow_lps': n.airflow!.inLitersPerSecond,
+                if (n.customFixtureId != null)
+                  'customFixtureId': n.customFixtureId,
+                if (n.roofAreaM2 != null) 'roof_area_m2': n.roofAreaM2,
               },
           ],
           'edges': [
@@ -330,6 +333,8 @@ class ProjectDocument {
           airflow: n['airflow_lps'] == null
               ? null
               : FlowRate.litersPerSecond((n['airflow_lps'] as num).toDouble()),
+          customFixtureId: n['customFixtureId'] as String?,
+          roofAreaM2: (n['roof_area_m2'] as num?)?.toDouble(),
         ),
     ];
     final edges = [

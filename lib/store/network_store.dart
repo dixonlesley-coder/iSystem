@@ -367,6 +367,30 @@ class NetworkController extends Notifier<DrawingState> {
     ));
   }
 
+  /// Assign a user-defined custom fixture type [customFixtureId] to a node (the
+  /// app resolves the id to its UBAP load). Pass null to clear it. Marks the node
+  /// a fixture terminal when set. Uses copyWith so other node fields survive.
+  void setNodeCustomFixture(String id, String? customFixtureId) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    _replaceNode(node.copyWith(
+      role: customFixtureId == null ? null : NodeRole.fixture,
+      customFixtureId: customFixtureId,
+      clearCustomFixtureId: customFixtureId == null,
+    ));
+  }
+
+  /// Set the catchment [roofAreaM2] (m²) draining to a rainwater outlet node, for
+  /// storm sizing. Pass null to revert to the flat default catchment.
+  void setNodeRoofArea(String id, double? roofAreaM2) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    _replaceNode(node.copyWith(
+      roofAreaM2: roofAreaM2,
+      clearRoofAreaM2: roofAreaM2 == null,
+    ));
+  }
+
   /// Change the service an edge carries.
   void setEdgeService(String id, ServiceType service) {
     final idx = state.network.edges.indexWhere((e) => e.id == id);
