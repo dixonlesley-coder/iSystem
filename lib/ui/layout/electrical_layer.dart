@@ -83,12 +83,17 @@ class ElectricalLayoutLayer extends ConsumerWidget {
     // layer's markers + wiring cross-fade between full opacity and the faded
     // coordination alpha over MechXMotion.appear (instead of snapping). The
     // endpoints are byte-identical to the old instant values.
+    // Build the layer ONCE (full opacity) as the tween's `child` and apply the
+    // fade with a single outer Opacity in the builder — so the panel/load nodes,
+    // wiring painter, drop targets and tray are NOT rebuilt 60×/s during the
+    // 220ms cross-fade (only the cheap Opacity wrapper re-runs per frame).
     return TweenAnimationBuilder<double>(
-      tween: Tween<double>(
-          end: interactive ? 1.0 : kElectricalFadedAlpha),
+      tween: Tween<double>(end: interactive ? 1.0 : kElectricalFadedAlpha),
       duration: MechXMotion.appear,
       curve: MechXMotion.standard,
-      builder: (context, opacity, _) => _buildLayer(context, ref, opacity),
+      child: _buildLayer(context, ref, 1.0),
+      builder: (context, opacity, child) =>
+          Opacity(opacity: opacity, child: child),
     );
   }
 

@@ -2080,7 +2080,9 @@ class _TextState extends State<_Text> {
     final type = context.type;
     return GestureDetector(
       onTap: _focus.requestFocus,
-      child: Container(
+      child: AnimatedContainer(
+        duration: MechXMotion.hover,
+        curve: MechXMotion.standard,
         padding: const EdgeInsets.symmetric(
           horizontal: MechXSpacing.sm,
           vertical: MechXSpacing.xs + 2,
@@ -2088,7 +2090,19 @@ class _TextState extends State<_Text> {
         decoration: BoxDecoration(
           color: colors.background,
           borderRadius: MechXRadii.control,
-          border: Border.all(color: _focused ? colors.accent : colors.border),
+          border: Border.all(
+            color: _focused ? colors.accent : colors.border,
+            width: _focused ? 1.5 : 1.0,
+          ),
+          boxShadow: _focused
+              ? [
+                  BoxShadow(
+                    color: colors.accent.withAlpha(60),
+                    blurRadius: 0,
+                    spreadRadius: 2,
+                  ),
+                ]
+              : null,
         ),
         child: EditableText(
           controller: _ctl,
@@ -2144,7 +2158,9 @@ class _NumState extends State<_Num> {
     final type = context.type;
     return GestureDetector(
       onTap: _focus.requestFocus,
-      child: Container(
+      child: AnimatedContainer(
+        duration: MechXMotion.hover,
+        curve: MechXMotion.standard,
         padding: const EdgeInsets.symmetric(
           horizontal: MechXSpacing.sm,
           vertical: MechXSpacing.xs + 2,
@@ -2152,7 +2168,19 @@ class _NumState extends State<_Num> {
         decoration: BoxDecoration(
           color: colors.background,
           borderRadius: MechXRadii.control,
-          border: Border.all(color: _focused ? colors.accent : colors.border),
+          border: Border.all(
+            color: _focused ? colors.accent : colors.border,
+            width: _focused ? 1.5 : 1.0,
+          ),
+          boxShadow: _focused
+              ? [
+                  BoxShadow(
+                    color: colors.accent.withAlpha(60),
+                    blurRadius: 0,
+                    spreadRadius: 2,
+                  ),
+                ]
+              : null,
         ),
         child: EditableText(
           controller: _ctl,
