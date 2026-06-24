@@ -36,6 +36,7 @@ import 'package:mechx_engine/electrical/results.dart' show BreakerResult;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
+import '../canvas/canvas_grid.dart';
 import '../canvas/viewport.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -59,8 +60,8 @@ const Color kRailPE = Color(0xFF2F9E44); // protective earth
 typedef PanelTap = void Function(String panelId);
 typedef CircuitEdit = void Function(String panelId, String circuitId);
 typedef PanelMenu = void Function(String panelId, Offset globalPos);
-typedef CircuitMenu = void Function(
-    String panelId, String circuitId, Offset globalPos);
+typedef CircuitMenu =
+    void Function(String panelId, String circuitId, Offset globalPos);
 
 /// The spatial single-line canvas. Stateful: it owns the [ViewportTransform]
 /// (electrical has no per-sheet viewport store) and the in-flight feeder-drag.
@@ -258,13 +259,21 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     });
   }
 
-  void _onFeederDragUpdate(Offset globalPos, Map<String, Offset> positions,
-      Map<String, ElectricalPanelResult> panels) {
+  void _onFeederDragUpdate(
+    Offset globalPos,
+    Map<String, Offset> positions,
+    Map<String, ElectricalPanelResult> panels,
+  ) {
     final box = context.findRenderObject() as RenderBox?;
     final local = box?.globalToLocal(globalPos) ?? globalPos;
     setState(() {
       _feederCursor = local;
-      _feederHoverPanel = _panelAt(local, positions, panels, exclude: _feederFrom);
+      _feederHoverPanel = _panelAt(
+        local,
+        positions,
+        panels,
+        exclude: _feederFrom,
+      );
     });
   }
 
@@ -431,8 +440,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     final tl = vt.worldToScreen(world);
     final w = panelCardWidth(panel.circuits.length);
     final cardH = cardFootprint(panel);
-    final modelPanel =
-        project.panels.where((p) => p.id == panel.panelId).firstOrNull;
+    final modelPanel = project.panels
+        .where((p) => p.id == panel.panelId)
+        .firstOrNull;
     final isRoot = panel.panelId == rootId;
     final fed = modelPanel?.fedByCircuitId != null;
     final unfed = !isRoot && !fed;
@@ -446,39 +456,42 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         world.dy - kGridSrcH - 30,
       );
       final hp = vt.worldToScreen(headWorld);
-      widgets.add(Positioned(
-        left: hp.dx,
-        top: hp.dy,
-        width: kGridSrcW * scale,
-        height: kGridSrcH * scale,
-        child: _ScaledTap(
-          onDoubleTap: widget.onRequestService,
-          child: _ScaledChild(
-            scale: scale,
-            width: kGridSrcW,
-            height: kGridSrcH,
-            child: _GridSourceNode(voltage: panel.system),
+      widgets.add(
+        Positioned(
+          left: hp.dx,
+          top: hp.dy,
+          width: kGridSrcW * scale,
+          height: kGridSrcH * scale,
+          child: _ScaledTap(
+            onDoubleTap: widget.onRequestService,
+            child: _ScaledChild(
+              scale: scale,
+              width: kGridSrcW,
+              height: kGridSrcH,
+              child: _GridSourceNode(voltage: panel.system),
+            ),
           ),
         ),
-      ));
+      );
     }
 
     // The panel card.
-    widgets.add(Positioned(
-      left: tl.dx,
-      top: tl.dy,
-      width: w * scale,
-      height: cardH * scale,
-      child: _PanelDraggable(
-        panelId: panel.panelId,
-        world: world,
-        scale: scale,
-        controller: _ctrl,
-        child: _ScaledChild(
+    widgets.add(
+      Positioned(
+        left: tl.dx,
+        top: tl.dy,
+        width: w * scale,
+        height: cardH * scale,
+        child: _PanelDraggable(
+          panelId: panel.panelId,
+          world: world,
           scale: scale,
-          width: w,
-          height: cardH,
-          child: _PanelCardNode(
+          controller: _ctrl,
+          child: _ScaledChild(
+            scale: scale,
+            width: w,
+            height: cardH,
+            child: _PanelCardNode(
               panel: panel,
               detail: detail,
               selected: _selectedPanel == panel.panelId,
@@ -486,12 +499,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               essential: modelPanel?.essential ?? false,
               upsBacked: modelPanel?.upsBacked ?? false,
               submeter: modelPanel?.submeter ?? false,
-              onTap: () =>
-                  setState(() => _selectedPanel = panel.panelId),
+              onTap: () => setState(() => _selectedPanel = panel.panelId),
               onDoubleTap: () => widget.onEditPanel(panel.panelId),
               onMenu: (gp) => widget.onPanelMenu(panel.panelId, gp),
-              onWayDoubleTap: (cid) =>
-                  widget.onEditCircuit(panel.panelId, cid),
+              onWayDoubleTap: (cid) => widget.onEditCircuit(panel.panelId, cid),
               onWayMenu: (cid, gp) =>
                   widget.onCircuitMenu(panel.panelId, cid, gp),
               onDropLoad: (load) => _ctrl.addCircuit(
@@ -503,15 +514,15 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                 loadW: load.loadW > 0 ? load.loadW : null,
                 motorKw: load.motorKw,
               ),
-              onOutletDragStart: (gp) =>
-                  _onFeederDragStart(panel.panelId, gp),
+              onOutletDragStart: (gp) => _onFeederDragStart(panel.panelId, gp),
               onOutletDragUpdate: (gp) =>
                   _onFeederDragUpdate(gp, positions, panels),
               onOutletDragEnd: _onFeederDragEnd,
             ),
+          ),
         ),
       ),
-    ));
+    );
 
     // Load nodes hanging below each non-feeder, non-spare way.
     for (var i = 0; i < panel.circuits.length; i++) {
@@ -525,33 +536,37 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         world.dy + cardH + kLoadDropGap,
       );
       final lp = vt.worldToScreen(loadWorld);
-      widgets.add(Positioned(
-        left: lp.dx,
-        top: lp.dy,
-        width: kLoadW * scale,
-        height: kLoadNodeH * scale,
-        child: _ScaledTap(
-          onTap: () => setState(() => _selectedPanel = null),
-          onDoubleTap: () => widget.onEditCircuit(panel.panelId, c.circuitId),
-          onMenu: (gp) => widget.onCircuitMenu(panel.panelId, c.circuitId, gp),
-          child: _ScaledChild(
-            scale: scale,
-            width: kLoadW,
-            height: kLoadNodeH,
-            child: _LoadNode(circuit: c),
+      widgets.add(
+        Positioned(
+          left: lp.dx,
+          top: lp.dy,
+          width: kLoadW * scale,
+          height: kLoadNodeH * scale,
+          child: _ScaledTap(
+            onTap: () => setState(() => _selectedPanel = null),
+            onDoubleTap: () => widget.onEditCircuit(panel.panelId, c.circuitId),
+            onMenu: (gp) =>
+                widget.onCircuitMenu(panel.panelId, c.circuitId, gp),
+            child: _ScaledChild(
+              scale: scale,
+              width: kLoadW,
+              height: kLoadNodeH,
+              child: _LoadNode(circuit: c),
+            ),
           ),
         ),
-      ));
+      );
     }
 
     return widgets;
   }
 
   // Helpers exposed to the host view's zoom controls.
-  void zoomIn() => _setTransform(
-      _current.zoomedBy(1.2, _viewportSize.center(Offset.zero)));
+  void zoomIn() =>
+      _setTransform(_current.zoomedBy(1.2, _viewportSize.center(Offset.zero)));
   void zoomOut() => _setTransform(
-      _current.zoomedBy(1 / 1.2, _viewportSize.center(Offset.zero)));
+    _current.zoomedBy(1 / 1.2, _viewportSize.center(Offset.zero)),
+  );
   void fitView() {
     final project = ref.read(electricalProjectProvider);
     final result = ref.read(electricalResultProvider);
@@ -608,21 +623,23 @@ class _CanvasPainter extends CustomPainter {
         final toPos = positions[fed];
         final fromPos = positions[p.id];
         if (fromPanel == null || toPos == null || fromPos == null) continue;
-        final wayIdx =
-            fromPanel.circuits.indexWhere((r) => r.circuitId == c.id);
-        final fromCardH =
-            panelCardHeight(fromPanel) + kPanelChrome;
+        final wayIdx = fromPanel.circuits.indexWhere(
+          (r) => r.circuitId == c.id,
+        );
+        final fromCardH = panelCardHeight(fromPanel) + kPanelChrome;
         final cx = wayIdx >= 0
             ? wayColumnX(wayIdx)
             : panelCardWidth(fromPanel.circuits.length) / 2;
         final start = transform.worldToScreen(
-            Offset(fromPos.dx + cx, fromPos.dy + fromCardH));
+          Offset(fromPos.dx + cx, fromPos.dy + fromCardH),
+        );
         final toPanel = result.panels[fed];
         final toW = toPanel == null
             ? 280.0
             : panelCardWidth(toPanel.circuits.length);
-        final end = transform
-            .worldToScreen(Offset(toPos.dx + toW / 2, toPos.dy));
+        final end = transform.worldToScreen(
+          Offset(toPos.dx + toW / 2, toPos.dy),
+        );
         _smoothFeeder(canvas, start, end);
       }
     }
@@ -644,8 +661,9 @@ class _CanvasPainter extends CustomPainter {
       if (fromPos != null && fromPanel != null) {
         final w = panelCardWidth(fromPanel.circuits.length);
         final h = panelCardHeight(fromPanel) + kPanelChrome;
-        final anchor =
-            transform.worldToScreen(Offset(fromPos.dx + w / 2, fromPos.dy + h));
+        final anchor = transform.worldToScreen(
+          Offset(fromPos.dx + w / 2, fromPos.dy + h),
+        );
         canvas.drawLine(
           anchor,
           feederCursor,
@@ -659,22 +677,8 @@ class _CanvasPainter extends CustomPainter {
     }
   }
 
-  void _grid(Canvas canvas, Size size) {
-    const worldStep = 32.0;
-    final step = worldStep * transform.scale;
-    if (step < 6) return;
-    final paint = Paint()
-      ..color = gridLine.withAlpha(90)
-      ..strokeWidth = 1;
-    final originX = transform.offset.dx % step;
-    final originY = transform.offset.dy % step;
-    for (var x = originX; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (var y = originY; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
+  void _grid(Canvas canvas, Size size) =>
+      paintCanvasGrid(canvas, size, transform, gridLine);
 
   void _smoothFeeder(Canvas canvas, Offset a, Offset b) {
     final paint = Paint()
@@ -722,11 +726,13 @@ class _CanvasPainter extends CustomPainter {
             ? '${c.grounding.cableSpec} · ${util.round()}%'
             : c.grounding.cableSpec;
         _label(
-            canvas,
-            transform
-                .worldToScreen(Offset(world.dx + cx + 6, world.dy + (cardH + loadTop) / 2)),
-            lbl,
-            s);
+          canvas,
+          transform.worldToScreen(
+            Offset(world.dx + cx + 6, world.dy + (cardH + loadTop) / 2),
+          ),
+          lbl,
+          s,
+        );
       }
     }
   }
@@ -746,7 +752,10 @@ class _CanvasPainter extends CustomPainter {
       textDirection: TextDirection.ltr,
     )..layout();
     final rect = Rect.fromCenter(
-        center: center, width: tp.width + 8 * s, height: tp.height + 4 * s);
+      center: center,
+      width: tp.width + 8 * s,
+      height: tp.height + 4 * s,
+    );
     canvas.drawRRect(
       RRect.fromRectAndRadius(rect, Radius.circular(3 * s)),
       Paint()..color = const Color(0xD915171B),
@@ -774,38 +783,38 @@ class _CanvasPainter extends CustomPainter {
 // ── Shared rail / phase colour helpers ───────────────────────────────────────
 
 Color railColorFor(String key) => switch (key) {
-      'L1' => kRailR,
-      'L2' => kRailS,
-      'L3' => kRailT,
-      'L' => kRailR,
-      'N' => kRailN,
-      'PE' => kRailPE,
-      _ => kRailR,
-    };
+  'L1' => kRailR,
+  'L2' => kRailS,
+  'L3' => kRailT,
+  'L' => kRailR,
+  'N' => kRailN,
+  'PE' => kRailPE,
+  _ => kRailR,
+};
 
 String railLetterFor(String key) => switch (key) {
-      'L1' => 'R',
-      'L2' => 'S',
-      'L3' => 'T',
-      'L' => 'R',
-      'N' => 'N',
-      'PE' => 'PE',
-      _ => key,
-    };
+  'L1' => 'R',
+  'L2' => 'S',
+  'L3' => 'T',
+  'L' => 'R',
+  'N' => 'N',
+  'PE' => 'PE',
+  _ => key,
+};
 
 String phaseKeyFor(PhaseAssignment phase) => switch (phase) {
-      PhaseAssignment.l1 => 'L1',
-      PhaseAssignment.l2 => 'L2',
-      PhaseAssignment.l3 => 'L3',
-      PhaseAssignment.threePhase => 'L1',
-    };
+  PhaseAssignment.l1 => 'L1',
+  PhaseAssignment.l2 => 'L2',
+  PhaseAssignment.l3 => 'L3',
+  PhaseAssignment.threePhase => 'L1',
+};
 
 Color phaseColorFor(PhaseAssignment phase, bool threePhase) => switch (phase) {
-      PhaseAssignment.l1 => kRailR,
-      PhaseAssignment.l2 => kRailS,
-      PhaseAssignment.l3 => kRailT,
-      PhaseAssignment.threePhase => const Color(0xFFAAB2BD),
-    };
+  PhaseAssignment.l1 => kRailR,
+  PhaseAssignment.l2 => kRailS,
+  PhaseAssignment.l3 => kRailT,
+  PhaseAssignment.threePhase => const Color(0xFFAAB2BD),
+};
 
 String amp0(double a) =>
     a == a.roundToDouble() ? a.toInt().toString() : a.toStringAsFixed(0);
@@ -888,17 +897,27 @@ class SchematicPainter extends CustomPainter {
         Offset(right, ly),
         Paint()
           ..color = color
-          ..strokeWidth = key == 'PE' ? 3.5 : key == 'N' ? 4.0 : 5.0
+          ..strokeWidth = key == 'PE'
+              ? 3.5
+              : key == 'N'
+              ? 4.0
+              : 5.0
           ..strokeCap = StrokeCap.round,
       );
       _pill(canvas, Offset(6, ly), railLetterFor(key), color);
     });
 
     // Incomer head.
-    final incRect =
-        Rect.fromLTWH(kLeft.toDouble(), kIncomerY.toDouble(), 148, kIncomerH.toDouble());
-    canvas.drawRRect(RRect.fromRectAndRadius(incRect, const Radius.circular(4)),
-        Paint()..color = accent.withAlpha(40));
+    final incRect = Rect.fromLTWH(
+      kLeft.toDouble(),
+      kIncomerY.toDouble(),
+      148,
+      kIncomerH.toDouble(),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(incRect, const Radius.circular(4)),
+      Paint()..color = accent.withAlpha(40),
+    );
     canvas.drawRRect(
       RRect.fromRectAndRadius(incRect, const Radius.circular(4)),
       Paint()
@@ -907,12 +926,13 @@ class SchematicPainter extends CustomPainter {
         ..style = PaintingStyle.stroke,
     );
     _text(
-        canvas,
-        incRect.topLeft + const Offset(6, 6),
-        'INC ${amp0(panel.incomer.breaker.ratingA.amperes)}/${panel.incomer.poles}P',
-        9.5,
-        accent,
-        bold: true);
+      canvas,
+      incRect.topLeft + const Offset(6, 6),
+      'INC ${amp0(panel.incomer.breaker.ratingA.amperes)}/${panel.incomer.poles}P',
+      9.5,
+      accent,
+      bold: true,
+    );
     canvas.drawLine(
       Offset(incRect.left + 16, incRect.bottom),
       Offset(kLeft + 16, bars['N'] ?? bars.values.last),
@@ -961,23 +981,36 @@ class SchematicPainter extends CustomPainter {
           ..color = isSpare
               ? const Color(0x66888888)
               : (c.phase == PhaseAssignment.threePhase
-                  ? const Color(0xFFAAB2BD)
-                  : phaseColor)
+                    ? const Color(0xFFAAB2BD)
+                    : phaseColor)
           ..strokeWidth = 1.8,
       );
       canvas.drawCircle(Offset(cx, outY), 2.4, Paint()..color = phaseColor);
-      _text(canvas, Offset(cx + 9, brkTop + 4),
-          '${amp0(c.breaker.ratingA.amperes)}A', 9, accent, bold: true);
+      _text(
+        canvas,
+        Offset(cx + 9, brkTop + 4),
+        '${amp0(c.breaker.ratingA.amperes)}A',
+        9,
+        accent,
+        bold: true,
+      );
     }
   }
 
   void _pill(Canvas canvas, Offset at, String letter, Color color) {
     final rect = Rect.fromLTWH(at.dx, at.dy - 6, 16, 12);
-    canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(3)),
-        Paint()..color = color);
-    _text(canvas, rect.topLeft + const Offset(3, 0.5), letter, 8.5,
-        const Color(0xFFFFFFFF),
-        bold: true);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(3)),
+      Paint()..color = color,
+    );
+    _text(
+      canvas,
+      rect.topLeft + const Offset(3, 0.5),
+      letter,
+      8.5,
+      const Color(0xFFFFFFFF),
+      bold: true,
+    );
   }
 
   void _breaker(Canvas canvas, Offset top, Color color) {
@@ -988,8 +1021,11 @@ class SchematicPainter extends CustomPainter {
     canvas.drawCircle(top + const Offset(0, 2), 1.6, Paint()..color = color);
     canvas.drawLine(top + const Offset(0, 2), top + const Offset(7, 12), p);
     canvas.drawCircle(top + const Offset(0, 16), 1.4, Paint()..color = color);
-    canvas.drawLine(top + const Offset(0, 16),
-        top + Offset(0, kBrkH.toDouble()), p);
+    canvas.drawLine(
+      top + const Offset(0, 16),
+      top + Offset(0, kBrkH.toDouble()),
+      p,
+    );
     canvas.drawRect(
       Rect.fromLTWH(top.dx + 4, top.dy + 6, 5, 5),
       p..style = PaintingStyle.stroke,
@@ -1010,8 +1046,14 @@ class SchematicPainter extends CustomPainter {
     }
   }
 
-  void _text(Canvas canvas, Offset at, String text, double size, Color color,
-      {bool bold = false}) {
+  void _text(
+    Canvas canvas,
+    Offset at,
+    String text,
+    double size,
+    Color color, {
+    bool bold = false,
+  }) {
     final tp = TextPainter(
       text: TextSpan(
         text: text,
@@ -1085,29 +1127,30 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final panel = widget.panel;
-    final hasError =
-        panel.warnings.any((w) => w.severity == WarningSeverity.error);
+    final hasError = panel.warnings.any(
+      (w) => w.severity == WarningSeverity.error,
+    );
     final borderColor = hasError
         ? colors.danger
         : (widget.selected || _hover || _dropHover)
-            ? colors.accent
-            : colors.border;
+        ? colors.accent
+        : colors.border;
 
     // The card reserves the full schematic height at BOTH LOD levels (header
     // chrome of kPanelChrome + the schematic band), so the load nodes sit a
     // fixed distance below regardless of zoom and the card never grows over
     // them when it switches to the detail schematic.
-    final card = Container(
+    final card = AnimatedContainer(
+      duration: MechXMotion.hover,
+      curve: MechXMotion.standard,
       decoration: BoxDecoration(
         color: colors.surface,
         borderRadius: MechXRadii.card,
-        border: Border.all(
-          color: borderColor,
-          width: widget.selected ? 2 : 1,
-        ),
-        boxShadow: const [
-          BoxShadow(color: Color(0x33000000), blurRadius: 8, offset: Offset(0, 2)),
-        ],
+        border: Border.all(color: borderColor, width: widget.selected ? 2 : 1),
+        // Soft iOS elevation; lifts a touch on hover / selection.
+        boxShadow: (_hover || widget.selected)
+            ? MechXShadow.popover
+            : MechXShadow.card,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1122,17 +1165,28 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
             ),
           ),
           Expanded(
-            child: widget.detail
-                ? _SchematicSurface(
-                    panel: panel,
-                    accent: colors.accent,
-                    onWayDoubleTap: widget.onWayDoubleTap,
-                    onWayMenu: widget.onWayMenu,
-                  )
-                : Padding(
-                    padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-                    child: _PanelSummaryBody(panel: panel),
-                  ),
+            // Cross-fade the summary ↔ detail schematic at the LOD threshold
+            // instead of an instant swap.
+            child: AnimatedSwitcher(
+              duration: MechXMotion.appear,
+              switchInCurve: MechXMotion.standard,
+              switchOutCurve: MechXMotion.standard,
+              child: widget.detail
+                  ? KeyedSubtree(
+                      key: const ValueKey('detail'),
+                      child: _SchematicSurface(
+                        panel: panel,
+                        accent: colors.accent,
+                        onWayDoubleTap: widget.onWayDoubleTap,
+                        onWayMenu: widget.onWayMenu,
+                      ),
+                    )
+                  : Padding(
+                      key: const ValueKey('summary'),
+                      padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+                      child: _PanelSummaryBody(panel: panel),
+                    ),
+            ),
           ),
         ],
       ),
@@ -1152,21 +1206,27 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
         return MouseRegion(
           onEnter: (_) => setState(() => _hover = true),
           onExit: (_) => setState(() => _hover = false),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Positioned.fill(child: card),
-              // The round outlet handle (drag → feeder).
-              Positioned(
-                left: panelCardWidth(panel.circuits.length) / 2 - 13,
-                bottom: -13,
-                child: _OutletHandle(
-                  onDragStart: widget.onOutletDragStart,
-                  onDragUpdate: widget.onOutletDragUpdate,
-                  onDragEnd: widget.onOutletDragEnd,
+          // Subtle hover lift (1.03) — a pre-click affordance.
+          child: AnimatedScale(
+            scale: (_hover && !widget.selected) ? 1.03 : 1.0,
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(child: card),
+                // The round outlet handle (drag → feeder).
+                Positioned(
+                  left: panelCardWidth(panel.circuits.length) / 2 - 13,
+                  bottom: -13,
+                  child: _OutletHandle(
+                    onDragStart: widget.onOutletDragStart,
+                    onDragUpdate: widget.onOutletDragUpdate,
+                    onDragEnd: widget.onOutletDragEnd,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
@@ -1202,19 +1262,25 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (tag != null && tag.isNotEmpty)
-                    Text(tag,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: type.caption.copyWith(
-                          color: colors.accent,
-                          fontWeight: FontWeight.w700,
-                          fontFamily: 'Roboto Mono',
-                        )),
-                  Text(panel.name,
+                    Text(
+                      tag,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: type.label
-                          .copyWith(color: colors.textPrimary, fontWeight: FontWeight.w700)),
+                      style: type.caption.copyWith(
+                        color: colors.accent,
+                        fontWeight: FontWeight.w700,
+                        fontFamily: 'Roboto Mono',
+                      ),
+                    ),
+                  Text(
+                    panel.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: type.label.copyWith(
+                      color: colors.textPrimary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -1232,10 +1298,13 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
     if (widget.unfed) {
       badges.add(_Badge(label: 'not connected', color: colors.warning));
     } else {
-      badges.add(_Badge(
+      badges.add(
+        _Badge(
           label: widget.panel.tag != null ? 'supply' : 'fed',
           color: colors.accent,
-          subtle: true));
+          subtle: true,
+        ),
+      );
     }
     if (widget.essential) {
       badges.add(_Badge(label: 'ess', color: colors.warning, subtle: true));
@@ -1259,8 +1328,9 @@ class _PanelSummaryBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final spares =
-        panel.circuits.where((c) => c.loadKind == LoadKind.spare).length;
+    final spares = panel.circuits
+        .where((c) => c.loadKind == LoadKind.spare)
+        .length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -1307,31 +1377,36 @@ class _PhaseStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final type = context.type;
     Widget cell(String letter, Color color, double amps) => Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 14,
-              height: 14,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: const BorderRadius.all(Radius.circular(4)),
-              ),
-              child: Text(letter,
-                  style: const TextStyle(
-                    fontFamily: 'Roboto',
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFFFFFFFF),
-                  )),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 14,
+          height: 14,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: const BorderRadius.all(Radius.circular(4)),
+          ),
+          child: Text(
+            letter,
+            style: const TextStyle(
+              fontFamily: 'Roboto',
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFFFFFFFF),
             ),
-            const SizedBox(width: 3),
-            Text(fmtAmp0(amps),
-                style: type.caption.copyWith(
-                    color: context.colors.textSecondary,
-                    fontWeight: FontWeight.w600)),
-          ],
-        );
+          ),
+        ),
+        const SizedBox(width: 3),
+        Text(
+          fmtAmp0(amps),
+          style: type.caption.copyWith(
+            color: context.colors.textSecondary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: Wrap(
@@ -1359,17 +1434,23 @@ class _Stat extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: type.label
-                .copyWith(color: colors.textPrimary, fontWeight: FontWeight.w700)),
-        Text(label.toUpperCase(),
-            style: type.caption.copyWith(
-              color: colors.textMuted,
-              fontSize: 9,
-              letterSpacing: 0.5,
-            )),
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: type.label.copyWith(
+            color: colors.textPrimary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        Text(
+          label.toUpperCase(),
+          style: type.caption.copyWith(
+            color: colors.textMuted,
+            fontSize: 9,
+            letterSpacing: 0.5,
+          ),
+        ),
       ],
     );
   }
@@ -1390,13 +1471,15 @@ class _Badge extends StatelessWidget {
         borderRadius: const BorderRadius.all(Radius.circular(4)),
         border: Border.all(color: color.withAlpha(subtle ? 90 : 255)),
       ),
-      child: Text(label,
-          style: TextStyle(
-            fontFamily: 'Roboto',
-            fontSize: 9,
-            fontWeight: FontWeight.w600,
-            color: subtle ? color : const Color(0xFFFFFFFF),
-          )),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontFamily: 'Roboto',
+          fontSize: 9,
+          fontWeight: FontWeight.w600,
+          color: subtle ? color : const Color(0xFFFFFFFF),
+        ),
+      ),
     );
   }
 }
@@ -1422,40 +1505,48 @@ class _LoadNodeState extends State<_LoadNode> {
     final type = context.type;
     final c = widget.circuit;
     final rating = c.breaker.ratingA.amperes;
-    final util =
-        rating > 0 ? (c.designCurrent.amperes / rating * 100) : null;
+    final util = rating > 0 ? (c.designCurrent.amperes / rating * 100) : null;
     final utilColor = util == null
         ? colors.textMuted
         : util >= 100
-            ? colors.danger
-            : util >= 85
-                ? colors.warning
-                : colors.textMuted;
+        ? colors.danger
+        : util >= 85
+        ? colors.warning
+        : colors.textMuted;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      child: Container(
-        padding: const EdgeInsets.all(5),
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: MechXRadii.control,
-          border:
-              Border.all(color: _hover ? colors.accent : colors.border),
-          boxShadow: const [
-            BoxShadow(
-                color: Color(0x22000000), blurRadius: 4, offset: Offset(0, 1)),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _GlyphTile(
-              data: _glyph(c.loadKind),
-              color: colors.textSecondary,
-            ),
-            const SizedBox(height: 2),
-            Text(c.name,
+      // Subtle hover lift (1.03) + an accent ring preview.
+      child: AnimatedScale(
+        scale: _hover ? 1.03 : 1.0,
+        duration: MechXMotion.hover,
+        curve: MechXMotion.standard,
+        child: AnimatedContainer(
+          duration: MechXMotion.hover,
+          curve: MechXMotion.standard,
+          padding: const EdgeInsets.all(5),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: MechXRadii.control,
+            border: Border.all(color: _hover ? colors.accent : colors.border),
+            boxShadow: _hover
+                ? MechXShadow.card
+                : const [
+                    BoxShadow(
+                      color: Color(0x22000000),
+                      blurRadius: 4,
+                      offset: Offset(0, 1),
+                    ),
+                  ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _GlyphTile(data: _glyph(c.loadKind), color: colors.textSecondary),
+              const SizedBox(height: 2),
+              Text(
+                c.name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
@@ -1463,16 +1554,17 @@ class _LoadNodeState extends State<_LoadNode> {
                   fontFamily: 'Roboto',
                   fontSize: 9,
                   fontWeight: FontWeight.w700,
-                )),
-            Text(
-              util != null
-                  ? '${fmtAmp0(rating)}A · ${util.round()}%'
-                  : '${fmtAmp0(rating)}A',
-              textAlign: TextAlign.center,
-              style: type.caption
-                  .copyWith(fontSize: 9, color: utilColor),
-            ),
-          ],
+                ),
+              ),
+              Text(
+                util != null
+                    ? '${fmtAmp0(rating)}A · ${util.round()}%'
+                    : '${fmtAmp0(rating)}A',
+                textAlign: TextAlign.center,
+                style: type.caption.copyWith(fontSize: 9, color: utilColor),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1480,17 +1572,17 @@ class _LoadNodeState extends State<_LoadNode> {
 
   // Roboto-safe ASCII tags (no symbol glyphs — those render as tofu in goldens).
   String _glyph(LoadKind kind) => switch (kind) {
-        LoadKind.lighting => 'L',
-        LoadKind.socket => 'SO',
-        LoadKind.motor => 'M',
-        LoadKind.pump => 'P',
-        LoadKind.hvac => 'AC',
-        LoadKind.heating => 'H',
-        LoadKind.ups => 'U',
-        LoadKind.evCharger => 'EV',
-        LoadKind.welding => 'W',
-        _ => 'G',
-      };
+    LoadKind.lighting => 'L',
+    LoadKind.socket => 'SO',
+    LoadKind.motor => 'M',
+    LoadKind.pump => 'P',
+    LoadKind.hvac => 'AC',
+    LoadKind.heating => 'H',
+    LoadKind.ups => 'U',
+    LoadKind.evCharger => 'EV',
+    LoadKind.welding => 'W',
+    _ => 'G',
+  };
 }
 
 /// A tiny text-glyph "icon" (Roboto-safe, no symbol fonts).
@@ -1509,13 +1601,15 @@ class _GlyphTile extends StatelessWidget {
         border: Border.all(color: color.withAlpha(120)),
         borderRadius: const BorderRadius.all(Radius.circular(4)),
       ),
-      child: Text(data,
-          style: TextStyle(
-            fontFamily: 'Roboto',
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            color: color,
-          )),
+      child: Text(
+        data,
+        style: TextStyle(
+          fontFamily: 'Roboto',
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: color,
+        ),
+      ),
     );
   }
 }
@@ -1549,9 +1643,14 @@ class _GridSourceNode extends StatelessWidget {
               shape: BoxShape.circle,
               border: Border.all(color: kRailR, width: 2),
             ),
-            child: Text('~',
-                style: TextStyle(
-                    fontFamily: 'Roboto', fontSize: 12, color: kRailR)),
+            child: Text(
+              '~',
+              style: TextStyle(
+                fontFamily: 'Roboto',
+                fontSize: 12,
+                color: kRailR,
+              ),
+            ),
           ),
           const SizedBox(width: MechXSpacing.xs),
           Expanded(
@@ -1559,16 +1658,21 @@ class _GridSourceNode extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('PLN grid supply',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: type.label.copyWith(
-                        color: colors.textPrimary,
-                        fontWeight: FontWeight.w700)),
-                Text('Low voltage (direct PLN)',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: type.caption.copyWith(color: colors.textMuted)),
+                Text(
+                  'PLN grid supply',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: type.label.copyWith(
+                    color: colors.textPrimary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  'Low voltage (direct PLN)',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: type.caption.copyWith(color: colors.textMuted),
+                ),
               ],
             ),
           ),
@@ -1612,7 +1716,10 @@ class _OutletHandle extends StatelessWidget {
             border: Border.all(color: colors.surface, width: 3),
             boxShadow: const [
               BoxShadow(
-                  color: Color(0x40000000), blurRadius: 4, offset: Offset(0, 1)),
+                color: Color(0x40000000),
+                blurRadius: 4,
+                offset: Offset(0, 1),
+              ),
             ],
           ),
           child: Center(
@@ -1663,8 +1770,7 @@ class _PanelDraggableState extends State<_PanelDraggable> {
       behavior: HitTestBehavior.translucent,
       onPanStart: (_) => _dragWorld = widget.world,
       onPanUpdate: (d) {
-        final next = (_dragWorld ?? widget.world) +
-            d.delta / widget.scale;
+        final next = (_dragWorld ?? widget.world) + d.delta / widget.scale;
         _dragWorld = next;
         widget.controller.setPanelPosition(widget.panelId, next.dx, next.dy);
       },
@@ -1673,7 +1779,10 @@ class _PanelDraggableState extends State<_PanelDraggable> {
         if (w != null) {
           // Snap to the 16px world grid on release.
           widget.controller.setPanelPosition(
-              widget.panelId, _snap(w.dx), _snap(w.dy));
+            widget.panelId,
+            _snap(w.dx),
+            _snap(w.dy),
+          );
         }
         _dragWorld = null;
       },
@@ -1827,11 +1936,15 @@ class _CanvasDropTargetState extends State<_CanvasDropTarget> {
       },
       builder: (context, candidate, rejected) {
         if (!_active) return const IgnorePointer(child: SizedBox.expand());
+        // Matches the mechanical drop overlay's tint + rounded affordance.
         return DecoratedBox(
           decoration: BoxDecoration(
-            color: context.colors.accent.withAlpha(14),
-            border:
-                Border.all(color: context.colors.accent.withAlpha(110), width: 1.5),
+            color: context.colors.accent.withAlpha(18),
+            borderRadius: MechXRadii.card,
+            border: Border.all(
+              color: context.colors.accent.withAlpha(110),
+              width: 1.5,
+            ),
           ),
           child: const SizedBox.expand(),
         );
@@ -1861,20 +1974,25 @@ class _Toast extends StatelessWidget {
         child: Container(
           margin: const EdgeInsets.only(bottom: 8),
           padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.md, vertical: MechXSpacing.sm),
+            horizontal: MechXSpacing.md,
+            vertical: MechXSpacing.sm,
+          ),
           decoration: BoxDecoration(
             color: colors.surface,
             borderRadius: MechXRadii.card,
             border: Border.all(color: colors.border),
             boxShadow: const [
               BoxShadow(
-                  color: Color(0x40000000),
-                  blurRadius: 16,
-                  offset: Offset(0, 4)),
+                color: Color(0x40000000),
+                blurRadius: 16,
+                offset: Offset(0, 4),
+              ),
             ],
           ),
-          child: Text(message,
-              style: type.body.copyWith(color: colors.textPrimary)),
+          child: Text(
+            message,
+            style: type.body.copyWith(color: colors.textPrimary),
+          ),
         ),
       ),
     );

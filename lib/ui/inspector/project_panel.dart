@@ -34,6 +34,8 @@ import 'fixture_library_editor.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
+import '../widgets/mechx_focus_ring.dart';
+import '../widgets/section_label.dart';
 import '../widgets/mechx_text_field.dart';
 
 /// Gather the live design results into a calc report and write it to a Markdown
@@ -149,7 +151,7 @@ const List<ServiceType> kDrawServices = [
 class ProjectPanel extends ConsumerWidget {
   const ProjectPanel({super.key});
 
-  static const double width = 296;
+  static const double width = 272;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -171,7 +173,7 @@ class ProjectPanel extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _SectionLabel(context.strings(StringKey.inspectorProject)),
+              MechXSectionLabel(context.strings(StringKey.inspectorProject)),
               const SizedBox(height: MechXSpacing.sm),
               MechXTextField(
                 value: project.name,
@@ -202,12 +204,18 @@ class ProjectPanel extends ConsumerWidget {
               Row(
                 children: [
                   Expanded(
-                      child: _SectionLabel(
+                      child: MechXSectionLabel(
                           context.strings(StringKey.inspectorBuilding))),
-                  Text(
-                    '${building.totalHeight.meters.toStringAsFixed(1)} m · '
-                    '${building.levelCount} levels',
-                    style: type.caption.copyWith(color: colors.textMuted),
+                  const SizedBox(width: MechXSpacing.xs),
+                  Flexible(
+                    child: Text(
+                      '${building.totalHeight.meters.toStringAsFixed(1)} m · '
+                      '${building.levelCount} levels',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
                   ),
                 ],
               ),
@@ -258,7 +266,7 @@ class ProjectPanel extends ConsumerWidget {
 
               // ── Sheet → floor mapping ─────────────────────────────────────
               if (currentSheet != null) ...[
-                _SectionLabel(context.strings(StringKey.inspectorSheet)),
+                MechXSectionLabel(context.strings(StringKey.inspectorSheet)),
                 const SizedBox(height: MechXSpacing.sm),
                 Builder(builder: (context) {
                   final sheetsState = ref.watch(sheetsControllerProvider);
@@ -301,7 +309,7 @@ class ProjectPanel extends ConsumerWidget {
               ],
 
               // ── Scale calibration ─────────────────────────────────────────
-              _SectionLabel('Scale'),
+              MechXSectionLabel('Scale'),
               const SizedBox(height: MechXSpacing.sm),
               Container(
                 padding: const EdgeInsets.all(MechXSpacing.sm),
@@ -353,21 +361,6 @@ class ProjectPanel extends ConsumerWidget {
       ),
     );
   }
-}
-
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  const _SectionLabel(this.text);
-
-  @override
-  Widget build(BuildContext context) => Text(
-        text.toUpperCase(),
-        style: context.type.caption.copyWith(
-          color: context.colors.textMuted,
-          letterSpacing: 0.8,
-          fontWeight: FontWeight.w600,
-        ),
-      );
 }
 
 class _FloorRow extends StatelessWidget {
@@ -442,6 +435,7 @@ class _GlyphButton extends StatefulWidget {
 
 class _GlyphButtonState extends State<_GlyphButton> {
   bool _hover = false;
+  bool _down = false;
 
   @override
   Widget build(BuildContext context) {
@@ -452,24 +446,44 @@ class _GlyphButtonState extends State<_GlyphButton> {
         : widget.danger
             ? (_hover ? colors.danger : colors.textMuted)
             : (_hover ? colors.textPrimary : colors.textSecondary);
+    final glyph = AnimatedScale(
+      scale: _down && enabled ? 0.9 : 1.0,
+      duration: MechXMotion.press,
+      curve: MechXMotion.standard,
+      child: AnimatedContainer(
+        duration: MechXMotion.hover,
+        curve: MechXMotion.standard,
+        width: 24,
+        height: 24,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color:
+              _hover && enabled ? colors.surfaceHover : const Color(0x00000000),
+          borderRadius: MechXRadii.control,
+        ),
+        child: Text(
+          widget.glyph,
+          style:
+              TextStyle(fontFamily: 'Roboto', fontSize: 16, height: 1.0, color: fg),
+        ),
+      ),
+    );
     return MouseRegion(
       cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: 24,
-          height: 24,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: _hover && enabled ? colors.surfaceHover : const Color(0x00000000),
-            borderRadius: MechXRadii.control,
-          ),
-          child: Text(
-            widget.glyph,
-            style: TextStyle(fontFamily: 'Roboto', fontSize: 16, height: 1.0, color: fg),
-          ),
+      onExit: (_) => setState(() {
+        _hover = false;
+        _down = false;
+      }),
+      child: MechXFocusRing(
+        enabled: enabled,
+        onActivated: widget.onTap,
+        child: GestureDetector(
+          onTap: widget.onTap,
+          onTapDown: enabled ? (_) => setState(() => _down = true) : null,
+          onTapUp: enabled ? (_) => setState(() => _down = false) : null,
+          onTapCancel: enabled ? () => setState(() => _down = false) : null,
+          child: glyph,
         ),
       ),
     );
@@ -551,7 +565,7 @@ class _DrawSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionLabel('Draw'),
+        const MechXSectionLabel('Draw'),
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
@@ -632,7 +646,7 @@ class _SizingSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionLabel('Sizing'),
+        const MechXSectionLabel('Sizing'),
         const SizedBox(height: MechXSpacing.sm),
         Row(
           children: [
@@ -733,7 +747,7 @@ class _ResultsSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionLabel('Network'),
+        const MechXSectionLabel('Network'),
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
@@ -848,9 +862,19 @@ class _ResultsSection extends ConsumerWidget {
       child: Row(
         children: [
           Expanded(
-            child: Text(key, style: type.caption.copyWith(color: colors.textMuted)),
+            child: Text(key,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: type.caption.copyWith(color: colors.textMuted)),
           ),
-          Text(value, style: type.mono.copyWith(color: colors.textSecondary)),
+          const SizedBox(width: MechXSpacing.xs),
+          Flexible(
+            child: Text(value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+                style: type.mono.copyWith(color: colors.textSecondary)),
+          ),
         ],
       ),
     );
@@ -873,10 +897,18 @@ class _FireSection extends ConsumerWidget {
             children: [
               Expanded(
                 child: Text(key,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: type.caption.copyWith(color: colors.textMuted)),
               ),
-              Text(value,
-                  style: type.mono.copyWith(color: colors.textSecondary)),
+              const SizedBox(width: MechXSpacing.xs),
+              Flexible(
+                child: Text(value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: type.mono.copyWith(color: colors.textSecondary)),
+              ),
             ],
           ),
         );
@@ -884,7 +916,7 @@ class _FireSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionLabel('Fire'),
+        const MechXSectionLabel('Fire'),
         const SizedBox(height: MechXSpacing.sm),
         kv('Sprinkler flow',
             '${sprinkler.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),
@@ -935,37 +967,46 @@ class _ServiceChip extends StatelessWidget {
     final type = context.type;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
-            vertical: MechXSpacing.xs,
-          ),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : colors.background,
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: selected ? colors.accent : colors.border),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 9,
-                height: 9,
-                decoration: BoxDecoration(
-                  color: serviceColor(service),
-                  borderRadius: const BorderRadius.all(Radius.circular(2)),
-                ),
+      child: MechXFocusRing(
+        onActivated: onTap,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              // Compensate the heavier selected border so the chip never jumps.
+              horizontal: MechXSpacing.sm - (selected ? 1 : 0),
+              vertical: MechXSpacing.xs - (selected ? 1 : 0),
+            ),
+            decoration: BoxDecoration(
+              color: selected ? colors.accentMuted : colors.background,
+              borderRadius: MechXRadii.control,
+              border: Border.all(
+                color: selected ? colors.accent : colors.border,
+                width: selected ? 2 : 1,
               ),
-              const SizedBox(width: MechXSpacing.xs),
-              Text(
-                serviceLabel(service),
-                style: type.label.copyWith(
-                  color: selected ? colors.textPrimary : colors.textSecondary,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(
+                    color: serviceColor(service),
+                    borderRadius: const BorderRadius.all(Radius.circular(2)),
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(width: MechXSpacing.xs),
+                Text(
+                  serviceLabel(service),
+                  style: type.label.copyWith(
+                    color:
+                        selected ? colors.textPrimary : colors.textSecondary,
+                    fontWeight: selected ? FontWeight.w600 : null,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1035,7 +1076,7 @@ class _SelectionSection extends ConsumerWidget {
       children: [
         Row(
           children: [
-            Expanded(child: _SectionLabel('Selection')),
+            Expanded(child: MechXSectionLabel('Selection')),
             _GlyphButton(glyph: '×', onTap: selCtrl.clear),
           ],
         ),
@@ -1057,7 +1098,7 @@ class _SelectionSection extends ConsumerWidget {
       children: [
         Row(
           children: [
-            Expanded(child: _SectionLabel('Selection')),
+            Expanded(child: MechXSectionLabel('Selection')),
             _GlyphButton(glyph: '×', onTap: selCtrl.clear),
           ],
         ),
@@ -1342,9 +1383,18 @@ class _HvacSection extends ConsumerWidget {
             children: [
               Expanded(
                 child: Text(k,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: type.caption.copyWith(color: colors.textMuted)),
               ),
-              Text(v, style: type.mono.copyWith(color: colors.textSecondary)),
+              const SizedBox(width: MechXSpacing.xs),
+              Flexible(
+                child: Text(v,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: type.mono.copyWith(color: colors.textSecondary)),
+              ),
             ],
           ),
         );
@@ -1352,7 +1402,7 @@ class _HvacSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionLabel('HVAC · ducting'),
+        const MechXSectionLabel('HVAC · ducting'),
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
@@ -1439,22 +1489,30 @@ class _Pill extends StatelessWidget {
     final type = context.type;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
-            vertical: MechXSpacing.xs,
-          ),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : colors.background,
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: selected ? colors.accent : colors.border),
-          ),
-          child: Text(
-            label,
-            style: type.label.copyWith(
-              color: selected ? colors.textPrimary : colors.textSecondary,
+      child: MechXFocusRing(
+        onActivated: onTap,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              // Compensate the heavier selected border so the pill never jumps.
+              horizontal: MechXSpacing.sm - (selected ? 1 : 0),
+              vertical: MechXSpacing.xs - (selected ? 1 : 0),
+            ),
+            decoration: BoxDecoration(
+              color: selected ? colors.accentMuted : colors.background,
+              borderRadius: MechXRadii.control,
+              border: Border.all(
+                color: selected ? colors.accent : colors.border,
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: Text(
+              label,
+              style: type.label.copyWith(
+                color: selected ? colors.textPrimary : colors.textSecondary,
+                fontWeight: selected ? FontWeight.w600 : null,
+              ),
             ),
           ),
         ),

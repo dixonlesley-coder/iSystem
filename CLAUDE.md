@@ -340,6 +340,20 @@ report export**; versioned `.mechx` save/open with viewport restore;
   lines on the calibrated sheet with the real length via `ScaleCalibration.lengthForPixels`,
   secondary-click to delete; round-trips in `.mechx` as a top-level `measurements` list,
   tolerant/absent ⇒ empty). This **closes the Known-gaps editing list**.
+  **Mechanical ↔ electrical theme convergence landed (Apple-consistency pass):** the
+  electrical workspace (a PanelMaker port) now reads as one app with the mechanical one.
+  Driven by an audit + re-review, converged: the electrical **Loads palette to the RIGHT**
+  (inspector side everywhere); a **shared drafting grid** (`ui/canvas/canvas_grid.dart`
+  `paintCanvasGrid`) behind BOTH canvases; **shared right-bar widgets**
+  (`ui/widgets/section_label.dart` `MechXSectionLabel` + `ui/widgets/palette_card.dart`
+  generic `PaletteCard<T>`) used by both `SegmentPalette` + `ElectricalPalette`; **one
+  selected-segment style** (LAYER switcher → tinted `accentMuted`+border, matching DRAW
+  pills / electrical tabs / chips); a **shared `ui/canvas/zoom_controls.dart` `ZoomControls`**
+  on both canvases (CanvasView gained an imperative zoom API via a per-sheet
+  `GlobalKey<CanvasViewState>`); the electrical toolbar button on the canonical `MechXButton`
+  soft-fill; a branded mechanical empty-state card; harmonised drop-target tint. New tokens:
+  `MechXRadii.xs`, `MechXColors.onAccent`, `MechXTypography.micro`. (Goldens 01/02/03/05/06
+  regenerated + visually verified; gate green.)
 - Looped networks: ring/grid **pressurized & air** mains are balanced with
   Hardy-Cross (`network/hardy_cross.dart`) at sizing time and the balanced flows
   feed the heatmap. The split uses resistance ∝ **real edge length** at a

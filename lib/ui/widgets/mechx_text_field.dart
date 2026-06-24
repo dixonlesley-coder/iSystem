@@ -8,7 +8,16 @@ class MechXTextField extends StatefulWidget {
   final String value;
   final ValueChanged<String> onChanged;
 
-  const MechXTextField({super.key, required this.value, required this.onChanged});
+  /// Optional placeholder shown (in the muted tier) when the field is empty and
+  /// unfocused — an Apple-style affordance for what belongs here.
+  final String? hint;
+
+  const MechXTextField({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    this.hint,
+  });
 
   @override
   State<MechXTextField> createState() => _MechXTextFieldState();
@@ -49,9 +58,13 @@ class _MechXTextFieldState extends State<MechXTextField> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    final showHint =
+        widget.hint != null && _controller.text.isEmpty && !_focused;
     return GestureDetector(
       onTap: _focusNode.requestFocus,
-      child: Container(
+      child: AnimatedContainer(
+        duration: MechXMotion.hover,
+        curve: MechXMotion.standard,
         padding: const EdgeInsets.symmetric(
           horizontal: MechXSpacing.sm,
           vertical: MechXSpacing.xs + 2,
@@ -60,19 +73,43 @@ class _MechXTextFieldState extends State<MechXTextField> {
           color: colors.background,
           borderRadius: MechXRadii.control,
           border: Border.all(
+            // Soft accent tint at rest of focus, full accent when focused.
             color: _focused ? colors.accent : colors.border,
+            width: _focused ? 1.5 : 1.0,
           ),
+          boxShadow: _focused
+              ? [
+                  BoxShadow(
+                    color: colors.accent.withAlpha(60),
+                    blurRadius: 0,
+                    spreadRadius: 2,
+                  ),
+                ]
+              : null,
         ),
-        child: EditableText(
-          controller: _controller,
-          focusNode: _focusNode,
-          onChanged: widget.onChanged,
-          maxLines: 1,
-          style: type.body.copyWith(color: colors.textPrimary),
-          cursorColor: colors.accent,
-          backgroundCursorColor: colors.textMuted,
-          cursorWidth: 1.5,
-          selectionColor: colors.accentMuted,
+        child: Stack(
+          children: [
+            EditableText(
+              controller: _controller,
+              focusNode: _focusNode,
+              onChanged: widget.onChanged,
+              maxLines: 1,
+              style: type.body.copyWith(color: colors.textPrimary),
+              cursorColor: colors.accent,
+              backgroundCursorColor: colors.textMuted,
+              cursorWidth: 1.5,
+              selectionColor: colors.accentMuted,
+            ),
+            if (showHint)
+              IgnorePointer(
+                child: Text(
+                  widget.hint!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: type.body.copyWith(color: colors.textMuted),
+                ),
+              ),
+          ],
         ),
       ),
     );

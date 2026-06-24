@@ -39,9 +39,11 @@ import '../../store/sizing_store.dart';
 import '../canvas/edge_context_menu.dart';
 import '../canvas/service_style.dart';
 import '../canvas/viewport.dart';
+import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/mechx_focus_ring.dart';
 
 // ---------------------------------------------------------------------------
 // Public widget
@@ -160,6 +162,13 @@ class _Toolbar extends StatelessWidget {
                 ),
               ),
             ),
+            // The riser drag source is pinned at the toolbar's right — drag it
+            // down onto a floor to drop a riser (no separate palette panel, so
+            // the elevation canvas keeps the full width; the ? help explains).
+            const SizedBox(width: MechXSpacing.sm),
+            Container(width: 1, height: 22, color: colors.border),
+            const SizedBox(width: MechXSpacing.sm),
+            _RiserCard(service: service),
           ],
         ],
       ),
@@ -178,23 +187,31 @@ class _TabButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 2),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : const Color(0x00000000),
-            borderRadius: MechXRadii.control,
-            border: Border.all(
-                color: selected ? colors.accent : const Color(0x00000000)),
-          ),
-          child: Text(label,
+    return MechXFocusRing(
+      onActivated: onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 2),
+            decoration: BoxDecoration(
+              color: selected ? colors.accentMuted : const Color(0x00000000),
+              borderRadius: MechXRadii.control,
+              border: Border.all(
+                  color: selected ? colors.accent : const Color(0x00000000)),
+            ),
+            child: AnimatedDefaultTextStyle(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
               style: type.label.copyWith(
-                  color:
-                      selected ? colors.textPrimary : colors.textSecondary)),
+                  color: selected ? colors.textPrimary : colors.textSecondary),
+              child: Text(label),
+            ),
+          ),
         ),
       ),
     );
@@ -213,33 +230,44 @@ class _ServiceChip extends StatelessWidget {
     final colors = context.colors;
     final type = context.type;
     final swatch = serviceColor(service);
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 1),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : colors.background,
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: selected ? colors.accent : colors.border),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 9,
-                height: 9,
-                decoration: BoxDecoration(color: swatch, shape: BoxShape.circle),
-              ),
-              const SizedBox(width: MechXSpacing.xs),
-              Text(serviceLabel(service),
+    return MechXFocusRing(
+      onActivated: onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 1),
+            decoration: BoxDecoration(
+              color: selected ? colors.accentMuted : colors.background,
+              borderRadius: MechXRadii.control,
+              border:
+                  Border.all(color: selected ? colors.accent : colors.border),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration:
+                      BoxDecoration(color: swatch, shape: BoxShape.circle),
+                ),
+                const SizedBox(width: MechXSpacing.xs),
+                AnimatedDefaultTextStyle(
+                  duration: MechXMotion.hover,
+                  curve: MechXMotion.standard,
                   style: type.label.copyWith(
                       color: selected
                           ? colors.textPrimary
-                          : colors.textSecondary)),
-            ],
+                          : colors.textSecondary),
+                  child: Text(serviceLabel(service)),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -575,11 +603,11 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       ),
     );
 
+    // Canvas leads; the Riser palette sits on the RIGHT (tools-on-the-right,
+    // consistent with the Layout / electrical workspaces).
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _RiserPalette(service: widget.service),
-        Container(width: 1, color: colors.border),
         Expanded(
           child: Stack(
             children: [
@@ -601,7 +629,8 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                             child: IgnorePointer(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
-                                  color: colors.accent.withAlpha(14),
+                                  color: colors.accent.withAlpha(18),
+                                  borderRadius: MechXRadii.card,
                                   border: Border.all(
                                       color: colors.accent.withAlpha(110),
                                       width: 1.5),
@@ -629,7 +658,7 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
               Positioned(
                 left: MechXSpacing.md,
                 bottom: MechXSpacing.md,
-                child: _ZoomControls(
+                child: ZoomControls(
                   onIn: () => _emit(_current.zoomedBy(
                       1.2, _viewportSize.center(Offset.zero))),
                   onOut: () => _emit(_current.zoomedBy(
@@ -670,40 +699,6 @@ class _RiserDragData {
 // ---------------------------------------------------------------------------
 // Riser palette
 // ---------------------------------------------------------------------------
-
-class _RiserPalette extends StatelessWidget {
-  final ServiceType service;
-  const _RiserPalette({required this.service});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return Container(
-      width: 184,
-      color: colors.surface,
-      padding: const EdgeInsets.all(MechXSpacing.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(context.strings(StringKey.schematicPalette),
-              style: type.caption.copyWith(
-                color: colors.textMuted,
-                letterSpacing: 0.8,
-                fontWeight: FontWeight.w600,
-              )),
-          const SizedBox(height: MechXSpacing.xs),
-          Text(
-            context.strings(StringKey.schematicPaletteHelp),
-            style: type.caption.copyWith(color: colors.textMuted),
-          ),
-          const SizedBox(height: MechXSpacing.sm),
-          _RiserCard(service: service),
-        ],
-      ),
-    );
-  }
-}
 
 class _RiserCard extends StatelessWidget {
   final ServiceType service;
@@ -1064,14 +1059,16 @@ class _EditSchematicPainter extends CustomPainter {
       final toS = transform.worldToScreen(_worldOf(b));
 
       if (edge.id == selectedEdgeId) {
-        // Selection halo behind the line.
+        // Selection halo behind the line — a soft, blurred glow so the
+        // selection 'floats' (Apple-soft) rather than reading as a hard band.
         canvas.drawLine(
           fromS,
           toS,
           Paint()
-            ..color = colors.accent.withAlpha(90)
-            ..strokeWidth = 8
-            ..strokeCap = StrokeCap.round,
+            ..color = colors.accent.withAlpha(64)
+            ..strokeWidth = 7
+            ..strokeCap = StrokeCap.round
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
         );
       }
 
@@ -1207,75 +1204,6 @@ class _Banner extends StatelessWidget {
   }
 }
 
-class _ZoomControls extends StatelessWidget {
-  final VoidCallback onIn;
-  final VoidCallback onOut;
-  final VoidCallback onFit;
-  const _ZoomControls(
-      {required this.onIn, required this.onOut, required this.onFit});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: colors.border),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _IconBtn(glyph: '+', onTap: onIn),
-          _Sep(),
-          _IconBtn(glyph: '-', onTap: onOut),
-          _Sep(),
-          _IconBtn(glyph: 'fit', onTap: onFit),
-        ],
-      ),
-    );
-  }
-}
-
-class _Sep extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) =>
-      Container(width: 1, height: 22, color: context.colors.border);
-}
-
-class _IconBtn extends StatefulWidget {
-  final String glyph;
-  final VoidCallback onTap;
-  const _IconBtn({required this.glyph, required this.onTap});
-
-  @override
-  State<_IconBtn> createState() => _IconBtnState();
-}
-
-class _IconBtnState extends State<_IconBtn> {
-  bool _hover = false;
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: widget.glyph.length > 1 ? 34 : 28,
-          height: 28,
-          alignment: Alignment.center,
-          color: _hover ? colors.surfaceHover : const Color(0x00000000),
-          child: Text(widget.glyph,
-              style: context.type.label.copyWith(color: colors.textSecondary)),
-        ),
-      ),
-    );
-  }
-}
-
 class _HelpButton extends StatelessWidget {
   final bool open;
   final VoidCallback onToggle;
@@ -1284,23 +1212,29 @@ class _HelpButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onToggle,
-        child: Container(
-          width: 26,
-          height: 26,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: open ? colors.accent : colors.surface,
-            shape: BoxShape.circle,
-            border: Border.all(color: colors.border),
+    return MechXFocusRing(
+      onActivated: onToggle,
+      borderRadius: MechXRadii.rounded,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onToggle,
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            width: 26,
+            height: 26,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: open ? colors.accent : colors.surface,
+              shape: BoxShape.circle,
+              border: Border.all(color: colors.border),
+            ),
+            child: Text('?',
+                style: context.type.label.copyWith(
+                    color:
+                        open ? const Color(0xFFFFFFFF) : colors.textSecondary)),
           ),
-          child: Text('?',
-              style: context.type.label.copyWith(
-                  color:
-                      open ? const Color(0xFFFFFFFF) : colors.textSecondary)),
         ),
       ),
     );

@@ -51,6 +51,10 @@ String _n(double v) =>
 
 String _a(double amperes) => '${_n(amperes)} A';
 
+/// Escape a value for a Markdown table cell: a literal `|` would split the row
+/// into extra columns; a newline would break it.
+String _md(String v) => v.replaceAll('|', r'\|').replaceAll('\n', ' ');
+
 String _severityTag(WarningSeverity s) => switch (s) {
       WarningSeverity.error => 'ERROR',
       WarningSeverity.warning => 'WARN',
@@ -145,7 +149,7 @@ String buildElectricalCalcReport(ElectricalCalcReportData data) {
         final rcd = c.rcd.required
             ? '${c.rcd.ratingMa} mA${c.rcd.type != null ? ' ${c.rcd.type!.name.toUpperCase()}' : ''}'
             : '—';
-        b.writeln('| ${c.name} | ${c.loadKind.name} | ${_a(c.designCurrent.amperes)} '
+        b.writeln('| ${_md(c.name)} | ${c.loadKind.name} | ${_a(c.designCurrent.amperes)} '
             '| ${c.phase.label} | $br | $cable | $vd | $rcd |');
       }
       b.writeln();

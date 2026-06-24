@@ -44,6 +44,7 @@ import '../canvas/network_layer.dart';
 import '../canvas/selection_overlay.dart';
 import '../canvas/sheet_canvas.dart' show sheetContentBuilderProvider;
 import '../canvas/viewport.dart';
+import '../canvas/zoom_controls.dart';
 import '../electrical/electrical_inspector.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -67,6 +68,13 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   ElectricalEditTarget? _circuitMenu;
   Offset _menuAt = Offset.zero;
 
+  /// One [CanvasView] key per sheet id (so switching sheets still resets the
+  /// per-sheet viewport) — gives the on-canvas zoom controls an imperative
+  /// handle to the live canvas transform.
+  final Map<String, GlobalKey<CanvasViewState>> _canvasKeys = {};
+  GlobalKey<CanvasViewState> canvasKeyFor(String id) =>
+      _canvasKeys.putIfAbsent(id, () => GlobalKey<CanvasViewState>());
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -81,8 +89,22 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const _LayoutTopBar(),
-                  Container(height: 1, color: colors.border),
+                  // The chrome bar floats a hair above the sheet: a hairline
+                  // separator plus a soft downward shadow (Apple-style depth) so
+                  // it never blends into the canvas below.
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: Border(
+                          bottom: BorderSide(color: colors.border)),
+                      boxShadow: const [
+                        BoxShadow(
+                            color: Color(0x10000000),
+                            blurRadius: 4,
+                            offset: Offset(0, 1)),
+                      ],
+                    ),
+                    child: const _LayoutTopBar(),
+                  ),
                   Expanded(child: _SharedSheet(host: this)),
                 ],
               ),
@@ -167,14 +189,17 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   Widget _buildCircuitMenu() => Positioned(
         left: _menuAt.dx,
         top: _menuAt.dy,
-        child: ElectricalCircuitMenu(
-          target: _circuitMenu!,
-          controller: _ctrl,
-          onEdit: () => setState(() {
-            _editing = _circuitMenu;
-            _circuitMenu = null;
-          }),
-          onDone: () => setState(() => _circuitMenu = null),
+        child: _EntranceScaleFade(
+          alignment: Alignment.topLeft,
+          child: ElectricalCircuitMenu(
+            target: _circuitMenu!,
+            controller: _ctrl,
+            onEdit: () => setState(() {
+              _editing = _circuitMenu;
+              _circuitMenu = null;
+            }),
+            onDone: () => setState(() => _circuitMenu = null),
+          ),
         ),
       );
 
@@ -190,21 +215,24 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     return Positioned(
       left: _menuAt.dx,
       top: _menuAt.dy,
-      child: ElectricalPanelMenu(
-        panel: panel,
-        controller: _ctrl,
-        onOpen: () {
-          final first = panel.circuits
-              .where((c) => c.loadKind != LoadKind.feeder)
-              .firstOrNull;
-          setState(() {
-            _panelMenu = null;
-            if (first != null) {
-              _editing = ElectricalEditTarget(panel.id, first.id);
-            }
-          });
-        },
-        onDone: () => setState(() => _panelMenu = null),
+      child: _EntranceScaleFade(
+        alignment: Alignment.topLeft,
+        child: ElectricalPanelMenu(
+          panel: panel,
+          controller: _ctrl,
+          onOpen: () {
+            final first = panel.circuits
+                .where((c) => c.loadKind != LoadKind.feeder)
+                .firstOrNull;
+            setState(() {
+              _panelMenu = null;
+              if (first != null) {
+                _editing = ElectricalEditTarget(panel.id, first.id);
+              }
+            });
+          },
+          onDone: () => setState(() => _panelMenu = null),
+        ),
       ),
     );
   }
@@ -388,11 +416,38 @@ class _SharedSheet extends ConsumerWidget {
     final sheet = sheetsState.current;
 
     if (sheet == null) {
+      final type = context.type;
+      // A branded empty-state card (matching the electrical workspace's), not
+      // bare text — so an empty canvas reads as one app in both workspaces.
       return ColoredBox(
         color: colors.canvas,
         child: Center(
-          child: Text('No sheet loaded',
-              style: context.type.body.copyWith(color: colors.textMuted)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: Container(
+              padding: const EdgeInsets.all(MechXSpacing.lg),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                borderRadius: MechXRadii.card,
+                border: Border.all(color: colors.border),
+                boxShadow: MechXShadow.card,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('No sheet loaded',
+                      style: type.title.copyWith(color: colors.textPrimary)),
+                  const SizedBox(height: MechXSpacing.xs),
+                  Text(
+                    'Import a PDF floor plan to begin — then calibrate its '
+                    'scale and draw on the Plumbing, HVAC and Electrical layers.',
+                    style: type.body.copyWith(color: colors.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       );
     }
@@ -426,10 +481,11 @@ class _SharedSheet extends ConsumerWidget {
         // The PDF sheet, pannable/zoomable — drives the shared viewport.
         Positioned.fill(
           child: CanvasView(
-            key: ValueKey('layout-shared-${sheet.id}'),
+            key: host.canvasKeyFor(sheet.id),
             contentSize: sheet.sizePx,
             initialTransform: sheetsState.viewportFor(sheet.id),
             background: colors.canvas,
+            gridColor: colors.gridLine,
             onTransformChanged: (t) => ref
                 .read(sheetsControllerProvider.notifier)
                 .setViewport(sheet.id, t),
@@ -512,6 +568,17 @@ class _SharedSheet extends ConsumerWidget {
             right: 0,
             child: Center(child: _CalibrateHint()),
           ),
+        // On-canvas zoom controls (bottom-left) — the same cluster the
+        // electrical canvas shows, so both workspaces share the affordance.
+        Positioned(
+          left: MechXSpacing.md,
+          bottom: MechXSpacing.md,
+          child: ZoomControls(
+            onIn: () => host.canvasKeyFor(sheet.id).currentState?.zoomIn(),
+            onOut: () => host.canvasKeyFor(sheet.id).currentState?.zoomOut(),
+            onFit: () => host.canvasKeyFor(sheet.id).currentState?.fitView(),
+          ),
+        ),
       ],
     );
   }
@@ -523,44 +590,88 @@ class _CalibrateHint extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final colors = context.colors;
-    final type = context.type;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: () => ref.read(calibrationControllerProvider.notifier).start(),
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm + 2,
-            vertical: MechXSpacing.xs + 1,
+        // Gentle scale-in + fade so the nudge arrives rather than pops.
+        child: const _EntranceScaleFade(
+          child: _CalibrateHintBody(),
+        ),
+      ),
+    );
+  }
+}
+
+/// The calibrate-nudge content (factored out so the entrance wrapper can be a
+/// const child).
+class _CalibrateHintBody extends StatelessWidget {
+  const _CalibrateHintBody();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: MechXSpacing.sm + 2,
+        vertical: MechXSpacing.xs + 1,
+      ),
+      decoration: BoxDecoration(
+        color: colors.surface.withAlpha(240),
+        borderRadius: MechXRadii.control,
+        border: Border.all(color: colors.warning),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            margin: const EdgeInsets.only(right: MechXSpacing.xs),
+            decoration: BoxDecoration(
+              color: colors.warning,
+              borderRadius: const BorderRadius.all(Radius.circular(4)),
+            ),
           ),
-          decoration: BoxDecoration(
-            color: colors.surface.withAlpha(240),
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: colors.warning),
-            boxShadow: const [
-              BoxShadow(
-                  color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
-            ],
+          Text(
+            'Set drawing scale to measure runs',
+            style: type.label.copyWith(color: colors.textPrimary),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 7,
-                height: 7,
-                margin: const EdgeInsets.only(right: MechXSpacing.xs),
-                decoration: BoxDecoration(
-                  color: colors.warning,
-                  borderRadius: const BorderRadius.all(Radius.circular(4)),
-                ),
-              ),
-              Text(
-                'Set drawing scale to measure runs',
-                style: type.label.copyWith(color: colors.textPrimary),
-              ),
-            ],
-          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A one-shot entrance: scales from ~0.94 → 1.0 and fades 0 → 1 over
+/// [MechXMotion.appear] the first (and only) time it's built. Transient motion
+/// — no at-rest pixel change once settled.
+class _EntranceScaleFade extends StatelessWidget {
+  final Widget child;
+  final Alignment alignment;
+  const _EntranceScaleFade({
+    required this.child,
+    this.alignment = Alignment.center,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.0, end: 1.0),
+      duration: MechXMotion.appear,
+      curve: MechXMotion.standard,
+      child: child,
+      builder: (context, t, child) => Opacity(
+        opacity: t.clamp(0.0, 1.0),
+        child: Transform.scale(
+          scale: 0.94 + 0.06 * t,
+          alignment: alignment,
+          child: child,
         ),
       ),
     );

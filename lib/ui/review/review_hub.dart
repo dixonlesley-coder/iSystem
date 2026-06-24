@@ -85,8 +85,7 @@ class _WarningList extends ConsumerWidget {
                         top: 5, right: MechXSpacing.sm),
                     decoration: BoxDecoration(
                       color: colors.warning,
-                      borderRadius:
-                          const BorderRadius.all(Radius.circular(4)),
+                      borderRadius: const BorderRadius.all(MechXRadii.xs),
                     ),
                   ),
                   Expanded(

@@ -21,6 +21,10 @@ String _csv(String v) {
 String _num(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
+/// Escape a value for a Markdown table cell: a literal `|` would otherwise
+/// split the row into extra columns, and a newline would break the row.
+String _md(String v) => v.replaceAll('|', r'\|').replaceAll('\n', ' ');
+
 /// Render a priced [estimate] as CSV: one header row + one row per priced BOM
 /// line (qty, category, description, sku, unit price, line total, matched). The
 /// grand total is appended as a trailing summary row.
@@ -70,7 +74,7 @@ String quotationToMarkdown(
     ..writeln('| ---: | --- | --- | --- | ---: | ---: |');
   for (final l in estimate.lines) {
     b.writeln('| ${_num(l.line.qty)} | ${l.line.category.name} | '
-        '${l.line.description} | ${l.line.sku ?? '-'} | '
+        '${_md(l.line.description)} | ${_md(l.line.sku ?? '-')} | '
         '${l.unitPrice == null ? '-' : _num(l.unitPrice!)} | '
         '${l.lineTotal == null ? '(unpriced)' : _num(l.lineTotal!)} |');
   }

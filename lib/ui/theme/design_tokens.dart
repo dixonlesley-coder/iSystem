@@ -28,6 +28,7 @@ abstract final class MechXSpacing {
 /// Corner radii — iOS-scale (controls ~9, cards ~14, large surfaces ~20), plus
 /// a fully-rounded [pill] for segmented controls / switches / sidebar items.
 abstract final class MechXRadii {
+  static const Radius xs = Radius.circular(4); // micro insets (chips, swatches)
   static const Radius sm = Radius.circular(6);
   static const Radius md = Radius.circular(9);
   static const Radius lg = Radius.circular(14);
@@ -35,6 +36,7 @@ abstract final class MechXRadii {
   static const Radius pill = Radius.circular(999);
   static const BorderRadius card = BorderRadius.all(lg);
   static const BorderRadius control = BorderRadius.all(md);
+  static const BorderRadius small = BorderRadius.all(xs);
   static const BorderRadius large = BorderRadius.all(xl);
   static const BorderRadius rounded = BorderRadius.all(pill);
 }
@@ -62,6 +64,15 @@ abstract final class MechXShadow {
 }
 
 /// Motion that orients — short, eased, never decorative (§4).
+///
+/// Base durations + curves, plus SEMANTIC IDIOMS naming the UX moment each
+/// pairing serves so motion is consistent across surfaces (pair every idiom
+/// duration with [standard] unless noted):
+///   • [press]   — a control's press/scale feedback (snappy)
+///   • [hover]    — hover fills, focus-border + focus-ring fades
+///   • [appear]   — reveals, selection fades, menus/drawers/banners entering
+///   • [dismiss]  — close / collapse / fade-out
+/// Drag tracking uses NO animation (live, 1:1).
 abstract final class MechXMotion {
   static const Duration instant = Duration(milliseconds: 90);
   static const Duration fast = Duration(milliseconds: 140);
@@ -69,6 +80,12 @@ abstract final class MechXMotion {
   static const Duration slow = Duration(milliseconds: 320);
   static const Curve standard = Curves.easeOutCubic;
   static const Curve emphasized = Curves.easeInOutCubic;
+
+  // Semantic idioms (names map a moment → a base duration; see class doc).
+  static const Duration press = instant;
+  static const Duration hover = fast;
+  static const Duration appear = medium;
+  static const Duration dismiss = fast;
 }
 
 /// A complete colour set for one brightness.
@@ -91,6 +108,15 @@ class MechXColors {
   final Color danger;
   final Color success;
 
+  /// The label/glyph colour that sits ON the [accent] fill or a coloured node
+  /// (filled segment, accent dot, on-canvas chip). White in both modes — kept a
+  /// token so canvas painters stop reaching for raw `Color(0xFFFFFFFF)`.
+  final Color onAccent;
+
+  /// Dimming behind a modal / drawer (iOS sheets dim the content beneath). A
+  /// touch lighter in light mode, deeper in dark, per HIG.
+  final Color scrim;
+
   const MechXColors({
     required this.brightness,
     required this.background,
@@ -108,6 +134,8 @@ class MechXColors {
     required this.warning,
     required this.danger,
     required this.success,
+    this.onAccent = const Color(0xFFFFFFFF),
+    this.scrim = const Color(0x66000000),
   });
 
   /// iOS light — systemGroupedBackground behind white cells, systemBlue accent,
@@ -129,6 +157,7 @@ class MechXColors {
     warning: Color(0xFFF08C00), // systemOrange (text-contrast tuned)
     danger: Color(0xFFFF3B30), // systemRed
     success: Color(0xFF30A46C), // systemGreen (text-contrast tuned)
+    scrim: Color(0x66000000), // ~0.40 dim
   );
 
   /// iOS dark — elevated grey cells on a near-black grouped background,
@@ -150,6 +179,7 @@ class MechXColors {
     warning: Color(0xFFFF9F0A), // systemOrange (dark)
     danger: Color(0xFFFF453A), // systemRed (dark)
     success: Color(0xFF30D158), // systemGreen (dark)
+    scrim: Color(0x8A000000), // ~0.54 dim (deeper in dark)
   );
 }
 
@@ -164,6 +194,7 @@ class MechXTypography {
   final TextStyle body;
   final TextStyle label;
   final TextStyle caption;
+  final TextStyle micro; // dense on-canvas labels (panel letters, wire tags)
   final TextStyle mono; // measurements / tabular numbers
 
   const MechXTypography({
@@ -173,6 +204,7 @@ class MechXTypography {
     required this.body,
     required this.label,
     required this.caption,
+    required this.micro,
     required this.mono,
   });
 
@@ -186,6 +218,7 @@ class MechXTypography {
     body: TextStyle(fontFamily: fontFamily, fontSize: 14.5, height: 1.4, fontWeight: FontWeight.w400, letterSpacing: -0.1),
     label: TextStyle(fontFamily: fontFamily, fontSize: 13, height: 1.3, fontWeight: FontWeight.w500, letterSpacing: -0.05),
     caption: TextStyle(fontFamily: fontFamily, fontSize: 12, height: 1.3, fontWeight: FontWeight.w500, letterSpacing: 0.1),
+    micro: TextStyle(fontFamily: fontFamily, fontSize: 9, height: 1.2, fontWeight: FontWeight.w600, letterSpacing: 0.1),
     mono: TextStyle(
       fontFamily: monoFamily,
       fontSize: 13,

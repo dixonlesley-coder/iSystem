@@ -78,6 +78,7 @@ class SheetCanvas extends ConsumerWidget {
             contentSize: sheet.sizePx,
             initialTransform: state.viewportFor(sheet.id),
             background: colors.canvas,
+            gridColor: colors.gridLine,
             onTransformChanged: (vt) => ref
                 .read(sheetsControllerProvider.notifier)
                 .setViewport(sheet.id, vt),

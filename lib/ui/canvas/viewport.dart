@@ -47,7 +47,7 @@ class ViewportTransform {
   static ViewportTransform fit(
     Size contentSize,
     Size viewportSize, {
-    double padding = 24,
+    double padding = 12,
   }) {
     if (contentSize.width <= 0 ||
         contentSize.height <= 0 ||

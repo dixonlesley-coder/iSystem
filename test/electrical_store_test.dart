@@ -461,8 +461,8 @@ void main() {
           .set(WorkspaceView.electrical);
       await tester.pump();
 
-      // The Loads palette renders, the Single-line tab is present.
-      expect(find.text('Loads'), findsWidgets);
+      // The Loads palette renders (its section label), the Single-line tab too.
+      expect(find.text('LOADS'), findsWidgets);
       expect(find.text('Single-line'), findsOneWidget);
       expect(find.text('Power one-line'), findsOneWidget);
       // The sample panels are on the canvas.
@@ -747,7 +747,7 @@ void main() {
       expect(find.text('HVAC'), findsWidgets);
       expect(find.text('Electrical'), findsWidgets);
       expect(find.text('MDP'), findsWidgets);
-      expect(find.text('Loads'), findsWidgets);
+      expect(find.text('LOADS'), findsWidgets);
     });
 
     testWidgets('a placed panel is hidden when the Electrical layer is toggled '

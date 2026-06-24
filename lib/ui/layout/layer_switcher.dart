@@ -13,6 +13,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../store/layer_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/mechx_focus_ring.dart';
+import '../widgets/section_label.dart';
 
 /// A compact "Layers" panel: a segmented active-layer picker + an eye toggle per
 /// discipline. Sits in the canvas top bar.
@@ -22,7 +24,6 @@ class LayerSwitcher extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
-    final type = context.type;
     final active = ref.watch(activeDisciplineProvider);
     final visible = ref.watch(layerVisibilityProvider);
     final activeCtrl = ref.read(activeDisciplineProvider.notifier);
@@ -39,12 +40,7 @@ class LayerSwitcher extends ConsumerWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('LAYER',
-              style: type.caption.copyWith(
-                color: colors.textMuted,
-                letterSpacing: 0.8,
-                fontWeight: FontWeight.w600,
-              )),
+          const MechXSectionLabel('LAYER'),
           const SizedBox(width: MechXSpacing.sm),
           for (final layer in DisciplineLayer.values)
             _LayerSegment(
@@ -89,54 +85,69 @@ class _LayerSegmentState extends State<_LayerSegment> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    // The selected segment uses the app-wide tinted-fill language (accentMuted
+    // + accent hairline + primary label), matching the DRAW service pills, the
+    // electrical tabs, and the inspector chips — instead of white-on-accent.
     final fg = widget.active
-        ? const Color(0xFFFFFFFF)
+        ? colors.textPrimary
         : (widget.visible ? colors.textSecondary : colors.textMuted);
     final bg = widget.active
-        ? colors.accent
+        ? colors.accentMuted
         : (_hover ? colors.surfaceHover : const Color(0x00000000));
 
     return Padding(
       padding: const EdgeInsets.only(right: MechXSpacing.xxs),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: Container(
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: MechXRadii.control,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Name — selects the active layer.
-              GestureDetector(
-                onTap: widget.onSelect,
-                behavior: HitTestBehavior.opaque,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                      MechXSpacing.sm, MechXSpacing.xs, MechXSpacing.xs,
-                      MechXSpacing.xs),
-                  child: Text(widget.layer.label,
-                      style: type.label.copyWith(
-                        color: fg,
-                        fontWeight:
-                            widget.active ? FontWeight.w700 : FontWeight.w500,
-                      )),
-                ),
+      // Keyboard focus + Enter/Space select the layer (the eye dot stays a
+      // pointer affordance). The ring radius matches the segment fill.
+      child: MechXFocusRing(
+        borderRadius: const BorderRadius.all(MechXRadii.md),
+        onActivated: widget.onSelect,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          // Ease the hover / selection fill so the segment doesn't jump state.
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: MechXRadii.control,
+              border: Border.all(
+                color: widget.active ? colors.accent : const Color(0x00000000),
               ),
-              // Visibility eye dot — toggles draw on/off (active stays on).
-              GestureDetector(
-                onTap: widget.onToggleVisible,
-                behavior: HitTestBehavior.opaque,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                      2, MechXSpacing.xs, MechXSpacing.sm, MechXSpacing.xs),
-                  child: _EyeDot(visible: widget.visible, color: fg),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Name — selects the active layer.
+                GestureDetector(
+                  onTap: widget.onSelect,
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                        MechXSpacing.sm, MechXSpacing.xs, MechXSpacing.xs,
+                        MechXSpacing.xs),
+                    child: Text(widget.layer.label,
+                        style: type.label.copyWith(
+                          color: fg,
+                          fontWeight:
+                              widget.active ? FontWeight.w700 : FontWeight.w500,
+                        )),
+                  ),
                 ),
-              ),
-            ],
+                // Visibility eye dot — toggles draw on/off (active stays on).
+                GestureDetector(
+                  onTap: widget.onToggleVisible,
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                        2, MechXSpacing.xs, MechXSpacing.sm, MechXSpacing.xs),
+                    child: _EyeDot(visible: widget.visible, color: fg),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
