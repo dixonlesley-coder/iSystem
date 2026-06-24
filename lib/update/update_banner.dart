@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../ui/theme/design_tokens.dart';
 import '../ui/theme/mechx_theme.dart';
 import '../ui/widgets/mechx_button.dart';
+import '../ui/widgets/mechx_focus_ring.dart';
 import 'update_check.dart';
 import 'update_provider.dart';
 
@@ -67,8 +68,31 @@ class _UpdateBannerState extends ConsumerState<UpdateBanner> {
         status is UpdateDownloading ||
         status is UpdateDownloaded ||
         status is UpdateError;
-    if (!visible || _dismissed) return const SizedBox.shrink();
+    final show = visible && !_dismissed;
 
+    // Ease the banner in (slide up + fade) and out (fade), on the appear idiom,
+    // so it never snaps into the corner. Hidden resolves to a zero-size box.
+    return AnimatedSwitcher(
+      duration: MechXMotion.appear,
+      switchInCurve: MechXMotion.standard,
+      switchOutCurve: MechXMotion.standard,
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0, 0.12),
+            end: Offset.zero,
+          ).animate(animation),
+          child: child,
+        ),
+      ),
+      child: show
+          ? _card(context, status)
+          : const SizedBox.shrink(key: ValueKey('update-banner-hidden')),
+    );
+  }
+
+  Widget _card(BuildContext context, UpdateStatus status) {
     final colors = context.colors;
     final type = context.type;
     final isError = status is UpdateError;
@@ -81,6 +105,7 @@ class _UpdateBannerState extends ConsumerState<UpdateBanner> {
     };
 
     return ConstrainedBox(
+      key: const ValueKey('update-banner-card'),
       constraints: const BoxConstraints(maxWidth: 320),
       child: Container(
         padding: const EdgeInsets.all(MechXSpacing.sm + 2),
@@ -88,6 +113,8 @@ class _UpdateBannerState extends ConsumerState<UpdateBanner> {
           color: colors.surface,
           borderRadius: MechXRadii.card,
           border: Border.all(color: colors.border),
+          // A soft lift — it floats over the workspace (HIG popover elevation).
+          boxShadow: MechXShadow.card,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -110,16 +137,7 @@ class _UpdateBannerState extends ConsumerState<UpdateBanner> {
                     style: type.label.copyWith(color: colors.textPrimary),
                   ),
                 ),
-                MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: GestureDetector(
-                    onTap: () => setState(() => _dismissed = true),
-                    child: Text(
-                      'Dismiss',
-                      style: type.caption.copyWith(color: colors.textMuted),
-                    ),
-                  ),
-                ),
+                _DismissLink(onTap: () => setState(() => _dismissed = true)),
               ],
             ),
             const SizedBox(height: MechXSpacing.xs),
@@ -190,6 +208,51 @@ class _UpdateBannerState extends ConsumerState<UpdateBanner> {
   }
 }
 
+/// The banner's Dismiss text-link: dims toward muted at rest, brightens to the
+/// primary label on hover, eased on the `hover` idiom — so it reads tappable.
+/// Keyboard-focusable + Enter/Space via the shared focus ring.
+class _DismissLink extends StatefulWidget {
+  final VoidCallback onTap;
+  const _DismissLink({required this.onTap});
+
+  @override
+  State<_DismissLink> createState() => _DismissLinkState();
+}
+
+class _DismissLinkState extends State<_DismissLink> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final fg = _hover ? colors.textPrimary : colors.textMuted;
+    return MechXFocusRing(
+      onActivated: widget.onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: MechXSpacing.xs,
+              vertical: MechXSpacing.xxs,
+            ),
+            child: AnimatedDefaultTextStyle(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
+              style: type.caption.copyWith(color: fg),
+              child: const Text('Dismiss'),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ProgressBar extends StatelessWidget {
   final int percent;
   const _ProgressBar({required this.percent});
@@ -205,9 +268,16 @@ class _ProgressBar extends StatelessWidget {
         color: colors.surfaceHover,
         child: Align(
           alignment: Alignment.centerLeft,
-          child: FractionallySizedBox(
-            widthFactor: fraction,
-            child: ColoredBox(color: colors.accent),
+          // Ease the fill between progress ticks so it glides rather than
+          // jumping percent-by-percent (HIG: determinate progress eases).
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(begin: 0, end: fraction),
+            duration: MechXMotion.medium,
+            curve: MechXMotion.standard,
+            builder: (context, value, _) => FractionallySizedBox(
+              widthFactor: value.clamp(0.0, 1.0),
+              child: ColoredBox(color: colors.accent),
+            ),
           ),
         ),
       ),
