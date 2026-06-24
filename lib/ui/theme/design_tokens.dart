@@ -62,6 +62,15 @@ abstract final class MechXShadow {
 }
 
 /// Motion that orients — short, eased, never decorative (§4).
+///
+/// Base durations + curves, plus SEMANTIC IDIOMS naming the UX moment each
+/// pairing serves so motion is consistent across surfaces (pair every idiom
+/// duration with [standard] unless noted):
+///   • [press]   — a control's press/scale feedback (snappy)
+///   • [hover]    — hover fills, focus-border + focus-ring fades
+///   • [appear]   — reveals, selection fades, menus/drawers/banners entering
+///   • [dismiss]  — close / collapse / fade-out
+/// Drag tracking uses NO animation (live, 1:1).
 abstract final class MechXMotion {
   static const Duration instant = Duration(milliseconds: 90);
   static const Duration fast = Duration(milliseconds: 140);
@@ -69,6 +78,12 @@ abstract final class MechXMotion {
   static const Duration slow = Duration(milliseconds: 320);
   static const Curve standard = Curves.easeOutCubic;
   static const Curve emphasized = Curves.easeInOutCubic;
+
+  // Semantic idioms (names map a moment → a base duration; see class doc).
+  static const Duration press = instant;
+  static const Duration hover = fast;
+  static const Duration appear = medium;
+  static const Duration dismiss = fast;
 }
 
 /// A complete colour set for one brightness.
@@ -91,6 +106,10 @@ class MechXColors {
   final Color danger;
   final Color success;
 
+  /// Dimming behind a modal / drawer (iOS sheets dim the content beneath). A
+  /// touch lighter in light mode, deeper in dark, per HIG.
+  final Color scrim;
+
   const MechXColors({
     required this.brightness,
     required this.background,
@@ -108,6 +127,7 @@ class MechXColors {
     required this.warning,
     required this.danger,
     required this.success,
+    this.scrim = const Color(0x66000000),
   });
 
   /// iOS light — systemGroupedBackground behind white cells, systemBlue accent,
@@ -129,6 +149,7 @@ class MechXColors {
     warning: Color(0xFFF08C00), // systemOrange (text-contrast tuned)
     danger: Color(0xFFFF3B30), // systemRed
     success: Color(0xFF30A46C), // systemGreen (text-contrast tuned)
+    scrim: Color(0x66000000), // ~0.40 dim
   );
 
   /// iOS dark — elevated grey cells on a near-black grouped background,
@@ -150,6 +171,7 @@ class MechXColors {
     warning: Color(0xFFFF9F0A), // systemOrange (dark)
     danger: Color(0xFFFF453A), // systemRed (dark)
     success: Color(0xFF30D158), // systemGreen (dark)
+    scrim: Color(0x8A000000), // ~0.54 dim (deeper in dark)
   );
 }
 
