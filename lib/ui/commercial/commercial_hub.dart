@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/commercial_export.dart';
 
+import '../../store/app_state.dart';
 import '../../store/commercial_store.dart';
 import '../../store/project_store.dart';
 import '../strings/app_strings.dart';
@@ -89,7 +90,7 @@ class _ExportBar extends ConsumerWidget {
     final name = ref.read(projectControllerProvider).name;
     final csv = costEstimateToCsv(ref.read(electricalCostProvider));
     final path = await FilePicker.saveFile(
-      dialogTitle: 'Export electrical BOM',
+      dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleElectricalBom),
       fileName: '$name-electrical-bom.csv',
       type: FileType.custom,
       allowedExtensions: const ['csv'],
@@ -107,7 +108,7 @@ class _ExportBar extends ConsumerWidget {
       projectName: name,
     );
     final path = await FilePicker.saveFile(
-      dialogTitle: 'Export electrical proposal',
+      dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleElectricalProposal),
       fileName: '$name-electrical-proposal.md',
       type: FileType.custom,
       allowedExtensions: const ['md'],

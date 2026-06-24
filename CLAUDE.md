@@ -311,9 +311,11 @@ report export**; versioned `.mechx` save/open with viewport restore;
   {…})` substitutes `{name}` placeholders (EN+ID templates carry identical placeholders, pinned
   by a test) — and the Commercial workspace's dynamic captions (BOM/pricelist leads, unpriced
   count, labour-rate/amount/hours labels) now use it.
-  Remaining in **Wave 4b** (deferred, incremental): the tail of the string migration — the
-  heatmap/plan-canvas on-overlay labels and the remaining dynamic/on-canvas captions, plus the
-  context-less OS file-dialog titles, all left as literals for now.
+  The **export OS save-dialog titles** (all 10, across mechanical/electrical/commercial) are now
+  localized too — the export fns resolve the active locale via `ref.read(localeProvider)`, so no
+  signature/call-site churn. Remaining in **Wave 4b** (deferred, incremental): only the
+  heatmap/plan-canvas on-overlay abbreviation labels (`DN50 · 3.5 m`-style, golden-locked, low
+  prose value) are still literals.
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),

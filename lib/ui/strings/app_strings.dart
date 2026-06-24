@@ -204,6 +204,18 @@ enum StringKey {
   inspectorRoleJunction,
   inspectorRoleFixture,
   inspectorRoleSource,
+
+  // Export — OS save-dialog titles.
+  exportTitleCalcReport,
+  exportTitleDrawingDxf,
+  exportTitleDrawingPdf,
+  exportTitleBom,
+  exportTitleSldDxf,
+  exportTitleSldPdf,
+  exportTitlePowerOneLineDxf,
+  exportTitleElectricalReport,
+  exportTitleElectricalBom,
+  exportTitleElectricalProposal,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -430,6 +442,18 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorRoleJunction: 'Junction',
   StringKey.inspectorRoleFixture: 'Fixture',
   StringKey.inspectorRoleSource: 'Source / tank',
+
+  // Export — OS save-dialog titles.
+  StringKey.exportTitleCalcReport: 'Export calculation report',
+  StringKey.exportTitleDrawingDxf: 'Export drawing (DXF)',
+  StringKey.exportTitleDrawingPdf: 'Export drawing (PDF)',
+  StringKey.exportTitleBom: 'Export bill of materials',
+  StringKey.exportTitleSldDxf: 'Export single-line (DXF)',
+  StringKey.exportTitleSldPdf: 'Export single-line (PDF)',
+  StringKey.exportTitlePowerOneLineDxf: 'Export power one-line (DXF)',
+  StringKey.exportTitleElectricalReport: 'Export electrical report',
+  StringKey.exportTitleElectricalBom: 'Export electrical BOM',
+  StringKey.exportTitleElectricalProposal: 'Export electrical proposal',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -661,6 +685,18 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorRoleJunction: 'Persimpangan',
   StringKey.inspectorRoleFixture: 'Fikstur',
   StringKey.inspectorRoleSource: 'Sumber / tangki',
+
+  // Export — OS save-dialog titles.
+  StringKey.exportTitleCalcReport: 'Ekspor laporan perhitungan',
+  StringKey.exportTitleDrawingDxf: 'Ekspor gambar (DXF)',
+  StringKey.exportTitleDrawingPdf: 'Ekspor gambar (PDF)',
+  StringKey.exportTitleBom: 'Ekspor daftar material',
+  StringKey.exportTitleSldDxf: 'Ekspor satu-garis (DXF)',
+  StringKey.exportTitleSldPdf: 'Ekspor satu-garis (PDF)',
+  StringKey.exportTitlePowerOneLineDxf: 'Ekspor daya satu-garis (DXF)',
+  StringKey.exportTitleElectricalReport: 'Ekspor laporan kelistrikan',
+  StringKey.exportTitleElectricalBom: 'Ekspor BOM kelistrikan',
+  StringKey.exportTitleElectricalProposal: 'Ekspor proposal kelistrikan',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

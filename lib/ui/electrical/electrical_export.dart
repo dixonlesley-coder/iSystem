@@ -14,7 +14,9 @@ import 'package:mechx_engine/report/electrical_dxf_export.dart';
 import 'package:mechx_engine/report/electrical_pdf_export.dart';
 import 'package:mechx_engine/standards/puil.dart';
 
+import '../../store/app_state.dart';
 import '../../store/electrical_store.dart';
+import '../strings/app_strings.dart';
 
 /// Export the sized electrical single-line as a DXF drawing file.
 Future<void> exportElectricalSldDxf(WidgetRef ref) async {
@@ -22,7 +24,7 @@ Future<void> exportElectricalSldDxf(WidgetRef ref) async {
   final result = ref.read(electricalResultProvider);
   final dxf = electricalSldToDxf(project: project, result: result);
   await _save(dxf, name: project.name, suffix: 'sld', ext: 'dxf',
-      title: 'Export single-line (DXF)');
+      title: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleSldDxf));
 }
 
 /// Export the sized electrical single-line as a native (vector) PDF.
@@ -32,7 +34,7 @@ Future<void> exportElectricalSldPdf(WidgetRef ref) async {
   final bytes = electricalSldToPdf(project: project, result: result);
   final base = project.name.isEmpty ? 'electrical' : project.name;
   final path = await FilePicker.saveFile(
-    dialogTitle: 'Export single-line (PDF)',
+    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleSldPdf),
     fileName: '$base-sld.pdf',
     type: FileType.custom,
     allowedExtensions: const ['pdf'],
@@ -51,7 +53,7 @@ Future<void> exportPowerOneLineDxf(WidgetRef ref) async {
   if (oneLine == null || oneLine.nodes.isEmpty) return;
   final dxf = powerOneLineToDxf(oneLine);
   await _save(dxf, name: project.name, suffix: 'power-one-line', ext: 'dxf',
-      title: 'Export power one-line (DXF)');
+      title: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitlePowerOneLineDxf));
 }
 
 /// Export the electrical calculation report as Markdown.
@@ -72,7 +74,7 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) async {
     verifyItems: advanced.verifyItems,
   ));
   await _save(md, name: project.name, suffix: 'electrical-report', ext: 'md',
-      title: 'Export electrical report');
+      title: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleElectricalReport));
 }
 
 Future<void> _save(

@@ -68,7 +68,7 @@ Future<void> exportCalcReport(WidgetRef ref) async {
   );
 
   final path = await FilePicker.saveFile(
-    dialogTitle: 'Export calculation report',
+    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleCalcReport),
     fileName: '${project.name}-report.md',
     type: FileType.custom,
     allowedExtensions: const ['md'],
@@ -92,7 +92,7 @@ Future<void> exportDrawingDxf(WidgetRef ref) async {
     floorIndex: floorIndex,
   );
   final path = await FilePicker.saveFile(
-    dialogTitle: 'Export drawing (DXF)',
+    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingDxf),
     fileName: '${sheet.name}.dxf',
     type: FileType.custom,
     allowedExtensions: const ['dxf'],
@@ -117,7 +117,7 @@ Future<void> exportDrawingPdf(WidgetRef ref) async {
     title: sheet.name,
   );
   final path = await FilePicker.saveFile(
-    dialogTitle: 'Export drawing (PDF)',
+    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingPdf),
     fileName: '${sheet.name}.pdf',
     type: FileType.custom,
     allowedExtensions: const ['pdf'],
@@ -792,7 +792,9 @@ class _ResultsSection extends ConsumerWidget {
             alignment: Alignment.centerLeft,
             child: MechXButton(
               label: 'Export BOM (CSV)',
-              onPressed: () => _exportBom(bom, fittings),
+              onPressed: () => _exportBom(bom, fittings,
+                  MechXStringsData(ref.read(localeProvider))(
+                      StringKey.exportTitleBom)),
             ),
           ),
         ],
@@ -800,10 +802,10 @@ class _ResultsSection extends ConsumerWidget {
     );
   }
 
-  Future<void> _exportBom(
-      List<BomLine> bom, List<FittingLine> fittings) async {
+  Future<void> _exportBom(List<BomLine> bom, List<FittingLine> fittings,
+      String dialogTitle) async {
     final path = await FilePicker.saveFile(
-      dialogTitle: 'Export bill of materials',
+      dialogTitle: dialogTitle,
       fileName: 'mechx-bom.csv',
       type: FileType.custom,
       allowedExtensions: const ['csv'],
