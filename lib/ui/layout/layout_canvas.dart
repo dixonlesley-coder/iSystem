@@ -252,16 +252,44 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       return KeyEventResult.handled;
     }
 
-    // Delete only acts on the mechanical selection (the active mechanical layer).
-    final activeMechanical =
-        ref.read(activeDisciplineProvider).isMechanical;
+    // Copy / paste / delete only act on the mechanical selection (the active
+    // mechanical layer). The current sheet/floor mirror what _SharedSheet uses.
+    final activeMechanical = ref.read(activeDisciplineProvider).isMechanical;
+    if (activeMechanical && mod && key == LogicalKeyboardKey.keyC) {
+      final sel = ref.read(selectionProvider);
+      final nodeIds = sel.nodeIds.isEmpty
+          ? {if (sel.nodeId != null) sel.nodeId!}
+          : sel.nodeIds;
+      final edgeIds = sel.edgeIds.isEmpty
+          ? {if (sel.edgeId != null) sel.edgeId!}
+          : sel.edgeIds;
+      if (nodeIds.isEmpty && edgeIds.isEmpty) return KeyEventResult.ignored;
+      ref
+          .read(networkControllerProvider.notifier)
+          .copySelection(nodeIds, edgeIds);
+      return KeyEventResult.handled;
+    }
+    if (activeMechanical && mod && key == LogicalKeyboardKey.keyV) {
+      final sheet = ref.read(sheetsControllerProvider).current;
+      if (sheet == null) return KeyEventResult.ignored;
+      final levelCount =
+          ref.read(projectControllerProvider).building.levelCount;
+      final floorIndex =
+          ref.read(sheetsControllerProvider).floorFor(sheet.id, levelCount);
+      ref
+          .read(networkControllerProvider.notifier)
+          .paste(sheetId: sheet.id, floorIndex: floorIndex);
+      return KeyEventResult.handled;
+    }
     if (activeMechanical &&
         (key == LogicalKeyboardKey.delete ||
             key == LogicalKeyboardKey.backspace)) {
       final sel = ref.read(selectionProvider);
       if (sel.isEmpty) return KeyEventResult.ignored;
       final net = ref.read(networkControllerProvider.notifier);
-      if (sel.isNode) {
+      if (sel.isMulti) {
+        net.deleteMany(sel.nodeIds, sel.edgeIds);
+      } else if (sel.isNode) {
         net.deleteNode(sel.nodeId!);
       } else if (sel.isEdge) {
         net.deleteEdge(sel.edgeId!);
