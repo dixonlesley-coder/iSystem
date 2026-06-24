@@ -297,16 +297,20 @@ report export**; versioned `.mechx` save/open with viewport restore;
   mechanism (`AppLocale`/`localeProvider` + `ui/strings/app_strings.dart`'s `MechXStrings`
   InheritedWidget + `context.strings`, a Preferences language toggle; string batches so far =
   nav-rail + Preferences, then the whole **Commercial workspace** + the electrical **Export menu**
-  + the Fold-1 Service & Earthing fields (26 more keys), all EN byte-identical so goldens are
-  unchanged). Both round-trip additively in
+  + the Fold-1 Service & Earthing fields (26 more keys), then the **DESIGN-workspace chrome**
+  (app shell top-bar/banners/status-bar + Schematic Auto/Edit toolbar + the `project_panel`
+  inspector) — all EN byte-identical so goldens are unchanged. `MechXStrings.of` now degrades to
+  EN when no provider ancestor is present (so widgets pumped standalone never throw). Both
+  round-trip additively in
   `DesignSettings` (pricelist+markups; `localeCode`, tolerant unknown→en), no version bump.
   **Electrical export now has full mechanical parity** — `report/electrical_pdf_export.dart`
   adds a native vector-PDF single-line (single A3 page, no third-party dep; panels as stroked
   rects at their schematic x/y, feeders as lines, labels as text, auto-fitted) alongside the DXF
   + Markdown, wired as a 'PDF (vector)' row in the toolbar Export menu.
-  Remaining in **Wave 4b** (deferred, incremental): the rest of the string migration — the 4
-  golden views (plan/heatmap/schematic top-bar/status-bar/inspector) plus dynamic/interpolated
-  captions and the context-less OS file-dialog titles, all left as literals for now.
+  Remaining in **Wave 4b** (deferred, incremental): the tail of the string migration — the
+  heatmap/plan-canvas on-overlay labels, plus dynamic/interpolated captions (counts, units,
+  currency woven into labels) and the context-less OS file-dialog titles, all left as literals
+  for now.
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),
