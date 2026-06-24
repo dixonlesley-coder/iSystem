@@ -150,7 +150,7 @@ const List<ServiceType> kDrawServices = [
 class ProjectPanel extends ConsumerWidget {
   const ProjectPanel({super.key});
 
-  static const double width = 296;
+  static const double width = 272;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -205,10 +205,16 @@ class ProjectPanel extends ConsumerWidget {
                   Expanded(
                       child: _SectionLabel(
                           context.strings(StringKey.inspectorBuilding))),
-                  Text(
-                    '${building.totalHeight.meters.toStringAsFixed(1)} m · '
-                    '${building.levelCount} levels',
-                    style: type.caption.copyWith(color: colors.textMuted),
+                  const SizedBox(width: MechXSpacing.xs),
+                  Flexible(
+                    child: Text(
+                      '${building.totalHeight.meters.toStringAsFixed(1)} m · '
+                      '${building.levelCount} levels',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
                   ),
                 ],
               ),
@@ -870,9 +876,19 @@ class _ResultsSection extends ConsumerWidget {
       child: Row(
         children: [
           Expanded(
-            child: Text(key, style: type.caption.copyWith(color: colors.textMuted)),
+            child: Text(key,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: type.caption.copyWith(color: colors.textMuted)),
           ),
-          Text(value, style: type.mono.copyWith(color: colors.textSecondary)),
+          const SizedBox(width: MechXSpacing.xs),
+          Flexible(
+            child: Text(value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+                style: type.mono.copyWith(color: colors.textSecondary)),
+          ),
         ],
       ),
     );
@@ -895,10 +911,18 @@ class _FireSection extends ConsumerWidget {
             children: [
               Expanded(
                 child: Text(key,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: type.caption.copyWith(color: colors.textMuted)),
               ),
-              Text(value,
-                  style: type.mono.copyWith(color: colors.textSecondary)),
+              const SizedBox(width: MechXSpacing.xs),
+              Flexible(
+                child: Text(value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: type.mono.copyWith(color: colors.textSecondary)),
+              ),
             ],
           ),
         );
@@ -1373,9 +1397,18 @@ class _HvacSection extends ConsumerWidget {
             children: [
               Expanded(
                 child: Text(k,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: type.caption.copyWith(color: colors.textMuted)),
               ),
-              Text(v, style: type.mono.copyWith(color: colors.textSecondary)),
+              const SizedBox(width: MechXSpacing.xs),
+              Flexible(
+                child: Text(v,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: type.mono.copyWith(color: colors.textSecondary)),
+              ),
             ],
           ),
         );
