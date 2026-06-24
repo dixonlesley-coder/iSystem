@@ -4,7 +4,9 @@
 /// editing surfaces over the one [ElectricalProject].
 ///
 /// Pure presentation: every mutation routes through the supplied
-/// [ElectricalProjectController]. Styled with MechXTheme — no Material.
+/// [ElectricalProjectController]. The control primitives live in
+/// `electrical_controls.dart` (shared with the single-line view). Styled with
+/// MechXTheme — no Material.
 library;
 
 import 'package:flutter/widgets.dart';
@@ -15,6 +17,9 @@ import 'package:mechx_engine/units.dart';
 import '../../store/electrical_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import 'electrical_controls.dart';
+
+export 'electrical_controls.dart' show ElectricalTextButton;
 
 /// Identifies a circuit being edited / menu'd (panel + circuit id).
 class ElectricalEditTarget {
@@ -47,14 +52,14 @@ class ElectricalCircuitMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _ContextMenu(
+    return ElectricalMenu(
       items: [
-        _MenuAction('Edit', onEdit),
-        _MenuAction('Duplicate', () {
+        ElectricalMenuAction('Edit', onEdit),
+        ElectricalMenuAction('Duplicate', () {
           controller.duplicateCircuit(target.panelId, target.circuitId);
           onDone();
         }),
-        _MenuAction('Delete', () {
+        ElectricalMenuAction('Delete', () {
           controller.deleteCircuit(target.panelId, target.circuitId);
           onDone();
         }, danger: true),
@@ -80,137 +85,38 @@ class ElectricalPanelMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _ContextMenu(
+    return ElectricalMenu(
       items: [
-        _MenuAction('Open panel', onOpen),
-        _MenuAction(
+        ElectricalMenuAction('Open panel', onOpen),
+        ElectricalMenuAction(
           panel.essential ? 'Unmark essential' : 'Mark essential',
           () {
             controller.setPanelEssential(panel.id, !panel.essential);
             onDone();
           },
         ),
-        _MenuAction(
+        ElectricalMenuAction(
           panel.upsBacked ? 'Unmark critical (UPS)' : 'Mark critical (UPS)',
           () {
             controller.setPanelUpsBacked(panel.id, !panel.upsBacked);
             onDone();
           },
         ),
-        _MenuAction(panel.submeter ? 'Remove submeter' : 'Add submeter', () {
+        ElectricalMenuAction(
+            panel.submeter ? 'Remove submeter' : 'Add submeter', () {
           controller.setPanelSubmeter(panel.id, !panel.submeter);
           onDone();
         }),
         if (panel.fedByCircuitId != null)
-          _MenuAction('Disconnect feeder', () {
+          ElectricalMenuAction('Disconnect feeder', () {
             controller.disconnectFeeder(panel.id);
             onDone();
           }),
-        _MenuAction('Delete panel', () {
+        ElectricalMenuAction('Delete panel', () {
           controller.deletePanel(panel.id);
           onDone();
         }, danger: true),
       ],
-    );
-  }
-}
-
-class _MenuAction {
-  final String label;
-  final VoidCallback onTap;
-  final bool danger;
-  const _MenuAction(this.label, this.onTap, {this.danger = false});
-}
-
-class _ContextMenu extends StatelessWidget {
-  final List<_MenuAction> items;
-  const _ContextMenu({required this.items});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    // Grow-from-top-left scale + fade on open, like a native context menu.
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.dismiss,
-      curve: MechXMotion.standard,
-      builder: (context, t, child) => Opacity(
-        opacity: t,
-        child: Transform.scale(
-          scale: 0.94 + 0.06 * t,
-          alignment: Alignment.topLeft,
-          child: child,
-        ),
-      ),
-      child: Container(
-        width: 188,
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: MechXRadii.control,
-          border: Border.all(color: colors.border),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final item in items)
-              _MenuItem(
-                label: item.label,
-                onTap: item.onTap,
-                danger: item.danger,
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MenuItem extends StatefulWidget {
-  final String label;
-  final VoidCallback onTap;
-  final bool danger;
-  const _MenuItem({
-    required this.label,
-    required this.onTap,
-    this.danger = false,
-  });
-
-  @override
-  State<_MenuItem> createState() => _MenuItemState();
-}
-
-class _MenuItemState extends State<_MenuItem> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm + 2,
-            vertical: MechXSpacing.xs + 3,
-          ),
-          color: _hover ? colors.surfaceHover : const Color(0x00000000),
-          child: Text(
-            widget.label,
-            style: type.body.copyWith(
-              color: widget.danger ? colors.danger : colors.textPrimary,
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -297,9 +203,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _Field(
+                    ElectricalField(
                       label: 'Name',
-                      child: _Text(
+                      child: ElectricalTextInput(
                         value: circuit.name,
                         onChanged: (v) => controller.setCircuit(
                           panel.id,
@@ -308,9 +214,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                         ),
                       ),
                     ),
-                    _Field(
+                    ElectricalField(
                       label: 'Load kind',
-                      child: _EnumPicker<LoadKind>(
+                      child: ElectricalEnumPicker<LoadKind>(
                         value: circuit.loadKind,
                         options: const [
                           LoadKind.general,
@@ -334,9 +240,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                       ),
                     ),
                     if (_isMotor)
-                      _Field(
+                      ElectricalField(
                         label: 'Motor power (kW)',
-                        child: _Num(
+                        child: ElectricalNumInput(
                           value: circuit.motorKw ?? 0,
                           onChanged: (v) => controller.setCircuit(
                             panel.id,
@@ -346,9 +252,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                         ),
                       )
                     else
-                      _Field(
+                      ElectricalField(
                         label: 'Load (W)',
-                        child: _Num(
+                        child: ElectricalNumInput(
                           value: circuit.loadW,
                           onChanged: (v) => controller.setCircuit(
                             panel.id,
@@ -357,9 +263,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                           ),
                         ),
                       ),
-                    _Field(
+                    ElectricalField(
                       label: 'cos phi',
-                      child: _Num(
+                      child: ElectricalNumInput(
                         value: circuit.cosPhi,
                         onChanged: (v) => controller.setCircuit(
                           panel.id,
@@ -368,9 +274,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                         ),
                       ),
                     ),
-                    _Field(
+                    ElectricalField(
                       label: 'Demand factor',
-                      child: _Num(
+                      child: ElectricalNumInput(
                         value: circuit.demandFactor,
                         onChanged: (v) => controller.setCircuit(
                           panel.id,
@@ -379,9 +285,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                         ),
                       ),
                     ),
-                    _Field(
+                    ElectricalField(
                       label: 'Run length (m)',
-                      child: _Num(
+                      child: ElectricalNumInput(
                         value: circuit.length.meters,
                         onChanged: (v) => controller.setCircuit(
                           panel.id,
@@ -390,9 +296,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                         ),
                       ),
                     ),
-                    _Field(
+                    ElectricalField(
                       label: 'Supply phase',
-                      child: _EnumPicker<int>(
+                      child: ElectricalEnumPicker<int>(
                         value: circuit.phases ?? 0,
                         options: const [0, 1, 3],
                         label: (p) => switch (p) {
@@ -413,9 +319,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                               ),
                       ),
                     ),
-                    _Field(
+                    ElectricalField(
                       label: 'Cable type',
-                      child: _EnumPicker<String?>(
+                      child: ElectricalEnumPicker<String?>(
                         value: circuit.cableType,
                         options: _cableTypes,
                         label: (t) => t ?? 'Panel default',
@@ -432,7 +338,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
                               ),
                       ),
                     ),
-                    _ToggleRow(
+                    ElectricalToggleRow(
                       label: 'Lighting circuit (3% Vd limit)',
                       value: circuit.isLighting,
                       onChanged: (v) => controller.setCircuit(
@@ -441,7 +347,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
                         isLighting: v,
                       ),
                     ),
-                    _ToggleRow(
+                    ElectricalToggleRow(
                       label: 'Life-safety (no RCD)',
                       value: circuit.lifeSafety,
                       onChanged: (v) => controller.setCircuit(
@@ -455,379 +361,6 @@ class ElectricalCircuitInspector extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-// ── Reused field primitives ─────────────────────────────────────────────────
-
-class _Field extends StatelessWidget {
-  final String label;
-  final Widget child;
-  const _Field({required this.label, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: MechXSpacing.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Quiet field label (secondary tier, sentence case) over the input —
-          // the weight, not all-caps, carries the emphasis.
-          Text(
-            label,
-            style: type.caption.copyWith(
-              color: colors.textSecondary,
-              letterSpacing: 0.05,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: MechXSpacing.xs),
-          child,
-        ],
-      ),
-    );
-  }
-}
-
-class _Text extends StatefulWidget {
-  final String value;
-  final ValueChanged<String> onChanged;
-  const _Text({required this.value, required this.onChanged});
-
-  @override
-  State<_Text> createState() => _TextState();
-}
-
-class _TextState extends State<_Text> {
-  late final TextEditingController _ctl = TextEditingController(
-    text: widget.value,
-  );
-  final FocusNode _focus = FocusNode();
-  bool _focused = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _focus.addListener(() => setState(() => _focused = _focus.hasFocus));
-  }
-
-  @override
-  void dispose() {
-    _ctl.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return GestureDetector(
-      onTap: _focus.requestFocus,
-      child: AnimatedContainer(
-        duration: MechXMotion.hover,
-        curve: MechXMotion.standard,
-        padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.sm,
-          vertical: MechXSpacing.xs + 2,
-        ),
-        decoration: BoxDecoration(
-          color: colors.background,
-          borderRadius: MechXRadii.control,
-          border: Border.all(
-            color: _focused ? colors.accent : colors.border,
-            width: _focused ? 1.5 : 1.0,
-          ),
-          boxShadow: _focused
-              ? [
-                  BoxShadow(
-                    color: colors.accent.withAlpha(60),
-                    blurRadius: 0,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
-        ),
-        child: EditableText(
-          controller: _ctl,
-          focusNode: _focus,
-          onChanged: widget.onChanged,
-          maxLines: 1,
-          style: type.body.copyWith(color: colors.textPrimary),
-          cursorColor: colors.accent,
-          backgroundCursorColor: colors.textMuted,
-          cursorWidth: 1.5,
-          selectionColor: colors.accentMuted,
-        ),
-      ),
-    );
-  }
-}
-
-class _Num extends StatefulWidget {
-  final double value;
-  final ValueChanged<double> onChanged;
-  const _Num({required this.value, required this.onChanged});
-
-  @override
-  State<_Num> createState() => _NumState();
-}
-
-class _NumState extends State<_Num> {
-  late final TextEditingController _ctl = TextEditingController(
-    text: _fmt(widget.value),
-  );
-  final FocusNode _focus = FocusNode();
-  bool _focused = false;
-
-  static String _fmt(double v) =>
-      v == v.roundToDouble() ? v.toInt().toString() : v.toString();
-
-  @override
-  void initState() {
-    super.initState();
-    _focus.addListener(() => setState(() => _focused = _focus.hasFocus));
-  }
-
-  @override
-  void dispose() {
-    _ctl.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return GestureDetector(
-      onTap: _focus.requestFocus,
-      child: AnimatedContainer(
-        duration: MechXMotion.hover,
-        curve: MechXMotion.standard,
-        padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.sm,
-          vertical: MechXSpacing.xs + 2,
-        ),
-        decoration: BoxDecoration(
-          color: colors.background,
-          borderRadius: MechXRadii.control,
-          border: Border.all(
-            color: _focused ? colors.accent : colors.border,
-            width: _focused ? 1.5 : 1.0,
-          ),
-          boxShadow: _focused
-              ? [
-                  BoxShadow(
-                    color: colors.accent.withAlpha(60),
-                    blurRadius: 0,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
-        ),
-        child: EditableText(
-          controller: _ctl,
-          focusNode: _focus,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          onChanged: (s) {
-            final v = double.tryParse(s.trim());
-            if (v != null) widget.onChanged(v);
-          },
-          maxLines: 1,
-          style: type.mono.copyWith(color: colors.textPrimary),
-          cursorColor: colors.accent,
-          backgroundCursorColor: colors.textMuted,
-          cursorWidth: 1.5,
-          selectionColor: colors.accentMuted,
-        ),
-      ),
-    );
-  }
-}
-
-class _EnumPicker<T> extends StatelessWidget {
-  final T value;
-  final List<T> options;
-  final String Function(T) label;
-  final ValueChanged<T> onChanged;
-  const _EnumPicker({
-    required this.value,
-    required this.options,
-    required this.label,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: MechXSpacing.xs,
-      runSpacing: MechXSpacing.xs,
-      children: [
-        for (final o in options)
-          _Chip(
-            label: label(o),
-            selected: o == value,
-            onTap: () => onChanged(o),
-          ),
-      ],
-    );
-  }
-}
-
-class _Chip extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _Chip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    // Selected = the iOS tinted-fill chip (accentMuted + accent hairline +
-    // textPrimary label), matching the tab + button selected language and well
-    // above 4.5:1, instead of small white text on the systemBlue accent.
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
-            vertical: MechXSpacing.xs + 1,
-          ),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : colors.background,
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: selected ? colors.accent : colors.border),
-          ),
-          child: Text(
-            label,
-            style: type.label.copyWith(
-              color: selected ? colors.textPrimary : colors.textSecondary,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ToggleRow extends StatelessWidget {
-  final String label;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-  const _ToggleRow({
-    required this.label,
-    required this.value,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: MechXSpacing.md),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => onChanged(!value),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                label,
-                style: type.body.copyWith(color: colors.textSecondary),
-              ),
-            ),
-            const SizedBox(width: MechXSpacing.sm),
-            AnimatedContainer(
-              duration: MechXMotion.fast,
-              width: 36,
-              height: 20,
-              padding: const EdgeInsets.all(2),
-              decoration: BoxDecoration(
-                color: value ? colors.accent : colors.border,
-                borderRadius: const BorderRadius.all(Radius.circular(10)),
-              ),
-              child: Align(
-                alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  // White thumb is the correct iOS switch knob in BOTH modes:
-                  // it reads on the accent (on) and on the border grey (off).
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFFFFFFF),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// A small bordered text button (Close, etc.). Shared by the inspector + the
-/// electrical view's drawers.
-class ElectricalTextButton extends StatefulWidget {
-  final String label;
-  final VoidCallback onTap;
-  const ElectricalTextButton({
-    super.key,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  State<ElectricalTextButton> createState() => _ElectricalTextButtonState();
-}
-
-class _ElectricalTextButtonState extends State<ElectricalTextButton> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.fast,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm + 2,
-            vertical: MechXSpacing.xs + 1,
-          ),
-          decoration: BoxDecoration(
-            color: _hover ? colors.surfaceHover : const Color(0x00000000),
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: colors.border),
-          ),
-          child: Text(
-            widget.label,
-            style: type.label.copyWith(color: colors.textSecondary),
-          ),
         ),
       ),
     );

@@ -36,9 +36,10 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_focus_ring.dart';
 import 'electrical_canvas.dart';
+import 'electrical_controls.dart';
 import 'electrical_export.dart';
 import 'electrical_format.dart';
-import 'electrical_inspector.dart' show ElectricalTextButton;
+import 'electrical_inspector.dart' show ElectricalCircuitInspector;
 import 'electrical_palette.dart';
 import 'panel_geometry.dart';
 import 'power_oneline_view.dart';
@@ -344,20 +345,20 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     return Positioned(
       left: _menuAt.dx,
       top: _menuAt.dy,
-      child: _ContextMenu(
+      child: ElectricalMenu(
         items: [
-          _MenuAction(
+          ElectricalMenuAction(
             'Edit',
             () => setState(() {
               _editing = ref0;
               _circuitMenu = null;
             }),
           ),
-          _MenuAction('Duplicate', () {
+          ElectricalMenuAction('Duplicate', () {
             _controller.duplicateCircuit(ref0.panelId, ref0.circuitId);
             setState(() => _circuitMenu = null);
           }),
-          _MenuAction('Delete', () {
+          ElectricalMenuAction('Delete', () {
             _controller.deleteCircuit(ref0.panelId, ref0.circuitId);
             setState(() => _circuitMenu = null);
           }, danger: true),
@@ -377,9 +378,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     return Positioned(
       left: _menuAt.dx,
       top: _menuAt.dy,
-      child: _ContextMenu(
+      child: ElectricalMenu(
         items: [
-          _MenuAction('Open panel', () {
+          ElectricalMenuAction('Open panel', () {
             final first = panel.circuits
                 .where((c) => c.loadKind != LoadKind.feeder)
                 .firstOrNull;
@@ -390,30 +391,30 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               }
             });
           }),
-          _MenuAction(
+          ElectricalMenuAction(
             panel.essential ? 'Unmark essential' : 'Mark essential',
             () {
               _controller.setPanelEssential(panel.id, !panel.essential);
               setState(() => _panelMenu = null);
             },
           ),
-          _MenuAction(
+          ElectricalMenuAction(
             panel.upsBacked ? 'Unmark critical (UPS)' : 'Mark critical (UPS)',
             () {
               _controller.setPanelUpsBacked(panel.id, !panel.upsBacked);
               setState(() => _panelMenu = null);
             },
           ),
-          _MenuAction(panel.submeter ? 'Remove submeter' : 'Add submeter', () {
+          ElectricalMenuAction(panel.submeter ? 'Remove submeter' : 'Add submeter', () {
             _controller.setPanelSubmeter(panel.id, !panel.submeter);
             setState(() => _panelMenu = null);
           }),
           if (panel.fedByCircuitId != null)
-            _MenuAction('Disconnect feeder', () {
+            ElectricalMenuAction('Disconnect feeder', () {
               _controller.disconnectFeeder(panel.id);
               setState(() => _panelMenu = null);
             }),
-          _MenuAction('Delete panel', () {
+          ElectricalMenuAction('Delete panel', () {
             _controller.deletePanel(panel.id);
             setState(() => _panelMenu = null);
           }, danger: true),
@@ -437,7 +438,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       top: 0,
       right: 0,
       bottom: 0,
-      child: _CircuitInspector(
+      child: ElectricalCircuitInspector(
         key: ValueKey('${ref0.panelId}/${ref0.circuitId}'),
         panel: panel,
         circuit: circuit,
@@ -1263,9 +1264,9 @@ class _ServiceInspector extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _Field(
+                    ElectricalField(
                       label: 'Earthing system',
-                      child: _EnumPicker<EarthingSystem>(
+                      child: ElectricalEnumPicker<EarthingSystem>(
                         value: project.earthingSystem,
                         options: EarthingSystem.values,
                         label: (e) => e.label,
@@ -1277,11 +1278,11 @@ class _ServiceInspector extends ConsumerWidget {
                       style: type.caption.copyWith(color: colors.textMuted),
                     ),
                     const SizedBox(height: MechXSpacing.md),
-                    _Field(
+                    ElectricalField(
                       label: context.strings(
                         StringKey.electricalOriginFaultLevel,
                       ),
-                      child: _Num(
+                      child: ElectricalNumInput(
                         value: project.originFaultLevelA != null
                             ? project.originFaultLevelA!.amperes / 1000
                             : 16,
@@ -1294,11 +1295,11 @@ class _ServiceInspector extends ConsumerWidget {
                       style: type.caption.copyWith(color: colors.textMuted),
                     ),
                     const SizedBox(height: MechXSpacing.md),
-                    _Field(
+                    ElectricalField(
                       label: context.strings(
                         StringKey.electricalBusbarClearingTime,
                       ),
-                      child: _Num(
+                      child: ElectricalNumInput(
                         value: project.busbarClearingTimeS ?? 0.1,
                         onChanged: ctrl.setBusbarClearingTime,
                       ),
@@ -1584,677 +1585,3 @@ class _WarningRow extends StatelessWidget {
     );
   }
 }
-
-// ── Context menu ──────────────────────────────────────────────────────────────
-
-class _MenuAction {
-  final String label;
-  final VoidCallback onTap;
-  final bool danger;
-  const _MenuAction(this.label, this.onTap, {this.danger = false});
-}
-
-class _ContextMenu extends StatelessWidget {
-  final List<_MenuAction> items;
-  const _ContextMenu({required this.items});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    // Grow-from-top-left scale + fade on open, like a native context menu.
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.dismiss,
-      curve: MechXMotion.standard,
-      builder: (context, t, child) => Opacity(
-        opacity: t,
-        child: Transform.scale(
-          scale: 0.94 + 0.06 * t,
-          alignment: Alignment.topLeft,
-          child: child,
-        ),
-      ),
-      child: Container(
-        width: 188,
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: MechXRadii.control,
-          border: Border.all(color: colors.border),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final item in items)
-              _MenuItem(
-                label: item.label,
-                onTap: item.onTap,
-                danger: item.danger,
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MenuItem extends StatefulWidget {
-  final String label;
-  final VoidCallback onTap;
-  final bool danger;
-  const _MenuItem({
-    required this.label,
-    required this.onTap,
-    this.danger = false,
-  });
-
-  @override
-  State<_MenuItem> createState() => _MenuItemState();
-}
-
-class _MenuItemState extends State<_MenuItem> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm + 2,
-            vertical: MechXSpacing.xs + 3,
-          ),
-          color: _hover ? colors.surfaceHover : const Color(0x00000000),
-          child: Text(
-            widget.label,
-            style: type.body.copyWith(
-              color: widget.danger ? colors.danger : colors.textPrimary,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Circuit inspector (the Wave-4 drawer, reused) ───────────────────────────
-
-class _CircuitInspector extends StatelessWidget {
-  final ElectricalPanel panel;
-  final ElectricalCircuit circuit;
-  final ElectricalProjectController controller;
-  final VoidCallback onClose;
-
-  const _CircuitInspector({
-    super.key,
-    required this.panel,
-    required this.circuit,
-    required this.controller,
-    required this.onClose,
-  });
-
-  static const _cableTypes = <String?>[
-    null,
-    'NYY',
-    'NYM',
-    'NYA',
-    'NYAF',
-    'FRC',
-  ];
-
-  bool get _isMotor =>
-      circuit.loadKind == LoadKind.motor || circuit.loadKind == LoadKind.pump;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-
-    // Slide-in from the right + fade on open (and on switching circuits, since
-    // the host keys this by panel/circuit), matching the iOS sheet idiom.
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.appear,
-      curve: MechXMotion.standard,
-      builder: (context, t, child) => Opacity(
-        opacity: t,
-        child: Transform.translate(
-          offset: Offset(340 * (1 - t), 0),
-          child: child,
-        ),
-      ),
-      child: Container(
-        width: 340,
-        decoration: BoxDecoration(
-          color: colors.surface,
-          border: Border(left: BorderSide(color: colors.border)),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                MechXSpacing.md,
-                MechXSpacing.md,
-                MechXSpacing.sm,
-                MechXSpacing.sm,
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Edit circuit',
-                      style: type.subtitle.copyWith(color: colors.textPrimary),
-                    ),
-                  ),
-                  ElectricalTextButton(label: 'Close', onTap: onClose),
-                ],
-              ),
-            ),
-            Container(height: 1, color: colors.border),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(MechXSpacing.md),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _Field(
-                      label: 'Name',
-                      child: _Text(
-                        value: circuit.name,
-                        onChanged: (v) => controller.setCircuit(
-                          panel.id,
-                          circuit.id,
-                          name: v,
-                        ),
-                      ),
-                    ),
-                    _Field(
-                      label: 'Load kind',
-                      child: _EnumPicker<LoadKind>(
-                        value: circuit.loadKind,
-                        options: const [
-                          LoadKind.general,
-                          LoadKind.lighting,
-                          LoadKind.socket,
-                          LoadKind.hvac,
-                          LoadKind.motor,
-                          LoadKind.pump,
-                          LoadKind.heating,
-                          LoadKind.ups,
-                          LoadKind.evCharger,
-                          LoadKind.welding,
-                          LoadKind.spare,
-                        ],
-                        label: (k) => loadDefaults[k]?.label ?? k.name,
-                        onChanged: (k) => controller.setCircuit(
-                          panel.id,
-                          circuit.id,
-                          loadKind: k,
-                        ),
-                      ),
-                    ),
-                    if (_isMotor)
-                      _Field(
-                        label: 'Motor power (kW)',
-                        child: _Num(
-                          value: circuit.motorKw ?? 0,
-                          onChanged: (v) => controller.setCircuit(
-                            panel.id,
-                            circuit.id,
-                            motorKw: v,
-                          ),
-                        ),
-                      )
-                    else
-                      _Field(
-                        label: 'Load (W)',
-                        child: _Num(
-                          value: circuit.loadW,
-                          onChanged: (v) => controller.setCircuit(
-                            panel.id,
-                            circuit.id,
-                            loadW: v,
-                          ),
-                        ),
-                      ),
-                    _Field(
-                      label: 'cos phi',
-                      child: _Num(
-                        value: circuit.cosPhi,
-                        onChanged: (v) => controller.setCircuit(
-                          panel.id,
-                          circuit.id,
-                          cosPhi: v.clamp(0.0, 1.0),
-                        ),
-                      ),
-                    ),
-                    _Field(
-                      label: 'Demand factor',
-                      child: _Num(
-                        value: circuit.demandFactor,
-                        onChanged: (v) => controller.setCircuit(
-                          panel.id,
-                          circuit.id,
-                          demandFactor: v.clamp(0.0, 1.0),
-                        ),
-                      ),
-                    ),
-                    _Field(
-                      label: 'Run length (m)',
-                      child: _Num(
-                        value: circuit.length.meters,
-                        onChanged: (v) => controller.setCircuit(
-                          panel.id,
-                          circuit.id,
-                          length: Length(v),
-                        ),
-                      ),
-                    ),
-                    _Field(
-                      label: 'Supply phase',
-                      child: _EnumPicker<int>(
-                        value: circuit.phases ?? 0,
-                        options: const [0, 1, 3],
-                        label: (p) => switch (p) {
-                          1 => '1-phase',
-                          3 => '3-phase',
-                          _ => 'Auto',
-                        },
-                        onChanged: (p) => p == 0
-                            ? controller.setCircuit(
-                                panel.id,
-                                circuit.id,
-                                clearPhases: true,
-                              )
-                            : controller.setCircuit(
-                                panel.id,
-                                circuit.id,
-                                phases: p,
-                              ),
-                      ),
-                    ),
-                    _Field(
-                      label: 'Cable type',
-                      child: _EnumPicker<String?>(
-                        value: circuit.cableType,
-                        options: _cableTypes,
-                        label: (t) => t ?? 'Panel default',
-                        onChanged: (t) => t == null
-                            ? controller.setCircuit(
-                                panel.id,
-                                circuit.id,
-                                clearCableType: true,
-                              )
-                            : controller.setCircuit(
-                                panel.id,
-                                circuit.id,
-                                cableType: t,
-                              ),
-                      ),
-                    ),
-                    _ToggleRow(
-                      label: 'Lighting circuit (3% Vd limit)',
-                      value: circuit.isLighting,
-                      onChanged: (v) => controller.setCircuit(
-                        panel.id,
-                        circuit.id,
-                        isLighting: v,
-                      ),
-                    ),
-                    _ToggleRow(
-                      label: 'Life-safety (no RCD)',
-                      value: circuit.lifeSafety,
-                      onChanged: (v) => controller.setCircuit(
-                        panel.id,
-                        circuit.id,
-                        lifeSafety: v,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ── Reused field primitives ─────────────────────────────────────────────────
-
-class _Field extends StatelessWidget {
-  final String label;
-  final Widget child;
-  const _Field({required this.label, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: MechXSpacing.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Quiet field label (secondary tier, sentence case) over the input —
-          // the weight, not all-caps, carries the emphasis.
-          Text(
-            label,
-            style: type.caption.copyWith(
-              color: colors.textSecondary,
-              letterSpacing: 0.05,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: MechXSpacing.xs),
-          child,
-        ],
-      ),
-    );
-  }
-}
-
-class _Text extends StatefulWidget {
-  final String value;
-  final ValueChanged<String> onChanged;
-  const _Text({required this.value, required this.onChanged});
-
-  @override
-  State<_Text> createState() => _TextState();
-}
-
-class _TextState extends State<_Text> {
-  late final TextEditingController _ctl = TextEditingController(
-    text: widget.value,
-  );
-  final FocusNode _focus = FocusNode();
-  bool _focused = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _focus.addListener(() => setState(() => _focused = _focus.hasFocus));
-  }
-
-  @override
-  void dispose() {
-    _ctl.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return GestureDetector(
-      onTap: _focus.requestFocus,
-      child: AnimatedContainer(
-        duration: MechXMotion.hover,
-        curve: MechXMotion.standard,
-        padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.sm,
-          vertical: MechXSpacing.xs + 2,
-        ),
-        decoration: BoxDecoration(
-          color: colors.background,
-          borderRadius: MechXRadii.control,
-          border: Border.all(
-            color: _focused ? colors.accent : colors.border,
-            width: _focused ? 1.5 : 1.0,
-          ),
-          boxShadow: _focused
-              ? [
-                  BoxShadow(
-                    color: colors.accent.withAlpha(60),
-                    blurRadius: 0,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
-        ),
-        child: EditableText(
-          controller: _ctl,
-          focusNode: _focus,
-          onChanged: widget.onChanged,
-          maxLines: 1,
-          style: type.body.copyWith(color: colors.textPrimary),
-          cursorColor: colors.accent,
-          backgroundCursorColor: colors.textMuted,
-          cursorWidth: 1.5,
-          selectionColor: colors.accentMuted,
-        ),
-      ),
-    );
-  }
-}
-
-class _Num extends StatefulWidget {
-  final double value;
-  final ValueChanged<double> onChanged;
-  const _Num({required this.value, required this.onChanged});
-
-  @override
-  State<_Num> createState() => _NumState();
-}
-
-class _NumState extends State<_Num> {
-  late final TextEditingController _ctl = TextEditingController(
-    text: _fmt(widget.value),
-  );
-  final FocusNode _focus = FocusNode();
-  bool _focused = false;
-
-  static String _fmt(double v) =>
-      v == v.roundToDouble() ? v.toInt().toString() : v.toString();
-
-  @override
-  void initState() {
-    super.initState();
-    _focus.addListener(() => setState(() => _focused = _focus.hasFocus));
-  }
-
-  @override
-  void dispose() {
-    _ctl.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return GestureDetector(
-      onTap: _focus.requestFocus,
-      child: AnimatedContainer(
-        duration: MechXMotion.hover,
-        curve: MechXMotion.standard,
-        padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.sm,
-          vertical: MechXSpacing.xs + 2,
-        ),
-        decoration: BoxDecoration(
-          color: colors.background,
-          borderRadius: MechXRadii.control,
-          border: Border.all(
-            color: _focused ? colors.accent : colors.border,
-            width: _focused ? 1.5 : 1.0,
-          ),
-          boxShadow: _focused
-              ? [
-                  BoxShadow(
-                    color: colors.accent.withAlpha(60),
-                    blurRadius: 0,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
-        ),
-        child: EditableText(
-          controller: _ctl,
-          focusNode: _focus,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          onChanged: (s) {
-            final v = double.tryParse(s.trim());
-            if (v != null) widget.onChanged(v);
-          },
-          maxLines: 1,
-          style: type.mono.copyWith(color: colors.textPrimary),
-          cursorColor: colors.accent,
-          backgroundCursorColor: colors.textMuted,
-          cursorWidth: 1.5,
-          selectionColor: colors.accentMuted,
-        ),
-      ),
-    );
-  }
-}
-
-class _EnumPicker<T> extends StatelessWidget {
-  final T value;
-  final List<T> options;
-  final String Function(T) label;
-  final ValueChanged<T> onChanged;
-  const _EnumPicker({
-    required this.value,
-    required this.options,
-    required this.label,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: MechXSpacing.xs,
-      runSpacing: MechXSpacing.xs,
-      children: [
-        for (final o in options)
-          _Chip(
-            label: label(o),
-            selected: o == value,
-            onTap: () => onChanged(o),
-          ),
-      ],
-    );
-  }
-}
-
-class _Chip extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _Chip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    // Selected = the iOS tinted-fill chip (accentMuted + accent hairline +
-    // textPrimary label), matching the tab + button selected language. This
-    // keeps the label on a light tint at well above 4.5:1, instead of small
-    // white text on the systemBlue accent (which is borderline for AA).
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
-            vertical: MechXSpacing.xs + 1,
-          ),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : colors.background,
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: selected ? colors.accent : colors.border),
-          ),
-          child: Text(
-            label,
-            style: type.label.copyWith(
-              color: selected ? colors.textPrimary : colors.textSecondary,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ToggleRow extends StatelessWidget {
-  final String label;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-  const _ToggleRow({
-    required this.label,
-    required this.value,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: MechXSpacing.md),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => onChanged(!value),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                label,
-                style: type.body.copyWith(color: colors.textSecondary),
-              ),
-            ),
-            const SizedBox(width: MechXSpacing.sm),
-            AnimatedContainer(
-              duration: MechXMotion.fast,
-              width: 36,
-              height: 20,
-              padding: const EdgeInsets.all(2),
-              decoration: BoxDecoration(
-                color: value ? colors.accent : colors.border,
-                borderRadius: const BorderRadius.all(Radius.circular(10)),
-              ),
-              child: Align(
-                alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  // White thumb is the correct iOS switch knob in BOTH modes:
-                  // it reads on the accent (on) and on the border grey (off).
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFFFFFFF),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
