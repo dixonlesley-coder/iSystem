@@ -55,7 +55,7 @@ class PricelistScreen extends ConsumerWidget {
             CommercialColumn(context.strings(StringKey.commercialColUnit),
                 flex: 2),
             CommercialColumn(context.strings(StringKey.commercialColUnitPrice),
-                flex: 4, alignEnd: true),
+                flex: 4, numeric: true),
           ],
           rows: [
             for (final sku in skus)
@@ -88,7 +88,9 @@ Map<String, Part> _partIndex() => {
     };
 
 /// A small numeric input for a unit price: parses on change (a blank or invalid
-/// value clears the price). Width-capped so the column stays tidy.
+/// value clears the price). The foundation [MechXTextField] supplies the focus
+/// animation + ring; a muted "0.00" hint signals an empty, editable cell.
+/// Width-capped so the column stays tidy.
 class _PriceField extends StatelessWidget {
   final double? value;
   final ValueChanged<double?> onChanged;
@@ -101,6 +103,7 @@ class _PriceField extends StatelessWidget {
       width: 140,
       child: MechXTextField(
         value: value == null ? '' : _fmt(value!),
+        hint: CommercialFormat.money(0),
         onChanged: (s) {
           final trimmed = s.trim();
           if (trimmed.isEmpty) {
@@ -114,6 +117,8 @@ class _PriceField extends StatelessWidget {
     );
   }
 
+  // Keep the edit value plain (no grouping) so it round-trips through the
+  // parser cleanly; the hint carries the "0.00" formatting cue.
   static String _fmt(double v) =>
       v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 }

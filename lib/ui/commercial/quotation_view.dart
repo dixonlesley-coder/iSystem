@@ -40,20 +40,22 @@ class QuotationView extends ConsumerWidget {
         ),
         const SizedBox(height: MechXSpacing.sm),
 
-        // Quote-settings inputs.
+        // Quote-settings inputs — a lifted card (shadow + generous padding) so
+        // it reads as the "user input area" floating above the flush roll-up.
         Container(
-          padding: const EdgeInsets.all(MechXSpacing.md),
+          padding: const EdgeInsets.all(MechXSpacing.lg),
           decoration: BoxDecoration(
             color: colors.surface,
             borderRadius: MechXRadii.card,
             border: Border.all(color: colors.border),
+            boxShadow: MechXShadow.card,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(context.strings(StringKey.commercialQuoteSettings),
                   style: type.subtitle.copyWith(color: colors.textPrimary)),
-              const SizedBox(height: MechXSpacing.sm),
+              const SizedBox(height: MechXSpacing.md),
               _NumberRow(
                 label: context.strings
                     .format(StringKey.commercialLabourRate, {'cur': cur}),
@@ -74,13 +76,15 @@ class QuotationView extends ConsumerWidget {
                 label: context.strings(StringKey.commercialMarginPct),
                 value: settings.marginPct,
                 onChanged: ctrl.setMarginPct,
+                last: true,
               ),
             ],
           ),
         ),
         const SizedBox(height: MechXSpacing.md),
 
-        // The costed roll-up.
+        // The costed roll-up — the emphasized grand-total row is boxed out by
+        // the table (heavier top hairline + accent wash + larger bold figure).
         CommercialTable(
           columns: [
             CommercialColumn(context.strings(StringKey.commercialColItem),
@@ -89,14 +93,14 @@ class QuotationView extends ConsumerWidget {
                 context.strings
                     .format(StringKey.commercialColAmount, {'cur': cur}),
                 flex: 4,
-                alignEnd: true),
+                numeric: true),
           ],
           rows: [
             _money(context.strings(StringKey.commercialItemMaterial),
                 q.materialSubtotal),
             _money(
                 context.strings.format(StringKey.commercialLabourHours,
-                    {'hours': _fmt(q.labourHours)}),
+                    {'hours': CommercialFormat.hours(q.labourHours)}),
                 q.labourSubtotal),
             _money(context.strings(StringKey.commercialItemOverhead),
                 q.overhead),
@@ -108,7 +112,7 @@ class QuotationView extends ConsumerWidget {
               cells: [
                 CommercialCell.text(
                     context.strings(StringKey.commercialItemGrandTotal)),
-                CommercialCell.text(_fmt(q.grandTotal)),
+                CommercialCell.text(CommercialFormat.money(q.grandTotal)),
               ],
             ),
           ],
@@ -119,23 +123,22 @@ class QuotationView extends ConsumerWidget {
 
   CommercialRow _money(String label, double amount) => CommercialRow(cells: [
         CommercialCell.text(label),
-        CommercialCell.text(_fmt(amount)),
+        CommercialCell.text(CommercialFormat.money(amount)),
       ]);
 }
-
-String _fmt(double v) =>
-    v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
 
 /// A labelled numeric input row used in the quote-settings card.
 class _NumberRow extends StatelessWidget {
   final String label;
   final double value;
   final ValueChanged<double> onChanged;
+  final bool last;
 
   const _NumberRow({
     required this.label,
     required this.value,
     required this.onChanged,
+    this.last = false,
   });
 
   @override
@@ -143,7 +146,7 @@ class _NumberRow extends StatelessWidget {
     final colors = context.colors;
     final type = context.type;
     return Padding(
-      padding: const EdgeInsets.only(bottom: MechXSpacing.sm),
+      padding: EdgeInsets.only(bottom: last ? 0 : MechXSpacing.sm),
       child: Row(
         children: [
           Expanded(
@@ -153,7 +156,7 @@ class _NumberRow extends StatelessWidget {
           SizedBox(
             width: 160,
             child: MechXTextField(
-              value: _fmt(value),
+              value: _editValue(value),
               onChanged: (s) {
                 final parsed = double.tryParse(s.trim().replaceAll(',', ''));
                 if (parsed != null) onChanged(parsed);
@@ -164,4 +167,8 @@ class _NumberRow extends StatelessWidget {
       ),
     );
   }
+
+  // Plain (un-grouped) edit value so it parses back cleanly.
+  static String _editValue(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
 }
