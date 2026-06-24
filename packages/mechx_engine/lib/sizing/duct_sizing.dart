@@ -106,13 +106,16 @@ const double _galvSteelRoughness = 9.0e-5;
 /// duct carrying airflow [q] of diameter [d].
 ///
 /// Formula: Δp/L = f · (1/D) · (ρ v² / 2), with f the Swamee–Jain friction
-/// factor, ρ = [_airDensity], ν = [_airKinematicViscosity],
-/// ε = [_galvSteelRoughness]. Public so the fan-static solve can sum it along a
-/// duct run.
-double ductFrictionPaPerMetre(FlowRate q, Diameter d) {
+/// factor, ρ = [_airDensity], ν = [_airKinematicViscosity]. The absolute wall
+/// roughness ε defaults to [_galvSteelRoughness] (galvanised steel); pass
+/// [roughness] to use a per-product ε (e.g. a smoother PU pre-insulated panel).
+/// Omitting [roughness] keeps the galvanised-steel default, so existing callers
+/// are unchanged. Public so the fan-static solve can sum it along a duct run.
+double ductFrictionPaPerMetre(FlowRate q, Diameter d, {Roughness? roughness}) {
   final v = velocityFromFlow(q, d);
   final re = reynolds(v, d, kinematicViscosity: _airKinematicViscosity);
-  final relRoughness = _galvSteelRoughness / d.meters;
+  final eps = roughness?.meters ?? _galvSteelRoughness;
+  final relRoughness = eps / d.meters;
   final f = frictionFactorSwameeJain(re, relRoughness);
   return f * (1.0 / d.meters) * (_airDensity * v.metersPerSecond * v.metersPerSecond / 2.0);
 }
