@@ -596,11 +596,11 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       ),
     );
 
+    // Canvas leads; the Riser palette sits on the RIGHT (tools-on-the-right,
+    // consistent with the Layout / electrical workspaces).
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _RiserPalette(service: widget.service),
-        Container(width: 1, color: colors.border),
         Expanded(
           child: Stack(
             children: [
@@ -622,7 +622,8 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                             child: IgnorePointer(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
-                                  color: colors.accent.withAlpha(14),
+                                  color: colors.accent.withAlpha(18),
+                                  borderRadius: MechXRadii.card,
                                   border: Border.all(
                                       color: colors.accent.withAlpha(110),
                                       width: 1.5),
@@ -676,6 +677,8 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
             ],
           ),
         ),
+        Container(width: 1, color: colors.border),
+        _RiserPalette(service: widget.service),
       ],
     );
   }
