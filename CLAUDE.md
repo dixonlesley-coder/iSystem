@@ -334,7 +334,12 @@ report export**; versioned `.mechx` save/open with viewport restore;
   round-trip, `sizing_store` resolves `NetNode.customFixtureId` → UBAP/DFU/flush loads,
   inspector custom pills, built-in path byte-identical when empty); **per-outlet
   roof-area** (`NetNode.roofAreaM2` → per-outlet rainwater flow in `nodeFlowDemand`,
-  inspector stepper, null ⇒ byte-identical). Still open: measurement-annotation.
+  inspector stepper, null ⇒ byte-identical). **Measurement annotations** also landed
+  (`store/annotation_store.dart` `Measurement` + `measurementsProvider`/`measureModeProvider`;
+  `ui/canvas/measurement_overlay.dart` — a DRAW-panel **Measure** tool: two-click dimension
+  lines on the calibrated sheet with the real length via `ScaleCalibration.lengthForPixels`,
+  secondary-click to delete; round-trips in `.mechx` as a top-level `measurements` list,
+  tolerant/absent ⇒ empty). This **closes the Known-gaps editing list**.
 - Looped networks: ring/grid **pressurized & air** mains are balanced with
   Hardy-Cross (`network/hardy_cross.dart`) at sizing time and the balanced flows
   feed the heatmap. The split uses resistance ∝ **real edge length** at a

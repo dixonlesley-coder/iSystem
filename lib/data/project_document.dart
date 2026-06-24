@@ -13,6 +13,7 @@ import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../store/annotation_store.dart';
 import '../store/models/sheet.dart';
 import '../ui/canvas/viewport.dart';
 
@@ -212,6 +213,10 @@ class ProjectDocument {
   /// Non-network design inputs (occupancy, feed, ducts, rainfall, fire, theme).
   final DesignSettings settings;
 
+  /// Measurement annotations (dimension lines on the calibrated sheets). Not part
+  /// of the network — purely an overlay; defaults empty.
+  final List<Measurement> measurements;
+
   /// Optional electrical sub-model (panels + earthing system). Added in v2;
   /// null for a v1 file or a project with no electrical design yet.
   final ElectricalProject? electrical;
@@ -227,6 +232,7 @@ class ProjectDocument {
     this.sheetFloors = const {},
     this.settings = const DesignSettings(),
     this.electrical,
+    this.measurements = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -263,6 +269,7 @@ class ProjectDocument {
           for (final e in sheetFloors.entries) e.key: e.value,
         },
         'settings': settings.toJson(),
+        'measurements': [for (final m in measurements) m.toJson()],
         if (electrical != null) 'electrical': electrical!.toJson(),
         'network': {
           'nodes': [
@@ -407,6 +414,12 @@ class ProjectDocument {
     final electrical = rawElectrical is Map<String, dynamic>
         ? ElectricalProject.fromJson(rawElectrical)
         : null;
+    // Measurement annotations (additive; absent on an older file ⇒ empty). Each
+    // malformed entry is dropped rather than throwing.
+    final measurements = <Measurement>[
+      for (final m in (json['measurements'] as List? ?? const []))
+        ?Measurement.fromJson(m),
+    ];
     return ProjectDocument(
       version: version,
       projectName: project['name'] as String? ?? 'Untitled project',
@@ -418,6 +431,7 @@ class ProjectDocument {
       sheetFloors: sheetFloors,
       settings: settings,
       electrical: electrical,
+      measurements: measurements,
     );
   }
 

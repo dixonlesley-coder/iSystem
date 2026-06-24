@@ -13,6 +13,7 @@ import 'package:mechx_engine/sizing/supply_design.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/electrical_store.dart';
@@ -507,10 +508,15 @@ class _DrawSection extends ConsumerWidget {
       });
     }
 
+    final measureMode = ref.watch(measureModeProvider);
     Widget tool(String label, DrawTool t) => MechXButton(
           label: label,
-          primary: drawing.tool == t,
-          onPressed: () => ctrl.setTool(t),
+          // While the measure tool is on, no draw tool reads as active.
+          primary: drawing.tool == t && !measureMode,
+          onPressed: () {
+            ctrl.setTool(t);
+            ref.read(measureModeProvider.notifier).set(false);
+          },
         );
 
     // Duplicate the current floor's runs to the sheet ONE FLOOR UP. The
@@ -554,6 +560,17 @@ class _DrawSection extends ConsumerWidget {
             tool('Select', DrawTool.select),
             tool('Run', DrawTool.drawRun),
             tool('Riser', DrawTool.drawRiser),
+            // Measure is a separate mode (annotation, not a network element);
+            // turning it on collapses the draw tool to Select.
+            MechXButton(
+              label: 'Measure',
+              primary: measureMode,
+              onPressed: () {
+                final on = !measureMode;
+                ref.read(measureModeProvider.notifier).set(on);
+                if (on) ctrl.setTool(DrawTool.select);
+              },
+            ),
           ],
         ),
         const SizedBox(height: MechXSpacing.sm),

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../store/annotation_store.dart';
 import '../store/app_state.dart';
 import '../store/commercial_store.dart';
 import '../store/electrical_store.dart';
@@ -83,6 +84,8 @@ ProjectDocument buildDocument(ProviderReader read) {
     ),
     // The electrical sub-model (v2) round-trips alongside the plumbing project.
     electrical: read(electricalProjectProvider),
+    // Measurement annotations round-trip with the project.
+    measurements: read(measurementsProvider),
   );
 }
 
@@ -131,6 +134,8 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   // with no electrical design fall back to the built-in sample).
   read(electricalProjectProvider.notifier)
       .setProject(doc.electrical ?? sampleElectricalProject());
+  // Restore measurement annotations (absent on an older file ⇒ empty).
+  read(measurementsProvider.notifier).set(doc.measurements);
 }
 
 /// Start the periodic autosave loop: every [interval], snapshot the current

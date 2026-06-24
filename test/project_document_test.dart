@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart' show Brightness, Offset, Size;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/project_document.dart';
+import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
 import 'package:mechx_engine/electrical/control/starter.dart';
@@ -140,6 +141,37 @@ void main() {
     expect(s.rainfallMmPerHr, 275);
     expect(s.fireHazard, FireHazardClass.ordinaryHazard2);
     expect(s.brightness, Brightness.light);
+  });
+
+  test('measurement annotations round-trip; an old file loads none', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(100, 100))],
+      network: Network(),
+      measurements: [
+        Measurement(
+            id: 'm0', sheetId: 's1', floorIndex: 1, ax: 0, ay: 0, bx: 30, by: 40),
+      ],
+    );
+    final decoded = ProjectDocument.decode(doc.encode());
+    expect(decoded.measurements, hasLength(1));
+    final m = decoded.measurements.first;
+    expect(m.id, 'm0');
+    expect(m.sheetId, 's1');
+    expect(m.floorIndex, 1);
+    expect(m.pixelLength, closeTo(50, 1e-9));
+
+    // A document without the measurements key loads an empty list.
+    const bare = ProjectDocument(
+      projectName: 'Y',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    expect(ProjectDocument.decode(bare.encode()).measurements, isEmpty);
   });
 
   test('per-segment pipe/duct product + size override round-trip', () {
