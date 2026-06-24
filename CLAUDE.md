@@ -289,8 +289,17 @@ report export**; versioned `.mechx` save/open with viewport restore;
   are now project settings** (additive `ElectricalProject.originFaultLevelA` +
   `busbarClearingTimeS`, edited in the Service & Earthing inspector, `.mechx`-persisted,
   defaulting to 16 kA / 0.1 s so an untouched project is byte-identical).
-  Remaining in **Wave 4b**: commercial UI (BOM/quotation screens over the catalogue) and
-  workflow/i18n (EN/ID).
+  **Wave 4b commercial + i18n landed too:** a **Commercial workspace**
+  (`lib/store/commercial_store.dart` + `lib/ui/commercial/**`) — electrical BOM over
+  `fullCatalog()`, an editable pricelist (`sku→price`, kept OUT of the catalogue), and a
+  costed quotation (labour/overhead/contingency/margin) with CSV/Markdown export
+  (pure `electrical/commercial_export.dart`); and a **Material-free EN/ID i18n**
+  mechanism (`AppLocale`/`localeProvider` + `ui/strings/app_strings.dart`'s `MechXStrings`
+  InheritedWidget + `context.strings`, a Preferences language toggle, first string batch
+  with EN byte-identical so goldens are unchanged). Both round-trip additively in
+  `DesignSettings` (pricelist+markups; `localeCode`, tolerant unknown→en), no version bump.
+  Remaining in **Wave 4b** (deferred, incremental): electrical SLD/GA *vector*-PDF export
+  (DXF + Markdown done) and deeper string migration beyond the first batch.
 - **Release + auto-update (Workstream B, landed):** `.github/workflows/ci.yml`
   (the gate on ubuntu) + `release.yml` (windows-latest → `flutter build windows`
   → **Inno Setup** `installer/iSystem.iss` → GitHub Release with `latest.json`),
