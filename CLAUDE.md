@@ -325,9 +325,16 @@ report export**; versioned `.mechx` save/open with viewport restore;
   gate runs; `flutter build windows`/`iscc` only run on the Windows CI runner.
 - Native PDF *drawing* export (DXF drawing export and the Markdown calc report
   are done; both convert to PDF externally).
-- Multi-select / copy-paste / measurement-annotation; per-outlet roof-area UI
-  for storm (rainfall intensity is tunable; roof area is a fixed default);
-  user fixture libraries.
+- **Landed (parallel batch):** **multi-select + copy/paste** (additive
+  `Selection.nodeIds/edgeIds` sets + rubber-band marquee/shift-click in
+  `selection_overlay`, in-memory clipboard `copySelection`/`paste`/`deleteMany` in
+  `network_store` with fresh-id remap + single undo step, Ctrl/Cmd+C/V + multi-delete,
+  `isMulti` inspector header); **user fixture libraries** (pure-engine `CustomFixture`
+  + `fixture_library_store`/`fixture_library_editor`, `DesignSettings.fixtureLibrary`
+  round-trip, `sizing_store` resolves `NetNode.customFixtureId` → UBAP/DFU/flush loads,
+  inspector custom pills, built-in path byte-identical when empty); **per-outlet
+  roof-area** (`NetNode.roofAreaM2` → per-outlet rainwater flow in `nodeFlowDemand`,
+  inspector stepper, null ⇒ byte-identical). Still open: measurement-annotation.
 - Looped networks: ring/grid **pressurized & air** mains are balanced with
   Hardy-Cross (`network/hardy_cross.dart`) at sizing time and the balanced flows
   feed the heatmap. The split uses resistance ∝ **real edge length** at a
