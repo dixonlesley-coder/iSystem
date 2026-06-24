@@ -5,6 +5,7 @@ import 'package:mechx_engine/network/network.dart';
 import '../../store/network_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/mechx_focus_ring.dart';
 import 'service_style.dart';
 
 /// What a palette card drops onto the canvas. The drop overlay reads [kind] to
@@ -81,7 +82,9 @@ class SegmentPalette extends ConsumerWidget {
 
 /// A draggable palette chip. Uses [Draggable] (in widgets.dart) with a small
 /// feedback chip; the drag payload is the [PaletteItem] the drop overlay reads.
-class _PaletteCard extends StatelessWidget {
+/// Hovering lifts the chip a touch and a keyboard focus ring shows it's
+/// reachable (the chip is drag-only, so the ring carries no Enter/Space action).
+class _PaletteCard extends StatefulWidget {
   final String label;
   final Color swatch;
   final PaletteItem item;
@@ -97,16 +100,32 @@ class _PaletteCard extends StatelessWidget {
   });
 
   @override
+  State<_PaletteCard> createState() => _PaletteCardState();
+}
+
+class _PaletteCardState extends State<_PaletteCard> {
+  bool _hover = false;
+
+  @override
   Widget build(BuildContext context) {
     final chip = _chip(context, dragging: false);
-    return Draggable<PaletteItem>(
-      data: item,
-      dragAnchorStrategy: pointerDragAnchorStrategy,
-      feedback: _chip(context, dragging: true),
-      childWhenDragging: Opacity(opacity: 0.4, child: chip),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.grab,
-        child: chip,
+    return MechXFocusRing(
+      child: Draggable<PaletteItem>(
+        data: widget.item,
+        dragAnchorStrategy: pointerDragAnchorStrategy,
+        feedback: _chip(context, dragging: true),
+        childWhenDragging: Opacity(opacity: 0.4, child: chip),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.grab,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: AnimatedScale(
+            scale: _hover ? 1.03 : 1.0,
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            child: chip,
+          ),
+        ),
       ),
     );
   }
@@ -139,17 +158,19 @@ class _PaletteCard extends StatelessWidget {
             width: 10,
             height: 10,
             decoration: BoxDecoration(
-              color: dotHollow ? const Color(0x00000000) : swatch,
-              shape: dotShape,
-              borderRadius: dotShape == BoxShape.rectangle
+              color: widget.dotHollow ? const Color(0x00000000) : widget.swatch,
+              shape: widget.dotShape,
+              borderRadius: widget.dotShape == BoxShape.rectangle
                   ? const BorderRadius.all(Radius.circular(2))
                   : null,
-              border: dotHollow ? Border.all(color: swatch, width: 1.5) : null,
+              border: widget.dotHollow
+                  ? Border.all(color: widget.swatch, width: 1.5)
+                  : null,
             ),
           ),
           const SizedBox(width: MechXSpacing.xs),
           Text(
-            label,
+            widget.label,
             style: type.label.copyWith(color: colors.textSecondary),
           ),
         ],

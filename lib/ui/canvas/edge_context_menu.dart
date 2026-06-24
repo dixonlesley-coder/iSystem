@@ -240,25 +240,55 @@ class _EdgeMenuPanel extends ConsumerWidget {
       },
     ));
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.card,
-        border: Border.all(color: colors.border),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x40000000), blurRadius: 18, offset: Offset(0, 6)),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: MechXRadii.card,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xs),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: children,
+    // Entrance: scale-in (~0.92 → 1.0) + fade over MechXMotion.appear, anchored
+    // at the top-left so the menu grows out of the click point. One-shot motion.
+    return _MenuEntrance(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: MechXRadii.card,
+          border: Border.all(color: colors.border),
+          boxShadow: const [
+            BoxShadow(
+                color: Color(0x40000000), blurRadius: 18, offset: Offset(0, 6)),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: MechXRadii.card,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xs),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: children,
+            ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A one-shot menu entrance: scales from ~0.92 → 1.0 and fades 0 → 1 over
+/// [MechXMotion.appear], anchored top-left. Transient — the menu settles at its
+/// natural size/opacity, so nothing changes at rest.
+class _MenuEntrance extends StatelessWidget {
+  final Widget child;
+  const _MenuEntrance({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.0, end: 1.0),
+      duration: MechXMotion.appear,
+      curve: MechXMotion.emphasized,
+      child: child,
+      builder: (context, t, child) => Opacity(
+        opacity: t.clamp(0.0, 1.0),
+        child: Transform.scale(
+          scale: 0.92 + 0.08 * t,
+          alignment: Alignment.topLeft,
+          child: child,
         ),
       ),
     );
@@ -357,7 +387,9 @@ class _MenuRowState extends State<_MenuRow> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
-        child: Container(
+        child: AnimatedContainer(
+          duration: MechXMotion.hover,
+          curve: MechXMotion.standard,
           color: _hover ? colors.surfaceHover : const Color(0x00000000),
           padding: const EdgeInsets.symmetric(
             horizontal: MechXSpacing.sm + 2,
