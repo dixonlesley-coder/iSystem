@@ -35,6 +35,14 @@ class _MeasurementOverlayState extends ConsumerState<MeasurementOverlay> {
   Offset? _pending; // first placed point (world)
   Offset? _hover; // cursor (world)
 
+  @override
+  void didUpdateWidget(MeasurementOverlay old) {
+    super.didUpdateWidget(old);
+    // Abandon a half-placed dimension when the tool is switched off, so it
+    // doesn't reappear on re-activation.
+    if (!widget.active) _pending = null;
+  }
+
   ViewportTransform get _transform =>
       ref.read(sheetsControllerProvider).viewportFor(widget.sheetId) ??
       const ViewportTransform();
