@@ -16,6 +16,7 @@ import '../../store/fixture_library_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
+import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_text_field.dart';
 
 /// Open the fixture-library editor as a modal over the current [MechXTheme].
@@ -25,11 +26,29 @@ Future<void> showFixtureLibraryEditor(BuildContext context, WidgetRef ref) {
     context: context,
     barrierDismissible: true,
     barrierLabel: 'Fixture library',
-    barrierColor: const Color(0x66000000),
+    // The HIG scrim token (deeper in dark) dims the content beneath the sheet.
+    barrierColor: theme.colors.scrim,
+    transitionDuration: MechXMotion.appear,
     pageBuilder: (ctx, _, _) => MechXTheme(
       data: theme,
       child: const Center(child: _FixtureLibraryDialog()),
     ),
+    // Settle in (and back out) with the iOS sheet idiom: a small scale-up from
+    // 96% paired with a fade, so the card materialises rather than snapping.
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(
+        parent: anim,
+        curve: MechXMotion.standard,
+        reverseCurve: MechXMotion.standard,
+      );
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
   );
 }
 
@@ -124,6 +143,7 @@ class _FixtureLibraryDialogState extends ConsumerState<_FixtureLibraryDialog> {
               ),
               MechXButton(
                 label: 'Close',
+                tertiary: true,
                 onPressed: () => Navigator.of(context).pop(),
               ),
             ],
@@ -308,7 +328,7 @@ class _Field extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(label, style: type.caption.copyWith(color: colors.textMuted)),
-        const SizedBox(height: MechXSpacing.xxs),
+        const SizedBox(height: MechXSpacing.xs),
         child,
       ],
     );
@@ -341,6 +361,9 @@ class _Stepper extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    // The '−' can't go below the floor of 0 — disable it there so the bound
+    // reads as a real edge rather than a silently-clamped no-op.
+    final atMin = isNull || value <= 0;
     return Row(
       children: [
         Expanded(
@@ -349,10 +372,13 @@ class _Stepper extends StatelessWidget {
         ),
         _Glyph(
           glyph: '−',
-          onTap: () {
-            final next = (value - step);
-            onChanged(next < 0 ? 0 : double.parse(next.toStringAsFixed(2)));
-          },
+          onTap: atMin
+              ? null
+              : () {
+                  final next = (value - step);
+                  onChanged(
+                      next < 0 ? 0 : double.parse(next.toStringAsFixed(2)));
+                },
         ),
         const SizedBox(width: MechXSpacing.sm),
         SizedBox(
@@ -373,7 +399,7 @@ class _Stepper extends StatelessWidget {
         ),
         if (allowNull) ...[
           const SizedBox(width: MechXSpacing.sm),
-          _Glyph(glyph: '×', onTap: onNull ?? () {}),
+          _Glyph(glyph: '×', onTap: onNull),
         ],
       ],
     );
@@ -383,29 +409,70 @@ class _Stepper extends StatelessWidget {
       v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
 }
 
-class _Glyph extends StatelessWidget {
+class _Glyph extends StatefulWidget {
   final String glyph;
-  final VoidCallback onTap;
+
+  /// Pass `null` to render the disabled affordance (dimmed, no hover / press).
+  final VoidCallback? onTap;
   const _Glyph({required this.glyph, required this.onTap});
+
+  @override
+  State<_Glyph> createState() => _GlyphState();
+}
+
+class _GlyphState extends State<_Glyph> {
+  bool _hover = false;
+  bool _down = false;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          width: 28,
-          height: 28,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: colors.surfaceHover,
-            borderRadius: MechXRadii.control,
+    final enabled = widget.onTap != null;
+    final visual = AnimatedScale(
+      scale: _down && enabled ? 0.9 : 1.0,
+      duration: MechXMotion.press,
+      curve: MechXMotion.standard,
+      child: AnimatedContainer(
+        duration: MechXMotion.hover,
+        curve: MechXMotion.standard,
+        width: 28,
+        height: 28,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: !enabled
+              ? colors.surfaceHover.withAlpha(90)
+              : (_hover
+                  ? Color.lerp(colors.surfaceHover, colors.accentMuted, 0.5)!
+                  : colors.surfaceHover),
+          borderRadius: MechXRadii.control,
+        ),
+        child: Text(
+          widget.glyph,
+          style: type.body.copyWith(
+            color: enabled
+                ? colors.textPrimary
+                : colors.textMuted.withAlpha(120),
           ),
-          child: Text(glyph,
-              style: type.body.copyWith(color: colors.textPrimary)),
+        ),
+      ),
+    );
+    return MouseRegion(
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() {
+        _hover = false;
+        _down = false;
+      }),
+      child: MechXFocusRing(
+        enabled: enabled,
+        onActivated: widget.onTap,
+        child: GestureDetector(
+          onTap: widget.onTap,
+          onTapDown: enabled ? (_) => setState(() => _down = true) : null,
+          onTapUp: enabled ? (_) => setState(() => _down = false) : null,
+          onTapCancel: enabled ? () => setState(() => _down = false) : null,
+          child: visual,
         ),
       ),
     );
