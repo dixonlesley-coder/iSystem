@@ -29,6 +29,22 @@ class ShellSectionController extends Notifier<ShellSection> {
   void set(ShellSection s) => state = s;
 }
 
+/// Whether the rail is collapsed to icon-only. Defaults to `false` (EXPANDED —
+/// icon + caption), so a fresh launch and the golden-screenshot tests land on
+/// the same at-rest rail as before (only the new bottom toggle chevron is new).
+final navRailCollapsedProvider =
+    NotifierProvider<NavRailCollapsedController, bool>(
+  NavRailCollapsedController.new,
+);
+
+class NavRailCollapsedController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void toggle() => state = !state;
+  void set(bool v) => state = v;
+}
+
 /// The kinds of glyph the rail draws. Custom-painted (no icon font) so nothing
 /// can render as tofu in the goldens.
 enum _Glyph { plan, schematic, electrical, review, commercial, projects, preferences }
@@ -45,8 +61,13 @@ class NavRail extends ConsumerWidget {
   /// A COMPACT icon+caption rail (was a 248-px labelled list) so the calibrated
   /// canvas — the app's focal point — gets the real estate. Each destination is a
   /// centred glyph over a small caption (the iPadOS / Finder compact-sidebar
-  /// idiom): labels are kept for clarity, the canvas gains ~168 px.
+  /// idiom): labels are kept for clarity, the canvas gains ~168 px. This is the
+  /// EXPANDED width; the rail can be collapsed to icon-only ([collapsedWidth]).
   static const double width = 80;
+
+  /// The icon-only collapsed width (captions + the DESIGN group label hidden),
+  /// handing a further ~28 px to the canvas. Default state is EXPANDED.
+  static const double collapsedWidth = 52;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -55,9 +76,11 @@ class NavRail extends ConsumerWidget {
     final strings = context.strings;
     final section = ref.watch(shellSectionProvider);
     final view = ref.watch(workspaceViewProvider);
+    final collapsed = ref.watch(navRailCollapsedProvider);
 
     final sectionCtrl = ref.read(shellSectionProvider.notifier);
     final viewCtrl = ref.read(workspaceViewProvider.notifier);
+    final collapsedCtrl = ref.read(navRailCollapsedProvider.notifier);
 
     // A Design item is active when we're in the design section AND its
     // workspace view is selected — so the highlight tracks the real centre area
@@ -70,8 +93,13 @@ class NavRail extends ConsumerWidget {
       sectionCtrl.set(ShellSection.design);
     }
 
-    return Container(
-      width: width,
+    // The rail glides between EXPANDED (icon + caption) and COLLAPSED
+    // (icon-only) — HIG: width changes ease, never pop. [appear]/[standard]
+    // matches the selection-fill easing the items already use.
+    return AnimatedContainer(
+      duration: MechXMotion.appear,
+      curve: MechXMotion.standard,
+      width: collapsed ? collapsedWidth : width,
       color: colors.surface,
       padding: const EdgeInsets.symmetric(
         horizontal: MechXSpacing.xs,
@@ -80,8 +108,16 @@ class NavRail extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _GroupLabel(strings(StringKey.navGroupDesign),
-              style: type.caption.copyWith(color: colors.textMuted)),
+          // The DESIGN group label is hidden when collapsed (cross-fades out so
+          // the layout settles cleanly).
+          AnimatedSize(
+            duration: MechXMotion.appear,
+            curve: MechXMotion.standard,
+            child: collapsed
+                ? const SizedBox(width: double.infinity)
+                : _GroupLabel(strings(StringKey.navGroupDesign),
+                    style: type.caption.copyWith(color: colors.textMuted)),
+          ),
           const SizedBox(height: MechXSpacing.xxs),
           _NavItem(
             glyph: _Glyph.plan,
@@ -91,18 +127,21 @@ class NavRail extends ConsumerWidget {
             // the screenshot test seam valid).
             label: strings(StringKey.navLayout),
             active: designActive(WorkspaceView.plan),
+            collapsed: collapsed,
             onTap: () => openDesign(WorkspaceView.plan),
           ),
           _NavItem(
             glyph: _Glyph.schematic,
             label: strings(StringKey.navSchematic),
             active: designActive(WorkspaceView.schematic),
+            collapsed: collapsed,
             onTap: () => openDesign(WorkspaceView.schematic),
           ),
           _NavItem(
             glyph: _Glyph.electrical,
             label: strings(StringKey.navElectrical),
             active: designActive(WorkspaceView.electrical),
+            collapsed: collapsed,
             onTap: () => openDesign(WorkspaceView.electrical),
           ),
           const SizedBox(height: MechXSpacing.sm),
@@ -110,12 +149,14 @@ class NavRail extends ConsumerWidget {
             glyph: _Glyph.review,
             label: strings(StringKey.navReview),
             active: section == ShellSection.review,
+            collapsed: collapsed,
             onTap: () => sectionCtrl.set(ShellSection.review),
           ),
           _NavItem(
             glyph: _Glyph.commercial,
             label: strings(StringKey.navCommercial),
             active: section == ShellSection.commercial,
+            collapsed: collapsed,
             onTap: () => sectionCtrl.set(ShellSection.commercial),
           ),
           const Spacer(),
@@ -123,13 +164,20 @@ class NavRail extends ConsumerWidget {
             glyph: _Glyph.projects,
             label: strings(StringKey.navProjects),
             active: section == ShellSection.projects,
+            collapsed: collapsed,
             onTap: () => sectionCtrl.set(ShellSection.projects),
           ),
           _NavItem(
             glyph: _Glyph.preferences,
             label: strings(StringKey.navPreferences),
             active: section == ShellSection.preferences,
+            collapsed: collapsed,
             onTap: () => sectionCtrl.set(ShellSection.preferences),
+          ),
+          const SizedBox(height: MechXSpacing.xs),
+          _CollapseToggle(
+            collapsed: collapsed,
+            onTap: collapsedCtrl.toggle,
           ),
         ],
       ),
@@ -157,17 +205,111 @@ class _GroupLabel extends StatelessWidget {
       );
 }
 
+/// The collapse / expand control pinned at the bottom of the rail: a small
+/// custom-painted chevron — '‹' when expanded (click to collapse) / '›' when
+/// collapsed (click to expand). Custom-drawn (no icon font) so it can never
+/// render as tofu, and keyboard-activatable via [MechXFocusRing].
+class _CollapseToggle extends StatefulWidget {
+  final bool collapsed;
+  final VoidCallback onTap;
+
+  const _CollapseToggle({required this.collapsed, required this.onTap});
+
+  @override
+  State<_CollapseToggle> createState() => _CollapseToggleState();
+}
+
+class _CollapseToggleState extends State<_CollapseToggle> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final fg = _hover ? colors.textSecondary : colors.textMuted;
+    final bg = _hover ? colors.surfaceHover : const Color(0x00000000);
+
+    return Align(
+      alignment: Alignment.center,
+      child: MechXFocusRing(
+        borderRadius: const BorderRadius.all(MechXRadii.md),
+        onActivated: widget.onTap,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: AnimatedContainer(
+              duration: MechXMotion.appear,
+              curve: MechXMotion.standard,
+              padding: const EdgeInsets.all(MechXSpacing.xs),
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: MechXRadii.control,
+              ),
+              child: CustomPaint(
+                size: const Size(20, 20),
+                painter: _ChevronPainter(
+                  pointsRight: widget.collapsed,
+                  color: fg,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A small chevron mark. [pointsRight] '›' (expand) when collapsed, else '‹'
+/// (collapse). Custom-painted so it never tofus.
+class _ChevronPainter extends CustomPainter {
+  final bool pointsRight;
+  final Color color;
+
+  _ChevronPainter({required this.pointsRight, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final w = size.width;
+    final h = size.height;
+    // A two-segment 'v' rotated to point left ('‹') or right ('›').
+    final near = pointsRight ? w * 0.40 : w * 0.60; // the chevron's tip x
+    final far = pointsRight ? w * 0.60 : w * 0.40; // the open-end x
+    final path = Path()
+      ..moveTo(far, h * 0.28)
+      ..lineTo(near, h * 0.50)
+      ..lineTo(far, h * 0.72);
+    canvas.drawPath(path, stroke);
+  }
+
+  @override
+  bool shouldRepaint(_ChevronPainter old) =>
+      old.pointsRight != pointsRight || old.color != color;
+}
+
 /// One rail row: a custom-drawn glyph + a label, with hover + active states.
+/// When [collapsed] the caption is dropped (icon-only); the glyph remains the
+/// affordance and expanding the rail restores the labels.
 class _NavItem extends StatefulWidget {
   final _Glyph glyph;
   final String label;
   final bool active;
+  final bool collapsed;
   final VoidCallback onTap;
 
   const _NavItem({
     required this.glyph,
     required this.label,
     required this.active,
+    required this.collapsed,
     required this.onTap,
   });
 
@@ -188,6 +330,62 @@ class _NavItemState extends State<_NavItem> {
         : (_hover ? colors.surfaceHover : const Color(0x00000000));
     final fg = widget.active ? colors.accent : colors.textSecondary;
 
+    final item = AnimatedContainer(
+      // Selection / hover eases in (HIG: the highlight glides, never
+      // pops) — pair the appear idiom with the standard curve. The
+      // accent-tinted fill stays the selection cue (no content-shifting
+      // stripe, so at-rest pixels are unchanged).
+      duration: MechXMotion.appear,
+      curve: MechXMotion.standard,
+      padding: const EdgeInsets.symmetric(
+        horizontal: MechXSpacing.xxs,
+        vertical: MechXSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: MechXRadii.control,
+      ),
+      // Compact rail: glyph centred over a small caption (labels kept for
+      // clarity; long ones wrap to a second line). When collapsed the caption
+      // cross-fades out and only the glyph remains.
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CustomPaint(
+            size: const Size(22, 22),
+            painter: _GlyphPainter(widget.glyph, fg),
+          ),
+          AnimatedSize(
+            duration: MechXMotion.appear,
+            curve: MechXMotion.standard,
+            child: widget.collapsed
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.only(top: MechXSpacing.xxs + 2),
+                    child: Text(
+                      widget.label,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: type.caption.copyWith(
+                        fontSize: 10.5,
+                        height: 1.1,
+                        color: fg,
+                        fontWeight: widget.active
+                            ? FontWeight.w600
+                            : FontWeight.w500,
+                      ),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+
+    // NB: a hover Tooltip for the collapsed label would need package:material
+    // (Tooltip isn't in the widgets layer), which the design-system rule
+    // forbids — and the prompt says to skip the tooltip rather than break it.
+    // The glyph stays the affordance; expanding restores the captions.
     return Padding(
       padding: const EdgeInsets.only(bottom: MechXSpacing.xxs),
       child: MechXFocusRing(
@@ -199,47 +397,7 @@ class _NavItemState extends State<_NavItem> {
           onExit: (_) => setState(() => _hover = false),
           child: GestureDetector(
             onTap: widget.onTap,
-            child: AnimatedContainer(
-              // Selection / hover eases in (HIG: the highlight glides, never
-              // pops) — pair the appear idiom with the standard curve. The
-              // accent-tinted fill stays the selection cue (no content-shifting
-              // stripe, so at-rest pixels are unchanged).
-              duration: MechXMotion.appear,
-              curve: MechXMotion.standard,
-              padding: const EdgeInsets.symmetric(
-                horizontal: MechXSpacing.xxs,
-                vertical: MechXSpacing.sm,
-              ),
-              decoration: BoxDecoration(
-                color: bg,
-                borderRadius: MechXRadii.control,
-              ),
-              // Compact rail: glyph centred over a small caption (labels kept
-              // for clarity; long ones wrap to a second line).
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CustomPaint(
-                    size: const Size(22, 22),
-                    painter: _GlyphPainter(widget.glyph, fg),
-                  ),
-                  const SizedBox(height: MechXSpacing.xxs + 2),
-                  Text(
-                    widget.label,
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: type.caption.copyWith(
-                      fontSize: 10.5,
-                      height: 1.1,
-                      color: fg,
-                      fontWeight:
-                          widget.active ? FontWeight.w600 : FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            child: item,
           ),
         ),
       ),
