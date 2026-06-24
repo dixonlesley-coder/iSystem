@@ -24,6 +24,7 @@ import '../geometry/scale_calibration.dart';
 import '../standards/puil.dart';
 import '../units.dart';
 import 'busbar.dart';
+import 'cable_family.dart';
 import 'control/starter.dart' show StarterType;
 import 'earthing.dart';
 import 'fault.dart' show Impedance, conductorImpedance, downstreamFaultA,
@@ -565,6 +566,11 @@ _CircuitComputation _computeCircuit(
   final minSection = math.max(baseMin, c.cableOverrideMm2 ?? 0);
 
   final installMethod = _effectiveInstallMethod(c, panel);
+  // The cable family (NYY/NYM/NYA/NYAF/FRC) sets the insulation temperature
+  // class for the KHA lookup — notably FRC sizes on the 90 °C table — falling
+  // back to the panel default when the run is untyped (byte-identical then).
+  final cableInsulation =
+      insulationForCableType(c.cableType, fallback: panel.insulation);
 
   final cable = sizeCable(
     profile,
@@ -572,7 +578,7 @@ _CircuitComputation _computeCircuit(
     breakerRating: breaker.ratingA,
     deratingFactor: df,
     minSectionMm2: minSection,
-    insulation: panel.insulation,
+    insulation: cableInsulation,
     material: panel.material,
     method: installMethod,
     threePhase: threePhase,
@@ -695,7 +701,9 @@ ElectricalPanelResult computePanel(
         ambientC: panel.ambientTempC,
         groupingCount: c.groupingCountOverride ?? panel.groupingCount,
         method: _effectiveInstallMethod(c, panel),
-        insulation: panel.insulation,
+        // Match the sizing insulation: a family (e.g. FRC at 90 °C) derates on
+        // its own ambient curve, not the panel default.
+        insulation: insulationForCableType(c.cableType, fallback: panel.insulation),
         soilThermalResistivityKmW: opts.soilThermalResistivityKmW,
         groundTempC: panel.groundTempC,
         depthM: panel.depthM,

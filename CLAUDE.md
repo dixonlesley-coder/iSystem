@@ -403,6 +403,15 @@ report export**; versioned `.mechx` save/open with viewport restore;
   rating, no head-loss term). Fold-1 busbar withstand fault level + clearing time come from
   `ElectricalProject.originFaultLevelA`/`busbarClearingTimeS` (Service & Earthing inspector),
   with the store falling back to 16 kA / 0.1 s when unset.
+- **Cable family → ampacity class**: a circuit's `cableType` (NYY/NYM/NYA/NYAF/FRC)
+  selects the insulation temperature-class for the KHA lookup via
+  `electrical/cable_family.dart` (`insulationForCableType`): **FRC → XLPE 90 °C**,
+  the others → PVC 70 °C, `null`/unknown → the panel-wide fallback. `compute.dart`
+  threads it into both `sizeCable` and `deratingFactor`, so a typed run sizes/derates
+  on its own class (notably FRC life-safety cable is no longer mis-rated at the panel
+  default). Null `cableType` ⇒ **byte-identical**. The KHA *numbers* are the
+  Supreme/SUCACO-ported tables; per-family number tables that depart from the generic
+  method table remain a `// VERIFY` refinement pending the Supreme datasheet.
 - **Persistence**: design settings (occupancy, feed, ducts, rainfall, fire
   hazard, theme) round-trip via `DesignSettings` in the `.mechx` file; autosave
   only writes recovery when the work differs from the last clean Save
