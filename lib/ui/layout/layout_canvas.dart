@@ -450,6 +450,7 @@ class _SharedSheet extends ConsumerWidget {
             contentSize: sheet.sizePx,
             initialTransform: sheetsState.viewportFor(sheet.id),
             background: colors.canvas,
+            gridColor: colors.gridLine,
             onTransformChanged: (t) => ref
                 .read(sheetsControllerProvider.notifier)
                 .setViewport(sheet.id, t),

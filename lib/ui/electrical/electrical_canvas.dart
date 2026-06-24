@@ -36,6 +36,7 @@ import 'package:mechx_engine/electrical/results.dart' show BreakerResult;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
+import '../canvas/canvas_grid.dart';
 import '../canvas/viewport.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -676,22 +677,8 @@ class _CanvasPainter extends CustomPainter {
     }
   }
 
-  void _grid(Canvas canvas, Size size) {
-    const worldStep = 32.0;
-    final step = worldStep * transform.scale;
-    if (step < 6) return;
-    final paint = Paint()
-      ..color = gridLine.withAlpha(90)
-      ..strokeWidth = 1;
-    final originX = transform.offset.dx % step;
-    final originY = transform.offset.dy % step;
-    for (var x = originX; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (var y = originY; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
+  void _grid(Canvas canvas, Size size) =>
+      paintCanvasGrid(canvas, size, transform, gridLine);
 
   void _smoothFeeder(Canvas canvas, Offset a, Offset b) {
     final paint = Paint()

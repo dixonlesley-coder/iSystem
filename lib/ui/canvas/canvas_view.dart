@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import 'canvas_grid.dart';
 import 'viewport.dart';
 
 /// A pannable / zoomable canvas hosting a fixed-size [child] (a sheet page).
@@ -21,6 +22,12 @@ class CanvasView extends StatefulWidget {
   final ValueChanged<ViewportTransform> onTransformChanged;
   final Color background;
 
+  /// The drafting grid colour (typically `colors.gridLine`). When null no grid
+  /// is drawn; when set, the canvas paints the SAME graph-paper grid as the
+  /// electrical single-line canvas (see [paintCanvasGrid]) so both workspaces
+  /// share one substrate.
+  final Color? gridColor;
+
   const CanvasView({
     super.key,
     required this.contentSize,
@@ -28,6 +35,7 @@ class CanvasView extends StatefulWidget {
     required this.initialTransform,
     required this.onTransformChanged,
     required this.background,
+    this.gridColor,
   });
 
   @override
@@ -202,29 +210,40 @@ class _CanvasViewState extends State<CanvasView> {
               final vt = _current;
               return SizedBox.expand(
                 child: ClipRect(
-                  child: ColoredBox(
-                    color: widget.background,
-                    child: Transform.translate(
-                      offset: vt.offset,
-                      child: Transform.scale(
-                        scale: vt.scale,
-                        alignment: Alignment.topLeft,
-                        // OverflowBox lets the content take its true pixel size
-                        // (rather than being clamped to the viewport) so it
-                        // scales 1:1 with the world-space overlays.
-                        child: OverflowBox(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // Backdrop: the canvas fill + the shared drafting grid,
+                      // painted in screen space so it pans/zooms with content.
+                      CustomPaint(
+                        painter: _BackdropPainter(
+                          transform: vt,
+                          background: widget.background,
+                          gridColor: widget.gridColor,
+                        ),
+                      ),
+                      Transform.translate(
+                        offset: vt.offset,
+                        child: Transform.scale(
+                          scale: vt.scale,
                           alignment: Alignment.topLeft,
-                          minWidth: 0,
-                          maxWidth: double.infinity,
-                          minHeight: 0,
-                          maxHeight: double.infinity,
-                          child: SizedBox.fromSize(
-                            size: widget.contentSize,
-                            child: RepaintBoundary(child: widget.child),
+                          // OverflowBox lets the content take its true pixel size
+                          // (rather than being clamped to the viewport) so it
+                          // scales 1:1 with the world-space overlays.
+                          child: OverflowBox(
+                            alignment: Alignment.topLeft,
+                            minWidth: 0,
+                            maxWidth: double.infinity,
+                            minHeight: 0,
+                            maxHeight: double.infinity,
+                            child: SizedBox.fromSize(
+                              size: widget.contentSize,
+                              child: RepaintBoundary(child: widget.child),
+                            ),
                           ),
                         ),
                       ),
-                    ),
+                    ],
                   ),
                 ),
               );
@@ -235,4 +254,31 @@ class _CanvasViewState extends State<CanvasView> {
       ),
     );
   }
+}
+
+/// Paints the canvas fill and (when [gridColor] is set) the shared drafting
+/// grid behind the world content.
+class _BackdropPainter extends CustomPainter {
+  final ViewportTransform transform;
+  final Color background;
+  final Color? gridColor;
+
+  _BackdropPainter({
+    required this.transform,
+    required this.background,
+    required this.gridColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(Offset.zero & size, Paint()..color = background);
+    final grid = gridColor;
+    if (grid != null) paintCanvasGrid(canvas, size, transform, grid);
+  }
+
+  @override
+  bool shouldRepaint(_BackdropPainter old) =>
+      old.transform != transform ||
+      old.background != background ||
+      old.gridColor != gridColor;
 }
