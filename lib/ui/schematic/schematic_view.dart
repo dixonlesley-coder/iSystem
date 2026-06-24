@@ -39,6 +39,7 @@ import '../../store/sizing_store.dart';
 import '../canvas/edge_context_menu.dart';
 import '../canvas/service_style.dart';
 import '../canvas/viewport.dart';
+import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -649,7 +650,7 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
               Positioned(
                 left: MechXSpacing.md,
                 bottom: MechXSpacing.md,
-                child: _ZoomControls(
+                child: ZoomControls(
                   onIn: () => _emit(_current.zoomedBy(
                       1.2, _viewportSize.center(Offset.zero))),
                   onOut: () => _emit(_current.zoomedBy(
@@ -1224,95 +1225,6 @@ class _Banner extends StatelessWidget {
         ),
         child: Text(text,
             style: context.type.body.copyWith(color: colors.textSecondary)),
-      ),
-    );
-  }
-}
-
-class _ZoomControls extends StatelessWidget {
-  final VoidCallback onIn;
-  final VoidCallback onOut;
-  final VoidCallback onFit;
-  const _ZoomControls(
-      {required this.onIn, required this.onOut, required this.onFit});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: colors.border),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _IconBtn(glyph: '+', onTap: onIn),
-          _Sep(),
-          _IconBtn(glyph: '-', onTap: onOut),
-          _Sep(),
-          _IconBtn(glyph: 'fit', onTap: onFit),
-        ],
-      ),
-    );
-  }
-}
-
-class _Sep extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) =>
-      Container(width: 1, height: 22, color: context.colors.border);
-}
-
-class _IconBtn extends StatefulWidget {
-  final String glyph;
-  final VoidCallback onTap;
-  const _IconBtn({required this.glyph, required this.onTap});
-
-  @override
-  State<_IconBtn> createState() => _IconBtnState();
-}
-
-class _IconBtnState extends State<_IconBtn> {
-  bool _hover = false;
-  bool _down = false;
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return MechXFocusRing(
-      onActivated: widget.onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() {
-          _hover = false;
-          _down = false;
-        }),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          onTapDown: (_) => setState(() => _down = true),
-          onTapUp: (_) => setState(() => _down = false),
-          onTapCancel: () => setState(() => _down = false),
-          child: AnimatedScale(
-            scale: _down ? 0.95 : 1.0,
-            duration: MechXMotion.press,
-            curve: MechXMotion.standard,
-            child: AnimatedContainer(
-              duration: MechXMotion.hover,
-              curve: MechXMotion.standard,
-              width: widget.glyph.length > 1 ? 34 : 28,
-              height: 28,
-              alignment: Alignment.center,
-              color: _down
-                  ? colors.accentMuted
-                  : (_hover ? colors.surfaceHover : const Color(0x00000000)),
-              child: Text(widget.glyph,
-                  style:
-                      context.type.label.copyWith(color: colors.textSecondary)),
-            ),
-          ),
-        ),
       ),
     );
   }
