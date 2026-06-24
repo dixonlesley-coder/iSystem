@@ -33,6 +33,7 @@ import '../../store/electrical_store.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/mechx_focus_ring.dart';
 import 'electrical_canvas.dart';
 import 'electrical_export.dart';
 import 'electrical_format.dart';
@@ -133,8 +134,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         Expanded(
           child: switch (_tab) {
             _Tab.singleLine => _buildCanvasArea(project, result),
-            _Tab.powerOneLine =>
-              PowerOneLineView(oneLine: advanced.powerOneLine),
+            _Tab.powerOneLine => PowerOneLineView(
+              oneLine: advanced.powerOneLine,
+            ),
           },
         ),
       ],
@@ -142,7 +144,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
 
     return Stack(
       children: [
-        Positioned.fill(child: ColoredBox(color: colors.canvas, child: body)),
+        Positioned.fill(
+          child: ColoredBox(color: colors.canvas, child: body),
+        ),
         // Tap-away scrim behind any open menu / inspector.
         if (_editing != null ||
             _panelMenu != null ||
@@ -179,13 +183,17 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             onClose: () => setState(() => _showAdvanced = false),
           ),
         if (_showService)
-          _ServiceInspector(onClose: () => setState(() => _showService = false)),
+          _ServiceInspector(
+            onClose: () => setState(() => _showService = false),
+          ),
       ],
     );
   }
 
   Widget _buildCanvasArea(
-      ElectricalProject project, ElectricalSystemResult result) {
+    ElectricalProject project,
+    ElectricalSystemResult result,
+  ) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -205,14 +213,14 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                         .where((c) => c.loadKind != LoadKind.feeder)
                         .firstOrNull;
                     if (panel != null && first != null) {
-                      setState(() =>
-                          _editing = _CircuitRef(panelId, first.id));
+                      setState(() => _editing = _CircuitRef(panelId, first.id));
                     } else {
                       _openPanelMenu(panelId, _canvasCenter());
                     }
                   },
                   onEditCircuit: (panelId, circuitId) => setState(
-                      () => _editing = _CircuitRef(panelId, circuitId)),
+                    () => _editing = _CircuitRef(panelId, circuitId),
+                  ),
                   onPanelMenu: _openPanelMenu,
                   onCircuitMenu: (panelId, circuitId, gp) => setState(() {
                     _circuitMenu = _CircuitRef(panelId, circuitId);
@@ -244,10 +252,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               Positioned(
                 right: MechXSpacing.md,
                 bottom: MechXSpacing.md,
-                child: _MiniMap(
-                  project: project,
-                  result: result,
-                ),
+                child: _MiniMap(project: project, result: result),
               ),
               // Gesture-help (?) (top-left).
               Positioned(
@@ -263,7 +268,8 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                   left: MechXSpacing.md,
                   top: 48,
                   child: _CanvasHelp(
-                      onClose: () => setState(() => _showHelp = false)),
+                    onClose: () => setState(() => _showHelp = false),
+                  ),
                 ),
               // Empty-state setup card.
               if (project.panels.isEmpty)
@@ -300,7 +306,11 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   void _addPanel() {
     final n = ref.read(electricalProjectProvider).panels.length + 1;
     _controller.addPanelAt(
-        name: 'Sub-panel $n', tag: 'SP-$n', x: 80 + n * 40, y: 80 + n * 40);
+      name: 'Sub-panel $n',
+      tag: 'SP-$n',
+      x: 80 + n * 40,
+      y: 80 + n * 40,
+    );
   }
 
   void _openService() {
@@ -330,10 +340,13 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       top: _menuAt.dy,
       child: _ContextMenu(
         items: [
-          _MenuAction('Edit', () => setState(() {
-                _editing = ref0;
-                _circuitMenu = null;
-              })),
+          _MenuAction(
+            'Edit',
+            () => setState(() {
+              _editing = ref0;
+              _circuitMenu = null;
+            }),
+          ),
           _MenuAction('Duplicate', () {
             _controller.duplicateCircuit(ref0.panelId, ref0.circuitId);
             setState(() => _circuitMenu = null);
@@ -385,13 +398,10 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               setState(() => _panelMenu = null);
             },
           ),
-          _MenuAction(
-            panel.submeter ? 'Remove submeter' : 'Add submeter',
-            () {
-              _controller.setPanelSubmeter(panel.id, !panel.submeter);
-              setState(() => _panelMenu = null);
-            },
-          ),
+          _MenuAction(panel.submeter ? 'Remove submeter' : 'Add submeter', () {
+            _controller.setPanelSubmeter(panel.id, !panel.submeter);
+            setState(() => _panelMenu = null);
+          }),
           if (panel.fedByCircuitId != null)
             _MenuAction('Disconnect feeder', () {
               _controller.disconnectFeeder(panel.id);
@@ -410,8 +420,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     final ref0 = _editing!;
     final project = ref.watch(electricalProjectProvider);
     final panel = project.panels.where((p) => p.id == ref0.panelId).firstOrNull;
-    final circuit =
-        panel?.circuits.where((c) => c.id == ref0.circuitId).firstOrNull;
+    final circuit = panel?.circuits
+        .where((c) => c.id == ref0.circuitId)
+        .firstOrNull;
     if (panel == null || circuit == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
       return const SizedBox.shrink();
@@ -469,7 +480,9 @@ class _Toolbar extends StatelessWidget {
     return Container(
       color: colors.surface,
       padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.md, vertical: MechXSpacing.sm),
+        horizontal: MechXSpacing.md,
+        vertical: MechXSpacing.sm,
+      ),
       child: Row(
         children: [
           // Tabs (left).
@@ -495,8 +508,9 @@ class _Toolbar extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _Btn(
-                    label:
-                        warningCount > 0 ? 'Issues ($warningCount)' : 'Issues',
+                    label: warningCount > 0
+                        ? 'Issues ($warningCount)'
+                        : 'Issues',
                     danger: warningCount > 0,
                     onTap: onToggleAdvanced,
                   ),
@@ -518,34 +532,75 @@ class _Toolbar extends StatelessWidget {
   }
 }
 
-class _TabButton extends StatelessWidget {
+class _TabButton extends StatefulWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  const _TabButton(
-      {required this.label, required this.selected, required this.onTap});
+  const _TabButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  State<_TabButton> createState() => _TabButtonState();
+}
+
+class _TabButtonState extends State<_TabButton> {
+  bool _hover = false;
+  bool _down = false;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 2),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : const Color(0x00000000),
-            borderRadius: MechXRadii.control,
-            border: Border.all(
-                color: selected ? colors.accent : const Color(0x00000000)),
+    final selected = widget.selected;
+    // Calm rest: unselected = no decoration; it lifts to the soft fill only on
+    // hover. Selected = the accent tint + a hairline accent border (the strong
+    // signal). Hover colour animates and a press compresses the tab slightly.
+    final bg = selected
+        ? colors.accentMuted
+        : (_hover ? colors.surfaceHover : const Color(0x00000000));
+    return MechXFocusRing(
+      onActivated: widget.onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() {
+          _hover = false;
+          _down = false;
+        }),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          onTapDown: (_) => setState(() => _down = true),
+          onTapUp: (_) => setState(() => _down = false),
+          onTapCancel: () => setState(() => _down = false),
+          child: AnimatedScale(
+            scale: _down ? 0.97 : 1.0,
+            duration: MechXMotion.press,
+            curve: MechXMotion.standard,
+            child: AnimatedContainer(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
+              padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm + 2,
+                vertical: MechXSpacing.xs + 2,
+              ),
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: MechXRadii.control,
+                border: Border.all(
+                  color: selected ? colors.accent : const Color(0x00000000),
+                ),
+              ),
+              child: Text(
+                widget.label,
+                style: type.label.copyWith(
+                  color: selected ? colors.textPrimary : colors.textSecondary,
+                ),
+              ),
+            ),
           ),
-          child: Text(label,
-              style: type.label.copyWith(
-                  color:
-                      selected ? colors.textPrimary : colors.textSecondary)),
         ),
       ),
     );
@@ -557,11 +612,12 @@ class _Btn extends StatefulWidget {
   final VoidCallback onTap;
   final bool danger;
   final bool muted;
-  const _Btn(
-      {required this.label,
-      required this.onTap,
-      this.danger = false,
-      this.muted = false});
+  const _Btn({
+    required this.label,
+    required this.onTap,
+    this.danger = false,
+    this.muted = false,
+  });
 
   @override
   State<_Btn> createState() => _BtnState();
@@ -569,6 +625,7 @@ class _Btn extends StatefulWidget {
 
 class _BtnState extends State<_Btn> {
   bool _hover = false;
+  bool _down = false;
 
   @override
   Widget build(BuildContext context) {
@@ -577,23 +634,41 @@ class _BtnState extends State<_Btn> {
     final fg = widget.danger
         ? colors.danger
         : widget.muted
-            ? colors.textMuted
-            : colors.textSecondary;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 1),
-          decoration: BoxDecoration(
-            color: _hover ? colors.surfaceHover : const Color(0x00000000),
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: colors.border),
+        ? colors.textMuted
+        : colors.textSecondary;
+    return MechXFocusRing(
+      onActivated: widget.onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() {
+          _hover = false;
+          _down = false;
+        }),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          onTapDown: (_) => setState(() => _down = true),
+          onTapUp: (_) => setState(() => _down = false),
+          onTapCancel: () => setState(() => _down = false),
+          child: AnimatedScale(
+            scale: _down ? 0.96 : 1.0,
+            duration: MechXMotion.press,
+            curve: MechXMotion.standard,
+            child: AnimatedContainer(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
+              padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm + 2,
+                vertical: MechXSpacing.xs + 1,
+              ),
+              decoration: BoxDecoration(
+                color: _hover ? colors.surfaceHover : const Color(0x00000000),
+                borderRadius: MechXRadii.control,
+                border: Border.all(color: colors.border),
+              ),
+              child: Text(widget.label, style: type.label.copyWith(color: fg)),
+            ),
           ),
-          child: Text(widget.label, style: type.label.copyWith(color: fg)),
         ),
       ),
     );
@@ -602,25 +677,48 @@ class _BtnState extends State<_Btn> {
 
 // ── Canvas chrome (hint, zoom, minimap, help) ───────────────────────────────
 
-class _HintChip extends StatelessWidget {
+/// A quiet ambient hint over the canvas — faded at rest so it never competes
+/// with the drawing, brightening to full on hover for anyone who wants to read
+/// it.
+class _HintChip extends StatefulWidget {
   final String text;
   const _HintChip({required this.text});
 
   @override
+  State<_HintChip> createState() => _HintChipState();
+}
+
+class _HintChipState extends State<_HintChip> {
+  bool _hover = false;
+
+  @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 320),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs),
-        decoration: BoxDecoration(
-          color: colors.surface.withAlpha(220),
-          borderRadius: MechXRadii.control,
-          border: Border.all(color: colors.border),
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 320),
+        child: AnimatedOpacity(
+          opacity: _hover ? 1.0 : 0.55,
+          duration: MechXMotion.hover,
+          curve: MechXMotion.standard,
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: MechXSpacing.sm,
+              vertical: MechXSpacing.xs,
+            ),
+            decoration: BoxDecoration(
+              color: colors.surface.withAlpha(220),
+              borderRadius: MechXRadii.control,
+              border: Border.all(color: colors.border),
+            ),
+            child: Text(
+              widget.text,
+              style: context.type.caption.copyWith(color: colors.textMuted),
+            ),
+          ),
         ),
-        child: Text(text,
-            style: context.type.caption.copyWith(color: colors.textMuted)),
       ),
     );
   }
@@ -630,8 +728,11 @@ class _ZoomControls extends StatelessWidget {
   final VoidCallback onIn;
   final VoidCallback onOut;
   final VoidCallback onFit;
-  const _ZoomControls(
-      {required this.onIn, required this.onOut, required this.onFit});
+  const _ZoomControls({
+    required this.onIn,
+    required this.onOut,
+    required this.onFit,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -641,16 +742,20 @@ class _ZoomControls extends StatelessWidget {
         color: colors.surface,
         borderRadius: MechXRadii.control,
         border: Border.all(color: colors.border),
+        boxShadow: MechXShadow.card,
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _IconBtn(glyph: '+', onTap: onIn),
-          _Sep(),
-          _IconBtn(glyph: '-', onTap: onOut),
-          _Sep(),
-          _IconBtn(glyph: 'fit', onTap: onFit),
-        ],
+      child: ClipRRect(
+        borderRadius: MechXRadii.control,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _IconBtn(glyph: '+', onTap: onIn),
+            _Sep(),
+            _IconBtn(glyph: '-', onTap: onOut),
+            _Sep(),
+            _IconBtn(glyph: 'fit', onTap: onFit),
+          ],
+        ),
       ),
     );
   }
@@ -673,22 +778,41 @@ class _IconBtn extends StatefulWidget {
 
 class _IconBtnState extends State<_IconBtn> {
   bool _hover = false;
+  bool _down = false;
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: widget.glyph.length > 1 ? 34 : 28,
-          height: 28,
-          alignment: Alignment.center,
-          color: _hover ? colors.surfaceHover : const Color(0x00000000),
-          child: Text(widget.glyph,
-              style: context.type.label.copyWith(color: colors.textSecondary)),
+    return MechXFocusRing(
+      onActivated: widget.onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() {
+          _hover = false;
+          _down = false;
+        }),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          onTapDown: (_) => setState(() => _down = true),
+          onTapUp: (_) => setState(() => _down = false),
+          onTapCancel: () => setState(() => _down = false),
+          child: AnimatedScale(
+            scale: _down ? 0.96 : 1.0,
+            duration: MechXMotion.press,
+            curve: MechXMotion.standard,
+            child: AnimatedContainer(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
+              width: widget.glyph.length > 1 ? 34 : 28,
+              height: 28,
+              alignment: Alignment.center,
+              color: _hover ? colors.surfaceHover : const Color(0x00000000),
+              child: Text(
+                widget.glyph,
+                style: context.type.label.copyWith(color: colors.textSecondary),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -707,20 +831,23 @@ class _HelpButton extends StatelessWidget {
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: onToggle,
-        child: Container(
+        child: AnimatedContainer(
+          duration: MechXMotion.hover,
+          curve: MechXMotion.standard,
           width: 26,
           height: 26,
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: open ? colors.accent : colors.surface,
             shape: BoxShape.circle,
-            border: Border.all(color: colors.border),
+            border: Border.all(color: open ? colors.accent : colors.border),
           ),
-          child: Text('?',
-              style: context.type.label.copyWith(
-                  color: open
-                      ? const Color(0xFFFFFFFF)
-                      : colors.textSecondary)),
+          child: Text(
+            '?',
+            style: context.type.label.copyWith(
+              color: open ? const Color(0xFFFFFFFF) : colors.textSecondary,
+            ),
+          ),
         ),
       ),
     );
@@ -746,64 +873,86 @@ class _CanvasHelp extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return Container(
-      width: 310,
-      padding: const EdgeInsets.all(MechXSpacing.md),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.card,
-        border: Border.all(color: colors.border),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x33000000), blurRadius: 16, offset: Offset(0, 4)),
-        ],
+    // Fade + slight scale-from-top-left on open, anchored to the (?) button.
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: MechXMotion.appear,
+      curve: MechXMotion.standard,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.scale(
+          scale: 0.96 + 0.04 * t,
+          alignment: Alignment.topLeft,
+          child: child,
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text('Canvas guide',
-                    style:
-                        type.subtitle.copyWith(color: colors.textPrimary)),
-              ),
-              MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: GestureDetector(
-                  onTap: onClose,
-                  child: Text('Close',
-                      style: type.label.copyWith(color: colors.textMuted)),
+      child: Container(
+        width: 310,
+        padding: const EdgeInsets.all(MechXSpacing.md),
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: MechXRadii.card,
+          border: Border.all(color: colors.border),
+          boxShadow: MechXShadow.popover,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Canvas guide',
+                    style: type.subtitle.copyWith(color: colors.textPrimary),
+                  ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: MechXSpacing.sm),
-          for (final item in _items)
-            Padding(
-              padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 5,
-                    height: 5,
-                    margin: const EdgeInsets.only(top: 6, right: MechXSpacing.sm),
-                    decoration: BoxDecoration(
-                      color: colors.accent,
-                      borderRadius: const BorderRadius.all(Radius.circular(3)),
+                MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: GestureDetector(
+                    onTap: onClose,
+                    child: Text(
+                      'Close',
+                      style: type.label.copyWith(color: colors.textMuted),
                     ),
                   ),
-                  Expanded(
-                    child: Text(item,
-                        style: type.caption
-                            .copyWith(color: colors.textSecondary)),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-        ],
+            const SizedBox(height: MechXSpacing.sm),
+            for (final item in _items)
+              Padding(
+                padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 5,
+                      height: 5,
+                      margin: const EdgeInsets.only(
+                        top: 6,
+                        right: MechXSpacing.sm,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colors.accent,
+                        borderRadius: const BorderRadius.all(
+                          Radius.circular(3),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        item,
+                        style: type.caption.copyWith(
+                          color: colors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -826,54 +975,76 @@ class _ExportMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Container(
-      width: 260,
-      padding: const EdgeInsets.all(MechXSpacing.xs),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.card,
-        border: Border.all(color: colors.border),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x33000000), blurRadius: 16, offset: Offset(0, 4)),
-        ],
+    // Pop-in: a brief scale-from-95% + fade, anchored at the top-right corner
+    // (under the Export button), so the popover feels like it grows from there.
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: MechXMotion.appear,
+      curve: MechXMotion.standard,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.scale(
+          scale: 0.95 + 0.05 * t,
+          alignment: Alignment.topRight,
+          child: child,
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _ExportRow(
-            label: context.strings(StringKey.electricalExportSld),
-            sub: context.strings(StringKey.electricalExportSldDxf),
-            onTap: onSld,
-          ),
-          _ExportRow(
-            label: context.strings(StringKey.electricalExportSld),
-            sub: context.strings(StringKey.electricalExportSldPdf),
-            onTap: onSldPdf,
-          ),
-          _ExportRow(
-            label: context.strings(StringKey.electricalExportReport),
-            sub: context.strings(StringKey.electricalExportReportSub),
-            onTap: onReport,
-          ),
-          _ExportRow(
-            label: context.strings(StringKey.electricalExportPowerOneLine),
-            sub: context.strings(StringKey.electricalExportPowerOneLineSub),
-            onTap: onPowerOneLine,
-          ),
-        ],
+      child: Container(
+        width: 260,
+        padding: const EdgeInsets.all(MechXSpacing.xs),
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: MechXRadii.card,
+          border: Border.all(color: colors.border),
+          boxShadow: MechXShadow.popover,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportSld),
+              sub: context.strings(StringKey.electricalExportSldDxf),
+              onTap: onSld,
+            ),
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportSld),
+              sub: context.strings(StringKey.electricalExportSldPdf),
+              onTap: onSldPdf,
+            ),
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportReport),
+              sub: context.strings(StringKey.electricalExportReportSub),
+              onTap: onReport,
+            ),
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportPowerOneLine),
+              sub: context.strings(StringKey.electricalExportPowerOneLineSub),
+              onTap: onPowerOneLine,
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _ExportRow extends StatelessWidget {
+class _ExportRow extends StatefulWidget {
   final String label;
   final String sub;
   final VoidCallback onTap;
-  const _ExportRow(
-      {required this.label, required this.sub, required this.onTap});
+  const _ExportRow({
+    required this.label,
+    required this.sub,
+    required this.onTap,
+  });
+
+  @override
+  State<_ExportRow> createState() => _ExportRowState();
+}
+
+class _ExportRowState extends State<_ExportRow> {
+  bool _hover = false;
 
   @override
   Widget build(BuildContext context) {
@@ -881,21 +1052,35 @@ class _ExportRow extends StatelessWidget {
     final type = context.type;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
-        onTap: onTap,
+        onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
-        child: Container(
+        child: AnimatedContainer(
+          duration: MechXMotion.hover,
+          curve: MechXMotion.standard,
           padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm, vertical: MechXSpacing.sm),
+            horizontal: MechXSpacing.sm,
+            vertical: MechXSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            color: _hover ? colors.surfaceHover : const Color(0x00000000),
+            borderRadius: MechXRadii.control,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(label,
-                  style: type.label.copyWith(color: colors.textPrimary)),
+              Text(
+                widget.label,
+                style: type.label.copyWith(color: colors.textPrimary),
+              ),
               const SizedBox(height: 2),
-              Text(sub,
-                  style: type.caption.copyWith(color: colors.textMuted)),
+              Text(
+                widget.sub,
+                style: type.caption.copyWith(color: colors.textMuted),
+              ),
             ],
           ),
         ),
@@ -917,9 +1102,10 @@ class _MiniMap extends StatelessWidget {
       width: 150,
       height: 100,
       decoration: BoxDecoration(
-        color: colors.surface.withAlpha(230),
+        color: colors.surface,
         borderRadius: MechXRadii.control,
         border: Border.all(color: colors.border),
+        boxShadow: MechXShadow.card,
       ),
       child: ClipRRect(
         borderRadius: MechXRadii.control,
@@ -968,10 +1154,7 @@ class _MiniMapPainter extends CustomPainter {
     positions.forEach((id, p) {
       final x = ox + (p.dx - minX + 80) * scale;
       final y = oy + (p.dy - minY + 60) * scale;
-      canvas.drawRect(
-        Rect.fromLTWH(x, y, 14, 8),
-        Paint()..color = accent,
-      );
+      canvas.drawRect(Rect.fromLTWH(x, y, 14, 8), Paint()..color = accent);
     });
   }
 
@@ -991,36 +1174,117 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return Container(
-      width: 360,
+    // ConstrainedBox (not a fixed width) so the card scales down gracefully on
+    // a narrow window without overflowing.
+    return Padding(
       padding: const EdgeInsets.all(MechXSpacing.lg),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.card,
-        border: Border.all(color: colors.border),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Set up your service',
-              style: type.title.copyWith(color: colors.textPrimary)),
-          const SizedBox(height: MechXSpacing.xs),
-          Text(
-            'Add a distribution panel, then drag loads from the palette onto it. '
-            'Set the supply phase and earthing from Service & Earthing.',
-            style: type.body.copyWith(color: colors.textSecondary),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: Container(
+          padding: const EdgeInsets.all(MechXSpacing.lg),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: MechXRadii.card,
+            border: Border.all(color: colors.border),
+            boxShadow: MechXShadow.card,
           ),
-          const SizedBox(height: MechXSpacing.md),
-          Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _Btn(label: '+ Panel', onTap: onAddPanel),
-              const SizedBox(width: MechXSpacing.sm),
-              _Btn(label: 'Service & Earthing', onTap: onSetUp),
+              Text(
+                'Set up your service',
+                style: type.title.copyWith(color: colors.textPrimary),
+              ),
+              const SizedBox(height: MechXSpacing.xs),
+              Text(
+                'Add a distribution panel, then drag loads from the palette '
+                'onto it. Set the supply phase and earthing from Service & '
+                'Earthing.',
+                style: type.body.copyWith(color: colors.textSecondary),
+              ),
+              const SizedBox(height: MechXSpacing.md),
+              Row(
+                children: [
+                  _Btn(label: '+ Panel', onTap: onAddPanel),
+                  const SizedBox(width: MechXSpacing.sm),
+                  _Btn(label: 'Service & Earthing', onTap: onSetUp),
+                ],
+              ),
             ],
           ),
-        ],
+        ),
       ),
+    );
+  }
+}
+
+// ── Animated drawer shell ───────────────────────────────────────────────────
+
+/// A right-anchored sheet drawer: the modal scrim fades in over the content
+/// (using the brightness-aware [MechXColors.scrim]) and the panel slides in
+/// from the right + fades on mount (MechXMotion.appear), matching the iOS
+/// sheet idiom. Tap the scrim to close. Reused by the Service & Earthing and
+/// the Advanced-study drawers so both present identically.
+class _AnimatedDrawerShell extends StatefulWidget {
+  final double width;
+  final VoidCallback onClose;
+  final Widget child;
+  const _AnimatedDrawerShell({
+    required this.width,
+    required this.onClose,
+    required this.child,
+  });
+
+  @override
+  State<_AnimatedDrawerShell> createState() => _AnimatedDrawerShellState();
+}
+
+class _AnimatedDrawerShellState extends State<_AnimatedDrawerShell> {
+  bool _shown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _shown = true);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onClose,
+            child: AnimatedOpacity(
+              opacity: _shown ? 1 : 0,
+              duration: MechXMotion.appear,
+              curve: MechXMotion.standard,
+              child: ColoredBox(color: colors.scrim),
+            ),
+          ),
+        ),
+        Positioned(
+          top: 0,
+          right: 0,
+          bottom: 0,
+          child: AnimatedSlide(
+            offset: _shown ? Offset.zero : const Offset(1, 0),
+            duration: MechXMotion.appear,
+            curve: MechXMotion.standard,
+            child: AnimatedOpacity(
+              opacity: _shown ? 1 : 0,
+              duration: MechXMotion.appear,
+              curve: MechXMotion.standard,
+              child: SizedBox(width: widget.width, child: widget.child),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1038,105 +1302,98 @@ class _ServiceInspector extends ConsumerWidget {
     final project = ref.watch(electricalProjectProvider);
     final ctrl = ref.read(electricalProjectProvider.notifier);
 
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onClose,
-            child: ColoredBox(color: const Color(0x33000000)),
-          ),
+    return _AnimatedDrawerShell(
+      width: 340,
+      onClose: onClose,
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          border: Border(left: BorderSide(color: colors.border)),
+          boxShadow: MechXShadow.popover,
         ),
-        Positioned(
-          top: 0,
-          right: 0,
-          bottom: 0,
-          child: Container(
-            width: 340,
-            decoration: BoxDecoration(
-              color: colors.surface,
-              border: Border(left: BorderSide(color: colors.border)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(MechXSpacing.md,
-                      MechXSpacing.md, MechXSpacing.sm, MechXSpacing.sm),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text('Service & Earthing',
-                            style: type.subtitle
-                                .copyWith(color: colors.textPrimary)),
-                      ),
-                      _TextButton(label: 'Close', onTap: onClose),
-                    ],
-                  ),
-                ),
-                Container(height: 1, color: colors.border),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(MechXSpacing.md),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _Field(
-                          label: 'Earthing system',
-                          child: _EnumPicker<EarthingSystem>(
-                            value: project.earthingSystem,
-                            options: EarthingSystem.values,
-                            label: (e) => e.label,
-                            onChanged: ctrl.setEarthingSystem,
-                          ),
-                        ),
-                        Text(
-                          project.earthingSystem.note,
-                          style: type.caption
-                              .copyWith(color: colors.textMuted),
-                        ),
-                        const SizedBox(height: MechXSpacing.md),
-                        _Field(
-                          label: context.strings(
-                              StringKey.electricalOriginFaultLevel),
-                          child: _Num(
-                            value: project.originFaultLevelA != null
-                                ? project.originFaultLevelA!.amperes / 1000
-                                : 16,
-                            onChanged: (v) =>
-                                ctrl.setOriginFaultLevel(Current(v * 1000)),
-                          ),
-                        ),
-                        Text(
-                          context.strings(
-                              StringKey.electricalOriginFaultLevelNote),
-                          style:
-                              type.caption.copyWith(color: colors.textMuted),
-                        ),
-                        const SizedBox(height: MechXSpacing.md),
-                        _Field(
-                          label: context.strings(
-                              StringKey.electricalBusbarClearingTime),
-                          child: _Num(
-                            value: project.busbarClearingTimeS ?? 0.1,
-                            onChanged: ctrl.setBusbarClearingTime,
-                          ),
-                        ),
-                        Text(
-                          context.strings(
-                              StringKey.electricalBusbarClearingTimeNote),
-                          style:
-                              type.caption.copyWith(color: colors.textMuted),
-                        ),
-                      ],
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                MechXSpacing.md,
+                MechXSpacing.md,
+                MechXSpacing.md,
+                MechXSpacing.sm + 4,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Service & Earthing',
+                      style: type.subtitle.copyWith(color: colors.textPrimary),
                     ),
                   ),
-                ),
-              ],
+                  _TextButton(label: 'Close', onTap: onClose),
+                ],
+              ),
             ),
-          ),
+            Container(height: 1, color: colors.border),
+            const SizedBox(height: MechXSpacing.xs),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(MechXSpacing.md),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _Field(
+                      label: 'Earthing system',
+                      child: _EnumPicker<EarthingSystem>(
+                        value: project.earthingSystem,
+                        options: EarthingSystem.values,
+                        label: (e) => e.label,
+                        onChanged: ctrl.setEarthingSystem,
+                      ),
+                    ),
+                    Text(
+                      project.earthingSystem.note,
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                    const SizedBox(height: MechXSpacing.md),
+                    _Field(
+                      label: context.strings(
+                        StringKey.electricalOriginFaultLevel,
+                      ),
+                      child: _Num(
+                        value: project.originFaultLevelA != null
+                            ? project.originFaultLevelA!.amperes / 1000
+                            : 16,
+                        onChanged: (v) =>
+                            ctrl.setOriginFaultLevel(Current(v * 1000)),
+                      ),
+                    ),
+                    Text(
+                      context.strings(StringKey.electricalOriginFaultLevelNote),
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                    const SizedBox(height: MechXSpacing.md),
+                    _Field(
+                      label: context.strings(
+                        StringKey.electricalBusbarClearingTime,
+                      ),
+                      child: _Num(
+                        value: project.busbarClearingTimeS ?? 0.1,
+                        onChanged: ctrl.setBusbarClearingTime,
+                      ),
+                    ),
+                    Text(
+                      context.strings(
+                        StringKey.electricalBusbarClearingTimeNote,
+                      ),
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
@@ -1157,68 +1414,62 @@ class _AdvancedDrawer extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onClose,
-            child: ColoredBox(color: const Color(0x33000000)),
-          ),
+    return _AnimatedDrawerShell(
+      width: 420,
+      onClose: onClose,
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          border: Border(left: BorderSide(color: colors.border)),
+          boxShadow: MechXShadow.popover,
         ),
-        Positioned(
-          top: 0,
-          right: 0,
-          bottom: 0,
-          child: Container(
-            width: 420,
-            decoration: BoxDecoration(
-              color: colors.surface,
-              border: Border(left: BorderSide(color: colors.border)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(MechXSpacing.md,
-                      MechXSpacing.md, MechXSpacing.sm, MechXSpacing.sm),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text('Issues & advanced study',
-                            style: type.subtitle
-                                .copyWith(color: colors.textPrimary)),
-                      ),
-                      _TextButton(label: 'Close', onTap: onClose),
-                    ],
-                  ),
-                ),
-                Container(height: 1, color: colors.border),
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(MechXSpacing.md),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (result.warnings.isNotEmpty) ...[
-                          Text('Warnings (${result.warnings.length})',
-                              style: type.label
-                                  .copyWith(color: colors.textPrimary)),
-                          const SizedBox(height: MechXSpacing.xs),
-                          for (final w in result.warnings)
-                            _WarningRow(warning: w),
-                          const SizedBox(height: MechXSpacing.md),
-                        ],
-                        _AdvancedBody(advanced: advanced, result: result),
-                      ],
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                MechXSpacing.md,
+                MechXSpacing.md,
+                MechXSpacing.md,
+                MechXSpacing.sm + 4,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Issues & advanced study',
+                      style: type.subtitle.copyWith(color: colors.textPrimary),
                     ),
                   ),
-                ),
-              ],
+                  _TextButton(label: 'Close', onTap: onClose),
+                ],
+              ),
             ),
-          ),
+            Container(height: 1, color: colors.border),
+            const SizedBox(height: MechXSpacing.xs),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(MechXSpacing.md),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (result.warnings.isNotEmpty) ...[
+                      Text(
+                        'Warnings (${result.warnings.length})',
+                        style: type.label.copyWith(color: colors.textPrimary),
+                      ),
+                      const SizedBox(height: MechXSpacing.xs),
+                      for (final w in result.warnings) _WarningRow(warning: w),
+                      const SizedBox(height: MechXSpacing.md),
+                    ],
+                    _AdvancedBody(advanced: advanced, result: result),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
@@ -1238,15 +1489,15 @@ class _AdvancedBody extends StatelessWidget {
 
     final metrics = <_Metric>[
       _Metric(
-          label: 'Supply',
-          value: supply.lvOrMv == SupplyLevel.mv &&
-                  supply.transformerKva != null
-              ? 'MV · ${fmtNum(supply.transformerKva!)} kVA${supply.units > 1 ? ' x${supply.units}' : ''}'
-              : 'LV direct'),
+        label: 'Supply',
+        value: supply.lvOrMv == SupplyLevel.mv && supply.transformerKva != null
+            ? 'MV · ${fmtNum(supply.transformerKva!)} kVA${supply.units > 1 ? ' x${supply.units}' : ''}'
+            : 'LV direct',
+      ),
       _Metric(
-          label: 'Daya',
-          value:
-              '${(advanced.recommendedDayaVa / 1000).toStringAsFixed(1)} kVA'),
+        label: 'Daya',
+        value: '${(advanced.recommendedDayaVa / 1000).toStringAsFixed(1)} kVA',
+      ),
       _Metric(label: 'Origin Isc', value: '${fmtNum(fault.originFaultkA)} kA'),
       _Metric(
         label: 'Power factor',
@@ -1256,32 +1507,37 @@ class _AdvancedBody extends StatelessWidget {
       ),
       if (pf.needed)
         _Metric(
-            label: 'Capacitor',
-            value:
-                '${fmtNum(pf.bankKvar)} kvar${pf.steps > 0 ? ' / ${pf.steps} steps' : ''}'),
+          label: 'Capacitor',
+          value:
+              '${fmtNum(pf.bankKvar)} kvar${pf.steps > 0 ? ' / ${pf.steps} steps' : ''}',
+        ),
       if (advanced.lightning != null)
         _Metric(
-            label: 'Lightning',
-            value: advanced.lightning!.lpsRequired
-                ? 'LPS ${advanced.lightning!.level?.label ?? 'req'}'
-                : 'not required'),
+          label: 'Lightning',
+          value: advanced.lightning!.lpsRequired
+              ? 'LPS ${advanced.lightning!.level?.label ?? 'req'}'
+              : 'not required',
+        ),
     ];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('Advanced study',
-            style: type.label.copyWith(color: colors.textPrimary)),
+        Text(
+          'Advanced study',
+          style: type.label.copyWith(color: colors.textPrimary),
+        ),
         const SizedBox(height: MechXSpacing.sm),
-        Wrap(spacing: MechXSpacing.xl, runSpacing: MechXSpacing.sm, children: metrics),
+        Wrap(
+          spacing: MechXSpacing.xl,
+          runSpacing: MechXSpacing.sm,
+          children: metrics,
+        ),
         const SizedBox(height: MechXSpacing.md),
         // Per-panel matrix.
         for (final id in result.order)
           if (result.panels[id] != null)
-            _PanelAdvancedRow(
-              panel: result.panels[id]!,
-              advanced: advanced,
-            ),
+            _PanelAdvancedRow(panel: result.panels[id]!, advanced: advanced),
         const SizedBox(height: MechXSpacing.sm),
         Text(
           'Estimates — verify against PUIL 2011 / IEC 60364. '
@@ -1321,14 +1577,18 @@ class _PanelAdvancedRow extends StatelessWidget {
         children: [
           SizedBox(
             width: 96,
-            child: Text(panel.tag ?? panel.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: type.body.copyWith(color: colors.textPrimary)),
+            child: Text(
+              panel.tag ?? panel.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: type.body.copyWith(color: colors.textPrimary),
+            ),
           ),
           Expanded(
-            child: Text(bits.join(' · '),
-                style: type.caption.copyWith(color: colors.textSecondary)),
+            child: Text(
+              bits.join(' · '),
+              style: type.caption.copyWith(color: colors.textSecondary),
+            ),
           ),
         ],
       ),
@@ -1349,12 +1609,14 @@ class _Metric extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(label.toUpperCase(),
-            style: type.caption.copyWith(
-              color: colors.textMuted,
-              letterSpacing: 0.8,
-              fontWeight: FontWeight.w600,
-            )),
+        Text(
+          label.toUpperCase(),
+          style: type.caption.copyWith(
+            color: colors.textMuted,
+            letterSpacing: 0.5,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
         const SizedBox(height: MechXSpacing.xxs),
         Text(value, style: type.mono.copyWith(color: colors.textPrimary)),
       ],
@@ -1390,8 +1652,10 @@ class _WarningRow extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: Text(warning.message,
-                style: type.caption.copyWith(color: colors.textSecondary)),
+            child: Text(
+              warning.message,
+              style: type.caption.copyWith(color: colors.textSecondary),
+            ),
           ),
         ],
       ),
@@ -1415,24 +1679,39 @@ class _ContextMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Container(
-      width: 188,
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: colors.border),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
-        ],
+    // Grow-from-top-left scale + fade on open, like a native context menu.
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: MechXMotion.dismiss,
+      curve: MechXMotion.standard,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.scale(
+          scale: 0.94 + 0.06 * t,
+          alignment: Alignment.topLeft,
+          child: child,
+        ),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final item in items)
-            _MenuItem(label: item.label, onTap: item.onTap, danger: item.danger),
-        ],
+      child: Container(
+        width: 188,
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: MechXRadii.control,
+          border: Border.all(color: colors.border),
+          boxShadow: MechXShadow.popover,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final item in items)
+              _MenuItem(
+                label: item.label,
+                onTap: item.onTap,
+                danger: item.danger,
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1442,8 +1721,11 @@ class _MenuItem extends StatefulWidget {
   final String label;
   final VoidCallback onTap;
   final bool danger;
-  const _MenuItem(
-      {required this.label, required this.onTap, this.danger = false});
+  const _MenuItem({
+    required this.label,
+    required this.onTap,
+    this.danger = false,
+  });
 
   @override
   State<_MenuItem> createState() => _MenuItemState();
@@ -1463,14 +1745,20 @@ class _MenuItemState extends State<_MenuItem> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
-        child: Container(
+        child: AnimatedContainer(
+          duration: MechXMotion.hover,
+          curve: MechXMotion.standard,
           padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 3),
+            horizontal: MechXSpacing.sm + 2,
+            vertical: MechXSpacing.xs + 3,
+          ),
           color: _hover ? colors.surfaceHover : const Color(0x00000000),
-          child: Text(widget.label,
-              style: type.body.copyWith(
-                color: widget.danger ? colors.danger : colors.textPrimary,
-              )),
+          child: Text(
+            widget.label,
+            style: type.body.copyWith(
+              color: widget.danger ? colors.danger : colors.textPrimary,
+            ),
+          ),
         ),
       ),
     );
@@ -1510,166 +1798,214 @@ class _CircuitInspector extends StatelessWidget {
     final colors = context.colors;
     final type = context.type;
 
-    return Container(
-      width: 340,
-      decoration: BoxDecoration(
-        color: colors.surface,
-        border: Border(left: BorderSide(color: colors.border)),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x22000000), blurRadius: 16, offset: Offset(-2, 0)),
-        ],
+    // Slide-in from the right + fade on open (and on switching circuits, since
+    // the host keys this by panel/circuit), matching the iOS sheet idiom.
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: MechXMotion.appear,
+      curve: MechXMotion.standard,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(
+          offset: Offset(340 * (1 - t), 0),
+          child: child,
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(MechXSpacing.md, MechXSpacing.md,
-                MechXSpacing.sm, MechXSpacing.sm),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text('Edit circuit',
-                      style:
-                          type.subtitle.copyWith(color: colors.textPrimary)),
-                ),
-                _TextButton(label: 'Close', onTap: onClose),
-              ],
-            ),
-          ),
-          Container(height: 1, color: colors.border),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(MechXSpacing.md),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: Container(
+        width: 340,
+        decoration: BoxDecoration(
+          color: colors.surface,
+          border: Border(left: BorderSide(color: colors.border)),
+          boxShadow: MechXShadow.popover,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                MechXSpacing.md,
+                MechXSpacing.md,
+                MechXSpacing.sm,
+                MechXSpacing.sm,
+              ),
+              child: Row(
                 children: [
-                  _Field(
-                    label: 'Name',
-                    child: _Text(
-                      value: circuit.name,
-                      onChanged: (v) =>
-                          controller.setCircuit(panel.id, circuit.id, name: v),
+                  Expanded(
+                    child: Text(
+                      'Edit circuit',
+                      style: type.subtitle.copyWith(color: colors.textPrimary),
                     ),
                   ),
-                  _Field(
-                    label: 'Load kind',
-                    child: _EnumPicker<LoadKind>(
-                      value: circuit.loadKind,
-                      options: const [
-                        LoadKind.general,
-                        LoadKind.lighting,
-                        LoadKind.socket,
-                        LoadKind.hvac,
-                        LoadKind.motor,
-                        LoadKind.pump,
-                        LoadKind.heating,
-                        LoadKind.ups,
-                        LoadKind.evCharger,
-                        LoadKind.welding,
-                        LoadKind.spare,
-                      ],
-                      label: (k) => loadDefaults[k]?.label ?? k.name,
-                      onChanged: (k) =>
-                          controller.setCircuit(panel.id, circuit.id, loadKind: k),
-                    ),
-                  ),
-                  if (_isMotor)
-                    _Field(
-                      label: 'Motor power (kW)',
-                      child: _Num(
-                        value: circuit.motorKw ?? 0,
-                        onChanged: (v) => controller.setCircuit(
-                            panel.id, circuit.id,
-                            motorKw: v),
-                      ),
-                    )
-                  else
-                    _Field(
-                      label: 'Load (W)',
-                      child: _Num(
-                        value: circuit.loadW,
-                        onChanged: (v) => controller.setCircuit(
-                            panel.id, circuit.id,
-                            loadW: v),
-                      ),
-                    ),
-                  _Field(
-                    label: 'cos phi',
-                    child: _Num(
-                      value: circuit.cosPhi,
-                      onChanged: (v) => controller.setCircuit(
-                          panel.id, circuit.id,
-                          cosPhi: v.clamp(0.0, 1.0)),
-                    ),
-                  ),
-                  _Field(
-                    label: 'Demand factor',
-                    child: _Num(
-                      value: circuit.demandFactor,
-                      onChanged: (v) => controller.setCircuit(
-                          panel.id, circuit.id,
-                          demandFactor: v.clamp(0.0, 1.0)),
-                    ),
-                  ),
-                  _Field(
-                    label: 'Run length (m)',
-                    child: _Num(
-                      value: circuit.length.meters,
-                      onChanged: (v) => controller.setCircuit(
-                          panel.id, circuit.id,
-                          length: Length(v)),
-                    ),
-                  ),
-                  _Field(
-                    label: 'Supply phase',
-                    child: _EnumPicker<int>(
-                      value: circuit.phases ?? 0,
-                      options: const [0, 1, 3],
-                      label: (p) => switch (p) {
-                        1 => '1-phase',
-                        3 => '3-phase',
-                        _ => 'Auto',
-                      },
-                      onChanged: (p) => p == 0
-                          ? controller.setCircuit(panel.id, circuit.id,
-                              clearPhases: true)
-                          : controller.setCircuit(panel.id, circuit.id,
-                              phases: p),
-                    ),
-                  ),
-                  _Field(
-                    label: 'Cable type',
-                    child: _EnumPicker<String?>(
-                      value: circuit.cableType,
-                      options: _cableTypes,
-                      label: (t) => t ?? 'Panel default',
-                      onChanged: (t) => t == null
-                          ? controller.setCircuit(panel.id, circuit.id,
-                              clearCableType: true)
-                          : controller.setCircuit(panel.id, circuit.id,
-                              cableType: t),
-                    ),
-                  ),
-                  _ToggleRow(
-                    label: 'Lighting circuit (3% Vd limit)',
-                    value: circuit.isLighting,
-                    onChanged: (v) => controller.setCircuit(
-                        panel.id, circuit.id,
-                        isLighting: v),
-                  ),
-                  _ToggleRow(
-                    label: 'Life-safety (no RCD)',
-                    value: circuit.lifeSafety,
-                    onChanged: (v) => controller.setCircuit(
-                        panel.id, circuit.id,
-                        lifeSafety: v),
-                  ),
+                  _TextButton(label: 'Close', onTap: onClose),
                 ],
               ),
             ),
-          ),
-        ],
+            Container(height: 1, color: colors.border),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(MechXSpacing.md),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _Field(
+                      label: 'Name',
+                      child: _Text(
+                        value: circuit.name,
+                        onChanged: (v) => controller.setCircuit(
+                          panel.id,
+                          circuit.id,
+                          name: v,
+                        ),
+                      ),
+                    ),
+                    _Field(
+                      label: 'Load kind',
+                      child: _EnumPicker<LoadKind>(
+                        value: circuit.loadKind,
+                        options: const [
+                          LoadKind.general,
+                          LoadKind.lighting,
+                          LoadKind.socket,
+                          LoadKind.hvac,
+                          LoadKind.motor,
+                          LoadKind.pump,
+                          LoadKind.heating,
+                          LoadKind.ups,
+                          LoadKind.evCharger,
+                          LoadKind.welding,
+                          LoadKind.spare,
+                        ],
+                        label: (k) => loadDefaults[k]?.label ?? k.name,
+                        onChanged: (k) => controller.setCircuit(
+                          panel.id,
+                          circuit.id,
+                          loadKind: k,
+                        ),
+                      ),
+                    ),
+                    if (_isMotor)
+                      _Field(
+                        label: 'Motor power (kW)',
+                        child: _Num(
+                          value: circuit.motorKw ?? 0,
+                          onChanged: (v) => controller.setCircuit(
+                            panel.id,
+                            circuit.id,
+                            motorKw: v,
+                          ),
+                        ),
+                      )
+                    else
+                      _Field(
+                        label: 'Load (W)',
+                        child: _Num(
+                          value: circuit.loadW,
+                          onChanged: (v) => controller.setCircuit(
+                            panel.id,
+                            circuit.id,
+                            loadW: v,
+                          ),
+                        ),
+                      ),
+                    _Field(
+                      label: 'cos phi',
+                      child: _Num(
+                        value: circuit.cosPhi,
+                        onChanged: (v) => controller.setCircuit(
+                          panel.id,
+                          circuit.id,
+                          cosPhi: v.clamp(0.0, 1.0),
+                        ),
+                      ),
+                    ),
+                    _Field(
+                      label: 'Demand factor',
+                      child: _Num(
+                        value: circuit.demandFactor,
+                        onChanged: (v) => controller.setCircuit(
+                          panel.id,
+                          circuit.id,
+                          demandFactor: v.clamp(0.0, 1.0),
+                        ),
+                      ),
+                    ),
+                    _Field(
+                      label: 'Run length (m)',
+                      child: _Num(
+                        value: circuit.length.meters,
+                        onChanged: (v) => controller.setCircuit(
+                          panel.id,
+                          circuit.id,
+                          length: Length(v),
+                        ),
+                      ),
+                    ),
+                    _Field(
+                      label: 'Supply phase',
+                      child: _EnumPicker<int>(
+                        value: circuit.phases ?? 0,
+                        options: const [0, 1, 3],
+                        label: (p) => switch (p) {
+                          1 => '1-phase',
+                          3 => '3-phase',
+                          _ => 'Auto',
+                        },
+                        onChanged: (p) => p == 0
+                            ? controller.setCircuit(
+                                panel.id,
+                                circuit.id,
+                                clearPhases: true,
+                              )
+                            : controller.setCircuit(
+                                panel.id,
+                                circuit.id,
+                                phases: p,
+                              ),
+                      ),
+                    ),
+                    _Field(
+                      label: 'Cable type',
+                      child: _EnumPicker<String?>(
+                        value: circuit.cableType,
+                        options: _cableTypes,
+                        label: (t) => t ?? 'Panel default',
+                        onChanged: (t) => t == null
+                            ? controller.setCircuit(
+                                panel.id,
+                                circuit.id,
+                                clearCableType: true,
+                              )
+                            : controller.setCircuit(
+                                panel.id,
+                                circuit.id,
+                                cableType: t,
+                              ),
+                      ),
+                    ),
+                    _ToggleRow(
+                      label: 'Lighting circuit (3% Vd limit)',
+                      value: circuit.isLighting,
+                      onChanged: (v) => controller.setCircuit(
+                        panel.id,
+                        circuit.id,
+                        isLighting: v,
+                      ),
+                    ),
+                    _ToggleRow(
+                      label: 'Life-safety (no RCD)',
+                      value: circuit.lifeSafety,
+                      onChanged: (v) => controller.setCircuit(
+                        panel.id,
+                        circuit.id,
+                        lifeSafety: v,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1691,12 +2027,16 @@ class _Field extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(label.toUpperCase(),
-              style: type.caption.copyWith(
-                color: colors.textMuted,
-                letterSpacing: 0.6,
-                fontWeight: FontWeight.w600,
-              )),
+          // Quiet field label (secondary tier, sentence case) over the input —
+          // the weight, not all-caps, carries the emphasis.
+          Text(
+            label,
+            style: type.caption.copyWith(
+              color: colors.textSecondary,
+              letterSpacing: 0.05,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
           const SizedBox(height: MechXSpacing.xs),
           child,
         ],
@@ -1715,8 +2055,9 @@ class _Text extends StatefulWidget {
 }
 
 class _TextState extends State<_Text> {
-  late final TextEditingController _ctl =
-      TextEditingController(text: widget.value);
+  late final TextEditingController _ctl = TextEditingController(
+    text: widget.value,
+  );
   final FocusNode _focus = FocusNode();
   bool _focused = false;
 
@@ -1741,7 +2082,9 @@ class _TextState extends State<_Text> {
       onTap: _focus.requestFocus,
       child: Container(
         padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 2),
+          horizontal: MechXSpacing.sm,
+          vertical: MechXSpacing.xs + 2,
+        ),
         decoration: BoxDecoration(
           color: colors.background,
           borderRadius: MechXRadii.control,
@@ -1773,8 +2116,9 @@ class _Num extends StatefulWidget {
 }
 
 class _NumState extends State<_Num> {
-  late final TextEditingController _ctl =
-      TextEditingController(text: _fmt(widget.value));
+  late final TextEditingController _ctl = TextEditingController(
+    text: _fmt(widget.value),
+  );
   final FocusNode _focus = FocusNode();
   bool _focused = false;
 
@@ -1802,7 +2146,9 @@ class _NumState extends State<_Num> {
       onTap: _focus.requestFocus,
       child: Container(
         padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 2),
+          horizontal: MechXSpacing.sm,
+          vertical: MechXSpacing.xs + 2,
+        ),
         decoration: BoxDecoration(
           color: colors.background,
           borderRadius: MechXRadii.control,
@@ -1861,29 +2207,43 @@ class _Chip extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  const _Chip(
-      {required this.label, required this.selected, required this.onTap});
+  const _Chip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    // Selected = the iOS tinted-fill chip (accentMuted + accent hairline +
+    // textPrimary label), matching the tab + button selected language. This
+    // keeps the label on a light tint at well above 4.5:1, instead of small
+    // white text on the systemBlue accent (which is borderline for AA).
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: onTap,
-        child: Container(
+        child: AnimatedContainer(
+          duration: MechXMotion.hover,
+          curve: MechXMotion.standard,
           padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 1),
+            horizontal: MechXSpacing.sm,
+            vertical: MechXSpacing.xs + 1,
+          ),
           decoration: BoxDecoration(
-            color: selected ? colors.accent : colors.background,
+            color: selected ? colors.accentMuted : colors.background,
             borderRadius: MechXRadii.control,
             border: Border.all(color: selected ? colors.accent : colors.border),
           ),
-          child: Text(label,
-              style: type.label.copyWith(
-                color: selected ? const Color(0xFFFFFFFF) : colors.textSecondary,
-              )),
+          child: Text(
+            label,
+            style: type.label.copyWith(
+              color: selected ? colors.textPrimary : colors.textSecondary,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+            ),
+          ),
         ),
       ),
     );
@@ -1912,8 +2272,10 @@ class _ToggleRow extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child: Text(label,
-                  style: type.body.copyWith(color: colors.textSecondary)),
+              child: Text(
+                label,
+                style: type.body.copyWith(color: colors.textSecondary),
+              ),
             ),
             const SizedBox(width: MechXSpacing.sm),
             AnimatedContainer(
@@ -1930,6 +2292,8 @@ class _ToggleRow extends StatelessWidget {
                 child: Container(
                   width: 16,
                   height: 16,
+                  // White thumb is the correct iOS switch knob in BOTH modes:
+                  // it reads on the accent (on) and on the border grey (off).
                   decoration: const BoxDecoration(
                     color: Color(0xFFFFFFFF),
                     shape: BoxShape.circle,
@@ -1969,14 +2333,18 @@ class _TextButtonState extends State<_TextButton> {
         child: AnimatedContainer(
           duration: MechXMotion.fast,
           padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 1),
+            horizontal: MechXSpacing.sm + 2,
+            vertical: MechXSpacing.xs + 1,
+          ),
           decoration: BoxDecoration(
             color: _hover ? colors.surfaceHover : const Color(0x00000000),
             borderRadius: MechXRadii.control,
             border: Border.all(color: colors.border),
           ),
-          child: Text(widget.label,
-              style: type.label.copyWith(color: colors.textSecondary)),
+          child: Text(
+            widget.label,
+            style: type.label.copyWith(color: colors.textSecondary),
+          ),
         ),
       ),
     );
