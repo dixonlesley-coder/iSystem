@@ -30,6 +30,7 @@ import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'electrical_canvas.dart';
@@ -842,23 +843,23 @@ class _ExportMenu extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           _ExportRow(
-            label: 'Single-line drawing',
-            sub: 'DXF (CAD)',
+            label: context.strings(StringKey.electricalExportSld),
+            sub: context.strings(StringKey.electricalExportSldDxf),
             onTap: onSld,
           ),
           _ExportRow(
-            label: 'Single-line drawing',
-            sub: 'PDF (vector)',
+            label: context.strings(StringKey.electricalExportSld),
+            sub: context.strings(StringKey.electricalExportSldPdf),
             onTap: onSldPdf,
           ),
           _ExportRow(
-            label: 'Calculation report',
-            sub: 'Markdown',
+            label: context.strings(StringKey.electricalExportReport),
+            sub: context.strings(StringKey.electricalExportReportSub),
             onTap: onReport,
           ),
           _ExportRow(
-            label: 'Power one-line',
-            sub: 'DXF (needs energy sources)',
+            label: context.strings(StringKey.electricalExportPowerOneLine),
+            sub: context.strings(StringKey.electricalExportPowerOneLineSub),
             onTap: onPowerOneLine,
           ),
         ],
@@ -1096,7 +1097,8 @@ class _ServiceInspector extends ConsumerWidget {
                         ),
                         const SizedBox(height: MechXSpacing.md),
                         _Field(
-                          label: 'Origin fault level (kA)',
+                          label: context.strings(
+                              StringKey.electricalOriginFaultLevel),
                           child: _Num(
                             value: project.originFaultLevelA != null
                                 ? project.originFaultLevelA!.amperes / 1000
@@ -1106,23 +1108,23 @@ class _ServiceInspector extends ConsumerWidget {
                           ),
                         ),
                         Text(
-                          'Prospective 3-phase fault at the supply origin. Drives '
-                          'Fold-1 busbar short-circuit withstand sizing. Default '
-                          '16 kA. VERIFY against the PLN / upstream let-through.',
+                          context.strings(
+                              StringKey.electricalOriginFaultLevelNote),
                           style:
                               type.caption.copyWith(color: colors.textMuted),
                         ),
                         const SizedBox(height: MechXSpacing.md),
                         _Field(
-                          label: 'Busbar clearing time (s)',
+                          label: context.strings(
+                              StringKey.electricalBusbarClearingTime),
                           child: _Num(
                             value: project.busbarClearingTimeS ?? 0.1,
                             onChanged: ctrl.setBusbarClearingTime,
                           ),
                         ),
                         Text(
-                          'Protective-device clearing time for the withstand '
-                          'thermal check (smaller = less oversize). Default 0.1 s.',
+                          context.strings(
+                              StringKey.electricalBusbarClearingTimeNote),
                           style:
                               type.caption.copyWith(color: colors.textMuted),
                         ),

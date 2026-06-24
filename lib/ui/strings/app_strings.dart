@@ -29,6 +29,59 @@ enum StringKey {
   prefsSwitchToLight,
   prefsSwitchToDark,
   prefsLanguage,
+
+  // Commercial workspace — hub.
+  commercialHubTitle,
+  commercialHubLead,
+  commercialExportBomCsv,
+  commercialExportProposalMd,
+
+  // Commercial workspace — electrical BOM.
+  commercialBomTitle,
+  commercialColQty,
+  commercialColPart,
+  commercialColBrand,
+  commercialColSku,
+  commercialColMatch,
+  commercialMatched,
+  commercialUnmatched,
+
+  // Commercial workspace — pricelist.
+  commercialPricelistTitle,
+  commercialColUnit,
+  commercialColUnitPrice,
+
+  // Commercial workspace — quotation.
+  commercialQuotationTitle,
+  commercialAllPriced,
+  commercialQuoteSettings,
+  commercialOverheadPct,
+  commercialContingencyPct,
+  commercialMarginPct,
+  commercialColItem,
+  commercialItemMaterial,
+  commercialItemOverhead,
+  commercialItemContingency,
+  commercialItemMargin,
+  commercialItemGrandTotal,
+
+  // Commercial workspace — shared table.
+  commercialNoItems,
+
+  // Electrical — Export menu.
+  electricalExportSld,
+  electricalExportSldDxf,
+  electricalExportSldPdf,
+  electricalExportReport,
+  electricalExportReportSub,
+  electricalExportPowerOneLine,
+  electricalExportPowerOneLineSub,
+
+  // Electrical — Service & Earthing (Fold-1 fields).
+  electricalOriginFaultLevel,
+  electricalOriginFaultLevelNote,
+  electricalBusbarClearingTime,
+  electricalBusbarClearingTimeNote,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -50,6 +103,67 @@ const Map<StringKey, String> _en = {
   StringKey.prefsSwitchToLight: 'Switch to Light',
   StringKey.prefsSwitchToDark: 'Switch to Dark',
   StringKey.prefsLanguage: 'Language',
+
+  // Commercial workspace — hub.
+  StringKey.commercialHubTitle: 'Commercial',
+  StringKey.commercialHubLead:
+      'The electrical bill of materials, your pricelist and the '
+          'priced proposal. Edit prices below and the quotation updates '
+          'live.',
+  StringKey.commercialExportBomCsv: 'Export BOM (CSV)',
+  StringKey.commercialExportProposalMd: 'Export proposal (Markdown)',
+
+  // Commercial workspace — electrical BOM.
+  StringKey.commercialBomTitle: 'Bill of materials',
+  StringKey.commercialColQty: 'Qty',
+  StringKey.commercialColPart: 'Part',
+  StringKey.commercialColBrand: 'Brand',
+  StringKey.commercialColSku: 'SKU',
+  StringKey.commercialColMatch: 'Match',
+  StringKey.commercialMatched: 'matched',
+  StringKey.commercialUnmatched: 'unmatched',
+
+  // Commercial workspace — pricelist.
+  StringKey.commercialPricelistTitle: 'Pricelist',
+  StringKey.commercialColUnit: 'Unit',
+  StringKey.commercialColUnitPrice: 'Unit price',
+
+  // Commercial workspace — quotation.
+  StringKey.commercialQuotationTitle: 'Quotation',
+  StringKey.commercialAllPriced: 'All catalogue-matched lines are priced.',
+  StringKey.commercialQuoteSettings: 'Quote settings',
+  StringKey.commercialOverheadPct: 'Overhead (%)',
+  StringKey.commercialContingencyPct: 'Contingency (%)',
+  StringKey.commercialMarginPct: 'Margin (%)',
+  StringKey.commercialColItem: 'Item',
+  StringKey.commercialItemMaterial: 'Material',
+  StringKey.commercialItemOverhead: 'Overhead',
+  StringKey.commercialItemContingency: 'Contingency',
+  StringKey.commercialItemMargin: 'Margin',
+  StringKey.commercialItemGrandTotal: 'Grand total',
+
+  // Commercial workspace — shared table.
+  StringKey.commercialNoItems: 'No items.',
+
+  // Electrical — Export menu.
+  StringKey.electricalExportSld: 'Single-line drawing',
+  StringKey.electricalExportSldDxf: 'DXF (CAD)',
+  StringKey.electricalExportSldPdf: 'PDF (vector)',
+  StringKey.electricalExportReport: 'Calculation report',
+  StringKey.electricalExportReportSub: 'Markdown',
+  StringKey.electricalExportPowerOneLine: 'Power one-line',
+  StringKey.electricalExportPowerOneLineSub: 'DXF (needs energy sources)',
+
+  // Electrical — Service & Earthing (Fold-1 fields).
+  StringKey.electricalOriginFaultLevel: 'Origin fault level (kA)',
+  StringKey.electricalOriginFaultLevelNote:
+      'Prospective 3-phase fault at the supply origin. Drives '
+          'Fold-1 busbar short-circuit withstand sizing. Default '
+          '16 kA. VERIFY against the PLN / upstream let-through.',
+  StringKey.electricalBusbarClearingTime: 'Busbar clearing time (s)',
+  StringKey.electricalBusbarClearingTimeNote:
+      'Protective-device clearing time for the withstand '
+          'thermal check (smaller = less oversize). Default 0.1 s.',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -72,6 +186,67 @@ const Map<StringKey, String> _id = {
   StringKey.prefsSwitchToLight: 'Beralih ke Terang',
   StringKey.prefsSwitchToDark: 'Beralih ke Gelap',
   StringKey.prefsLanguage: 'Bahasa',
+
+  // Commercial workspace — hub.
+  StringKey.commercialHubTitle: 'Komersial',
+  StringKey.commercialHubLead:
+      'Daftar material kelistrikan, daftar harga Anda, dan proposal '
+          'berbiaya. Ubah harga di bawah ini dan penawaran akan diperbarui '
+          'secara langsung.',
+  StringKey.commercialExportBomCsv: 'Ekspor BOM (CSV)',
+  StringKey.commercialExportProposalMd: 'Ekspor proposal (Markdown)',
+
+  // Commercial workspace — electrical BOM.
+  StringKey.commercialBomTitle: 'Daftar material',
+  StringKey.commercialColQty: 'Jml',
+  StringKey.commercialColPart: 'Komponen',
+  StringKey.commercialColBrand: 'Merek',
+  StringKey.commercialColSku: 'SKU',
+  StringKey.commercialColMatch: 'Kecocokan',
+  StringKey.commercialMatched: 'cocok',
+  StringKey.commercialUnmatched: 'tidak cocok',
+
+  // Commercial workspace — pricelist.
+  StringKey.commercialPricelistTitle: 'Daftar Harga',
+  StringKey.commercialColUnit: 'Satuan',
+  StringKey.commercialColUnitPrice: 'Harga satuan',
+
+  // Commercial workspace — quotation.
+  StringKey.commercialQuotationTitle: 'Penawaran',
+  StringKey.commercialAllPriced: 'Semua baris yang cocok katalog telah diberi harga.',
+  StringKey.commercialQuoteSettings: 'Pengaturan penawaran',
+  StringKey.commercialOverheadPct: 'Overhead (%)',
+  StringKey.commercialContingencyPct: 'Kontingensi (%)',
+  StringKey.commercialMarginPct: 'Margin (%)',
+  StringKey.commercialColItem: 'Item',
+  StringKey.commercialItemMaterial: 'Material',
+  StringKey.commercialItemOverhead: 'Overhead',
+  StringKey.commercialItemContingency: 'Kontingensi',
+  StringKey.commercialItemMargin: 'Margin',
+  StringKey.commercialItemGrandTotal: 'Total keseluruhan',
+
+  // Commercial workspace — shared table.
+  StringKey.commercialNoItems: 'Tidak ada item.',
+
+  // Electrical — Export menu.
+  StringKey.electricalExportSld: 'Gambar satu-garis',
+  StringKey.electricalExportSldDxf: 'DXF (CAD)',
+  StringKey.electricalExportSldPdf: 'PDF (vektor)',
+  StringKey.electricalExportReport: 'Laporan perhitungan',
+  StringKey.electricalExportReportSub: 'Markdown',
+  StringKey.electricalExportPowerOneLine: 'Diagram daya satu-garis',
+  StringKey.electricalExportPowerOneLineSub: 'DXF (perlu sumber energi)',
+
+  // Electrical — Service & Earthing (Fold-1 fields).
+  StringKey.electricalOriginFaultLevel: 'Tingkat gangguan sumber (kA)',
+  StringKey.electricalOriginFaultLevelNote:
+      'Gangguan 3-fasa prospektif di titik asal suplai. Menjadi dasar '
+          'pengukuran ketahanan hubung-singkat busbar Fold-1. Default '
+          '16 kA. VERIFIKASI terhadap let-through PLN / hulu.',
+  StringKey.electricalBusbarClearingTime: 'Waktu pemutusan busbar (s)',
+  StringKey.electricalBusbarClearingTimeNote:
+      'Waktu pemutusan perangkat proteksi untuk pemeriksaan ketahanan '
+          'termal (lebih kecil = lebih sedikit pembesaran). Default 0,1 s.',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]
