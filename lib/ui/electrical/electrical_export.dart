@@ -11,6 +11,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
+import 'package:mechx_engine/report/electrical_pdf_export.dart';
 import 'package:mechx_engine/standards/puil.dart';
 
 import '../../store/electrical_store.dart';
@@ -22,6 +23,23 @@ Future<void> exportElectricalSldDxf(WidgetRef ref) async {
   final dxf = electricalSldToDxf(project: project, result: result);
   await _save(dxf, name: project.name, suffix: 'sld', ext: 'dxf',
       title: 'Export single-line (DXF)');
+}
+
+/// Export the sized electrical single-line as a native (vector) PDF.
+Future<void> exportElectricalSldPdf(WidgetRef ref) async {
+  final project = ref.read(electricalProjectProvider);
+  final result = ref.read(electricalResultProvider);
+  final bytes = electricalSldToPdf(project: project, result: result);
+  final base = project.name.isEmpty ? 'electrical' : project.name;
+  final path = await FilePicker.saveFile(
+    dialogTitle: 'Export single-line (PDF)',
+    fileName: '$base-sld.pdf',
+    type: FileType.custom,
+    allowedExtensions: const ['pdf'],
+  );
+  if (path == null) return;
+  final full = path.endsWith('.pdf') ? path : '$path.pdf';
+  await File(full).writeAsBytes(bytes);
 }
 
 /// Export the hybrid power one-line as a DXF drawing file. No-op (returns) when

@@ -163,6 +163,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             right: MechXSpacing.md,
             child: _ExportMenu(
               onSld: () => _runExport(exportElectricalSldDxf),
+              onSldPdf: () => _runExport(exportElectricalSldPdf),
               onReport: () => _runExport(exportElectricalCalcReport),
               onPowerOneLine: () => _runExport(exportPowerOneLineDxf),
             ),
@@ -811,10 +812,12 @@ class _CanvasHelp extends StatelessWidget {
 /// DXF, electrical report (Markdown) and power one-line DXF.
 class _ExportMenu extends StatelessWidget {
   final VoidCallback onSld;
+  final VoidCallback onSldPdf;
   final VoidCallback onReport;
   final VoidCallback onPowerOneLine;
   const _ExportMenu({
     required this.onSld,
+    required this.onSldPdf,
     required this.onReport,
     required this.onPowerOneLine,
   });
@@ -842,6 +845,11 @@ class _ExportMenu extends StatelessWidget {
             label: 'Single-line drawing',
             sub: 'DXF (CAD)',
             onTap: onSld,
+          ),
+          _ExportRow(
+            label: 'Single-line drawing',
+            sub: 'PDF (vector)',
+            onTap: onSldPdf,
           ),
           _ExportRow(
             label: 'Calculation report',
