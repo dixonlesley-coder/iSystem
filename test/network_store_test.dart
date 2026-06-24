@@ -168,6 +168,38 @@ void main() {
       expect(node.fixture, isNull);
     });
 
+    test('custom fixture and built-in fixture are mutually exclusive', () {
+      final c = makeContainer();
+      final n = twoRunChain(c);
+      final nodeId = c.read(networkControllerProvider).network.nodes.last.id;
+
+      // Assign a built-in fixture, then a custom one: the built-in is cleared.
+      n.setNodeFixture(nodeId, PlumbingFixture.lavatory);
+      n.setNodeCustomFixture(nodeId, 'cf-1');
+      var node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.role, NodeRole.fixture);
+      expect(node.customFixtureId, 'cf-1');
+      expect(node.fixture, isNull);
+
+      // Now assign a built-in fixture: the custom one is cleared.
+      n.setNodeFixture(nodeId, PlumbingFixture.shower);
+      node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.fixture, PlumbingFixture.shower);
+      expect(node.customFixtureId, isNull);
+
+      // Clearing the custom fixture (null) reverts to no custom reference and
+      // preserves other fields (e.g. roofAreaM2 set below).
+      n.setNodeRoofArea(nodeId, 75);
+      n.setNodeCustomFixture(nodeId, 'cf-2');
+      node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.customFixtureId, 'cf-2');
+      expect(node.roofAreaM2, 75); // survives the custom-fixture assignment
+      n.setNodeCustomFixture(nodeId, null);
+      node = c.read(networkControllerProvider).network.nodeById(nodeId)!;
+      expect(node.customFixtureId, isNull);
+      expect(node.roofAreaM2, 75);
+    });
+
     test('setNodeRole leaving fixture clears the air-terminal airflow', () {
       final c = makeContainer();
       final n = twoRunChain(c);

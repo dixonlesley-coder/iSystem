@@ -6,6 +6,7 @@ import '../store/app_state.dart';
 import '../store/commercial_store.dart';
 import '../store/electrical_store.dart';
 import '../store/fire_store.dart';
+import '../store/fixture_library_store.dart';
 import '../store/history_store.dart';
 import '../store/network_store.dart';
 import '../store/project_store.dart';
@@ -77,6 +78,8 @@ ProjectDocument buildDocument(ProviderReader read) {
       overheadPct: commercial.overheadPct,
       contingencyPct: commercial.contingencyPct,
       marginPct: commercial.marginPct,
+      // The user-defined fixture library round-trips with the project.
+      fixtureLibrary: read(fixtureLibraryProvider),
     ),
     // The electrical sub-model (v2) round-trips alongside the plumbing project.
     electrical: read(electricalProjectProvider),
@@ -122,6 +125,8 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
     contingencyPct: s.contingencyPct,
     marginPct: s.marginPct,
   ));
+  // Restore the user-defined fixture library (absent on an older file ⇒ empty).
+  read(fixtureLibraryProvider.notifier).set(s.fixtureLibrary);
   // Restore the electrical project (v2 files carry one; older files / projects
   // with no electrical design fall back to the built-in sample).
   read(electricalProjectProvider.notifier)

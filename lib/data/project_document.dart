@@ -7,6 +7,7 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/custom_fixture.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
@@ -87,6 +88,12 @@ class DesignSettings {
   final double contingencyPct;
   final double marginPct;
 
+  /// User-defined fixture library: custom plumbing fixture types (with their
+  /// UBAP supply + DFU drainage loads) the project's nodes can reference by id
+  /// (`NetNode.customFixtureId`). Defaults to empty — a project that never
+  /// defined a custom fixture loads with none, byte-identical to before.
+  final List<CustomFixture> fixtureLibrary;
+
   const DesignSettings({
     this.occupancy = Occupancy.private,
     this.upfeed = false,
@@ -101,6 +108,7 @@ class DesignSettings {
     this.overheadPct = 10,
     this.contingencyPct = 5,
     this.marginPct = 15,
+    this.fixtureLibrary = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -118,6 +126,8 @@ class DesignSettings {
         'overheadPct': overheadPct,
         'contingencyPct': contingencyPct,
         'marginPct': marginPct,
+        // User fixture library (additive; absent on an older file → empty).
+        'fixtureLibrary': [for (final f in fixtureLibrary) f.toJson()],
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -149,7 +159,20 @@ class DesignSettings {
         overheadPct: (json['overheadPct'] as num?)?.toDouble() ?? 10,
         contingencyPct: (json['contingencyPct'] as num?)?.toDouble() ?? 5,
         marginPct: (json['marginPct'] as num?)?.toDouble() ?? 15,
+        fixtureLibrary: _fixtureLibraryFromJson(json['fixtureLibrary']),
       );
+
+  /// Tolerantly read the fixture library: a non-list (or absent) value yields an
+  /// empty library; each entry that fails to decode (missing id/name) is dropped.
+  static List<CustomFixture> _fixtureLibraryFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <CustomFixture>[];
+    for (final e in raw) {
+      final f = CustomFixture.fromJson(e);
+      if (f != null) out.add(f);
+    }
+    return out;
+  }
 
   /// Tolerantly read a `sku → unit price` map: a non-map (or absent) value, a
   /// non-string key, or a non-numeric / non-positive price is dropped.

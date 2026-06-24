@@ -13,6 +13,7 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/custom_fixture.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/puil.dart'
@@ -534,6 +535,110 @@ void main() {
     expect(decoded.version, 1);
     expect(decoded.projectName, 'Legacy');
     expect(decoded.electrical, isNull);
+  });
+
+  test('fixture library + a node referencing it survive encode/decode', () {
+    const doc = ProjectDocument(
+      projectName: 'Custom fixtures',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(100, 100))],
+      network: Network(
+        nodes: [
+          NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          NetNode(
+            id: 'b',
+            sheetId: 's1',
+            x: 10,
+            y: 0,
+            floorIndex: 0,
+            role: NodeRole.fixture,
+            customFixtureId: 'cf-bidet',
+          ),
+        ],
+        edges: [
+          NetEdge(id: 'e', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
+        ],
+      ),
+      settings: DesignSettings(
+        fixtureLibrary: [
+          CustomFixture(
+            id: 'cf-bidet',
+            name: 'Bidet',
+            supplyUnits: 1.5,
+            drainageUnits: 0.5,
+            defaultMountingHeight: Length(0.4),
+            isFlushValve: false,
+          ),
+          CustomFixture(
+            id: 'cf-flushvalve',
+            name: 'Squat WC (valve)',
+            supplyUnits: 8,
+            drainageUnits: 6,
+            isFlushValve: true,
+          ),
+        ],
+      ),
+    );
+
+    final decoded = ProjectDocument.decode(doc.encode());
+    final lib = decoded.settings.fixtureLibrary;
+    expect(lib.length, 2);
+    expect(lib[0].id, 'cf-bidet');
+    expect(lib[0].supplyUnits, 1.5);
+    expect(lib[0].drainageUnits, 0.5);
+    expect(lib[0].defaultMountingHeight!.meters, 0.4);
+    expect(lib[1].isFlushValve, isTrue);
+    // The node keeps its custom-fixture reference.
+    expect(decoded.network.nodes[1].customFixtureId, 'cf-bidet');
+  });
+
+  test('an old file (no fixtureLibrary, no customFixtureId) loads tolerantly',
+      () {
+    const doc = ProjectDocument(
+      projectName: 'Legacy',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(100, 100))],
+      network: Network(
+        nodes: [
+          NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        ],
+      ),
+    );
+    final json = doc.toJson();
+    // Old files have neither the settings key nor a node customFixtureId.
+    (json['settings'] as Map).remove('fixtureLibrary');
+    expect((json['network']['nodes'][0] as Map).containsKey('customFixtureId'),
+        isFalse);
+    final decoded = ProjectDocument.fromJson(json);
+    expect(decoded.settings.fixtureLibrary, isEmpty);
+    expect(decoded.network.nodes.single.customFixtureId, isNull);
+  });
+
+  test('a corrupt fixture-library entry is dropped, good ones kept', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      settings: DesignSettings(
+        fixtureLibrary: [CustomFixture(id: 'ok', name: 'Good', supplyUnits: 2)],
+      ),
+    );
+    final json = doc.toJson();
+    // Replace the library list with one carrying the good entry + malformed
+    // entries (no id, and a non-map) — a real file could be hand-edited.
+    final good = (json['settings']['fixtureLibrary'] as List).single;
+    json['settings']['fixtureLibrary'] = <dynamic>[
+      good,
+      {'name': 'no id'},
+      'garbage',
+    ];
+    final decoded = ProjectDocument.fromJson(json);
+    expect(decoded.settings.fixtureLibrary.length, 1);
+    expect(decoded.settings.fixtureLibrary.single.id, 'ok');
   });
 
   test('a v3 (newer) file is rejected with ProjectDocumentException', () {

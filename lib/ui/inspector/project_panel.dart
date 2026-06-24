@@ -17,6 +17,7 @@ import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/fire_store.dart';
+import '../../store/fixture_library_store.dart';
 import '../../store/history_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
@@ -28,6 +29,7 @@ import '../../store/solve_store.dart';
 import '../canvas/segment_palette.dart';
 import '../canvas/service_style.dart';
 import '../strings/app_strings.dart';
+import 'fixture_library_editor.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
@@ -1058,10 +1060,37 @@ class _SelectionSection extends ConsumerWidget {
               for (final f in PlumbingFixture.values)
                 _Pill(
                   label: fixtureLabel(f),
-                  selected: node.fixture == f,
+                  selected:
+                      node.customFixtureId == null && node.fixture == f,
                   onTap: () => ctrl.setNodeFixture(node.id, f),
                 ),
             ],
+          ),
+          // User-defined fixture library — shown only when non-empty so the
+          // built-in-only goldens are unchanged. A selected custom pill clears
+          // the built-in fixture (mutual exclusivity, handled in the store).
+          if (ref.watch(fixtureLibraryProvider).isNotEmpty) ...[
+            const SizedBox(height: MechXSpacing.xs),
+            Wrap(
+              spacing: MechXSpacing.xs,
+              runSpacing: MechXSpacing.xs,
+              children: [
+                for (final cf in ref.watch(fixtureLibraryProvider))
+                  _Pill(
+                    label: cf.name,
+                    selected: node.customFixtureId == cf.id,
+                    onTap: () => ctrl.setNodeCustomFixture(node.id, cf.id),
+                  ),
+              ],
+            ),
+          ],
+          const SizedBox(height: MechXSpacing.xs),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MechXButton(
+              label: 'Manage fixtures…',
+              onPressed: () => showFixtureLibraryEditor(context, ref),
+            ),
           ),
           const SizedBox(height: MechXSpacing.sm),
           Text('Air terminal (diffuser) airflow',
