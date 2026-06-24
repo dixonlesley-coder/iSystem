@@ -39,7 +39,7 @@ class ElectricalBomView extends ConsumerWidget {
         CommercialTable(
           columns: [
             CommercialColumn(context.strings(StringKey.commercialColQty),
-                flex: 2, alignEnd: true),
+                flex: 2, numeric: true),
             CommercialColumn(context.strings(StringKey.commercialColPart),
                 flex: 8),
             CommercialColumn(context.strings(StringKey.commercialColBrand),
@@ -58,20 +58,47 @@ class ElectricalBomView extends ConsumerWidget {
   }
 
   CommercialRow _row(BuildContext context, BomLine line, Part? part) {
-    final colors = context.colors;
     final matched = line.sku != null;
     return CommercialRow(cells: [
-      CommercialCell.text(_qty(line.qty)),
+      CommercialCell.text(CommercialFormat.qty(line.qty)),
       CommercialCell.text(line.description),
       CommercialCell.text(part?.manufacturer ?? '-'),
       CommercialCell.text(line.sku ?? '-'),
-      CommercialCell.text(
+      CommercialCell.widget(_MatchBadge(matched: matched)),
+    ]);
+  }
+}
+
+/// A small pill that flags whether a BOM line matched the catalogue: a tinted
+/// success / warning fill with the label in the full-strength tier colour and a
+/// hairline of the same hue — legible in both light and dark (the old flat
+/// warning text was too faint on the light surface).
+class _MatchBadge extends StatelessWidget {
+  final bool matched;
+  const _MatchBadge({required this.matched});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final color = matched ? colors.success : colors.warning;
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: MechXSpacing.sm,
+        vertical: MechXSpacing.xxs,
+      ),
+      decoration: BoxDecoration(
+        color: color.withAlpha(38),
+        borderRadius: const BorderRadius.all(MechXRadii.pill),
+        border: Border.all(color: color.withAlpha(122)),
+      ),
+      child: Text(
         matched
             ? context.strings(StringKey.commercialMatched)
             : context.strings(StringKey.commercialUnmatched),
-        color: matched ? colors.success : colors.warning,
+        style: type.caption.copyWith(color: color, fontWeight: FontWeight.w600),
       ),
-    ]);
+    );
   }
 }
 
@@ -79,6 +106,3 @@ class ElectricalBomView extends ConsumerWidget {
 Map<String, Part> _partIndex() => {
       for (final p in fullCatalog()) p.sku: p,
     };
-
-String _qty(double v) =>
-    v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
