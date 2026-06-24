@@ -3,10 +3,12 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/storm_sizing.dart';
+import 'package:mechx_engine/standards/custom_fixture.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'app_state.dart';
+import 'fixture_library_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
 
@@ -55,11 +57,26 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
   final project = ref.watch(projectControllerProvider);
   const profile = SniProfile();
 
+  // User-defined custom fixtures, keyed by id. A node's `customFixtureId` (when
+  // present and FOUND here) resolves to its UBAP/DFU loads directly, overriding
+  // the built-in `fixture`. An unknown id falls back to the no-fixture default.
+  final library = ref.watch(fixtureLibraryProvider);
+  final libraryById = <String, CustomFixture>{
+    for (final f in library) f.id: f,
+  };
+  CustomFixture? customFor(NetNode n) {
+    final id = n.customFixtureId;
+    return id == null ? null : libraryById[id];
+  }
+
   // Real per-fixture UBAP where the user has assigned a fixture type; nodes
-  // without a type fall back to the flat default in autoSizeNetwork.
+  // without a type fall back to the flat default in autoSizeNetwork. A resolved
+  // custom fixture's supplyUnits wins over the built-in table.
   final nodeFixtureUnits = <String, double>{
     for (final n in net.nodes)
-      if (n.fixture != null)
+      if (customFor(n) != null)
+        n.id: customFor(n)!.supplyUnits
+      else if (n.fixture != null)
         n.id: profile.fixtureUnitLoad(n.fixture!, occupancy: occupancy),
   };
   // Per-diffuser airflow where assigned (drives the duct air path).
@@ -67,14 +84,20 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     for (final n in net.nodes)
       if (n.airflow != null) n.id: n.airflow!,
   };
-  // Per-fixture drainage units (drives sanitary drainage/vent sizing).
+  // Per-fixture drainage units (drives sanitary drainage/vent sizing). A
+  // resolved custom fixture's drainageUnits wins over the built-in table.
   final nodeDrainageUnits = <String, double>{
     for (final n in net.nodes)
-      if (n.fixture != null) n.id: drainageFixtureUnit(n.fixture!),
+      if (customFor(n) != null)
+        n.id: customFor(n)!.drainageUnits
+      else if (n.fixture != null)
+        n.id: drainageFixtureUnit(n.fixture!),
   };
-  // If any assigned WC uses a flush valve, size the supply on the valve curve.
-  final anyFlushValve = net.nodes.any(
-      (n) => n.fixture == PlumbingFixture.waterClosetFlushValve);
+  // If any assigned WC uses a flush valve (built-in OR a custom flush-valve
+  // fixture), size the supply on the valve curve.
+  final anyFlushValve = net.nodes.any((n) =>
+      n.fixture == PlumbingFixture.waterClosetFlushValve ||
+      (customFor(n)?.isFlushValve ?? false));
 
   // Rainwater leaves drain a default roof area at the design storm intensity.
   final leafDemand = <ServiceType, FlowRate>{

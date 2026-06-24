@@ -331,19 +331,32 @@ class NetworkController extends Notifier<DrawingState> {
     ));
   }
 
-  /// Assign (or clear) the plumbing [fixture] at a node, marking it a fixture.
+  /// Assign (or clear) the built-in plumbing [fixture] at a node, marking it a
+  /// fixture. Selecting a built-in fixture clears any custom fixture (the two
+  /// are mutually exclusive); copyWith preserves the node's other fields.
   void setNodeFixture(String id, PlumbingFixture? fixture) {
     final node = state.network.nodeById(id);
     if (node == null) return;
-    _replaceNode(NetNode(
-      id: node.id,
-      sheetId: node.sheetId,
-      x: node.x,
-      y: node.y,
-      floorIndex: node.floorIndex,
+    if (fixture == null) {
+      // Clear the built-in fixture (and any custom fixture): the constructor
+      // default for `fixture` is null. Preserve roofAreaM2.
+      _replaceNode(NetNode(
+        id: node.id,
+        sheetId: node.sheetId,
+        x: node.x,
+        y: node.y,
+        floorIndex: node.floorIndex,
+        role: node.role,
+        elevation: node.elevation,
+        airflow: node.airflow,
+        roofAreaM2: node.roofAreaM2,
+      ));
+      return;
+    }
+    _replaceNode(node.copyWith(
       role: NodeRole.fixture,
-      elevation: node.elevation,
       fixture: fixture,
+      clearCustomFixtureId: true,
     ));
   }
 
@@ -389,10 +402,22 @@ class NetworkController extends Notifier<DrawingState> {
   void setNodeCustomFixture(String id, String? customFixtureId) {
     final node = state.network.nodeById(id);
     if (node == null) return;
-    _replaceNode(node.copyWith(
-      role: customFixtureId == null ? null : NodeRole.fixture,
+    // Assigning a custom fixture clears the built-in [fixture] (mutual
+    // exclusivity). The fresh constructor (with `fixture` omitted) is how we
+    // clear it — copyWith has no clear-fixture flag — while preserving the
+    // node's other fields (roofAreaM2, airflow, elevation).
+    _replaceNode(NetNode(
+      id: node.id,
+      sheetId: node.sheetId,
+      x: node.x,
+      y: node.y,
+      floorIndex: node.floorIndex,
+      role: customFixtureId == null ? node.role : NodeRole.fixture,
+      elevation: node.elevation,
+      fixture: customFixtureId == null ? node.fixture : null,
+      airflow: node.airflow,
       customFixtureId: customFixtureId,
-      clearCustomFixtureId: customFixtureId == null,
+      roofAreaM2: node.roofAreaM2,
     ));
   }
 
