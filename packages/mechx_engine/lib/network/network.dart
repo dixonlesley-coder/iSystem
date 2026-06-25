@@ -58,6 +58,29 @@ enum EdgeKind { run, riser }
 /// [plant] (transfer pump / tank base) at an explicit datum (default roof).
 enum NodeRole { main, fixture, plant }
 
+/// The pipe fitting a junction node represents where runs meet. [auto] (the
+/// default) lets the renderer pick from the joint's geometry — an end cap (1
+/// pipe), a coupling (2 in-line), an elbow (2 at an angle), a tee (3) or a
+/// cross (4+). A non-[auto] value is a user override (right-click → Fitting) so
+/// a 3-way branch can be drawn/specified as a square tee, a 45° wye, or a
+/// tee-wye regardless of the drawn angle. Additive — null/[auto] is the prior
+/// behaviour and carries no head-loss term (a drawing/BOM concern).
+enum JunctionFitting { auto, coupling, elbow, tee, wye, teeWye, cross, cap }
+
+extension JunctionFittingInfo on JunctionFitting {
+  /// Short human label for menus / BOM.
+  String get label => switch (this) {
+        JunctionFitting.auto => 'Auto',
+        JunctionFitting.coupling => 'Coupling',
+        JunctionFitting.elbow => 'Elbow',
+        JunctionFitting.tee => 'Tee',
+        JunctionFitting.wye => 'Wye (Y)',
+        JunctionFitting.teeWye => 'Tee-wye',
+        JunctionFitting.cross => 'Cross',
+        JunctionFitting.cap => 'End cap',
+      };
+}
+
 /// A placed equipment / component on the network — a labelled node that renders
 /// with its own schematic symbol. Each component implies a default [NodeRole]
 /// (plant for pumps/tanks, fixture for drains/vents, main for inline
@@ -313,6 +336,12 @@ class NetNode {
   /// with one edited power.
   final double? electricalLoadW;
 
+  /// Optional fitting-type override for a junction (right-click → Fitting). Null
+  /// or [JunctionFitting.auto] ⇒ the renderer derives the fitting from the joint
+  /// geometry. A specific value pins it (e.g. tee vs wye). Additive — a
+  /// drawing/BOM concern, never read by the sizing core.
+  final JunctionFitting? fittingType;
+
   const NetNode({
     required this.id,
     required this.sheetId,
@@ -329,6 +358,7 @@ class NetNode {
     this.component,
     this.tankCapacityLitres,
     this.electricalLoadW,
+    this.fittingType,
   });
 
   NetNode copyWith({
@@ -352,6 +382,8 @@ class NetNode {
     bool clearTankCapacity = false,
     double? electricalLoadW,
     bool clearElectricalLoad = false,
+    JunctionFitting? fittingType,
+    bool clearJunctionFitting = false,
   }) =>
       NetNode(
         id: id,
@@ -375,6 +407,8 @@ class NetNode {
         electricalLoadW: clearElectricalLoad
             ? null
             : (electricalLoadW ?? this.electricalLoadW),
+        fittingType:
+            clearJunctionFitting ? null : (fittingType ?? this.fittingType),
       );
 }
 

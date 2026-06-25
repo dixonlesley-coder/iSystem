@@ -377,6 +377,26 @@ void main() {
           isNull);
     });
 
+    test('setNodeFittingType overrides the junction fitting; auto/null clears',
+        () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addFitting('s1', 0, const Offset(10, 10));
+      final id = c.read(networkControllerProvider).network.nodes.single.id;
+      NetNode node() => c.read(networkControllerProvider).network.nodeById(id)!;
+
+      expect(node().fittingType, isNull); // auto by default
+      n.setNodeFittingType(id, JunctionFitting.wye);
+      expect(node().fittingType, JunctionFitting.wye);
+      // Picking Auto clears the override back to geometry-derived (null).
+      n.setNodeFittingType(id, JunctionFitting.auto);
+      expect(node().fittingType, isNull);
+      // Explicit null also clears.
+      n.setNodeFittingType(id, JunctionFitting.tee);
+      n.setNodeFittingType(id, null);
+      expect(node().fittingType, isNull);
+    });
+
     test('setEdgePipeProduct / setEdgeDuctProduct / setEdgeSizeOverride', () {
       final c = makeContainer();
       final n = c.read(networkControllerProvider.notifier);

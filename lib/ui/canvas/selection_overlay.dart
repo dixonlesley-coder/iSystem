@@ -518,7 +518,20 @@ class _SelectionGestureLayerState
         final net = ref.read(networkControllerProvider).network;
         final sel = ref.read(selectionProvider.notifier);
         final world = transform.screenToWorld(details.localPosition);
-        if (_nodeAt(net, transform, world, _sheetId, _floor) != null) return;
+        final nodeId = _nodeAt(net, transform, world, _sheetId, _floor);
+        if (nodeId != null) {
+          // Right-clicking a plain junction (a fitting) opens the Fitting menu —
+          // pick Tee / Wye / Tee-wye / Cross / Coupling / Elbow / Cap / Auto.
+          // Equipment / fixture nodes have no fitting menu (fall through clears).
+          final node = net.nodeById(nodeId);
+          if (node != null &&
+              node.component == null &&
+              node.role == NodeRole.main) {
+            sel.selectNode(nodeId);
+            showNodeFittingMenu(context, ref, nodeId, details.globalPosition);
+          }
+          return;
+        }
         final edge = _edgeAt(net, transform, world, _sheetId, _floor);
         if (edge == null) {
           sel.clear();

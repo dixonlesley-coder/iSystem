@@ -9,6 +9,7 @@ import 'package:mechx_engine/standards/pipe_products.dart';
 
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
+import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
@@ -49,10 +50,15 @@ class NetworkLayer extends ConsumerWidget {
     final net = ref.watch(networkControllerProvider).network;
     final transform = ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
         const ViewportTransform();
-    final sizing = ref.watch(showSizingProvider)
-        ? ref.watch(sizingProvider)
-        : const <String, EdgeSizing>{};
+    // Sizing always drives the pipe WIDTH (so a pipe visibly grows with its DN);
+    // the toggle only governs whether the size LABELS are drawn on top.
+    final sizing = ref.watch(sizingProvider);
+    final showLabels = ref.watch(showSizingProvider);
     final selection = ref.watch(selectionProvider);
+    // Sheet scale (m per px) lets the painter mark a coupling joint every stock
+    // pipe length along a run; null (uncalibrated) ⇒ no joint marks.
+    final metersPerPixel =
+        ref.watch(projectControllerProvider).calibrationFor(sheetId)?.metersPerPixel;
 
     // Layer filtering (unified canvas only).
     Set<DisciplineLayer> visible = DisciplineLayer.values.toSet();
@@ -71,6 +77,8 @@ class NetworkLayer extends ConsumerWidget {
           floorIndex: floorIndex,
           transform: transform,
           sizing: sizing,
+          showLabels: showLabels,
+          metersPerPixel: metersPerPixel,
           selectedNodeId: selection.nodeId,
           selectedEdgeId: selection.edgeId,
           selectedNodeIds: selection.nodeIds,
@@ -94,6 +102,14 @@ class _NetworkPainter extends CustomPainter {
   final int floorIndex;
   final ViewportTransform transform;
   final Map<String, EdgeSizing> sizing;
+
+  /// Whether to draw the size LABELS (the toggle); the pipe WIDTH always tracks
+  /// the sized DN regardless of this.
+  final bool showLabels;
+
+  /// Sheet scale (metres per pixel), or null when the sheet is uncalibrated. Used
+  /// to place a coupling joint mark every stock pipe length along a run.
+  final double? metersPerPixel;
   final String? selectedNodeId;
   final String? selectedEdgeId;
 
@@ -114,6 +130,8 @@ class _NetworkPainter extends CustomPainter {
     required this.floorIndex,
     required this.transform,
     required this.sizing,
+    this.showLabels = false,
+    this.metersPerPixel,
     required this.selectedNodeId,
     required this.selectedEdgeId,
     this.selectedNodeIds = const {},
@@ -212,11 +230,28 @@ class _NetworkPainter extends CustomPainter {
           final u = (pb - pa) / len;
           (joints[a.id] ??= _Joint(opacity)).add(u, outer, opacity);
           (joints[b.id] ??= _Joint(opacity)).add(-u, outer, opacity);
+
+          // Coupling joints every stock pipe length (a real run is multiple
+          // stock lengths joined): 4 m for PVC/PPR, 6 m for steel (sprinkler /
+          // hydrant). Only when the sheet is calibrated and the service is a
+          // pipe (not a duct).
+          final mpp = metersPerPixel;
+          if (mpp != null && e.service.regime != FlowRegime.air) {
+            final stockWorldPx = _stockLengthM(e.service) / mpp; // world px
+            final lenWorldPx = (Offset(b.x, b.y) - Offset(a.x, a.y)).distance;
+            if (stockWorldPx > 1 && lenWorldPx > stockWorldPx) {
+              final metal = _fade(const Color(0xFF3A3F47), opacity);
+              for (var d = stockWorldPx; d < lenWorldPx - 1; d += stockWorldPx) {
+                final p = pa + u * (d / lenWorldPx) * len;
+                _couplingMark(canvas, p, u, outer, metal);
+              }
+            }
+          }
         }
 
-        // Suppress sizing labels on a faded (coordination) layer to keep the
-        // active layer's annotation readable.
-        if (s != null && opacity >= 1.0) {
+        // Size labels are drawn only when the toggle is on, and never on a faded
+        // (coordination) layer — to keep the active layer's annotation readable.
+        if (s != null && showLabels && opacity >= 1.0) {
           String label;
           if (s.isRectangular) {
             label = '${s.width!.inMillimeters.round()}'
@@ -254,7 +289,8 @@ class _NetworkPainter extends CustomPainter {
       if (j == null) continue;
       final layer = _nodeLayer(n);
       if (!layer.visible) continue;
-      _paintFitting(canvas, transform.worldToScreen(Offset(n.x, n.y)), j);
+      _paintFitting(
+          canvas, transform.worldToScreen(Offset(n.x, n.y)), j, n.fittingType);
     }
 
     // Nodes on top, drawn with a role-distinct glyph and a selection ring.
@@ -285,27 +321,46 @@ class _NetworkPainter extends CustomPainter {
     }
   }
 
-  /// The on-screen outer width (px) of a pipe, tiered by its sized nominal bore
-  /// (or a small default when unsized). Kept in screen px (constant at any zoom)
-  /// so pipes read as pipes, with larger services drawn proportionally fatter.
+  /// The on-screen outer width (px) of a pipe, scaled CONTINUOUSLY from its
+  /// sized nominal bore (or a small default when unsized) — so a pipe visibly
+  /// grows with its DN. Kept in screen px (constant at any zoom) and clamped to
+  /// a sane band so the thinnest still reads as a pipe and the fattest doesn't
+  /// dominate. Ducts use a gentler slope (their mm are far larger).
   double _pipeOuterPx(EdgeSizing? s, ServiceType svc) {
     final double mm = s == null
-        ? 25
+        ? 20
         : (s.isRectangular
             ? math.max(s.width!.inMillimeters, s.height!.inMillimeters)
             : s.diameter.inMillimeters);
     if (svc.regime == FlowRegime.air) {
-      if (mm <= 200) return 9;
-      if (mm <= 400) return 12;
-      if (mm <= 700) return 15;
-      return 18;
+      return (6.0 + mm * 0.012).clamp(8.0, 20.0);
     }
-    if (mm <= 20) return 5;
-    if (mm <= 32) return 6.5;
-    if (mm <= 50) return 8;
-    if (mm <= 80) return 9.5;
-    if (mm <= 150) return 11;
-    return 13;
+    return (3.6 + mm * 0.06).clamp(4.0, 16.0);
+  }
+
+  /// Stock (per-pipe) length in metres for a service's pipe material: steel for
+  /// the fire services (sprinkler / hydrant) ships in 6 m lengths; PVC / PPR (and
+  /// the other pressurised / gravity pipes) in 4 m. A coupling joins each length.
+  double _stockLengthM(ServiceType s) =>
+      (s == ServiceType.fireSprinkler || s == ServiceType.fireHydrant)
+          ? 6.0
+          : 4.0;
+
+  /// A coupling joint mark across a pipe — a short perpendicular steel collar at
+  /// a stock-length boundary along the run.
+  void _couplingMark(
+      Canvas canvas, Offset p, Offset dir, double outer, Color metal) {
+    final perp = Offset(-dir.dy, dir.dx);
+    final half = outer / 2 + 1.2;
+    canvas.drawLine(
+      p + perp * half,
+      p - perp * half,
+      Paint()
+        ..color = metal
+        ..strokeWidth = 2.4
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke,
+    );
   }
 
   /// Draws a run as a walled pipe: a darker casing stroke (the two visible wall
@@ -333,50 +388,83 @@ class _NetworkPainter extends CustomPainter {
     );
   }
 
-  /// Draws the fitting at a junction from its incident pipe directions: an open
-  /// END CAP (1 pipe), a COUPLING (2 in-line), an ELBOW (2 at an angle), or a TEE
-  /// / CROSS hub (3 / 4+). Drawn in a steel colour so joints read as fittings.
-  void _paintFitting(Canvas canvas, Offset p, _Joint j) {
+  /// Draws the fitting at a junction. The body is built from short, fat metal
+  /// "arms" laid along the ACTUAL incident pipe directions, so the fitting takes
+  /// the true shape of the joint — a tee reads as a T, an elbow as an L, a cross
+  /// as a +, a wye keeps its angled branch. The fitting TYPE (auto-derived from
+  /// the joint, or the node's [override]) chooses the cap face / inline sleeve /
+  /// wye crotch detailing.
+  void _paintFitting(
+      Canvas canvas, Offset p, _Joint j, JunctionFitting? override) {
     final metal = _fade(const Color(0xFF3A3F47), j.opacity);
     final light = _fade(const Color(0xFFFFFFFF), j.opacity);
     final w = j.maxOuter;
     final dirs = j.dirs;
+    if (dirs.isEmpty) return;
 
-    if (dirs.length >= 3) {
-      // Tee / cross: a solid hub where the branches meet.
-      final r = w / 2 + 2.4;
-      canvas.drawCircle(p, r, Paint()..color = metal);
-      canvas.drawCircle(p, r,
-          Paint()..color = light..strokeWidth = 1..style = PaintingStyle.stroke);
+    final type = (override == null || override == JunctionFitting.auto)
+        ? _autoFitting(dirs)
+        : override;
+
+    // In-line coupling → a single short sleeve across the pipe (no arms).
+    if (type == JunctionFitting.coupling) {
+      _sleeve(canvas, p, dirs.first, w, metal, light);
       return;
     }
+
+    // Arms along each pipe direction + a fused hub.
+    final armLen = w * 0.85 + 2;
+    final armW = w + 2.6;
+    for (final d in dirs) {
+      _arm(canvas, p, d, armLen, armW, metal);
+    }
+    final hubR = (type == JunctionFitting.cross || type == JunctionFitting.teeWye)
+        ? armW / 2 + 0.5
+        : armW / 2;
+    canvas.drawCircle(p, hubR, Paint()..color = metal);
+
+    // Wye / tee-wye → fill the branch crotch (the narrowest gap between two
+    // arms) so the swept-Y reads distinctly from a square tee.
+    if (type == JunctionFitting.wye || type == JunctionFitting.teeWye) {
+      _wyeGusset(canvas, p, dirs, armLen, metal);
+    }
+
+    // End cap → a flat face bar across the open end of the single arm.
+    if (type == JunctionFitting.cap) {
+      final d = dirs.first;
+      final perp = Offset(-d.dy, d.dx);
+      final tip = p + d * armLen;
+      final half = armW / 2;
+      canvas.drawLine(
+        tip + perp * half,
+        tip - perp * half,
+        Paint()
+          ..color = metal
+          ..strokeWidth = 2.6
+          ..strokeCap = StrokeCap.round
+          ..style = PaintingStyle.stroke,
+      );
+    }
+
+    // A hairline ring on the hub lifts it off the pipes.
+    canvas.drawCircle(
+        p,
+        hubR,
+        Paint()
+          ..color = light
+          ..strokeWidth = 1
+          ..style = PaintingStyle.stroke);
+  }
+
+  /// The geometry-derived fitting for a joint with no override.
+  JunctionFitting _autoFitting(List<Offset> dirs) {
+    if (dirs.length >= 4) return JunctionFitting.cross;
+    if (dirs.length == 3) return JunctionFitting.tee;
     if (dirs.length == 2) {
       final dot = dirs[0].dx * dirs[1].dx + dirs[0].dy * dirs[1].dy;
-      if (dot < -0.94) {
-        // In-line coupling: a short sleeve/collar across the pipe.
-        _sleeve(canvas, p, dirs[0], w, metal, light);
-      } else {
-        // Elbow: a rounded corner body at the bend.
-        final r = w / 2 + 1.6;
-        canvas.drawCircle(p, r, Paint()..color = metal);
-        canvas.drawCircle(p, r,
-            Paint()..color = light..strokeWidth = 1..style = PaintingStyle.stroke);
-      }
-      return;
+      return dot < -0.94 ? JunctionFitting.coupling : JunctionFitting.elbow;
     }
-    // Single pipe → an end cap perpendicular to it.
-    final d = dirs.first;
-    final perp = Offset(-d.dy, d.dx);
-    final half = w / 2 + 1.8;
-    canvas.drawLine(
-      p + perp * half,
-      p - perp * half,
-      Paint()
-        ..color = metal
-        ..strokeWidth = 2.6
-        ..strokeCap = StrokeCap.round
-        ..style = PaintingStyle.stroke,
-    );
+    return JunctionFitting.cap;
   }
 
   /// A coupling sleeve: a short rounded collar centred on [p], its long axis
@@ -386,12 +474,55 @@ class _NetworkPainter extends CustomPainter {
     canvas.save();
     canvas.translate(p.dx, p.dy);
     canvas.rotate(math.atan2(axis.dy, axis.dx));
-    final rect = Rect.fromCenter(center: Offset.zero, width: 9, height: w + 2.4);
+    final rect = Rect.fromCenter(center: Offset.zero, width: 10, height: w + 3);
     final rr = RRect.fromRectAndRadius(rect, const Radius.circular(2));
     canvas.drawRRect(rr, Paint()..color = metal);
-    canvas.drawRRect(rr,
-        Paint()..color = light..strokeWidth = 1..style = PaintingStyle.stroke);
+    canvas.drawRRect(
+        rr,
+        Paint()
+          ..color = light
+          ..strokeWidth = 1
+          ..style = PaintingStyle.stroke);
     canvas.restore();
+  }
+
+  /// A fat rounded arm of the fitting body extending from [p] along [dir].
+  void _arm(Canvas canvas, Offset p, Offset dir, double len, double thick,
+      Color metal) {
+    canvas.save();
+    canvas.translate(p.dx, p.dy);
+    canvas.rotate(math.atan2(dir.dy, dir.dx));
+    final rect = Rect.fromLTWH(-thick / 2, -thick / 2, len + thick / 2, thick);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, Radius.circular(thick / 2)),
+      Paint()..color = metal,
+    );
+    canvas.restore();
+  }
+
+  /// Fills the crotch between the two closest-together arms (the swept branch of
+  /// a wye), so a Y reads differently from a square tee.
+  void _wyeGusset(
+      Canvas canvas, Offset p, List<Offset> dirs, double len, Color metal) {
+    if (dirs.length < 2) return;
+    var bestDot = -2.0;
+    var ai = 0, bi = 1;
+    for (var i = 0; i < dirs.length; i++) {
+      for (var k = i + 1; k < dirs.length; k++) {
+        final dot = dirs[i].dx * dirs[k].dx + dirs[i].dy * dirs[k].dy;
+        if (dot > bestDot) {
+          bestDot = dot;
+          ai = i;
+          bi = k;
+        }
+      }
+    }
+    final path = Path()
+      ..moveTo(p.dx, p.dy)
+      ..lineTo(p.dx + dirs[ai].dx * len * 0.7, p.dy + dirs[ai].dy * len * 0.7)
+      ..lineTo(p.dx + dirs[bi].dx * len * 0.7, p.dy + dirs[bi].dy * len * 0.7)
+      ..close();
+    canvas.drawPath(path, Paint()..color = metal);
   }
 
   /// Draws an equipment node as its schematic symbol on a light chip so it
@@ -544,6 +675,8 @@ class _NetworkPainter extends CustomPainter {
       old.floorIndex != floorIndex ||
       old.sheetId != sheetId ||
       old.sizing != sizing ||
+      old.showLabels != showLabels ||
+      old.metersPerPixel != metersPerPixel ||
       old.selectedNodeId != selectedNodeId ||
       old.selectedEdgeId != selectedEdgeId ||
       !_sameStrSet(old.selectedNodeIds, selectedNodeIds) ||

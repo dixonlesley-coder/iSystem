@@ -330,6 +330,7 @@ class NetworkController extends Notifier<DrawingState> {
       component: node.component,
       tankCapacityLitres: node.tankCapacityLitres,
       electricalLoadW: node.electricalLoadW,
+      fittingType: node.fittingType,
       fixture: keepTerminal ? node.fixture : null,
       airflow: keepTerminal ? node.airflow : null,
     ));
@@ -356,6 +357,7 @@ class NetworkController extends Notifier<DrawingState> {
       component: node.component,
       tankCapacityLitres: node.tankCapacityLitres,
       electricalLoadW: node.electricalLoadW,
+      fittingType: node.fittingType,
         airflow: node.airflow,
         roofAreaM2: node.roofAreaM2,
       ));
@@ -385,6 +387,7 @@ class NetworkController extends Notifier<DrawingState> {
       component: node.component,
       tankCapacityLitres: node.tankCapacityLitres,
       electricalLoadW: node.electricalLoadW,
+      fittingType: node.fittingType,
       fixture: node.fixture,
       airflow: airflow,
       customFixtureId: node.customFixtureId,
@@ -434,6 +437,7 @@ class NetworkController extends Notifier<DrawingState> {
       component: node.component,
       tankCapacityLitres: node.tankCapacityLitres,
       electricalLoadW: node.electricalLoadW,
+      fittingType: node.fittingType,
       fixture: customFixtureId == null ? node.fixture : null,
       airflow: node.airflow,
       customFixtureId: customFixtureId,
@@ -462,6 +466,19 @@ class NetworkController extends Notifier<DrawingState> {
     _replaceNode(node.copyWith(
       component: component,
       clearComponent: component == null,
+    ));
+  }
+
+  /// Set (or clear, with null/[JunctionFitting.auto]) the fitting-type override on a
+  /// junction node — right-click → Fitting (Tee / Wye / Tee-wye / …). Clearing
+  /// reverts to the geometry-derived fitting. copyWith preserves other fields.
+  void setNodeFittingType(String id, JunctionFitting? fitting) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    final clear = fitting == null || fitting == JunctionFitting.auto;
+    _replaceNode(node.copyWith(
+      fittingType: clear ? null : fitting,
+      clearJunctionFitting: clear,
     ));
   }
 
@@ -947,6 +964,7 @@ class NetworkController extends Notifier<DrawingState> {
         component: n.component,
         tankCapacityLitres: n.tankCapacityLitres,
         electricalLoadW: n.electricalLoadW,
+        fittingType: n.fittingType,
         fixture: n.fixture,
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,
@@ -1046,6 +1064,7 @@ class NetworkController extends Notifier<DrawingState> {
         component: n.component,
         tankCapacityLitres: n.tankCapacityLitres,
         electricalLoadW: n.electricalLoadW,
+        fittingType: n.fittingType,
         fixture: n.fixture,
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,

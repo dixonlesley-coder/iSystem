@@ -62,6 +62,114 @@ void showEdgeContextMenu(
   overlay.insert(entry);
 }
 
+/// Show the per-junction right-click Fitting menu (Auto / Coupling / Elbow /
+/// Tee / Wye / Tee-wye / Cross / End cap) for node [nodeId]. Same overlay /
+/// barrier / theme-reprovide mechanics as [showEdgeContextMenu].
+void showNodeFittingMenu(
+  BuildContext context,
+  WidgetRef ref,
+  String nodeId,
+  Offset globalPosition,
+) {
+  final overlay = Overlay.of(context, rootOverlay: true);
+  final theme = MechXTheme.of(context);
+  late OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (ctx) => MechXTheme(
+      data: theme,
+      child: _NodeFittingLayer(
+        anchor: globalPosition,
+        nodeId: nodeId,
+        onDismiss: () => entry.remove(),
+      ),
+    ),
+  );
+  overlay.insert(entry);
+}
+
+class _NodeFittingLayer extends ConsumerWidget {
+  final Offset anchor;
+  final String nodeId;
+  final VoidCallback onDismiss;
+
+  const _NodeFittingLayer({
+    required this.anchor,
+    required this.nodeId,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final net = ref.watch(networkControllerProvider).network;
+    final node = net.nodeById(nodeId);
+    if (node == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => onDismiss());
+      return const SizedBox.shrink();
+    }
+    final size = MediaQuery.sizeOf(context);
+    const menuWidth = 208.0;
+    final left =
+        anchor.dx.clamp(0.0, (size.width - menuWidth).clamp(0.0, size.width));
+    final top = anchor.dy.clamp(0.0, (size.height - 80).clamp(0.0, size.height));
+    final ctrl = ref.read(networkControllerProvider.notifier);
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onDismiss,
+            onSecondaryTap: onDismiss,
+            child: const SizedBox.expand(),
+          ),
+        ),
+        Positioned(
+          left: left,
+          top: top,
+          width: menuWidth,
+          child: _MenuEntrance(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: context.colors.surface,
+                borderRadius: MechXRadii.card,
+                border: Border.all(color: context.colors.border),
+                boxShadow: const [
+                  BoxShadow(
+                      color: Color(0x40000000),
+                      blurRadius: 18,
+                      offset: Offset(0, 6)),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: MechXRadii.card,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(height: MechXSpacing.xs),
+                    const _MenuHeader('Fitting'),
+                    for (final f in JunctionFitting.values)
+                      _MenuRow(
+                        label: f.label,
+                        selected: (node.fittingType ?? JunctionFitting.auto) == f,
+                        onTap: () {
+                          ctrl.setNodeFittingType(nodeId, f);
+                          ref.read(selectionProvider.notifier).selectNode(nodeId);
+                          onDismiss();
+                        },
+                      ),
+                    const SizedBox(height: MechXSpacing.xs),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _EdgeMenuLayer extends ConsumerWidget {
   final Offset anchor;
   final String edgeId;
