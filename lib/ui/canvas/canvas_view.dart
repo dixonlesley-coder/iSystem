@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -107,14 +106,15 @@ class CanvasViewState extends State<CanvasView> {
   /// middle-button drag) can drive middle-click panning.
   void panByScreen(Offset delta) => _emit(_current.panned(delta));
 
-  // ── Pointer (mouse) ────────────────────────────────────────────────────────
-
-  void _onPointerSignal(PointerSignalEvent event) {
-    if (event is PointerScrollEvent) {
-      final factor = math.pow(1.0015, -event.scrollDelta.dy).toDouble();
-      _emit(_current.zoomedBy(factor, event.localPosition));
-    }
+  /// Zoom toward [localPos] (canvas-local px) by a mouse-wheel [scrollDeltaY].
+  /// Public for the same reason as [panByScreen]: the overlays above this widget
+  /// swallow the wheel signal, so a parent drives zoom from above them.
+  void zoomByScroll(Offset localPos, double scrollDeltaY) {
+    final factor = math.pow(1.0015, -scrollDeltaY).toDouble();
+    _emit(_current.zoomedBy(factor, localPos));
   }
+
+  // ── Pointer (mouse) ────────────────────────────────────────────────────────
 
   void _onPointerDown(PointerDownEvent event) {
     _focus.requestFocus();
@@ -208,7 +208,6 @@ class CanvasViewState extends State<CanvasView> {
             ? SystemMouseCursors.grabbing
             : SystemMouseCursors.grab,
         child: Listener(
-          onPointerSignal: _onPointerSignal,
           onPointerDown: _onPointerDown,
           onPointerUp: _onPointerUp,
           child: GestureDetector(

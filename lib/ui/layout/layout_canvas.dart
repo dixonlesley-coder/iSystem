@@ -19,7 +19,8 @@
 /// Styled with MechXTheme — no Material.
 library;
 
-import 'package:flutter/gestures.dart' show kMiddleMouseButton;
+import 'package:flutter/gestures.dart'
+    show kMiddleMouseButton, PointerScrollEvent, PointerSignalEvent;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -98,6 +99,15 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   }
 
   void midPanEnd() => _midPanning = false;
+
+  /// Mouse-wheel zoom, handled here (above the overlays) so the wheel signal
+  /// isn't swallowed by an opaque overlay before it reaches the canvas.
+  void scrollZoom(PointerSignalEvent e, String sheetId) {
+    if (e is! PointerScrollEvent) return;
+    canvasKeyFor(sheetId)
+        .currentState
+        ?.zoomByScroll(e.localPosition, e.scrollDelta.dy);
+  }
 
   /// The PDF page widget per sheet, built ONCE and cached. The shared sheet
   /// rebuilds on every viewport change (it watches the sheets controller for
@@ -518,7 +528,9 @@ class _SharedSheet extends ConsumerWidget {
     final vt = sheetsState.viewportFor(sheet.id) ?? const ViewportTransform();
 
     return Listener(
-      // Middle-button drag pans the canvas (handled above the opaque overlays).
+      // Middle-button drag pans, mouse-wheel zooms — both handled above the
+      // opaque overlays that would otherwise swallow the events.
+      onPointerSignal: (e) => host.scrollZoom(e, sheet.id),
       onPointerDown: host.midPanDown,
       onPointerMove: (e) => host.midPanMove(e, sheet.id),
       onPointerUp: (_) => host.midPanEnd(),
@@ -606,14 +618,18 @@ class _SharedSheet extends ConsumerWidget {
           ),
         if (mechanicalActive && !drawing && !calibrating && !measureMode && !tankMode)
           Positioned.fill(
-            child: DropOverlay(sheetId: sheet.id, floorIndex: floorIndex),
-          ),
-        if (mechanicalActive && !drawing && !calibrating && !measureMode && !tankMode)
-          Positioned.fill(
             child: NetworkSelectionOverlay(
               sheetId: sheet.id,
               floorIndex: floorIndex,
             ),
+          ),
+        // The drop target sits ABOVE the selection overlay so a dragged palette
+        // card is hit-tested before the (opaque-handle-bearing) selection layer
+        // swallows it. It IgnorePointer's itself when nothing is being dragged,
+        // so normal taps still fall through to selection underneath.
+        if (mechanicalActive && !drawing && !calibrating && !measureMode && !tankMode)
+          Positioned.fill(
+            child: DropOverlay(sheetId: sheet.id, floorIndex: floorIndex),
           ),
         if (calibrating)
           Positioned.fill(child: CalibrationOverlay(sheetId: sheet.id)),
