@@ -86,6 +86,8 @@ ProjectDocument buildDocument(ProviderReader read) {
     electrical: read(electricalProjectProvider),
     // Measurement annotations round-trip with the project.
     measurements: read(measurementsProvider),
+    // Designated tank areas round-trip with the project.
+    tanks: read(tankAreasProvider),
   );
 }
 
@@ -136,6 +138,8 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
       .setProject(doc.electrical ?? sampleElectricalProject());
   // Restore measurement annotations (absent on an older file ⇒ empty).
   read(measurementsProvider.notifier).set(doc.measurements);
+  // Restore designated tank areas (absent on an older file ⇒ empty).
+  read(tankAreasProvider.notifier).set(doc.tanks);
 }
 
 /// Start the periodic autosave loop: every [interval], snapshot the current

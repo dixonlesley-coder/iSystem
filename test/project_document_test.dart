@@ -182,6 +182,46 @@ void main() {
     expect(ProjectDocument.decode(bare.encode()).measurements, isEmpty);
   });
 
+  test('tank areas round-trip; an old file loads none', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(100, 100))],
+      network: Network(),
+      tanks: [
+        TankArea(
+          id: 't0',
+          sheetId: 's1',
+          floorIndex: 0,
+          ax: 0,
+          ay: 0,
+          bx: 200,
+          by: 100,
+          depthM: 2.5,
+          material: TankMaterial.concrete,
+          name: 'Ground reservoir',
+        ),
+      ],
+    );
+    final decoded = ProjectDocument.decode(doc.encode());
+    expect(decoded.tanks, hasLength(1));
+    final t = decoded.tanks.first;
+    expect(t.name, 'Ground reservoir');
+    expect(t.depthM, 2.5);
+    expect(t.material, TankMaterial.concrete);
+    expect(t.volumeM3(0.01), closeTo(5.0, 1e-9)); // 2.0 m^2 x 2.5 m
+
+    const bare = ProjectDocument(
+      projectName: 'Y',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    expect(ProjectDocument.decode(bare.encode()).tanks, isEmpty);
+  });
+
   test('per-segment pipe/duct product + size override round-trip', () {
     const doc = ProjectDocument(
       projectName: 'X',

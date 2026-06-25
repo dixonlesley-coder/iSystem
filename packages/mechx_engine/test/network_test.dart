@@ -143,6 +143,11 @@ void main() {
       final withC = n.copyWith(component: NodeComponent.pump);
       expect(withC.component, NodeComponent.pump);
       expect(withC.copyWith(clearComponent: true).component, isNull);
+      // A prebuilt tank node carries an editable capacity (litres).
+      final tank = n.copyWith(
+          component: NodeComponent.roofTank, tankCapacityLitres: 5000);
+      expect(tank.tankCapacityLitres, 5000);
+      expect(tank.copyWith(clearTankCapacity: true).tankCapacityLitres, isNull);
     });
 
     test('uncalibrated run yields zero length (flagged elsewhere)', () {

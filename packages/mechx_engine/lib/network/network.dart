@@ -195,6 +195,12 @@ class NetNode {
   /// sizing core reads the [role], not this label.
   final NodeComponent? component;
 
+  /// Stored capacity (litres) for a TANK component node — e.g. a prebuilt
+  /// fibreglass/HDPE tank where you enter the bought size directly (as opposed
+  /// to a cast concrete reservoir whose capacity comes from its drawn
+  /// footprint × depth). Null for a non-tank node or an unspecified size.
+  final double? tankCapacityLitres;
+
   const NetNode({
     required this.id,
     required this.sheetId,
@@ -209,6 +215,7 @@ class NetNode {
     this.customFixtureId,
     this.roofAreaM2,
     this.component,
+    this.tankCapacityLitres,
   });
 
   NetNode copyWith({
@@ -228,6 +235,8 @@ class NetNode {
     bool clearRoofAreaM2 = false,
     NodeComponent? component,
     bool clearComponent = false,
+    double? tankCapacityLitres,
+    bool clearTankCapacity = false,
   }) =>
       NetNode(
         id: id,
@@ -245,6 +254,9 @@ class NetNode {
             clearCustomFixtureId ? null : (customFixtureId ?? this.customFixtureId),
         roofAreaM2: clearRoofAreaM2 ? null : (roofAreaM2 ?? this.roofAreaM2),
         component: clearComponent ? null : (component ?? this.component),
+        tankCapacityLitres: clearTankCapacity
+            ? null
+            : (tankCapacityLitres ?? this.tankCapacityLitres),
       );
 }
 

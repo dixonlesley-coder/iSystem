@@ -328,6 +328,7 @@ class NetworkController extends Notifier<DrawingState> {
       elevation: node.elevation,
       mountHeight: node.mountHeight,
       component: node.component,
+      tankCapacityLitres: node.tankCapacityLitres,
       fixture: keepTerminal ? node.fixture : null,
       airflow: keepTerminal ? node.airflow : null,
     ));
@@ -352,6 +353,7 @@ class NetworkController extends Notifier<DrawingState> {
         elevation: node.elevation,
         mountHeight: node.mountHeight,
       component: node.component,
+      tankCapacityLitres: node.tankCapacityLitres,
         airflow: node.airflow,
         roofAreaM2: node.roofAreaM2,
       ));
@@ -379,6 +381,7 @@ class NetworkController extends Notifier<DrawingState> {
       elevation: node.elevation,
       mountHeight: node.mountHeight,
       component: node.component,
+      tankCapacityLitres: node.tankCapacityLitres,
       fixture: node.fixture,
       airflow: airflow,
       customFixtureId: node.customFixtureId,
@@ -426,6 +429,7 @@ class NetworkController extends Notifier<DrawingState> {
       elevation: node.elevation,
       mountHeight: node.mountHeight,
       component: node.component,
+      tankCapacityLitres: node.tankCapacityLitres,
       fixture: customFixtureId == null ? node.fixture : null,
       airflow: node.airflow,
       customFixtureId: customFixtureId,
@@ -454,6 +458,17 @@ class NetworkController extends Notifier<DrawingState> {
     _replaceNode(node.copyWith(
       component: component,
       clearComponent: component == null,
+    ));
+  }
+
+  /// Set the stored tank [capacityLitres] on a tank component node (a prebuilt
+  /// tank bought at a fixed size). Pass null to clear it.
+  void setNodeTankCapacity(String id, double? capacityLitres) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    _replaceNode(node.copyWith(
+      tankCapacityLitres: capacityLitres,
+      clearTankCapacity: capacityLitres == null,
     ));
   }
 
@@ -701,6 +716,7 @@ class NetworkController extends Notifier<DrawingState> {
         elevation: n.elevation,
         mountHeight: n.mountHeight,
         component: n.component,
+        tankCapacityLitres: n.tankCapacityLitres,
         fixture: n.fixture,
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,
@@ -798,6 +814,7 @@ class NetworkController extends Notifier<DrawingState> {
         elevation: n.elevation,
         mountHeight: n.mountHeight,
         component: n.component,
+        tankCapacityLitres: n.tankCapacityLitres,
         fixture: n.fixture,
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,
