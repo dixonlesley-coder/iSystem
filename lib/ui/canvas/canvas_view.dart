@@ -51,8 +51,6 @@ class CanvasViewState extends State<CanvasView> {
   final FocusNode _focus = FocusNode(debugLabel: 'canvas');
 
   // Middle-button pan tracking.
-  bool _panning = false;
-  Offset _lastPanPoint = Offset.zero;
   // Scale-gesture incremental tracking.
   double _lastScale = 1.0;
   // Grab-cursor affordance (left/middle click pans).
@@ -104,6 +102,11 @@ class CanvasViewState extends State<CanvasView> {
     _emit(ViewportTransform.fit(widget.contentSize, _viewportSize));
   }
 
+  /// Pan the viewport by a screen-space [delta]. Public so a parent (above the
+  /// canvas overlays, which are opaque and would otherwise swallow the
+  /// middle-button drag) can drive middle-click panning.
+  void panByScreen(Offset delta) => _emit(_current.panned(delta));
+
   // ── Pointer (mouse) ────────────────────────────────────────────────────────
 
   void _onPointerSignal(PointerSignalEvent event) {
@@ -115,23 +118,13 @@ class CanvasViewState extends State<CanvasView> {
 
   void _onPointerDown(PointerDownEvent event) {
     _focus.requestFocus();
-    setState(() => _grabbing = true);
-    // Middle-button uses the manual pan path; left-drag pans via the scale
-    // gesture (a single-pointer scale is a pan).
-    if (event.buttons & kMiddleMouseButton != 0) {
-      _panning = true;
-      _lastPanPoint = event.localPosition;
-    }
-  }
-
-  void _onPointerMove(PointerMoveEvent event) {
-    if (!_panning) return;
-    _emit(_current.panned(event.localPosition - _lastPanPoint));
-    _lastPanPoint = event.localPosition;
+    if (!_grabbing) setState(() => _grabbing = true);
+    // NB: middle-button PAN is driven from an ancestor Listener (see
+    // [panByScreen]) because the canvas overlays sit ON TOP of this widget and
+    // are opaque — they'd swallow the middle-drag before it reached here.
   }
 
   void _onPointerUp(PointerUpEvent event) {
-    _panning = false;
     if (_grabbing) setState(() => _grabbing = false);
   }
 
@@ -217,7 +210,6 @@ class CanvasViewState extends State<CanvasView> {
         child: Listener(
           onPointerSignal: _onPointerSignal,
           onPointerDown: _onPointerDown,
-          onPointerMove: _onPointerMove,
           onPointerUp: _onPointerUp,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,

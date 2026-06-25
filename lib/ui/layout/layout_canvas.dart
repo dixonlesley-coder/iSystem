@@ -19,6 +19,7 @@
 /// Styled with MechXTheme — no Material.
 library;
 
+import 'package:flutter/gestures.dart' show kMiddleMouseButton;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -76,6 +77,27 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   final Map<String, GlobalKey<CanvasViewState>> _canvasKeys = {};
   GlobalKey<CanvasViewState> canvasKeyFor(String id) =>
       _canvasKeys.putIfAbsent(id, () => GlobalKey<CanvasViewState>());
+
+  // Middle-button PAN, handled here (an ancestor of the sheet's overlays) so it
+  // works even though the overlays are opaque and would swallow the drag at the
+  // CanvasView below. Drives the live canvas via [canvasKeyFor].
+  bool _midPanning = false;
+  Offset _midLast = Offset.zero;
+
+  void midPanDown(PointerDownEvent e) {
+    if (e.buttons & kMiddleMouseButton != 0) {
+      _midPanning = true;
+      _midLast = e.localPosition;
+    }
+  }
+
+  void midPanMove(PointerMoveEvent e, String sheetId) {
+    if (!_midPanning) return;
+    canvasKeyFor(sheetId).currentState?.panByScreen(e.localPosition - _midLast);
+    _midLast = e.localPosition;
+  }
+
+  void midPanEnd() => _midPanning = false;
 
   /// The PDF page widget per sheet, built ONCE and cached. The shared sheet
   /// rebuilds on every viewport change (it watches the sheets controller for
@@ -391,6 +413,9 @@ class _LayoutTopBar extends ConsumerWidget {
           horizontal: MechXSpacing.md, vertical: MechXSpacing.xs + 2),
       child: Row(
         children: [
+          // The layer switcher gets the available width (and scrolls
+          // horizontally if the system layers ever exceed it); the sheet
+          // breadcrumb is capped so it can't starve the switcher.
           Flexible(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -399,7 +424,8 @@ class _LayoutTopBar extends ConsumerWidget {
           ),
           const SizedBox(width: MechXSpacing.sm),
           if (current != null)
-            Flexible(
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 200),
               child: Text(
                 '${current.name}  ·  Floor '
                 '${sheets.floorFor(current.id, levelCount) + 1} of $levelCount',
@@ -483,8 +509,7 @@ class _SharedSheet extends ConsumerWidget {
     final electricalActive = active == DisciplineLayer.electrical;
     final electricalVisible = visible.contains(DisciplineLayer.electrical);
     // Any mechanical layer visible? (Plumbing or HVAC.)
-    final mechanicalVisible = visible.contains(DisciplineLayer.plumbing) ||
-        visible.contains(DisciplineLayer.hvac);
+    final mechanicalVisible = visible.any((l) => l.isMechanical);
     final measureMode = ref.watch(measureModeProvider);
     final tankMode = ref.watch(tankModeProvider);
 
@@ -492,7 +517,13 @@ class _SharedSheet extends ConsumerWidget {
     // layer reads, so both disciplines ride the SAME pan/zoom.
     final vt = sheetsState.viewportFor(sheet.id) ?? const ViewportTransform();
 
-    return Stack(
+    return Listener(
+      // Middle-button drag pans the canvas (handled above the opaque overlays).
+      onPointerDown: host.midPanDown,
+      onPointerMove: (e) => host.midPanMove(e, sheet.id),
+      onPointerUp: (_) => host.midPanEnd(),
+      onPointerCancel: (_) => host.midPanEnd(),
+      child: Stack(
       children: [
         // The PDF sheet, pannable/zoomable — drives the shared viewport.
         Positioned.fill(
@@ -606,6 +637,7 @@ class _SharedSheet extends ConsumerWidget {
           ),
         ),
       ],
+      ),
     );
   }
 }

@@ -741,9 +741,9 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
 
-      // The layer switcher offers the three disciplines; the placed MDP marker
+      // The layer switcher offers the system layers; the placed MDP marker
       // shows on the sheet (by its tag); the Loads palette is the inspector.
-      expect(find.text('Plumbing'), findsWidgets);
+      expect(find.text('Water'), findsWidgets);
       expect(find.text('HVAC'), findsWidgets);
       expect(find.text('Electrical'), findsWidgets);
       expect(find.text('MDP'), findsWidgets);
@@ -762,7 +762,7 @@ void main() {
       );
       container
           .read(activeDisciplineProvider.notifier)
-          .set(DisciplineLayer.plumbing); // electrical is now a faded layer
+          .set(DisciplineLayer.water); // electrical is now a faded layer
       container.read(electricalProjectProvider.notifier).setPanelLayoutPos(
           'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 400, y: 300));
       await tester.pump();

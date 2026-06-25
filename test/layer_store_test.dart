@@ -8,48 +8,43 @@ import 'package:mechx_engine/network/network.dart';
 /// and their invariants (the active layer is always visible).
 void main() {
   group('disciplineOf / servicesFor (pure mapping)', () {
-    test('air services map to HVAC, the rest to plumbing', () {
+    test('each service maps to its engineering-system layer', () {
+      expect(disciplineOf(ServiceType.coldWater), DisciplineLayer.water);
+      expect(disciplineOf(ServiceType.hotWater), DisciplineLayer.water);
+      expect(disciplineOf(ServiceType.drainage), DisciplineLayer.sanitary);
+      expect(disciplineOf(ServiceType.vent), DisciplineLayer.sanitary);
+      expect(disciplineOf(ServiceType.rainwater), DisciplineLayer.storm);
+      expect(disciplineOf(ServiceType.fireSprinkler), DisciplineLayer.fire);
+      expect(disciplineOf(ServiceType.fireHydrant), DisciplineLayer.fire);
       expect(disciplineOf(ServiceType.duct), DisciplineLayer.hvac);
       expect(disciplineOf(ServiceType.returnAir), DisciplineLayer.hvac);
       expect(disciplineOf(ServiceType.exhaust), DisciplineLayer.hvac);
-      for (final s in const [
-        ServiceType.coldWater,
-        ServiceType.hotWater,
-        ServiceType.drainage,
-        ServiceType.vent,
-        ServiceType.rainwater,
-        ServiceType.fireSprinkler,
-        ServiceType.fireHydrant,
-      ]) {
-        expect(disciplineOf(s), DisciplineLayer.plumbing, reason: '$s');
-      }
     });
 
-    test('disciplineOf matches the engine isAir flag for every service', () {
+    test('every air service is HVAC; no non-air service is HVAC', () {
       for (final s in ServiceType.values) {
-        expect(
-          disciplineOf(s),
-          s.isAir ? DisciplineLayer.hvac : DisciplineLayer.plumbing,
-          reason: '$s',
-        );
+        expect(disciplineOf(s) == DisciplineLayer.hvac, s.isAir, reason: '$s');
       }
     });
 
-    test('servicesFor partitions ServiceType exactly (plumbing + hvac = all)',
-        () {
-      final plumbing = servicesFor(DisciplineLayer.plumbing).toSet();
-      final hvac = servicesFor(DisciplineLayer.hvac).toSet();
-      // Disjoint…
-      expect(plumbing.intersection(hvac), isEmpty);
+    test('servicesFor partitions ServiceType exactly across the layers', () {
+      final byLayer = {
+        for (final l in DisciplineLayer.values) l: servicesFor(l).toSet(),
+      };
+      // Pairwise disjoint…
+      final all = <ServiceType>[];
+      for (final set in byLayer.values) {
+        expect(set.intersection(all.toSet()), isEmpty);
+        all.addAll(set);
+      }
       // …and together cover every service.
-      expect({...plumbing, ...hvac}, ServiceType.values.toSet());
+      expect(all.toSet(), ServiceType.values.toSet());
       // Every service maps back to the layer it was bucketed into.
-      for (final s in plumbing) {
-        expect(disciplineOf(s), DisciplineLayer.plumbing);
-      }
-      for (final s in hvac) {
-        expect(disciplineOf(s), DisciplineLayer.hvac);
-      }
+      byLayer.forEach((layer, services) {
+        for (final s in services) {
+          expect(disciplineOf(s), layer);
+        }
+      });
     });
 
     test('electrical has no ServiceType services', () {
@@ -63,10 +58,10 @@ void main() {
       }
     });
 
-    test('isMechanical: plumbing + hvac true, electrical false', () {
-      expect(DisciplineLayer.plumbing.isMechanical, isTrue);
-      expect(DisciplineLayer.hvac.isMechanical, isTrue);
-      expect(DisciplineLayer.electrical.isMechanical, isFalse);
+    test('isMechanical: every system true, electrical false', () {
+      for (final l in DisciplineLayer.values) {
+        expect(l.isMechanical, l != DisciplineLayer.electrical, reason: '$l');
+      }
     });
   });
 
@@ -77,9 +72,9 @@ void main() {
       return c;
     }
 
-    test('defaults: plumbing active, all three visible', () {
+    test('defaults: water active, all layers visible', () {
       final c = make();
-      expect(c.read(activeDisciplineProvider), DisciplineLayer.plumbing);
+      expect(c.read(activeDisciplineProvider), DisciplineLayer.water);
       expect(c.read(layerVisibilityProvider), DisciplineLayer.values.toSet());
     });
 
@@ -109,10 +104,10 @@ void main() {
 
     test('the active layer cannot be toggled off (you edit it)', () {
       final c = make();
-      // plumbing active by default — toggling it off is a no-op.
-      c.read(layerVisibilityProvider.notifier).toggle(DisciplineLayer.plumbing);
+      // water active by default — toggling it off is a no-op.
+      c.read(layerVisibilityProvider.notifier).toggle(DisciplineLayer.water);
       expect(
-          c.read(layerVisibilityProvider).contains(DisciplineLayer.plumbing),
+          c.read(layerVisibilityProvider).contains(DisciplineLayer.water),
           isTrue);
     });
 
