@@ -58,6 +58,191 @@ enum EdgeKind { run, riser }
 /// [plant] (transfer pump / tank base) at an explicit datum (default roof).
 enum NodeRole { main, fixture, plant }
 
+/// A placed equipment / component on the network — a labelled node that renders
+/// with its own schematic symbol. Each component implies a default [NodeRole]
+/// (plant for pumps/tanks, fixture for drains/vents, main for inline
+/// valves/meters), set at placement, so sizing reads the role exactly as
+/// before — a pump or roof tank therefore feeds the pressure solve as a plant
+/// source with no extra code. Per-component head loss (valve K-factors, meter
+/// loss) is a later refinement (`// VERIFY`); for now a component is a labelled,
+/// role-bearing symbol. Additive: `NetNode.component` is null for an ordinary
+/// node, so nothing changes for existing networks.
+enum NodeComponent {
+  // Plant (role: plant — a solve source / boundary).
+  pump,
+  roofTank,
+  groundTank,
+  boosterSet,
+  // Valves (role: main — inline on a run).
+  gateValve,
+  checkValve,
+  prv,
+  balancingValve,
+  // Drains (role: fixture — a drainage/storm endpoint).
+  roofDrain,
+  floorDrain,
+  cleanout,
+  // Meters & misc.
+  waterMeter,
+  strainer,
+  expansionTank,
+  airVent,
+  // Fire protection (role: fixture — points on the sprinkler/hydrant services;
+  // the FDC is an inline main inlet).
+  sprinklerHead,
+  fireExtinguisher,
+  hydrantBox,
+  hoseReel,
+  fireDeptConnection,
+  // ── HVAC / ducting ──────────────────────────────────────────────────────
+  // Air terminals (role: fixture — carry the airflow demand).
+  supplyDiffuser,
+  returnGrille,
+  exhaustGrille,
+  linearDiffuser,
+  // Dampers + VAV (role: main — inline on a duct run).
+  volumeDamper,
+  fireDamper,
+  motorizedDamper,
+  vavBox,
+  // Air units (role: plant — an air source / handling unit).
+  ahu,
+  fcu,
+  supplyFan,
+  exhaustFan,
+}
+
+extension NodeComponentInfo on NodeComponent {
+  /// The vertical [NodeRole] this component takes when placed.
+  NodeRole get role => switch (this) {
+        NodeComponent.pump ||
+        NodeComponent.roofTank ||
+        NodeComponent.groundTank ||
+        NodeComponent.boosterSet =>
+          NodeRole.plant,
+        NodeComponent.roofDrain ||
+        NodeComponent.floorDrain ||
+        NodeComponent.cleanout ||
+        NodeComponent.airVent ||
+        NodeComponent.sprinklerHead ||
+        NodeComponent.fireExtinguisher ||
+        NodeComponent.hydrantBox ||
+        NodeComponent.hoseReel ||
+        // HVAC air terminals carry the airflow demand → fixture.
+        NodeComponent.supplyDiffuser ||
+        NodeComponent.returnGrille ||
+        NodeComponent.exhaustGrille ||
+        NodeComponent.linearDiffuser =>
+          NodeRole.fixture,
+        // Air units are the air source → plant.
+        NodeComponent.ahu ||
+        NodeComponent.fcu ||
+        NodeComponent.supplyFan ||
+        NodeComponent.exhaustFan =>
+          NodeRole.plant,
+        // Inline valves + meters / strainer / expansion tank + FDC inlet +
+        // inline dampers / VAV.
+        _ => NodeRole.main,
+      };
+
+  /// A short human-readable label.
+  String get label => switch (this) {
+        NodeComponent.pump => 'Pump',
+        NodeComponent.roofTank => 'Roof tank',
+        NodeComponent.groundTank => 'Ground tank',
+        NodeComponent.boosterSet => 'Booster set',
+        NodeComponent.gateValve => 'Gate valve',
+        NodeComponent.checkValve => 'Check valve',
+        NodeComponent.prv => 'PRV',
+        NodeComponent.balancingValve => 'Balancing valve',
+        NodeComponent.roofDrain => 'Roof drain',
+        NodeComponent.floorDrain => 'Floor drain',
+        NodeComponent.cleanout => 'Cleanout',
+        NodeComponent.waterMeter => 'Water meter',
+        NodeComponent.strainer => 'Strainer',
+        NodeComponent.expansionTank => 'Expansion tank',
+        NodeComponent.airVent => 'Air vent',
+        NodeComponent.sprinklerHead => 'Sprinkler head',
+        NodeComponent.fireExtinguisher => 'Fire extinguisher',
+        NodeComponent.hydrantBox => 'Hydrant box',
+        NodeComponent.hoseReel => 'Hose reel',
+        NodeComponent.fireDeptConnection => 'Fire dept. connection',
+        NodeComponent.supplyDiffuser => 'Supply diffuser',
+        NodeComponent.returnGrille => 'Return grille',
+        NodeComponent.exhaustGrille => 'Exhaust grille',
+        NodeComponent.linearDiffuser => 'Linear diffuser',
+        NodeComponent.volumeDamper => 'Volume damper',
+        NodeComponent.fireDamper => 'Fire damper',
+        NodeComponent.motorizedDamper => 'Motorized damper',
+        NodeComponent.vavBox => 'VAV box',
+        NodeComponent.ahu => 'AHU',
+        NodeComponent.fcu => 'FCU',
+        NodeComponent.supplyFan => 'Supply fan',
+        NodeComponent.exhaustFan => 'Exhaust fan',
+      };
+
+  /// Minor-loss coefficient K for an inline RESTRICTOR (valve / strainer /
+  /// meter), used for the local head loss h = K·v²/2g folded into the
+  /// pressurized solve. 0 for components that aren't an inline restriction
+  /// (pumps add head, tanks are sources, drains/fire points sit off the supply
+  /// path). These are representative fully-open values from general hydraulics
+  /// practice (Crane TP-410-class), NOT an SNI clause — `// VERIFY` against the
+  /// project's actual valve schedule / Cv data. A PRV is intentionally 0 here:
+  /// it sets a downstream pressure (handled by the PRV zoning), not a simple K.
+  double get minorLossK => switch (this) {
+        NodeComponent.gateValve => 0.2,
+        NodeComponent.checkValve => 2.0,
+        NodeComponent.balancingValve => 3.0,
+        NodeComponent.strainer => 2.0,
+        NodeComponent.waterMeter => 6.0,
+        _ => 0.0,
+      };
+
+  /// Air-side fitting loss coefficient C (dimensionless, against the velocity
+  /// pressure ρv²/2) for an inline DUCT restrictor — a damper or VAV box —
+  /// folded into the fan total static (`duct_static`). 0 for components that
+  /// aren't an inline air restriction. Representative values from general HVAC
+  /// practice, NOT an SNI clause — `// VERIFY` against the damper/VAV schedule.
+  double get airLossC => switch (this) {
+        NodeComponent.volumeDamper => 0.2,
+        NodeComponent.fireDamper => 0.3,
+        NodeComponent.motorizedDamper => 0.4,
+        // A VAV terminal box's effective drop (a higher coefficient stands in
+        // for its minimum static requirement).
+        NodeComponent.vavBox => 1.5,
+        _ => 0.0,
+      };
+
+  /// Whether this component is also an ELECTRICAL load — a motorised piece of
+  /// equipment that draws power, so a pump/fan/air-unit placed on the mechanical
+  /// plan is INTER-RELATED with the electrical model (it appears as a circuit on
+  /// the panel). The mechanical and electrical disciplines share the one node.
+  bool get isElectricalLoad => switch (this) {
+        NodeComponent.pump ||
+        NodeComponent.boosterSet ||
+        NodeComponent.supplyFan ||
+        NodeComponent.exhaustFan ||
+        NodeComponent.ahu ||
+        NodeComponent.fcu =>
+          true,
+        _ => false,
+      };
+
+  /// A representative motor rating (kW) for an [isElectricalLoad] component, used
+  /// as the electrical load when the node carries no explicit override. General
+  /// practice, NOT a PUIL/SNI clause — `// VERIFY` against the equipment
+  /// schedule. 0 for non-electrical components.
+  double get defaultMotorKw => switch (this) {
+        NodeComponent.pump => 1.5,
+        NodeComponent.boosterSet => 3.0,
+        NodeComponent.supplyFan => 1.1,
+        NodeComponent.exhaustFan => 0.75,
+        NodeComponent.ahu => 5.5,
+        NodeComponent.fcu => 0.25,
+        _ => 0.0,
+      };
+}
+
 /// A connection point, located at ([x], [y]) sheet pixels on [sheetId] /
 /// [floorIndex]. Its vertical position comes from [role] (+ optional explicit
 /// [elevation]) via [nodeElevation], never from the PDF.
@@ -105,6 +290,25 @@ class NetNode {
   /// keeps storm sizing byte-identical.
   final double? roofAreaM2;
 
+  /// Optional equipment/component this node represents (pump, roof tank, valve,
+  /// roof drain, meter…). Drives the on-canvas symbol; the implied [role] is set
+  /// at placement. Null ⇒ an ordinary node (byte-identical). Additive — the
+  /// sizing core reads the [role], not this label.
+  final NodeComponent? component;
+
+  /// Stored capacity (litres) for a TANK component node — e.g. a prebuilt
+  /// fibreglass/HDPE tank where you enter the bought size directly (as opposed
+  /// to a cast concrete reservoir whose capacity comes from its drawn
+  /// footprint × depth). Null for a non-tank node or an unspecified size.
+  final double? tankCapacityLitres;
+
+  /// Explicit electrical load (W) for a motorised equipment node (pump / fan /
+  /// air unit) — overrides the component's [NodeComponentInfo.defaultMotorKw]
+  /// when the mechanical node is fed into the electrical model. Null ⇒ use the
+  /// default rating. Lets a pump exist on BOTH the plumbing and electrical sides
+  /// with one edited power.
+  final double? electricalLoadW;
+
   const NetNode({
     required this.id,
     required this.sheetId,
@@ -118,6 +322,9 @@ class NetNode {
     this.airflow,
     this.customFixtureId,
     this.roofAreaM2,
+    this.component,
+    this.tankCapacityLitres,
+    this.electricalLoadW,
   });
 
   NetNode copyWith({
@@ -135,6 +342,12 @@ class NetNode {
     bool clearCustomFixtureId = false,
     double? roofAreaM2,
     bool clearRoofAreaM2 = false,
+    NodeComponent? component,
+    bool clearComponent = false,
+    double? tankCapacityLitres,
+    bool clearTankCapacity = false,
+    double? electricalLoadW,
+    bool clearElectricalLoad = false,
   }) =>
       NetNode(
         id: id,
@@ -151,6 +364,13 @@ class NetNode {
         customFixtureId:
             clearCustomFixtureId ? null : (customFixtureId ?? this.customFixtureId),
         roofAreaM2: clearRoofAreaM2 ? null : (roofAreaM2 ?? this.roofAreaM2),
+        component: clearComponent ? null : (component ?? this.component),
+        tankCapacityLitres: clearTankCapacity
+            ? null
+            : (tankCapacityLitres ?? this.tankCapacityLitres),
+        electricalLoadW: clearElectricalLoad
+            ? null
+            : (electricalLoadW ?? this.electricalLoadW),
       );
 }
 

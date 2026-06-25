@@ -217,6 +217,11 @@ class ProjectDocument {
   /// of the network — purely an overlay; defaults empty.
   final List<Measurement> measurements;
 
+  /// Designated tank/reservoir areas on the calibrated sheets (footprint + depth
+  /// + material → capacity). An annotation, not part of the network; empty by
+  /// default.
+  final List<TankArea> tanks;
+
   /// Optional electrical sub-model (panels + earthing system). Added in v2;
   /// null for a v1 file or a project with no electrical design yet.
   final ElectricalProject? electrical;
@@ -233,6 +238,7 @@ class ProjectDocument {
     this.settings = const DesignSettings(),
     this.electrical,
     this.measurements = const [],
+    this.tanks = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -270,6 +276,7 @@ class ProjectDocument {
         },
         'settings': settings.toJson(),
         'measurements': [for (final m in measurements) m.toJson()],
+        'tanks': [for (final t in tanks) t.toJson()],
         if (electrical != null) 'electrical': electrical!.toJson(),
         'network': {
           'nodes': [
@@ -289,6 +296,10 @@ class ProjectDocument {
                 if (n.customFixtureId != null)
                   'customFixtureId': n.customFixtureId,
                 if (n.roofAreaM2 != null) 'roof_area_m2': n.roofAreaM2,
+                if (n.component != null) 'component': n.component!.name,
+                if (n.tankCapacityLitres != null)
+                  'tank_l': n.tankCapacityLitres,
+                if (n.electricalLoadW != null) 'elec_w': n.electricalLoadW,
               },
           ],
           'edges': [
@@ -371,6 +382,12 @@ class ProjectDocument {
               : FlowRate.litersPerSecond((n['airflow_lps'] as num).toDouble()),
           customFixtureId: n['customFixtureId'] as String?,
           roofAreaM2: (n['roof_area_m2'] as num?)?.toDouble(),
+          // Tolerant: absent / unknown ⇒ null ⇒ an ordinary node.
+          component: n['component'] == null
+              ? null
+              : _enumOrNull(NodeComponent.values, n['component']),
+          tankCapacityLitres: (n['tank_l'] as num?)?.toDouble(),
+          electricalLoadW: (n['elec_w'] as num?)?.toDouble(),
         ),
     ];
     final edges = [
@@ -426,6 +443,10 @@ class ProjectDocument {
       for (final m in (json['measurements'] as List? ?? const []))
         ?Measurement.fromJson(m),
     ];
+    // Tank areas (additive; absent on an older file ⇒ empty).
+    final tanks = <TankArea>[
+      for (final t in (json['tanks'] as List? ?? const [])) ?TankArea.fromJson(t),
+    ];
     return ProjectDocument(
       version: version,
       projectName: project['name'] as String? ?? 'Untitled project',
@@ -438,6 +459,7 @@ class ProjectDocument {
       settings: settings,
       electrical: electrical,
       measurements: measurements,
+      tanks: tanks,
     );
   }
 

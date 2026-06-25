@@ -353,6 +353,30 @@ void main() {
       expect(terminal.fixture, PlumbingFixture.lavatory);
     });
 
+    test('addComponentNode drops equipment with the implied role + label', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addComponentNode('s1', 0, const Offset(5, 5), NodeComponent.pump);
+      n.addComponentNode('s1', 0, const Offset(9, 9), NodeComponent.gateValve);
+      n.addComponentNode('s1', 0, const Offset(7, 7), NodeComponent.roofDrain);
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 3);
+      final pump =
+          net.nodes.firstWhere((nd) => nd.component == NodeComponent.pump);
+      expect(pump.role, NodeRole.plant); // a pump feeds the solve as plant
+      final valve =
+          net.nodes.firstWhere((nd) => nd.component == NodeComponent.gateValve);
+      expect(valve.role, NodeRole.main);
+      final drain =
+          net.nodes.firstWhere((nd) => nd.component == NodeComponent.roofDrain);
+      expect(drain.role, NodeRole.fixture);
+
+      // setNodeComponent clears it (back to an ordinary node).
+      n.setNodeComponent(pump.id, null);
+      expect(c.read(networkControllerProvider).network.nodeById(pump.id)!.component,
+          isNull);
+    });
+
     test('setEdgePipeProduct / setEdgeDuctProduct / setEdgeSizeOverride', () {
       final c = makeContainer();
       final n = c.read(networkControllerProvider.notifier);

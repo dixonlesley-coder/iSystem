@@ -98,6 +98,18 @@ DuctStaticSolution solveDuctStatic({
             ) *
             length.meters *
             fittingFactor;
+        // Inline air restrictor (damper / VAV) we're arriving at: add its static
+        // loss C·ρv²/2 (velocity from the feeding duct), so it propagates to
+        // every downstream node — the air-path analogue of the valve minor
+        // loss. C = 0 (no component / not a restrictor) ⇒ no change.
+        final c = net.nodeById(link.other)?.component?.airLossC ?? 0;
+        if (c > 0) {
+          edgePa += ductFittingLossPa(
+            c: c,
+            flow: flow,
+            diameter: edgeSizing.diameter,
+          );
+        }
       }
       staticPa[link.other] = currentStatic + edgePa;
       queue.add(link.other);

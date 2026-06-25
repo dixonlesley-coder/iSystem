@@ -171,6 +171,15 @@ PressureSolution solvePressurized({
           diameter: edgeSizing.diameter,
           hazenWilliamsC: edgeC,
         ).meters;
+        // Minor (local) loss if we're arriving at an inline restrictor
+        // (valve/strainer/meter): h = K·v²/2g at the feeding edge's velocity.
+        // Added to this node's accumulated friction, so it propagates to every
+        // downstream node. K = 0 (no component / not a restrictor) ⇒ no change.
+        final k = net.nodeById(link.other)?.component?.minorLossK ?? 0;
+        if (k > 0) {
+          final v = velocityFromFlow(flow, edgeSizing.diameter);
+          edgeFriction += minorLossHead(k: k, velocity: v).meters;
+        }
       }
 
       final neighbour = net.nodeById(link.other);
@@ -322,6 +331,13 @@ DownfeedSolution solveDownfeed({
           diameter: edgeSizing.diameter,
           hazenWilliamsC: edgeC,
         ).meters;
+        // Minor (local) loss at an inline restrictor we're arriving at — same
+        // h = K·v²/2g treatment as the upfeed solve (K = 0 ⇒ no change).
+        final k = net.nodeById(link.other)?.component?.minorLossK ?? 0;
+        if (k > 0) {
+          final v = velocityFromFlow(flow, edgeSizing.diameter);
+          edgeFriction += minorLossHead(k: k, velocity: v).meters;
+        }
       }
       friction[link.other] = currentFriction + edgeFriction;
       queue.add(link.other);

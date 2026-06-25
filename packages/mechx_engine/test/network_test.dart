@@ -121,6 +121,59 @@ void main() {
       expect(nodeElevation(both, building).meters, closeTo(9.0, 1e-9));
     });
 
+    test('NodeComponent maps to the expected role + label', () {
+      expect(NodeComponent.pump.role, NodeRole.plant);
+      expect(NodeComponent.roofTank.role, NodeRole.plant);
+      expect(NodeComponent.gateValve.role, NodeRole.main);
+      expect(NodeComponent.waterMeter.role, NodeRole.main);
+      expect(NodeComponent.roofDrain.role, NodeRole.fixture);
+      expect(NodeComponent.airVent.role, NodeRole.fixture);
+      // Fire-protection points are fixtures; the FDC inlet is an inline main.
+      expect(NodeComponent.sprinklerHead.role, NodeRole.fixture);
+      expect(NodeComponent.fireExtinguisher.role, NodeRole.fixture);
+      expect(NodeComponent.hydrantBox.role, NodeRole.fixture);
+      expect(NodeComponent.fireDeptConnection.role, NodeRole.main);
+      // HVAC: terminals are fixtures (carry airflow), dampers/VAV inline main,
+      // air units (AHU/FCU/fans) are plant sources.
+      expect(NodeComponent.supplyDiffuser.role, NodeRole.fixture);
+      expect(NodeComponent.returnGrille.role, NodeRole.fixture);
+      expect(NodeComponent.volumeDamper.role, NodeRole.main);
+      expect(NodeComponent.vavBox.role, NodeRole.main);
+      expect(NodeComponent.ahu.role, NodeRole.plant);
+      expect(NodeComponent.supplyFan.role, NodeRole.plant);
+      // HVAC components add no water-side K (air loss is a separate path).
+      expect(NodeComponent.volumeDamper.minorLossK, 0);
+      expect(NodeComponent.pump.label, 'Pump');
+      // Every component carries a non-empty label (UI never shows a blank).
+      for (final c in NodeComponent.values) {
+        expect(c.label, isNotEmpty);
+      }
+      // copyWith carries the component and can clear it.
+      const n = NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0);
+      final withC = n.copyWith(component: NodeComponent.pump);
+      expect(withC.component, NodeComponent.pump);
+      expect(withC.copyWith(clearComponent: true).component, isNull);
+      // A prebuilt tank node carries an editable capacity (litres).
+      final tank = n.copyWith(
+          component: NodeComponent.roofTank, tankCapacityLitres: 5000);
+      expect(tank.tankCapacityLitres, 5000);
+      expect(tank.copyWith(clearTankCapacity: true).tankCapacityLitres, isNull);
+      // Motorised equipment is an electrical load (inter-related with the panel);
+      // valves/drains/tanks are not.
+      expect(NodeComponent.pump.isElectricalLoad, isTrue);
+      expect(NodeComponent.supplyFan.isElectricalLoad, isTrue);
+      expect(NodeComponent.ahu.isElectricalLoad, isTrue);
+      expect(NodeComponent.gateValve.isElectricalLoad, isFalse);
+      expect(NodeComponent.roofTank.isElectricalLoad, isFalse);
+      expect(NodeComponent.pump.defaultMotorKw, greaterThan(0));
+      expect(NodeComponent.gateValve.defaultMotorKw, 0);
+      // The per-node electrical load override round-trips through copyWith.
+      final motor = n.copyWith(
+          component: NodeComponent.pump, electricalLoadW: 2200);
+      expect(motor.electricalLoadW, 2200);
+      expect(motor.copyWith(clearElectricalLoad: true).electricalLoadW, isNull);
+    });
+
     test('uncalibrated run yields zero length (flagged elsewhere)', () {
       final len = edgeLength(net.edges[0], net,
           calibrationBySheet: const {}, building: building);

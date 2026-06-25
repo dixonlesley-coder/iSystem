@@ -29,6 +29,7 @@ import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/segment_palette.dart';
+import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
 import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
@@ -191,6 +192,9 @@ class ProjectPanel extends ConsumerWidget {
               // ── Draw ──────────────────────────────────────────────────────
               const _DrawSection(),
               const SizedBox(height: MechXSpacing.lg),
+
+              // ── Tanks (only shown when the sheet has designated areas) ─────
+              const _TanksSection(),
 
               // ── Selection (only shown when something is selected) ─────────
               const _SelectionSection(),
@@ -465,13 +469,15 @@ class _DrawSection extends ConsumerWidget {
     }
 
     final measureMode = ref.watch(measureModeProvider);
+    final tankMode = ref.watch(tankModeProvider);
     Widget tool(String label, DrawTool t) => MechXButton(
           label: label,
-          // While the measure tool is on, no draw tool reads as active.
-          primary: drawing.tool == t && !measureMode,
+          // While the measure / tank tool is on, no draw tool reads as active.
+          primary: drawing.tool == t && !measureMode && !tankMode,
           onPressed: () {
             ctrl.setTool(t);
             ref.read(measureModeProvider.notifier).set(false);
+            ref.read(tankModeProvider.notifier).set(false);
           },
         );
 
@@ -524,7 +530,25 @@ class _DrawSection extends ConsumerWidget {
               onPressed: () {
                 final on = !measureMode;
                 ref.read(measureModeProvider.notifier).set(on);
-                if (on) ctrl.setTool(DrawTool.select);
+                if (on) {
+                  ref.read(tankModeProvider.notifier).set(false);
+                  ctrl.setTool(DrawTool.select);
+                }
+              },
+            ),
+            // Tank tool: drag a rectangle on the calibrated plan to designate a
+            // tank/reservoir area; its capacity comes from the footprint × depth
+            // (edit depth/material in the Tanks inspector below).
+            MechXButton(
+              label: 'Tank',
+              primary: tankMode,
+              onPressed: () {
+                final on = !tankMode;
+                ref.read(tankModeProvider.notifier).set(on);
+                if (on) {
+                  ref.read(measureModeProvider.notifier).set(false);
+                  ctrl.setTool(DrawTool.select);
+                }
               },
             ),
           ],
@@ -570,6 +594,118 @@ class _DrawSection extends ConsumerWidget {
         ),
         const SizedBox(height: MechXSpacing.lg),
         const SegmentPalette(),
+      ],
+    );
+  }
+}
+
+/// Lists the tank areas designated on the CURRENT sheet, with a depth stepper +
+/// material picker + computed capacity + delete. Hidden when there are none, so
+/// the at-rest inspector (and the goldens) are unchanged.
+class _TanksSection extends ConsumerWidget {
+  const _TanksSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final sheet = ref.watch(sheetsControllerProvider).current;
+    if (sheet == null) return const SizedBox.shrink();
+    final tanks = [
+      for (final t in ref.watch(tankAreasProvider))
+        if (t.sheetId == sheet.id) t,
+    ];
+    if (tanks.isEmpty) return const SizedBox.shrink();
+    final cal = ref.watch(projectControllerProvider).calibrationFor(sheet.id);
+    final ctrl = ref.read(tankAreasProvider.notifier);
+
+    String capacity(TankArea t) {
+      if (cal == null) return 'set scale';
+      final l = t.litres(cal.metersPerPixel);
+      return l >= 10000
+          ? '${t.volumeM3(cal.metersPerPixel).toStringAsFixed(1)} m3 (${(l / 1000).round()} kL)'
+          : '${l.round()} L';
+    }
+
+    String dims(TankArea t) {
+      if (cal == null) return '';
+      final mpp = cal.metersPerPixel;
+      return '${(t.widthPx * mpp).toStringAsFixed(1)} x '
+          '${(t.heightPx * mpp).toStringAsFixed(1)} m';
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const MechXSectionLabel('Tanks'),
+        const SizedBox(height: MechXSpacing.sm),
+        for (final t in tanks) ...[
+          Container(
+            padding: const EdgeInsets.all(MechXSpacing.sm),
+            decoration: BoxDecoration(
+              color: colors.background,
+              borderRadius: MechXRadii.control,
+              border: Border.all(color: colors.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text('${t.name} · ${dims(t)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: type.body.copyWith(color: colors.textPrimary)),
+                    ),
+                    _GlyphButton(
+                        glyph: '×', onTap: () => ctrl.removeById(t.id)),
+                  ],
+                ),
+                const SizedBox(height: MechXSpacing.xxs),
+                Text(capacity(t),
+                    style: type.caption.copyWith(color: colors.accent)),
+                const SizedBox(height: MechXSpacing.xs),
+                Row(
+                  children: [
+                    Text('Depth',
+                        style:
+                            type.caption.copyWith(color: colors.textMuted)),
+                    const Spacer(),
+                    _GlyphButton(
+                        glyph: '−',
+                        onTap: () => ctrl.setDepth(t.id, t.depthM - 0.25)),
+                    SizedBox(
+                      width: 56,
+                      child: Text('${t.depthM.toStringAsFixed(2)} m',
+                          textAlign: TextAlign.center,
+                          style:
+                              type.mono.copyWith(color: colors.textPrimary)),
+                    ),
+                    _GlyphButton(
+                        glyph: '+',
+                        onTap: () => ctrl.setDepth(t.id, t.depthM + 0.25)),
+                  ],
+                ),
+                const SizedBox(height: MechXSpacing.xs),
+                Wrap(
+                  spacing: MechXSpacing.xs,
+                  runSpacing: MechXSpacing.xs,
+                  children: [
+                    for (final m in TankMaterial.values)
+                      _Pill(
+                        label: m.label,
+                        selected: t.material == m,
+                        onTap: () => ctrl.setMaterial(t.id, m),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+        ],
+        const SizedBox(height: MechXSpacing.sm),
       ],
     );
   }
@@ -1098,6 +1234,111 @@ class _SelectionSection extends ConsumerWidget {
         Text('Node · floor ${node.floorIndex + 1} · elev '
             '${elev.toStringAsFixed(1)} m',
             style: context.type.caption.copyWith(color: context.colors.textMuted)),
+        if (node.component != null) ...[
+          const SizedBox(height: MechXSpacing.xxs),
+          Row(
+            children: [
+              ComponentSymbol(
+                  component: node.component!,
+                  color: context.colors.textSecondary,
+                  size: 15),
+              const SizedBox(width: MechXSpacing.xs),
+              Expanded(
+                child: Text(node.component!.label,
+                    style: context.type.body
+                        .copyWith(color: context.colors.textPrimary)),
+              ),
+              MechXButton(
+                label: 'Clear',
+                tertiary: true,
+                onPressed: () => ctrl.setNodeComponent(node.id, null),
+              ),
+            ],
+          ),
+          // A prebuilt tank (e.g. a bought fibreglass/HDPE tank) carries a
+          // directly-entered capacity; a cast concrete reservoir uses the drawn
+          // tank-area footprint instead. Shown only for tank components.
+          if (node.component == NodeComponent.roofTank ||
+              node.component == NodeComponent.groundTank) ...[
+            const SizedBox(height: MechXSpacing.xs),
+            Text('Tank capacity (prebuilt)',
+                style: context.type.caption
+                    .copyWith(color: context.colors.textMuted)),
+            const SizedBox(height: MechXSpacing.xxs),
+            Row(
+              children: [
+                _GlyphButton(
+                  glyph: '−',
+                  onTap: () {
+                    final next = (node.tankCapacityLitres ?? 0) - 500;
+                    ctrl.setNodeTankCapacity(
+                        node.id, next <= 0 ? null : next);
+                  },
+                ),
+                const SizedBox(width: MechXSpacing.sm),
+                Text(
+                  node.tankCapacityLitres == null
+                      ? '—'
+                      : '${node.tankCapacityLitres!.round()} L',
+                  style: context.type.mono
+                      .copyWith(color: context.colors.textSecondary),
+                ),
+                const SizedBox(width: MechXSpacing.sm),
+                _GlyphButton(
+                  glyph: '+',
+                  onTap: () => ctrl.setNodeTankCapacity(
+                      node.id, (node.tankCapacityLitres ?? 0) + 500),
+                ),
+              ],
+            ),
+          ],
+          // A motorised component (pump / fan / air unit) is INTER-RELATED with
+          // the electrical model: it feeds the MEP equipment panel as its own
+          // circuit. Edit its electrical load here (kW); blank ⇒ the default
+          // rating for this equipment.
+          if (node.component!.isElectricalLoad) ...[
+            const SizedBox(height: MechXSpacing.xs),
+            Text('Electrical load (feeds the panel)',
+                style: context.type.caption
+                    .copyWith(color: context.colors.textMuted)),
+            const SizedBox(height: MechXSpacing.xxs),
+            Row(
+              children: [
+                _GlyphButton(
+                  glyph: '−',
+                  onTap: () {
+                    final base = node.electricalLoadW ??
+                        node.component!.defaultMotorKw * 1000;
+                    final next = base - 250;
+                    ctrl.setNodeElectricalLoad(
+                        node.id, next <= 0 ? null : next);
+                  },
+                ),
+                const SizedBox(width: MechXSpacing.sm),
+                Text(
+                  () {
+                    final w = node.electricalLoadW ??
+                        node.component!.defaultMotorKw * 1000;
+                    final suffix =
+                        node.electricalLoadW == null ? ' · default' : '';
+                    return '${(w / 1000).toStringAsFixed(2)} kW$suffix';
+                  }(),
+                  style: context.type.mono
+                      .copyWith(color: context.colors.textSecondary),
+                ),
+                const SizedBox(width: MechXSpacing.sm),
+                _GlyphButton(
+                  glyph: '+',
+                  onTap: () {
+                    final base = node.electricalLoadW ??
+                        node.component!.defaultMotorKw * 1000;
+                    ctrl.setNodeElectricalLoad(node.id, base + 250);
+                  },
+                ),
+              ],
+            ),
+          ],
+        ],
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,

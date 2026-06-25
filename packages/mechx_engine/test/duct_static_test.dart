@@ -194,4 +194,52 @@ void main() {
           reason: 'PU roughness must appear in ductProductsVerifyChecklist');
     });
   });
+
+  test('an inline damper adds its C·ρv²/2 static loss to the fan total', () {
+    // Same fan→diffuser run, but the diffuser node carries a VAV box (C=1.5).
+    const damperNet = Network(
+      nodes: [
+        NetNode(
+            id: 'f', sheetId: 's1', x: 0, y: 0, floorIndex: 0,
+            role: NodeRole.plant),
+        NetNode(
+            id: 'd', sheetId: 's1', x: 1000, y: 0, floorIndex: 0,
+            role: NodeRole.main, component: NodeComponent.vavBox),
+      ],
+      edges: [
+        NetEdge(id: 'e', fromId: 'f', toId: 'd', service: ServiceType.duct),
+      ],
+    );
+    DuctStaticSolution run(Network n) => solveDuctStatic(
+          net: n,
+          service: ServiceType.duct,
+          fanNodeId: 'f',
+          edgeFlows: edgeFlows,
+          sizing: sizing,
+          calibrationBySheet: calibration,
+          building: building,
+        );
+    // Plain reference (the 'd' node above is role main, no component).
+    const plainNet = Network(
+      nodes: [
+        NetNode(
+            id: 'f', sheetId: 's1', x: 0, y: 0, floorIndex: 0,
+            role: NodeRole.plant),
+        NetNode(
+            id: 'd', sheetId: 's1', x: 1000, y: 0, floorIndex: 0,
+            role: NodeRole.main),
+      ],
+      edges: [
+        NetEdge(id: 'e', fromId: 'f', toId: 'd', service: ServiceType.duct),
+      ],
+    );
+    final expectedExtra =
+        ductFittingLossPa(c: 1.5, flow: flow, diameter: dia);
+    expect(expectedExtra, greaterThan(0));
+    expect(
+      run(damperNet).totalStaticPressure.pascals -
+          run(plainNet).totalStaticPressure.pascals,
+      closeTo(expectedExtra, 1e-9),
+    );
+  });
 }

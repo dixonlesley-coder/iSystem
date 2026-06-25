@@ -51,6 +51,8 @@ void main() {
             floorIndex: 0,
             role: NodeRole.plant,
             elevation: Length(30),
+            component: NodeComponent.roofTank,
+            electricalLoadW: 1500, // motorised-equipment load override
           ),
           NetNode(
             id: 'n1',
@@ -101,6 +103,11 @@ void main() {
     // node role / explicit elevation / fixture type round-trip
     expect(decoded.network.nodes[0].role, NodeRole.plant);
     expect(decoded.network.nodes[0].elevation?.meters, 30);
+    expect(decoded.network.nodes[0].component, NodeComponent.roofTank);
+    expect(decoded.network.nodes[0].electricalLoadW, 1500);
+    // a node with no component loads it as null
+    expect(decoded.network.nodes[1].component, isNull);
+    expect(decoded.network.nodes[1].electricalLoadW, isNull);
     expect(decoded.network.nodes[2].role, NodeRole.fixture);
     expect(decoded.network.nodes[2].fixture, PlumbingFixture.lavatory);
     expect(decoded.network.nodes[2].mountHeight?.meters, closeTo(1.4, 1e-9));
@@ -176,6 +183,46 @@ void main() {
       network: Network(),
     );
     expect(ProjectDocument.decode(bare.encode()).measurements, isEmpty);
+  });
+
+  test('tank areas round-trip; an old file loads none', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(100, 100))],
+      network: Network(),
+      tanks: [
+        TankArea(
+          id: 't0',
+          sheetId: 's1',
+          floorIndex: 0,
+          ax: 0,
+          ay: 0,
+          bx: 200,
+          by: 100,
+          depthM: 2.5,
+          material: TankMaterial.concrete,
+          name: 'Ground reservoir',
+        ),
+      ],
+    );
+    final decoded = ProjectDocument.decode(doc.encode());
+    expect(decoded.tanks, hasLength(1));
+    final t = decoded.tanks.first;
+    expect(t.name, 'Ground reservoir');
+    expect(t.depthM, 2.5);
+    expect(t.material, TankMaterial.concrete);
+    expect(t.volumeM3(0.01), closeTo(5.0, 1e-9)); // 2.0 m^2 x 2.5 m
+
+    const bare = ProjectDocument(
+      projectName: 'Y',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    expect(ProjectDocument.decode(bare.encode()).tanks, isEmpty);
   });
 
   test('per-segment pipe/duct product + size override round-trip', () {

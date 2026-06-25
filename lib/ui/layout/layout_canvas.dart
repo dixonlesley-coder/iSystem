@@ -41,6 +41,7 @@ import '../canvas/drawing_overlay.dart';
 import '../canvas/drop_overlay.dart';
 import '../canvas/heatmap_layer.dart';
 import '../canvas/measurement_overlay.dart';
+import '../canvas/tank_overlay.dart';
 import '../canvas/network_layer.dart';
 import '../canvas/selection_overlay.dart';
 import '../canvas/sheet_canvas.dart' show sheetContentBuilderProvider;
@@ -485,6 +486,7 @@ class _SharedSheet extends ConsumerWidget {
     final mechanicalVisible = visible.contains(DisciplineLayer.plumbing) ||
         visible.contains(DisciplineLayer.hvac);
     final measureMode = ref.watch(measureModeProvider);
+    final tankMode = ref.watch(tankModeProvider);
 
     // The shared viewport transform (persisted per-sheet) is what the electrical
     // layer reads, so both disciplines ride the SAME pan/zoom.
@@ -550,6 +552,16 @@ class _SharedSheet extends ConsumerWidget {
               active: mechanicalActive && measureMode && !drawing,
             ),
           ),
+        // Tank areas — saved footprints always render (mechanical layer visible);
+        // the tank tool captures a drag only when active.
+        if (mechanicalVisible && !calibrating)
+          Positioned.fill(
+            child: TankOverlay(
+              sheetId: sheet.id,
+              floorIndex: floorIndex,
+              active: mechanicalActive && tankMode && !drawing,
+            ),
+          ),
         // Mechanical drawing / drop / selection overlays — ONLY when a mechanical
         // layer is active (so editing routes to the active discipline). The
         // selection/drop overlays stand down while the measure tool is on.
@@ -561,11 +573,11 @@ class _SharedSheet extends ConsumerWidget {
               levelCount: levelCount,
             ),
           ),
-        if (mechanicalActive && !drawing && !calibrating && !measureMode)
+        if (mechanicalActive && !drawing && !calibrating && !measureMode && !tankMode)
           Positioned.fill(
             child: DropOverlay(sheetId: sheet.id, floorIndex: floorIndex),
           ),
-        if (mechanicalActive && !drawing && !calibrating && !measureMode)
+        if (mechanicalActive && !drawing && !calibrating && !measureMode && !tankMode)
           Positioned.fill(
             child: NetworkSelectionOverlay(
               sheetId: sheet.id,

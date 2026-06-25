@@ -131,6 +131,20 @@ Head headLossDarcy({
   );
 }
 
+/// Minor (local / fitting) head loss h = K · v² / (2g) for a dimensionless loss
+/// coefficient [k] at a mean [velocity]. Used for inline restrictors — valves,
+/// strainers, meters — on the pressurized path (the K's are general hydraulics
+/// practice, NOT an SNI clause; see [NodeComponentInfo.minorLossK]). K = 0 ⇒ no
+/// loss, so a network without such components is byte-identical.
+Head minorLossHead({
+  required double k,
+  required Velocity velocity,
+  double gravity = standardGravity,
+}) {
+  final v = velocity.metersPerSecond;
+  return Head(k * v * v / (2 * gravity));
+}
+
 /// Friction head loss via Hazen–Williams (SI form, water only):
 /// h_f = 10.67 · L · Q^1.852 / (C^1.852 · D^4.8704).
 /// Common in plumbing & fire because it folds friction into the empirical

@@ -120,6 +120,20 @@ double ductFrictionPaPerMetre(FlowRate q, Diameter d, {Roughness? roughness}) {
   return f * (1.0 / d.meters) * (_airDensity * v.metersPerSecond * v.metersPerSecond / 2.0);
 }
 
+/// Air velocity pressure (Pa) at mean [velocity]: ρv²/2 (ρ = standard air).
+double airVelocityPressurePa(Velocity velocity) =>
+    _airDensity * velocity.metersPerSecond * velocity.metersPerSecond / 2.0;
+
+/// Static loss (Pa) of an inline duct fitting/restrictor (damper, VAV box) with
+/// loss coefficient [c] carrying [flow] in a duct of [diameter]: C · ρv²/2.
+/// C = 0 ⇒ no loss, so a duct without such a component is byte-identical.
+double ductFittingLossPa({
+  required double c,
+  required FlowRate flow,
+  required Diameter diameter,
+}) =>
+    c * airVelocityPressurePa(velocityFromFlow(flow, diameter));
+
 // ── Public sizing functions ───────────────────────────────────────────────────
 
 /// Size a circular duct so the mean air velocity stays at or below
