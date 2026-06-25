@@ -76,6 +76,14 @@ class NetNode {
   /// basement plant datum). When set it wins over [role]-derived elevation.
   final Length? elevation;
 
+  /// Optional mounting height of THIS node above its own floor surface — "how
+  /// high up the wall" the fixture/outlet sits. When set it places the node at
+  /// `floorElevation + mountHeight`, so the vertical pipe/cable to it is sized
+  /// from the real wall height rather than the role default (§10). `null` ⇒ use
+  /// the role-derived elevation (fixture-height default / ceiling / roof).
+  /// An explicit absolute [elevation] still wins over this.
+  final Length? mountHeight;
+
   /// Plumbing fixture served at this node (for [NodeRole.fixture] terminals on
   /// a water service). Drives the per-fixture UBAP demand upstream.
   final PlumbingFixture? fixture;
@@ -105,6 +113,7 @@ class NetNode {
     required this.floorIndex,
     this.role = NodeRole.main,
     this.elevation,
+    this.mountHeight,
     this.fixture,
     this.airflow,
     this.customFixtureId,
@@ -118,6 +127,8 @@ class NetNode {
     int? floorIndex,
     NodeRole? role,
     Length? elevation,
+    Length? mountHeight,
+    bool clearMountHeight = false,
     PlumbingFixture? fixture,
     FlowRate? airflow,
     String? customFixtureId,
@@ -133,6 +144,8 @@ class NetNode {
         floorIndex: floorIndex ?? this.floorIndex,
         role: role ?? this.role,
         elevation: elevation ?? this.elevation,
+        mountHeight:
+            clearMountHeight ? null : (mountHeight ?? this.mountHeight),
         fixture: fixture ?? this.fixture,
         airflow: airflow ?? this.airflow,
         customFixtureId:
@@ -143,6 +156,7 @@ class NetNode {
 
 /// True elevation of [node] (§10), used for riser/drop length and static lift:
 ///   • explicit [NetNode.elevation] if set;
+///   • [NetNode.mountHeight] (above its floor) if set — the per-node wall height;
 ///   • [NodeRole.main]    → ceiling of its floor;
 ///   • [NodeRole.fixture] → fixture height above its floor;
 ///   • [NodeRole.plant]   → roof level (override via [NetNode.elevation] for a
@@ -154,6 +168,12 @@ Length nodeElevation(
 ]) {
   final explicit = node.elevation;
   if (explicit != null) return explicit;
+  // A per-node mounting height places it that far up its own floor's wall — the
+  // single source for the vertical run to this fixture/outlet.
+  final mount = node.mountHeight;
+  if (mount != null) {
+    return Length(building.elevationOf(node.floorIndex).meters + mount.meters);
+  }
   switch (node.role) {
     case NodeRole.main:
       return building.ceilingElevationOf(node.floorIndex, mounting);

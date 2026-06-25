@@ -435,7 +435,8 @@ void main() {
     expect(find.text('DRAW'), findsOneWidget);
     expect(find.text('Run'), findsOneWidget);
     expect(find.text('Riser'), findsOneWidget);
-    expect(find.text('Cold water'), findsOneWidget);
+    // 'Cold water' appears in both the DRAW chips and the node palette.
+    expect(find.text('Cold water'), findsWidgets);
 
     await tester.ensureVisible(find.text('Run'));
     await tester.tap(find.text('Run'));
@@ -453,9 +454,11 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
+    // The node palette: grouped (PIPES / NODES) with per-service cards plus the
+    // generic Fitting / Terminal endpoints. (DUCTS only appears under HVAC.)
     expect(find.text('PALETTE'), findsOneWidget);
-    expect(find.text('Pipe segment'), findsOneWidget);
-    expect(find.text('Duct segment'), findsOneWidget);
+    expect(find.text('PIPES'), findsOneWidget);
+    expect(find.text('NODES'), findsOneWidget);
     expect(find.text('Fitting'), findsOneWidget);
     expect(find.text('Terminal'), findsOneWidget);
   });

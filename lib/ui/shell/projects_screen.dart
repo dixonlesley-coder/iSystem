@@ -1,23 +1,81 @@
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../store/project_store.dart';
+import '../inspector/project_panel.dart'
+    show exportCalcReport, exportDrawingDxf, exportDrawingPdf;
+import '../strings/app_strings.dart';
+import '../theme/design_tokens.dart';
+import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
+import '../widgets/mechx_button.dart';
+import '../widgets/mechx_text_field.dart';
 
-/// Projects landing. The app's open/save flows live in the top bar (file
-/// pickers); this is the durable home for a project browser/recents list, which
-/// arrives in a later wave.
-class ProjectsScreen extends StatelessWidget {
+/// Projects landing — now also the home of the current project's identity:
+/// its name and the document exports (calc report / DXF / PDF), lifted off the
+/// canvas inspector so the drawing area stays focused. The open/save flows live
+/// in the top bar; a recent-projects browser arrives in a later wave.
+class ProjectsScreen extends ConsumerWidget {
   const ProjectsScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return const HubScaffold(
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final project = ref.watch(projectControllerProvider);
+    final ctrl = ref.read(projectControllerProvider.notifier);
+
+    return HubScaffold(
       title: 'Projects',
-      lead: 'Open and save projects from the top bar for now. A recent-projects '
-          'browser will live here.',
+      lead: 'Name the current project and export its deliverables here. Open and '
+          'save .mechx files from the top bar; autosave keeps a recovery '
+          'snapshot between sessions.',
       children: [
-        HubNote(
+        // ── Current project ──────────────────────────────────────────────
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(MechXSpacing.md),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: MechXRadii.card,
+            border: Border.all(color: colors.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(context.strings(StringKey.inspectorProject),
+                  style: type.subtitle.copyWith(color: colors.textPrimary)),
+              const SizedBox(height: MechXSpacing.sm),
+              MechXTextField(value: project.name, onChanged: ctrl.setName),
+              const SizedBox(height: MechXSpacing.md),
+              Text('Export',
+                  style: type.caption.copyWith(color: colors.textMuted)),
+              const SizedBox(height: MechXSpacing.xs),
+              Wrap(
+                spacing: MechXSpacing.xs,
+                runSpacing: MechXSpacing.xs,
+                children: [
+                  MechXButton(
+                    label: context.strings(StringKey.inspectorExportCalcReportMd),
+                    onPressed: () => exportCalcReport(ref),
+                  ),
+                  MechXButton(
+                    label: context.strings(StringKey.inspectorExportDrawingDxf),
+                    onPressed: () => exportDrawingDxf(ref),
+                  ),
+                  MechXButton(
+                    label: context.strings(StringKey.inspectorExportDrawingPdf),
+                    onPressed: () => exportDrawingPdf(ref),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: MechXSpacing.md),
+        const HubNote(
           'Use Open in the top bar to load a .mechx file, or Save to write the '
-          'current project. Autosave keeps a recovery snapshot between sessions.',
+          'current project. A recent-projects browser will live here.',
         ),
       ],
     );

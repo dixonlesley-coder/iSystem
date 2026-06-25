@@ -282,6 +282,7 @@ class ProjectDocument {
                 'floor': n.floorIndex,
                 'role': n.role.name,
                 if (n.elevation != null) 'elev_m': n.elevation!.meters,
+                if (n.mountHeight != null) 'mount_h_m': n.mountHeight!.meters,
                 if (n.fixture != null) 'fixture': n.fixture!.name,
                 if (n.airflow != null)
                   'airflow_lps': n.airflow!.inLitersPerSecond,
@@ -357,6 +358,11 @@ class ProjectDocument {
           role: _enumOr(NodeRole.values, n['role'], NodeRole.main),
           elevation:
               n['elev_m'] == null ? null : Length((n['elev_m'] as num).toDouble()),
+          // Per-node wall mounting height (above its floor). Tolerant: absent ⇒
+          // null ⇒ the role-derived elevation.
+          mountHeight: n['mount_h_m'] == null
+              ? null
+              : Length((n['mount_h_m'] as num).toDouble()),
           fixture: n['fixture'] == null
               ? null
               : _enumOrNull(PlumbingFixture.values, n['fixture']),

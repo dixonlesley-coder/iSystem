@@ -5,24 +5,23 @@ import 'package:mechx/app.dart';
 import 'test_util.dart';
 
 void main() {
-  testWidgets('project panel shows sections, floors, and adds a level',
+  testWidgets('project panel shows its sections + a building summary',
       (tester) async {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
-    // inspector sections
-    expect(find.text('PROJECT'), findsOneWidget);
+    // inspector sections. PROJECT (name + exports) moved to the Projects page;
+    // the BUILDING section is now a compact summary that opens the dedicated
+    // Building page (the floor editor itself moved off the inspector).
+    expect(find.text('PROJECT'), findsNothing);
     expect(find.text('BUILDING'), findsOneWidget);
     expect(find.text('SCALE'), findsOneWidget);
+    // The summary readout ("11.0 m · 3 levels") and its Edit affordance.
+    expect(find.textContaining('3 levels'), findsOneWidget);
 
-    // a floor name that is unique to the panel (not a sheet name)
-    expect(find.text('Level 2'), findsOneWidget);
-
-    // add a level → 'Level 3' appears
-    await tester.tap(find.text('+  Add level'));
-    await tester.pump();
-    expect(find.text('Level 3'), findsOneWidget);
+    // The floor editor (rows / Add level) is no longer in the inspector.
+    expect(find.text('+  Add level'), findsNothing);
   });
 
   testWidgets('uncalibrated sheet shows a calibration prompt', (tester) async {

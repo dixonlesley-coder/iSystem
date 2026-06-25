@@ -23,6 +23,8 @@ import 'inspector/project_panel.dart';
 import 'layout/layout_canvas.dart';
 import 'review/review_hub.dart';
 import 'schematic/schematic_view.dart';
+import 'sheets/pdf_page_picker.dart';
+import 'shell/building_screen.dart';
 import 'shell/nav_rail.dart';
 import 'shell/preferences_screen.dart';
 import 'shell/projects_screen.dart';
@@ -89,6 +91,8 @@ class _ShellBody extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final section = ref.watch(shellSectionProvider);
     switch (section) {
+      case ShellSection.building:
+        return const BuildingScreen();
       case ShellSection.review:
         return const ReviewHub();
       case ShellSection.commercial:
@@ -201,7 +205,7 @@ class _ElectricalInspectorColumn extends StatelessWidget {
 class _TopBar extends ConsumerWidget {
   const _TopBar();
 
-  Future<void> _pickAndLoadPdf(WidgetRef ref) async {
+  Future<void> _pickAndLoadPdf(BuildContext context, WidgetRef ref) async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['pdf'],
@@ -212,12 +216,20 @@ class _TopBar extends ConsumerWidget {
     if (path == null || path.isEmpty) return;
 
     try {
-      final sheets = await importPdf(path);
+      var sheets = await importPdf(path);
       if (sheets.isEmpty) {
         ref
             .read(loadErrorProvider.notifier)
             .set('That PDF had no importable pages.');
         return;
+      }
+      // Multi-page PDF: let the user pick which pages to bring in (single-page
+      // documents import straight through, unchanged).
+      if (sheets.length > 1 && context.mounted) {
+        final chosen = await showPdfPagePicker(context, sheets);
+        if (chosen == null) return; // cancelled — keep the current project
+        if (chosen.isEmpty) return;
+        sheets = chosen;
       }
       ref.read(sheetsControllerProvider.notifier).loadSheets(sheets);
       ref.read(loadErrorProvider.notifier).clear();
@@ -344,7 +356,7 @@ class _TopBar extends ConsumerWidget {
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
               label: context.strings(StringKey.shellImportPdf),
-              onPressed: () => _pickAndLoadPdf(ref),
+              onPressed: () => _pickAndLoadPdf(context, ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
