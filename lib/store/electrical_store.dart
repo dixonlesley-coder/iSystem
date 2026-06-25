@@ -623,6 +623,52 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     _replacePanel(panelId, (p) => p.copyWith(circuits: [...p.circuits, circuit]));
   }
 
+  /// Drop a load onto blank plan with NO panel to attach to: it becomes a
+  /// floating LOAD (a one-way utility-fed stub) placed at [pos] — so it renders
+  /// as its load icon on the sheet, NOT a generic panel. The stub board has no
+  /// `layoutPos` (only the circuit's `loadPos` is placed), so the layer draws
+  /// just the load symbol; wire it to a feeder later to fold it into a board.
+  void addFloatingLoadAtLayout({
+    required LoadKind kind,
+    required LayoutPos pos,
+    String? name,
+    int? phases,
+    double? loadW,
+    double? motorKw,
+  }) {
+    final d = loadDefaults[kind];
+    final isMotor = kind == LoadKind.motor || kind == LoadKind.pump;
+    final threePhase = phases == 3;
+    final circuit = ElectricalCircuit(
+      id: _freshId('c'),
+      name: name ?? (d?.label ?? 'Load'),
+      loadKind: kind,
+      cosPhi: d?.cosPhi ?? 0.85,
+      demandFactor: d?.demandFactor ?? 1,
+      isLighting: kind == LoadKind.lighting,
+      phases: phases,
+      motorKw: isMotor ? (motorKw ?? 3.0) : null,
+      loadW: isMotor || kind == LoadKind.spare || kind == LoadKind.feeder
+          ? 0
+          : (loadW ?? 2000),
+      length: const Length(20),
+      loadPos: pos,
+    );
+    final panel = ElectricalPanel(
+      id: _freshId('panel'),
+      name: name ?? (d?.label ?? 'Load'),
+      tag: null,
+      system: threePhase
+          ? ElectricalSystem.threePhase
+          : ElectricalSystem.singlePhase,
+      voltage: threePhase ? const Voltage(400) : const Voltage(220),
+      x: pos.x,
+      y: pos.y,
+      circuits: [circuit],
+    );
+    state = _withProject(panels: [...state.panels, panel]);
+  }
+
   /// Monotonic id source for new panels / circuits (deterministic per process,
   /// distinct across calls — sufficient for in-memory editing).
   static int _idSeq = 0;
