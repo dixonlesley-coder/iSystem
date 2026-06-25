@@ -32,6 +32,7 @@ import '../../store/project_store.dart';
 import '../canvas/viewport.dart';
 import '../electrical/electrical_canvas.dart' show phaseColorFor;
 import '../electrical/electrical_format.dart';
+import '../electrical/load_symbols.dart';
 import '../electrical/electrical_layout_view.dart'
     show
         kLayoutLod,
@@ -115,6 +116,11 @@ class ElectricalLayoutLayer extends ConsumerWidget {
     final nodeWidgets = <Widget>[
       for (final p in placedPanels)
         ..._panelNodes(context, ref, ctrl, p, result, vt, opacity),
+      // Floating loads — placed circuits whose stub board is NOT itself placed
+      // on this sheet (drop-on-blank). Render the load icon on its own.
+      for (final p in project.panels)
+        if (!onSheet(p.layoutPos))
+          ..._loadNodes(context, ref, ctrl, p, result, vt, opacity),
     ];
 
     return Stack(
@@ -233,6 +239,26 @@ class ElectricalLayoutLayer extends ConsumerWidget {
       ),
     ));
 
+    widgets.addAll(_loadNodes(context, ref, ctrl, panel, result, vt, opacity));
+    return widgets;
+  }
+
+  /// The placed-LOAD icons for a panel's circuits (those with a `loadPos` on
+  /// this sheet). Rendered for EVERY panel — including a floating-load stub
+  /// board that has no `layoutPos` — so a load dropped on blank plan shows as
+  /// its symbol rather than vanishing or becoming a panel.
+  List<Widget> _loadNodes(
+    BuildContext context,
+    WidgetRef ref,
+    ElectricalProjectController ctrl,
+    ElectricalPanel panel,
+    ElectricalSystemResult result,
+    ViewportTransform vt,
+    double opacity,
+  ) {
+    final pr = result.panels[panel.id];
+    final detail = vt.scale >= kLayoutLod;
+    final widgets = <Widget>[];
     for (final c in panel.circuits) {
       final lp = c.loadPos;
       if (lp == null ||
@@ -618,61 +644,59 @@ class _LoadMarkerState extends State<_LoadMarker> {
     final util =
         (r != null && rating > 0) ? (r.designCurrent.amperes / rating * 100) : null;
 
-    final body = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      decoration: BoxDecoration(
-        color: colors.surface.withAlpha(245),
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: _hover ? colors.accent : colors.border),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x30000000), blurRadius: 4, offset: Offset(0, 1)),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 18,
-                height: 14,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  border: Border.all(color: colors.textMuted.withAlpha(140)),
-                  borderRadius: const BorderRadius.all(Radius.circular(3)),
-                ),
-                child: Text(_glyph(c.loadKind),
-                    style: TextStyle(
-                      fontFamily: 'Roboto',
-                      fontSize: 8,
-                      fontWeight: FontWeight.w700,
-                      color: colors.textSecondary,
-                    )),
-              ),
-              const SizedBox(width: 4),
-              Flexible(
-                child: Text(c.name,
+    // Icon-first: the load's industry-standard symbol in a small chip, with the
+    // name (and amps) as a quiet caption below it only when zoomed in.
+    final symbolColor = _hover ? colors.accent : colors.textSecondary;
+    final body = Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Container(
+          width: 30,
+          height: 30,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: colors.surface.withAlpha(245),
+            borderRadius: MechXRadii.control,
+            border: Border.all(color: _hover ? colors.accent : colors.border),
+            boxShadow: const [
+              BoxShadow(
+                  color: Color(0x30000000), blurRadius: 4, offset: Offset(0, 1)),
+            ],
+          ),
+          child: LoadSymbol(kind: c.loadKind, color: symbolColor, size: 20),
+        ),
+        if (widget.detail) ...[
+          const SizedBox(height: 2),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(
+              color: colors.surface.withAlpha(220),
+              borderRadius: const BorderRadius.all(Radius.circular(3)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(c.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: type.caption.copyWith(
                         color: colors.textPrimary,
                         fontWeight: FontWeight.w700,
                         fontSize: 9)),
-              ),
-            ],
-          ),
-          if (widget.detail)
-            Text(
-              util != null
-                  ? '${fmtAmp0(rating)}A · ${util.round()}%'
-                  : (rating > 0 ? '${fmtAmp0(rating)}A' : 'placed'),
-              style: type.caption.copyWith(color: colors.textMuted, fontSize: 8),
+                if (rating > 0)
+                  Text(
+                    util != null
+                        ? '${fmtAmp0(rating)}A · ${util.round()}%'
+                        : '${fmtAmp0(rating)}A',
+                    style:
+                        type.caption.copyWith(color: colors.textMuted, fontSize: 8),
+                  ),
+              ],
             ),
+          ),
         ],
-      ),
+      ],
     );
 
     return MouseRegion(
@@ -698,19 +722,6 @@ class _LoadMarkerState extends State<_LoadMarker> {
     );
   }
 
-  String _glyph(LoadKind kind) => switch (kind) {
-        LoadKind.lighting => 'L',
-        LoadKind.socket => 'SO',
-        LoadKind.motor => 'M',
-        LoadKind.pump => 'P',
-        LoadKind.hvac => 'AC',
-        LoadKind.heating => 'H',
-        LoadKind.ups => 'U',
-        LoadKind.evCharger => 'EV',
-        LoadKind.welding => 'W',
-        LoadKind.spare => 'SP',
-        _ => 'G',
-      };
 }
 
 // ── Node drag (move a placed node) ───────────────────────────────────────────
@@ -877,15 +888,15 @@ class _SheetDropTargetState extends ConsumerState<_SheetDropTarget> {
 
     final nearest = _nearestPanel(project, world);
     if (nearest == null) {
-      final n = project.panels.length + 1;
-      widget.controller.addPanelAt(
-        name: 'Panel $n',
-        tag: 'P-$n',
-        x: 80 + n * 40,
-        y: 80 + n * 40,
+      // No board placed yet — drop a floating LOAD (rendered as its icon), not
+      // a generic panel. It stays a utility-fed stub until wired to a feeder.
+      widget.controller.addFloatingLoadAtLayout(
+        kind: load.kind,
+        pos: pos,
+        phases: load.phases,
+        loadW: load.loadW > 0 ? load.loadW : null,
+        motorKw: load.motorKw,
       );
-      final added = ref.read(electricalProjectProvider).panels.last;
-      widget.controller.setPanelLayoutPos(added.id, pos);
       return;
     }
     widget.controller.addLoadAtLayout(

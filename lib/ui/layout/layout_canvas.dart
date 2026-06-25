@@ -32,6 +32,7 @@ import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
+import '../../store/models/sheet.dart';
 import '../../store/sheets_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/calibration_overlay.dart';
@@ -74,6 +75,19 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   final Map<String, GlobalKey<CanvasViewState>> _canvasKeys = {};
   GlobalKey<CanvasViewState> canvasKeyFor(String id) =>
       _canvasKeys.putIfAbsent(id, () => GlobalKey<CanvasViewState>());
+
+  /// The PDF page widget per sheet, built ONCE and cached. The shared sheet
+  /// rebuilds on every viewport change (it watches the sheets controller for
+  /// the live transform), and rebuilding the content re-instantiated the pdfrx
+  /// page — which flashed its white placeholder while it re-resolved, so any
+  /// pan/zoom/edit blanked the drawing. Returning the same instance lets the
+  /// framework skip the PDF subtree entirely, so it stays put.
+  final Map<String, Widget> _contentCache = {};
+  Widget contentFor(Sheet sheet) {
+    final key = '${sheet.id}:${sheet.pageIndex}:${sheet.pdfPath}';
+    return _contentCache.putIfAbsent(
+        key, () => ref.read(sheetContentBuilderProvider)(context, sheet));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -452,7 +466,7 @@ class _SharedSheet extends ConsumerWidget {
       );
     }
 
-    final content = ref.watch(sheetContentBuilderProvider)(context, sheet);
+    final content = host.contentFor(sheet);
     final calibrating = ref.watch(calibrationControllerProvider).isActive;
     final drawing = ref.watch(networkControllerProvider).isDrawing;
     final showHeatmap = ref.watch(showHeatmapProvider);

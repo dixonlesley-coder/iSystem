@@ -18,6 +18,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/palette_card.dart';
 import '../widgets/section_label.dart';
+import 'load_symbols.dart';
 
 /// The drag payload — what a palette card drops.
 @immutable
@@ -168,6 +169,15 @@ class ElectricalPalette extends StatelessWidget {
                               : colors.accent,
                           data: c.load,
                           fillWidth: true,
+                          // Show the load's industry-standard symbol so the
+                          // palette matches how it'll appear on the plan.
+                          leading: LoadSymbol(
+                            kind: c.load.kind,
+                            color: c.load.kind == LoadKind.feeder
+                                ? colors.success
+                                : colors.accent,
+                            size: 16,
+                          ),
                         ),
                       ),
                   ],

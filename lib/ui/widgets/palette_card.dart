@@ -21,6 +21,10 @@ class PaletteCard<T extends Object> extends StatefulWidget {
   final bool dotHollow;
   final bool fillWidth;
 
+  /// An optional leading visual that replaces the swatch dot (e.g. a schematic
+  /// load symbol). When null, the [swatch] dot is shown.
+  final Widget? leading;
+
   const PaletteCard({
     super.key,
     required this.label,
@@ -29,6 +33,7 @@ class PaletteCard<T extends Object> extends StatefulWidget {
     this.dotShape = BoxShape.circle,
     this.dotHollow = false,
     this.fillWidth = false,
+    this.leading,
   });
 
   @override
@@ -101,20 +106,23 @@ class _PaletteCardState<T extends Object> extends State<PaletteCard<T>> {
       child: Row(
         mainAxisSize: fill ? MainAxisSize.max : MainAxisSize.min,
         children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(
-              color: widget.dotHollow ? const Color(0x00000000) : widget.swatch,
-              shape: widget.dotShape,
-              borderRadius: widget.dotShape == BoxShape.rectangle
-                  ? const BorderRadius.all(Radius.circular(2))
-                  : null,
-              border: widget.dotHollow
-                  ? Border.all(color: widget.swatch, width: 1.5)
-                  : null,
-            ),
-          ),
+          widget.leading ??
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: widget.dotHollow
+                      ? const Color(0x00000000)
+                      : widget.swatch,
+                  shape: widget.dotShape,
+                  borderRadius: widget.dotShape == BoxShape.rectangle
+                      ? const BorderRadius.all(Radius.circular(2))
+                      : null,
+                  border: widget.dotHollow
+                      ? Border.all(color: widget.swatch, width: 1.5)
+                      : null,
+                ),
+              ),
           const SizedBox(width: MechXSpacing.xs),
           // In a full-width list the label flexes (ellipsis on overflow); the
           // compact (feedback / Wrap) form hugs its content.

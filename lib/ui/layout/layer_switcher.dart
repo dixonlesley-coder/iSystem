@@ -155,8 +155,9 @@ class _LayerSegmentState extends State<_LayerSegment> {
   }
 }
 
-/// A tiny visibility indicator: a filled ring when visible, a hollow ring with a
-/// slash when hidden. Custom-painted (no icon font), so it never tofus.
+/// The show/hide control: a clear almond eye with a pupil when the layer is
+/// shown, struck through when hidden. Custom-painted (no icon font), so it
+/// never tofus. Larger than a dot so it reads as a real toggle.
 class _EyeDot extends StatelessWidget {
   final bool visible;
   final Color color;
@@ -164,7 +165,7 @@ class _EyeDot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) =>
-      CustomPaint(size: const Size(13, 13), painter: _EyePainter(visible, color));
+      CustomPaint(size: const Size(18, 14), painter: _EyePainter(visible, color));
 }
 
 class _EyePainter extends CustomPainter {
@@ -174,27 +175,37 @@ class _EyePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final c = size.center(Offset.zero);
+    final w = size.width;
+    final h = size.height;
+    final cx = w / 2;
+    final cy = h / 2;
     final stroke = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4
-      ..strokeCap = StrokeCap.round;
-    if (visible) {
-      canvas.drawCircle(c, size.width * 0.34, stroke);
-      canvas.drawCircle(c, size.width * 0.12, Paint()..color = color);
-    } else {
-      canvas.drawCircle(c, size.width * 0.34,
-          Paint()
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    // Almond eye outline (upper + lower lid).
+    final eye = Path()
+      ..moveTo(w * 0.08, cy)
+      ..quadraticBezierTo(cx, h * 0.02, w * 0.92, cy)
+      ..quadraticBezierTo(cx, h * 0.98, w * 0.08, cy)
+      ..close();
+    canvas.drawPath(eye, stroke);
+    // Pupil — filled when shown, hollow when hidden.
+    canvas.drawCircle(
+      Offset(cx, cy),
+      h * 0.22,
+      visible
+          ? (Paint()..color = color)
+          : (Paint()
             ..color = color
             ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.0);
-      // A slash through it.
-      canvas.drawLine(
-        Offset(size.width * 0.18, size.height * 0.82),
-        Offset(size.width * 0.82, size.height * 0.18),
-        stroke,
-      );
+            ..strokeWidth = 1.2),
+    );
+    if (!visible) {
+      // Strike-through for the hidden state.
+      canvas.drawLine(Offset(w * 0.1, h * 0.92), Offset(w * 0.9, h * 0.08), stroke);
     }
   }
 
