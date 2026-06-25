@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/project_store.dart';
+import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/shell/nav_rail.dart';
 
 import 'test_util.dart';
@@ -41,6 +42,26 @@ void main() {
     await tester.pump();
     expect(container.read(projectControllerProvider).floors.length, 4);
     expect(find.text('Level 3'), findsOneWidget);
+  });
+
+  testWidgets('assigning a floor plan maps that sheet to the level',
+      (tester) async {
+    await _openBuilding(tester);
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+
+    // The top card is Level 2 (floor index 2). Open its plan picker.
+    await tester.tap(find.text('Change').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Assign a floor plan'), findsOneWidget);
+
+    // Pick the demo 'Ground Floor' sheet (id s1) for the top level.
+    await tester.tap(find.text('Ground Floor').last);
+    await tester.pumpAndSettle();
+    expect(container.read(sheetsControllerProvider).floorFor('s1', 3), 2);
   });
 
   testWidgets('the height stepper nudges a floor height', (tester) async {

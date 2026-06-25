@@ -3,7 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/models/sheet.dart';
 import '../../store/project_store.dart';
+import '../../store/sheets_store.dart';
+import '../sheets/pdf_page_picker.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
@@ -25,12 +28,22 @@ class BuildingScreen extends ConsumerWidget {
     final project = ref.watch(projectControllerProvider);
     final ctrl = ref.read(projectControllerProvider.notifier);
     final building = project.building;
+    final sheetsState = ref.watch(sheetsControllerProvider);
+
+    // The sheet (PDF page) assigned to each level — the first sheet whose
+    // floor mapping lands on it (a floor may carry more than one sheet).
+    Sheet? sheetForFloor(int level) {
+      for (final s in sheetsState.sheets) {
+        if (sheetsState.floorFor(s.id, building.levelCount) == level) return s;
+      }
+      return null;
+    }
 
     return HubScaffold(
       title: 'Building',
       lead: 'Floor-to-floor heights are the single source of truth for every '
-          'riser length (vertical run). Rename a level, set its height, or add '
-          'and remove levels.',
+          'riser length (vertical run). Rename a level, set its height, assign '
+          'its PDF page, or add and remove levels.',
       children: [
         HubStatRow(stats: [
           ('Total height', '${building.totalHeight.meters.toStringAsFixed(1)} m'),
@@ -44,9 +57,13 @@ class BuildingScreen extends ConsumerWidget {
           _LevelCard(
             floor: project.floors[i],
             elevation: building.elevationOf(i),
+            sheet: sheetForFloor(i),
             onRename: (name) => ctrl.renameFloor(i, name),
             onHeightMinus: () => ctrl.nudgeFloorHeight(i, -0.1),
             onHeightPlus: () => ctrl.nudgeFloorHeight(i, 0.1),
+            onPickSheet: sheetsState.sheets.isEmpty
+                ? null
+                : () => _pickSheetForFloor(context, ref, i),
             onRemove: project.floors.length > 1
                 ? () => ctrl.removeFloor(i)
                 : null,
@@ -61,23 +78,37 @@ class BuildingScreen extends ConsumerWidget {
       ],
     );
   }
+
+  /// Open the sheet picker for [floorIndex] and assign the chosen PDF page to
+  /// this level (mapping it via the sheets store).
+  Future<void> _pickSheetForFloor(
+      BuildContext context, WidgetRef ref, int floorIndex) async {
+    final sheets = ref.read(sheetsControllerProvider).sheets;
+    final id = await showSheetPicker(context, sheets);
+    if (id == null) return;
+    ref.read(sheetsControllerProvider.notifier).setSheetFloor(id, floorIndex);
+  }
 }
 
 /// One level's editable card: name, elevation, and floor-to-floor height.
 class _LevelCard extends StatelessWidget {
   final Floor floor;
   final Length elevation;
+  final Sheet? sheet;
   final ValueChanged<String> onRename;
   final VoidCallback onHeightMinus;
   final VoidCallback onHeightPlus;
+  final VoidCallback? onPickSheet;
   final VoidCallback? onRemove;
 
   const _LevelCard({
     required this.floor,
     required this.elevation,
+    required this.sheet,
     required this.onRename,
     required this.onHeightMinus,
     required this.onHeightPlus,
+    required this.onPickSheet,
     required this.onRemove,
   });
 
@@ -118,6 +149,33 @@ class _LevelCard extends StatelessWidget {
             value: '${floor.height.meters.toStringAsFixed(1)} m',
             onMinus: onHeightMinus,
             onPlus: onHeightPlus,
+          ),
+          const SizedBox(height: MechXSpacing.xs),
+          // The PDF page assigned to this level.
+          Row(
+            children: [
+              Expanded(
+                child: Text('Floor plan',
+                    style: type.body.copyWith(color: colors.textSecondary)),
+              ),
+              Flexible(
+                child: Text(
+                  sheet?.name ?? 'none',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: type.caption.copyWith(
+                      color: sheet == null
+                          ? colors.textMuted
+                          : colors.textSecondary),
+                ),
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              MechXButton(
+                label: sheet == null ? 'Assign' : 'Change',
+                onPressed: onPickSheet,
+              ),
+            ],
           ),
         ],
       ),
