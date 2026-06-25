@@ -19,6 +19,7 @@
 /// Styled with MechXTheme — no Material.
 library;
 
+import 'package:flutter/gestures.dart' show kMiddleMouseButton;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -76,6 +77,27 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   final Map<String, GlobalKey<CanvasViewState>> _canvasKeys = {};
   GlobalKey<CanvasViewState> canvasKeyFor(String id) =>
       _canvasKeys.putIfAbsent(id, () => GlobalKey<CanvasViewState>());
+
+  // Middle-button PAN, handled here (an ancestor of the sheet's overlays) so it
+  // works even though the overlays are opaque and would swallow the drag at the
+  // CanvasView below. Drives the live canvas via [canvasKeyFor].
+  bool _midPanning = false;
+  Offset _midLast = Offset.zero;
+
+  void midPanDown(PointerDownEvent e) {
+    if (e.buttons & kMiddleMouseButton != 0) {
+      _midPanning = true;
+      _midLast = e.localPosition;
+    }
+  }
+
+  void midPanMove(PointerMoveEvent e, String sheetId) {
+    if (!_midPanning) return;
+    canvasKeyFor(sheetId).currentState?.panByScreen(e.localPosition - _midLast);
+    _midLast = e.localPosition;
+  }
+
+  void midPanEnd() => _midPanning = false;
 
   /// The PDF page widget per sheet, built ONCE and cached. The shared sheet
   /// rebuilds on every viewport change (it watches the sheets controller for
@@ -495,7 +517,13 @@ class _SharedSheet extends ConsumerWidget {
     // layer reads, so both disciplines ride the SAME pan/zoom.
     final vt = sheetsState.viewportFor(sheet.id) ?? const ViewportTransform();
 
-    return Stack(
+    return Listener(
+      // Middle-button drag pans the canvas (handled above the opaque overlays).
+      onPointerDown: host.midPanDown,
+      onPointerMove: (e) => host.midPanMove(e, sheet.id),
+      onPointerUp: (_) => host.midPanEnd(),
+      onPointerCancel: (_) => host.midPanEnd(),
+      child: Stack(
       children: [
         // The PDF sheet, pannable/zoomable — drives the shared viewport.
         Positioned.fill(
@@ -609,6 +637,7 @@ class _SharedSheet extends ConsumerWidget {
           ),
         ),
       ],
+      ),
     );
   }
 }
