@@ -69,6 +69,7 @@ void main() {
             floorIndex: 1,
             role: NodeRole.fixture,
             fixture: PlumbingFixture.lavatory,
+            mountHeight: Length(1.4), // per-node wall height
           ),
         ],
         edges: [
@@ -102,6 +103,9 @@ void main() {
     expect(decoded.network.nodes[0].elevation?.meters, 30);
     expect(decoded.network.nodes[2].role, NodeRole.fixture);
     expect(decoded.network.nodes[2].fixture, PlumbingFixture.lavatory);
+    expect(decoded.network.nodes[2].mountHeight?.meters, closeTo(1.4, 1e-9));
+    // a node without a mountHeight loads it as null (role default)
+    expect(decoded.network.nodes[0].mountHeight, isNull);
     expect(decoded.network.nodes[1].role, NodeRole.fixture);
     expect(decoded.network.nodes[1].airflow?.inLitersPerSecond, closeTo(45, 1e-9));
     expect(decoded.network.nodes[1].fixture, isNull);

@@ -106,6 +106,21 @@ void main() {
       expect(nodeElevation(plant, building).meters, closeTo(11.0, 1e-9));
     });
 
+    test('nodeElevation: per-node mountHeight places it on its floor wall', () {
+      // A fixture on floor 1 (surface 4.0 m) mounted 1.5 m up the wall sits at
+      // 4.0 + 1.5 = 5.5 m — overriding the 1.1 m role default.
+      const mounted = NetNode(
+          id: 'm', sheetId: 's1', x: 0, y: 0, floorIndex: 1,
+          role: NodeRole.fixture, mountHeight: Length(1.5));
+      expect(nodeElevation(mounted, building).meters, closeTo(5.5, 1e-9));
+      // An explicit absolute elevation still wins over mountHeight.
+      const both = NetNode(
+          id: 'm2', sheetId: 's1', x: 0, y: 0, floorIndex: 1,
+          role: NodeRole.fixture,
+          elevation: Length(9.0), mountHeight: Length(1.5));
+      expect(nodeElevation(both, building).meters, closeTo(9.0, 1e-9));
+    });
+
     test('uncalibrated run yields zero length (flagged elsewhere)', () {
       final len = edgeLength(net.edges[0], net,
           calibrationBySheet: const {}, building: building);

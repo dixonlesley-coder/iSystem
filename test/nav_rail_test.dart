@@ -36,6 +36,7 @@ void main() {
       'Layout', // "Plan" relabelled — the unified shared-PDF canvas
       'Schematic',
       'Electrical',
+      'Building',
       'Review',
       'Commercial',
       'Projects',
@@ -133,6 +134,7 @@ void main() {
       'Layout',
       'Schematic',
       'Electrical',
+      'Building',
       'Review',
       'Commercial',
       'Projects',

@@ -23,6 +23,7 @@ import 'inspector/project_panel.dart';
 import 'layout/layout_canvas.dart';
 import 'review/review_hub.dart';
 import 'schematic/schematic_view.dart';
+import 'shell/building_screen.dart';
 import 'shell/nav_rail.dart';
 import 'shell/preferences_screen.dart';
 import 'shell/projects_screen.dart';
@@ -89,6 +90,8 @@ class _ShellBody extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final section = ref.watch(shellSectionProvider);
     switch (section) {
+      case ShellSection.building:
+        return const BuildingScreen();
       case ShellSection.review:
         return const ReviewHub();
       case ShellSection.commercial:

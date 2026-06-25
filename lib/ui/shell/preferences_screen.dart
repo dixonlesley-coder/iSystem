@@ -2,6 +2,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/app_state.dart';
+import '../../update/update_check.dart';
+import '../../update/update_provider.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -21,6 +23,7 @@ class PreferencesScreen extends ConsumerWidget {
     final isDark = brightness == Brightness.dark;
     final locale = ref.watch(localeProvider);
     final otherLocale = locale == AppLocale.en ? AppLocale.id : AppLocale.en;
+    final update = ref.watch(updateControllerProvider);
 
     return HubScaffold(
       title: strings(StringKey.prefsTitle),
@@ -46,9 +49,51 @@ class PreferencesScreen extends ConsumerWidget {
             onPressed: () => ref.read(localeProvider.notifier).set(otherLocale),
           ),
         ),
+        const SizedBox(height: MechXSpacing.sm),
+        _SettingCard(
+          title: 'Software update',
+          value: _updateStatusText(update),
+          action: _updateAction(ref, update),
+        ),
       ],
     );
   }
+}
+
+/// Human-readable status line for the update card, mapping each [UpdateStatus]
+/// branch to a calm sentence. (English literals — Preferences isn't in the
+/// golden set; an i18n pass for these keys is a noted follow-up.)
+String _updateStatusText(UpdateStatus s) => switch (s) {
+      UpdateDisabled(:final reason) => reason,
+      UpdateIdle() => 'Checks automatically on launch and every 6 hours.',
+      UpdateChecking() => 'Checking for updates...',
+      UpdateAvailable(:final version) =>
+        'Update available: v$version - downloading...',
+      UpdateDownloading(:final percent) => 'Downloading update... $percent%',
+      UpdateDownloaded(:final version) => 'Update v$version is ready to install.',
+      UpdateUpToDate() => "You're on the latest version.",
+      UpdateError(:final message) => 'Update check failed: $message',
+    };
+
+/// The trailing action for the update card. A ready download offers "Restart &
+/// update" (primary); otherwise a "Check for updates" button (or "Retry" after
+/// an error), disabled while a check/download is mid-flight. In a disabled
+/// (non-release) build the action is omitted entirely.
+Widget _updateAction(WidgetRef ref, UpdateStatus s) {
+  final ctrl = ref.read(updateControllerProvider.notifier);
+  if (s is UpdateDisabled) return const SizedBox.shrink();
+  if (s is UpdateDownloaded) {
+    return MechXButton(
+      label: 'Restart & update',
+      primary: true,
+      onPressed: ctrl.installUpdate,
+    );
+  }
+  final busy = s is UpdateChecking || s is UpdateDownloading;
+  return MechXButton(
+    label: s is UpdateError ? 'Retry' : 'Check for updates',
+    onPressed: busy ? null : ctrl.checkForUpdates,
+  );
 }
 
 /// A single settings row: a title + current value on the left, an action on the

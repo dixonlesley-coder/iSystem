@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
@@ -29,6 +30,7 @@ import '../../store/sizing_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/segment_palette.dart';
 import '../canvas/service_style.dart';
+import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
 import 'fixture_library_editor.dart';
 import '../theme/design_tokens.dart';
@@ -200,44 +202,18 @@ class ProjectPanel extends ConsumerWidget {
               ),
               const SizedBox(height: MechXSpacing.lg),
 
-              // ── Building / floor heights ──────────────────────────────────
-              Row(
-                children: [
-                  Expanded(
-                      child: MechXSectionLabel(
-                          context.strings(StringKey.inspectorBuilding))),
-                  const SizedBox(width: MechXSpacing.xs),
-                  Flexible(
-                    child: Text(
-                      '${building.totalHeight.meters.toStringAsFixed(1)} m · '
-                      '${building.levelCount} levels',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.right,
-                      style: type.caption.copyWith(color: colors.textMuted),
-                    ),
-                  ),
-                ],
-              ),
+              // ── Building (summary → its own page) ─────────────────────────
+              // The full floor/level editor (+ per-floor fixture heights) now
+              // lives on the dedicated Building page so the inspector stays
+              // canvas-focused; this is a read-only summary that opens it.
+              MechXSectionLabel(context.strings(StringKey.inspectorBuilding)),
               const SizedBox(height: MechXSpacing.sm),
-              // Top floor first.
-              for (var i = project.floors.length - 1; i >= 0; i--)
-                _FloorRow(
-                  name: project.floors[i].name,
-                  height: project.floors[i].height,
-                  elevation: building.elevationOf(i),
-                  onMinus: () => ctrl.nudgeFloorHeight(i, -0.1),
-                  onPlus: () => ctrl.nudgeFloorHeight(i, 0.1),
-                  onRemove: project.floors.length > 1
-                      ? () => ctrl.removeFloor(i)
-                      : null,
-                ),
-              const SizedBox(height: MechXSpacing.sm),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: MechXButton(
-                    label: context.strings(StringKey.inspectorAddLevel),
-                    onPressed: ctrl.addFloor),
+              _BuildingSummary(
+                summary: '${building.totalHeight.meters.toStringAsFixed(1)} m · '
+                    '${building.levelCount} levels',
+                onOpen: () => ref
+                    .read(shellSectionProvider.notifier)
+                    .set(ShellSection.building),
               ),
               const SizedBox(height: MechXSpacing.lg),
 
@@ -363,61 +339,59 @@ class ProjectPanel extends ConsumerWidget {
   }
 }
 
-class _FloorRow extends StatelessWidget {
-  final String name;
-  final Length height;
-  final Length elevation;
-  final VoidCallback onMinus;
-  final VoidCallback onPlus;
-  final VoidCallback? onRemove;
+/// The compact building summary shown in the inspector: a one-line "11.0 m · 3
+/// levels" readout in a tappable card that opens the dedicated Building page
+/// (where floors are edited). Keeps the inspector canvas-focused.
+class _BuildingSummary extends StatefulWidget {
+  final String summary;
+  final VoidCallback onOpen;
+  const _BuildingSummary({required this.summary, required this.onOpen});
 
-  const _FloorRow({
-    required this.name,
-    required this.height,
-    required this.elevation,
-    required this.onMinus,
-    required this.onPlus,
-    required this.onRemove,
-  });
+  @override
+  State<_BuildingSummary> createState() => _BuildingSummaryState();
+}
+
+class _BuildingSummaryState extends State<_BuildingSummary> {
+  bool _hover = false;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return MechXFocusRing(
+      borderRadius: MechXRadii.control,
+      onActivated: widget.onOpen,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onOpen,
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            padding: const EdgeInsets.all(MechXSpacing.sm),
+            decoration: BoxDecoration(
+              color: _hover ? colors.surfaceHover : colors.background,
+              borderRadius: MechXRadii.control,
+              border: Border.all(color: _hover ? colors.textMuted : colors.border),
+            ),
+            child: Row(
               children: [
-                Text(name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: type.body.copyWith(color: colors.textPrimary)),
-                Text('elev ${elevation.meters.toStringAsFixed(1)} m',
-                    style: type.caption.copyWith(color: colors.textMuted)),
+                Expanded(
+                  child: Text(widget.summary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          type.body.copyWith(color: colors.textSecondary)),
+                ),
+                const SizedBox(width: MechXSpacing.xs),
+                Text('Edit',
+                    style: type.caption.copyWith(color: colors.accent)),
               ],
             ),
           ),
-          _GlyphButton(glyph: '−', onTap: onMinus),
-          SizedBox(
-            width: 56,
-            child: Text(
-              '${height.meters.toStringAsFixed(1)} m',
-              textAlign: TextAlign.center,
-              style: type.mono.copyWith(color: colors.textPrimary),
-            ),
-          ),
-          _GlyphButton(glyph: '+', onTap: onPlus),
-          const SizedBox(width: MechXSpacing.xs),
-          _GlyphButton(
-            glyph: '×',
-            onTap: onRemove,
-            danger: true,
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -426,8 +400,7 @@ class _FloorRow extends StatelessWidget {
 class _GlyphButton extends StatefulWidget {
   final String glyph;
   final VoidCallback? onTap;
-  final bool danger;
-  const _GlyphButton({required this.glyph, required this.onTap, this.danger = false});
+  const _GlyphButton({required this.glyph, required this.onTap});
 
   @override
   State<_GlyphButton> createState() => _GlyphButtonState();
@@ -443,9 +416,7 @@ class _GlyphButtonState extends State<_GlyphButton> {
     final enabled = widget.onTap != null;
     final fg = !enabled
         ? colors.textMuted.withAlpha(90)
-        : widget.danger
-            ? (_hover ? colors.danger : colors.textMuted)
-            : (_hover ? colors.textPrimary : colors.textSecondary);
+        : (_hover ? colors.textPrimary : colors.textSecondary);
     final glyph = AnimatedScale(
       scale: _down && enabled ? 0.9 : 1.0,
       duration: MechXMotion.press,
@@ -1167,6 +1138,54 @@ class _SelectionSection extends ConsumerWidget {
                 selected: node.role == r,
                 onTap: () => ctrl.setNodeRole(node.id, r),
               ),
+          ],
+        ),
+        // Per-node mounting height — "how high on the wall" this fixture/outlet
+        // sits above its own floor. Drives the vertical pipe/cable run to it
+        // (§10). Shown in cm; "default" = the role's standard height.
+        const SizedBox(height: MechXSpacing.sm),
+        Text('Mounting height (above floor)',
+            style:
+                context.type.caption.copyWith(color: context.colors.textMuted)),
+        const SizedBox(height: MechXSpacing.xs),
+        Row(
+          children: [
+            _GlyphButton(
+              glyph: '−',
+              onTap: () {
+                final base = node.mountHeight?.meters ??
+                    const MountingHeights().fixtureHeight.meters;
+                final next = base - 0.05;
+                // Stepping down through floor level reverts to the role default.
+                ctrl.setNodeMountHeight(
+                    node.id, next <= 0 ? null : Length(next));
+              },
+            ),
+            const SizedBox(width: MechXSpacing.sm),
+            Text(
+              node.mountHeight == null
+                  ? 'default'
+                  : '${(node.mountHeight!.meters * 100).round()} cm',
+              style: context.type.mono
+                  .copyWith(color: context.colors.textSecondary),
+            ),
+            const SizedBox(width: MechXSpacing.sm),
+            _GlyphButton(
+              glyph: '+',
+              onTap: () {
+                final base = node.mountHeight?.meters ??
+                    const MountingHeights().fixtureHeight.meters;
+                ctrl.setNodeMountHeight(node.id, Length(base + 0.05));
+              },
+            ),
+            if (node.mountHeight != null) ...[
+              const SizedBox(width: MechXSpacing.sm),
+              MechXButton(
+                label: 'Reset',
+                tertiary: true,
+                onPressed: () => ctrl.setNodeMountHeight(node.id, null),
+              ),
+            ],
           ],
         ),
         if (node.role == NodeRole.fixture) ...[

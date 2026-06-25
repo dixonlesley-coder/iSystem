@@ -12,7 +12,7 @@ import '../widgets/mechx_focus_ring.dart';
 /// The top-level destination chosen in the left navigation rail. `design` shows
 /// the workspace area (Plan / Schematic / Electrical, driven by
 /// [workspaceViewProvider]); the others show their own screens.
-enum ShellSection { design, review, commercial, projects, preferences }
+enum ShellSection { design, building, review, commercial, projects, preferences }
 
 /// Active shell section. Defaults to [ShellSection.design] so a fresh launch
 /// (and the golden-screenshot test, which only sets [workspaceViewProvider])
@@ -47,7 +47,7 @@ class NavRailCollapsedController extends Notifier<bool> {
 
 /// The kinds of glyph the rail draws. Custom-painted (no icon font) so nothing
 /// can render as tofu in the goldens.
-enum _Glyph { plan, schematic, electrical, review, commercial, projects, preferences }
+enum _Glyph { plan, schematic, electrical, building, review, commercial, projects, preferences }
 
 /// PanelMaker's left navigation rail, mirrored for iSystem's M+E+P workspaces.
 ///
@@ -145,6 +145,13 @@ class NavRail extends ConsumerWidget {
             onTap: () => openDesign(WorkspaceView.electrical),
           ),
           const SizedBox(height: MechXSpacing.sm),
+          _NavItem(
+            glyph: _Glyph.building,
+            label: strings(StringKey.navBuilding),
+            active: section == ShellSection.building,
+            collapsed: collapsed,
+            onTap: () => sectionCtrl.set(ShellSection.building),
+          ),
           _NavItem(
             glyph: _Glyph.review,
             label: strings(StringKey.navReview),
@@ -459,6 +466,23 @@ class _GlyphPainter extends CustomPainter {
           ..lineTo(w * 0.52, h * 0.42)
           ..close();
         canvas.drawPath(p, fill);
+      case _Glyph.building:
+        // A multi-storey tower: an outline with a grid of window squares and a
+        // door at the base — reads as "building / floors".
+        final r = Rect.fromLTWH(w * 0.26, h * 0.14, w * 0.48, h * 0.74);
+        canvas.drawRect(r, stroke);
+        // Three rows of two windows.
+        for (var row = 0; row < 3; row++) {
+          for (var col = 0; col < 2; col++) {
+            final wx = w * (0.36 + col * 0.18);
+            final wy = h * (0.26 + row * 0.18);
+            canvas.drawRect(
+                Rect.fromLTWH(wx, wy, w * 0.08, h * 0.08), stroke);
+          }
+        }
+        // A door centred at the base.
+        canvas.drawRect(
+            Rect.fromLTWH(w * 0.45, h * 0.72, w * 0.10, h * 0.16), stroke);
       case _Glyph.review:
         // A simple bar chart (three columns of different heights).
         canvas.drawLine(

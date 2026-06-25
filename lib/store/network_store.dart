@@ -326,6 +326,7 @@ class NetworkController extends Notifier<DrawingState> {
       floorIndex: node.floorIndex,
       role: role,
       elevation: node.elevation,
+      mountHeight: node.mountHeight,
       fixture: keepTerminal ? node.fixture : null,
       airflow: keepTerminal ? node.airflow : null,
     ));
@@ -348,6 +349,7 @@ class NetworkController extends Notifier<DrawingState> {
         floorIndex: node.floorIndex,
         role: node.role,
         elevation: node.elevation,
+        mountHeight: node.mountHeight,
         airflow: node.airflow,
         roofAreaM2: node.roofAreaM2,
       ));
@@ -373,6 +375,7 @@ class NetworkController extends Notifier<DrawingState> {
       floorIndex: node.floorIndex,
       role: airflow == null ? node.role : NodeRole.fixture,
       elevation: node.elevation,
+      mountHeight: node.mountHeight,
       fixture: node.fixture,
       airflow: airflow,
       customFixtureId: node.customFixtureId,
@@ -418,10 +421,24 @@ class NetworkController extends Notifier<DrawingState> {
       floorIndex: node.floorIndex,
       role: customFixtureId == null ? node.role : NodeRole.fixture,
       elevation: node.elevation,
+      mountHeight: node.mountHeight,
       fixture: customFixtureId == null ? node.fixture : null,
       airflow: node.airflow,
       customFixtureId: customFixtureId,
       roofAreaM2: node.roofAreaM2,
+    ));
+  }
+
+  /// Set this node's [mountHeight] above its own floor — "how high on the wall"
+  /// the fixture/outlet sits — which drives its true elevation and therefore its
+  /// vertical run. Pass null to revert to the role default (fixture height /
+  /// ceiling / roof). copyWith preserves the node's other fields.
+  void setNodeMountHeight(String id, Length? mountHeight) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    _replaceNode(node.copyWith(
+      mountHeight: mountHeight,
+      clearMountHeight: mountHeight == null,
     ));
   }
 
@@ -641,6 +658,7 @@ class NetworkController extends Notifier<DrawingState> {
         floorIndex: toFloor,
         role: n.role,
         elevation: n.elevation,
+        mountHeight: n.mountHeight,
         fixture: n.fixture,
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,
@@ -736,6 +754,7 @@ class NetworkController extends Notifier<DrawingState> {
         floorIndex: floorIndex,
         role: n.role,
         elevation: n.elevation,
+        mountHeight: n.mountHeight,
         fixture: n.fixture,
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,
