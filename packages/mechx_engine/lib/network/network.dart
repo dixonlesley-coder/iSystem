@@ -198,6 +198,21 @@ extension NodeComponentInfo on NodeComponent {
         _ => 0.0,
       };
 
+  /// Air-side fitting loss coefficient C (dimensionless, against the velocity
+  /// pressure ρv²/2) for an inline DUCT restrictor — a damper or VAV box —
+  /// folded into the fan total static (`duct_static`). 0 for components that
+  /// aren't an inline air restriction. Representative values from general HVAC
+  /// practice, NOT an SNI clause — `// VERIFY` against the damper/VAV schedule.
+  double get airLossC => switch (this) {
+        NodeComponent.volumeDamper => 0.2,
+        NodeComponent.fireDamper => 0.3,
+        NodeComponent.motorizedDamper => 0.4,
+        // A VAV terminal box's effective drop (a higher coefficient stands in
+        // for its minimum static requirement).
+        NodeComponent.vavBox => 1.5,
+        _ => 0.0,
+      };
+
   /// Whether this component is also an ELECTRICAL load — a motorised piece of
   /// equipment that draws power, so a pump/fan/air-unit placed on the mechanical
   /// plan is INTER-RELATED with the electrical model (it appears as a circuit on
