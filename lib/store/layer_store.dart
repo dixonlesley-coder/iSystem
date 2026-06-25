@@ -1,12 +1,15 @@
 /// Discipline-LAYER state for the unified Layout canvas — the convergence piece
-/// that puts plumbing, HVAC and electrical on ONE shared PDF substrate ("same
-/// PDF, work on it at different layers").
+/// that puts the MEP systems on ONE shared PDF substrate ("same PDF, work on it
+/// at different layers").
 ///
-/// The disciplines map onto the EXISTING model with no new copy:
-///  • [DisciplineLayer.plumbing] — the mechanical non-air services (cold/hot
-///    water, drainage, vent, rainwater, sprinkler, hydrant);
-///  • [DisciplineLayer.hvac] — the mechanical air services (supply / return /
-///    exhaust), via the engine's `ServiceType.isAir`;
+/// Each layer is an engineering SYSTEM (not the old single "Plumbing" bucket),
+/// mapped onto the EXISTING model with no new copy:
+///  • [DisciplineLayer.water]     — domestic water supply (cold + hot water);
+///  • [DisciplineLayer.sanitary]  — soil / waste + vent (drainage, vent);
+///  • [DisciplineLayer.storm]     — rainwater / storm (rainwater);
+///  • [DisciplineLayer.fire]      — fire protection (sprinkler, hydrant);
+///  • [DisciplineLayer.hvac]      — the mechanical air services (supply / return
+///    / exhaust), via the engine's `ServiceType.isAir`;
 ///  • [DisciplineLayer.electrical] — the electrical panels / loads / feeders
 ///    placed on the sheet (`ElectricalPanel.layoutPos` / `Circuit.loadPos`).
 ///
@@ -23,40 +26,52 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 
-/// A design discipline shown as a layer on the unified Layout canvas.
-enum DisciplineLayer { plumbing, hvac, electrical }
+/// A design discipline / system shown as a layer on the unified Layout canvas.
+enum DisciplineLayer { water, sanitary, storm, fire, hvac, electrical }
 
 extension DisciplineLayerInfo on DisciplineLayer {
   /// Short label for the layer switcher / chips.
   String get label => switch (this) {
-        DisciplineLayer.plumbing => 'Plumbing',
+        DisciplineLayer.water => 'Water',
+        DisciplineLayer.sanitary => 'Sanitary',
+        DisciplineLayer.storm => 'Storm',
+        DisciplineLayer.fire => 'Fire',
         DisciplineLayer.hvac => 'HVAC',
         DisciplineLayer.electrical => 'Electrical',
       };
 
-  /// True for the two MECHANICAL disciplines (drawn from the `network` model);
-  /// false for electrical (drawn from the `ElectricalProject` placements).
-  bool get isMechanical =>
-      this == DisciplineLayer.plumbing || this == DisciplineLayer.hvac;
+  /// True for the MECHANICAL disciplines (drawn from the `network` model); false
+  /// for electrical (drawn from the `ElectricalProject` placements).
+  bool get isMechanical => this != DisciplineLayer.electrical;
 }
 
-/// The discipline a mechanical [ServiceType] belongs to: air → HVAC, else
-/// plumbing. (Electrical has no `ServiceType` — it's a separate model.)
-DisciplineLayer disciplineOf(ServiceType service) =>
-    service.isAir ? DisciplineLayer.hvac : DisciplineLayer.plumbing;
-
-/// The mechanical services that belong to [layer]. Empty for electrical (which
-/// is not a `ServiceType`-based discipline).
-List<ServiceType> servicesFor(DisciplineLayer layer) => switch (layer) {
-      DisciplineLayer.plumbing =>
-        ServiceType.values.where((s) => !s.isAir).toList(growable: false),
-      DisciplineLayer.hvac =>
-        ServiceType.values.where((s) => s.isAir).toList(growable: false),
-      DisciplineLayer.electrical => const <ServiceType>[],
+/// The discipline a mechanical [ServiceType] belongs to — its engineering
+/// system. (Electrical has no `ServiceType` — it's a separate model.)
+DisciplineLayer disciplineOf(ServiceType service) => switch (service) {
+      ServiceType.coldWater || ServiceType.hotWater => DisciplineLayer.water,
+      ServiceType.drainage || ServiceType.vent => DisciplineLayer.sanitary,
+      ServiceType.rainwater => DisciplineLayer.storm,
+      ServiceType.fireSprinkler ||
+      ServiceType.fireHydrant =>
+        DisciplineLayer.fire,
+      ServiceType.duct ||
+      ServiceType.returnAir ||
+      ServiceType.exhaust =>
+        DisciplineLayer.hvac,
     };
 
-/// The active (editable) discipline layer. Defaults to plumbing — the canvas's
-/// historical drawing discipline. Setting it leaves visibility untouched (a
+/// The mechanical services that belong to [layer]. Empty for electrical (which
+/// is not a `ServiceType`-based discipline). Derived from [disciplineOf] so the
+/// two never drift.
+List<ServiceType> servicesFor(DisciplineLayer layer) => layer ==
+        DisciplineLayer.electrical
+    ? const <ServiceType>[]
+    : ServiceType.values
+        .where((s) => disciplineOf(s) == layer)
+        .toList(growable: false);
+
+/// The active (editable) discipline layer. Defaults to water supply — the
+/// canvas's first drawing discipline. Setting it leaves visibility untouched (a
 /// layer can be active without being toggled off, and the switcher keeps the
 /// active layer visible).
 final activeDisciplineProvider =
@@ -66,7 +81,7 @@ final activeDisciplineProvider =
 
 class ActiveDisciplineController extends Notifier<DisciplineLayer> {
   @override
-  DisciplineLayer build() => DisciplineLayer.plumbing;
+  DisciplineLayer build() => DisciplineLayer.water;
 
   void set(DisciplineLayer layer) {
     if (state == layer) return;

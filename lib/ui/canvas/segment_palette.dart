@@ -74,10 +74,15 @@ class SegmentPalette extends ConsumerWidget {
     final pipes = services.where((s) => !s.isAir).toList();
     final ducts = services.where((s) => s.isAir).toList();
 
-    // Plumbing-side equipment shows on the Plumbing layer (and the Schematic
-    // view, which has no layer concept); air-side equipment shows on HVAC.
-    final showEquipment = !onLayout || active == DisciplineLayer.plumbing;
-    final showAir = !onLayout || active == DisciplineLayer.hvac;
+    // Equipment groups scope to the SYSTEM layer they belong to (and the
+    // Schematic view, which has no layer concept, shows everything).
+    final showAll = !onLayout;
+    final showWater = showAll || active == DisciplineLayer.water;
+    final showDrains = showAll ||
+        active == DisciplineLayer.sanitary ||
+        active == DisciplineLayer.storm;
+    final showFire = showAll || active == DisciplineLayer.fire;
+    final showAir = showAll || active == DisciplineLayer.hvac;
 
     Widget componentCard(NodeComponent c) => Padding(
           padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
@@ -169,8 +174,8 @@ class SegmentPalette extends ConsumerWidget {
               size: 16),
         ),
 
-        // ── Equipment (plumbing-side) ──────────────────────────────────────
-        if (showEquipment) ...[
+        // ── Water-supply equipment (Water layer) ───────────────────────────
+        if (showWater) ...[
           equipmentGroup('Plant', const [
             NodeComponent.pump,
             NodeComponent.roofTank,
@@ -183,17 +188,24 @@ class SegmentPalette extends ConsumerWidget {
             NodeComponent.prv,
             NodeComponent.balancingValve,
           ]),
-          equipmentGroup('Drains', const [
-            NodeComponent.roofDrain,
-            NodeComponent.floorDrain,
-            NodeComponent.cleanout,
-          ]),
           equipmentGroup('Meters & misc', const [
             NodeComponent.waterMeter,
             NodeComponent.strainer,
             NodeComponent.expansionTank,
             NodeComponent.airVent,
           ]),
+        ],
+
+        // ── Drains (Sanitary + Storm layers) ───────────────────────────────
+        if (showDrains)
+          equipmentGroup('Drains', const [
+            NodeComponent.roofDrain,
+            NodeComponent.floorDrain,
+            NodeComponent.cleanout,
+          ]),
+
+        // ── Fire protection (Fire layer) ───────────────────────────────────
+        if (showFire)
           equipmentGroup('Fire protection', const [
             NodeComponent.sprinklerHead,
             NodeComponent.fireExtinguisher,
@@ -201,7 +213,6 @@ class SegmentPalette extends ConsumerWidget {
             NodeComponent.hoseReel,
             NodeComponent.fireDeptConnection,
           ]),
-        ],
 
         // ── HVAC / ducting equipment ───────────────────────────────────────
         if (showAir) ...[

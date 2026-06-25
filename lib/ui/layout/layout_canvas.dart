@@ -391,6 +391,9 @@ class _LayoutTopBar extends ConsumerWidget {
           horizontal: MechXSpacing.md, vertical: MechXSpacing.xs + 2),
       child: Row(
         children: [
+          // The layer switcher gets the available width (and scrolls
+          // horizontally if the system layers ever exceed it); the sheet
+          // breadcrumb is capped so it can't starve the switcher.
           Flexible(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -399,7 +402,8 @@ class _LayoutTopBar extends ConsumerWidget {
           ),
           const SizedBox(width: MechXSpacing.sm),
           if (current != null)
-            Flexible(
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 200),
               child: Text(
                 '${current.name}  ·  Floor '
                 '${sheets.floorFor(current.id, levelCount) + 1} of $levelCount',
@@ -483,8 +487,7 @@ class _SharedSheet extends ConsumerWidget {
     final electricalActive = active == DisciplineLayer.electrical;
     final electricalVisible = visible.contains(DisciplineLayer.electrical);
     // Any mechanical layer visible? (Plumbing or HVAC.)
-    final mechanicalVisible = visible.contains(DisciplineLayer.plumbing) ||
-        visible.contains(DisciplineLayer.hvac);
+    final mechanicalVisible = visible.any((l) => l.isMechanical);
     final measureMode = ref.watch(measureModeProvider);
     final tankMode = ref.watch(tankModeProvider);
 
