@@ -779,4 +779,99 @@ void main() {
       expect(find.text('MDP'), findsNothing);
     });
   });
+
+  group('moveCircuit (electrical load re-parent)', () {
+    test('moves a load from one panel to another', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      // mdp-c1 (Chiller / HVAC) is a plain load on the MDP, not a feeder.
+      final mdpBefore = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp')
+          .circuits
+          .length;
+      final lp1Before = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'lp1')
+          .circuits
+          .length;
+
+      ctrl.moveCircuit('mdp', 'mdp-c1', 'lp1');
+
+      final mdp = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp');
+      final lp1 = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'lp1');
+      expect(mdp.circuits.length, mdpBefore - 1);
+      expect(mdp.circuits.where((w) => w.id == 'mdp-c1'), isEmpty);
+      expect(lp1.circuits.length, lp1Before + 1);
+      final moved = lp1.circuits.firstWhere((w) => w.id == 'mdp-c1');
+      expect(moved.name, 'Chiller / HVAC');
+
+      // The moved way re-sizes under its new panel.
+      final sized = c.read(electricalResultProvider).panels['lp1']!.circuits
+          .firstWhere((r) => r.circuitId == 'mdp-c1');
+      expect(sized.designCurrent.amperes, greaterThan(0));
+    });
+
+    test('same-panel move is a no-op', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      final before = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp')
+          .circuits
+          .length;
+      ctrl.moveCircuit('mdp', 'mdp-c1', 'mdp');
+      expect(
+          c.read(electricalProjectProvider).panels
+              .firstWhere((p) => p.id == 'mdp')
+              .circuits
+              .length,
+          before);
+    });
+
+    test('refuses to move a feeder onto the panel it feeds', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      // mdp-f1 is the feeder from the MDP to lp1 — moving it onto lp1 would feed
+      // itself, so it's rejected and nothing changes.
+      final feeder = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp')
+          .circuits
+          .firstWhere((w) => w.feedsPanelId == 'lp1');
+      final mdpBefore = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp')
+          .circuits
+          .length;
+      ctrl.moveCircuit('mdp', feeder.id, 'lp1');
+      final mdp = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp');
+      expect(mdp.circuits.length, mdpBefore);
+      expect(mdp.circuits.where((w) => w.id == feeder.id), isNotEmpty);
+    });
+
+    test('unknown panel / circuit ids are no-ops', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      final before = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp')
+          .circuits
+          .length;
+      ctrl.moveCircuit('nope', 'mdp-c1', 'lp1');
+      ctrl.moveCircuit('mdp', 'no-such-circuit', 'lp1');
+      ctrl.moveCircuit('mdp', 'mdp-c1', 'nope');
+      expect(
+          c.read(electricalProjectProvider).panels
+              .firstWhere((p) => p.id == 'mdp')
+              .circuits
+              .length,
+          before);
+    });
+  });
 }

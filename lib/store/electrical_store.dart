@@ -356,6 +356,40 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     });
   }
 
+  /// Move (re-parent) a circuit from [fromPanelId] to [toPanelId], preserving
+  /// the way's settings — drag a load node onto another panel to assign it
+  /// there. No-op when an id is unknown, the panels are the same, or the circuit
+  /// is a feeder that targets the destination (a panel can't feed itself).
+  void moveCircuit(String fromPanelId, String circuitId, String toPanelId) {
+    if (fromPanelId == toPanelId) return;
+    ElectricalPanel? from, to;
+    for (final p in state.panels) {
+      if (p.id == fromPanelId) from = p;
+      if (p.id == toPanelId) to = p;
+    }
+    if (from == null || to == null) return;
+    ElectricalCircuit? circuit;
+    for (final c in from.circuits) {
+      if (c.id == circuitId) circuit = c;
+    }
+    if (circuit == null) return;
+    if (circuit.feedsPanelId == toPanelId) return; // would feed itself
+    final moved = circuit;
+    final panels = [
+      for (final p in state.panels)
+        if (p.id == fromPanelId)
+          p.copyWith(circuits: [
+            for (final c in p.circuits)
+              if (c.id != circuitId) c,
+          ])
+        else if (p.id == toPanelId)
+          p.copyWith(circuits: [...p.circuits, moved])
+        else
+          p,
+    ];
+    state = _withProject(panels: panels);
+  }
+
   /// Add a new (empty) panel. When [fedByCircuitId] is given it is a fed
   /// sub-board; otherwise a utility-fed board.
   void addPanel({

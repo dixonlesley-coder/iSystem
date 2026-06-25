@@ -475,14 +475,18 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       );
     }
 
-    // The panel card.
+    // The panel card. Also a DROP TARGET for a load node dragged off another
+    // panel — re-parenting that circuit here.
     widgets.add(
       Positioned(
         left: tl.dx,
         top: tl.dy,
         width: w * scale,
         height: cardH * scale,
-        child: _PanelDraggable(
+        child: DragTarget<_LoadRef>(
+          onAcceptWithDetails: (d) => _ctrl.moveCircuit(
+              d.data.fromPanelId, d.data.circuitId, panel.panelId),
+          builder: (ctx, cand, rej) => _PanelDraggable(
           panelId: panel.panelId,
           world: world,
           scale: scale,
@@ -520,6 +524,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               onOutletDragEnd: _onFeederDragEnd,
             ),
           ),
+          ),
         ),
       ),
     );
@@ -536,23 +541,38 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         world.dy + cardH + kLoadDropGap,
       );
       final lp = vt.worldToScreen(loadWorld);
+      final loadNode = _ScaledChild(
+        scale: scale,
+        width: kLoadW,
+        height: kLoadNodeH,
+        child: _LoadNode(circuit: c),
+      );
       widgets.add(
         Positioned(
           left: lp.dx,
           top: lp.dy,
           width: kLoadW * scale,
           height: kLoadNodeH * scale,
+          // Drag a load node onto another panel to RE-PARENT the circuit there.
+          child: Draggable<_LoadRef>(
+            data: _LoadRef(panel.panelId, c.circuitId),
+            dragAnchorStrategy: childDragAnchorStrategy,
+            feedback: Opacity(
+              opacity: 0.85,
+              child: SizedBox(
+                width: kLoadW * scale,
+                height: kLoadNodeH * scale,
+                child: loadNode,
+              ),
+            ),
+            childWhenDragging: Opacity(opacity: 0.35, child: loadNode),
           child: _ScaledTap(
             onTap: () => setState(() => _selectedPanel = null),
             onDoubleTap: () => widget.onEditCircuit(panel.panelId, c.circuitId),
             onMenu: (gp) =>
                 widget.onCircuitMenu(panel.panelId, c.circuitId, gp),
-            child: _ScaledChild(
-              scale: scale,
-              width: kLoadW,
-              height: kLoadNodeH,
-              child: _LoadNode(circuit: c),
-            ),
+            child: loadNode,
+          ),
           ),
         ),
       );
@@ -574,6 +594,14 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   }
 
   ViewportTransform get transform => _current;
+}
+
+/// Drag payload for re-parenting a load: which circuit, off which panel.
+@immutable
+class _LoadRef {
+  final String fromPanelId;
+  final String circuitId;
+  const _LoadRef(this.fromPanelId, this.circuitId);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
