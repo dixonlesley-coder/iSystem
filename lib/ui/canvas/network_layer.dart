@@ -170,6 +170,12 @@ class _NetworkPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Incidence collected while drawing pipes: per node, the screen-space unit
+    // directions of the run pipes leaving it + the widest pipe + its opacity —
+    // used to draw the right fitting (coupling / elbow / tee / cross / cap) where
+    // pipes meet.
+    final joints = <String, _Joint>{};
+
     for (final e in net.edges) {
       final a = net.nodeById(e.fromId);
       final b = net.nodeById(e.toId);
@@ -182,29 +188,34 @@ class _NetworkPainter extends CustomPainter {
         if (!_onThisFloor(a) || !_onThisFloor(b)) continue;
         final pa = transform.worldToScreen(Offset(a.x, a.y));
         final pb = transform.worldToScreen(Offset(b.x, b.y));
+        final s = sizing[e.id];
+        final outer = _pipeOuterPx(s, e.service);
+
         if (_edgeSelected(e.id)) {
           canvas.drawLine(
             pa,
             pb,
             Paint()
               ..color = _kSelection.withAlpha(120)
-              ..strokeWidth = 7
+              ..strokeWidth = outer + 5
               ..strokeCap = StrokeCap.round
               ..style = PaintingStyle.stroke,
           );
         }
-        canvas.drawLine(
-          pa,
-          pb,
-          Paint()
-            ..color = color
-            ..strokeWidth = 2.5
-            ..strokeCap = StrokeCap.round
-            ..style = PaintingStyle.stroke,
-        );
+        // The pipe as a walled body: a darker casing stroke with the service-
+        // colour bore inside it — two parallel wall lines, not a single line.
+        _paintPipe(canvas, pa, pb, color, outer);
+
+        // Record incidence at both ends (direction points AWAY from the node).
+        final len = (pb - pa).distance;
+        if (len > 0.0) {
+          final u = (pb - pa) / len;
+          (joints[a.id] ??= _Joint(opacity)).add(u, outer, opacity);
+          (joints[b.id] ??= _Joint(opacity)).add(-u, outer, opacity);
+        }
+
         // Suppress sizing labels on a faded (coordination) layer to keep the
         // active layer's annotation readable.
-        final s = sizing[e.id];
         if (s != null && opacity >= 1.0) {
           String label;
           if (s.isRectangular) {
@@ -233,6 +244,19 @@ class _NetworkPainter extends CustomPainter {
       }
     }
 
+    // Fittings where pipes meet — drawn over the pipe bodies, under the node
+    // glyphs. Only plain junctions (role main, no equipment component) become a
+    // coupling/elbow/tee; fixtures/plant/equipment keep their own glyph.
+    for (final n in net.nodes) {
+      if (!_onThisFloor(n)) continue;
+      if (n.component != null || n.role != NodeRole.main) continue;
+      final j = joints[n.id];
+      if (j == null) continue;
+      final layer = _nodeLayer(n);
+      if (!layer.visible) continue;
+      _paintFitting(canvas, transform.worldToScreen(Offset(n.x, n.y)), j);
+    }
+
     // Nodes on top, drawn with a role-distinct glyph and a selection ring.
     for (final n in net.nodes) {
       if (!_onThisFloor(n)) continue;
@@ -253,10 +277,121 @@ class _NetworkPainter extends CustomPainter {
       }
       if (n.component != null) {
         _componentGlyph(canvas, p, n.component!, layer.opacity);
-      } else {
+      } else if (n.role != NodeRole.main || joints[n.id] == null) {
+        // A plain junction that carries a fitting glyph (drawn above) no longer
+        // needs the bare dot; a free main node (no pipes yet) still gets it.
         _nodeGlyph(canvas, p, n.role, layer.opacity);
       }
     }
+  }
+
+  /// The on-screen outer width (px) of a pipe, tiered by its sized nominal bore
+  /// (or a small default when unsized). Kept in screen px (constant at any zoom)
+  /// so pipes read as pipes, with larger services drawn proportionally fatter.
+  double _pipeOuterPx(EdgeSizing? s, ServiceType svc) {
+    final double mm = s == null
+        ? 25
+        : (s.isRectangular
+            ? math.max(s.width!.inMillimeters, s.height!.inMillimeters)
+            : s.diameter.inMillimeters);
+    if (svc.regime == FlowRegime.air) {
+      if (mm <= 200) return 9;
+      if (mm <= 400) return 12;
+      if (mm <= 700) return 15;
+      return 18;
+    }
+    if (mm <= 20) return 5;
+    if (mm <= 32) return 6.5;
+    if (mm <= 50) return 8;
+    if (mm <= 80) return 9.5;
+    if (mm <= 150) return 11;
+    return 13;
+  }
+
+  /// Draws a run as a walled pipe: a darker casing stroke (the two visible wall
+  /// lines) with the service-colour bore inside it.
+  void _paintPipe(Canvas canvas, Offset pa, Offset pb, Color color, double outer) {
+    final wall = Color.lerp(color, const Color(0xFF000000), 0.45)!;
+    canvas.drawLine(
+      pa,
+      pb,
+      Paint()
+        ..color = wall
+        ..strokeWidth = outer
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke,
+    );
+    final bore = (outer - 2.6).clamp(1.2, outer);
+    canvas.drawLine(
+      pa,
+      pb,
+      Paint()
+        ..color = color
+        ..strokeWidth = bore
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke,
+    );
+  }
+
+  /// Draws the fitting at a junction from its incident pipe directions: an open
+  /// END CAP (1 pipe), a COUPLING (2 in-line), an ELBOW (2 at an angle), or a TEE
+  /// / CROSS hub (3 / 4+). Drawn in a steel colour so joints read as fittings.
+  void _paintFitting(Canvas canvas, Offset p, _Joint j) {
+    final metal = _fade(const Color(0xFF3A3F47), j.opacity);
+    final light = _fade(const Color(0xFFFFFFFF), j.opacity);
+    final w = j.maxOuter;
+    final dirs = j.dirs;
+
+    if (dirs.length >= 3) {
+      // Tee / cross: a solid hub where the branches meet.
+      final r = w / 2 + 2.4;
+      canvas.drawCircle(p, r, Paint()..color = metal);
+      canvas.drawCircle(p, r,
+          Paint()..color = light..strokeWidth = 1..style = PaintingStyle.stroke);
+      return;
+    }
+    if (dirs.length == 2) {
+      final dot = dirs[0].dx * dirs[1].dx + dirs[0].dy * dirs[1].dy;
+      if (dot < -0.94) {
+        // In-line coupling: a short sleeve/collar across the pipe.
+        _sleeve(canvas, p, dirs[0], w, metal, light);
+      } else {
+        // Elbow: a rounded corner body at the bend.
+        final r = w / 2 + 1.6;
+        canvas.drawCircle(p, r, Paint()..color = metal);
+        canvas.drawCircle(p, r,
+            Paint()..color = light..strokeWidth = 1..style = PaintingStyle.stroke);
+      }
+      return;
+    }
+    // Single pipe → an end cap perpendicular to it.
+    final d = dirs.first;
+    final perp = Offset(-d.dy, d.dx);
+    final half = w / 2 + 1.8;
+    canvas.drawLine(
+      p + perp * half,
+      p - perp * half,
+      Paint()
+        ..color = metal
+        ..strokeWidth = 2.6
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke,
+    );
+  }
+
+  /// A coupling sleeve: a short rounded collar centred on [p], its long axis
+  /// along the pipe direction [axis].
+  void _sleeve(Canvas canvas, Offset p, Offset axis, double w, Color metal,
+      Color light) {
+    canvas.save();
+    canvas.translate(p.dx, p.dy);
+    canvas.rotate(math.atan2(axis.dy, axis.dx));
+    final rect = Rect.fromCenter(center: Offset.zero, width: 9, height: w + 2.4);
+    final rr = RRect.fromRectAndRadius(rect, const Radius.circular(2));
+    canvas.drawRRect(rr, Paint()..color = metal);
+    canvas.drawRRect(rr,
+        Paint()..color = light..strokeWidth = 1..style = PaintingStyle.stroke);
+    canvas.restore();
   }
 
   /// Draws an equipment node as its schematic symbol on a light chip so it
@@ -422,4 +557,22 @@ class _NetworkPainter extends CustomPainter {
 
   static bool _sameStrSet(Set<String> a, Set<String> b) =>
       a.length == b.length && a.containsAll(b);
+}
+
+/// Accumulates the run pipes incident to one node (screen-space unit directions
+/// away from it, the widest pipe, and the node's draw opacity) so the painter
+/// can choose the right fitting where they meet.
+class _Joint {
+  final List<Offset> dirs = [];
+  double maxOuter = 0;
+  double opacity;
+
+  _Joint(this.opacity);
+
+  void add(Offset unit, double outer, double op) {
+    dirs.add(unit);
+    if (outer > maxOuter) maxOuter = outer;
+    // A junction touched by the active layer draws solid; keep the strongest.
+    if (op > opacity) opacity = op;
+  }
 }
