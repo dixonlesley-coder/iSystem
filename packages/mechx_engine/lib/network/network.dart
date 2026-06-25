@@ -82,6 +82,9 @@ enum NodeComponent {
   roofDrain,
   floorDrain,
   cleanout,
+  // A riser start/connection marker (role: main) — where a vertical riser meets
+  // the horizontal main, so a run can be connected from it.
+  riser,
   // Meters & misc.
   waterMeter,
   strainer,
@@ -158,6 +161,7 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.roofDrain => 'Roof drain',
         NodeComponent.floorDrain => 'Floor drain',
         NodeComponent.cleanout => 'Cleanout',
+        NodeComponent.riser => 'Riser',
         NodeComponent.waterMeter => 'Water meter',
         NodeComponent.strainer => 'Strainer',
         NodeComponent.expansionTank => 'Expansion tank',

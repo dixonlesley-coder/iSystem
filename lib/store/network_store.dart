@@ -686,7 +686,14 @@ class NetworkController extends Notifier<DrawingState> {
         targetId = n.id;
       }
     }
-    if (targetId == null) return; // nothing to snap to
+    if (targetId == null) {
+      // No node to merge onto. If the dragged node is FREE (no edges) — e.g. a
+      // fixture just dropped from the palette — and it landed near a mainline
+      // pipe, TAP it in: draw a new branch pipe from the fixture to the main
+      // (splitting the main at the nearest point). The fixture itself stays put.
+      _tapFreeNodeIntoNearestEdge(dragged, snapRadiusWorld);
+      return;
+    }
 
     final target = targetId;
     // Re-point edges, dropping self-loops left by the merge.
@@ -700,6 +707,102 @@ class NetworkController extends Notifier<DrawingState> {
     }
     final nodes = state.network.nodes.where((n) => n.id != nodeId).toList();
     _commit(Network(nodes: nodes, edges: edges));
+  }
+
+  /// Closest point on segment a→b to p (all in world px).
+  static Offset _closestPointOnSegment(Offset p, Offset a, Offset b) {
+    final ab = b - a;
+    final len2 = ab.distanceSquared;
+    if (len2 == 0) return a;
+    final t = (((p.dx - a.dx) * ab.dx + (p.dy - a.dy) * ab.dy) / len2)
+        .clamp(0.0, 1.0);
+    return a + ab * t;
+  }
+
+  /// If [dragged] has NO edges and lies within [radiusWorld] of a horizontal RUN
+  /// on the same sheet/floor, connect it: split that run at the nearest point
+  /// (or reuse an endpoint if very close) and add a new branch pipe from the
+  /// dragged node to that junction, carrying the main's service. One undo step.
+  void _tapFreeNodeIntoNearestEdge(NetNode dragged, double radiusWorld) {
+    final net = state.network;
+    final connected =
+        net.edges.any((e) => e.fromId == dragged.id || e.toId == dragged.id);
+    if (connected) return; // only auto-connect a free node
+
+    NetEdge? bestEdge;
+    var bestD2 = radiusWorld * radiusWorld;
+    var bestP = Offset.zero;
+    final dp = Offset(dragged.x, dragged.y);
+    for (final e in net.edges) {
+      if (e.kind == EdgeKind.riser) continue; // tap onto horizontal runs only
+      final a = net.nodeById(e.fromId);
+      final b = net.nodeById(e.toId);
+      if (a == null || b == null) continue;
+      if (a.sheetId != dragged.sheetId || a.floorIndex != dragged.floorIndex) {
+        continue;
+      }
+      if (b.sheetId != dragged.sheetId || b.floorIndex != dragged.floorIndex) {
+        continue;
+      }
+      final p = _closestPointOnSegment(
+          dp, Offset(a.x, a.y), Offset(b.x, b.y));
+      final d2 = (p - dp).distanceSquared;
+      if (d2 <= bestD2) {
+        bestD2 = d2;
+        bestEdge = e;
+        bestP = p;
+      }
+    }
+    final e = bestEdge;
+    if (e == null) return;
+    final a = net.nodeById(e.fromId)!;
+    final b = net.nodeById(e.toId)!;
+    final snap2 = radiusWorld * radiusWorld;
+
+    final newNodes = [...net.nodes];
+    final newEdges = <NetEdge>[];
+    final String junctionId;
+    if ((bestP - Offset(a.x, a.y)).distanceSquared <= snap2) {
+      junctionId = a.id; // near the start node — connect straight to it
+      newEdges.addAll(net.edges);
+    } else if ((bestP - Offset(b.x, b.y)).distanceSquared <= snap2) {
+      junctionId = b.id; // near the end node
+      newEdges.addAll(net.edges);
+    } else {
+      // Split the main at the projection: a→J (keeps the edge's material), J→b.
+      junctionId = _id('n');
+      newNodes.add(NetNode(
+        id: junctionId,
+        sheetId: dragged.sheetId,
+        x: bestP.dx,
+        y: bestP.dy,
+        floorIndex: dragged.floorIndex,
+      ));
+      for (final edge in net.edges) {
+        if (edge.id == e.id) {
+          newEdges.add(e.copyWith(toId: junctionId));
+          newEdges.add(NetEdge(
+            id: _id('e'),
+            fromId: junctionId,
+            toId: e.toId,
+            service: e.service,
+            kind: e.kind,
+            pipeProduct: e.pipeProduct,
+            ductProduct: e.ductProduct,
+          ));
+        } else {
+          newEdges.add(edge);
+        }
+      }
+    }
+    // The new branch pipe from the fixture to the main, carrying its service.
+    newEdges.add(NetEdge(
+      id: _id('e'),
+      fromId: dragged.id,
+      toId: junctionId,
+      service: e.service,
+    ));
+    _commit(Network(nodes: newNodes, edges: newEdges));
   }
 
   /// Copy every horizontal RUN (and the nodes it touches) on

@@ -173,6 +173,22 @@ class SegmentPalette extends ConsumerWidget {
               kind: PaletteItemKind.terminal, color: colors.textSecondary,
               size: 16),
         ),
+        // A riser-start marker (any system): place it where the riser meets the
+        // main, then connect runs from it.
+        Padding(
+          padding: const EdgeInsets.only(top: MechXSpacing.xs),
+          child: PaletteCard<PaletteItem>(
+            label: 'Riser node',
+            swatch: colors.textSecondary,
+            data: const PaletteItem(PaletteItemKind.component,
+                component: NodeComponent.riser),
+            fillWidth: true,
+            leading: ComponentSymbol(
+                component: NodeComponent.riser,
+                color: colors.textSecondary,
+                size: 16),
+          ),
+        ),
 
         // ── Water-supply equipment (Water layer) ───────────────────────────
         if (showWater) ...[

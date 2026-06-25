@@ -448,6 +448,39 @@ void main() {
       n.endNodeDragWithSnap(id, 14);
       expect(c.read(networkControllerProvider).network.nodes.length, before);
     });
+
+    test('dragging a FREE fixture onto a main taps in (split + branch pipe)', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // A cold-water main from ~(50,0) to ~(150,0).
+      n.addSegment('s1', 0, const Offset(100, 0),
+          spanPx: 100, service: ServiceType.coldWater);
+      // A free fixture dropped below the main's midpoint.
+      n.addTerminal('s1', 0, const Offset(100, 40),
+          fixture: PlumbingFixture.lavatory);
+      var net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 3); // 2 main + 1 fixture
+      expect(net.edges.length, 1);
+      final fixture =
+          net.nodes.firstWhere((nd) => nd.fixture == PlumbingFixture.lavatory);
+
+      // Drag the fixture up to within the snap radius of the main (y≈0), away
+      // from either endpoint (x≈100, the midpoint).
+      n.pushUndoSnapshot();
+      n.moveNode(fixture.id, 100, 6);
+      n.endNodeDragWithSnap(fixture.id, 14);
+
+      net = c.read(networkControllerProvider).network;
+      // The fixture survives (it didn't merge); a junction split the main, and a
+      // new branch pipe connects the fixture to that junction.
+      expect(net.nodeById(fixture.id), isNotNull);
+      expect(net.nodes.length, 4); // + the split junction
+      expect(net.edges.length, 3); // main split into 2 + the branch
+      // The fixture now has exactly one edge — the branch — carrying the main's
+      // service.
+      final branch = net.edgesAt(fixture.id).single;
+      expect(branch.service, ServiceType.coldWater);
+    });
   });
 
   testWidgets('draw palette renders; Run tool activates without error',
