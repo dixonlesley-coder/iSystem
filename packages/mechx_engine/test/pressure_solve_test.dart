@@ -537,4 +537,106 @@ void main() {
       );
     });
   });
+
+  group('solvePressurized — inline valve minor loss (K·v²/2g)', () {
+    // s --e1(50 m)--> n1(GATE VALVE) --r1(riser)--> n2.  Same geometry/flows as
+    // the headline tree; only n1 carries a component, so the valve's local loss
+    // must lift the required pump head by exactly K·v²/2g and nothing else.
+    const flow = FlowRate(0.005);
+    const dn65 = Diameter(0.065);
+    const edgeFlows = <String, FlowRate>{'e1': flow, 'r1': flow};
+    final sizing = <String, EdgeSizing>{
+      'e1': const EdgeSizing(
+          edgeId: 'e1',
+          service: ServiceType.coldWater,
+          flow: flow,
+          diameter: dn65,
+          velocity: Velocity(1.507)),
+      'r1': const EdgeSizing(
+          edgeId: 'r1',
+          service: ServiceType.coldWater,
+          flow: flow,
+          diameter: dn65,
+          velocity: Velocity(1.507)),
+    };
+
+    // Build the tree with n1 carrying an explicit [role] + optional [c]omponent,
+    // so a comparison can hold the ROLE (and therefore the riser geometry)
+    // constant and vary ONLY the component — isolating the K·v²/2g effect.
+    Network netWith({NodeComponent? c, NodeRole role = NodeRole.main}) =>
+        Network(
+          nodes: [
+            const NetNode(id: 's', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+            NetNode(
+                id: 'n1',
+                sheetId: 's1',
+                x: 500,
+                y: 0,
+                floorIndex: 0,
+                role: role,
+                component: c),
+            const NetNode(id: 'n2', sheetId: 's1', x: 500, y: 0, floorIndex: 2),
+          ],
+          edges: const [
+            NetEdge(
+                id: 'e1', fromId: 's', toId: 'n1', service: ServiceType.coldWater),
+            NetEdge(
+                id: 'r1',
+                fromId: 'n1',
+                toId: 'n2',
+                service: ServiceType.coldWater,
+                kind: EdgeKind.riser),
+          ],
+        );
+
+    test('a gate valve adds exactly K·v²/2g to the required pump head', () {
+      PressureSolution run(Network net) => solvePressurized(
+            net: net,
+            service: ServiceType.coldWater,
+            sourceId: 's',
+            edgeFlows: edgeFlows,
+            sizing: sizing,
+            calibrationBySheet: calibration,
+            building: building,
+            targetResidual: targetResidual,
+          );
+      // gateValve.role is `main`, so both nets share n1's role + geometry.
+      final plain = run(netWith());
+      final withValve = run(netWith(c: NodeComponent.gateValve));
+
+      final v = velocityFromFlow(flow, dn65);
+      final expected =
+          minorLossHead(k: NodeComponent.gateValve.minorLossK, velocity: v)
+              .meters;
+      expect(expected, greaterThan(0));
+      expect(
+        withValve.requiredPumpHead.meters - plain.requiredPumpHead.meters,
+        closeTo(expected, 1e-9),
+      );
+    });
+
+    test('a non-restrictor component (roof drain) changes nothing', () {
+      PressureSolution run(Network net) => solvePressurized(
+            net: net,
+            service: ServiceType.coldWater,
+            sourceId: 's',
+            edgeFlows: edgeFlows,
+            sizing: sizing,
+            calibrationBySheet: calibration,
+            building: building,
+            targetResidual: targetResidual,
+          );
+      // roofDrain has K = 0. Hold the role at `fixture` (roofDrain's own role)
+      // in BOTH nets so geometry is constant and only the K=0 component varies —
+      // the pump head must be byte-identical.
+      expect(
+        run(netWith(c: NodeComponent.roofDrain, role: NodeRole.fixture))
+            .requiredPumpHead
+            .meters,
+        closeTo(
+            run(netWith(role: NodeRole.fixture)).requiredPumpHead.meters,
+            1e-12),
+      );
+    });
+  });
 }

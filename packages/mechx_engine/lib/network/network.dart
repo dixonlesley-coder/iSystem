@@ -140,6 +140,23 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.hoseReel => 'Hose reel',
         NodeComponent.fireDeptConnection => 'Fire dept. connection',
       };
+
+  /// Minor-loss coefficient K for an inline RESTRICTOR (valve / strainer /
+  /// meter), used for the local head loss h = K·v²/2g folded into the
+  /// pressurized solve. 0 for components that aren't an inline restriction
+  /// (pumps add head, tanks are sources, drains/fire points sit off the supply
+  /// path). These are representative fully-open values from general hydraulics
+  /// practice (Crane TP-410-class), NOT an SNI clause — `// VERIFY` against the
+  /// project's actual valve schedule / Cv data. A PRV is intentionally 0 here:
+  /// it sets a downstream pressure (handled by the PRV zoning), not a simple K.
+  double get minorLossK => switch (this) {
+        NodeComponent.gateValve => 0.2,
+        NodeComponent.checkValve => 2.0,
+        NodeComponent.balancingValve => 3.0,
+        NodeComponent.strainer => 2.0,
+        NodeComponent.waterMeter => 6.0,
+        _ => 0.0,
+      };
 }
 
 /// A connection point, located at ([x], [y]) sheet pixels on [sheetId] /
