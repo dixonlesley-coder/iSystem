@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/widgets.dart';
 import 'package:mechx_engine/network/network.dart';
 
@@ -226,6 +228,121 @@ void paintComponentSymbol(
         ..moveTo(cx, h * 0.10)
         ..lineTo(cx + w * 0.10, h * 0.26);
       canvas.drawPath(a, p);
+    case NodeComponent.supplyDiffuser:
+      // A 4-way ceiling diffuser: a square with diagonals to the corners.
+      final r = Rect.fromCenter(
+          center: Offset(cx, cy), width: w * 0.56, height: h * 0.56);
+      canvas.drawRect(r, p);
+      canvas.drawLine(r.topLeft, r.bottomRight, p);
+      canvas.drawLine(r.topRight, r.bottomLeft, p);
+    case NodeComponent.returnGrille:
+      // A return grille: a rectangle with horizontal louver lines.
+      final r = Rect.fromCenter(
+          center: Offset(cx, cy), width: w * 0.60, height: h * 0.48);
+      canvas.drawRect(r, p);
+      for (var i = 1; i < 3; i++) {
+        final y = r.top + r.height * i / 3;
+        canvas.drawLine(Offset(r.left, y), Offset(r.right, y), p);
+      }
+    case NodeComponent.exhaustGrille:
+      // A grille with an out arrow (extract).
+      final r = Rect.fromCenter(
+          center: Offset(cx, h * 0.58), width: w * 0.60, height: h * 0.40);
+      canvas.drawRect(r, p);
+      for (var i = 1; i < 3; i++) {
+        final y = r.top + r.height * i / 3;
+        canvas.drawLine(Offset(r.left, y), Offset(r.right, y), p);
+      }
+      final up = Path()
+        ..moveTo(cx, h * 0.06)
+        ..lineTo(cx - w * 0.10, h * 0.24)
+        ..moveTo(cx, h * 0.06)
+        ..lineTo(cx + w * 0.10, h * 0.24)
+        ..moveTo(cx, h * 0.06)
+        ..lineTo(cx, h * 0.34);
+      canvas.drawPath(up, p);
+    case NodeComponent.linearDiffuser:
+      // A linear slot diffuser: a long thin rectangle with parallel slots.
+      final r = Rect.fromCenter(
+          center: Offset(cx, cy), width: w * 0.72, height: h * 0.30);
+      canvas.drawRect(r, p);
+      canvas.drawLine(
+          Offset(r.left, cy), Offset(r.right, cy), p);
+    case NodeComponent.volumeDamper:
+      // A VCD: a duct box with an angled blade + pivot.
+      final r = Rect.fromCenter(
+          center: Offset(cx, cy), width: w * 0.56, height: h * 0.44);
+      canvas.drawRect(r, p);
+      canvas.drawLine(r.topLeft, r.bottomRight, p);
+      canvas.drawCircle(Offset(cx, cy), w * 0.04, fill);
+    case NodeComponent.fireDamper:
+      // A damper with a flame mark.
+      final r = Rect.fromCenter(
+          center: Offset(cx, cy), width: w * 0.56, height: h * 0.44);
+      canvas.drawRect(r, p);
+      canvas.drawLine(r.topLeft, r.bottomRight, p);
+      canvas.drawLine(Offset(cx, h * 0.20), Offset(w * 0.60, h * 0.10), p);
+    case NodeComponent.motorizedDamper:
+      // A damper with a motor box on top.
+      final r = Rect.fromCenter(
+          center: Offset(cx, h * 0.58), width: w * 0.56, height: h * 0.42);
+      canvas.drawRect(r, p);
+      canvas.drawLine(r.topLeft, r.bottomRight, p);
+      canvas.drawRect(
+          Rect.fromLTWH(w * 0.42, h * 0.10, w * 0.16, h * 0.14), p);
+    case NodeComponent.vavBox:
+      // A VAV terminal: a box with a through-flow arrow + a blade.
+      final r = Rect.fromLTWH(w * 0.18, h * 0.32, w * 0.64, h * 0.36);
+      canvas.drawRect(r, p);
+      canvas.drawLine(Offset(w * 0.10, cy), Offset(w * 0.90, cy), p);
+      final a = Path()
+        ..moveTo(w * 0.78, cy - w * 0.07)
+        ..lineTo(w * 0.90, cy)
+        ..lineTo(w * 0.78, cy + w * 0.07);
+      canvas.drawPath(a, p);
+    case NodeComponent.ahu:
+      // An air-handling unit: a large box with a fan circle inside.
+      final r = Rect.fromLTWH(w * 0.14, h * 0.24, w * 0.72, h * 0.52);
+      canvas.drawRect(r, p);
+      canvas.drawCircle(Offset(w * 0.66, cy), w * 0.12, p);
+    case NodeComponent.fcu:
+      // A fan-coil unit: a box with a coil zigzag.
+      final r = Rect.fromLTWH(w * 0.18, h * 0.30, w * 0.64, h * 0.40);
+      canvas.drawRect(r, p);
+      final coil = Path()..moveTo(w * 0.26, h * 0.40);
+      for (var i = 0; i < 3; i++) {
+        final x = w * (0.26 + 0.16 * i);
+        coil.lineTo(x + w * 0.08, h * 0.60);
+        coil.lineTo(x + w * 0.16, h * 0.40);
+      }
+      canvas.drawPath(coil, p);
+    case NodeComponent.supplyFan:
+      // A fan: a circle with three blades + an out arrow.
+      _fan(canvas, Offset(cx, cy), w * 0.26, p);
+      canvas.drawLine(Offset(w * 0.80, cy), Offset(w * 0.94, cy), p);
+    case NodeComponent.exhaustFan:
+      // A fan with an in arrow (extract).
+      _fan(canvas, Offset(cx, cy), w * 0.26, p);
+      final a = Path()
+        ..moveTo(w * 0.94, cy)
+        ..lineTo(w * 0.80, cy)
+        ..moveTo(w * 0.86, cy - w * 0.06)
+        ..lineTo(w * 0.80, cy)
+        ..lineTo(w * 0.86, cy + w * 0.06);
+      canvas.drawPath(a, p);
+  }
+}
+
+/// A small 3-blade fan inside a circle, used by the supply/exhaust fan glyphs.
+void _fan(Canvas canvas, Offset c, double r, Paint p) {
+  canvas.drawCircle(c, r, p);
+  for (var i = 0; i < 3; i++) {
+    final a = i * 2 * math.pi / 3; // 120° apart
+    canvas.drawLine(
+      c,
+      c + Offset(r * 0.9 * math.cos(a), r * 0.9 * math.sin(a)),
+      p,
+    );
   }
 }
 

@@ -133,6 +133,16 @@ void main() {
       expect(NodeComponent.fireExtinguisher.role, NodeRole.fixture);
       expect(NodeComponent.hydrantBox.role, NodeRole.fixture);
       expect(NodeComponent.fireDeptConnection.role, NodeRole.main);
+      // HVAC: terminals are fixtures (carry airflow), dampers/VAV inline main,
+      // air units (AHU/FCU/fans) are plant sources.
+      expect(NodeComponent.supplyDiffuser.role, NodeRole.fixture);
+      expect(NodeComponent.returnGrille.role, NodeRole.fixture);
+      expect(NodeComponent.volumeDamper.role, NodeRole.main);
+      expect(NodeComponent.vavBox.role, NodeRole.main);
+      expect(NodeComponent.ahu.role, NodeRole.plant);
+      expect(NodeComponent.supplyFan.role, NodeRole.plant);
+      // HVAC components add no water-side K (air loss is a separate path).
+      expect(NodeComponent.volumeDamper.minorLossK, 0);
       expect(NodeComponent.pump.label, 'Pump');
       // Every component carries a non-empty label (UI never shows a blank).
       for (final c in NodeComponent.values) {

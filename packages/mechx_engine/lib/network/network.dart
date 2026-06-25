@@ -94,6 +94,22 @@ enum NodeComponent {
   hydrantBox,
   hoseReel,
   fireDeptConnection,
+  // ── HVAC / ducting ──────────────────────────────────────────────────────
+  // Air terminals (role: fixture — carry the airflow demand).
+  supplyDiffuser,
+  returnGrille,
+  exhaustGrille,
+  linearDiffuser,
+  // Dampers + VAV (role: main — inline on a duct run).
+  volumeDamper,
+  fireDamper,
+  motorizedDamper,
+  vavBox,
+  // Air units (role: plant — an air source / handling unit).
+  ahu,
+  fcu,
+  supplyFan,
+  exhaustFan,
 }
 
 extension NodeComponentInfo on NodeComponent {
@@ -111,9 +127,21 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.sprinklerHead ||
         NodeComponent.fireExtinguisher ||
         NodeComponent.hydrantBox ||
-        NodeComponent.hoseReel =>
+        NodeComponent.hoseReel ||
+        // HVAC air terminals carry the airflow demand → fixture.
+        NodeComponent.supplyDiffuser ||
+        NodeComponent.returnGrille ||
+        NodeComponent.exhaustGrille ||
+        NodeComponent.linearDiffuser =>
           NodeRole.fixture,
-        // Inline valves + meters / strainer / expansion tank + FDC inlet.
+        // Air units are the air source → plant.
+        NodeComponent.ahu ||
+        NodeComponent.fcu ||
+        NodeComponent.supplyFan ||
+        NodeComponent.exhaustFan =>
+          NodeRole.plant,
+        // Inline valves + meters / strainer / expansion tank + FDC inlet +
+        // inline dampers / VAV.
         _ => NodeRole.main,
       };
 
@@ -139,6 +167,18 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.hydrantBox => 'Hydrant box',
         NodeComponent.hoseReel => 'Hose reel',
         NodeComponent.fireDeptConnection => 'Fire dept. connection',
+        NodeComponent.supplyDiffuser => 'Supply diffuser',
+        NodeComponent.returnGrille => 'Return grille',
+        NodeComponent.exhaustGrille => 'Exhaust grille',
+        NodeComponent.linearDiffuser => 'Linear diffuser',
+        NodeComponent.volumeDamper => 'Volume damper',
+        NodeComponent.fireDamper => 'Fire damper',
+        NodeComponent.motorizedDamper => 'Motorized damper',
+        NodeComponent.vavBox => 'VAV box',
+        NodeComponent.ahu => 'AHU',
+        NodeComponent.fcu => 'FCU',
+        NodeComponent.supplyFan => 'Supply fan',
+        NodeComponent.exhaustFan => 'Exhaust fan',
       };
 
   /// Minor-loss coefficient K for an inline RESTRICTOR (valve / strainer /

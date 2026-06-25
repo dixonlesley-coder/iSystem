@@ -74,9 +74,10 @@ class SegmentPalette extends ConsumerWidget {
     final pipes = services.where((s) => !s.isAir).toList();
     final ducts = services.where((s) => s.isAir).toList();
 
-    // Equipment groups are plumbing-side; show them on the Plumbing layer (and
-    // on the Schematic view, which has no layer concept). Hidden under HVAC.
+    // Plumbing-side equipment shows on the Plumbing layer (and the Schematic
+    // view, which has no layer concept); air-side equipment shows on HVAC.
     final showEquipment = !onLayout || active == DisciplineLayer.plumbing;
+    final showAir = !onLayout || active == DisciplineLayer.hvac;
 
     Widget componentCard(NodeComponent c) => Padding(
           padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
@@ -199,6 +200,28 @@ class SegmentPalette extends ConsumerWidget {
             NodeComponent.hydrantBox,
             NodeComponent.hoseReel,
             NodeComponent.fireDeptConnection,
+          ]),
+        ],
+
+        // ── HVAC / ducting equipment ───────────────────────────────────────
+        if (showAir) ...[
+          equipmentGroup('Air terminals', const [
+            NodeComponent.supplyDiffuser,
+            NodeComponent.returnGrille,
+            NodeComponent.exhaustGrille,
+            NodeComponent.linearDiffuser,
+          ]),
+          equipmentGroup('Dampers', const [
+            NodeComponent.volumeDamper,
+            NodeComponent.fireDamper,
+            NodeComponent.motorizedDamper,
+            NodeComponent.vavBox,
+          ]),
+          equipmentGroup('Air units', const [
+            NodeComponent.ahu,
+            NodeComponent.fcu,
+            NodeComponent.supplyFan,
+            NodeComponent.exhaustFan,
           ]),
         ],
       ],
