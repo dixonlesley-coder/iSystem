@@ -11,10 +11,10 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
-    // inspector sections
-    expect(find.text('PROJECT'), findsOneWidget);
-    // The BUILDING section is now a compact summary that opens the dedicated
+    // inspector sections. PROJECT (name + exports) moved to the Projects page;
+    // the BUILDING section is now a compact summary that opens the dedicated
     // Building page (the floor editor itself moved off the inspector).
+    expect(find.text('PROJECT'), findsNothing);
     expect(find.text('BUILDING'), findsOneWidget);
     expect(find.text('SCALE'), findsOneWidget);
     // The summary readout ("11.0 m · 3 levels") and its Edit affordance.

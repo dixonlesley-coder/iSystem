@@ -87,14 +87,15 @@ void main() {
     await tester.pump();
 
     final c = _containerOf(tester);
-    // Plumbing active → a plumbing service chip shows, an air one does not.
-    expect(find.text('Cold water'), findsOneWidget);
+    // Plumbing active → plumbing services show (in the DRAW chips AND the node
+    // palette), air services do not. Both surfaces scope to the active layer.
+    expect(find.text('Cold water'), findsWidgets);
     expect(find.text('Supply air'), findsNothing);
 
-    // Switch the active layer to HVAC → the air chips replace the plumbing ones.
+    // Switch the active layer to HVAC → the air services replace the plumbing.
     c.read(activeDisciplineProvider.notifier).set(DisciplineLayer.hvac);
     await tester.pump();
-    expect(find.text('Supply air'), findsOneWidget);
+    expect(find.text('Supply air'), findsWidgets);
     expect(find.text('Cold water'), findsNothing);
     // The draw service followed the active discipline (an air service now).
     expect(c.read(networkControllerProvider).service.isAir, isTrue);

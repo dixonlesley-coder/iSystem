@@ -2,12 +2,14 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 
-import '../../store/network_store.dart';
+import '../../store/electrical_store.dart';
+import '../../store/layer_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/palette_card.dart';
 import '../widgets/section_label.dart';
 import 'service_style.dart';
+import 'segment_symbols.dart';
 
 /// What a palette card drops onto the canvas. The drop overlay reads [kind] to
 /// pick the matching store add-action; [service] (a pipe segment) carries the
@@ -25,59 +27,117 @@ class PaletteItem {
   const PaletteItem(this.kind, {this.service});
 }
 
-/// A compact drag-and-drop palette: drag a card onto the canvas to drop the
-/// matching element (a pipe / duct segment, a fitting, or a terminal). Mirrors
-/// the PanelMaker electrical palette so the two canvases share one interaction
-/// language. Styled with MechXTheme (no Material).
+/// The mechanical node palette — a full, grouped, draggable node palette built
+/// to mirror the electrical Loads column ([ElectricalPalette]) so both canvases
+/// speak ONE node language: each service gets its own pipe/duct node card with a
+/// leading schematic symbol, and there's a Nodes group for the generic fitting /
+/// terminal endpoints. Drag a card onto the calibrated canvas to place it.
+/// Styled with MechXTheme (no Material).
 class SegmentPalette extends ConsumerWidget {
   const SegmentPalette({super.key});
 
+  // The services offered as draggable segment cards (the same set the DRAW
+  // chips expose), split into pipe vs duct (air) at render time by regime.
+  static const List<ServiceType> _services = [
+    ServiceType.coldWater,
+    ServiceType.hotWater,
+    ServiceType.drainage,
+    ServiceType.vent,
+    ServiceType.rainwater,
+    ServiceType.duct,
+    ServiceType.returnAir,
+    ServiceType.exhaust,
+    ServiceType.fireSprinkler,
+    ServiceType.fireHydrant,
+  ];
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final activeService = ref.watch(networkControllerProvider).service;
+    final colors = context.colors;
+    final type = context.type;
+
+    // Scope the offered services to the active discipline on the Layout canvas
+    // (plumbing services under Plumbing, air services under HVAC) — matching the
+    // DRAW chips, so the palette never offers a service the active layer hides.
+    // On the Schematic view (no layer concept) all services are offered.
+    final onLayout = ref.watch(workspaceViewProvider) == WorkspaceView.plan;
+    final active = ref.watch(activeDisciplineProvider);
+    final scoped = (onLayout && active.isMechanical)
+        ? servicesFor(active)
+        : _services;
+    final services = _services.where(scoped.contains).toList();
+
+    final pipes = services.where((s) => !s.isAir).toList();
+    final ducts = services.where((s) => s.isAir).toList();
+
+    Widget serviceCard(ServiceType s) {
+      final isAir = s.isAir;
+      final kind =
+          isAir ? PaletteItemKind.ductSegment : PaletteItemKind.pipeSegment;
+      return Padding(
+        padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+        child: PaletteCard<PaletteItem>(
+          label: serviceLabel(s),
+          swatch: serviceColor(s),
+          data: PaletteItem(kind, service: s),
+          fillWidth: true,
+          leading: SegmentSymbol(kind: kind, color: serviceColor(s), size: 16),
+        ),
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const MechXSectionLabel('Palette'),
         const SizedBox(height: MechXSpacing.xs),
         Text(
-          'Drag onto the canvas to drop. Segments use the active service.',
-          style: context.type.caption.copyWith(color: context.colors.textMuted),
+          'Drag a node onto the canvas to place it.',
+          style: type.caption.copyWith(color: colors.textMuted),
         ),
         const SizedBox(height: MechXSpacing.sm),
-        Wrap(
-          spacing: MechXSpacing.xs,
-          runSpacing: MechXSpacing.xs,
-          children: [
-            PaletteCard<PaletteItem>(
-              label: 'Pipe segment',
-              swatch: serviceColor(activeService),
-              data: const PaletteItem(PaletteItemKind.pipeSegment),
-            ),
-            PaletteCard<PaletteItem>(
-              label: 'Duct segment',
-              swatch: serviceColor(ServiceType.duct),
-              data: const PaletteItem(
-                PaletteItemKind.ductSegment,
-                service: ServiceType.duct,
-              ),
-              dotShape: BoxShape.rectangle,
-            ),
-            PaletteCard<PaletteItem>(
-              label: 'Fitting',
-              swatch: context.colors.textSecondary,
-              data: const PaletteItem(PaletteItemKind.fitting),
-            ),
-            PaletteCard<PaletteItem>(
-              label: 'Terminal',
-              swatch: context.colors.textSecondary,
-              data: const PaletteItem(PaletteItemKind.terminal),
-              dotHollow: true,
-            ),
-          ],
+
+        // ── Pipes ──────────────────────────────────────────────────────────
+        if (pipes.isNotEmpty) ...[
+          const MechXSectionLabel('Pipes'),
+          const SizedBox(height: MechXSpacing.xs),
+          for (final s in pipes) serviceCard(s),
+        ],
+
+        // ── Ducts ──────────────────────────────────────────────────────────
+        if (ducts.isNotEmpty) ...[
+          const SizedBox(height: MechXSpacing.xs),
+          const MechXSectionLabel('Ducts'),
+          const SizedBox(height: MechXSpacing.xs),
+          for (final s in ducts) serviceCard(s),
+        ],
+
+        // ── Nodes (generic endpoints) ──────────────────────────────────────
+        const SizedBox(height: MechXSpacing.xs),
+        const MechXSectionLabel('Nodes'),
+        const SizedBox(height: MechXSpacing.xs),
+        Padding(
+          padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+          child: PaletteCard<PaletteItem>(
+            label: 'Fitting',
+            swatch: colors.textSecondary,
+            data: const PaletteItem(PaletteItemKind.fitting),
+            fillWidth: true,
+            leading: SegmentSymbol(
+                kind: PaletteItemKind.fitting, color: colors.textSecondary,
+                size: 16),
+          ),
+        ),
+        PaletteCard<PaletteItem>(
+          label: 'Terminal',
+          swatch: colors.textSecondary,
+          data: const PaletteItem(PaletteItemKind.terminal),
+          fillWidth: true,
+          leading: SegmentSymbol(
+              kind: PaletteItemKind.terminal, color: colors.textSecondary,
+              size: 16),
         ),
       ],
     );
   }
 }
-

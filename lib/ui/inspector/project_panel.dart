@@ -38,7 +38,6 @@ import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
 import '../widgets/section_label.dart';
-import '../widgets/mechx_text_field.dart';
 
 /// Gather the live design results into a calc report and write it to a Markdown
 /// file chosen by the user.
@@ -160,7 +159,6 @@ class ProjectPanel extends ConsumerWidget {
     final colors = context.colors;
     final type = context.type;
     final project = ref.watch(projectControllerProvider);
-    final ctrl = ref.read(projectControllerProvider.notifier);
     final building = project.building;
     final currentSheet = ref.watch(sheetsControllerProvider).current;
     final calibration =
@@ -175,33 +173,6 @@ class ProjectPanel extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              MechXSectionLabel(context.strings(StringKey.inspectorProject)),
-              const SizedBox(height: MechXSpacing.sm),
-              MechXTextField(
-                value: project.name,
-                onChanged: ctrl.setName,
-              ),
-              const SizedBox(height: MechXSpacing.sm),
-              Wrap(
-                spacing: MechXSpacing.xs,
-                runSpacing: MechXSpacing.xs,
-                children: [
-                  MechXButton(
-                    label: context.strings(StringKey.inspectorExportCalcReportMd),
-                    onPressed: () => exportCalcReport(ref),
-                  ),
-                  MechXButton(
-                    label: context.strings(StringKey.inspectorExportDrawingDxf),
-                    onPressed: () => exportDrawingDxf(ref),
-                  ),
-                  MechXButton(
-                    label: context.strings(StringKey.inspectorExportDrawingPdf),
-                    onPressed: () => exportDrawingPdf(ref),
-                  ),
-                ],
-              ),
-              const SizedBox(height: MechXSpacing.lg),
-
               // ── Building (summary → its own page) ─────────────────────────
               // The full floor/level editor (+ per-floor fixture heights) now
               // lives on the dedicated Building page so the inspector stays
