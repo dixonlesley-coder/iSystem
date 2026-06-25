@@ -483,6 +483,105 @@ void main() {
     });
   });
 
+  group('drawRunFromNode (pull a mainline out of a node)', () {
+    ProviderContainer makeContainer() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    test('pulls a new run + fresh junction out of a riser', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setService(ServiceType.coldWater);
+      n.addComponentNode('s1', 0, const Offset(100, 100), NodeComponent.riser);
+      final riser = c.read(networkControllerProvider).network.nodes.single;
+
+      final eid = n.drawRunFromNode(riser.id, const Offset(300, 100));
+      expect(eid, isNotNull);
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 2); // riser + the new far junction
+      expect(net.edges.length, 1);
+      final edge = net.edges.single;
+      expect(edge.fromId, riser.id);
+      expect(edge.service, ServiceType.coldWater);
+      final far = net.nodeById(edge.toId)!;
+      expect(far.x, 300);
+      expect(far.y, 100);
+      expect(far.role, NodeRole.main);
+    });
+
+    test('far end snaps onto an existing node within radius (no new node)', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addFitting('s1', 0, const Offset(300, 100));
+      n.addComponentNode('s1', 0, const Offset(100, 100), NodeComponent.riser);
+      final net0 = c.read(networkControllerProvider).network;
+      final fitting =
+          net0.nodes.firstWhere((nd) => nd.component == null);
+      final riser =
+          net0.nodes.firstWhere((nd) => nd.component == NodeComponent.riser);
+
+      n.drawRunFromNode(riser.id, const Offset(302, 101), snapRadius: 14);
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 2); // snapped — no third node
+      expect(net.edges.length, 1);
+      expect(net.edges.single.toId, fitting.id);
+    });
+
+    test('far end taps into a nearby run, splitting it', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // A run from (200,0) to (400,0).
+      n.addSegment('s1', 0, const Offset(300, 0),
+          spanPx: 200, service: ServiceType.coldWater);
+      n.addComponentNode('s1', 0, const Offset(300, 80), NodeComponent.riser);
+      final riser = c.read(networkControllerProvider).network.nodes
+          .firstWhere((nd) => nd.component == NodeComponent.riser);
+
+      // Release near the run's midpoint (y≈0), away from either endpoint.
+      n.drawRunFromNode(riser.id, const Offset(300, 6), snapRadius: 14);
+      final net = c.read(networkControllerProvider).network;
+      // run endpoints (2) + riser (1) + the split junction (1)
+      expect(net.nodes.length, 4);
+      // run split into 2 + the new branch from the riser
+      expect(net.edges.length, 3);
+      // The riser's single edge ends at the new junction sitting on the main.
+      final branch = net.edgesAt(riser.id).single;
+      final junction = net.nodeById(branch.toId)!;
+      expect(junction.y, closeTo(0, 1e-6));
+      expect(junction.x, closeTo(300, 1e-6));
+    });
+
+    test('a pulled run inherits the source node\'s existing service', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(0, 0),
+          spanPx: 100, service: ServiceType.hotWater);
+      final from = c.read(networkControllerProvider).network.edges.single.fromId;
+      // Active service is something else — the pulled run must still inherit hot.
+      n.setService(ServiceType.coldWater);
+
+      final eid = n.drawRunFromNode(from, const Offset(0, 200));
+      final edge = c
+          .read(networkControllerProvider)
+          .network
+          .edges
+          .firstWhere((e) => e.id == eid);
+      expect(edge.service, ServiceType.hotWater);
+    });
+
+    test('releasing back on the source lays nothing', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addComponentNode('s1', 0, const Offset(50, 50), NodeComponent.riser);
+      final riser = c.read(networkControllerProvider).network.nodes.single;
+      final eid = n.drawRunFromNode(riser.id, const Offset(51, 51), snapRadius: 14);
+      expect(eid, isNull);
+      expect(c.read(networkControllerProvider).network.edges, isEmpty);
+    });
+  });
+
   testWidgets('draw palette renders; Run tool activates without error',
       (tester) async {
     setDesktopSurface(tester);
@@ -511,11 +610,13 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
-    // The node palette: grouped (PIPES / NODES) with per-service cards plus the
-    // generic Fitting / Terminal endpoints. (DUCTS only appears under HVAC.)
+    // The node palette: the Riser as the mainline start (you drag a run out of
+    // it), plus the generic Fitting / Terminal endpoints. Pipe-segment cards are
+    // gone — mains are pulled out of nodes, not dropped as pre-made segments.
     expect(find.text('PALETTE'), findsOneWidget);
-    expect(find.text('PIPES'), findsOneWidget);
+    expect(find.text('MAINLINE START'), findsOneWidget);
     expect(find.text('NODES'), findsOneWidget);
+    expect(find.text('Riser node'), findsOneWidget);
     expect(find.text('Fitting'), findsOneWidget);
     expect(find.text('Terminal'), findsOneWidget);
   });

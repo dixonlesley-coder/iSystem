@@ -23,7 +23,13 @@ const Color _kBand = Color(0xFF4C8DFF);
 /// (or with Shift held) draws a rubber-band marquee that multi-selects every
 /// on-floor node + run edge inside it. (Canvas panning still works via
 /// middle-drag; only empty-space left-drag is repurposed as the marquee.)
-class NetworkSelectionOverlay extends ConsumerWidget {
+///
+/// Every non-fixture node (riser / fitting / plant) also carries a small
+/// **outlet nub**: dragging a line out of it LAYS A MAINLINE RUN to where you
+/// release (snapping to a node, tapping into an existing main, or a fresh
+/// junction) — so mains are drawn by pulling out of a riser, not by dropping
+/// pre-made segments.
+class NetworkSelectionOverlay extends ConsumerStatefulWidget {
   final String sheetId;
   final int floorIndex;
 
@@ -33,10 +39,53 @@ class NetworkSelectionOverlay extends ConsumerWidget {
     required this.floorIndex,
   });
 
+  @override
+  ConsumerState<NetworkSelectionOverlay> createState() =>
+      _NetworkSelectionOverlayState();
+}
+
+class _NetworkSelectionOverlayState
+    extends ConsumerState<NetworkSelectionOverlay> {
+  String get sheetId => widget.sheetId;
+  int get floorIndex => widget.floorIndex;
+
+  /// While pulling a main out of a node: the source node id and the current
+  /// pointer position (local to this overlay, screen px). Null when idle.
+  String? _pullFrom;
+  Offset? _pullNow;
+
   bool _onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
 
+  Offset _toLocal(Offset global) {
+    final box = context.findRenderObject() as RenderBox?;
+    return box?.globalToLocal(global) ?? global;
+  }
+
+  void _startPull(String nodeId) => setState(() {
+        _pullFrom = nodeId;
+        _pullNow = null;
+      });
+
+  void _updatePull(Offset global) =>
+      setState(() => _pullNow = _toLocal(global));
+
+  void _endPull(ViewportTransform transform) {
+    final from = _pullFrom;
+    final now = _pullNow;
+    setState(() {
+      _pullFrom = null;
+      _pullNow = null;
+    });
+    if (from == null || now == null) return;
+    final world = transform.screenToWorld(now);
+    final snapWorld = 14 / transform.scale;
+    ref
+        .read(networkControllerProvider.notifier)
+        .drawRunFromNode(from, world, snapRadius: snapWorld);
+  }
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final net = ref.watch(networkControllerProvider).network;
     final transform =
         ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
@@ -54,6 +103,15 @@ class NetworkSelectionOverlay extends ConsumerWidget {
         if (_onFloor(n))
           _dragHandle(ref, n.id, transform.worldToScreen(Offset(n.x, n.y)),
               transform.scale, snapWorld),
+    ];
+
+    // Outlet nubs — one per non-fixture node (mains/plant/risers, the sources a
+    // mainline is pulled out of). Sit above the move handle so a drag from the
+    // nub lays a run rather than moving the node.
+    final outlets = <Widget>[
+      for (final n in net.nodes)
+        if (_onFloor(n) && n.role != NodeRole.fixture)
+          _outletNub(n.id, transform.worldToScreen(Offset(n.x, n.y)), transform),
     ];
 
     // A selected run's two endpoints get larger, accented resize handles — the
@@ -77,6 +135,13 @@ class NetworkSelectionOverlay extends ConsumerWidget {
       }
     }
 
+    // The live "pull a main out of here" preview line, node → cursor.
+    final pullNode =
+        _pullFrom == null ? null : net.nodeById(_pullFrom!);
+    final pullFromScreen = pullNode == null
+        ? null
+        : transform.worldToScreen(Offset(pullNode.x, pullNode.y));
+
     // Translucent (not opaque) so a tap selects, but drag-pan and scroll-zoom
     // still reach the CanvasView underneath.
     return Stack(
@@ -88,7 +153,16 @@ class NetworkSelectionOverlay extends ConsumerWidget {
           ),
         ),
         ...handles,
+        ...outlets,
         ...resizeHandles,
+        if (pullFromScreen != null && _pullNow != null)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: _PullPainter(from: pullFromScreen, to: _pullNow!),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -129,6 +203,54 @@ class NetworkSelectionOverlay extends ConsumerWidget {
     );
   }
 
+  /// The small accent "outlet" nub offset up-right of a node — drag it to pull a
+  /// mainline run out of the node. Reports the pull to the host state, which
+  /// paints the preview line and lays the run on release.
+  Widget _outletNub(String nodeId, Offset screen, ViewportTransform transform) {
+    const off = 15.0; // up-right of the node, clear of the move handle
+    const r = 9.0;
+    return Positioned(
+      left: screen.dx + off - r,
+      top: screen.dy - off - r,
+      width: r * 2,
+      height: r * 2,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.precise,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanStart: (d) {
+            _startPull(nodeId);
+            _updatePull(d.globalPosition);
+          },
+          onPanUpdate: (d) => _updatePull(d.globalPosition),
+          onPanEnd: (_) => _endPull(transform),
+          onPanCancel: () => setState(() {
+            _pullFrom = null;
+            _pullNow = null;
+          }),
+          child: Center(
+            child: Container(
+              width: 11,
+              height: 11,
+              decoration: const BoxDecoration(
+                color: _kBand,
+                shape: BoxShape.circle,
+                border: Border.fromBorderSide(
+                    BorderSide(color: Color(0xFFFFFFFF), width: 1.5)),
+                boxShadow: [
+                  BoxShadow(
+                      color: Color(0x33000000),
+                      blurRadius: 3,
+                      offset: Offset(0, 1)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// A larger accented endpoint handle for a selected run: live drag moves the
   /// endpoint node; drag-end snaps/merges it onto a nearby node (connecting the
   /// segment to a fitting). Keeps the edge selected.
@@ -148,7 +270,42 @@ class NetworkSelectionOverlay extends ConsumerWidget {
       ),
     );
   }
+}
 
+/// Paints the live preview line while a mainline run is being pulled out of a
+/// node — a dashed accent line from the source node to the cursor, with a small
+/// target ring at the release end.
+class _PullPainter extends CustomPainter {
+  final Offset from;
+  final Offset to;
+
+  _PullPainter({required this.from, required this.to});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = _kBand
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    // A dashed line so the in-progress run reads as a preview, not committed.
+    const dash = 7.0, gap = 5.0;
+    final dir = to - from;
+    final len = dir.distance;
+    if (len > 0.0) {
+      final unit = dir / len;
+      var d = 0.0;
+      while (d < len) {
+        final a = from + unit * d;
+        final b = from + unit * math.min(d + dash, len);
+        canvas.drawLine(a, b, paint);
+        d += dash + gap;
+      }
+    }
+    canvas.drawCircle(to, 4, paint);
+  }
+
+  @override
+  bool shouldRepaint(_PullPainter old) => old.from != from || old.to != to;
 }
 
 /// The draggable endpoint dot for a selected run. Tracks its own press state so

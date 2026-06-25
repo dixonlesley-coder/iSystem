@@ -659,6 +659,116 @@ class NetworkController extends Notifier<DrawingState> {
     ));
   }
 
+  /// The service an existing run incident to [nodeId] carries (so a main pulled
+  /// out of a node inherits its service), or null if the node has no run yet.
+  ServiceType? _serviceOf(String nodeId) {
+    for (final e in state.network.edges) {
+      if (e.fromId == nodeId || e.toId == nodeId) return e.service;
+    }
+    return null;
+  }
+
+  /// Pull a NEW run OUT of an existing node [fromId] to [world] (sheet/world px)
+  /// — the way mains are laid: place a riser/fitting, then drag a line out of it.
+  /// The far end SNAPS to an existing node within [snapRadius], else TAPS into a
+  /// nearby run (splitting it at the nearest point), else becomes a fresh
+  /// junction node. The run carries [service] (explicit), else the source node's
+  /// existing run service, else the active draw service. Records one undo step.
+  /// Returns the new edge id, or null if it would be zero-length / invalid.
+  String? drawRunFromNode(
+    String fromId,
+    Offset world, {
+    ServiceType? service,
+    double snapRadius = 12,
+  }) {
+    final from = state.network.nodeById(fromId);
+    if (from == null) return null;
+    final sheetId = from.sheetId;
+    final floorIndex = from.floorIndex;
+    final svc = service ?? _serviceOf(fromId) ?? state.service;
+
+    final nodes = [...state.network.nodes];
+    final edges = [...state.network.edges];
+    final farId = _resolveDrawEndpoint(
+        nodes, edges, sheetId, floorIndex, world, snapRadius);
+    if (farId == fromId) return null; // collapsed onto the source — nothing laid
+
+    final edgeId = _id('e');
+    edges.add(NetEdge(id: edgeId, fromId: fromId, toId: farId, service: svc));
+    _commit(Network(nodes: nodes, edges: edges));
+    return edgeId;
+  }
+
+  /// Resolve a drawn run's far endpoint to a node id, MUTATING [nodes]/[edges]:
+  /// snap to an existing node, else split the nearest run at the projection (the
+  /// new junction), else append a fresh junction node at [world].
+  String _resolveDrawEndpoint(
+    List<NetNode> nodes,
+    List<NetEdge> edges,
+    String sheetId,
+    int floorIndex,
+    Offset world,
+    double snapRadius,
+  ) {
+    // 1) snap to an existing node on this floor.
+    final snapped = _snap(nodes, sheetId, floorIndex, world, snapRadius);
+    if (snapped != null) return snapped;
+
+    // 2) tap into the nearest run on this floor (split it at the projection).
+    final r2 = snapRadius * snapRadius;
+    NetEdge? bestEdge;
+    var bestD2 = r2;
+    var bestP = world;
+    for (final e in edges) {
+      if (e.kind == EdgeKind.riser) continue;
+      final a = nodes.where((n) => n.id == e.fromId).firstOrNull;
+      final b = nodes.where((n) => n.id == e.toId).firstOrNull;
+      if (a == null || b == null) continue;
+      if (a.sheetId != sheetId || a.floorIndex != floorIndex) continue;
+      if (b.sheetId != sheetId || b.floorIndex != floorIndex) continue;
+      final p =
+          _closestPointOnSegment(world, Offset(a.x, a.y), Offset(b.x, b.y));
+      final d2 = (p - world).distanceSquared;
+      if (d2 <= bestD2) {
+        bestD2 = d2;
+        bestEdge = e;
+        bestP = p;
+      }
+    }
+    final e = bestEdge;
+    if (e != null) {
+      final a = nodes.firstWhere((n) => n.id == e.fromId);
+      final b = nodes.firstWhere((n) => n.id == e.toId);
+      if ((bestP - Offset(a.x, a.y)).distanceSquared <= r2) return a.id;
+      if ((bestP - Offset(b.x, b.y)).distanceSquared <= r2) return b.id;
+      final jId = _id('n');
+      nodes.add(NetNode(
+          id: jId,
+          sheetId: sheetId,
+          x: bestP.dx,
+          y: bestP.dy,
+          floorIndex: floorIndex));
+      final idx = edges.indexWhere((x) => x.id == e.id);
+      edges[idx] = e.copyWith(toId: jId);
+      edges.add(NetEdge(
+        id: _id('e'),
+        fromId: jId,
+        toId: e.toId,
+        service: e.service,
+        kind: e.kind,
+        pipeProduct: e.pipeProduct,
+        ductProduct: e.ductProduct,
+      ));
+      return jId;
+    }
+
+    // 3) a fresh junction node at the release point.
+    final id = _id('n');
+    nodes.add(NetNode(
+        id: id, sheetId: sheetId, x: world.dx, y: world.dy, floorIndex: floorIndex));
+    return id;
+  }
+
   /// Call at the END of a node drag: if the node now lands within
   /// [snapRadiusWorld] of ANOTHER node on the same sheet/floor, MERGE the two —
   /// re-point every edge that referenced the dragged node to the target, drop
