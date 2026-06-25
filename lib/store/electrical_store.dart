@@ -26,6 +26,7 @@ import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'electrical_feed.dart';
 import 'project_store.dart';
 
 /// The outcome of a [ElectricalProjectController.connectFeeder] attempt — a
@@ -138,7 +139,20 @@ final electricalAdvancedProvider = Provider<AdvancedStudy>(
 @immutable
 class ElectricalProjectController extends Notifier<ElectricalProject> {
   @override
-  ElectricalProject build() => sampleElectricalProject();
+  ElectricalProject build() {
+    // Keep the "MEP Equipment" panel in sync with the motorised equipment NODES
+    // placed on the plan (pumps/fans/AHUs/FCUs). This is the inter-discipline
+    // payoff: a pump drawn on the plumbing layer appears here as an electrical
+    // circuit. We sync the PLACED equipment only (not the always-on sized-duty
+    // feed), so an untouched project with nothing placed has no MEP panel and is
+    // unchanged. The listener fires on every change after build; a microtask
+    // does the initial sync (state can't be set during build()).
+    ref.listen(
+        placedEquipmentCircuitsProvider, (_, next) => syncMepEquipment(next));
+    Future.microtask(
+        () => syncMepEquipment(ref.read(placedEquipmentCircuitsProvider)));
+    return sampleElectricalProject();
+  }
 
   /// Replace the whole project (used by A6 persistence / A5 auto-feed later).
   void setProject(ElectricalProject project) => state = project;

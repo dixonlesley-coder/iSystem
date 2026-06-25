@@ -2,9 +2,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/electrical_feed.dart';
 import 'package:mechx/store/electrical_store.dart';
+import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/load_list.dart';
+import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -75,5 +77,39 @@ void main() {
     expect(pump.flaOverrideA, isNotNull);
     // 2.5 kW input / (√3·400·0.85) ≈ 4.25 A
     expect(pump.flaOverrideA!.amperes, closeTo(4.25, 0.1));
+  });
+
+  test('a pump NODE placed on the plan is inter-related as an electrical load',
+      () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final net = container.read(networkControllerProvider.notifier);
+
+    // Drop a pump (default 1.5 kW) and an exhaust fan with an explicit 900 W.
+    net.addComponentNode('s1', 0, const Offset(10, 10), NodeComponent.pump);
+    net.addComponentNode('s1', 0, const Offset(20, 20), NodeComponent.exhaustFan);
+    final fanId = container
+        .read(networkControllerProvider)
+        .network
+        .nodes
+        .firstWhere((n) => n.component == NodeComponent.exhaustFan)
+        .id;
+    net.setNodeElectricalLoad(fanId, 900);
+    // A non-electrical component (gate valve) must NOT surface as a load.
+    net.addComponentNode('s1', 0, const Offset(30, 30), NodeComponent.gateValve);
+
+    final loads = container.read(placedEquipmentLoadsProvider);
+    expect(loads, hasLength(2));
+    final pump =
+        loads.firstWhere((l) => l.source == MepLoadSource.supplyPump);
+    expect(pump.mechanicalPower.inKiloWatts, closeTo(1.5, 1e-9)); // default
+    final fan =
+        loads.firstWhere((l) => l.source == MepLoadSource.exhaustFan);
+    expect(fan.mechanicalPower.watts, closeTo(900, 1e-9)); // explicit override
+
+    // They become circuits on the MEP equipment feed, keyed by node id.
+    final circuits = container.read(mepEquipmentCircuitsProvider);
+    expect(circuits.where((c) => c.sourceEquipmentId!.startsWith('node-')),
+        hasLength(2));
   });
 }

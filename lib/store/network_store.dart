@@ -329,6 +329,7 @@ class NetworkController extends Notifier<DrawingState> {
       mountHeight: node.mountHeight,
       component: node.component,
       tankCapacityLitres: node.tankCapacityLitres,
+      electricalLoadW: node.electricalLoadW,
       fixture: keepTerminal ? node.fixture : null,
       airflow: keepTerminal ? node.airflow : null,
     ));
@@ -354,6 +355,7 @@ class NetworkController extends Notifier<DrawingState> {
         mountHeight: node.mountHeight,
       component: node.component,
       tankCapacityLitres: node.tankCapacityLitres,
+      electricalLoadW: node.electricalLoadW,
         airflow: node.airflow,
         roofAreaM2: node.roofAreaM2,
       ));
@@ -382,6 +384,7 @@ class NetworkController extends Notifier<DrawingState> {
       mountHeight: node.mountHeight,
       component: node.component,
       tankCapacityLitres: node.tankCapacityLitres,
+      electricalLoadW: node.electricalLoadW,
       fixture: node.fixture,
       airflow: airflow,
       customFixtureId: node.customFixtureId,
@@ -430,6 +433,7 @@ class NetworkController extends Notifier<DrawingState> {
       mountHeight: node.mountHeight,
       component: node.component,
       tankCapacityLitres: node.tankCapacityLitres,
+      electricalLoadW: node.electricalLoadW,
       fixture: customFixtureId == null ? node.fixture : null,
       airflow: node.airflow,
       customFixtureId: customFixtureId,
@@ -469,6 +473,18 @@ class NetworkController extends Notifier<DrawingState> {
     _replaceNode(node.copyWith(
       tankCapacityLitres: capacityLitres,
       clearTankCapacity: capacityLitres == null,
+    ));
+  }
+
+  /// Set the explicit electrical load (W) on a motorised equipment node (pump /
+  /// fan / air unit) — its draw on the electrical panel. Pass null to revert to
+  /// the component's default rating.
+  void setNodeElectricalLoad(String id, double? watts) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    _replaceNode(node.copyWith(
+      electricalLoadW: watts,
+      clearElectricalLoad: watts == null,
     ));
   }
 
@@ -717,6 +733,7 @@ class NetworkController extends Notifier<DrawingState> {
         mountHeight: n.mountHeight,
         component: n.component,
         tankCapacityLitres: n.tankCapacityLitres,
+        electricalLoadW: n.electricalLoadW,
         fixture: n.fixture,
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,
@@ -815,6 +832,7 @@ class NetworkController extends Notifier<DrawingState> {
         mountHeight: n.mountHeight,
         component: n.component,
         tankCapacityLitres: n.tankCapacityLitres,
+        electricalLoadW: n.electricalLoadW,
         fixture: n.fixture,
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,

@@ -1292,6 +1292,52 @@ class _SelectionSection extends ConsumerWidget {
               ],
             ),
           ],
+          // A motorised component (pump / fan / air unit) is INTER-RELATED with
+          // the electrical model: it feeds the MEP equipment panel as its own
+          // circuit. Edit its electrical load here (kW); blank ⇒ the default
+          // rating for this equipment.
+          if (node.component!.isElectricalLoad) ...[
+            const SizedBox(height: MechXSpacing.xs),
+            Text('Electrical load (feeds the panel)',
+                style: context.type.caption
+                    .copyWith(color: context.colors.textMuted)),
+            const SizedBox(height: MechXSpacing.xxs),
+            Row(
+              children: [
+                _GlyphButton(
+                  glyph: '−',
+                  onTap: () {
+                    final base = node.electricalLoadW ??
+                        node.component!.defaultMotorKw * 1000;
+                    final next = base - 250;
+                    ctrl.setNodeElectricalLoad(
+                        node.id, next <= 0 ? null : next);
+                  },
+                ),
+                const SizedBox(width: MechXSpacing.sm),
+                Text(
+                  () {
+                    final w = node.electricalLoadW ??
+                        node.component!.defaultMotorKw * 1000;
+                    final suffix =
+                        node.electricalLoadW == null ? ' · default' : '';
+                    return '${(w / 1000).toStringAsFixed(2)} kW$suffix';
+                  }(),
+                  style: context.type.mono
+                      .copyWith(color: context.colors.textSecondary),
+                ),
+                const SizedBox(width: MechXSpacing.sm),
+                _GlyphButton(
+                  glyph: '+',
+                  onTap: () {
+                    final base = node.electricalLoadW ??
+                        node.component!.defaultMotorKw * 1000;
+                    ctrl.setNodeElectricalLoad(node.id, base + 250);
+                  },
+                ),
+              ],
+            ),
+          ],
         ],
         const SizedBox(height: MechXSpacing.sm),
         Wrap(

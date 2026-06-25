@@ -158,6 +158,20 @@ void main() {
           component: NodeComponent.roofTank, tankCapacityLitres: 5000);
       expect(tank.tankCapacityLitres, 5000);
       expect(tank.copyWith(clearTankCapacity: true).tankCapacityLitres, isNull);
+      // Motorised equipment is an electrical load (inter-related with the panel);
+      // valves/drains/tanks are not.
+      expect(NodeComponent.pump.isElectricalLoad, isTrue);
+      expect(NodeComponent.supplyFan.isElectricalLoad, isTrue);
+      expect(NodeComponent.ahu.isElectricalLoad, isTrue);
+      expect(NodeComponent.gateValve.isElectricalLoad, isFalse);
+      expect(NodeComponent.roofTank.isElectricalLoad, isFalse);
+      expect(NodeComponent.pump.defaultMotorKw, greaterThan(0));
+      expect(NodeComponent.gateValve.defaultMotorKw, 0);
+      // The per-node electrical load override round-trips through copyWith.
+      final motor = n.copyWith(
+          component: NodeComponent.pump, electricalLoadW: 2200);
+      expect(motor.electricalLoadW, 2200);
+      expect(motor.copyWith(clearElectricalLoad: true).electricalLoadW, isNull);
     });
 
     test('uncalibrated run yields zero length (flagged elsewhere)', () {

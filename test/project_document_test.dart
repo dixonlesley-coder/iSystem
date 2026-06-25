@@ -52,6 +52,7 @@ void main() {
             role: NodeRole.plant,
             elevation: Length(30),
             component: NodeComponent.roofTank,
+            electricalLoadW: 1500, // motorised-equipment load override
           ),
           NetNode(
             id: 'n1',
@@ -103,8 +104,10 @@ void main() {
     expect(decoded.network.nodes[0].role, NodeRole.plant);
     expect(decoded.network.nodes[0].elevation?.meters, 30);
     expect(decoded.network.nodes[0].component, NodeComponent.roofTank);
+    expect(decoded.network.nodes[0].electricalLoadW, 1500);
     // a node with no component loads it as null
     expect(decoded.network.nodes[1].component, isNull);
+    expect(decoded.network.nodes[1].electricalLoadW, isNull);
     expect(decoded.network.nodes[2].role, NodeRole.fixture);
     expect(decoded.network.nodes[2].fixture, PlumbingFixture.lavatory);
     expect(decoded.network.nodes[2].mountHeight?.meters, closeTo(1.4, 1e-9));

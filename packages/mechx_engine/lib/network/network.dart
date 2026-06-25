@@ -197,6 +197,35 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.waterMeter => 6.0,
         _ => 0.0,
       };
+
+  /// Whether this component is also an ELECTRICAL load — a motorised piece of
+  /// equipment that draws power, so a pump/fan/air-unit placed on the mechanical
+  /// plan is INTER-RELATED with the electrical model (it appears as a circuit on
+  /// the panel). The mechanical and electrical disciplines share the one node.
+  bool get isElectricalLoad => switch (this) {
+        NodeComponent.pump ||
+        NodeComponent.boosterSet ||
+        NodeComponent.supplyFan ||
+        NodeComponent.exhaustFan ||
+        NodeComponent.ahu ||
+        NodeComponent.fcu =>
+          true,
+        _ => false,
+      };
+
+  /// A representative motor rating (kW) for an [isElectricalLoad] component, used
+  /// as the electrical load when the node carries no explicit override. General
+  /// practice, NOT a PUIL/SNI clause — `// VERIFY` against the equipment
+  /// schedule. 0 for non-electrical components.
+  double get defaultMotorKw => switch (this) {
+        NodeComponent.pump => 1.5,
+        NodeComponent.boosterSet => 3.0,
+        NodeComponent.supplyFan => 1.1,
+        NodeComponent.exhaustFan => 0.75,
+        NodeComponent.ahu => 5.5,
+        NodeComponent.fcu => 0.25,
+        _ => 0.0,
+      };
 }
 
 /// A connection point, located at ([x], [y]) sheet pixels on [sheetId] /
@@ -258,6 +287,13 @@ class NetNode {
   /// footprint × depth). Null for a non-tank node or an unspecified size.
   final double? tankCapacityLitres;
 
+  /// Explicit electrical load (W) for a motorised equipment node (pump / fan /
+  /// air unit) — overrides the component's [NodeComponentInfo.defaultMotorKw]
+  /// when the mechanical node is fed into the electrical model. Null ⇒ use the
+  /// default rating. Lets a pump exist on BOTH the plumbing and electrical sides
+  /// with one edited power.
+  final double? electricalLoadW;
+
   const NetNode({
     required this.id,
     required this.sheetId,
@@ -273,6 +309,7 @@ class NetNode {
     this.roofAreaM2,
     this.component,
     this.tankCapacityLitres,
+    this.electricalLoadW,
   });
 
   NetNode copyWith({
@@ -294,6 +331,8 @@ class NetNode {
     bool clearComponent = false,
     double? tankCapacityLitres,
     bool clearTankCapacity = false,
+    double? electricalLoadW,
+    bool clearElectricalLoad = false,
   }) =>
       NetNode(
         id: id,
@@ -314,6 +353,9 @@ class NetNode {
         tankCapacityLitres: clearTankCapacity
             ? null
             : (tankCapacityLitres ?? this.tankCapacityLitres),
+        electricalLoadW: clearElectricalLoad
+            ? null
+            : (electricalLoadW ?? this.electricalLoadW),
       );
 }
 
