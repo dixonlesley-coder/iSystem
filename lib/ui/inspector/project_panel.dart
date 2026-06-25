@@ -29,6 +29,7 @@ import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/segment_palette.dart';
+import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
 import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
@@ -1098,6 +1099,28 @@ class _SelectionSection extends ConsumerWidget {
         Text('Node · floor ${node.floorIndex + 1} · elev '
             '${elev.toStringAsFixed(1)} m',
             style: context.type.caption.copyWith(color: context.colors.textMuted)),
+        if (node.component != null) ...[
+          const SizedBox(height: MechXSpacing.xxs),
+          Row(
+            children: [
+              ComponentSymbol(
+                  component: node.component!,
+                  color: context.colors.textSecondary,
+                  size: 15),
+              const SizedBox(width: MechXSpacing.xs),
+              Expanded(
+                child: Text(node.component!.label,
+                    style: context.type.body
+                        .copyWith(color: context.colors.textPrimary)),
+              ),
+              MechXButton(
+                label: 'Clear',
+                tertiary: true,
+                onPressed: () => ctrl.setNodeComponent(node.id, null),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,

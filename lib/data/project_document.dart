@@ -289,6 +289,7 @@ class ProjectDocument {
                 if (n.customFixtureId != null)
                   'customFixtureId': n.customFixtureId,
                 if (n.roofAreaM2 != null) 'roof_area_m2': n.roofAreaM2,
+                if (n.component != null) 'component': n.component!.name,
               },
           ],
           'edges': [
@@ -371,6 +372,10 @@ class ProjectDocument {
               : FlowRate.litersPerSecond((n['airflow_lps'] as num).toDouble()),
           customFixtureId: n['customFixtureId'] as String?,
           roofAreaM2: (n['roof_area_m2'] as num?)?.toDouble(),
+          // Tolerant: absent / unknown ⇒ null ⇒ an ordinary node.
+          component: n['component'] == null
+              ? null
+              : _enumOrNull(NodeComponent.values, n['component']),
         ),
     ];
     final edges = [

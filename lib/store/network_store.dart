@@ -327,6 +327,7 @@ class NetworkController extends Notifier<DrawingState> {
       role: role,
       elevation: node.elevation,
       mountHeight: node.mountHeight,
+      component: node.component,
       fixture: keepTerminal ? node.fixture : null,
       airflow: keepTerminal ? node.airflow : null,
     ));
@@ -350,6 +351,7 @@ class NetworkController extends Notifier<DrawingState> {
         role: node.role,
         elevation: node.elevation,
         mountHeight: node.mountHeight,
+      component: node.component,
         airflow: node.airflow,
         roofAreaM2: node.roofAreaM2,
       ));
@@ -376,6 +378,7 @@ class NetworkController extends Notifier<DrawingState> {
       role: airflow == null ? node.role : NodeRole.fixture,
       elevation: node.elevation,
       mountHeight: node.mountHeight,
+      component: node.component,
       fixture: node.fixture,
       airflow: airflow,
       customFixtureId: node.customFixtureId,
@@ -422,6 +425,7 @@ class NetworkController extends Notifier<DrawingState> {
       role: customFixtureId == null ? node.role : NodeRole.fixture,
       elevation: node.elevation,
       mountHeight: node.mountHeight,
+      component: node.component,
       fixture: customFixtureId == null ? node.fixture : null,
       airflow: node.airflow,
       customFixtureId: customFixtureId,
@@ -439,6 +443,17 @@ class NetworkController extends Notifier<DrawingState> {
     _replaceNode(node.copyWith(
       mountHeight: mountHeight,
       clearMountHeight: mountHeight == null,
+    ));
+  }
+
+  /// Set (or clear, with null) the equipment [component] a node represents.
+  /// Clearing reverts it to an ordinary node (its role is left as-is).
+  void setNodeComponent(String id, NodeComponent? component) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    _replaceNode(node.copyWith(
+      component: component,
+      clearComponent: component == null,
     ));
   }
 
@@ -587,6 +602,32 @@ class NetworkController extends Notifier<DrawingState> {
     ));
   }
 
+  /// Drop an EQUIPMENT / COMPONENT node (pump, roof tank, valve, roof drain,
+  /// meter…) at [world]. The component sets the node's [NodeRole] (plant for
+  /// pumps/tanks, fixture for drains, main for inline valves/meters), so a pump
+  /// or tank feeds the pressure solve as a plant source with no extra wiring.
+  /// Records one undo step.
+  void addComponentNode(
+    String sheetId,
+    int floorIndex,
+    Offset world,
+    NodeComponent component,
+  ) {
+    final node = NetNode(
+      id: _id('n'),
+      sheetId: sheetId,
+      x: world.dx,
+      y: world.dy,
+      floorIndex: floorIndex,
+      role: component.role,
+      component: component,
+    );
+    _commit(Network(
+      nodes: [...state.network.nodes, node],
+      edges: state.network.edges,
+    ));
+  }
+
   /// Call at the END of a node drag: if the node now lands within
   /// [snapRadiusWorld] of ANOTHER node on the same sheet/floor, MERGE the two —
   /// re-point every edge that referenced the dragged node to the target, drop
@@ -659,6 +700,7 @@ class NetworkController extends Notifier<DrawingState> {
         role: n.role,
         elevation: n.elevation,
         mountHeight: n.mountHeight,
+        component: n.component,
         fixture: n.fixture,
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,
@@ -755,6 +797,7 @@ class NetworkController extends Notifier<DrawingState> {
         role: n.role,
         elevation: n.elevation,
         mountHeight: n.mountHeight,
+        component: n.component,
         fixture: n.fixture,
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,

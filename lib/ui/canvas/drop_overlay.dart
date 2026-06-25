@@ -51,6 +51,9 @@ class DropOverlay extends ConsumerWidget {
             ctrl.addFitting(sheetId, floorIndex, world);
           case PaletteItemKind.terminal:
             ctrl.addTerminal(sheetId, floorIndex, world);
+          case PaletteItemKind.component:
+            final c = details.data.component;
+            if (c != null) ctrl.addComponentNode(sheetId, floorIndex, world, c);
         }
       },
       builder: (context, candidate, rejected) {

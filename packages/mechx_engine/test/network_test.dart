@@ -121,6 +121,30 @@ void main() {
       expect(nodeElevation(both, building).meters, closeTo(9.0, 1e-9));
     });
 
+    test('NodeComponent maps to the expected role + label', () {
+      expect(NodeComponent.pump.role, NodeRole.plant);
+      expect(NodeComponent.roofTank.role, NodeRole.plant);
+      expect(NodeComponent.gateValve.role, NodeRole.main);
+      expect(NodeComponent.waterMeter.role, NodeRole.main);
+      expect(NodeComponent.roofDrain.role, NodeRole.fixture);
+      expect(NodeComponent.airVent.role, NodeRole.fixture);
+      // Fire-protection points are fixtures; the FDC inlet is an inline main.
+      expect(NodeComponent.sprinklerHead.role, NodeRole.fixture);
+      expect(NodeComponent.fireExtinguisher.role, NodeRole.fixture);
+      expect(NodeComponent.hydrantBox.role, NodeRole.fixture);
+      expect(NodeComponent.fireDeptConnection.role, NodeRole.main);
+      expect(NodeComponent.pump.label, 'Pump');
+      // Every component carries a non-empty label (UI never shows a blank).
+      for (final c in NodeComponent.values) {
+        expect(c.label, isNotEmpty);
+      }
+      // copyWith carries the component and can clear it.
+      const n = NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0);
+      final withC = n.copyWith(component: NodeComponent.pump);
+      expect(withC.component, NodeComponent.pump);
+      expect(withC.copyWith(clearComponent: true).component, isNull);
+    });
+
     test('uncalibrated run yields zero length (flagged elsewhere)', () {
       final len = edgeLength(net.edges[0], net,
           calibrationBySheet: const {}, building: building);

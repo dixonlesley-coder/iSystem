@@ -12,6 +12,7 @@ import '../../store/network_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
+import 'segment_symbols.dart';
 import 'service_style.dart';
 import 'viewport.dart';
 
@@ -250,8 +251,37 @@ class _NetworkPainter extends CustomPainter {
             ..style = PaintingStyle.stroke,
         );
       }
-      _nodeGlyph(canvas, p, n.role, layer.opacity);
+      if (n.component != null) {
+        _componentGlyph(canvas, p, n.component!, layer.opacity);
+      } else {
+        _nodeGlyph(canvas, p, n.role, layer.opacity);
+      }
     }
+  }
+
+  /// Draws an equipment node as its schematic symbol on a light chip so it
+  /// stands out from plain junctions. [opacity] fades it on a coordination layer.
+  void _componentGlyph(
+      Canvas canvas, Offset p, NodeComponent c, double opacity) {
+    final dark = _fade(const Color(0xFF15171B), opacity);
+    final light = _fade(const Color(0xFFFFFFFF), opacity);
+    const r = 9.0;
+    final box = Rect.fromCenter(center: p, width: r * 2, height: r * 2);
+    // A rounded white chip with a hairline, then the symbol centred in it.
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(box, const Radius.circular(4)),
+        Paint()..color = light);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(box, const Radius.circular(4)),
+      Paint()
+        ..color = dark
+        ..strokeWidth = 1
+        ..style = PaintingStyle.stroke,
+    );
+    canvas.save();
+    canvas.translate(box.left, box.top);
+    paintComponentSymbol(canvas, const Size(r * 2, r * 2), c, dark, stroke: 1.2);
+    canvas.restore();
   }
 
   /// Draws a node glyph by role: plant = filled square (tank/pump), fixture =

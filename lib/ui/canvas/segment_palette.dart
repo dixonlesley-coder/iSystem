@@ -13,8 +13,9 @@ import 'segment_symbols.dart';
 
 /// What a palette card drops onto the canvas. The drop overlay reads [kind] to
 /// pick the matching store add-action; [service] (a pipe segment) carries the
-/// service so a duct vs water segment lands correctly.
-enum PaletteItemKind { pipeSegment, ductSegment, fitting, terminal }
+/// service so a duct vs water segment lands correctly; [component] (a
+/// [PaletteItemKind.component]) carries which piece of equipment to drop.
+enum PaletteItemKind { pipeSegment, ductSegment, fitting, terminal, component }
 
 @immutable
 class PaletteItem {
@@ -24,7 +25,10 @@ class PaletteItem {
   /// service the dropped segment carries. Null ⇒ use the active draw service.
   final ServiceType? service;
 
-  const PaletteItem(this.kind, {this.service});
+  /// For [PaletteItemKind.component] — which equipment node to drop.
+  final NodeComponent? component;
+
+  const PaletteItem(this.kind, {this.service, this.component});
 }
 
 /// The mechanical node palette — a full, grouped, draggable node palette built
@@ -69,6 +73,32 @@ class SegmentPalette extends ConsumerWidget {
 
     final pipes = services.where((s) => !s.isAir).toList();
     final ducts = services.where((s) => s.isAir).toList();
+
+    // Equipment groups are plumbing-side; show them on the Plumbing layer (and
+    // on the Schematic view, which has no layer concept). Hidden under HVAC.
+    final showEquipment = !onLayout || active == DisciplineLayer.plumbing;
+
+    Widget componentCard(NodeComponent c) => Padding(
+          padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+          child: PaletteCard<PaletteItem>(
+            label: c.label,
+            swatch: colors.textSecondary,
+            data: PaletteItem(PaletteItemKind.component, component: c),
+            fillWidth: true,
+            leading:
+                ComponentSymbol(component: c, color: colors.textSecondary, size: 16),
+          ),
+        );
+
+    Widget equipmentGroup(String title, List<NodeComponent> items) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: MechXSpacing.xs),
+            MechXSectionLabel(title),
+            const SizedBox(height: MechXSpacing.xs),
+            for (final c in items) componentCard(c),
+          ],
+        );
 
     Widget serviceCard(ServiceType s) {
       final isAir = s.isAir;
@@ -137,6 +167,40 @@ class SegmentPalette extends ConsumerWidget {
               kind: PaletteItemKind.terminal, color: colors.textSecondary,
               size: 16),
         ),
+
+        // ── Equipment (plumbing-side) ──────────────────────────────────────
+        if (showEquipment) ...[
+          equipmentGroup('Plant', const [
+            NodeComponent.pump,
+            NodeComponent.roofTank,
+            NodeComponent.groundTank,
+            NodeComponent.boosterSet,
+          ]),
+          equipmentGroup('Valves', const [
+            NodeComponent.gateValve,
+            NodeComponent.checkValve,
+            NodeComponent.prv,
+            NodeComponent.balancingValve,
+          ]),
+          equipmentGroup('Drains', const [
+            NodeComponent.roofDrain,
+            NodeComponent.floorDrain,
+            NodeComponent.cleanout,
+          ]),
+          equipmentGroup('Meters & misc', const [
+            NodeComponent.waterMeter,
+            NodeComponent.strainer,
+            NodeComponent.expansionTank,
+            NodeComponent.airVent,
+          ]),
+          equipmentGroup('Fire protection', const [
+            NodeComponent.sprinklerHead,
+            NodeComponent.fireExtinguisher,
+            NodeComponent.hydrantBox,
+            NodeComponent.hoseReel,
+            NodeComponent.fireDeptConnection,
+          ]),
+        ],
       ],
     );
   }
