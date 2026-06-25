@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 
@@ -13,6 +14,7 @@ import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
+import '../../store/solve_store.dart';
 import 'segment_symbols.dart';
 import 'service_style.dart';
 import 'viewport.dart';
@@ -59,6 +61,17 @@ class NetworkLayer extends ConsumerWidget {
     // pipe length along a run; null (uncalibrated) ⇒ no joint marks.
     final metersPerPixel =
         ref.watch(projectControllerProvider).calibrationFor(sheetId)?.metersPerPixel;
+    // Continuous pipe chains → per-edge stock-coupling positions. A run is marked
+    // along its WHOLE chain (collinear segments merged) so couplings fall at true
+    // stock-length boundaries (4 m PVC/PPR, 6 m steel), not reset per segment —
+    // the efficiency engine for where joints (and so offcuts) land.
+    final edgeCuts = <String, _EdgeCut>{};
+    for (final chain in ref.watch(pipeChainsProvider)) {
+      final stockM = stockLengthMForService(chain.service);
+      for (final ce in chain.edges) {
+        edgeCuts[ce.edgeId] = _EdgeCut(ce.offsetAtFromM, ce.offsetAtToM, stockM);
+      }
+    }
 
     // Layer filtering (unified canvas only).
     Set<DisciplineLayer> visible = DisciplineLayer.values.toSet();
@@ -79,6 +92,7 @@ class NetworkLayer extends ConsumerWidget {
           sizing: sizing,
           showLabels: showLabels,
           metersPerPixel: metersPerPixel,
+          edgeCuts: edgeCuts,
           selectedNodeId: selection.nodeId,
           selectedEdgeId: selection.edgeId,
           selectedNodeIds: selection.nodeIds,
@@ -110,6 +124,11 @@ class _NetworkPainter extends CustomPainter {
   /// Sheet scale (metres per pixel), or null when the sheet is uncalibrated. Used
   /// to place a coupling joint mark every stock pipe length along a run.
   final double? metersPerPixel;
+
+  /// Per-edge stock-coupling layout (chain arc-length at each endpoint + the
+  /// stock length), so couplings fall along the WHOLE continuous pipe rather than
+  /// resetting each segment. Absent ⇒ that edge isn't part of a sized chain.
+  final Map<String, _EdgeCut> edgeCuts;
   final String? selectedNodeId;
   final String? selectedEdgeId;
 
@@ -132,6 +151,7 @@ class _NetworkPainter extends CustomPainter {
     required this.sizing,
     this.showLabels = false,
     this.metersPerPixel,
+    this.edgeCuts = const {},
     required this.selectedNodeId,
     required this.selectedEdgeId,
     this.selectedNodeIds = const {},
@@ -231,19 +251,27 @@ class _NetworkPainter extends CustomPainter {
           (joints[a.id] ??= _Joint(opacity)).add(u, outer, opacity);
           (joints[b.id] ??= _Joint(opacity)).add(-u, outer, opacity);
 
-          // Coupling joints every stock pipe length (a real run is multiple
-          // stock lengths joined): 4 m for PVC/PPR, 6 m for steel (sprinkler /
-          // hydrant). Only when the sheet is calibrated and the service is a
+          // Coupling joints at stock-length boundaries along the WHOLE pipe
+          // chain (collinear segments merged) — 4 m PVC/PPR, 6 m steel — placed
+          // by the efficiency engine so offcuts fall once per chain, not per
+          // segment. Only when the sheet is calibrated and the run is a sized
           // pipe (not a duct).
-          final mpp = metersPerPixel;
-          if (mpp != null && e.service.regime != FlowRegime.air) {
-            final stockWorldPx = _stockLengthM(e.service) / mpp; // world px
-            final lenWorldPx = (Offset(b.x, b.y) - Offset(a.x, a.y)).distance;
-            if (stockWorldPx > 1 && lenWorldPx > stockWorldPx) {
+          final cut = edgeCuts[e.id];
+          if (metersPerPixel != null &&
+              cut != null &&
+              e.service.regime != FlowRegime.air) {
+            final lo = math.min(cut.offFromM, cut.offToM);
+            final hi = math.max(cut.offFromM, cut.offToM);
+            final span = cut.offToM - cut.offFromM;
+            if (span.abs() > 1e-6) {
               final metal = _fade(const Color(0xFF3A3F47), opacity);
-              for (var d = stockWorldPx; d < lenWorldPx - 1; d += stockWorldPx) {
-                final p = pa + u * (d / lenWorldPx) * len;
-                _couplingMark(canvas, p, u, outer, metal);
+              for (var k = (lo / cut.stockM).floor() + 1;
+                  k * cut.stockM < hi - 1e-6;
+                  k++) {
+                final c = k * cut.stockM;
+                if (c <= lo + 1e-6) continue;
+                final t = (c - cut.offFromM) / span; // 0..1 along from→to
+                _couplingMark(canvas, pa + u * t * len, u, outer, metal);
               }
             }
           }
@@ -338,14 +366,6 @@ class _NetworkPainter extends CustomPainter {
     return (3.6 + mm * 0.06).clamp(4.0, 16.0);
   }
 
-  /// Stock (per-pipe) length in metres for a service's pipe material: steel for
-  /// the fire services (sprinkler / hydrant) ships in 6 m lengths; PVC / PPR (and
-  /// the other pressurised / gravity pipes) in 4 m. A coupling joins each length.
-  double _stockLengthM(ServiceType s) =>
-      (s == ServiceType.fireSprinkler || s == ServiceType.fireHydrant)
-          ? 6.0
-          : 4.0;
-
   /// A coupling joint mark across a pipe — a short perpendicular steel collar at
   /// a stock-length boundary along the run.
   void _couplingMark(
@@ -402,12 +422,14 @@ class _NetworkPainter extends CustomPainter {
     final dirs = j.dirs;
     if (dirs.isEmpty) return;
 
-    final type = (override == null || override == JunctionFitting.auto)
-        ? _autoFitting(dirs)
-        : override;
+    final auto = override == null || override == JunctionFitting.auto;
+    final type = auto ? _autoFitting(dirs) : override;
 
-    // In-line coupling → a single short sleeve across the pipe (no arms).
+    // A COLLINEAR pass-through vertex (auto-coupling) is just continuous pipe —
+    // the stock-length coupling marks already show the real joints, so draw
+    // nothing here unless the user explicitly pinned a coupling.
     if (type == JunctionFitting.coupling) {
+      if (auto) return;
       _sleeve(canvas, p, dirs.first, w, metal, light);
       return;
     }
@@ -677,6 +699,7 @@ class _NetworkPainter extends CustomPainter {
       old.sizing != sizing ||
       old.showLabels != showLabels ||
       old.metersPerPixel != metersPerPixel ||
+      !identical(old.edgeCuts, edgeCuts) ||
       old.selectedNodeId != selectedNodeId ||
       old.selectedEdgeId != selectedEdgeId ||
       !_sameStrSet(old.selectedNodeIds, selectedNodeIds) ||
@@ -690,6 +713,17 @@ class _NetworkPainter extends CustomPainter {
 
   static bool _sameStrSet(Set<String> a, Set<String> b) =>
       a.length == b.length && a.containsAll(b);
+}
+
+/// One run edge's stock-coupling layout within its continuous pipe chain: the
+/// chain arc-length (metres) at the edge's from/to endpoints and the stock pipe
+/// length, so couplings fall at chain `k·stock` boundaries regardless of which
+/// way the edge was drawn.
+class _EdgeCut {
+  final double offFromM;
+  final double offToM;
+  final double stockM;
+  const _EdgeCut(this.offFromM, this.offToM, this.stockM);
 }
 
 /// Accumulates the run pipes incident to one node (screen-space unit directions

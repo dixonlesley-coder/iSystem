@@ -10,6 +10,7 @@ import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/fan.dart';
 import 'package:mechx_engine/sizing/hot_water.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
 import 'package:mechx_engine/standards/sni.dart';
@@ -292,6 +293,29 @@ final bomProvider = Provider<List<BomLine>>((ref) {
     calibrationBySheet: project.calibrations,
     building: project.building,
   );
+});
+
+/// Continuous pipe chains (maximal collinear same-service/-diameter run
+/// segments merged through pass-through vertices) — the basis for placing stock
+/// couplings efficiently and for the cut plan. Empty when nothing is sized.
+final pipeChainsProvider = Provider<List<PipeChain>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final sizing = ref.watch(sizingProvider);
+  if (sizing.isEmpty) return const [];
+  final project = ref.watch(projectControllerProvider);
+  return buildPipeChains(
+    net: net,
+    sizing: sizing,
+    calibrationBySheet: project.calibrations,
+    building: project.building,
+  );
+});
+
+/// The stock-pipe CUT PLAN per (service, diameter): how many 4 m (PVC/PPR) /
+/// 6 m (steel) stock bars are needed, with offcut reuse, and the resulting
+/// waste. The efficiency engine behind the on-canvas coupling marks.
+final pipeCutPlanProvider = Provider<List<PipeCutGroup>>((ref) {
+  return buildPipeCutPlan(ref.watch(pipeChainsProvider));
 });
 
 /// Hot-water recirculation design for the drawn hot-water network: the loop is

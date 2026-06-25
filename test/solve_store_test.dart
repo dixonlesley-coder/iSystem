@@ -2,7 +2,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/solve_store.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 
 void main() {
@@ -13,6 +15,25 @@ void main() {
     n.placeRunPoint('s1', 0, const Offset(0, 0));
     n.placeRunPoint('s1', 0, const Offset(1000, 0));
   }
+
+  test('pipeCutPlanProvider plans stock pipes for a calibrated network', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    c
+        .read(projectControllerProvider.notifier)
+        .setCalibration('s1', const ScaleCalibration(0.02));
+    drawColdRun(c); // 1000 px x 0.02 = a 20 m cold-water main
+
+    final plan = c.read(pipeCutPlanProvider);
+    expect(plan, isNotEmpty);
+    final g = plan.first;
+    expect(g.service, ServiceType.coldWater);
+    expect(g.stockLengthM, 4.0); // PVC/PPR
+    expect(g.plan.requiredM, closeTo(20.0, 1e-6));
+    // 20 m / 4 m = exactly 5 stock bars, no waste.
+    expect(g.plan.totalBars, 5);
+    expect(g.plan.wasteM, closeTo(0.0, 1e-6));
+  });
 
   test('upfeed: solve + pump + zones + bom derive from a cold-water network',
       () {
