@@ -874,4 +874,56 @@ void main() {
           before);
     });
   });
+
+  group('mergeCircuit (chain loads onto one breaker)', () {
+    ElectricalPanel mdpOf(ProviderContainer c) => c
+        .read(electricalProjectProvider)
+        .panels
+        .firstWhere((p) => p.id == 'mdp');
+
+    test('folds one load into another (loads sum, one way removed)', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      final before = mdpOf(c);
+      final c1 = before.circuits.firstWhere((x) => x.id == 'mdp-c1');
+      final c4 = before.circuits.firstWhere((x) => x.id == 'mdp-c4');
+      final sumW = c1.loadW + c4.loadW;
+      final beforeLen = before.circuits.length;
+
+      // Chain the water heater (mdp-c4) onto the chiller way (mdp-c1).
+      ctrl.mergeCircuit('mdp', 'mdp-c4', 'mdp-c1');
+
+      final mdp = mdpOf(c);
+      expect(mdp.circuits.length, beforeLen - 1);
+      expect(mdp.circuits.where((x) => x.id == 'mdp-c4'), isEmpty);
+      final merged = mdp.circuits.firstWhere((x) => x.id == 'mdp-c1');
+      expect(merged.loadW, sumW); // combined load on one breaker
+
+      // The single breaker re-sizes against the combined load.
+      final sized = c.read(electricalResultProvider).panels['mdp']!.circuits
+          .firstWhere((r) => r.circuitId == 'mdp-c1');
+      expect(sized.designCurrent.amperes, greaterThan(0));
+    });
+
+    test('refuses same / feeder / unknown', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      final beforeLen = mdpOf(c).circuits.length;
+      // Same circuit — no-op.
+      ctrl.mergeCircuit('mdp', 'mdp-c1', 'mdp-c1');
+      // A feeder isn't a load — refused either way.
+      final feeder =
+          mdpOf(c).circuits.firstWhere((w) => w.feedsPanelId == 'lp1');
+      ctrl.mergeCircuit('mdp', feeder.id, 'mdp-c1');
+      ctrl.mergeCircuit('mdp', 'mdp-c1', feeder.id);
+      // Unknown ids — no-op.
+      ctrl.mergeCircuit('mdp', 'nope', 'mdp-c1');
+      expect(mdpOf(c).circuits.length, beforeLen);
+      expect(mdpOf(c).circuits.where((w) => w.id == feeder.id), isNotEmpty);
+    });
+  });
 }

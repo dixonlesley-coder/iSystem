@@ -390,6 +390,50 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     state = _withProject(panels: panels);
   }
 
+  /// CHAIN one load onto another on the SAME panel — the [sourceId] circuit's
+  /// load is folded into [targetId] (one breaker now carries both, e.g. two
+  /// sockets next to each other) and the source way is removed. Both loads' watts
+  /// (and motor kW, if any) sum onto the target; the target keeps its identity,
+  /// cable type, phase and accessories. No-op when the two are the same, on
+  /// different panels, missing, or either is a feeder (feeders aren't loads).
+  void mergeCircuit(String panelId, String sourceId, String targetId) {
+    if (sourceId == targetId) return;
+    ElectricalPanel? panel;
+    for (final p in state.panels) {
+      if (p.id == panelId) panel = p;
+    }
+    if (panel == null) return;
+    ElectricalCircuit? source, target;
+    for (final c in panel.circuits) {
+      if (c.id == sourceId) source = c;
+      if (c.id == targetId) target = c;
+    }
+    if (source == null || target == null) return;
+    if (source.isFeeder || target.isFeeder) return; // feeders aren't loads
+
+    final src = source;
+    final tgt = target;
+    final mergedMotorKw = (tgt.motorKw == null && src.motorKw == null)
+        ? null
+        : (tgt.motorKw ?? 0) + (src.motorKw ?? 0);
+    final merged = tgt.copyWith(
+      loadW: tgt.loadW + src.loadW,
+      motorKw: mergedMotorKw,
+    );
+    final panels = [
+      for (final p in state.panels)
+        if (p.id == panelId)
+          p.copyWith(circuits: [
+            // Drop the source; replace the target with the merged way.
+            for (final c in p.circuits)
+              if (c.id != sourceId) (c.id == targetId ? merged : c),
+          ])
+        else
+          p,
+    ];
+    state = _withProject(panels: panels);
+  }
+
   /// Add a new (empty) panel. When [fedByCircuitId] is given it is a fed
   /// sub-board; otherwise a utility-fed board.
   void addPanel({

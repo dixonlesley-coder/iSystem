@@ -553,26 +553,40 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
           top: lp.dy,
           width: kLoadW * scale,
           height: kLoadNodeH * scale,
-          // Drag a load node onto another panel to RE-PARENT the circuit there.
-          child: Draggable<_LoadRef>(
-            data: _LoadRef(panel.panelId, c.circuitId),
-            dragAnchorStrategy: childDragAnchorStrategy,
-            feedback: Opacity(
-              opacity: 0.85,
-              child: SizedBox(
-                width: kLoadW * scale,
-                height: kLoadNodeH * scale,
+          // Drop another load HERE to CHAIN them onto one breaker (same panel),
+          // or drag a load onto a panel to RE-PARENT the circuit there.
+          child: DragTarget<_LoadRef>(
+            onWillAcceptWithDetails: (d) => d.data.circuitId != c.circuitId,
+            onAcceptWithDetails: (d) {
+              if (d.data.fromPanelId == panel.panelId) {
+                _ctrl.mergeCircuit(
+                    panel.panelId, d.data.circuitId, c.circuitId);
+              } else {
+                _ctrl.moveCircuit(
+                    d.data.fromPanelId, d.data.circuitId, panel.panelId);
+              }
+            },
+            builder: (ctx, cand, rej) => Draggable<_LoadRef>(
+              data: _LoadRef(panel.panelId, c.circuitId),
+              dragAnchorStrategy: childDragAnchorStrategy,
+              feedback: Opacity(
+                opacity: 0.85,
+                child: SizedBox(
+                  width: kLoadW * scale,
+                  height: kLoadNodeH * scale,
+                  child: loadNode,
+                ),
+              ),
+              childWhenDragging: Opacity(opacity: 0.35, child: loadNode),
+              child: _ScaledTap(
+                onTap: () => setState(() => _selectedPanel = null),
+                onDoubleTap: () =>
+                    widget.onEditCircuit(panel.panelId, c.circuitId),
+                onMenu: (gp) =>
+                    widget.onCircuitMenu(panel.panelId, c.circuitId, gp),
                 child: loadNode,
               ),
             ),
-            childWhenDragging: Opacity(opacity: 0.35, child: loadNode),
-          child: _ScaledTap(
-            onTap: () => setState(() => _selectedPanel = null),
-            onDoubleTap: () => widget.onEditCircuit(panel.panelId, c.circuitId),
-            onMenu: (gp) =>
-                widget.onCircuitMenu(panel.panelId, c.circuitId, gp),
-            child: loadNode,
-          ),
           ),
         ),
       );
