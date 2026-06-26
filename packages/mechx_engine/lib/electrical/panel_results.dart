@@ -73,6 +73,15 @@ class ElectricalCircuitResult {
   final GroundingResult grounding;
   final RcdSpec rcd;
 
+  /// Effective run length used for sizing (m) — geo-derived when placed, else
+  /// the manual circuit length. Drives the cable quantity in the BOM. Additive
+  /// (default 0).
+  final double lengthM;
+
+  /// Connected load (W) on the circuit — for the accessory takeoff (light
+  /// points / sockets). Additive (default 0).
+  final double loadW;
+
   const ElectricalCircuitResult({
     required this.circuitId,
     required this.name,
@@ -86,6 +95,8 @@ class ElectricalCircuitResult {
     required this.cumulativeDropPercent,
     required this.grounding,
     required this.rcd,
+    this.lengthM = 0,
+    this.loadW = 0,
   });
 
   /// Copy with a new phase assignment + cumulative drop (the only fields the
@@ -108,6 +119,8 @@ class ElectricalCircuitResult {
             cumulativeDropPercent ?? this.cumulativeDropPercent,
         grounding: grounding,
         rcd: rcd,
+        lengthM: lengthM,
+        loadW: loadW,
       );
 }
 

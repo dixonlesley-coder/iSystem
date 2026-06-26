@@ -126,6 +126,69 @@ void main() {
       expect(byCat[PartCategory.enclosure]!.length, 1);
       expect(byCat[PartCategory.enclosure]!.single.qty, 1);
     });
+
+    test('cable quantity is the run length in metres', () {
+      // Both runs are 15 m → qty 15 each (cable is sold per metre).
+      expect(byCat[PartCategory.cable]!.every((l) => l.qty == 15), isTrue);
+    });
+
+    test('wiring accessories: light points + switches + sockets (estimate)', () {
+      final acc = byCat[PartCategory.accessory]!;
+      double q(String prefix) =>
+          acc.firstWhere((l) => l.description.startsWith(prefix)).qty;
+      // 1150 W / 36 W ⇒ 32 light points; 32 / 3 ⇒ 11 switches.
+      expect(q('Light point'), 32);
+      expect(q('Light switch (saklar)'), 11);
+      // 1800 VA / 200 ⇒ 9 socket outlets.
+      expect(q('Socket outlet (stop kontak)'), 9);
+      // The small branch cables (1.5 / 2.5 mm²) clamp directly — no skun.
+      expect(acc.any((l) => l.description.startsWith('Cable lug')), isFalse);
+    });
+  });
+
+  group('(1b) cable lugs (skun) for a large cable', () {
+    test('a 3φ feeder-size cable gets 5 conductors × 2 ends = 10 lugs', () {
+      const big = ElectricalPanel(
+        id: 'P',
+        name: 'P',
+        voltage: Voltage(400),
+        circuits: [
+          ElectricalCircuit(
+            id: 'm',
+            name: 'Big motor',
+            loadKind: LoadKind.motor,
+            loadW: 30000,
+            cosPhi: 0.85,
+            length: Length(10),
+          ),
+        ],
+      );
+      final r = computePanel(profile, big);
+      final sys = ElectricalSystemResult(
+        projectId: 'p',
+        panels: {'P': r},
+        order: const ['P'],
+        totalDemandW: r.demandW,
+        supply: SupplySummary(
+          connectedW: r.connectedW,
+          demandW: r.demandW,
+          demandVa: const ApparentPower(0),
+          system: big.system,
+          voltage: big.voltage,
+        ),
+        earthing: computeEarthing(profile,
+            system: EarthingSystem.tnCs, supplyPeMm2: 16),
+        warnings: const [],
+      );
+      final bom = buildBom(sys);
+      final skun = bom.lines
+          .where((l) => l.description.startsWith('Cable lug'))
+          .toList();
+      expect(skun, isNotEmpty);
+      expect(skun.first.qty, 10); // 5 conductors (3L+N+PE) × 2 ends
+      // Sanity: the motor cable was indeed >= the 10 mm² skun threshold.
+      expect(r.circuits.single.cable.csaMm2, greaterThanOrEqualTo(10));
+    });
   });
 
   // ── (2) Breaker SKU match (class/poles/curve/rating ranking) ───────────────
