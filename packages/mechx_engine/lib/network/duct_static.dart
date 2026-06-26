@@ -92,9 +92,9 @@ DuctStaticSolution solveDuctStatic({
         edgePa = ductFrictionPaPerMetre(
               flow,
               edgeSizing.diameter,
-              roughness: edge.ductProduct == null
-                  ? null
-                  : ductRoughnessFor(edge.ductProduct!),
+              // Per-segment material → wall roughness ε. The product defaults by
+              // service (PU for AC supply/return, BJLS for exhaust) when unset.
+              roughness: ductRoughnessFor(effectiveDuctProductFor(edge)),
             ) *
             length.meters *
             fittingFactor;

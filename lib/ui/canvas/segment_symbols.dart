@@ -166,6 +166,23 @@ void paintComponentSymbol(
       canvas.drawCircle(Offset(cx, cy + h * 0.04), w * 0.26, p);
       canvas.drawRect(
           Rect.fromLTWH(w * 0.40, h * 0.12, w * 0.20, h * 0.12), fill);
+    case NodeComponent.riser:
+      // A riser marker: a junction dot with a double-headed vertical arrow
+      // (the riser runs up/down out of the horizontal main here).
+      canvas.drawCircle(Offset(cx, cy), w * 0.10, fill);
+      canvas.drawLine(Offset(cx, h * 0.12), Offset(cx, h * 0.88), p);
+      final up = Path()
+        ..moveTo(cx, h * 0.12)
+        ..lineTo(cx - w * 0.10, h * 0.28)
+        ..moveTo(cx, h * 0.12)
+        ..lineTo(cx + w * 0.10, h * 0.28);
+      final down = Path()
+        ..moveTo(cx, h * 0.88)
+        ..lineTo(cx - w * 0.10, h * 0.72)
+        ..moveTo(cx, h * 0.88)
+        ..lineTo(cx + w * 0.10, h * 0.72);
+      canvas.drawPath(up, p);
+      canvas.drawPath(down, p);
     case NodeComponent.waterMeter:
       // A gauge: circle + a needle.
       canvas.drawCircle(Offset(cx, cy), w * 0.30, p);

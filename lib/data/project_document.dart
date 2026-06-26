@@ -300,6 +300,8 @@ class ProjectDocument {
                 if (n.tankCapacityLitres != null)
                   'tank_l': n.tankCapacityLitres,
                 if (n.electricalLoadW != null) 'elec_w': n.electricalLoadW,
+                if (n.fittingType != null && n.fittingType != JunctionFitting.auto)
+                  'fitting': n.fittingType!.name,
               },
           ],
           'edges': [
@@ -388,6 +390,9 @@ class ProjectDocument {
               : _enumOrNull(NodeComponent.values, n['component']),
           tankCapacityLitres: (n['tank_l'] as num?)?.toDouble(),
           electricalLoadW: (n['elec_w'] as num?)?.toDouble(),
+          fittingType: n['fitting'] == null
+              ? null
+              : _enumOrNull(JunctionFitting.values, n['fitting']),
         ),
     ];
     final edges = [

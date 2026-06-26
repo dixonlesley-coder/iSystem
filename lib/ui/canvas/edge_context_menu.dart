@@ -1,11 +1,13 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/network_store.dart';
+import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sizing_store.dart';
 import '../theme/design_tokens.dart';
@@ -60,6 +62,114 @@ void showEdgeContextMenu(
     ),
   );
   overlay.insert(entry);
+}
+
+/// Show the per-junction right-click Fitting menu (Auto / Coupling / Elbow /
+/// Tee / Wye / Tee-wye / Cross / End cap) for node [nodeId]. Same overlay /
+/// barrier / theme-reprovide mechanics as [showEdgeContextMenu].
+void showNodeFittingMenu(
+  BuildContext context,
+  WidgetRef ref,
+  String nodeId,
+  Offset globalPosition,
+) {
+  final overlay = Overlay.of(context, rootOverlay: true);
+  final theme = MechXTheme.of(context);
+  late OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (ctx) => MechXTheme(
+      data: theme,
+      child: _NodeFittingLayer(
+        anchor: globalPosition,
+        nodeId: nodeId,
+        onDismiss: () => entry.remove(),
+      ),
+    ),
+  );
+  overlay.insert(entry);
+}
+
+class _NodeFittingLayer extends ConsumerWidget {
+  final Offset anchor;
+  final String nodeId;
+  final VoidCallback onDismiss;
+
+  const _NodeFittingLayer({
+    required this.anchor,
+    required this.nodeId,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final net = ref.watch(networkControllerProvider).network;
+    final node = net.nodeById(nodeId);
+    if (node == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => onDismiss());
+      return const SizedBox.shrink();
+    }
+    final size = MediaQuery.sizeOf(context);
+    const menuWidth = 208.0;
+    final left =
+        anchor.dx.clamp(0.0, (size.width - menuWidth).clamp(0.0, size.width));
+    final top = anchor.dy.clamp(0.0, (size.height - 80).clamp(0.0, size.height));
+    final ctrl = ref.read(networkControllerProvider.notifier);
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onDismiss,
+            onSecondaryTap: onDismiss,
+            child: const SizedBox.expand(),
+          ),
+        ),
+        Positioned(
+          left: left,
+          top: top,
+          width: menuWidth,
+          child: _MenuEntrance(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: context.colors.surface,
+                borderRadius: MechXRadii.card,
+                border: Border.all(color: context.colors.border),
+                boxShadow: const [
+                  BoxShadow(
+                      color: Color(0x40000000),
+                      blurRadius: 18,
+                      offset: Offset(0, 6)),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: MechXRadii.card,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(height: MechXSpacing.xs),
+                    const _MenuHeader('Fitting'),
+                    for (final f in JunctionFitting.values)
+                      _MenuRow(
+                        label: f.label,
+                        selected: (node.fittingType ?? JunctionFitting.auto) == f,
+                        onTap: () {
+                          ctrl.setNodeFittingType(nodeId, f);
+                          ref.read(selectionProvider.notifier).selectNode(nodeId);
+                          onDismiss();
+                        },
+                      ),
+                    const SizedBox(height: MechXSpacing.xs),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _EdgeMenuLayer extends ConsumerWidget {
@@ -167,6 +277,36 @@ class _EdgeMenuPanel extends ConsumerWidget {
                 '(auto by size)'
             : 'PU panel ${puPanelThicknessMm().toStringAsFixed(0)} mm';
         children.add(_MenuNote(note));
+      }
+      // Sheet-material takeoff for this segment: developed area (perimeter ×
+      // length) + the number of standard sheets/panels of the effective product.
+      if (sizing != null) {
+        final net = ref.watch(networkControllerProvider).network;
+        final project = ref.watch(projectControllerProvider);
+        final len = edgeLength(edge, net,
+                calibrationBySheet: project.calibrations,
+                building: project.building)
+            .meters;
+        final t = ductSheetTakeoff(edge, sizing, len);
+        if (t != null) {
+          children.add(_MenuNote(
+            'Sheet material: ${t.developedAreaM2.toStringAsFixed(2)} m2 '
+            '(perimeter x length) = ${t.sheets} '
+            '${t.product == DuctProduct.pu ? 'panel' : 'sheet'}'
+            '${t.sheets == 1 ? '' : 's'} @ '
+            '${t.sheetAreaM2.toStringAsFixed(2)} m2',
+          ));
+        }
+        // Accessories takeoff: covering angle (siku) + gasket + hangers + bolts.
+        final acc = computeDuctAccessories(edge, sizing, len);
+        if (acc != null) {
+          children.add(_MenuNote(
+            'Accessories: ${acc.flangeAngleM.toStringAsFixed(1)} m covering angle'
+            ' · ${acc.gasketM.toStringAsFixed(1)} m gasket · '
+            '${acc.hangers} hanger${acc.hangers == 1 ? '' : 's'} · '
+            '${acc.bolts} bolt set${acc.bolts == 1 ? '' : 's'}',
+          ));
+        }
       }
       if (edge.ductProduct != null) {
         children.add(_MenuRow(

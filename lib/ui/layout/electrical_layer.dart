@@ -282,6 +282,12 @@ class ElectricalLayoutLayer extends ConsumerWidget {
             world: Offset(lp.x, lp.y),
             onMove: (w) =>
                 ctrl.setLoadPos(panel.id, c.id, lp.copyWith(x: w.dx, y: w.dy)),
+            // Dropped ONTO another load on the SAME panel → CHAIN them (one
+            // breaker); otherwise the live onMove already repositioned it.
+            onDropAt: (w) {
+              final target = _loadDroppedOnto(panel, c.id, w);
+              if (target != null) ctrl.mergeCircuit(panel.id, c.id, target);
+            },
             child: _ScaledLayoutChild(
               scale: vt.scale,
               width: kLayoutLoadW,
@@ -300,6 +306,32 @@ class ElectricalLayoutLayer extends ConsumerWidget {
       ));
     }
     return widgets;
+  }
+
+  /// The id of another placed load on [panel] (this sheet/floor) whose marker the
+  /// dragged load [draggedId] was released over (within ~one load-node width),
+  /// or null. Used to CHAIN loads onto one breaker by dropping one onto another.
+  String? _loadDroppedOnto(
+      ElectricalPanel panel, String draggedId, Offset world) {
+    final r = kLayoutLoadW; // ~one node width, in world px
+    final r2 = r * r;
+    String? best;
+    var bestD2 = r2;
+    for (final c in panel.circuits) {
+      if (c.id == draggedId || c.loadKind == LoadKind.feeder) continue;
+      final lp = c.loadPos;
+      if (lp == null || lp.sheetId != sheetId || lp.floorIndex != floorIndex) {
+        continue;
+      }
+      final dx = lp.x - world.dx;
+      final dy = lp.y - world.dy;
+      final d2 = dx * dx + dy * dy;
+      if (d2 <= bestD2) {
+        bestD2 = d2;
+        best = c.id;
+      }
+    }
+    return best;
   }
 }
 
@@ -731,6 +763,10 @@ class _LayoutNodeDraggable extends StatefulWidget {
   final double scale;
   final Offset world;
   final ValueChanged<Offset> onMove;
+
+  /// Fired on release with the final world position — lets the host decide
+  /// whether the node was dropped ONTO another (e.g. to chain loads).
+  final ValueChanged<Offset>? onDropAt;
   final Widget child;
 
   const _LayoutNodeDraggable({
@@ -738,6 +774,7 @@ class _LayoutNodeDraggable extends StatefulWidget {
     required this.scale,
     required this.world,
     required this.onMove,
+    this.onDropAt,
     required this.child,
   });
 
@@ -759,7 +796,11 @@ class _LayoutNodeDraggableState extends State<_LayoutNodeDraggable> {
         _dragWorld = next;
         widget.onMove(next);
       },
-      onPanEnd: (_) => _dragWorld = null,
+      onPanEnd: (_) {
+        final w = _dragWorld;
+        _dragWorld = null;
+        if (w != null) widget.onDropAt?.call(w);
+      },
       child: widget.child,
     );
   }

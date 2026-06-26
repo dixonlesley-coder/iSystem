@@ -398,9 +398,13 @@ report export**; versioned `.mechx` save/open with viewport restore;
   honours `edge.pipeProduct` via a per-edge Hazen–Williams C (`hazenWilliamsCFor`, still
   pure H-W — only the C is swapped, never Darcy on the pressurized path); `duct_static`
   honours `edge.ductProduct` via a per-edge Darcy roughness (`ductRoughnessFor` →
-  `ductFrictionPaPerMetre(roughness:)`). A null product falls back to the service default
-  ⇒ **byte-identical**. PN/pressure-class is NOT folded into hydraulics (a mechanical
-  rating, no head-loss term). Fold-1 busbar withstand fault level + clearing time come from
+  `ductFrictionPaPerMetre(roughness:)`). A null **pipe** product falls back to the service
+  default ⇒ **byte-identical**. A null **duct** product resolves via
+  `effectiveDuctProductFor` to the SERVICE DEFAULT — **PU** for AC supply/return air, **BJLS**
+  (galvanised steel) for exhaust (`defaultDuctProductForService`) — so an AC duct defaults to
+  PU friction (smoother → lower fan static) and a 4 m PU section length, exhaust to BJLS /
+  1.2 m; this same resolver drives the on-canvas material tag + the cut-plan section length.
+  PN/pressure-class is NOT folded into hydraulics (a mechanical rating, no head-loss term). Fold-1 busbar withstand fault level + clearing time come from
   `ElectricalProject.originFaultLevelA`/`busbarClearingTimeS` (Service & Earthing inspector),
   with the store falling back to 16 kA / 0.1 s when unset.
 - **Cable family → ampacity class**: a circuit's `cableType` (NYY/NYM/NYA/NYAF/FRC)

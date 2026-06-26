@@ -47,6 +47,19 @@ extension ServiceRegime on ServiceType {
   bool get isAir => regime == FlowRegime.air;
 }
 
+/// The default duct PRODUCT for an air [service] when the engineer hasn't picked
+/// one per segment: **AC installs** (supply + return air) default to **PU**
+/// pre-insulated panel; **exhaust-fan installs** to **BJLS** galvanised steel.
+/// Only meaningful for air services (the duct disciplines).
+DuctProduct defaultDuctProductForService(ServiceType service) =>
+    service == ServiceType.exhaust ? DuctProduct.bjls : DuctProduct.pu;
+
+/// The effective duct product for [edge]: its explicit [NetEdge.ductProduct]
+/// when set, else the service default (PU for AC supply/return, BJLS for
+/// exhaust). Call only for air edges.
+DuctProduct effectiveDuctProductFor(NetEdge edge) =>
+    edge.ductProduct ?? defaultDuctProductForService(edge.service);
+
 /// A horizontal [run] (length from the sheet's calibrated scale) or a vertical
 /// [riser] (length from a true-elevation delta — never from a PDF, §10). A
 /// riser also covers a "drop" between a ceiling main and a fixture or the
@@ -57,6 +70,29 @@ enum EdgeKind { run, riser }
 /// (§10): a [main] sits at the ceiling, a [fixture] at fixture height, and the
 /// [plant] (transfer pump / tank base) at an explicit datum (default roof).
 enum NodeRole { main, fixture, plant }
+
+/// The pipe fitting a junction node represents where runs meet. [auto] (the
+/// default) lets the renderer pick from the joint's geometry — an end cap (1
+/// pipe), a coupling (2 in-line), an elbow (2 at an angle), a tee (3) or a
+/// cross (4+). A non-[auto] value is a user override (right-click → Fitting) so
+/// a 3-way branch can be drawn/specified as a square tee, a 45° wye, or a
+/// tee-wye regardless of the drawn angle. Additive — null/[auto] is the prior
+/// behaviour and carries no head-loss term (a drawing/BOM concern).
+enum JunctionFitting { auto, coupling, elbow, tee, wye, teeWye, cross, cap }
+
+extension JunctionFittingInfo on JunctionFitting {
+  /// Short human label for menus / BOM.
+  String get label => switch (this) {
+        JunctionFitting.auto => 'Auto',
+        JunctionFitting.coupling => 'Coupling',
+        JunctionFitting.elbow => 'Elbow',
+        JunctionFitting.tee => 'Tee',
+        JunctionFitting.wye => 'Wye (Y)',
+        JunctionFitting.teeWye => 'Tee-wye',
+        JunctionFitting.cross => 'Cross',
+        JunctionFitting.cap => 'End cap',
+      };
+}
 
 /// A placed equipment / component on the network — a labelled node that renders
 /// with its own schematic symbol. Each component implies a default [NodeRole]
@@ -82,6 +118,9 @@ enum NodeComponent {
   roofDrain,
   floorDrain,
   cleanout,
+  // A riser start/connection marker (role: main) — where a vertical riser meets
+  // the horizontal main, so a run can be connected from it.
+  riser,
   // Meters & misc.
   waterMeter,
   strainer,
@@ -158,6 +197,7 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.roofDrain => 'Roof drain',
         NodeComponent.floorDrain => 'Floor drain',
         NodeComponent.cleanout => 'Cleanout',
+        NodeComponent.riser => 'Riser',
         NodeComponent.waterMeter => 'Water meter',
         NodeComponent.strainer => 'Strainer',
         NodeComponent.expansionTank => 'Expansion tank',
@@ -309,6 +349,12 @@ class NetNode {
   /// with one edited power.
   final double? electricalLoadW;
 
+  /// Optional fitting-type override for a junction (right-click → Fitting). Null
+  /// or [JunctionFitting.auto] ⇒ the renderer derives the fitting from the joint
+  /// geometry. A specific value pins it (e.g. tee vs wye). Additive — a
+  /// drawing/BOM concern, never read by the sizing core.
+  final JunctionFitting? fittingType;
+
   const NetNode({
     required this.id,
     required this.sheetId,
@@ -325,6 +371,7 @@ class NetNode {
     this.component,
     this.tankCapacityLitres,
     this.electricalLoadW,
+    this.fittingType,
   });
 
   NetNode copyWith({
@@ -348,6 +395,8 @@ class NetNode {
     bool clearTankCapacity = false,
     double? electricalLoadW,
     bool clearElectricalLoad = false,
+    JunctionFitting? fittingType,
+    bool clearJunctionFitting = false,
   }) =>
       NetNode(
         id: id,
@@ -371,6 +420,8 @@ class NetNode {
         electricalLoadW: clearElectricalLoad
             ? null
             : (electricalLoadW ?? this.electricalLoadW),
+        fittingType:
+            clearJunctionFitting ? null : (fittingType ?? this.fittingType),
       );
 }
 
