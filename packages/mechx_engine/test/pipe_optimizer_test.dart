@@ -3,6 +3,7 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pipe_optimizer.dart';
+import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
@@ -187,6 +188,85 @@ void main() {
       expect(g.plan.totalBars, 5);
       expect(g.plan.requiredM, closeTo(18.0, 1e-6));
       expect(g.plan.wasteM, closeTo(2.0, 1e-6)); // 20 - 18
+    });
+  });
+
+  group('duct sections (BJLS / PU)', () {
+    test('ductSectionLengthM: BJLS (and null) 1.2 m, PU 4 m', () {
+      expect(ductSectionLengthM(DuctProduct.bjls), 1.2);
+      expect(ductSectionLengthM(DuctProduct.pu), 4.0);
+      expect(ductSectionLengthM(null), 1.2);
+    });
+
+    test('stockLengthForEdge: pipe by service, duct by product', () {
+      NetEdge e(ServiceType s, {DuctProduct? d}) =>
+          NetEdge(id: 'e', fromId: 'a', toId: 'b', service: s, ductProduct: d);
+      expect(stockLengthForEdge(e(ServiceType.coldWater)), 4.0);
+      expect(stockLengthForEdge(e(ServiceType.fireSprinkler)), 6.0);
+      expect(stockLengthForEdge(e(ServiceType.duct)), 1.2); // null ⇒ BJLS
+      expect(stockLengthForEdge(e(ServiceType.duct, d: DuctProduct.bjls)), 1.2);
+      expect(stockLengthForEdge(e(ServiceType.exhaust, d: DuctProduct.pu)), 4.0);
+    });
+
+    EdgeSizing ductSized(double mm, String id, {DuctProduct? p}) => EdgeSizing(
+          edgeId: id,
+          service: ServiceType.duct,
+          flow: const FlowRate(0.05),
+          diameter: Diameter.mm(mm),
+          velocity: const Velocity(4.0),
+        );
+
+    test('a BJLS supply duct sections at 1.2 m', () {
+      // 120 px x 0.05 = 6 m straight supply duct, default product (BJLS).
+      const net = Network(
+        nodes: [
+          NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          NetNode(id: 'b', sheetId: 's1', x: 120, y: 0, floorIndex: 0),
+        ],
+        edges: [
+          NetEdge(id: 'e0', fromId: 'a', toId: 'b', service: ServiceType.duct),
+        ],
+      );
+      final chains = buildPipeChains(
+        net: net,
+        sizing: {'e0': ductSized(300, 'e0')},
+        calibrationBySheet: const {'s1': ScaleCalibration(0.05)},
+        building: const BuildingLevels([Floor('G', Length(3))]),
+      );
+      final plan = buildPipeCutPlan(chains);
+      expect(plan.single.stockLengthM, 1.2);
+      // 6 m / 1.2 m = exactly 5 sections, no waste.
+      expect(plan.single.plan.totalBars, 5);
+      expect(plan.single.plan.wasteM, closeTo(0.0, 1e-6));
+    });
+
+    test('a PU supply duct sections at 4 m (offcut waste)', () {
+      const net = Network(
+        nodes: [
+          NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          NetNode(id: 'b', sheetId: 's1', x: 120, y: 0, floorIndex: 0),
+        ],
+        edges: [
+          NetEdge(
+              id: 'e0',
+              fromId: 'a',
+              toId: 'b',
+              service: ServiceType.duct,
+              ductProduct: DuctProduct.pu),
+        ],
+      );
+      final chains = buildPipeChains(
+        net: net,
+        sizing: {'e0': ductSized(300, 'e0', p: DuctProduct.pu)},
+        calibrationBySheet: const {'s1': ScaleCalibration(0.05)},
+        building: const BuildingLevels([Floor('G', Length(3))]),
+      );
+      final plan = buildPipeCutPlan(chains);
+      expect(plan.single.stockLengthM, 4.0);
+      // 6 m ⇒ 1 full 4 m panel + a 2 m remainder ⇒ 2 sections, 2 m waste.
+      expect(plan.single.plan.fullBars, 1);
+      expect(plan.single.plan.totalBars, 2);
+      expect(plan.single.plan.wasteM, closeTo(2.0, 1e-6));
     });
   });
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/network/network.dart';
 
 import '../../store/electrical_store.dart';
 import '../../store/solve_store.dart';
@@ -62,10 +63,10 @@ class ReviewHub extends ConsumerWidget {
         ],
         const SizedBox(height: MechXSpacing.lg),
         const HubNote(
-          'Stock pipes assume 4 m PVC/PPR and 6 m steel (sprinkler/hydrant); the '
-          'cut plan reuses offcuts to minimise waste. Couplings on the canvas '
-          'fall at these stock boundaries. Export the Markdown calc report from '
-          'the top bar for the full sizing breakdown.',
+          'Stock lengths: 4 m PVC/PPR, 6 m steel (sprinkler/hydrant), and duct '
+          'sections 1.2 m BJLS / 4 m PU. The cut plan reuses offcuts to minimise '
+          'waste; couplings and duct flanges on the canvas fall at these '
+          'boundaries. Export the Markdown calc report for the full breakdown.',
         ),
         if (warnings > 0) ...[
           const SizedBox(height: MechXSpacing.md),
@@ -106,13 +107,18 @@ class _CutPlanCard extends ConsumerWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      '${serviceLabel(g.service)}  DN${g.diameterMm}',
+                      // Ducts size by Ø + the BJLS/PU section; pipes by DN.
+                      g.service.isAir
+                          ? '${serviceLabel(g.service)}  Ø${g.diameterMm}  '
+                              '${g.stockLengthM == 4.0 ? 'PU' : 'BJLS'}'
+                          : '${serviceLabel(g.service)}  DN${g.diameterMm}',
                       style:
                           type.caption.copyWith(color: colors.textSecondary),
                     ),
                   ),
                   Text(
-                    '${g.plan.totalBars} x ${g.stockLengthM.toStringAsFixed(0)} m'
+                    '${g.plan.totalBars} x '
+                    '${g.stockLengthM.toStringAsFixed(g.service.isAir ? 1 : 0)} m'
                     '  ·  ${g.plan.wastePercent.toStringAsFixed(0)}% waste',
                     style: type.mono.copyWith(color: colors.textPrimary),
                   ),

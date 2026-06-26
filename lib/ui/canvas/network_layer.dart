@@ -4,7 +4,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
-import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 
@@ -67,9 +66,9 @@ class NetworkLayer extends ConsumerWidget {
     // the efficiency engine for where joints (and so offcuts) land.
     final edgeCuts = <String, _EdgeCut>{};
     for (final chain in ref.watch(pipeChainsProvider)) {
-      final stockM = stockLengthMForService(chain.service);
       for (final ce in chain.edges) {
-        edgeCuts[ce.edgeId] = _EdgeCut(ce.offsetAtFromM, ce.offsetAtToM, stockM);
+        edgeCuts[ce.edgeId] =
+            _EdgeCut(ce.offsetAtFromM, ce.offsetAtToM, chain.stockLengthM);
       }
     }
 
@@ -251,15 +250,13 @@ class _NetworkPainter extends CustomPainter {
           (joints[a.id] ??= _Joint(opacity)).add(u, outer, opacity);
           (joints[b.id] ??= _Joint(opacity)).add(-u, outer, opacity);
 
-          // Coupling joints at stock-length boundaries along the WHOLE pipe
-          // chain (collinear segments merged) — 4 m PVC/PPR, 6 m steel — placed
-          // by the efficiency engine so offcuts fall once per chain, not per
-          // segment. Only when the sheet is calibrated and the run is a sized
-          // pipe (not a duct).
+          // Joint marks at stock/section boundaries along the WHOLE chain
+          // (collinear segments merged) — pipe couplings (4 m PVC/PPR, 6 m
+          // steel) and duct flanges (1.2 m BJLS, 4 m PU) alike — placed by the
+          // efficiency engine so offcuts fall once per chain, not per segment.
+          // Only when the sheet is calibrated.
           final cut = edgeCuts[e.id];
-          if (metersPerPixel != null &&
-              cut != null &&
-              e.service.regime != FlowRegime.air) {
+          if (metersPerPixel != null && cut != null) {
             final lo = math.min(cut.offFromM, cut.offToM);
             final hi = math.max(cut.offFromM, cut.offToM);
             final span = cut.offToM - cut.offFromM;

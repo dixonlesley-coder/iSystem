@@ -21,12 +21,30 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/duct_products.dart';
 
 /// Stock (per-pipe) length in metres for a service's pipe material: the fire
 /// services (sprinkler / hydrant) are steel and ship in 6 m lengths; PVC / PPR
 /// (and the other pressurised / gravity pipes) in 4 m. Air ducts are not pipes.
 double stockLengthMForService(ServiceType s) =>
     (s == ServiceType.fireSprinkler || s == ServiceType.fireHydrant) ? 6.0 : 4.0;
+
+/// Standard fabrication SECTION length (m) for a duct [product] — the spacing of
+/// its flanged joints: BJLS galvanised-steel sheet duct is sectioned ≈ 1.2 m
+/// (the sheet-metal joint spacing), PU pre-insulated panel duct ≈ 4 m (the
+/// panel length). A null product ⇒ BJLS (the galvanised-steel default).
+///
+// VERIFY: 1.2 m (BJLS) / 4.0 m (PU) are representative Indonesian HVAC
+// fabrication section lengths, not an SNI/SMACNA verbatim clause.
+double ductSectionLengthM(DuctProduct? product) =>
+    product == DuctProduct.pu ? 4.0 : 1.2;
+
+/// Stock / fabrication section length (m) for an [edge]'s material — pipes by
+/// service, ducts by [DuctProduct]. The unit both the on-canvas joint marks and
+/// the cut plan are computed against.
+double stockLengthForEdge(NetEdge e) => e.service.regime == FlowRegime.air
+    ? ductSectionLengthM(e.ductProduct)
+    : stockLengthMForService(e.service);
 
 /// One stock bar in the cut plan and the cut pieces taken from it.
 class CutBar {
@@ -119,16 +137,21 @@ class PipeChainEdge {
   const PipeChainEdge(this.edgeId, this.offsetAtFromM, this.offsetAtToM);
 }
 
-/// A maximal continuous straight pipe: collinear same-(service,diameter) run
-/// segments merged through degree-2 pass-through vertices.
+/// A maximal continuous straight pipe/duct: collinear same-(service,diameter,
+/// material) run segments merged through degree-2 pass-through vertices.
 class PipeChain {
   final ServiceType service;
   final int diameterMm;
+
+  /// Stock / section length (m) of this chain's material (4/6 m pipe, 1.2/4 m
+  /// duct) — couplings / flange joints fall at its multiples.
+  final double stockLengthM;
   final double lengthM;
   final List<PipeChainEdge> edges;
   const PipeChain({
     required this.service,
     required this.diameterMm,
+    required this.stockLengthM,
     required this.lengthM,
     required this.edges,
   });
@@ -150,12 +173,17 @@ List<PipeChain> buildPipeChains({
   required Map<String, ScaleCalibration> calibrationBySheet,
   required BuildingLevels building,
 }) {
-  // Group key per edge so a chain stays uniform.
-  ({ServiceType s, int mm})? groupOf(NetEdge e) {
+  // Group key per edge so a chain stays uniform (service, diameter AND stock
+  // length, so a BJLS→PU or PVC→steel transition breaks the chain).
+  ({ServiceType s, int mm, double stock})? groupOf(NetEdge e) {
     if (e.kind != EdgeKind.run) return null;
     final es = sizing[e.id];
     if (es == null) return null;
-    return (s: e.service, mm: es.diameter.inMillimeters.round());
+    return (
+      s: e.service,
+      mm: es.diameter.inMillimeters.round(),
+      stock: stockLengthForEdge(e),
+    );
   }
 
   // Eligible run edges + their endpoint world points (same sheet/floor only).
@@ -193,7 +221,7 @@ List<PipeChain> buildPipeChains({
     if (otherId == viaId) return null;
     final g1 = groupOf(runs[viaId]!)!;
     final g2 = groupOf(runs[otherId]!)!;
-    if (g1.s != g2.s || g1.mm != g2.mm) return null;
+    if (g1.s != g2.s || g1.mm != g2.mm || g1.stock != g2.stock) return null;
     // Direction of the incoming edge AT this node (pointing INTO the node) and
     // of the outgoing edge LEAVING the node; collinear ⇒ small turn.
     final inDir = _dirAtNode(viaId, node, runs, pFrom, pTo, incoming: true);
@@ -250,6 +278,7 @@ List<PipeChain> buildPipeChains({
     chains.add(PipeChain(
       service: g.s,
       diameterMm: g.mm,
+      stockLengthM: g.stock,
       lengthM: cum,
       edges: ordered,
     ));
@@ -275,23 +304,25 @@ class PipeCutGroup {
 /// is one continuous pipe whose length is a "piece" packed into that group's
 /// stock bars. Sorted by service then diameter.
 List<PipeCutGroup> buildPipeCutPlan(List<PipeChain> chains) {
-  final byGroup = <({ServiceType s, int mm}), List<double>>{};
+  final byGroup = <({ServiceType s, int mm, double stock}), List<double>>{};
   for (final c in chains) {
     if (c.lengthM <= 1e-9) continue;
-    (byGroup[(s: c.service, mm: c.diameterMm)] ??= []).add(c.lengthM);
+    (byGroup[(s: c.service, mm: c.diameterMm, stock: c.stockLengthM)] ??= [])
+        .add(c.lengthM);
   }
   final groups = <PipeCutGroup>[
     for (final entry in byGroup.entries)
       PipeCutGroup(
         service: entry.key.s,
         diameterMm: entry.key.mm,
-        stockLengthM: stockLengthMForService(entry.key.s),
-        plan: planStockCuts(entry.value, stockLengthMForService(entry.key.s)),
+        stockLengthM: entry.key.stock,
+        plan: planStockCuts(entry.value, entry.key.stock),
       ),
   ];
   groups.sort((a, b) {
     final svc = a.service.index.compareTo(b.service.index);
-    return svc != 0 ? svc : a.diameterMm.compareTo(b.diameterMm);
+    if (svc != 0) return svc;
+    return a.diameterMm.compareTo(b.diameterMm);
   });
   return groups;
 }
