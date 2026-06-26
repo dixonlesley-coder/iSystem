@@ -9,6 +9,11 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart'
+    show DuctShape, DuctSizingMethod;
+import 'package:mechx_engine/sizing/room_air.dart';
+import 'package:mechx_engine/standards/ventilation.dart';
+import 'package:mechx_engine/units.dart';
 
 /// A two-point dimension annotation on a sheet/floor, in sheet (world) pixels.
 @immutable
@@ -329,6 +334,248 @@ final measureModeProvider =
     NotifierProvider<MeasureModeController, bool>(MeasureModeController.new);
 
 class MeasureModeController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void set(bool value) => state = value;
+  void toggle() => state = !state;
+}
+
+/// A rectangular ROOM/ZONE drawn on the calibrated plan, sized for air by the
+/// air-change-rate (ACH) method. Its footprint (two opposite corners, in
+/// sheet/world pixels) × the per-sheet scale gives the floor area; with a
+/// ceiling height and a target ACH the engine derives the design airflow (CFM /
+/// L/s) and auto-sizes the supply diffusers, return grille(s), the supply trunk
+/// and the AHU/FCU/fan duty (`sizeRoomAir`). Like [TankArea] it is an
+/// annotation: it never feeds the pressurised network solve, and it round-trips
+/// in the `.mechx` project as plain data.
+@immutable
+class RoomArea {
+  final String id;
+  final String sheetId;
+  final int floorIndex;
+  final double ax;
+  final double ay;
+  final double bx;
+  final double by;
+
+  /// Space type — drives the default ACH and the diffuser face-velocity class.
+  final RoomType roomType;
+
+  /// Ceiling height (m) used for the room volume.
+  final double ceilingHeightM;
+
+  /// Explicit ACH override; when null the [roomType] default ACH is used.
+  final double? achOverride;
+
+  /// Unit serving the room (affects the assumed equipment internal static).
+  final AirEquipmentKind equipmentKind;
+
+  final String name;
+
+  const RoomArea({
+    required this.id,
+    required this.sheetId,
+    required this.floorIndex,
+    required this.ax,
+    required this.ay,
+    required this.bx,
+    required this.by,
+    this.roomType = RoomType.office,
+    this.ceilingHeightM = 3.0,
+    this.achOverride,
+    this.equipmentKind = AirEquipmentKind.fcu,
+    this.name = 'Room',
+  });
+
+  /// Footprint width / height in sheet pixels.
+  double get widthPx => (bx - ax).abs();
+  double get heightPx => (by - ay).abs();
+
+  /// Floor area (m²) given the sheet's metres-per-pixel.
+  double areaM2(double metersPerPixel) =>
+      widthPx * heightPx * metersPerPixel * metersPerPixel;
+
+  /// Air-change rate actually applied: the [achOverride] if set, else the
+  /// [roomType] default from the ventilation profile.
+  double effectiveAch() =>
+      achOverride ?? const SniVentilationProfile().recommendedAch(roomType).value;
+
+  /// Full air-side sizing for the room, or null when the sheet has no scale or
+  /// the footprint is degenerate. Honours the project [ductShape]/[ductMethod].
+  RoomAirResult? sizing(
+    double? metersPerPixel, {
+    DuctShape ductShape = DuctShape.round,
+    DuctSizingMethod ductMethod = DuctSizingMethod.velocity,
+  }) {
+    if (metersPerPixel == null) return null;
+    final area = areaM2(metersPerPixel);
+    if (area <= 0 || ceilingHeightM <= 0) return null;
+    const profile = SniVentilationProfile();
+    return sizeRoomAir(
+      floorArea: Area(area),
+      ceilingHeight: Length(ceilingHeightM),
+      airChangesPerHour: effectiveAch(),
+      equipmentKind: equipmentKind,
+      grilleApplication: profile.grilleApplicationFor(roomType),
+      ductShape: ductShape,
+      ductMethod: ductMethod,
+    );
+  }
+
+  RoomArea copyWith({
+    RoomType? roomType,
+    double? ceilingHeightM,
+    Object? achOverride = _unset,
+    AirEquipmentKind? equipmentKind,
+    String? name,
+  }) =>
+      RoomArea(
+        id: id,
+        sheetId: sheetId,
+        floorIndex: floorIndex,
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+        roomType: roomType ?? this.roomType,
+        ceilingHeightM: ceilingHeightM ?? this.ceilingHeightM,
+        achOverride:
+            achOverride == _unset ? this.achOverride : achOverride as double?,
+        equipmentKind: equipmentKind ?? this.equipmentKind,
+        name: name ?? this.name,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'sheetId': sheetId,
+        'floor': floorIndex,
+        'ax': ax,
+        'ay': ay,
+        'bx': bx,
+        'by': by,
+        'roomType': roomType.name,
+        'ceiling_m': ceilingHeightM,
+        if (achOverride != null) 'ach': achOverride,
+        'equipment': equipmentKind.name,
+        'name': name,
+      };
+
+  /// Tolerant decode — null for a non-map / missing coordinate (dropped, not
+  /// thrown). Unknown room type → office, unknown equipment → fcu, absent
+  /// ceiling → 3.0 m, absent ACH → null (room-type default applies).
+  static RoomArea? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final id = raw['id'], sheetId = raw['sheetId'];
+    final ax = raw['ax'], ay = raw['ay'], bx = raw['bx'], by = raw['by'];
+    if (id is! String ||
+        sheetId is! String ||
+        ax is! num ||
+        ay is! num ||
+        bx is! num ||
+        by is! num) {
+      return null;
+    }
+    final type = RoomType.values.firstWhere(
+      (t) => t.name == raw['roomType'],
+      orElse: () => RoomType.office,
+    );
+    final kind = AirEquipmentKind.values.firstWhere(
+      (k) => k.name == raw['equipment'],
+      orElse: () => AirEquipmentKind.fcu,
+    );
+    return RoomArea(
+      id: id,
+      sheetId: sheetId,
+      floorIndex: (raw['floor'] as num?)?.toInt() ?? 0,
+      ax: ax.toDouble(),
+      ay: ay.toDouble(),
+      bx: bx.toDouble(),
+      by: by.toDouble(),
+      roomType: type,
+      ceilingHeightM: (raw['ceiling_m'] as num?)?.toDouble() ?? 3.0,
+      achOverride: (raw['ach'] as num?)?.toDouble(),
+      equipmentKind: kind,
+      name: raw['name'] is String ? raw['name'] as String : 'Room',
+    );
+  }
+}
+
+/// Sentinel so [RoomArea.copyWith] can distinguish "leave achOverride" from
+/// "set it to null" (clear the override back to the room-type default).
+const Object _unset = Object();
+
+/// The project's designated room/zone areas. Mutated by the canvas room tool;
+/// read by the room overlay, the inspector editor, and the persistence layer.
+final roomAreasProvider =
+    NotifierProvider<RoomAreaController, List<RoomArea>>(RoomAreaController.new);
+
+class RoomAreaController extends Notifier<List<RoomArea>> {
+  int _seq = 0;
+
+  @override
+  List<RoomArea> build() => const [];
+
+  /// Add a room from two opposite corners. Ignores a degenerate (zero-area) box.
+  void add({
+    required String sheetId,
+    required int floorIndex,
+    required double ax,
+    required double ay,
+    required double bx,
+    required double by,
+  }) {
+    if ((ax - bx).abs() < 2 || (ay - by).abs() < 2) return;
+    state = [
+      ...state,
+      RoomArea(
+        id: 'r${_seq++}',
+        sheetId: sheetId,
+        floorIndex: floorIndex,
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+      ),
+    ];
+  }
+
+  void setRoomType(String id, RoomType t) =>
+      _update(id, (r) => r.copyWith(roomType: t));
+  void setCeiling(String id, double m) =>
+      _update(id, (r) => r.copyWith(ceilingHeightM: m.clamp(1.5, 12).toDouble()));
+  void setAch(String id, double? ach) => _update(
+      id, (r) => r.copyWith(achOverride: ach?.clamp(0.5, 60).toDouble()));
+  void setEquipment(String id, AirEquipmentKind k) =>
+      _update(id, (r) => r.copyWith(equipmentKind: k));
+  void setName(String id, String name) =>
+      _update(id, (r) => r.copyWith(name: name));
+
+  void _update(String id, RoomArea Function(RoomArea) f) =>
+      state = [for (final r in state) if (r.id == id) f(r) else r];
+
+  void removeById(String id) =>
+      state = [for (final r in state) if (r.id != id) r];
+
+  void clear() => state = const [];
+
+  /// Replace the whole set (used when loading a `.mechx` document). Advances the
+  /// fresh-id counter past any loaded ids so new ids never collide.
+  void set(List<RoomArea> rooms) {
+    state = List.unmodifiable(rooms);
+    for (final r in rooms) {
+      final n = int.tryParse(r.id.replaceFirst('r', ''));
+      if (n != null && n >= _seq) _seq = n + 1;
+    }
+  }
+}
+
+/// Whether the canvas room tool is active (drag to draw a room footprint).
+/// Mutually exclusive with the network draw tools, measure tool, and tank tool.
+final roomModeProvider =
+    NotifierProvider<RoomModeController, bool>(RoomModeController.new);
+
+class RoomModeController extends Notifier<bool> {
   @override
   bool build() => false;
 

@@ -14,7 +14,9 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/standards/custom_fixture.dart';
+import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/puil.dart'
@@ -223,6 +225,52 @@ void main() {
       network: Network(),
     );
     expect(ProjectDocument.decode(bare.encode()).tanks, isEmpty);
+  });
+
+  test('room areas round-trip; an old file loads none', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(100, 100))],
+      network: Network(),
+      rooms: [
+        RoomArea(
+          id: 'r0',
+          sheetId: 's1',
+          floorIndex: 0,
+          ax: 0,
+          ay: 0,
+          bx: 200,
+          by: 100,
+          roomType: RoomType.meetingRoom,
+          ceilingHeightM: 2.7,
+          achOverride: 9,
+          equipmentKind: AirEquipmentKind.ahu,
+          name: 'Boardroom',
+        ),
+      ],
+    );
+    final decoded = ProjectDocument.decode(doc.encode());
+    expect(decoded.rooms, hasLength(1));
+    final r = decoded.rooms.first;
+    expect(r.name, 'Boardroom');
+    expect(r.roomType, RoomType.meetingRoom);
+    expect(r.ceilingHeightM, 2.7);
+    expect(r.achOverride, 9);
+    expect(r.equipmentKind, AirEquipmentKind.ahu);
+    // 2.0 m^2 x 2.7 m x 9 ACH / 3600 = 0.0135 m^3/s.
+    expect(r.sizing(0.01)!.airflow.cubicMetersPerSecond,
+        closeTo(2.0 * 2.7 * 9 / 3600, 1e-12));
+
+    const bare = ProjectDocument(
+      projectName: 'Y',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    expect(ProjectDocument.decode(bare.encode()).rooms, isEmpty);
   });
 
   test('per-segment pipe/duct product + size override round-trip', () {

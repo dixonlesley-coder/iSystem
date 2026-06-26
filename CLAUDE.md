@@ -142,7 +142,10 @@ roof-tank-downfeed** solve with unified residual heatmap; PRV pressure zoning;
 pump/fan duty + motor; hot-water recirculation; fire sprinkler + standpipe;
 schematic riser diagram; **BOM + fittings + CSV export**; **Markdown calc
 report export**; versioned `.mechx` save/open with viewport restore;
-**autosave / crash-recovery**; light/dark.
+**autosave / crash-recovery**; light/dark; **draw-a-room AHU/FCU/fan air sizing**
+(Room tool → footprint area from scale × ceiling × per-room-type ACH → CFM, then
+auto-sized supply diffusers / return grilles / supply trunk / equipment duty via
+`sizing/room_air.dart`, edited in the Rooms inspector, round-trips in `.mechx`).
 
 ## Conventions
 
@@ -403,6 +406,17 @@ report export**; versioned `.mechx` save/open with viewport restore;
   rating, no head-loss term). Fold-1 busbar withstand fault level + clearing time come from
   `ElectricalProject.originFaultLevelA`/`busbarClearingTimeS` (Service & Earthing inspector),
   with the store falling back to 16 kA / 0.1 s when unset.
+- **Room air sizing (`sizing/room_air.dart`)**: `sizeRoomAir` is pure
+  ORCHESTRATION — it computes the airflow (`airChangeFlow` = floor area × ceiling ×
+  ACH / 3600) then *composes* the existing primitives (`duct_sizing`, `grille_sizing`,
+  `fan.sizeFan`); it adds NO new hydraulics. Supply diffusers / return grilles are
+  auto-split so each face stays ≤ its noise limit (never falls back to an
+  over-velocity face). The equipment total static is a documented first-pass
+  ESTIMATE (kind internal allowance + duct friction × assumed run × fitting factor +
+  terminal drops) for equipment selection — the drawn-network `duct_static` solve
+  stays the authority. ACH values (`standards/ventilation.dart`) are all
+  `secondarySource` (UNVERIFIED) until the SNI 03-6572-2001 PDF is checked. `RoomArea`
+  is an annotation (like `TankArea`): it NEVER feeds the pressurized network solve.
 - **Cable family → ampacity class**: a circuit's `cableType` (NYY/NYM/NYA/NYAF/FRC)
   selects the insulation temperature-class for the KHA lookup via
   `electrical/cable_family.dart` (`insulationForCableType`): **FRC → XLPE 90 °C**,

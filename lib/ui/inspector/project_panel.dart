@@ -10,7 +10,9 @@ import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
+import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -195,6 +197,9 @@ class ProjectPanel extends ConsumerWidget {
 
               // ── Tanks (only shown when the sheet has designated areas) ─────
               const _TanksSection(),
+
+              // ── Rooms (only shown when the sheet has designated rooms) ─────
+              const _RoomsSection(),
 
               // ── Selection (only shown when something is selected) ─────────
               const _SelectionSection(),
@@ -470,14 +475,16 @@ class _DrawSection extends ConsumerWidget {
 
     final measureMode = ref.watch(measureModeProvider);
     final tankMode = ref.watch(tankModeProvider);
+    final roomMode = ref.watch(roomModeProvider);
     Widget tool(String label, DrawTool t) => MechXButton(
           label: label,
-          // While the measure / tank tool is on, no draw tool reads as active.
-          primary: drawing.tool == t && !measureMode && !tankMode,
+          // While the measure / tank / room tool is on, no draw tool reads as active.
+          primary: drawing.tool == t && !measureMode && !tankMode && !roomMode,
           onPressed: () {
             ctrl.setTool(t);
             ref.read(measureModeProvider.notifier).set(false);
             ref.read(tankModeProvider.notifier).set(false);
+            ref.read(roomModeProvider.notifier).set(false);
           },
         );
 
@@ -532,6 +539,7 @@ class _DrawSection extends ConsumerWidget {
                 ref.read(measureModeProvider.notifier).set(on);
                 if (on) {
                   ref.read(tankModeProvider.notifier).set(false);
+                  ref.read(roomModeProvider.notifier).set(false);
                   ctrl.setTool(DrawTool.select);
                 }
               },
@@ -547,6 +555,24 @@ class _DrawSection extends ConsumerWidget {
                 ref.read(tankModeProvider.notifier).set(on);
                 if (on) {
                   ref.read(measureModeProvider.notifier).set(false);
+                  ref.read(roomModeProvider.notifier).set(false);
+                  ctrl.setTool(DrawTool.select);
+                }
+              },
+            ),
+            // Room tool: drag a rectangle on the calibrated plan to designate a
+            // room/zone; its design airflow (CFM) comes from area × ceiling ×
+            // target ACH, and the ducts/diffusers/equipment auto-size from it
+            // (edit room type / ACH / ceiling / equipment in the Rooms inspector).
+            MechXButton(
+              label: 'Room',
+              primary: roomMode,
+              onPressed: () {
+                final on = !roomMode;
+                ref.read(roomModeProvider.notifier).set(on);
+                if (on) {
+                  ref.read(measureModeProvider.notifier).set(false);
+                  ref.read(tankModeProvider.notifier).set(false);
                   ctrl.setTool(DrawTool.select);
                 }
               },
@@ -703,6 +729,207 @@ class _TanksSection extends ConsumerWidget {
               ],
             ),
           ),
+          const SizedBox(height: MechXSpacing.sm),
+        ],
+        const SizedBox(height: MechXSpacing.sm),
+      ],
+    );
+  }
+}
+
+class _RoomsSection extends ConsumerWidget {
+  const _RoomsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final sheet = ref.watch(sheetsControllerProvider).current;
+    if (sheet == null) return const SizedBox.shrink();
+    final rooms = [
+      for (final r in ref.watch(roomAreasProvider))
+        if (r.sheetId == sheet.id) r,
+    ];
+    if (rooms.isEmpty) return const SizedBox.shrink();
+    final cal = ref.watch(projectControllerProvider).calibrationFor(sheet.id);
+    final ducts = ref.watch(ductSettingsProvider);
+    final ctrl = ref.read(roomAreasProvider.notifier);
+
+    String dims(RoomArea r) {
+      if (cal == null) return '';
+      final mpp = cal.metersPerPixel;
+      return '${(r.widthPx * mpp).toStringAsFixed(1)} x '
+          '${(r.heightPx * mpp).toStringAsFixed(1)} m';
+    }
+
+    String duct(RoomAirResult s) {
+      final round = s.supplyDuctRound;
+      if (round != null) {
+        return 'Duct Ø${round.diameter.inMillimeters.round()} mm @ '
+            '${round.actualVelocity.metersPerSecond.toStringAsFixed(1)} m/s';
+      }
+      final rect = s.supplyDuctRect!;
+      return 'Duct ${rect.width.inMillimeters.round()}x'
+          '${rect.height.inMillimeters.round()} mm @ '
+          '${rect.actualVelocity.metersPerSecond.toStringAsFixed(1)} m/s';
+    }
+
+    String bank(TerminalBank b) =>
+        '${b.count} x ${b.each.squareSide.inMillimeters.round()} mm @ '
+        '${b.each.faceVelocity.metersPerSecond.toStringAsFixed(1)} m/s';
+
+    String equip(RoomAirResult s) =>
+        '${airEquipmentLabel(s.equipmentKind)} · '
+        '${s.equipment.totalStaticPressure.pascals.round()} Pa · '
+        'motor ${s.equipment.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const MechXSectionLabel('Rooms (ACH airflow)'),
+        const SizedBox(height: MechXSpacing.sm),
+        for (final r in rooms) ...[
+          Builder(builder: (context) {
+            final s = r.sizing(
+              cal?.metersPerPixel,
+              ductShape: ducts.shape,
+              ductMethod: ducts.method,
+            );
+            return Container(
+              padding: const EdgeInsets.all(MechXSpacing.sm),
+              decoration: BoxDecoration(
+                color: colors.background,
+                borderRadius: MechXRadii.control,
+                border: Border.all(color: colors.border),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                            '${roomTypeLabel(r.roomType)} · ${dims(r)}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: type.body
+                                .copyWith(color: colors.textPrimary)),
+                      ),
+                      _GlyphButton(
+                          glyph: '×', onTap: () => ctrl.removeById(r.id)),
+                    ],
+                  ),
+                  const SizedBox(height: MechXSpacing.xxs),
+                  if (s == null)
+                    Text('set scale',
+                        style: type.caption.copyWith(color: colors.textMuted))
+                  else ...[
+                    Text(
+                        '${s.airflowCfm.round()} CFM · '
+                        '${s.airflow.inLitersPerSecond.round()} L/s · '
+                        '${s.airflow.inCubicMetersPerHour.round()} m3/h',
+                        style: type.caption.copyWith(color: colors.accent)),
+                    const SizedBox(height: MechXSpacing.xxs),
+                    Text(duct(s),
+                        style:
+                            type.caption.copyWith(color: colors.textMuted)),
+                    Text('Supply ${bank(s.supply)}',
+                        style:
+                            type.caption.copyWith(color: colors.textMuted)),
+                    Text('Return ${bank(s.return_)}',
+                        style:
+                            type.caption.copyWith(color: colors.textMuted)),
+                    Text(equip(s),
+                        style:
+                            type.caption.copyWith(color: colors.textMuted)),
+                  ],
+                  const SizedBox(height: MechXSpacing.xs),
+                  // Ceiling height stepper.
+                  Row(
+                    children: [
+                      Text('Ceiling',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted)),
+                      const Spacer(),
+                      _GlyphButton(
+                          glyph: '−',
+                          onTap: () =>
+                              ctrl.setCeiling(r.id, r.ceilingHeightM - 0.25)),
+                      SizedBox(
+                        width: 56,
+                        child: Text('${r.ceilingHeightM.toStringAsFixed(2)} m',
+                            textAlign: TextAlign.center,
+                            style: type.mono
+                                .copyWith(color: colors.textPrimary)),
+                      ),
+                      _GlyphButton(
+                          glyph: '+',
+                          onTap: () =>
+                              ctrl.setCeiling(r.id, r.ceilingHeightM + 0.25)),
+                    ],
+                  ),
+                  const SizedBox(height: MechXSpacing.xxs),
+                  // ACH stepper (override; 'Auto' resets to the room-type value).
+                  Row(
+                    children: [
+                      Text('ACH',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted)),
+                      const SizedBox(width: MechXSpacing.xs),
+                      _Pill(
+                        label: 'Auto',
+                        selected: r.achOverride == null,
+                        onTap: () => ctrl.setAch(r.id, null),
+                      ),
+                      const Spacer(),
+                      _GlyphButton(
+                          glyph: '−',
+                          onTap: () =>
+                              ctrl.setAch(r.id, r.effectiveAch() - 1)),
+                      SizedBox(
+                        width: 56,
+                        child: Text(
+                            '${r.effectiveAch().toStringAsFixed(0)}/h',
+                            textAlign: TextAlign.center,
+                            style: type.mono
+                                .copyWith(color: colors.textPrimary)),
+                      ),
+                      _GlyphButton(
+                          glyph: '+',
+                          onTap: () =>
+                              ctrl.setAch(r.id, r.effectiveAch() + 1)),
+                    ],
+                  ),
+                  const SizedBox(height: MechXSpacing.xs),
+                  Wrap(
+                    spacing: MechXSpacing.xs,
+                    runSpacing: MechXSpacing.xs,
+                    children: [
+                      for (final t in RoomType.values)
+                        _Pill(
+                          label: roomTypeLabel(t),
+                          selected: r.roomType == t,
+                          onTap: () => ctrl.setRoomType(r.id, t),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: MechXSpacing.xs),
+                  Wrap(
+                    spacing: MechXSpacing.xs,
+                    runSpacing: MechXSpacing.xs,
+                    children: [
+                      for (final k in AirEquipmentKind.values)
+                        _Pill(
+                          label: airEquipmentLabel(k),
+                          selected: r.equipmentKind == k,
+                          onTap: () => ctrl.setEquipment(r.id, k),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          }),
           const SizedBox(height: MechXSpacing.sm),
         ],
         const SizedBox(height: MechXSpacing.sm),
