@@ -297,6 +297,16 @@ class _EdgeMenuPanel extends ConsumerWidget {
             '${t.sheetAreaM2.toStringAsFixed(2)} m2',
           ));
         }
+        // Accessories takeoff: covering angle (siku) + gasket + hangers + bolts.
+        final acc = computeDuctAccessories(edge, sizing, len);
+        if (acc != null) {
+          children.add(_MenuNote(
+            'Accessories: ${acc.flangeAngleM.toStringAsFixed(1)} m covering angle'
+            ' · ${acc.gasketM.toStringAsFixed(1)} m gasket · '
+            '${acc.hangers} hanger${acc.hangers == 1 ? '' : 's'} · '
+            '${acc.bolts} bolt set${acc.bolts == 1 ? '' : 's'}',
+          ));
+        }
       }
       if (edge.ductProduct != null) {
         children.add(_MenuRow(

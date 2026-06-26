@@ -740,9 +740,13 @@ void main() {
     await gesture.up();
     await tester.pump(const Duration(milliseconds: 50));
 
-    // The duct menu shows the material picker + the sheet-material takeoff.
+    // The duct menu shows the material picker + the sheet-material takeoff +
+    // the ducting-accessories takeoff (covering angle etc).
     expect(find.text('DUCT MATERIAL'), findsOneWidget);
     expect(find.textContaining('Sheet material:'), findsOneWidget);
+    // The accessories note shows in both the menu and the inspector selection.
+    expect(find.textContaining('Accessories:'), findsWidgets);
+    expect(find.textContaining('covering angle'), findsWidgets);
   });
 
   test('node edits preserve customFixtureId + roofAreaM2 (no data loss)', () {

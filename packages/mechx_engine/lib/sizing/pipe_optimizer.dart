@@ -178,6 +178,77 @@ DuctSheetTakeoff? ductSheetTakeoff(
   );
 }
 
+/// Ducting accessories needed to fabricate + install one duct segment — the
+/// joint-framing **covering angle** (siku / flange profile), the joint gasket,
+/// the hanger supports, and the flange bolt sets. All derived from the section
+/// count (`ceil(length ÷ section)`) and the duct perimeter.
+class DuctAccessories {
+  final DuctProduct product;
+
+  /// Stock sections (pieces) the run is built from.
+  final int sections;
+
+  /// Duct perimeter (m) — 2(W+H) rectangular, πD round.
+  final double perimeterM;
+
+  /// Covering / flange angle (siku) length (m): each piece is framed at BOTH
+  /// ends → `2 × sections × perimeter`.
+  final double flangeAngleM;
+
+  /// Joint gasket / sealant length (m): one sealed joint per piece.
+  final double gasketM;
+
+  /// Hanger supports (count) at the standard spacing.
+  final int hangers;
+
+  /// Flange bolt + nut sets (count) around the framed joints.
+  final int bolts;
+
+  const DuctAccessories({
+    required this.product,
+    required this.sections,
+    required this.perimeterM,
+    required this.flangeAngleM,
+    required this.gasketM,
+    required this.hangers,
+    required this.bolts,
+  });
+}
+
+/// Per-segment ducting-accessories takeoff for a duct [edge] of physical
+/// [lengthM] at [sizing]. Null for a non-air edge.
+///
+// VERIFY: the hanger spacing (2.4 m) and flange bolt pitch (0.15 m) are
+// representative SMACNA / Indonesian practice, not an SNI verbatim clause; a
+// piece is framed (covering angle) + gasketed at each end.
+DuctAccessories? computeDuctAccessories(
+  NetEdge edge,
+  EdgeSizing sizing,
+  double lengthM, {
+  double hangerSpacingM = 2.4,
+  double boltPitchM = 0.15,
+}) {
+  if (edge.service.regime != FlowRegime.air) return null;
+  final product = effectiveDuctProductFor(edge);
+  final section = stockLengthForEdge(edge);
+  final sections = lengthM <= 0 ? 0 : math.max(1, (lengthM / section).ceil());
+  final perim = sizing.isRectangular
+      ? 2 * (sizing.width!.meters + sizing.height!.meters)
+      : math.pi * sizing.diameter.meters;
+  final frames = 2 * sections; // both ends of each piece
+  final boltsPerFrame =
+      perim <= 0 ? 0 : math.max(4, (perim / boltPitchM).ceil());
+  return DuctAccessories(
+    product: product,
+    sections: sections,
+    perimeterM: perim,
+    flangeAngleM: frames * perim,
+    gasketM: sections * perim,
+    hangers: lengthM <= 0 ? 0 : math.max(1, (lengthM / hangerSpacingM).ceil()),
+    bolts: frames * boltsPerFrame,
+  );
+}
+
 /// One run segment's place within its continuous pipe chain: the chain
 /// arc-length coordinate (metres) at the edge's `from` and `to` endpoints. A
 /// point at fraction `t` along from→to has chain coordinate

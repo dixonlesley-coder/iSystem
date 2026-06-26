@@ -332,4 +332,47 @@ void main() {
       expect(ductSheetTakeoff(e, s, 5.0), isNull);
     });
   });
+
+  group('ducting accessories takeoff', () {
+    test('covering angle / gasket / hangers / bolts from sections + perimeter',
+        () {
+      const e =
+          NetEdge(id: 'e', fromId: 'a', toId: 'b', service: ServiceType.exhaust);
+      const s = EdgeSizing(
+        edgeId: 'e',
+        service: ServiceType.exhaust,
+        flow: FlowRate(0.5),
+        diameter: Diameter(0.38),
+        velocity: Velocity(5),
+        width: Length(0.4),
+        height: Length(0.3),
+      );
+      // Exhaust ⇒ BJLS 1.2 m sections. 6 m ⇒ 5 sections; perimeter 1.4 m.
+      final a = computeDuctAccessories(e, s, 6.0)!;
+      expect(a.product, DuctProduct.bjls);
+      expect(a.sections, 5);
+      expect(a.perimeterM, closeTo(1.4, 1e-9));
+      // 2 frames/section × 5 × 1.4 m = 14 m covering angle.
+      expect(a.flangeAngleM, closeTo(14.0, 1e-6));
+      // one gasketed joint per section: 5 × 1.4 = 7 m.
+      expect(a.gasketM, closeTo(7.0, 1e-6));
+      // hangers at 2.4 m: ceil(6/2.4) = 3.
+      expect(a.hangers, 3);
+      // bolts: 10 frames × max(4, ceil(1.4/0.15)=10) = 100.
+      expect(a.bolts, 100);
+    });
+
+    test('a pipe segment has no accessories', () {
+      const e = NetEdge(
+          id: 'e', fromId: 'a', toId: 'b', service: ServiceType.coldWater);
+      const s = EdgeSizing(
+        edgeId: 'e',
+        service: ServiceType.coldWater,
+        flow: FlowRate(0.5),
+        diameter: Diameter(0.025),
+        velocity: Velocity(1.5),
+      );
+      expect(computeDuctAccessories(e, s, 5.0), isNull);
+    });
+  });
 }

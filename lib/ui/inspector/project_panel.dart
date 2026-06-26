@@ -1542,9 +1542,12 @@ class _SelectionSection extends ConsumerWidget {
         : '${edge.service.regime == FlowRegime.air ? 'Ø' : 'DN'}'
             '${sizing.diameter.inMillimeters.round()}';
     final material = edgeMaterialLabel(edge);
-    // Per-segment duct sheet-material takeoff (developed m² + standard sheets).
+    // Per-segment duct sheet-material takeoff (developed m² + standard sheets)
+    // and the ducting accessories (covering angle / gasket / hangers / bolts).
     final takeoff =
         sizing == null ? null : ductSheetTakeoff(edge, sizing, len);
+    final accessories =
+        sizing == null ? null : computeDuctAccessories(edge, sizing, len);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1567,6 +1570,17 @@ class _SelectionSection extends ConsumerWidget {
             '${takeoff.sheets == 1 ? '' : 's'} '
             '@ ${takeoff.sheetAreaM2.toStringAsFixed(2)} m2 · '
             '${takeoff.thicknessMm.toStringAsFixed(takeoff.product == DuctProduct.pu ? 0 : 2)} mm',
+            style: context.type.caption
+                .copyWith(color: context.colors.textSecondary),
+          ),
+        ],
+        if (accessories != null) ...[
+          const SizedBox(height: MechXSpacing.xxs),
+          Text(
+            'Accessories: ${accessories.flangeAngleM.toStringAsFixed(1)} m '
+            'covering angle · ${accessories.gasketM.toStringAsFixed(1)} m gasket'
+            ' · ${accessories.hangers} hanger'
+            '${accessories.hangers == 1 ? '' : 's'} · ${accessories.bolts} bolts',
             style: context.type.caption
                 .copyWith(color: context.colors.textSecondary),
           ),
