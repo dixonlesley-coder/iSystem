@@ -900,6 +900,7 @@ void main() {
       expect(mdp.circuits.where((x) => x.id == 'mdp-c4'), isEmpty);
       final merged = mdp.circuits.firstWhere((x) => x.id == 'mdp-c1');
       expect(merged.loadW, sumW); // combined load on one breaker
+      expect(merged.points, c1.points + c4.points); // chained outlet points add
 
       // The single breaker re-sizes against the combined load.
       final sized = c.read(electricalResultProvider).panels['mdp']!.circuits

@@ -418,6 +418,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         : (tgt.motorKw ?? 0) + (src.motorKw ?? 0);
     final merged = tgt.copyWith(
       loadW: tgt.loadW + src.loadW,
+      points: tgt.points + src.points, // chained outlet points add up
       motorKw: mergedMotorKw,
     );
     final panels = [

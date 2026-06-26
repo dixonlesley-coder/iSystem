@@ -213,7 +213,10 @@ List<BomLine> _panelLines(ElectricalPanelResult panel, List<Part> parts) {
       // Light points + switches for a lighting way; socket outlets for a socket
       // way; cable lugs (skun) at both ends of a larger cable.
       if (c.loadKind == LoadKind.lighting) {
-        final points = math.max(1, (c.loadW / _wattsPerLightPoint).ceil());
+        // At least the chained point count (c.points), at least the load-implied
+        // estimate.
+        final points = math.max(
+            c.points, math.max(1, (c.loadW / _wattsPerLightPoint).ceil()));
         final switches = math.max(1, (points / _pointsPerSwitch).ceil());
         lines.add(BomLine(
           description: 'Light point — ${c.name}',
@@ -226,7 +229,8 @@ List<BomLine> _panelLines(ElectricalPanelResult panel, List<Part> parts) {
           category: PartCategory.accessory,
         ));
       } else if (c.loadKind == LoadKind.socket) {
-        final sockets = math.max(1, (c.loadW / _vaPerSocket).ceil());
+        final sockets =
+            math.max(c.points, math.max(1, (c.loadW / _vaPerSocket).ceil()));
         lines.add(BomLine(
           description: 'Socket outlet (stop kontak) — ${c.name}',
           qty: sockets.toDouble(),

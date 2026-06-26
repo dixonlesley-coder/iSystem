@@ -54,6 +54,11 @@ class ElectricalCircuit {
   /// diversified demand at compute time.
   final double loadW;
 
+  /// Number of physical outlet POINTS on this way (sockets / lamp points). One
+  /// by default; chaining loads onto one breaker sums them (e.g. two adjacent
+  /// sockets ⇒ 2). Drives the accessory count in the BOM. Additive.
+  final int points;
+
   /// Power factor (cos φ).
   final double cosPhi;
 
@@ -139,6 +144,7 @@ class ElectricalCircuit {
     required this.name,
     this.role = CircuitRole.branch,
     this.loadW = 0,
+    this.points = 1,
     this.cosPhi = 0.85,
     this.length = const Length(0),
     this.loadKind = LoadKind.general,
@@ -174,6 +180,7 @@ class ElectricalCircuit {
     String? name,
     CircuitRole? role,
     double? loadW,
+    int? points,
     double? cosPhi,
     Length? length,
     LoadKind? loadKind,
@@ -204,6 +211,7 @@ class ElectricalCircuit {
         name: name ?? this.name,
         role: role ?? this.role,
         loadW: loadW ?? this.loadW,
+        points: points ?? this.points,
         cosPhi: cosPhi ?? this.cosPhi,
         length: length ?? this.length,
         loadKind: loadKind ?? this.loadKind,
@@ -235,6 +243,7 @@ class ElectricalCircuit {
         'name': name,
         'role': role.name,
         'loadW': loadW,
+        if (points != 1) 'points': points,
         'cosPhi': cosPhi,
         'length': length.meters,
         'loadKind': loadKind.name,
@@ -267,6 +276,7 @@ class ElectricalCircuit {
         name: json['name'] as String? ?? '',
         role: _enumOr(CircuitRole.values, json['role'], CircuitRole.branch),
         loadW: (json['loadW'] as num?)?.toDouble() ?? 0,
+        points: (json['points'] as num?)?.toInt() ?? 1,
         cosPhi: (json['cosPhi'] as num?)?.toDouble() ?? 0.85,
         length: Length((json['length'] as num?)?.toDouble() ?? 0),
         loadKind: _enumOr(LoadKind.values, json['loadKind'], LoadKind.general),

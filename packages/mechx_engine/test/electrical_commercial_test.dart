@@ -191,6 +191,50 @@ void main() {
     });
   });
 
+  group('(1c) chained points floor the accessory count', () {
+    test('socket outlets = max(points, load estimate)', () {
+      // 4 chained sockets at a small combined load (400 VA → estimate 2): the
+      // explicit point count (4) wins.
+      const panel = ElectricalPanel(
+        id: 'P',
+        name: 'P',
+        voltage: Voltage(230),
+        circuits: [
+          ElectricalCircuit(
+            id: 's',
+            name: 'Chained sockets',
+            loadKind: LoadKind.socket,
+            loadW: 400,
+            points: 4,
+            cosPhi: 0.9,
+            length: Length(10),
+          ),
+        ],
+      );
+      final r = computePanel(profile, panel);
+      final sys = ElectricalSystemResult(
+        projectId: 'p',
+        panels: {'P': r},
+        order: const ['P'],
+        totalDemandW: r.demandW,
+        supply: SupplySummary(
+          connectedW: r.connectedW,
+          demandW: r.demandW,
+          demandVa: const ApparentPower(0),
+          system: panel.system,
+          voltage: panel.voltage,
+        ),
+        earthing: computeEarthing(profile,
+            system: EarthingSystem.tnCs, supplyPeMm2: 16),
+        warnings: const [],
+      );
+      final bom = buildBom(sys);
+      final sockets = bom.lines
+          .firstWhere((l) => l.description.startsWith('Socket outlet'));
+      expect(sockets.qty, 4); // points (4) > ceil(400/200)=2
+    });
+  });
+
   // ── (2) Breaker SKU match (class/poles/curve/rating ranking) ───────────────
   group('(2) matchBreakerSku', () {
     // Seed-catalogue facts: A9F44110 = MCB 1P C10; A9F44116 = MCB 1P C16;

@@ -30,4 +30,22 @@ void main() {
     expect(json.containsKey('originFaultLevelA'), isFalse);
     expect(json.containsKey('busbarClearingTimeS'), isFalse);
   });
+
+  group('ElectricalCircuit.points (chained outlets)', () {
+    test('round-trips and is omitted when 1 (default)', () {
+      const c = ElectricalCircuit(id: 'c', name: 'Sockets', points: 3);
+      final back = ElectricalCircuit.fromJson(c.toJson());
+      expect(back.points, 3);
+      // The default (1) is omitted so an unchained circuit stays byte-identical.
+      const single = ElectricalCircuit(id: 'c', name: 'X');
+      expect(single.toJson().containsKey('points'), isFalse);
+      expect(ElectricalCircuit.fromJson({'id': 'c', 'name': 'X'}).points, 1);
+    });
+
+    test('copyWith carries / overrides points', () {
+      const c = ElectricalCircuit(id: 'c', name: 'X', points: 2);
+      expect(c.copyWith().points, 2);
+      expect(c.copyWith(points: 5).points, 5);
+    });
+  });
 }

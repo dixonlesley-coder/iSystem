@@ -679,6 +679,7 @@ _CircuitComputation _computeCircuit(
     rcd: rcd,
     lengthM: effectiveLength.meters,
     loadW: loadW,
+    points: c.points,
   );
 
   return _CircuitComputation(

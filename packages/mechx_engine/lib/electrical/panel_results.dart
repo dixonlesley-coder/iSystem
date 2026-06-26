@@ -82,6 +82,10 @@ class ElectricalCircuitResult {
   /// points / sockets). Additive (default 0).
   final double loadW;
 
+  /// Physical outlet points on the way (1, or more when loads were chained) —
+  /// the explicit accessory count floor in the BOM. Additive (default 1).
+  final int points;
+
   const ElectricalCircuitResult({
     required this.circuitId,
     required this.name,
@@ -97,6 +101,7 @@ class ElectricalCircuitResult {
     required this.rcd,
     this.lengthM = 0,
     this.loadW = 0,
+    this.points = 1,
   });
 
   /// Copy with a new phase assignment + cumulative drop (the only fields the
@@ -121,6 +126,7 @@ class ElectricalCircuitResult {
         rcd: rcd,
         lengthM: lengthM,
         loadW: loadW,
+        points: points,
       );
 }
 
