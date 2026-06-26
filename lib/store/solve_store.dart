@@ -9,6 +9,7 @@ import 'package:mechx_engine/network/zoning.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/fan.dart';
 import 'package:mechx_engine/sizing/hot_water.dart';
+import 'package:mechx_engine/sizing/consumables.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/sizing/pump.dart';
@@ -348,6 +349,68 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
     heatLoss: heatLossFromLength(loopLength: loop),
     loopLength: loop,
     returnDiameter: minDia.isFinite ? Diameter(minDia) : Diameter.mm(20),
+  );
+});
+
+/// Jointing-consumables estimate (PVC solvent cement cans, duct sealant
+/// cartridges, thread-tape rolls) for the quotation. Joints come from the
+/// fittings + inline pipe couplings; duct sealant from the duct joint length.
+final consumablesProvider = Provider<ConsumablesEstimate>((ref) {
+  final fittings = ref.watch(fittingsProvider);
+  final chains = ref.watch(pipeChainsProvider);
+  final net = ref.watch(networkControllerProvider).network;
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+
+  final solventByDn = <int, int>{};
+  var threaded = 0;
+  // Fitting sockets (each is a made joint), grouped by the service join method.
+  for (final f in fittings) {
+    final joints = fittingSockets(f.type) * f.count;
+    switch (joinMethodForService(f.service)) {
+      case PipeJoinMethod.solventWeld:
+        solventByDn[f.diameterMm] = (solventByDn[f.diameterMm] ?? 0) + joints;
+      case PipeJoinMethod.threaded:
+        threaded += joints;
+      case PipeJoinMethod.heatFusion:
+      case PipeJoinMethod.other:
+        break;
+    }
+  }
+  // Inline couplings along straight pipe chains (sections − 1 per chain).
+  for (final c in chains) {
+    if (c.service.regime == FlowRegime.air) continue;
+    final sections = (c.lengthM / c.stockLengthM).ceil();
+    final couplings = sections > 1 ? sections - 1 : 0;
+    if (couplings == 0) continue;
+    switch (joinMethodForService(c.service)) {
+      case PipeJoinMethod.solventWeld:
+        solventByDn[c.diameterMm] =
+            (solventByDn[c.diameterMm] ?? 0) + couplings;
+      case PipeJoinMethod.threaded:
+        threaded += couplings;
+      case PipeJoinMethod.heatFusion:
+      case PipeJoinMethod.other:
+        break;
+    }
+  }
+  // Duct joint sealant: total gasket length over the duct runs.
+  var sealM = 0.0;
+  for (final e in net.edges) {
+    if (e.kind != EdgeKind.run || e.service.regime != FlowRegime.air) continue;
+    final s = sizing[e.id];
+    if (s == null) continue;
+    final len = edgeLength(e, net,
+            calibrationBySheet: project.calibrations, building: project.building)
+        .meters;
+    final acc = computeDuctAccessories(e, s, len);
+    if (acc != null) sealM += acc.gasketM;
+  }
+
+  return estimateConsumables(
+    solventJointsByDn: solventByDn,
+    ductSealMetres: sealM,
+    threadedJoints: threaded,
   );
 });
 

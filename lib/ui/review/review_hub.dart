@@ -61,6 +61,8 @@ class ReviewHub extends ConsumerWidget {
           const SizedBox(height: MechXSpacing.md),
           _CutPlanCard(),
         ],
+        const SizedBox(height: MechXSpacing.md),
+        _ConsumablesCard(),
         const SizedBox(height: MechXSpacing.lg),
         const HubNote(
           'Stock lengths: 4 m PVC/PPR, 6 m steel (sprinkler/hydrant), and duct '
@@ -125,6 +127,69 @@ class _CutPlanCard extends ConsumerWidget {
                 ],
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Jointing-consumables estimate — cans of PVC cement, tubes of duct sealant,
+/// rolls of thread tape — for the quotation. Hidden until something needs them.
+class _ConsumablesCard extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final e = ref.watch(consumablesProvider);
+    if (e.isEmpty) return const SizedBox.shrink();
+
+    final rows = <(String, String)>[
+      if (e.pvcCementCans > 0)
+        ('PVC solvent cement', '${e.pvcCementCans} can'
+            '${e.pvcCementCans == 1 ? '' : 's'}  (${e.solventJoints} joints)'),
+      if (e.ductSealantCartridges > 0)
+        ('Duct joint sealant', '${e.ductSealantCartridges} cartridge'
+            '${e.ductSealantCartridges == 1 ? '' : 's'}  '
+            '(${e.ductSealMetres.toStringAsFixed(1)} m)'),
+      if (e.threadTapeRolls > 0)
+        ('Thread-seal tape', '${e.threadTapeRolls} roll'
+            '${e.threadTapeRolls == 1 ? '' : 's'}  (${e.threadedJoints} joints)'),
+    ];
+
+    return Container(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        border: Border.all(color: colors.border),
+      ),
+      padding: const EdgeInsets.all(MechXSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Consumables (estimate)',
+              style: type.subtitle.copyWith(color: colors.textPrimary)),
+          const SizedBox(height: MechXSpacing.sm),
+          for (final r in rows)
+            Padding(
+              padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(r.$1,
+                        style: type.caption
+                            .copyWith(color: colors.textSecondary)),
+                  ),
+                  Text(r.$2,
+                      style: type.mono.copyWith(color: colors.textPrimary)),
+                ],
+              ),
+            ),
+          Text(
+            'Estimate — coverage assumes ~1 L cement tins, 300 ml sealant '
+            'cartridges, 30 joints/tape roll (verify per datasheet). PPR water '
+            'pipe is heat-fused (no cement).',
+            style: type.caption.copyWith(color: colors.textMuted),
+          ),
         ],
       ),
     );

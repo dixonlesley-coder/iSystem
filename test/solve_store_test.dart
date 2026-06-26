@@ -6,6 +6,7 @@ import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/sni.dart';
 
 void main() {
   void drawColdRun(ProviderContainer c) {
@@ -33,6 +34,32 @@ void main() {
     // 20 m / 4 m = exactly 5 stock bars, no waste.
     expect(g.plan.totalBars, 5);
     expect(g.plan.wasteM, closeTo(0.0, 1e-6));
+  });
+
+  test('consumablesProvider estimates PVC cement from a drainage network', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    c
+        .read(projectControllerProvider.notifier)
+        .setCalibration('s1', const ScaleCalibration(0.02));
+    final n = c.read(networkControllerProvider.notifier);
+    // A long PVC drainage run (solvent weld) with a fixture so it sizes; the
+    // 20 m run is 5 stock lengths ⇒ inline couplings ⇒ solvent joints.
+    n.setService(ServiceType.drainage);
+    n.setTool(DrawTool.drawRun);
+    n.placeRunPoint('s1', 0, const Offset(0, 0));
+    n.placeRunPoint('s1', 0, const Offset(1000, 0));
+    n.setTool(DrawTool.select);
+    final endNode = c
+        .read(networkControllerProvider)
+        .network
+        .nodes
+        .reduce((a, b) => a.x > b.x ? a : b);
+    n.setNodeFixture(endNode.id, PlumbingFixture.waterClosetFlushTank);
+
+    final est = c.read(consumablesProvider);
+    expect(est.solventJoints, greaterThan(0));
+    expect(est.pvcCementCans, greaterThanOrEqualTo(1));
   });
 
   test('upfeed: solve + pump + zones + bom derive from a cold-water network',
