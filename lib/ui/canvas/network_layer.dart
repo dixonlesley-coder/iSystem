@@ -651,8 +651,10 @@ class _NetworkPainter extends CustomPainter {
         PipeProduct.hdpe => 'HDPE',
       };
     }
-    final dp = e.ductProduct;
-    if (dp != null) {
+    // Ducts: the explicit product, else the service default (PU for AC
+    // supply/return, BJLS for exhaust), so the canvas reflects what will be used.
+    if (e.service.regime == FlowRegime.air) {
+      final dp = effectiveDuctProductFor(e);
       if (dp == DuctProduct.pu) return 'PU';
       final largest = s.isRectangular
           ? math.max(s.width!.inMillimeters, s.height!.inMillimeters)

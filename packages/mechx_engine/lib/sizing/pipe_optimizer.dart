@@ -43,7 +43,7 @@ double ductSectionLengthM(DuctProduct? product) =>
 /// service, ducts by [DuctProduct]. The unit both the on-canvas joint marks and
 /// the cut plan are computed against.
 double stockLengthForEdge(NetEdge e) => e.service.regime == FlowRegime.air
-    ? ductSectionLengthM(e.ductProduct)
+    ? ductSectionLengthM(effectiveDuctProductFor(e))
     : stockLengthMForService(e.service);
 
 /// One stock bar in the cut plan and the cut pieces taken from it.

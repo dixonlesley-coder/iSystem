@@ -198,17 +198,22 @@ void main() {
       expect(ductSectionLengthM(null), 1.2);
     });
 
-    test('stockLengthForEdge: pipe by service, duct by product', () {
+    test('stockLengthForEdge: pipe by service, duct by service-default product',
+        () {
       NetEdge e(ServiceType s, {DuctProduct? d}) =>
           NetEdge(id: 'e', fromId: 'a', toId: 'b', service: s, ductProduct: d);
       expect(stockLengthForEdge(e(ServiceType.coldWater)), 4.0);
       expect(stockLengthForEdge(e(ServiceType.fireSprinkler)), 6.0);
-      expect(stockLengthForEdge(e(ServiceType.duct)), 1.2); // null ⇒ BJLS
+      // AC supply/return default to PU (4 m); exhaust to BJLS (1.2 m).
+      expect(stockLengthForEdge(e(ServiceType.duct)), 4.0); // null ⇒ PU
+      expect(stockLengthForEdge(e(ServiceType.returnAir)), 4.0); // null ⇒ PU
+      expect(stockLengthForEdge(e(ServiceType.exhaust)), 1.2); // null ⇒ BJLS
+      // An explicit product overrides the service default.
       expect(stockLengthForEdge(e(ServiceType.duct, d: DuctProduct.bjls)), 1.2);
       expect(stockLengthForEdge(e(ServiceType.exhaust, d: DuctProduct.pu)), 4.0);
     });
 
-    EdgeSizing ductSized(double mm, String id, {DuctProduct? p}) => EdgeSizing(
+    EdgeSizing ductSized(double mm, String id) => EdgeSizing(
           edgeId: id,
           service: ServiceType.duct,
           flow: const FlowRate(0.05),
@@ -216,15 +221,16 @@ void main() {
           velocity: const Velocity(4.0),
         );
 
-    test('a BJLS supply duct sections at 1.2 m', () {
-      // 120 px x 0.05 = 6 m straight supply duct, default product (BJLS).
+    test('an exhaust duct defaults to BJLS, sectioned at 1.2 m', () {
+      // 120 px x 0.05 = 6 m straight exhaust duct, default product (BJLS).
       const net = Network(
         nodes: [
           NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
           NetNode(id: 'b', sheetId: 's1', x: 120, y: 0, floorIndex: 0),
         ],
         edges: [
-          NetEdge(id: 'e0', fromId: 'a', toId: 'b', service: ServiceType.duct),
+          NetEdge(
+              id: 'e0', fromId: 'a', toId: 'b', service: ServiceType.exhaust),
         ],
       );
       final chains = buildPipeChains(
@@ -240,24 +246,21 @@ void main() {
       expect(plan.single.plan.wasteM, closeTo(0.0, 1e-6));
     });
 
-    test('a PU supply duct sections at 4 m (offcut waste)', () {
+    test('an AC supply duct defaults to PU, sectioned at 4 m (offcut waste)',
+        () {
+      // No explicit product → supply defaults to PU panel (4 m sections).
       const net = Network(
         nodes: [
           NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
           NetNode(id: 'b', sheetId: 's1', x: 120, y: 0, floorIndex: 0),
         ],
         edges: [
-          NetEdge(
-              id: 'e0',
-              fromId: 'a',
-              toId: 'b',
-              service: ServiceType.duct,
-              ductProduct: DuctProduct.pu),
+          NetEdge(id: 'e0', fromId: 'a', toId: 'b', service: ServiceType.duct),
         ],
       );
       final chains = buildPipeChains(
         net: net,
-        sizing: {'e0': ductSized(300, 'e0', p: DuctProduct.pu)},
+        sizing: {'e0': ductSized(300, 'e0')},
         calibrationBySheet: const {'s1': ScaleCalibration(0.05)},
         building: const BuildingLevels([Floor('G', Length(3))]),
       );

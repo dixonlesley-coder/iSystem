@@ -47,6 +47,19 @@ extension ServiceRegime on ServiceType {
   bool get isAir => regime == FlowRegime.air;
 }
 
+/// The default duct PRODUCT for an air [service] when the engineer hasn't picked
+/// one per segment: **AC installs** (supply + return air) default to **PU**
+/// pre-insulated panel; **exhaust-fan installs** to **BJLS** galvanised steel.
+/// Only meaningful for air services (the duct disciplines).
+DuctProduct defaultDuctProductForService(ServiceType service) =>
+    service == ServiceType.exhaust ? DuctProduct.bjls : DuctProduct.pu;
+
+/// The effective duct product for [edge]: its explicit [NetEdge.ductProduct]
+/// when set, else the service default (PU for AC supply/return, BJLS for
+/// exhaust). Call only for air edges.
+DuctProduct effectiveDuctProductFor(NetEdge edge) =>
+    edge.ductProduct ?? defaultDuctProductForService(edge.service);
+
 /// A horizontal [run] (length from the sheet's calibrated scale) or a vertical
 /// [riser] (length from a true-elevation delta — never from a PDF, §10). A
 /// riser also covers a "drop" between a ceiling main and a fixture or the
