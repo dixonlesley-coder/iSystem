@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -270,6 +272,64 @@ void main() {
       expect(plan.single.plan.fullBars, 1);
       expect(plan.single.plan.totalBars, 2);
       expect(plan.single.plan.wasteM, closeTo(2.0, 1e-6));
+    });
+  });
+
+  group('duct sheet-material takeoff', () {
+    test('ductSheetAreaM2: BJLS 4x8 ft sheet, PU 1.2x4 m panel', () {
+      expect(ductSheetAreaM2(DuctProduct.bjls), closeTo(1.22 * 2.44, 1e-9));
+      expect(ductSheetAreaM2(DuctProduct.pu), closeTo(4.8, 1e-9));
+    });
+
+    test('rectangular exhaust (BJLS): developed area = perimeter x length', () {
+      const e =
+          NetEdge(id: 'e', fromId: 'a', toId: 'b', service: ServiceType.exhaust);
+      const s = EdgeSizing(
+        edgeId: 'e',
+        service: ServiceType.exhaust,
+        flow: FlowRate(0.5),
+        diameter: Diameter(0.38),
+        velocity: Velocity(5),
+        width: Length(0.4),
+        height: Length(0.3),
+      );
+      final t = ductSheetTakeoff(e, s, 10.0)!;
+      expect(t.product, DuctProduct.bjls);
+      // 2·(0.4+0.3)·10 = 14 m²; ceil(14 / 2.9768) = 5 sheets.
+      expect(t.developedAreaM2, closeTo(14.0, 1e-6));
+      expect(t.sheets, 5);
+      expect(t.sheetAreaM2, closeTo(2.9768, 1e-6));
+    });
+
+    test('round supply (PU): developed area = πD x length, panels', () {
+      const e =
+          NetEdge(id: 'e', fromId: 'a', toId: 'b', service: ServiceType.duct);
+      const s = EdgeSizing(
+        edgeId: 'e',
+        service: ServiceType.duct,
+        flow: FlowRate(0.5),
+        diameter: Diameter(0.4),
+        velocity: Velocity(5),
+      );
+      final t = ductSheetTakeoff(e, s, 10.0)!;
+      expect(t.product, DuctProduct.pu);
+      expect(t.developedAreaM2, closeTo(math.pi * 0.4 * 10, 1e-6));
+      // ceil(12.566 / 4.8) = 3 panels.
+      expect(t.sheets, 3);
+      expect(t.thicknessMm, 20); // PU panel default
+    });
+
+    test('a pipe segment has no duct takeoff', () {
+      const e = NetEdge(
+          id: 'e', fromId: 'a', toId: 'b', service: ServiceType.coldWater);
+      const s = EdgeSizing(
+        edgeId: 'e',
+        service: ServiceType.coldWater,
+        flow: FlowRate(0.5),
+        diameter: Diameter(0.025),
+        velocity: Velocity(1.5),
+      );
+      expect(ductSheetTakeoff(e, s, 5.0), isNull);
     });
   });
 }

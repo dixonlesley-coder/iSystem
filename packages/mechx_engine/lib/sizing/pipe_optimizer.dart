@@ -125,6 +125,59 @@ StockCutPlan planStockCuts(Iterable<double> pieceLengthsM, double stockLengthM) 
   );
 }
 
+/// Sheet-material takeoff for a single duct segment: the developed sheet area
+/// (the unwrapped perimeter × length you fabricate the duct from) and how many
+/// standard stock sheets/panels of its product that takes.
+class DuctSheetTakeoff {
+  final DuctProduct product;
+
+  /// Developed sheet area to fabricate the duct = perimeter × length (m²).
+  final double developedAreaM2;
+
+  /// Area of one stock sheet/panel of [product] (m²).
+  final double sheetAreaM2;
+
+  /// Standard sheets/panels needed = ceil(developed ÷ sheet).
+  final int sheets;
+
+  /// Sheet gauge (BJLS, by largest side) or panel thickness (PU), mm.
+  final double thicknessMm;
+
+  const DuctSheetTakeoff({
+    required this.product,
+    required this.developedAreaM2,
+    required this.sheetAreaM2,
+    required this.sheets,
+    required this.thicknessMm,
+  });
+}
+
+/// Per-segment sheet-material takeoff for a duct [edge] of physical [lengthM] at
+/// [sizing]: the developed area (perimeter × length) of its (effective) product
+/// and the number of standard sheets/panels. Null for a non-air edge.
+DuctSheetTakeoff? ductSheetTakeoff(
+    NetEdge edge, EdgeSizing sizing, double lengthM) {
+  if (edge.service.regime != FlowRegime.air) return null;
+  final product = effectiveDuctProductFor(edge);
+  final perimM = sizing.isRectangular
+      ? 2 * (sizing.width!.meters + sizing.height!.meters)
+      : math.pi * sizing.diameter.meters;
+  final area = perimM * lengthM;
+  final sheetArea = ductSheetAreaM2(product);
+  final largestMm = sizing.isRectangular
+      ? math.max(sizing.width!.inMillimeters, sizing.height!.inMillimeters)
+      : sizing.diameter.inMillimeters;
+  return DuctSheetTakeoff(
+    product: product,
+    developedAreaM2: area,
+    sheetAreaM2: sheetArea,
+    sheets: sheetArea <= 0 ? 0 : (area / sheetArea).ceil(),
+    thicknessMm: product == DuctProduct.pu
+        ? puPanelThicknessMm()
+        : bjlsThicknessMm(largestMm),
+  );
+}
+
 /// One run segment's place within its continuous pipe chain: the chain
 /// arc-length coordinate (metres) at the edge's `from` and `to` endpoints. A
 /// point at fraction `t` along from→to has chain coordinate

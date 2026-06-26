@@ -3,10 +3,13 @@ import 'package:flutter/rendering.dart' show RenderBox;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/canvas/selection_overlay.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
@@ -690,6 +693,56 @@ void main() {
     expect(edge.sizeOverride?.inMillimeters, closeTo(50, 1e-6));
     // Menu dismissed after the pick.
     expect(find.text('SET SIZE'), findsNothing);
+  });
+
+  testWidgets('right-clicking a duct segment shows the sheet-material takeoff',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    // Calibrate (so length/area are real) and make HVAC the active layer.
+    container
+        .read(projectControllerProvider.notifier)
+        .setCalibration('s1', const ScaleCalibration(0.02));
+    container
+        .read(activeDisciplineProvider.notifier)
+        .set(DisciplineLayer.hvac);
+
+    final ctrl = container.read(networkControllerProvider.notifier);
+    ctrl.setService(ServiceType.duct);
+    ctrl.setTool(DrawTool.drawRun);
+    ctrl.placeRunPoint('s1', 0, const Offset(360, 360));
+    ctrl.placeRunPoint('s1', 0, const Offset(1040, 360));
+    ctrl.setTool(DrawTool.select);
+    // Airflow at the far node so the duct sizes (and so a takeoff exists).
+    final far = container
+        .read(networkControllerProvider)
+        .network
+        .nodes
+        .reduce((a, b) => a.x > b.x ? a : b);
+    ctrl.setNodeAirflow(far.id, FlowRate.litersPerSecond(500));
+    await tester.pump();
+
+    final transform =
+        container.read(sheetsControllerProvider).viewportFor('s1')!;
+    final overlayBox = tester.renderObject<RenderBox>(
+        find.byType(NetworkSelectionOverlay).first);
+    final globalMid =
+        overlayBox.localToGlobal(transform.worldToScreen(const Offset(700, 360)));
+    final gesture =
+        await tester.startGesture(globalMid, buttons: kSecondaryButton);
+    await gesture.up();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // The duct menu shows the material picker + the sheet-material takeoff.
+    expect(find.text('DUCT MATERIAL'), findsOneWidget);
+    expect(find.textContaining('Sheet material:'), findsOneWidget);
   });
 
   test('node edits preserve customFixtureId + roofAreaM2 (no data loss)', () {

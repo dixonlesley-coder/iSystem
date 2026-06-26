@@ -1,11 +1,13 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/network_store.dart';
+import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sizing_store.dart';
 import '../theme/design_tokens.dart';
@@ -275,6 +277,26 @@ class _EdgeMenuPanel extends ConsumerWidget {
                 '(auto by size)'
             : 'PU panel ${puPanelThicknessMm().toStringAsFixed(0)} mm';
         children.add(_MenuNote(note));
+      }
+      // Sheet-material takeoff for this segment: developed area (perimeter ×
+      // length) + the number of standard sheets/panels of the effective product.
+      if (sizing != null) {
+        final net = ref.watch(networkControllerProvider).network;
+        final project = ref.watch(projectControllerProvider);
+        final len = edgeLength(edge, net,
+                calibrationBySheet: project.calibrations,
+                building: project.building)
+            .meters;
+        final t = ductSheetTakeoff(edge, sizing, len);
+        if (t != null) {
+          children.add(_MenuNote(
+            'Sheet material: ${t.developedAreaM2.toStringAsFixed(2)} m2 '
+            '(perimeter x length) = ${t.sheets} '
+            '${t.product == DuctProduct.pu ? 'panel' : 'sheet'}'
+            '${t.sheets == 1 ? '' : 's'} @ '
+            '${t.sheetAreaM2.toStringAsFixed(2)} m2',
+          ));
+        }
       }
       if (edge.ductProduct != null) {
         children.add(_MenuRow(
