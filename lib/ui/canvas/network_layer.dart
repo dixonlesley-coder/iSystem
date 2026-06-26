@@ -7,6 +7,7 @@ import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 
+import '../../store/air_warnings_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/selection_store.dart';
@@ -18,6 +19,9 @@ import 'viewport.dart';
 
 /// Accent used to highlight the current selection.
 const Color _kSelection = Color(0xFF4C8DFF);
+
+/// Warning colour for an out-of-band air velocity (too high / too low).
+const Color _kWarn = Color(0xFFE8703A);
 
 /// Always-on render of the drawn network for the current sheet/floor, painted
 /// in screen space via the sheet's viewport transform. Pointer-transparent so
@@ -53,6 +57,12 @@ class NetworkLayer extends ConsumerWidget {
         ? ref.watch(sizingProvider)
         : const <String, EdgeSizing>{};
     final selection = ref.watch(selectionProvider);
+    // Ids of air elements whose velocity is out of band — get an on-plan badge.
+    final checks = ref.watch(airVelocityChecksProvider);
+    final warningIds = <String>{
+      for (final e in checks.entries)
+        if (e.value.isWarning) e.key,
+    };
 
     // Layer filtering (unified canvas only).
     Set<DisciplineLayer> visible = DisciplineLayer.values.toSet();
@@ -78,6 +88,7 @@ class NetworkLayer extends ConsumerWidget {
           layerFiltered: layerFiltered,
           visibleDisciplines: visible,
           activeDiscipline: active,
+          warningIds: warningIds,
         ),
       ),
     );
@@ -108,6 +119,9 @@ class _NetworkPainter extends CustomPainter {
   final Set<DisciplineLayer> visibleDisciplines;
   final DisciplineLayer? activeDiscipline;
 
+  /// Ids of air elements (edges / terminal nodes) whose velocity is out of band.
+  final Set<String> warningIds;
+
   _NetworkPainter({
     required this.net,
     required this.sheetId,
@@ -121,6 +135,7 @@ class _NetworkPainter extends CustomPainter {
     this.layerFiltered = false,
     this.visibleDisciplines = const {},
     this.activeDiscipline,
+    this.warningIds = const {},
   });
 
   bool _onThisFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
@@ -217,6 +232,10 @@ class _NetworkPainter extends CustomPainter {
           final tag = _productTag(e, s);
           if (tag != null) label = '$label  $tag';
           _label(canvas, (pa + pb) / 2, label);
+          // Velocity-out-of-band badge above the size label.
+          if (warningIds.contains(e.id)) {
+            _warnBadge(canvas, Offset((pa.dx + pb.dx) / 2, (pa.dy + pb.dy) / 2 - 13));
+          }
         }
       } else {
         final lowFloor = math.min(a.floorIndex, b.floorIndex);
@@ -256,7 +275,37 @@ class _NetworkPainter extends CustomPainter {
       } else {
         _nodeGlyph(canvas, p, n.role, layer.opacity);
       }
+      // Face-velocity-out-of-band ring on an air terminal.
+      if (layer.opacity >= 1.0 && warningIds.contains(n.id)) {
+        canvas.drawCircle(
+          p,
+          12,
+          Paint()
+            ..color = _kWarn
+            ..strokeWidth = 2
+            ..style = PaintingStyle.stroke,
+        );
+      }
     }
+  }
+
+  /// A small "!" badge marking an air element whose velocity is out of band.
+  void _warnBadge(Canvas canvas, Offset center) {
+    canvas.drawCircle(center, 6, Paint()..color = const Color(0xFFFFFFFF));
+    canvas.drawCircle(center, 5.5, Paint()..color = _kWarn);
+    final tp = TextPainter(
+      text: const TextSpan(
+        text: '!',
+        style: TextStyle(
+          color: Color(0xFFFFFFFF),
+          fontSize: 9,
+          fontFamily: 'Roboto',
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
   }
 
   /// Draws an equipment node as its schematic symbol on a light chip so it
@@ -415,7 +464,8 @@ class _NetworkPainter extends CustomPainter {
       !_sameStrSet(old.selectedEdgeIds, selectedEdgeIds) ||
       old.layerFiltered != layerFiltered ||
       old.activeDiscipline != activeDiscipline ||
-      !_sameSet(old.visibleDisciplines, visibleDisciplines);
+      !_sameSet(old.visibleDisciplines, visibleDisciplines) ||
+      !_sameStrSet(old.warningIds, warningIds);
 
   static bool _sameSet(Set<DisciplineLayer> a, Set<DisciplineLayer> b) =>
       a.length == b.length && a.containsAll(b);

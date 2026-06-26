@@ -145,7 +145,11 @@ report export**; versioned `.mechx` save/open with viewport restore;
 **autosave / crash-recovery**; light/dark; **draw-a-room AHU/FCU/fan air sizing**
 (Room tool → footprint area from scale × ceiling × per-room-type ACH → CFM, then
 auto-sized supply diffusers / return grilles / supply trunk / equipment duty via
-`sizing/room_air.dart`, edited in the Rooms inspector, round-trips in `.mechx`).
+`sizing/room_air.dart`, edited in the Rooms inspector, round-trips in `.mechx`);
+**manual air routing + velocity warnings** (hand-route ducts, pick a duct size
+[right-click → Ø ladder] and a diffuser face size [inspector picker], and the app
+warns when the air velocity is too high/low via `sizing/air_velocity.dart` +
+`airVelocityChecksProvider` — inspector verdict + an on-plan orange "!" badge).
 
 ## Conventions
 
@@ -417,6 +421,15 @@ auto-sized supply diffusers / return grilles / supply trunk / equipment duty via
   stays the authority. ACH values (`standards/ventilation.dart`) are all
   `secondarySource` (UNVERIFIED) until the SNI 03-6572-2001 PDF is checked. `RoomArea`
   is an annotation (like `TankArea`): it NEVER feeds the pressurized network solve.
+- **Air-velocity warnings (`sizing/air_velocity.dart` + `airVelocityChecksProvider`)**:
+  a JUDGE-ONLY layer over the manually routed air network — it never resizes
+  anything. Duct edges use the live `EdgeSizing.velocity`; air terminals use
+  `faceVelocityFor(airflow, grossFaceArea)` from the node's chosen
+  `faceWidthMm`/`faceHeightMm`. Bands are plain constants (supply duct 3–7 m/s,
+  supply face 1.0–3.0, return/exhaust face 1.0–4.0) — general practice, NOT an SNI
+  clause (`// VERIFY`). A non-positive velocity or a terminal with no chosen face is
+  reported OK (nothing to warn about), so a project with no manual air sizing is
+  byte-identical (no badges, goldens unchanged).
 - **Cable family → ampacity class**: a circuit's `cableType` (NYY/NYM/NYA/NYAF/FRC)
   selects the insulation temperature-class for the KHA lookup via
   `electrical/cable_family.dart` (`insulationForCableType`): **FRC → XLPE 90 °C**,

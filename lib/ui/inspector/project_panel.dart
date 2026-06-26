@@ -9,6 +9,7 @@ import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/sizing/bom.dart';
+import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
@@ -16,6 +17,7 @@ import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/air_warnings_store.dart';
 import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
@@ -1705,6 +1707,58 @@ class _SelectionSection extends ConsumerWidget {
               ),
             ],
           ),
+          // Manually chosen diffuser/grille FACE size + a face-velocity warning.
+          // Lets the engineer pick a size for aesthetics and be told when the
+          // velocity is too high (noisy) or too low (poor throw / dumping).
+          if (node.airflow != null ||
+              node.component == NodeComponent.supplyDiffuser ||
+              node.component == NodeComponent.returnGrille ||
+              node.component == NodeComponent.exhaustGrille ||
+              node.component == NodeComponent.linearDiffuser) ...[
+            const SizedBox(height: MechXSpacing.sm),
+            Text('Diffuser / grille face size',
+                style: context.type.caption
+                    .copyWith(color: context.colors.textMuted)),
+            const SizedBox(height: MechXSpacing.xs),
+            Wrap(
+              spacing: MechXSpacing.xs,
+              runSpacing: MechXSpacing.xs,
+              children: [
+                _Pill(
+                  label: 'Auto',
+                  selected:
+                      node.faceWidthMm == null || node.faceHeightMm == null,
+                  onTap: () => ctrl.setNodeFace(node.id, null, null),
+                ),
+                for (final face in standardGrilleFacesMm)
+                  _Pill(
+                    label: '${face.$1.round()}x${face.$2.round()}',
+                    selected: node.faceWidthMm == face.$1 &&
+                        node.faceHeightMm == face.$2,
+                    onTap: () => ctrl.setNodeFace(node.id, face.$1, face.$2),
+                  ),
+              ],
+            ),
+            const SizedBox(height: MechXSpacing.xs),
+            Builder(builder: (context) {
+              final check = ref.watch(airVelocityChecksProvider)[node.id];
+              if (check == null) {
+                return Text(
+                  'Pick a face size to check the face velocity.',
+                  style: context.type.caption
+                      .copyWith(color: context.colors.textMuted),
+                );
+              }
+              return Text(
+                'Face velocity: ${check.message}',
+                style: context.type.caption.copyWith(
+                  color: check.isWarning
+                      ? context.colors.danger
+                      : context.colors.accent,
+                ),
+              );
+            }),
+          ],
           const SizedBox(height: MechXSpacing.sm),
           Text('Rainwater outlet roof area',
               style: context.type.caption
@@ -1779,6 +1833,23 @@ class _SelectionSection extends ConsumerWidget {
           Text('Material: $material',
               style: context.type.caption
                   .copyWith(color: context.colors.textSecondary)),
+        ],
+        // Air-duct velocity check (warns too-high / too-low for the chosen size).
+        if (edge.service.isAir && sizing != null) ...[
+          const SizedBox(height: MechXSpacing.xxs),
+          Builder(builder: (context) {
+            final check = ref.watch(airVelocityChecksProvider)[edge.id];
+            final msg = check?.message ??
+                '${sizing.velocity.metersPerSecond.toStringAsFixed(1)} m/s';
+            return Text(
+              'Air velocity: $msg',
+              style: context.type.caption.copyWith(
+                color: (check != null && check.isWarning)
+                    ? context.colors.danger
+                    : context.colors.textSecondary,
+              ),
+            );
+          }),
         ],
         const SizedBox(height: MechXSpacing.xxs),
         Text('Right-click the segment to set its size and material.',

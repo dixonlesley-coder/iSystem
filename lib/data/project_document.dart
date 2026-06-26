@@ -306,6 +306,8 @@ class ProjectDocument {
                 if (n.tankCapacityLitres != null)
                   'tank_l': n.tankCapacityLitres,
                 if (n.electricalLoadW != null) 'elec_w': n.electricalLoadW,
+                if (n.faceWidthMm != null) 'face_w_mm': n.faceWidthMm,
+                if (n.faceHeightMm != null) 'face_h_mm': n.faceHeightMm,
               },
           ],
           'edges': [
@@ -394,6 +396,8 @@ class ProjectDocument {
               : _enumOrNull(NodeComponent.values, n['component']),
           tankCapacityLitres: (n['tank_l'] as num?)?.toDouble(),
           electricalLoadW: (n['elec_w'] as num?)?.toDouble(),
+          faceWidthMm: (n['face_w_mm'] as num?)?.toDouble(),
+          faceHeightMm: (n['face_h_mm'] as num?)?.toDouble(),
         ),
     ];
     final edges = [

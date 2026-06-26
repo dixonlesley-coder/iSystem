@@ -309,6 +309,15 @@ class NetNode {
   /// with one edited power.
   final double? electricalLoadW;
 
+  /// Manually chosen grille/diffuser FACE size (gross width × height, mm) for an
+  /// air-terminal node — set when the engineer picks a specific diffuser size
+  /// (for aesthetic / ceiling-grid reasons) rather than letting the engine size
+  /// it. The face velocity (airflow ÷ free face area) is checked against the
+  /// recommended band for a too-high / too-low warning. Both null ⇒ no chosen
+  /// face (byte-identical; the warning layer simply has nothing to judge).
+  final double? faceWidthMm;
+  final double? faceHeightMm;
+
   const NetNode({
     required this.id,
     required this.sheetId,
@@ -325,6 +334,8 @@ class NetNode {
     this.component,
     this.tankCapacityLitres,
     this.electricalLoadW,
+    this.faceWidthMm,
+    this.faceHeightMm,
   });
 
   NetNode copyWith({
@@ -348,6 +359,9 @@ class NetNode {
     bool clearTankCapacity = false,
     double? electricalLoadW,
     bool clearElectricalLoad = false,
+    double? faceWidthMm,
+    double? faceHeightMm,
+    bool clearFace = false,
   }) =>
       NetNode(
         id: id,
@@ -371,6 +385,8 @@ class NetNode {
         electricalLoadW: clearElectricalLoad
             ? null
             : (electricalLoadW ?? this.electricalLoadW),
+        faceWidthMm: clearFace ? null : (faceWidthMm ?? this.faceWidthMm),
+        faceHeightMm: clearFace ? null : (faceHeightMm ?? this.faceHeightMm),
       );
 }
 

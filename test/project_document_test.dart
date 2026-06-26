@@ -273,6 +273,37 @@ void main() {
     expect(ProjectDocument.decode(bare.encode()).rooms, isEmpty);
   });
 
+  test('diffuser face size round-trips on a node; absent ⇒ null', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(100, 100))],
+      network: Network(nodes: [
+        NetNode(
+          id: 'd',
+          sheetId: 's1',
+          x: 0,
+          y: 0,
+          floorIndex: 0,
+          role: NodeRole.fixture,
+          component: NodeComponent.supplyDiffuser,
+          airflow: FlowRate(0.05),
+          faceWidthMm: 450,
+          faceHeightMm: 300,
+        ),
+        NetNode(id: 'p', sheetId: 's1', x: 9, y: 0, floorIndex: 0),
+      ]),
+    );
+    final decoded = ProjectDocument.decode(doc.encode());
+    final d = decoded.network.nodeById('d')!;
+    expect(d.faceWidthMm, 450);
+    expect(d.faceHeightMm, 300);
+    // A node without a chosen face decodes to null (byte-identical default).
+    expect(decoded.network.nodeById('p')!.faceWidthMm, isNull);
+    expect(decoded.network.nodeById('p')!.faceHeightMm, isNull);
+  });
+
   test('per-segment pipe/duct product + size override round-trip', () {
     const doc = ProjectDocument(
       projectName: 'X',
