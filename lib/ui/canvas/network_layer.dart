@@ -23,6 +23,9 @@ const Color _kSelection = Color(0xFF4C8DFF);
 /// Warning colour for an out-of-band air velocity (too high / too low).
 const Color _kWarn = Color(0xFFE8703A);
 
+/// Muted colour for the softer "carries air but not yet sized" advisory.
+const Color _kUnsized = Color(0xFF9AA0A6);
+
 /// Always-on render of the drawn network for the current sheet/floor, painted
 /// in screen space via the sheet's viewport transform. Pointer-transparent so
 /// the canvas keeps panning/zooming underneath.
@@ -63,6 +66,8 @@ class NetworkLayer extends ConsumerWidget {
       for (final e in checks.entries)
         if (e.value.isWarning) e.key,
     };
+    // Air elements carrying air but not yet manually sized — a softer advisory.
+    final unsizedIds = ref.watch(airUnsizedProvider);
 
     // Layer filtering (unified canvas only).
     Set<DisciplineLayer> visible = DisciplineLayer.values.toSet();
@@ -89,6 +94,7 @@ class NetworkLayer extends ConsumerWidget {
           visibleDisciplines: visible,
           activeDiscipline: active,
           warningIds: warningIds,
+          unsizedIds: unsizedIds,
         ),
       ),
     );
@@ -122,6 +128,9 @@ class _NetworkPainter extends CustomPainter {
   /// Ids of air elements (edges / terminal nodes) whose velocity is out of band.
   final Set<String> warningIds;
 
+  /// Ids of air elements carrying air but not yet manually sized (soft advisory).
+  final Set<String> unsizedIds;
+
   _NetworkPainter({
     required this.net,
     required this.sheetId,
@@ -136,6 +145,7 @@ class _NetworkPainter extends CustomPainter {
     this.visibleDisciplines = const {},
     this.activeDiscipline,
     this.warningIds = const {},
+    this.unsizedIds = const {},
   });
 
   bool _onThisFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
@@ -232,9 +242,15 @@ class _NetworkPainter extends CustomPainter {
           final tag = _productTag(e, s);
           if (tag != null) label = '$label  $tag';
           _label(canvas, (pa + pb) / 2, label);
-          // Velocity-out-of-band badge above the size label.
+        }
+        // Air status badge (independent of the size-label toggle), active layer
+        // only: an out-of-band warning takes precedence over the unsized hint.
+        if (opacity >= 1.0) {
+          final mid = Offset((pa.dx + pb.dx) / 2, (pa.dy + pb.dy) / 2 - 13);
           if (warningIds.contains(e.id)) {
-            _warnBadge(canvas, Offset((pa.dx + pb.dx) / 2, (pa.dy + pb.dy) / 2 - 13));
+            _warnBadge(canvas, mid);
+          } else if (unsizedIds.contains(e.id)) {
+            _unsizedBadge(canvas, mid);
           }
         }
       } else {
@@ -275,18 +291,43 @@ class _NetworkPainter extends CustomPainter {
       } else {
         _nodeGlyph(canvas, p, n.role, layer.opacity);
       }
-      // Face-velocity-out-of-band ring on an air terminal.
-      if (layer.opacity >= 1.0 && warningIds.contains(n.id)) {
-        canvas.drawCircle(
-          p,
-          12,
-          Paint()
-            ..color = _kWarn
-            ..strokeWidth = 2
-            ..style = PaintingStyle.stroke,
-        );
+      // Air-terminal ring: out-of-band face velocity (warning) takes precedence
+      // over the not-yet-sized advisory.
+      if (layer.opacity >= 1.0) {
+        if (warningIds.contains(n.id)) {
+          canvas.drawCircle(
+            p,
+            12,
+            Paint()
+              ..color = _kWarn
+              ..strokeWidth = 2
+              ..style = PaintingStyle.stroke,
+          );
+        } else if (unsizedIds.contains(n.id)) {
+          canvas.drawCircle(
+            p,
+            12,
+            Paint()
+              ..color = _kUnsized
+              ..strokeWidth = 1.5
+              ..style = PaintingStyle.stroke,
+          );
+        }
       }
     }
+  }
+
+  /// A small hollow advisory dot for an air element not yet manually sized.
+  void _unsizedBadge(Canvas canvas, Offset center) {
+    canvas.drawCircle(center, 4, Paint()..color = const Color(0xFFFFFFFF));
+    canvas.drawCircle(
+      center,
+      4,
+      Paint()
+        ..color = _kUnsized
+        ..strokeWidth = 1.5
+        ..style = PaintingStyle.stroke,
+    );
   }
 
   /// A small "!" badge marking an air element whose velocity is out of band.
@@ -465,7 +506,8 @@ class _NetworkPainter extends CustomPainter {
       old.layerFiltered != layerFiltered ||
       old.activeDiscipline != activeDiscipline ||
       !_sameSet(old.visibleDisciplines, visibleDisciplines) ||
-      !_sameStrSet(old.warningIds, warningIds);
+      !_sameStrSet(old.warningIds, warningIds) ||
+      !_sameStrSet(old.unsizedIds, unsizedIds);
 
   static bool _sameSet(Set<DisciplineLayer> a, Set<DisciplineLayer> b) =>
       a.length == b.length && a.containsAll(b);

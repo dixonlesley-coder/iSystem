@@ -1851,6 +1851,13 @@ class _SelectionSection extends ConsumerWidget {
             );
           }),
         ],
+        // Soft advisory: this air duct carries air but isn't manually sized yet.
+        if (ref.watch(airUnsizedProvider).contains(edge.id)) ...[
+          const SizedBox(height: MechXSpacing.xxs),
+          Text('Auto-sized — no duct size chosen yet (right-click to set one).',
+              style: context.type.caption
+                  .copyWith(color: context.colors.textMuted)),
+        ],
         const SizedBox(height: MechXSpacing.xxs),
         Text('Right-click the segment to set its size and material.',
             style:

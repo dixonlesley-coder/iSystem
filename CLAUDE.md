@@ -429,7 +429,10 @@ warns when the air velocity is too high/low via `sizing/air_velocity.dart` +
   supply face 1.0–3.0, return/exhaust face 1.0–4.0) — general practice, NOT an SNI
   clause (`// VERIFY`). A non-positive velocity or a terminal with no chosen face is
   reported OK (nothing to warn about), so a project with no manual air sizing is
-  byte-identical (no badges, goldens unchanged).
+  byte-identical (no badges, goldens unchanged). A separate `airUnsizedProvider`
+  flags air ducts/terminals that carry air but have no manual size/face yet (a
+  muted advisory marker, distinct from the orange out-of-band warning, which
+  always takes precedence).
 - **Cable family → ampacity class**: a circuit's `cableType` (NYY/NYM/NYA/NYAF/FRC)
   selects the insulation temperature-class for the KHA lookup via
   `electrical/cable_family.dart` (`insulationForCableType`): **FRC → XLPE 90 °C**,

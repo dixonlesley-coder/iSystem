@@ -81,6 +81,59 @@ void main() {
     expect(c.read(airWarningCountProvider), 0);
   });
 
+  test('an air terminal with no chosen face is flagged as unsized', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    c.read(networkControllerProvider.notifier).loadNetwork(Network(nodes: [
+          _diffuser(id: 'd', airflow: const FlowRate(0.1)),
+        ]));
+    expect(c.read(airUnsizedProvider), contains('d'));
+    expect(c.read(airUnsizedCountProvider), 1);
+    // It is NOT a velocity warning (nothing to judge without a face).
+    expect(c.read(airWarningCountProvider), 0);
+  });
+
+  test('choosing a face clears the unsized advisory', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final ctrl = c.read(networkControllerProvider.notifier);
+    ctrl.loadNetwork(Network(nodes: [
+      _diffuser(id: 'd', airflow: const FlowRate(0.1)),
+    ]));
+    expect(c.read(airUnsizedProvider), contains('d'));
+    ctrl.setNodeFace('d', 300, 300);
+    expect(c.read(airUnsizedProvider), isEmpty);
+  });
+
+  test('an air duct carrying flow with no size override is flagged unsized', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    // AHU (plant source) → duct → diffuser (airflow): the duct carries 0.1 m³/s.
+    c.read(networkControllerProvider.notifier).loadNetwork(Network(
+          nodes: [
+            const NetNode(
+              id: 'ahu',
+              sheetId: 's1',
+              x: 0,
+              y: 0,
+              floorIndex: 0,
+              role: NodeRole.plant,
+              component: NodeComponent.ahu,
+            ),
+            _diffuser(
+                id: 'd', airflow: const FlowRate(0.1), faceW: 300, faceH: 300),
+          ],
+          edges: [
+            const NetEdge(
+                id: 'duct', fromId: 'ahu', toId: 'd', service: ServiceType.duct),
+          ],
+        ));
+    // The duct carries air and has no override ⇒ unsized advisory.
+    expect(c.read(airUnsizedProvider), contains('duct'));
+    // The terminal has a face ⇒ not unsized.
+    expect(c.read(airUnsizedProvider).contains('d'), isFalse);
+  });
+
   test('setNodeFace sets then clears the face, preserving the airflow', () {
     final c = ProviderContainer();
     addTearDown(c.dispose);

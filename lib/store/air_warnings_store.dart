@@ -58,3 +58,35 @@ final airWarningCountProvider = Provider<int>((ref) => ref
     .values
     .where((c) => c.isWarning)
     .length);
+
+/// Air elements (duct edges + air terminals) that carry air but have NO manually
+/// chosen size yet — they are still relying on auto-sizing. A softer advisory
+/// than an out-of-band velocity warning: it just nudges the engineer to pick a
+/// size / face for the hand-routed network. An element that already carries a
+/// chosen size (edge `sizeOverride`, node face) is NOT listed.
+final airUnsizedProvider = Provider<Set<String>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final sizing = ref.watch(sizingProvider);
+  final out = <String>{};
+
+  // Air ducts that carry flow but have no manual size override.
+  for (final e in net.edges) {
+    if (!e.service.isAir || e.sizeOverride != null) continue;
+    final s = sizing[e.id];
+    if (s == null || s.flow.cubicMetersPerSecond <= 0) continue;
+    out.add(e.id);
+  }
+
+  // Air terminals (a node carrying an airflow) with no chosen face size.
+  for (final n in net.nodes) {
+    final q = n.airflow;
+    if (q == null || q.cubicMetersPerSecond <= 0) continue;
+    if (n.faceWidthMm != null && n.faceHeightMm != null) continue;
+    out.add(n.id);
+  }
+  return out;
+});
+
+/// Count of air elements not yet manually sized (for a summary / status surface).
+final airUnsizedCountProvider =
+    Provider<int>((ref) => ref.watch(airUnsizedProvider).length);
