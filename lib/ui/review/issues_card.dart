@@ -8,6 +8,7 @@ import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/severity_glyph.dart';
 
 /// The unified "Design Issues" card for the Review hub — every design warning
 /// the app already computes (out-of-band air velocities, unsized air elements,
@@ -39,8 +40,8 @@ class IssuesCard extends ConsumerWidget {
           children: [
             CustomPaint(
               size: const Size(16, 16),
-              painter: _SeverityGlyph(
-                kind: _GlyphKind.check,
+              painter: SeverityGlyph(
+                kind: SeverityGlyphKind.check,
                 color: colors.success,
               ),
             ),
@@ -238,8 +239,8 @@ class _IssueRow extends StatelessWidget {
             padding: const EdgeInsets.only(top: 2, right: MechXSpacing.sm),
             child: CustomPaint(
               size: const Size(11, 11),
-              painter: _SeverityGlyph(
-                kind: isWarning ? _GlyphKind.warn : _GlyphKind.info,
+              painter: SeverityGlyph(
+                kind: isWarning ? SeverityGlyphKind.warn : SeverityGlyphKind.info,
                 color: dotColor,
               ),
             ),
@@ -276,59 +277,3 @@ class _IssueRow extends StatelessWidget {
   }
 }
 
-/// Which glyph a [_SeverityGlyph] draws: a hollow ring with an exclamation
-/// (warning), a ring with a centre dot (advisory / info), or a bare check
-/// (the clean-state success mark).
-enum _GlyphKind { warn, info, check }
-
-/// A small custom-painted severity glyph — a redundant cue paired with colour
-/// so the meaning survives without relying on hue alone. Custom-painted (no
-/// icon font), so it can never render as tofu in the goldens.
-class _SeverityGlyph extends CustomPainter {
-  final _GlyphKind kind;
-  final Color color;
-
-  const _SeverityGlyph({required this.kind, required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-    final c = Offset(w / 2, h / 2);
-    final stroke = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.3
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    if (kind == _GlyphKind.check) {
-      final path = Path()
-        ..moveTo(w * 0.20, h * 0.52)
-        ..lineTo(w * 0.42, h * 0.74)
-        ..lineTo(w * 0.80, h * 0.26);
-      canvas.drawPath(path, stroke);
-      return;
-    }
-
-    // A ring for both warn + info.
-    canvas.drawCircle(c, w * 0.42, stroke);
-    final fill = Paint()..color = color;
-    if (kind == _GlyphKind.warn) {
-      // An exclamation stem + dot inside the ring.
-      canvas.drawLine(
-        Offset(w / 2, h * 0.28),
-        Offset(w / 2, h * 0.58),
-        stroke,
-      );
-      canvas.drawCircle(Offset(w / 2, h * 0.74), w * 0.07, fill);
-    } else {
-      // Info: a single centre dot.
-      canvas.drawCircle(c, w * 0.10, fill);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_SeverityGlyph old) =>
-      old.kind != kind || old.color != color;
-}

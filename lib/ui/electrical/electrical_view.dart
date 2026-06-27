@@ -36,7 +36,9 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/canvas_guide_popover.dart';
 import '../widgets/mechx_button.dart';
+import '../widgets/mechx_empty_state_card.dart';
 import '../widgets/mechx_segment.dart';
+import '../widgets/severity_glyph.dart';
 import 'electrical_canvas.dart';
 import 'electrical_controls.dart';
 import 'electrical_export.dart';
@@ -766,51 +768,20 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    // ConstrainedBox (not a fixed width) so the card scales down gracefully on
-    // a narrow window without overflowing.
+    // The shared branded empty-state card (matching the mechanical Layout
+    // canvas's), with the two service set-up actions.
     return Padding(
       padding: const EdgeInsets.all(MechXSpacing.lg),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 360),
-        child: Container(
-          padding: const EdgeInsets.all(MechXSpacing.lg),
-          decoration: BoxDecoration(
-            color: colors.surface,
-            borderRadius: MechXRadii.card,
-            border: Border.all(color: colors.border),
-            boxShadow: MechXShadow.card,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Set up your service',
-                style: type.title.copyWith(color: colors.textPrimary),
-              ),
-              const SizedBox(height: MechXSpacing.xs),
-              Text(
-                'Add a distribution panel, then drag loads from the palette '
-                'onto it. Set the supply phase and earthing from Service & '
-                'Earthing.',
-                style: type.body.copyWith(color: colors.textSecondary),
-              ),
-              const SizedBox(height: MechXSpacing.md),
-              Row(
-                children: [
-                  MechXButton(label: '+ Panel', onPressed: onAddPanel),
-                  const SizedBox(width: MechXSpacing.sm),
-                  MechXButton(
-                    label: 'Service & Earthing',
-                    onPressed: onSetUp,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
+      child: MechXEmptyStateCard(
+        title: 'Set up your service',
+        body: 'Add a distribution panel, then drag loads from the palette '
+            'onto it. Set the supply phase and earthing from Service & '
+            'Earthing.',
+        actions: [
+          MechXButton(label: '+ Panel', onPressed: onAddPanel),
+          const SizedBox(width: MechXSpacing.sm),
+          MechXButton(label: 'Service & Earthing', onPressed: onSetUp),
+        ],
       ),
     );
   }
@@ -1242,18 +1213,25 @@ class _WarningRow extends StatelessWidget {
       WarningSeverity.warning => colors.warning,
       WarningSeverity.info => colors.textMuted,
     };
+    // Severity is carried by SHAPE as well as colour (the shared [SeverityGlyph])
+    // so error/warning/info stay distinguishable without relying on hue alone:
+    // error + warning use the "!"-ring (in their danger / warning colour), info
+    // uses the dot-ring. No longer a colour-only filled dot.
+    final glyphKind = switch (warning.severity) {
+      WarningSeverity.error => SeverityGlyphKind.warn,
+      WarningSeverity.warning => SeverityGlyphKind.warn,
+      WarningSeverity.info => SeverityGlyphKind.info,
+    };
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 7,
-            height: 7,
-            margin: const EdgeInsets.only(top: 5, right: MechXSpacing.sm),
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: const BorderRadius.all(Radius.circular(4)),
+          Padding(
+            padding: const EdgeInsets.only(top: 3, right: MechXSpacing.sm),
+            child: CustomPaint(
+              size: const Size(11, 11),
+              painter: SeverityGlyph(kind: glyphKind, color: color),
             ),
           ),
           Expanded(

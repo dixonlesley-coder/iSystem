@@ -11,6 +11,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/context_menu.dart';
 import '../widgets/mechx_segment.dart';
+import '../widgets/mechx_text_field.dart';
 
 /// A labelled field row: a quiet sentence-case caption over its [child] input.
 class ElectricalField extends StatelessWidget {
@@ -45,8 +46,10 @@ class ElectricalField extends StatelessWidget {
   }
 }
 
-/// A single-line text input with the shared focus-border + spread-ring.
-class ElectricalTextInput extends StatefulWidget {
+/// A single-line text input — a thin wrapper over the canonical
+/// [MechXTextField] so the focus-border + spread-ring fill style lives in one
+/// place. Public API (`value`/`onChanged`) is unchanged.
+class ElectricalTextInput extends StatelessWidget {
   final String value;
   final ValueChanged<String> onChanged;
   const ElectricalTextInput({
@@ -56,77 +59,16 @@ class ElectricalTextInput extends StatefulWidget {
   });
 
   @override
-  State<ElectricalTextInput> createState() => _ElectricalTextInputState();
-}
-
-class _ElectricalTextInputState extends State<ElectricalTextInput> {
-  late final TextEditingController _ctl = TextEditingController(
-    text: widget.value,
-  );
-  final FocusNode _focus = FocusNode();
-  bool _focused = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _focus.addListener(() => setState(() => _focused = _focus.hasFocus));
-  }
-
-  @override
-  void dispose() {
-    _ctl.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return GestureDetector(
-      onTap: _focus.requestFocus,
-      child: AnimatedContainer(
-        duration: MechXMotion.hover,
-        curve: MechXMotion.standard,
-        padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.sm,
-          vertical: MechXSpacing.xs + 2,
-        ),
-        decoration: BoxDecoration(
-          color: colors.background,
-          borderRadius: MechXRadii.control,
-          border: Border.all(
-            color: _focused ? colors.accent : colors.border,
-            width: _focused ? 1.5 : 1.0,
-          ),
-          boxShadow: _focused
-              ? [
-                  BoxShadow(
-                    color: colors.accent.withAlpha(60),
-                    blurRadius: 0,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
-        ),
-        child: EditableText(
-          controller: _ctl,
-          focusNode: _focus,
-          onChanged: widget.onChanged,
-          maxLines: 1,
-          style: type.body.copyWith(color: colors.textPrimary),
-          cursorColor: colors.accent,
-          backgroundCursorColor: colors.textMuted,
-          cursorWidth: 1.5,
-          selectionColor: colors.accentMuted,
-        ),
-      ),
-    );
+    return MechXTextField(value: value, onChanged: onChanged);
   }
 }
 
-/// A numeric input (mono, decimal keyboard) with the shared focus treatment.
-class ElectricalNumInput extends StatefulWidget {
+/// A numeric input (mono, decimal keyboard) — the canonical [MechXTextField]
+/// with a mono text style, a decimal keyboard, and a parse guard wrapping
+/// `onChanged` (only well-formed numbers propagate). Public API
+/// (`value`/`onChanged(double)`) and parse behaviour are unchanged.
+class ElectricalNumInput extends StatelessWidget {
   final double value;
   final ValueChanged<double> onChanged;
   const ElectricalNumInput({
@@ -135,79 +77,20 @@ class ElectricalNumInput extends StatefulWidget {
     required this.onChanged,
   });
 
-  @override
-  State<ElectricalNumInput> createState() => _ElectricalNumInputState();
-}
-
-class _ElectricalNumInputState extends State<ElectricalNumInput> {
-  late final TextEditingController _ctl = TextEditingController(
-    text: _fmt(widget.value),
-  );
-  final FocusNode _focus = FocusNode();
-  bool _focused = false;
-
   static String _fmt(double v) =>
       v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
   @override
-  void initState() {
-    super.initState();
-    _focus.addListener(() => setState(() => _focused = _focus.hasFocus));
-  }
-
-  @override
-  void dispose() {
-    _ctl.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
     final type = context.type;
-    return GestureDetector(
-      onTap: _focus.requestFocus,
-      child: AnimatedContainer(
-        duration: MechXMotion.hover,
-        curve: MechXMotion.standard,
-        padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.sm,
-          vertical: MechXSpacing.xs + 2,
-        ),
-        decoration: BoxDecoration(
-          color: colors.background,
-          borderRadius: MechXRadii.control,
-          border: Border.all(
-            color: _focused ? colors.accent : colors.border,
-            width: _focused ? 1.5 : 1.0,
-          ),
-          boxShadow: _focused
-              ? [
-                  BoxShadow(
-                    color: colors.accent.withAlpha(60),
-                    blurRadius: 0,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
-        ),
-        child: EditableText(
-          controller: _ctl,
-          focusNode: _focus,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          onChanged: (s) {
-            final v = double.tryParse(s.trim());
-            if (v != null) widget.onChanged(v);
-          },
-          maxLines: 1,
-          style: type.mono.copyWith(color: colors.textPrimary),
-          cursorColor: colors.accent,
-          backgroundCursorColor: colors.textMuted,
-          cursorWidth: 1.5,
-          selectionColor: colors.accentMuted,
-        ),
-      ),
+    return MechXTextField(
+      value: _fmt(value),
+      textStyle: type.mono,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      onChanged: (s) {
+        final v = double.tryParse(s.trim());
+        if (v != null) onChanged(v);
+      },
     );
   }
 }
