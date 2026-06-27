@@ -443,6 +443,19 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   lines on the calibrated sheet with the real length via `ScaleCalibration.lengthForPixels`,
   secondary-click to delete; round-trips in `.mechx` as a top-level `measurements` list,
   tolerant/absent ⇒ empty). This **closes the Known-gaps editing list**.
+  **Drafter-productivity suite** also landed (faster drafting, each simpler than its AutoCAD
+  analogue): **select-similar** (`selection_store` `selectSimilarEdges`/`Nodes` + a row in both
+  context menus → select every element of the same service/component for batch edit; pure
+  selection, no undo; added `Network.edgeById`); a **smart input bar** (`store/smart_input_store.dart`
+  pure `parseDrawingInput`/`polarRunTarget` + `drawHoverProvider`, `ui/canvas/smart_input_bar.dart`
+  — type an exact run length in mm [`3000`, or `3000 90` to pin the bearing] while drawing,
+  direct-distance entry along the live cursor; calls the existing `placeRunPoint`, mounted only
+  while drawing so idle is byte-identical); **one-click issue sets** (`design_issues_store`
+  `issueBatchActionsProvider` + "Quick fixes" chips in `issues_card` — SAFE batch actions:
+  select-all-velocity-warnings, select-all-unsized-air, copy-scale-to-all-uncalibrated-sheets;
+  read-only-derived, executor in the UI); and **offset run** (`NetworkController.offsetEdgeParallel`
+  + `ui/canvas/offset_dialog.dart` — right-click a run → "Offset…" → distance+side → a parallel run
+  in one undo step; auto-split-on-drag deferred).
   **Mechanical ↔ electrical theme convergence landed (Apple-consistency pass):** the
   electrical workspace (a PanelMaker port) now reads as one app with the mechanical one.
   Driven by an audit + re-review, converged: the electrical **Loads palette to the RIGHT**
