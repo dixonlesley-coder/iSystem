@@ -235,10 +235,7 @@ class _CalibrateHint extends ConsumerWidget {
             color: colors.surface.withAlpha(240),
             borderRadius: MechXRadii.control,
             border: Border.all(color: colors.warning),
-            boxShadow: const [
-              BoxShadow(
-                  color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
-            ],
+            boxShadow: MechXShadow.card,
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -249,7 +246,7 @@ class _CalibrateHint extends ConsumerWidget {
                 margin: const EdgeInsets.only(right: MechXSpacing.xs),
                 decoration: BoxDecoration(
                   color: colors.warning,
-                  borderRadius: const BorderRadius.all(Radius.circular(4)),
+                  borderRadius: MechXRadii.small,
                 ),
               ),
               Text(
@@ -280,9 +277,7 @@ class PlaceholderSheetPage extends StatelessWidget {
       decoration: BoxDecoration(
         color: colors.sheetPaper,
         border: Border.all(color: colors.border),
-        boxShadow: const [
-          BoxShadow(color: Color(0x33000000), blurRadius: 24, offset: Offset(0, 8)),
-        ],
+        boxShadow: MechXShadow.card,
       ),
       child: Center(
         child: Column(

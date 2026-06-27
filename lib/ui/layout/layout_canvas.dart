@@ -154,12 +154,7 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
                     decoration: BoxDecoration(
                       border: Border(
                           bottom: BorderSide(color: colors.border)),
-                      boxShadow: const [
-                        BoxShadow(
-                            color: Color(0x10000000),
-                            blurRadius: 4,
-                            offset: Offset(0, 1)),
-                      ],
+                      boxShadow: MechXShadow.card,
                     ),
                     child: const _LayoutTopBar(),
                   ),
@@ -764,10 +759,7 @@ class _CalibrateHintBody extends StatelessWidget {
         color: colors.surface.withAlpha(240),
         borderRadius: MechXRadii.control,
         border: Border.all(color: colors.warning),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
-        ],
+        boxShadow: MechXShadow.card,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -778,7 +770,7 @@ class _CalibrateHintBody extends StatelessWidget {
             margin: const EdgeInsets.only(right: MechXSpacing.xs),
             decoration: BoxDecoration(
               color: colors.warning,
-              borderRadius: const BorderRadius.all(Radius.circular(4)),
+              borderRadius: MechXRadii.small,
             ),
           ),
           Text(

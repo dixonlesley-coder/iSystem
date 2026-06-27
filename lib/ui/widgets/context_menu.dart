@@ -71,10 +71,7 @@ class MechXContextMenu extends StatelessWidget {
           color: colors.surface,
           borderRadius: MechXRadii.card,
           border: Border.all(color: colors.border),
-          boxShadow: const [
-            BoxShadow(
-                color: Color(0x40000000), blurRadius: 18, offset: Offset(0, 6)),
-          ],
+          boxShadow: MechXShadow.popover,
         ),
         child: ClipRRect(
           borderRadius: MechXRadii.card,
@@ -222,7 +219,7 @@ class _MechXMenuRowState extends State<MechXMenuRow> {
                   height: 6,
                   decoration: BoxDecoration(
                     color: colors.accent,
-                    borderRadius: const BorderRadius.all(Radius.circular(3)),
+                    borderRadius: MechXRadii.small,
                   ),
                 ),
             ],

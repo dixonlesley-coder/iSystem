@@ -380,6 +380,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                           feederCursor: _feederCursor,
                           feederHover: _feederHoverPanel,
                           accent: colors.accent,
+                          onAccent: colors.onAccent,
                         ),
                       ),
                     ),
@@ -636,6 +637,7 @@ class _CanvasPainter extends CustomPainter {
   final Offset feederCursor;
   final String? feederHover;
   final Color accent;
+  final Color onAccent;
 
   _CanvasPainter({
     required this.project,
@@ -650,6 +652,7 @@ class _CanvasPainter extends CustomPainter {
     required this.feederCursor,
     required this.feederHover,
     required this.accent,
+    required this.onAccent,
   });
 
   @override
@@ -788,7 +791,7 @@ class _CanvasPainter extends CustomPainter {
         style: TextStyle(
           fontFamily: 'Roboto',
           fontSize: 9 * s,
-          color: const Color(0xFFFFFFFF),
+          color: onAccent,
           fontWeight: FontWeight.w600,
         ),
       ),

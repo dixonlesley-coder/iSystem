@@ -9,12 +9,9 @@ import '../../store/network_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../theme/design_tokens.dart';
+import '../theme/mechx_theme.dart';
 import 'edge_context_menu.dart';
 import 'viewport.dart';
-
-/// Accent used for the rubber-band marquee fill/stroke (matches the drawing
-/// overlay's band painter + the selection highlight).
-const Color _kBand = Color(0xFF4C8DFF);
 
 /// Interaction layer active while the Select tool is chosen: a tap picks the
 /// nearest node (then edge) on this floor and writes it to [selectionProvider];
@@ -159,7 +156,10 @@ class _NetworkSelectionOverlayState
           Positioned.fill(
             child: IgnorePointer(
               child: CustomPaint(
-                painter: _PullPainter(from: pullFromScreen, to: _pullNow!),
+                painter: _PullPainter(
+                    from: pullFromScreen,
+                    to: _pullNow!,
+                    accent: context.colors.accent),
               ),
             ),
           ),
@@ -207,6 +207,7 @@ class _NetworkSelectionOverlayState
   /// mainline run out of the node. Reports the pull to the host state, which
   /// paints the preview line and lays the run on release.
   Widget _outletNub(String nodeId, Offset screen, ViewportTransform transform) {
+    final colors = context.colors;
     const off = 15.0; // up-right of the node, clear of the move handle
     const r = 9.0;
     return Positioned(
@@ -232,17 +233,12 @@ class _NetworkSelectionOverlayState
             child: Container(
               width: 11,
               height: 11,
-              decoration: const BoxDecoration(
-                color: _kBand,
+              decoration: BoxDecoration(
+                color: colors.accent,
                 shape: BoxShape.circle,
                 border: Border.fromBorderSide(
-                    BorderSide(color: Color(0xFFFFFFFF), width: 1.5)),
-                boxShadow: [
-                  BoxShadow(
-                      color: Color(0x33000000),
-                      blurRadius: 3,
-                      offset: Offset(0, 1)),
-                ],
+                    BorderSide(color: colors.onAccent, width: 1.5)),
+                boxShadow: MechXShadow.card,
               ),
             ),
           ),
@@ -278,13 +274,14 @@ class _NetworkSelectionOverlayState
 class _PullPainter extends CustomPainter {
   final Offset from;
   final Offset to;
+  final Color accent;
 
-  _PullPainter({required this.from, required this.to});
+  _PullPainter({required this.from, required this.to, required this.accent});
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = _kBand
+      ..color = accent
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke;
     // A dashed line so the in-progress run reads as a preview, not committed.
@@ -305,7 +302,8 @@ class _PullPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_PullPainter old) => old.from != from || old.to != to;
+  bool shouldRepaint(_PullPainter old) =>
+      old.from != from || old.to != to || old.accent != accent;
 }
 
 /// The draggable endpoint dot for a selected run. Tracks its own press state so
@@ -334,6 +332,7 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     return MouseRegion(
       cursor: SystemMouseCursors.resizeUpLeftDownRight,
       child: GestureDetector(
@@ -380,21 +379,13 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
               width: 10,
               height: 10,
               decoration: BoxDecoration(
-                color: const Color(0xFF4C8DFF),
+                color: colors.accent,
                 shape: BoxShape.circle,
-                border: const Border.fromBorderSide(
-                    BorderSide(color: Color(0xFFFFFFFF), width: 1.5)),
+                border: Border.fromBorderSide(
+                    BorderSide(color: colors.onAccent, width: 1.5)),
                 // Shadow only while grabbed (at rest it matches the original
                 // flat dot, so no static pixel change).
-                boxShadow: _pressing
-                    ? const [
-                        BoxShadow(
-                          color: Color(0x55000000),
-                          blurRadius: 6,
-                          offset: Offset(0, 1),
-                        ),
-                      ]
-                    : null,
+                boxShadow: _pressing ? MechXShadow.popover : null,
               ),
             ),
           ),
@@ -589,7 +580,8 @@ class _SelectionGestureLayerState
       },
       child: CustomPaint(
         size: Size.infinite,
-        painter: _MarqueePainter(start: _bandStart, now: _bandNow),
+        painter: _MarqueePainter(
+            start: _bandStart, now: _bandNow, accent: context.colors.accent),
         child: const SizedBox.expand(),
       ),
     );
@@ -600,18 +592,19 @@ class _SelectionGestureLayerState
 class _MarqueePainter extends CustomPainter {
   final Offset? start;
   final Offset? now;
+  final Color accent;
 
-  _MarqueePainter({required this.start, required this.now});
+  _MarqueePainter({required this.start, required this.now, required this.accent});
 
   @override
   void paint(Canvas canvas, Size size) {
     if (start == null || now == null) return;
     final rect = Rect.fromPoints(start!, now!);
-    canvas.drawRect(rect, Paint()..color = _kBand.withAlpha(38));
+    canvas.drawRect(rect, Paint()..color = accent.withAlpha(38));
     canvas.drawRect(
       rect,
       Paint()
-        ..color = _kBand
+        ..color = accent
         ..strokeWidth = 1
         ..style = PaintingStyle.stroke,
     );
@@ -619,7 +612,7 @@ class _MarqueePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_MarqueePainter old) =>
-      old.start != start || old.now != now;
+      old.start != start || old.now != now || old.accent != accent;
 }
 
 /// Shortest distance from [p] to the segment [a]–[b] (world units).

@@ -137,6 +137,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
                 transform: vt,
                 detail: vt.scale >= kLayoutLod,
                 accent: colors.accent,
+                onAccent: colors.onAccent,
                 opacity: opacity,
                 calibrationBySheet:
                     ref.read(projectControllerProvider).calibrations,
@@ -345,6 +346,7 @@ class _WiringPainter extends CustomPainter {
   final ViewportTransform transform;
   final bool detail;
   final Color accent;
+  final Color onAccent;
   final double opacity;
   final Map<String, ScaleCalibration> calibrationBySheet;
   final BuildingLevels building;
@@ -357,6 +359,7 @@ class _WiringPainter extends CustomPainter {
     required this.transform,
     required this.detail,
     required this.accent,
+    required this.onAccent,
     required this.opacity,
     required this.calibrationBySheet,
     required this.building,
@@ -479,10 +482,10 @@ class _WiringPainter extends CustomPainter {
     final tp = TextPainter(
       text: TextSpan(
         text: parts.join(' · '),
-        style: const TextStyle(
+        style: TextStyle(
           fontFamily: 'Roboto',
           fontSize: 9.5,
-          color: Color(0xFFFFFFFF),
+          color: onAccent,
           fontWeight: FontWeight.w600,
         ),
       ),
@@ -491,7 +494,7 @@ class _WiringPainter extends CustomPainter {
     final rect = Rect.fromCenter(
         center: mid, width: tp.width + 10, height: tp.height + 6);
     canvas.drawRRect(
-      RRect.fromRectAndRadius(rect, const Radius.circular(4)),
+      RRect.fromRectAndRadius(rect, MechXRadii.xs),
       Paint()..color = const Color(0xE015171B),
     );
     tp.paint(canvas, mid - Offset(tp.width / 2, tp.height / 2));
@@ -558,10 +561,7 @@ class _PanelMarkerState extends State<_PanelMarker> {
         color: colors.surface.withAlpha(245),
         borderRadius: MechXRadii.card,
         border: Border.all(color: border, width: 1.5),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x40000000), blurRadius: 8, offset: Offset(0, 2)),
-        ],
+        boxShadow: MechXShadow.card,
       ),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: Row(
@@ -691,10 +691,7 @@ class _LoadMarkerState extends State<_LoadMarker> {
             color: colors.surface.withAlpha(245),
             borderRadius: MechXRadii.control,
             border: Border.all(color: _hover ? colors.accent : colors.border),
-            boxShadow: const [
-              BoxShadow(
-                  color: Color(0x30000000), blurRadius: 4, offset: Offset(0, 1)),
-            ],
+            boxShadow: MechXShadow.card,
           ),
           child: LoadSymbol(kind: c.loadKind, color: symbolColor, size: 20),
         ),
@@ -704,7 +701,7 @@ class _LoadMarkerState extends State<_LoadMarker> {
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
             decoration: BoxDecoration(
               color: colors.surface.withAlpha(220),
-              borderRadius: const BorderRadius.all(Radius.circular(3)),
+              borderRadius: MechXRadii.small,
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1012,10 +1009,7 @@ class _UnplacedTray extends StatelessWidget {
         color: colors.surface.withAlpha(245),
         borderRadius: MechXRadii.card,
         border: Border.all(color: colors.border),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
-        ],
+        boxShadow: MechXShadow.popover,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

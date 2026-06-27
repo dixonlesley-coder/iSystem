@@ -118,10 +118,7 @@ class _SmartInputBarState extends ConsumerState<SmartInputBar> {
         color: colors.surface.withAlpha(245),
         borderRadius: MechXRadii.control,
         border: Border.all(color: colors.border),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
-        ],
+        boxShadow: MechXShadow.popover,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
