@@ -69,7 +69,7 @@ enum AiProviderKind { anthropic, openai, glm }
 /// to re-seed the model field when the engineer switches providers so a model
 /// string from the wrong family is never sent (e.g. a `claude-*` id to OpenAI).
 const String kDefaultAnthropicModel = 'claude-sonnet-4-6';
-const String kDefaultOpenAiModel = 'gpt-4o';
+const String kDefaultOpenAiModel = 'gpt-5.2';
 const String kDefaultGlmModel = 'glm-4.6';
 
 String defaultModelForProvider(AiProviderKind provider) => switch (provider) {
@@ -90,6 +90,7 @@ class AiModelOption {
 /// each provider (`defaultModelForProvider`) is the first entry. These are the
 /// wire ids sent verbatim to the API; the label is display-only.
 const List<AiModelOption> kAnthropicModels = [
+  AiModelOption('claude-fable-5', 'Claude Fable 5'),
   AiModelOption('claude-opus-4-8', 'Claude Opus 4.8'),
   AiModelOption('claude-opus-4-7', 'Claude Opus 4.7'),
   AiModelOption('claude-sonnet-4-6', 'Claude Sonnet 4.6'),
@@ -97,17 +98,18 @@ const List<AiModelOption> kAnthropicModels = [
 ];
 
 const List<AiModelOption> kOpenAiModels = [
-  AiModelOption('gpt-4o', 'GPT-4o'),
-  AiModelOption('gpt-4o-mini', 'GPT-4o mini'),
-  AiModelOption('gpt-4.1', 'GPT-4.1'),
-  AiModelOption('gpt-4-turbo', 'GPT-4 Turbo'),
+  AiModelOption('gpt-5.5', 'GPT-5.5'),
+  AiModelOption('gpt-5.5-pro', 'GPT-5.5 Pro'),
+  AiModelOption('gpt-5.2', 'GPT-5.2'),
+  AiModelOption('gpt-5.4-mini', 'GPT-5.4 mini'),
+  AiModelOption('gpt-5.4-nano', 'GPT-5.4 nano'),
 ];
 
 const List<AiModelOption> kGlmModels = [
+  AiModelOption('glm-5.2', 'GLM-5.2'),
   AiModelOption('glm-4.6', 'GLM-4.6'),
   AiModelOption('glm-4.5', 'GLM-4.5'),
-  AiModelOption('glm-4-plus', 'GLM-4-Plus'),
-  AiModelOption('glm-4-flash', 'GLM-4-Flash'),
+  AiModelOption('glm-4.5-air', 'GLM-4.5 Air'),
 ];
 
 List<AiModelOption> modelsForProvider(AiProviderKind provider) =>
