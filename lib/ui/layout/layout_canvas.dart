@@ -55,6 +55,7 @@ import '../electrical/electrical_inspector.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/canvas_guide_popover.dart';
+import '../widgets/mechx_empty_state_card.dart';
 import 'electrical_layer.dart';
 import 'layer_switcher.dart';
 
@@ -153,12 +154,7 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
                     decoration: BoxDecoration(
                       border: Border(
                           bottom: BorderSide(color: colors.border)),
-                      boxShadow: const [
-                        BoxShadow(
-                            color: Color(0x10000000),
-                            blurRadius: 4,
-                            offset: Offset(0, 1)),
-                      ],
+                      boxShadow: MechXShadow.card,
                     ),
                     child: const _LayoutTopBar(),
                   ),
@@ -477,37 +473,16 @@ class _SharedSheet extends ConsumerWidget {
     final sheet = sheetsState.current;
 
     if (sheet == null) {
-      final type = context.type;
-      // A branded empty-state card (matching the electrical workspace's), not
-      // bare text — so an empty canvas reads as one app in both workspaces.
+      // A branded empty-state card (the shared one, matching the electrical
+      // workspace's), not bare text — so an empty canvas reads as one app in
+      // both workspaces.
       return ColoredBox(
         color: colors.canvas,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360),
-            child: Container(
-              padding: const EdgeInsets.all(MechXSpacing.lg),
-              decoration: BoxDecoration(
-                color: colors.surface,
-                borderRadius: MechXRadii.card,
-                border: Border.all(color: colors.border),
-                boxShadow: MechXShadow.card,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text('No sheet loaded',
-                      style: type.title.copyWith(color: colors.textPrimary)),
-                  const SizedBox(height: MechXSpacing.xs),
-                  Text(
-                    'Import a PDF floor plan to begin — then calibrate its '
-                    'scale and draw on the Plumbing, HVAC and Electrical layers.',
-                    style: type.body.copyWith(color: colors.textSecondary),
-                  ),
-                ],
-              ),
-            ),
+        child: const Center(
+          child: MechXEmptyStateCard(
+            title: 'No sheet loaded',
+            body: 'Import a PDF floor plan to begin — then calibrate its '
+                'scale and draw on the Plumbing, HVAC and Electrical layers.',
           ),
         ),
       );
@@ -784,10 +759,7 @@ class _CalibrateHintBody extends StatelessWidget {
         color: colors.surface.withAlpha(240),
         borderRadius: MechXRadii.control,
         border: Border.all(color: colors.warning),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
-        ],
+        boxShadow: MechXShadow.card,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -798,7 +770,7 @@ class _CalibrateHintBody extends StatelessWidget {
             margin: const EdgeInsets.only(right: MechXSpacing.xs),
             decoration: BoxDecoration(
               color: colors.warning,
-              borderRadius: const BorderRadius.all(Radius.circular(4)),
+              borderRadius: MechXRadii.small,
             ),
           ),
           Text(

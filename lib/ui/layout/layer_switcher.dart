@@ -14,7 +14,6 @@ import '../../store/layer_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_focus_ring.dart';
-import '../widgets/section_label.dart';
 
 /// A compact "Layers" panel: a segmented active-layer picker + an eye toggle per
 /// discipline. Sits in the canvas top bar.
@@ -40,8 +39,6 @@ class LayerSwitcher extends ConsumerWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const MechXSectionLabel('LAYER'),
-          const SizedBox(width: MechXSpacing.sm),
           for (final layer in DisciplineLayer.values)
             _LayerSegment(
               layer: layer,

@@ -97,13 +97,7 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
                 color: colors.surface,
                 borderRadius: MechXRadii.card,
                 border: Border.all(color: colors.border),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x40000000),
-                    blurRadius: 24,
-                    offset: Offset(0, 8),
-                  ),
-                ],
+                boxShadow: MechXShadow.popover,
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,

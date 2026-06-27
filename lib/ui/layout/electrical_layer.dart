@@ -51,6 +51,12 @@ import '../theme/mechx_theme.dart';
 /// Opacity applied when the electrical layer is a faded coordination layer.
 const double kElectricalFadedAlpha = 0.34;
 
+/// ≈18 screen px snap radius for the drag-place preview ring — a panel within
+/// this distance of the cursor is highlighted as the load's drop parent. Mirrors
+/// the mechanical [DropOverlay] preview affordance (its ring is 14px on small
+/// nodes; panels are larger, so a slightly wider radius reads right).
+const double _kElecSnapScreenPx = 18;
+
 /// The electrical layer painted over the shared sheet at [transform].
 ///
 /// When [interactive] is true it hosts the drop / drag / tap affordances and
@@ -137,6 +143,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
                 transform: vt,
                 detail: vt.scale >= kLayoutLod,
                 accent: colors.accent,
+                onAccent: colors.onAccent,
                 opacity: opacity,
                 calibrationBySheet:
                     ref.read(projectControllerProvider).calibrations,
@@ -345,6 +352,7 @@ class _WiringPainter extends CustomPainter {
   final ViewportTransform transform;
   final bool detail;
   final Color accent;
+  final Color onAccent;
   final double opacity;
   final Map<String, ScaleCalibration> calibrationBySheet;
   final BuildingLevels building;
@@ -357,6 +365,7 @@ class _WiringPainter extends CustomPainter {
     required this.transform,
     required this.detail,
     required this.accent,
+    required this.onAccent,
     required this.opacity,
     required this.calibrationBySheet,
     required this.building,
@@ -479,10 +488,10 @@ class _WiringPainter extends CustomPainter {
     final tp = TextPainter(
       text: TextSpan(
         text: parts.join(' · '),
-        style: const TextStyle(
+        style: TextStyle(
           fontFamily: 'Roboto',
           fontSize: 9.5,
-          color: Color(0xFFFFFFFF),
+          color: onAccent,
           fontWeight: FontWeight.w600,
         ),
       ),
@@ -491,7 +500,7 @@ class _WiringPainter extends CustomPainter {
     final rect = Rect.fromCenter(
         center: mid, width: tp.width + 10, height: tp.height + 6);
     canvas.drawRRect(
-      RRect.fromRectAndRadius(rect, const Radius.circular(4)),
+      RRect.fromRectAndRadius(rect, MechXRadii.xs),
       Paint()..color = const Color(0xE015171B),
     );
     tp.paint(canvas, mid - Offset(tp.width / 2, tp.height / 2));
@@ -558,10 +567,7 @@ class _PanelMarkerState extends State<_PanelMarker> {
         color: colors.surface.withAlpha(245),
         borderRadius: MechXRadii.card,
         border: Border.all(color: border, width: 1.5),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x40000000), blurRadius: 8, offset: Offset(0, 2)),
-        ],
+        boxShadow: MechXShadow.card,
       ),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: Row(
@@ -627,7 +633,7 @@ class _PanelMarkerState extends State<_PanelMarker> {
               onDoubleTap: widget.onDoubleTap,
               // Subtle hover/drop lift signalling the marker is interactive.
               child: AnimatedScale(
-                scale: (_hover || _dropHover) ? 1.03 : 1.0,
+                scale: (_hover || _dropHover) ? MechXMotion.hoverLift : 1.0,
                 duration: MechXMotion.hover,
                 curve: MechXMotion.standard,
                 child: body,
@@ -691,10 +697,7 @@ class _LoadMarkerState extends State<_LoadMarker> {
             color: colors.surface.withAlpha(245),
             borderRadius: MechXRadii.control,
             border: Border.all(color: _hover ? colors.accent : colors.border),
-            boxShadow: const [
-              BoxShadow(
-                  color: Color(0x30000000), blurRadius: 4, offset: Offset(0, 1)),
-            ],
+            boxShadow: MechXShadow.card,
           ),
           child: LoadSymbol(kind: c.loadKind, color: symbolColor, size: 20),
         ),
@@ -704,7 +707,7 @@ class _LoadMarkerState extends State<_LoadMarker> {
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
             decoration: BoxDecoration(
               color: colors.surface.withAlpha(220),
-              borderRadius: const BorderRadius.all(Radius.circular(3)),
+              borderRadius: MechXRadii.small,
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -744,7 +747,7 @@ class _LoadMarkerState extends State<_LoadMarker> {
           onDoubleTap: widget.onDoubleTap,
           // Subtle hover lift signalling the marker is interactive.
           child: AnimatedScale(
-            scale: _hover ? 1.03 : 1.0,
+            scale: _hover ? MechXMotion.hoverLift : 1.0,
             duration: MechXMotion.hover,
             curve: MechXMotion.standard,
             child: body,
@@ -860,40 +863,130 @@ class _SheetDropTarget extends ConsumerStatefulWidget {
 class _SheetDropTargetState extends ConsumerState<_SheetDropTarget> {
   bool _active = false;
 
+  /// The live drag position (LOCAL canvas px) and payload, set on move and
+  /// cleared on leave/accept. Transient — exists only during a drag gesture.
+  Offset? _dragLocal;
+  PaletteLoad? _dragLoad;
+
+  Offset? _toLocal(Offset global) {
+    final box = context.findRenderObject() as RenderBox?;
+    return box?.globalToLocal(global);
+  }
+
+  void _clearDrag() {
+    if (_active || _dragLocal != null || _dragLoad != null) {
+      setState(() {
+        _active = false;
+        _dragLocal = null;
+        _dragLoad = null;
+      });
+    }
+  }
+
+  /// The nearest placed panel (this sheet/floor) within the snap radius of
+  /// [world] in SCREEN space, or null — so the ring marks the panel a load drop
+  /// will attach to.
+  Offset? _nearestPanelScreen(Offset world) {
+    final project = ref.read(electricalProjectProvider);
+    final snapWorld = _kElecSnapScreenPx / widget.transform.scale;
+    final r2 = snapWorld * snapWorld;
+    Offset? best;
+    var bestD2 = r2;
+    for (final p in project.panels) {
+      final pos = p.layoutPos;
+      if (pos == null ||
+          pos.sheetId != widget.sheetId ||
+          pos.floorIndex != widget.floorIndex) {
+        continue;
+      }
+      final dx = pos.x - world.dx;
+      final dy = pos.y - world.dy;
+      final d2 = dx * dx + dy * dy;
+      if (d2 <= bestD2) {
+        bestD2 = d2;
+        best = Offset(pos.x, pos.y);
+      }
+    }
+    return best == null ? null : widget.transform.worldToScreen(best);
+  }
+
   @override
   Widget build(BuildContext context) {
     return DragTarget<PaletteLoad>(
       hitTestBehavior: HitTestBehavior.translucent,
-      onWillAcceptWithDetails: (_) {
-        setState(() => _active = true);
+      onWillAcceptWithDetails: (d) {
+        setState(() {
+          _active = true;
+          _dragLoad = d.data;
+        });
         return true;
       },
-      onLeave: (_) => setState(() => _active = false),
+      onMove: (d) {
+        final local = _toLocal(d.offset);
+        if (local == null) return;
+        setState(() {
+          _active = true;
+          _dragLocal = local;
+          _dragLoad = d.data;
+        });
+      },
+      onLeave: (_) => _clearDrag(),
       onAcceptWithDetails: (d) {
-        setState(() => _active = false);
         final box = context.findRenderObject() as RenderBox?;
-        if (box == null) return;
-        final local = box.globalToLocal(d.offset);
-        final world = widget.transform.screenToWorld(local);
-        _drop(d.data, world);
+        if (box != null) {
+          final local = box.globalToLocal(d.offset);
+          final world = widget.transform.screenToWorld(local);
+          _drop(d.data, world);
+        }
+        _clearDrag();
       },
       builder: (context, candidate, rejected) {
+        final accent = context.colors.accent;
+        // Resolve the live snap target (screen space) for the preview paint.
+        Offset? snapScreen;
+        if (_active && _dragLocal != null) {
+          final world = widget.transform.screenToWorld(_dragLocal!);
+          snapScreen = _nearestPanelScreen(world);
+        }
+        final willSnap = snapScreen != null;
         // Cross-fade the drop highlight in/out instead of popping; idle is
-        // pointer-ignored so the canvas keeps panning.
+        // pointer-ignored so the canvas keeps panning. Tint + radius + the
+        // will-snap strengthening MATCH the mechanical DropOverlay.
         return IgnorePointer(
           ignoring: !_active,
-          child: AnimatedOpacity(
-            opacity: _active ? 1.0 : 0.0,
-            duration: MechXMotion.hover,
-            curve: MechXMotion.standard,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: context.colors.accent.withAlpha(12),
-                border: Border.all(
-                    color: context.colors.accent.withAlpha(110), width: 1.5),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: AnimatedOpacity(
+                  opacity: _active ? 1.0 : 0.0,
+                  duration: MechXMotion.hover,
+                  curve: MechXMotion.standard,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: accent.withAlpha(willSnap ? 35 : 18),
+                      border: Border.all(
+                          color: accent.withAlpha(willSnap ? 170 : 120),
+                          width: 1.5),
+                      borderRadius: MechXRadii.card,
+                    ),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
               ),
-              child: const SizedBox.expand(),
-            ),
+              // The drag preview: a faint ghost LOAD symbol at the cursor + a
+              // snap ring on the nearest panel. Paints ONLY during a drag.
+              if (_active && _dragLocal != null && _dragLoad != null)
+                Positioned.fill(
+                  child: CustomPaint(
+                    painter: _ElecDropPreviewPainter(
+                      kind: _dragLoad!.kind,
+                      cursorLocal: _dragLocal!,
+                      snapScreen: snapScreen,
+                      color: accent,
+                    ),
+                  ),
+                ),
+            ],
           ),
         );
       },
@@ -970,6 +1063,61 @@ class _SheetDropTargetState extends ConsumerState<_SheetDropTarget> {
   }
 }
 
+/// Paints the drag-place preview for the electrical layer: a translucent ghost
+/// [LoadSymbol] of the dragged load at the cursor, and (when snapping) a ring +
+/// crosshair over the target panel. Drag-only, so it never affects the at-rest
+/// canvas — mirrors the mechanical `_DropPreviewPainter`.
+class _ElecDropPreviewPainter extends CustomPainter {
+  final LoadKind kind;
+  final Offset cursorLocal;
+  final Offset? snapScreen;
+  final Color color;
+
+  _ElecDropPreviewPainter({
+    required this.kind,
+    required this.cursorLocal,
+    required this.snapScreen,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // ── Ghost glyph at the cursor (≈36px box, ~45% opacity) ──────────────────
+    const box = 36.0;
+    final ghostColor = color.withAlpha(115);
+    canvas.save();
+    canvas.translate(cursorLocal.dx - box / 2, cursorLocal.dy - box / 2);
+    paintLoadSymbol(canvas, const Size(box, box), kind, ghostColor, stroke: 2.0);
+    canvas.restore();
+
+    // ── Snap indicator: a ring + crosshair over the target panel ─────────────
+    final snap = snapScreen;
+    if (snap != null) {
+      final ring = Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0;
+      canvas.drawCircle(snap, _kElecSnapScreenPx, ring);
+      final cross = Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5;
+      const arm = 5.0;
+      canvas.drawLine(
+          snap + const Offset(-arm, 0), snap + const Offset(arm, 0), cross);
+      canvas.drawLine(
+          snap + const Offset(0, -arm), snap + const Offset(0, arm), cross);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ElecDropPreviewPainter old) =>
+      old.kind != kind ||
+      old.cursorLocal != cursorLocal ||
+      old.snapScreen != snapScreen ||
+      old.color != color;
+}
+
 // ── Unplaced tray ────────────────────────────────────────────────────────────
 
 class _UnplacedTray extends StatelessWidget {
@@ -1012,10 +1160,7 @@ class _UnplacedTray extends StatelessWidget {
         color: colors.surface.withAlpha(245),
         borderRadius: MechXRadii.card,
         border: Border.all(color: colors.border),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
-        ],
+        boxShadow: MechXShadow.popover,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1027,12 +1172,6 @@ class _UnplacedTray extends StatelessWidget {
             child: Text('Not on this sheet',
                 style: type.label.copyWith(
                     color: colors.textPrimary, fontWeight: FontWeight.w700)),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.sm),
-            child: Text('Drag onto the plan to place; until placed it uses its '
-                'typed run length',
-                style: type.caption.copyWith(color: colors.textMuted)),
           ),
           const SizedBox(height: MechXSpacing.xs),
           Flexible(
@@ -1189,9 +1328,10 @@ class _TrayDropTargetState extends ConsumerState<_TrayDropTarget> {
             curve: MechXMotion.standard,
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: context.colors.success.withAlpha(12),
+                color: context.colors.success.withAlpha(18),
                 border: Border.all(
                     color: context.colors.success.withAlpha(120), width: 1.5),
+                borderRadius: MechXRadii.card,
               ),
               child: const SizedBox.expand(),
             ),

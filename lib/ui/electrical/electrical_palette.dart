@@ -113,7 +113,6 @@ class ElectricalPalette extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final type = context.type;
     return Container(
       width: 188,
       color: colors.surface,
@@ -128,13 +127,6 @@ class ElectricalPalette extends StatelessWidget {
               MechXSpacing.xs,
             ),
             child: MechXSectionLabel('Loads'),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.md),
-            child: Text(
-              'Onto a panel to add a way; onto blank canvas to add it',
-              style: type.caption.copyWith(color: colors.textMuted),
-            ),
           ),
           const SizedBox(height: MechXSpacing.sm),
           Expanded(

@@ -12,11 +12,22 @@ class MechXTextField extends StatefulWidget {
   /// unfocused — an Apple-style affordance for what belongs here.
   final String? hint;
 
+  /// Optional override for the editing text style. Defaults to `type.body`
+  /// (the standard field text); pass `type.mono` for a numeric field. The
+  /// colour is applied to whatever is given.
+  final TextStyle? textStyle;
+
+  /// Optional keyboard type (e.g. decimal numeric). Defaults to null (the
+  /// platform default text keyboard) so unspecified callers are unaffected.
+  final TextInputType? keyboardType;
+
   const MechXTextField({
     super.key,
     required this.value,
     required this.onChanged,
     this.hint,
+    this.textStyle,
+    this.keyboardType,
   });
 
   @override
@@ -58,6 +69,7 @@ class _MechXTextFieldState extends State<MechXTextField> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    final baseStyle = widget.textStyle ?? type.body;
     final showHint =
         widget.hint != null && _controller.text.isEmpty && !_focused;
     return GestureDetector(
@@ -93,8 +105,9 @@ class _MechXTextFieldState extends State<MechXTextField> {
               controller: _controller,
               focusNode: _focusNode,
               onChanged: widget.onChanged,
+              keyboardType: widget.keyboardType,
               maxLines: 1,
-              style: type.body.copyWith(color: colors.textPrimary),
+              style: baseStyle.copyWith(color: colors.textPrimary),
               cursorColor: colors.accent,
               backgroundCursorColor: colors.textMuted,
               cursorWidth: 1.5,

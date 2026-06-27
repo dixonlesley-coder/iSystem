@@ -17,9 +17,8 @@ import 'package:mechx_engine/units.dart';
 import '../../store/electrical_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/mechx_button.dart';
 import 'electrical_controls.dart';
-
-export 'electrical_controls.dart' show ElectricalTextButton;
 
 /// Identifies a circuit being edited / menu'd (panel + circuit id).
 class ElectricalEditTarget {
@@ -192,7 +191,11 @@ class ElectricalCircuitInspector extends StatelessWidget {
                       style: type.title.copyWith(color: colors.textPrimary),
                     ),
                   ),
-                  ElectricalTextButton(label: 'Close', onTap: onClose),
+                  MechXButton(
+                    label: 'Close',
+                    tertiary: true,
+                    onPressed: onClose,
+                  ),
                 ],
               ),
             ),

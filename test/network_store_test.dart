@@ -638,7 +638,6 @@ void main() {
     // The node palette: the Riser as the mainline start (you drag a run out of
     // it), plus the generic Fitting / Terminal endpoints. Pipe-segment cards are
     // gone — mains are pulled out of nodes, not dropped as pre-made segments.
-    expect(find.text('PALETTE'), findsOneWidget);
     expect(find.text('MAINLINE START'), findsOneWidget);
     expect(find.text('NODES'), findsOneWidget);
     expect(find.text('Riser node'), findsOneWidget);

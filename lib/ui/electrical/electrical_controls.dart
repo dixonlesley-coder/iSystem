@@ -9,6 +9,9 @@ import 'package:flutter/widgets.dart';
 
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/context_menu.dart';
+import '../widgets/mechx_segment.dart';
+import '../widgets/mechx_text_field.dart';
 
 /// A labelled field row: a quiet sentence-case caption over its [child] input.
 class ElectricalField extends StatelessWidget {
@@ -43,8 +46,10 @@ class ElectricalField extends StatelessWidget {
   }
 }
 
-/// A single-line text input with the shared focus-border + spread-ring.
-class ElectricalTextInput extends StatefulWidget {
+/// A single-line text input — a thin wrapper over the canonical
+/// [MechXTextField] so the focus-border + spread-ring fill style lives in one
+/// place. Public API (`value`/`onChanged`) is unchanged.
+class ElectricalTextInput extends StatelessWidget {
   final String value;
   final ValueChanged<String> onChanged;
   const ElectricalTextInput({
@@ -54,77 +59,16 @@ class ElectricalTextInput extends StatefulWidget {
   });
 
   @override
-  State<ElectricalTextInput> createState() => _ElectricalTextInputState();
-}
-
-class _ElectricalTextInputState extends State<ElectricalTextInput> {
-  late final TextEditingController _ctl = TextEditingController(
-    text: widget.value,
-  );
-  final FocusNode _focus = FocusNode();
-  bool _focused = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _focus.addListener(() => setState(() => _focused = _focus.hasFocus));
-  }
-
-  @override
-  void dispose() {
-    _ctl.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return GestureDetector(
-      onTap: _focus.requestFocus,
-      child: AnimatedContainer(
-        duration: MechXMotion.hover,
-        curve: MechXMotion.standard,
-        padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.sm,
-          vertical: MechXSpacing.xs + 2,
-        ),
-        decoration: BoxDecoration(
-          color: colors.background,
-          borderRadius: MechXRadii.control,
-          border: Border.all(
-            color: _focused ? colors.accent : colors.border,
-            width: _focused ? 1.5 : 1.0,
-          ),
-          boxShadow: _focused
-              ? [
-                  BoxShadow(
-                    color: colors.accent.withAlpha(60),
-                    blurRadius: 0,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
-        ),
-        child: EditableText(
-          controller: _ctl,
-          focusNode: _focus,
-          onChanged: widget.onChanged,
-          maxLines: 1,
-          style: type.body.copyWith(color: colors.textPrimary),
-          cursorColor: colors.accent,
-          backgroundCursorColor: colors.textMuted,
-          cursorWidth: 1.5,
-          selectionColor: colors.accentMuted,
-        ),
-      ),
-    );
+    return MechXTextField(value: value, onChanged: onChanged);
   }
 }
 
-/// A numeric input (mono, decimal keyboard) with the shared focus treatment.
-class ElectricalNumInput extends StatefulWidget {
+/// A numeric input (mono, decimal keyboard) — the canonical [MechXTextField]
+/// with a mono text style, a decimal keyboard, and a parse guard wrapping
+/// `onChanged` (only well-formed numbers propagate). Public API
+/// (`value`/`onChanged(double)`) and parse behaviour are unchanged.
+class ElectricalNumInput extends StatelessWidget {
   final double value;
   final ValueChanged<double> onChanged;
   const ElectricalNumInput({
@@ -133,79 +77,20 @@ class ElectricalNumInput extends StatefulWidget {
     required this.onChanged,
   });
 
-  @override
-  State<ElectricalNumInput> createState() => _ElectricalNumInputState();
-}
-
-class _ElectricalNumInputState extends State<ElectricalNumInput> {
-  late final TextEditingController _ctl = TextEditingController(
-    text: _fmt(widget.value),
-  );
-  final FocusNode _focus = FocusNode();
-  bool _focused = false;
-
   static String _fmt(double v) =>
       v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
   @override
-  void initState() {
-    super.initState();
-    _focus.addListener(() => setState(() => _focused = _focus.hasFocus));
-  }
-
-  @override
-  void dispose() {
-    _ctl.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
     final type = context.type;
-    return GestureDetector(
-      onTap: _focus.requestFocus,
-      child: AnimatedContainer(
-        duration: MechXMotion.hover,
-        curve: MechXMotion.standard,
-        padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.sm,
-          vertical: MechXSpacing.xs + 2,
-        ),
-        decoration: BoxDecoration(
-          color: colors.background,
-          borderRadius: MechXRadii.control,
-          border: Border.all(
-            color: _focused ? colors.accent : colors.border,
-            width: _focused ? 1.5 : 1.0,
-          ),
-          boxShadow: _focused
-              ? [
-                  BoxShadow(
-                    color: colors.accent.withAlpha(60),
-                    blurRadius: 0,
-                    spreadRadius: 2,
-                  ),
-                ]
-              : null,
-        ),
-        child: EditableText(
-          controller: _ctl,
-          focusNode: _focus,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          onChanged: (s) {
-            final v = double.tryParse(s.trim());
-            if (v != null) widget.onChanged(v);
-          },
-          maxLines: 1,
-          style: type.mono.copyWith(color: colors.textPrimary),
-          cursorColor: colors.accent,
-          backgroundCursorColor: colors.textMuted,
-          cursorWidth: 1.5,
-          selectionColor: colors.accentMuted,
-        ),
-      ),
+    return MechXTextField(
+      value: _fmt(value),
+      textStyle: type.mono,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      onChanged: (s) {
+        final v = double.tryParse(s.trim());
+        if (v != null) onChanged(v);
+      },
     );
   }
 }
@@ -230,60 +115,17 @@ class ElectricalEnumPicker<T> extends StatelessWidget {
       spacing: MechXSpacing.xs,
       runSpacing: MechXSpacing.xs,
       children: [
+        // The shared selectable-segment vocabulary — accentMuted fill + accent
+        // hairline + textPrimary (w600) when selected; textSecondary + no fill
+        // otherwise — so the enum chips speak the same language as the tabs.
         for (final o in options)
-          _Chip(
+          MechXSegment(
             label: label(o),
             selected: o == value,
+            selectedWeight: FontWeight.w600,
             onTap: () => onChanged(o),
           ),
       ],
-    );
-  }
-}
-
-class _Chip extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _Chip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    // Selected = the iOS tinted-fill chip (accentMuted + accent hairline +
-    // textPrimary label), matching the tab + button selected language. This
-    // keeps the label on a light tint at well above 4.5:1, instead of small
-    // white text on the systemBlue accent (which is borderline for AA).
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
-            vertical: MechXSpacing.xs + 1,
-          ),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : colors.background,
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: selected ? colors.accent : colors.border),
-          ),
-          child: Text(
-            label,
-            style: type.label.copyWith(
-              color: selected ? colors.textPrimary : colors.textSecondary,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -356,145 +198,30 @@ class ElectricalMenuAction {
   const ElectricalMenuAction(this.label, this.onTap, {this.danger = false});
 }
 
-/// A floating context menu (grow-from-top-left on open) of [ElectricalMenuAction]s.
+/// A floating context menu of [ElectricalMenuAction]s — the SHARED
+/// [MechXContextMenu] chrome (the same panel/rows/entrance the mechanical
+/// right-click menus use), at a fixed 188-px width to match the electrical
+/// canvas. Each action maps to a [MechXMenuRow]; destructive actions use the
+/// danger row variant.
 class ElectricalMenu extends StatelessWidget {
   final List<ElectricalMenuAction> items;
   const ElectricalMenu({super.key, required this.items});
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
-    // Grow-from-top-left scale + fade on open, like a native context menu.
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.dismiss,
-      curve: MechXMotion.standard,
-      builder: (context, t, child) => Opacity(
-        opacity: t,
-        child: Transform.scale(
-          scale: 0.94 + 0.06 * t,
-          alignment: Alignment.topLeft,
-          child: child,
-        ),
-      ),
-      child: Container(
-        width: 188,
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: MechXRadii.control,
-          border: Border.all(color: colors.border),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final item in items)
-              _MenuItem(
-                label: item.label,
-                onTap: item.onTap,
-                danger: item.danger,
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MenuItem extends StatefulWidget {
-  final String label;
-  final VoidCallback onTap;
-  final bool danger;
-  const _MenuItem({
-    required this.label,
-    required this.onTap,
-    this.danger = false,
-  });
-
-  @override
-  State<_MenuItem> createState() => _MenuItemState();
-}
-
-class _MenuItemState extends State<_MenuItem> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm + 2,
-            vertical: MechXSpacing.xs + 3,
-          ),
-          color: _hover ? colors.surfaceHover : const Color(0x00000000),
-          child: Text(
-            widget.label,
-            style: type.body.copyWith(
-              color: widget.danger ? colors.danger : colors.textPrimary,
+    return SizedBox(
+      width: 188,
+      child: MechXContextMenu(
+        children: [
+          for (final item in items)
+            MechXMenuRow(
+              label: item.label,
+              onTap: item.onTap,
+              danger: item.danger,
             ),
-          ),
-        ),
+        ],
       ),
     );
   }
 }
 
-/// A small bordered text button (Close, etc.). Shared by the inspector + the
-/// electrical view's drawers.
-class ElectricalTextButton extends StatefulWidget {
-  final String label;
-  final VoidCallback onTap;
-  const ElectricalTextButton({
-    super.key,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  State<ElectricalTextButton> createState() => _ElectricalTextButtonState();
-}
-
-class _ElectricalTextButtonState extends State<ElectricalTextButton> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.fast,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm + 2,
-            vertical: MechXSpacing.xs + 1,
-          ),
-          decoration: BoxDecoration(
-            color: _hover ? colors.surfaceHover : const Color(0x00000000),
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: colors.border),
-          ),
-          child: Text(
-            widget.label,
-            style: type.label.copyWith(color: colors.textSecondary),
-          ),
-        ),
-      ),
-    );
-  }
-}
