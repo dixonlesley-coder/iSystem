@@ -185,3 +185,17 @@ final copilotProvider =
 /// UI's enabled/disabled affordance.
 final copilotEnabledProvider = Provider<bool>(
     (ref) => ref.watch(aiApiKeyProvider).trim().isNotEmpty);
+
+/// Whether the copilot panel overlay is open. Transient UI state — the overlay
+/// renders nothing when closed (so the goldens are byte-identical).
+final copilotOpenProvider =
+    NotifierProvider<CopilotOpenController, bool>(CopilotOpenController.new);
+
+class CopilotOpenController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void open() => state = true;
+  void close() => state = false;
+  void toggle() => state = !state;
+}

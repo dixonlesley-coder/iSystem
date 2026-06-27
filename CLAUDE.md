@@ -456,6 +456,23 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   read-only-derived, executor in the UI); and **offset run** (`NetworkController.offsetEdgeParallel`
   + `ui/canvas/offset_dialog.dart` — right-click a run → "Offset…" → distance+side → a parallel run
   in one undo step; auto-split-on-drag deferred).
+  **In-app Claude copilot** also landed — Claude embedded in the app so the engineer selects a
+  room/element and asks the AI to design or change it: **command registry** (`lib/ai/commands.dart`
+  — a typed CLOSED `AiCommand` set [placeComponent/Terminal/Fitting/Segment, autoPlaceRoomTerminals,
+  suggest], each pure JSON-round-trippable with a `preview` + the Anthropic tool-use schema; an
+  unknown kind decodes to null = hallucination guard); **injectable client** (`lib/ai/ai_client.dart`
+  — `AiClient` interface + `AnthropicAiClient` [raw HTTP `/v1/messages`, tool-use, BYO key, model
+  `claude-sonnet-4-6`] + `FakeAiClient`; all failures TYPED `AiResult` ok/disabled/error, never
+  throws; offline/no-key ⇒ graceful); **copilot store** (`lib/store/ai_copilot_store.dart`
+  `CopilotController` — the plan→preview→confirm→apply loop: `ask()` gathers a compact context
+  snapshot + proposes WITHOUT applying, `applyPlan()` runs each command through the existing
+  `NetworkController` methods [one undo each, sizing recomputes reactively], `discard()`;
+  `aiClientProvider` overridable for tests); **UI** (`lib/ui/ai/copilot_panel.dart` `CopilotOverlay`
+  — right-side panel gated on `copilotOpenProvider` ⇒ `SizedBox.shrink` when closed so goldens are
+  byte-identical; opened via a **"Ask Claude"** command-palette action); **BYO key** persists via
+  additive `DesignSettings.anthropicApiKey`/`aiModel` (tolerant) + an API-key card in Preferences
+  (masked). The registry + plan loop are fully covered offline via `FakeAiClient`; the live call
+  needs the engineer's key.
   **Mechanical ↔ electrical theme convergence landed (Apple-consistency pass):** the
   electrical workspace (a PanelMaker port) now reads as one app with the mechanical one.
   Driven by an audit + re-review, converged: the electrical **Loads palette to the RIGHT**

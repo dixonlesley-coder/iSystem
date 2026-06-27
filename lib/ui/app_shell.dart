@@ -17,6 +17,7 @@ import '../store/project_store.dart';
 import '../store/sheets_store.dart';
 import '../update/update_banner.dart';
 import '../update/version_label.dart';
+import 'ai/copilot_panel.dart';
 import 'commercial/commercial_hub.dart';
 import 'electrical/electrical_palette.dart';
 import 'electrical/electrical_view.dart';
@@ -109,6 +110,7 @@ class AppShell extends ConsumerWidget {
           ),
           const UpdateBannerOverlay(),
           const CommandPaletteOverlay(),
+          const CopilotOverlay(),
         ],
       ),
     );

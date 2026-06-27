@@ -9,6 +9,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
 import '../widgets/mechx_button.dart';
+import '../widgets/mechx_text_field.dart';
 
 /// Preferences. Surfaces the real app-wide settings that exist today (the
 /// light/dark appearance + the UI language); more design defaults move here in
@@ -55,7 +56,112 @@ class PreferencesScreen extends ConsumerWidget {
           value: _updateStatusText(update),
           action: _updateAction(ref, update),
         ),
+        const SizedBox(height: MechXSpacing.sm),
+        const _ApiKeyCard(),
       ],
+    );
+  }
+}
+
+/// The BYO Anthropic API key for the in-app Claude copilot. Stored in the
+/// project's `DesignSettings` (round-trips in `.mechx`). The field is masked and
+/// only ever shows whether a key is configured — never the key itself. English
+/// literals: Preferences isn't in the golden set.
+class _ApiKeyCard extends ConsumerStatefulWidget {
+  const _ApiKeyCard();
+
+  @override
+  ConsumerState<_ApiKeyCard> createState() => _ApiKeyCardState();
+}
+
+class _ApiKeyCardState extends ConsumerState<_ApiKeyCard> {
+  bool _editing = false;
+  String _draft = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final hasKey = ref.watch(aiApiKeyProvider).trim().isNotEmpty;
+
+    return Container(
+      padding: const EdgeInsets.all(MechXSpacing.md),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Claude copilot (Anthropic API key)',
+                        style: type.body.copyWith(color: colors.textPrimary)),
+                    const SizedBox(height: 2),
+                    Text(
+                      hasKey
+                          ? 'Configured — open the command palette and run "Ask Claude".'
+                          : 'Not set — the copilot is disabled.',
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+              MechXButton(
+                label: _editing ? 'Cancel' : (hasKey ? 'Change' : 'Add key'),
+                tertiary: true,
+                onPressed: () => setState(() {
+                  _editing = !_editing;
+                  _draft = '';
+                }),
+              ),
+            ],
+          ),
+          if (_editing) ...[
+            const SizedBox(height: MechXSpacing.sm),
+            MechXTextField(
+              value: _draft,
+              hint: 'sk-ant-…',
+              onChanged: (v) => _draft = v,
+            ),
+            const SizedBox(height: MechXSpacing.sm),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (hasKey)
+                  MechXButton(
+                    label: 'Remove',
+                    tertiary: true,
+                    onPressed: () {
+                      ref.read(aiApiKeyProvider.notifier).set('');
+                      setState(() => _editing = false);
+                    },
+                  ),
+                const SizedBox(width: MechXSpacing.xs),
+                MechXButton(
+                  label: 'Save',
+                  primary: true,
+                  onPressed: () {
+                    ref.read(aiApiKeyProvider.notifier).set(_draft);
+                    setState(() => _editing = false);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: MechXSpacing.xs),
+            Text(
+              'Stored in this project file. Do not share a .mechx that carries '
+              'your key.',
+              style: type.caption.copyWith(color: colors.textMuted),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

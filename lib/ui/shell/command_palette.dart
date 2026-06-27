@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../store/ai_copilot_store.dart';
 import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/command_store.dart';
@@ -136,6 +137,11 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       },
     ),
     // — Actions —
+    _Command(
+      title: 'Ask Claude',
+      subtitle: 'Design or change the selection with AI',
+      run: () => ref.read(copilotOpenProvider.notifier).open(),
+    ),
     _Command(
       title: 'New from template',
       subtitle: 'Prefill floors / occupancy',
