@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -9,6 +10,7 @@ import '../data/pdf_import.dart';
 import '../data/project_document.dart';
 import '../data/recovery.dart';
 import '../store/app_state.dart';
+import '../store/command_store.dart';
 import '../store/electrical_store.dart';
 import '../store/layer_store.dart';
 import '../store/project_store.dart';
@@ -25,7 +27,9 @@ import 'review/review_hub.dart';
 import 'schematic/schematic_view.dart';
 import 'sheets/pdf_page_picker.dart';
 import 'shell/building_screen.dart';
+import 'shell/command_palette.dart';
 import 'shell/nav_rail.dart';
+import 'shell/workflow_stepper.dart';
 import 'shell/preferences_screen.dart';
 import 'shell/projects_screen.dart';
 import 'sheets/sheet_rail.dart';
@@ -39,44 +43,74 @@ import 'widgets/mechx_focus_ring.dart';
 /// slim top bar · body · status-bar column. The rail picks the [ShellSection];
 /// the body is the workspace (Plan / Schematic / Electrical) or a hub/screen.
 /// No Material Scaffold — a restrained, custom shell (§4).
-class AppShell extends StatelessWidget {
+class AppShell extends ConsumerWidget {
   const AppShell({super.key});
 
+  /// Global hotkey handler, mounted as a non-focus-stealing ancestor [Focus]
+  /// (see [build]). Key events bubble UP from the focused canvas/field to this
+  /// node, so Ctrl/Cmd+K opens the command palette without grabbing focus from
+  /// in-canvas editing. Esc closes the palette when it's open.
+  KeyEventResult _onKey(WidgetRef ref, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    final mod = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+    if (mod && key == LogicalKeyboardKey.keyK) {
+      ref.read(commandPaletteOpenProvider.notifier).toggle();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.escape &&
+        ref.read(commandPaletteOpenProvider)) {
+      ref.read(commandPaletteOpenProvider.notifier).close();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
-    // The auto-update banner is stacked on top as a non-layout overlay (renders
-    // nothing when idle/offline/no update).
-    return Stack(
-      children: [
-        ColoredBox(
-          color: colors.background,
-          child: SafeArea(
-            // PanelMaker-style chrome: a left navigation rail beside the
-            // top-bar + body + status-bar column.
-            child: Row(
-              children: [
-                const NavRail(),
-                Container(width: 1, color: colors.border),
-                Expanded(
-                  child: Column(
-                    children: [
-                      const _TopBar(),
-                      Container(height: 1, color: colors.border),
-                      const _RecoveryBanner(),
-                      const _ErrorBanner(),
-                      const Expanded(child: _ShellBody()),
-                      Container(height: 1, color: colors.border),
-                      const _StatusBar(),
-                    ],
+    // The auto-update banner + command palette are stacked on top as non-layout
+    // overlays (each renders nothing when idle).
+    return Focus(
+      // A bubble-phase listener high in the tree: it never requests focus
+      // itself, so it doesn't disturb in-canvas editing — Ctrl/Cmd+K bubbles up
+      // here when the focused descendant ignores it.
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: (_, event) => _onKey(ref, event),
+      child: Stack(
+        children: [
+          ColoredBox(
+            color: colors.background,
+            child: SafeArea(
+              // PanelMaker-style chrome: a left navigation rail beside the
+              // top-bar + body + status-bar column.
+              child: Row(
+                children: [
+                  const NavRail(),
+                  Container(width: 1, color: colors.border),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        const _TopBar(),
+                        Container(height: 1, color: colors.border),
+                        const _RecoveryBanner(),
+                        const _ErrorBanner(),
+                        const Expanded(child: _ShellBody()),
+                        Container(height: 1, color: colors.border),
+                        const _StatusBar(),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
-        const UpdateBannerOverlay(),
-      ],
+          const UpdateBannerOverlay(),
+          const CommandPaletteOverlay(),
+        ],
+      ),
     );
   }
 }
@@ -397,10 +431,9 @@ class _StatusBar extends ConsumerWidget {
           vertical: MechXSpacing.xs + 1,
         ),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             // Left group: current sheet info (truncates first).
-            Flexible(
+            Expanded(
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -414,24 +447,46 @@ class _StatusBar extends ConsumerWidget {
                   ),
                   if (sheet != null) ...[
                     _dot(colors.textMuted),
-                    Text(
-                      '${sheet.sizePx.width.round()} × ${sheet.sizePx.height.round()} px',
-                      style: caption.copyWith(color: colors.textMuted),
+                    Flexible(
+                      child: Text(
+                        '${sheet.sizePx.width.round()} × ${sheet.sizePx.height.round()} px',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
+                        style: caption.copyWith(color: colors.textMuted),
+                      ),
                     ),
                     _dot(colors.textMuted),
-                    Text(
-                      context.strings(StringKey.shellUncalibrated),
-                      style: caption.copyWith(color: colors.textMuted),
+                    Flexible(
+                      child: Text(
+                        context.strings(StringKey.shellUncalibrated),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
+                        style: caption.copyWith(color: colors.textMuted),
+                      ),
                     ),
                   ],
                 ],
               ),
             ),
             const SizedBox(width: MechXSpacing.md),
+            // Centre: the compact workflow stepper (Calibrate · Floors · Draw ·
+            // Size · Report) — a glanceable "where am I" guide. Read-only;
+            // derived O(1) from project state. Clipped so it surrenders width
+            // gracefully on a narrow window instead of overflowing.
+            const Flexible(
+              flex: 0,
+              child: ClipRect(
+                child: WorkflowStepper(),
+              ),
+            ),
+            const SizedBox(width: MechXSpacing.md),
             // Right group: standards provenance + input hints.
-            Flexible(
+            Expanded(
               child: Row(
                 mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   Container(
                     width: 7,

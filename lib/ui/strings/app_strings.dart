@@ -148,6 +148,7 @@ enum StringKey {
   inspectorExportCalcReportMd,
   inspectorExportDrawingDxf,
   inspectorExportDrawingPdf,
+  inspectorExportAnnotatedPlanPdf,
 
   // Inspector — Building section.
   inspectorAddLevel,
@@ -210,6 +211,7 @@ enum StringKey {
   exportTitleCalcReport,
   exportTitleDrawingDxf,
   exportTitleDrawingPdf,
+  exportTitleAnnotatedPlanPdf,
   exportTitleBom,
   exportTitleSldDxf,
   exportTitleSldPdf,
@@ -382,6 +384,7 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorExportCalcReportMd: 'Export calc report (MD)',
   StringKey.inspectorExportDrawingDxf: 'Export drawing (DXF)',
   StringKey.inspectorExportDrawingPdf: 'Export drawing (PDF)',
+  StringKey.inspectorExportAnnotatedPlanPdf: 'Export annotated plan (PDF)',
 
   // Inspector — Building section.
   StringKey.inspectorAddLevel: '+  Add level',
@@ -449,6 +452,7 @@ const Map<StringKey, String> _en = {
   StringKey.exportTitleCalcReport: 'Export calculation report',
   StringKey.exportTitleDrawingDxf: 'Export drawing (DXF)',
   StringKey.exportTitleDrawingPdf: 'Export drawing (PDF)',
+  StringKey.exportTitleAnnotatedPlanPdf: 'Export annotated plan (PDF)',
   StringKey.exportTitleBom: 'Export bill of materials',
   StringKey.exportTitleSldDxf: 'Export single-line (DXF)',
   StringKey.exportTitleSldPdf: 'Export single-line (PDF)',
@@ -625,6 +629,7 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorExportCalcReportMd: 'Ekspor laporan hitung (MD)',
   StringKey.inspectorExportDrawingDxf: 'Ekspor gambar (DXF)',
   StringKey.inspectorExportDrawingPdf: 'Ekspor gambar (PDF)',
+  StringKey.inspectorExportAnnotatedPlanPdf: 'Ekspor denah beranotasi (PDF)',
 
   // Inspector — Building section.
   StringKey.inspectorAddLevel: '+  Tambah lantai',
@@ -693,6 +698,7 @@ const Map<StringKey, String> _id = {
   StringKey.exportTitleCalcReport: 'Ekspor laporan perhitungan',
   StringKey.exportTitleDrawingDxf: 'Ekspor gambar (DXF)',
   StringKey.exportTitleDrawingPdf: 'Ekspor gambar (PDF)',
+  StringKey.exportTitleAnnotatedPlanPdf: 'Ekspor denah beranotasi (PDF)',
   StringKey.exportTitleBom: 'Ekspor daftar material',
   StringKey.exportTitleSldDxf: 'Ekspor satu-garis (DXF)',
   StringKey.exportTitleSldPdf: 'Ekspor satu-garis (PDF)',

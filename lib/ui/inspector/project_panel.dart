@@ -8,6 +8,7 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
+import 'package:mechx_engine/report/plan_pdf_export.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/grille_sizing.dart';
@@ -133,6 +134,54 @@ Future<void> exportDrawingPdf(WidgetRef ref) async {
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingPdf),
     fileName: '${sheet.name}.pdf',
+    type: FileType.custom,
+    allowedExtensions: const ['pdf'],
+  );
+  if (path == null) return;
+  final full = path.endsWith('.pdf') ? path : '$path.pdf';
+  await File(full).writeAsBytes(bytes);
+}
+
+/// Export the current sheet/floor's drawn network as a native ANNOTATED plan
+/// PDF — the richer drawing deliverable with a title block (project / sheet /
+/// date) and real §10 run/riser LENGTHS folded into each size label. The real
+/// lengths are pre-computed here (the engine `edgeLength` over the live
+/// calibrations + building) and passed to the pure `planToPdf`.
+Future<void> exportAnnotatedPlanPdf(WidgetRef ref) async {
+  final sheets = ref.read(sheetsControllerProvider);
+  final sheet = sheets.current;
+  if (sheet == null) return;
+  final project = ref.read(projectControllerProvider);
+  final levelCount = project.building.levelCount;
+  final floorIndex = sheets.floorFor(sheet.id, levelCount);
+  final net = ref.read(networkControllerProvider).network;
+
+  // Real length per edge from the §10 sources of truth (run via calibration,
+  // riser via the elevation delta).
+  final edgeLengths = <String, Length>{
+    for (final e in net.edges)
+      e.id: edgeLength(
+        e,
+        net,
+        calibrationBySheet: project.calibrations,
+        building: project.building,
+      ),
+  };
+
+  final bytes = planToPdf(
+    net: net,
+    sizing: ref.read(sizingProvider),
+    edgeLengths: edgeLengths,
+    sheetId: sheet.id,
+    floorIndex: floorIndex,
+    projectName: project.name,
+    sheetName: sheet.name,
+    dateString: DateTime.now().toIso8601String().split('T').first,
+  );
+  final path = await FilePicker.saveFile(
+    dialogTitle: MechXStringsData(ref.read(localeProvider))(
+        StringKey.exportTitleAnnotatedPlanPdf),
+    fileName: '${sheet.name}-annotated.pdf',
     type: FileType.custom,
     allowedExtensions: const ['pdf'],
   );
@@ -315,6 +364,27 @@ class ProjectPanel extends ConsumerWidget {
                         ref.read(calibrationControllerProvider.notifier).start(),
                   ),
                 ),
+                // QoL: once this sheet is calibrated, stamp its scale onto every
+                // other sheet in one undo step (typical floors share a scale).
+                if (calibration != null) ...[
+                  const SizedBox(height: MechXSpacing.sm),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: MechXButton(
+                      label: 'Apply scale to all sheets',
+                      onPressed: () => ref
+                          .read(projectControllerProvider.notifier)
+                          .applyCalibrationToAllSheets(
+                            currentSheet.id,
+                            toSheetIds: ref
+                                .read(sheetsControllerProvider)
+                                .sheets
+                                .map((s) => s.id)
+                                .toSet(),
+                          ),
+                    ),
+                  ),
+                ],
               ],
             ],
           ),
@@ -978,6 +1048,31 @@ class _RoomsSection extends ConsumerWidget {
                           selected: r.equipmentKind == k,
                           onTap: () => ctrl.setEquipment(r.id, k),
                         ),
+                    ],
+                  ),
+                  const SizedBox(height: MechXSpacing.xs),
+                  // Drop the sized supply diffusers + a return grille onto the
+                  // plan inside this room's footprint, in one undo step.
+                  Row(
+                    children: [
+                      MechXButton(
+                        label: 'Auto-place diffusers',
+                        onPressed: (s != null && cal != null)
+                            ? () => ref
+                                .read(networkControllerProvider.notifier)
+                                .autoPlaceRoomTerminals(
+                                  room: r,
+                                  metersPerPixel: cal.metersPerPixel,
+                                  ductShape: ducts.shape,
+                                  ductMethod: ducts.method,
+                                )
+                            : null,
+                      ),
+                      const Spacer(),
+                      if (s != null)
+                        Text('${s.supply.count} + 1',
+                            style: type.caption
+                                .copyWith(color: colors.textMuted)),
                     ],
                   ),
                 ],

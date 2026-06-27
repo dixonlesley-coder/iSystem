@@ -3,6 +3,7 @@ import 'package:flutter/rendering.dart' show RenderBox;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
@@ -778,5 +779,95 @@ void main() {
     expect(node().customFixtureId, 'cf-1',
         reason: 'elevation edit dropped customFixtureId');
     expect(node().elevation!.meters, 3);
+  });
+
+  group('autoPlaceRoomTerminals (room -> network)', () {
+    // A 100x50 px room at 0.1 m/px = 10 m x 5 m = 50 m^2 footprint, default
+    // 3 m ceiling, default office room type.
+    //   volume        = 50 * 3            = 150 m^3
+    //   office ACH     = 6.0
+    //   Q              = 150 * 6 / 3600   = 0.25 m^3/s
+    //   max per face   = 0.36 (600x600) * 0.8 * 3.0 (office) = 0.864 m^3/s
+    //   supply count   = ceil(0.25 / 0.864)                  = 1
+    //   each airflow   = 0.25 m^3/s
+    //   face: smallest std gross >= 0.25/(0.8*3.0)=0.10417 m^2 -> 450x300 mm
+    // So: 1 supply diffuser + 1 return grille, each 0.25 m^3/s, 450x300 mm.
+    const room = RoomArea(
+      id: 'r0',
+      sheetId: 's1',
+      floorIndex: 0,
+      ax: 100,
+      ay: 100,
+      bx: 200, // 100 px wide
+      by: 150, // 50 px tall
+    );
+
+    test('a 50 m2 office room places the sized diffuser + return grille', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(networkControllerProvider.notifier);
+
+      final ids =
+          n.autoPlaceRoomTerminals(room: room, metersPerPixel: 0.1);
+      expect(ids.length, 1, reason: 'one supply diffuser for 0.25 m^3/s');
+
+      final net = c.read(networkControllerProvider).network;
+      final supplies = [
+        for (final node in net.nodes)
+          if (node.component == NodeComponent.supplyDiffuser) node,
+      ];
+      final returns = [
+        for (final node in net.nodes)
+          if (node.component == NodeComponent.returnGrille) node,
+      ];
+
+      expect(supplies.length, 1);
+      expect(returns.length, 1);
+      expect(net.nodes.length, 2);
+
+      // Each supply diffuser carries the per-terminal airflow + chosen face.
+      final sup = supplies.single;
+      expect(sup.airflow!.cubicMetersPerSecond, closeTo(0.25, 1e-9));
+      expect(sup.faceWidthMm, 450);
+      expect(sup.faceHeightMm, 300);
+      expect(sup.role, NodeRole.fixture);
+
+      // The return grille matches.
+      final ret = returns.single;
+      expect(ret.airflow!.cubicMetersPerSecond, closeTo(0.25, 1e-9));
+      expect(ret.faceWidthMm, 450);
+      expect(ret.faceHeightMm, 300);
+
+      // All nodes on the room's sheet/floor and inside the footprint.
+      for (final node in net.nodes) {
+        expect(node.sheetId, 's1');
+        expect(node.floorIndex, 0);
+        expect(node.x, inInclusiveRange(100, 200));
+        expect(node.y, inInclusiveRange(100, 150));
+      }
+
+      // One undo step puts the network back to empty.
+      expect(n.canUndo, isTrue);
+    });
+
+    test('no scale (null metersPerPixel degenerate) is a no-op', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(networkControllerProvider.notifier);
+      // A zero-width room -> degenerate footprint -> sizing null -> no-op.
+      const flat = RoomArea(
+        id: 'r1',
+        sheetId: 's1',
+        floorIndex: 0,
+        ax: 100,
+        ay: 100,
+        bx: 100,
+        by: 150,
+      );
+      final ids = n.autoPlaceRoomTerminals(room: flat, metersPerPixel: 0.1);
+      expect(ids, isEmpty);
+      expect(c.read(networkControllerProvider).network.nodes, isEmpty);
+      expect(n.canUndo, isFalse);
+    });
   });
 }

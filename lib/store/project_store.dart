@@ -107,6 +107,15 @@ class ProjectController extends Notifier<ProjectState> {
     state = state.copyWith(floors: [...state.floors, next]);
   }
 
+  /// Replace the whole floor stack in one undo step (used by project
+  /// templates / smart defaults to prefill a building's levels). A no-op for an
+  /// empty list — a building must always have at least one floor.
+  void setFloors(List<Floor> floors) {
+    if (floors.isEmpty) return;
+    _snapshot();
+    state = state.copyWith(floors: List<Floor>.from(floors));
+  }
+
   void removeFloor(int index) {
     if (index < 0 || index >= state.floors.length || state.floors.length <= 1) {
       return;
@@ -144,6 +153,25 @@ class ProjectController extends Notifier<ProjectState> {
     _snapshot();
     final next = Map<String, ScaleCalibration>.from(state.calibrations)
       ..[sheetId] = calibration;
+    state = state.copyWith(calibrations: next);
+  }
+
+  /// Copy [fromSheetId]'s calibration onto every other sheet, as ONE undo step
+  /// — a per-sheet calibration QoL shortcut (one sheet measured ⇒ apply that
+  /// scale to all). [toSheetIds] is the set of sheets to stamp (the caller
+  /// passes the live sheet ids, since the sheet list lives in `SheetsState`,
+  /// not here); when null it falls back to every sheet that already has a
+  /// calibration. No-op if the source sheet is uncalibrated.
+  void applyCalibrationToAllSheets(String fromSheetId, {Set<String>? toSheetIds}) {
+    final source = state.calibrationFor(fromSheetId);
+    if (source == null) return;
+    final targets = toSheetIds ?? state.calibrations.keys.toSet();
+    _snapshot();
+    final next = Map<String, ScaleCalibration>.from(state.calibrations);
+    for (final id in targets) {
+      if (id == fromSheetId) continue;
+      next[id] = source;
+    }
     state = state.copyWith(calibrations: next);
   }
 }

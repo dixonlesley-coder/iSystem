@@ -266,3 +266,30 @@ GrilleSizingResult selectStandardGrille({
     squareSide: Length(squareSideM),
   );
 }
+
+/// The standard rectangular face (width × height in mm, from
+/// [standardGrilleFacesMm]) that [selectStandardGrille] picks for [airflow].
+///
+/// Same selection rule as [selectStandardGrille] (smallest gross area whose
+/// face velocity ≤ [maxFaceVelocity], else the largest face). Useful when a
+/// caller needs the rectangular face dimensions — e.g. to stamp a placed air
+/// terminal's `faceWidthMm` / `faceHeightMm` — rather than the square-equivalent
+/// side returned on [GrilleSizingResult].
+(double widthMm, double heightMm) standardGrilleFaceFor({
+  required FlowRate airflow,
+  required Velocity maxFaceVelocity,
+  double freeAreaRatio = 0.8,
+}) {
+  final sorted = standardGrilleFacesMm.map((face) {
+    final grossM2 = (face.$1 / 1000.0) * (face.$2 / 1000.0);
+    return (grossM2, face);
+  }).toList()
+    ..sort((a, b) => a.$1.compareTo(b.$1));
+
+  for (final entry in sorted) {
+    final velocity =
+        airflow.cubicMetersPerSecond / (entry.$1 * freeAreaRatio);
+    if (velocity <= maxFaceVelocity.metersPerSecond) return entry.$2;
+  }
+  return sorted.last.$2;
+}

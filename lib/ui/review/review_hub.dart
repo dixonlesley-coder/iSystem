@@ -8,6 +8,7 @@ import '../canvas/service_style.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
+import 'issues_card.dart';
 
 /// The Review hub — a calm landing for checking the design before issue.
 ///
@@ -61,6 +62,8 @@ class ReviewHub extends ConsumerWidget {
           const SizedBox(height: MechXSpacing.md),
           _CutPlanCard(),
         ],
+        const SizedBox(height: MechXSpacing.md),
+        const IssuesCard(),
         const SizedBox(height: MechXSpacing.md),
         _ConsumablesCard(),
         const SizedBox(height: MechXSpacing.lg),

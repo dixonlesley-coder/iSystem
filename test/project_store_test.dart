@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
@@ -87,6 +88,53 @@ void main() {
 
     n.redo(); // re-add the floor
     expect(c.read(projectControllerProvider).floors.length, before + 1);
+  });
+
+  test('applyCalibrationToAllSheets copies one sheet\'s calibration to all others',
+      () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    n.setCalibration('s1', const ScaleCalibration(0.02));
+
+    n.applyCalibrationToAllSheets('s1', toSheetIds: {'s1', 's2', 's3'});
+
+    final s = c.read(projectControllerProvider);
+    expect(s.calibrationFor('s1')?.metersPerPixel, 0.02);
+    expect(s.calibrationFor('s2')?.metersPerPixel, 0.02);
+    expect(s.calibrationFor('s3')?.metersPerPixel, 0.02);
+  });
+
+  test('applyCalibrationToAllSheets is a no-op when source is uncalibrated', () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    n.applyCalibrationToAllSheets('s1', toSheetIds: {'s1', 's2'});
+    expect(c.read(projectControllerProvider).calibrations, isEmpty);
+    expect(n.canUndo, isFalse); // nothing recorded
+  });
+
+  test('applyCalibrationToAllSheets is undoable (one step) / redoable', () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    n.setCalibration('s1', const ScaleCalibration(0.02)); // 1st undoable edit
+
+    n.applyCalibrationToAllSheets('s1', toSheetIds: {'s1', 's2', 's3'});
+    expect(c.read(projectControllerProvider).calibrationFor('s2')?.metersPerPixel,
+        0.02);
+
+    // It records on the global timeline as a project action.
+    final hist = c.read(historyProvider.notifier);
+    expect(hist.canUndo, isTrue);
+
+    hist.undo(); // reverts the bulk-apply, leaving only s1 calibrated
+    final reverted = c.read(projectControllerProvider);
+    expect(reverted.calibrationFor('s1')?.metersPerPixel, 0.02);
+    expect(reverted.calibrationFor('s2'), isNull);
+    expect(reverted.calibrationFor('s3'), isNull);
+
+    hist.redo(); // re-applies to all
+    final redone = c.read(projectControllerProvider);
+    expect(redone.calibrationFor('s2')?.metersPerPixel, 0.02);
+    expect(redone.calibrationFor('s3')?.metersPerPixel, 0.02);
   });
 
   test('load() clears undo history (opened doc is a fresh baseline)', () {

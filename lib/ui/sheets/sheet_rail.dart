@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/models/sheet.dart';
+import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -72,7 +73,7 @@ class SheetRail extends ConsumerWidget {
   }
 }
 
-class _RailItem extends StatefulWidget {
+class _RailItem extends ConsumerStatefulWidget {
   final int index;
   final Sheet sheet;
   final bool selected;
@@ -86,16 +87,19 @@ class _RailItem extends StatefulWidget {
   });
 
   @override
-  State<_RailItem> createState() => _RailItemState();
+  ConsumerState<_RailItem> createState() => _RailItemState();
 }
 
-class _RailItemState extends State<_RailItem> {
+class _RailItemState extends ConsumerState<_RailItem> {
   bool _hover = false;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    final calibrated = ref.watch(projectControllerProvider)
+            .calibrationFor(widget.sheet.id) !=
+        null;
     final bg = widget.selected
         ? colors.accentMuted
         : (_hover ? colors.surfaceHover : const Color(0x00000000));
@@ -156,6 +160,18 @@ class _RailItemState extends State<_RailItem> {
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
                   style: type.caption.copyWith(color: labelColor),
+                ),
+                const SizedBox(height: MechXSpacing.xxs),
+                // Per-sheet calibration status: a small dot (green = calibrated,
+                // warning = not) so the rail shows at a glance which sheets still
+                // need a scale.
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: calibrated ? colors.success : colors.warning,
+                    shape: BoxShape.circle,
+                  ),
                 ),
               ],
             ),

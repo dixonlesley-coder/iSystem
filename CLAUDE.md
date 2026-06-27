@@ -145,14 +145,47 @@ report export**; versioned `.mechx` save/open with viewport restore;
 **autosave / crash-recovery**; light/dark; **draw-a-room AHU/FCU/fan air sizing**
 (Room tool → footprint area from scale × ceiling × per-room-type ACH → CFM, then
 auto-sized supply diffusers / return grilles / supply trunk / equipment duty via
-`sizing/room_air.dart`, edited in the Rooms inspector, round-trips in `.mechx`);
+`sizing/room_air.dart`, edited in the Rooms inspector, round-trips in `.mechx`;
+**'Auto-place diffusers'** in the Rooms inspector closes the room→network loop —
+`NetworkController.autoPlaceRoomTerminals` drops the sized supply diffuser count
+(+ a return grille) as `supplyDiffuser`/`returnGrille` nodes carrying airflow +
+face on a grid inside the room footprint, in one undo step, via the existing node
+path);
 **manual air routing + velocity warnings** (hand-route ducts, pick a duct size
 [right-click → Ø ladder] and a diffuser face size [inspector picker], and the app
 warns when the air velocity is too high/low via `sizing/air_velocity.dart` +
 `airVelocityChecksProvider` — inspector verdict + an on-plan orange "!" badge);
 **AC cooling-load + AC node types** (drop a Cassette / Split-wall / Ducted AC
 node into a room and the Rooms inspector auto-computes the cooling requirement —
-BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
+BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`);
+**calibration quality-of-life** (`ProjectController.applyCalibrationToAllSheets` copies one
+sheet's scale to all others in one undo step, surfaced as an 'Apply scale to all sheets'
+button in the Scale inspector when the current sheet is calibrated; the slim sheet rail shows
+a per-sheet calibrated/uncalibrated dot);
+**project templates / smart defaults** (`store/templates.dart` `kBuildingTemplates` —
+Residential highrise / Office tower / Hospital / Retail shop, each prefilling floors +
+occupancy + fire hazard + design rainfall; a **'New from template'** dialog on the Projects
+screen applies them via `ProjectController.setFloors` + the occupancy/fire/rainfall provider
+`.set()` methods — additive, no `.mechx` change);
+**unified Design Issues review panel** (`store/design_issues_store.dart`
+`designIssuesProvider` — a read-only fan-in that aggregates every existing design warning
+into one typed `DesignIssue` list: out-of-band air velocities + unsized air elements
+[`airVelocityChecksProvider`/`airUnsizedProvider`], uncalibrated sheets, and unverified
+`// VERIFY` standards [`SniProfile`/`SniVentilationProfile`/`PuilProfile.verifyChecklist`],
+each with a severity + an optional `IssueLocation(sheetId, {nodeId, edgeId})`; surfaced as an
+`IssuesCard` in the Review hub grouped Warnings/Advisory with a count, a locatable row jumping
+to the element via sheet + selection + `WorkspaceView.plan` — no engine change);
+**command palette + workflow stepper** (`store/command_store.dart` — `commandPaletteOpenProvider`
++ a pure `fuzzyScore`/`fuzzyMatches` + `workflowStageStateProvider` deriving the five
+`WorkflowStage`s [Calibrate · Floors · Draw · Size · Report] done/active O(1) from project
+state; `ui/shell/command_palette.dart` is a non-layout **Ctrl/Cmd+K** overlay [renders nothing
+when closed] hosted at app-shell level — a centred `MechXTheme` card with a text filter + a
+fuzzy-ranked action list [switch DESIGN view, toggle/edit a layer, pick a draw tool, New from
+template, Start calibration, Export calc report, light/dark], each run through the existing
+providers, Up/Down/Enter/Esc; `ui/shell/workflow_stepper.dart` is a compact status-bar stepper
+with custom-painted marks. App-shell wiring is minimal: `AppShell` is a `ConsumerWidget` in a
+non-focus-stealing ancestor `Focus` that catches Ctrl/Cmd+K [bubbles up, canvas keeps focus]
++ Esc; no persistence).
 
 ## Conventions
 
@@ -333,8 +366,13 @@ BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
   MechXTheme banner). Version source of truth = `pubspec.yaml`. The web env has
   no Flutter SDK — a `.claude/` SessionStart hook installs Flutter 3.44.3 so the
   gate runs; `flutter build windows`/`iscc` only run on the Windows CI runner.
-- Native PDF *drawing* export (DXF drawing export and the Markdown calc report
-  are done; both convert to PDF externally).
+- Native PDF *drawing* export — **done**: `report/pdf_export.dart` (`networkToPdf`,
+  the plain single-sheet vector PDF) and `report/plan_pdf_export.dart`
+  (`planToPdf`, the **annotated** plan PDF — adds a project/sheet/date title block
+  and real §10 run/riser LENGTHS folded into each DN/Ø/W×H label, nodes as dots,
+  risers as markers; the app passes a `dateString` + pre-computed `edgeLengths` so
+  the engine never reads the clock), wired in `projects_screen.dart` beside the
+  DXF + Markdown-calc-report exports.
 - **Landed (parallel batch):** **multi-select + copy/paste** (additive
   `Selection.nodeIds/edgeIds` sets + rubber-band marquee/shift-click in
   `selection_overlay`, in-memory clipboard `copySelection`/`paste`/`deleteMany` in

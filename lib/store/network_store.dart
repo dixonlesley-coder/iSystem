@@ -1,11 +1,18 @@
+import 'dart:math' as math;
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/grille_sizing.dart' show standardGrilleFacesMm;
+import 'package:mechx_engine/sizing/network_sizing.dart'
+    show DuctShape, DuctSizingMethod;
+import 'package:mechx_engine/sizing/room_air.dart' show TerminalBank;
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'annotation_store.dart' show RoomArea;
 import 'history_store.dart';
 import 'selection_store.dart';
 
@@ -695,6 +702,104 @@ class NetworkController extends Notifier<DrawingState> {
       nodes: [...state.network.nodes, node],
       edges: state.network.edges,
     ));
+  }
+
+  /// Auto-place the air terminals a [room] needs — closing the room→network
+  /// loop. Runs the room's ACH air-side sizing ([RoomArea.sizing]) to get the
+  /// supply-diffuser COUNT + per-terminal airflow + chosen face, then drops that
+  /// many [NodeComponent.supplyDiffuser] nodes on a simple grid inside the room's
+  /// footprint rectangle (on the room's own sheet/floor), each carrying the
+  /// per-terminal [FlowRate] airflow + `faceWidthMm`/`faceHeightMm`; plus one
+  /// [NodeComponent.returnGrille] node carrying the return bank's airflow + face.
+  ///
+  /// All nodes land in ONE undo step. A null/degenerate sizing (no scale, zero
+  /// footprint) is a no-op (nothing recorded). Returns the new supply-diffuser
+  /// node ids (for optional trunk wiring); empty on a no-op.
+  List<String> autoPlaceRoomTerminals({
+    required RoomArea room,
+    required double metersPerPixel,
+    DuctShape ductShape = DuctShape.round,
+    DuctSizingMethod ductMethod = DuctSizingMethod.velocity,
+  }) {
+    final s = room.sizing(metersPerPixel,
+        ductShape: ductShape, ductMethod: ductMethod);
+    if (s == null) return const [];
+
+    final loX = room.ax < room.bx ? room.ax : room.bx;
+    final hiX = room.ax < room.bx ? room.bx : room.ax;
+    final loY = room.ay < room.by ? room.ay : room.by;
+    final hiY = room.ay < room.by ? room.by : room.ay;
+    final w = hiX - loX;
+    final h = hiY - loY;
+    if (w <= 0 || h <= 0) return const [];
+
+    // Lay the supply diffusers out on a near-square grid inside the footprint,
+    // each cell's centre giving the node position (inset off the room edge).
+    final n = s.supply.count;
+    final cols = math.max(1, math.sqrt(n).ceil());
+    final rows = (n / cols).ceil();
+    final supplyFace = _faceMm(s.supply);
+    final returnFace = _faceMm(s.return_);
+
+    final nodes = [...state.network.nodes];
+    final ids = <String>[];
+    var placed = 0;
+    for (var ry = 0; ry < rows && placed < n; ry++) {
+      for (var cx = 0; cx < cols && placed < n; cx++) {
+        final px = loX + w * (cx + 0.5) / cols;
+        final py = loY + h * (ry + 0.5) / rows;
+        final id = _id('n');
+        ids.add(id);
+        nodes.add(NetNode(
+          id: id,
+          sheetId: room.sheetId,
+          x: px,
+          y: py,
+          floorIndex: room.floorIndex,
+          role: NodeComponent.supplyDiffuser.role,
+          component: NodeComponent.supplyDiffuser,
+          airflow: s.supply.airflowEach,
+          faceWidthMm: supplyFace.$1,
+          faceHeightMm: supplyFace.$2,
+        ));
+        placed++;
+      }
+    }
+
+    // One return grille near the room centre.
+    nodes.add(NetNode(
+      id: _id('n'),
+      sheetId: room.sheetId,
+      x: loX + w * 0.5,
+      y: loY + h * 0.5,
+      floorIndex: room.floorIndex,
+      role: NodeComponent.returnGrille.role,
+      component: NodeComponent.returnGrille,
+      airflow: s.return_.airflowEach,
+      faceWidthMm: returnFace.$1,
+      faceHeightMm: returnFace.$2,
+    ));
+
+    _commit(Network(nodes: nodes, edges: state.network.edges));
+    return ids;
+  }
+
+  /// The standard rectangular face (width, height in mm) the engine chose for a
+  /// [bank], recovered by matching the bank's chosen gross face area against the
+  /// standard catalogue (see [standardGrilleFacesMm]).
+  (double, double) _faceMm(TerminalBank bank) {
+    final targetM2 = bank.each.grossFaceArea.squareMeters;
+    var best = standardGrilleFacesMm.first;
+    var bestErr = double.infinity;
+    for (final f in standardGrilleFacesMm) {
+      final grossM2 = (f.$1 / 1000.0) * (f.$2 / 1000.0);
+      final err = (grossM2 - targetM2).abs();
+      if (err < bestErr) {
+        bestErr = err;
+        best = f;
+      }
+    }
+    return best;
   }
 
   /// The service an existing run incident to [nodeId] carries (so a main pulled
