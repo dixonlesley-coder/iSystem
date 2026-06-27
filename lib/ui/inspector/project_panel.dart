@@ -1352,13 +1352,6 @@ class _SizingSection extends ConsumerWidget {
             ),
           ],
         ),
-        const SizedBox(height: MechXSpacing.xs),
-        Text(
-          'Auto-sized to SNI velocity limits. Water supply uses accumulated '
-          'fixture units via the Hunter demand curve; assign fixture types per '
-          'node.',
-          style: type.caption.copyWith(color: colors.textMuted),
-        ),
         const SizedBox(height: MechXSpacing.sm),
         Text('Occupancy',
             style: type.caption.copyWith(color: colors.textMuted)),

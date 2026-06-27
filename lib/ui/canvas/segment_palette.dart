@@ -46,7 +46,6 @@ class SegmentPalette extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
-    final type = context.type;
 
     // Scope the equipment groups to the active discipline on the Layout canvas.
     // On the Schematic view (no layer concept) everything is offered.
@@ -123,13 +122,6 @@ class SegmentPalette extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const MechXSectionLabel('Palette'),
-        const SizedBox(height: MechXSpacing.xs),
-        Text(
-          'Drop a riser where a main starts, then drag the blue outlet out '
-          'of it to lay the mainline. Drop a terminal and drag it onto a main '
-          'to branch it.',
-          style: type.caption.copyWith(color: colors.textMuted),
-        ),
         const SizedBox(height: MechXSpacing.sm),
 
         // ── Start here: the riser (the mainline's origin) ──────────────────
