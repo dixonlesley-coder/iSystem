@@ -9,6 +9,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/network/network.dart' show NodeComponent;
+import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show DuctShape, DuctSizingMethod;
 import 'package:mechx_engine/sizing/room_air.dart';
@@ -421,6 +423,40 @@ class RoomArea {
       ductShape: ductShape,
       ductMethod: ductMethod,
     );
+  }
+
+  /// Estimated AC cooling load (BTU/h · kW · PK + a recommended unit) for the
+  /// room, or null when the sheet has no scale / the footprint is degenerate.
+  /// The per-area density comes from the ventilation profile (room-type based).
+  CoolingLoad? coolingLoad(double? metersPerPixel) {
+    if (metersPerPixel == null) return null;
+    final area = areaM2(metersPerPixel);
+    if (area <= 0 || ceilingHeightM <= 0) return null;
+    final density = const SniVentilationProfile()
+        .coolingLoadDensityBtuPerHrM2(roomType)
+        .value;
+    return estimateCoolingLoad(
+      floorArea: Area(area),
+      ceilingHeight: Length(ceilingHeightM),
+      densityBtuPerHrPerM2: density,
+    );
+  }
+
+  /// True if [component] is an AC indoor unit (cassette / split wall / ducted).
+  static bool isAcComponent(NodeComponent? component) =>
+      component == NodeComponent.acCassette ||
+      component == NodeComponent.acSplitWall ||
+      component == NodeComponent.acDucted;
+
+  /// Whether a node at sheet-pixel ([nx], [ny]) on [nodeSheetId]/[nodeFloor]
+  /// falls inside this room's footprint (used to attach AC units to a room).
+  bool containsNode(String nodeSheetId, int nodeFloor, double nx, double ny) {
+    if (nodeSheetId != sheetId || nodeFloor != floorIndex) return false;
+    final loX = ax < bx ? ax : bx;
+    final hiX = ax < bx ? bx : ax;
+    final loY = ay < by ? ay : by;
+    final hiY = ay < by ? by : ay;
+    return nx >= loX && nx <= hiX && ny >= loY && ny <= hiY;
   }
 
   RoomArea copyWith({

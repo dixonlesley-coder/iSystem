@@ -110,6 +110,10 @@ abstract interface class VentilationStandardsProfile {
   /// Recommended design air-change rate (changes per hour) for [type].
   StandardValue<double> recommendedAch(RoomType type);
 
+  /// Sensible cooling-load density (BTU/h per m² of floor) for [type] — the
+  /// per-area figure for the area-density AC sizing rule (`cooling_load.dart`).
+  StandardValue<double> coolingLoadDensityBtuPerHrM2(RoomType type);
+
   /// Noise-driven grille/diffuser face-velocity class for [type] — the bridge
   /// to [sizeGrille] / [selectStandardGrille].
   GrilleApplication grilleApplicationFor(RoomType type);
@@ -187,6 +191,54 @@ class SniVentilationProfile implements VentilationStandardsProfile {
     );
   }
 
+  /// Bare cooling-load density (BTU/h per m²) per room use.
+  static double _coolingDensity(RoomType type) {
+    switch (type) {
+      case RoomType.corridor:
+        return 400.0;
+      case RoomType.lobby:
+        return 500.0;
+      case RoomType.office:
+        return 600.0;
+      case RoomType.bedroom:
+        return 500.0;
+      case RoomType.livingRoom:
+        return 550.0;
+      case RoomType.classroom:
+        return 600.0;
+      case RoomType.meetingRoom:
+        return 700.0; // high occupant density
+      case RoomType.retail:
+        return 600.0;
+      case RoomType.restaurant:
+        return 700.0;
+      case RoomType.toilet:
+        return 450.0;
+      case RoomType.hospitalWard:
+        return 550.0;
+      case RoomType.laboratory:
+        return 700.0;
+      case RoomType.serverRoom:
+        return 1000.0; // equipment-dominated
+      case RoomType.commercialKitchen:
+        return 900.0;
+    }
+  }
+
+  @override
+  StandardValue<double> coolingLoadDensityBtuPerHrM2(RoomType type) {
+    final d = _coolingDensity(type);
+    return StandardValue<double>(
+      d,
+      unit: 'BTU/h per m2',
+      citation: '$_doc — beban pendinginan per luas (${roomTypeLabel(type)})',
+      sourceUrl: _sourceUrl,
+      status: VerificationStatus.secondarySource,
+      note: '${roomTypeLabel(type)}: ${d.toStringAsFixed(0)} BTU/h per m2 floor '
+          '(general HVAC practice; VERIFY against SNI 03-6572-2001).',
+    );
+  }
+
   @override
   GrilleApplication grilleApplicationFor(RoomType type) {
     switch (type) {
@@ -223,6 +275,16 @@ class SniVentilationProfile implements VentilationStandardsProfile {
           status: VerificationStatus.secondarySource,
           note: 'ACH per room type from general HVAC practice; confirm each '
               'figure against the official SNI 03-6572-2001 clause.',
+        ),
+        const StandardValue<Object?>(
+          'cooling-load density (BTU/h per m², per room type)',
+          unit: 'BTU/h per m2',
+          citation: '$_doc — beban pendinginan per luas',
+          sourceUrl: _sourceUrl,
+          verified: false,
+          status: VerificationStatus.secondarySource,
+          note: 'Area-density AC sizing figures from general HVAC practice; '
+              'confirm against an SNI / cooling-load study.',
         ),
       ];
 }

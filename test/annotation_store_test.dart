@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/annotation_store.dart';
+import 'package:mechx_engine/network/network.dart' show NodeComponent;
 import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 
@@ -147,6 +148,37 @@ void main() {
     room = c.read(roomAreasProvider).single;
     expect(room.achOverride, isNull);
     expect(room.effectiveAch(), closeTo(20.0, 1e-9));
+  });
+
+  test('RoomArea cooling load + AC containment', () {
+    const room = RoomArea(
+      id: 'r0',
+      sheetId: 's1',
+      floorIndex: 0,
+      ax: 0,
+      ay: 0,
+      bx: 200,
+      by: 100,
+    );
+    // 2.0 m² (200×100 px @ 0.01) × 3 m ceiling, office density 600 BTU/h·m²:
+    //   load = 2.0 × 600 × (3/3) = 1200 BTU/h → 0.133 PK → recommend 0.5 PK.
+    final load = room.coolingLoad(0.01)!;
+    expect(load.btuPerHr, closeTo(1200.0, 1e-9));
+    expect(load.pk, closeTo(1200.0 / 9000.0, 1e-9));
+    expect(load.recommended.pk, 0.5);
+    expect(room.coolingLoad(null), isNull); // no scale ⇒ null
+
+    // Containment: a node inside the footprint on the same sheet/floor.
+    expect(room.containsNode('s1', 0, 100, 50), isTrue);
+    expect(room.containsNode('s1', 0, 250, 50), isFalse); // outside x
+    expect(room.containsNode('s2', 0, 100, 50), isFalse); // other sheet
+    expect(room.containsNode('s1', 1, 100, 50), isFalse); // other floor
+
+    expect(RoomArea.isAcComponent(NodeComponent.acCassette), isTrue);
+    expect(RoomArea.isAcComponent(NodeComponent.acSplitWall), isTrue);
+    expect(RoomArea.isAcComponent(NodeComponent.acDucted), isTrue);
+    expect(RoomArea.isAcComponent(NodeComponent.fcu), isFalse);
+    expect(RoomArea.isAcComponent(null), isFalse);
   });
 
   test('RoomArea.fromJson is tolerant (drops malformed, unknown enums)', () {

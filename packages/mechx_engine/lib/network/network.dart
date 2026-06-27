@@ -110,6 +110,12 @@ enum NodeComponent {
   fcu,
   supplyFan,
   exhaustFan,
+  // Air-conditioning indoor units (role: plant). A conditioned-air source that
+  // also represents the room's AC equipment + its electrical load. Placed inside
+  // a drawn room, it triggers the room's cooling-load (BTU/h · PK) calc.
+  acCassette,
+  acSplitWall,
+  acDucted,
 }
 
 extension NodeComponentInfo on NodeComponent {
@@ -134,11 +140,14 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.exhaustGrille ||
         NodeComponent.linearDiffuser =>
           NodeRole.fixture,
-        // Air units are the air source → plant.
+        // Air units + AC indoor units are the air source → plant.
         NodeComponent.ahu ||
         NodeComponent.fcu ||
         NodeComponent.supplyFan ||
-        NodeComponent.exhaustFan =>
+        NodeComponent.exhaustFan ||
+        NodeComponent.acCassette ||
+        NodeComponent.acSplitWall ||
+        NodeComponent.acDucted =>
           NodeRole.plant,
         // Inline valves + meters / strainer / expansion tank + FDC inlet +
         // inline dampers / VAV.
@@ -179,6 +188,9 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.fcu => 'FCU',
         NodeComponent.supplyFan => 'Supply fan',
         NodeComponent.exhaustFan => 'Exhaust fan',
+        NodeComponent.acCassette => 'Cassette AC',
+        NodeComponent.acSplitWall => 'Split wall AC',
+        NodeComponent.acDucted => 'Ducted AC',
       };
 
   /// Minor-loss coefficient K for an inline RESTRICTOR (valve / strainer /
@@ -223,7 +235,10 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.supplyFan ||
         NodeComponent.exhaustFan ||
         NodeComponent.ahu ||
-        NodeComponent.fcu =>
+        NodeComponent.fcu ||
+        NodeComponent.acCassette ||
+        NodeComponent.acSplitWall ||
+        NodeComponent.acDucted =>
           true,
         _ => false,
       };
@@ -239,6 +254,11 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.exhaustFan => 0.75,
         NodeComponent.ahu => 5.5,
         NodeComponent.fcu => 0.25,
+        // AC indoor-unit input power (representative; depends on PK/COP). The
+        // room cooling calc surfaces the PK; this is the panel default.
+        NodeComponent.acSplitWall => 0.9,
+        NodeComponent.acCassette => 1.8,
+        NodeComponent.acDucted => 2.6,
         _ => 0.0,
       };
 }

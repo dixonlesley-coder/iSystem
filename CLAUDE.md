@@ -149,7 +149,10 @@ auto-sized supply diffusers / return grilles / supply trunk / equipment duty via
 **manual air routing + velocity warnings** (hand-route ducts, pick a duct size
 [right-click → Ø ladder] and a diffuser face size [inspector picker], and the app
 warns when the air velocity is too high/low via `sizing/air_velocity.dart` +
-`airVelocityChecksProvider` — inspector verdict + an on-plan orange "!" badge).
+`airVelocityChecksProvider` — inspector verdict + an on-plan orange "!" badge);
+**AC cooling-load + AC node types** (drop a Cassette / Split-wall / Ducted AC
+node into a room and the Rooms inspector auto-computes the cooling requirement —
+BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
 
 ## Conventions
 
@@ -433,6 +436,13 @@ warns when the air velocity is too high/low via `sizing/air_velocity.dart` +
   flags air ducts/terminals that carry air but have no manual size/face yet (a
   muted advisory marker, distinct from the orange out-of-band warning, which
   always takes precedence).
+- **AC cooling load (`sizing/cooling_load.dart`)**: pure ORCHESTRATION — an
+  area-density estimate (floor area × per-`RoomType` density × ceiling
+  correction → BTU/h) mapped to **PK** (1 PK ≈ 9000 BTU/h, convention) + a
+  standard-ladder `selectAc`. It adds NO heat-gain physics (not a CLTD solve);
+  the density + PK convention are `secondarySource`/`// VERIFY`. It is surfaced
+  only when an AC node (`acCassette`/`acSplitWall`/`acDucted`) sits inside a
+  `RoomArea` footprint — an annotation read, never part of the network solve.
 - **Cable family → ampacity class**: a circuit's `cableType` (NYY/NYM/NYA/NYAF/FRC)
   selects the insulation temperature-class for the KHA lookup via
   `electrical/cable_family.dart` (`insulationForCableType`): **FRC → XLPE 90 °C**,

@@ -9,6 +9,7 @@ import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/sizing/bom.dart';
+import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/room_air.dart';
@@ -756,6 +757,10 @@ class _RoomsSection extends ConsumerWidget {
     final cal = ref.watch(projectControllerProvider).calibrationFor(sheet.id);
     final ducts = ref.watch(ductSettingsProvider);
     final ctrl = ref.read(roomAreasProvider.notifier);
+    final nodes = ref.watch(networkControllerProvider).network.nodes;
+
+    String pkStr(double pk) =>
+        pk == pk.roundToDouble() ? pk.toStringAsFixed(0) : pk.toString();
 
     String dims(RoomArea r) {
       if (cal == null) return '';
@@ -845,6 +850,47 @@ class _RoomsSection extends ConsumerWidget {
                         style:
                             type.caption.copyWith(color: colors.textMuted)),
                   ],
+                  // Cooling (AC) — shown only when an AC indoor unit sits in
+                  // the room. Auto-computes the BTU/h + PK requirement and a
+                  // per-unit recommendation split across the placed units.
+                  ...() {
+                    final acs = [
+                      for (final n in nodes)
+                        if (RoomArea.isAcComponent(n.component) &&
+                            r.containsNode(n.sheetId, n.floorIndex, n.x, n.y))
+                          n,
+                    ];
+                    final load = r.coolingLoad(cal?.metersPerPixel);
+                    if (acs.isEmpty || load == null) return const <Widget>[];
+                    final perUnit = selectAc(load.btuPerHr / acs.length);
+                    final labels = {for (final n in acs) n.component!.label};
+                    final typeStr =
+                        labels.length == 1 ? labels.first : 'mixed';
+                    return <Widget>[
+                      const SizedBox(height: MechXSpacing.xxs),
+                      Text(
+                        'Cooling (AC): ${load.btuPerHr.round()} BTU/h · '
+                        '${load.pk.toStringAsFixed(1)} PK',
+                        style: type.caption.copyWith(color: colors.accent),
+                      ),
+                      Text(
+                        '${acs.length} ${acs.length == 1 ? 'unit' : 'units'} '
+                        '($typeStr) -> ${pkStr(perUnit.pk)} PK each '
+                        '(${perUnit.nominalBtuPerHr.round()} BTU/h)',
+                        style: type.caption.copyWith(
+                          color: perUnit.exceedsRange
+                              ? colors.danger
+                              : colors.textMuted,
+                        ),
+                      ),
+                      if (perUnit.exceedsRange)
+                        Text(
+                          'Load exceeds the largest single unit — add more units.',
+                          style:
+                              type.caption.copyWith(color: colors.danger),
+                        ),
+                    ];
+                  }(),
                   const SizedBox(height: MechXSpacing.xs),
                   // Ceiling height stepper.
                   Row(

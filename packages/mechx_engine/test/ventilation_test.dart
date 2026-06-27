@@ -46,6 +46,29 @@ void main() {
     });
   });
 
+  group('coolingLoadDensityBtuPerHrM2', () {
+    test('office is 600 BTU/h per m²', () {
+      expect(profile.coolingLoadDensityBtuPerHrM2(RoomType.office).value,
+          closeTo(600.0, 1e-9));
+    });
+
+    test('a server room demands more cooling per m² than an office', () {
+      expect(
+        profile.coolingLoadDensityBtuPerHrM2(RoomType.serverRoom).value,
+        greaterThan(profile.coolingLoadDensityBtuPerHrM2(RoomType.office).value),
+      );
+    });
+
+    test('every room type has a positive density, all UNVERIFIED', () {
+      for (final t in RoomType.values) {
+        final v = profile.coolingLoadDensityBtuPerHrM2(t);
+        expect(v.value, greaterThan(0.0));
+        expect(v.status, VerificationStatus.secondarySource);
+        expect(v.verified, isFalse);
+      }
+    });
+  });
+
   group('grilleApplicationFor', () {
     test('bedroom maps to the quietest (bedroom) face class', () {
       expect(profile.grilleApplicationFor(RoomType.bedroom),
