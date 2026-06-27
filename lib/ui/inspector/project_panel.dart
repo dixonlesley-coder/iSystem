@@ -913,7 +913,6 @@ class _DrawSection extends ConsumerWidget {
               label: 'Redo',
               onPressed: ref.read(historyProvider.notifier).redo,
             ),
-            MechXButton(label: 'Clear', onPressed: ctrl.clear),
             MechXButton(
               label: 'Ortho',
               primary: ortho,

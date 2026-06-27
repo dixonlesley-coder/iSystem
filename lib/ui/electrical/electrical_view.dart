@@ -234,15 +234,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                   onRequestService: _openService,
                 ),
               ),
-              // Hint banner (top-right).
-              Positioned(
-                top: MechXSpacing.sm,
-                right: MechXSpacing.md,
-                child: _HintChip(
-                  text:
-                      'Zoom in on a panel to see its components; zoom out for a summary. Double-click to edit.',
-                ),
-              ),
               // Zoom controls (bottom-left).
               Positioned(
                 left: MechXSpacing.md,
@@ -690,54 +681,7 @@ class _BtnState extends State<_Btn> {
   }
 }
 
-// ── Canvas chrome (hint, zoom, minimap, help) ───────────────────────────────
-
-/// A quiet ambient hint over the canvas — faded at rest so it never competes
-/// with the drawing, brightening to full on hover for anyone who wants to read
-/// it.
-class _HintChip extends StatefulWidget {
-  final String text;
-  const _HintChip({required this.text});
-
-  @override
-  State<_HintChip> createState() => _HintChipState();
-}
-
-class _HintChipState extends State<_HintChip> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 320),
-        child: AnimatedOpacity(
-          opacity: _hover ? 1.0 : 0.55,
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          child: Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm,
-              vertical: MechXSpacing.xs,
-            ),
-            decoration: BoxDecoration(
-              color: colors.surface.withAlpha(220),
-              borderRadius: MechXRadii.control,
-              border: Border.all(color: colors.border),
-            ),
-            child: Text(
-              widget.text,
-              style: context.type.caption.copyWith(color: colors.textMuted),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
+// ── Canvas chrome (zoom, minimap, help) ─────────────────────────────────────
 
 /// The electrical canvas gesture-help items, ported verbatim from PanelMaker's
 /// CanvasHelp HELP_ITEMS. Rendered via the shared [CanvasGuideLegend].

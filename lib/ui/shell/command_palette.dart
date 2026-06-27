@@ -143,6 +143,11 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       run: () => ref.read(copilotOpenProvider.notifier).open(),
     ),
     _Command(
+      title: 'Clear drawing',
+      subtitle: 'Remove all drawn elements (undoable)',
+      run: net.clear,
+    ),
+    _Command(
       title: 'New from template',
       subtitle: 'Prefill floors / occupancy',
       run: () => showTemplatesDialog(context),
