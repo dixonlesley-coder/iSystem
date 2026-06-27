@@ -8,6 +8,8 @@ import 'package:mechx_engine/sizing/storm_sizing.dart'
     show kDefaultRunoffCoefficient;
 import 'package:mechx_engine/standards/sni.dart';
 
+import '../ai/ai_client.dart';
+
 /// HVAC duct preferences (shape + sizing method) driving the air code path.
 @immutable
 class DuctSettings {
@@ -109,16 +111,30 @@ class AiApiKeyController extends Notifier<String> {
   void set(String v) => state = v.trim();
 }
 
+/// Which LLM backend the copilot uses — Anthropic (primary) or OpenAI (backup).
+/// Round-trips via `DesignSettings.aiProvider`.
+final aiProviderProvider =
+    NotifierProvider<AiProviderController, AiProviderKind>(
+        AiProviderController.new);
+
+class AiProviderController extends Notifier<AiProviderKind> {
+  @override
+  AiProviderKind build() => AiProviderKind.anthropic;
+
+  void set(AiProviderKind v) => state = v;
+}
+
 /// Model id the copilot calls (default `claude-sonnet-4-6`). Round-trips via
-/// `DesignSettings.aiModel`.
+/// `DesignSettings.aiModel`. Empty falls back to the Anthropic default; switch
+/// the provider in Preferences to re-seed it with that provider's default.
 final aiModelProvider =
     NotifierProvider<AiModelController, String>(AiModelController.new);
 
 class AiModelController extends Notifier<String> {
   @override
-  String build() => 'claude-sonnet-4-6';
+  String build() => kDefaultAnthropicModel;
 
-  void set(String v) => state = v.trim().isEmpty ? 'claude-sonnet-4-6' : v.trim();
+  void set(String v) => state = v.trim().isEmpty ? kDefaultAnthropicModel : v.trim();
 }
 
 /// A transient, user-facing error message (e.g. a failed project open). Null

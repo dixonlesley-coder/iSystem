@@ -60,6 +60,28 @@ abstract interface class AiClient {
   Future<AiResult> proposePlan(AiRequest request);
 }
 
+/// Which LLM backend the copilot talks to. Anthropic is the primary; OpenAI is
+/// a backup so an engineer with only an OpenAI key can still use the copilot.
+enum AiProviderKind { anthropic, openai }
+
+/// The default model for each provider — used when no explicit model is set, and
+/// to re-seed the model field when the engineer switches providers so a Claude
+/// model string is never sent to OpenAI (or vice-versa).
+const String kDefaultAnthropicModel = 'claude-sonnet-4-6';
+const String kDefaultOpenAiModel = 'gpt-4o';
+
+String defaultModelForProvider(AiProviderKind provider) => switch (provider) {
+      AiProviderKind.anthropic => kDefaultAnthropicModel,
+      AiProviderKind.openai => kDefaultOpenAiModel,
+    };
+
+/// Parse a persisted/free-form provider string, tolerant of unknown values
+/// (anything unrecognised falls back to Anthropic — the primary).
+AiProviderKind aiProviderFromName(String? name) => switch (name) {
+      'openai' => AiProviderKind.openai,
+      _ => AiProviderKind.anthropic,
+    };
+
 /// Calls the Anthropic Messages API with the command registry as tools and
 /// decodes the returned `tool_use` blocks into an [AiPlan]. Offline-graceful:
 /// an empty key ⇒ [AiDisabled]; any network/API failure ⇒ [AiError].

@@ -473,6 +473,27 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   additive `DesignSettings.anthropicApiKey`/`aiModel` (tolerant) + an API-key card in Preferences
   (masked). The registry + plan loop are fully covered offline via `FakeAiClient`; the live call
   needs the engineer's key.
+  **Copilot multi-provider (OpenAI backup) landed:** the copilot now runs on **either**
+  Anthropic (primary) or **OpenAI** (backup) so an engineer with only an OpenAI key still gets
+  the copilot — same injectable `AiClient` seam. New `lib/ai/openai_client.dart`
+  (`OpenAiAiClient` → `POST /v1/chat/completions`, the registry mapped to OpenAI function-tools
+  via pure `openAiToolsFromRegistry()`, `tool_calls` decoded by pure `parseOpenAiResponse`;
+  same TYPED `AiResult` ok/disabled/error, offline-graceful). `ai_client.dart` adds
+  `AiProviderKind`/`defaultModelForProvider`/`aiProviderFromName`; `aiProviderProvider`
+  (`app_state.dart`) drives `aiClientProvider`'s switch; the store resolves a **family-correct
+  model** (`_effectiveModel` — never sends a `claude-*` string to OpenAI or vice-versa, even
+  from a hand-edited file). Persists additively via `DesignSettings.aiProvider` (tolerant,
+  unknown→anthropic); a **Provider** Anthropic/OpenAI toggle in the Preferences AI card re-seeds
+  the model to that provider's default on switch. **Subscription/OAuth sign-in is NOT built** —
+  a live browser PKCE flow needs an Anthropic-registered OAuth client ID that third-party apps
+  can't obtain today, so the shippable path stays BYO-key for either provider (no dead OAuth
+  scaffolding, per the declutter direction).
+  **Riser-view discoverability (declutter-consistent clarity):** the "Schematic" view is renamed
+  **"Riser"** (nav + `WorkspaceView.label` + the command palette's "Go to Riser"). Two ON-DEMAND
+  (behind the existing `?` guides, hidden by default ⇒ goldens byte-identical) clarity lines were
+  added rather than persistent prose: the Layout canvas mechanical guide notes that risers drawn
+  on the plan stack vertically in the Riser view, and the Riser-view Edit help legend leads with
+  an Auto-vs-Edit mode explainer (`StringKey.schematicHelpModes`, EN+ID).
   **Mechanical ↔ electrical theme convergence landed (Apple-consistency pass):** the
   electrical workspace (a PanelMaker port) now reads as one app with the mechanical one.
   Driven by an audit + re-review, converged: the electrical **Loads palette to the RIGHT**

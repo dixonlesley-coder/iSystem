@@ -13,6 +13,7 @@ import 'package:mechx_engine/network/network.dart';
 
 import '../ai/ai_client.dart';
 import '../ai/commands.dart';
+import '../ai/openai_client.dart';
 import 'annotation_store.dart';
 import 'app_state.dart';
 import 'network_store.dart';
@@ -37,9 +38,15 @@ class CopilotState {
   static const idle = CopilotState();
 }
 
-/// The injectable copilot client. Defaults to the real Anthropic HTTP client;
-/// tests `overrideWithValue(FakeAiClient(...))`.
-final aiClientProvider = Provider<AiClient>((ref) => AnthropicAiClient());
+/// The injectable copilot client. Resolves to the real HTTP client for the
+/// chosen provider (Anthropic primary, OpenAI backup); tests
+/// `overrideWithValue(FakeAiClient(...))`.
+final aiClientProvider = Provider<AiClient>((ref) {
+  return switch (ref.watch(aiProviderProvider)) {
+    AiProviderKind.anthropic => AnthropicAiClient(),
+    AiProviderKind.openai => OpenAiAiClient(),
+  };
+});
 
 class CopilotController extends Notifier<CopilotState> {
   @override
@@ -53,10 +60,11 @@ class CopilotController extends Notifier<CopilotState> {
     if (text.isEmpty) return;
     state = const CopilotState(phase: CopilotPhase.thinking);
 
+    final provider = ref.read(aiProviderProvider);
     final result = await ref.read(aiClientProvider).proposePlan(AiRequest(
           userText: text,
           apiKey: ref.read(aiApiKeyProvider),
-          model: ref.read(aiModelProvider),
+          model: _effectiveModel(provider, ref.read(aiModelProvider)),
           contextSummary: _buildContext(),
         ));
 
@@ -92,6 +100,20 @@ class CopilotController extends Notifier<CopilotState> {
       _apply(cmd);
     }
     state = CopilotState.idle;
+  }
+
+  /// The model to actually send: the engineer's stored choice when it matches the
+  /// active provider's family, else that provider's default — so a Claude model
+  /// string is never sent to OpenAI (or vice-versa), even from a hand-edited file.
+  static String _effectiveModel(AiProviderKind provider, String stored) {
+    final s = stored.trim();
+    if (s.isEmpty) return defaultModelForProvider(provider);
+    final looksAnthropic = s.startsWith('claude');
+    final providerIsAnthropic = provider == AiProviderKind.anthropic;
+    if (looksAnthropic != providerIsAnthropic) {
+      return defaultModelForProvider(provider);
+    }
+    return s;
   }
 
   /// Drop the proposed plan without applying anything.

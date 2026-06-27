@@ -735,6 +735,7 @@ const _mechanicalLayerGuideItems = <String>[
   'Drag a segment endpoint to resize it — it snaps to nearby fittings',
   'Left-click to select; Shift+click or rubber-band for multi-select',
   'Drag the empty canvas to pan; scroll to zoom',
+  'Risers drawn here stack vertically in the Riser view (left nav)',
 ];
 
 /// Gesture-help for the electrical layer of the Layout canvas.

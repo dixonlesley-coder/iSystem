@@ -2,8 +2,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/ai/ai_client.dart';
 import 'package:mechx/ai/commands.dart';
+import 'package:mechx/ai/openai_client.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/ai_copilot_store.dart';
+import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/network_store.dart';
 
 void main() {
@@ -134,6 +136,44 @@ void main() {
       final back = DesignSettings.fromJson(const {'occupancy': 'private'});
       expect(back.anthropicApiKey, '');
       expect(back.aiModel, 'claude-sonnet-4-6');
+      // No provider key on an older file → Anthropic (the primary).
+      expect(back.aiProvider, 'anthropic');
+    });
+
+    test('aiProvider round-trips; unknown falls back to anthropic', () {
+      const s = DesignSettings(aiProvider: 'openai');
+      expect(DesignSettings.fromJson(s.toJson()).aiProvider, 'openai');
+      // A hand-edited / unknown value is tolerated → anthropic.
+      expect(
+        DesignSettings.fromJson(const {'aiProvider': 'gemini'}).aiProvider,
+        'anthropic',
+      );
+    });
+  });
+
+  group('Provider selection', () {
+    test('aiClientProvider resolves the chosen backend', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      // Default → Anthropic.
+      expect(c.read(aiProviderProvider), AiProviderKind.anthropic);
+      expect(c.read(aiClientProvider), isA<AnthropicAiClient>());
+      // Switch → OpenAI client.
+      c.read(aiProviderProvider.notifier).set(AiProviderKind.openai);
+      expect(c.read(aiClientProvider), isA<OpenAiAiClient>());
+    });
+
+    test('aiProviderFromName is tolerant', () {
+      expect(aiProviderFromName('openai'), AiProviderKind.openai);
+      expect(aiProviderFromName('anthropic'), AiProviderKind.anthropic);
+      expect(aiProviderFromName(null), AiProviderKind.anthropic);
+      expect(aiProviderFromName('mystery'), AiProviderKind.anthropic);
+    });
+
+    test('defaultModelForProvider gives a family-correct default', () {
+      expect(defaultModelForProvider(AiProviderKind.anthropic),
+          startsWith('claude'));
+      expect(defaultModelForProvider(AiProviderKind.openai), startsWith('gpt'));
     });
   });
 }

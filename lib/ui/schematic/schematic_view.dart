@@ -1251,6 +1251,7 @@ class _ElevationHelp extends StatelessWidget {
     final type = context.type;
     final strings = context.strings;
     final items = <String>[
+      strings(StringKey.schematicHelpModes),
       strings(StringKey.schematicHelp1),
       strings(StringKey.schematicHelp2),
       strings(StringKey.schematicHelp3),

@@ -131,6 +131,7 @@ enum StringKey {
   schematicHelp4,
   schematicHelp5,
   schematicHelp6,
+  schematicHelpModes,
 
   // Inspector — section labels.
   inspectorProject,
@@ -368,6 +369,9 @@ const Map<StringKey, String> _en = {
       'Drag a riser sideways to reposition it; its length does not change',
   StringKey.schematicHelp4:
       'Right-click a riser to set its nominal size in inches or pick a material',
+  StringKey.schematicHelpModes:
+      'Auto shows the read-only generated riser; switch to Edit to place and '
+          'size risers by hand',
   StringKey.schematicHelp5: 'Select a riser and press Delete to remove it',
   StringKey.schematicHelp6:
       'Middle-drag or scroll to pan; Ctrl+scroll or pinch to zoom',
@@ -616,6 +620,9 @@ const Map<StringKey, String> _id = {
       'Seret riser ke samping untuk memindahkannya; panjangnya tidak berubah',
   StringKey.schematicHelp4:
       'Klik-kanan riser untuk mengatur ukuran nominalnya dalam inci atau memilih material',
+  StringKey.schematicHelpModes:
+      'Otomatis menampilkan riser yang dibuat otomatis (hanya-baca); beralih ke '
+          'Edit untuk menempatkan dan mengukur riser secara manual',
   StringKey.schematicHelp5:
       'Pilih riser dan tekan Delete untuk menghapusnya',
   StringKey.schematicHelp6:

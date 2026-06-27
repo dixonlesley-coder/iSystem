@@ -127,6 +127,10 @@ class DesignSettings {
   /// Model id the copilot calls. Defaults to `claude-sonnet-4-6`.
   final String aiModel;
 
+  /// Which LLM backend the copilot uses: `'anthropic'` (primary) or `'openai'`
+  /// (backup). Defaults to Anthropic; unknown values fall back to it on load.
+  final String aiProvider;
+
   const DesignSettings({
     this.occupancy = Occupancy.private,
     this.upfeed = false,
@@ -148,6 +152,7 @@ class DesignSettings {
     this.multiZoneExhaustStrategy = 'return_all',
     this.anthropicApiKey = '',
     this.aiModel = 'claude-sonnet-4-6',
+    this.aiProvider = 'anthropic',
   });
 
   Map<String, dynamic> toJson() => {
@@ -176,6 +181,7 @@ class DesignSettings {
         // disabled copilot / default model).
         'anthropicApiKey': anthropicApiKey,
         'aiModel': aiModel,
+        'aiProvider': aiProvider,
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -223,6 +229,7 @@ class DesignSettings {
         aiModel: json['aiModel'] is String && (json['aiModel'] as String).isNotEmpty
             ? json['aiModel']
             : 'claude-sonnet-4-6',
+        aiProvider: json['aiProvider'] == 'openai' ? 'openai' : 'anthropic',
       );
 
   /// Clamp the multi-zone diversity factor into (0,1]; absent/invalid ⇒ 0.9.

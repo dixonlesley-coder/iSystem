@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../ai/ai_client.dart';
 import '../../store/app_state.dart';
 import '../../update/update_check.dart';
 import '../../update/update_provider.dart';
@@ -78,11 +79,22 @@ class _ApiKeyCardState extends ConsumerState<_ApiKeyCard> {
   bool _editing = false;
   String _draft = '';
 
+  /// Switch the copilot backend and re-seed the model field with that provider's
+  /// default, so a Claude model string is never carried over to OpenAI (and vice
+  /// versa). The API key is provider-specific too — clear any open draft.
+  void _switchProvider(AiProviderKind provider) {
+    ref.read(aiProviderProvider.notifier).set(provider);
+    ref.read(aiModelProvider.notifier).set(defaultModelForProvider(provider));
+    setState(() => _draft = '');
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
     final hasKey = ref.watch(aiApiKeyProvider).trim().isNotEmpty;
+    final provider = ref.watch(aiProviderProvider);
+    final isOpenAi = provider == AiProviderKind.openai;
 
     return Container(
       padding: const EdgeInsets.all(MechXSpacing.md),
@@ -100,7 +112,7 @@ class _ApiKeyCardState extends ConsumerState<_ApiKeyCard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Claude copilot (Anthropic API key)',
+                    Text('AI copilot',
                         style: type.body.copyWith(color: colors.textPrimary)),
                     const SizedBox(height: 2),
                     Text(
@@ -122,11 +134,38 @@ class _ApiKeyCardState extends ConsumerState<_ApiKeyCard> {
               ),
             ],
           ),
+          const SizedBox(height: MechXSpacing.sm),
+          // Provider toggle — Anthropic is primary, OpenAI a backup so an
+          // engineer with only an OpenAI key can still use the copilot.
+          Row(
+            children: [
+              Text('Provider',
+                  style: type.caption.copyWith(color: colors.textMuted)),
+              const SizedBox(width: MechXSpacing.sm),
+              MechXButton(
+                label: 'Anthropic',
+                primary: !isOpenAi,
+                tertiary: isOpenAi,
+                onPressed: isOpenAi
+                    ? () => _switchProvider(AiProviderKind.anthropic)
+                    : null,
+              ),
+              const SizedBox(width: MechXSpacing.xs),
+              MechXButton(
+                label: 'OpenAI',
+                primary: isOpenAi,
+                tertiary: !isOpenAi,
+                onPressed: isOpenAi
+                    ? null
+                    : () => _switchProvider(AiProviderKind.openai),
+              ),
+            ],
+          ),
           if (_editing) ...[
             const SizedBox(height: MechXSpacing.sm),
             MechXTextField(
               value: _draft,
-              hint: 'sk-ant-…',
+              hint: isOpenAi ? 'sk-…' : 'sk-ant-…',
               onChanged: (v) => _draft = v,
             ),
             const SizedBox(height: MechXSpacing.sm),
