@@ -21,6 +21,35 @@ void main() {
       );
     });
 
+    test('SNI 03-6572-2001 Tabel 4.4.1 figures are pinned', () {
+      // The spaces listed in the mechanical-ventilation table — locked to the
+      // SNI numbers (see docs/standards-references.md). A regression here means
+      // a value drifted away from the standard.
+      const expected = <RoomType, double>{
+        RoomType.office: 6.0, // kantor
+        RoomType.restaurant: 6.0, // restoran
+        RoomType.retail: 6.0, // toko / pasar swalayan
+        RoomType.classroom: 8.0, // kelas / bioskop
+        RoomType.lobby: 4.0, // lobi / koridor / tangga
+        RoomType.corridor: 4.0, // lobi / koridor / tangga
+        RoomType.toilet: 10.0, // kamar mandi / WC
+        RoomType.commercialKitchen: 20.0, // dapur
+      };
+      expected.forEach((type, ach) {
+        expect(profile.recommendedAch(type).value, closeTo(ach, 1e-9),
+            reason: '${roomTypeLabel(type)} must match SNI Tabel 4.4.1');
+      });
+    });
+
+    test('table-sourced ACH cites Tabel 4.4.1; off-table cites general '
+        'practice', () {
+      expect(profile.recommendedAch(RoomType.office).citation,
+          contains('Tabel 4.4.1'));
+      // Bedroom is not in the table — its citation must not falsely claim it.
+      expect(profile.recommendedAch(RoomType.bedroom).citation,
+          isNot(contains('Tabel 4.4.1')));
+    });
+
     test('every room type has a positive ACH', () {
       for (final t in RoomType.values) {
         expect(profile.recommendedAch(t).value, greaterThan(0.0),

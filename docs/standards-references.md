@@ -41,9 +41,12 @@ promoted to `sniVerbatim`. **Do not** promote on the strength of secondary sourc
 Spaces NOT in Tabel 4.4.1 (bedroom, living room, hospital ward, laboratory, server room)
 remain general HVAC practice (`secondarySource`, ASHRAE 62.1-class).
 
-> Drives `standards/ventilation.dart` `_achValue`. Earlier draft values that differ from the
-> table (classroom 6→8, retail 8→6, restaurant 10→6, toilet 12→10, lobby 5→4) are TO BE
-> corrected to these SNI figures (pending — applied in the standards-citation pass).
+> Drives `standards/ventilation.dart` `_achValue`. The draft values that differed from the
+> table (classroom 6→8, retail 8→6, restaurant 10→6, toilet 12→10, lobby 5→4) have been
+> **corrected** to these SNI figures (standards-citation pass, 2026-06); table-sourced values
+> now cite `Tabel 4.4.1` and are pinned by a `ventilation_test.dart` test, while off-table
+> spaces (bedroom/living/ward/lab/server/meeting) carry a general-practice citation. Both tiers
+> stay `secondarySource` until the official PDF is read verbatim.
 
 ACH cooling-load BTU/m² densities and AC PK conventions are NOT from this standard —
 they stay general practice (`secondarySource`); see `sizing/cooling_load.dart`.

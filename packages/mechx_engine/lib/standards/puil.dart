@@ -267,20 +267,24 @@ class PuilProfile implements ElectricalStandardsProfile {
   StandardValue<double> get maxVoltageDropGeneral => const StandardValue(
         0.05,
         unit: '%',
-        citation: '$_doc §4.2.3 / IEC 60364-5-52 — max voltage drop (general)',
+        citation: '$_doc cl. 4.2.3.1 / IEC 60364-5-52 — max voltage drop '
+            '(general)',
         verified: false,
-        note: 'Drop tegangan maks. 5 % dari titik suplai ke beban (umum). '
-            'Confirm the PUIL clause.',
+        note: 'Drop tegangan maks. 5 % dari titik suplai ke beban (umum), per '
+            'PUIL 2011 cl. 4.2.3.1 (corroborated via secondary sources; VERIFY '
+            'against the official PDF).',
       );
 
   @override
   StandardValue<double> get maxVoltageDropLighting => const StandardValue(
         0.03,
         unit: '%',
-        citation: '$_doc §4.2.3 / IEC 60364-5-52 — max voltage drop (lighting)',
+        citation: '$_doc cl. 4.2.3.1 / IEC 60364-5-52 — max voltage drop '
+            '(lighting)',
         verified: false,
-        note: 'Drop tegangan maks. 3 % untuk sirkit penerangan. '
-            'Confirm the PUIL clause.',
+        note: 'Drop tegangan maks. 3 % untuk sirkit penerangan (PUIL 2011 '
+            'cl. 4.2.3.1 general limit is 5 %; 3 % is the tighter lighting '
+            'target). VERIFY against the official PDF.',
       );
 
   // ── Cable sizing constants ────────────────────────────────────────────────
@@ -289,9 +293,12 @@ class PuilProfile implements ElectricalStandardsProfile {
   StandardValue<double> get continuousLoadFactor => const StandardValue(
         1.25,
         unit: '×',
-        citation: '$_doc / IEC 60364-4-43 — continuous-load factor (Iz ≥ 1.25·Ib)',
+        citation: '$_doc cl. 2.2.8.3 / IEC 60364-4-43 — continuous-load factor '
+            '(Iz ≥ 1.25·Ib)',
         verified: false,
-        note: 'Cable Iz must be ≥ max(In, 1.25·Ib); 125 % continuous-load rule.',
+        note: 'A final circuit cable KHA must be ≥ 125 % of the full-load '
+            'current for a single motor (PUIL 2011 cl. 2.2.8.3); Iz ≥ '
+            'max(In, 1.25·Ib). VERIFY against the official PDF.',
       );
 
   @override
@@ -409,8 +416,12 @@ class PuilProfile implements ElectricalStandardsProfile {
   double get conductorReactanceOhmPerKm => 0.08;
 
   // ── Derating ──────────────────────────────────────────────────────────────
+  // PUIL 2011 (amandemen 1:2013) Tabel K.52.3.2 gives the ambient + grouping
+  // correction factors over the 30 °C KHA reference ambient; the tables below
+  // are the matching IEC 60364-5-52 figures the PUIL table adopts. Applied as
+  // Ib' = Ib / (k1·k2). VERIFY against the official PUIL PDF.
 
-  // IEC 60364-5-52 Table B.52.14 (base 30 °C).
+  // IEC 60364-5-52 Table B.52.14 / PUIL Tabel K.52.3.2 (base 30 °C).
   static final Map<double, double> _ambientPvc = {
     10: 1.22, 15: 1.17, 20: 1.12, 25: 1.06, 30: 1.0, 35: 0.94, 40: 0.87,
     45: 0.79, 50: 0.71, 55: 0.61, 60: 0.5,
