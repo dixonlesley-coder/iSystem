@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/ai/ai_client.dart';
 import 'package:mechx/ai/commands.dart';
+import 'package:mechx/ai/glm_client.dart';
 import 'package:mechx/ai/openai_client.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/ai_copilot_store.dart';
@@ -141,8 +142,10 @@ void main() {
     });
 
     test('aiProvider round-trips; unknown falls back to anthropic', () {
-      const s = DesignSettings(aiProvider: 'openai');
-      expect(DesignSettings.fromJson(s.toJson()).aiProvider, 'openai');
+      for (final code in const ['openai', 'glm']) {
+        final s = DesignSettings(aiProvider: code);
+        expect(DesignSettings.fromJson(s.toJson()).aiProvider, code);
+      }
       // A hand-edited / unknown value is tolerated → anthropic.
       expect(
         DesignSettings.fromJson(const {'aiProvider': 'gemini'}).aiProvider,
@@ -161,10 +164,14 @@ void main() {
       // Switch → OpenAI client.
       c.read(aiProviderProvider.notifier).set(AiProviderKind.openai);
       expect(c.read(aiClientProvider), isA<OpenAiAiClient>());
+      // Switch → GLM client.
+      c.read(aiProviderProvider.notifier).set(AiProviderKind.glm);
+      expect(c.read(aiClientProvider), isA<GlmAiClient>());
     });
 
     test('aiProviderFromName is tolerant', () {
       expect(aiProviderFromName('openai'), AiProviderKind.openai);
+      expect(aiProviderFromName('glm'), AiProviderKind.glm);
       expect(aiProviderFromName('anthropic'), AiProviderKind.anthropic);
       expect(aiProviderFromName(null), AiProviderKind.anthropic);
       expect(aiProviderFromName('mystery'), AiProviderKind.anthropic);
@@ -174,6 +181,30 @@ void main() {
       expect(defaultModelForProvider(AiProviderKind.anthropic),
           startsWith('claude'));
       expect(defaultModelForProvider(AiProviderKind.openai), startsWith('gpt'));
+      expect(defaultModelForProvider(AiProviderKind.glm), startsWith('glm'));
+    });
+
+    test('every provider has a non-empty in-family catalog that includes its '
+        'default', () {
+      for (final p in AiProviderKind.values) {
+        final models = modelsForProvider(p);
+        expect(models, isNotEmpty, reason: '$p has no models');
+        // The default the dropdown re-seeds to must itself be selectable.
+        expect(models.map((m) => m.id), contains(defaultModelForProvider(p)),
+            reason: '$p default is not in its catalog');
+        // Every catalogued id is in-family.
+        for (final m in models) {
+          expect(modelFamilyMatches(p, m.id), isTrue,
+              reason: '${m.id} is not in the $p family');
+        }
+      }
+    });
+
+    test('modelFamilyMatches guards cross-provider ids', () {
+      expect(modelFamilyMatches(AiProviderKind.glm, 'claude-opus-4-8'), isFalse);
+      expect(modelFamilyMatches(AiProviderKind.openai, 'glm-4.6'), isFalse);
+      expect(modelFamilyMatches(AiProviderKind.anthropic, 'gpt-4o'), isFalse);
+      expect(modelFamilyMatches(AiProviderKind.glm, 'glm-4.6'), isTrue);
     });
   });
 }

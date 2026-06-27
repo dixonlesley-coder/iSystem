@@ -229,7 +229,9 @@ class DesignSettings {
         aiModel: json['aiModel'] is String && (json['aiModel'] as String).isNotEmpty
             ? json['aiModel']
             : 'claude-sonnet-4-6',
-        aiProvider: json['aiProvider'] == 'openai' ? 'openai' : 'anthropic',
+        aiProvider: const {'openai', 'glm'}.contains(json['aiProvider'])
+            ? json['aiProvider'] as String
+            : 'anthropic',
       );
 
   /// Clamp the multi-zone diversity factor into (0,1]; absent/invalid ⇒ 0.9.

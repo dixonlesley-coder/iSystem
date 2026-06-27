@@ -60,27 +60,91 @@ abstract interface class AiClient {
   Future<AiResult> proposePlan(AiRequest request);
 }
 
-/// Which LLM backend the copilot talks to. Anthropic is the primary; OpenAI is
-/// a backup so an engineer with only an OpenAI key can still use the copilot.
-enum AiProviderKind { anthropic, openai }
+/// Which LLM backend the copilot talks to. Anthropic is the primary; OpenAI and
+/// GLM (Zhipu) are backups so an engineer with only one of those keys can still
+/// use the copilot. All three speak the same tool-call shape behind [AiClient].
+enum AiProviderKind { anthropic, openai, glm }
 
 /// The default model for each provider — used when no explicit model is set, and
-/// to re-seed the model field when the engineer switches providers so a Claude
-/// model string is never sent to OpenAI (or vice-versa).
+/// to re-seed the model field when the engineer switches providers so a model
+/// string from the wrong family is never sent (e.g. a `claude-*` id to OpenAI).
 const String kDefaultAnthropicModel = 'claude-sonnet-4-6';
 const String kDefaultOpenAiModel = 'gpt-4o';
+const String kDefaultGlmModel = 'glm-4.6';
 
 String defaultModelForProvider(AiProviderKind provider) => switch (provider) {
       AiProviderKind.anthropic => kDefaultAnthropicModel,
       AiProviderKind.openai => kDefaultOpenAiModel,
+      AiProviderKind.glm => kDefaultGlmModel,
     };
+
+/// A selectable model in the Preferences dropdown — the wire `id` plus a short
+/// human label.
+class AiModelOption {
+  final String id;
+  final String label;
+  const AiModelOption(this.id, this.label);
+}
+
+/// The models offered per provider, newest/most-capable first. The default for
+/// each provider (`defaultModelForProvider`) is the first entry. These are the
+/// wire ids sent verbatim to the API; the label is display-only.
+const List<AiModelOption> kAnthropicModels = [
+  AiModelOption('claude-opus-4-8', 'Claude Opus 4.8'),
+  AiModelOption('claude-opus-4-7', 'Claude Opus 4.7'),
+  AiModelOption('claude-sonnet-4-6', 'Claude Sonnet 4.6'),
+  AiModelOption('claude-haiku-4-5', 'Claude Haiku 4.5'),
+];
+
+const List<AiModelOption> kOpenAiModels = [
+  AiModelOption('gpt-4o', 'GPT-4o'),
+  AiModelOption('gpt-4o-mini', 'GPT-4o mini'),
+  AiModelOption('gpt-4.1', 'GPT-4.1'),
+  AiModelOption('gpt-4-turbo', 'GPT-4 Turbo'),
+];
+
+const List<AiModelOption> kGlmModels = [
+  AiModelOption('glm-4.6', 'GLM-4.6'),
+  AiModelOption('glm-4.5', 'GLM-4.5'),
+  AiModelOption('glm-4-plus', 'GLM-4-Plus'),
+  AiModelOption('glm-4-flash', 'GLM-4-Flash'),
+];
+
+List<AiModelOption> modelsForProvider(AiProviderKind provider) =>
+    switch (provider) {
+      AiProviderKind.anthropic => kAnthropicModels,
+      AiProviderKind.openai => kOpenAiModels,
+      AiProviderKind.glm => kGlmModels,
+    };
+
+/// A display label for a model id — the catalog label if known, else the raw id
+/// (so a hand-edited custom model still shows something sensible).
+String modelLabelFor(AiProviderKind provider, String id) {
+  for (final m in modelsForProvider(provider)) {
+    if (m.id == id) return m.label;
+  }
+  return id;
+}
 
 /// Parse a persisted/free-form provider string, tolerant of unknown values
 /// (anything unrecognised falls back to Anthropic — the primary).
 AiProviderKind aiProviderFromName(String? name) => switch (name) {
       'openai' => AiProviderKind.openai,
+      'glm' => AiProviderKind.glm,
       _ => AiProviderKind.anthropic,
     };
+
+/// Whether a model id belongs to a provider's family — used to guard against a
+/// hand-edited `.mechx` carrying, say, a `claude-*` id while the provider is GLM.
+/// The dropdown only ever offers in-family ids, so this is a safety net.
+bool modelFamilyMatches(AiProviderKind provider, String id) {
+  final s = id.trim().toLowerCase();
+  return switch (provider) {
+    AiProviderKind.anthropic => s.startsWith('claude'),
+    AiProviderKind.openai => s.startsWith('gpt') || s.startsWith('o'),
+    AiProviderKind.glm => s.startsWith('glm'),
+  };
+}
 
 /// Calls the Anthropic Messages API with the command registry as tools and
 /// decodes the returned `tool_use` blocks into an [AiPlan]. Offline-graceful:

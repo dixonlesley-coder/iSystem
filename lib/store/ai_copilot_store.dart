@@ -13,6 +13,7 @@ import 'package:mechx_engine/network/network.dart';
 
 import '../ai/ai_client.dart';
 import '../ai/commands.dart';
+import '../ai/glm_client.dart';
 import '../ai/openai_client.dart';
 import 'annotation_store.dart';
 import 'app_state.dart';
@@ -45,6 +46,7 @@ final aiClientProvider = Provider<AiClient>((ref) {
   return switch (ref.watch(aiProviderProvider)) {
     AiProviderKind.anthropic => AnthropicAiClient(),
     AiProviderKind.openai => OpenAiAiClient(),
+    AiProviderKind.glm => GlmAiClient(),
   };
 });
 
@@ -103,14 +105,12 @@ class CopilotController extends Notifier<CopilotState> {
   }
 
   /// The model to actually send: the engineer's stored choice when it matches the
-  /// active provider's family, else that provider's default — so a Claude model
-  /// string is never sent to OpenAI (or vice-versa), even from a hand-edited file.
+  /// active provider's family, else that provider's default — so a model id from
+  /// the wrong family is never sent (e.g. a `claude-*` id to GLM), even from a
+  /// hand-edited file.
   static String _effectiveModel(AiProviderKind provider, String stored) {
     final s = stored.trim();
-    if (s.isEmpty) return defaultModelForProvider(provider);
-    final looksAnthropic = s.startsWith('claude');
-    final providerIsAnthropic = provider == AiProviderKind.anthropic;
-    if (looksAnthropic != providerIsAnthropic) {
+    if (s.isEmpty || !modelFamilyMatches(provider, s)) {
       return defaultModelForProvider(provider);
     }
     return s;

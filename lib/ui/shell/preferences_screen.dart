@@ -10,6 +10,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
 import '../widgets/mechx_button.dart';
+import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_text_field.dart';
 
 /// Preferences. Surfaces the real app-wide settings that exist today (the
@@ -94,7 +95,7 @@ class _ApiKeyCardState extends ConsumerState<_ApiKeyCard> {
     final type = context.type;
     final hasKey = ref.watch(aiApiKeyProvider).trim().isNotEmpty;
     final provider = ref.watch(aiProviderProvider);
-    final isOpenAi = provider == AiProviderKind.openai;
+    final model = ref.watch(aiModelProvider);
 
     return Container(
       padding: const EdgeInsets.all(MechXSpacing.md),
@@ -135,29 +136,50 @@ class _ApiKeyCardState extends ConsumerState<_ApiKeyCard> {
             ],
           ),
           const SizedBox(height: MechXSpacing.sm),
-          // Provider toggle — Anthropic is primary, OpenAI a backup so an
-          // engineer with only an OpenAI key can still use the copilot.
+          // Provider toggle — Anthropic is primary; OpenAI and GLM (Zhipu) are
+          // backups so an engineer with only one of those keys can still use the
+          // copilot.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: MechXSpacing.xs),
+                child: Text('Provider',
+                    style: type.caption.copyWith(color: colors.textMuted)),
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              Expanded(
+                child: Wrap(
+                  spacing: MechXSpacing.xs,
+                  runSpacing: MechXSpacing.xs,
+                  children: [
+                    for (final p in AiProviderKind.values)
+                      MechXButton(
+                        label: _providerLabel(p),
+                        primary: provider == p,
+                        tertiary: provider != p,
+                        onPressed:
+                            provider == p ? null : () => _switchProvider(p),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          // Model picker — a dropdown of the chosen provider's models.
           Row(
             children: [
-              Text('Provider',
+              Text('Model',
                   style: type.caption.copyWith(color: colors.textMuted)),
               const SizedBox(width: MechXSpacing.sm),
-              MechXButton(
-                label: 'Anthropic',
-                primary: !isOpenAi,
-                tertiary: isOpenAi,
-                onPressed: isOpenAi
-                    ? () => _switchProvider(AiProviderKind.anthropic)
-                    : null,
-              ),
-              const SizedBox(width: MechXSpacing.xs),
-              MechXButton(
-                label: 'OpenAI',
-                primary: isOpenAi,
-                tertiary: !isOpenAi,
-                onPressed: isOpenAi
-                    ? null
-                    : () => _switchProvider(AiProviderKind.openai),
+              Expanded(
+                child: _ModelDropdown(
+                  provider: provider,
+                  model: model,
+                  onSelected: (id) =>
+                      ref.read(aiModelProvider.notifier).set(id),
+                ),
               ),
             ],
           ),
@@ -165,7 +187,7 @@ class _ApiKeyCardState extends ConsumerState<_ApiKeyCard> {
             const SizedBox(height: MechXSpacing.sm),
             MechXTextField(
               value: _draft,
-              hint: isOpenAi ? 'sk-…' : 'sk-ant-…',
+              hint: _keyHint(provider),
               onChanged: (v) => _draft = v,
             ),
             const SizedBox(height: MechXSpacing.sm),
@@ -203,6 +225,176 @@ class _ApiKeyCardState extends ConsumerState<_ApiKeyCard> {
       ),
     );
   }
+}
+
+String _providerLabel(AiProviderKind p) => switch (p) {
+      AiProviderKind.anthropic => 'Anthropic',
+      AiProviderKind.openai => 'OpenAI',
+      AiProviderKind.glm => 'GLM',
+    };
+
+String _keyHint(AiProviderKind p) => switch (p) {
+      AiProviderKind.anthropic => 'sk-ant-…',
+      AiProviderKind.openai => 'sk-…',
+      AiProviderKind.glm => 'your GLM API key',
+    };
+
+/// A compact, MechXTheme dropdown for picking the copilot model. Tapping the
+/// field discloses the current provider's models inline (no Material menu); the
+/// open list is transient state, so a closed dropdown is byte-identical.
+class _ModelDropdown extends StatefulWidget {
+  final AiProviderKind provider;
+  final String model;
+  final ValueChanged<String> onSelected;
+  const _ModelDropdown({
+    required this.provider,
+    required this.model,
+    required this.onSelected,
+  });
+
+  @override
+  State<_ModelDropdown> createState() => _ModelDropdownState();
+}
+
+class _ModelDropdownState extends State<_ModelDropdown> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final options = modelsForProvider(widget.provider);
+    final label = modelLabelFor(widget.provider, widget.model);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        MechXFocusRing(
+          onActivated: () => setState(() => _open = !_open),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => setState(() => _open = !_open),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 2),
+                decoration: BoxDecoration(
+                  color: colors.background,
+                  borderRadius: MechXRadii.control,
+                  border: Border.all(
+                      color: _open ? colors.accent : colors.border),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(label,
+                          style:
+                              type.label.copyWith(color: colors.textPrimary)),
+                    ),
+                    CustomPaint(
+                      size: const Size(10, 6),
+                      painter: _ChevronPainter(
+                          color: colors.textMuted, open: _open),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (_open) ...[
+          const SizedBox(height: MechXSpacing.xs),
+          Container(
+            decoration: BoxDecoration(
+              color: colors.surface,
+              borderRadius: MechXRadii.control,
+              border: Border.all(color: colors.border),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final o in options)
+                  _ModelRow(
+                    option: o,
+                    selected: o.id == widget.model,
+                    onTap: () {
+                      widget.onSelected(o.id);
+                      setState(() => _open = false);
+                    },
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _ModelRow extends StatelessWidget {
+  final AiModelOption option;
+  final bool selected;
+  final VoidCallback onTap;
+  const _ModelRow(
+      {required this.option, required this.selected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MechXFocusRing(
+      onActivated: onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 2),
+            color: selected ? colors.accentMuted : const Color(0x00000000),
+            child: Text(
+              option.label,
+              style: type.label.copyWith(
+                  color: selected ? colors.textPrimary : colors.textSecondary),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A small down/up chevron for the dropdown field.
+class _ChevronPainter extends CustomPainter {
+  final Color color;
+  final bool open;
+  const _ChevronPainter({required this.color, required this.open});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final path = Path();
+    if (open) {
+      path.moveTo(0, size.height);
+      path.lineTo(size.width / 2, 0);
+      path.lineTo(size.width, size.height);
+    } else {
+      path.moveTo(0, 0);
+      path.lineTo(size.width / 2, size.height);
+      path.lineTo(size.width, 0);
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_ChevronPainter old) =>
+      old.color != color || old.open != open;
 }
 
 /// Human-readable status line for the update card, mapping each [UpdateStatus]

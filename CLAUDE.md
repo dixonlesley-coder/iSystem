@@ -473,21 +473,28 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   additive `DesignSettings.anthropicApiKey`/`aiModel` (tolerant) + an API-key card in Preferences
   (masked). The registry + plan loop are fully covered offline via `FakeAiClient`; the live call
   needs the engineer's key.
-  **Copilot multi-provider (OpenAI backup) landed:** the copilot now runs on **either**
-  Anthropic (primary) or **OpenAI** (backup) so an engineer with only an OpenAI key still gets
-  the copilot — same injectable `AiClient` seam. New `lib/ai/openai_client.dart`
-  (`OpenAiAiClient` → `POST /v1/chat/completions`, the registry mapped to OpenAI function-tools
-  via pure `openAiToolsFromRegistry()`, `tool_calls` decoded by pure `parseOpenAiResponse`;
-  same TYPED `AiResult` ok/disabled/error, offline-graceful). `ai_client.dart` adds
-  `AiProviderKind`/`defaultModelForProvider`/`aiProviderFromName`; `aiProviderProvider`
-  (`app_state.dart`) drives `aiClientProvider`'s switch; the store resolves a **family-correct
-  model** (`_effectiveModel` — never sends a `claude-*` string to OpenAI or vice-versa, even
-  from a hand-edited file). Persists additively via `DesignSettings.aiProvider` (tolerant,
-  unknown→anthropic); a **Provider** Anthropic/OpenAI toggle in the Preferences AI card re-seeds
-  the model to that provider's default on switch. **Subscription/OAuth sign-in is NOT built** —
-  a live browser PKCE flow needs an Anthropic-registered OAuth client ID that third-party apps
-  can't obtain today, so the shippable path stays BYO-key for either provider (no dead OAuth
-  scaffolding, per the declutter direction).
+  **Copilot multi-provider (OpenAI + GLM backups) + model dropdown landed:** the copilot now
+  runs on **Anthropic** (primary), **OpenAI**, or **GLM** (Zhipu) so an engineer with any one of
+  those keys gets the copilot — all three behind the same injectable `AiClient` seam. New
+  `lib/ai/openai_client.dart` (`OpenAiAiClient` → `POST /v1/chat/completions`, the registry mapped
+  to OpenAI function-tools via pure `openAiToolsFromRegistry()`, `tool_calls` decoded by pure
+  `parseOpenAiResponse`) and `lib/ai/glm_client.dart` (`GlmAiClient` → Zhipu's OpenAI-compatible
+  `…/paas/v4/chat/completions`, **reusing** the OpenAI client's two pure static helpers — only the
+  endpoint/auth/system-prompt differ); same TYPED `AiResult` ok/disabled/error, offline-graceful.
+  `ai_client.dart` adds `AiProviderKind` {anthropic, openai, glm} + `defaultModelForProvider`/
+  `aiProviderFromName`/`modelFamilyMatches` + a per-provider **model catalog** (`kAnthropicModels`/
+  `kOpenAiModels`/`kGlmModels` + `modelsForProvider`/`modelLabelFor`). `aiProviderProvider`
+  (`app_state.dart`) drives `aiClientProvider`'s 3-way switch; the store resolves a **family-correct
+  model** (`_effectiveModel` via `modelFamilyMatches` — never sends a `claude-*` id to GLM/OpenAI
+  etc., even from a hand-edited file). Persists additively via `DesignSettings.aiProvider`
+  (tolerant, unknown→anthropic). Preferences AI card: a 3-way **Provider** toggle (re-seeds the
+  model to that provider's default on switch) + a custom MechXTheme **model dropdown**
+  (`_ModelDropdown`, inline disclosure, no Material — closed ⇒ byte-identical so Preferences-not-in-
+  goldens stays stable) listing the active provider's models. **Subscription/OAuth sign-in is still
+  NOT built (for any provider)** — a live browser PKCE flow needs a provider-registered OAuth client
+  ID that third-party apps can't obtain (Anthropic) and consumer ChatGPT login ≠ OpenAI API access;
+  so the shippable path stays BYO-key per provider (no dead OAuth scaffolding, per the declutter
+  direction).
   **Riser-view discoverability (declutter-consistent clarity):** the "Schematic" view is renamed
   **"Riser"** (nav + `WorkspaceView.label` + the command palette's "Go to Riser"). Two ON-DEMAND
   (behind the existing `?` guides, hidden by default ⇒ goldens byte-identical) clarity lines were
