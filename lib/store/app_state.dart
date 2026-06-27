@@ -97,6 +97,30 @@ class RunoffCoefficientController extends Notifier<double> {
   void nudge(double delta) => set(state + delta);
 }
 
+/// BYO Anthropic API key for the in-app Claude copilot. Empty ⇒ the copilot is
+/// disabled (offline-graceful). Round-trips via `DesignSettings.anthropicApiKey`.
+final aiApiKeyProvider =
+    NotifierProvider<AiApiKeyController, String>(AiApiKeyController.new);
+
+class AiApiKeyController extends Notifier<String> {
+  @override
+  String build() => '';
+
+  void set(String v) => state = v.trim();
+}
+
+/// Model id the copilot calls (default `claude-sonnet-4-6`). Round-trips via
+/// `DesignSettings.aiModel`.
+final aiModelProvider =
+    NotifierProvider<AiModelController, String>(AiModelController.new);
+
+class AiModelController extends Notifier<String> {
+  @override
+  String build() => 'claude-sonnet-4-6';
+
+  void set(String v) => state = v.trim().isEmpty ? 'claude-sonnet-4-6' : v.trim();
+}
+
 /// A transient, user-facing error message (e.g. a failed project open). Null
 /// when there is nothing to show; the shell renders it as a dismissible banner.
 final loadErrorProvider =

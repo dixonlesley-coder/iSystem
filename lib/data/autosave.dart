@@ -82,6 +82,9 @@ ProjectDocument buildDocument(ProviderReader read) {
       marginPct: commercial.marginPct,
       // The user-defined fixture library round-trips with the project.
       fixtureLibrary: read(fixtureLibraryProvider),
+      // BYO Claude copilot key + model round-trip with the project.
+      anthropicApiKey: read(aiApiKeyProvider),
+      aiModel: read(aiModelProvider),
     ),
     // The electrical sub-model (v2) round-trips alongside the plumbing project.
     electrical: read(electricalProjectProvider),
@@ -136,6 +139,9 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   ));
   // Restore the user-defined fixture library (absent on an older file ⇒ empty).
   read(fixtureLibraryProvider.notifier).set(s.fixtureLibrary);
+  // Restore the BYO Claude copilot key + model (absent ⇒ disabled / default).
+  read(aiApiKeyProvider.notifier).set(s.anthropicApiKey);
+  read(aiModelProvider.notifier).set(s.aiModel);
   // Restore the electrical project (v2 files carry one; older files / projects
   // with no electrical design fall back to the built-in sample).
   read(electricalProjectProvider.notifier)

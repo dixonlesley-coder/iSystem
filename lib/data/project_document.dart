@@ -119,6 +119,14 @@ class DesignSettings {
   /// absent ⇒ `'return_all'`, tolerant on load.
   final String multiZoneExhaustStrategy;
 
+  /// BYO Anthropic API key for the in-app Claude copilot. Empty ⇒ the copilot is
+  /// disabled (offline-graceful). Stored in the `.mechx` file; the engineer is
+  /// warned not to share a project file carrying their key.
+  final String anthropicApiKey;
+
+  /// Model id the copilot calls. Defaults to `claude-sonnet-4-6`.
+  final String aiModel;
+
   const DesignSettings({
     this.occupancy = Occupancy.private,
     this.upfeed = false,
@@ -138,6 +146,8 @@ class DesignSettings {
     this.coolingLoadMethod = 'simple',
     this.multiZoneDiversityFactor = 0.9,
     this.multiZoneExhaustStrategy = 'return_all',
+    this.anthropicApiKey = '',
+    this.aiModel = 'claude-sonnet-4-6',
   });
 
   Map<String, dynamic> toJson() => {
@@ -162,6 +172,10 @@ class DesignSettings {
         'coolingLoadMethod': coolingLoadMethod,
         'multiZoneDiversityFactor': multiZoneDiversityFactor,
         'multiZoneExhaustStrategy': multiZoneExhaustStrategy,
+        // BYO Claude copilot key + model (additive; absent on an older file →
+        // disabled copilot / default model).
+        'anthropicApiKey': anthropicApiKey,
+        'aiModel': aiModel,
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -204,6 +218,11 @@ class DesignSettings {
                 ?.toDouble()),
         multiZoneExhaustStrategy: _exhaustStrategyOr(
             json['multiZoneExhaustStrategy'], 'return_all'),
+        anthropicApiKey:
+            json['anthropicApiKey'] is String ? json['anthropicApiKey'] : '',
+        aiModel: json['aiModel'] is String && (json['aiModel'] as String).isNotEmpty
+            ? json['aiModel']
+            : 'claude-sonnet-4-6',
       );
 
   /// Clamp the multi-zone diversity factor into (0,1]; absent/invalid ⇒ 0.9.
