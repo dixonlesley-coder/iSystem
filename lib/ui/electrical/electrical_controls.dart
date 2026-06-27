@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/context_menu.dart';
 
 /// A labelled field row: a quiet sentence-case caption over its [child] input.
 class ElectricalField extends StatelessWidget {
@@ -356,95 +357,28 @@ class ElectricalMenuAction {
   const ElectricalMenuAction(this.label, this.onTap, {this.danger = false});
 }
 
-/// A floating context menu (grow-from-top-left on open) of [ElectricalMenuAction]s.
+/// A floating context menu of [ElectricalMenuAction]s — the SHARED
+/// [MechXContextMenu] chrome (the same panel/rows/entrance the mechanical
+/// right-click menus use), at a fixed 188-px width to match the electrical
+/// canvas. Each action maps to a [MechXMenuRow]; destructive actions use the
+/// danger row variant.
 class ElectricalMenu extends StatelessWidget {
   final List<ElectricalMenuAction> items;
   const ElectricalMenu({super.key, required this.items});
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
-    // Grow-from-top-left scale + fade on open, like a native context menu.
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.dismiss,
-      curve: MechXMotion.standard,
-      builder: (context, t, child) => Opacity(
-        opacity: t,
-        child: Transform.scale(
-          scale: 0.94 + 0.06 * t,
-          alignment: Alignment.topLeft,
-          child: child,
-        ),
-      ),
-      child: Container(
-        width: 188,
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: MechXRadii.control,
-          border: Border.all(color: colors.border),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final item in items)
-              _MenuItem(
-                label: item.label,
-                onTap: item.onTap,
-                danger: item.danger,
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MenuItem extends StatefulWidget {
-  final String label;
-  final VoidCallback onTap;
-  final bool danger;
-  const _MenuItem({
-    required this.label,
-    required this.onTap,
-    this.danger = false,
-  });
-
-  @override
-  State<_MenuItem> createState() => _MenuItemState();
-}
-
-class _MenuItemState extends State<_MenuItem> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm + 2,
-            vertical: MechXSpacing.xs + 3,
-          ),
-          color: _hover ? colors.surfaceHover : const Color(0x00000000),
-          child: Text(
-            widget.label,
-            style: type.body.copyWith(
-              color: widget.danger ? colors.danger : colors.textPrimary,
+    return SizedBox(
+      width: 188,
+      child: MechXContextMenu(
+        children: [
+          for (final item in items)
+            MechXMenuRow(
+              label: item.label,
+              onTap: item.onTap,
+              danger: item.danger,
             ),
-          ),
-        ),
+        ],
       ),
     );
   }
