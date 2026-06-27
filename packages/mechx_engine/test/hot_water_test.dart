@@ -68,6 +68,57 @@ void main() {
     test('pump.selectedMotor power is positive', () {
       expect(design.pump.selectedMotor.inKiloWatts, greaterThan(0));
     });
+
+    test('returnTempC = flowTemp − ΔT = 60 − 5 = 55 °C', () {
+      // returnTempC = kHotWaterFlowTempC (60) − allowableDropK (5) = 55 °C.
+      expect(design.returnTempC, closeTo(60.0 - 5.0, 1e-12));
+    });
+
+    test('returnTempC 55 °C is AT the floor ⇒ legionellaRisk is false', () {
+      // legionellaRisk is a strict `<` against kLegionellaMinReturnTempC (55).
+      expect(design.legionellaRisk, isFalse);
+    });
+  });
+
+  // ── Anti-Legionella return-temperature check ─────────────────────────────
+
+  group('sizeHotWaterRecirculation — anti-Legionella return temperature', () {
+    test('a large design drop pulls the return below 55 °C → risk flagged', () {
+      // ΔT = 8 K ⇒ returnTempC = 60 − 8 = 52 °C < 55 °C floor ⇒ risk.
+      final design = sizeHotWaterRecirculation(
+        heatLoss: const Power(4186),
+        loopLength: const Length(30),
+        returnDiameter: Diameter.mm(25),
+        allowableDropK: 8.0,
+      );
+      expect(design.returnTempC, closeTo(52.0, 1e-12));
+      expect(design.legionellaRisk, isTrue);
+    });
+
+    test('a tight design drop keeps the return hot ⇒ no risk', () {
+      // ΔT = 2 K ⇒ returnTempC = 60 − 2 = 58 °C ≥ 55 °C floor ⇒ no risk.
+      final design = sizeHotWaterRecirculation(
+        heatLoss: const Power(4186),
+        loopLength: const Length(30),
+        returnDiameter: Diameter.mm(25),
+        allowableDropK: 2.0,
+      );
+      expect(design.returnTempC, closeTo(58.0, 1e-12));
+      expect(design.legionellaRisk, isFalse);
+    });
+
+    test('a lower assumed flow temperature lowers the return temperature', () {
+      // flowTempC = 55, ΔT = 5 ⇒ returnTempC = 50 °C < 55 ⇒ risk.
+      final design = sizeHotWaterRecirculation(
+        heatLoss: const Power(4186),
+        loopLength: const Length(30),
+        returnDiameter: Diameter.mm(25),
+        flowTempC: 55.0,
+        allowableDropK: 5.0,
+      );
+      expect(design.returnTempC, closeTo(50.0, 1e-12));
+      expect(design.legionellaRisk, isTrue);
+    });
   });
 
   // ── Zero-length loop: no friction, zero head ─────────────────────────────

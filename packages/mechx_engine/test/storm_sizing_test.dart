@@ -14,6 +14,38 @@ void main() {
       expect(q.inLitersPerSecond, closeTo(5.5556, 1e-3));
     });
 
+    test('runoffCoefficient defaults to 1.0 (byte-identical to before)', () {
+      // No coefficient passed ⇒ C = 1.0 ⇒ identical to the historic formula.
+      final q = rainwaterDesignFlow(intensityMmPerHr: 200, roofAreaM2: 100);
+      expect(q.cubicMetersPerSecond, closeTo(200 * 100 / 3.6e6, 1e-12));
+    });
+
+    test('runoffCoefficient=0.5 halves the flow vs C=1.0', () {
+      // Q(C) = C × intensity × area / 3.6e6, so C=0.5 is exactly half of C=1.0.
+      final full =
+          rainwaterDesignFlow(intensityMmPerHr: 200, roofAreaM2: 100);
+      final half = rainwaterDesignFlow(
+        intensityMmPerHr: 200,
+        roofAreaM2: 100,
+        runoffCoefficient: 0.5,
+      );
+      // C=0.5: 0.5 × 200 × 100 / 3.6e6 = 0.0027778 m³/s = 2.7778 L/s.
+      expect(half.cubicMetersPerSecond,
+          closeTo(0.5 * 200 * 100 / 3.6e6, 1e-12));
+      expect(half.cubicMetersPerSecond,
+          closeTo(0.5 * full.cubicMetersPerSecond, 1e-12));
+      expect(half.inLitersPerSecond, closeTo(2.7778, 1e-3));
+    });
+
+    test('runoffCoefficient scales the flow linearly', () {
+      final c09 = rainwaterDesignFlow(
+          intensityMmPerHr: 250, roofAreaM2: 80, runoffCoefficient: 0.9);
+      final c10 = rainwaterDesignFlow(
+          intensityMmPerHr: 250, roofAreaM2: 80, runoffCoefficient: 1.0);
+      expect(c09.cubicMetersPerSecond,
+          closeTo(0.9 * c10.cubicMetersPerSecond, 1e-12));
+    });
+
     test('scales linearly with area and intensity', () {
       final base = rainwaterDesignFlow(intensityMmPerHr: 100, roofAreaM2: 50);
       final twiceArea =

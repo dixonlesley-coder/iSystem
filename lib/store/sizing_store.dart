@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/storm_sizing.dart';
@@ -80,6 +81,7 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
         n.id: profile.fixtureUnitLoad(n.fixture!, occupancy: occupancy),
   };
   final intensity = ref.watch(rainfallIntensityProvider);
+  final runoffC = ref.watch(runoffCoefficientProvider);
   // Per-diffuser airflow where assigned (drives the duct air path), plus the
   // per-outlet rainwater design flow for any rainwater node carrying a roof-area
   // override (it wins over the flat default leaf demand for that outlet).
@@ -92,7 +94,9 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     for (final n in net.nodes)
       if (n.roofAreaM2 != null && n.airflow == null)
         n.id: rainwaterDesignFlow(
-            intensityMmPerHr: intensity, roofAreaM2: n.roofAreaM2!),
+            intensityMmPerHr: intensity,
+            roofAreaM2: n.roofAreaM2!,
+            runoffCoefficient: runoffC),
   };
   // Per-fixture drainage units (drives sanitary drainage/vent sizing). A
   // resolved custom fixture's drainageUnits wins over the built-in table.
@@ -116,6 +120,7 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     ServiceType.rainwater: rainwaterDesignFlow(
       intensityMmPerHr: intensity,
       roofAreaM2: kDefaultRoofAreaPerOutlet,
+      runoffCoefficient: runoffC,
     ),
   };
 
@@ -142,6 +147,39 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     building: project.building,
     calibrationBySheet: project.calibrations,
   );
+});
+
+/// Advisory checks over the drawn DRAINAGE branches — a read-only judge layer
+/// (`drainage_advisory.dart`) that NEVER resizes. For each horizontal drainage
+/// run it flags a too-flat laid SLOPE (below the self-cleansing minimum) and an
+/// over-long developed length (trap-arm / self-siphonage risk), using the §10
+/// geometry length. Risers (vertical stacks) and vents are skipped — the slope
+/// rule is a horizontal-branch concern. All thresholds are `// VERIFY`.
+///
+/// Empty when there's no drainage network, so a project without drainage is
+/// byte-identical (no issues surfaced).
+final drainageAdvisoryProvider = Provider<List<DrainageAdvisory>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final project = ref.watch(projectControllerProvider);
+  // The laid design slope is the same default the sizer uses (SizingContext).
+  final slope = const SizingContext().drainageSlope; // m/m // VERIFY
+  final out = <DrainageAdvisory>[];
+  for (final e in net.edges) {
+    if (e.service != ServiceType.drainage) continue;
+    if (e.kind == EdgeKind.riser) continue; // slope is a horizontal-branch rule
+    final lenM = edgeLength(
+      e,
+      net,
+      calibrationBySheet: project.calibrations,
+      building: project.building,
+    ).meters;
+    out.addAll(drainageAdvisories(
+      edgeId: e.id,
+      slope: slope,
+      developedLengthM: lenM > 0 ? lenM : null,
+    ));
+  }
+  return out;
 });
 
 /// Whether to overlay the computed sizes on the canvas.

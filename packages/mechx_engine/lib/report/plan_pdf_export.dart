@@ -20,6 +20,7 @@ import 'dart:typed_data';
 import '../network/network.dart';
 import '../sizing/network_sizing.dart';
 import '../units.dart';
+import 'drawing_chrome.dart';
 
 /// Per-service stroke colour as RGB in the 0..1 range (no Flutter `Color`).
 /// Matches `pdf_export.dart` so the annotated and plain PDFs read the same.
@@ -83,6 +84,7 @@ Uint8List planToPdf({
   required String projectName,
   required String sheetName,
   required String dateString,
+  DrawingChrome? chrome,
 }) {
   const pageW = 1190.55; // A3 landscape, points (420 mm)
   const pageH = 841.89; // 297 mm
@@ -148,9 +150,11 @@ Uint8List planToPdf({
   cs.writeln('BT /F1 16 Tf 0 0 0 rg '
       '${_n(margin)} ${_n(pageH - margin + 6)} Td '
       '(${_pdfText(projectName)}) Tj ET');
+  final counter = chrome?.sheetCounter;
   cs.writeln('BT /F1 10 Tf 0.25 0.25 0.25 rg '
       '${_n(margin)} ${_n(pageH - margin - 9)} Td '
-      '(${_pdfText('$sheetName   -   $dateString')}) Tj ET');
+      '(${_pdfText('$sheetName   -   $dateString'
+          '${counter != null ? '   -   Sheet $counter' : ''}')}) Tj ET');
 
   void strokeColor(ServiceType s) {
     final (r, g, b) = _serviceColor(s);
@@ -218,6 +222,14 @@ Uint8List planToPdf({
   for (final n in net.nodes) {
     if (!onFloor(n)) continue;
     circle(tx(n.x), ty(n.y), 2, fill: true);
+  }
+
+  // ── Issuable-document chrome (opt-in; byte-identical when null) ─────────────
+  if (chrome != null && !chrome.isEmpty) {
+    cs.write(pdfRevisionBlock(chrome, pageW: pageW, pageH: pageH, margin: margin));
+    cs.write(pdfLegend(chrome, originX: margin, originY: margin + 28));
+    cs.write(pdfScaleBar(chrome, centerX: pageW / 2, baseY: margin));
+    cs.write(pdfNorthArrow(chrome, cx: pageW - margin - 18, cy: pageH - margin - 40));
   }
 
   // ── Object assembly with a byte-accurate cross-reference table ──────────────

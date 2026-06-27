@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/units.dart';
@@ -79,6 +80,40 @@ void main() {
     // lines[0] = 'xref', lines[1] = '0 6', lines[2] = free entry, lines[3] = obj1
     final obj1Offset = int.parse(lines[3].substring(0, 10));
     expect(s.substring(obj1Offset).startsWith('1 0 obj'), isTrue);
+  });
+
+  test('issuable chrome stamps legend / scale / north / revision block', () {
+    final s = latin1.decode(networkToPdf(
+      net: net,
+      sizing: sizing,
+      sheetId: 's1',
+      floorIndex: 0,
+      title: 'Ground Floor (cold)',
+      chrome: const DrawingChrome(
+        drawingNumber: 'M-101',
+        revisionNumber: 'Rev. A',
+        sheetIndex: 1,
+        sheetTotal: 4,
+        legendServices: [ServiceType.coldWater],
+        scaleBarLabel: '1 : 100',
+      ),
+    ));
+    expect(s, contains('(M-101) Tj'));
+    expect(s, contains('(Sheet 1 of 4) Tj'));
+    expect(s, contains('(LEGEND) Tj'));
+    expect(s, contains('(SCALE  1 : 100) Tj'));
+    expect(s, contains('(N) Tj'));
+  });
+
+  test('null chrome leaves the bytes byte-identical', () {
+    expect(build(),
+        equals(networkToPdf(
+            net: net,
+            sizing: sizing,
+            sheetId: 's1',
+            floorIndex: 0,
+            title: 'Ground Floor (cold)',
+            chrome: null)));
   });
 
   test('an empty floor still produces a valid (title-only) page', () {

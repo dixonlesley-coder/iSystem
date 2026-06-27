@@ -4,6 +4,9 @@ import 'package:mechx_engine/network/network.dart';
 
 import '../../store/electrical_store.dart';
 import '../../store/layer_store.dart';
+import '../../store/network_store.dart';
+import '../../store/project_store.dart';
+import '../../store/sheets_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/palette_card.dart';
@@ -59,6 +62,31 @@ class SegmentPalette extends ConsumerWidget {
     final showFire = showAll || active == DisciplineLayer.fire;
     final showAir = showAll || active == DisciplineLayer.hvac;
 
+    // Keyboard activation (Enter/Space on a focused card): drop the item at the
+    // CENTRE of the current sheet (world coords, viewport-independent) via the
+    // same store add-actions a drag uses. No-op if no sheet is loaded.
+    void dropAtCentre(PaletteItem item) {
+      final sheet = ref.read(sheetsControllerProvider).current;
+      if (sheet == null) return;
+      final levelCount = ref.read(projectControllerProvider).building.levelCount;
+      final floorIndex =
+          ref.read(sheetsControllerProvider).floorFor(sheet.id, levelCount);
+      final world = sheet.sizePx.center(Offset.zero);
+      final ctrl = ref.read(networkControllerProvider.notifier);
+      switch (item.kind) {
+        case PaletteItemKind.pipeSegment:
+        case PaletteItemKind.ductSegment:
+          ctrl.addSegment(sheet.id, floorIndex, world, service: item.service);
+        case PaletteItemKind.fitting:
+          ctrl.addFitting(sheet.id, floorIndex, world);
+        case PaletteItemKind.terminal:
+          ctrl.addTerminal(sheet.id, floorIndex, world);
+        case PaletteItemKind.component:
+          final c = item.component;
+          if (c != null) ctrl.addComponentNode(sheet.id, floorIndex, world, c);
+      }
+    }
+
     Widget componentCard(NodeComponent c) => Padding(
           padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
           child: PaletteCard<PaletteItem>(
@@ -66,6 +94,8 @@ class SegmentPalette extends ConsumerWidget {
             swatch: colors.textSecondary,
             data: PaletteItem(PaletteItemKind.component, component: c),
             fillWidth: true,
+            onActivate: () =>
+                dropAtCentre(PaletteItem(PaletteItemKind.component, component: c)),
             leading:
                 ComponentSymbol(component: c, color: colors.textSecondary, size: 16),
           ),
@@ -103,6 +133,9 @@ class SegmentPalette extends ConsumerWidget {
           data: const PaletteItem(PaletteItemKind.component,
               component: NodeComponent.riser),
           fillWidth: true,
+          onActivate: () => dropAtCentre(const PaletteItem(
+              PaletteItemKind.component,
+              component: NodeComponent.riser)),
           leading: ComponentSymbol(
               component: NodeComponent.riser,
               color: context.colors.accent,
@@ -120,6 +153,8 @@ class SegmentPalette extends ConsumerWidget {
             swatch: colors.textSecondary,
             data: const PaletteItem(PaletteItemKind.fitting),
             fillWidth: true,
+            onActivate: () =>
+                dropAtCentre(const PaletteItem(PaletteItemKind.fitting)),
             leading: SegmentSymbol(
                 kind: PaletteItemKind.fitting, color: colors.textSecondary,
                 size: 16),
@@ -130,6 +165,8 @@ class SegmentPalette extends ConsumerWidget {
           swatch: colors.textSecondary,
           data: const PaletteItem(PaletteItemKind.terminal),
           fillWidth: true,
+          onActivate: () =>
+              dropAtCentre(const PaletteItem(PaletteItemKind.terminal)),
           leading: SegmentSymbol(
               kind: PaletteItemKind.terminal, color: colors.textSecondary,
               size: 16),

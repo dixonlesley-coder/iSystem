@@ -38,6 +38,21 @@ import 'package:mechx_engine/units.dart';
 /// Used in the recirculation energy balance Q = heatLoss / (ρ·c·ΔT).
 const double waterSpecificHeat = 4186; // J/(kg·K) // VERIFY
 
+/// Assumed hot-water FLOW (supply) temperature leaving the heater/calorifier
+/// (°C). The modelled return temperature is this minus the loop temperature
+/// drop. 60 °C is a common stored/flow temperature that satisfies the
+/// anti-Legionella requirement at the outlet. // VERIFY against SNI / local
+/// hot-water guidance (stored vs delivered temperature).
+const double kHotWaterFlowTempC = 60.0;
+
+/// Anti-Legionella minimum acceptable RETURN temperature (°C) for the
+/// recirculation loop. Legionella proliferates below ~50 °C and is controlled
+/// when water is kept above ~55–60 °C throughout the system, including at the
+/// return. We flag a modelled return temperature below this floor.
+/// // VERIFY against SNI / WHO Legionella guidance (commonly 55 °C at the return,
+/// 60 °C stored).
+const double kLegionellaMinReturnTempC = 55.0;
+
 /// The sized recirculation duty: the circulating flow, the loop friction head,
 /// and the selected recirc pump.
 class HotWaterRecircDesign {
@@ -51,11 +66,23 @@ class HotWaterRecircDesign {
   /// Pump/motor selection for the recirculation duty point.
   final PumpDuty pump;
 
+  /// Modelled water temperature ARRIVING back at the heater (°C): the assumed
+  /// flow temperature [kHotWaterFlowTempC] minus the design loop drop
+  /// ([allowableDropK]). Compared against [kLegionellaMinReturnTempC] by
+  /// [legionellaRisk] — a low return temperature is an anti-Legionella concern.
+  final double returnTempC;
+
   const HotWaterRecircDesign({
     required this.recircFlow,
     required this.loopHead,
     required this.pump,
+    required this.returnTempC,
   });
+
+  /// `true` when the modelled [returnTempC] falls below the anti-Legionella
+  /// floor [kLegionellaMinReturnTempC] — the loop is not kept hot enough at the
+  /// return and risks bacterial growth. // VERIFY threshold vs SNI guidance.
+  bool get legionellaRisk => returnTempC < kLegionellaMinReturnTempC;
 }
 
 /// Size a hot-water recirculation loop.
@@ -66,17 +93,22 @@ class HotWaterRecircDesign {
 /// - [returnDiameter]  — inside diameter of the return pipe (m).
 /// - [allowableDropK]  — maximum permitted return-temperature drop ΔT (K);
 ///                       defaults to 5 K. // VERIFY: typical design ΔT.
+/// - [flowTempC]       — assumed flow (supply) temperature leaving the heater
+///                       (°C); defaults to [kHotWaterFlowTempC]. The modelled
+///                       return temperature is `flowTempC − allowableDropK`.
 /// - [hazenWilliamsC]  — Hazen–Williams roughness coefficient for the return
 ///                       pipe; defaults to 150 (smooth copper/plastic).
 /// - [density]         — water density ρ (kg/m³); defaults to 1000.
 ///
-/// Returns a [HotWaterRecircDesign] with the circulating flow, loop head, and
-/// pump selection.
+/// Returns a [HotWaterRecircDesign] with the circulating flow, loop head, pump
+/// selection, and the modelled return temperature (for the anti-Legionella
+/// check, [HotWaterRecircDesign.legionellaRisk]).
 HotWaterRecircDesign sizeHotWaterRecirculation({
   required Power heatLoss,
   required Length loopLength,
   required Diameter returnDiameter,
   double allowableDropK = 5.0,
+  double flowTempC = kHotWaterFlowTempC,
   double hazenWilliamsC = 150.0,
   double density = 1000.0,
 }) {
@@ -104,10 +136,18 @@ HotWaterRecircDesign sizeHotWaterRecirculation({
   // path's default pump/motor efficiencies.
   final pump = sizePump(flow: recircFlow, head: loopHead);
 
+  // Modelled return temperature: the loop is SIZED so the recirc flow carries
+  // the heat loss within the allowable drop ΔT (Q = heatLoss / (ρ·c·ΔT)), so by
+  // construction the temperature arriving back is flowTemp − ΔT. We surface it
+  // explicitly so the anti-Legionella check ([legionellaRisk]) can flag a design
+  // ΔT large enough to pull the return below the safe floor. // VERIFY model.
+  final returnTempC = flowTempC - allowableDropK;
+
   return HotWaterRecircDesign(
     recircFlow: recircFlow,
     loopHead: loopHead,
     pump: pump,
+    returnTempC: returnTempC,
   );
 }
 

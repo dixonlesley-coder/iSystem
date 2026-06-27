@@ -267,6 +267,10 @@ class _TopBar extends ConsumerWidget {
       }
       ref.read(sheetsControllerProvider.notifier).loadSheets(sheets);
       ref.read(loadErrorProvider.notifier).clear();
+      final n = sheets.length;
+      ref
+          .read(statusMessageProvider.notifier)
+          .showStatus('$n ${n == 1 ? 'page' : 'pages'} imported');
     } catch (e) {
       // Surface the failure instead of silently keeping the old sheets.
       ref.read(loadErrorProvider.notifier).set('Could not import PDF: $e');
@@ -296,6 +300,9 @@ class _TopBar extends ConsumerWidget {
     ref.read(lastSavedSignatureProvider.notifier).set(encoded);
     await clearRecovery();
     ref.read(recoveryDocProvider.notifier).clear();
+    ref
+        .read(statusMessageProvider.notifier)
+        .showStatus('Saved ${project.name}.mechx');
   }
 
   Future<void> _openProject(WidgetRef ref) async {
@@ -317,6 +324,7 @@ class _TopBar extends ConsumerWidget {
       await clearRecovery();
       ref.read(recoveryDocProvider.notifier).clear();
       ref.read(loadErrorProvider.notifier).clear();
+      ref.read(statusMessageProvider.notifier).showStatus('Project opened');
     } on ProjectDocumentException catch (e) {
       // Malformed/incompatible file — surface why, leave the project untouched.
       ref.read(loadErrorProvider.notifier).set(e.message);
@@ -482,6 +490,10 @@ class _StatusBar extends ConsumerWidget {
               ),
             ),
             const SizedBox(width: MechXSpacing.md),
+            // Transient confirmation pill (Saved / opened / imported). Null at
+            // rest, so this collapses to nothing and the goldens are unchanged;
+            // it cross-fades in/out via AnimatedSwitcher when a message arrives.
+            const _StatusConfirmation(),
             // Right group: standards provenance + input hints.
             Expanded(
               child: Row(
@@ -531,6 +543,86 @@ class _StatusBar extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.sm),
         child: Text('·', style: TextStyle(fontFamily: 'Roboto', color: color)),
       );
+}
+
+/// The transient save/open/export confirmation in the status bar. Reads the
+/// [statusMessageProvider] (null at rest), rendering nothing when there is no
+/// message and a quiet success-tinted pill — cross-fading in/out — when there
+/// is. The pill mirrors the zoom read-out's soft idiom (a tint, no border).
+class _StatusConfirmation extends ConsumerWidget {
+  const _StatusConfirmation();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final message = ref.watch(statusMessageProvider);
+    return AnimatedSwitcher(
+      duration: MechXMotion.appear,
+      switchInCurve: MechXMotion.standard,
+      switchOutCurve: MechXMotion.standard,
+      child: message == null
+          ? const SizedBox.shrink()
+          : Padding(
+              key: const ValueKey('status-confirmation'),
+              padding: const EdgeInsets.only(right: MechXSpacing.md),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: MechXSpacing.sm,
+                  vertical: MechXSpacing.xxs,
+                ),
+                decoration: BoxDecoration(
+                  color: colors.success.withAlpha(30),
+                  borderRadius: MechXRadii.control,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // A small custom-painted check (Roboto-safe, can't tofu).
+                    CustomPaint(
+                      size: const Size(10, 10),
+                      painter: _CheckMark(color: colors.success),
+                    ),
+                    const SizedBox(width: MechXSpacing.xs),
+                    Text(
+                      message,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: type.caption.copyWith(color: colors.success),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+    );
+  }
+}
+
+/// A small check-mark glyph (the same tick the workflow stepper paints), used
+/// by the status confirmation pill. Custom-painted so it never renders as tofu.
+class _CheckMark extends CustomPainter {
+  final Color color;
+  const _CheckMark({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final path = Path()
+      ..moveTo(w * 0.18, h * 0.52)
+      ..lineTo(w * 0.42, h * 0.76)
+      ..lineTo(w * 0.84, h * 0.24);
+    canvas.drawPath(path, stroke);
+  }
+
+  @override
+  bool shouldRepaint(_CheckMark old) => old.color != color;
 }
 
 /// Eases a shell banner in and out: the height collapses ([AnimatedSize]) and

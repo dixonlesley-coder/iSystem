@@ -7,7 +7,9 @@ import '../inspector/project_panel.dart'
         exportAnnotatedPlanPdf,
         exportCalcReport,
         exportDrawingDxf,
-        exportDrawingPdf;
+        exportDrawingPdf,
+        exportEquipmentSchedule,
+        exportMepUnifiedReport;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -65,6 +67,15 @@ class ProjectsScreen extends ConsumerWidget {
                     onPressed: () => exportCalcReport(ref),
                   ),
                   MechXButton(
+                    label: context.strings(StringKey.inspectorExportMepReportMd),
+                    onPressed: () => exportMepUnifiedReport(ref),
+                  ),
+                  MechXButton(
+                    label: context.strings(
+                        StringKey.inspectorExportEquipmentScheduleMd),
+                    onPressed: () => exportEquipmentSchedule(ref),
+                  ),
+                  MechXButton(
                     label: context.strings(StringKey.inspectorExportDrawingDxf),
                     onPressed: () => exportDrawingDxf(ref),
                   ),
@@ -117,7 +128,8 @@ class ProjectsScreen extends ConsumerWidget {
         const SizedBox(height: MechXSpacing.md),
         const HubNote(
           'Use Open in the top bar to load a .mechx file, or Save to write the '
-          'current project. A recent-projects browser will live here.',
+          'current project. Export the calc report and drawings from here, or '
+          'use the export tools in the Electrical / Schematic views.',
         ),
       ],
     );

@@ -3,8 +3,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/design_issues_store.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/store/solve_store.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -99,6 +102,50 @@ void main() {
       expect(firstInfo, greaterThanOrEqualTo(0));
       expect(lastWarning, greaterThanOrEqualTo(0));
       expect(lastWarning, lessThan(firstInfo));
+    });
+
+    test('an over-long drainage branch surfaces as an info issue (locatable)',
+        () {
+      final c = makeContainer();
+      const sheetId = 'sd';
+      // Calibrate so 100 px → 40 m (> the 32 m developed-length limit).
+      c.read(projectControllerProvider.notifier).setCalibration(
+            sheetId,
+            const ScaleCalibration(0.4), // 0.4 m/px
+          );
+      const nodeA =
+          NetNode(id: 'da', sheetId: sheetId, x: 0, y: 0, floorIndex: 0);
+      const nodeB =
+          NetNode(id: 'db', sheetId: sheetId, x: 100, y: 0, floorIndex: 0);
+      const edge = NetEdge(
+        id: 'ed',
+        fromId: 'da',
+        toId: 'db',
+        service: ServiceType.drainage,
+      );
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            Network(nodes: [nodeA, nodeB], edges: [edge]),
+          );
+
+      final issue = c.read(designIssuesProvider).firstWhere(
+            (i) => i.title == 'Drainage branch too long',
+            orElse: () => fail('expected a drainage developed-length issue'),
+          );
+      expect(issue.severity, IssueSeverity.info);
+      expect(issue.locate, isNotNull);
+      expect(issue.locate!.edgeId, 'ed');
+      expect(issue.locate!.sheetId, sheetId);
+    });
+
+    test('no hot-water network ⇒ no Legionella advisory', () {
+      final c = makeContainer();
+      // Empty default network has no hot-water loop, so the provider is null and
+      // no Legionella issue is raised.
+      expect(c.read(hotWaterLegionellaProvider), isNull);
+      final legionella = c
+          .read(designIssuesProvider)
+          .where((i) => i.title == 'Hot-water return temperature low');
+      expect(legionella, isEmpty);
     });
 
     test('locating a duct issue seeds selection + sheet + Layout view', () {

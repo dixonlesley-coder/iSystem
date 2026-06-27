@@ -70,6 +70,7 @@ ProjectDocument buildDocument(ProviderReader read) {
       ductShape: ducts.shape,
       ductMethod: ducts.method,
       rainfallMmPerHr: read(rainfallIntensityProvider),
+      runoffCoefficientStorm: read(runoffCoefficientProvider),
       fireHazard: read(fireHazardProvider),
       brightness: read(brightnessProvider),
       localeCode: read(localeProvider).name,
@@ -119,6 +120,7 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
     ..setShape(s.ductShape)
     ..setMethod(s.ductMethod);
   read(rainfallIntensityProvider.notifier).set(s.rainfallMmPerHr);
+  read(runoffCoefficientProvider.notifier).set(s.runoffCoefficientStorm);
   read(fireHazardProvider.notifier).set(s.fireHazard);
   read(brightnessProvider.notifier).set(s.brightness);
   read(localeProvider.notifier)

@@ -146,6 +146,8 @@ enum StringKey {
 
   // Inspector — Project section.
   inspectorExportCalcReportMd,
+  inspectorExportMepReportMd,
+  inspectorExportEquipmentScheduleMd,
   inspectorExportDrawingDxf,
   inspectorExportDrawingPdf,
   inspectorExportAnnotatedPlanPdf,
@@ -209,6 +211,8 @@ enum StringKey {
 
   // Export — OS save-dialog titles.
   exportTitleCalcReport,
+  exportTitleMepReport,
+  exportTitleEquipmentSchedule,
   exportTitleDrawingDxf,
   exportTitleDrawingPdf,
   exportTitleAnnotatedPlanPdf,
@@ -382,6 +386,8 @@ const Map<StringKey, String> _en = {
 
   // Inspector — Project section.
   StringKey.inspectorExportCalcReportMd: 'Export calc report (MD)',
+  StringKey.inspectorExportMepReportMd: 'Export unified MEP report (MD)',
+  StringKey.inspectorExportEquipmentScheduleMd: 'Export equipment schedule (MD)',
   StringKey.inspectorExportDrawingDxf: 'Export drawing (DXF)',
   StringKey.inspectorExportDrawingPdf: 'Export drawing (PDF)',
   StringKey.inspectorExportAnnotatedPlanPdf: 'Export annotated plan (PDF)',
@@ -450,6 +456,8 @@ const Map<StringKey, String> _en = {
 
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Export calculation report',
+  StringKey.exportTitleMepReport: 'Export unified MEP report',
+  StringKey.exportTitleEquipmentSchedule: 'Export equipment schedule',
   StringKey.exportTitleDrawingDxf: 'Export drawing (DXF)',
   StringKey.exportTitleDrawingPdf: 'Export drawing (PDF)',
   StringKey.exportTitleAnnotatedPlanPdf: 'Export annotated plan (PDF)',
@@ -627,6 +635,8 @@ const Map<StringKey, String> _id = {
 
   // Inspector — Project section.
   StringKey.inspectorExportCalcReportMd: 'Ekspor laporan hitung (MD)',
+  StringKey.inspectorExportMepReportMd: 'Ekspor laporan MEP terpadu (MD)',
+  StringKey.inspectorExportEquipmentScheduleMd: 'Ekspor jadwal peralatan (MD)',
   StringKey.inspectorExportDrawingDxf: 'Ekspor gambar (DXF)',
   StringKey.inspectorExportDrawingPdf: 'Ekspor gambar (PDF)',
   StringKey.inspectorExportAnnotatedPlanPdf: 'Ekspor denah beranotasi (PDF)',
@@ -696,6 +706,8 @@ const Map<StringKey, String> _id = {
 
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Ekspor laporan perhitungan',
+  StringKey.exportTitleMepReport: 'Ekspor laporan MEP terpadu',
+  StringKey.exportTitleEquipmentSchedule: 'Ekspor jadwal peralatan',
   StringKey.exportTitleDrawingDxf: 'Ekspor gambar (DXF)',
   StringKey.exportTitleDrawingPdf: 'Ekspor gambar (PDF)',
   StringKey.exportTitleAnnotatedPlanPdf: 'Ekspor denah beranotasi (PDF)',

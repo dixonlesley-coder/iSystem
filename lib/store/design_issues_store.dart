@@ -13,6 +13,7 @@ library;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
@@ -21,6 +22,8 @@ import 'air_warnings_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sheets_store.dart';
+import 'sizing_store.dart';
+import 'solve_store.dart';
 
 /// Triage level for a design issue. [warning] needs the engineer's attention
 /// (out-of-band velocity, uncalibrated sheet); [info] is an honesty advisory
@@ -87,6 +90,8 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final sheets = ref.watch(sheetsControllerProvider);
   final velocity = ref.watch(airVelocityChecksProvider);
   final unsized = ref.watch(airUnsizedProvider);
+  final drainAdvisories = ref.watch(drainageAdvisoryProvider);
+  final legionellaReturnTempC = ref.watch(hotWaterLegionellaProvider);
 
   final warnings = <DesignIssue>[];
   final infos = <DesignIssue>[];
@@ -160,7 +165,39 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
-  // ── 4. Unverified // VERIFY standards (info, not locatable) ─────────────────
+  // ── 4. Drainage advisories: too-flat slope / over-long branch (info) ────────
+  // Each advisory is edge-locatable via the edge's `from` node sheet. Title is
+  // fixed (golden-friendly); the engine message carries the specifics.
+  for (final a in drainAdvisories) {
+    final edge = edgeById[a.edgeId];
+    final sheetId = edge == null ? null : sheetForEdge(edge);
+    final title = switch (a.kind) {
+      DrainageAdvisoryKind.minSlope => 'Drainage slope below self-cleansing',
+      DrainageAdvisoryKind.developedLength => 'Drainage branch too long',
+    };
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      title: title,
+      message: a.message,
+      locate: sheetId == null
+          ? null
+          : IssueLocation(sheetId, edgeId: a.edgeId),
+    ));
+  }
+
+  // ── 5. Hot-water anti-Legionella return temperature (info, not locatable) ───
+  if (legionellaReturnTempC != null) {
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      title: 'Hot-water return temperature low',
+      message: 'Modelled recirculation return temperature '
+          '${legionellaReturnTempC.toStringAsFixed(0)} °C is below the '
+          'anti-Legionella floor (~55 °C). Reduce the loop temperature drop or '
+          'add trace heating. (// VERIFY vs SNI / WHO guidance.)',
+    ));
+  }
+
+  // ── 6. Unverified // VERIFY standards (info, not locatable) ─────────────────
   void addVerify(StandardValue<Object?> v) {
     if (!v.isUnverified) return;
     infos.add(DesignIssue(

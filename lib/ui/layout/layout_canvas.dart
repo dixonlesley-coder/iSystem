@@ -53,6 +53,7 @@ import '../canvas/zoom_controls.dart';
 import '../electrical/electrical_inspector.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/canvas_guide_popover.dart';
 import 'electrical_layer.dart';
 import 'layer_switcher.dart';
 
@@ -67,6 +68,13 @@ class LayoutCanvas extends ConsumerStatefulWidget {
 }
 
 class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
+  /// Whether the persistent "(?) Canvas guide" popover is open. Transient UI
+  /// chrome — never persisted; the (?) button is a small edge affordance, so the
+  /// idle canvas stays byte-identical.
+  bool _showGuide = false;
+  void toggleGuide() => setState(() => _showGuide = !_showGuide);
+  void closeGuide() => setState(() => _showGuide = false);
+
   /// The electrical circuit/panel open in the inspector / a context menu.
   ElectricalEditTarget? _editing;
   ElectricalPanelMenuTarget? _panelMenu;
@@ -674,11 +682,54 @@ class _SharedSheet extends ConsumerWidget {
             onFit: () => host.canvasKeyFor(sheet.id).currentState?.fitView(),
           ),
         ),
+        // Persistent "(?) Canvas guide" (top-left) — the same affordance the
+        // electrical canvas advertises, now lifted to the mechanical Layout
+        // canvas so right-click size/material + drag gestures are discoverable.
+        // The gesture list is scoped to the active layer.
+        Positioned(
+          left: MechXSpacing.md,
+          top: MechXSpacing.sm,
+          child: CanvasGuideButton(
+            open: host._showGuide,
+            onToggle: host.toggleGuide,
+          ),
+        ),
+        if (host._showGuide)
+          Positioned(
+            left: MechXSpacing.md,
+            top: 48,
+            child: CanvasGuideLegend(
+              items: electricalActive
+                  ? _electricalLayerGuideItems
+                  : _mechanicalLayerGuideItems,
+              onClose: host.closeGuide,
+            ),
+          ),
       ],
       ),
     );
   }
 }
+
+/// Gesture-help for the mechanical (Plumbing / HVAC) layer of the Layout canvas.
+const _mechanicalLayerGuideItems = <String>[
+  'Drag a Riser card onto the canvas to start a mainline',
+  'Drag the blue outlet out of a node to lay a run',
+  'Drag a Terminal onto a main to branch it',
+  'Right-click a segment to set its size (inches) or material',
+  'Drag a segment endpoint to resize it — it snaps to nearby fittings',
+  'Left-click to select; Shift+click or rubber-band for multi-select',
+  'Drag the empty canvas to pan; scroll to zoom',
+];
+
+/// Gesture-help for the electrical layer of the Layout canvas.
+const _electricalLayerGuideItems = <String>[
+  'Drag a Load card onto a panel to wire it (creates the MCB)',
+  'Double-click a panel or circuit to edit it',
+  'Right-click a panel or circuit for Edit / Duplicate / Delete',
+  'Drag a placed panel or load to move it on the plan',
+  'Drag the empty canvas to pan; scroll to zoom',
+];
 
 /// A small tappable nudge over an uncalibrated sheet — starts scale calibration.
 class _CalibrateHint extends ConsumerWidget {

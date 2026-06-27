@@ -16,6 +16,7 @@ import 'dart:typed_data';
 
 import '../network/network.dart';
 import '../sizing/network_sizing.dart';
+import 'drawing_chrome.dart';
 
 /// Per-service stroke colour as RGB in the 0..1 range (no Flutter `Color`).
 (double, double, double) _serviceColor(ServiceType s) => switch (s) {
@@ -61,6 +62,7 @@ Uint8List networkToPdf({
   required String sheetId,
   required int floorIndex,
   String title = 'MechX drawing',
+  DrawingChrome? chrome,
 }) {
   const pageW = 1190.55; // A3 landscape, points (420 mm)
   const pageH = 841.89; // 297 mm
@@ -167,6 +169,14 @@ Uint8List networkToPdf({
         circle(tx(n.x), ty(n.y), 5);
       }
     }
+  }
+
+  // ── Issuable-document chrome (opt-in; byte-identical when null) ─────────────
+  if (chrome != null && !chrome.isEmpty) {
+    cs.write(pdfRevisionBlock(chrome, pageW: pageW, pageH: pageH, margin: margin));
+    cs.write(pdfLegend(chrome, originX: margin, originY: margin + 28));
+    cs.write(pdfScaleBar(chrome, centerX: pageW / 2, baseY: margin));
+    cs.write(pdfNorthArrow(chrome, cx: pageW - margin - 18, cy: pageH - margin - 40));
   }
 
   // ── Object assembly with a byte-accurate cross-reference table ──────────────

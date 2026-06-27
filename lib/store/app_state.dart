@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/storm_sizing.dart'
+    show kDefaultRunoffCoefficient;
 import 'package:mechx_engine/standards/sni.dart';
 
 /// HVAC duct preferences (shape + sizing method) driving the air code path.
@@ -76,6 +80,23 @@ class RainfallController extends Notifier<double> {
   void nudge(double delta) => set(state + delta);
 }
 
+/// Design storm runoff coefficient C (dimensionless, 0–1) — the fraction of
+/// design rainfall that becomes runoff at the outlet (rational method). Pairs
+/// with [rainfallIntensityProvider]; both feed `rainwaterDesignFlow`. Defaults to
+/// the impervious-roof figure (`kDefaultRunoffCoefficient`). // VERIFY vs SNI.
+final runoffCoefficientProvider =
+    NotifierProvider<RunoffCoefficientController, double>(
+  RunoffCoefficientController.new,
+);
+
+class RunoffCoefficientController extends Notifier<double> {
+  @override
+  double build() => kDefaultRunoffCoefficient; // VERIFY — surface/region C
+
+  void set(double v) => state = v.clamp(0.5, 1.0).toDouble();
+  void nudge(double delta) => set(state + delta);
+}
+
 /// A transient, user-facing error message (e.g. a failed project open). Null
 /// when there is nothing to show; the shell renders it as a dismissible banner.
 final loadErrorProvider =
@@ -87,6 +108,47 @@ class LoadErrorController extends Notifier<String?> {
 
   void set(String? message) => state = message;
   void clear() => state = null;
+}
+
+/// A transient, positive status confirmation (e.g. "Saved project.mechx",
+/// "Project opened"). Null at rest — so the status bar slot is empty and the
+/// goldens are unchanged. Set via [StatusMessageController.showStatus], which
+/// also schedules a self-clear after a few seconds; calling it again restarts
+/// the timer so the latest message always shows for its full window.
+final statusMessageProvider =
+    NotifierProvider<StatusMessageController, String?>(
+  StatusMessageController.new,
+);
+
+class StatusMessageController extends Notifier<String?> {
+  Timer? _timer;
+
+  @override
+  String? build() {
+    // Cancel any pending clear when the provider is disposed/rebuilt.
+    ref.onDispose(() => _timer?.cancel());
+    return null;
+  }
+
+  /// How long a confirmation lingers before it fades out on its own.
+  static const Duration _window = Duration(seconds: 3);
+
+  /// Show [message] and schedule it to clear after [_window]. A fresh call
+  /// supersedes any in-flight clear (the newest message wins its full window).
+  void showStatus(String message) {
+    _timer?.cancel();
+    state = message;
+    _timer = Timer(_window, () {
+      // Only clear if this is still the message we set (a newer call would have
+      // restarted the timer, so this guard is belt-and-braces).
+      state = null;
+    });
+  }
+
+  void clear() {
+    _timer?.cancel();
+    state = null;
+  }
 }
 
 /// App-wide light/dark brightness. Defaults to dark (the restrained, low-glare

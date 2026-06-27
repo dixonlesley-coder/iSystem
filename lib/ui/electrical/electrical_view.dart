@@ -34,6 +34,7 @@ import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/canvas_guide_popover.dart';
 import '../widgets/mechx_focus_ring.dart';
 import 'electrical_canvas.dart';
 import 'electrical_controls.dart';
@@ -127,7 +128,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           onIssues: () => setState(() => _showAdvanced = false),
           onService: _openService,
           onAddPanel: _addPanel,
-          onImport: () {},
           onExport: () => setState(() => _showExportMenu = !_showExportMenu),
           onToggleAdvanced: () =>
               setState(() => _showAdvanced = !_showAdvanced),
@@ -263,7 +263,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               Positioned(
                 left: MechXSpacing.md,
                 top: MechXSpacing.sm,
-                child: _HelpButton(
+                child: CanvasGuideButton(
                   open: _showHelp,
                   onToggle: () => setState(() => _showHelp = !_showHelp),
                 ),
@@ -272,7 +272,8 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                 Positioned(
                   left: MechXSpacing.md,
                   top: 48,
-                  child: _CanvasHelp(
+                  child: CanvasGuideLegend(
+                    items: _electricalGuideItems,
                     onClose: () => setState(() => _showHelp = false),
                   ),
                 ),
@@ -463,7 +464,6 @@ class _Toolbar extends StatelessWidget {
   final VoidCallback onIssues;
   final VoidCallback onService;
   final VoidCallback onAddPanel;
-  final VoidCallback onImport;
   final VoidCallback onExport;
   final VoidCallback onToggleAdvanced;
   final bool advancedOpen;
@@ -475,7 +475,6 @@ class _Toolbar extends StatelessWidget {
     required this.onIssues,
     required this.onService,
     required this.onAddPanel,
-    required this.onImport,
     required this.onExport,
     required this.onToggleAdvanced,
     required this.advancedOpen,
@@ -525,8 +524,6 @@ class _Toolbar extends StatelessWidget {
                   _Btn(label: 'Service & Earthing', onTap: onService),
                   const SizedBox(width: MechXSpacing.xs),
                   _Btn(label: '+ Panel', onTap: onAddPanel),
-                  const SizedBox(width: MechXSpacing.xs),
-                  _Btn(label: 'Import loads', onTap: onImport, muted: true),
                   const SizedBox(width: MechXSpacing.xs),
                   _Btn(label: 'Export', onTap: onExport, muted: true),
                 ],
@@ -742,144 +739,17 @@ class _HintChipState extends State<_HintChip> {
   }
 }
 
-class _HelpButton extends StatelessWidget {
-  final bool open;
-  final VoidCallback onToggle;
-  const _HelpButton({required this.open, required this.onToggle});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onToggle,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          width: 26,
-          height: 26,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: open ? colors.accent : colors.surface,
-            shape: BoxShape.circle,
-            border: Border.all(color: open ? colors.accent : colors.border),
-          ),
-          child: Text(
-            '?',
-            style: context.type.label.copyWith(
-              color: open ? const Color(0xFFFFFFFF) : colors.textSecondary,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CanvasHelp extends StatelessWidget {
-  final VoidCallback onClose;
-  const _CanvasHelp({required this.onClose});
-
-  // Ported verbatim from PanelMaker's CanvasHelp HELP_ITEMS.
-  static const _items = <String>[
-    'Double-click a component to edit its size, type or label',
-    'Right-click a component for compatible replacement parts',
-    'Drag a card from the palette onto a panel to add a way',
-    "Drag a panel's round outlet onto another panel to feed it",
-    'Drag a load onto a panel to wire it (creates the MCB)',
-    'Select a panel or floating load and press Delete; right-click a way to delete it',
-    'Drag the empty canvas to pan; scroll to zoom; panels reveal their internals up close',
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    // Fade + slight scale-from-top-left on open, anchored to the (?) button.
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.appear,
-      curve: MechXMotion.standard,
-      builder: (context, t, child) => Opacity(
-        opacity: t,
-        child: Transform.scale(
-          scale: 0.96 + 0.04 * t,
-          alignment: Alignment.topLeft,
-          child: child,
-        ),
-      ),
-      child: Container(
-        width: 310,
-        padding: const EdgeInsets.all(MechXSpacing.md),
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: MechXRadii.card,
-          border: Border.all(color: colors.border),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Canvas guide',
-                    style: type.subtitle.copyWith(color: colors.textPrimary),
-                  ),
-                ),
-                MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: GestureDetector(
-                    onTap: onClose,
-                    child: Text(
-                      'Close',
-                      style: type.label.copyWith(color: colors.textMuted),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: MechXSpacing.sm),
-            for (final item in _items)
-              Padding(
-                padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 5,
-                      height: 5,
-                      margin: const EdgeInsets.only(
-                        top: 6,
-                        right: MechXSpacing.sm,
-                      ),
-                      decoration: BoxDecoration(
-                        color: colors.accent,
-                        borderRadius: const BorderRadius.all(
-                          Radius.circular(3),
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: Text(
-                        item,
-                        style: type.caption.copyWith(
-                          color: colors.textSecondary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+/// The electrical canvas gesture-help items, ported verbatim from PanelMaker's
+/// CanvasHelp HELP_ITEMS. Rendered via the shared [CanvasGuideLegend].
+const _electricalGuideItems = <String>[
+  'Double-click a component to edit its size, type or label',
+  'Right-click a component for compatible replacement parts',
+  'Drag a card from the palette onto a panel to add a way',
+  "Drag a panel's round outlet onto another panel to feed it",
+  'Drag a load onto a panel to wire it (creates the MCB)',
+  'Select a panel or floating load and press Delete; right-click a way to delete it',
+  'Drag the empty canvas to pan; scroll to zoom; panels reveal their internals up close',
+];
 
 /// The Export popover (anchored under the toolbar's Export button) — single-line
 /// DXF, electrical report (Markdown) and power one-line DXF.

@@ -162,15 +162,15 @@ class _RailItemState extends ConsumerState<_RailItem> {
                   style: type.caption.copyWith(color: labelColor),
                 ),
                 const SizedBox(height: MechXSpacing.xxs),
-                // Per-sheet calibration status: a small dot (green = calibrated,
-                // warning = not) so the rail shows at a glance which sheets still
-                // need a scale.
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
+                // Per-sheet calibration status: a small glyph pairing colour
+                // with shape (a check ring = calibrated/green, a "!" ring =
+                // uncalibrated/warning) so the rail reads at a glance which
+                // sheets still need a scale, without relying on hue alone.
+                CustomPaint(
+                  size: const Size(9, 9),
+                  painter: _CalibrationGlyph(
+                    calibrated: calibrated,
                     color: calibrated ? colors.success : colors.warning,
-                    shape: BoxShape.circle,
                   ),
                 ),
               ],
@@ -180,4 +180,49 @@ class _RailItemState extends ConsumerState<_RailItem> {
       ),
     );
   }
+}
+
+/// The per-sheet calibration mark: a check ring when [calibrated], else a "!"
+/// ring. A redundant cue (shape + colour) so the status survives without hue
+/// alone. Custom-painted (no icon font), so it can never tofu in the goldens.
+class _CalibrationGlyph extends CustomPainter {
+  final bool calibrated;
+  final Color color;
+
+  const _CalibrationGlyph({required this.calibrated, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final c = Offset(w / 2, h / 2);
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    canvas.drawCircle(c, w * 0.42, stroke);
+    if (calibrated) {
+      final path = Path()
+        ..moveTo(w * 0.30, h * 0.52)
+        ..lineTo(w * 0.45, h * 0.68)
+        ..lineTo(w * 0.72, h * 0.34);
+      canvas.drawPath(path, stroke);
+    } else {
+      // An exclamation stem + dot inside the ring.
+      canvas.drawLine(
+        Offset(w / 2, h * 0.30),
+        Offset(w / 2, h * 0.58),
+        stroke,
+      );
+      canvas.drawCircle(Offset(w / 2, h * 0.74), w * 0.07,
+          Paint()..color = color);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_CalibrationGlyph old) =>
+      old.calibrated != calibrated || old.color != color;
 }

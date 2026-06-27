@@ -26,11 +26,13 @@ import '../units.dart';
 import 'busbar.dart';
 import 'cable_family.dart';
 import 'control/starter.dart' show StarterType;
+import 'diversity_library.dart' show DiversityLibrary;
 import 'earthing.dart';
 import 'fault.dart' show Impedance, conductorImpedance, downstreamFaultA,
     sourceImpedanceFromIsc;
 import 'geo_length.dart';
 import 'harmonics.dart' show neutralOversizeFactor;
+import 'headroom.dart' show HeadroomSpec;
 import 'load_kind.dart';
 import 'model.dart';
 import 'panel_results.dart';
@@ -383,6 +385,13 @@ class ComputePanelOptions {
   /// feeders fall back to their manual length.
   final Map<String, ElectricalPanel> panelById;
 
+  /// Optional occupancy-keyed demand-factor library. When supplied AND the panel
+  /// sets [ElectricalPanel.diversityLibraryId], each circuit's demand factor is
+  /// looked up by occupancy + load kind in place of the model's per-circuit
+  /// `demandFactor`. Null ⇒ the per-circuit factor is used as before
+  /// (byte-identical). Additive.
+  final DiversityLibrary? diversityLibrary;
+
   const ComputePanelOptions({
     this.feederLoadW = const {},
     this.panelSystems = const {},
@@ -393,6 +402,7 @@ class ComputePanelOptions {
     this.calibrationBySheet = const {},
     this.building,
     this.panelById = const {},
+    this.diversityLibrary,
   });
 }
 
@@ -408,22 +418,56 @@ CableInstallMethod _effectiveInstallMethod(
   return panel.installMethod;
 }
 
+/// The effective per-circuit demand (utilisation) factor: the occupancy-keyed
+/// diversity library value when [library] is supplied AND [diversityLibraryId]
+/// is set on the panel, else the circuit's own [ElectricalCircuit.demandFactor].
+/// A feeder is an aggregation of the fed panel's already-diversified demand, so
+/// it is NEVER re-diversified by the library (it keeps its own factor — normally
+/// 1.0). With no library/id this returns `c.demandFactor` ⇒ byte-identical.
+double effectiveDemandFactor(
+  ElectricalCircuit c, {
+  DiversityLibrary? library,
+  String? diversityLibraryId,
+}) {
+  if (library == null ||
+      diversityLibraryId == null ||
+      c.isFeeder ||
+      !library.hasOccupancy(diversityLibraryId)) {
+    return c.demandFactor;
+  }
+  return library.demandFactorFor(
+    diversityLibraryId,
+    c.loadKind,
+    fallback: c.demandFactor,
+  );
+}
+
 /// A leaf circuit's connected demand (W): motor kW ×1000 for motors, else
 /// connected W, times the demand factor. Ported from `computePanel.ts
-/// circuitConnectedW`.
-double circuitConnectedW(ElectricalCircuit c) {
+/// circuitConnectedW`. With no diversity library/id the factor is the circuit's
+/// own [ElectricalCircuit.demandFactor] ⇒ byte-identical to the original.
+double circuitConnectedW(
+  ElectricalCircuit c, {
+  DiversityLibrary? library,
+  String? diversityLibraryId,
+}) {
   final isMotor =
       (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
           c.motorKw != null;
   final baseW = isMotor ? c.motorKw! * 1000 : c.loadW;
-  return baseW * c.demandFactor;
+  return baseW *
+      effectiveDemandFactor(c,
+          library: library, diversityLibraryId: diversityLibraryId);
 }
 
-double _effectiveLoadW(ElectricalCircuit c, ComputePanelOptions opts) {
+double _effectiveLoadW(
+    ElectricalCircuit c, ElectricalPanel panel, ComputePanelOptions opts) {
   if (c.feedsPanelId != null && opts.feederLoadW.containsKey(c.feedsPanelId)) {
     return opts.feederLoadW[c.feedsPanelId]!;
   }
-  return circuitConnectedW(c);
+  return circuitConnectedW(c,
+      library: opts.diversityLibrary,
+      diversityLibraryId: panel.diversityLibraryId);
 }
 
 /// The panel's SINGLE-PHASE non-linear demand share (0–1) for the triplen-
@@ -482,7 +526,7 @@ _CircuitComputation _computeCircuit(
   double df,
   ComputePanelOptions opts,
 ) {
-  final loadW = _effectiveLoadW(c, opts);
+  final loadW = _effectiveLoadW(c, panel, opts);
   final def = loadDefaults[c.loadKind]!;
   final isFeeder = c.isFeeder;
   final warnings = <ElectricalWarning>[];
@@ -761,23 +805,39 @@ ElectricalPanelResult computePanel(
     1,
   );
 
+  // SPARE-WAYS / FUTURE-LOAD HEADROOM. A null spec (or a 0 % / 0-way spec)
+  // leaves the incomer + busbar + section count BYTE-IDENTICAL — the multiplier
+  // is 1.0 and no spare ways are reserved. When a future-load % is set, the
+  // INCOMER + BUSBAR are rated for the uplifted (future) line current so a later
+  // load addition doesn't outgrow the board; the per-circuit sizing is unchanged
+  // (today's circuits are sized for today's load). Reserved spare ways are
+  // counted toward the busbar way capacity below.
+  final headroom = panel.headroom ?? HeadroomSpec.none;
+  final headroomApplied = headroom.isActive;
+  final headroomMultiplier = headroom.demandMultiplier;
+  final spareWaysReserved = headroom.effectiveSpareWays;
+  // The line current the incomer + busbar are sized against (= demand × future
+  // multiplier). 1.0 ⇒ exactly demandCurrentA.
+  final incomerSizingCurrentA = roundTo(demandCurrentA * headroomMultiplier, 1);
+
   final incomerBreaker = selectBreaker(
     profile,
-    designCurrent: Current(demandCurrentA),
+    designCurrent: Current(incomerSizingCurrentA),
     loadKind: LoadKind.feeder,
   );
   final incomer = IncomerResult(
     breaker: incomerBreaker,
     poles: panel.system == ElectricalSystem.threePhase ? 4 : 2,
   );
-  if (incomerBreaker.ratingA.amperes + 1e-9 < demandCurrentA) {
+  if (incomerBreaker.ratingA.amperes + 1e-9 < incomerSizingCurrentA) {
     warnings.add(ElectricalWarning(
       code: 'incomer-exceeds-range',
       severity: WarningSeverity.error,
       message:
-          '${panel.name}: demand $demandCurrentA A exceeds the largest standard '
-          'breaker frame (${incomerBreaker.ratingA.amperes} A) — split the board '
-          'or feed it at MV.',
+          '${panel.name}: ${headroomApplied ? 'future ' : ''}demand '
+          '$incomerSizingCurrentA A exceeds the largest standard breaker frame '
+          '(${incomerBreaker.ratingA.amperes} A) — split the board or feed it '
+          'at MV.',
       panelId: panel.id,
     ));
   }
@@ -791,10 +851,12 @@ ElectricalPanelResult computePanel(
       : 0.0;
   final clearingTimeS = opts.busbarClearingTimeS;
 
-  // Main bus rated for the incoming device (IEC 61439-1), not just demand.
+  // Main bus rated for the incoming device (IEC 61439-1), not just demand. The
+  // sizing current carries any future-load headroom (= demand × multiplier; 1.0
+  // ⇒ exactly demandCurrentA ⇒ byte-identical).
   final busbar = sizeBusbar(
     profile,
-    Current(demandCurrentA),
+    Current(incomerSizingCurrentA),
     minAmpacityA: incomerBreaker.ratingA,
     faultKa: faultKa,
     clearingTimeS: clearingTimeS,
@@ -835,6 +897,11 @@ ElectricalPanelResult computePanel(
           }(),
           branches[i].busbarBreakBefore,
         ),
+      // Reserved spare ways occupy busbar way-capacity (so the bus is split into
+      // enough sections to host them) but carry no load. spareWaysReserved = 0
+      // ⇒ none added ⇒ byte-identical section layout.
+      for (var s = 0; s < spareWaysReserved; s++)
+        _BusbarWayLoad('__spare_$s', 0, false, PhaseAssignment.l1, false),
     ],
     maxWays: profile.maxWaysPerBusbar,
     maxSectionCurrentA: profile.maxBusbarSectionCurrentA,
@@ -892,6 +959,9 @@ ElectricalPanelResult computePanel(
   }
 
   final demandW = connectedW * panel.diversityFactor;
+  // Future (spare-uplifted) demand the incomer + busbar were rated for. With no
+  // headroom the multiplier is 1.0 ⇒ futureLoadW == demandW.
+  final futureLoadW = demandW * headroomMultiplier;
 
   return ElectricalPanelResult(
     panelId: panel.id,
@@ -906,6 +976,9 @@ ElectricalPanelResult computePanel(
     connectedW: roundTo(connectedW, 0),
     demandW: roundTo(demandW, 0),
     demandCurrent: Current(demandCurrentA),
+    futureLoadW: roundTo(futureLoadW, 0),
+    headroomApplied: headroomApplied,
+    spareWaysReserved: spareWaysReserved,
     phaseBalance: PhaseBalanceResult(
       l1: balance.l1,
       l2: balance.l2,
@@ -946,6 +1019,7 @@ ElectricalSystemResult computeSystem(
   BuildingLevels? building,
   Current? originFaultLevel,
   double busbarClearingTimeS = busbarDefaultClearingTimeS,
+  DiversityLibrary? diversityLibrary,
 }) {
   final panels = project.panels;
   final byId = {for (final p in panels) p.id: p};
@@ -1037,7 +1111,9 @@ ElectricalSystemResult computeSystem(
       if (c.role != CircuitRole.branch) continue;
       final load = c.feedsPanelId != null
           ? (panelDemandW[c.feedsPanelId] ?? 0)
-          : circuitConnectedW(c);
+          : circuitConnectedW(c,
+              library: diversityLibrary,
+              diversityLibraryId: panel.diversityLibraryId);
       if (c.feedsPanelId != null) feederLoadW[c.feedsPanelId!] = load;
       connectedW += load;
     }
@@ -1050,7 +1126,8 @@ ElectricalSystemResult computeSystem(
   for (final p in panels) {
     for (final c in p.circuits) {
       if (c.role == CircuitRole.branch && c.feedsPanelId == null) {
-        connectedLoadW += circuitConnectedW(c);
+        connectedLoadW += circuitConnectedW(c,
+            library: diversityLibrary, diversityLibraryId: p.diversityLibraryId);
       }
     }
   }
@@ -1130,6 +1207,7 @@ ElectricalSystemResult computeSystem(
         calibrationBySheet: calibrationBySheet,
         building: building,
         panelById: byId,
+        diversityLibrary: diversityLibrary,
       ),
     );
   }
@@ -1196,6 +1274,9 @@ ElectricalSystemResult computeSystem(
       connectedW: pr.connectedW,
       demandW: pr.demandW,
       demandCurrent: pr.demandCurrent,
+      futureLoadW: pr.futureLoadW,
+      headroomApplied: pr.headroomApplied,
+      spareWaysReserved: pr.spareWaysReserved,
       phaseBalance: pr.phaseBalance,
       warnings: pr.warnings,
     );

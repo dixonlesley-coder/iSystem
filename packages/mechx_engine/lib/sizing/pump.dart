@@ -13,6 +13,7 @@
 library;
 
 import 'package:mechx_engine/hydraulics.dart';
+import 'package:mechx_engine/sizing/operating_point.dart';
 import 'package:mechx_engine/units.dart';
 
 // ── Standard motor frame sizes ─────────────────────────────────────────────
@@ -66,6 +67,13 @@ class PumpDuty {
   /// The total head against which the pump must operate.
   final Head head;
 
+  /// System × equipment curve operating-point analysis (intersection +
+  /// stability + NPSH cavitation check), composed over this duty by
+  /// [computePumpOperatingPoint]. Null unless requested — an absent value leaves
+  /// the duty byte-identical to before this feature. Its curve coefficients are
+  /// // VERIFY representative estimates, not certified pump data.
+  final PumpOperatingPoint? operatingPoint;
+
   const PumpDuty({
     required this.flow,
     required this.head,
@@ -73,6 +81,7 @@ class PumpDuty {
     required this.shaftPower,
     required this.motorInputPower,
     required this.selectedMotor,
+    this.operatingPoint,
   });
 }
 
@@ -106,12 +115,22 @@ Power selectMotor(Power shaft) {
 /// - [motorEfficiency] — motor efficiency η_m (0 < η ≤ 1);
 ///                       defaults to 0.90 (90 %).
 ///
+/// When [withOperatingPoint] is true (or any system-curve / NPSH input is
+/// supplied) the result also carries a [PumpOperatingPoint] (the system ×
+/// equipment curve intersection + NPSH cavitation check) via
+/// [computePumpOperatingPoint]. Omitting all of these leaves [PumpDuty.operatingPoint]
+/// null and the result byte-identical to before this feature.
+///
 /// Returns a [PumpDuty] containing all five calculated values.
 PumpDuty sizePump({
   required FlowRate flow,
   required Head head,
   double pumpEfficiency = 0.70,
   double motorEfficiency = 0.90,
+  bool withOperatingPoint = false,
+  Head? systemStaticHead,
+  double? systemResistanceK,
+  Head? suctionStaticHead,
 }) {
   assert(
     pumpEfficiency > 0 && pumpEfficiency <= 1,
@@ -131,6 +150,23 @@ PumpDuty sizePump({
   final motorInput = Power(shaft.watts / motorEfficiency);
   final selectedMotor = selectMotor(shaft);
 
+  // Compose the operating-point analysis only when requested (or any system /
+  // suction input is supplied) — otherwise the field stays null and the duty is
+  // byte-identical to before this feature.
+  final wantsOp = withOperatingPoint ||
+      systemStaticHead != null ||
+      systemResistanceK != null ||
+      suctionStaticHead != null;
+  final operatingPoint = wantsOp
+      ? computePumpOperatingPoint(
+          designFlow: flow,
+          designHead: head,
+          systemStaticHead: systemStaticHead,
+          systemResistanceK: systemResistanceK,
+          suctionStaticHead: suctionStaticHead ?? const Head(0),
+        )
+      : null;
+
   return PumpDuty(
     flow: flow,
     head: head,
@@ -138,5 +174,6 @@ PumpDuty sizePump({
     shaftPower: shaft,
     motorInputPower: motorInput,
     selectedMotor: selectedMotor,
+    operatingPoint: operatingPoint,
   );
 }

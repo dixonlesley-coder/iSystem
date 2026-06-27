@@ -52,6 +52,20 @@ class SizingContext {
   final double ductEqualFrictionPa; // target Pa/m for the equal-friction method
   final double ductAspectRatio; // W:H for rectangular ducts
 
+  /// Operating-point system-curve coefficients (design inputs for the
+  /// equipment-curve × system-curve analysis in `operating_point.dart`). These
+  /// are USER-PROVIDED design estimates — they are NEVER fitted from the solved
+  /// network (a system-curve k is an INPUT, not an output). All default null; an
+  /// absent value leaves the duty operating-point analysis off (byte-identical).
+  ///
+  /// - [systemHeadStatic]    — the pump system's fixed static lift/residual
+  ///   (the H_static term of H_sys = H_static + k·Q²). // VERIFY.
+  /// - [systemResistanceK]   — pump system resistance k (head per (m³/s)²).
+  /// - [airSystemResistanceK]— fan/duct system resistance k (Pa per (m³/s)²).
+  final Length? systemHeadStatic;
+  final double? systemResistanceK;
+  final double? airSystemResistanceK;
+
   const SizingContext({
     this.maxSupplyVelocity = const Velocity(2.0),
     this.maxDuctVelocity = const Velocity(5.0),
@@ -63,6 +77,9 @@ class SizingContext {
     this.ductMethod = DuctSizingMethod.velocity,
     this.ductEqualFrictionPa = 1.0,
     this.ductAspectRatio = 1.5,
+    this.systemHeadStatic,
+    this.systemResistanceK,
+    this.airSystemResistanceK,
   });
 }
 

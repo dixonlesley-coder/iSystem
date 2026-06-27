@@ -64,8 +64,10 @@ class HeatmapLayer extends ConsumerWidget {
               ),
             ),
           ),
+          // Bottom-RIGHT, clear of the bottom-left zoom cluster so the two
+          // don't overlap.
           Positioned(
-            left: MechXSpacing.md,
+            right: MechXSpacing.md,
             bottom: MechXSpacing.md,
             child: _HeatmapLegend(minKpa: minKpa, maxKpa: maxKpa),
           ),
@@ -119,23 +121,38 @@ class _HeatmapLegend extends StatelessWidget {
             ),
           ),
           const SizedBox(height: MechXSpacing.xxs),
+          // Always show the numeric min/max kPa endpoints — even when the field
+          // is (near-)uniform, where both ends read the same value.
           SizedBox(
             width: 148,
-            child: uniform
-                ? Center(
-                    child: Text('≈ ${bar(minKpa)}',
-                        style: type.mono.copyWith(color: colors.textMuted)),
-                  )
-                : Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('low · ${bar(minKpa)}',
-                          style: type.mono.copyWith(color: colors.textMuted)),
-                      Text('${bar(maxKpa)} · ample',
-                          style: type.mono.copyWith(color: colors.textMuted)),
-                    ],
-                  ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: Text('Low ${bar(minKpa)}',
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      style: type.mono.copyWith(color: colors.textMuted)),
+                ),
+                const SizedBox(width: MechXSpacing.xs),
+                Flexible(
+                  child: Text('High ${bar(maxKpa)}',
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: type.mono.copyWith(color: colors.textMuted)),
+                ),
+              ],
+            ),
           ),
+          if (uniform)
+            Padding(
+              padding: const EdgeInsets.only(top: MechXSpacing.xxs),
+              child: Text('uniform field',
+                  style: type.caption.copyWith(color: colors.textMuted)),
+            ),
         ],
       ),
     );

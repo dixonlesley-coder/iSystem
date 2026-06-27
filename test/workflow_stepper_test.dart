@@ -6,7 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/command_store.dart';
+import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/ui/shell/command_palette.dart';
+import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx/ui/shell/workflow_stepper.dart';
 
 import 'test_util.dart';
@@ -46,6 +48,67 @@ void main() {
         reason: 'workflow stage "$label"',
       );
     }
+  });
+
+  testWidgets('tapping the Floors stage navigates to the Building screen',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    // At rest the shell is on the DESIGN workspace.
+    expect(container.read(shellSectionProvider), ShellSection.design);
+
+    await tester.tap(find.descendant(
+        of: find.byType(WorkflowStepper), matching: find.text('Floors')));
+    await tester.pump();
+
+    // Floors lives in the Building screen — the stepper jumped there.
+    expect(container.read(shellSectionProvider), ShellSection.building);
+  });
+
+  testWidgets('tapping the Report stage navigates to the Review hub',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+
+    await tester.tap(find.descendant(
+        of: find.byType(WorkflowStepper), matching: find.text('Report')));
+    await tester.pump();
+
+    expect(container.read(shellSectionProvider), ShellSection.review);
+  });
+
+  testWidgets('tapping the Draw stage returns to the Layout workspace view',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    // Move away first so the tap has something to change.
+    container.read(shellSectionProvider.notifier).set(ShellSection.review);
+    await tester.pump();
+
+    await tester.tap(find.descendant(
+        of: find.byType(WorkflowStepper), matching: find.text('Draw')));
+    await tester.pump();
+
+    expect(container.read(shellSectionProvider), ShellSection.design);
+    expect(container.read(workspaceViewProvider), WorkspaceView.plan);
   });
 
   testWidgets('command palette is closed at rest and renders nothing',

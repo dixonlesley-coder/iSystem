@@ -1,6 +1,11 @@
-/// A compact, read-only workflow stepper for the status bar: the five MEP
-/// stages (Calibrate · Floors · Draw · Size · Report) with a done / active /
-/// pending state derived from project state ([workflowStageStateProvider]).
+/// A compact workflow stepper for the status bar: the five MEP stages
+/// (Calibrate · Floors · Draw · Size · Report) with a done / active / pending
+/// state derived from project state ([workflowStageStateProvider]).
+///
+/// Each stage is CLICKABLE — tapping it navigates straight to where that step
+/// is done (Calibrate → start calibration on the Layout canvas; Floors → the
+/// Building screen; Draw → the Layout canvas; Size → the Layout canvas; Report
+/// → the Review hub) through the existing controllers/providers (no new state).
 ///
 /// App-shell-local; custom design system only. Every text style is
 /// Roboto-backed via `context.type`. The done tick is a small custom-painted
@@ -10,7 +15,10 @@ library;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../store/calibration_store.dart';
 import '../../store/command_store.dart';
+import '../../store/electrical_store.dart';
+import '../shell/nav_rail.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 
@@ -19,6 +27,27 @@ import '../theme/mechx_theme.dart';
 /// outlined, the rest muted.
 class WorkflowStepper extends ConsumerWidget {
   const WorkflowStepper({super.key});
+
+  /// Navigate to where [stage] is carried out, through the existing providers.
+  /// The status bar stays put — only the workspace section / view changes.
+  void _goTo(WidgetRef ref, WorkflowStage stage) {
+    switch (stage) {
+      case WorkflowStage.calibrate:
+        ref.read(shellSectionProvider.notifier).set(ShellSection.design);
+        ref.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
+        ref.read(calibrationControllerProvider.notifier).start();
+      case WorkflowStage.floors:
+        ref.read(shellSectionProvider.notifier).set(ShellSection.building);
+      case WorkflowStage.draw:
+        ref.read(shellSectionProvider.notifier).set(ShellSection.design);
+        ref.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
+      case WorkflowStage.size:
+        ref.read(shellSectionProvider.notifier).set(ShellSection.design);
+        ref.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
+      case WorkflowStage.report:
+        ref.read(shellSectionProvider.notifier).set(ShellSection.review);
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -33,6 +62,7 @@ class WorkflowStepper extends ConsumerWidget {
         label: s.label,
         done: state.isDone(s),
         active: s == active,
+        onTap: () => _goTo(ref, s),
       ));
       if (i != stages.length - 1) {
         children.add(_connector(context));
@@ -57,11 +87,13 @@ class _StageChip extends StatelessWidget {
   final String label;
   final bool done;
   final bool active;
+  final VoidCallback onTap;
 
   const _StageChip({
     required this.label,
     required this.done,
     required this.active,
+    required this.onTap,
   });
 
   @override
@@ -78,7 +110,7 @@ class _StageChip extends StatelessWidget {
       fg = colors.textMuted;
     }
 
-    return Container(
+    final chip = Container(
       padding: const EdgeInsets.symmetric(
         horizontal: MechXSpacing.xs + 2,
         vertical: MechXSpacing.xxs,
@@ -104,6 +136,16 @@ class _StageChip extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+
+    // Each stage jumps to where that step is performed.
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: chip,
       ),
     );
   }

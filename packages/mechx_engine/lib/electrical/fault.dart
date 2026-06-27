@@ -41,6 +41,7 @@ import '../standards/puil.dart'
         ElectricalStandardsProfile;
 import '../units.dart';
 import 'earthing.dart' show EarthingSystem;
+import 'load_kind.dart' show LoadKind;
 import 'model.dart' show ElectricalCircuit, ElectricalPanel, ElectricalProject;
 import 'panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, ElectricalSystemResult,
@@ -85,6 +86,27 @@ const double zsFaultTempFactor = 1.28;
 /// rating. Full selectivity needs manufacturer let-through curves; first pass.
 // VERIFY — notAnSniClause (engineering rule of thumb, not a standard clause).
 const double selectivityRatio = 1.6;
+
+/// Above this upstream/downstream rating ratio TOTAL selectivity (both the
+/// overload AND the short-circuit zone discriminate) is taken as likely — the
+/// time-current bands separate enough that the downstream device always clears
+/// first. A coarse stand-in for reading the manufacturer's selectivity tables.
+// VERIFY — notAnSniClause (engineering rule of thumb, not a standard clause).
+const double totalSelectivityRatio = 2.5;
+
+/// A representative motor full-load current contributes a brief sub-transient
+/// fault infeed of ~this multiple of its FLA (a locked-rotor / sub-transient
+/// pulse, ~6× FLA, decaying over the first cycles). Folded into the prospective
+/// fault as a conservative uplift; a soft-starter / VFD front-end limits this in
+/// practice, so it is an UPPER-bound estimate, not a manufacturer figure.
+// VERIFY — secondarySource (IEC 60909 motor contribution ~ locked-rotor ratio).
+const double motorFaultContributionMultiple = 6;
+
+/// The sub-transient motor-fault pulse persists for roughly this long before the
+/// asynchronous-machine contribution decays away (the first few cycles at 50 Hz).
+/// Reported as the [SelectivityResult] estimated clearing-time context.
+// VERIFY — secondarySource (IEC 60909 sub-transient decay ~100 ms).
+const double motorFaultPulseMs = 100;
 
 /// Magnetic (instantaneous) trip multiple of In for each MCB curve (IEC 60898):
 /// the current Ia = multiple·In that guarantees fast tripping. MCCB
@@ -131,7 +153,11 @@ const List<String> faultStudyVerifyItems = [
   'ADS voltage factor (0.95) and fault-temperature factor (1.28)',
   'MCB curve trip multiples (B 5× / C 10× / D 20×)',
   'breaker breaking-capacity ladders (MCB 6–25 kA / MCCB 16–70 kA)',
-  'selectivity discrimination ratio (1.6×)',
+  'selectivity discrimination ratios (partial 1.6× / total 2.5×) — a simplified '
+      'time-current zone model, not manufacturer let-through / selectivity tables',
+  'estimated motor fault contribution (~6× FLA sub-transient pulse, ~100 ms) '
+      'folded into the prospective fault level',
+  'Ics vs Icu service/ultimate breaking-capacity check (IEC 60947-2)',
   'PE adiabatic-k table (IEC 60364-5-54 Table 54.3)',
 ];
 
@@ -211,6 +237,62 @@ bool nonSelective(double upstreamInA, double downstreamInA) {
   return upstreamInA < selectivityRatio * downstreamInA;
 }
 
+/// A coarse selectivity classification by upstream/downstream rating band — a
+/// simplified time-current ZONE model standing in for reading the manufacturer's
+/// selectivity tables. NOT a fabricated TCC: it only buckets the rating ratio.
+///   - [nonSelective] — ratio < 1.6× ⇒ the overload zones likely overlap; a
+///     downstream fault may trip the upstream device too;
+///   - [partial] — 1.6×..2.5× ⇒ overload discrimination is likely but the
+///     short-circuit (instantaneous) zones may still overlap on a high fault;
+///   - [total] — ≥ 2.5× ⇒ both zones likely discriminate.
+// VERIFY — notAnSniClause (a rating-ratio rule of thumb, not a standard clause).
+enum SelectivityZone { nonSelective, partial, total }
+
+extension SelectivityZoneInfo on SelectivityZone {
+  String get label => switch (this) {
+        SelectivityZone.nonSelective => 'non-selective',
+        SelectivityZone.partial => 'partial',
+        SelectivityZone.total => 'total',
+      };
+}
+
+/// Classify an upstream→downstream breaker pair into a [SelectivityZone] from
+/// the rating ratio alone (a coarse stand-in for the manufacturer tables).
+SelectivityZone classifySelectivity(double upstreamInA, double downstreamInA) {
+  if (downstreamInA <= 0) return SelectivityZone.total;
+  final ratio = upstreamInA / downstreamInA;
+  if (ratio < selectivityRatio) return SelectivityZone.nonSelective;
+  if (ratio < totalSelectivityRatio) return SelectivityZone.partial;
+  return SelectivityZone.total;
+}
+
+/// Estimated sub-transient fault current (A) an asynchronous motor of
+/// [motorFlaA] full-load amps feeds INTO a nearby fault: ~[motorFaultContribution
+/// Multiple]× FLA, a locked-rotor-scale pulse that decays over the first cycles.
+/// A conservative UPPER bound (a soft-starter / VFD limits it); // VERIFY.
+double estimatedMotorFaultA(double motorFlaA) {
+  if (motorFlaA <= 0) return 0;
+  return motorFaultContributionMultiple * motorFlaA;
+}
+
+/// Sum the estimated sub-transient motor-fault contribution (A) of every motor /
+/// pump / HVAC (motor-like) circuit in the system, from the already-computed
+/// design currents. Folded into the origin prospective fault as a conservative
+/// uplift when requested. Returns 0 when there are no motor loads ⇒ the fault
+/// study is byte-identical (the default path passes 0).
+double systemMotorFaultContributionA(ElectricalSystemResult sys) {
+  var total = 0.0;
+  for (final panel in sys.panels.values) {
+    for (final c in panel.circuits) {
+      final motorLike = c.loadKind == LoadKind.motor ||
+          c.loadKind == LoadKind.pump ||
+          c.loadKind == LoadKind.hvac;
+      if (motorLike) total += estimatedMotorFaultA(c.designCurrent.amperes);
+    }
+  }
+  return total;
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Result records (defined HERE — the A4 result types are not touched).
 // ───────────────────────────────────────────────────────────────────────────
@@ -273,6 +355,17 @@ class CircuitFaultResult {
   });
 }
 
+/// Service-vs-ultimate breaking-capacity ratio (Ics/Icu) per device class.
+/// MCCBs are commonly rated Ics = 50–100 % Icu; small MCBs are effectively
+/// Ics = Icu (single-use is rare in practice). A conservative MCCB 0.75 is used.
+/// Used for the Ics-adequacy check (a device should clear a SERVICE fault and
+/// remain usable, IEC 60947-2), distinct from the one-shot Icu rating.
+// VERIFY — notAnSniClause (IEC 60947-2 Ics declaration; verify on the datasheet).
+const Map<BreakerClass, double> serviceCapacityFraction = {
+  BreakerClass.mcb: 1.0,
+  BreakerClass.mccb: 0.75,
+};
+
 /// One upstream→downstream breaker pair examined for current discrimination.
 class SelectivityResult {
   final String upstreamCircuitId;
@@ -283,12 +376,34 @@ class SelectivityResult {
   /// True when the pair likely does NOT discriminate (upstream < 1.6×downstream).
   final bool nonSelective;
 
+  /// Coarse time-current ZONE classification (non-selective / partial / total)
+  /// from the rating ratio — a simplified stand-in for the manufacturer
+  /// selectivity tables. Additive (defaults to a ratio-derived value).
+  final SelectivityZone zone;
+
+  /// True when the upstream device's ULTIMATE breaking capacity (Icu) covers the
+  /// prospective fault at its bus. Additive (default true when not assessed).
+  final bool icuAdequate;
+
+  /// True when the upstream device's SERVICE breaking capacity (Ics) covers the
+  /// prospective fault — so it remains usable after clearing a fault, not merely
+  /// surviving one shot (IEC 60947-2). Additive (default true when not assessed).
+  final bool icsAdequate;
+
+  /// True when the busbar short-time withstand (Icw) is NOT exceeded by the
+  /// prospective fault at the upstream bus. Additive (default true).
+  final bool icwAdequate;
+
   const SelectivityResult({
     required this.upstreamCircuitId,
     required this.downstreamPanelId,
     required this.upstreamRatingA,
     required this.downstreamRatingA,
     required this.nonSelective,
+    this.zone = SelectivityZone.total,
+    this.icuAdequate = true,
+    this.icsAdequate = true,
+    this.icwAdequate = true,
   });
 }
 
@@ -337,18 +452,30 @@ double _round(double v, int dp) {
 /// supply origin can deliver (default 16 kA — a conservative direct-LV PLN
 /// figure when no transformer impedance is modelled). The fault decays down the
 /// feeder tree through each feeder cable's series impedance.
+/// [estimatedMotorFaultContributionA] folds a sub-transient MOTOR fault infeed
+/// (asynchronous machines briefly feed ~6× FLA into a nearby fault) into the
+/// origin prospective fault as a conservative uplift. Default 0 ⇒ no uplift ⇒
+/// the study is BYTE-IDENTICAL to before (the regression guard). Pass
+/// [systemMotorFaultContributionA]`(sys)` to apply the engine's own estimate.
 FaultStudyResult faultStudy(
   ElectricalSystemResult sys,
   ElectricalProject project,
   ElectricalStandardsProfile profile, {
   Current originFaultLevel = const Current(16000),
+  Current estimatedMotorFaultContributionA = const Current(0),
 }) {
   final warnings = <ElectricalWarning>[];
   final panelResults = <String, PanelFaultResult>{};
   final circuitResults = <String, CircuitFaultResult>{};
   final selectivity = <SelectivityResult>[];
 
-  final originIscA = originFaultLevel.amperes > 0 ? originFaultLevel.amperes : 0.0;
+  final baseIscA = originFaultLevel.amperes > 0 ? originFaultLevel.amperes : 0.0;
+  // Motor sub-transient infeed lifts the prospective fault the devices must
+  // break. 0 ⇒ unchanged (byte-identical). Only added when there is a base fault.
+  final motorA = estimatedMotorFaultContributionA.amperes > 0
+      ? estimatedMotorFaultContributionA.amperes
+      : 0.0;
+  final originIscA = baseIscA > 0 ? baseIscA + motorA : baseIscA;
 
   // Project model lookups (lengths, materials, feeder links live on the input).
   final modelById = {for (final p in project.panels) p.id: p};
@@ -527,12 +654,35 @@ FaultStudyResult faultStudy(
     final upstreamIn = feeder.breaker.ratingA.amperes;
     final downstreamIn = child.incomer.breaker.ratingA.amperes;
     final ns = nonSelective(upstreamIn, downstreamIn);
+    final zone = classifySelectivity(upstreamIn, downstreamIn);
+
+    // Ics vs Icu (IEC 60947-2) at the UPSTREAM device's bus: Icu must cover the
+    // prospective fault (survive one shot); Ics (service capacity) must too if
+    // the device is to remain usable. Icw: the upstream panel's busbar
+    // short-time withstand must not be exceeded.
+    final upstreamFaultKa = (panelFaultA[parentId] ?? originIscA) / 1000.0;
+    final icu = breakerKa(
+      upstreamIn,
+      feeder.breaker.deviceClass,
+      upstreamFaultKa,
+    );
+    final icsFraction = serviceCapacityFraction[feeder.breaker.deviceClass] ?? 1;
+    final icuAdequate = icu + 1e-9 >= upstreamFaultKa;
+    final icsAdequate = icu * icsFraction + 1e-9 >= upstreamFaultKa;
+    final parentBusbar = sys.panels[parentId]?.busbar;
+    final icwKa = parentBusbar?.withstand?.icwKa;
+    final icwAdequate = icwKa == null ? true : icwKa + 1e-9 >= upstreamFaultKa;
+
     selectivity.add(SelectivityResult(
       upstreamCircuitId: feederCircuitId,
       downstreamPanelId: childPanelId,
       upstreamRatingA: upstreamIn,
       downstreamRatingA: downstreamIn,
       nonSelective: ns,
+      zone: zone,
+      icuAdequate: icuAdequate,
+      icsAdequate: icsAdequate,
+      icwAdequate: icwAdequate,
     ));
     if (ns) {
       warnings.add(ElectricalWarning(
@@ -543,6 +693,35 @@ FaultStudyResult faultStudy(
             '${child.name} incomer (${_fmt(downstreamIn)} A): ratio < '
             '${_fmt(selectivityRatio)}× — verify against the manufacturer '
             'time-current / let-through curves.',
+        panelId: parentId,
+        circuitId: feederCircuitId,
+      ));
+    } else if (zone == SelectivityZone.partial) {
+      // Overload zone discriminates but the short-circuit (instantaneous) zone
+      // may overlap on a high fault — an advisory, not an error.
+      warnings.add(ElectricalWarning(
+        code: 'selectivity-partial',
+        severity: WarningSeverity.info,
+        message:
+            '${feeder.name} (${_fmt(upstreamIn)} A) over ${child.name} incomer '
+            '(${_fmt(downstreamIn)} A): partial selectivity (ratio '
+            '${_fmt(selectivityRatio)}×..${_fmt(totalSelectivityRatio)}×) — the '
+            'short-circuit zone may overlap on a high fault; confirm against the '
+            'manufacturer selectivity tables.',
+        panelId: parentId,
+        circuitId: feederCircuitId,
+      ));
+    }
+    if (!icsAdequate) {
+      warnings.add(ElectricalWarning(
+        code: 'service-capacity-inadequate',
+        severity: WarningSeverity.warning,
+        message:
+            '${feeder.name}: service breaking capacity Ics '
+            '(~${_fmt(_round(icu * icsFraction, 1))} kA) is below the '
+            '${_fmt(_round(upstreamFaultKa, 2))} kA prospective fault — the '
+            'device may survive one clearance (Icu) but not remain usable; '
+            'specify a 100 % Ics device.',
         panelId: parentId,
         circuitId: feederCircuitId,
       ));

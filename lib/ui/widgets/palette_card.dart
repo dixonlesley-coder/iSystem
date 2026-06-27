@@ -8,7 +8,8 @@ import 'mechx_focus_ring.dart';
 /// electrical (ElectricalPalette) right-bar palettes so both read as one app:
 /// a leading swatch dot + label, a soft hairline at rest that lifts to the
 /// accent border + a drop shadow while dragging, a hover scale, and a keyboard
-/// focus ring (the chip is drag-only, so the ring carries no Enter/Space action).
+/// focus ring. Supply [onActivate] to make a focused card Enter/Space-droppable
+/// (a keyboard alternative to dragging); omit it to keep the chip drag-only.
 ///
 /// Generic over the drag payload [T] (PaletteItem / PaletteLoad). Set
 /// [fillWidth] when the card sits in a full-width vertical list (the labels can
@@ -25,6 +26,12 @@ class PaletteCard<T extends Object> extends StatefulWidget {
   /// load symbol). When null, the [swatch] dot is shown.
   final Widget? leading;
 
+  /// Optional keyboard activation: when the card is focused and the user presses
+  /// Enter/Space, this fires (a keyboard alternative to dragging — typically a
+  /// "drop at canvas centre"). When null the focus ring carries no action (the
+  /// card stays drag-only).
+  final VoidCallback? onActivate;
+
   const PaletteCard({
     super.key,
     required this.label,
@@ -34,6 +41,7 @@ class PaletteCard<T extends Object> extends StatefulWidget {
     this.dotHollow = false,
     this.fillWidth = false,
     this.leading,
+    this.onActivate,
   });
 
   @override
@@ -47,6 +55,7 @@ class _PaletteCardState<T extends Object> extends State<PaletteCard<T>> {
   Widget build(BuildContext context) {
     final chip = _chip(context, dragging: false, fill: widget.fillWidth);
     return MechXFocusRing(
+      onActivated: widget.onActivate,
       child: Draggable<T>(
         data: widget.data,
         dragAnchorStrategy: pointerDragAnchorStrategy,

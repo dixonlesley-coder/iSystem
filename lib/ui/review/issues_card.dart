@@ -24,7 +24,45 @@ class IssuesCard extends ConsumerWidget {
     final colors = context.colors;
     final type = context.type;
     final issues = ref.watch(designIssuesProvider);
-    if (issues.isEmpty) return const SizedBox.shrink();
+    if (issues.isEmpty) {
+      // A clean design earns an explicit, positive confirmation rather than an
+      // empty void — the card still renders, with a success check + message.
+      return Container(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: MechXRadii.card,
+          border: Border.all(color: colors.border),
+        ),
+        padding: const EdgeInsets.all(MechXSpacing.md),
+        child: Row(
+          children: [
+            CustomPaint(
+              size: const Size(16, 16),
+              painter: _SeverityGlyph(
+                kind: _GlyphKind.check,
+                color: colors.success,
+              ),
+            ),
+            const SizedBox(width: MechXSpacing.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('No design issues found',
+                      style:
+                          type.subtitle.copyWith(color: colors.textPrimary)),
+                  Text(
+                    'Air velocities are in band, sheets are calibrated, and '
+                    'every standards value is accounted for.',
+                    style: type.caption.copyWith(color: colors.textMuted),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     final warnings =
         issues.where((i) => i.severity == IssueSeverity.warning).toList();
@@ -109,21 +147,25 @@ class _IssueRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    final dotColor =
-        issue.severity == IssueSeverity.warning ? colors.warning : colors.accent;
+    final isWarning = issue.severity == IssueSeverity.warning;
+    final dotColor = isWarning ? colors.warning : colors.accent;
 
     final row = Padding(
       padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 7,
-            height: 7,
-            margin: const EdgeInsets.only(top: 5, right: MechXSpacing.sm),
-            decoration: BoxDecoration(
-              color: dotColor,
-              borderRadius: const BorderRadius.all(MechXRadii.xs),
+          // Severity is carried by a glyph (a "!" ring for a warning, an "i"
+          // dot-ring for advisory) as well as colour, so it stays legible
+          // without relying on hue alone (redundant cue).
+          Padding(
+            padding: const EdgeInsets.only(top: 2, right: MechXSpacing.sm),
+            child: CustomPaint(
+              size: const Size(11, 11),
+              painter: _SeverityGlyph(
+                kind: isWarning ? _GlyphKind.warn : _GlyphKind.info,
+                color: dotColor,
+              ),
             ),
           ),
           Expanded(
@@ -156,4 +198,61 @@ class _IssueRow extends StatelessWidget {
       child: row,
     );
   }
+}
+
+/// Which glyph a [_SeverityGlyph] draws: a hollow ring with an exclamation
+/// (warning), a ring with a centre dot (advisory / info), or a bare check
+/// (the clean-state success mark).
+enum _GlyphKind { warn, info, check }
+
+/// A small custom-painted severity glyph — a redundant cue paired with colour
+/// so the meaning survives without relying on hue alone. Custom-painted (no
+/// icon font), so it can never render as tofu in the goldens.
+class _SeverityGlyph extends CustomPainter {
+  final _GlyphKind kind;
+  final Color color;
+
+  const _SeverityGlyph({required this.kind, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final c = Offset(w / 2, h / 2);
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.3
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    if (kind == _GlyphKind.check) {
+      final path = Path()
+        ..moveTo(w * 0.20, h * 0.52)
+        ..lineTo(w * 0.42, h * 0.74)
+        ..lineTo(w * 0.80, h * 0.26);
+      canvas.drawPath(path, stroke);
+      return;
+    }
+
+    // A ring for both warn + info.
+    canvas.drawCircle(c, w * 0.42, stroke);
+    final fill = Paint()..color = color;
+    if (kind == _GlyphKind.warn) {
+      // An exclamation stem + dot inside the ring.
+      canvas.drawLine(
+        Offset(w / 2, h * 0.28),
+        Offset(w / 2, h * 0.58),
+        stroke,
+      );
+      canvas.drawCircle(Offset(w / 2, h * 0.74), w * 0.07, fill);
+    } else {
+      // Info: a single centre dot.
+      canvas.drawCircle(c, w * 0.10, fill);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_SeverityGlyph old) =>
+      old.kind != kind || old.color != color;
 }

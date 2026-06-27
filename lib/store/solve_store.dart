@@ -352,6 +352,17 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
   );
 });
 
+/// Anti-Legionella advisory over the modelled hot-water recirculation: the
+/// modelled return temperature (°C) when it falls below the safe floor
+/// (`kLegionellaMinReturnTempC` ≈ 55 °C), else null. Read-only — it never
+/// resizes; the Review panel surfaces it. Null when there's no hot-water loop or
+/// the return is hot enough. // VERIFY threshold vs SNI / WHO guidance.
+final hotWaterLegionellaProvider = Provider<double?>((ref) {
+  final hwr = ref.watch(hotWaterRecircProvider);
+  if (hwr == null || !hwr.legionellaRisk) return null;
+  return hwr.returnTempC;
+});
+
 /// Jointing-consumables estimate (PVC solvent cement cans, duct sealant
 /// cartridges, thread-tape rolls) for the quotation. Joints come from the
 /// fittings + inline pipe couplings; duct sealant from the duct joint length.

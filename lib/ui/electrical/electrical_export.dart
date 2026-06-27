@@ -9,6 +9,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
 import 'package:mechx_engine/report/electrical_pdf_export.dart';
@@ -31,7 +32,14 @@ Future<void> exportElectricalSldDxf(WidgetRef ref) async {
 Future<void> exportElectricalSldPdf(WidgetRef ref) async {
   final project = ref.read(electricalProjectProvider);
   final result = ref.read(electricalResultProvider);
-  final bytes = electricalSldToPdf(project: project, result: result);
+  // The single-line is one drawing for the whole project; stamp it as sheet
+  // 1 of 1 with a north arrow so it reads as an issuable document. (Drawing
+  // number / revision aren't tracked in the model yet — a future wave.)
+  final bytes = electricalSldToPdf(
+    project: project,
+    result: result,
+    chrome: const DrawingChrome(sheetIndex: 1, sheetTotal: 1),
+  );
   final base = project.name.isEmpty ? 'electrical' : project.name;
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleSldPdf),

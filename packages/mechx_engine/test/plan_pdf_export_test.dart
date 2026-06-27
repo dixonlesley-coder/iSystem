@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/units.dart';
@@ -94,6 +95,34 @@ void main() {
     // lines[0] = 'xref', lines[1] = '0 6', lines[2] = free entry, lines[3] = obj1
     final obj1Offset = int.parse(lines[3].substring(0, 10));
     expect(s.substring(obj1Offset).startsWith('1 0 obj'), isTrue);
+  });
+
+  test('issuable chrome adds the sheet counter + legend/scale/north', () {
+    final s = latin1.decode(planToPdf(
+      net: net,
+      sizing: sizing,
+      edgeLengths: lengths,
+      sheetId: 's1',
+      floorIndex: 0,
+      projectName: 'Tower A',
+      sheetName: 'Ground Floor',
+      dateString: '2026-06-27',
+      chrome: const DrawingChrome(
+        drawingNumber: 'M-101',
+        revisionNumber: 'Rev. C',
+        sheetIndex: 3,
+        sheetTotal: 8,
+        legendServices: [ServiceType.coldWater],
+      ),
+    ));
+    expect(s, contains('Sheet 3 of 8')); // on the sheet-name title line
+    expect(s, contains('(M-101) Tj'));
+    expect(s, contains('(LEGEND) Tj'));
+    expect(s, contains('(N) Tj'));
+  });
+
+  test('null chrome leaves the bytes byte-identical', () {
+    expect(build(), equals(build()));
   });
 
   test('an empty floor still produces a valid (title-only) page', () {
