@@ -10,6 +10,7 @@ import 'package:flutter/widgets.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/context_menu.dart';
+import '../widgets/mechx_segment.dart';
 
 /// A labelled field row: a quiet sentence-case caption over its [child] input.
 class ElectricalField extends StatelessWidget {
@@ -231,60 +232,17 @@ class ElectricalEnumPicker<T> extends StatelessWidget {
       spacing: MechXSpacing.xs,
       runSpacing: MechXSpacing.xs,
       children: [
+        // The shared selectable-segment vocabulary — accentMuted fill + accent
+        // hairline + textPrimary (w600) when selected; textSecondary + no fill
+        // otherwise — so the enum chips speak the same language as the tabs.
         for (final o in options)
-          _Chip(
+          MechXSegment(
             label: label(o),
             selected: o == value,
+            selectedWeight: FontWeight.w600,
             onTap: () => onChanged(o),
           ),
       ],
-    );
-  }
-}
-
-class _Chip extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _Chip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    // Selected = the iOS tinted-fill chip (accentMuted + accent hairline +
-    // textPrimary label), matching the tab + button selected language. This
-    // keeps the label on a light tint at well above 4.5:1, instead of small
-    // white text on the systemBlue accent (which is borderline for AA).
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
-            vertical: MechXSpacing.xs + 1,
-          ),
-          decoration: BoxDecoration(
-            color: selected ? colors.accentMuted : colors.background,
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: selected ? colors.accent : colors.border),
-          ),
-          child: Text(
-            label,
-            style: type.label.copyWith(
-              color: selected ? colors.textPrimary : colors.textSecondary,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -384,51 +342,3 @@ class ElectricalMenu extends StatelessWidget {
   }
 }
 
-/// A small bordered text button (Close, etc.). Shared by the inspector + the
-/// electrical view's drawers.
-class ElectricalTextButton extends StatefulWidget {
-  final String label;
-  final VoidCallback onTap;
-  const ElectricalTextButton({
-    super.key,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  State<ElectricalTextButton> createState() => _ElectricalTextButtonState();
-}
-
-class _ElectricalTextButtonState extends State<ElectricalTextButton> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.fast,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm + 2,
-            vertical: MechXSpacing.xs + 1,
-          ),
-          decoration: BoxDecoration(
-            color: _hover ? colors.surfaceHover : const Color(0x00000000),
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: colors.border),
-          ),
-          child: Text(
-            widget.label,
-            style: type.label.copyWith(color: colors.textSecondary),
-          ),
-        ),
-      ),
-    );
-  }
-}

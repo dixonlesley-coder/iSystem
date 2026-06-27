@@ -35,7 +35,8 @@ import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/canvas_guide_popover.dart';
-import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_button.dart';
+import '../widgets/mechx_segment.dart';
 import 'electrical_canvas.dart';
 import 'electrical_controls.dart';
 import 'electrical_export.dart';
@@ -482,21 +483,22 @@ class _Toolbar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Tabs (left).
-          _TabButton(
+          // Tabs (left) — the shared selectable-segment vocabulary.
+          MechXSegment(
             label: 'Single-line',
             selected: tab == _Tab.singleLine,
             onTap: () => onTab(_Tab.singleLine),
           ),
           const SizedBox(width: MechXSpacing.xs),
-          _TabButton(
+          MechXSegment(
             label: 'Power one-line',
             selected: tab == _Tab.powerOneLine,
             onTap: () => onTab(_Tab.powerOneLine),
           ),
           const Spacer(),
           // Actions (right) — horizontally scrollable so a narrow window never
-          // overflows the toolbar.
+          // overflows the toolbar. The canonical MechXButton "gray button";
+          // danger / muted tones only recolour the label.
           Flexible(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -504,178 +506,33 @@ class _Toolbar extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _Btn(
+                  MechXButton(
                     label: warningCount > 0
                         ? 'Issues ($warningCount)'
                         : 'Issues',
-                    danger: warningCount > 0,
-                    onTap: onToggleAdvanced,
+                    tone: warningCount > 0
+                        ? MechXButtonTone.danger
+                        : MechXButtonTone.normal,
+                    onPressed: onToggleAdvanced,
                   ),
                   const SizedBox(width: MechXSpacing.xs),
-                  _Btn(label: 'Service & Earthing', onTap: onService),
+                  MechXButton(
+                    label: 'Service & Earthing',
+                    onPressed: onService,
+                  ),
                   const SizedBox(width: MechXSpacing.xs),
-                  _Btn(label: '+ Panel', onTap: onAddPanel),
+                  MechXButton(label: '+ Panel', onPressed: onAddPanel),
                   const SizedBox(width: MechXSpacing.xs),
-                  _Btn(label: 'Export', onTap: onExport, muted: true),
+                  MechXButton(
+                    label: 'Export',
+                    tone: MechXButtonTone.muted,
+                    onPressed: onExport,
+                  ),
                 ],
               ),
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _TabButton extends StatefulWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _TabButton({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  State<_TabButton> createState() => _TabButtonState();
-}
-
-class _TabButtonState extends State<_TabButton> {
-  bool _hover = false;
-  bool _down = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    final selected = widget.selected;
-    // Calm rest: unselected = no decoration; it lifts to the soft fill only on
-    // hover. Selected = the accent tint + a hairline accent border (the strong
-    // signal). Hover colour animates and a press compresses the tab slightly.
-    final bg = selected
-        ? colors.accentMuted
-        : (_hover ? colors.surfaceHover : const Color(0x00000000));
-    return MechXFocusRing(
-      onActivated: widget.onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() {
-          _hover = false;
-          _down = false;
-        }),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          onTapDown: (_) => setState(() => _down = true),
-          onTapUp: (_) => setState(() => _down = false),
-          onTapCancel: () => setState(() => _down = false),
-          child: AnimatedScale(
-            scale: _down ? 0.97 : 1.0,
-            duration: MechXMotion.press,
-            curve: MechXMotion.standard,
-            child: AnimatedContainer(
-              duration: MechXMotion.hover,
-              curve: MechXMotion.standard,
-              padding: const EdgeInsets.symmetric(
-                horizontal: MechXSpacing.sm + 2,
-                vertical: MechXSpacing.xs + 2,
-              ),
-              decoration: BoxDecoration(
-                color: bg,
-                borderRadius: MechXRadii.control,
-                border: Border.all(
-                  color: selected ? colors.accent : const Color(0x00000000),
-                ),
-              ),
-              child: Text(
-                widget.label,
-                style: type.label.copyWith(
-                  color: selected ? colors.textPrimary : colors.textSecondary,
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _Btn extends StatefulWidget {
-  final String label;
-  final VoidCallback onTap;
-  final bool danger;
-  final bool muted;
-  const _Btn({
-    required this.label,
-    required this.onTap,
-    this.danger = false,
-    this.muted = false,
-  });
-
-  @override
-  State<_Btn> createState() => _BtnState();
-}
-
-class _BtnState extends State<_Btn> {
-  bool _hover = false;
-  bool _down = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    // The toolbar button speaks the canonical MechXButton "gray button"
-    // language: a soft fill (no border) that lifts to the accent tint on hover
-    // and deepens on press. danger / muted only recolour the label.
-    final fg = widget.danger
-        ? colors.danger
-        : widget.muted
-        ? colors.textMuted
-        : colors.textPrimary;
-    final bg = _down
-        ? colors.accentMuted
-        : (_hover
-            ? Color.lerp(colors.surfaceHover, colors.accentMuted, 0.5)!
-            : colors.surfaceHover);
-    return MechXFocusRing(
-      onActivated: widget.onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() {
-          _hover = false;
-          _down = false;
-        }),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          onTapDown: (_) => setState(() => _down = true),
-          onTapUp: (_) => setState(() => _down = false),
-          onTapCancel: () => setState(() => _down = false),
-          child: AnimatedScale(
-            scale: _down ? 0.97 : 1.0,
-            duration: MechXMotion.press,
-            curve: MechXMotion.standard,
-            child: AnimatedContainer(
-              duration: MechXMotion.hover,
-              curve: MechXMotion.standard,
-              padding: const EdgeInsets.symmetric(
-                horizontal: MechXSpacing.sm + 4,
-                vertical: MechXSpacing.xs + 2,
-              ),
-              decoration: BoxDecoration(
-                color: bg,
-                borderRadius: MechXRadii.control,
-              ),
-              child: Text(
-                widget.label,
-                style: type.label
-                    .copyWith(color: fg, fontWeight: FontWeight.w500),
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -943,9 +800,12 @@ class _EmptyState extends StatelessWidget {
               const SizedBox(height: MechXSpacing.md),
               Row(
                 children: [
-                  _Btn(label: '+ Panel', onTap: onAddPanel),
+                  MechXButton(label: '+ Panel', onPressed: onAddPanel),
                   const SizedBox(width: MechXSpacing.sm),
-                  _Btn(label: 'Service & Earthing', onTap: onSetUp),
+                  MechXButton(
+                    label: 'Service & Earthing',
+                    onPressed: onSetUp,
+                  ),
                 ],
               ),
             ],
@@ -1066,7 +926,11 @@ class _ServiceInspector extends ConsumerWidget {
                       style: type.title.copyWith(color: colors.textPrimary),
                     ),
                   ),
-                  ElectricalTextButton(label: 'Close', onTap: onClose),
+                  MechXButton(
+                    label: 'Close',
+                    tertiary: true,
+                    onPressed: onClose,
+                  ),
                 ],
               ),
             ),
@@ -1178,7 +1042,11 @@ class _AdvancedDrawer extends StatelessWidget {
                       style: type.title.copyWith(color: colors.textPrimary),
                     ),
                   ),
-                  ElectricalTextButton(label: 'Close', onTap: onClose),
+                  MechXButton(
+                    label: 'Close',
+                    tertiary: true,
+                    onPressed: onClose,
+                  ),
                 ],
               ),
             ),
