@@ -13,6 +13,7 @@ import '../../store/selection_store.dart';
 import '../../store/sizing_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import 'offset_dialog.dart';
 
 /// Render a nominal size in inches as plain ASCII (no Unicode fractions, which
 /// Roboto lacks): 0.5 -> 1/2", 0.75 -> 3/4", 1.25 -> 1 1/4", 2.0 -> 2".
@@ -407,6 +408,23 @@ class _EdgeMenuPanel extends ConsumerWidget {
     }
 
     children.add(const _MenuDivider());
+    // Offset — a parallel run at a typed distance. Only meaningful for a
+    // horizontal run on a calibrated sheet (needs a real scale).
+    final sheetId = ref.watch(networkControllerProvider).network
+        .nodeById(edge.fromId)
+        ?.sheetId;
+    final calibrated = sheetId != null &&
+        ref.watch(projectControllerProvider).calibrationFor(sheetId) != null;
+    if (edge.kind == EdgeKind.run && calibrated) {
+      children.add(_MenuRow(
+        label: 'Offset…',
+        onTap: () {
+          // Open the dialog with the live context first, then dismiss the menu.
+          showOffsetDialog(context, ref, edge.id);
+          close();
+        },
+      ));
+    }
     children.add(_MenuRow(
       label: 'Select similar',
       onTap: () {

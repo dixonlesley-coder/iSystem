@@ -601,6 +601,63 @@ class NetworkController extends Notifier<DrawingState> {
     );
   }
 
+  /// Create a PARALLEL run offset from edge [id] by [distancePixels], on the
+  /// [leftSide] of the edge's `from`→`to` heading (left = the heading rotated a
+  /// quarter-turn anticlockwise on screen). Adds two nodes + one run edge of the
+  /// same service in a single undo step — the simpler-than-AutoCAD OFFSET: one
+  /// action, no separate trim/extend. No-op for a riser, a missing/zero-length
+  /// edge, or a non-positive distance. The UI converts a real distance to pixels
+  /// via the sheet calibration, so the controller stays calibration-agnostic
+  /// (like [placeRunPoint]). Returns the new edge id, or null on a no-op.
+  String? offsetEdgeParallel(
+    String id,
+    double distancePixels, {
+    required bool leftSide,
+  }) {
+    if (distancePixels <= 0) return null;
+    final edge = state.network.edgeById(id);
+    if (edge == null || edge.kind != EdgeKind.run) return null;
+    final a = state.network.nodeById(edge.fromId);
+    final b = state.network.nodeById(edge.toId);
+    if (a == null || b == null) return null;
+    final dx = b.x - a.x;
+    final dy = b.y - a.y;
+    final len = math.sqrt(dx * dx + dy * dy);
+    if (len < 1e-6) return null;
+
+    // Perpendicular unit vector: left of the a→b heading is (dy, -dx)/len on a
+    // y-down screen. Right flips the sign.
+    final sign = leftSide ? 1.0 : -1.0;
+    final ox = (dy / len) * distancePixels * sign;
+    final oy = (-dx / len) * distancePixels * sign;
+
+    final na = NetNode(
+      id: _id('n'),
+      sheetId: a.sheetId,
+      x: a.x + ox,
+      y: a.y + oy,
+      floorIndex: a.floorIndex,
+    );
+    final nb = NetNode(
+      id: _id('n'),
+      sheetId: b.sheetId,
+      x: b.x + ox,
+      y: b.y + oy,
+      floorIndex: b.floorIndex,
+    );
+    final newEdge = NetEdge(
+      id: _id('e'),
+      fromId: na.id,
+      toId: nb.id,
+      service: edge.service,
+    );
+    _commit(Network(
+      nodes: [...state.network.nodes, na, nb],
+      edges: [...state.network.edges, newEdge],
+    ));
+    return newEdge.id;
+  }
+
   // ── Drag-and-drop palette (drop a segment / fitting / terminal) ─────────────
 
   /// Default horizontal span (world px) of a dropped segment, before snapping.
