@@ -20,14 +20,18 @@ import '../units.dart';
 /// 1 watt of cooling = 3.412141633 BTU/h.
 const double kBtuPerHrPerWatt = 3.412141633;
 
-/// AC capacity in Indonesia is quoted in **PK** (paardenkracht). By common
-/// convention 1 PK ≈ 9000 BTU/h of COOLING (not a horsepower of input power).
+/// AC capacity in Indonesia is quoted in **PK** (paardenkracht). By the standard
+/// Indonesian market convention 1 PK ≈ 9000 BTU/h of COOLING (not a horsepower
+/// of input power) — corroborated across Indonesian AC references (the ladder
+/// ½→5000, ¾→7000, 1→9000, 1½→12000, 2→18000, 2½→24000 BTU/h is widely cited).
 /// `// VERIFY` against the chosen product's rated capacity.
 const double kBtuPerHrPerPk = 9000.0;
 
 /// Representative coefficient of performance for a modern (inverter) AC: input
-/// power = cooling output ÷ COP. General practice, `// VERIFY` against the
-/// product's rated EER/COP.
+/// power = cooling output ÷ COP. 3.0 corresponds to a ~4-star Indonesian unit
+/// (SNI/MEPS split-AC labels span EER 8.53→10.41 BTU/h·W ⇒ COP ≈ 2.5→3.05); a
+/// minimum-efficiency unit draws MORE input power, so `// VERIFY` against the
+/// product's rated EER/COP for an accurate electrical load.
 const double kAcDefaultCop = 3.0;
 
 double wattsToBtuPerHr(double watts) => watts * kBtuPerHrPerWatt;

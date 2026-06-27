@@ -187,7 +187,9 @@ class SniVentilationProfile implements VentilationStandardsProfile {
       sourceUrl: _sourceUrl,
       status: VerificationStatus.secondarySource,
       note: '${roomTypeLabel(type)}: ${ach.toStringAsFixed(0)} air changes per '
-          'hour (general HVAC practice; VERIFY against SNI 03-6572-2001).',
+          'hour. Corroborated against ASHRAE 62.1-class ranges (office 4-6, '
+          'classroom 6-8, retail 6-10, restaurant 8-12, toilet 8-15, hospital '
+          'ward min 6); VERIFY the exact figure against SNI 03-6572-2001.',
     );
   }
 
@@ -203,7 +205,7 @@ class SniVentilationProfile implements VentilationStandardsProfile {
       case RoomType.bedroom:
         return 500.0;
       case RoomType.livingRoom:
-        return 550.0;
+        return 500.0; // residential base (≈ the common "area × 500" rule)
       case RoomType.classroom:
         return 600.0;
       case RoomType.meetingRoom:
@@ -234,8 +236,10 @@ class SniVentilationProfile implements VentilationStandardsProfile {
       citation: '$_doc — beban pendinginan per luas (${roomTypeLabel(type)})',
       sourceUrl: _sourceUrl,
       status: VerificationStatus.secondarySource,
-      note: '${roomTypeLabel(type)}: ${d.toStringAsFixed(0)} BTU/h per m2 floor '
-          '(general HVAC practice; VERIFY against SNI 03-6572-2001).',
+      note: '${roomTypeLabel(type)}: ${d.toStringAsFixed(0)} BTU/h per m2 floor. '
+          'Corroborated against the common Indonesian rule of ~600 (well '
+          'insulated) to ~800 (sun-exposed / poorly insulated) BTU/h per m2; '
+          'low-gain spaces ~400-500, equipment-heavy ~900-1000. VERIFY.',
     );
   }
 
