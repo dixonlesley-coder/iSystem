@@ -144,13 +144,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     // A known command near the top of the (scrollable) list is shown.
-    expect(find.text('Go to Schematic'), findsOneWidget);
+    expect(find.text('Go to Riser'), findsOneWidget);
 
     // Type a filter that should keep only matching commands — the list narrows
     // to a single short result, bringing it on-screen.
-    await tester.enterText(find.byType(EditableText), 'schem');
+    await tester.enterText(find.byType(EditableText), 'riser');
     await tester.pump();
-    expect(find.text('Go to Schematic'), findsOneWidget);
+    expect(find.text('Go to Riser'), findsOneWidget);
     expect(find.text('Go to Layout'), findsNothing);
 
     // A different filter surfaces the export command (which lives lower in the
@@ -158,7 +158,7 @@ void main() {
     await tester.enterText(find.byType(EditableText), 'export');
     await tester.pump();
     expect(find.text('Export calculation report'), findsOneWidget);
-    expect(find.text('Go to Schematic'), findsNothing);
+    expect(find.text('Go to Riser'), findsNothing);
   });
 
   testWidgets('Esc closes the open palette', (tester) async {

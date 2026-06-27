@@ -34,7 +34,7 @@ void main() {
     expect(find.text('DESIGN'), findsOneWidget);
     for (final label in const [
       'Layout', // "Plan" relabelled — the unified shared-PDF canvas
-      'Schematic',
+      'Riser',
       'Electrical',
       'Building',
       'Review',
@@ -77,7 +77,7 @@ void main() {
 
     // The active item reads bolder than an inactive sibling.
     expect(styleOf('Layout').fontWeight, FontWeight.w600);
-    expect(styleOf('Schematic').fontWeight, FontWeight.w500);
+    expect(styleOf('Riser').fontWeight, FontWeight.w500);
 
     // Selecting Electrical drives the workspace provider (the screenshots test
     // contract) and moves the highlight — no off-by-one onto a neighbour.
@@ -132,7 +132,7 @@ void main() {
     // would tofu.
     for (final label in const [
       'Layout',
-      'Schematic',
+      'Riser',
       'Electrical',
       'Building',
       'Review',

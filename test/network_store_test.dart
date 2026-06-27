@@ -614,7 +614,8 @@ void main() {
 
     expect(find.text('DRAW'), findsOneWidget);
     expect(find.text('Run'), findsOneWidget);
-    expect(find.text('Riser'), findsOneWidget);
+    // 'Riser' is both the DRAW tool button and the (renamed) nav-rail item.
+    expect(find.text('Riser'), findsWidgets);
     // 'Cold water' appears in both the DRAW chips and the node palette.
     expect(find.text('Cold water'), findsWidgets);
 

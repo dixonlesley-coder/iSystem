@@ -50,7 +50,7 @@ extension WorkspaceViewInfo on WorkspaceView {
   /// Short top-bar control label.
   String get label => switch (this) {
         WorkspaceView.plan => 'Plan',
-        WorkspaceView.schematic => 'Schematic',
+        WorkspaceView.schematic => 'Riser',
         WorkspaceView.electrical => 'Electrical',
       };
 }

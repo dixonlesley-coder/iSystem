@@ -230,7 +230,7 @@ enum StringKey {
 const Map<StringKey, String> _en = {
   StringKey.navGroupDesign: 'DESIGN',
   StringKey.navLayout: 'Layout',
-  StringKey.navSchematic: 'Schematic',
+  StringKey.navSchematic: 'Riser',
   StringKey.navElectrical: 'Electrical',
   StringKey.navBuilding: 'Building',
   StringKey.navReview: 'Review',
@@ -475,7 +475,7 @@ const Map<StringKey, String> _en = {
 const Map<StringKey, String> _id = {
   StringKey.navGroupDesign: 'DESAIN',
   StringKey.navLayout: 'Tata Letak',
-  StringKey.navSchematic: 'Skematik',
+  StringKey.navSchematic: 'Riser',
   StringKey.navElectrical: 'Listrik',
   StringKey.navBuilding: 'Bangunan',
   StringKey.navReview: 'Tinjauan',

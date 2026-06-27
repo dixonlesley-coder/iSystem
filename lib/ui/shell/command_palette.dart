@@ -64,8 +64,8 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       run: () => openDesign(WorkspaceView.plan),
     ),
     _Command(
-      title: 'Go to Schematic',
-      subtitle: 'Design view',
+      title: 'Go to Riser',
+      subtitle: 'Vertical riser / elevation editor',
       run: () => openDesign(WorkspaceView.schematic),
     ),
     _Command(
