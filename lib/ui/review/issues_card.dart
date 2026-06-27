@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/design_issues_store.dart';
 import '../../store/electrical_store.dart';
+import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../theme/design_tokens.dart';
@@ -84,6 +85,27 @@ class IssuesCard extends ConsumerWidget {
       ref.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
     }
 
+    // One-click batch actions over a whole class of issues — SAFE: each either
+    // multi-selects the offending elements (then jumps to Layout to review) or
+    // copies a calibrated sheet's scale to the rest. Never edits/sizes anything.
+    final batchActions = ref.watch(issueBatchActionsProvider);
+    void runBatch(IssueBatchAction a) {
+      if (!a.enabled) return;
+      switch (a.kind) {
+        case IssueBatchKind.selectVelocityWarnings:
+        case IssueBatchKind.selectUnsizedAir:
+          ref.read(selectionProvider.notifier).setMulti(a.nodeIds, a.edgeIds);
+          ref.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
+        case IssueBatchKind.calibrateAllSheets:
+          final src = a.sourceSheetId;
+          if (src != null) {
+            ref
+                .read(projectControllerProvider.notifier)
+                .applyCalibrationToAllSheets(src, toSheetIds: a.targetSheetIds);
+          }
+      }
+    }
+
     return Container(
       decoration: BoxDecoration(
         color: colors.surface,
@@ -103,6 +125,23 @@ class IssuesCard extends ConsumerWidget {
                   style: type.caption.copyWith(color: colors.textMuted)),
             ],
           ),
+          if (batchActions.isNotEmpty) ...[
+            const SizedBox(height: MechXSpacing.sm),
+            _GroupLabel('Quick fixes', batchActions.length),
+            const SizedBox(height: MechXSpacing.xs),
+            Wrap(
+              spacing: MechXSpacing.xs,
+              runSpacing: MechXSpacing.xs,
+              children: [
+                for (final a in batchActions)
+                  _BatchChip(
+                    label: a.label,
+                    enabled: a.enabled,
+                    onTap: () => runBatch(a),
+                  ),
+              ],
+            ),
+          ],
           if (warnings.isNotEmpty) ...[
             const SizedBox(height: MechXSpacing.sm),
             _GroupLabel('Warnings', warnings.length),
@@ -117,6 +156,43 @@ class IssuesCard extends ConsumerWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// A tappable pill for a one-click batch action. Disabled chips are muted and
+/// non-interactive (e.g. calibrate-all before any sheet is calibrated).
+class _BatchChip extends StatelessWidget {
+  final String label;
+  final bool enabled;
+  final VoidCallback onTap;
+  const _BatchChip({
+    required this.label,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final fg = enabled ? colors.accent : colors.textMuted;
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: MechXSpacing.sm,
+        vertical: MechXSpacing.xs,
+      ),
+      decoration: BoxDecoration(
+        color: enabled ? colors.accentMuted : colors.surface,
+        borderRadius: MechXRadii.control,
+        border: Border.all(color: enabled ? colors.accent : colors.border),
+      ),
+      child: Text(label, style: type.caption.copyWith(color: fg)),
+    );
+    if (!enabled) return chip;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(onTap: onTap, child: chip),
     );
   }
 }

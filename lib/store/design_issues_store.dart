@@ -229,3 +229,132 @@ final designIssueWarningCountProvider = Provider<int>((ref) => ref
     .watch(designIssuesProvider)
     .where((i) => i.severity == IssueSeverity.warning)
     .length);
+
+/// A one-click batch action over a whole CLASS of issues. SAFE by construction —
+/// it only SELECTS the offending elements or applies an already-existing bulk op
+/// (copy one sheet's calibration to the rest). It never invents geometry or
+/// resizes anything; the executor lives in the UI (see `issues_card.dart`).
+enum IssueBatchKind {
+  /// Multi-select every out-of-band air-velocity element.
+  selectVelocityWarnings,
+
+  /// Multi-select every air element carrying air with no chosen size yet.
+  selectUnsizedAir,
+
+  /// Copy a calibrated sheet's scale onto every uncalibrated sheet.
+  calibrateAllSheets,
+}
+
+@immutable
+class IssueBatchAction {
+  final IssueBatchKind kind;
+  final String label;
+
+  /// False when the action can't run yet (e.g. calibrate-all with no calibrated
+  /// source sheet) — the UI shows it disabled with the explanatory label.
+  final bool enabled;
+
+  /// Selection payload (for the select-* kinds).
+  final Set<String> nodeIds;
+  final Set<String> edgeIds;
+
+  /// Calibrate-all payload: the source (a calibrated sheet, null ⇒ disabled) and
+  /// the uncalibrated targets.
+  final String? sourceSheetId;
+  final Set<String> targetSheetIds;
+
+  const IssueBatchAction({
+    required this.kind,
+    required this.label,
+    required this.enabled,
+    this.nodeIds = const {},
+    this.edgeIds = const {},
+    this.sourceSheetId,
+    this.targetSheetIds = const {},
+  });
+}
+
+/// Safe one-click batch actions, derived READ-ONLY from the same sources as
+/// [designIssuesProvider] (not from issue titles). Empty when there's nothing to
+/// batch — so a clean design surfaces no actions.
+final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final project = ref.watch(projectControllerProvider);
+  final sheets = ref.watch(sheetsControllerProvider);
+  final velocity = ref.watch(airVelocityChecksProvider);
+  final unsized = ref.watch(airUnsizedProvider);
+
+  final nodeIds = {for (final n in net.nodes) n.id};
+  final edgeIds = {for (final e in net.edges) e.id};
+  final actions = <IssueBatchAction>[];
+
+  // 1. Out-of-band velocity warnings → select.
+  final velN = <String>{};
+  final velE = <String>{};
+  velocity.forEach((id, check) {
+    if (!check.isWarning) return;
+    if (edgeIds.contains(id)) {
+      velE.add(id);
+    } else if (nodeIds.contains(id)) {
+      velN.add(id);
+    }
+  });
+  if (velN.isNotEmpty || velE.isNotEmpty) {
+    final c = velN.length + velE.length;
+    actions.add(IssueBatchAction(
+      kind: IssueBatchKind.selectVelocityWarnings,
+      label: 'Select $c out-of-band ${c == 1 ? 'velocity' : 'velocities'}',
+      enabled: true,
+      nodeIds: velN,
+      edgeIds: velE,
+    ));
+  }
+
+  // 2. Unsized air → select.
+  final unN = <String>{};
+  final unE = <String>{};
+  for (final id in unsized) {
+    if (edgeIds.contains(id)) {
+      unE.add(id);
+    } else if (nodeIds.contains(id)) {
+      unN.add(id);
+    }
+  }
+  if (unN.isNotEmpty || unE.isNotEmpty) {
+    final c = unN.length + unE.length;
+    actions.add(IssueBatchAction(
+      kind: IssueBatchKind.selectUnsizedAir,
+      label: 'Select $c unsized air ${c == 1 ? 'element' : 'elements'}',
+      enabled: true,
+      nodeIds: unN,
+      edgeIds: unE,
+    ));
+  }
+
+  // 3. Calibrate-all from the first calibrated sheet (if any).
+  final uncalibrated = <String>{
+    for (final s in sheets.sheets)
+      if (project.calibrationFor(s.id) == null) s.id,
+  };
+  if (uncalibrated.isNotEmpty) {
+    String? source;
+    for (final s in sheets.sheets) {
+      if (project.calibrationFor(s.id) != null) {
+        source = s.id;
+        break;
+      }
+    }
+    final n = uncalibrated.length;
+    actions.add(IssueBatchAction(
+      kind: IssueBatchKind.calibrateAllSheets,
+      label: source == null
+          ? 'Calibrate one sheet to copy scale to $n more'
+          : 'Copy scale to $n uncalibrated ${n == 1 ? 'sheet' : 'sheets'}',
+      enabled: source != null,
+      sourceSheetId: source,
+      targetSheetIds: uncalibrated,
+    ));
+  }
+
+  return actions;
+});
