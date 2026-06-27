@@ -161,6 +161,16 @@ class _NodeFittingLayer extends ConsumerWidget {
                           onDismiss();
                         },
                       ),
+                    const _MenuDivider(),
+                    _MenuRow(
+                      label: 'Select similar',
+                      onTap: () {
+                        ref
+                            .read(selectionProvider.notifier)
+                            .selectSimilarNodes(nodeId);
+                        onDismiss();
+                      },
+                    ),
                     const SizedBox(height: MechXSpacing.xs),
                   ],
                 ),
@@ -396,6 +406,14 @@ class _EdgeMenuPanel extends ConsumerWidget {
       }
     }
 
+    children.add(const _MenuDivider());
+    children.add(_MenuRow(
+      label: 'Select similar',
+      onTap: () {
+        ref.read(selectionProvider.notifier).selectSimilarEdges(edge.id);
+        close();
+      },
+    ));
     children.add(const _MenuDivider());
     children.add(_MenuRow(
       label: 'Delete ${edge.kind == EdgeKind.riser ? 'riser' : 'segment'}',

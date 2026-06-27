@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'network_store.dart';
+
 /// The currently selected network element(s). The single [nodeId]/[edgeId] are
 /// the PRIMARY (last-clicked) element that drives the inspector edit panel and
 /// canvas highlight; [nodeIds]/[edgeIds] are the full multi-selection sets (a
@@ -115,6 +117,39 @@ class SelectionController extends Notifier<Selection> {
 
   void clear() {
     if (state != Selection.none) state = Selection.none;
+  }
+
+  /// Select every EDGE that carries the same service as [edgeId] (e.g. all
+  /// cold-water runs), so the drafter can batch-edit size/material/delete in one
+  /// gesture. A pure selection change — records no undo step. No-op if the seed
+  /// edge is gone. "Similar" = same [ServiceType]; deliberately not size/product
+  /// (matching the whole service is the predictable, useful default).
+  void selectSimilarEdges(String edgeId) {
+    final net = ref.read(networkControllerProvider).network;
+    final seed = net.edgeById(edgeId);
+    if (seed == null) return;
+    final ids = <String>{
+      for (final e in net.edges)
+        if (e.service == seed.service) e.id,
+    };
+    if (ids.isEmpty) return;
+    setMulti(const {}, ids);
+  }
+
+  /// Select every NODE of the same component kind as [nodeId] (all pumps, all
+  /// gate valves, …; a plain junction with no component matches other plain
+  /// junctions). A pure selection change — no undo step. No-op if the seed node
+  /// is gone.
+  void selectSimilarNodes(String nodeId) {
+    final net = ref.read(networkControllerProvider).network;
+    final seed = net.nodeById(nodeId);
+    if (seed == null) return;
+    final ids = <String>{
+      for (final n in net.nodes)
+        if (n.component == seed.component) n.id,
+    };
+    if (ids.isEmpty) return;
+    setMulti(ids, const {});
   }
 }
 
