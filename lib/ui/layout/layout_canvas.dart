@@ -43,6 +43,7 @@ import '../canvas/drawing_overlay.dart';
 import '../canvas/drop_overlay.dart';
 import '../canvas/heatmap_layer.dart';
 import '../canvas/measurement_overlay.dart';
+import '../canvas/smart_input_bar.dart';
 import '../canvas/tank_overlay.dart';
 import '../canvas/room_overlay.dart';
 import '../canvas/network_layer.dart';
@@ -703,6 +704,20 @@ class _SharedSheet extends ConsumerWidget {
                   ? _electricalLayerGuideItems
                   : _mechanicalLayerGuideItems,
               onClose: host.closeGuide,
+            ),
+          ),
+        // Smart input bar (bottom-centre) — precise length entry while drawing a
+        // run. Renders nothing unless a run is pending, so idle is unchanged.
+        if (mechanicalActive && drawing)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: MechXSpacing.md,
+            child: Center(
+              child: SmartInputBar(
+                sheetId: sheet.id,
+                floorIndex: floorIndex,
+              ),
             ),
           ),
       ],

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/network_store.dart';
 import '../../store/sheets_store.dart';
+import '../../store/smart_input_store.dart';
 import 'service_style.dart';
 import 'snapping.dart';
 import 'viewport.dart';
@@ -46,8 +47,14 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
 
     return MouseRegion(
       cursor: SystemMouseCursors.precise,
-      onHover: (e) =>
-          setState(() => _hoverWorld = transform.screenToWorld(e.localPosition)),
+      onHover: (e) {
+        final world = transform.screenToWorld(e.localPosition);
+        // Publish the live cursor so the smart input bar can place a
+        // length-only entry along the current pointing direction.
+        ref.read(drawHoverProvider.notifier).set(world);
+        setState(() => _hoverWorld = world);
+      },
+      onExit: (_) => ref.read(drawHoverProvider.notifier).set(null),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTapUp: (details) {
