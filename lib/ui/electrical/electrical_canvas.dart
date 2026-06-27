@@ -1252,9 +1252,9 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
         return MouseRegion(
           onEnter: (_) => setState(() => _hover = true),
           onExit: (_) => setState(() => _hover = false),
-          // Subtle hover lift (1.03) — a pre-click affordance.
+          // Subtle hover lift — a pre-click affordance.
           child: AnimatedScale(
-            scale: (_hover && !widget.selected) ? 1.03 : 1.0,
+            scale: (_hover && !widget.selected) ? MechXMotion.hoverLift : 1.0,
             duration: MechXMotion.hover,
             curve: MechXMotion.standard,
             child: Stack(
@@ -1353,7 +1353,7 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
       );
     }
     if (widget.essential) {
-      badges.add(_Badge(label: 'ess', color: colors.warning, subtle: true));
+      badges.add(_Badge(label: 'essential', color: colors.warning, subtle: true));
     }
     if (widget.upsBacked) {
       badges.add(_Badge(label: 'UPS', color: colors.accent, subtle: true));
@@ -1563,9 +1563,9 @@ class _LoadNodeState extends State<_LoadNode> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      // Subtle hover lift (1.03) + an accent ring preview.
+      // Subtle hover lift + an accent ring preview.
       child: AnimatedScale(
-        scale: _hover ? 1.03 : 1.0,
+        scale: _hover ? MechXMotion.hoverLift : 1.0,
         duration: MechXMotion.hover,
         curve: MechXMotion.standard,
         child: AnimatedContainer(
@@ -1897,19 +1897,49 @@ class _CanvasDropTarget extends StatefulWidget {
 class _CanvasDropTargetState extends State<_CanvasDropTarget> {
   bool _active = false;
 
+  /// The live drag position (LOCAL canvas px) and payload — set on move and
+  /// cleared on leave/accept. Transient (drag-only), so idle is byte-identical.
+  Offset? _dragLocal;
+  PaletteLoad? _dragLoad;
+
+  void _clearDrag() {
+    if (_active || _dragLocal != null || _dragLoad != null) {
+      setState(() {
+        _active = false;
+        _dragLocal = null;
+        _dragLoad = null;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return DragTarget<PaletteLoad>(
       hitTestBehavior: HitTestBehavior.translucent,
-      onWillAcceptWithDetails: (_) {
-        setState(() => _active = true);
+      onWillAcceptWithDetails: (d) {
+        setState(() {
+          _active = true;
+          _dragLoad = d.data;
+        });
         return true;
       },
-      onLeave: (_) => setState(() => _active = false),
-      onAcceptWithDetails: (details) {
-        setState(() => _active = false);
+      onMove: (d) {
         final box = context.findRenderObject() as RenderBox?;
-        if (box == null) return;
+        final local = box?.globalToLocal(d.offset);
+        if (local == null) return;
+        setState(() {
+          _active = true;
+          _dragLocal = local;
+          _dragLoad = d.data;
+        });
+      },
+      onLeave: (_) => _clearDrag(),
+      onAcceptWithDetails: (details) {
+        final box = context.findRenderObject() as RenderBox?;
+        if (box == null) {
+          _clearDrag();
+          return;
+        }
         final local = box.globalToLocal(details.offset);
         final load = details.data;
         // Blank canvas → floating load (or a sub-panel for the feeder kind).
@@ -1941,24 +1971,75 @@ class _CanvasDropTargetState extends State<_CanvasDropTarget> {
           );
           widget.onToast('Load dropped — wire it to a panel.');
         }
+        _clearDrag();
       },
       builder: (context, candidate, rejected) {
         if (!_active) return const IgnorePointer(child: SizedBox.expand());
-        // Matches the mechanical drop overlay's tint + rounded affordance.
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            color: context.colors.accent.withAlpha(18),
-            borderRadius: MechXRadii.card,
-            border: Border.all(
-              color: context.colors.accent.withAlpha(110),
-              width: 1.5,
-            ),
+        final accent = context.colors.accent;
+        // Matches the mechanical drop overlay's tint + rounded affordance, plus
+        // a cursor-following ghost of the dragged load. Drag-only (mounted only
+        // while `_active`), so the at-rest canvas is byte-identical.
+        return IgnorePointer(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: accent.withAlpha(18),
+                    borderRadius: MechXRadii.card,
+                    border: Border.all(color: accent.withAlpha(110), width: 1.5),
+                  ),
+                  child: const SizedBox.expand(),
+                ),
+              ),
+              if (_dragLocal != null && _dragLoad != null)
+                Positioned.fill(
+                  child: CustomPaint(
+                    painter: _CanvasDropPreviewPainter(
+                      kind: _dragLoad!.kind,
+                      cursorLocal: _dragLocal!,
+                      color: accent,
+                    ),
+                  ),
+                ),
+            ],
           ),
-          child: const SizedBox.expand(),
         );
       },
     );
   }
+}
+
+/// Paints the cursor-following ghost [LoadSymbol] while a palette card hovers
+/// the blank single-line canvas. Blank-canvas drops always create a floating
+/// load / sub-panel (never attach to a panel), so there is no snap ring — just
+/// the ghost. Drag-only; never affects the at-rest canvas.
+class _CanvasDropPreviewPainter extends CustomPainter {
+  final LoadKind kind;
+  final Offset cursorLocal;
+  final Color color;
+
+  _CanvasDropPreviewPainter({
+    required this.kind,
+    required this.cursorLocal,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const box = 36.0;
+    final ghostColor = color.withAlpha(115);
+    canvas.save();
+    canvas.translate(cursorLocal.dx - box / 2, cursorLocal.dy - box / 2);
+    paintLoadSymbol(canvas, const Size(box, box), kind, ghostColor, stroke: 2.0);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_CanvasDropPreviewPainter old) =>
+      old.kind != kind ||
+      old.cursorLocal != cursorLocal ||
+      old.color != color;
 }
 
 // ════════════════════════════════════════════════════════════════════════════

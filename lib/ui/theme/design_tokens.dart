@@ -86,6 +86,13 @@ abstract final class MechXMotion {
   static const Duration hover = fast;
   static const Duration appear = medium;
   static const Duration dismiss = fast;
+
+  /// Tactile scale feedback — the single source of truth for the subtle
+  /// hover LIFT and press DOWN-scale used by interactive nodes / cards
+  /// (canvas panels, load nodes, layout markers). Values match the literals
+  /// they replace so adoption is byte-identical.
+  static const double hoverLift = 1.03;
+  static const double pressScale = 0.98;
 }
 
 /// A complete colour set for one brightness.

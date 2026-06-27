@@ -1071,7 +1071,7 @@ class _AdvancedBody extends StatelessWidget {
             : 'LV direct',
       ),
       _Metric(
-        label: 'Daya',
+        label: 'Demand (kVA)',
         value: '${(advanced.recommendedDayaVa / 1000).toStringAsFixed(1)} kVA',
       ),
       _Metric(label: 'Origin Isc', value: '${fmtNum(fault.originFaultkA)} kA'),

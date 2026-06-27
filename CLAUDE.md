@@ -556,8 +556,17 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   status, duct/face prompts trimmed to status-only). Goldens 01–07 regenerated + visually
   verified (tighter inspector/Layout chrome, no tofu/overflow); `network_store_test` dropped its
   `'PALETTE'` assertion. The companion **Batch B (shared-widget consolidation)** + **Batch C
-  (token + a11y polish)** + **Batch D (electrical interaction parity)** from the same review are
-  the follow-on passes. No engine / `.mechx` change.
+  (token + a11y polish)** from the same review landed as follow-on passes, and the final
+  **Batch D (electrical interaction parity)** is now done: the electrical drop targets
+  (`_SheetDropTarget` in `layout/electrical_layer.dart`, `_CanvasDropTarget` in
+  `electrical/electrical_canvas.dart`) paint a mechanical-`DropOverlay`-style **drag-place
+  preview** — a cursor-following ghost `LoadSymbol` (+ a nearest-panel snap ring on the Layout
+  layer; the single-line canvas has no ring as blank-canvas drops never attach), mounted ONLY
+  during a drag so idle is byte-identical; the drop-tint is unified to the mechanical
+  `accent.withAlpha(18→35 on will-snap)` + `MechXRadii.card` language; in-frame PanelMaker-isms
+  are normalised (**"Daya" → "Demand (kVA)"**, badge **"ess" → "essential"**; R/S/T/N/PE/INC/UPS/kWh
+  kept); and a single `MechXMotion.hoverLift` (1.03) / `pressScale` (0.98) token pair replaces the
+  five hardcoded hover-scale literals. No engine / `.mechx` change.
 - Looped networks: ring/grid **pressurized & air** mains are balanced with
   Hardy-Cross (`network/hardy_cross.dart`) at sizing time and the balanced flows
   feed the heatmap. The split uses resistance ∝ **real edge length** at a
