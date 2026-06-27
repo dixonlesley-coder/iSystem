@@ -282,7 +282,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   **Wave 5 — PanelMaker-faithful electrical canvas + left-nav shell landed**: the
   electrical workspace is now a **single-line spatial canvas** (`ui/electrical/electrical_canvas.dart`,
   a port of PanelMaker `BuildingSingleLine.tsx`) — panels as nodes wired by feeders,
-  zoom-LOD (summary card ↔ internal R-S-T busbar+breakers), loads hanging below,
+  zoom-LOD (summary card ↔ internal R-S-T busbar+breakers), loads hanging below as
+  **IEC 60617-style schematic symbols** (`ui/electrical/load_symbols.dart` `LoadSymbol`,
+  shared with the Loads palette + the layout markers — one symbol language; replaced the
+  old text-tag glyph box),
   Loads palette (`Draggable<LoadKind>`), outlet-drag-to-feeder, minimap, zoom controls,
   Single-line / Power one-line tabs + canvas toolbar; additive `ElectricalPanel.x/y`
   (no math change). The app shell is now PanelMaker's **248-px left navigation rail**
