@@ -330,6 +330,8 @@ class NetworkController extends Notifier<DrawingState> {
       component: node.component,
       tankCapacityLitres: node.tankCapacityLitres,
       electricalLoadW: node.electricalLoadW,
+      faceWidthMm: node.faceWidthMm,
+      faceHeightMm: node.faceHeightMm,
       fittingType: node.fittingType,
       fixture: keepTerminal ? node.fixture : null,
       airflow: keepTerminal ? node.airflow : null,
@@ -357,6 +359,8 @@ class NetworkController extends Notifier<DrawingState> {
       component: node.component,
       tankCapacityLitres: node.tankCapacityLitres,
       electricalLoadW: node.electricalLoadW,
+      faceWidthMm: node.faceWidthMm,
+      faceHeightMm: node.faceHeightMm,
       fittingType: node.fittingType,
         airflow: node.airflow,
         roofAreaM2: node.roofAreaM2,
@@ -387,12 +391,27 @@ class NetworkController extends Notifier<DrawingState> {
       component: node.component,
       tankCapacityLitres: node.tankCapacityLitres,
       electricalLoadW: node.electricalLoadW,
+      faceWidthMm: node.faceWidthMm,
+      faceHeightMm: node.faceHeightMm,
       fittingType: node.fittingType,
       fixture: node.fixture,
       airflow: airflow,
       customFixtureId: node.customFixtureId,
       roofAreaM2: node.roofAreaM2,
     ));
+  }
+
+  /// Set (or clear, with null) the manually chosen grille/diffuser FACE size
+  /// (gross width × height, mm) at an air terminal. The velocity-warning layer
+  /// judges the resulting face velocity against the recommended band.
+  void setNodeFace(String id, double? widthMm, double? heightMm) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    final clear = widthMm == null || heightMm == null;
+    if (node.faceWidthMm == widthMm && node.faceHeightMm == heightMm) return;
+    _replaceNode(clear
+        ? node.copyWith(clearFace: true)
+        : node.copyWith(faceWidthMm: widthMm, faceHeightMm: heightMm));
   }
 
   /// Set an explicit absolute [elevation] override on a node (e.g. a roof tank
@@ -437,6 +456,8 @@ class NetworkController extends Notifier<DrawingState> {
       component: node.component,
       tankCapacityLitres: node.tankCapacityLitres,
       electricalLoadW: node.electricalLoadW,
+      faceWidthMm: node.faceWidthMm,
+      faceHeightMm: node.faceHeightMm,
       fittingType: node.fittingType,
       fixture: customFixtureId == null ? node.fixture : null,
       airflow: node.airflow,
@@ -964,6 +985,8 @@ class NetworkController extends Notifier<DrawingState> {
         component: n.component,
         tankCapacityLitres: n.tankCapacityLitres,
         electricalLoadW: n.electricalLoadW,
+        faceWidthMm: n.faceWidthMm,
+        faceHeightMm: n.faceHeightMm,
         fittingType: n.fittingType,
         fixture: n.fixture,
         airflow: n.airflow,
@@ -1064,6 +1087,8 @@ class NetworkController extends Notifier<DrawingState> {
         component: n.component,
         tankCapacityLitres: n.tankCapacityLitres,
         electricalLoadW: n.electricalLoadW,
+        faceWidthMm: n.faceWidthMm,
+        faceHeightMm: n.faceHeightMm,
         fittingType: n.fittingType,
         fixture: n.fixture,
         airflow: n.airflow,

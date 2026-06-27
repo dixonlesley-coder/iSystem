@@ -88,6 +88,8 @@ ProjectDocument buildDocument(ProviderReader read) {
     measurements: read(measurementsProvider),
     // Designated tank areas round-trip with the project.
     tanks: read(tankAreasProvider),
+    // Designated room/zone areas round-trip with the project.
+    rooms: read(roomAreasProvider),
   );
 }
 
@@ -140,6 +142,8 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(measurementsProvider.notifier).set(doc.measurements);
   // Restore designated tank areas (absent on an older file ⇒ empty).
   read(tankAreasProvider.notifier).set(doc.tanks);
+  // Restore designated room/zone areas (absent on an older file ⇒ empty).
+  read(roomAreasProvider.notifier).set(doc.rooms);
 }
 
 /// Start the periodic autosave loop: every [interval], snapshot the current

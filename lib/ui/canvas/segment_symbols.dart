@@ -347,6 +347,31 @@ void paintComponentSymbol(
         ..lineTo(w * 0.80, cy)
         ..lineTo(w * 0.86, cy + w * 0.06);
       canvas.drawPath(a, p);
+    case NodeComponent.acCassette:
+      // A ceiling cassette: a square with a smaller inset square (4-way blow).
+      final outer = Rect.fromLTWH(w * 0.20, h * 0.20, w * 0.60, h * 0.60);
+      final inner = Rect.fromLTWH(w * 0.34, h * 0.34, w * 0.32, h * 0.32);
+      canvas.drawRect(outer, p);
+      canvas.drawRect(inner, p);
+    case NodeComponent.acSplitWall:
+      // A wall-mounted split: a slim rounded horizontal bar with a louvre line.
+      final r = RRect.fromRectAndRadius(
+        Rect.fromLTWH(w * 0.14, h * 0.38, w * 0.72, h * 0.24),
+        Radius.circular(w * 0.06),
+      );
+      canvas.drawRRect(r, p);
+      canvas.drawLine(Offset(w * 0.18, h * 0.56), Offset(w * 0.82, h * 0.56), p);
+    case NodeComponent.acDucted:
+      // A concealed ducted unit: a box with a supply arrow out one side.
+      final r = Rect.fromLTWH(w * 0.16, h * 0.30, w * 0.56, h * 0.40);
+      canvas.drawRect(r, p);
+      final a = Path()
+        ..moveTo(w * 0.72, cy)
+        ..lineTo(w * 0.92, cy)
+        ..moveTo(w * 0.86, cy - w * 0.06)
+        ..lineTo(w * 0.92, cy)
+        ..lineTo(w * 0.86, cy + w * 0.06);
+      canvas.drawPath(a, p);
   }
 }
 

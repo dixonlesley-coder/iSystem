@@ -12,10 +12,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/load_list.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'annotation_store.dart';
 import 'fire_store.dart';
 import 'network_store.dart';
+import 'project_store.dart';
 import 'solve_store.dart';
 
 /// Nominal voltage the MEP equipment panel is fed at (3-phase). The derived FLA
@@ -67,8 +70,51 @@ MepLoadSource _sourceFor(NodeComponent c) => switch (c) {
       NodeComponent.boosterSet => MepLoadSource.boosterPump,
       NodeComponent.supplyFan || NodeComponent.ahu => MepLoadSource.supplyFan,
       NodeComponent.exhaustFan => MepLoadSource.exhaustFan,
-      _ => MepLoadSource.generic, // fcu + any other motorised node
+      _ => MepLoadSource.generic, // fcu / AC / any other motorised node
     };
+
+/// Phase count for a placed motorised node: small fan-coils + wall/cassette AC
+/// are single-phase; the rest (pumps, fans, AHU, ducted AC) default three-phase.
+int _phasesFor(NodeComponent c) => switch (c) {
+      NodeComponent.fcu ||
+      NodeComponent.acSplitWall ||
+      NodeComponent.acCassette =>
+        1,
+      _ => 3,
+    };
+
+/// Electrical INPUT power (W) for a placed AC [node], derived from the cooling
+/// load of the room it sits inside (split across the AC units in that room) via
+/// the AC COP — so the AC's panel circuit tracks the room's PK. Null when the
+/// node is in no scaled room (the caller falls back to the component default).
+double? _acRoomWatts(
+  Network net,
+  List<RoomArea> rooms,
+  double? Function(String sheetId) mppFor,
+  NetNode node,
+) {
+  RoomArea? room;
+  for (final r in rooms) {
+    if (r.containsNode(node.sheetId, node.floorIndex, node.x, node.y)) {
+      room = r;
+      break;
+    }
+  }
+  if (room == null) return null;
+  final load = room.coolingLoad(mppFor(room.sheetId));
+  if (load == null) return null;
+  // Split the room load across the AC indoor units inside the same footprint.
+  var count = 0;
+  for (final n in net.nodes) {
+    if (RoomArea.isAcComponent(n.component) &&
+        room.containsNode(n.sheetId, n.floorIndex, n.x, n.y)) {
+      count++;
+    }
+  }
+  if (count == 0) return null;
+  final perUnit = selectAc(load.btuPerHr / count);
+  return acInputPowerW(coolingBtuPerHr: perUnit.nominalBtuPerHr);
+}
 
 /// Motorised equipment NODES the engineer has placed on the plan (pumps, fans,
 /// AHUs, FCUs…) surfaced as electrical loads — so a pump drawn on the PLUMBING
@@ -78,19 +124,27 @@ MepLoadSource _sourceFor(NodeComponent c) => switch (c) {
 /// node id, so editing/moving the node updates its circuit in place.
 final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
   final net = ref.watch(networkControllerProvider).network;
+  final rooms = ref.watch(roomAreasProvider);
+  final project = ref.watch(projectControllerProvider);
+  double? mppFor(String sheetId) =>
+      project.calibrationFor(sheetId)?.metersPerPixel;
+
   final loads = <MepEquipmentLoad>[];
   for (final n in net.nodes) {
     final c = n.component;
     if (c == null || !c.isElectricalLoad) continue;
-    final watts = n.electricalLoadW ?? c.defaultMotorKw * 1000;
+    // An AC unit's load tracks its room's cooling PK when it sits in a scaled
+    // room; an explicit per-node override still wins, else the component default.
+    final acWatts =
+        RoomArea.isAcComponent(c) ? _acRoomWatts(net, rooms, mppFor, n) : null;
+    final watts = n.electricalLoadW ?? acWatts ?? c.defaultMotorKw * 1000;
     if (watts <= 0) continue;
     loads.add(MepEquipmentLoad(
       id: 'node-${n.id}',
       name: c.label,
       source: _sourceFor(c),
       mechanicalPower: Power(watts),
-      // A small fan-coil is single-phase; the rest default to three-phase.
-      phases: c == NodeComponent.fcu ? 1 : 3,
+      phases: _phasesFor(c),
     ));
   }
   return loads;

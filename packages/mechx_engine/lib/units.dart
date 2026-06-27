@@ -50,13 +50,24 @@ extension type const Velocity(double metersPerSecond) {}
 
 /// Volumetric flow rate in cubic metres per second (m³/s).
 extension type const FlowRate(double cubicMetersPerSecond) {
+  /// Exact volume of one cubic foot in cubic metres (0.3048 m per foot, cubed).
+  static const double _cubicMetresPerCubicFoot = 0.028316846592;
+
   static FlowRate litersPerSecond(double lps) => FlowRate(lps / 1000.0);
   static FlowRate litersPerMinute(double lpm) => FlowRate(lpm / 60000.0);
   static FlowRate cubicMetersPerHour(double m3h) => FlowRate(m3h / 3600.0);
 
+  /// From cubic feet per minute (CFM) — the customary HVAC airflow unit.
+  static FlowRate cubicFeetPerMinute(double cfm) =>
+      FlowRate(cfm * _cubicMetresPerCubicFoot / 60.0);
+
   double get inLitersPerSecond => cubicMetersPerSecond * 1000.0;
   double get inLitersPerMinute => cubicMetersPerSecond * 60000.0;
   double get inCubicMetersPerHour => cubicMetersPerSecond * 3600.0;
+
+  /// In cubic feet per minute (CFM). 1 m³/s ≈ 2118.88 CFM.
+  double get inCubicFeetPerMinute =>
+      cubicMetersPerSecond * 60.0 / _cubicMetresPerCubicFoot;
 }
 
 /// Pressure in pascals (Pa).

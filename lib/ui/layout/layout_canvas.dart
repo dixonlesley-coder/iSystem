@@ -44,6 +44,7 @@ import '../canvas/drop_overlay.dart';
 import '../canvas/heatmap_layer.dart';
 import '../canvas/measurement_overlay.dart';
 import '../canvas/tank_overlay.dart';
+import '../canvas/room_overlay.dart';
 import '../canvas/network_layer.dart';
 import '../canvas/selection_overlay.dart';
 import '../canvas/sheet_canvas.dart' show sheetContentBuilderProvider;
@@ -522,6 +523,7 @@ class _SharedSheet extends ConsumerWidget {
     final mechanicalVisible = visible.any((l) => l.isMechanical);
     final measureMode = ref.watch(measureModeProvider);
     final tankMode = ref.watch(tankModeProvider);
+    final roomMode = ref.watch(roomModeProvider);
 
     // The shared viewport transform (persisted per-sheet) is what the electrical
     // layer reads, so both disciplines ride the SAME pan/zoom.
@@ -605,6 +607,16 @@ class _SharedSheet extends ConsumerWidget {
               active: mechanicalActive && tankMode && !drawing,
             ),
           ),
+        // Room/zone areas — saved footprints always render (mechanical layer
+        // visible); the room tool captures a drag only when active.
+        if (mechanicalVisible && !calibrating)
+          Positioned.fill(
+            child: RoomOverlay(
+              sheetId: sheet.id,
+              floorIndex: floorIndex,
+              active: mechanicalActive && roomMode && !drawing,
+            ),
+          ),
         // Mechanical drawing / drop / selection overlays — ONLY when a mechanical
         // layer is active (so editing routes to the active discipline). The
         // selection/drop overlays stand down while the measure tool is on.
@@ -616,7 +628,12 @@ class _SharedSheet extends ConsumerWidget {
               levelCount: levelCount,
             ),
           ),
-        if (mechanicalActive && !drawing && !calibrating && !measureMode && !tankMode)
+        if (mechanicalActive &&
+            !drawing &&
+            !calibrating &&
+            !measureMode &&
+            !tankMode &&
+            !roomMode)
           Positioned.fill(
             child: NetworkSelectionOverlay(
               sheetId: sheet.id,
@@ -627,7 +644,12 @@ class _SharedSheet extends ConsumerWidget {
         // card is hit-tested before the (opaque-handle-bearing) selection layer
         // swallows it. It IgnorePointer's itself when nothing is being dragged,
         // so normal taps still fall through to selection underneath.
-        if (mechanicalActive && !drawing && !calibrating && !measureMode && !tankMode)
+        if (mechanicalActive &&
+            !drawing &&
+            !calibrating &&
+            !measureMode &&
+            !tankMode &&
+            !roomMode)
           Positioned.fill(
             child: DropOverlay(sheetId: sheet.id, floorIndex: floorIndex),
           ),

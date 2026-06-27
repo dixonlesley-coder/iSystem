@@ -195,6 +195,11 @@ class SegmentPalette extends ConsumerWidget {
             NodeComponent.supplyFan,
             NodeComponent.exhaustFan,
           ]),
+          equipmentGroup('Air conditioning', const [
+            NodeComponent.acCassette,
+            NodeComponent.acSplitWall,
+            NodeComponent.acDucted,
+          ]),
         ],
       ],
     );

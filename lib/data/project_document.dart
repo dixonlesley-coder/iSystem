@@ -222,6 +222,10 @@ class ProjectDocument {
   /// default.
   final List<TankArea> tanks;
 
+  /// Designated room/zone areas on the calibrated sheets (footprint + ceiling +
+  /// ACH → airflow). An annotation, not part of the network; empty by default.
+  final List<RoomArea> rooms;
+
   /// Optional electrical sub-model (panels + earthing system). Added in v2;
   /// null for a v1 file or a project with no electrical design yet.
   final ElectricalProject? electrical;
@@ -239,6 +243,7 @@ class ProjectDocument {
     this.electrical,
     this.measurements = const [],
     this.tanks = const [],
+    this.rooms = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -277,6 +282,7 @@ class ProjectDocument {
         'settings': settings.toJson(),
         'measurements': [for (final m in measurements) m.toJson()],
         'tanks': [for (final t in tanks) t.toJson()],
+        'rooms': [for (final r in rooms) r.toJson()],
         if (electrical != null) 'electrical': electrical!.toJson(),
         'network': {
           'nodes': [
@@ -300,6 +306,8 @@ class ProjectDocument {
                 if (n.tankCapacityLitres != null)
                   'tank_l': n.tankCapacityLitres,
                 if (n.electricalLoadW != null) 'elec_w': n.electricalLoadW,
+                if (n.faceWidthMm != null) 'face_w_mm': n.faceWidthMm,
+                if (n.faceHeightMm != null) 'face_h_mm': n.faceHeightMm,
                 if (n.fittingType != null && n.fittingType != JunctionFitting.auto)
                   'fitting': n.fittingType!.name,
               },
@@ -390,6 +398,8 @@ class ProjectDocument {
               : _enumOrNull(NodeComponent.values, n['component']),
           tankCapacityLitres: (n['tank_l'] as num?)?.toDouble(),
           electricalLoadW: (n['elec_w'] as num?)?.toDouble(),
+          faceWidthMm: (n['face_w_mm'] as num?)?.toDouble(),
+          faceHeightMm: (n['face_h_mm'] as num?)?.toDouble(),
           fittingType: n['fitting'] == null
               ? null
               : _enumOrNull(JunctionFitting.values, n['fitting']),
@@ -452,6 +462,10 @@ class ProjectDocument {
     final tanks = <TankArea>[
       for (final t in (json['tanks'] as List? ?? const [])) ?TankArea.fromJson(t),
     ];
+    // Room/zone areas (additive; absent on an older file ⇒ empty).
+    final rooms = <RoomArea>[
+      for (final r in (json['rooms'] as List? ?? const [])) ?RoomArea.fromJson(r),
+    ];
     return ProjectDocument(
       version: version,
       projectName: project['name'] as String? ?? 'Untitled project',
@@ -465,6 +479,7 @@ class ProjectDocument {
       electrical: electrical,
       measurements: measurements,
       tanks: tanks,
+      rooms: rooms,
     );
   }
 

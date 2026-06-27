@@ -1,6 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/annotation_store.dart';
+import 'package:mechx_engine/network/network.dart' show NodeComponent;
+import 'package:mechx_engine/sizing/room_air.dart';
+import 'package:mechx_engine/standards/ventilation.dart';
 
 void main() {
   test('add ignores a zero-length span and stores real ones', () {
@@ -93,6 +96,121 @@ void main() {
     expect(ok!.material, TankMaterial.concrete); // unknown ⇒ concrete
     expect(ok.depthM, 2.0); // absent ⇒ default
     expect(TankArea.fromJson(ok.toJson())!.toJson(), ok.toJson());
+  });
+
+  test('RoomArea airflow = area x ceiling x ACH; add ignores a tiny box', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final r = c.read(roomAreasProvider.notifier);
+    // A degenerate (sub-2px) box is ignored.
+    r.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 1, by: 1);
+    expect(c.read(roomAreasProvider), isEmpty);
+    // A 200x100 px footprint at 0.01 m/px = 2.0 x 1.0 m = 2.0 m^2.
+    r.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+    final room = c.read(roomAreasProvider).single;
+    expect(room.areaM2(0.01), closeTo(2.0, 1e-9));
+    // Defaults: office (6 ACH), 3.0 m ceiling, FCU, no override.
+    expect(room.roomType, RoomType.office);
+    expect(room.ceilingHeightM, 3.0);
+    expect(room.equipmentKind, AirEquipmentKind.fcu);
+    expect(room.achOverride, isNull);
+    expect(room.effectiveAch(), closeTo(6.0, 1e-9));
+    // volume = 2.0 x 3.0 = 6.0 m^3; Q = 6.0 x 6 / 3600 = 0.01 m^3/s = 10 L/s.
+    final s = room.sizing(0.01)!;
+    expect(s.airflow.cubicMetersPerSecond, closeTo(0.01, 1e-12));
+    expect(s.airflow.inLitersPerSecond, closeTo(10.0, 1e-9));
+    expect(s.airflowCfm, closeTo(21.19, 0.01)); // 0.01 x 2118.88
+  });
+
+  test('RoomArea edits: room type drives ACH; explicit override; Auto resets',
+      () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final r = c.read(roomAreasProvider.notifier);
+    r.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+    final id = c.read(roomAreasProvider).single.id;
+
+    // Commercial kitchen ⇒ 20 ACH ⇒ Q = 6.0 x 20 / 3600 = 0.03333 m^3/s.
+    r.setRoomType(id, RoomType.commercialKitchen);
+    var room = c.read(roomAreasProvider).single;
+    expect(room.effectiveAch(), closeTo(20.0, 1e-9));
+    expect(room.sizing(0.01)!.airflow.cubicMetersPerSecond,
+        closeTo(6.0 * 20 / 3600, 1e-12));
+
+    // Explicit override wins over the room-type default.
+    r.setAch(id, 10);
+    room = c.read(roomAreasProvider).single;
+    expect(room.achOverride, 10);
+    expect(room.effectiveAch(), closeTo(10.0, 1e-9));
+
+    // 'Auto' (null) clears the override back to the room-type default (20).
+    r.setAch(id, null);
+    room = c.read(roomAreasProvider).single;
+    expect(room.achOverride, isNull);
+    expect(room.effectiveAch(), closeTo(20.0, 1e-9));
+  });
+
+  test('RoomArea cooling load + AC containment', () {
+    const room = RoomArea(
+      id: 'r0',
+      sheetId: 's1',
+      floorIndex: 0,
+      ax: 0,
+      ay: 0,
+      bx: 200,
+      by: 100,
+    );
+    // 2.0 m² (200×100 px @ 0.01) × 3 m ceiling, office density 600 BTU/h·m²:
+    //   load = 2.0 × 600 × (3/3) = 1200 BTU/h → 0.133 PK → recommend 0.5 PK.
+    final load = room.coolingLoad(0.01)!;
+    expect(load.btuPerHr, closeTo(1200.0, 1e-9));
+    expect(load.pk, closeTo(1200.0 / 9000.0, 1e-9));
+    expect(load.recommended.pk, 0.5);
+    expect(room.coolingLoad(null), isNull); // no scale ⇒ null
+
+    // Containment: a node inside the footprint on the same sheet/floor.
+    expect(room.containsNode('s1', 0, 100, 50), isTrue);
+    expect(room.containsNode('s1', 0, 250, 50), isFalse); // outside x
+    expect(room.containsNode('s2', 0, 100, 50), isFalse); // other sheet
+    expect(room.containsNode('s1', 1, 100, 50), isFalse); // other floor
+
+    expect(RoomArea.isAcComponent(NodeComponent.acCassette), isTrue);
+    expect(RoomArea.isAcComponent(NodeComponent.acSplitWall), isTrue);
+    expect(RoomArea.isAcComponent(NodeComponent.acDucted), isTrue);
+    expect(RoomArea.isAcComponent(NodeComponent.fcu), isFalse);
+    expect(RoomArea.isAcComponent(null), isFalse);
+  });
+
+  test('RoomArea.fromJson is tolerant (drops malformed, unknown enums)', () {
+    expect(RoomArea.fromJson('nope'), isNull);
+    expect(RoomArea.fromJson({'id': 'r1', 'sheetId': 's1'}), isNull);
+    final ok = RoomArea.fromJson({
+      'id': 'r1',
+      'sheetId': 's1',
+      'floor': 2,
+      'ax': 0,
+      'ay': 0,
+      'bx': 10,
+      'by': 20,
+      'roomType': 'not-a-type',
+      'equipment': 'not-a-kind',
+    });
+    expect(ok, isNotNull);
+    expect(ok!.roomType, RoomType.office); // unknown ⇒ office
+    expect(ok.equipmentKind, AirEquipmentKind.fcu); // unknown ⇒ fcu
+    expect(ok.ceilingHeightM, 3.0); // absent ⇒ default
+    expect(ok.achOverride, isNull); // absent ⇒ null
+    expect(RoomArea.fromJson(ok.toJson())!.toJson(), ok.toJson());
+  });
+
+  test('roomMode toggles', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    expect(c.read(roomModeProvider), isFalse);
+    c.read(roomModeProvider.notifier).toggle();
+    expect(c.read(roomModeProvider), isTrue);
+    c.read(roomModeProvider.notifier).set(false);
+    expect(c.read(roomModeProvider), isFalse);
   });
 
   test('Measurement.fromJson is tolerant (drops malformed)', () {

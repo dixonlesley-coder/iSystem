@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/duct_sizing.dart' show standardDuctDiametersMm;
 import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
@@ -252,6 +253,32 @@ class _EdgeMenuPanel extends ConsumerWidget {
     final children = <Widget>[];
 
     if (isAir) {
+      // ── Duct: set size (manual routing) ──────────────────────────────────
+      children.add(const _MenuHeader('Set size'));
+      for (final mm in standardDuctDiametersMm) {
+        final selected = edge.sizeOverride != null &&
+            (edge.sizeOverride!.inMillimeters - mm).abs() < 0.5;
+        children.add(_MenuRow(
+          label: 'Ø${mm.round()}',
+          mono: true,
+          selected: selected,
+          onTap: () {
+            ctrl.setEdgeSizeOverride(edge.id, Diameter.mm(mm));
+            afterEdit();
+          },
+        ));
+      }
+      if (edge.sizeOverride != null) {
+        children.add(_MenuRow(
+          label: 'Clear size override',
+          muted: true,
+          onTap: () {
+            ctrl.setEdgeSizeOverride(edge.id, null);
+            afterEdit();
+          },
+        ));
+      }
+      children.add(const _MenuDivider());
       // ── Duct: material + auto thickness ──────────────────────────────────
       children.add(const _MenuHeader('Duct material'));
       for (final p in DuctProduct.values) {

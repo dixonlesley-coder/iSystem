@@ -7,6 +7,7 @@ import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 
+import '../../store/air_warnings_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -20,6 +21,12 @@ import 'viewport.dart';
 
 /// Accent used to highlight the current selection.
 const Color _kSelection = Color(0xFF4C8DFF);
+
+/// Warning colour for an out-of-band air velocity (too high / too low).
+const Color _kWarn = Color(0xFFE8703A);
+
+/// Muted colour for the softer "carries air but not yet sized" advisory.
+const Color _kUnsized = Color(0xFF9AA0A6);
 
 /// Always-on render of the drawn network for the current sheet/floor, painted
 /// in screen space via the sheet's viewport transform. Pointer-transparent so
@@ -56,6 +63,14 @@ class NetworkLayer extends ConsumerWidget {
     final sizing = ref.watch(sizingProvider);
     final showLabels = ref.watch(showSizingProvider);
     final selection = ref.watch(selectionProvider);
+    // Ids of air elements whose velocity is out of band — get an on-plan badge.
+    final checks = ref.watch(airVelocityChecksProvider);
+    final warningIds = <String>{
+      for (final e in checks.entries)
+        if (e.value.isWarning) e.key,
+    };
+    // Air elements carrying air but not yet manually sized — a softer advisory.
+    final unsizedIds = ref.watch(airUnsizedProvider);
     // Sheet scale (m per px) lets the painter mark a coupling joint every stock
     // pipe length along a run; null (uncalibrated) ⇒ no joint marks.
     final metersPerPixel =
@@ -99,6 +114,8 @@ class NetworkLayer extends ConsumerWidget {
           layerFiltered: layerFiltered,
           visibleDisciplines: visible,
           activeDiscipline: active,
+          warningIds: warningIds,
+          unsizedIds: unsizedIds,
         ),
       ),
     );
@@ -142,6 +159,12 @@ class _NetworkPainter extends CustomPainter {
   final Set<DisciplineLayer> visibleDisciplines;
   final DisciplineLayer? activeDiscipline;
 
+  /// Ids of air elements (edges / terminal nodes) whose velocity is out of band.
+  final Set<String> warningIds;
+
+  /// Ids of air elements carrying air but not yet manually sized (soft advisory).
+  final Set<String> unsizedIds;
+
   _NetworkPainter({
     required this.net,
     required this.sheetId,
@@ -158,6 +181,8 @@ class _NetworkPainter extends CustomPainter {
     this.layerFiltered = false,
     this.visibleDisciplines = const {},
     this.activeDiscipline,
+    this.warningIds = const {},
+    this.unsizedIds = const {},
   });
 
   bool _onThisFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
@@ -289,6 +314,16 @@ class _NetworkPainter extends CustomPainter {
           if (tag != null) label = '$label  $tag';
           _label(canvas, (pa + pb) / 2, label);
         }
+        // Air status badge (independent of the size-label toggle), active layer
+        // only: an out-of-band warning takes precedence over the unsized hint.
+        if (opacity >= 1.0) {
+          final mid = Offset((pa.dx + pb.dx) / 2, (pa.dy + pb.dy) / 2 - 13);
+          if (warningIds.contains(e.id)) {
+            _warnBadge(canvas, mid);
+          } else if (unsizedIds.contains(e.id)) {
+            _unsizedBadge(canvas, mid);
+          }
+        }
       } else {
         final lowFloor = math.min(a.floorIndex, b.floorIndex);
         for (final n in [a, b]) {
@@ -343,7 +378,43 @@ class _NetworkPainter extends CustomPainter {
         // needs the bare dot; a free main node (no pipes yet) still gets it.
         _nodeGlyph(canvas, p, n.role, layer.opacity);
       }
+      // Air-terminal ring: out-of-band face velocity (warning) takes precedence
+      // over the not-yet-sized advisory.
+      if (layer.opacity >= 1.0) {
+        if (warningIds.contains(n.id)) {
+          canvas.drawCircle(
+            p,
+            12,
+            Paint()
+              ..color = _kWarn
+              ..strokeWidth = 2
+              ..style = PaintingStyle.stroke,
+          );
+        } else if (unsizedIds.contains(n.id)) {
+          canvas.drawCircle(
+            p,
+            12,
+            Paint()
+              ..color = _kUnsized
+              ..strokeWidth = 1.5
+              ..style = PaintingStyle.stroke,
+          );
+        }
+      }
     }
+  }
+
+  /// A small hollow advisory dot for an air element not yet manually sized.
+  void _unsizedBadge(Canvas canvas, Offset center) {
+    canvas.drawCircle(center, 4, Paint()..color = const Color(0xFFFFFFFF));
+    canvas.drawCircle(
+      center,
+      4,
+      Paint()
+        ..color = _kUnsized
+        ..strokeWidth = 1.5
+        ..style = PaintingStyle.stroke,
+    );
   }
 
   /// The on-screen outer width (px) of a pipe, scaled CONTINUOUSLY from its
@@ -378,6 +449,25 @@ class _NetworkPainter extends CustomPainter {
         ..strokeCap = StrokeCap.round
         ..style = PaintingStyle.stroke,
     );
+  }
+
+  /// A small "!" badge marking an air element whose velocity is out of band.
+  void _warnBadge(Canvas canvas, Offset center) {
+    canvas.drawCircle(center, 6, Paint()..color = const Color(0xFFFFFFFF));
+    canvas.drawCircle(center, 5.5, Paint()..color = _kWarn);
+    final tp = TextPainter(
+      text: const TextSpan(
+        text: '!',
+        style: TextStyle(
+          color: Color(0xFFFFFFFF),
+          fontSize: 9,
+          fontFamily: 'Roboto',
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
   }
 
   /// Draws a run as a walled pipe: a darker casing stroke (the two visible wall
@@ -705,7 +795,9 @@ class _NetworkPainter extends CustomPainter {
       !_sameStrSet(old.selectedEdgeIds, selectedEdgeIds) ||
       old.layerFiltered != layerFiltered ||
       old.activeDiscipline != activeDiscipline ||
-      !_sameSet(old.visibleDisciplines, visibleDisciplines);
+      !_sameSet(old.visibleDisciplines, visibleDisciplines) ||
+      !_sameStrSet(old.warningIds, warningIds) ||
+      !_sameStrSet(old.unsizedIds, unsizedIds);
 
   static bool _sameSet(Set<DisciplineLayer> a, Set<DisciplineLayer> b) =>
       a.length == b.length && a.containsAll(b);

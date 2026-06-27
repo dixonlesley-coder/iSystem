@@ -142,7 +142,17 @@ roof-tank-downfeed** solve with unified residual heatmap; PRV pressure zoning;
 pump/fan duty + motor; hot-water recirculation; fire sprinkler + standpipe;
 schematic riser diagram; **BOM + fittings + CSV export**; **Markdown calc
 report export**; versioned `.mechx` save/open with viewport restore;
-**autosave / crash-recovery**; light/dark.
+**autosave / crash-recovery**; light/dark; **draw-a-room AHU/FCU/fan air sizing**
+(Room tool → footprint area from scale × ceiling × per-room-type ACH → CFM, then
+auto-sized supply diffusers / return grilles / supply trunk / equipment duty via
+`sizing/room_air.dart`, edited in the Rooms inspector, round-trips in `.mechx`);
+**manual air routing + velocity warnings** (hand-route ducts, pick a duct size
+[right-click → Ø ladder] and a diffuser face size [inspector picker], and the app
+warns when the air velocity is too high/low via `sizing/air_velocity.dart` +
+`airVelocityChecksProvider` — inspector verdict + an on-plan orange "!" badge);
+**AC cooling-load + AC node types** (drop a Cassette / Split-wall / Ducted AC
+node into a room and the Rooms inspector auto-computes the cooling requirement —
+BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
 
 ## Conventions
 
@@ -407,6 +417,40 @@ report export**; versioned `.mechx` save/open with viewport restore;
   PN/pressure-class is NOT folded into hydraulics (a mechanical rating, no head-loss term). Fold-1 busbar withstand fault level + clearing time come from
   `ElectricalProject.originFaultLevelA`/`busbarClearingTimeS` (Service & Earthing inspector),
   with the store falling back to 16 kA / 0.1 s when unset.
+- **Room air sizing (`sizing/room_air.dart`)**: `sizeRoomAir` is pure
+  ORCHESTRATION — it computes the airflow (`airChangeFlow` = floor area × ceiling ×
+  ACH / 3600) then *composes* the existing primitives (`duct_sizing`, `grille_sizing`,
+  `fan.sizeFan`); it adds NO new hydraulics. Supply diffusers / return grilles are
+  auto-split so each face stays ≤ its noise limit (never falls back to an
+  over-velocity face). The equipment total static is a documented first-pass
+  ESTIMATE (kind internal allowance + duct friction × assumed run × fitting factor +
+  terminal drops) for equipment selection — the drawn-network `duct_static` solve
+  stays the authority. ACH values (`standards/ventilation.dart`) are all
+  `secondarySource` (UNVERIFIED) until the SNI 03-6572-2001 PDF is checked. `RoomArea`
+  is an annotation (like `TankArea`): it NEVER feeds the pressurized network solve.
+- **Air-velocity warnings (`sizing/air_velocity.dart` + `airVelocityChecksProvider`)**:
+  a JUDGE-ONLY layer over the manually routed air network — it never resizes
+  anything. Duct edges use the live `EdgeSizing.velocity`; air terminals use
+  `faceVelocityFor(airflow, grossFaceArea)` from the node's chosen
+  `faceWidthMm`/`faceHeightMm`. Bands are plain constants (supply duct 3–7 m/s,
+  supply face 1.0–3.0, return/exhaust face 1.0–4.0) — general practice, NOT an SNI
+  clause (`// VERIFY`). A non-positive velocity or a terminal with no chosen face is
+  reported OK (nothing to warn about), so a project with no manual air sizing is
+  byte-identical (no badges, goldens unchanged). A separate `airUnsizedProvider`
+  flags air ducts/terminals that carry air but have no manual size/face yet (a
+  muted advisory marker, distinct from the orange out-of-band warning, which
+  always takes precedence).
+- **AC cooling load (`sizing/cooling_load.dart`)**: pure ORCHESTRATION — an
+  area-density estimate (floor area × per-`RoomType` density × ceiling
+  correction → BTU/h) mapped to **PK** (1 PK ≈ 9000 BTU/h, convention) + a
+  standard-ladder `selectAc`. It adds NO heat-gain physics (not a CLTD solve);
+  the density + PK convention are `secondarySource`/`// VERIFY`. It is surfaced
+  only when an AC node (`acCassette`/`acSplitWall`/`acDucted`) sits inside a
+  `RoomArea` footprint — an annotation read, never part of the network solve. A
+  placed AC's ELECTRICAL load tracks that PK: `electrical_feed` derives its panel
+  circuit from the room cooling (split across the room's AC units) via
+  `acInputPowerW` (output ÷ COP 3.0, `// VERIFY`); an explicit `electricalLoadW`
+  override wins, and an AC in no scaled room falls back to `defaultMotorKw`.
 - **Cable family → ampacity class**: a circuit's `cableType` (NYY/NYM/NYA/NYAF/FRC)
   selects the insulation temperature-class for the KHA lookup via
   `electrical/cable_family.dart` (`insulationForCableType`): **FRC → XLPE 90 °C**,
