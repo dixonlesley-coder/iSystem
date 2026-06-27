@@ -757,8 +757,6 @@ class _DrawSection extends ConsumerWidget {
     final drawing = ref.watch(networkControllerProvider);
     final ctrl = ref.read(networkControllerProvider.notifier);
     final ortho = ref.watch(orthoProvider);
-    final sheets = ref.watch(sheetsControllerProvider);
-    final levelCount = ref.watch(projectControllerProvider).building.levelCount;
 
     // On the unified Layout canvas, scope the drawable services to the ACTIVE
     // discipline layer (plumbing services when Plumbing is active, air services
@@ -796,34 +794,9 @@ class _DrawSection extends ConsumerWidget {
           },
         );
 
-    // Duplicate the current floor's runs to the sheet ONE FLOOR UP. The
-    // destination is resolved by the sheet→floor MAPPING, not by list position:
-    // a sheet may carry an explicit floor override, so a sheet's list index need
-    // not equal its floor index. Enabled only when such a destination sheet
-    // exists for the next floor.
-    final current = sheets.current;
-    final fromFloor =
-        current == null ? 0 : sheets.floorFor(current.id, levelCount);
-    final toFloor = fromFloor + 1;
-    String? toSheetId;
-    if (current != null && toFloor < levelCount) {
-      for (final s in sheets.sheets) {
-        if (sheets.floorFor(s.id, levelCount) == toFloor) {
-          toSheetId = s.id;
-          break;
-        }
-      }
-    }
-    final canDuplicate = current != null && toSheetId != null;
-    void duplicateFloor() {
-      if (current == null || toSheetId == null) return;
-      ctrl.duplicateFloor(
-        fromSheetId: current.id,
-        fromFloor: fromFloor,
-        toSheetId: toSheetId,
-        toFloor: toFloor,
-      );
-    }
+    // Duplicating the current floor's runs to the floor above now lives in the
+    // command palette ("Duplicate floor up") — a niche power action that no
+    // longer crowds the primary draw toolbar.
 
     return DisclosureSection(
       name: 'Draw',
@@ -918,11 +891,6 @@ class _DrawSection extends ConsumerWidget {
               primary: ortho,
               onPressed: () => ref.read(orthoProvider.notifier).toggle(),
             ),
-            if (canDuplicate)
-              MechXButton(
-                label: 'Duplicate floor up',
-                onPressed: duplicateFloor,
-              ),
           ],
         ),
         const SizedBox(height: MechXSpacing.lg),

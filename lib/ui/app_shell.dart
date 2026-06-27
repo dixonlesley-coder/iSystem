@@ -509,16 +509,6 @@ class _StatusBar extends ConsumerWidget {
                       style: caption.copyWith(color: colors.textMuted),
                     ),
                   ),
-                  _dot(colors.textMuted),
-                  Flexible(
-                    child: Text(
-                      context.strings(StringKey.shellViewportHints),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      softWrap: false,
-                      style: caption.copyWith(color: colors.textMuted),
-                    ),
-                  ),
                   // App version (hidden in tests — no platform channel — so
                   // the golden screenshots stay byte-identical).
                   const VersionLabel(),

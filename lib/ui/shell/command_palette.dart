@@ -23,6 +23,8 @@ import '../../store/command_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
+import '../../store/project_store.dart';
+import '../../store/sheets_store.dart';
 import '../inspector/project_panel.dart' show exportCalcReport;
 import '../shell/nav_rail.dart';
 import '../shell/templates_dialog.dart';
@@ -146,6 +148,36 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       title: 'Clear drawing',
       subtitle: 'Remove all drawn elements (undoable)',
       run: net.clear,
+    ),
+    _Command(
+      title: 'Duplicate floor up',
+      subtitle: "Copy this floor's runs to the floor above",
+      run: () {
+        final sheets = ref.read(sheetsControllerProvider);
+        final levelCount =
+            ref.read(projectControllerProvider).building.levelCount;
+        final current = sheets.current;
+        if (current == null) return;
+        final fromFloor = sheets.floorFor(current.id, levelCount);
+        final toFloor = fromFloor + 1;
+        if (toFloor >= levelCount) return;
+        // Resolve the destination by the sheet→floor MAPPING (a sheet may carry
+        // an explicit floor override, so list index need not equal floor index).
+        String? toSheetId;
+        for (final s in sheets.sheets) {
+          if (sheets.floorFor(s.id, levelCount) == toFloor) {
+            toSheetId = s.id;
+            break;
+          }
+        }
+        if (toSheetId == null) return;
+        net.duplicateFloor(
+          fromSheetId: current.id,
+          fromFloor: fromFloor,
+          toSheetId: toSheetId,
+          toFloor: toFloor,
+        );
+      },
     ),
     _Command(
       title: 'New from template',
