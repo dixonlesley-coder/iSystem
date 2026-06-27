@@ -7,6 +7,7 @@ import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../inspector/disclosure_header.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/palette_card.dart';
@@ -101,14 +102,21 @@ class SegmentPalette extends ConsumerWidget {
           ),
         );
 
-    Widget equipmentGroup(String title, List<NodeComponent> items) => Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: MechXSpacing.xs),
-            MechXSectionLabel(title),
-            const SizedBox(height: MechXSpacing.xs),
-            for (final c in items) componentCard(c),
-          ],
+    // Accessory groups (valves, meters, dampers) collapse by default so the
+    // palette reads as a short list of primary equipment instead of a long
+    // scroll — the long tail is one tap away. Primary equipment for each
+    // discipline (plant, terminals, units, AC, drains, fire) stays open.
+    const collapsedByDefault = <String>{'Valves', 'Meters & misc', 'Dampers'};
+    Widget equipmentGroup(String title, List<NodeComponent> items) => Padding(
+          padding: const EdgeInsets.only(top: MechXSpacing.xs),
+          child: DisclosureSection(
+            name: title,
+            defaultExpanded: !collapsedByDefault.contains(title),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [for (final c in items) componentCard(c)],
+            ),
+          ),
         );
 
     return Column(
