@@ -459,16 +459,6 @@ class _StatusBar extends ConsumerWidget {
                     _dot(colors.textMuted),
                     Flexible(
                       child: Text(
-                        '${sheet.sizePx.width.round()} × ${sheet.sizePx.height.round()} px',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        softWrap: false,
-                        style: caption.copyWith(color: colors.textMuted),
-                      ),
-                    ),
-                    _dot(colors.textMuted),
-                    Flexible(
-                      child: Text(
                         context.strings(StringKey.shellUncalibrated),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
