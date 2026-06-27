@@ -442,7 +442,11 @@ BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
   standard-ladder `selectAc`. It adds NO heat-gain physics (not a CLTD solve);
   the density + PK convention are `secondarySource`/`// VERIFY`. It is surfaced
   only when an AC node (`acCassette`/`acSplitWall`/`acDucted`) sits inside a
-  `RoomArea` footprint — an annotation read, never part of the network solve.
+  `RoomArea` footprint — an annotation read, never part of the network solve. A
+  placed AC's ELECTRICAL load tracks that PK: `electrical_feed` derives its panel
+  circuit from the room cooling (split across the room's AC units) via
+  `acInputPowerW` (output ÷ COP 3.0, `// VERIFY`); an explicit `electricalLoadW`
+  override wins, and an AC in no scaled room falls back to `defaultMotorKw`.
 - **Cable family → ampacity class**: a circuit's `cableType` (NYY/NYM/NYA/NYAF/FRC)
   selects the insulation temperature-class for the KHA lookup via
   `electrical/cable_family.dart` (`insulationForCableType`): **FRC → XLPE 90 °C**,

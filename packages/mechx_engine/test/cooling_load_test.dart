@@ -67,6 +67,19 @@ void main() {
     });
   });
 
+  group('acInputPowerW', () {
+    test('1 PK (9000 BTU/h) at COP 3 ≈ 879 W input', () {
+      // 9000 BTU/h = 9000/3.412141633 = 2637.6 W cooling; ÷ 3 = 879.2 W input.
+      expect(acInputPowerW(coolingBtuPerHr: 9000.0), closeTo(879.2, 0.2));
+    });
+
+    test('input power scales inversely with COP', () {
+      final cop3 = acInputPowerW(coolingBtuPerHr: 12000.0, cop: 3.0);
+      final cop4 = acInputPowerW(coolingBtuPerHr: 12000.0, cop: 4.0);
+      expect(cop4, closeTo(cop3 * 3.0 / 4.0, 1e-9));
+    });
+  });
+
   group('estimateCoolingLoad', () {
     test('integrates load → watts → PK → recommended AC', () {
       final r = estimateCoolingLoad(

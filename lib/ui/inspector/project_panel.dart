@@ -876,13 +876,17 @@ class _RoomsSection extends ConsumerWidget {
                       Text(
                         '${acs.length} ${acs.length == 1 ? 'unit' : 'units'} '
                         '($typeStr) -> ${pkStr(perUnit.pk)} PK each '
-                        '(${perUnit.nominalBtuPerHr.round()} BTU/h)',
+                        '(${perUnit.nominalBtuPerHr.round()} BTU/h, '
+                        '~${(acInputPowerW(coolingBtuPerHr: perUnit.nominalBtuPerHr) / 1000).toStringAsFixed(2)} kW)',
                         style: type.caption.copyWith(
                           color: perUnit.exceedsRange
                               ? colors.danger
                               : colors.textMuted,
                         ),
                       ),
+                      Text('Feeds the electrical panel at the kW above.',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted)),
                       if (perUnit.exceedsRange)
                         Text(
                           'Load exceeds the largest single unit — add more units.',

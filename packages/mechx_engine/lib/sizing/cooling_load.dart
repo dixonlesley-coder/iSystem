@@ -25,10 +25,26 @@ const double kBtuPerHrPerWatt = 3.412141633;
 /// `// VERIFY` against the chosen product's rated capacity.
 const double kBtuPerHrPerPk = 9000.0;
 
+/// Representative coefficient of performance for a modern (inverter) AC: input
+/// power = cooling output ÷ COP. General practice, `// VERIFY` against the
+/// product's rated EER/COP.
+const double kAcDefaultCop = 3.0;
+
 double wattsToBtuPerHr(double watts) => watts * kBtuPerHrPerWatt;
 double btuPerHrToWatts(double btuPerHr) => btuPerHr / kBtuPerHrPerWatt;
 double btuPerHrToPk(double btuPerHr) => btuPerHr / kBtuPerHrPerPk;
 double pkToBtuPerHr(double pk) => pk * kBtuPerHrPerPk;
+
+/// Electrical INPUT power (W) for an AC delivering [coolingBtuPerHr] of cooling
+/// at [cop] (input = output ÷ COP). Feeds a placed AC unit's panel circuit from
+/// its cooling duty, so the AC's electrical load tracks the room's PK.
+double acInputPowerW({
+  required double coolingBtuPerHr,
+  double cop = kAcDefaultCop,
+}) {
+  assert(cop > 0, 'cop must be positive');
+  return btuPerHrToWatts(coolingBtuPerHr) / cop;
+}
 
 /// Estimated sensible cooling load (BTU/h) for a room by the area-density rule.
 /// [densityBtuPerHrPerM2] is supplied by the caller from the ventilation
