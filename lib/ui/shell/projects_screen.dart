@@ -125,12 +125,6 @@ class ProjectsScreen extends ConsumerWidget {
             ],
           ),
         ),
-        const SizedBox(height: MechXSpacing.md),
-        const HubNote(
-          'Use Open in the top bar to load a .mechx file, or Save to write the '
-          'current project. Export the calc report and drawings from here, or '
-          'use the export tools in the Electrical / Schematic views.',
-        ),
       ],
     );
   }

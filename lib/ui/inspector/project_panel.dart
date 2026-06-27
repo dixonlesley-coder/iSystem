@@ -577,7 +577,7 @@ class ProjectPanel extends ConsumerWidget {
                     Expanded(
                       child: Text(
                         calibration == null
-                            ? 'Not calibrated — mark a known distance'
+                            ? 'Not calibrated'
                             : '1 px = ${calibration.metersPerPixel.toStringAsExponential(2)} m',
                         style: type.caption.copyWith(color: colors.textSecondary),
                       ),
@@ -2157,11 +2157,9 @@ class _SelectionSection extends ConsumerWidget {
             Builder(builder: (context) {
               final check = ref.watch(airVelocityChecksProvider)[node.id];
               if (check == null) {
-                return Text(
-                  'Pick a face size to check the face velocity.',
-                  style: context.type.caption
-                      .copyWith(color: context.colors.textMuted),
-                );
+                // No face chosen yet — the face-size pills above are the
+                // affordance; nothing to coach here.
+                return const SizedBox.shrink();
               }
               return Text(
                 'Face velocity: ${check.message}',
@@ -2274,7 +2272,7 @@ class _SelectionSection extends ConsumerWidget {
         // Soft advisory: this air duct carries air but isn't manually sized yet.
         if (ref.watch(airUnsizedProvider).contains(edge.id)) ...[
           const SizedBox(height: MechXSpacing.xxs),
-          Text('Auto-sized — no duct size chosen yet (right-click to set one).',
+          Text('Auto-sized — no duct size chosen yet.',
               style: context.type.caption
                   .copyWith(color: context.colors.textMuted)),
         ],
@@ -2302,10 +2300,6 @@ class _SelectionSection extends ConsumerWidget {
                 .copyWith(color: context.colors.textSecondary),
           ),
         ],
-        const SizedBox(height: MechXSpacing.xxs),
-        Text('Right-click the segment to set its size and material.',
-            style:
-                context.type.caption.copyWith(color: context.colors.textMuted)),
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,

@@ -545,6 +545,19 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   placeholder (projects_screen). New text only appears in non-golden states so EN stays
   byte-identical (no new `StringKey` keys). No engine / `.mechx` change (status message is
   transient; stepper reuses volatile providers).
+  **Review-driven declutter (Batch A, subtraction) landed:** a 3-agent read-only review
+  (declutter / polish / mechanical-electrical consistency) drove an Apple-style subtraction
+  pass. Removed persistent how-to prose the on-demand `(?)` guides already cover — the
+  electrical-layer help caption (`app_shell.dart`), the Loads-palette instruction line
+  (`electrical_palette.dart`), the Projects-screen `HubNote`, the unplaced-riser-tray drag hint
+  (`electrical_layer.dart`) — plus redundant section labels (the `'Palette'` header in
+  `segment_palette.dart`, the `'LAYER'` header in `layer_switcher.dart` — reclaims canvas width)
+  and inspector right-click/face-size coaching suffixes (`project_panel.dart`: calibration
+  status, duct/face prompts trimmed to status-only). Goldens 01–07 regenerated + visually
+  verified (tighter inspector/Layout chrome, no tofu/overflow); `network_store_test` dropped its
+  `'PALETTE'` assertion. The companion **Batch B (shared-widget consolidation)** + **Batch C
+  (token + a11y polish)** + **Batch D (electrical interaction parity)** from the same review are
+  the follow-on passes. No engine / `.mechx` change.
 - Looped networks: ring/grid **pressurized & air** mains are balanced with
   Hardy-Cross (`network/hardy_cross.dart`) at sizing time and the balanced flows
   feed the heatmap. The split uses resistance ∝ **real edge length** at a

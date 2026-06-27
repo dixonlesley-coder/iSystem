@@ -1028,12 +1028,6 @@ class _UnplacedTray extends StatelessWidget {
                 style: type.label.copyWith(
                     color: colors.textPrimary, fontWeight: FontWeight.w700)),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.sm),
-            child: Text('Drag onto the plan to place; until placed it uses its '
-                'typed run length',
-                style: type.caption.copyWith(color: colors.textMuted)),
-          ),
           const SizedBox(height: MechXSpacing.xs),
           Flexible(
             child: SingleChildScrollView(

@@ -222,13 +222,6 @@ class _ElectricalInspectorColumn extends StatelessWidget {
               child: Text(context.strings(StringKey.shellElectricalLayer),
                   style: type.subtitle.copyWith(color: colors.textPrimary)),
             ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.md),
-              child: Text(
-                context.strings(StringKey.shellElectricalLayerHelp),
-                style: type.caption.copyWith(color: colors.textMuted),
-              ),
-            ),
             const SizedBox(height: MechXSpacing.sm),
             const Expanded(child: ElectricalPalette()),
           ],

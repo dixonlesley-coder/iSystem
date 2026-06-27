@@ -121,9 +121,6 @@ class SegmentPalette extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const MechXSectionLabel('Palette'),
-        const SizedBox(height: MechXSpacing.sm),
-
         // ── Start here: the riser (the mainline's origin) ──────────────────
         const MechXSectionLabel('Mainline start'),
         const SizedBox(height: MechXSpacing.xs),
