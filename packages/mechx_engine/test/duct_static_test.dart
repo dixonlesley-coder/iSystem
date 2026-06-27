@@ -52,7 +52,9 @@ void main() {
       calibrationBySheet: calibration,
       building: building,
     );
-    final perM = ductFrictionPaPerMetre(flow, dia);
+    // A supply (AC) duct with no explicit product now defaults to PU panel.
+    final perM = ductFrictionPaPerMetre(flow, dia,
+        roughness: ductRoughnessFor(DuctProduct.pu));
     const length = 100.0; // 1000 px × 0.1
     final expected = perM * length * 1.3 + 30.0; // defaults: fitting 1.3, term 30
     expect(sol.totalStaticPressure.pascals, closeTo(expected, 1e-6));
@@ -90,9 +92,11 @@ void main() {
     expect(sol.totalStaticPressure.pascals, closeTo(30.0, 1e-9));
   });
 
-  // ── Per-edge duct-material fold (NetEdge.ductProduct → wall roughness ε) ────
-  group('per-edge ductProduct folds into the Darcy roughness', () {
-    Network netWith({DuctProduct? product}) => Network(
+  // ── Per-edge duct-material fold + service defaults (product → roughness ε) ──
+  group('duct product folds into Darcy roughness; defaults by service', () {
+    Network netWith(
+            {DuctProduct? product, ServiceType service = ServiceType.duct}) =>
+        Network(
           nodes: const [
             NetNode(
                 id: 'f',
@@ -114,15 +118,16 @@ void main() {
               id: 'e',
               fromId: 'f',
               toId: 'd',
-              service: ServiceType.duct,
+              service: service,
               ductProduct: product,
             ),
           ],
         );
 
-    DuctStaticSolution solve(Network net) => solveDuctStatic(
-          net: net,
-          service: ServiceType.duct,
+    DuctStaticSolution solveFor(Network n, ServiceType service) =>
+        solveDuctStatic(
+          net: n,
+          service: service,
           fanNodeId: 'f',
           edgeFlows: edgeFlows,
           sizing: sizing,
@@ -130,35 +135,50 @@ void main() {
           building: building,
         );
 
-    test('no product → byte-identical to the galvanised-steel default', () {
-      final plain = solve(net); // existing const net, no ductProduct
-      final noProduct = solve(netWith(product: null));
+    const length = 100.0; // 1000 px × 0.1
+    double composed(DuctProduct p) =>
+        ductFrictionPaPerMetre(flow, dia, roughness: ductRoughnessFor(p)) *
+            length *
+            1.3 +
+        30.0;
+
+    test('AC supply with no product defaults to PU', () {
+      final noProduct = solveFor(netWith(), ServiceType.duct);
+      final pu = solveFor(
+          netWith(product: DuctProduct.pu), ServiceType.duct);
       expect(noProduct.totalStaticPressure.pascals,
-          equals(plain.totalStaticPressure.pascals));
+          equals(pu.totalStaticPressure.pascals));
+      expect(noProduct.totalStaticPressure.pascals,
+          closeTo(composed(DuctProduct.pu), 1e-6));
     });
 
-    test('BJLS equals the galvanised default exactly', () {
-      // BJLS roughness matches the kernel's galvanised-steel default ε, so the
-      // per-edge swap is a no-op.
-      final plain = solve(net);
-      final bjls = solve(netWith(product: DuctProduct.bjls));
+    test('return air also defaults to PU', () {
+      final ret = solveFor(
+          netWith(service: ServiceType.returnAir), ServiceType.returnAir);
+      expect(ret.totalStaticPressure.pascals,
+          closeTo(composed(DuctProduct.pu), 1e-6));
+    });
+
+    test('exhaust with no product defaults to BJLS (galvanised steel)', () {
+      final exh = solveFor(
+          netWith(service: ServiceType.exhaust), ServiceType.exhaust);
+      final bjls = solveFor(
+          netWith(product: DuctProduct.bjls, service: ServiceType.exhaust),
+          ServiceType.exhaust);
+      expect(exh.totalStaticPressure.pascals,
+          equals(bjls.totalStaticPressure.pascals));
+      expect(exh.totalStaticPressure.pascals,
+          closeTo(composed(DuctProduct.bjls), 1e-6));
+    });
+
+    test('an explicit BJLS overrides the supply PU default (higher static)', () {
+      final pu = solveFor(netWith(), ServiceType.duct); // default PU
+      final bjls = solveFor(
+          netWith(product: DuctProduct.bjls), ServiceType.duct);
       expect(bjls.totalStaticPressure.pascals,
-          equals(plain.totalStaticPressure.pascals));
-    });
-
-    test('PU (smoother) gives strictly LOWER total static than the default', () {
-      final plain = solve(net);
-      final pu = solve(netWith(product: DuctProduct.pu));
-      expect(pu.totalStaticPressure.pascals,
-          lessThan(plain.totalStaticPressure.pascals));
-
-      // The PU static equals the hand-composed friction at the PU roughness:
-      // perM(ε_PU) · L · fittings + terminal.
-      final perMPu = ductFrictionPaPerMetre(flow, dia,
-          roughness: ductRoughnessFor(DuctProduct.pu));
-      const length = 100.0; // 1000 px × 0.1
-      final expected = perMPu * length * 1.3 + 30.0; // defaults
-      expect(pu.totalStaticPressure.pascals, closeTo(expected, 1e-6));
+          greaterThan(pu.totalStaticPressure.pascals));
+      expect(bjls.totalStaticPressure.pascals,
+          closeTo(composed(DuctProduct.bjls), 1e-6));
     });
   });
 

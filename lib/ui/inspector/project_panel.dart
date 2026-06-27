@@ -12,8 +12,10 @@ import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
+import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
@@ -1871,6 +1873,12 @@ class _SelectionSection extends ConsumerWidget {
         : '${edge.service.regime == FlowRegime.air ? 'Ø' : 'DN'}'
             '${sizing.diameter.inMillimeters.round()}';
     final material = edgeMaterialLabel(edge);
+    // Per-segment duct sheet-material takeoff (developed m² + standard sheets)
+    // and the ducting accessories (covering angle / gasket / hangers / bolts).
+    final takeoff =
+        sizing == null ? null : ductSheetTakeoff(edge, sizing, len);
+    final accessories =
+        sizing == null ? null : computeDuctAccessories(edge, sizing, len);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1907,6 +1915,30 @@ class _SelectionSection extends ConsumerWidget {
           Text('Auto-sized — no duct size chosen yet (right-click to set one).',
               style: context.type.caption
                   .copyWith(color: context.colors.textMuted)),
+        ],
+        if (takeoff != null) ...[
+          const SizedBox(height: MechXSpacing.xxs),
+          Text(
+            'Sheet: ${takeoff.developedAreaM2.toStringAsFixed(2)} m2'
+            ' (perimeter x length) · '
+            '${takeoff.sheets} ${takeoff.product == DuctProduct.pu ? 'panel' : 'sheet'}'
+            '${takeoff.sheets == 1 ? '' : 's'} '
+            '@ ${takeoff.sheetAreaM2.toStringAsFixed(2)} m2 · '
+            '${takeoff.thicknessMm.toStringAsFixed(takeoff.product == DuctProduct.pu ? 0 : 2)} mm',
+            style: context.type.caption
+                .copyWith(color: context.colors.textSecondary),
+          ),
+        ],
+        if (accessories != null) ...[
+          const SizedBox(height: MechXSpacing.xxs),
+          Text(
+            'Accessories: ${accessories.flangeAngleM.toStringAsFixed(1)} m '
+            'covering angle · ${accessories.gasketM.toStringAsFixed(1)} m gasket'
+            ' · ${accessories.hangers} hanger'
+            '${accessories.hangers == 1 ? '' : 's'} · ${accessories.bolts} bolts',
+            style: context.type.caption
+                .copyWith(color: context.colors.textSecondary),
+          ),
         ],
         const SizedBox(height: MechXSpacing.xxs),
         Text('Right-click the segment to set its size and material.',

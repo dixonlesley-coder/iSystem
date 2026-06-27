@@ -128,6 +128,7 @@ void main() {
       expect(NodeComponent.waterMeter.role, NodeRole.main);
       expect(NodeComponent.roofDrain.role, NodeRole.fixture);
       expect(NodeComponent.airVent.role, NodeRole.fixture);
+      expect(NodeComponent.riser.role, NodeRole.main); // a connection junction
       // Fire-protection points are fixtures; the FDC inlet is an inline main.
       expect(NodeComponent.sprinklerHead.role, NodeRole.fixture);
       expect(NodeComponent.fireExtinguisher.role, NodeRole.fixture);

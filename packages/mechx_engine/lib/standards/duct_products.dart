@@ -127,6 +127,23 @@ const double _puDefaultPanelThicknessMm = 20.0;
 double puPanelThicknessMm({double? panelThicknessMm}) =>
     panelThicknessMm ?? _puDefaultPanelThicknessMm;
 
+// ── Standard fabrication sheet / panel sizes (for the per-segment takeoff) ──
+
+/// Standard BJLS galvanised-steel sheet: the 4 ft × 8 ft sheet (1.22 m × 2.44 m)
+/// duct is cut from. PU duct is fabricated from a 1.2 m × 4 m board.
+///
+// VERIFY: representative Indonesian stock sheet (4×8 ft) and PU panel (1.2×4 m)
+// sizes — a takeoff convenience, not an SNI/SMACNA verbatim clause.
+const double bjlsSheetWidthM = 1.22;
+const double bjlsSheetLengthM = 2.44;
+const double puPanelWidthM = 1.2;
+const double puPanelLengthM = 4.0;
+
+/// Area (m²) of one standard stock sheet/panel of a duct [product].
+double ductSheetAreaM2(DuctProduct product) => product == DuctProduct.pu
+    ? puPanelWidthM * puPanelLengthM
+    : bjlsSheetWidthM * bjlsSheetLengthM;
+
 // ── Verify checklist (UI surfaces these as still-unverified) ───────────────
 
 /// All currently-unverified duct-product values, for the report's "verify

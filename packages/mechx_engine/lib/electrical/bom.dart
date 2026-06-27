@@ -2,18 +2,23 @@
 ///
 /// The sizing engine (`compute.dart`) sizes gear but emits no bill of materials,
 /// so this module derives one from a computed [ElectricalSystemResult]: one line
-/// per panel incomer, one per branch breaker, one per cable run, the per-circuit
-/// RCDs, each panel's busbar + neutral/PE bars, and an enclosure line per panel.
-/// Quantities for identical items are aggregated. Lines are matched to catalogue
-/// [Part] SKUs by a class/poles/curve/rating heuristic (breakers) or a
-/// section/type heuristic (cables); unmatched lines keep `sku == null`.
+/// per panel incomer, one per branch breaker, the cable runs (priced per metre
+/// of run length), the per-circuit RCDs, each panel's busbar + neutral/PE bars,
+/// an enclosure line per panel, and the **wiring accessories** (light points +
+/// switches, socket outlets, cable lugs/skun). Quantities for identical items
+/// are aggregated. Lines are matched to catalogue [Part] SKUs by a
+/// class/poles/curve/rating heuristic (breakers) or a section/type heuristic
+/// (cables); unmatched lines keep `sku == null`.
 ///
-/// Ported (core slice) from PanelMaker `engine/bom.ts`. Length-agnostic: a cable
-/// run is one BOM line of qty 1 (the run length is not modelled as a quantity
-/// here — matching PanelMaker's "qty is the conductor/run count" convention).
+/// Ported (core slice) from PanelMaker `engine/bom.ts`, then extended: the cable
+/// quantity is the run length in metres (cable is sold per metre) and the
+/// accessory takeoff is added. The accessory counts are an ESTIMATE from the
+/// circuit load (see the `// VERIFY` coverage constants).
 ///
 /// Zero Flutter imports.
 library;
+
+import 'dart:math' as math;
 
 import '../standards/puil.dart' show BreakerClass, BreakerCurve;
 import 'catalog.dart';
@@ -21,6 +26,21 @@ import 'earthing.dart' show RcdType;
 import 'load_kind.dart' show LoadKind;
 import 'panel_results.dart';
 import 'results.dart' show BreakerResult, BusbarResult, NeutralPeBars;
+
+// ── Accessory takeoff coverage (VERIFY — representative trade figures) ──────
+
+/// Connected watts per lighting point (typical LED/TL fitting).
+const double _wattsPerLightPoint = 36; // VERIFY
+
+/// Lighting points controlled per switch (saklar) gang group.
+const int _pointsPerSwitch = 3; // VERIFY
+
+/// Connected VA per socket outlet (stop kontak) — SNI ~200 VA/point.
+const double _vaPerSocket = 200; // VERIFY
+
+/// Minimum conductor section (mm²) that terminates with a cable lug (skun);
+/// smaller cables clamp directly into the terminal.
+const double _skunMinCsaMm2 = 10; // VERIFY
 
 // ── matchers ─────────────────────────────────────────────────────────────────
 
@@ -177,16 +197,55 @@ List<BomLine> _panelLines(ElectricalPanelResult panel, List<Part> parts) {
       sku: matchBreakerSku(c.breaker, parts, poles: poles),
     ));
 
-    // Cable run — one multicore line (length-agnostic). A spare way has no
-    // load and no cable to pull, so it lists the breaker provision only.
+    // Cable run — the conductor PULL LENGTH in metres (cable is sold per metre),
+    // from the geo/manual run length; a length-less run lists 1 m as a
+    // placeholder. A spare way has no load and no cable to pull.
     if (c.loadKind != LoadKind.spare) {
       final spec = c.grounding.cableSpec;
       lines.add(BomLine(
         description: 'Cable $spec — ${c.name}',
-        qty: 1,
+        qty: c.lengthM > 0 ? c.lengthM.ceilToDouble() : 1,
         category: PartCategory.cable,
         sku: matchCableSku(c.cable.csaMm2, parts, cableType: c.grounding.cableType),
       ));
+
+      // ── Wiring accessories (estimate) ──────────────────────────────────────
+      // Light points + switches for a lighting way; socket outlets for a socket
+      // way; cable lugs (skun) at both ends of a larger cable.
+      if (c.loadKind == LoadKind.lighting) {
+        // At least the chained point count (c.points), at least the load-implied
+        // estimate.
+        final points = math.max(
+            c.points, math.max(1, (c.loadW / _wattsPerLightPoint).ceil()));
+        final switches = math.max(1, (points / _pointsPerSwitch).ceil());
+        lines.add(BomLine(
+          description: 'Light point — ${c.name}',
+          qty: points.toDouble(),
+          category: PartCategory.accessory,
+        ));
+        lines.add(BomLine(
+          description: 'Light switch (saklar) — ${c.name}',
+          qty: switches.toDouble(),
+          category: PartCategory.accessory,
+        ));
+      } else if (c.loadKind == LoadKind.socket) {
+        final sockets =
+            math.max(c.points, math.max(1, (c.loadW / _vaPerSocket).ceil()));
+        lines.add(BomLine(
+          description: 'Socket outlet (stop kontak) — ${c.name}',
+          qty: sockets.toDouble(),
+          category: PartCategory.accessory,
+        ));
+      }
+      // Cable lugs (skun): one per conductor at EACH end of a larger cable.
+      if (c.cable.csaMm2 >= _skunMinCsaMm2) {
+        final conductors = c.threePhase ? 5 : 3; // 3L+N+PE or L+N+PE
+        lines.add(BomLine(
+          description: 'Cable lug (skun) ${_fmt(c.cable.csaMm2)} mm² — ${c.name}',
+          qty: (conductors * 2).toDouble(),
+          category: PartCategory.accessory,
+        ));
+      }
     }
 
     // RCD, when the circuit requires one.

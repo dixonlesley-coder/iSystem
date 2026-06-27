@@ -64,6 +64,7 @@ void main() {
             floorIndex: 0,
             role: NodeRole.fixture,
             airflow: FlowRate(0.045), // 45 L/s
+            fittingType: JunctionFitting.wye, // user fitting override
           ),
           NetNode(
             id: 'n2',
@@ -118,6 +119,9 @@ void main() {
     expect(decoded.network.nodes[1].role, NodeRole.fixture);
     expect(decoded.network.nodes[1].airflow?.inLitersPerSecond, closeTo(45, 1e-9));
     expect(decoded.network.nodes[1].fixture, isNull);
+    // fitting-type override round-trips; an unset node loads as null (auto)
+    expect(decoded.network.nodes[1].fittingType, JunctionFitting.wye);
+    expect(decoded.network.nodes[0].fittingType, isNull);
     expect(decoded.network.edges.length, 2);
     expect(decoded.network.edges[0].service, ServiceType.coldWater);
     expect(decoded.network.edges[1].kind, EdgeKind.riser);

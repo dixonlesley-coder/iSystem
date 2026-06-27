@@ -677,6 +677,9 @@ _CircuitComputation _computeCircuit(
     cumulativeDropPercent: vd.dropPercent,
     grounding: grounding,
     rcd: rcd,
+    lengthM: effectiveLength.meters,
+    loadW: loadW,
+    points: c.points,
   );
 
   return _CircuitComputation(

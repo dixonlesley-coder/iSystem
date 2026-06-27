@@ -308,6 +308,8 @@ class ProjectDocument {
                 if (n.electricalLoadW != null) 'elec_w': n.electricalLoadW,
                 if (n.faceWidthMm != null) 'face_w_mm': n.faceWidthMm,
                 if (n.faceHeightMm != null) 'face_h_mm': n.faceHeightMm,
+                if (n.fittingType != null && n.fittingType != JunctionFitting.auto)
+                  'fitting': n.fittingType!.name,
               },
           ],
           'edges': [
@@ -398,6 +400,9 @@ class ProjectDocument {
           electricalLoadW: (n['elec_w'] as num?)?.toDouble(),
           faceWidthMm: (n['face_w_mm'] as num?)?.toDouble(),
           faceHeightMm: (n['face_h_mm'] as num?)?.toDouble(),
+          fittingType: n['fitting'] == null
+              ? null
+              : _enumOrNull(JunctionFitting.values, n['fitting']),
         ),
     ];
     final edges = [

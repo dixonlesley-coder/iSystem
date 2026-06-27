@@ -332,6 +332,7 @@ class NetworkController extends Notifier<DrawingState> {
       electricalLoadW: node.electricalLoadW,
       faceWidthMm: node.faceWidthMm,
       faceHeightMm: node.faceHeightMm,
+      fittingType: node.fittingType,
       fixture: keepTerminal ? node.fixture : null,
       airflow: keepTerminal ? node.airflow : null,
     ));
@@ -360,6 +361,7 @@ class NetworkController extends Notifier<DrawingState> {
       electricalLoadW: node.electricalLoadW,
       faceWidthMm: node.faceWidthMm,
       faceHeightMm: node.faceHeightMm,
+      fittingType: node.fittingType,
         airflow: node.airflow,
         roofAreaM2: node.roofAreaM2,
       ));
@@ -391,6 +393,7 @@ class NetworkController extends Notifier<DrawingState> {
       electricalLoadW: node.electricalLoadW,
       faceWidthMm: node.faceWidthMm,
       faceHeightMm: node.faceHeightMm,
+      fittingType: node.fittingType,
       fixture: node.fixture,
       airflow: airflow,
       customFixtureId: node.customFixtureId,
@@ -455,6 +458,7 @@ class NetworkController extends Notifier<DrawingState> {
       electricalLoadW: node.electricalLoadW,
       faceWidthMm: node.faceWidthMm,
       faceHeightMm: node.faceHeightMm,
+      fittingType: node.fittingType,
       fixture: customFixtureId == null ? node.fixture : null,
       airflow: node.airflow,
       customFixtureId: customFixtureId,
@@ -483,6 +487,19 @@ class NetworkController extends Notifier<DrawingState> {
     _replaceNode(node.copyWith(
       component: component,
       clearComponent: component == null,
+    ));
+  }
+
+  /// Set (or clear, with null/[JunctionFitting.auto]) the fitting-type override on a
+  /// junction node — right-click → Fitting (Tee / Wye / Tee-wye / …). Clearing
+  /// reverts to the geometry-derived fitting. copyWith preserves other fields.
+  void setNodeFittingType(String id, JunctionFitting? fitting) {
+    final node = state.network.nodeById(id);
+    if (node == null) return;
+    final clear = fitting == null || fitting == JunctionFitting.auto;
+    _replaceNode(node.copyWith(
+      fittingType: clear ? null : fitting,
+      clearJunctionFitting: clear,
     ));
   }
 
@@ -680,6 +697,116 @@ class NetworkController extends Notifier<DrawingState> {
     ));
   }
 
+  /// The service an existing run incident to [nodeId] carries (so a main pulled
+  /// out of a node inherits its service), or null if the node has no run yet.
+  ServiceType? _serviceOf(String nodeId) {
+    for (final e in state.network.edges) {
+      if (e.fromId == nodeId || e.toId == nodeId) return e.service;
+    }
+    return null;
+  }
+
+  /// Pull a NEW run OUT of an existing node [fromId] to [world] (sheet/world px)
+  /// — the way mains are laid: place a riser/fitting, then drag a line out of it.
+  /// The far end SNAPS to an existing node within [snapRadius], else TAPS into a
+  /// nearby run (splitting it at the nearest point), else becomes a fresh
+  /// junction node. The run carries [service] (explicit), else the source node's
+  /// existing run service, else the active draw service. Records one undo step.
+  /// Returns the new edge id, or null if it would be zero-length / invalid.
+  String? drawRunFromNode(
+    String fromId,
+    Offset world, {
+    ServiceType? service,
+    double snapRadius = 12,
+  }) {
+    final from = state.network.nodeById(fromId);
+    if (from == null) return null;
+    final sheetId = from.sheetId;
+    final floorIndex = from.floorIndex;
+    final svc = service ?? _serviceOf(fromId) ?? state.service;
+
+    final nodes = [...state.network.nodes];
+    final edges = [...state.network.edges];
+    final farId = _resolveDrawEndpoint(
+        nodes, edges, sheetId, floorIndex, world, snapRadius);
+    if (farId == fromId) return null; // collapsed onto the source — nothing laid
+
+    final edgeId = _id('e');
+    edges.add(NetEdge(id: edgeId, fromId: fromId, toId: farId, service: svc));
+    _commit(Network(nodes: nodes, edges: edges));
+    return edgeId;
+  }
+
+  /// Resolve a drawn run's far endpoint to a node id, MUTATING [nodes]/[edges]:
+  /// snap to an existing node, else split the nearest run at the projection (the
+  /// new junction), else append a fresh junction node at [world].
+  String _resolveDrawEndpoint(
+    List<NetNode> nodes,
+    List<NetEdge> edges,
+    String sheetId,
+    int floorIndex,
+    Offset world,
+    double snapRadius,
+  ) {
+    // 1) snap to an existing node on this floor.
+    final snapped = _snap(nodes, sheetId, floorIndex, world, snapRadius);
+    if (snapped != null) return snapped;
+
+    // 2) tap into the nearest run on this floor (split it at the projection).
+    final r2 = snapRadius * snapRadius;
+    NetEdge? bestEdge;
+    var bestD2 = r2;
+    var bestP = world;
+    for (final e in edges) {
+      if (e.kind == EdgeKind.riser) continue;
+      final a = nodes.where((n) => n.id == e.fromId).firstOrNull;
+      final b = nodes.where((n) => n.id == e.toId).firstOrNull;
+      if (a == null || b == null) continue;
+      if (a.sheetId != sheetId || a.floorIndex != floorIndex) continue;
+      if (b.sheetId != sheetId || b.floorIndex != floorIndex) continue;
+      final p =
+          _closestPointOnSegment(world, Offset(a.x, a.y), Offset(b.x, b.y));
+      final d2 = (p - world).distanceSquared;
+      if (d2 <= bestD2) {
+        bestD2 = d2;
+        bestEdge = e;
+        bestP = p;
+      }
+    }
+    final e = bestEdge;
+    if (e != null) {
+      final a = nodes.firstWhere((n) => n.id == e.fromId);
+      final b = nodes.firstWhere((n) => n.id == e.toId);
+      if ((bestP - Offset(a.x, a.y)).distanceSquared <= r2) return a.id;
+      if ((bestP - Offset(b.x, b.y)).distanceSquared <= r2) return b.id;
+      final jId = _id('n');
+      nodes.add(NetNode(
+          id: jId,
+          sheetId: sheetId,
+          x: bestP.dx,
+          y: bestP.dy,
+          floorIndex: floorIndex));
+      final idx = edges.indexWhere((x) => x.id == e.id);
+      edges[idx] = e.copyWith(toId: jId);
+      edges.add(NetEdge(
+        id: _id('e'),
+        fromId: jId,
+        toId: e.toId,
+        service: e.service,
+        kind: e.kind,
+        pipeProduct: e.pipeProduct,
+        ductProduct: e.ductProduct,
+      ));
+      return jId;
+    }
+
+    // 3) a fresh junction node at the release point.
+    final id = _id('n');
+    nodes.add(NetNode(
+        id: id, sheetId: sheetId, x: world.dx, y: world.dy, floorIndex: floorIndex));
+    return id;
+  }
+
   /// Call at the END of a node drag: if the node now lands within
   /// [snapRadiusWorld] of ANOTHER node on the same sheet/floor, MERGE the two —
   /// re-point every edge that referenced the dragged node to the target, drop
@@ -707,7 +834,14 @@ class NetworkController extends Notifier<DrawingState> {
         targetId = n.id;
       }
     }
-    if (targetId == null) return; // nothing to snap to
+    if (targetId == null) {
+      // No node to merge onto. If the dragged node is FREE (no edges) — e.g. a
+      // fixture just dropped from the palette — and it landed near a mainline
+      // pipe, TAP it in: draw a new branch pipe from the fixture to the main
+      // (splitting the main at the nearest point). The fixture itself stays put.
+      _tapFreeNodeIntoNearestEdge(dragged, snapRadiusWorld);
+      return;
+    }
 
     final target = targetId;
     // Re-point edges, dropping self-loops left by the merge.
@@ -721,6 +855,102 @@ class NetworkController extends Notifier<DrawingState> {
     }
     final nodes = state.network.nodes.where((n) => n.id != nodeId).toList();
     _commit(Network(nodes: nodes, edges: edges));
+  }
+
+  /// Closest point on segment a→b to p (all in world px).
+  static Offset _closestPointOnSegment(Offset p, Offset a, Offset b) {
+    final ab = b - a;
+    final len2 = ab.distanceSquared;
+    if (len2 == 0) return a;
+    final t = (((p.dx - a.dx) * ab.dx + (p.dy - a.dy) * ab.dy) / len2)
+        .clamp(0.0, 1.0);
+    return a + ab * t;
+  }
+
+  /// If [dragged] has NO edges and lies within [radiusWorld] of a horizontal RUN
+  /// on the same sheet/floor, connect it: split that run at the nearest point
+  /// (or reuse an endpoint if very close) and add a new branch pipe from the
+  /// dragged node to that junction, carrying the main's service. One undo step.
+  void _tapFreeNodeIntoNearestEdge(NetNode dragged, double radiusWorld) {
+    final net = state.network;
+    final connected =
+        net.edges.any((e) => e.fromId == dragged.id || e.toId == dragged.id);
+    if (connected) return; // only auto-connect a free node
+
+    NetEdge? bestEdge;
+    var bestD2 = radiusWorld * radiusWorld;
+    var bestP = Offset.zero;
+    final dp = Offset(dragged.x, dragged.y);
+    for (final e in net.edges) {
+      if (e.kind == EdgeKind.riser) continue; // tap onto horizontal runs only
+      final a = net.nodeById(e.fromId);
+      final b = net.nodeById(e.toId);
+      if (a == null || b == null) continue;
+      if (a.sheetId != dragged.sheetId || a.floorIndex != dragged.floorIndex) {
+        continue;
+      }
+      if (b.sheetId != dragged.sheetId || b.floorIndex != dragged.floorIndex) {
+        continue;
+      }
+      final p = _closestPointOnSegment(
+          dp, Offset(a.x, a.y), Offset(b.x, b.y));
+      final d2 = (p - dp).distanceSquared;
+      if (d2 <= bestD2) {
+        bestD2 = d2;
+        bestEdge = e;
+        bestP = p;
+      }
+    }
+    final e = bestEdge;
+    if (e == null) return;
+    final a = net.nodeById(e.fromId)!;
+    final b = net.nodeById(e.toId)!;
+    final snap2 = radiusWorld * radiusWorld;
+
+    final newNodes = [...net.nodes];
+    final newEdges = <NetEdge>[];
+    final String junctionId;
+    if ((bestP - Offset(a.x, a.y)).distanceSquared <= snap2) {
+      junctionId = a.id; // near the start node — connect straight to it
+      newEdges.addAll(net.edges);
+    } else if ((bestP - Offset(b.x, b.y)).distanceSquared <= snap2) {
+      junctionId = b.id; // near the end node
+      newEdges.addAll(net.edges);
+    } else {
+      // Split the main at the projection: a→J (keeps the edge's material), J→b.
+      junctionId = _id('n');
+      newNodes.add(NetNode(
+        id: junctionId,
+        sheetId: dragged.sheetId,
+        x: bestP.dx,
+        y: bestP.dy,
+        floorIndex: dragged.floorIndex,
+      ));
+      for (final edge in net.edges) {
+        if (edge.id == e.id) {
+          newEdges.add(e.copyWith(toId: junctionId));
+          newEdges.add(NetEdge(
+            id: _id('e'),
+            fromId: junctionId,
+            toId: e.toId,
+            service: e.service,
+            kind: e.kind,
+            pipeProduct: e.pipeProduct,
+            ductProduct: e.ductProduct,
+          ));
+        } else {
+          newEdges.add(edge);
+        }
+      }
+    }
+    // The new branch pipe from the fixture to the main, carrying its service.
+    newEdges.add(NetEdge(
+      id: _id('e'),
+      fromId: dragged.id,
+      toId: junctionId,
+      service: e.service,
+    ));
+    _commit(Network(nodes: newNodes, edges: newEdges));
   }
 
   /// Copy every horizontal RUN (and the nodes it touches) on
@@ -757,6 +987,7 @@ class NetworkController extends Notifier<DrawingState> {
         electricalLoadW: n.electricalLoadW,
         faceWidthMm: n.faceWidthMm,
         faceHeightMm: n.faceHeightMm,
+        fittingType: n.fittingType,
         fixture: n.fixture,
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,
@@ -858,6 +1089,7 @@ class NetworkController extends Notifier<DrawingState> {
         electricalLoadW: n.electricalLoadW,
         faceWidthMm: n.faceWidthMm,
         faceHeightMm: n.faceHeightMm,
+        fittingType: n.fittingType,
         fixture: n.fixture,
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,
