@@ -1,4 +1,5 @@
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/units.dart';
@@ -53,6 +54,37 @@ void main() {
     final dxf = networkToDxf(
         net: net, sizing: sizing, sheetId: 's1', floorIndex: 0);
     expect(dxf, contains('CIRCLE'));
+  });
+
+  test('issuable chrome adds title/legend/scale/north entities', () {
+    final dxf = networkToDxf(
+      net: net,
+      sizing: sizing,
+      sheetId: 's1',
+      floorIndex: 0,
+      chrome: const DrawingChrome(
+        drawingNumber: 'M-101',
+        sheetIndex: 2,
+        sheetTotal: 6,
+        legendServices: [ServiceType.coldWater],
+        scaleBarLabel: '1 : 50',
+      ),
+    );
+    expect(dxf, contains('title'));
+    expect(dxf, contains('legend'));
+    expect(dxf, contains('scale'));
+    expect(dxf, contains('north'));
+    expect(dxf, contains('M-101'));
+    expect(dxf, contains('Sheet 2 of 6'));
+    expect(dxf, contains('Cold water'));
+  });
+
+  test('null chrome leaves the DXF byte-identical', () {
+    expect(
+      networkToDxf(net: net, sizing: sizing, sheetId: 's1', floorIndex: 0),
+      equals(networkToDxf(
+          net: net, sizing: sizing, sheetId: 's1', floorIndex: 0, chrome: null)),
+    );
   });
 
   test('only the requested sheet/floor is exported', () {

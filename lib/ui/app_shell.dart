@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -9,12 +10,14 @@ import '../data/pdf_import.dart';
 import '../data/project_document.dart';
 import '../data/recovery.dart';
 import '../store/app_state.dart';
+import '../store/command_store.dart';
 import '../store/electrical_store.dart';
 import '../store/layer_store.dart';
 import '../store/project_store.dart';
 import '../store/sheets_store.dart';
 import '../update/update_banner.dart';
 import '../update/version_label.dart';
+import 'ai/copilot_panel.dart';
 import 'commercial/commercial_hub.dart';
 import 'electrical/electrical_palette.dart';
 import 'electrical/electrical_view.dart';
@@ -25,7 +28,9 @@ import 'review/review_hub.dart';
 import 'schematic/schematic_view.dart';
 import 'sheets/pdf_page_picker.dart';
 import 'shell/building_screen.dart';
+import 'shell/command_palette.dart';
 import 'shell/nav_rail.dart';
+import 'shell/workflow_stepper.dart';
 import 'shell/preferences_screen.dart';
 import 'shell/projects_screen.dart';
 import 'sheets/sheet_rail.dart';
@@ -39,44 +44,75 @@ import 'widgets/mechx_focus_ring.dart';
 /// slim top bar · body · status-bar column. The rail picks the [ShellSection];
 /// the body is the workspace (Plan / Schematic / Electrical) or a hub/screen.
 /// No Material Scaffold — a restrained, custom shell (§4).
-class AppShell extends StatelessWidget {
+class AppShell extends ConsumerWidget {
   const AppShell({super.key});
 
+  /// Global hotkey handler, mounted as a non-focus-stealing ancestor [Focus]
+  /// (see [build]). Key events bubble UP from the focused canvas/field to this
+  /// node, so Ctrl/Cmd+K opens the command palette without grabbing focus from
+  /// in-canvas editing. Esc closes the palette when it's open.
+  KeyEventResult _onKey(WidgetRef ref, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    final mod = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+    if (mod && key == LogicalKeyboardKey.keyK) {
+      ref.read(commandPaletteOpenProvider.notifier).toggle();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.escape &&
+        ref.read(commandPaletteOpenProvider)) {
+      ref.read(commandPaletteOpenProvider.notifier).close();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
-    // The auto-update banner is stacked on top as a non-layout overlay (renders
-    // nothing when idle/offline/no update).
-    return Stack(
-      children: [
-        ColoredBox(
-          color: colors.background,
-          child: SafeArea(
-            // PanelMaker-style chrome: a left navigation rail beside the
-            // top-bar + body + status-bar column.
-            child: Row(
-              children: [
-                const NavRail(),
-                Container(width: 1, color: colors.border),
-                Expanded(
-                  child: Column(
-                    children: [
-                      const _TopBar(),
-                      Container(height: 1, color: colors.border),
-                      const _RecoveryBanner(),
-                      const _ErrorBanner(),
-                      const Expanded(child: _ShellBody()),
-                      Container(height: 1, color: colors.border),
-                      const _StatusBar(),
-                    ],
+    // The auto-update banner + command palette are stacked on top as non-layout
+    // overlays (each renders nothing when idle).
+    return Focus(
+      // A bubble-phase listener high in the tree: it never requests focus
+      // itself, so it doesn't disturb in-canvas editing — Ctrl/Cmd+K bubbles up
+      // here when the focused descendant ignores it.
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: (_, event) => _onKey(ref, event),
+      child: Stack(
+        children: [
+          ColoredBox(
+            color: colors.background,
+            child: SafeArea(
+              // PanelMaker-style chrome: a left navigation rail beside the
+              // top-bar + body + status-bar column.
+              child: Row(
+                children: [
+                  const NavRail(),
+                  Container(width: 1, color: colors.border),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        const _TopBar(),
+                        Container(height: 1, color: colors.border),
+                        const _RecoveryBanner(),
+                        const _ErrorBanner(),
+                        const Expanded(child: _ShellBody()),
+                        Container(height: 1, color: colors.border),
+                        const _StatusBar(),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
-        const UpdateBannerOverlay(),
-      ],
+          const UpdateBannerOverlay(),
+          const CommandPaletteOverlay(),
+          const CopilotOverlay(),
+        ],
+      ),
     );
   }
 }
@@ -233,6 +269,10 @@ class _TopBar extends ConsumerWidget {
       }
       ref.read(sheetsControllerProvider.notifier).loadSheets(sheets);
       ref.read(loadErrorProvider.notifier).clear();
+      final n = sheets.length;
+      ref
+          .read(statusMessageProvider.notifier)
+          .showStatus('$n ${n == 1 ? 'page' : 'pages'} imported');
     } catch (e) {
       // Surface the failure instead of silently keeping the old sheets.
       ref.read(loadErrorProvider.notifier).set('Could not import PDF: $e');
@@ -262,6 +302,9 @@ class _TopBar extends ConsumerWidget {
     ref.read(lastSavedSignatureProvider.notifier).set(encoded);
     await clearRecovery();
     ref.read(recoveryDocProvider.notifier).clear();
+    ref
+        .read(statusMessageProvider.notifier)
+        .showStatus('Saved ${project.name}.mechx');
   }
 
   Future<void> _openProject(WidgetRef ref) async {
@@ -283,6 +326,7 @@ class _TopBar extends ConsumerWidget {
       await clearRecovery();
       ref.read(recoveryDocProvider.notifier).clear();
       ref.read(loadErrorProvider.notifier).clear();
+      ref.read(statusMessageProvider.notifier).showStatus('Project opened');
     } on ProjectDocumentException catch (e) {
       // Malformed/incompatible file — surface why, leave the project untouched.
       ref.read(loadErrorProvider.notifier).set(e.message);
@@ -397,10 +441,9 @@ class _StatusBar extends ConsumerWidget {
           vertical: MechXSpacing.xs + 1,
         ),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             // Left group: current sheet info (truncates first).
-            Flexible(
+            Expanded(
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -414,24 +457,40 @@ class _StatusBar extends ConsumerWidget {
                   ),
                   if (sheet != null) ...[
                     _dot(colors.textMuted),
-                    Text(
-                      '${sheet.sizePx.width.round()} × ${sheet.sizePx.height.round()} px',
-                      style: caption.copyWith(color: colors.textMuted),
-                    ),
-                    _dot(colors.textMuted),
-                    Text(
-                      context.strings(StringKey.shellUncalibrated),
-                      style: caption.copyWith(color: colors.textMuted),
+                    Flexible(
+                      child: Text(
+                        context.strings(StringKey.shellUncalibrated),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
+                        style: caption.copyWith(color: colors.textMuted),
+                      ),
                     ),
                   ],
                 ],
               ),
             ),
             const SizedBox(width: MechXSpacing.md),
+            // Centre: the compact workflow stepper (Calibrate · Floors · Draw ·
+            // Size · Report) — a glanceable "where am I" guide. Read-only;
+            // derived O(1) from project state. Clipped so it surrenders width
+            // gracefully on a narrow window instead of overflowing.
+            const Flexible(
+              flex: 0,
+              child: ClipRect(
+                child: WorkflowStepper(),
+              ),
+            ),
+            const SizedBox(width: MechXSpacing.md),
+            // Transient confirmation pill (Saved / opened / imported). Null at
+            // rest, so this collapses to nothing and the goldens are unchanged;
+            // it cross-fades in/out via AnimatedSwitcher when a message arrives.
+            const _StatusConfirmation(),
             // Right group: standards provenance + input hints.
-            Flexible(
+            Expanded(
               child: Row(
                 mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   Container(
                     width: 7,
@@ -447,16 +506,6 @@ class _StatusBar extends ConsumerWidget {
                       context.strings(StringKey.shellStandardsProvenance),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: caption.copyWith(color: colors.textMuted),
-                    ),
-                  ),
-                  _dot(colors.textMuted),
-                  Flexible(
-                    child: Text(
-                      context.strings(StringKey.shellViewportHints),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      softWrap: false,
                       style: caption.copyWith(color: colors.textMuted),
                     ),
                   ),
@@ -476,6 +525,86 @@ class _StatusBar extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.sm),
         child: Text('·', style: TextStyle(fontFamily: 'Roboto', color: color)),
       );
+}
+
+/// The transient save/open/export confirmation in the status bar. Reads the
+/// [statusMessageProvider] (null at rest), rendering nothing when there is no
+/// message and a quiet success-tinted pill — cross-fading in/out — when there
+/// is. The pill mirrors the zoom read-out's soft idiom (a tint, no border).
+class _StatusConfirmation extends ConsumerWidget {
+  const _StatusConfirmation();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final message = ref.watch(statusMessageProvider);
+    return AnimatedSwitcher(
+      duration: MechXMotion.appear,
+      switchInCurve: MechXMotion.standard,
+      switchOutCurve: MechXMotion.standard,
+      child: message == null
+          ? const SizedBox.shrink()
+          : Padding(
+              key: const ValueKey('status-confirmation'),
+              padding: const EdgeInsets.only(right: MechXSpacing.md),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: MechXSpacing.sm,
+                  vertical: MechXSpacing.xxs,
+                ),
+                decoration: BoxDecoration(
+                  color: colors.success.withAlpha(30),
+                  borderRadius: MechXRadii.control,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // A small custom-painted check (Roboto-safe, can't tofu).
+                    CustomPaint(
+                      size: const Size(10, 10),
+                      painter: _CheckMark(color: colors.success),
+                    ),
+                    const SizedBox(width: MechXSpacing.xs),
+                    Text(
+                      message,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: type.caption.copyWith(color: colors.success),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+    );
+  }
+}
+
+/// A small check-mark glyph (the same tick the workflow stepper paints), used
+/// by the status confirmation pill. Custom-painted so it never renders as tofu.
+class _CheckMark extends CustomPainter {
+  final Color color;
+  const _CheckMark({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final path = Path()
+      ..moveTo(w * 0.18, h * 0.52)
+      ..lineTo(w * 0.42, h * 0.76)
+      ..lineTo(w * 0.84, h * 0.24);
+    canvas.drawPath(path, stroke);
+  }
+
+  @override
+  bool shouldRepaint(_CheckMark old) => old.color != color;
 }
 
 /// Eases a shell banner in and out: the height collapses ([AnimatedSize]) and

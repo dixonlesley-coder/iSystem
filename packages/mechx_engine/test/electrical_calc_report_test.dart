@@ -3,6 +3,7 @@ import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/standards/puil.dart';
+import 'package:mechx_engine/standards/sni.dart' show Revision;
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
@@ -84,5 +85,51 @@ void main() {
       result: result,
     ));
     expect(md, isNot(contains('## Unverified values')));
+  });
+
+  test('renders a Design basis register with supply, load and fault target', () {
+    final md = buildElectricalCalcReport(ElectricalCalcReportData(
+      projectName: 'Test building',
+      date: '2026-06-24',
+      standardsName: profile.name,
+      standardsRevision: profile.revision,
+      project: project,
+      result: result,
+      originFaultLevelA: 16000, // 16 kA
+      busbarClearingTimeS: 0.1,
+    ));
+    expect(md, contains('## Design basis'));
+    expect(md, contains('Supply:'));
+    expect(md, contains('Connected load:'));
+    expect(md, contains('Earthing system:'));
+    // 16000 A => 16 kA, 0.10 s.
+    expect(md, contains('16 kA'));
+    expect(md, contains('0.10 s'));
+  });
+
+  test('renders a Revision history table when revisions are provided', () {
+    final md = buildElectricalCalcReport(ElectricalCalcReportData(
+      projectName: 'Test building',
+      date: '2026-06-24',
+      standardsName: profile.name,
+      standardsRevision: profile.revision,
+      project: project,
+      result: result,
+      revisions: const [Revision('2026-06-10', 'Issued for construction')],
+    ));
+    expect(md, contains('## Revision history'));
+    expect(md, contains('| 2026-06-10 | Issued for construction |'));
+  });
+
+  test('empty revisions render NO Revision-history table (back-compat)', () {
+    final md = buildElectricalCalcReport(ElectricalCalcReportData(
+      projectName: 'Test building',
+      date: '2026-06-24',
+      standardsName: profile.name,
+      standardsRevision: profile.revision,
+      project: project,
+      result: result,
+    ));
+    expect(md, isNot(contains('## Revision history')));
   });
 }

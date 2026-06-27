@@ -35,6 +35,7 @@ import 'bom.dart' show Bom, buildBom;
 import 'containment.dart' show ContainmentResult, containmentFor;
 import 'control/starter.dart'
     show ControlAssembly, StarterType, applyStarterTemplate;
+import 'diversity_library.dart' show diversityLibraryVerifyItems;
 import 'electrode.dart' show ElectrodeDesign, designElectrode;
 import 'enclosure.dart' show EnclosureResult, estimateEnclosure;
 import 'fault.dart' show FaultStudyResult, faultStudy;
@@ -323,6 +324,10 @@ AdvancedStudy computeAdvancedStudy(
     for (final s in spd.values) s.verifyItems,
     lightning?.verifyItems,
     electrode?.verifyItems,
+    // The occupancy diversity library is only an honesty surface when a panel
+    // actually references it (otherwise the per-circuit demand factors apply).
+    if (project.panels.any((p) => p.diversityLibraryId != null))
+      diversityLibraryVerifyItems,
   ]);
 
   return AdvancedStudy(

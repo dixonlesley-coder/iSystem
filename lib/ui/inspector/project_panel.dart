@@ -6,13 +6,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
+import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
+import 'package:mechx_engine/report/electrical_calc_report.dart';
+import 'package:mechx_engine/report/equipment_schedule.dart';
+import 'package:mechx_engine/report/mep_report.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
+import 'package:mechx_engine/report/plan_pdf_export.dart';
+import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pipe_optimizer.dart';
+import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
@@ -24,6 +31,7 @@ import '../../store/air_warnings_store.dart';
 import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
+import '../../store/design_issues_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/fire_store.dart';
 import '../../store/fixture_library_store.dart';
@@ -40,23 +48,26 @@ import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
 import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
+import 'disclosure_header.dart';
 import 'fixture_library_editor.dart';
+import 'result_card.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
 import '../widgets/section_label.dart';
 
-/// Gather the live design results into a calc report and write it to a Markdown
-/// file chosen by the user.
-Future<void> exportCalcReport(WidgetRef ref) async {
+/// Gather the live mechanical/plumbing design results into a [CalcReportData].
+/// Shared by the standalone calc-report export and the unified MEP report so
+/// both render the same mechanical basis + sections.
+CalcReportData _buildMechanicalReportData(WidgetRef ref) {
   final project = ref.read(projectControllerProvider);
   final strategy = ref.read(feedStrategyProvider);
   final downfeed = ref.read(downfeedProvider);
   final balance = ref.read(airBalanceProvider);
   const profile = SniProfile();
 
-  final data = CalcReportData(
+  return CalcReportData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,
     standardsName: profile.name,
@@ -74,12 +85,24 @@ Future<void> exportCalcReport(WidgetRef ref) async {
     hotWaterRecirc: ref.read(hotWaterRecircProvider),
     sprinkler: ref.read(sprinklerDesignProvider),
     standpipe: ref.read(standpipeDesignProvider),
+    sprinklerRemoteArea: ref.read(sprinklerRemoteAreaProvider),
+    firePumpRating: ref.read(firePumpRatingProvider),
     fan: ref.read(ductFanProvider),
     supplyAirflowLps: balance?.supplyLps ?? 0,
     returnAirflowLps: balance?.returnLps ?? 0,
+    rainfallMmPerHr: ref.read(rainfallIntensityProvider),
+    runoffCoefficient: ref.read(runoffCoefficientProvider),
     bom: ref.read(bomProvider),
     fittings: ref.read(fittingsProvider),
+    occupancy: ref.read(occupancyProvider),
   );
+}
+
+/// Gather the live design results into a calc report and write it to a Markdown
+/// file chosen by the user.
+Future<void> exportCalcReport(WidgetRef ref) async {
+  final project = ref.read(projectControllerProvider);
+  final data = _buildMechanicalReportData(ref);
 
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleCalcReport),
@@ -90,6 +113,214 @@ Future<void> exportCalcReport(WidgetRef ref) async {
   if (path == null) return;
   final full = path.endsWith('.md') ? path : '$path.md';
   await File(full).writeAsString(buildCalcReportMarkdown(data));
+}
+
+/// Build the compliance pass/fail roll-up from the live aggregated design
+/// issues. Pure read of `designIssuesProvider` (no new checks): warnings drive
+/// fail/review verdicts, info-tier items (unverified standards, advisories) are
+/// summarised but kept as PASS-with-note categories.
+ComplianceSummary _buildComplianceSummary(WidgetRef ref) {
+  final issues = ref.read(designIssuesProvider);
+
+  int countWhere(bool Function(DesignIssue) test) =>
+      issues.where(test).length;
+
+  // Velocity: any out-of-band air-velocity warning fails the check.
+  final velocityWarnings = countWhere((i) =>
+      i.severity == IssueSeverity.warning &&
+      (i.title.contains('velocity')));
+  // Calibration: any uncalibrated-sheet warning fails the check.
+  final calibrationWarnings = countWhere((i) =>
+      i.severity == IssueSeverity.warning && i.title.contains('calibrated'));
+  // Standards verification: unverified-standard info items.
+  final unverified =
+      countWhere((i) => i.title == 'Unverified standard');
+
+  return ComplianceSummary(
+    date: DateTime.now().toIso8601String().split('T').first,
+    items: [
+      ComplianceItem('Air velocities within band',
+          pass: velocityWarnings == 0,
+          detail: velocityWarnings == 0
+              ? 'all within band'
+              : '$velocityWarnings out of band'),
+      ComplianceItem('Sheet calibration',
+          pass: calibrationWarnings == 0,
+          detail: calibrationWarnings == 0
+              ? 'all sheets calibrated'
+              : '$calibrationWarnings uncalibrated'),
+      ComplianceItem('Standards verification',
+          pass: unverified == 0,
+          detail: unverified == 0
+              ? 'all values verified'
+              : '$unverified value(s) require verification before submission'),
+    ],
+  );
+}
+
+/// Gather BOTH the mechanical and electrical designs into one unified MEP
+/// building-services report (with a compliance summary) and write it to a
+/// Markdown file chosen by the user.
+Future<void> exportMepUnifiedReport(WidgetRef ref) async {
+  final project = ref.read(projectControllerProvider);
+  final mechanical = _buildMechanicalReportData(ref);
+
+  final eProject = ref.read(electricalProjectProvider);
+  final eResult = ref.read(electricalResultProvider);
+  final eAdvanced = ref.read(electricalAdvancedProvider);
+  const eProfile = PuilProfile();
+  final electrical = ElectricalCalcReportData(
+    projectName: project.name,
+    date: DateTime.now().toIso8601String().split('T').first,
+    standardsName: eProfile.name,
+    standardsRevision: eProfile.revision,
+    project: eProject,
+    result: eResult,
+    powerOneLine: eAdvanced.powerOneLine,
+    verifyItems: eAdvanced.verifyItems,
+    originFaultLevelA: eProject.originFaultLevelA?.amperes,
+    busbarClearingTimeS: eProject.busbarClearingTimeS,
+  );
+
+  final md = buildMepUnifiedReport(
+    mechanical: mechanical,
+    electrical: electrical,
+    compliance: _buildComplianceSummary(ref),
+  );
+
+  final base = project.name.isEmpty ? 'project' : project.name;
+  final path = await FilePicker.saveFile(
+    dialogTitle:
+        MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleMepReport),
+    fileName: '$base-mep-report.md',
+    type: FileType.custom,
+    allowedExtensions: const ['md'],
+  );
+  if (path == null) return;
+  final full = path.endsWith('.md') ? path : '$path.md';
+  await File(full).writeAsString(md);
+}
+
+/// Gather the live solved equipment (pumps, fans, room AHU/FCU/AC, and
+/// electrical panels) into an [EquipmentScheduleData] and write the equipment
+/// schedule to a Markdown file chosen by the user. The engine only tabulates
+/// already-solved duties — no new sizing here. Tags are assigned at gather time
+/// (sequential when not user-named), so the engine results stay untouched.
+Future<void> exportEquipmentSchedule(WidgetRef ref) async {
+  final project = ref.read(projectControllerProvider);
+
+  // Pumps: the domestic-supply booster (upfeed) + the standpipe fire pump.
+  final pumps = <PumpScheduleItem>[];
+  final supplyPump = ref.read(pumpDutyProvider);
+  if (supplyPump != null) {
+    pumps.add(PumpScheduleItem(
+      duty: supplyPump,
+      service: 'Domestic water supply',
+      tag: 'P-01',
+    ));
+  }
+  final standpipe = ref.read(standpipeDesignProvider);
+  if (standpipe.requiredFlow.cubicMetersPerSecond > 0) {
+    pumps.add(PumpScheduleItem(
+      duty: sizePump(
+        flow: standpipe.requiredFlow,
+        head: standpipe.pumpHead,
+      ),
+      service: 'Fire standpipe pump',
+      tag: 'FP-01',
+    ));
+  }
+
+  // Fans: the drawn supply/exhaust duct fan.
+  final fans = <FanScheduleItem>[];
+  final ductFan = ref.read(ductFanProvider);
+  if (ductFan != null) {
+    fans.add(FanScheduleItem(
+      duty: ductFan,
+      service: 'Mechanical ventilation',
+      tag: 'F-01',
+    ));
+  }
+
+  // Air-handling: each drawn ROOM's AHU/FCU/AC equipment duty (FanDuty).
+  final ducts = ref.read(ductSettingsProvider);
+  final rooms = ref.read(roomAreasProvider);
+  var ahuSeq = 0;
+  for (final r in rooms) {
+    final cal = project.calibrationFor(r.sheetId);
+    final sizing = r.sizing(
+      cal?.metersPerPixel,
+      ductShape: ducts.shape,
+      ductMethod: ducts.method,
+    );
+    if (sizing == null) continue;
+    ahuSeq++;
+    fans.add(FanScheduleItem(
+      duty: sizing.equipment,
+      service: r.name,
+      tag: 'AHU-${ahuSeq.toString().padLeft(2, '0')}',
+      airHandling: true,
+    ));
+  }
+
+  final data = EquipmentScheduleData(
+    projectName: project.name,
+    date: DateTime.now().toIso8601String().split('T').first,
+    pumps: pumps,
+    fans: fans,
+    electrical: ref.read(electricalResultProvider),
+  );
+
+  final base = project.name.isEmpty ? 'project' : project.name;
+  final path = await FilePicker.saveFile(
+    dialogTitle: MechXStringsData(ref.read(localeProvider))(
+        StringKey.exportTitleEquipmentSchedule),
+    fileName: '$base-equipment-schedule.md',
+    type: FileType.custom,
+    allowedExtensions: const ['md'],
+  );
+  if (path == null) return;
+  final full = path.endsWith('.md') ? path : '$path.md';
+  await File(full).writeAsString(buildEquipmentScheduleMarkdown(data));
+}
+
+/// Build the issuable-drawing chrome (legend / scale bar / north arrow / sheet
+/// "X of Y" / drawing-number block) for the current [sheetId]/[floorIndex].
+/// The legend lists the services actually present on this floor; the sheet
+/// counter is the sheet's position in the rail. Drawing number / revision aren't
+/// tracked in the project model yet (a future DesignSettings wave), so they're
+/// left null — the block then only shows the sheet counter. North defaults to 0
+/// (page-up). Pure-data: the export engine renders it.
+DrawingChrome _issuableChrome(
+  WidgetRef ref, {
+  required String sheetId,
+  required int floorIndex,
+}) {
+  final sheets = ref.read(sheetsControllerProvider).sheets;
+  final net = ref.read(networkControllerProvider).network;
+
+  // Services present on this floor (runs on-floor, risers anchored here), in
+  // the canonical draw order so the legend reads consistently.
+  bool onFloor(String id) {
+    final n = net.nodeById(id);
+    return n != null && n.sheetId == sheetId && n.floorIndex == floorIndex;
+  }
+
+  final present = <ServiceType>{};
+  for (final e in net.edges) {
+    if (onFloor(e.fromId) || onFloor(e.toId)) present.add(e.service);
+  }
+  final legend = [
+    for (final s in kDrawServices)
+      if (present.contains(s)) s,
+  ];
+
+  final idx = sheets.indexWhere((s) => s.id == sheetId);
+  return DrawingChrome(
+    sheetIndex: idx >= 0 ? idx + 1 : null,
+    sheetTotal: sheets.isNotEmpty ? sheets.length : null,
+    legendServices: legend,
+  );
 }
 
 /// Export the current sheet/floor's drawn network as a DXF drawing file.
@@ -104,6 +335,7 @@ Future<void> exportDrawingDxf(WidgetRef ref) async {
     sizing: ref.read(sizingProvider),
     sheetId: sheet.id,
     floorIndex: floorIndex,
+    chrome: _issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
   );
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingDxf),
@@ -129,10 +361,60 @@ Future<void> exportDrawingPdf(WidgetRef ref) async {
     sheetId: sheet.id,
     floorIndex: floorIndex,
     title: sheet.name,
+    chrome: _issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
   );
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingPdf),
     fileName: '${sheet.name}.pdf',
+    type: FileType.custom,
+    allowedExtensions: const ['pdf'],
+  );
+  if (path == null) return;
+  final full = path.endsWith('.pdf') ? path : '$path.pdf';
+  await File(full).writeAsBytes(bytes);
+}
+
+/// Export the current sheet/floor's drawn network as a native ANNOTATED plan
+/// PDF — the richer drawing deliverable with a title block (project / sheet /
+/// date) and real §10 run/riser LENGTHS folded into each size label. The real
+/// lengths are pre-computed here (the engine `edgeLength` over the live
+/// calibrations + building) and passed to the pure `planToPdf`.
+Future<void> exportAnnotatedPlanPdf(WidgetRef ref) async {
+  final sheets = ref.read(sheetsControllerProvider);
+  final sheet = sheets.current;
+  if (sheet == null) return;
+  final project = ref.read(projectControllerProvider);
+  final levelCount = project.building.levelCount;
+  final floorIndex = sheets.floorFor(sheet.id, levelCount);
+  final net = ref.read(networkControllerProvider).network;
+
+  // Real length per edge from the §10 sources of truth (run via calibration,
+  // riser via the elevation delta).
+  final edgeLengths = <String, Length>{
+    for (final e in net.edges)
+      e.id: edgeLength(
+        e,
+        net,
+        calibrationBySheet: project.calibrations,
+        building: project.building,
+      ),
+  };
+
+  final bytes = planToPdf(
+    net: net,
+    sizing: ref.read(sizingProvider),
+    edgeLengths: edgeLengths,
+    sheetId: sheet.id,
+    floorIndex: floorIndex,
+    projectName: project.name,
+    sheetName: sheet.name,
+    dateString: DateTime.now().toIso8601String().split('T').first,
+    chrome: _issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+  );
+  final path = await FilePicker.saveFile(
+    dialogTitle: MechXStringsData(ref.read(localeProvider))(
+        StringKey.exportTitleAnnotatedPlanPdf),
+    fileName: '${sheet.name}-annotated.pdf',
     type: FileType.custom,
     allowedExtensions: const ['pdf'],
   );
@@ -315,6 +597,27 @@ class ProjectPanel extends ConsumerWidget {
                         ref.read(calibrationControllerProvider.notifier).start(),
                   ),
                 ),
+                // QoL: once this sheet is calibrated, stamp its scale onto every
+                // other sheet in one undo step (typical floors share a scale).
+                if (calibration != null) ...[
+                  const SizedBox(height: MechXSpacing.sm),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: MechXButton(
+                      label: 'Apply scale to all sheets',
+                      onPressed: () => ref
+                          .read(projectControllerProvider.notifier)
+                          .applyCalibrationToAllSheets(
+                            currentSheet.id,
+                            toSheetIds: ref
+                                .read(sheetsControllerProvider)
+                                .sheets
+                                .map((s) => s.id)
+                                .toSet(),
+                          ),
+                    ),
+                  ),
+                ],
               ],
             ],
           ),
@@ -454,8 +757,6 @@ class _DrawSection extends ConsumerWidget {
     final drawing = ref.watch(networkControllerProvider);
     final ctrl = ref.read(networkControllerProvider.notifier);
     final ortho = ref.watch(orthoProvider);
-    final sheets = ref.watch(sheetsControllerProvider);
-    final levelCount = ref.watch(projectControllerProvider).building.levelCount;
 
     // On the unified Layout canvas, scope the drawable services to the ACTIVE
     // discipline layer (plumbing services when Plumbing is active, air services
@@ -493,40 +794,15 @@ class _DrawSection extends ConsumerWidget {
           },
         );
 
-    // Duplicate the current floor's runs to the sheet ONE FLOOR UP. The
-    // destination is resolved by the sheet→floor MAPPING, not by list position:
-    // a sheet may carry an explicit floor override, so a sheet's list index need
-    // not equal its floor index. Enabled only when such a destination sheet
-    // exists for the next floor.
-    final current = sheets.current;
-    final fromFloor =
-        current == null ? 0 : sheets.floorFor(current.id, levelCount);
-    final toFloor = fromFloor + 1;
-    String? toSheetId;
-    if (current != null && toFloor < levelCount) {
-      for (final s in sheets.sheets) {
-        if (sheets.floorFor(s.id, levelCount) == toFloor) {
-          toSheetId = s.id;
-          break;
-        }
-      }
-    }
-    final canDuplicate = current != null && toSheetId != null;
-    void duplicateFloor() {
-      if (current == null || toSheetId == null) return;
-      ctrl.duplicateFloor(
-        fromSheetId: current.id,
-        fromFloor: fromFloor,
-        toSheetId: toSheetId,
-        toFloor: toFloor,
-      );
-    }
+    // Duplicating the current floor's runs to the floor above now lives in the
+    // command palette ("Duplicate floor up") — a niche power action that no
+    // longer crowds the primary draw toolbar.
 
-    return Column(
+    return DisclosureSection(
+      name: 'Draw',
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const MechXSectionLabel('Draw'),
-        const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
@@ -610,22 +886,17 @@ class _DrawSection extends ConsumerWidget {
               label: 'Redo',
               onPressed: ref.read(historyProvider.notifier).redo,
             ),
-            MechXButton(label: 'Clear', onPressed: ctrl.clear),
             MechXButton(
               label: 'Ortho',
               primary: ortho,
               onPressed: () => ref.read(orthoProvider.notifier).toggle(),
             ),
-            if (canDuplicate)
-              MechXButton(
-                label: 'Duplicate floor up',
-                onPressed: duplicateFloor,
-              ),
           ],
         ),
         const SizedBox(height: MechXSpacing.lg),
         const SegmentPalette(),
       ],
+    ),
     );
   }
 }
@@ -665,11 +936,11 @@ class _TanksSection extends ConsumerWidget {
           '${(t.heightPx * mpp).toStringAsFixed(1)} m';
     }
 
-    return Column(
+    return DisclosureSection(
+      name: 'Tanks',
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const MechXSectionLabel('Tanks'),
-        const SizedBox(height: MechXSpacing.sm),
         for (final t in tanks) ...[
           Container(
             padding: const EdgeInsets.all(MechXSpacing.sm),
@@ -738,6 +1009,7 @@ class _TanksSection extends ConsumerWidget {
         ],
         const SizedBox(height: MechXSpacing.sm),
       ],
+    ),
     );
   }
 }
@@ -792,11 +1064,11 @@ class _RoomsSection extends ConsumerWidget {
         '${s.equipment.totalStaticPressure.pascals.round()} Pa · '
         'motor ${s.equipment.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW';
 
-    return Column(
+    return DisclosureSection(
+      name: 'Rooms (ACH airflow)',
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const MechXSectionLabel('Rooms (ACH airflow)'),
-        const SizedBox(height: MechXSpacing.sm),
         for (final r in rooms) ...[
           Builder(builder: (context) {
             final s = r.sizing(
@@ -980,6 +1252,31 @@ class _RoomsSection extends ConsumerWidget {
                         ),
                     ],
                   ),
+                  const SizedBox(height: MechXSpacing.xs),
+                  // Drop the sized supply diffusers + a return grille onto the
+                  // plan inside this room's footprint, in one undo step.
+                  Row(
+                    children: [
+                      MechXButton(
+                        label: 'Auto-place diffusers',
+                        onPressed: (s != null && cal != null)
+                            ? () => ref
+                                .read(networkControllerProvider.notifier)
+                                .autoPlaceRoomTerminals(
+                                  room: r,
+                                  metersPerPixel: cal.metersPerPixel,
+                                  ductShape: ducts.shape,
+                                  ductMethod: ducts.method,
+                                )
+                            : null,
+                      ),
+                      const Spacer(),
+                      if (s != null)
+                        Text('${s.supply.count} + 1',
+                            style: type.caption
+                                .copyWith(color: colors.textMuted)),
+                    ],
+                  ),
                 ],
               ),
             );
@@ -988,6 +1285,7 @@ class _RoomsSection extends ConsumerWidget {
         ],
         const SizedBox(height: MechXSpacing.sm),
       ],
+    ),
     );
   }
 }
@@ -1002,11 +1300,11 @@ class _SizingSection extends ConsumerWidget {
     final show = ref.watch(showSizingProvider);
     final sized = ref.watch(sizingProvider);
 
-    return Column(
+    return DisclosureSection(
+      name: 'Sizing',
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const MechXSectionLabel('Sizing'),
-        const SizedBox(height: MechXSpacing.sm),
         Row(
           children: [
             MechXButton(
@@ -1020,13 +1318,6 @@ class _SizingSection extends ConsumerWidget {
               style: type.caption.copyWith(color: colors.textMuted),
             ),
           ],
-        ),
-        const SizedBox(height: MechXSpacing.xs),
-        Text(
-          'Auto-sized to SNI velocity limits. Water supply uses accumulated '
-          'fixture units via the Hunter demand curve; assign fixture types per '
-          'node.',
-          style: type.caption.copyWith(color: colors.textMuted),
         ),
         const SizedBox(height: MechXSpacing.sm),
         Text('Occupancy',
@@ -1067,7 +1358,31 @@ class _SizingSection extends ConsumerWidget {
             ),
           ],
         ),
+        const SizedBox(height: MechXSpacing.sm),
+        Row(
+          children: [
+            Expanded(
+              child: Text('Runoff coefficient',
+                  style: type.caption.copyWith(color: colors.textMuted)),
+            ),
+            _GlyphButton(
+              glyph: '−',
+              onTap: () =>
+                  ref.read(runoffCoefficientProvider.notifier).nudge(-0.05),
+            ),
+            const SizedBox(width: MechXSpacing.xs),
+            Text(ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
+                style: type.mono.copyWith(color: colors.textSecondary)),
+            const SizedBox(width: MechXSpacing.xs),
+            _GlyphButton(
+              glyph: '+',
+              onTap: () =>
+                  ref.read(runoffCoefficientProvider.notifier).nudge(0.05),
+            ),
+          ],
+        ),
       ],
+    ),
     );
   }
 }
@@ -1103,11 +1418,52 @@ class _ResultsSection extends ConsumerWidget {
     final totalLength =
         bom.fold<double>(0, (sum, line) => sum + line.totalLength.meters);
 
-    return Column(
+    // The promoted headline result for this feed strategy: the single number an
+    // engineer scans for (pump motor kW upfeed; worst PRV-zone status downfeed),
+    // with a colour-coded verdict. Only built once there is a real result, so a
+    // fresh/blank launch (the golden state) renders no card — byte-identical.
+    final colors = context.colors;
+    Widget? headlineCard;
+    if (strategy == FeedStrategy.upfeed) {
+      if (pump != null) {
+        headlineCard = ResultCard(
+          headline: '${pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW',
+          label: 'Pump motor',
+          verdict: 'sized',
+          verdictColor: colors.success,
+        );
+      }
+    } else {
+      if (downfeed != null) {
+        if (zoneStatics.isEmpty) {
+          // No PRV zones drawn — the headline is the gravity/booster verdict.
+          headlineCard = ResultCard(
+            headline: downfeed.gravitySufficient
+                ? 'gravity'
+                : '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m',
+            label: 'Downfeed booster',
+            verdict: downfeed.gravitySufficient ? 'OK' : 'boost',
+            verdictColor: downfeed.gravitySufficient
+                ? colors.success
+                : colors.warning,
+          );
+        } else {
+          headlineCard = ResultCard(
+            headline: '${zones.length} zone${zones.length == 1 ? '' : 's'}'
+                ' · ${worstZone.toStringAsFixed(0)} kPa',
+            label: 'PRV zones (worst)',
+            verdict: zonesOk ? 'OK' : 'over',
+            verdictColor: zonesOk ? colors.success : colors.danger,
+          );
+        }
+      }
+    }
+
+    return DisclosureSection(
+      name: 'Network',
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const MechXSectionLabel('Network'),
-        const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
@@ -1133,6 +1489,10 @@ class _ResultsSection extends ConsumerWidget {
             onPressed: () => ref.read(showHeatmapProvider.notifier).toggle(),
           ),
         ),
+        if (headlineCard != null) ...[
+          const SizedBox(height: MechXSpacing.sm),
+          headlineCard,
+        ],
         const SizedBox(height: MechXSpacing.sm),
         if (strategy == FeedStrategy.upfeed) ...[
           _kv(context, 'Pump head',
@@ -1191,6 +1551,7 @@ class _ResultsSection extends ConsumerWidget {
           ),
         ],
       ],
+    ),
     );
   }
 
@@ -1272,11 +1633,11 @@ class _FireSection extends ConsumerWidget {
           ),
         );
 
-    return Column(
+    return DisclosureSection(
+      name: 'Fire',
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const MechXSectionLabel('Fire'),
-        const SizedBox(height: MechXSpacing.sm),
         kv('Sprinkler flow',
             '${sprinkler.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),
         kv('Sprinkler heads', '${sprinkler.sprinklerCount}'),
@@ -1305,6 +1666,7 @@ class _FireSection extends ConsumerWidget {
           ],
         ),
       ],
+    ),
     );
   }
 }
@@ -2017,11 +2379,11 @@ class _HvacSection extends ConsumerWidget {
           ),
         );
 
-    return Column(
+    return DisclosureSection(
+      name: 'HVAC · ducting',
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const MechXSectionLabel('HVAC · ducting'),
-        const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
@@ -2060,6 +2422,17 @@ class _HvacSection extends ConsumerWidget {
           Text('Draw a duct network and assign diffuser airflows.',
               style: type.caption.copyWith(color: colors.textMuted))
         else ...[
+          // Promoted headline: fan total static + selected motor. Only rendered
+          // once a fan exists, so the blank/golden launch is byte-identical.
+          ResultCard(
+            headline:
+                '${fan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa',
+            label:
+                'Fan static · ${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW motor',
+            verdict: 'sized',
+            verdictColor: colors.success,
+          ),
+          const SizedBox(height: MechXSpacing.xs),
           kv('Trunk airflow',
               '${fan.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s'),
           kv('Fan static',
@@ -2076,6 +2449,7 @@ class _HvacSection extends ConsumerWidget {
           kv('Air balance', _balanceLabel(balance.supplyLps, balance.returnLps)),
         ],
       ],
+    ),
     );
   }
 }

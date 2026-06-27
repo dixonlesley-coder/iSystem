@@ -16,6 +16,7 @@ import 'dart:typed_data';
 
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
+import 'drawing_chrome.dart';
 
 /// Box footprint (layout units) for an auto-laid panel — matches the DXF export.
 const double _boxW = 200;
@@ -43,6 +44,7 @@ Uint8List electricalSldToPdf({
   required ElectricalProject project,
   required ElectricalSystemResult result,
   String title = 'iSystem electrical single-line',
+  DrawingChrome? chrome,
 }) {
   const pageW = 1190.55; // A3 landscape, points (420 mm)
   const pageH = 841.89; // 297 mm
@@ -143,6 +145,14 @@ Uint8List electricalSldToPdf({
     cs.writeln('BT /F1 8 Tf 0.25 0.25 0.25 rg '
         '${_n(tx(at.x) + 6)} ${_n(ty(at.y) - 42)} Td '
         '(${_pdfText('bus ${_num(p.busbar.csaMm2)} mm2')}) Tj ET');
+  }
+
+  // ── Issuable-document chrome (opt-in; byte-identical when null) ─────────────
+  if (chrome != null && !chrome.isEmpty) {
+    cs.write(pdfRevisionBlock(chrome, pageW: pageW, pageH: pageH, margin: margin));
+    cs.write(pdfLegend(chrome, originX: margin, originY: margin + 28));
+    cs.write(pdfScaleBar(chrome, centerX: pageW / 2, baseY: margin));
+    cs.write(pdfNorthArrow(chrome, cx: pageW - margin - 18, cy: pageH - margin - 40));
   }
 
   // ── Object assembly with a byte-accurate cross-reference table ──────────────

@@ -8,6 +8,7 @@ import '../canvas/service_style.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
+import 'issues_card.dart';
 
 /// The Review hub — a calm landing for checking the design before issue.
 ///
@@ -62,6 +63,8 @@ class ReviewHub extends ConsumerWidget {
           _CutPlanCard(),
         ],
         const SizedBox(height: MechXSpacing.md),
+        const IssuesCard(),
+        const SizedBox(height: MechXSpacing.md),
         _ConsumablesCard(),
         const SizedBox(height: MechXSpacing.lg),
         const HubNote(
@@ -70,10 +73,6 @@ class ReviewHub extends ConsumerWidget {
           'waste; couplings and duct flanges on the canvas fall at these '
           'boundaries. Export the Markdown calc report for the full breakdown.',
         ),
-        if (warnings > 0) ...[
-          const SizedBox(height: MechXSpacing.md),
-          _WarningList(),
-        ],
       ],
     );
   }
@@ -196,56 +195,3 @@ class _ConsumablesCard extends ConsumerWidget {
   }
 }
 
-/// Lists the electrical warnings the A4 engine raised, so Review is not a blank
-/// placeholder when the model has something worth flagging.
-class _WarningList extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final colors = context.colors;
-    final type = context.type;
-    final elec = ref.watch(electricalResultProvider);
-
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.card,
-        border: Border.all(color: colors.border),
-      ),
-      padding: const EdgeInsets.all(MechXSpacing.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Electrical warnings',
-              style: type.subtitle.copyWith(color: colors.textPrimary)),
-          const SizedBox(height: MechXSpacing.sm),
-          for (final w in elec.warnings)
-            Padding(
-              padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 7,
-                    height: 7,
-                    margin: const EdgeInsets.only(
-                        top: 5, right: MechXSpacing.sm),
-                    decoration: BoxDecoration(
-                      color: colors.warning,
-                      borderRadius: const BorderRadius.all(MechXRadii.xs),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      w.message,
-                      style:
-                          type.caption.copyWith(color: colors.textSecondary),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}

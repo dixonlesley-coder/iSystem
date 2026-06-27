@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../ai/ai_client.dart';
 import '../store/annotation_store.dart';
 import '../store/app_state.dart';
 import '../store/commercial_store.dart';
@@ -70,6 +71,7 @@ ProjectDocument buildDocument(ProviderReader read) {
       ductShape: ducts.shape,
       ductMethod: ducts.method,
       rainfallMmPerHr: read(rainfallIntensityProvider),
+      runoffCoefficientStorm: read(runoffCoefficientProvider),
       fireHazard: read(fireHazardProvider),
       brightness: read(brightnessProvider),
       localeCode: read(localeProvider).name,
@@ -81,6 +83,10 @@ ProjectDocument buildDocument(ProviderReader read) {
       marginPct: commercial.marginPct,
       // The user-defined fixture library round-trips with the project.
       fixtureLibrary: read(fixtureLibraryProvider),
+      // BYO Claude copilot key + model + provider round-trip with the project.
+      anthropicApiKey: read(aiApiKeyProvider),
+      aiModel: read(aiModelProvider),
+      aiProvider: read(aiProviderProvider).name,
     ),
     // The electrical sub-model (v2) round-trips alongside the plumbing project.
     electrical: read(electricalProjectProvider),
@@ -119,6 +125,7 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
     ..setShape(s.ductShape)
     ..setMethod(s.ductMethod);
   read(rainfallIntensityProvider.notifier).set(s.rainfallMmPerHr);
+  read(runoffCoefficientProvider.notifier).set(s.runoffCoefficientStorm);
   read(fireHazardProvider.notifier).set(s.fireHazard);
   read(brightnessProvider.notifier).set(s.brightness);
   read(localeProvider.notifier)
@@ -134,6 +141,11 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   ));
   // Restore the user-defined fixture library (absent on an older file ⇒ empty).
   read(fixtureLibraryProvider.notifier).set(s.fixtureLibrary);
+  // Restore the BYO Claude copilot key + model + provider (absent ⇒ disabled /
+  // default / Anthropic).
+  read(aiApiKeyProvider.notifier).set(s.anthropicApiKey);
+  read(aiModelProvider.notifier).set(s.aiModel);
+  read(aiProviderProvider.notifier).set(aiProviderFromName(s.aiProvider));
   // Restore the electrical project (v2 files carry one; older files / projects
   // with no electrical design fall back to the built-in sample).
   read(electricalProjectProvider.notifier)

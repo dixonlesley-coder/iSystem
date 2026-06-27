@@ -4,6 +4,10 @@ import 'package:mechx_engine/network/network.dart';
 
 import '../../store/electrical_store.dart';
 import '../../store/layer_store.dart';
+import '../../store/network_store.dart';
+import '../../store/project_store.dart';
+import '../../store/sheets_store.dart';
+import '../inspector/disclosure_header.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/palette_card.dart';
@@ -42,7 +46,6 @@ class SegmentPalette extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
-    final type = context.type;
 
     // Scope the equipment groups to the active discipline on the Layout canvas.
     // On the Schematic view (no layer concept) everything is offered.
@@ -59,6 +62,31 @@ class SegmentPalette extends ConsumerWidget {
     final showFire = showAll || active == DisciplineLayer.fire;
     final showAir = showAll || active == DisciplineLayer.hvac;
 
+    // Keyboard activation (Enter/Space on a focused card): drop the item at the
+    // CENTRE of the current sheet (world coords, viewport-independent) via the
+    // same store add-actions a drag uses. No-op if no sheet is loaded.
+    void dropAtCentre(PaletteItem item) {
+      final sheet = ref.read(sheetsControllerProvider).current;
+      if (sheet == null) return;
+      final levelCount = ref.read(projectControllerProvider).building.levelCount;
+      final floorIndex =
+          ref.read(sheetsControllerProvider).floorFor(sheet.id, levelCount);
+      final world = sheet.sizePx.center(Offset.zero);
+      final ctrl = ref.read(networkControllerProvider.notifier);
+      switch (item.kind) {
+        case PaletteItemKind.pipeSegment:
+        case PaletteItemKind.ductSegment:
+          ctrl.addSegment(sheet.id, floorIndex, world, service: item.service);
+        case PaletteItemKind.fitting:
+          ctrl.addFitting(sheet.id, floorIndex, world);
+        case PaletteItemKind.terminal:
+          ctrl.addTerminal(sheet.id, floorIndex, world);
+        case PaletteItemKind.component:
+          final c = item.component;
+          if (c != null) ctrl.addComponentNode(sheet.id, floorIndex, world, c);
+      }
+    }
+
     Widget componentCard(NodeComponent c) => Padding(
           padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
           child: PaletteCard<PaletteItem>(
@@ -66,32 +94,34 @@ class SegmentPalette extends ConsumerWidget {
             swatch: colors.textSecondary,
             data: PaletteItem(PaletteItemKind.component, component: c),
             fillWidth: true,
+            onActivate: () =>
+                dropAtCentre(PaletteItem(PaletteItemKind.component, component: c)),
             leading:
                 ComponentSymbol(component: c, color: colors.textSecondary, size: 16),
           ),
         );
 
-    Widget equipmentGroup(String title, List<NodeComponent> items) => Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: MechXSpacing.xs),
-            MechXSectionLabel(title),
-            const SizedBox(height: MechXSpacing.xs),
-            for (final c in items) componentCard(c),
-          ],
+    // Accessory groups (valves, meters, dampers) collapse by default so the
+    // palette reads as a short list of primary equipment instead of a long
+    // scroll — the long tail is one tap away. Primary equipment for each
+    // discipline (plant, terminals, units, AC, drains, fire) stays open.
+    const collapsedByDefault = <String>{'Valves', 'Meters & misc', 'Dampers'};
+    Widget equipmentGroup(String title, List<NodeComponent> items) => Padding(
+          padding: const EdgeInsets.only(top: MechXSpacing.xs),
+          child: DisclosureSection(
+            name: title,
+            defaultExpanded: !collapsedByDefault.contains(title),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [for (final c in items) componentCard(c)],
+            ),
+          ),
         );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const MechXSectionLabel('Palette'),
-        const SizedBox(height: MechXSpacing.xs),
-        Text(
-          'Drop a riser where a main starts, then drag the blue outlet out '
-          'of it to lay the mainline. Drop a terminal and drag it onto a main '
-          'to branch it.',
-          style: type.caption.copyWith(color: colors.textMuted),
-        ),
         const SizedBox(height: MechXSpacing.sm),
 
         // ── Start here: the riser (the mainline's origin) ──────────────────
@@ -103,6 +133,9 @@ class SegmentPalette extends ConsumerWidget {
           data: const PaletteItem(PaletteItemKind.component,
               component: NodeComponent.riser),
           fillWidth: true,
+          onActivate: () => dropAtCentre(const PaletteItem(
+              PaletteItemKind.component,
+              component: NodeComponent.riser)),
           leading: ComponentSymbol(
               component: NodeComponent.riser,
               color: context.colors.accent,
@@ -120,6 +153,8 @@ class SegmentPalette extends ConsumerWidget {
             swatch: colors.textSecondary,
             data: const PaletteItem(PaletteItemKind.fitting),
             fillWidth: true,
+            onActivate: () =>
+                dropAtCentre(const PaletteItem(PaletteItemKind.fitting)),
             leading: SegmentSymbol(
                 kind: PaletteItemKind.fitting, color: colors.textSecondary,
                 size: 16),
@@ -130,6 +165,8 @@ class SegmentPalette extends ConsumerWidget {
           swatch: colors.textSecondary,
           data: const PaletteItem(PaletteItemKind.terminal),
           fillWidth: true,
+          onActivate: () =>
+              dropAtCentre(const PaletteItem(PaletteItemKind.terminal)),
           leading: SegmentSymbol(
               kind: PaletteItemKind.terminal, color: colors.textSecondary,
               size: 16),

@@ -214,6 +214,20 @@ class ElectricalPanelResult {
   /// Demand line current (A) — the worst-loaded phase on a 3-phase board.
   final Current demandCurrent;
 
+  /// Future (spare-uplifted) demand (W) the incomer + busbar were sized for when
+  /// panel headroom is set = demandW × (1 + sparePercentage/100). Equal to
+  /// [demandW] (no uplift) when no headroom is applied. Additive (default 0 —
+  /// read [headroomApplied] to tell "no headroom" from a literal 0 W demand).
+  final double futureLoadW;
+
+  /// True when spare-ways / future-load headroom was applied to this panel's
+  /// incomer + busbar sizing. Additive (default false ⇒ byte-identical path).
+  final bool headroomApplied;
+
+  /// Reserved spare outgoing ways counted toward the busbar capacity. Additive
+  /// (default 0).
+  final int spareWaysReserved;
+
   final PhaseBalanceResult phaseBalance;
 
   /// Phase imbalance (%) — convenience alias of [phaseBalance.imbalancePercent].
@@ -234,6 +248,9 @@ class ElectricalPanelResult {
     required this.connectedW,
     required this.demandW,
     required this.demandCurrent,
+    this.futureLoadW = 0,
+    this.headroomApplied = false,
+    this.spareWaysReserved = 0,
     required this.phaseBalance,
     required this.warnings,
   });

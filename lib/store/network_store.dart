@@ -1,11 +1,18 @@
+import 'dart:math' as math;
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/grille_sizing.dart' show standardGrilleFacesMm;
+import 'package:mechx_engine/sizing/network_sizing.dart'
+    show DuctShape, DuctSizingMethod;
+import 'package:mechx_engine/sizing/room_air.dart' show TerminalBank;
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'annotation_store.dart' show RoomArea;
 import 'history_store.dart';
 import 'selection_store.dart';
 
@@ -594,6 +601,63 @@ class NetworkController extends Notifier<DrawingState> {
     );
   }
 
+  /// Create a PARALLEL run offset from edge [id] by [distancePixels], on the
+  /// [leftSide] of the edge's `from`→`to` heading (left = the heading rotated a
+  /// quarter-turn anticlockwise on screen). Adds two nodes + one run edge of the
+  /// same service in a single undo step — the simpler-than-AutoCAD OFFSET: one
+  /// action, no separate trim/extend. No-op for a riser, a missing/zero-length
+  /// edge, or a non-positive distance. The UI converts a real distance to pixels
+  /// via the sheet calibration, so the controller stays calibration-agnostic
+  /// (like [placeRunPoint]). Returns the new edge id, or null on a no-op.
+  String? offsetEdgeParallel(
+    String id,
+    double distancePixels, {
+    required bool leftSide,
+  }) {
+    if (distancePixels <= 0) return null;
+    final edge = state.network.edgeById(id);
+    if (edge == null || edge.kind != EdgeKind.run) return null;
+    final a = state.network.nodeById(edge.fromId);
+    final b = state.network.nodeById(edge.toId);
+    if (a == null || b == null) return null;
+    final dx = b.x - a.x;
+    final dy = b.y - a.y;
+    final len = math.sqrt(dx * dx + dy * dy);
+    if (len < 1e-6) return null;
+
+    // Perpendicular unit vector: left of the a→b heading is (dy, -dx)/len on a
+    // y-down screen. Right flips the sign.
+    final sign = leftSide ? 1.0 : -1.0;
+    final ox = (dy / len) * distancePixels * sign;
+    final oy = (-dx / len) * distancePixels * sign;
+
+    final na = NetNode(
+      id: _id('n'),
+      sheetId: a.sheetId,
+      x: a.x + ox,
+      y: a.y + oy,
+      floorIndex: a.floorIndex,
+    );
+    final nb = NetNode(
+      id: _id('n'),
+      sheetId: b.sheetId,
+      x: b.x + ox,
+      y: b.y + oy,
+      floorIndex: b.floorIndex,
+    );
+    final newEdge = NetEdge(
+      id: _id('e'),
+      fromId: na.id,
+      toId: nb.id,
+      service: edge.service,
+    );
+    _commit(Network(
+      nodes: [...state.network.nodes, na, nb],
+      edges: [...state.network.edges, newEdge],
+    ));
+    return newEdge.id;
+  }
+
   // ── Drag-and-drop palette (drop a segment / fitting / terminal) ─────────────
 
   /// Default horizontal span (world px) of a dropped segment, before snapping.
@@ -695,6 +759,104 @@ class NetworkController extends Notifier<DrawingState> {
       nodes: [...state.network.nodes, node],
       edges: state.network.edges,
     ));
+  }
+
+  /// Auto-place the air terminals a [room] needs — closing the room→network
+  /// loop. Runs the room's ACH air-side sizing ([RoomArea.sizing]) to get the
+  /// supply-diffuser COUNT + per-terminal airflow + chosen face, then drops that
+  /// many [NodeComponent.supplyDiffuser] nodes on a simple grid inside the room's
+  /// footprint rectangle (on the room's own sheet/floor), each carrying the
+  /// per-terminal [FlowRate] airflow + `faceWidthMm`/`faceHeightMm`; plus one
+  /// [NodeComponent.returnGrille] node carrying the return bank's airflow + face.
+  ///
+  /// All nodes land in ONE undo step. A null/degenerate sizing (no scale, zero
+  /// footprint) is a no-op (nothing recorded). Returns the new supply-diffuser
+  /// node ids (for optional trunk wiring); empty on a no-op.
+  List<String> autoPlaceRoomTerminals({
+    required RoomArea room,
+    required double metersPerPixel,
+    DuctShape ductShape = DuctShape.round,
+    DuctSizingMethod ductMethod = DuctSizingMethod.velocity,
+  }) {
+    final s = room.sizing(metersPerPixel,
+        ductShape: ductShape, ductMethod: ductMethod);
+    if (s == null) return const [];
+
+    final loX = room.ax < room.bx ? room.ax : room.bx;
+    final hiX = room.ax < room.bx ? room.bx : room.ax;
+    final loY = room.ay < room.by ? room.ay : room.by;
+    final hiY = room.ay < room.by ? room.by : room.ay;
+    final w = hiX - loX;
+    final h = hiY - loY;
+    if (w <= 0 || h <= 0) return const [];
+
+    // Lay the supply diffusers out on a near-square grid inside the footprint,
+    // each cell's centre giving the node position (inset off the room edge).
+    final n = s.supply.count;
+    final cols = math.max(1, math.sqrt(n).ceil());
+    final rows = (n / cols).ceil();
+    final supplyFace = _faceMm(s.supply);
+    final returnFace = _faceMm(s.return_);
+
+    final nodes = [...state.network.nodes];
+    final ids = <String>[];
+    var placed = 0;
+    for (var ry = 0; ry < rows && placed < n; ry++) {
+      for (var cx = 0; cx < cols && placed < n; cx++) {
+        final px = loX + w * (cx + 0.5) / cols;
+        final py = loY + h * (ry + 0.5) / rows;
+        final id = _id('n');
+        ids.add(id);
+        nodes.add(NetNode(
+          id: id,
+          sheetId: room.sheetId,
+          x: px,
+          y: py,
+          floorIndex: room.floorIndex,
+          role: NodeComponent.supplyDiffuser.role,
+          component: NodeComponent.supplyDiffuser,
+          airflow: s.supply.airflowEach,
+          faceWidthMm: supplyFace.$1,
+          faceHeightMm: supplyFace.$2,
+        ));
+        placed++;
+      }
+    }
+
+    // One return grille near the room centre.
+    nodes.add(NetNode(
+      id: _id('n'),
+      sheetId: room.sheetId,
+      x: loX + w * 0.5,
+      y: loY + h * 0.5,
+      floorIndex: room.floorIndex,
+      role: NodeComponent.returnGrille.role,
+      component: NodeComponent.returnGrille,
+      airflow: s.return_.airflowEach,
+      faceWidthMm: returnFace.$1,
+      faceHeightMm: returnFace.$2,
+    ));
+
+    _commit(Network(nodes: nodes, edges: state.network.edges));
+    return ids;
+  }
+
+  /// The standard rectangular face (width, height in mm) the engine chose for a
+  /// [bank], recovered by matching the bank's chosen gross face area against the
+  /// standard catalogue (see [standardGrilleFacesMm]).
+  (double, double) _faceMm(TerminalBank bank) {
+    final targetM2 = bank.each.grossFaceArea.squareMeters;
+    var best = standardGrilleFacesMm.first;
+    var bestErr = double.infinity;
+    for (final f in standardGrilleFacesMm) {
+      final grossM2 = (f.$1 / 1000.0) * (f.$2 / 1000.0);
+      final err = (grossM2 - targetM2).abs();
+      if (err < bestErr) {
+        bestErr = err;
+        best = f;
+      }
+    }
+    return best;
   }
 
   /// The service an existing run incident to [nodeId] carries (so a main pulled

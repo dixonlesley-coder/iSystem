@@ -14,6 +14,7 @@ import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BusbarSizingReason;
+import '../standards/sni.dart' show Revision;
 
 /// All inputs the electrical calc report renders. The [project] supplies the
 /// input model (panel tags / order) and [result] the sizing; [powerOneLine] and
@@ -34,6 +35,18 @@ class ElectricalCalcReportData {
   /// Aggregated provenance honesty surface (e.g. `AdvancedStudy.verifyItems`).
   final List<String> verifyItems;
 
+  /// Prospective short-circuit current at the supply origin (A) — the Fold-1
+  /// busbar-withstand fault target. Null ⇒ omitted from the Design Basis.
+  final double? originFaultLevelA;
+
+  /// Protective-device clearing time (s) for the busbar withstand check. Null ⇒
+  /// omitted from the Design Basis.
+  final double? busbarClearingTimeS;
+
+  /// Revision history (caller-supplied). Empty ⇒ no Revision-history table, so a
+  /// caller that does not populate it gets byte-identical legacy output.
+  final List<Revision> revisions;
+
   const ElectricalCalcReportData({
     required this.projectName,
     required this.date,
@@ -43,6 +56,9 @@ class ElectricalCalcReportData {
     required this.result,
     this.powerOneLine,
     this.verifyItems = const [],
+    this.originFaultLevelA,
+    this.busbarClearingTimeS,
+    this.revisions = const [],
   });
 }
 
@@ -61,6 +77,38 @@ String _severityTag(WarningSeverity s) => switch (s) {
       WarningSeverity.info => 'INFO',
     };
 
+/// Render the electrical **Design Basis / Inputs & Assumptions** register into
+/// [b] from [data] — supply system/voltage, connected/diversified load, earthing
+/// system, and (when set) the Fold-1 fault target + clearing time. Shared with
+/// the unified MEP report. Caller writes the `##` heading.
+void writeElectricalDesignBasis(StringBuffer b, ElectricalCalcReportData data) {
+  final s = data.result.supply;
+  b.writeln('- Supply: **${s.system.label}, ${_n(s.voltage.volts)} V**');
+  b.writeln('- Connected load: **${_n(s.connectedW)} W** · diversified demand '
+      '**${_n(s.demandW)} W** (${_n(s.demandVa.inKilovoltAmperes)} kVA)');
+  b.writeln('- Earthing system: **${data.result.earthing.label}**');
+  if (data.originFaultLevelA != null) {
+    b.writeln('- Origin fault level: '
+        '**${_n(data.originFaultLevelA! / 1000)} kA**'
+        '${data.busbarClearingTimeS != null ? ' · clearing time '
+            '**${data.busbarClearingTimeS!.toStringAsFixed(2)} s**' : ''} '
+        '(busbar short-circuit-withstand basis)');
+  }
+}
+
+/// Render a Revision-history table into [b]. No-op when [revisions] is empty.
+void writeElectricalRevisionHistory(StringBuffer b, List<Revision> revisions) {
+  if (revisions.isEmpty) return;
+  b.writeln('## Revision history');
+  b.writeln();
+  b.writeln('| Date | Description |');
+  b.writeln('| --- | --- |');
+  for (final r in revisions) {
+    b.writeln('| ${_md(r.date)} | ${_md(r.description)} |');
+  }
+  b.writeln();
+}
+
 /// Render [data] as a Markdown electrical calculation report.
 String buildElectricalCalcReport(ElectricalCalcReportData data) {
   final b = StringBuffer();
@@ -73,6 +121,15 @@ String buildElectricalCalcReport(ElectricalCalcReportData data) {
   b.writeln(
       '- Standard: ${data.standardsName} ${data.standardsRevision}'.trimRight());
   b.writeln();
+
+  // ── Design basis / inputs & assumptions ─────────────────────────────────────
+  b.writeln('## Design basis');
+  b.writeln();
+  writeElectricalDesignBasis(b, data);
+  b.writeln();
+
+  // ── Revision history (only when the caller tracks revisions) ────────────────
+  writeElectricalRevisionHistory(b, data.revisions);
 
   // ── Supply summary ────────────────────────────────────────────────────────
   final s = r.supply;

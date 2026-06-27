@@ -25,6 +25,16 @@ library;
 
 import '../units.dart';
 
+/// A single revision-history entry for an issuable calculation report — a date
+/// and what changed. Pure data (no logic); the report renderers turn a
+/// `List<Revision>` into a Revision-history table. Callers (the app) populate
+/// it; an empty list renders no table, keeping legacy output byte-identical.
+class Revision {
+  final String date;
+  final String description;
+  const Revision(this.date, this.description);
+}
+
 /// Provenance tier for a standard value — the precise honesty surface (§12.6).
 /// Splitting the old binary unverified flag tells the engineer WHY a value is
 /// not yet authoritative, so the verification debt is actionable rather than a
@@ -403,5 +413,39 @@ class SniProfile implements StandardsProfile {
         mandatoryPressureReliefThreshold,
         minResidualPressureFlushValve,
         minResidualPressureFaucet,
+        // Plumbing-rigour advisory thresholds — all general practice, NOT yet
+        // confirmed against the SNI clauses (surfaced so the report stays honest).
+        const StandardValue<Object?>(
+          0.9,
+          unit: 'C',
+          citation: '$_doc — storm runoff coefficient (rational method)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'Default runoff coefficient C ≈ 0.9 (impervious roof); '
+              'surface/region-dependent — confirm vs SNI rational-method table.',
+        ),
+        const StandardValue<Object?>(
+          0.005,
+          unit: 'm/m',
+          citation: '$_doc — minimum self-cleansing drainage gradient',
+          status: VerificationStatus.notAnSniClause,
+          note: 'Minimum branch gradient ≈ 0.005 (1:200) for self-cleansing; '
+              'general plumbing practice — confirm vs SNI 8153 gradient table.',
+        ),
+        const StandardValue<Object?>(
+          32.0,
+          unit: 'm',
+          citation: '$_doc — drainage developed-length / trap-arm limit',
+          status: VerificationStatus.notAnSniClause,
+          note: 'Developed-length limit ≈ 32 m before self-siphonage / loss of '
+              'grade; general practice — confirm vs SNI 8153.',
+        ),
+        const StandardValue<Object?>(
+          55.0,
+          unit: 'C',
+          citation: '$_doc — anti-Legionella minimum return temperature',
+          status: VerificationStatus.notAnSniClause,
+          note: 'Hot-water return kept ≥ ~55 °C (60 °C stored) for Legionella '
+              'control; general guidance — confirm vs SNI / WHO clause.',
+        ),
       ].where((v) => v.isUnverified).toList();
 }

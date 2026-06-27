@@ -131,6 +131,7 @@ enum StringKey {
   schematicHelp4,
   schematicHelp5,
   schematicHelp6,
+  schematicHelpModes,
 
   // Inspector — section labels.
   inspectorProject,
@@ -146,8 +147,11 @@ enum StringKey {
 
   // Inspector — Project section.
   inspectorExportCalcReportMd,
+  inspectorExportMepReportMd,
+  inspectorExportEquipmentScheduleMd,
   inspectorExportDrawingDxf,
   inspectorExportDrawingPdf,
+  inspectorExportAnnotatedPlanPdf,
 
   // Inspector — Building section.
   inspectorAddLevel,
@@ -208,8 +212,11 @@ enum StringKey {
 
   // Export — OS save-dialog titles.
   exportTitleCalcReport,
+  exportTitleMepReport,
+  exportTitleEquipmentSchedule,
   exportTitleDrawingDxf,
   exportTitleDrawingPdf,
+  exportTitleAnnotatedPlanPdf,
   exportTitleBom,
   exportTitleSldDxf,
   exportTitleSldPdf,
@@ -224,7 +231,7 @@ enum StringKey {
 const Map<StringKey, String> _en = {
   StringKey.navGroupDesign: 'DESIGN',
   StringKey.navLayout: 'Layout',
-  StringKey.navSchematic: 'Schematic',
+  StringKey.navSchematic: 'Riser',
   StringKey.navElectrical: 'Electrical',
   StringKey.navBuilding: 'Building',
   StringKey.navReview: 'Review',
@@ -362,6 +369,9 @@ const Map<StringKey, String> _en = {
       'Drag a riser sideways to reposition it; its length does not change',
   StringKey.schematicHelp4:
       'Right-click a riser to set its nominal size in inches or pick a material',
+  StringKey.schematicHelpModes:
+      'Auto shows the read-only generated riser; switch to Edit to place and '
+          'size risers by hand',
   StringKey.schematicHelp5: 'Select a riser and press Delete to remove it',
   StringKey.schematicHelp6:
       'Middle-drag or scroll to pan; Ctrl+scroll or pinch to zoom',
@@ -380,8 +390,11 @@ const Map<StringKey, String> _en = {
 
   // Inspector — Project section.
   StringKey.inspectorExportCalcReportMd: 'Export calc report (MD)',
+  StringKey.inspectorExportMepReportMd: 'Export unified MEP report (MD)',
+  StringKey.inspectorExportEquipmentScheduleMd: 'Export equipment schedule (MD)',
   StringKey.inspectorExportDrawingDxf: 'Export drawing (DXF)',
   StringKey.inspectorExportDrawingPdf: 'Export drawing (PDF)',
+  StringKey.inspectorExportAnnotatedPlanPdf: 'Export annotated plan (PDF)',
 
   // Inspector — Building section.
   StringKey.inspectorAddLevel: '+  Add level',
@@ -447,8 +460,11 @@ const Map<StringKey, String> _en = {
 
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Export calculation report',
+  StringKey.exportTitleMepReport: 'Export unified MEP report',
+  StringKey.exportTitleEquipmentSchedule: 'Export equipment schedule',
   StringKey.exportTitleDrawingDxf: 'Export drawing (DXF)',
   StringKey.exportTitleDrawingPdf: 'Export drawing (PDF)',
+  StringKey.exportTitleAnnotatedPlanPdf: 'Export annotated plan (PDF)',
   StringKey.exportTitleBom: 'Export bill of materials',
   StringKey.exportTitleSldDxf: 'Export single-line (DXF)',
   StringKey.exportTitleSldPdf: 'Export single-line (PDF)',
@@ -463,7 +479,7 @@ const Map<StringKey, String> _en = {
 const Map<StringKey, String> _id = {
   StringKey.navGroupDesign: 'DESAIN',
   StringKey.navLayout: 'Tata Letak',
-  StringKey.navSchematic: 'Skematik',
+  StringKey.navSchematic: 'Riser',
   StringKey.navElectrical: 'Listrik',
   StringKey.navBuilding: 'Bangunan',
   StringKey.navReview: 'Tinjauan',
@@ -604,6 +620,9 @@ const Map<StringKey, String> _id = {
       'Seret riser ke samping untuk memindahkannya; panjangnya tidak berubah',
   StringKey.schematicHelp4:
       'Klik-kanan riser untuk mengatur ukuran nominalnya dalam inci atau memilih material',
+  StringKey.schematicHelpModes:
+      'Otomatis menampilkan riser yang dibuat otomatis (hanya-baca); beralih ke '
+          'Edit untuk menempatkan dan mengukur riser secara manual',
   StringKey.schematicHelp5:
       'Pilih riser dan tekan Delete untuk menghapusnya',
   StringKey.schematicHelp6:
@@ -623,8 +642,11 @@ const Map<StringKey, String> _id = {
 
   // Inspector — Project section.
   StringKey.inspectorExportCalcReportMd: 'Ekspor laporan hitung (MD)',
+  StringKey.inspectorExportMepReportMd: 'Ekspor laporan MEP terpadu (MD)',
+  StringKey.inspectorExportEquipmentScheduleMd: 'Ekspor jadwal peralatan (MD)',
   StringKey.inspectorExportDrawingDxf: 'Ekspor gambar (DXF)',
   StringKey.inspectorExportDrawingPdf: 'Ekspor gambar (PDF)',
+  StringKey.inspectorExportAnnotatedPlanPdf: 'Ekspor denah beranotasi (PDF)',
 
   // Inspector — Building section.
   StringKey.inspectorAddLevel: '+  Tambah lantai',
@@ -691,8 +713,11 @@ const Map<StringKey, String> _id = {
 
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Ekspor laporan perhitungan',
+  StringKey.exportTitleMepReport: 'Ekspor laporan MEP terpadu',
+  StringKey.exportTitleEquipmentSchedule: 'Ekspor jadwal peralatan',
   StringKey.exportTitleDrawingDxf: 'Ekspor gambar (DXF)',
   StringKey.exportTitleDrawingPdf: 'Ekspor gambar (PDF)',
+  StringKey.exportTitleAnnotatedPlanPdf: 'Ekspor denah beranotasi (PDF)',
   StringKey.exportTitleBom: 'Ekspor daftar material',
   StringKey.exportTitleSldDxf: 'Ekspor satu-garis (DXF)',
   StringKey.exportTitleSldPdf: 'Ekspor satu-garis (PDF)',

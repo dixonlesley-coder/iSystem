@@ -42,6 +42,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'electrical_format.dart';
 import 'electrical_palette.dart';
+import 'load_symbols.dart';
 import 'panel_geometry.dart';
 
 /// LOD threshold — at/above this zoom each panel shows its full internal
@@ -1585,7 +1586,11 @@ class _LoadNodeState extends State<_LoadNode> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _GlyphTile(data: _glyph(c.loadKind), color: colors.textSecondary),
+              LoadSymbol(
+                kind: c.loadKind,
+                color: colors.textSecondary,
+                size: 22,
+              ),
               const SizedBox(height: 2),
               Text(
                 c.name,
@@ -1612,48 +1617,6 @@ class _LoadNodeState extends State<_LoadNode> {
     );
   }
 
-  // Roboto-safe ASCII tags (no symbol glyphs — those render as tofu in goldens).
-  String _glyph(LoadKind kind) => switch (kind) {
-    LoadKind.lighting => 'L',
-    LoadKind.socket => 'SO',
-    LoadKind.motor => 'M',
-    LoadKind.pump => 'P',
-    LoadKind.hvac => 'AC',
-    LoadKind.heating => 'H',
-    LoadKind.ups => 'U',
-    LoadKind.evCharger => 'EV',
-    LoadKind.welding => 'W',
-    _ => 'G',
-  };
-}
-
-/// A tiny text-glyph "icon" (Roboto-safe, no symbol fonts).
-class _GlyphTile extends StatelessWidget {
-  final String data;
-  final Color color;
-  const _GlyphTile({required this.data, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 24,
-      height: 18,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        border: Border.all(color: color.withAlpha(120)),
-        borderRadius: const BorderRadius.all(Radius.circular(4)),
-      ),
-      child: Text(
-        data,
-        style: TextStyle(
-          fontFamily: 'Roboto',
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          color: color,
-        ),
-      ),
-    );
-  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

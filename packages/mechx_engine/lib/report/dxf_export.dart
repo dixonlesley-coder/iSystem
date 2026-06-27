@@ -7,8 +7,11 @@
 /// screen Y is negated. Coordinates are the drawn sheet pixels.
 library;
 
+import 'dart:math' as math;
+
 import '../network/network.dart';
 import '../sizing/network_sizing.dart';
+import 'drawing_chrome.dart';
 
 String _sizeLabel(NetEdge e, EdgeSizing s) {
   if (s.isRectangular) {
@@ -24,6 +27,7 @@ String networkToDxf({
   required Map<String, EdgeSizing> sizing,
   required String sheetId,
   required int floorIndex,
+  DrawingChrome? chrome,
 }) {
   final b = StringBuffer();
   void g(int code, Object value) {
@@ -32,6 +36,17 @@ String networkToDxf({
   }
 
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
+
+  // Track drawn extent (DXF world units, y = -screenY) so chrome can anchor to
+  // the drawing's corners.
+  var minX = double.infinity, minY = double.infinity;
+  var maxX = -double.infinity, maxY = -double.infinity;
+  void include(double x, double y) {
+    minX = math.min(minX, x);
+    minY = math.min(minY, y);
+    maxX = math.max(maxX, x);
+    maxY = math.max(maxY, y);
+  }
 
   g(0, 'SECTION');
   g(2, 'ENTITIES');
@@ -44,6 +59,8 @@ String networkToDxf({
 
     if (e.kind == EdgeKind.run) {
       if (!onFloor(a) || !onFloor(c)) continue;
+      include(a.x, -a.y);
+      include(c.x, -c.y);
       g(0, 'LINE');
       g(8, layer);
       g(10, a.x);
@@ -63,6 +80,7 @@ String networkToDxf({
       // Riser/drop: a marker circle at whichever endpoint is on this floor.
       for (final n in [a, c]) {
         if (!onFloor(n)) continue;
+        include(n.x, -n.y);
         g(0, 'CIRCLE');
         g(8, layer);
         g(10, n.x);
@@ -70,6 +88,17 @@ String networkToDxf({
         g(40, 8);
       }
     }
+  }
+
+  // ── Issuable-document chrome (opt-in; byte-identical when null/empty) ───────
+  if (chrome != null && !chrome.isEmpty) {
+    if (!minX.isFinite) {
+      minX = 0;
+      minY = 0;
+      maxX = 1;
+      maxY = 1;
+    }
+    b.write(dxfChrome(chrome, minX: minX, minY: minY, maxX: maxX, maxY: maxY));
   }
 
   g(0, 'ENDSEC');

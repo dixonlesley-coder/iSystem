@@ -145,14 +145,60 @@ report export**; versioned `.mechx` save/open with viewport restore;
 **autosave / crash-recovery**; light/dark; **draw-a-room AHU/FCU/fan air sizing**
 (Room tool → footprint area from scale × ceiling × per-room-type ACH → CFM, then
 auto-sized supply diffusers / return grilles / supply trunk / equipment duty via
-`sizing/room_air.dart`, edited in the Rooms inspector, round-trips in `.mechx`);
+`sizing/room_air.dart`, edited in the Rooms inspector, round-trips in `.mechx`;
+**'Auto-place diffusers'** in the Rooms inspector closes the room→network loop —
+`NetworkController.autoPlaceRoomTerminals` drops the sized supply diffuser count
+(+ a return grille) as `supplyDiffuser`/`returnGrille` nodes carrying airflow +
+face on a grid inside the room footprint, in one undo step, via the existing node
+path);
 **manual air routing + velocity warnings** (hand-route ducts, pick a duct size
 [right-click → Ø ladder] and a diffuser face size [inspector picker], and the app
 warns when the air velocity is too high/low via `sizing/air_velocity.dart` +
 `airVelocityChecksProvider` — inspector verdict + an on-plan orange "!" badge);
 **AC cooling-load + AC node types** (drop a Cassette / Split-wall / Ducted AC
 node into a room and the Rooms inspector auto-computes the cooling requirement —
-BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
+BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`);
+**calibration quality-of-life** (`ProjectController.applyCalibrationToAllSheets` copies one
+sheet's scale to all others in one undo step, surfaced as an 'Apply scale to all sheets'
+button in the Scale inspector when the current sheet is calibrated; the slim sheet rail shows
+a per-sheet calibrated/uncalibrated dot);
+**project templates / smart defaults** (`store/templates.dart` `kBuildingTemplates` —
+Residential highrise / Office tower / Hospital / Retail shop, each prefilling floors +
+occupancy + fire hazard + design rainfall; a **'New from template'** dialog on the Projects
+screen applies them via `ProjectController.setFloors` + the occupancy/fire/rainfall provider
+`.set()` methods — additive, no `.mechx` change);
+**unified Design Issues review panel** (`store/design_issues_store.dart`
+`designIssuesProvider` — a read-only fan-in that aggregates every existing design warning
+into one typed `DesignIssue` list: out-of-band air velocities + unsized air elements
+[`airVelocityChecksProvider`/`airUnsizedProvider`], uncalibrated sheets, and unverified
+`// VERIFY` standards [`SniProfile`/`SniVentilationProfile`/`PuilProfile.verifyChecklist`],
+each with a severity + an optional `IssueLocation(sheetId, {nodeId, edgeId})`; surfaced as an
+`IssuesCard` in the Review hub grouped Warnings/Advisory with a count, a locatable row jumping
+to the element via sheet + selection + `WorkspaceView.plan` — no engine change);
+**command palette + workflow stepper** (`store/command_store.dart` — `commandPaletteOpenProvider`
++ a pure `fuzzyScore`/`fuzzyMatches` + `workflowStageStateProvider` deriving the five
+`WorkflowStage`s [Calibrate · Floors · Draw · Size · Report] done/active O(1) from project
+state; `ui/shell/command_palette.dart` is a non-layout **Ctrl/Cmd+K** overlay [renders nothing
+when closed] hosted at app-shell level — a centred `MechXTheme` card with a text filter + a
+fuzzy-ranked action list [switch DESIGN view, toggle/edit a layer, pick a draw tool, New from
+template, Start calibration, Export calc report, light/dark], each run through the existing
+providers, Up/Down/Enter/Esc; `ui/shell/workflow_stepper.dart` is a compact status-bar stepper
+with custom-painted marks. App-shell wiring is minimal: `AppShell` is a `ConsumerWidget` in a
+non-focus-stealing ancestor `Focus` that catches Ctrl/Cmd+K [bubbles up, canvas keeps focus]
++ Esc; no persistence).
+**Inspector clarity — collapsible sections + promoted headline results** (`ui/inspector/
+disclosure_header.dart` + `result_card.dart` + `store/inspector_store.dart`
+`sectionVisibilityProvider`): the dense `ProjectPanel`'s seven major sections (Draw / Tanks /
+Rooms / Sizing / Network / Fire / HVAC) are wrapped in a reusable `DisclosureSection` — a tappable
+header (replacing the section's `MechXSectionLabel`) with a custom-painted chevron that discloses
+its body only when expanded. Expansion is TRANSIENT UI state in `sectionVisibilityProvider` (a
+`Map<String,bool>` keyed by section name, read via the memoized `sectionExpandedProvider` family) —
+NOT persisted to `.mechx`, so reopening a project restarts from the per-section defaults
+(content-bearing sections default expanded; Tanks/Rooms keep their empty-state shrink). The 1–2
+headline results per sizing section are promoted to a bold `ResultCard` with a colour-coded
+success/warning/danger verdict (Network: pump motor kW, or PRV-zones worst-kPa OK/over; HVAC: fan
+static + motor), demoting the supporting key/value rows beneath; each card renders only when its
+result exists, so a blank launch is byte-identical (goldens shift only by the small chevron glyph).
 
 ## Conventions
 
@@ -236,7 +282,10 @@ BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
   **Wave 5 — PanelMaker-faithful electrical canvas + left-nav shell landed**: the
   electrical workspace is now a **single-line spatial canvas** (`ui/electrical/electrical_canvas.dart`,
   a port of PanelMaker `BuildingSingleLine.tsx`) — panels as nodes wired by feeders,
-  zoom-LOD (summary card ↔ internal R-S-T busbar+breakers), loads hanging below,
+  zoom-LOD (summary card ↔ internal R-S-T busbar+breakers), loads hanging below as
+  **IEC 60617-style schematic symbols** (`ui/electrical/load_symbols.dart` `LoadSymbol`,
+  shared with the Loads palette + the layout markers — one symbol language; replaced the
+  old text-tag glyph box),
   Loads palette (`Draggable<LoadKind>`), outlet-drag-to-feeder, minimap, zoom controls,
   Single-line / Power one-line tabs + canvas toolbar; additive `ElectricalPanel.x/y`
   (no math change). The app shell is now PanelMaker's **248-px left navigation rail**
@@ -333,8 +382,52 @@ BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
   MechXTheme banner). Version source of truth = `pubspec.yaml`. The web env has
   no Flutter SDK — a `.claude/` SessionStart hook installs Flutter 3.44.3 so the
   gate runs; `flutter build windows`/`iscc` only run on the Windows CI runner.
-- Native PDF *drawing* export (DXF drawing export and the Markdown calc report
-  are done; both convert to PDF externally).
+- Native PDF *drawing* export — **done**: `report/pdf_export.dart` (`networkToPdf`,
+  the plain single-sheet vector PDF) and `report/plan_pdf_export.dart`
+  (`planToPdf`, the **annotated** plan PDF — adds a project/sheet/date title block
+  and real §10 run/riser LENGTHS folded into each DN/Ø/W×H label, nodes as dots,
+  risers as markers; the app passes a `dateString` + pre-computed `edgeLengths` so
+  the engine never reads the clock), wired in `projects_screen.dart` beside the
+  DXF + Markdown-calc-report exports. **Issuable drawing chrome — done**: pure
+  `report/drawing_chrome.dart` (`DrawingChrome` value object + shared PDF/DXF
+  renderers for a service-colour LEGEND, a graphic SCALE BAR, a bearing-rotated
+  NORTH arrow, and a top-right drawing-number/revision/sheet "X of Y" block) is
+  threaded as an optional `chrome` param into all four exporters
+  (`networkToPdf`/`planToPdf`/`networkToDxf`/`electricalSldToPdf`); null/empty ⇒
+  byte-identical. The app builds it from live state in `project_panel`
+  `_issuableChrome` (legend = on-floor services, sheet counter = rail position,
+  north = page-up; drawing number/revision deferred to a future `DesignSettings`
+  wave). The heatmap legend now shows both numeric `Low`/`High` kPa endpoints
+  (uniform field too) and sits bottom-right, clear of the bottom-left zoom
+  cluster. **Defensible report deliverables — done**: both calc reports now print
+  a `## Design basis` (Inputs & Assumptions) register echoing the actual project
+  inputs (mechanical: levels/height, occupancy, feed, target residual, rainfall+C,
+  fire systems via `writeMechanicalDesignBasis`; electrical: supply/load/earthing
+  + Fold-1 fault target via `writeElectricalDesignBasis`), an optional `## Revision
+  history` table (`Revision(date, description)` in `standards/sni.dart`; empty list
+  ⇒ no table ⇒ byte-identical), and inline `**citation**` next to each unverified
+  value. New pure `report/mep_report.dart` `buildMepUnifiedReport(mechanical,
+  electrical, compliance)` composes ONE M+E+P document — unified head + a single
+  design-basis register from both disciplines + a `ComplianceSummary` pass/fail
+  table (app-derived from `designIssuesProvider`, engine renders only) + the full
+  mechanical & electrical bodies (each H1 stripped, demoted) + the merged revision
+  history. Wired as a localized **'Export unified MEP report (MD)'** button beside
+  the existing exports on the Projects screen (`project_panel.exportMepUnifiedReport`);
+  no `.mechx` change (revisions/compliance are export-time inputs).
+  **Equipment schedules — done**: new pure `report/equipment_schedule.dart`
+  (`buildEquipmentScheduleRows`/`buildEquipmentScheduleMarkdown` over
+  `EquipmentScheduleData` = `PumpScheduleItem`/`FanScheduleItem` wrappers + the solved
+  `ElectricalSystemResult`) tabulates the procurement schedule — tag · service · duty ·
+  size · model/spec placeholder · qty — grouped by `EquipmentCategory`
+  (pump / fan / airHandling AHU-FCU-AC / panel), synthesising sequential tags
+  (`P-01`/`F-01`/`AHU-01`) when a source carries none. The engine only TABULATES solved
+  duties (no new physics); model/spec stays a "—" placeholder (a tag + qty are
+  bookkeeping, so nothing to `// VERIFY`). Wired as a localized
+  **'Export equipment schedule (MD)'** button on the Projects screen
+  (`project_panel.exportEquipmentSchedule` — supply pump + standpipe fire pump, the
+  duct fan, each room's AHU/FCU/AC duty, and every electrical panel from the live
+  providers). No model churn (`PumpDuty`/`FanDuty` untouched; tags assigned at gather
+  time) and no `.mechx` change (gathered at export time).
 - **Landed (parallel batch):** **multi-select + copy/paste** (additive
   `Selection.nodeIds/edgeIds` sets + rubber-band marquee/shift-click in
   `selection_overlay`, in-memory clipboard `copySelection`/`paste`/`deleteMany` in
@@ -350,6 +443,64 @@ BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
   lines on the calibrated sheet with the real length via `ScaleCalibration.lengthForPixels`,
   secondary-click to delete; round-trips in `.mechx` as a top-level `measurements` list,
   tolerant/absent ⇒ empty). This **closes the Known-gaps editing list**.
+  **Drafter-productivity suite** also landed (faster drafting, each simpler than its AutoCAD
+  analogue): **select-similar** (`selection_store` `selectSimilarEdges`/`Nodes` + a row in both
+  context menus → select every element of the same service/component for batch edit; pure
+  selection, no undo; added `Network.edgeById`); a **smart input bar** (`store/smart_input_store.dart`
+  pure `parseDrawingInput`/`polarRunTarget` + `drawHoverProvider`, `ui/canvas/smart_input_bar.dart`
+  — type an exact run length in mm [`3000`, or `3000 90` to pin the bearing] while drawing,
+  direct-distance entry along the live cursor; calls the existing `placeRunPoint`, mounted only
+  while drawing so idle is byte-identical); **one-click issue sets** (`design_issues_store`
+  `issueBatchActionsProvider` + "Quick fixes" chips in `issues_card` — SAFE batch actions:
+  select-all-velocity-warnings, select-all-unsized-air, copy-scale-to-all-uncalibrated-sheets;
+  read-only-derived, executor in the UI); and **offset run** (`NetworkController.offsetEdgeParallel`
+  + `ui/canvas/offset_dialog.dart` — right-click a run → "Offset…" → distance+side → a parallel run
+  in one undo step; auto-split-on-drag deferred).
+  **In-app Claude copilot** also landed — Claude embedded in the app so the engineer selects a
+  room/element and asks the AI to design or change it: **command registry** (`lib/ai/commands.dart`
+  — a typed CLOSED `AiCommand` set [placeComponent/Terminal/Fitting/Segment, autoPlaceRoomTerminals,
+  suggest], each pure JSON-round-trippable with a `preview` + the Anthropic tool-use schema; an
+  unknown kind decodes to null = hallucination guard); **injectable client** (`lib/ai/ai_client.dart`
+  — `AiClient` interface + `AnthropicAiClient` [raw HTTP `/v1/messages`, tool-use, BYO key, model
+  `claude-sonnet-4-6`] + `FakeAiClient`; all failures TYPED `AiResult` ok/disabled/error, never
+  throws; offline/no-key ⇒ graceful); **copilot store** (`lib/store/ai_copilot_store.dart`
+  `CopilotController` — the plan→preview→confirm→apply loop: `ask()` gathers a compact context
+  snapshot + proposes WITHOUT applying, `applyPlan()` runs each command through the existing
+  `NetworkController` methods [one undo each, sizing recomputes reactively], `discard()`;
+  `aiClientProvider` overridable for tests); **UI** (`lib/ui/ai/copilot_panel.dart` `CopilotOverlay`
+  — right-side panel gated on `copilotOpenProvider` ⇒ `SizedBox.shrink` when closed so goldens are
+  byte-identical; opened via a **"Ask Claude"** command-palette action); **BYO key** persists via
+  additive `DesignSettings.anthropicApiKey`/`aiModel` (tolerant) + an API-key card in Preferences
+  (masked). The registry + plan loop are fully covered offline via `FakeAiClient`; the live call
+  needs the engineer's key.
+  **Copilot multi-provider (OpenAI + GLM backups) + model dropdown landed:** the copilot now
+  runs on **Anthropic** (primary), **OpenAI**, or **GLM** (Zhipu) so an engineer with any one of
+  those keys gets the copilot — all three behind the same injectable `AiClient` seam. New
+  `lib/ai/openai_client.dart` (`OpenAiAiClient` → `POST /v1/chat/completions`, the registry mapped
+  to OpenAI function-tools via pure `openAiToolsFromRegistry()`, `tool_calls` decoded by pure
+  `parseOpenAiResponse`) and `lib/ai/glm_client.dart` (`GlmAiClient` → Zhipu's OpenAI-compatible
+  `…/paas/v4/chat/completions`, **reusing** the OpenAI client's two pure static helpers — only the
+  endpoint/auth/system-prompt differ); same TYPED `AiResult` ok/disabled/error, offline-graceful.
+  `ai_client.dart` adds `AiProviderKind` {anthropic, openai, glm} + `defaultModelForProvider`/
+  `aiProviderFromName`/`modelFamilyMatches` + a per-provider **model catalog** (`kAnthropicModels`/
+  `kOpenAiModels`/`kGlmModels` + `modelsForProvider`/`modelLabelFor`). `aiProviderProvider`
+  (`app_state.dart`) drives `aiClientProvider`'s 3-way switch; the store resolves a **family-correct
+  model** (`_effectiveModel` via `modelFamilyMatches` — never sends a `claude-*` id to GLM/OpenAI
+  etc., even from a hand-edited file). Persists additively via `DesignSettings.aiProvider`
+  (tolerant, unknown→anthropic). Preferences AI card: a 3-way **Provider** toggle (re-seeds the
+  model to that provider's default on switch) + a custom MechXTheme **model dropdown**
+  (`_ModelDropdown`, inline disclosure, no Material — closed ⇒ byte-identical so Preferences-not-in-
+  goldens stays stable) listing the active provider's models. **Subscription/OAuth sign-in is still
+  NOT built (for any provider)** — a live browser PKCE flow needs a provider-registered OAuth client
+  ID that third-party apps can't obtain (Anthropic) and consumer ChatGPT login ≠ OpenAI API access;
+  so the shippable path stays BYO-key per provider (no dead OAuth scaffolding, per the declutter
+  direction).
+  **Riser-view discoverability (declutter-consistent clarity):** the "Schematic" view is renamed
+  **"Riser"** (nav + `WorkspaceView.label` + the command palette's "Go to Riser"). Two ON-DEMAND
+  (behind the existing `?` guides, hidden by default ⇒ goldens byte-identical) clarity lines were
+  added rather than persistent prose: the Layout canvas mechanical guide notes that risers drawn
+  on the plan stack vertically in the Riser view, and the Riser-view Edit help legend leads with
+  an Auto-vs-Edit mode explainer (`StringKey.schematicHelpModes`, EN+ID).
   **Mechanical ↔ electrical theme convergence landed (Apple-consistency pass):** the
   electrical workspace (a PanelMaker port) now reads as one app with the mechanical one.
   Driven by an audit + re-review, converged: the electrical **Loads palette to the RIGHT**
@@ -364,6 +515,36 @@ BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
   soft-fill; a branded mechanical empty-state card; harmonised drop-target tint. New tokens:
   `MechXRadii.xs`, `MechXColors.onAccent`, `MechXTypography.micro`. (Goldens 01/02/03/05/06
   regenerated + visually verified; gate green.)
+  **Predictable canvas interaction landed (drag-only / focus-only, goldens stable):**
+  the mechanical drop overlay (`ui/canvas/drop_overlay.dart`, now stateful) paints a
+  drag-place PREVIEW — a faint ghost glyph (`paintComponentSymbol`/`paintSegmentSymbol`)
+  at the cursor + a snap ring/crosshair on the nearest fitting within the shared 14px
+  radius (`_kSnapScreenPx`; nearest-node search mirrors the store `_snap`), with the
+  canvas tint strengthening to a will-snap state — all mounted ONLY while a card hovers,
+  so idle is byte-identical. A shared `ui/widgets/canvas_guide_popover.dart`
+  (`CanvasGuideButton` + `CanvasGuideLegend`, lifted from the electrical canvas) adds the
+  persistent **(?)** affordance to the mechanical Layout canvas with discipline-scoped
+  gesture help. And `PaletteCard` gained an optional `onActivate` (via the existing
+  `MechXFocusRing` Enter/Space) so a focused palette card drops at the current sheet's
+  centre (`SegmentPalette.dropAtCentre`, same store add-actions). No engine / `.mechx`
+  change.
+  **Feedback loop + states landed (UI-only, goldens 01–07 shift):** silent/empty/
+  colour-only states now give explicit feedback. The `IssuesCard` renders a positive
+  **"No design issues found"** success card (custom-painted check) instead of
+  `SizedBox.shrink()` when clean. A transient `statusMessageProvider` (`store/app_state.dart`,
+  `showStatus()` self-clearing after 3 s, null at rest) drives a quiet success pill in the
+  status bar (`_StatusConfirmation`) on a successful Save / Open / Import. The status-bar
+  **workflow stepper is now clickable** (`workflow_stepper.dart` `_StageChip` →
+  `MouseRegion`+`GestureDetector`): each stage jumps to where it's done (Calibrate → start
+  calibration on Layout, Floors → Building, Draw/Size → Layout, Report → Review) via existing
+  providers. Colour-only status gained **redundant glyph cues** — the sheet-rail calibration
+  dot (`sheet_rail.dart` `_CalibrationGlyph`) and the issue-severity dot (`issues_card.dart`
+  `_SeverityGlyph`) are now check-ring vs "!"-ring shapes paired with the success/warning
+  colour. Cleanup: dropped the duplicate electrical `_WarningList` (review_hub), the dead
+  no-op **Import loads** button (electrical_view), and the 'recent-projects coming soon'
+  placeholder (projects_screen). New text only appears in non-golden states so EN stays
+  byte-identical (no new `StringKey` keys). No engine / `.mechx` change (status message is
+  transient; stepper reuses volatile providers).
 - Looped networks: ring/grid **pressurized & air** mains are balanced with
   Hardy-Cross (`network/hardy_cross.dart`) at sizing time and the balanced flows
   feed the heatmap. The split uses resistance ∝ **real edge length** at a
@@ -387,6 +568,20 @@ BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
 
 ## Sizing-engine invariants (don't regress)
 
+- **Plumbing-rigour advisories + storm runoff C (additive, `// VERIFY`)**:
+  `rainwaterDesignFlow` takes an optional `runoffCoefficient` (rational method
+  `Q = C·i·A/3.6e6`, default **1.0** ⇒ byte-identical) threaded from the project
+  input `DesignSettings.runoffCoefficientStorm`/`runoffCoefficientProvider`
+  (default 0.9). `sizing/drainage_advisory.dart` (`drainageAdvisories`) is a
+  JUDGE-ONLY layer — it flags a too-flat laid slope (< 0.005) and an over-long
+  developed length (> 32 m) and NEVER resizes; `hot_water.dart` adds a modelled
+  `returnTempC` (= `flowTempC` − ΔT) + `legionellaRisk` (< 55 °C). All three feed
+  the Review panel via `drainageAdvisoryProvider` / `hotWaterLegionellaProvider`
+  → `designIssuesProvider` (info-severity). All four thresholds live in
+  `SniProfile.verifyChecklist` (`notAnSniClause`) and the calc report. The minSlope
+  and Legionella checks sit AT their thresholds with the live defaults (slope 0.01,
+  ΔT 5 K) so they don't fire until those inputs change — the developed-length and
+  runoff-C paths are the ones exercised by a default project.
 - **Looped sizing (`autoSizeNetwork`)**: a component with > (nodes − 1) edges is
   looped; for pressurized/air services its flows are split with Hardy-Cross
   (`balanceFlows`, resistance ∝ real edge length — pass `building`/`calibrations`
@@ -428,6 +623,26 @@ BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
   stays the authority. ACH values (`standards/ventilation.dart`) are all
   `secondarySource` (UNVERIFIED) until the SNI 03-6572-2001 PDF is checked. `RoomArea`
   is an annotation (like `TankArea`): it NEVER feeds the pressurized network solve.
+- **Fire-protection rigour (`sizing/fire_sprinkler_hydraulic.dart` +
+  `sizing/fire_pump_rating.dart`)**: both are pure ORCHESTRATION over
+  `hydraulics.dart`/`pump.dart` (NO new physics) layered over the density/area
+  (`fire_sprinkler.dart`) + standpipe (`fire_standpipe.dart`) modules, additive and
+  byte-identical-by-default. **Sprinkler:** `remoteAreaHydraulics` checks the most-
+  remote head with the discharge law `Q = K·√P` (`P = (Q/K)²`, K in L/min/bar^0.5,
+  P in bar) for the head's density/area share, adds branch-line friction via the
+  engine's own `headLossHazenWilliams`, and emits a minimum-operating-pressure
+  verdict. Defaults K = 80 / min 0.5 bar / 20 m·25 mm·C 120 branch are general
+  practice (`// VERIFY`, NOT an SNI clause). **Fire pump:** `checkFirePumpRating`
+  builds the NFPA 20 acceptance curve — churn (140 % head @ 0 % flow), rated, overload
+  (65 % head @ 150 % flow) — sizes the motor on the governing (rated) point via
+  `selectMotor` (flags 'Oversized pump curve' when the standard frame saturates),
+  recommends a jockey pump (1 % rated flow @ churn head + 5 m) and a duty/standby
+  designation. The curve ratios (140 %/65 %/150 %/1 %) are NFPA 20 acceptance *limits*
+  (`secondarySource`/`// VERIFY`), not a specific pump's certified curve. Wired via
+  `fire_store.dart` (`firePerHeadKFactorProvider`, `sprinklerRemoteAreaProvider`,
+  `firePumpRatingProvider`) and surfaced under the calc report's **Fire protection**
+  section (nullable `CalcReportData.sprinklerRemoteArea`/`firePumpRating` ⇒ section
+  unchanged when absent). No `.mechx` change — providers derive from existing state.
 - **Air-velocity warnings (`sizing/air_velocity.dart` + `airVelocityChecksProvider`)**:
   a JUDGE-ONLY layer over the manually routed air network — it never resizes
   anything. Duct edges use the live `EdgeSizing.velocity`; air terminals use
@@ -451,6 +666,27 @@ BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
   circuit from the room cooling (split across the room's AC units) via
   `acInputPowerW` (output ÷ COP 3.0, `// VERIFY`); an explicit `electricalLoadW`
   override wins, and an AC in no scaled room falls back to `defaultMotorKw`.
+- **Detailed cooling load (`sizing/cooling_load_detailed.dart`)**: an opt-in
+  heat-gain alternative to the area-density rule — still pure ORCHESTRATION, no
+  transient CLTD/RTS solve. `estimateDetailedCoolingLoad` sums the physical
+  streams split into **SENSIBLE** (envelope U·A·ΔT over walls/roof/glazing +
+  solar SHGC·irradiance·area + people-sensible + lighting + equipment +
+  ventilation ρ·cp·V̇·ΔT) and **LATENT** (people-latent + ventilation
+  ρ·h_fg·V̇·Δw), → BTU/h + PK + `selectAc` (which rejects sensible + latent).
+  Every coefficient (U-values, SHGC, design ΔT/Δw, gain densities, infiltration
+  ACH, air ρ/cp/h_fg) is a single representative steady-state default tagged
+  `secondarySource`/`// VERIFY` and surfaced via `detailedCoolingVerifyChecklist`.
+  The simple `cooling_load.dart` stays the fallback; `DesignSettings.coolingLoadMethod`
+  (`'simple'`/`'detailed'`, default `'simple'`) selects, round-tripping additively.
+- **Multi-zone HVAC (`room_air.dart` `multiZoneAirSystem`)**: aggregates several
+  already-sized `RoomAirResult`s onto one central AHU/fan — pure summation + a
+  **diversity/coincidence factor** k ∈ (0,1] (default 0.9, `// VERIFY`) scaling
+  the summed airflow to the simultaneous peak, re-sizing the central duty via
+  `sizeFan` against the diversified airflow at the **governing** (worst-zone)
+  static. Adds NO air physics. `ExhaustStrategy` (returnAll/supplyAll/balanced)
+  drives an informational make-up/exhaust balance note (net supply vs net
+  extract), advisory only. `DesignSettings.multiZoneDiversityFactor` (clamped to
+  (0,1]) + `multiZoneExhaustStrategy` round-trip additively (no version bump).
 - **Cable family → ampacity class**: a circuit's `cableType` (NYY/NYM/NYA/NYAF/FRC)
   selects the insulation temperature-class for the KHA lookup via
   `electrical/cable_family.dart` (`insulationForCableType`): **FRC → XLPE 90 °C**,
@@ -460,6 +696,49 @@ BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`).
   default). Null `cableType` ⇒ **byte-identical**. The KHA *numbers* are the
   Supreme/SUCACO-ported tables; per-family number tables that depart from the generic
   method table remain a `// VERIFY` refinement pending the Supreme datasheet.
+- **Pump/fan operating point (`sizing/operating_point.dart`)**: pure
+  ORCHESTRATION over `hydraulics.dart` — the system-resistance curve
+  (`H_sys = H_static + k·Q²` pump / `Δp_sys = k·Q²` fan) × a representative
+  equipment parabola (pinned to the design point, 125 % shutoff), intersected in
+  CLOSED FORM (`Q_op = √((H_shutoff − H_static)/(k + a))`, no iteration) with a
+  `stable` flag for no-real-root / near-tangent crossings. The system **k is a
+  DESIGN INPUT, never fitted from the solved network** — back-solved through the
+  design point when omitted. Pumps also get `NPSH_available` vs a `// VERIFY`
+  `NPSH_required` estimate with a conservative `cavitationRisk` flag
+  (`NPSH_a < 1.5·NPSH_r`). All curve coefficients are representative
+  `secondarySource`/`// VERIFY` estimates, NOT certified machine data. Composed
+  additively: `PumpDuty`/`FanDuty.operatingPoint` is null unless `sizePump`/
+  `sizeFan` is called with `withOperatingPoint` / a system-curve param ⇒
+  byte-identical otherwise. `SizingContext` carries the design-input coefficients
+  (`systemHeadStatic`/`systemResistanceK`/`airSystemResistanceK`, default null).
+- **Electrical spare-ways / future-load headroom (`electrical/headroom.dart`)**:
+  `HeadroomSpec(sparePercentage, spareWays)` on `ElectricalPanel.headroom` (nullable,
+  additive). `computePanel` sizes the **incomer + main/section busbar** against the
+  FUTURE line current (`demandCurrentA × (1 + %/100)`) and counts reserved spare ways
+  toward the busbar way capacity; **per-circuit sizing is untouched** (today's circuits
+  keep today's load). Null / 0 %-0-way spec ⇒ multiplier 1.0, no spare ways ⇒
+  incomer/busbar/section count **byte-identical**. `ElectricalPanelResult` carries
+  read-only `futureLoadW`/`headroomApplied`/`spareWaysReserved` for reporting. A spare
+  allowance is the engineer's design input, not a PUIL clause (no standards table).
+- **Electrical selectivity refinement (`electrical/fault.dart`)**: a coarse
+  rating-ratio time-current ZONE model (`classifySelectivity`: non-selective <1.6× ≤
+  partial <2.5× ≤ total) — a documented SIMPLIFIED stand-in for manufacturer
+  selectivity tables, NOT a fabricated TCC. `estimatedMotorFaultA(FLA)` ≈ 6×-FLA
+  sub-transient + `systemMotorFaultContributionA(sys)` (sum over motor/pump/HVAC
+  circuits) fold into `faultStudy(..., estimatedMotorFaultContributionA:)` as a
+  conservative origin-fault uplift — **default 0 ⇒ byte-identical**. `SelectivityResult`
+  gains `zone` + `icuAdequate`/`icsAdequate` (IEC 60947-2, MCCB Ics≈0.75·Icu) /
+  `icwAdequate` (busbar Icw vs the upstream bus fault). All device numbers are
+  `secondarySource`/`notAnSniClause` `// VERIFY`, surfaced via `faultStudyVerifyItems`.
+- **Electrical diversity library (`electrical/diversity_library.dart`)**: occupancy +
+  load-kind demand factors (`DiversityLibrary` interface + `PuilDiversityLibrary`).
+  `computePanel`/`computeSystem` take an optional `diversityLibrary`; when BOTH it and
+  `ElectricalPanel.diversityLibraryId` are set, each circuit's `demandFactor` is
+  overridden by occupancy + kind (**feeders never re-diversified** — they already carry
+  the fed panel's diversified demand). Null id OR no library ⇒ the per-circuit factor as
+  before ⇒ **byte-identical**. Every factor is `secondarySource` `// VERIFY` (IEC
+  60364-1 / NEC 220 practice, not a PUIL clause), surfaced via `diversityLibraryVerifyItems`
+  (added to `AdvancedStudy.verifyItems` only when a panel references the library).
 - **Persistence**: design settings (occupancy, feed, ducts, rainfall, fire
   hazard, theme) round-trip via `DesignSettings` in the `.mechx` file; autosave
   only writes recovery when the work differs from the last clean Save

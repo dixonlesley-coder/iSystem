@@ -570,6 +570,13 @@ class Network {
     return null;
   }
 
+  NetEdge? edgeById(String id) {
+    for (final e in edges) {
+      if (e.id == id) return e;
+    }
+    return null;
+  }
+
   Iterable<NetEdge> edgesAt(String nodeId) =>
       edges.where((e) => e.fromId == nodeId || e.toId == nodeId);
 

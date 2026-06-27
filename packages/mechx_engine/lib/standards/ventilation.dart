@@ -144,52 +144,93 @@ class SniVentilationProfile implements VentilationStandardsProfile {
 
   /// Bare ACH number per room type. Kept private so the public API always
   /// returns a provenance-tagged [StandardValue].
+  ///
+  /// Values marked "Tabel 4.4.1" are taken from SNI 03-6572-2001's mechanical
+  /// ventilation table (corroborated via secondary sources that quote it — see
+  /// `docs/standards-references.md`); the remainder (spaces NOT in that table)
+  /// stay general HVAC practice. See [_fromSniTable].
   static double _achValue(RoomType type) {
     switch (type) {
+      // ── SNI 03-6572-2001 Tabel 4.4.1 ──────────────────────────────────────
       case RoomType.corridor:
-        return 4.0;
+        return 4.0; // lobi / koridor / tangga
       case RoomType.lobby:
-        return 5.0;
+        return 4.0; // lobi / koridor / tangga
       case RoomType.office:
-        return 6.0;
+        return 6.0; // kantor
+      case RoomType.classroom:
+        return 8.0; // kelas / bioskop
+      case RoomType.retail:
+        return 6.0; // toko / pasar swalayan
+      case RoomType.restaurant:
+        return 6.0; // restoran
+      case RoomType.toilet:
+        return 10.0; // kamar mandi / WC
+      case RoomType.commercialKitchen:
+        return 20.0; // dapur
+      // ── Not in Tabel 4.4.1 — general HVAC practice (secondarySource) ───────
       case RoomType.bedroom:
         return 5.0;
       case RoomType.livingRoom:
         return 6.0;
-      case RoomType.classroom:
-        return 6.0;
       case RoomType.meetingRoom:
-        return 8.0;
-      case RoomType.retail:
-        return 8.0;
-      case RoomType.restaurant:
-        return 10.0;
-      case RoomType.toilet:
-        return 12.0;
+        return 8.0; // table specifies per-person fresh air, not ACH
       case RoomType.hospitalWard:
         return 6.0;
       case RoomType.laboratory:
         return 10.0;
       case RoomType.serverRoom:
         return 15.0;
+    }
+  }
+
+  /// Whether [type]'s ACH comes directly from SNI 03-6572-2001 Tabel 4.4.1
+  /// (vs general HVAC practice for spaces the table doesn't list). Drives the
+  /// citation precision — both tiers remain [VerificationStatus.secondarySource]
+  /// until the official PDF is read verbatim (then table values may promote).
+  static bool _fromSniTable(RoomType type) {
+    switch (type) {
+      case RoomType.corridor:
+      case RoomType.lobby:
+      case RoomType.office:
+      case RoomType.classroom:
+      case RoomType.retail:
+      case RoomType.restaurant:
+      case RoomType.toilet:
       case RoomType.commercialKitchen:
-        return 20.0;
+        return true;
+      case RoomType.bedroom:
+      case RoomType.livingRoom:
+      case RoomType.meetingRoom:
+      case RoomType.hospitalWard:
+      case RoomType.laboratory:
+      case RoomType.serverRoom:
+        return false;
     }
   }
 
   @override
   StandardValue<double> recommendedAch(RoomType type) {
     final ach = _achValue(type);
+    final fromTable = _fromSniTable(type);
     return StandardValue<double>(
       ach,
       unit: 'ACH (1/h)',
-      citation: '$_doc — laju perubahan udara (${roomTypeLabel(type)})',
+      citation: fromTable
+          ? '$_doc Tabel 4.4.1 — kebutuhan ventilasi mekanis '
+              '(${roomTypeLabel(type)})'
+          : 'general HVAC practice (ASHRAE 62.1-class) — laju perubahan udara '
+              '(${roomTypeLabel(type)}); space not listed in $_doc',
       sourceUrl: _sourceUrl,
       status: VerificationStatus.secondarySource,
-      note: '${roomTypeLabel(type)}: ${ach.toStringAsFixed(0)} air changes per '
-          'hour. Corroborated against ASHRAE 62.1-class ranges (office 4-6, '
-          'classroom 6-8, retail 6-10, restaurant 8-12, toilet 8-15, hospital '
-          'ward min 6); VERIFY the exact figure against SNI 03-6572-2001.',
+      note: fromTable
+          ? '${roomTypeLabel(type)}: ${ach.toStringAsFixed(0)} air changes per '
+              'hour, per SNI 03-6572-2001 Tabel 4.4.1 (corroborated via '
+              'secondary sources quoting the table). VERIFY against the '
+              'official PDF to promote to sniVerbatim.'
+          : '${roomTypeLabel(type)}: ${ach.toStringAsFixed(0)} air changes per '
+              'hour. This space is NOT in SNI 03-6572-2001 Tabel 4.4.1; figure '
+              'is general HVAC practice (ASHRAE 62.1-class). VERIFY.',
     );
   }
 

@@ -145,6 +145,7 @@ void main() {
         ductShape: DuctShape.rectangular,
         ductMethod: DuctSizingMethod.equalFriction,
         rainfallMmPerHr: 275,
+        runoffCoefficientStorm: 0.75,
         fireHazard: FireHazardClass.ordinaryHazard2,
         brightness: Brightness.light,
       ),
@@ -156,6 +157,7 @@ void main() {
     expect(s.ductShape, DuctShape.rectangular);
     expect(s.ductMethod, DuctSizingMethod.equalFriction);
     expect(s.rainfallMmPerHr, 275);
+    expect(s.runoffCoefficientStorm, 0.75);
     expect(s.fireHazard, FireHazardClass.ordinaryHazard2);
     expect(s.brightness, Brightness.light);
   });
@@ -403,6 +405,7 @@ void main() {
     expect(s.ductShape, DuctShape.round);
     expect(s.ductMethod, DuctSizingMethod.velocity);
     expect(s.rainfallMmPerHr, 200);
+    expect(s.runoffCoefficientStorm, 0.9); // kDefaultRunoffCoefficient
     expect(s.fireHazard, FireHazardClass.ordinaryHazard1);
     expect(s.brightness, Brightness.dark);
   });

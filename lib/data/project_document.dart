@@ -9,6 +9,8 @@ import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/custom_fixture.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
+import 'package:mechx_engine/sizing/storm_sizing.dart'
+    show kDefaultRunoffCoefficient;
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
@@ -65,6 +67,12 @@ class DesignSettings {
   final DuctShape ductShape;
   final DuctSizingMethod ductMethod;
   final double rainfallMmPerHr;
+
+  /// Storm runoff coefficient C (dimensionless, 0–1): the fraction of design
+  /// rainfall that becomes runoff at the outlet (rational method). Additive —
+  /// absent on an older file ⇒ the impervious-roof default (// VERIFY).
+  final double runoffCoefficientStorm;
+
   final FireHazardClass fireHazard;
   final Brightness brightness;
 
@@ -95,12 +103,41 @@ class DesignSettings {
   /// defined a custom fixture loads with none, byte-identical to before.
   final List<CustomFixture> fixtureLibrary;
 
+  /// Cooling-load estimation method: `'simple'` (the area-density rule in
+  /// `cooling_load.dart`, the default) or `'detailed'` (the heat-gain component
+  /// breakdown in `cooling_load_detailed.dart`). Additive — absent ⇒ `'simple'`,
+  /// byte-identical to before. Tolerant on load (unknown ⇒ `'simple'`).
+  final String coolingLoadMethod;
+
+  /// Multi-zone HVAC diversity / coincidence factor (0–1] applied to the summed
+  /// per-room airflow + cooling when one AHU serves several rooms
+  /// (`room_air.dart` `multiZoneAirSystem`). Defaults to 0.9 (`// VERIFY`).
+  final double multiZoneDiversityFactor;
+
+  /// Multi-zone supply/extract balance strategy: `'return_all'` (the default),
+  /// `'supply_all'`, or `'balanced'` (maps to `ExhaustStrategy`). Additive —
+  /// absent ⇒ `'return_all'`, tolerant on load.
+  final String multiZoneExhaustStrategy;
+
+  /// BYO Anthropic API key for the in-app Claude copilot. Empty ⇒ the copilot is
+  /// disabled (offline-graceful). Stored in the `.mechx` file; the engineer is
+  /// warned not to share a project file carrying their key.
+  final String anthropicApiKey;
+
+  /// Model id the copilot calls. Defaults to `claude-sonnet-4-6`.
+  final String aiModel;
+
+  /// Which LLM backend the copilot uses: `'anthropic'` (primary) or `'openai'`
+  /// (backup). Defaults to Anthropic; unknown values fall back to it on load.
+  final String aiProvider;
+
   const DesignSettings({
     this.occupancy = Occupancy.private,
     this.upfeed = false,
     this.ductShape = DuctShape.round,
     this.ductMethod = DuctSizingMethod.velocity,
     this.rainfallMmPerHr = 200.0,
+    this.runoffCoefficientStorm = kDefaultRunoffCoefficient,
     this.fireHazard = FireHazardClass.ordinaryHazard1,
     this.brightness = Brightness.dark,
     this.localeCode = 'en',
@@ -110,6 +147,12 @@ class DesignSettings {
     this.contingencyPct = 5,
     this.marginPct = 15,
     this.fixtureLibrary = const [],
+    this.coolingLoadMethod = 'simple',
+    this.multiZoneDiversityFactor = 0.9,
+    this.multiZoneExhaustStrategy = 'return_all',
+    this.anthropicApiKey = '',
+    this.aiModel = 'claude-sonnet-4-6',
+    this.aiProvider = 'anthropic',
   });
 
   Map<String, dynamic> toJson() => {
@@ -118,6 +161,7 @@ class DesignSettings {
         'ductShape': ductShape.name,
         'ductMethod': ductMethod.name,
         'rainfall_mmhr': rainfallMmPerHr,
+        'runoff_c': runoffCoefficientStorm,
         'fireHazard': fireHazard.name,
         'brightness': brightness == Brightness.dark ? 'dark' : 'light',
         'locale': localeCode,
@@ -129,6 +173,15 @@ class DesignSettings {
         'marginPct': marginPct,
         // User fixture library (additive; absent on an older file → empty).
         'fixtureLibrary': [for (final f in fixtureLibrary) f.toJson()],
+        // Cooling-load + multi-zone HVAC settings (additive; absent → defaults).
+        'coolingLoadMethod': coolingLoadMethod,
+        'multiZoneDiversityFactor': multiZoneDiversityFactor,
+        'multiZoneExhaustStrategy': multiZoneExhaustStrategy,
+        // BYO Claude copilot key + model (additive; absent on an older file →
+        // disabled copilot / default model).
+        'anthropicApiKey': anthropicApiKey,
+        'aiModel': aiModel,
+        'aiProvider': aiProvider,
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -145,6 +198,8 @@ class DesignSettings {
           DuctSizingMethod.velocity,
         ),
         rainfallMmPerHr: (json['rainfall_mmhr'] as num?)?.toDouble() ?? 200.0,
+        runoffCoefficientStorm: (json['runoff_c'] as num?)?.toDouble() ??
+            kDefaultRunoffCoefficient,
         fireHazard: _enumOr(
           FireHazardClass.values,
           json['fireHazard'],
@@ -161,7 +216,35 @@ class DesignSettings {
         contingencyPct: (json['contingencyPct'] as num?)?.toDouble() ?? 5,
         marginPct: (json['marginPct'] as num?)?.toDouble() ?? 15,
         fixtureLibrary: _fixtureLibraryFromJson(json['fixtureLibrary']),
+        // Tolerant: only the known method/strategy codes are accepted.
+        coolingLoadMethod:
+            json['coolingLoadMethod'] == 'detailed' ? 'detailed' : 'simple',
+        multiZoneDiversityFactor:
+            _clampDiversity((json['multiZoneDiversityFactor'] as num?)
+                ?.toDouble()),
+        multiZoneExhaustStrategy: _exhaustStrategyOr(
+            json['multiZoneExhaustStrategy'], 'return_all'),
+        anthropicApiKey:
+            json['anthropicApiKey'] is String ? json['anthropicApiKey'] : '',
+        aiModel: json['aiModel'] is String && (json['aiModel'] as String).isNotEmpty
+            ? json['aiModel']
+            : 'claude-sonnet-4-6',
+        aiProvider: const {'openai', 'glm'}.contains(json['aiProvider'])
+            ? json['aiProvider'] as String
+            : 'anthropic',
       );
+
+  /// Clamp the multi-zone diversity factor into (0,1]; absent/invalid ⇒ 0.9.
+  static double _clampDiversity(double? raw) {
+    if (raw == null || raw.isNaN || raw <= 0) return 0.9;
+    return raw > 1.0 ? 1.0 : raw;
+  }
+
+  /// Tolerantly read the multi-zone exhaust strategy code.
+  static String _exhaustStrategyOr(Object? raw, String fallback) {
+    const known = {'return_all', 'supply_all', 'balanced'};
+    return raw is String && known.contains(raw) ? raw : fallback;
+  }
 
   /// Tolerantly read the fixture library: a non-list (or absent) value yields an
   /// empty library; each entry that fails to decode (missing id/name) is dropped.

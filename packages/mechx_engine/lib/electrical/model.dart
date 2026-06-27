@@ -17,6 +17,7 @@ import '../units.dart';
 import 'control/starter.dart' show StarterType;
 import 'earthing.dart' show EarthingSystem;
 import 'geo_length.dart' show LayoutPos;
+import 'headroom.dart' show HeadroomSpec;
 import 'load_kind.dart' show LoadKind;
 import 'sources.dart'
     show
@@ -382,6 +383,21 @@ class ElectricalPanel {
   /// panel is not placed on the layout.
   final LayoutPos? layoutPos;
 
+  /// Spare-ways / future-load HEADROOM for this panel (a % spare on the demand +
+  /// N reserved outgoing ways). When set, `computePanel` sizes the incomer +
+  /// busbar against the future (spare-uplifted) demand and counts the spare ways
+  /// toward the busbar way capacity. Null ⇒ no headroom ⇒ byte-identical sizing.
+  /// Additive.
+  final HeadroomSpec? headroom;
+
+  /// Occupancy id keying the optional diversity / demand-factor library
+  /// (`DiversityLibrary`). When set AND the library is supplied to `computePanel`
+  /// / `computeSystem`, each circuit's demand factor is looked up by occupancy +
+  /// load kind (overriding the model's per-circuit `demandFactor`). Null ⇒ the
+  /// per-circuit `demandFactor` is used exactly as before ⇒ byte-identical.
+  /// Distinct from the carried-for-A8 [occupancy] label. Additive.
+  final String? diversityLibraryId;
+
   final List<ElectricalCircuit> circuits;
 
   const ElectricalPanel({
@@ -408,6 +424,8 @@ class ElectricalPanel {
     this.x,
     this.y,
     this.layoutPos,
+    this.headroom,
+    this.diversityLibraryId,
     this.circuits = const [],
   });
 
@@ -441,6 +459,10 @@ class ElectricalPanel {
     bool clearPosition = false,
     LayoutPos? layoutPos,
     bool clearLayoutPos = false,
+    HeadroomSpec? headroom,
+    bool clearHeadroom = false,
+    String? diversityLibraryId,
+    bool clearDiversityLibraryId = false,
     List<ElectricalCircuit>? circuits,
   }) =>
       ElectricalPanel(
@@ -468,6 +490,10 @@ class ElectricalPanel {
         x: clearPosition ? null : (x ?? this.x),
         y: clearPosition ? null : (y ?? this.y),
         layoutPos: clearLayoutPos ? null : (layoutPos ?? this.layoutPos),
+        headroom: clearHeadroom ? null : (headroom ?? this.headroom),
+        diversityLibraryId: clearDiversityLibraryId
+            ? null
+            : (diversityLibraryId ?? this.diversityLibraryId),
         circuits: circuits ?? this.circuits,
       );
 
@@ -497,6 +523,9 @@ class ElectricalPanel {
         if (x != null) 'x': x,
         if (y != null) 'y': y,
         if (layoutPos != null) 'layoutPos': layoutPos!.toJson(),
+        if (headroom != null) 'headroom': headroom!.toJson(),
+        if (diversityLibraryId != null)
+          'diversityLibraryId': diversityLibraryId,
         'circuits': [for (final c in circuits) c.toJson()],
       };
 
@@ -549,6 +578,10 @@ class ElectricalPanel {
         layoutPos: json['layoutPos'] is Map<String, dynamic>
             ? LayoutPos.fromJson(json['layoutPos'] as Map<String, dynamic>)
             : null,
+        headroom: json['headroom'] is Map<String, dynamic>
+            ? HeadroomSpec.fromJson(json['headroom'] as Map<String, dynamic>)
+            : null,
+        diversityLibraryId: json['diversityLibraryId'] as String?,
         circuits: [
           for (final c in (json['circuits'] as List? ?? const []))
             ElectricalCircuit.fromJson(c as Map<String, dynamic>),
