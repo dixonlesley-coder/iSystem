@@ -136,5 +136,39 @@ void main() {
           designCurrent: const Current(20));
       expect(r.required, isFalse);
     });
+
+    test('TT feeder (not a final) → S-type 300 mA earth-fault protection', () {
+      // A TT distribution circuit still needs earth-fault protection: the high
+      // TT earth-loop impedance gives no ADS by overcurrent, so a time-delayed
+      // (S-type) 300 mA RCD selective above the downstream 30/100 mA finals.
+      final r = circuitRcd(
+          earthingSystem: EarthingSystem.tt,
+          loadKind: LoadKind.feeder,
+          isFinalCircuit: false,
+          designCurrent: const Current(100));
+      expect(r.required, isTrue);
+      expect(r.ratingMa, 300);
+      expect(r.reason, contains('feeder'));
+      expect(r.reason, contains('S-type'));
+    });
+
+    test('TT feeder life-safety still wins → no RCD', () {
+      final r = circuitRcd(
+          earthingSystem: EarthingSystem.tt,
+          loadKind: LoadKind.pump,
+          isFinalCircuit: false,
+          designCurrent: const Current(100),
+          lifeSafety: true);
+      expect(r.required, isFalse);
+    });
+
+    test('feeder on TN (not a final) → no RCD (overcurrent ADS covers it)', () {
+      final r = circuitRcd(
+          earthingSystem: EarthingSystem.tnCs,
+          loadKind: LoadKind.feeder,
+          isFinalCircuit: false,
+          designCurrent: const Current(100));
+      expect(r.required, isFalse);
+    });
   });
 }

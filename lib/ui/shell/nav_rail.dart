@@ -327,6 +327,29 @@ class _NavItem extends StatefulWidget {
 class _NavItemState extends State<_NavItem> {
   bool _hover = false;
 
+  // The hover-label overlay shown when the rail is COLLAPSED — a lightweight
+  // MechXTheme tooltip (NOT package:material's Tooltip, which the design-system
+  // rule forbids), so a collapsed destination still names itself on hover. The
+  // controller is toggled only while collapsed + hovered; expanded the captions
+  // already show, so it never opens (and the goldens stay byte-identical).
+  final OverlayPortalController _tip = OverlayPortalController();
+
+  void _setHover(bool v) {
+    setState(() => _hover = v);
+    if (widget.collapsed && v) {
+      _tip.show();
+    } else {
+      _tip.hide();
+    }
+  }
+
+  @override
+  void didUpdateWidget(_NavItem old) {
+    super.didUpdateWidget(old);
+    // Expanding the rail (or the item ceasing to be hovered) closes any tooltip.
+    if (!widget.collapsed && _tip.isShowing) _tip.hide();
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -389,22 +412,83 @@ class _NavItemState extends State<_NavItem> {
       ),
     );
 
-    // NB: a hover Tooltip for the collapsed label would need package:material
-    // (Tooltip isn't in the widgets layer), which the design-system rule
-    // forbids — and the prompt says to skip the tooltip rather than break it.
-    // The glyph stays the affordance; expanding restores the captions.
+    // When the rail is collapsed the caption is hidden, so the destination
+    // names itself via a hover-anchored MechXTheme label overlay (a custom
+    // tooltip — the widgets layer has no Tooltip, and package:material is
+    // forbidden). The glyph stays the primary affordance; expanding the rail
+    // restores the captions and the overlay never opens.
+    final row = MechXFocusRing(
+      borderRadius: const BorderRadius.all(MechXRadii.md),
+      onActivated: widget.onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => _setHover(true),
+        onExit: (_) => _setHover(false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: item,
+        ),
+      ),
+    );
+
     return Padding(
       padding: const EdgeInsets.only(bottom: MechXSpacing.xxs),
-      child: MechXFocusRing(
-        borderRadius: const BorderRadius.all(MechXRadii.md),
-        onActivated: widget.onTap,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          onEnter: (_) => setState(() => _hover = true),
-          onExit: (_) => setState(() => _hover = false),
-          child: GestureDetector(
-            onTap: widget.onTap,
-            child: item,
+      child: OverlayPortal(
+        controller: _tip,
+        overlayChildBuilder: (_) => _CollapsedLabelTooltip(
+          label: widget.label,
+          // Anchor to this item's render box so the label sits just right of it.
+          link: _link,
+        ),
+        child: CompositedTransformTarget(link: _link, child: row),
+      ),
+    );
+  }
+
+  final LayerLink _link = LayerLink();
+}
+
+/// The hover label shown beside a COLLAPSED nav item — a small MechXTheme card
+/// composited just to the right of the item via a [LayerLink]. Custom-built (no
+/// package:material Tooltip), ephemeral, and pointer-transparent so it never
+/// intercepts the hover that spawned it.
+class _CollapsedLabelTooltip extends StatelessWidget {
+  final String label;
+  final LayerLink link;
+  const _CollapsedLabelTooltip({required this.label, required this.link});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Positioned(
+      // The Stack fills the overlay; CompositedTransformFollower positions the
+      // child relative to the linked target.
+      left: 0,
+      top: 0,
+      child: CompositedTransformFollower(
+        link: link,
+        showWhenUnlinked: false,
+        // Sit at the target's right edge, vertically centred-ish.
+        targetAnchor: Alignment.centerRight,
+        followerAnchor: Alignment.centerLeft,
+        offset: const Offset(MechXSpacing.xs, 0),
+        child: IgnorePointer(
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: MechXSpacing.sm,
+              vertical: MechXSpacing.xxs,
+            ),
+            decoration: BoxDecoration(
+              color: colors.surface,
+              borderRadius: MechXRadii.control,
+              border: Border.all(color: colors.border),
+              boxShadow: MechXShadow.popover,
+            ),
+            child: Text(
+              label,
+              style: type.caption.copyWith(color: colors.textPrimary),
+            ),
           ),
         ),
       ),

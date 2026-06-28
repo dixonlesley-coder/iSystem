@@ -318,6 +318,10 @@ CableResult sizeCable(
     deratingFactor: roundTo(df, 3),
     runsPerPhase: parallelMaxRuns,
     vdDriven: !ampacityImpossible,
+    // ampacity-impossible ⇒ even 4× the largest section never met Iz, so the
+    // breaker In now exceeds Iz (coordination violated). The vd-only fallback
+    // DID reach ampacity (it is over-limit only on voltage drop).
+    ampacityReached: !ampacityImpossible,
     appliedRule: ampacityImpossible
         ? 'exceeds-range: $parallelMaxRuns× largest standard section still below required Iz'
         : 'voltage-drop-exceeds-range: largest standard section still over the Vd limit',

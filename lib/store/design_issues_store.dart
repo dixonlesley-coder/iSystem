@@ -12,6 +12,7 @@ library;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/network/connectivity.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/standards/puil.dart';
@@ -25,10 +26,14 @@ import 'sheets_store.dart';
 import 'sizing_store.dart';
 import 'solve_store.dart';
 
-/// Triage level for a design issue. [warning] needs the engineer's attention
-/// (out-of-band velocity, uncalibrated sheet); [info] is an honesty advisory
-/// (an unsized air element, or an unverified standards value).
-enum IssueSeverity { warning, info }
+/// Triage level for a design issue. [critical] BLOCKS a sound deliverable (an
+/// uncalibrated sheet that already carries drawn runs — they size to ZERO
+/// length); [warning] needs the engineer's attention (out-of-band velocity, a
+/// source-less network, a blank uncalibrated sheet); [info] is an honesty
+/// advisory (an unsized air element, or an unverified standards value). Ordered
+/// most-severe first so a plain enum compare / sort surfaces blockers ahead of
+/// advisories.
+enum IssueSeverity { critical, warning, info }
 
 /// Where an issue lives on the drawing, so the Review row can jump to it.
 /// [sheetId] is always present for a locatable issue; [nodeId]/[edgeId] point at
@@ -90,9 +95,11 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final sheets = ref.watch(sheetsControllerProvider);
   final velocity = ref.watch(airVelocityChecksProvider);
   final unsized = ref.watch(airUnsizedProvider);
+  final overCapacity = ref.watch(airOverCapacityProvider);
   final drainAdvisories = ref.watch(drainageAdvisoryProvider);
   final legionellaReturnTempC = ref.watch(hotWaterLegionellaProvider);
 
+  final criticals = <DesignIssue>[];
   final warnings = <DesignIssue>[];
   final infos = <DesignIssue>[];
 
@@ -153,15 +160,83 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     }
   }
 
-  // ── 3. Uncalibrated sheets (warning, locatable) ─────────────────────────────
-  for (final s in sheets.sheets) {
-    if (project.calibrationFor(s.id) != null) continue;
+  // ── 2b. Duct over capacity: clamped to the largest standard size (warning) ──
+  // The auto-sizer clamps an oversize air duct to the largest standard duct
+  // and flags it instead of aborting the solve; surface each clamped edge.
+  for (final id in overCapacity) {
+    final edge = edgeById[id];
+    if (edge == null) continue;
+    final sheetId = sheetForEdge(edge);
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
-      title: 'Sheet not calibrated',
-      message: '"${s.name}" has no scale set — its run/riser lengths cannot '
-          'be measured. Calibrate the sheet to size it.',
-      locate: IssueLocation(s.id),
+      title: 'Duct over capacity',
+      message: 'This duct carries more air than the largest standard duct can '
+          'handle within the velocity / friction limit — it was clamped to the '
+          'largest standard size. Split the run or add a parallel duct.',
+      locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
+    ));
+  }
+
+  // ── 3. Uncalibrated sheets (warning, or CRITICAL when edges are drawn) ───────
+  // An uncalibrated sheet that already carries drawn runs is a BLOCKER: every
+  // run on it sizes to ZERO length (edgeLength returns Length(0) for an
+  // uncalibrated run), so the BOM / pressures / report are silently wrong. A
+  // blank uncalibrated sheet stays a plain warning. We escalate only the
+  // edge-bearing ones; the title is kept ('… calibrated') so the compliance
+  // roll-up and any title match still catch it.
+  final sheetsWithEdges = <String>{
+    for (final n in net.nodes)
+      if (net.edgesAt(n.id).isNotEmpty) n.sheetId,
+  };
+  for (final s in sheets.sheets) {
+    if (project.calibrationFor(s.id) != null) continue;
+    if (sheetsWithEdges.contains(s.id)) {
+      criticals.add(DesignIssue(
+        severity: IssueSeverity.critical,
+        title: 'Sheet not calibrated',
+        message: '"${s.name}" carries drawn runs but has no scale set — they '
+            'are sizing to ZERO length. Calibrate the sheet before sizing or '
+            'export, or the BOM and pressures will be wrong.',
+        locate: IssueLocation(s.id),
+      ));
+    } else {
+      warnings.add(DesignIssue(
+        severity: IssueSeverity.warning,
+        title: 'Sheet not calibrated',
+        message: '"${s.name}" has no scale set — its run/riser lengths cannot '
+            'be measured. Calibrate the sheet to size it.',
+        locate: IssueLocation(s.id),
+      ));
+    }
+  }
+
+  // ── 3b. Network connectivity / supply integrity (warning, locatable) ────────
+  // A pressurized/air component with no plant/source is being rooted
+  // heuristically and sized as if supplied; a plant-less component alongside a
+  // fed one is a branch that fell off the rooted tree. Both are detected by the
+  // pure engine helper (read-only — never resizes). Locate via a representative
+  // node's sheet. Gravity services are skipped (a drain has no source).
+  for (final d in networkConnectivityDefects(net)) {
+    final repId = d.representativeNodeId;
+    final repNode = repId == null ? null : nodeById[repId];
+    final service = d.service.name;
+    final n = d.nodeIds.length;
+    final title =
+        d.isIsland ? 'Network branch not connected' : 'Network has no source';
+    final message = d.isIsland
+        ? 'A $service branch with $n node(s) is disconnected from its fed '
+            'network — it is rooted heuristically and sized as if supplied. '
+            'Connect it to the source, or add a plant.'
+        : 'A $service component with $n node(s) has no plant/source — it is '
+            'being rooted heuristically and sized as if supplied. Add a pump / '
+            'tank / AHU source.';
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      title: title,
+      message: message,
+      locate: repNode == null
+          ? null
+          : IssueLocation(repNode.sheetId, nodeId: repId),
     ));
   }
 
@@ -217,7 +292,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     addVerify(v);
   }
 
-  return [...warnings, ...infos];
+  return [...criticals, ...warnings, ...infos];
 });
 
 /// Total number of aggregated design issues (for a count badge / summary).
@@ -229,6 +304,47 @@ final designIssueWarningCountProvider = Provider<int>((ref) => ref
     .watch(designIssuesProvider)
     .where((i) => i.severity == IssueSeverity.warning)
     .length);
+
+/// Number of CRITICAL-severity issues — blockers a sound deliverable can't carry
+/// (an uncalibrated sheet with drawn runs sizing to zero length). The export
+/// gate (cluster D) consumes this.
+final designIssueCriticalCountProvider = Provider<int>((ref) => ref
+    .watch(designIssuesProvider)
+    .where((i) => i.severity == IssueSeverity.critical)
+    .length);
+
+/// How many SIZED edges resolve to ZERO geometric length under the §10 length
+/// rule (a run on an uncalibrated sheet ⇒ `edgeLength` returns Length(0)). This
+/// is the SHARED zero-length detection: the export gate (cluster D) blocks an
+/// export when this is > 0, and the uncalibrated-sheet escalation (cluster C)
+/// keys off the same predicate (sized edge ⇒ engine length == 0). A riser keeps
+/// the true-elevation delta (never calibration), so it is never counted. Only
+/// edges that actually appear in the sizing map are considered, so an empty /
+/// fully-calibrated network returns 0 and the gate is inert.
+final zeroLengthSizedEdgeCountProvider = Provider<int>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final project = ref.watch(projectControllerProvider);
+  final sizing = ref.watch(sizingProvider);
+  var count = 0;
+  for (final e in net.edges) {
+    if (!sizing.containsKey(e.id)) continue;
+    final len = edgeLength(
+      e,
+      net,
+      calibrationBySheet: project.calibrations,
+      building: project.building,
+    );
+    if (len.meters <= 0) count++;
+  }
+  return count;
+});
+
+/// True when ANY sized edge resolves to zero geometric length — the boolean the
+/// export guard reads to block-and-warn instead of silently writing a wrong BOM
+/// / pressure / drawing. False (byte-identical) for a calibrated or empty
+/// network.
+final exportHasZeroLengthEdgesProvider =
+    Provider<bool>((ref) => ref.watch(zeroLengthSizedEdgeCountProvider) > 0);
 
 /// A one-click batch action over a whole CLASS of issues. SAFE by construction —
 /// it only SELECTS the offending elements or applies an already-existing bulk op

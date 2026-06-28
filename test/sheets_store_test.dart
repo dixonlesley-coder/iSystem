@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
@@ -65,5 +66,37 @@ void main() {
     expect(s.floorFor('s3', 3), 0);
     // clamped to the building's level count
     expect(s.floorFor('s2', 1), 0); // positional 1 → clamp to 0 when 1 level
+  });
+
+  test('setSheetFloor is undoable via the global history timeline', () {
+    final c = makeContainer();
+    final sheets = c.read(sheetsControllerProvider.notifier);
+    final history = c.read(historyProvider.notifier);
+
+    // s3's positional default is floor 2; override it to 0.
+    sheets.setSheetFloor('s3', 0);
+    expect(c.read(sheetsControllerProvider).floorFor('s3', 3), 0);
+    expect(history.canUndo, isTrue);
+
+    // Undo on the global timeline reverts the mapping to its positional default.
+    history.undo();
+    expect(c.read(sheetsControllerProvider).floorFor('s3', 3), 2);
+
+    // Redo restores the override.
+    history.redo();
+    expect(c.read(sheetsControllerProvider).floorFor('s3', 3), 0);
+  });
+
+  test('loadSheets clears the sheet-floor undo stack', () {
+    final c = makeContainer();
+    final sheets = c.read(sheetsControllerProvider.notifier);
+
+    sheets.setSheetFloor('s3', 0);
+    expect(sheets.canUndo, isTrue);
+
+    // A loaded document is a fresh baseline — the local mapping history is
+    // cleared so an undo can't reach back into the previous document.
+    sheets.loadSheets(const [Sheet(id: 'x', name: 'X')]);
+    expect(sheets.canUndo, isFalse);
   });
 }

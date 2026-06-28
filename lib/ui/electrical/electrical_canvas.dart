@@ -35,6 +35,7 @@ import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/electrical/results.dart' show BreakerResult;
 import 'package:mechx_engine/units.dart';
 
+import '../../store/app_state.dart';
 import '../../store/electrical_store.dart';
 import '../canvas/canvas_grid.dart';
 import '../canvas/viewport.dart';
@@ -284,7 +285,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     if (from != null && to != null && from != to) {
       final res = _ctrl.connectFeeder(from, to);
       if (!res.connected && res.reason != null && mounted) {
-        _toast(res.reason!);
+        // Route through the shared status pill (status bar) like the rest of
+        // the app — one feedback primitive, no bespoke per-canvas toast.
+        ref.read(statusMessageProvider.notifier).showStatus(res.reason!);
       }
     }
     setState(() {
@@ -312,22 +315,6 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       if (rect.contains(local)) return entry.key;
     }
     return null;
-  }
-
-  void _toast(String message) {
-    final overlay = Overlay.of(context, rootOverlay: true);
-    final theme = MechXTheme.of(context);
-    late OverlayEntry entry;
-    entry = OverlayEntry(
-      builder: (ctx) => MechXTheme(
-        data: theme,
-        child: _Toast(message: message),
-      ),
-    );
-    overlay.insert(entry);
-    Future<void>.delayed(const Duration(milliseconds: 2600), () {
-      if (entry.mounted) entry.remove();
-    });
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -393,7 +380,8 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                         transform: vt,
                         panelCount: project.panels.length,
                         controller: _ctrl,
-                        onToast: _toast,
+                        onToast: (m) =>
+                            ref.read(statusMessageProvider.notifier).showStatus(m),
                       ),
                     ),
                     // Panel cards + their load nodes + PLN heads (Flutter widgets
@@ -2042,48 +2030,3 @@ class _CanvasDropPreviewPainter extends CustomPainter {
       old.color != color;
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// Transient toast.
-// ════════════════════════════════════════════════════════════════════════════
-
-class _Toast extends StatelessWidget {
-  final String message;
-  const _Toast({required this.message});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return Positioned(
-      bottom: 28,
-      left: 0,
-      right: 0,
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: Container(
-          margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.md,
-            vertical: MechXSpacing.sm,
-          ),
-          decoration: BoxDecoration(
-            color: colors.surface,
-            borderRadius: MechXRadii.card,
-            border: Border.all(color: colors.border),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x40000000),
-                blurRadius: 16,
-                offset: Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Text(
-            message,
-            style: type.body.copyWith(color: colors.textPrimary),
-          ),
-        ),
-      ),
-    );
-  }
-}

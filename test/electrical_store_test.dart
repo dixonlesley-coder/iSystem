@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/data/autosave.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/layer_store.dart';
@@ -74,6 +75,74 @@ void main() {
       final hi =
           c.read(electricalResultProvider).panels['mdp']!.busbar.csaMm2;
       expect(hi, greaterThanOrEqualTo(base));
+    });
+  });
+
+  group('electrical project fallback on opening a document (#6)', () {
+    test('opening a document with no electrical model yields an EMPTY project',
+        () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      // A plumbing-only / v1 document carries no electrical sub-model.
+      const doc = ProjectDocument(
+        projectName: 'Plumbing only',
+        floors: [Floor('Ground', Length(4.0))],
+        calibrations: {},
+        sheets: [],
+        network: Network(),
+        electrical: null,
+      );
+      applyDocument(c.read, doc);
+
+      // No fictitious sample switchboard injected.
+      expect(c.read(electricalProjectProvider).panels, isEmpty);
+      // And the sized system therefore reports 0 panels (Review 'panels sized').
+      expect(c.read(electricalResultProvider).panels, isEmpty);
+    });
+
+    test('a brand-new project still seeds the sample (first-run unchanged)', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      // No applyDocument — this is the build() first-run path.
+      final ids =
+          c.read(electricalProjectProvider).panels.map((p) => p.id).toSet();
+      expect(ids, containsAll(<String>{'mdp', 'lp1'}));
+    });
+
+    test('a document WITH an electrical model loads that model, not the sample',
+        () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      const doc = ProjectDocument(
+        projectName: 'Has electrical',
+        floors: [Floor('Ground', Length(4.0))],
+        calibrations: {},
+        sheets: [],
+        network: Network(),
+        electrical: ElectricalProject(
+          id: 'x',
+          name: 'Custom',
+          panels: [
+            ElectricalPanel(
+              id: 'only',
+              name: 'Only panel',
+              circuits: [
+                ElectricalCircuit(
+                  id: 'c1',
+                  name: 'Lights',
+                  loadKind: LoadKind.lighting,
+                  loadW: 1500,
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+      applyDocument(c.read, doc);
+
+      final panels = c.read(electricalProjectProvider).panels;
+      expect(panels, hasLength(1));
+      expect(panels.single.id, 'only');
     });
   });
 

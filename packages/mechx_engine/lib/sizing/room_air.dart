@@ -234,11 +234,17 @@ RoomAirResult sizeRoomAir({
   duct.RectangularDuctResult? rect;
   double frictionPerMetre;
   if (ductShape == DuctShape.rectangular) {
-    rect = duct.sizeRectangularByVelocity(
-      airflow: airflow,
-      maxVelocity: maxDuctVelocity,
-      aspectRatio: ductAspectRatio,
-    );
+    rect = ductMethod == DuctSizingMethod.equalFriction
+        ? duct.sizeRectangularByEqualFriction(
+            airflow: airflow,
+            targetPaPerMetre: ductEqualFrictionPa,
+            aspectRatio: ductAspectRatio,
+          )
+        : duct.sizeRectangularByVelocity(
+            airflow: airflow,
+            maxVelocity: maxDuctVelocity,
+            aspectRatio: ductAspectRatio,
+          );
     frictionPerMetre = rect.frictionPerMetrePa;
   } else if (ductMethod == DuctSizingMethod.equalFriction) {
     round = duct.sizeByEqualFriction(

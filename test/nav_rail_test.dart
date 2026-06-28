@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -116,6 +117,47 @@ void main() {
     await tester.pump();
     expect(container.read(shellSectionProvider), ShellSection.preferences);
     expect(find.text('Appearance'), findsOneWidget);
+  });
+
+  testWidgets(
+      'a collapsed rail names a destination via a hover label (no caption '
+      'otherwise)', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+
+    // Collapse the rail → captions are hidden, so "Layout" no longer renders in
+    // the rail body.
+    container.read(navRailCollapsedProvider.notifier).set(true);
+    await tester.pumpAndSettle();
+    Finder railText(String label) =>
+        find.descendant(of: find.byType(NavRail), matching: find.text(label));
+    expect(railText('Layout'), findsNothing);
+
+    // Hover the topmost nav glyph (the first item, "Layout") — the
+    // highest-on-screen CustomPaint inside the rail.
+    final glyphCenters = find
+        .descendant(of: find.byType(NavRail), matching: find.byType(CustomPaint))
+        .evaluate()
+        .map((e) => tester.getCenter(find.byWidget(e.widget)))
+        .toList()
+      ..sort((a, b) => a.dy.compareTo(b.dy));
+    final topGlyph = glyphCenters.first;
+
+    final gesture =
+        await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: Offset.zero);
+    addTearDown(gesture.removePointer);
+    await gesture.moveTo(topGlyph);
+    await tester.pumpAndSettle();
+
+    // The hover label now names the destination (ASCII, no tofu).
+    expect(find.text('Layout'), findsWidgets);
   });
 
   testWidgets('rail icons paint without tofu (glyphs are custom-drawn)',

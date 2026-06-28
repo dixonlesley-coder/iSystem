@@ -2,12 +2,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'network_store.dart';
 import 'project_store.dart';
+import 'sheets_store.dart';
 
 /// Which domain controller owns a recorded action. Each domain keeps its own
 /// snapshot stack; this enum is the global timeline's record of *which* domain
 /// acted, so undo/redo can revert the genuinely most-recent edit regardless of
 /// domain (the previous "all network, then all project" ordering was wrong).
-enum UndoDomain { network, project }
+enum UndoDomain { network, project, sheets }
 
 /// A single, global undo/redo timeline across every domain. Domain controllers
 /// call [HistoryController.record] from their forward mutations; undo/redo here
@@ -57,6 +58,9 @@ class HistoryController extends Notifier<int> {
         redo ? c.redo() : c.undo();
       case UndoDomain.project:
         final c = ref.read(projectControllerProvider.notifier);
+        redo ? c.redo() : c.undo();
+      case UndoDomain.sheets:
+        final c = ref.read(sheetsControllerProvider.notifier);
         redo ? c.redo() : c.undo();
     }
   }

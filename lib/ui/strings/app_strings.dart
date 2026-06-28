@@ -96,10 +96,13 @@ enum StringKey {
   shellImportPdf,
   shellDark,
   shellLight,
+  shellSwitchToDark,
+  shellSwitchToLight,
 
   // App shell — status bar.
   shellNoSheet,
   shellUncalibrated,
+  shellCalibrated,
   shellStandardsProvenance,
   shellViewportHints,
 
@@ -325,10 +328,13 @@ const Map<StringKey, String> _en = {
   StringKey.shellImportPdf: 'Import PDF',
   StringKey.shellDark: 'Dark',
   StringKey.shellLight: 'Light',
+  StringKey.shellSwitchToDark: 'Switch to dark',
+  StringKey.shellSwitchToLight: 'Switch to light',
 
   // App shell — status bar.
   StringKey.shellNoSheet: 'No sheet',
   StringKey.shellUncalibrated: 'Uncalibrated',
+  StringKey.shellCalibrated: 'Calibrated',
   StringKey.shellStandardsProvenance: 'SNI 8153:2015 (draft)',
   StringKey.shellViewportHints: 'scroll zoom · drag pan · F fit · Ctrl+0 100%',
 
@@ -574,10 +580,13 @@ const Map<StringKey, String> _id = {
   StringKey.shellImportPdf: 'Impor PDF',
   StringKey.shellDark: 'Gelap',
   StringKey.shellLight: 'Terang',
+  StringKey.shellSwitchToDark: 'Ke mode gelap',
+  StringKey.shellSwitchToLight: 'Ke mode terang',
 
   // App shell — status bar.
   StringKey.shellNoSheet: 'Tidak ada lembar',
   StringKey.shellUncalibrated: 'Belum dikalibrasi',
+  StringKey.shellCalibrated: 'Terkalibrasi',
   StringKey.shellStandardsProvenance: 'SNI 8153:2015 (draf)',
   StringKey.shellViewportHints:
       'gulir zoom · seret geser · F pas · Ctrl+0 100%',

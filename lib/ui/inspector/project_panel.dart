@@ -98,28 +98,69 @@ CalcReportData _buildMechanicalReportData(WidgetRef ref) {
   );
 }
 
+/// Shared export driver: the completeness GUARD + success/failure FEEDBACK that
+/// wraps every export action. (1) If any sized edge resolves to zero geometric
+/// length (an uncalibrated sheet carrying drawn runs — they size to ZERO
+/// length), it raises a dismissible warning on [loadErrorProvider] and writes
+/// NOTHING — the engineer must calibrate first, so the BOM / pressures / drawing
+/// can't be silently wrong. (2) Otherwise it awaits [write] inside try/catch:
+/// `write` returns false when the user cancelled the file picker (no pill), true
+/// after a successful write ⇒ a transient "Exported `name`" confirmation pill;
+/// any thrown error ⇒ a "Could not export `name`" warning. The success pill
+/// reuses the same self-clearing mechanism as Save / Open / Import.
+Future<void> _runExport(
+  WidgetRef ref, {
+  required String name,
+  required Future<bool> Function() write,
+}) async {
+  if (ref.read(exportHasZeroLengthEdgesProvider)) {
+    final n = ref.read(zeroLengthSizedEdgeCountProvider);
+    ref.read(loadErrorProvider.notifier).set(
+          '$n drawn element(s) have zero length — calibrate the sheet before '
+          'exporting $name. The BOM, pressures and drawing would be wrong.',
+        );
+    return;
+  }
+  try {
+    final wrote = await write();
+    if (wrote) {
+      ref.read(statusMessageProvider.notifier).showStatus('Exported $name');
+    }
+  } catch (e) {
+    ref
+        .read(loadErrorProvider.notifier)
+        .set('Could not export $name: $e');
+  }
+}
+
 /// Gather the live design results into a calc report and write it to a Markdown
 /// file chosen by the user.
-Future<void> exportCalcReport(WidgetRef ref) async {
-  final project = ref.read(projectControllerProvider);
-  final data = _buildMechanicalReportData(ref);
+Future<void> exportCalcReport(WidgetRef ref) => _runExport(
+      ref,
+      name: 'calc report',
+      write: () async {
+        final project = ref.read(projectControllerProvider);
+        final data = _buildMechanicalReportData(ref);
 
-  final path = await FilePicker.saveFile(
-    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleCalcReport),
-    fileName: '${project.name}-report.md',
-    type: FileType.custom,
-    allowedExtensions: const ['md'],
-  );
-  if (path == null) return;
-  final full = path.endsWith('.md') ? path : '$path.md';
-  await File(full).writeAsString(buildCalcReportMarkdown(data));
-}
+        final path = await FilePicker.saveFile(
+          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleCalcReport),
+          fileName: '${project.name}-report.md',
+          type: FileType.custom,
+          allowedExtensions: const ['md'],
+        );
+        if (path == null) return false;
+        final full = path.endsWith('.md') ? path : '$path.md';
+        await File(full).writeAsString(buildCalcReportMarkdown(data));
+        return true;
+      },
+    );
 
 /// Build the compliance pass/fail roll-up from the live aggregated design
 /// issues. Pure read of `designIssuesProvider` (no new checks): warnings drive
 /// fail/review verdicts, info-tier items (unverified standards, advisories) are
 /// summarised but kept as PASS-with-note categories.
-ComplianceSummary _buildComplianceSummary(WidgetRef ref) {
+ComplianceSummary buildComplianceSummary(WidgetRef ref) {
   final issues = ref.read(designIssuesProvider);
 
   int countWhere(bool Function(DesignIssue) test) =>
@@ -129,9 +170,13 @@ ComplianceSummary _buildComplianceSummary(WidgetRef ref) {
   final velocityWarnings = countWhere((i) =>
       i.severity == IssueSeverity.warning &&
       (i.title.contains('velocity')));
-  // Calibration: any uncalibrated-sheet warning fails the check.
+  // Calibration: any uncalibrated-sheet issue fails the check — a blank sheet
+  // is a warning, an edge-bearing one is escalated to critical, and BOTH must
+  // fail the 'Sheet calibration' compliance item.
   final calibrationWarnings = countWhere((i) =>
-      i.severity == IssueSeverity.warning && i.title.contains('calibrated'));
+      (i.severity == IssueSeverity.warning ||
+          i.severity == IssueSeverity.critical) &&
+      i.title.contains('calibrated'));
   // Standards verification: unverified-standard info items.
   final unverified =
       countWhere((i) => i.title == 'Unverified standard');
@@ -161,52 +206,63 @@ ComplianceSummary _buildComplianceSummary(WidgetRef ref) {
 /// Gather BOTH the mechanical and electrical designs into one unified MEP
 /// building-services report (with a compliance summary) and write it to a
 /// Markdown file chosen by the user.
-Future<void> exportMepUnifiedReport(WidgetRef ref) async {
-  final project = ref.read(projectControllerProvider);
-  final mechanical = _buildMechanicalReportData(ref);
+Future<void> exportMepUnifiedReport(WidgetRef ref) => _runExport(
+      ref,
+      name: 'MEP report',
+      write: () async {
+        final project = ref.read(projectControllerProvider);
+        final mechanical = _buildMechanicalReportData(ref);
 
-  final eProject = ref.read(electricalProjectProvider);
-  final eResult = ref.read(electricalResultProvider);
-  final eAdvanced = ref.read(electricalAdvancedProvider);
-  const eProfile = PuilProfile();
-  final electrical = ElectricalCalcReportData(
-    projectName: project.name,
-    date: DateTime.now().toIso8601String().split('T').first,
-    standardsName: eProfile.name,
-    standardsRevision: eProfile.revision,
-    project: eProject,
-    result: eResult,
-    powerOneLine: eAdvanced.powerOneLine,
-    verifyItems: eAdvanced.verifyItems,
-    originFaultLevelA: eProject.originFaultLevelA?.amperes,
-    busbarClearingTimeS: eProject.busbarClearingTimeS,
-  );
+        final eProject = ref.read(electricalProjectProvider);
+        final eResult = ref.read(electricalResultProvider);
+        final eAdvanced = ref.read(electricalAdvancedProvider);
+        const eProfile = PuilProfile();
+        final electrical = ElectricalCalcReportData(
+          projectName: project.name,
+          date: DateTime.now().toIso8601String().split('T').first,
+          standardsName: eProfile.name,
+          standardsRevision: eProfile.revision,
+          project: eProject,
+          result: eResult,
+          powerOneLine: eAdvanced.powerOneLine,
+          verifyItems: eAdvanced.verifyItems,
+          originFaultLevelA: eProject.originFaultLevelA?.amperes,
+          busbarClearingTimeS: eProject.busbarClearingTimeS,
+        );
 
-  final md = buildMepUnifiedReport(
-    mechanical: mechanical,
-    electrical: electrical,
-    compliance: _buildComplianceSummary(ref),
-  );
+        final md = buildMepUnifiedReport(
+          mechanical: mechanical,
+          electrical: electrical,
+          compliance: buildComplianceSummary(ref),
+        );
 
-  final base = project.name.isEmpty ? 'project' : project.name;
-  final path = await FilePicker.saveFile(
-    dialogTitle:
-        MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleMepReport),
-    fileName: '$base-mep-report.md',
-    type: FileType.custom,
-    allowedExtensions: const ['md'],
-  );
-  if (path == null) return;
-  final full = path.endsWith('.md') ? path : '$path.md';
-  await File(full).writeAsString(md);
-}
+        final base = project.name.isEmpty ? 'project' : project.name;
+        final path = await FilePicker.saveFile(
+          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleMepReport),
+          fileName: '$base-mep-report.md',
+          type: FileType.custom,
+          allowedExtensions: const ['md'],
+        );
+        if (path == null) return false;
+        final full = path.endsWith('.md') ? path : '$path.md';
+        await File(full).writeAsString(md);
+        return true;
+      },
+    );
 
 /// Gather the live solved equipment (pumps, fans, room AHU/FCU/AC, and
 /// electrical panels) into an [EquipmentScheduleData] and write the equipment
 /// schedule to a Markdown file chosen by the user. The engine only tabulates
 /// already-solved duties — no new sizing here. Tags are assigned at gather time
 /// (sequential when not user-named), so the engine results stay untouched.
-Future<void> exportEquipmentSchedule(WidgetRef ref) async {
+Future<void> exportEquipmentSchedule(WidgetRef ref) => _runExport(
+      ref,
+      name: 'equipment schedule',
+      write: () => _writeEquipmentSchedule(ref),
+    );
+
+Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
   final project = ref.read(projectControllerProvider);
 
   // Pumps: the domestic-supply booster (upfeed) + the standpipe fire pump.
@@ -279,9 +335,10 @@ Future<void> exportEquipmentSchedule(WidgetRef ref) async {
     type: FileType.custom,
     allowedExtensions: const ['md'],
   );
-  if (path == null) return;
+  if (path == null) return false;
   final full = path.endsWith('.md') ? path : '$path.md';
   await File(full).writeAsString(buildEquipmentScheduleMarkdown(data));
+  return true;
 }
 
 /// Build the issuable-drawing chrome (legend / scale bar / north arrow / sheet
@@ -324,10 +381,16 @@ DrawingChrome _issuableChrome(
 }
 
 /// Export the current sheet/floor's drawn network as a DXF drawing file.
-Future<void> exportDrawingDxf(WidgetRef ref) async {
+Future<void> exportDrawingDxf(WidgetRef ref) => _runExport(
+      ref,
+      name: 'DXF drawing',
+      write: () => _writeDrawingDxf(ref),
+    );
+
+Future<bool> _writeDrawingDxf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
-  if (sheet == null) return;
+  if (sheet == null) return false;
   final levelCount = ref.read(projectControllerProvider).building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
   final dxf = networkToDxf(
@@ -343,16 +406,23 @@ Future<void> exportDrawingDxf(WidgetRef ref) async {
     type: FileType.custom,
     allowedExtensions: const ['dxf'],
   );
-  if (path == null) return;
+  if (path == null) return false;
   final full = path.endsWith('.dxf') ? path : '$path.dxf';
   await File(full).writeAsString(dxf);
+  return true;
 }
 
 /// Export the current sheet/floor's drawn network as a native (vector) PDF.
-Future<void> exportDrawingPdf(WidgetRef ref) async {
+Future<void> exportDrawingPdf(WidgetRef ref) => _runExport(
+      ref,
+      name: 'PDF drawing',
+      write: () => _writeDrawingPdf(ref),
+    );
+
+Future<bool> _writeDrawingPdf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
-  if (sheet == null) return;
+  if (sheet == null) return false;
   final levelCount = ref.read(projectControllerProvider).building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
   final bytes = networkToPdf(
@@ -369,9 +439,10 @@ Future<void> exportDrawingPdf(WidgetRef ref) async {
     type: FileType.custom,
     allowedExtensions: const ['pdf'],
   );
-  if (path == null) return;
+  if (path == null) return false;
   final full = path.endsWith('.pdf') ? path : '$path.pdf';
   await File(full).writeAsBytes(bytes);
+  return true;
 }
 
 /// Export the current sheet/floor's drawn network as a native ANNOTATED plan
@@ -379,10 +450,16 @@ Future<void> exportDrawingPdf(WidgetRef ref) async {
 /// date) and real §10 run/riser LENGTHS folded into each size label. The real
 /// lengths are pre-computed here (the engine `edgeLength` over the live
 /// calibrations + building) and passed to the pure `planToPdf`.
-Future<void> exportAnnotatedPlanPdf(WidgetRef ref) async {
+Future<void> exportAnnotatedPlanPdf(WidgetRef ref) => _runExport(
+      ref,
+      name: 'annotated plan PDF',
+      write: () => _writeAnnotatedPlanPdf(ref),
+    );
+
+Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
-  if (sheet == null) return;
+  if (sheet == null) return false;
   final project = ref.read(projectControllerProvider);
   final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
@@ -418,9 +495,10 @@ Future<void> exportAnnotatedPlanPdf(WidgetRef ref) async {
     type: FileType.custom,
     allowedExtensions: const ['pdf'],
   );
-  if (path == null) return;
+  if (path == null) return false;
   final full = path.endsWith('.pdf') ? path : '$path.pdf';
   await File(full).writeAsBytes(bytes);
+  return true;
 }
 
 /// All services offered in the draw palette / edge editor, in a sensible order.
@@ -1143,13 +1221,16 @@ class _RoomsSection extends ConsumerWidget {
                     return <Widget>[
                       const SizedBox(height: MechXSpacing.xxs),
                       Text(
+                        // The raw computed load PK (= BTU/h ÷ 9000); the unit
+                        // line below shows the recommended market-ladder PK, so
+                        // the two figures are labelled to read as distinct.
                         'Cooling (AC): ${load.btuPerHr.round()} BTU/h · '
-                        '${load.pk.toStringAsFixed(1)} PK',
+                        '${load.pk.toStringAsFixed(1)} PK (load)',
                         style: type.caption.copyWith(color: colors.accent),
                       ),
                       Text(
                         '${acs.length} ${acs.length == 1 ? 'unit' : 'units'} '
-                        '($typeStr) -> ${pkStr(perUnit.pk)} PK each '
+                        '($typeStr) -> ${pkStr(perUnit.pk)} PK each (recommended) '
                         '(${perUnit.nominalBtuPerHr.round()} BTU/h, '
                         '~${(acInputPowerW(coolingBtuPerHr: perUnit.nominalBtuPerHr) / 1000).toStringAsFixed(2)} kW)',
                         style: type.caption.copyWith(
@@ -1544,7 +1625,7 @@ class _ResultsSection extends ConsumerWidget {
             alignment: Alignment.centerLeft,
             child: MechXButton(
               label: 'Export BOM (CSV)',
-              onPressed: () => _exportBom(bom, fittings,
+              onPressed: () => _exportBom(ref, bom, fittings,
                   MechXStringsData(ref.read(localeProvider))(
                       StringKey.exportTitleBom)),
             ),
@@ -1555,24 +1636,30 @@ class _ResultsSection extends ConsumerWidget {
     );
   }
 
-  Future<void> _exportBom(List<BomLine> bom, List<FittingLine> fittings,
-      String dialogTitle) async {
-    final path = await FilePicker.saveFile(
-      dialogTitle: dialogTitle,
-      fileName: 'mechx-bom.csv',
-      type: FileType.custom,
-      allowedExtensions: const ['csv'],
-    );
-    if (path == null) return;
-    final full = path.endsWith('.csv') ? path : '$path.csv';
-    final csv = StringBuffer()
-      ..writeln('# Pipe / duct')
-      ..write(bomToCsv(bom))
-      ..writeln()
-      ..writeln('# Fittings (estimated)')
-      ..write(fittingsToCsv(fittings));
-    await File(full).writeAsString(csv.toString());
-  }
+  Future<void> _exportBom(WidgetRef ref, List<BomLine> bom,
+          List<FittingLine> fittings, String dialogTitle) =>
+      _runExport(
+        ref,
+        name: 'BOM',
+        write: () async {
+          final path = await FilePicker.saveFile(
+            dialogTitle: dialogTitle,
+            fileName: 'mechx-bom.csv',
+            type: FileType.custom,
+            allowedExtensions: const ['csv'],
+          );
+          if (path == null) return false;
+          final full = path.endsWith('.csv') ? path : '$path.csv';
+          final csv = StringBuffer()
+            ..writeln('# Pipe / duct')
+            ..write(bomToCsv(bom))
+            ..writeln()
+            ..writeln('# Fittings (estimated)')
+            ..write(fittingsToCsv(fittings));
+          await File(full).writeAsString(csv.toString());
+          return true;
+        },
+      );
 
   Widget _kv(BuildContext context, String key, String value) {
     final colors = context.colors;

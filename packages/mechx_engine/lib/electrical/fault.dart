@@ -76,9 +76,16 @@ const double sourceXrRatio = 7;
 const double zsVoltageFactor = 0.95;
 
 /// Conductor R rises with temperature; for the worst-case ADS loop the loop R
-/// is evaluated near the fault temperature (~×1.28 lifts the 70 °C R toward the
-/// PVC fault limit), the unfavourable case for guaranteed disconnection.
-// VERIFY — secondarySource (IEC 60364-4-41 / IEC 60909 temperature correction).
+/// is evaluated near the conductor fault-limit temperature (the unfavourable
+/// case for guaranteed disconnection), lifting the 70 °C tabulated R toward the
+/// 160 °C PVC final short-circuit limit (IEC 60364-4-43 Table 43A).
+///
+/// Derivation (copper resistance-temperature ratio, β = 235 °C):
+///   R(160)/R(70) = (235 + 160) / (235 + 70) = 395 / 305 = 1.295.
+/// Rounded down to 1.28 as a slightly less conservative working value (the PE
+/// reaches the limit later than the phase). Base 70 °C → target ~160 °C PVC.
+// VERIFY — secondarySource (IEC 60364-4-41 / IEC 60364-4-43 temperature
+// correction; the 1.28 vs derived 1.295 rounding is an engineering choice).
 const double zsFaultTempFactor = 1.28;
 
 /// Current-based selectivity (discrimination) rule of thumb: an upstream device
@@ -628,6 +635,24 @@ FaultStudyResult faultStudy(
             circuitId: c.circuitId,
           ));
         }
+      } else if (!c.rcd.required) {
+        // TT loop: ADS via overcurrent is not modelled (the loop impedance is
+        // too high to guarantee disconnection), and this way carries no
+        // modelled RCD either — so its earth fault is protected by NEITHER
+        // mechanism. (TT finals and feeders now get an RCD in `circuitRcd`, so
+        // only a genuinely uncovered way, e.g. an RCD-exempt life-safety run,
+        // reaches here.)
+        warnings.add(ElectricalWarning(
+          code: 'tt-no-earth-fault-protection',
+          severity: WarningSeverity.warning,
+          message:
+              '${panelResult.name} / ${c.name}: TT circuit with no modelled '
+              'earth-fault protection — the high TT earth-loop impedance gives '
+              'no ADS by overcurrent and this way carries no RCD. Fit a '
+              'time-delayed/S-type RCD or verify the earth-loop disconnection.',
+          panelId: panelId,
+          circuitId: c.circuitId,
+        ));
       }
 
       circuitResults[c.circuitId] = CircuitFaultResult(

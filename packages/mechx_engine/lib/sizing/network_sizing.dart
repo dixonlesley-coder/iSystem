@@ -96,6 +96,12 @@ class EdgeSizing {
   final Length? width;
   final Length? height;
 
+  /// True when an air duct could not meet its velocity limit / friction target
+  /// at the largest standard size and was CLAMPED (see
+  /// DuctSizingResult.overCapacity). The caller surfaces this as a per-edge
+  /// design issue. Default false ⇒ in-range ducts are byte-identical.
+  final bool overCapacity;
+
   const EdgeSizing({
     required this.edgeId,
     required this.service,
@@ -104,6 +110,7 @@ class EdgeSizing {
     required this.velocity,
     this.width,
     this.height,
+    this.overCapacity = false,
   });
 
   /// True when this edge is a rectangular duct (carries W×H).
@@ -216,11 +223,19 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
       );
     case FlowRegime.air:
       if (ctx.ductShape == DuctShape.rectangular) {
-        final r = duct.sizeRectangularByVelocity(
-          airflow: flow,
-          maxVelocity: ctx.maxDuctVelocity,
-          aspectRatio: ctx.ductAspectRatio,
-        );
+        // Honour the equal-friction selection for rectangular too (not just
+        // round) — velocity method keeps sizeRectangularByVelocity.
+        final r = ctx.ductMethod == DuctSizingMethod.equalFriction
+            ? duct.sizeRectangularByEqualFriction(
+                airflow: flow,
+                targetPaPerMetre: ctx.ductEqualFrictionPa,
+                aspectRatio: ctx.ductAspectRatio,
+              )
+            : duct.sizeRectangularByVelocity(
+                airflow: flow,
+                maxVelocity: ctx.maxDuctVelocity,
+                aspectRatio: ctx.ductAspectRatio,
+              );
         return EdgeSizing(
           edgeId: edge.id,
           service: edge.service,
@@ -229,6 +244,7 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
           velocity: r.actualVelocity,
           width: r.width,
           height: r.height,
+          overCapacity: r.overCapacity,
         );
       }
       final r = ctx.ductMethod == DuctSizingMethod.equalFriction
@@ -246,6 +262,7 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
         flow: flow,
         diameter: r.diameter,
         velocity: r.actualVelocity,
+        overCapacity: r.overCapacity,
       );
     case FlowRegime.gravity:
       final r = drain.sizeForFlow(
@@ -483,23 +500,40 @@ Map<String, EdgeSizing> autoSizeNetwork(
       if (isLooped &&
           (regime == FlowRegime.pressurized || regime == FlowRegime.air)) {
         final demandFlow = <String, double>{};
-        for (final n in component) {
-          if (n == root) continue;
-          double f;
-          if (useUbap) {
+        if (useUbap) {
+          // Water supply: diversify the COMBINED fixture-unit load through the
+          // Hunter/UBAP curve ONCE for the whole ring (mirrors the tree path —
+          // accumulate units, then curve), then split the diversified total by
+          // each node's UBAP share so Hardy–Cross balances the same spatial
+          // distribution. Curving each node's units individually and summing
+          // would over-size the ring (the curve is concave: Σf(uᵢ) > f(Σuᵢ)).
+          final nodeUbap = <String, double>{};
+          var totalUbap = 0.0;
+          for (final n in component) {
+            if (n == root) continue;
             final ubap = nodeFixtureUnits[n] ?? (degree(n) == 1 ? fuPerLeaf : 0.0);
-            f = ubap <= 0
-                ? 0.0
-                : profile
-                    .probableFlowForFixtureUnits(ubap, system: flushSystem)
-                    .cubicMetersPerSecond;
-          } else {
+            if (ubap > 0) {
+              nodeUbap[n] = ubap;
+              totalUbap += ubap;
+            }
+          }
+          if (totalUbap > 0) {
+            final totalFlow = profile
+                .probableFlowForFixtureUnits(totalUbap, system: flushSystem)
+                .cubicMetersPerSecond;
+            for (final entry in nodeUbap.entries) {
+              demandFlow[entry.key] = totalFlow * (entry.value / totalUbap);
+            }
+          }
+        } else {
+          for (final n in component) {
+            if (n == root) continue;
             final explicit = nodeFlowDemand[n];
-            f = explicit != null
+            final f = explicit != null
                 ? explicit.cubicMetersPerSecond
                 : (degree(n) == 1 ? demand.cubicMetersPerSecond : 0.0);
+            if (f != 0) demandFlow[n] = f;
           }
-          if (f != 0) demandFlow[n] = f;
         }
 
         final lengthById = <String, double>{

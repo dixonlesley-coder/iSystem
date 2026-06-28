@@ -185,14 +185,18 @@ final class DrainageSizingResult {
 ///
 /// ## Method
 /// For each diameter in [standardDrainDiametersMm] (ascending), the full-bore
-/// Manning capacity is computed via [manningFlowFull]. The usable capacity is:
+/// Manning capacity is computed via [manningFlowFull]. The usable (partial-full)
+/// capacity at the design depth is the TRUE circular-pipe partial-full flow:
 ///
-///   Q_usable = Q_full_bore × fillRatio
+///   Q_usable = Q_full_bore × partialFullCapacityFactor(fillRatio)
 ///
+/// where [partialFullCapacityFactor] is the exact A·R^(2/3) ratio for a circular
+/// section flowing at depth = fillRatio·D (≈ 0.912 at r = 0.75, and = fillRatio
+/// only in the degenerate r = 0.5 half-full case) — NOT a linear depth scaling.
 /// The smallest pipe whose full-bore capacity satisfies
-/// `Q_full_bore ≥ flow / fillRatio` is selected. If no standard size
-/// suffices, the largest (DN300) is returned — the caller should treat this as
-/// an overload condition.
+/// `Q_full_bore ≥ flow / partialFullCapacityFactor(fillRatio)` is selected. If
+/// no standard size suffices, the largest (DN300) is returned — the caller
+/// should treat this as an overload condition.
 ///
 /// ## Parameters
 /// * [flow]       — Design peak flow demand (m³/s internally).

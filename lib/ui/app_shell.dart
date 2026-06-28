@@ -11,6 +11,7 @@ import '../data/project_document.dart';
 import '../data/recovery.dart';
 import '../store/app_state.dart';
 import '../store/command_store.dart';
+import '../store/design_issues_store.dart';
 import '../store/electrical_store.dart';
 import '../store/layer_store.dart';
 import '../store/project_store.dart';
@@ -39,6 +40,7 @@ import 'theme/design_tokens.dart';
 import 'theme/mechx_theme.dart';
 import 'widgets/mechx_button.dart';
 import 'widgets/mechx_focus_ring.dart';
+import 'widgets/severity_glyph.dart';
 
 /// Top-level layout (PanelMaker-style chrome): a left navigation rail beside a
 /// slim top bar · body · status-bar column. The rail picks the [ShellSection];
@@ -397,9 +399,11 @@ class _TopBar extends ConsumerWidget {
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
+              // Name the ACTION, not the current mode: in light mode the button
+              // acts toward dark, and vice-versa.
               label: brightness == Brightness.dark
-                  ? context.strings(StringKey.shellDark)
-                  : context.strings(StringKey.shellLight),
+                  ? context.strings(StringKey.shellSwitchToLight)
+                  : context.strings(StringKey.shellSwitchToDark),
               onPressed: () =>
                   ref.read(brightnessProvider.notifier).toggle(),
             ),
@@ -423,6 +427,14 @@ class _StatusBar extends ConsumerWidget {
     final colors = context.colors;
     final type = context.type;
     final sheet = ref.watch(sheetsControllerProvider).current;
+    final project = ref.watch(projectControllerProvider);
+    final calibrated =
+        sheet != null && project.calibrationFor(sheet.id) != null;
+    // The standards-provenance dot lights only when there are genuinely
+    // unverified values to flag — a quiet caption otherwise.
+    final hasUnverified = ref
+        .watch(designIssuesProvider)
+        .any((i) => i.title == 'Unverified standard');
 
     final caption = type.caption;
 
@@ -450,15 +462,39 @@ class _StatusBar extends ConsumerWidget {
                   ),
                   if (sheet != null) ...[
                     _dot(colors.textMuted),
-                    Flexible(
-                      child: Text(
-                        context.strings(StringKey.shellUncalibrated),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        softWrap: false,
-                        style: caption.copyWith(color: colors.textMuted),
+                    if (calibrated) ...[
+                      // A redundant check glyph (shape + colour) so the
+                      // calibrated state survives without hue alone.
+                      Padding(
+                        padding:
+                            const EdgeInsets.only(right: MechXSpacing.xxs),
+                        child: CustomPaint(
+                          size: const Size(10, 10),
+                          painter: SeverityGlyph(
+                            kind: SeverityGlyphKind.check,
+                            color: colors.success,
+                          ),
+                        ),
                       ),
-                    ),
+                      Flexible(
+                        child: Text(
+                          context.strings(StringKey.shellCalibrated),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          softWrap: false,
+                          style: caption.copyWith(color: colors.success),
+                        ),
+                      ),
+                    ] else
+                      Flexible(
+                        child: Text(
+                          context.strings(StringKey.shellUncalibrated),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          softWrap: false,
+                          style: caption.copyWith(color: colors.textMuted),
+                        ),
+                      ),
                   ],
                 ],
               ),
@@ -485,15 +521,18 @@ class _StatusBar extends ConsumerWidget {
                 mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  Container(
-                    width: 7,
-                    height: 7,
-                    margin: const EdgeInsets.only(right: MechXSpacing.xs),
-                    decoration: BoxDecoration(
-                      color: colors.warning,
-                      borderRadius: const BorderRadius.all(Radius.circular(4)),
+                  if (hasUnverified)
+                    Container(
+                      key: const ValueKey('provenance-warning-dot'),
+                      width: 7,
+                      height: 7,
+                      margin: const EdgeInsets.only(right: MechXSpacing.xs),
+                      decoration: BoxDecoration(
+                        color: colors.warning,
+                        borderRadius:
+                            const BorderRadius.all(Radius.circular(4)),
+                      ),
                     ),
-                  ),
                   Flexible(
                     child: Text(
                       context.strings(StringKey.shellStandardsProvenance),

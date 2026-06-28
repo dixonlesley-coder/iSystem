@@ -98,6 +98,15 @@ final class AcSelection {
   });
 }
 
+/// The market-ladder PK for a cooling load — the PK of the smallest standard AC
+/// at or above [btuPerHr] (via [selectAc]). This is DISTINCT from the raw load
+/// PK ([btuPerHrToPk] / [CoolingLoad.pk] = btuPerHr ÷ 9000): the raw figure is
+/// the continuous requirement, while this is the discrete unit you would buy.
+/// Both are correct; the UI labels them separately and uses THIS one when it
+/// names a recommended unit, so the displayed unit PK is never re-derived
+/// inconsistently with [selectAc].
+double ladderPk(double btuPerHr) => selectAc(btuPerHr).pk;
+
 /// Smallest standard AC whose nominal capacity ≥ [requiredBtuPerHr]. If the load
 /// exceeds the largest size, returns the largest with [AcSelection.exceedsRange]
 /// set (split across multiple units).

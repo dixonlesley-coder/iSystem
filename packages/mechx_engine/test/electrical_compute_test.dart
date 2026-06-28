@@ -67,15 +67,17 @@ void main() {
       expect(byId(r, 'c1').threePhase, isFalse);
       // Sockets: 3000 / (231·0.9) = 14.43 → 14.4 A
       expect(byId(r, 'c2').designCurrent.amperes, closeTo(14.4, 1e-9));
-      // Motor (P=7.5 kW approximation): 7500 / (√3·400·0.85) = 12.736 → 12.7 A
-      expect(byId(r, 'c3').designCurrent.amperes, closeTo(12.7, 1e-9));
+      // Motor: nameplate FLC from shaft kW / efficiency 0.88:
+      //   P_in = 7500/0.88 = 8522.73 W; Ib = 8522.73/(√3·400·0.85)
+      //        = 14.472 → 14.5 A (was 12.7 on the shaft-kW approximation).
+      expect(byId(r, 'c3').designCurrent.amperes, closeTo(14.5, 1e-9));
       expect(byId(r, 'c3').threePhase, isTrue);
     });
 
     test('breaker rating = smallest standard ≥ Ib', () {
       expect(byId(r, 'c1').breaker.ratingA.amperes, 10); // ≥ 8.7
       expect(byId(r, 'c2').breaker.ratingA.amperes, 16); // ≥ 14.4
-      expect(byId(r, 'c3').breaker.ratingA.amperes, 16); // ≥ 12.7
+      expect(byId(r, 'c3').breaker.ratingA.amperes, 16); // ≥ 14.5
     });
 
     test('cable section = final-circuit minimum (ampacity not binding)', () {
@@ -83,7 +85,7 @@ void main() {
       expect(byId(r, 'c1').cable.csaMm2, 1.5);
       // Socket final minimum 2.5 mm² (KHA 25 A ≥ max(In 16, 1.25·14.43=18.0)).
       expect(byId(r, 'c2').cable.csaMm2, 2.5);
-      // Motor 3φ final minimum 2.5 mm² (KHA 25 A ≥ max(16, 1.25·12.74=15.9)).
+      // Motor 3φ final minimum 2.5 mm² (KHA 25 A ≥ max(16, 1.25·14.47=18.1)).
       expect(byId(r, 'c3').cable.csaMm2, 2.5);
     });
 
@@ -117,27 +119,28 @@ void main() {
     });
 
     test('balanced phases + worst-phase demand current', () {
-      // 3φ motor loads every line at 12.7 A. Single-phase sorted desc:
-      //   sockets 14.4 → least-loaded line (all equal) → L1: L1 = 12.7+14.4 = 27.1
-      //   lighting 8.7 → least loaded (L2 or L3 = 12.7) → L2: L2 = 12.7+8.7 = 21.4
-      //   L3 = 12.7. Local search finds no smaller spread.
-      expect(r.phaseBalance.l1, closeTo(27.1, 1e-9));
-      expect(r.phaseBalance.l2, closeTo(21.4, 1e-9));
-      expect(r.phaseBalance.l3, closeTo(12.7, 1e-9));
-      // Worst phase = 27.1 A drives the incomer + main bus.
-      expect(r.demandCurrent.amperes, closeTo(27.1, 1e-9));
-      // imbalance = (27.1-12.7)/avg(20.4) ·100 = 14.4/20.4·100 = 70.6 % > 15 %.
-      expect(r.imbalancePercent, closeTo(70.6, 0.2));
+      // 3φ motor loads every line at 14.5 A. Single-phase sorted desc:
+      //   sockets 14.4 → least-loaded line (all equal) → L1: L1 = 14.5+14.4 = 28.9
+      //   lighting 8.7 → least loaded (L2 or L3 = 14.5) → L2: L2 = 14.5+8.7 = 23.2
+      //   L3 = 14.5. Local search finds no smaller spread.
+      expect(r.phaseBalance.l1, closeTo(28.9, 1e-9));
+      expect(r.phaseBalance.l2, closeTo(23.2, 1e-9));
+      expect(r.phaseBalance.l3, closeTo(14.5, 1e-9));
+      // Worst phase = 28.9 A drives the incomer + main bus.
+      expect(r.demandCurrent.amperes, closeTo(28.9, 1e-9));
+      // avg = (28.9+23.2+14.5)/3 = 22.2; imbalance = (28.9-14.5)/22.2·100
+      //     = 14.4/22.2·100 = 64.86 % > 15 %.
+      expect(r.imbalancePercent, closeTo(64.86, 0.2));
       expect(r.warnings.map((w) => w.code), contains('phase-imbalance'));
     });
 
     test('incomer breaker ≥ worst-phase demand, 4-pole on 3φ', () {
-      expect(r.incomer.breaker.ratingA.amperes, 32); // smallest ≥ 27.1
+      expect(r.incomer.breaker.ratingA.amperes, 32); // smallest ≥ 28.9
       expect(r.incomer.poles, 4);
     });
 
     test('main busbar floored to incomer rating; N + PE bars', () {
-      // Demand 27.1 A, but the bus is rated for the incomer In = 32 A. The
+      // Demand 28.9 A, but the bus is rated for the incomer In = 32 A. The
       // smallest bar with ampacity ≥ 32 A is the 24 mm² / 110 A bar.
       expect(r.busbar.csaMm2, 24);
       expect(r.busbar.ampacityA.amperes, 110);
@@ -149,7 +152,7 @@ void main() {
     test('one busbar section carries all 3 ways at the worst-phase current', () {
       expect(r.busbarSections.length, 1);
       expect(r.busbarSections.first.ways, 3);
-      expect(r.busbarSections.first.sectionCurrent.amperes, closeTo(27.1, 1e-9));
+      expect(r.busbarSections.first.sectionCurrent.amperes, closeTo(28.9, 1e-9));
     });
   });
 
@@ -344,6 +347,70 @@ void main() {
       expect(r.busbarSections.length, 2);
       expect(r.busbarSections[0].ways, 12);
       expect(r.busbarSections[1].ways, 1);
+    });
+  });
+
+  group('cable-ampacity-inadequate warning (In > Iz)', () {
+    // A heavy single-phase load crushed by an extreme derating (60 °C ambient
+    // ⇒ ×0.5, 9 grouped circuits ⇒ ×0.5 ⇒ df 0.25) so even 4× the largest
+    // 300 mm² section can't reach the required Iz: the breaker In then exceeds
+    // the conductor Iz and no longer protects it ⇒ an error warning.
+    const heavy = ElectricalPanel(
+      id: 'HV',
+      name: 'Heavy',
+      system: ElectricalSystem.singlePhase,
+      voltage: Voltage(230),
+      ambientTempC: 60,
+      groupingCount: 9,
+      circuits: [
+        ElectricalCircuit(
+          id: 'big',
+          name: 'Big load',
+          loadKind: LoadKind.socket,
+          loadW: 200000, // ~870 A single-phase
+          cosPhi: 1.0,
+          length: Length(5),
+        ),
+      ],
+    );
+
+    test('emits a cable-ampacity-inadequate error for the under-protected way',
+        () {
+      final r = computePanel(p, heavy);
+      final big = byId(r, 'big');
+      // The cable could not reach ampacity (flag false) ⇒ breaker In > Iz.
+      expect(big.cable.ampacityReached, isFalse);
+      expect(big.breaker.ratingA.amperes,
+          greaterThan(big.cable.deratedIz.amperes));
+      final w = r.warnings.where((w) => w.code == 'cable-ampacity-inadequate');
+      expect(w, hasLength(1));
+      expect(w.single.severity, WarningSeverity.error);
+      expect(w.single.circuitId, 'big');
+    });
+
+    test('a normally-sized circuit produces no such warning', () {
+      const ok = ElectricalPanel(
+        id: 'OK',
+        name: 'Normal',
+        system: ElectricalSystem.singlePhase,
+        voltage: Voltage(230),
+        circuits: [
+          ElectricalCircuit(
+            id: 'c1',
+            name: 'Sockets',
+            loadKind: LoadKind.socket,
+            loadW: 3000,
+            cosPhi: 0.9,
+            length: Length(20),
+          ),
+        ],
+      );
+      final r = computePanel(p, ok);
+      expect(byId(r, 'c1').cable.ampacityReached, isTrue);
+      expect(
+        r.warnings.where((w) => w.code == 'cable-ampacity-inadequate'),
+        isEmpty,
+      );
     });
   });
 }

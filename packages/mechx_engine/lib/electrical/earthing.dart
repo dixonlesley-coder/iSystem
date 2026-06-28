@@ -275,6 +275,22 @@ RcdSpec circuitRcd({
       type: rcdType(),
     );
   }
+  // A TT FEEDER (distribution circuit, not a final) still needs earth-fault
+  // protection: the high TT earth-loop impedance means an overcurrent device
+  // cannot guarantee disconnection (no ADS on a TT loop). A time-delayed
+  // (S-type) 300 mA RCD provides it while discriminating above the 30/100 mA
+  // RCDs on the downstream finals.
+  if (earthingSystem == EarthingSystem.tt) {
+    return RcdSpec(
+      required: true,
+      ratingMa: 300,
+      reason:
+          'TT feeder — time-delayed (S-type) RCD for earth-fault protection, '
+          'selective above the downstream final RCDs (no ADS on the TT loop). '
+          '// VERIFY',
+      type: rcdType(),
+    );
+  }
   if (loadKind == LoadKind.socket || loadKind == LoadKind.evCharger) {
     return RcdSpec(
       required: true,

@@ -227,6 +227,15 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
+- **Audit-fix wave (2026-06-28) — resolved** (`AUDIT-REPORT.md`, see the §15 row):
+  the over-capacity air duct no longer THROWS (clamps + `EdgeSizing.overCapacity`
+  flag → Review warning via `airOverCapacityProvider`); rectangular ducts honour
+  equal-friction; looped water-supply diversifies the SUMMED UBAP once (no over-sized
+  ring source); a cable that can't meet `Iz ≥ In` raises a `cable-ampacity-inadequate`
+  ERROR instead of failing silently; TT feeders now require a 300 mA S-type RCD and
+  an uncovered TT way warns `tt-no-earth-fault-protection`; hand-entered motor FLC
+  includes a 0.88 efficiency factor. The over-capacity badge is Review-panel-only
+  (no on-plan marker yet — a future UI wave).
 - Electrical ("E") domain — **now in scope**: this repo is being merged into the
   single M+E+P app **iSystem** (see the §15 decisions-log "Project merge" row).
   The electrical engine is being ported to pure Dart under
@@ -611,6 +620,22 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   ring edge wrongly carries the full load. Do NOT iterate resistance against the
   velocity-sized diameters — it is unstable (see the inline note). Trees take the
   exact same code path as before. Don't route gravity loops through Hardy-Cross.
+  Looped **water-supply** components accumulate RAW per-node UBAP, curve the
+  SUMMED units ONCE via `probableFlowForFixtureUnits`, then split the diversified
+  total by each node's UBAP share before Hardy-Cross (mirrors the tree path — a
+  ring edge no longer carries an un-diversified full load).
+- **Duct over-capacity NEVER throws (`sizing/duct_sizing.dart`)**: when the ideal
+  diameter/side exceeds the largest standard size, `sizeByVelocity` /
+  `sizeByEqualFriction` / `sizeRectangularByVelocity` / `sizeRectangularByEqualFriction`
+  CLAMP to the largest size and set `overCapacity = true` (carrying the actual
+  over-target friction) — they must NOT `orElse: throw` (a throw aborts the whole
+  solve). `EdgeSizing.overCapacity` threads the flag through `sizeEdge`; the app
+  surfaces it via `airOverCapacityProvider` → `designIssuesProvider` as a per-edge
+  warning (Review panel only — no on-plan badge yet). `overCapacity` is a
+  robustness flag, NOT a standards value (no `// VERIFY`). Defaults false ⇒
+  in-range ducts byte-identical. Rectangular ducts now honour equal-friction
+  (`sizeRectangularByEqualFriction`) when `ctx.ductMethod == equalFriction` (in
+  both `network_sizing` and `room_air`); the velocity path is unchanged.
 - **Network rooting (`autoSizeNetwork`)**: each service component is rooted at
   its *source* — a `plant`, else a non-fixture/non-demand entry leaf, else the
   busiest demand-free junction. The root's own demand never traverses an edge,
@@ -718,6 +743,30 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   default). Null `cableType` ⇒ **byte-identical**. The KHA *numbers* are the
   Supreme/SUCACO-ported tables; per-family number tables that depart from the generic
   method table remain a `// VERIFY` refinement pending the Supreme datasheet.
+- **Cable ampacity-inadequate is SURFACED, never silent (`electrical/{results,compute}.dart`)**:
+  `CableResult.ampacityReached` (default true) is false only when the cable cannot
+  satisfy `Iz ≥ In` even at the largest CSA (the vd-only fallback still REACHED
+  ampacity → true). `compute.dart` `_computeCircuit` emits a `WarningSeverity.error`
+  `cable-ampacity-inadequate` (IEC 60364-4-43 / PUIL 2.2.8.3, names Iz vs In) when
+  `!ampacityReached` — fires only on a previously-silent unsafe design ⇒ byte-identical
+  otherwise. The `csaMm2`/`deratedIz` numbers are unchanged.
+- **TT feeders get earth-fault protection (`electrical/{earthing,fault}.dart`)**:
+  `circuitRcd` adds a TT-FEEDER branch (below the TT-final branch) requiring a
+  **300 mA S-type time-delayed** RCD (selective above the 30/100 mA finals; reason
+  `// VERIFY`); spare/life-safety early-returns still win and TN feeders are unchanged.
+  `fault.dart` warns `tt-no-earth-fault-protection` for a TT way covered by neither
+  ADS nor an RCD (e.g. an RCD-exempt life-safety run). TT finals now carry
+  `rcd.required = true`, so existing TT invariants (`zsOhm`/`adsOk` null, no
+  `ads-disconnection`) are preserved and they no longer warn.
+- **Motor FLC includes efficiency (`electrical/compute.dart`)**: a hand-entered
+  motor's `motorKw` is SHAFT power; the `motorLike` branch divides it by a file-level
+  `_assumedMotorEfficiency = 0.88` (`// VERIFY` `secondarySource`, deliberately NOT in
+  a standards profile to avoid implying SNI/PUIL provenance) before deriving Ib — so
+  the input current reflects the supply, not the shaft. The A5 `flaOverrideA` feed
+  path (MEP pump/fan duty) is untouched. NOT byte-identical: hand-entered motor Ib
+  rose ~13.8 % (the affected test's phase-balance/section-current/imbalance were
+  re-derived to the new first-principles values; the protection/cable/incomer/busbar
+  ladder rungs were unaffected).
 - **Pump/fan operating point (`sizing/operating_point.dart`)**: pure
   ORCHESTRATION over `hydraulics.dart` — the system-resistance curve
   (`H_sys = H_static + k·Q²` pump / `Δp_sys = k·Q²` fan) × a representative

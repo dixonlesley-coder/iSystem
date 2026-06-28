@@ -100,6 +100,11 @@ final electricalProjectProvider =
 /// inspector); a project that leaves them unset uses this 0.1 s and the 16 kA
 /// origin default below, preserving the prior byte-identical behaviour.
 /// // VERIFY against the assembly's declared Icw / the upstream device let-through.
+/// // VERIFY — the 0.1 s adequacy is valid ONLY if the upstream device clears in
+/// // ≤ 0.1 s (an instantaneous / current-limiting trip). A bar DECLARED on a 1 s
+/// // Icw, or fed by a selective time-delayed incomer, must be re-checked on its
+/// // real clearing time — do not mix the 1 s declaration basis with this 0.1 s
+/// // disconnection basis silently.
 const double _liveBusbarClearingTimeS = 0.1;
 
 final electricalResultProvider = Provider<ElectricalSystemResult>(
