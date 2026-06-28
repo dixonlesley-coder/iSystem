@@ -167,4 +167,61 @@ void main() {
       matchesGoldenFile('goldens/10_single_line_inferred.png'),
     );
   });
+
+  testWidgets('tapping an inferred riser commits a real sized riser edge',
+      (tester) async {
+    setDesktopSurface(tester, size: const Size(1100, 760));
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    container.read(projectControllerProvider.notifier).setFloors(const [
+      Floor('Ground', Length(4.0)),
+      Floor('Level 1', Length(4.0)),
+    ]);
+    container.read(networkControllerProvider.notifier).loadNetwork(Network(
+      nodes: [
+        _n('a', 150, 0, role: NodeRole.plant, component: NodeComponent.pump),
+        _n('b', 600, 0, role: NodeRole.fixture),
+        _n('c', 250, 1),
+        _n('d', 700, 1, role: NodeRole.fixture),
+      ],
+      edges: [
+        const NetEdge(
+            id: 'g1', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
+        const NetEdge(
+            id: 'g2', fromId: 'c', toId: 'd', service: ServiceType.coldWater),
+      ],
+    ));
+    bool hasRiser() => container
+        .read(networkControllerProvider)
+        .network
+        .edges
+        .any((e) => e.kind == EdgeKind.riser);
+    expect(hasRiser(), isFalse);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: const MechXTheme(
+        data: MechXThemeData.dark,
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: MediaQuery(
+            data: MediaQueryData(size: Size(1100, 760)),
+            child: SchematicView(),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    await tester.tap(find.text('Infer risers'));
+    await tester.pump();
+    // The inferred connector's vertical leg sits at the leftmost node x
+    // (≈ side-pad) spanning the two floor bands — tap it about mid-height.
+    await tester.tapAt(const Offset(32, 400));
+    // Drain the transient 'Riser added' status-message timer before teardown.
+    await tester.pump(const Duration(seconds: 4));
+
+    // The dashed suggestion became a real riser edge (sized via §10 elevation).
+    expect(hasRiser(), isTrue);
+  });
 }

@@ -32,6 +32,7 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/sni.dart';
 
+import '../../store/app_state.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
@@ -349,13 +350,54 @@ class _ServiceChip extends StatelessWidget {
 // Auto mode — the read-only generated diagram (unchanged behaviour)
 // ---------------------------------------------------------------------------
 
-class _AutoElevation extends ConsumerWidget {
+class _AutoElevation extends ConsumerStatefulWidget {
   final ServiceType? focus;
   final bool inferRisers;
   const _AutoElevation({this.focus, this.inferRisers = false});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_AutoElevation> createState() => _AutoElevationState();
+}
+
+class _AutoElevationState extends ConsumerState<_AutoElevation> {
+  Size _size = Size.zero;
+  bool _hoverInferred = false;
+
+  /// Click tolerance (px) for hitting a dashed inferred connector.
+  static const double _hitTol = 9.0;
+
+  List<_InferredRiser> _inferred(Network net, int levels) {
+    if (!widget.inferRisers || _size.isEmpty) return const [];
+    final pos = _autoNodePositions(net, levels, _size, focus: widget.focus);
+    return _computeInferredRisers(net, pos, widget.focus);
+  }
+
+  _InferredRiser? _hit(Offset local, Network net, int levels) {
+    _InferredRiser? best;
+    var bestD = _hitTol;
+    for (final r in _inferred(net, levels)) {
+      final d = _distanceToInferred(r, local);
+      if (d < bestD) {
+        bestD = d;
+        best = r;
+      }
+    }
+    return best;
+  }
+
+  void _commit(Offset local, Network net, int levels) {
+    final r = _hit(local, net, levels);
+    if (r == null) return;
+    final added = ref
+        .read(networkControllerProvider.notifier)
+        .connectRiser(r.fromId, r.toId, r.service);
+    if (added != null) {
+      ref.read(statusMessageProvider.notifier).showStatus('Riser added');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final network = ref.watch(networkControllerProvider).network;
     final sizing = ref.watch(sizingProvider);
     final building = ref.watch(projectControllerProvider).building;
@@ -370,22 +412,45 @@ class _AutoElevation extends ConsumerWidget {
         ),
       );
     }
+    final levels = building.levelCount;
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final size = Size(
+        _size = Size(
           constraints.maxWidth.isFinite ? constraints.maxWidth : 800,
           constraints.maxHeight.isFinite ? constraints.maxHeight : 600,
         );
-        return CustomPaint(
-          size: size,
+        final paint = CustomPaint(
+          size: _size,
           painter: _AutoSchematicPainter(
             network: network,
             sizing: sizing,
             building: building,
             colors: colors,
-            focus: focus,
-            inferRisers: inferRisers,
+            focus: widget.focus,
+            inferRisers: widget.inferRisers,
+          ),
+        );
+        // Read-only unless inferred risers are shown — then the dashed
+        // connectors become CLICKABLE: one tap commits a real sized riser.
+        if (!widget.inferRisers) return paint;
+        return MouseRegion(
+          cursor: _hoverInferred
+              ? SystemMouseCursors.click
+              : MouseCursor.defer,
+          onHover: (e) {
+            final over = _hit(e.localPosition, network, levels) != null;
+            if (over != _hoverInferred) {
+              setState(() => _hoverInferred = over);
+            }
+          },
+          onExit: (_) {
+            if (_hoverInferred) setState(() => _hoverInferred = false);
+          },
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapUp: (d) => _commit(d.localPosition, network, levels),
+            child: paint,
           ),
         );
       },
@@ -827,6 +892,125 @@ String _sizeLabel(EdgeSizing s) {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-mode layout + inferred-riser geometry (shared by the painter that DRAWS
+// the single-line and the widget that makes the inferred risers CLICKABLE).
+// ---------------------------------------------------------------------------
+
+const double _kAutoSidePad = MechXSpacing.xl;
+
+/// Node ids kept when one system is focused — endpoints of that service's edges
+/// (null ⇒ no filtering ⇒ the combined view).
+Set<String>? _focusedNodeIds(Network network, ServiceType? focus) {
+  if (focus == null) return null;
+  final ids = <String>{};
+  for (final e in network.edges) {
+    if (e.service == focus) {
+      ids
+        ..add(e.fromId)
+        ..add(e.toId);
+    }
+  }
+  return ids;
+}
+
+/// Screen position of each (visible) node: floors stacked by index (floor 0 at
+/// the bottom), nodes spread left→right across the band by their x order.
+Map<String, Offset> _autoNodePositions(
+    Network network, int levelCount, Size size,
+    {ServiceType? focus}) {
+  final n = levelCount.clamp(1, 999999);
+  double bandCentreY(int floorIndex) {
+    final bandH = size.height / n;
+    return bandH * ((n - 1) - floorIndex) + bandH / 2;
+  }
+
+  final visible = _focusedNodeIds(network, focus);
+  final byFloor = <int, List<NetNode>>{};
+  for (final node in network.nodes) {
+    if (visible != null && !visible.contains(node.id)) continue;
+    (byFloor[node.floorIndex] ??= []).add(node);
+  }
+  final positions = <String, Offset>{};
+  final drawWidth = size.width - 2 * _kAutoSidePad;
+  for (final entry in byFloor.entries) {
+    final nodes = List<NetNode>.from(entry.value)
+      ..sort((a, b) => a.x.compareTo(b.x));
+    final cy = bandCentreY(entry.key);
+    if (nodes.length == 1) {
+      positions[nodes.first.id] = Offset(size.width / 2, cy);
+    } else {
+      final step = drawWidth / (nodes.length - 1);
+      for (var i = 0; i < nodes.length; i++) {
+        positions[nodes[i].id] = Offset(_kAutoSidePad + i * step, cy);
+      }
+    }
+  }
+  return positions;
+}
+
+/// An inferred vertical the engineer hasn't drawn: two existing nodes on
+/// different floors that share a service with no drawn riser between them.
+class _InferredRiser {
+  final String fromId;
+  final String toId;
+  final ServiceType service;
+  final Offset from;
+  final Offset to;
+  const _InferredRiser(
+      this.fromId, this.toId, this.service, this.from, this.to);
+
+  /// The vertical leg sits at the midpoint x — its main clickable extent.
+  double get midX => (from.dx + to.dx) / 2;
+}
+
+/// For each service (respecting [focus]), find consecutive service-bearing
+/// floors with NO drawn riser between them and propose a connector between the
+/// lowest-x node on each (so the inferred stack reads vertically).
+List<_InferredRiser> _computeInferredRisers(
+    Network network, Map<String, Offset> nodePos, ServiceType? focus) {
+  final out = <_InferredRiser>[];
+  final services = focus != null ? [focus] : ServiceType.values;
+  for (final s in services) {
+    final repByFloor = <int, NetNode>{};
+    for (final e in network.edges) {
+      if (e.service != s) continue;
+      for (final id in [e.fromId, e.toId]) {
+        final node = network.nodeById(id);
+        if (node == null || nodePos[node.id] == null) continue;
+        final cur = repByFloor[node.floorIndex];
+        if (cur == null || node.x < cur.x) repByFloor[node.floorIndex] = node;
+      }
+    }
+    final floors = repByFloor.keys.toList()..sort();
+    if (floors.length < 2) continue;
+    bool drawnRiserBetween(int a, int b) => network.edges.any((e) {
+          if (e.service != s || e.kind != EdgeKind.riser) return false;
+          final fa = network.nodeById(e.fromId)?.floorIndex;
+          final fb = network.nodeById(e.toId)?.floorIndex;
+          return (fa == a && fb == b) || (fa == b && fb == a);
+        });
+    for (var i = 0; i < floors.length - 1; i++) {
+      final lo = floors[i], hi = floors[i + 1];
+      if (drawnRiserBetween(lo, hi)) continue;
+      final loN = repByFloor[lo]!, hiN = repByFloor[hi]!;
+      out.add(_InferredRiser(
+          loN.id, hiN.id, s, nodePos[loN.id]!, nodePos[hiN.id]!));
+    }
+  }
+  return out;
+}
+
+/// Distance from [p] to the inferred riser's vertical leg (its main clickable
+/// extent) — used to hit-test a tap/hover on the dashed connector.
+double _distanceToInferred(_InferredRiser r, Offset p) {
+  final x = r.midX;
+  final yTop = math.min(r.from.dy, r.to.dy);
+  final yBot = math.max(r.from.dy, r.to.dy);
+  final clampedY = p.dy.clamp(yTop, yBot);
+  return (Offset(x, clampedY) - p).distance;
+}
+
+// ---------------------------------------------------------------------------
 // Auto-mode painter (the prior read-only diagram)
 // ---------------------------------------------------------------------------
 
@@ -854,15 +1038,11 @@ class _AutoSchematicPainter extends CustomPainter {
   /// engineer hasn't routed the vertical, so it's shown dashed + flagged).
   final bool inferRisers;
 
-  static const double _sidePad = MechXSpacing.xl;
   static const double _nodeRadius = 4.0;
   static const double _edgeStroke = 2.0;
   static const double _gridStrokeWidth = 0.5;
   static const double _labelFontSize = 10.0;
   static const double _floorLabelFontSize = 11.0;
-
-  double _bandHeight(double totalHeight) =>
-      totalHeight / building.levelCount.clamp(1, 999999);
 
   double _bandTopY(int floorIndex, double totalHeight) {
     final n = building.levelCount;
@@ -871,57 +1051,11 @@ class _AutoSchematicPainter extends CustomPainter {
     return bandH * invertedIndex;
   }
 
-  double _bandCentreY(int floorIndex, double totalHeight) =>
-      _bandTopY(floorIndex, totalHeight) + _bandHeight(totalHeight) / 2;
-
-  /// Node ids kept when a single system is focused — the endpoints of every
-  /// edge of that service (null ⇒ no filtering ⇒ the combined view).
-  Set<String>? _focusedNodeIds() {
-    if (focus == null) return null;
-    final ids = <String>{};
-    for (final e in network.edges) {
-      if (e.service == focus) {
-        ids.add(e.fromId);
-        ids.add(e.toId);
-      }
-    }
-    return ids;
-  }
-
-  Map<String, Offset> _computeNodePositions(Size size) {
-    final visible = _focusedNodeIds();
-    final byFloor = <int, List<NetNode>>{};
-    for (final node in network.nodes) {
-      if (visible != null && !visible.contains(node.id)) continue;
-      (byFloor[node.floorIndex] ??= []).add(node);
-    }
-
-    final positions = <String, Offset>{};
-    final drawWidth = size.width - 2 * _sidePad;
-
-    for (final entry in byFloor.entries) {
-      final floorIndex = entry.key;
-      final nodes = List<NetNode>.from(entry.value)
-        ..sort((a, b) => a.x.compareTo(b.x));
-      final cy = _bandCentreY(floorIndex, size.height);
-
-      if (nodes.length == 1) {
-        positions[nodes.first.id] = Offset(size.width / 2, cy);
-      } else {
-        final step = drawWidth / (nodes.length - 1);
-        for (var i = 0; i < nodes.length; i++) {
-          positions[nodes[i].id] = Offset(_sidePad + i * step, cy);
-        }
-      }
-    }
-
-    return positions;
-  }
-
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
-    final nodePos = _computeNodePositions(size);
+    final nodePos =
+        _autoNodePositions(network, building.levelCount, size, focus: focus);
     _paintBands(canvas, size);
     if (inferRisers) _paintInferredRisers(canvas, nodePos);
     _paintEdges(canvas, nodePos);
@@ -953,40 +1087,8 @@ class _AutoSchematicPainter extends CustomPainter {
   /// riser of that service between them — a "you haven't routed this vertical
   /// yet" overlay, drawn dashed + faded so it's clearly inferred, not designed.
   void _paintInferredRisers(Canvas canvas, Map<String, Offset> nodePos) {
-    final services = focus != null ? [focus!] : ServiceType.values;
-    for (final s in services) {
-      // Floors that carry this service (endpoints of an S edge), and a
-      // representative node per floor (the one nearest the building's mid-x so
-      // the inferred stack reads vertically).
-      final repByFloor = <int, NetNode>{};
-      for (final e in network.edges) {
-        if (e.service != s) continue;
-        for (final id in [e.fromId, e.toId]) {
-          final n = network.nodeById(id);
-          if (n == null || nodePos[n.id] == null) continue;
-          final cur = repByFloor[n.floorIndex];
-          if (cur == null || n.x < cur.x) repByFloor[n.floorIndex] = n;
-        }
-      }
-      final floors = repByFloor.keys.toList()..sort();
-      if (floors.length < 2) continue;
-
-      // A drawn riser of S already spanning two floors → don't infer it.
-      bool drawnRiserBetween(int a, int b) => network.edges.any((e) {
-            if (e.service != s || e.kind != EdgeKind.riser) return false;
-            final fa = network.nodeById(e.fromId)?.floorIndex;
-            final fb = network.nodeById(e.toId)?.floorIndex;
-            return (fa == a && fb == b) || (fa == b && fb == a);
-          });
-
-      // Connect consecutive service-bearing floors (so a gap floor is skipped).
-      for (var i = 0; i < floors.length - 1; i++) {
-        final lo = floors[i], hi = floors[i + 1];
-        if (drawnRiserBetween(lo, hi)) continue;
-        final a = nodePos[repByFloor[lo]!.id]!;
-        final b = nodePos[repByFloor[hi]!.id]!;
-        _dashedRiser(canvas, a, b, serviceColor(s));
-      }
+    for (final r in _computeInferredRisers(network, nodePos, focus)) {
+      _dashedRiser(canvas, r.from, r.to, serviceColor(r.service));
     }
   }
 
