@@ -75,6 +75,14 @@ class CableResult {
   /// Human-readable governing rule (for the "why this size" note).
   final String appliedRule;
 
+  /// Whether the chosen section actually reaches the required ampacity (its
+  /// derated Iz ≥ the Iz the breaker In + 1.25·Ib demands). `false` only on the
+  /// terminal fallback where no standard section met Iz within the parallel-run
+  /// limit — i.e. the breaker In > Iz, so the device NO LONGER protects the
+  /// conductor (IEC 60364-4-43 / PUIL cl 2.2.8.3 In ≤ Iz coordination violated).
+  /// Defaults true so a normally-sized cable is byte-identical.
+  final bool ampacityReached;
+
   const CableResult({
     required this.csaMm2,
     required this.baseKha,
@@ -83,6 +91,7 @@ class CableResult {
     this.runsPerPhase,
     required this.vdDriven,
     required this.appliedRule,
+    this.ampacityReached = true,
   });
 }
 

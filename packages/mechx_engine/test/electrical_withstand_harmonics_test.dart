@@ -58,6 +58,15 @@ void main() {
       expect(checkBusbarWithstand(p, 250, 25).adequate, isFalse);
     });
 
+    test('the result echoes the clearing-time basis it was sized on (durationS)',
+        () {
+      // The adequacy verdict scales by 1/√t, so the basis must be explicit and
+      // not silently mixed: the result carries the durationS it used.
+      expect(checkBusbarWithstand(p, 500, 25).durationS, closeTo(1, 1e-9));
+      expect(checkBusbarWithstand(p, 500, 25, durationS: 0.1).durationS,
+          closeTo(0.1, 1e-9));
+    });
+
     test('peak-factor bands rise with the fault level (IEC 61439-1 Table 7)', () {
       expect(p.busbarPeakFactor(5), 1.5); // ≤ 5
       expect(p.busbarPeakFactor(10), 1.7); // ≤ 10

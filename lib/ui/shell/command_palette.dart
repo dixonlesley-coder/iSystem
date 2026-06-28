@@ -29,6 +29,7 @@ import '../inspector/project_panel.dart' show exportCalcReport;
 import '../shell/nav_rail.dart';
 import '../shell/templates_dialog.dart';
 import '../theme/design_tokens.dart';
+import '../widgets/glass_surface.dart';
 import '../theme/mechx_theme.dart';
 
 /// One runnable palette command: a [title] (matched + shown), an optional
@@ -318,16 +319,16 @@ class _PaletteCardState extends ConsumerState<_PaletteCard> {
 
     return Focus(
       onKeyEvent: (_, event) => _onKey(list, event),
-      child: Container(
+      child: SizedBox(
         width: 520,
-        constraints: const BoxConstraints(maxHeight: 460),
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: MechXRadii.card,
-          boxShadow: MechXShadow.popover,
-          border: Border.all(color: colors.border),
-        ),
-        child: Column(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 460),
+          // Liquid-Glass command palette — a translucent blurred card.
+          child: GlassSurface(
+            borderRadius: MechXRadii.card,
+            blurSigma: MechXGlass.blurSigmaLight,
+            shadow: MechXShadow.popover,
+            child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -395,6 +396,8 @@ class _PaletteCardState extends ConsumerState<_PaletteCard> {
                     ),
             ),
           ],
+            ),
+          ),
         ),
       ),
     );

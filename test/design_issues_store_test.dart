@@ -6,7 +6,9 @@ import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
+import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/units.dart';
@@ -104,6 +106,107 @@ void main() {
       expect(lastWarning, lessThan(firstInfo));
     });
 
+    test('an uncalibrated sheet that carries drawn edges escalates to critical',
+        () {
+      final c = makeContainer();
+      // Two nodes joined by a coldWater run on demo sheet s1, which is left
+      // uncalibrated — edgeLength returns Length(0), so the run sizes to zero
+      // length. That sheet's calibration issue must be CRITICAL.
+      const sheetId = 's1';
+      const nodeA = NetNode(id: 'na', sheetId: sheetId, x: 0, y: 0, floorIndex: 0);
+      const nodeB =
+          NetNode(id: 'nb', sheetId: sheetId, x: 100, y: 0, floorIndex: 0);
+      const edge = NetEdge(
+        id: 'e1',
+        fromId: 'na',
+        toId: 'nb',
+        service: ServiceType.coldWater,
+      );
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [nodeA, nodeB], edges: [edge]),
+          );
+
+      final issues = c.read(designIssuesProvider);
+      final calib =
+          issues.where((i) => i.title == 'Sheet not calibrated').toList();
+      // s1 (edge-bearing) is critical; the other edge-free demo sheets stay
+      // warning.
+      final s1Issue = calib.firstWhere((i) => i.locate?.sheetId == 's1');
+      expect(s1Issue.severity, IssueSeverity.critical);
+      expect(
+          calib.where((i) => i.severity == IssueSeverity.warning), isNotEmpty);
+      expect(c.read(designIssueCriticalCountProvider), greaterThanOrEqualTo(1));
+    });
+
+    test('a blank uncalibrated sheet stays a warning (byte-identical)', () {
+      final c = makeContainer();
+      // Default empty network: no sheet bears edges, so every demo-sheet
+      // calibration issue is a plain warning and NONE is critical.
+      final calib = c
+          .read(designIssuesProvider)
+          .where((i) => i.title == 'Sheet not calibrated')
+          .toList();
+      expect(calib, isNotEmpty);
+      expect(calib.every((i) => i.severity == IssueSeverity.warning), isTrue);
+      expect(c.read(designIssueCriticalCountProvider), 0);
+    });
+
+    test('a source-less pressurized component surfaces a "Network has no '
+        'source" warning locatable to its sheet', () {
+      final c = makeContainer();
+      const sheetId = 's1';
+      // A coldWater run A–B with no plant/source. (s1 is also uncalibrated, but
+      // that is a separate calibration issue.)
+      const nodeA = NetNode(id: 'a', sheetId: sheetId, x: 0, y: 0, floorIndex: 0);
+      const nodeB = NetNode(
+          id: 'b',
+          sheetId: sheetId,
+          x: 100,
+          y: 0,
+          floorIndex: 0,
+          role: NodeRole.fixture);
+      const edge = NetEdge(
+        id: 'e1',
+        fromId: 'a',
+        toId: 'b',
+        service: ServiceType.coldWater,
+      );
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [nodeA, nodeB], edges: [edge]),
+          );
+
+      final issue = c.read(designIssuesProvider).firstWhere(
+            (i) => i.title == 'Network has no source',
+            orElse: () => fail('expected a no-source connectivity issue'),
+          );
+      expect(issue.severity, IssueSeverity.warning);
+      expect(issue.locate, isNotNull);
+      expect(issue.locate!.sheetId, sheetId);
+    });
+
+    test('grouping still puts critical + warning before info', () {
+      final c = makeContainer();
+      // An edge-bearing uncalibrated sheet ⇒ a critical issue present.
+      const nodeA = NetNode(id: 'na', sheetId: 's1', x: 0, y: 0, floorIndex: 0);
+      const nodeB = NetNode(id: 'nb', sheetId: 's1', x: 100, y: 0, floorIndex: 0);
+      const edge = NetEdge(
+          id: 'e1', fromId: 'na', toId: 'nb', service: ServiceType.coldWater);
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [nodeA, nodeB], edges: [edge]),
+          );
+
+      final issues = c.read(designIssuesProvider);
+      expect(issues.any((i) => i.severity == IssueSeverity.critical), isTrue);
+      final firstInfo =
+          issues.indexWhere((i) => i.severity == IssueSeverity.info);
+      final lastNonInfo = issues.lastIndexWhere(
+          (i) => i.severity != IssueSeverity.info);
+      expect(firstInfo, greaterThanOrEqualTo(0));
+      // Every critical + warning precedes every info: order [critical, warning,
+      // info].
+      expect(lastNonInfo, lessThan(firstInfo));
+    });
+
     test('an over-long drainage branch surfaces as an info issue (locatable)',
         () {
       final c = makeContainer();
@@ -146,6 +249,79 @@ void main() {
           .read(designIssuesProvider)
           .where((i) => i.title == 'Hot-water return temperature low');
       expect(legionella, isEmpty);
+    });
+
+    test(
+        'zeroLengthSizedEdgeCountProvider counts only SIZED edges that resolve '
+        'to zero length on an uncalibrated sheet', () {
+      final c = makeContainer();
+      // An empty default network has no sized edges ⇒ the loop is empty ⇒ 0.
+      expect(c.read(zeroLengthSizedEdgeCountProvider), 0);
+      expect(c.read(exportHasZeroLengthEdgesProvider), isFalse);
+
+      // A single horizontal cold-water run on the UNCALIBRATED demo sheet s1.
+      // It is auto-sized (appears in sizingProvider), and edgeLength returns
+      // Length(0) for an uncalibrated run (network.dart) ⇒ count 1.
+      const sheetId = 's1';
+      const nodeA =
+          NetNode(id: 'na', sheetId: sheetId, x: 0, y: 0, floorIndex: 0);
+      const nodeB =
+          NetNode(id: 'nb', sheetId: sheetId, x: 100, y: 0, floorIndex: 0);
+      const edge = NetEdge(
+        id: 'e1',
+        fromId: 'na',
+        toId: 'nb',
+        service: ServiceType.coldWater,
+      );
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [nodeA, nodeB], edges: [edge]),
+          );
+      // Sanity: the edge actually got sized (so the loop body runs for it).
+      expect(c.read(sizingProvider).containsKey('e1'), isTrue);
+      expect(c.read(zeroLengthSizedEdgeCountProvider), 1);
+      expect(c.read(exportHasZeroLengthEdgesProvider), isTrue);
+
+      // Calibrate s1 (100 px = 1 m): the run now resolves to a positive length,
+      // so it drops out of the count.
+      c.read(projectControllerProvider.notifier).setCalibration(
+            sheetId,
+            const ScaleCalibration(0.01), // 0.01 m/px ⇒ 100 px = 1 m
+          );
+      expect(c.read(zeroLengthSizedEdgeCountProvider), 0);
+      expect(c.read(exportHasZeroLengthEdgesProvider), isFalse);
+    });
+
+    test(
+        'a riser (vertical) edge is NOT counted as zero-length even on an '
+        'uncalibrated sheet', () {
+      final c = makeContainer();
+      // Two floors with distinct true elevations: floor 0 ground, floor 1 above.
+      c.read(projectControllerProvider.notifier).setFloors(const [
+        Floor('L1', Length(3.0)),
+        Floor('L2', Length(3.0)),
+      ]);
+      const sheetId = 's1'; // left UNCALIBRATED on purpose
+      const nodeA = NetNode(
+          id: 'ra', sheetId: sheetId, x: 0, y: 0, floorIndex: 0);
+      const nodeB = NetNode(
+          id: 'rb', sheetId: sheetId, x: 0, y: 0, floorIndex: 1);
+      const edge = NetEdge(
+        id: 'er',
+        fromId: 'ra',
+        toId: 'rb',
+        service: ServiceType.coldWater,
+        kind: EdgeKind.riser,
+      );
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [nodeA, nodeB], edges: [edge]),
+          );
+      // edgeLength for a riser uses the |elevation delta| (> 0), never the
+      // calibration, so the guard must NOT count it even on an uncalibrated
+      // sheet — the guard keys off the engine's §10 length, not just
+      // "uncalibrated sheet".
+      expect(c.read(sizingProvider).containsKey('er'), isTrue);
+      expect(c.read(zeroLengthSizedEdgeCountProvider), 0);
+      expect(c.read(exportHasZeroLengthEdgesProvider), isFalse);
     });
 
     test('locating a duct issue seeds selection + sheet + Layout view', () {

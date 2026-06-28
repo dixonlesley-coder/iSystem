@@ -98,13 +98,23 @@ void paintLoadSymbol(
       }
       break;
 
-    // Heating / resistive element — a rectangle (IEC resistor / heater).
+    // Heating element — a rectangle enclosing a zigzag coil (IEC heater),
+    // so it reads as "heat", not an inline 2-terminal resistor box.
     case LoadKind.heating:
-      final rect = Rect.fromCenter(
-          center: c, width: r * 2.0, height: r * 1.15);
+      final w = r * 2.0, h = r * 1.25;
+      final rect = Rect.fromCenter(center: c, width: w, height: h);
       canvas.drawRect(rect, p);
-      canvas.drawLine(Offset(rect.left, c.dy), Offset(rect.left - r * 0.5, c.dy), p);
-      canvas.drawLine(Offset(rect.right, c.dy), Offset(rect.right + r * 0.5, c.dy), p);
+      const n = 4;
+      final x0 = rect.left + w * 0.12, x1 = rect.right - w * 0.12;
+      final span = x1 - x0;
+      final coil = Path()..moveTo(x0, c.dy);
+      for (var i = 0; i < n; i++) {
+        final xa = x0 + span * (i + 0.5) / n;
+        final xb = x0 + span * (i + 1) / n;
+        coil.lineTo(xa, i.isEven ? c.dy - h * 0.26 : c.dy + h * 0.26);
+        coil.lineTo(xb, c.dy);
+      }
+      canvas.drawPath(coil, p);
       break;
 
     // EV charger — a charging connector with a lightning bolt.
@@ -151,9 +161,10 @@ void paintLoadSymbol(
       canvas.drawLine(Offset(c.dx, c.dy + r * 0.35), Offset(c.dx, c.dy + r), p);
       break;
 
-    // Spare way — a dashed circle (empty).
+    // Spare way — an empty dashed circle. Fewer, longer dashes than before so
+    // it stays legibly "dashed" (not a solid blur) down at palette/chip size.
     case LoadKind.spare:
-      const seg = 14;
+      const seg = 8;
       for (var i = 0; i < seg; i += 2) {
         final a0 = i * 2 * math.pi / seg;
         final a1 = (i + 1) * 2 * math.pi / seg;
@@ -161,9 +172,19 @@ void paintLoadSymbol(
       }
       break;
 
-    // Feeder (sub-panel) — a board square. Not normally shown as a load.
+    // Feeder (sub-panel / distribution board) — a board with a busbar feeding
+    // outgoing ways, so it reads as a PANEL, not the generic load square.
     case LoadKind.feeder:
-      canvas.drawRect(Rect.fromCenter(center: c, width: r * 1.8, height: r * 1.8), p);
+      final w = r * 1.9, h = r * 1.7;
+      final rect = Rect.fromCenter(center: c, width: w, height: h);
+      canvas.drawRect(rect, p);
+      final busY = rect.top + h * 0.32;
+      canvas.drawLine(
+          Offset(rect.left + w * 0.12, busY), Offset(rect.right - w * 0.12, busY), p);
+      for (final fx in [0.3, 0.5, 0.7]) {
+        final x = rect.left + w * fx;
+        canvas.drawLine(Offset(x, busY), Offset(x, rect.bottom - h * 0.18), p);
+      }
       break;
 
     // General / unknown — a generic load square.

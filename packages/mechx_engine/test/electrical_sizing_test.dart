@@ -152,6 +152,8 @@ void main() {
       expect(c.deratedIz.amperes, 25);
       expect(c.vdDriven, isFalse);
       expect(c.runsPerPhase, isNull);
+      // A normally-sized cable reaches its required ampacity.
+      expect(c.ampacityReached, isTrue);
     });
 
     test('derating 0.7 forces an upsize: 2.5→4 mm² (34×0.7 = 23.8 ≥ 21.2)', () {
@@ -197,6 +199,9 @@ void main() {
       expect(c.runsPerPhase, 4);
       expect(c.vdDriven, isFalse);
       expect(c.appliedRule, contains('exceeds-range'));
+      // 4×300 mm² derated Iz ≪ 1.25·5000 A ⇒ ampacity is never met ⇒ the flag
+      // is false (the breaker In would exceed Iz — coordination violated).
+      expect(c.ampacityReached, isFalse);
     });
   });
 }

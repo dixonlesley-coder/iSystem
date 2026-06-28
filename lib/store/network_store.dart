@@ -242,6 +242,38 @@ class NetworkController extends Notifier<DrawingState> {
     return edgeId;
   }
 
+  /// Connect two EXISTING nodes with a riser edge of [service] — used by the
+  /// single-line to COMMIT an inferred vertical (the engineer hasn't routed it,
+  /// the SLD suggested it, one click makes it real). No new nodes; the riser's
+  /// length is the §10 elevation delta of the two nodes (via `edgeLength`), so
+  /// it sizes exactly like a drawn riser. No-op if either node is missing, they
+  /// share a floor, or an edge already joins them. Returns the new edge id (or
+  /// null), records one undo step.
+  String? connectRiser(String fromId, String toId, ServiceType service) {
+    final a = state.network.nodeById(fromId);
+    final b = state.network.nodeById(toId);
+    if (a == null || b == null || a.floorIndex == b.floorIndex) return null;
+    final exists = state.network.edges.any((e) =>
+        (e.fromId == fromId && e.toId == toId) ||
+        (e.fromId == toId && e.toId == fromId));
+    if (exists) return null;
+    final edgeId = _id('e');
+    _commit(Network(
+      nodes: state.network.nodes,
+      edges: [
+        ...state.network.edges,
+        NetEdge(
+          id: edgeId,
+          fromId: fromId,
+          toId: toId,
+          service: service,
+          kind: EdgeKind.riser,
+        ),
+      ],
+    ));
+    return edgeId;
+  }
+
   /// Move BOTH endpoint nodes of a riser [edgeId] to horizontal [worldX] WITHOUT
   /// recording undo (live drag — pair with [pushUndoSnapshot] at drag start).
   /// Only the x changes: the floors (and so the §10 elevation delta that is the

@@ -67,6 +67,24 @@ void main() {
     });
   });
 
+  group('ladderPk', () {
+    test('ladderPk equals selectAc.pk and differs from the raw load PK', () {
+      // 13 000 BTU/h: raw load PK = 13000/9000 = 1.4444… (continuous), while
+      // the market ladder rounds UP to the next standard unit ≥ 13 000 — the
+      // 1.5 PK size is only 12 000 BTU/h (< 13 000), so the next rung is 2.0 PK
+      // (18 000 BTU/h). The two figures are distinct but each correct.
+      expect(btuPerHrToPk(13000.0), closeTo(13000.0 / 9000.0, 1e-9)); // 1.444…
+      expect(ladderPk(13000.0), 2.0);
+      expect(ladderPk(13000.0), selectAc(13000.0).pk);
+    });
+
+    test('an exact standard size maps to its own PK', () {
+      // 12 000 BTU/h is exactly the 1.5 PK rung.
+      expect(ladderPk(12000.0), 1.5);
+      expect(ladderPk(12000.0), selectAc(12000.0).pk);
+    });
+  });
+
   group('acInputPowerW', () {
     test('1 PK (9000 BTU/h) at COP 3 ≈ 879 W input', () {
       // 9000 BTU/h = 9000/3.412141633 = 2637.6 W cooling; ÷ 3 = 879.2 W input.

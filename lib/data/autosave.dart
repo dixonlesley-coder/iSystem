@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/model.dart' show ElectricalProject;
 
 import '../ai/ai_client.dart';
 import '../store/annotation_store.dart';
@@ -146,10 +147,14 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(aiApiKeyProvider.notifier).set(s.anthropicApiKey);
   read(aiModelProvider.notifier).set(s.aiModel);
   read(aiProviderProvider.notifier).set(aiProviderFromName(s.aiProvider));
-  // Restore the electrical project (v2 files carry one; older files / projects
-  // with no electrical design fall back to the built-in sample).
+  // Restore the electrical project. A v2 file carries one; a plumbing-only / v1
+  // document has NO electrical sub-model — fall back to an EMPTY project (no
+  // fictitious sample switchboard), so its BOM / equipment schedule / unified
+  // report and the Review "panels sized" count read 0 panels rather than the
+  // sample MDP/LP-1. The built-in sample now seeds ONLY a brand-new project (the
+  // controller's `build()`), never an opened/recovered document.
   read(electricalProjectProvider.notifier)
-      .setProject(doc.electrical ?? sampleElectricalProject());
+      .setProject(doc.electrical ?? const ElectricalProject());
   // Restore measurement annotations (absent on an older file ⇒ empty).
   read(measurementsProvider.notifier).set(doc.measurements);
   // Restore designated tank areas (absent on an older file ⇒ empty).

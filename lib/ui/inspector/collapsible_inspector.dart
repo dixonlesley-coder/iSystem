@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../store/inspector_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
 
 /// Wraps a right-side inspector ([child]) with a collapse/expand affordance so
@@ -36,11 +37,14 @@ class CollapsibleInspector extends ConsumerWidget {
     final width =
         collapsed ? collapsedWidth : expandedWidth + collapsedWidth + 1;
 
-    return AnimatedContainer(
+    return GlassSurface(
+      // Floats over the canvas; its left edge faces the drawing.
+      edge: Border(
+          left: BorderSide(color: colors.glassEdge, width: MechXGlass.edgeWidth)),
+      child: AnimatedContainer(
       duration: MechXMotion.medium,
       curve: MechXMotion.emphasized,
       width: width,
-      color: colors.surface,
       // ClipRect so the body slides out (rather than overflowing) while the
       // container width animates between collapsed and expanded.
       child: ClipRect(
@@ -72,6 +76,7 @@ class CollapsibleInspector extends ConsumerWidget {
             ],
           ),
         ),
+      ),
       ),
     );
   }

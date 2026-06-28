@@ -66,8 +66,15 @@ class IssuesCard extends ConsumerWidget {
       );
     }
 
-    final warnings =
-        issues.where((i) => i.severity == IssueSeverity.warning).toList();
+    // Criticals (blockers — uncalibrated sheets carrying drawn runs) fold into
+    // the Warnings group rendered first; their row glyph/colour is promoted to
+    // the danger style so they read as the top-priority items without a new,
+    // golden-shifting header.
+    final warnings = issues
+        .where((i) =>
+            i.severity == IssueSeverity.critical ||
+            i.severity == IssueSeverity.warning)
+        .toList();
     final infos =
         issues.where((i) => i.severity == IssueSeverity.info).toList();
 
@@ -224,8 +231,11 @@ class _IssueRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    final isWarning = issue.severity == IssueSeverity.warning;
-    final dotColor = isWarning ? colors.warning : colors.accent;
+    final isCritical = issue.severity == IssueSeverity.critical;
+    final isWarning = issue.severity == IssueSeverity.warning || isCritical;
+    final dotColor = isCritical
+        ? colors.danger
+        : (isWarning ? colors.warning : colors.accent);
 
     final row = Padding(
       padding: const EdgeInsets.only(bottom: MechXSpacing.xs),

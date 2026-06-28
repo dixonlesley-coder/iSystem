@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/duct_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
@@ -451,6 +452,129 @@ void main() {
     // the split genuinely differs from the geometry-blind one.
     expect(ab(geo), greaterThan(0.17));
     expect(ab(geo), greaterThan(ab(pixel) + 0.02));
+  });
+
+  test('looped water-supply ring diversifies UBAP once, not per node', () {
+    // Square ring of COLD-WATER edges fed by a plant:
+    //   src(plant) → A, then a ring  A—B—C  and  A—D—C.
+    // Fixture-bearing nodes B and D each carry 50 UBAP. The ring is looped
+    // (5 edges, 5 nodes ⇒ > nodes−1), so it takes the Hardy-Cross path.
+    //
+    // CORRECT (this fix): diversify the COMBINED 50+50 = 100 UBAP through the
+    // Hunter/UBAP curve ONCE → source flow = probableFlowForFixtureUnits(100)
+    //   = 0.00303333 m³/s   (SNI _demandTank anchor at 100 UBAP).
+    // BUGGY (old summed-curve): probableFlow(50) + probableFlow(50)
+    //   = 0.00183333 × 2 = 0.00366667 m³/s — over-sized because the curve is
+    //   concave: Σf(uᵢ) > f(Σuᵢ).
+    const ring = Network(
+      nodes: [
+        NetNode(
+          id: 'src',
+          sheetId: 's1',
+          x: 0,
+          y: 100,
+          floorIndex: 0,
+          role: NodeRole.plant,
+        ),
+        NetNode(id: 'A', sheetId: 's1', x: 100, y: 100, floorIndex: 0),
+        NetNode(id: 'B', sheetId: 's1', x: 200, y: 0, floorIndex: 0),
+        NetNode(id: 'C', sheetId: 's1', x: 300, y: 100, floorIndex: 0),
+        NetNode(id: 'D', sheetId: 's1', x: 200, y: 200, floorIndex: 0),
+      ],
+      edges: [
+        NetEdge(id: 'feed', fromId: 'src', toId: 'A', service: ServiceType.coldWater),
+        NetEdge(id: 'AB', fromId: 'A', toId: 'B', service: ServiceType.coldWater),
+        NetEdge(id: 'BC', fromId: 'B', toId: 'C', service: ServiceType.coldWater),
+        NetEdge(id: 'AD', fromId: 'A', toId: 'D', service: ServiceType.coldWater),
+        NetEdge(id: 'DC', fromId: 'D', toId: 'C', service: ServiceType.coldWater),
+      ],
+    );
+    final sized = autoSizeNetwork(
+      ring,
+      const SizingContext(),
+      leafDemand: const {ServiceType.coldWater: FlowRate(0.0002)},
+      // Presence of this key turns on the UBAP path (useUbap).
+      leafFixtureUnits: const {ServiceType.coldWater: 6.0},
+      nodeFixtureUnits: const {'B': 50.0, 'D': 50.0},
+    );
+
+    const profile = SniProfile();
+    final diversified =
+        profile.probableFlowForFixtureUnits(100.0).cubicMetersPerSecond;
+    final buggySum =
+        profile.probableFlowForFixtureUnits(50.0).cubicMetersPerSecond * 2.0;
+    expect(diversified, closeTo(0.00303333, 1e-7)); // pin the corrected value
+    expect(buggySum, closeTo(0.00366667, 1e-7)); // the old over-sized value
+
+    final feed = sized['feed']!.flow.cubicMetersPerSecond;
+    // The feeder carries the diversified TOTAL — curved once, not summed.
+    expect(feed, closeTo(diversified, 1e-6));
+    expect(feed, lessThan(buggySum)); // strictly smaller than the old behaviour
+    // Continuity at the ring inlet A: the two ring legs leaving A
+    // (toward the symmetric draws at B and D) sum to the diversified feed.
+    final ab = sized['AB']!.flow.cubicMetersPerSecond;
+    final ad = sized['AD']!.flow.cubicMetersPerSecond;
+    expect(ab + ad, closeTo(diversified, 1e-6));
+    // Symmetric ring ⇒ each leg carries half the diversified draw.
+    expect(ab, closeTo(diversified / 2.0, 1e-6));
+    expect(ad, closeTo(diversified / 2.0, 1e-6));
+  });
+
+  test('rectangular + equal-friction honours the method (not always velocity)',
+      () {
+    // A single supply-air duct carrying a diffuser airflow, sized RECTANGULAR
+    // with the EQUAL-FRICTION method. The returned W×H must match
+    // sizeRectangularByEqualFriction (the method now honoured for rectangular),
+    // NOT sizeRectangularByVelocity. Expected sizes are engine-derived.
+    const ductNet = Network(
+      nodes: [
+        NetNode(id: 'r', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(
+          id: 'd',
+          sheetId: 's1',
+          x: 100,
+          y: 0,
+          floorIndex: 0,
+          role: NodeRole.fixture,
+          airflow: FlowRate(1.2), // 1.2 m³/s — large enough to diverge
+        ),
+      ],
+      edges: [
+        NetEdge(id: 'e', fromId: 'r', toId: 'd', service: ServiceType.duct),
+      ],
+    );
+    const ctx = SizingContext(
+      ductShape: DuctShape.rectangular,
+      ductMethod: DuctSizingMethod.equalFriction,
+    );
+    final sized = autoSizeNetwork(
+      ductNet,
+      ctx,
+      leafDemand: const {ServiceType.duct: FlowRate(1.2)},
+      nodeFlowDemand: const {'d': FlowRate(1.2)},
+    );
+
+    // Engine-derive both candidate sizings directly and confirm sizeEdge
+    // chose the equal-friction one (and that the two genuinely differ).
+    final ef = sizeRectangularByEqualFriction(
+      airflow: const FlowRate(1.2),
+      targetPaPerMetre: ctx.ductEqualFrictionPa,
+      aspectRatio: ctx.ductAspectRatio,
+    );
+    final vel = sizeRectangularByVelocity(
+      airflow: const FlowRate(1.2),
+      maxVelocity: ctx.maxDuctVelocity,
+      aspectRatio: ctx.ductAspectRatio,
+    );
+    final s = sized['e']!;
+    expect(s.width!.meters, closeTo(ef.width.meters, 1e-12));
+    expect(s.height!.meters, closeTo(ef.height.meters, 1e-12));
+    // Sanity: the two methods pick DIFFERENT W×H here, so this is a real test.
+    expect(
+      ef.width.meters != vel.width.meters || ef.height.meters != vel.height.meters,
+      isTrue,
+      reason: 'equal-friction and velocity must diverge for this flow',
+    );
   });
 
   test('sizeNetwork sizes every edge with an accumulated flow', () {

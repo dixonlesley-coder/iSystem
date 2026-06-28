@@ -90,3 +90,21 @@ final airUnsizedProvider = Provider<Set<String>>((ref) {
 /// Count of air elements not yet manually sized (for a summary / status surface).
 final airUnsizedCountProvider =
     Provider<int>((ref) => ref.watch(airUnsizedProvider).length);
+
+/// Air duct edges whose required size EXCEEDED the largest standard duct and
+/// were CLAMPED to it (`EdgeSizing.overCapacity`). The auto-sizer no longer
+/// throws on an oversize flow — it clamps and flags — so this surfaces the
+/// clamped edges as a per-edge design issue (the chosen duct cannot meet the
+/// velocity limit / friction target at that airflow). Empty when every air
+/// duct is in range ⇒ no issue.
+final airOverCapacityProvider = Provider<Set<String>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final sizing = ref.watch(sizingProvider);
+  final out = <String>{};
+  for (final e in net.edges) {
+    if (!e.service.isAir) continue;
+    final s = sizing[e.id];
+    if (s != null && s.overCapacity) out.add(e.id);
+  }
+  return out;
+});

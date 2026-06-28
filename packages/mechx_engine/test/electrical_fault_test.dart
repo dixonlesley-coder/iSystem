@@ -3,6 +3,7 @@ import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/fault.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart' show WarningSeverity;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -205,6 +206,62 @@ void main() {
       expect(c.zsMaxOhm, isNull);
       expect(c.adsOk, isNull);
       // No ADS warnings on TT.
+      expect(
+        fs.warnings.where((w) => w.code == 'ads-disconnection'),
+        isEmpty,
+      );
+      // The socket final carries an RCD (covered) ⇒ no uncovered-TT warning.
+      expect(sys.panels['MDP']!.circuits.single.rcd.required, isTrue);
+      expect(
+        fs.warnings.where((w) => w.code == 'tt-no-earth-fault-protection'),
+        isEmpty,
+      );
+    });
+  });
+
+  group('(c2) TT way with NO modelled RCD → tt-no-earth-fault-protection', () {
+    // A life-safety run on TT: circuitRcd deliberately omits the RCD
+    // (availability prevails), so its earth fault is covered by NEITHER ADS
+    // (TT loop) NOR an RCD — the fault study must flag it.
+    const mdp = ElectricalPanel(
+      id: 'MDP',
+      name: 'Main',
+      system: ElectricalSystem.threePhase,
+      voltage: Voltage(400),
+      circuits: [
+        ElectricalCircuit(
+          id: 'fp',
+          name: 'Fire pump',
+          loadKind: LoadKind.pump,
+          motorKw: 15,
+          cosPhi: 0.85,
+          lifeSafety: true,
+          cableType: 'FRC',
+          length: Length(15),
+        ),
+      ],
+    );
+    const project = ElectricalProject(
+      id: 'pr3b',
+      name: 'B3b',
+      panels: [mdp],
+      earthingSystem: EarthingSystem.tt,
+    );
+    final sys = computeSystem(p, project);
+    final fs = faultStudy(sys, project, p);
+
+    test('the uncovered life-safety TT way is flagged exactly once', () {
+      // The life-safety way carries no RCD (covered=false).
+      expect(sys.panels['MDP']!.circuits.single.rcd.required, isFalse);
+      final w =
+          fs.warnings.where((w) => w.code == 'tt-no-earth-fault-protection');
+      expect(w, hasLength(1));
+      expect(w.single.severity, WarningSeverity.warning);
+      expect(w.single.circuitId, 'fp');
+      // Still no Zs/ADS on TT, and no ADS warning.
+      final c = fs.circuits['fp']!;
+      expect(c.zsOhm, isNull);
+      expect(c.adsOk, isNull);
       expect(
         fs.warnings.where((w) => w.code == 'ads-disconnection'),
         isEmpty,

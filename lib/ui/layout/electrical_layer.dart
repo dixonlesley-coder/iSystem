@@ -47,6 +47,7 @@ import '../electrical/electrical_layout_view.dart'
 import '../electrical/electrical_palette.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/glass_surface.dart';
 
 /// Opacity applied when the electrical layer is a faded coordination layer.
 const double kElectricalFadedAlpha = 0.34;
@@ -1154,15 +1155,14 @@ class _UnplacedTray extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    return Container(
+    return SizedBox(
       width: 188,
-      decoration: BoxDecoration(
-        color: colors.surface.withAlpha(245),
+      // Liquid-Glass unplaced tray — floats over the layout canvas.
+      child: GlassSurface(
         borderRadius: MechXRadii.card,
-        border: Border.all(color: colors.border),
-        boxShadow: MechXShadow.popover,
-      ),
-      child: Column(
+        blurSigma: MechXGlass.blurSigmaLight,
+        shadow: MechXShadow.popover,
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1200,6 +1200,7 @@ class _UnplacedTray extends StatelessWidget {
             ),
           ),
         ],
+      ),
       ),
     );
   }

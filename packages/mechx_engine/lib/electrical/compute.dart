@@ -42,6 +42,14 @@ import 'sizing.dart';
 /// supply summary (matches PanelMaker `ASSUMED_BUILDING_PF`). Not a PUIL clause.
 const double assumedBuildingPf = 0.85;
 
+/// Assumed full-load efficiency of an induction motor when only the shaft
+/// (mechanical) kW is given: the electrical input (nameplate FLC) is the shaft
+/// kW divided by this efficiency. ~0.88 is a representative IE3-class value; the
+/// proper fix is a motor-kW → nameplate-FLC table (A8).
+// VERIFY — secondarySource (assumed IE3 induction-motor efficiency; no PUIL
+// clause, not in a standards profile — replace with a motorKw→FLC table).
+const double _assumedMotorEfficiency = 0.88;
+
 // ── phase determination ─────────────────────────────────────────────────────
 
 /// Whether a circuit is supplied three-phase. On a single-phase panel
@@ -566,8 +574,11 @@ _CircuitComputation _computeCircuit(
       : panel.voltage.volts;
   final useVoltageV = threePhase ? panel.voltage.volts : phaseVoltageV;
 
-  // Design current: a source-supplied FLA wins (A5); a motor approximates via
-  // P = motorKw·1000 (TODO motor FLC table (A8)); else loadCurrent.
+  // Design current: a source-supplied FLA wins (A5); a motor derives its
+  // nameplate FLC from the SHAFT kW divided by the assumed motor efficiency
+  // (electrical input > shaft power), so its breaker/cable size on the real
+  // full-load current rather than the under-stated shaft current; else
+  // loadCurrent. (TODO motor FLC table (A8) replaces the efficiency divisor.)
   final motorLike =
       (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
           c.motorKw != null;
@@ -575,9 +586,9 @@ _CircuitComputation _computeCircuit(
   if (c.flaOverrideA != null) {
     ib = c.flaOverrideA!;
   } else if (motorLike) {
-    // TODO motor FLC table (A8) — approximate the FLC from the shaft kW.
+    // Shaft kW → electrical input kW via the assumed efficiency (// VERIFY).
     ib = loadCurrent(
-      power: Power.kiloWatts(c.motorKw!),
+      power: Power.kiloWatts(c.motorKw! / _assumedMotorEfficiency),
       voltage: Voltage(useVoltageV),
       cosPhi: c.cosPhi,
       threePhase: threePhase,
@@ -702,6 +713,24 @@ _CircuitComputation _computeCircuit(
           '${c.name}: voltage drop ${vd.dropPercent}% exceeds the '
           '${vd.limitPercent}% limit even at the largest standard section — '
           'shorten the run or split the load.',
+      panelId: panel.id,
+      circuitId: c.id,
+    ));
+  }
+  // The cable could not reach the required ampacity even at the largest section
+  // / max parallel runs: the breaker In now exceeds the conductor Iz, so the
+  // device no longer protects the cable (IEC 60364-4-43 / PUIL cl 2.2.8.3
+  // In ≤ Iz coordination violated). A genuine safety defect — flag as an error.
+  if (!cable.ampacityReached) {
+    warnings.add(ElectricalWarning(
+      code: 'cable-ampacity-inadequate',
+      severity: WarningSeverity.error,
+      message:
+          '${c.name}: cable ampacity Iz ${cable.deratedIz.amperes} A is below '
+          'the breaker In ${breaker.ratingA.amperes} A even at the largest '
+          'section — the breaker no longer protects the conductor (In > Iz). '
+          'Reduce the grouping/ambient derating, split the load, or feed it '
+          'separately.',
       panelId: panel.id,
       circuitId: c.id,
     ));

@@ -15,7 +15,18 @@ import 'sizing.dart' show roundTo;
 /// Default short-circuit clearing time (s) for the busbar thermal-withstand
 /// (Icw) check, when no device clearing time is supplied. 1 s is the basis on
 /// which assembly Icw ratings are conventionally declared (IEC 61439-1 §9.3.2).
-// VERIFY — notAnSniClause (IEC 61439-1 conventional 1-second Icw basis).
+///
+/// IMPORTANT — basis consistency: the adequacy verdict here scales the bar's
+/// thermal capability by 1/√t, so it is valid ONLY if the upstream protective
+/// device actually clears the fault within [durationS]. Declaring a bar on a
+/// 1 s Icw and then checking it at a shorter clearing time (the live app uses
+/// ~0.1 s, the instantaneous-trip case) is legitimate for a current-limiting
+/// device, but a selective TIME-DELAYED incomer does NOT clear that fast — so
+/// do not silently mix bases. Re-check any bar declared on 1 s Icw against the
+/// device's real let-through time. The result echoes [durationS] so the basis
+/// is explicit, not hidden.
+// VERIFY — notAnSniClause (IEC 61439-1 conventional 1-second Icw basis; the
+// adequacy holds only if the upstream device clears within durationS).
 const double busbarDefaultClearingTimeS = 1;
 
 /// Numerical tolerance (kA) comparing Icw against the prospective fault, so a

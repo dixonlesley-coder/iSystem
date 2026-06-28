@@ -96,10 +96,13 @@ enum StringKey {
   shellImportPdf,
   shellDark,
   shellLight,
+  shellSwitchToDark,
+  shellSwitchToLight,
 
   // App shell — status bar.
   shellNoSheet,
   shellUncalibrated,
+  shellCalibrated,
   shellStandardsProvenance,
   shellViewportHints,
 
@@ -116,6 +119,8 @@ enum StringKey {
   schematicAuto,
   schematicEdit,
   schematicRiserService,
+  schematicSystemAll,
+  schematicInferRisers,
   schematicNoNetwork,
   schematicPalette,
   schematicPaletteHelp,
@@ -231,7 +236,7 @@ enum StringKey {
 const Map<StringKey, String> _en = {
   StringKey.navGroupDesign: 'DESIGN',
   StringKey.navLayout: 'Layout',
-  StringKey.navSchematic: 'Riser',
+  StringKey.navSchematic: 'Riser SLD',
   StringKey.navElectrical: 'Electrical',
   StringKey.navBuilding: 'Building',
   StringKey.navReview: 'Review',
@@ -325,10 +330,13 @@ const Map<StringKey, String> _en = {
   StringKey.shellImportPdf: 'Import PDF',
   StringKey.shellDark: 'Dark',
   StringKey.shellLight: 'Light',
+  StringKey.shellSwitchToDark: 'Switch to dark',
+  StringKey.shellSwitchToLight: 'Switch to light',
 
   // App shell — status bar.
   StringKey.shellNoSheet: 'No sheet',
   StringKey.shellUncalibrated: 'Uncalibrated',
+  StringKey.shellCalibrated: 'Calibrated',
   StringKey.shellStandardsProvenance: 'SNI 8153:2015 (draft)',
   StringKey.shellViewportHints: 'scroll zoom · drag pan · F fit · Ctrl+0 100%',
 
@@ -347,6 +355,8 @@ const Map<StringKey, String> _en = {
   StringKey.schematicAuto: 'Auto',
   StringKey.schematicEdit: 'Edit',
   StringKey.schematicRiserService: 'Riser service',
+  StringKey.schematicSystemAll: 'All',
+  StringKey.schematicInferRisers: 'Infer risers',
   StringKey.schematicNoNetwork: 'No network drawn',
   StringKey.schematicPalette: 'PALETTE',
   StringKey.schematicPaletteHelp:
@@ -479,7 +489,7 @@ const Map<StringKey, String> _en = {
 const Map<StringKey, String> _id = {
   StringKey.navGroupDesign: 'DESAIN',
   StringKey.navLayout: 'Tata Letak',
-  StringKey.navSchematic: 'Riser',
+  StringKey.navSchematic: 'Riser SLD',
   StringKey.navElectrical: 'Listrik',
   StringKey.navBuilding: 'Bangunan',
   StringKey.navReview: 'Tinjauan',
@@ -574,10 +584,13 @@ const Map<StringKey, String> _id = {
   StringKey.shellImportPdf: 'Impor PDF',
   StringKey.shellDark: 'Gelap',
   StringKey.shellLight: 'Terang',
+  StringKey.shellSwitchToDark: 'Ke mode gelap',
+  StringKey.shellSwitchToLight: 'Ke mode terang',
 
   // App shell — status bar.
   StringKey.shellNoSheet: 'Tidak ada lembar',
   StringKey.shellUncalibrated: 'Belum dikalibrasi',
+  StringKey.shellCalibrated: 'Terkalibrasi',
   StringKey.shellStandardsProvenance: 'SNI 8153:2015 (draf)',
   StringKey.shellViewportHints:
       'gulir zoom · seret geser · F pas · Ctrl+0 100%',
@@ -598,6 +611,8 @@ const Map<StringKey, String> _id = {
   StringKey.schematicAuto: 'Otomatis',
   StringKey.schematicEdit: 'Edit',
   StringKey.schematicRiserService: 'Layanan riser',
+  StringKey.schematicSystemAll: 'Semua',
+  StringKey.schematicInferRisers: 'Perkirakan riser',
   StringKey.schematicNoNetwork: 'Belum ada jaringan digambar',
   StringKey.schematicPalette: 'PALET',
   StringKey.schematicPaletteHelp:

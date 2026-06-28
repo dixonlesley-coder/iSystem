@@ -69,4 +69,34 @@ void main() {
 
     expect(find.text('Project opened'), findsOneWidget);
   });
+
+  testWidgets('an export shows an "Exported ..." confirmation pill on success',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+
+    // Nothing shown at rest.
+    expect(find.text('Exported calc report'), findsNothing);
+
+    // _runExport emits exactly this string on a successful write; drive it
+    // directly (the real FilePicker is a platform channel that can't run
+    // headlessly) to lock the success-pill string + mechanism.
+    container
+        .read(statusMessageProvider.notifier)
+        .showStatus('Exported calc report');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.text('Exported calc report'), findsOneWidget);
+
+    // Drain the self-clear timer so the widget test leaves none pending (the
+    // self-clearing mechanism itself is covered by the unit test above).
+    container.read(statusMessageProvider.notifier).clear();
+    await tester.pump();
+  });
 }

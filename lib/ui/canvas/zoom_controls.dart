@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
 
 /// The on-canvas zoom cluster (+ / − / fit) shared by BOTH the mechanical and
@@ -23,26 +24,21 @@ class ZoomControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: colors.border),
-        boxShadow: MechXShadow.card,
-      ),
-      child: ClipRRect(
-        borderRadius: MechXRadii.control,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _IconBtn(glyph: '+', onTap: onIn),
-            _Sep(),
-            _IconBtn(glyph: '-', onTap: onOut),
-            _Sep(),
-            _IconBtn(glyph: 'fit', onTap: onFit),
-          ],
-        ),
+    // Liquid-Glass zoom cluster — a translucent blurred pill floating over the
+    // canvas (iOS map-style), lifted by the card shadow.
+    return GlassSurface(
+      borderRadius: MechXRadii.control,
+      blurSigma: MechXGlass.blurSigmaLight,
+      shadow: MechXShadow.card,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _IconBtn(glyph: '+', onTap: onIn),
+          _Sep(),
+          _IconBtn(glyph: '-', onTap: onOut),
+          _Sep(),
+          _IconBtn(glyph: 'fit', onTap: onFit),
+        ],
       ),
     );
   }

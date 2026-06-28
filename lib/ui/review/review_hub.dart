@@ -5,9 +5,11 @@ import 'package:mechx_engine/network/network.dart';
 import '../../store/electrical_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/service_style.dart';
+import '../inspector/project_panel.dart' show buildComplianceSummary;
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
+import '../widgets/severity_glyph.dart';
 import 'issues_card.dart';
 
 /// The Review hub — a calm landing for checking the design before issue.
@@ -40,9 +42,10 @@ class ReviewHub extends ConsumerWidget {
 
     return HubScaffold(
       title: 'Review',
-      lead: 'Check the design before you issue it. The detailed review tabs are '
-          'coming together; for now this surfaces what the engine already knows.',
+      lead: 'Check the design before you issue it.',
       children: [
+        const _ComplianceCard(),
+        const SizedBox(height: MechXSpacing.md),
         HubStatRow(
           stats: [
             ('Panels sized', '$panels'),
@@ -74,6 +77,108 @@ class ReviewHub extends ConsumerWidget {
           'boundaries. Export the Markdown calc report for the full breakdown.',
         ),
       ],
+    );
+  }
+}
+
+/// The pre-issue compliance roll-up: an overall PASS / REVIEW REQUIRED verdict
+/// plus the three category rows (air velocities / sheet calibration / standards
+/// verification) the unified MEP report also prints. Read-only over the shared
+/// [buildComplianceSummary] (which derives from `designIssuesProvider`) — it
+/// invents no new checks, so the Review hub and the exported report always agree.
+class _ComplianceCard extends ConsumerWidget {
+  const _ComplianceCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final summary = buildComplianceSummary(ref);
+    final allPass = summary.allPass;
+    final headlineColor = allPass ? colors.success : colors.warning;
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        border: Border.all(color: colors.border),
+      ),
+      padding: const EdgeInsets.all(MechXSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Overall verdict headline with a redundant glyph (check / "!") so it
+          // reads without hue alone.
+          Row(
+            children: [
+              CustomPaint(
+                size: const Size(16, 16),
+                painter: SeverityGlyph(
+                  kind: allPass
+                      ? SeverityGlyphKind.check
+                      : SeverityGlyphKind.warn,
+                  color: headlineColor,
+                ),
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              Text(
+                allPass ? 'PASS' : 'REVIEW REQUIRED',
+                style: type.subtitle.copyWith(color: headlineColor),
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              Text('design sign-off',
+                  style: type.caption.copyWith(color: colors.textMuted)),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          for (final item in summary.items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2, right: MechXSpacing.sm),
+                    child: CustomPaint(
+                      size: const Size(11, 11),
+                      painter: SeverityGlyph(
+                        kind: item.pass
+                            ? SeverityGlyphKind.check
+                            : SeverityGlyphKind.warn,
+                        color: item.pass ? colors.success : colors.warning,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(item.category,
+                        style: type.caption
+                            .copyWith(color: colors.textPrimary)),
+                  ),
+                  Text(
+                    item.pass ? 'PASS' : 'REVIEW',
+                    style: type.caption.copyWith(
+                      color: item.pass ? colors.success : colors.warning,
+                    ),
+                  ),
+                  if (item.detail.isNotEmpty) ...[
+                    const SizedBox(width: MechXSpacing.sm),
+                    Flexible(
+                      child: Text(
+                        item.detail,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.end,
+                        style:
+                            type.caption.copyWith(color: colors.textMuted),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

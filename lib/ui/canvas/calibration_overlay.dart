@@ -24,7 +24,9 @@ class CalibrationOverlay extends ConsumerStatefulWidget {
 }
 
 class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
-  String _distance = '1.0';
+  // Start empty (was a committable '1.0', which silently set a 1 m span if the
+  // user clicked Set scale without typing) — the user must enter a real length.
+  String _distance = '';
 
   void _commit() {
     final meters = double.tryParse(_distance.trim());
@@ -37,6 +39,35 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
         .read(projectControllerProvider.notifier)
         .setCalibration(widget.sheetId, cal);
     ref.read(calibrationControllerProvider.notifier).cancel();
+  }
+
+  /// The live implied-scale read-out beneath the entry field. Renders nothing
+  /// until a positive length is typed; then shows `approx X m/px` and, when the
+  /// metres-per-pixel is implausibly small/large (an order-of-magnitude slip),
+  /// a warning-tinted caution line. Plain ASCII ("approx") — no glyphs that
+  /// could tofu in Roboto.
+  List<Widget> _scalePreview(
+      double pixelDistance, MechXColors colors, MechXTypography type) {
+    final meters = double.tryParse(_distance.trim());
+    if (meters == null || meters <= 0 || pixelDistance <= 0) return const [];
+    final mpp = meters / pixelDistance;
+    // Plausible building-drawing range: well under 1 m/px, well over 1e-4 m/px.
+    final implausible = mpp < 1e-4 || mpp > 1.0;
+    return [
+      const SizedBox(height: MechXSpacing.xs),
+      Text(
+        'Scale approx ${mpp.toStringAsExponential(2)} m/px',
+        style: type.caption.copyWith(color: colors.textMuted),
+      ),
+      if (implausible)
+        Padding(
+          padding: const EdgeInsets.only(top: MechXSpacing.xxs),
+          child: Text(
+            'That scale looks off by an order of magnitude — check the length.',
+            style: type.caption.copyWith(color: colors.warning),
+          ),
+        ),
+    ];
   }
 
   @override
@@ -118,13 +149,22 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
                       Expanded(
                         child: MechXTextField(
                           value: _distance,
-                          onChanged: (v) => _distance = v,
+                          hint: '5.0',
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          // Rebuild on every keystroke so the implied-scale
+                          // preview below tracks the input live.
+                          onChanged: (v) => setState(() => _distance = v),
                         ),
                       ),
                       const SizedBox(width: MechXSpacing.sm),
                       Text('m', style: type.body.copyWith(color: colors.textSecondary)),
                     ],
                   ),
+                  // Live implied-scale preview: shows m/px as the user types, and
+                  // an out-of-band warning when the magnitude is implausible — so
+                  // an order-of-magnitude slip is caught before Set scale.
+                  ..._scalePreview(cal.pixelDistance!, colors, type),
                   const SizedBox(height: MechXSpacing.md),
                   Wrap(
                     alignment: WrapAlignment.end,

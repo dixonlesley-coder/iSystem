@@ -16,6 +16,7 @@ import 'package:mechx_engine/electrical/load_kind.dart';
 
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/palette_card.dart';
 import '../widgets/section_label.dart';
 import 'load_symbols.dart';
@@ -113,9 +114,12 @@ class ElectricalPalette extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Container(
+    return GlassSurface(
+      // Floats over the electrical canvas; its left edge faces the diagram.
+      edge: Border(
+          left: BorderSide(color: colors.glassEdge, width: MechXGlass.edgeWidth)),
+      child: SizedBox(
       width: 188,
-      color: colors.surface,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -178,6 +182,7 @@ class ElectricalPalette extends StatelessWidget {
             ),
           ),
         ],
+      ),
       ),
     );
   }

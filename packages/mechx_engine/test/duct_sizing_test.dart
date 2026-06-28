@@ -89,6 +89,42 @@ void main() {
       expect(result.diameter.inMillimeters, closeTo(200.0, 0.1));
       expect(result.actualVelocity.metersPerSecond, closeTo(4.050, 0.01));
       expect(result.actualVelocity.metersPerSecond, lessThanOrEqualTo(5.0));
+      // The added overCapacity flag defaults false — in-range sizing unchanged.
+      expect(result.overCapacity, isFalse);
+    });
+
+    test('in-range duct keeps overCapacity false (default byte-identical)', () {
+      // Reuse the existing Q=0.1272345 / v_max 5.0 case → D=200 mm: a normal,
+      // in-range size must carry overCapacity == false, proving the new flag
+      // defaults false and existing sizing is unchanged.
+      final result = sizeByVelocity(
+        airflow: const FlowRate(0.1272345),
+        maxVelocity: const Velocity(5.0),
+      );
+      expect(result.diameter.inMillimeters, closeTo(200.0, 0.1));
+      expect(result.overCapacity, isFalse);
+    });
+
+    test('clamps to 1000 mm and flags overCapacity on oversize flow', () {
+      // HAND CALC — force ideal D > 1000 mm (the largest standard size):
+      //   maxVelocity = 2.0 m/s, Q = 2.5 m³/s
+      //   A = Q / v = 2.5 / 2.0 = 1.25 m²
+      //   D_ideal = √(4 × 1.25 / π) = √(5/π) = √1.59155 = 1.2616 m = 1261.6 mm
+      //            > 1000 mm (largest standard) → CLAMP to 1000 mm, flag over.
+      //   v_actual = Q / (π × 0.5² ) = 2.5 / (π × 0.25) = 2.5 / 0.785398
+      //            = 3.1831 m/s  (> the 2.0 limit → genuinely over capacity)
+      final result = sizeByVelocity(
+        airflow: const FlowRate(2.5),
+        maxVelocity: const Velocity(2.0),
+      );
+      expect(result.diameter.inMillimeters, closeTo(1000.0, 1e-9));
+      expect(result.overCapacity, isTrue);
+      expect(result.actualVelocity.metersPerSecond, closeTo(3.1831, 1e-3));
+      expect(
+        result.actualVelocity.metersPerSecond,
+        greaterThan(2.0),
+        reason: 'clamped duct genuinely exceeds the velocity limit',
+      );
     });
   });
 
@@ -164,6 +200,41 @@ void main() {
         relaxed.diameter.inMillimeters,
         lessThanOrEqualTo(strict.diameter.inMillimeters),
       );
+    });
+
+    test('in-range duct keeps overCapacity false', () {
+      // The existing Q=500 m³/h @ 1.0 Pa/m case resolves to 250 mm (in range).
+      final result = sizeByEqualFriction(
+        airflow: FlowRate.cubicMetersPerHour(500),
+      );
+      expect(result.diameter.inMillimeters, closeTo(250.0, 1e-9));
+      expect(result.overCapacity, isFalse);
+    });
+
+    test('clamps and flags overCapacity when target unreachable', () {
+      // HAND CALC — even the largest standard size (1000 mm) exceeds 1.0 Pa/m
+      // at Q = 10.0 m³/s, so no size qualifies → CLAMP to 1000 mm + flag.
+      //   D = 1000 mm (1.000 m):
+      //     A = π × 1.0² / 4 = 0.785398 m²
+      //     v = 10.0 / 0.785398 = 12.7324 m/s
+      //     Re = 12.7324 × 1.0 / 1.5e-5 = 848826
+      //     ε/D = 9e-5 / 1.0 = 9.0e-5
+      //     f = 0.25 / [log10(9e-5/3.7 + 5.74/848826^0.9)]²
+      //       = 0.25 / [log10(2.432e-5 + 5.74/200818)]²
+      //       = 0.25 / [log10(2.432e-5 + 2.858e-5)]²
+      //       = 0.25 / [log10(5.290e-5)]² = 0.25 / (−4.2768)² ≈ 0.01367
+      //     Δp/L = 0.01367 × (1/1.0) × (1.2 × 12.7324²/2)
+      //          = 0.01367 × (1.2 × 162.12 / 2) = 0.01367 × 97.27 ≈ 1.319 Pa/m
+      //          > 1.0 ✗  (engine cross-check: 1.3188 Pa/m)
+      final result = sizeByEqualFriction(airflow: const FlowRate(10.0));
+      expect(result.diameter.inMillimeters, closeTo(1000.0, 1e-9));
+      expect(result.overCapacity, isTrue);
+      expect(
+        result.frictionPerMetrePa,
+        greaterThan(1.0),
+        reason: 'clamped duct genuinely exceeds the friction target',
+      );
+      expect(result.frictionPerMetrePa, closeTo(1.319, 1e-2));
     });
   });
 

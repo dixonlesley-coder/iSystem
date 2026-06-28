@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../ui/canvas/viewport.dart';
+import 'history_store.dart';
 import 'models/sheet.dart';
 
 /// Immutable sheet-navigation state: the loaded [sheets], the [currentIndex],
@@ -65,23 +66,63 @@ class SheetsController extends Notifier<SheetsState> {
     Sheet(id: 's3', name: 'Roof Plan', sizePx: Size(1190, 1684)),
   ];
 
+  // Local snapshot stacks for the sheet→floor mapping edits, mirroring
+  // ProjectController. Only the undoable mutation (setSheetFloor) pushes here;
+  // navigation / viewport / load do not record undo.
+  final List<SheetsState> _undo = [];
+  final List<SheetsState> _redo = [];
+
   @override
   SheetsState build() => const SheetsState(sheets: _demoSheets);
+
+  bool get canUndo => _undo.isNotEmpty;
+  bool get canRedo => _redo.isNotEmpty;
 
   void loadSheets(
     List<Sheet> sheets, {
     Map<String, ViewportTransform> viewports = const {},
     Map<String, int> sheetFloors = const {},
-  }) =>
-      state = SheetsState(
-        sheets: sheets,
-        currentIndex: 0,
-        viewports: viewports,
-        sheetFloors: sheetFloors,
-      );
+  }) {
+    // A loaded document is a fresh baseline — drop the local mapping history so
+    // an undo can't reach back into a previous document (mirrors
+    // ProjectController.load()).
+    _undo.clear();
+    _redo.clear();
+    state = SheetsState(
+      sheets: sheets,
+      currentIndex: 0,
+      viewports: viewports,
+      sheetFloors: sheetFloors,
+    );
+  }
 
-  /// Map [sheetId] to building floor [floorIndex] (explicit override).
+  /// Snapshot before an undoable mapping mutation and record it on the global
+  /// timeline so a unified undo reverts the genuinely most-recent edit across
+  /// domains (the sheet→floor mapping was previously silently outside undo).
+  void _snapshot() {
+    _undo.add(state);
+    if (_undo.length > 200) _undo.removeAt(0);
+    _redo.clear();
+    ref.read(historyProvider.notifier).record(UndoDomain.sheets);
+  }
+
+  void undo() {
+    if (_undo.isEmpty) return;
+    _redo.add(state);
+    state = _undo.removeLast();
+  }
+
+  void redo() {
+    if (_redo.isEmpty) return;
+    _undo.add(state);
+    state = _redo.removeLast();
+  }
+
+  /// Map [sheetId] to building floor [floorIndex] (explicit override). Recorded
+  /// on the undo timeline so the mapping change is undoable like any other edit.
   void setSheetFloor(String sheetId, int floorIndex) {
+    if (state.sheetFloors[sheetId] == floorIndex) return;
+    _snapshot();
     final next = Map<String, int>.from(state.sheetFloors)
       ..[sheetId] = floorIndex;
     state = state.copyWith(sheetFloors: next);
