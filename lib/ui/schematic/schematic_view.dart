@@ -30,6 +30,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/sni.dart';
 
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -74,6 +75,10 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
   /// system only (cold/hot water, drainage, vent, rainwater/storm, air, fire).
   ServiceType? _autoFocus;
 
+  /// Auto-view: draw dashed inferred risers for floors that share a service but
+  /// have no drawn vertical between them. Default OFF (byte-identical) — opt in.
+  bool _inferRisers = false;
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -92,9 +97,11 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
                 .edges
                 .map((e) => e.service)
                 .toSet(),
+            inferRisers: _inferRisers,
             onMode: (m) => setState(() => _mode = m),
             onService: (s) => setState(() => _service = s),
             onAutoFocus: (s) => setState(() => _autoFocus = s),
+            onInferRisers: (v) => setState(() => _inferRisers = v),
           ),
           Container(height: 1, color: colors.border),
           Expanded(
@@ -104,7 +111,7 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
                     showHelp: _showHelp,
                     onToggleHelp: () => setState(() => _showHelp = !_showHelp),
                   )
-                : _AutoElevation(focus: _autoFocus),
+                : _AutoElevation(focus: _autoFocus, inferRisers: _inferRisers),
           ),
         ],
       ),
@@ -121,18 +128,22 @@ class _Toolbar extends StatelessWidget {
   final ServiceType service;
   final ServiceType? autoFocus;
   final Set<ServiceType> presentServices;
+  final bool inferRisers;
   final ValueChanged<_Mode> onMode;
   final ValueChanged<ServiceType> onService;
   final ValueChanged<ServiceType?> onAutoFocus;
+  final ValueChanged<bool> onInferRisers;
 
   const _Toolbar({
     required this.mode,
     required this.service,
     required this.autoFocus,
     required this.presentServices,
+    required this.inferRisers,
     required this.onMode,
     required this.onService,
     required this.onAutoFocus,
+    required this.onInferRisers,
   });
 
   @override
@@ -183,6 +194,13 @@ class _Toolbar extends StatelessWidget {
                         ),
                         const SizedBox(width: MechXSpacing.xs),
                       ],
+                    Container(width: 1, height: 22, color: colors.border),
+                    const SizedBox(width: MechXSpacing.xs),
+                    _TabButton(
+                      label: context.strings(StringKey.schematicInferRisers),
+                      selected: inferRisers,
+                      onTap: () => onInferRisers(!inferRisers),
+                    ),
                   ],
                 ),
               ),
@@ -333,7 +351,8 @@ class _ServiceChip extends StatelessWidget {
 
 class _AutoElevation extends ConsumerWidget {
   final ServiceType? focus;
-  const _AutoElevation({this.focus});
+  final bool inferRisers;
+  const _AutoElevation({this.focus, this.inferRisers = false});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -366,6 +385,7 @@ class _AutoElevation extends ConsumerWidget {
             building: building,
             colors: colors,
             focus: focus,
+            inferRisers: inferRisers,
           ),
         );
       },
@@ -817,6 +837,7 @@ class _AutoSchematicPainter extends CustomPainter {
     required this.building,
     required this.colors,
     this.focus,
+    this.inferRisers = false,
   });
 
   final Network network;
@@ -827,6 +848,11 @@ class _AutoSchematicPainter extends CustomPainter {
   /// When non-null, the single-line is filtered to ONE system (cold/hot water,
   /// drainage, vent, rainwater, air, fire …); null shows the COMBINED riser.
   final ServiceType? focus;
+
+  /// When true, draw DASHED inferred risers connecting floors that share a
+  /// service but have no DRAWN riser between them (a convenience overlay — the
+  /// engineer hasn't routed the vertical, so it's shown dashed + flagged).
+  final bool inferRisers;
 
   static const double _sidePad = MechXSpacing.xl;
   static const double _nodeRadius = 4.0;
@@ -897,8 +923,106 @@ class _AutoSchematicPainter extends CustomPainter {
     if (size.isEmpty) return;
     final nodePos = _computeNodePositions(size);
     _paintBands(canvas, size);
+    if (inferRisers) _paintInferredRisers(canvas, nodePos);
     _paintEdges(canvas, nodePos);
     _paintNodes(canvas, nodePos);
+  }
+
+  /// A human label for [node] on the single-line — its equipment name
+  /// ([NodeComponent.label]) or fixture type — or null for a plain junction.
+  String? _nodeLabel(NetNode node) {
+    final c = node.component;
+    if (c != null) return c.label;
+    final f = node.fixture;
+    if (f != null) return _fixtureLabel(f);
+    return null;
+  }
+
+  String _fixtureLabel(PlumbingFixture f) => switch (f) {
+        PlumbingFixture.waterClosetFlushValve => 'WC',
+        PlumbingFixture.waterClosetFlushTank => 'WC',
+        PlumbingFixture.urinalFlushTank => 'Urinal',
+        PlumbingFixture.lavatory => 'Lavatory',
+        PlumbingFixture.shower => 'Shower',
+        PlumbingFixture.bathtub => 'Bathtub',
+        PlumbingFixture.kitchenSink => 'Sink',
+        PlumbingFixture.hoseBibb => 'Hose bibb',
+      };
+
+  /// Dashed connectors between floors that share a service but have NO drawn
+  /// riser of that service between them — a "you haven't routed this vertical
+  /// yet" overlay, drawn dashed + faded so it's clearly inferred, not designed.
+  void _paintInferredRisers(Canvas canvas, Map<String, Offset> nodePos) {
+    final services = focus != null ? [focus!] : ServiceType.values;
+    for (final s in services) {
+      // Floors that carry this service (endpoints of an S edge), and a
+      // representative node per floor (the one nearest the building's mid-x so
+      // the inferred stack reads vertically).
+      final repByFloor = <int, NetNode>{};
+      for (final e in network.edges) {
+        if (e.service != s) continue;
+        for (final id in [e.fromId, e.toId]) {
+          final n = network.nodeById(id);
+          if (n == null || nodePos[n.id] == null) continue;
+          final cur = repByFloor[n.floorIndex];
+          if (cur == null || n.x < cur.x) repByFloor[n.floorIndex] = n;
+        }
+      }
+      final floors = repByFloor.keys.toList()..sort();
+      if (floors.length < 2) continue;
+
+      // A drawn riser of S already spanning two floors → don't infer it.
+      bool drawnRiserBetween(int a, int b) => network.edges.any((e) {
+            if (e.service != s || e.kind != EdgeKind.riser) return false;
+            final fa = network.nodeById(e.fromId)?.floorIndex;
+            final fb = network.nodeById(e.toId)?.floorIndex;
+            return (fa == a && fb == b) || (fa == b && fb == a);
+          });
+
+      // Connect consecutive service-bearing floors (so a gap floor is skipped).
+      for (var i = 0; i < floors.length - 1; i++) {
+        final lo = floors[i], hi = floors[i + 1];
+        if (drawnRiserBetween(lo, hi)) continue;
+        final a = nodePos[repByFloor[lo]!.id]!;
+        final b = nodePos[repByFloor[hi]!.id]!;
+        _dashedRiser(canvas, a, b, serviceColor(s));
+      }
+    }
+  }
+
+  void _dashedRiser(Canvas canvas, Offset from, Offset to, Color color) {
+    final paint = Paint()
+      ..color = color.withAlpha(140)
+      ..strokeWidth = _edgeStroke
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final midX = (from.dx + to.dx) / 2;
+    _dashedLine(canvas, from, Offset(midX, from.dy), paint);
+    _dashedLine(canvas, Offset(midX, from.dy), Offset(midX, to.dy), paint);
+    _dashedLine(canvas, Offset(midX, to.dy), to, paint);
+    // An "inferred" tag at the vertical mid so it's not mistaken for a drawn run.
+    _drawText(
+      canvas,
+      'inferred',
+      Offset(midX + MechXSpacing.xs, (from.dy + to.dy) / 2 - MechXSpacing.sm),
+      fontSize: 9,
+      color: color.withAlpha(170),
+      fontWeight: FontWeight.w500,
+    );
+  }
+
+  void _dashedLine(Canvas canvas, Offset a, Offset b, Paint paint,
+      {double dash = 6, double gap = 4}) {
+    final total = (b - a).distance;
+    if (total <= 0) return;
+    final dir = (b - a) / total;
+    var d = 0.0;
+    while (d < total) {
+      final start = a + dir * d;
+      final end = a + dir * math.min(d + dash, total);
+      canvas.drawLine(start, end, paint);
+      d += dash + gap;
+    }
   }
 
   void _paintBands(Canvas canvas, Size size) {
@@ -1043,6 +1167,21 @@ class _AutoSchematicPainter extends CustomPainter {
         canvas.drawCircle(pos, _nodeRadius + 1.5, Paint()..color = colors.canvas);
         canvas.drawCircle(pos, _nodeRadius, Paint()..color = color);
       }
+
+      // Fixture / equipment label, centred just below the symbol.
+      final label = node == null ? null : _nodeLabel(node);
+      if (label != null) {
+        _drawText(
+          canvas,
+          label,
+          Offset(pos.dx, pos.dy + 13),
+          fontSize: 9,
+          color: colors.textMuted,
+          fontWeight: FontWeight.w500,
+          centered: true,
+          maxWidth: 90,
+        );
+      }
     }
   }
 
@@ -1079,7 +1218,9 @@ class _AutoSchematicPainter extends CustomPainter {
       old.network != network ||
       old.sizing != sizing ||
       old.building != building ||
-      old.colors != colors;
+      old.colors != colors ||
+      old.focus != focus ||
+      old.inferRisers != inferRisers;
 }
 
 // ---------------------------------------------------------------------------

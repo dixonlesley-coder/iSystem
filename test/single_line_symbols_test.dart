@@ -106,10 +106,65 @@ void main() {
 
     expect(tester.takeException(), isNull);
     // The Auto-mode system filter offers the two services present + "All".
+    // (The fixture/equipment labels are canvas-painted, so they're verified by
+    // the golden rather than the widget finder.)
     expect(find.text('All'), findsOneWidget);
     await expectLater(
       find.byType(SchematicView),
       matchesGoldenFile('goldens/09_single_line_symbols.png'),
+    );
+  });
+
+  testWidgets('inferred risers connect floors that share a service unrouted',
+      (tester) async {
+    setDesktopSurface(tester, size: const Size(1100, 760));
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    container.read(projectControllerProvider.notifier).setFloors(const [
+      Floor('Ground', Length(4.0)),
+      Floor('Level 1', Length(4.0)),
+    ]);
+    // Cold water on BOTH floors but NO drawn riser between them — the single
+    // line should offer to infer the vertical when the toggle is on.
+    container.read(networkControllerProvider.notifier).loadNetwork(Network(
+      nodes: [
+        _n('a', 150, 0, role: NodeRole.plant, component: NodeComponent.pump),
+        _n('b', 600, 0, role: NodeRole.fixture),
+        _n('c', 250, 1),
+        _n('d', 700, 1, role: NodeRole.fixture),
+      ],
+      edges: [
+        const NetEdge(
+            id: 'g1', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
+        const NetEdge(
+            id: 'g2', fromId: 'c', toId: 'd', service: ServiceType.coldWater),
+      ],
+    ));
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: const MechXTheme(
+        data: MechXThemeData.dark,
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: MediaQuery(
+            data: MediaQueryData(size: Size(1100, 760)),
+            child: SchematicView(),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    // Turn on inferred risers.
+    await tester.tap(find.text('Infer risers'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(tester.takeException(), isNull);
+    await expectLater(
+      find.byType(SchematicView),
+      matchesGoldenFile('goldens/10_single_line_inferred.png'),
     );
   });
 }

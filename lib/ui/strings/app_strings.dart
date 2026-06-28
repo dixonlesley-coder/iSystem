@@ -120,6 +120,7 @@ enum StringKey {
   schematicEdit,
   schematicRiserService,
   schematicSystemAll,
+  schematicInferRisers,
   schematicNoNetwork,
   schematicPalette,
   schematicPaletteHelp,
@@ -355,6 +356,7 @@ const Map<StringKey, String> _en = {
   StringKey.schematicEdit: 'Edit',
   StringKey.schematicRiserService: 'Riser service',
   StringKey.schematicSystemAll: 'All',
+  StringKey.schematicInferRisers: 'Infer risers',
   StringKey.schematicNoNetwork: 'No network drawn',
   StringKey.schematicPalette: 'PALETTE',
   StringKey.schematicPaletteHelp:
@@ -610,6 +612,7 @@ const Map<StringKey, String> _id = {
   StringKey.schematicEdit: 'Edit',
   StringKey.schematicRiserService: 'Layanan riser',
   StringKey.schematicSystemAll: 'Semua',
+  StringKey.schematicInferRisers: 'Perkirakan riser',
   StringKey.schematicNoNetwork: 'Belum ada jaringan digambar',
   StringKey.schematicPalette: 'PALET',
   StringKey.schematicPaletteHelp:
