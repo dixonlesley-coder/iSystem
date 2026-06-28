@@ -215,13 +215,23 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('Infer risers'));
     await tester.pump();
-    // The inferred connector's vertical leg sits at the leftmost node x
-    // (≈ side-pad) spanning the two floor bands — tap it about mid-height.
-    await tester.tapAt(const Offset(32, 400));
-    // Drain the transient 'Riser added' status-message timer before teardown.
+    int riserCount() => container
+        .read(networkControllerProvider)
+        .network
+        .edges
+        .where((e) => e.kind == EdgeKind.riser)
+        .length;
+    // Two aligned stacks (a↔c on the left, b↔d on the right) ⇒ two inferred
+    // connectors. Their vertical legs sit at the leftmost / rightmost node x.
+    await tester.tapAt(const Offset(32, 400)); // left stack
+    await tester.pump();
+    expect(hasRiser(), isTrue);
+    expect(riserCount(), 1);
+    await tester.tapAt(const Offset(1068, 400)); // right stack
+    // Drain the transient 'Riser added' status-message timers before teardown.
     await tester.pump(const Duration(seconds: 4));
 
-    // The dashed suggestion became a real riser edge (sized via §10 elevation).
-    expect(hasRiser(), isTrue);
+    // Both dashed suggestions became real riser edges (per vertical stack).
+    expect(riserCount(), 2);
   });
 }

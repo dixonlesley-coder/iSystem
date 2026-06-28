@@ -963,38 +963,70 @@ class _InferredRiser {
   double get midX => (from.dx + to.dx) / 2;
 }
 
-/// For each service (respecting [focus]), find consecutive service-bearing
-/// floors with NO drawn riser between them and propose a connector between the
-/// lowest-x node on each (so the inferred stack reads vertically).
+/// For each service (respecting [focus]), connect consecutive service-bearing
+/// floors — but per VERTICAL STACK, not one-per-floor. Nodes are paired across
+/// the floor gap by **mutual-nearest-neighbour on world x**, so a building with
+/// several risers of the same service gets one inferred connector per aligned
+/// stack, while a spread-out horizontal main (no vertical alignment) doesn't
+/// spawn a connector at every junction. Nodes already joined to the adjacent
+/// floor by a DRAWN riser of that service are excluded.
 List<_InferredRiser> _computeInferredRisers(
     Network network, Map<String, Offset> nodePos, ServiceType? focus) {
   final out = <_InferredRiser>[];
   final services = focus != null ? [focus] : ServiceType.values;
   for (final s in services) {
-    final repByFloor = <int, NetNode>{};
+    // Visible nodes of this service, deduped, grouped by floor.
+    final byFloor = <int, List<NetNode>>{};
+    final seen = <String>{};
     for (final e in network.edges) {
       if (e.service != s) continue;
       for (final id in [e.fromId, e.toId]) {
         final node = network.nodeById(id);
         if (node == null || nodePos[node.id] == null) continue;
-        final cur = repByFloor[node.floorIndex];
-        if (cur == null || node.x < cur.x) repByFloor[node.floorIndex] = node;
+        if (seen.add(node.id)) (byFloor[node.floorIndex] ??= []).add(node);
       }
     }
-    final floors = repByFloor.keys.toList()..sort();
+    final floors = byFloor.keys.toList()..sort();
     if (floors.length < 2) continue;
-    bool drawnRiserBetween(int a, int b) => network.edges.any((e) {
+
+    // A node already risered (drawn) to [otherFloor] for this service.
+    bool drawnRiser(NetNode n, int otherFloor) => network.edges.any((e) {
           if (e.service != s || e.kind != EdgeKind.riser) return false;
-          final fa = network.nodeById(e.fromId)?.floorIndex;
-          final fb = network.nodeById(e.toId)?.floorIndex;
-          return (fa == a && fb == b) || (fa == b && fb == a);
+          if (e.fromId == n.id) {
+            return network.nodeById(e.toId)?.floorIndex == otherFloor;
+          }
+          if (e.toId == n.id) {
+            return network.nodeById(e.fromId)?.floorIndex == otherFloor;
+          }
+          return false;
         });
+
+    NetNode? nearestByX(NetNode n, List<NetNode> pool) {
+      NetNode? best;
+      var bestD = double.infinity;
+      for (final m in pool) {
+        final d = (n.x - m.x).abs();
+        if (d < bestD) {
+          bestD = d;
+          best = m;
+        }
+      }
+      return best;
+    }
+
     for (var i = 0; i < floors.length - 1; i++) {
       final lo = floors[i], hi = floors[i + 1];
-      if (drawnRiserBetween(lo, hi)) continue;
-      final loN = repByFloor[lo]!, hiN = repByFloor[hi]!;
-      out.add(_InferredRiser(
-          loN.id, hiN.id, s, nodePos[loN.id]!, nodePos[hiN.id]!));
+      final loNodes = byFloor[lo]!.where((n) => !drawnRiser(n, hi)).toList();
+      final hiNodes = byFloor[hi]!.where((n) => !drawnRiser(n, lo)).toList();
+      if (loNodes.isEmpty || hiNodes.isEmpty) continue;
+      for (final loN in loNodes) {
+        final hiN = nearestByX(loN, hiNodes);
+        if (hiN == null) continue;
+        // Mutual nearest → a genuine vertical stack (not a stray junction).
+        if (nearestByX(hiN, loNodes)?.id != loN.id) continue;
+        out.add(_InferredRiser(
+            loN.id, hiN.id, s, nodePos[loN.id]!, nodePos[hiN.id]!));
+      }
     }
   }
   return out;
