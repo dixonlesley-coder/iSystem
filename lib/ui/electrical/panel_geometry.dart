@@ -95,6 +95,19 @@ PanelGeometry panelGeometry(ElectricalPanelResult panel) {
 double panelCardHeight(ElectricalPanelResult panel) =>
     panelGeometry(panel).height;
 
+/// Compact summary-body band (header [kPanelChrome] excluded) used when a panel
+/// is COLLAPSED (zoomed out): just the kW / demand / incomer / system / ways +
+/// phase-balance rows — no schematic band, so the card is a tidy block instead
+/// of a tall card of empty space.
+const double kPanelSummaryBodyH = 104;
+
+/// Card footprint (header + body) at the active LOD: the full schematic band
+/// when [detail], else the compact summary band. Threaded through the canvas so
+/// the card height, its load/merged-node drop, and the feeder endpoints all
+/// agree at every zoom.
+double panelFootprint(ElectricalPanelResult panel, bool detail) =>
+    kPanelChrome + (detail ? panelGeometry(panel).height : kPanelSummaryBodyH);
+
 /// The single service entrance — the utility-fed root with the most demand
 /// (PanelMaker `serviceRootId`): a utility panel that has feeder children,
 /// preferring the highest-demand one, else the first utility root, else the

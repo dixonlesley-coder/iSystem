@@ -14,6 +14,7 @@ import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
+import 'package:mechx/ui/electrical/electrical_canvas.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -95,6 +96,18 @@ void main() {
     // through the pure A4 engine (panel schedule + summaries + warnings).
     container.read(workspaceViewProvider.notifier).set(WorkspaceView.electrical);
     await tester.pump(const Duration(milliseconds: 250));
+    // Zoom in past the LOD threshold so the showcase shows each panel's full
+    // internal schematic + individual load nodes (the fit default is an
+    // overview, where loads merge — see golden 08).
+    final elecCanvas =
+        tester.state<ElectricalCanvasState>(find.byType(ElectricalCanvas));
+    var zin = 0;
+    while (elecCanvas.currentScale < kLodThreshold && zin++ < 8) {
+      elecCanvas.zoomIn();
+    }
+    await tester.pump();
+    // Let the summary→schematic LOD cross-fade settle before capturing.
+    await tester.pump(const Duration(milliseconds: 300));
     await expectLater(app, matchesGoldenFile('goldens/05_electrical.png'));
 
     // Unified LAYOUT canvas, Electrical layer — panels + loads placed on the
@@ -131,5 +144,20 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     await expectLater(app, matchesGoldenFile('goldens/07_riser_edit.png'));
+
+    // Electrical single-line at the fit OVERVIEW — each panel's loads collapse
+    // into one tidy "N loads" node (they break out individually only when
+    // zoomed in past the LOD threshold, golden 05), so the map reads cleanly.
+    container.read(workspaceViewProvider.notifier).set(WorkspaceView.electrical);
+    await tester.pump(const Duration(milliseconds: 250));
+    final overview =
+        tester.state<ElectricalCanvasState>(find.byType(ElectricalCanvas));
+    overview.fitView();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    // The merged-loads summary nodes are present at the overview scale.
+    expect(find.textContaining('loads'), findsWidgets);
+    await expectLater(
+        app, matchesGoldenFile('goldens/08_electrical_collapsed.png'));
   });
 }

@@ -309,7 +309,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       final panel = panels[entry.key];
       if (panel == null) continue;
       final w = panelCardWidth(panel.circuits.length);
-      final h = cardFootprint(panel);
+      final h = panelFootprint(panel, vt.scale >= kLodThreshold);
       final tl = vt.worldToScreen(entry.value);
       final rect = Rect.fromLTWH(tl.dx, tl.dy, w * vt.scale, h * vt.scale);
       if (rect.contains(local)) return entry.key;
@@ -326,8 +326,6 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     final result = ref.watch(electricalResultProvider);
     final positions = _positions(project, result);
     final rootId = serviceRootId(project, result);
-
-    final detail = _current.scale >= kLodThreshold;
 
     return Focus(
       focusNode: _focus,
@@ -348,6 +346,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               _viewportSize = constraints.biggest;
               _ensureInitialTransform(positions);
               final vt = _current;
+              // Compute LOD from the RESOLVED viewport (after the initial fit),
+              // so the panel-internal schematic + the load break-out/merge track
+              // the real zoom from the first frame — not the pre-fit default.
+              final detail = vt.scale >= kLodThreshold;
               return ClipRect(
                 child: Stack(
                   children: [
@@ -410,9 +412,11 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     );
   }
 
-  /// The card footprint reserved at every zoom (so loads sit a fixed gap below).
+  /// The card footprint at the current LOD (full schematic when zoomed in, the
+  /// compact summary band when zoomed out) — so loads sit a fixed gap below the
+  /// ACTUAL card height, not a reserved schematic band of empty space.
   double cardFootprint(ElectricalPanelResult panel) =>
-      panelCardHeight(panel) + kPanelChrome;
+      panelFootprint(panel, currentScale >= kLodThreshold);
 
   /// Build the panel card, its PLN head (root only) and one load node per
   /// non-feeder / non-spare way.
@@ -429,7 +433,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     final scale = vt.scale;
     final tl = vt.worldToScreen(world);
     final w = panelCardWidth(panel.circuits.length);
-    final cardH = cardFootprint(panel);
+    final cardH = panelFootprint(panel, detail);
     final modelPanel = project.panels
         .where((p) => p.id == panel.panelId)
         .firstOrNull;
@@ -519,6 +523,44 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       ),
     );
 
+    // Loads below the panel. Zoomed OUT (summary view) they MERGE into one
+    // compact node so the panel reads as a tidy block instead of fanning every
+    // load out below it; they break out into the individual load nodes only
+    // when zoomed in (detail). Double-tap the merged node to zoom in + expand.
+    if (!detail) {
+      final loadCount = panel.circuits
+          .where((c) =>
+              c.loadKind != LoadKind.feeder && c.loadKind != LoadKind.spare)
+          .length;
+      if (loadCount > 0) {
+        final mergedWorld = Offset(
+          world.dx + w / 2 - kLoadW / 2,
+          world.dy + cardH + kLoadDropGap,
+        );
+        final mp = vt.worldToScreen(mergedWorld);
+        final focal = mp + Offset(kLoadW * scale / 2, kLoadNodeH * scale / 2);
+        widgets.add(
+          Positioned(
+            left: mp.dx,
+            top: mp.dy,
+            width: kLoadW * scale,
+            height: kLoadNodeH * scale,
+            child: _ScaledTap(
+              onTap: () => setState(() => _selectedPanel = null),
+              onDoubleTap: () => _expandLoadsAt(focal),
+              child: _ScaledChild(
+                scale: scale,
+                width: kLoadW,
+                height: kLoadNodeH,
+                child: _MergedLoadsNode(count: loadCount),
+              ),
+            ),
+          ),
+        );
+      }
+      return widgets;
+    }
+
     // Load nodes hanging below each non-feeder, non-spare way.
     for (var i = 0; i < panel.circuits.length; i++) {
       final c = panel.circuits[i];
@@ -586,6 +628,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   }
 
   // Helpers exposed to the host view's zoom controls.
+
+  /// Current zoom scale (exposed for tests / host LOD checks).
+  double get currentScale => _current.scale;
+
   void zoomIn() =>
       _setTransform(_current.zoomedBy(1.2, _viewportSize.center(Offset.zero)));
   void zoomOut() => _setTransform(
@@ -595,6 +641,14 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     final project = ref.read(electricalProjectProvider);
     final result = ref.read(electricalResultProvider);
     _fit(_positions(project, result));
+  }
+
+  /// Zoom in just past the LOD threshold, anchored at [focalScreen], so a
+  /// merged-loads node breaks out into its individual loads (double-tap to
+  /// expand). No-op if already in detail.
+  void _expandLoadsAt(Offset focalScreen) {
+    if (_current.scale >= kLodThreshold) return;
+    _setTransform(_current.zoomedTo(kLodThreshold + 0.06, focalScreen));
   }
 
   ViewportTransform get transform => _current;
@@ -660,7 +714,7 @@ class _CanvasPainter extends CustomPainter {
         final wayIdx = fromPanel.circuits.indexWhere(
           (r) => r.circuitId == c.id,
         );
-        final fromCardH = panelCardHeight(fromPanel) + kPanelChrome;
+        final fromCardH = panelFootprint(fromPanel, detail);
         final cx = wayIdx >= 0
             ? wayColumnX(wayIdx)
             : panelCardWidth(fromPanel.circuits.length) / 2;
@@ -694,7 +748,7 @@ class _CanvasPainter extends CustomPainter {
       final fromPanel = result.panels[feederFrom];
       if (fromPos != null && fromPanel != null) {
         final w = panelCardWidth(fromPanel.circuits.length);
-        final h = panelCardHeight(fromPanel) + kPanelChrome;
+        final h = panelFootprint(fromPanel, detail);
         final anchor = transform.worldToScreen(
           Offset(fromPos.dx + w / 2, fromPos.dy + h),
         );
@@ -736,9 +790,25 @@ class _CanvasPainter extends CustomPainter {
   /// schematic itself is drawn by the card widget (see [SchematicPainter]).
   void _loadDrops(Canvas canvas, ElectricalPanelResult panel, Offset world) {
     final s = transform.scale;
-    final cardH = panelCardHeight(panel) + kPanelChrome;
+    final cardH = panelFootprint(panel, detail);
     final loadTop = cardH + kLoadDropGap;
     final threePhase = panel.system == ElectricalSystem.threePhase;
+    // Collapsed (summary) view: one tidy drop line to the merged loads node,
+    // instead of a stem per way (which fans out and clutters the zoomed-out map).
+    if (!detail) {
+      final hasLoads = panel.circuits.any((c) =>
+          c.loadKind != LoadKind.feeder && c.loadKind != LoadKind.spare);
+      if (!hasLoads) return;
+      final cx = panelCardWidth(panel.circuits.length) / 2;
+      canvas.drawLine(
+        transform.worldToScreen(Offset(world.dx + cx, world.dy + cardH)),
+        transform.worldToScreen(Offset(world.dx + cx, world.dy + loadTop)),
+        Paint()
+          ..color = accent
+          ..strokeWidth = 1.6 * s,
+      );
+      return;
+    }
     for (var i = 0; i < panel.circuits.length; i++) {
       final c = panel.circuits[i];
       if (c.loadKind == LoadKind.feeder || c.loadKind == LoadKind.spare) {
@@ -1367,7 +1437,8 @@ class _PanelSummaryBody extends StatelessWidget {
         .length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Wrap(
           spacing: 16,
@@ -1608,6 +1679,89 @@ class _LoadNodeState extends State<_LoadNode> {
     );
   }
 
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Merged loads node — the zoomed-out summary that stands in for a panel's
+// individual load nodes (they break out when zoomed in past the LOD threshold).
+// ════════════════════════════════════════════════════════════════════════════
+
+class _MergedLoadsNode extends StatelessWidget {
+  final int count;
+  const _MergedLoadsNode({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Container(
+      padding: const EdgeInsets.all(5),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.control,
+        border: Border.all(color: colors.border),
+        boxShadow: const [
+          BoxShadow(color: Color(0x22000000), blurRadius: 4, offset: Offset(0, 1)),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CustomPaint(
+            size: const Size(22, 20),
+            painter: _StackedLoadsGlyph(colors.textSecondary, colors.surface),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            '$count ${count == 1 ? 'load' : 'loads'}',
+            textAlign: TextAlign.center,
+            style: type.caption.copyWith(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: colors.textPrimary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Three offset rounded cards — a "stack", conveying several loads collapsed
+/// into one. Each is filled (with the node surface) so it occludes the one
+/// behind, then outlined, so the layering reads cleanly.
+class _StackedLoadsGlyph extends CustomPainter {
+  final Color color;
+  final Color fill;
+  const _StackedLoadsGlyph(this.color, this.fill);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width, h = size.height;
+    final cardW = w * 0.6, cardH = h * 0.62;
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..strokeJoin = StrokeJoin.round;
+    final fillP = Paint()..color = fill;
+    for (var i = 2; i >= 0; i--) {
+      final dx = i * (w - cardW) / 2;
+      final dy = i * (h - cardH) / 2;
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(dx, dy, cardW, cardH),
+        const Radius.circular(2.5),
+      );
+      canvas.drawRRect(rect, fillP);
+      canvas.drawRRect(rect, stroke);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_StackedLoadsGlyph old) =>
+      old.color != color || old.fill != fill;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
