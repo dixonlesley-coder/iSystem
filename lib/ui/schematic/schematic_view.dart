@@ -37,6 +37,7 @@ import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
 import '../canvas/edge_context_menu.dart';
+import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
 import '../canvas/viewport.dart';
 import '../canvas/zoom_controls.dart';
@@ -999,10 +1000,49 @@ class _AutoSchematicPainter extends CustomPainter {
     canvas.drawPath(path, Paint()..color = color);
   }
 
+  /// A representative colour for [node] on the single-line: the focused system
+  /// when filtered, else the service of any edge touching the node, else neutral.
+  Color _nodeColor(NetNode node) {
+    if (focus != null) return serviceColor(focus!);
+    for (final e in network.edges) {
+      if (e.fromId == node.id || e.toId == node.id) return serviceColor(e.service);
+    }
+    return colors.textSecondary;
+  }
+
+  /// Nodes carry their schematic symbol — equipment (`paintComponentSymbol`:
+  /// pump / tank / AHU / diffuser / valve / drain …), a fixture terminal (a
+  /// small down-triangle "drop"), or a plain junction dot — so the single-line
+  /// reads like an engineered riser, not a string of anonymous dots.
   void _paintNodes(Canvas canvas, Map<String, Offset> nodePos) {
-    for (final pos in nodePos.values) {
-      canvas.drawCircle(pos, _nodeRadius + 1.5, Paint()..color = colors.canvas);
-      canvas.drawCircle(pos, _nodeRadius, Paint()..color = colors.textSecondary);
+    const box = 20.0;
+    for (final entry in nodePos.entries) {
+      final pos = entry.value;
+      final node = network.nodeById(entry.key);
+      final color = node == null ? colors.textSecondary : _nodeColor(node);
+
+      if (node?.component != null) {
+        // A halo so the symbol reads over the run line, then the equipment glyph.
+        canvas.drawCircle(pos, box * 0.62, Paint()..color = colors.canvas);
+        canvas.save();
+        canvas.translate(pos.dx - box / 2, pos.dy - box / 2);
+        paintComponentSymbol(canvas, const Size(box, box), node!.component!, color);
+        canvas.restore();
+      } else if (node?.role == NodeRole.fixture) {
+        // A fixture drop — a small filled down-triangle terminal.
+        const r = 6.0;
+        canvas.drawCircle(pos, r + 2.5, Paint()..color = colors.canvas);
+        final tri = Path()
+          ..moveTo(pos.dx - r, pos.dy - r * 0.7)
+          ..lineTo(pos.dx + r, pos.dy - r * 0.7)
+          ..lineTo(pos.dx, pos.dy + r)
+          ..close();
+        canvas.drawPath(tri, Paint()..color = color);
+      } else {
+        // A plain junction.
+        canvas.drawCircle(pos, _nodeRadius + 1.5, Paint()..color = colors.canvas);
+        canvas.drawCircle(pos, _nodeRadius, Paint()..color = color);
+      }
     }
   }
 

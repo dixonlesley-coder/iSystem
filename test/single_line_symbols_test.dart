@@ -1,0 +1,115 @@
+@Tags(['golden'])
+library;
+
+import 'dart:io';
+
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
+import 'package:mechx/ui/schematic/schematic_view.dart';
+import 'package:mechx/ui/theme/mechx_theme.dart';
+import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/units.dart';
+
+import 'test_util.dart';
+
+Future<void> _loadFonts() async {
+  Future<ByteData> bytes(String path) async =>
+      ByteData.sublistView(await File(path).readAsBytes());
+  final sans = FontLoader('Roboto')
+    ..addFont(bytes('assets/fonts/Roboto-Regular.ttf'))
+    ..addFont(bytes('assets/fonts/Roboto-Medium.ttf'));
+  await sans.load();
+}
+
+NetNode _n(
+  String id,
+  double x,
+  int floor, {
+  NodeRole role = NodeRole.main,
+  NodeComponent? component,
+}) =>
+    NetNode(
+      id: id,
+      sheetId: 's1',
+      x: x,
+      y: 0,
+      floorIndex: floor,
+      role: role,
+      component: component,
+    );
+
+void main() {
+  setUpAll(_loadFonts);
+
+  testWidgets('single-line draws equipment + fixture symbols per floor',
+      (tester) async {
+    setDesktopSurface(tester, size: const Size(1100, 760));
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    // Two stacked floors with a small mechanical network: plant + fixtures so
+    // the single-line renders real schematic symbols, not anonymous dots.
+    container.read(projectControllerProvider.notifier).setFloors(const [
+      Floor('Ground', Length(4.0)),
+      Floor('Level 1', Length(4.0)),
+    ]);
+    container.read(networkControllerProvider.notifier).loadNetwork(Network(
+      nodes: [
+        _n('pump', 150, 0, role: NodeRole.plant, component: NodeComponent.pump),
+        _n('gtank', 430, 0,
+            role: NodeRole.plant, component: NodeComponent.groundTank),
+        _n('junc', 720, 0),
+        _n('rtank', 250, 1,
+            role: NodeRole.plant, component: NodeComponent.roofTank),
+        _n('fix', 520, 1, role: NodeRole.fixture),
+        _n('diff', 780, 1,
+            role: NodeRole.fixture, component: NodeComponent.supplyDiffuser),
+      ],
+      edges: [
+        const NetEdge(
+            id: 'e1', fromId: 'pump', toId: 'gtank', service: ServiceType.coldWater),
+        const NetEdge(
+            id: 'e2', fromId: 'gtank', toId: 'junc', service: ServiceType.coldWater),
+        const NetEdge(
+            id: 'e3',
+            fromId: 'junc',
+            toId: 'fix',
+            service: ServiceType.coldWater,
+            kind: EdgeKind.riser),
+        const NetEdge(
+            id: 'e4', fromId: 'fix', toId: 'rtank', service: ServiceType.coldWater),
+        const NetEdge(
+            id: 'e5', fromId: 'fix', toId: 'diff', service: ServiceType.duct),
+      ],
+    ));
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: const MechXTheme(
+        data: MechXThemeData.dark,
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: MediaQuery(
+            data: MediaQueryData(size: Size(1100, 760)),
+            child: SchematicView(),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(tester.takeException(), isNull);
+    // The Auto-mode system filter offers the two services present + "All".
+    expect(find.text('All'), findsOneWidget);
+    await expectLater(
+      find.byType(SchematicView),
+      matchesGoldenFile('goldens/09_single_line_symbols.png'),
+    );
+  });
+}
