@@ -331,7 +331,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   for linear panels). The **full multi-brand parts catalogue** is ported verbatim into
   `electrical/catalog_data/**` + `catalog.dart` — **534 globally-unique parts** across Schneider /
   Mitsubishi / LS / ABB / Legrand / Chint + generic cables (matchers/`bom.dart`/`quotation.dart`
-  unchanged). **`v1.0.0` is SHIPPED** — the work was merged to the default branch
+  unchanged). **`v1.0.0` was the FIRST SHIPPED release** (the latest is `v1.5.0` — see the
+  Apple-polish row below) — the work was merged to the default branch
   (`claude/laughing-carson-4vhyf7`) via PRs #1/#2/#3 and the Release workflow published
   `iSystem-1.0.0-setup.exe` + `latest.json` (feed sha256 matches the installer). Two first-release
   CI fixes the Windows runner exposed: goldens are platform-locked (~2% font-AA diff on Windows) so
@@ -555,9 +556,20 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   and inspector right-click/face-size coaching suffixes (`project_panel.dart`: calibration
   status, duct/face prompts trimmed to status-only). Goldens 01–07 regenerated + visually
   verified (tighter inspector/Layout chrome, no tofu/overflow); `network_store_test` dropped its
-  `'PALETTE'` assertion. The companion **Batch B (shared-widget consolidation)** + **Batch C
-  (token + a11y polish)** from the same review landed as follow-on passes, and the final
-  **Batch D (electrical interaction parity)** is now done: the electrical drop targets
+  `'PALETTE'` assertion. The companion **Batch B (shared-widget consolidation)** collapsed the
+  electrical workspace (a PanelMaker port) onto the design system via four new shared widgets in
+  `ui/widgets/`: **`context_menu.dart`** (`MechXContextMenu`/`MechXMenuRow` — ONE right-click menu
+  for both the mechanical `edge_context_menu` and the electrical `ElectricalMenu`),
+  **`mechx_segment.dart`** (`MechXSegment` — ONE selected-segment control for the electrical tabs +
+  enum-picker chips), **`severity_glyph.dart`** (`SeverityGlyph` — a shape-per-severity cue, shared
+  with `issues_card`, **fixing a colour-only a11y signal** in the electrical warning rows) and
+  **`mechx_empty_state_card.dart`**; plus a `MechXButtonTone {normal,danger,muted}` on `MechXButton`
+  so three bespoke electrical button styles + `ElectricalTextInput`/`NumInput` now route through the
+  canonical `MechXButton`/`MechXTextField`. **Batch C (token + shadow polish)** routed every
+  hand-rolled `BoxShadow` through `MechXShadow.popover/.card` (softer, consistent floating chrome —
+  plan goldens lightened + re-verified) and the selection highlight through `colors.accent`
+  (light/dark-aware; was a fixed `0xFF4C8DFF`), raw white → `onAccent`, micro-radii → `MechXRadii`.
+  The final **Batch D (electrical interaction parity)** is now done: the electrical drop targets
   (`_SheetDropTarget` in `layout/electrical_layer.dart`, `_CanvasDropTarget` in
   `electrical/electrical_canvas.dart`) paint a mechanical-`DropOverlay`-style **drag-place
   preview** — a cursor-following ghost `LoadSymbol` (+ a nearest-panel snap ring on the Layout
@@ -566,7 +578,12 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `accent.withAlpha(18→35 on will-snap)` + `MechXRadii.card` language; in-frame PanelMaker-isms
   are normalised (**"Daya" → "Demand (kVA)"**, badge **"ess" → "essential"**; R/S/T/N/PE/INC/UPS/kWh
   kept); and a single `MechXMotion.hoverLift` (1.03) / `pressScale` (0.98) token pair replaces the
-  five hardcoded hover-scale literals. No engine / `.mechx` change.
+  five hardcoded hover-scale literals. No engine / `.mechx` change. The whole A–D pass + the in-app
+  Claude copilot (Anthropic primary + **OpenAI/GLM** backups behind one injectable `AiClient`, a 3-way
+  Provider toggle + custom model dropdown in Preferences, BYO-key, `DesignSettings.aiProvider`)
+  **shipped as `v1.5.0`** — merged to default `claude/laughing-carson-4vhyf7` via PRs **#15** then
+  **#16** (CI green), and the Release workflow published `iSystem-1.5.0-setup.exe` + `latest.json`
+  (feed sha256 matches the installer). Version source of truth `pubspec.yaml` → `1.5.0+8`.
 - Looped networks: ring/grid **pressurized & air** mains are balanced with
   Hardy-Cross (`network/hardy_cross.dart`) at sizing time and the balanced flows
   feed the heatmap. The split uses resistance ∝ **real edge length** at a
