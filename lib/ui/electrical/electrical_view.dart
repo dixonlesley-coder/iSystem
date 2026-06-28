@@ -572,7 +572,6 @@ class _ExportMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
     // Pop-in: a brief scale-from-95% + fade, anchored at the top-right corner
     // (under the Export button), so the popover feels like it grows from there.
     return TweenAnimationBuilder<double>(
@@ -587,16 +586,15 @@ class _ExportMenu extends StatelessWidget {
           child: child,
         ),
       ),
-      child: Container(
+      child: SizedBox(
         width: 260,
-        padding: const EdgeInsets.all(MechXSpacing.xs),
-        decoration: BoxDecoration(
-          color: colors.surface,
+        child: GlassSurface(
           borderRadius: MechXRadii.card,
-          border: Border.all(color: colors.border),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: Column(
+          blurSigma: MechXGlass.blurSigmaLight,
+          shadow: MechXShadow.popover,
+          child: Padding(
+            padding: const EdgeInsets.all(MechXSpacing.xs),
+            child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -621,6 +619,8 @@ class _ExportMenu extends StatelessWidget {
               onTap: onPowerOneLine,
             ),
           ],
+            ),
+          ),
         ),
       ),
     );

@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import 'glass_surface.dart';
 
 /// A small floating "(?)" affordance + its gesture-help popover, lifted from the
 /// electrical canvas so the mechanical Layout canvas can advertise the same
@@ -82,16 +83,15 @@ class CanvasGuideLegend extends StatelessWidget {
           child: child,
         ),
       ),
-      child: Container(
+      child: SizedBox(
         width: width,
-        padding: const EdgeInsets.all(MechXSpacing.md),
-        decoration: BoxDecoration(
-          color: colors.surface,
+        child: GlassSurface(
           borderRadius: MechXRadii.card,
-          border: Border.all(color: colors.border),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: Column(
+          blurSigma: MechXGlass.blurSigmaLight,
+          shadow: MechXShadow.popover,
+          child: Padding(
+            padding: const EdgeInsets.all(MechXSpacing.md),
+            child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -148,6 +148,8 @@ class CanvasGuideLegend extends StatelessWidget {
                 ),
               ),
           ],
+            ),
+          ),
         ),
       ),
     );

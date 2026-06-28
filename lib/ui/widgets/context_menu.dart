@@ -14,6 +14,7 @@ import 'package:flutter/widgets.dart';
 
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import 'glass_surface.dart';
 
 /// A one-shot menu entrance: scales from ~0.92 -> 1.0 and fades 0 -> 1 over
 /// [MechXMotion.appear], anchored top-left so the menu grows out of the click
@@ -59,34 +60,27 @@ class MechXContextMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
     final column = Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: children,
     );
+    // Liquid-Glass popover: a translucent blurred card that floats over the
+    // canvas/diagram, rimmed on all sides and lifted by the popover shadow.
     return MechXMenuEntrance(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: MechXRadii.card,
-          border: Border.all(color: colors.border),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: ClipRRect(
-          borderRadius: MechXRadii.card,
-          child: scrollable
-              ? SingleChildScrollView(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: MechXSpacing.xs),
-                  child: column,
-                )
-              : Padding(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: MechXSpacing.xs),
-                  child: column,
-                ),
-        ),
+      child: GlassSurface(
+        borderRadius: MechXRadii.card,
+        blurSigma: MechXGlass.blurSigmaLight,
+        shadow: MechXShadow.popover,
+        child: scrollable
+            ? SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xs),
+                child: column,
+              )
+            : Padding(
+                padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xs),
+                child: column,
+              ),
       ),
     );
   }

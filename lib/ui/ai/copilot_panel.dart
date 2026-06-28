@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../store/ai_copilot_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/mechx_button.dart';
 
 class CopilotOverlay extends ConsumerWidget {
@@ -74,14 +75,14 @@ class _CopilotPanelState extends ConsumerState<_CopilotPanel> {
     final state = ref.watch(copilotProvider);
     final enabled = ref.watch(copilotEnabledProvider);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: colors.surface,
-        border: Border(left: BorderSide(color: colors.border)),
-        boxShadow: MechXShadow.popover,
-      ),
-      padding: const EdgeInsets.all(MechXSpacing.md),
-      child: Column(
+    return GlassSurface(
+      // Liquid-Glass copilot panel — floats over the workspace at the right.
+      edge: Border(
+          left: BorderSide(color: colors.glassEdge, width: MechXGlass.edgeWidth)),
+      shadow: MechXShadow.popover,
+      child: Padding(
+        padding: const EdgeInsets.all(MechXSpacing.md),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
@@ -127,6 +128,7 @@ class _CopilotPanelState extends ConsumerState<_CopilotPanel> {
           const SizedBox(height: MechXSpacing.md),
           Expanded(child: SingleChildScrollView(child: _Body(state: state))),
         ],
+      ),
       ),
     );
   }
