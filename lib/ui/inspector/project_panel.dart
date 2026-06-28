@@ -534,9 +534,9 @@ class ProjectPanel extends ConsumerWidget {
 
     return SizedBox(
       width: width,
-      child: ColoredBox(
-        color: colors.surface,
-        child: SingleChildScrollView(
+      // Transparent: the inspector floats on a Liquid-Glass surface
+      // (CollapsibleInspector) so the canvas refracts through behind it.
+      child: SingleChildScrollView(
           padding: const EdgeInsets.all(MechXSpacing.md),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -700,7 +700,6 @@ class ProjectPanel extends ConsumerWidget {
             ],
           ),
         ),
-      ),
     );
   }
 }

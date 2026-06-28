@@ -7,6 +7,7 @@ import '../../store/electrical_store.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
 
 /// The top-level destination chosen in the left navigation rail. `design` shows
@@ -96,11 +97,14 @@ class NavRail extends ConsumerWidget {
     // The rail glides between EXPANDED (icon + caption) and COLLAPSED
     // (icon-only) — HIG: width changes ease, never pop. [appear]/[standard]
     // matches the selection-fill easing the items already use.
-    return AnimatedContainer(
+    return GlassSurface(
+      // The rail floats over the workspace; only its right edge faces the
+      // content, so just that side gets the hairline rim.
+      edge: Border(right: BorderSide(color: colors.glassEdge, width: MechXGlass.edgeWidth)),
+      child: AnimatedContainer(
       duration: MechXMotion.appear,
       curve: MechXMotion.standard,
       width: collapsed ? collapsedWidth : width,
-      color: colors.surface,
       padding: const EdgeInsets.symmetric(
         horizontal: MechXSpacing.xs,
         vertical: MechXSpacing.sm,
@@ -187,6 +191,7 @@ class NavRail extends ConsumerWidget {
             onTap: collapsedCtrl.toggle,
           ),
         ],
+      ),
       ),
     );
   }

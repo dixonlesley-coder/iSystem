@@ -38,6 +38,7 @@ import 'sheets/sheet_rail.dart';
 import 'strings/app_strings.dart';
 import 'theme/design_tokens.dart';
 import 'theme/mechx_theme.dart';
+import 'widgets/glass_surface.dart';
 import 'widgets/mechx_button.dart';
 import 'widgets/mechx_focus_ring.dart';
 import 'widgets/severity_glyph.dart';
@@ -92,16 +93,13 @@ class AppShell extends ConsumerWidget {
               child: Row(
                 children: [
                   const NavRail(),
-                  Container(width: 1, color: colors.border),
                   Expanded(
                     child: Column(
                       children: [
                         const _TopBar(),
-                        Container(height: 1, color: colors.border),
                         const _RecoveryBanner(),
                         const _ErrorBanner(),
                         const Expanded(child: _ShellBody()),
-                        Container(height: 1, color: colors.border),
                         const _StatusBar(),
                       ],
                     ),
@@ -162,41 +160,37 @@ class _DesignWorkspace extends ConsumerWidget {
     if (view == WorkspaceView.electrical) {
       return const ElectricalView();
     }
-    if (view == WorkspaceView.schematic) {
-      return Row(
-        children: [
-          const SheetRail(),
-          Container(width: 1, color: colors.border),
-          const Expanded(child: SchematicView()),
-          // The collapsible wrapper carries its own left border, so the canvas
-          // reclaims the full width when the inspector is collapsed.
-          const CollapsibleInspector(
-            expandedWidth: ProjectPanel.width,
-            child: ProjectPanel(),
-          ),
-        ],
-      );
-    }
-    // Layout (unified canvas).
+    final Widget canvas = view == WorkspaceView.schematic
+        ? const SchematicView()
+        : const LayoutCanvas();
+    // Layer-aware inspector (collapsible): the electrical Loads palette when
+    // Electrical is the active Layout layer, else the mechanical DRAW/project
+    // inspector. Schematic always shows the project inspector.
     final active = ref.watch(activeDisciplineProvider);
-    return Row(
+    final Widget inspector =
+        view != WorkspaceView.schematic && active == DisciplineLayer.electrical
+            ? const CollapsibleInspector(
+                expandedWidth: ProjectPanel.width,
+                child: _ElectricalInspectorColumn(),
+              )
+            : const CollapsibleInspector(
+                expandedWidth: ProjectPanel.width,
+                child: ProjectPanel(),
+              );
+    // Liquid Glass: the sheet rail + inspector are translucent glass that floats
+    // over a full-bleed CANVAS-coloured backdrop (painted behind the whole
+    // workspace), so the chrome frosts the canvas tone — distinct from the
+    // opaque content — without occluding the canvas's own overlays.
+    return Stack(
       children: [
-        const SheetRail(),
-        Container(width: 1, color: colors.border),
-        const Expanded(child: LayoutCanvas()),
-        // Layer-aware inspector (collapsible): the electrical Loads palette when
-        // Electrical is the active layer, else the mechanical DRAW/project
-        // inspector. Either way it collapses to a thin strip so the canvas wins.
-        if (active == DisciplineLayer.electrical)
-          const CollapsibleInspector(
-            expandedWidth: ProjectPanel.width,
-            child: _ElectricalInspectorColumn(),
-          )
-        else
-          const CollapsibleInspector(
-            expandedWidth: ProjectPanel.width,
-            child: ProjectPanel(),
-          ),
+        Positioned.fill(child: ColoredBox(color: colors.canvas)),
+        Row(
+          children: [
+            const SheetRail(),
+            Expanded(child: canvas),
+            inspector,
+          ],
+        ),
       ],
     );
   }
@@ -213,21 +207,19 @@ class _ElectricalInspectorColumn extends StatelessWidget {
     final type = context.type;
     return SizedBox(
       width: ProjectPanel.width,
-      child: ColoredBox(
-        color: colors.surface,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(MechXSpacing.md,
-                  MechXSpacing.md, MechXSpacing.md, MechXSpacing.xs),
-              child: Text(context.strings(StringKey.shellElectricalLayer),
-                  style: type.subtitle.copyWith(color: colors.textPrimary)),
-            ),
-            const SizedBox(height: MechXSpacing.sm),
-            const Expanded(child: ElectricalPalette()),
-          ],
-        ),
+      // Transparent: floats on the CollapsibleInspector's Liquid-Glass surface.
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(MechXSpacing.md, MechXSpacing.md,
+                MechXSpacing.md, MechXSpacing.xs),
+            child: Text(context.strings(StringKey.shellElectricalLayer),
+                style: type.subtitle.copyWith(color: colors.textPrimary)),
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          const Expanded(child: ElectricalPalette()),
+        ],
       ),
     );
   }
@@ -342,8 +334,9 @@ class _TopBar extends ConsumerWidget {
     final vt = current == null ? null : state.viewportFor(current.id);
     final zoom = vt == null ? '—' : '${(vt.scale * 100).round()}%';
 
-    return ColoredBox(
-      color: colors.surface,
+    return GlassSurface(
+      // The top bar floats over the workspace; its bottom edge faces content.
+      edge: Border(bottom: BorderSide(color: colors.glassEdge, width: MechXGlass.edgeWidth)),
       child: Padding(
         padding: const EdgeInsets.symmetric(
           horizontal: MechXSpacing.md,
@@ -438,8 +431,9 @@ class _StatusBar extends ConsumerWidget {
 
     final caption = type.caption;
 
-    return ColoredBox(
-      color: colors.surface,
+    return GlassSurface(
+      // The status bar floats over the workspace; its top edge faces content.
+      edge: Border(top: BorderSide(color: colors.glassEdge, width: MechXGlass.edgeWidth)),
       child: Padding(
         padding: const EdgeInsets.symmetric(
           horizontal: MechXSpacing.md,

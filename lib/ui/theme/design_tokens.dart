@@ -95,6 +95,25 @@ abstract final class MechXMotion {
   static const double pressScale = 0.98;
 }
 
+/// Liquid-Glass material constants — the translucent, blurred "glass" used by
+/// the floating chrome layers (nav rail, top/status bars, inspector, sheet rail,
+/// command palette, popovers, banners, zoom controls). Apple's Liquid Glass:
+/// the navigation/control layer floats above content, refracting + blurring what
+/// is behind it, with a soft specular sheen and a hairline edge; CONTENT stays
+/// opaque + legible. The per-brightness fill / sheen / edge colours live on
+/// [MechXColors] (`glassFill` / `glassSheen` / `glassEdge`); these are the
+/// shared geometry/optics.
+abstract final class MechXGlass {
+  /// Backdrop blur radius for a primary chrome surface (bars, rails, inspector).
+  static const double blurSigma = 18.0;
+
+  /// A lighter blur for small floating controls (zoom cluster, chips, popovers).
+  static const double blurSigmaLight = 12.0;
+
+  /// Hairline edge stroke width (the bright rim that gives glass its "lens" read).
+  static const double edgeWidth = 0.6;
+}
+
 /// A complete colour set for one brightness.
 @immutable
 class MechXColors {
@@ -124,6 +143,15 @@ class MechXColors {
   /// touch lighter in light mode, deeper in dark, per HIG.
   final Color scrim;
 
+  /// Liquid-Glass material (floating chrome only — see [MechXGlass]).
+  /// [glassFill] is the TRANSLUCENT panel tint painted over the blurred
+  /// backdrop; [glassSheen] is the top specular highlight the fill grades up
+  /// into; [glassEdge] is the hairline rim. Defaulted so a custom palette that
+  /// omits them still constructs (falls back to a neutral frost).
+  final Color glassFill;
+  final Color glassSheen;
+  final Color glassEdge;
+
   const MechXColors({
     required this.brightness,
     required this.background,
@@ -143,6 +171,9 @@ class MechXColors {
     required this.success,
     this.onAccent = const Color(0xFFFFFFFF),
     this.scrim = const Color(0x66000000),
+    this.glassFill = const Color(0xCCFFFFFF),
+    this.glassSheen = const Color(0xF2FFFFFF),
+    this.glassEdge = const Color(0x40FFFFFF),
   });
 
   /// iOS light — systemGroupedBackground behind white cells, systemBlue accent,
@@ -165,6 +196,12 @@ class MechXColors {
     danger: Color(0xFFFF3B30), // systemRed
     success: Color(0xFF30A46C), // systemGreen (text-contrast tuned)
     scrim: Color(0x66000000), // ~0.40 dim
+    // Liquid Glass (light): a bright frosted white that lets the canvas tone
+    // blur through — translucent enough to read as glass, with a crisp top
+    // sheen and a soft white rim.
+    glassFill: Color(0xA6FFFFFF), // ~0.65 white
+    glassSheen: Color(0xFFFFFFFF), // opaque top highlight
+    glassEdge: Color(0x80FFFFFF), // ~0.50 white hairline
   );
 
   /// iOS dark — elevated grey cells on a near-black grouped background,
@@ -187,6 +224,12 @@ class MechXColors {
     danger: Color(0xFFFF453A), // systemRed (dark)
     success: Color(0xFF30D158), // systemGreen (dark)
     scrim: Color(0x8A000000), // ~0.54 dim (deeper in dark)
+    // Liquid Glass (dark): a smoked translucent panel that lets the near-black
+    // canvas blur through — dark enough to keep label contrast, with a white
+    // sheen + rim that catch the light like real glass.
+    glassFill: Color(0x99343438), // ~0.60 elevated grey
+    glassSheen: Color(0x33FFFFFF), // ~0.20 white top highlight
+    glassEdge: Color(0x40FFFFFF), // ~0.25 white hairline
   );
 }
 

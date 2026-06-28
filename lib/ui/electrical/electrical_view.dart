@@ -34,6 +34,7 @@ import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/canvas_guide_popover.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_empty_state_card.dart';
@@ -136,7 +137,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               setState(() => _showAdvanced = !_showAdvanced),
           advancedOpen: _showAdvanced,
         ),
-        Container(height: 1, color: colors.border),
         Expanded(
           child: switch (_tab) {
             _Tab.singleLine => _buildCanvasArea(project, result),
@@ -200,7 +200,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     ElectricalProject project,
     ElectricalSystemResult result,
   ) {
-    final colors = context.colors;
     // The Loads palette sits on the RIGHT — consistent with the inspector/DRAW
     // column in every other workspace (Layout, Schematic). The canvas leads.
     return Row(
@@ -284,7 +283,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             ],
           ),
         ),
-        Container(width: 1, color: colors.border),
         const ElectricalPalette(),
       ],
     );
@@ -477,9 +475,12 @@ class _Toolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Container(
-      color: colors.surface,
-      padding: const EdgeInsets.symmetric(
+    return GlassSurface(
+      edge: Border(
+          bottom:
+              BorderSide(color: colors.glassEdge, width: MechXGlass.edgeWidth)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
         horizontal: MechXSpacing.md,
         vertical: MechXSpacing.sm,
       ),
@@ -535,6 +536,7 @@ class _Toolbar extends StatelessWidget {
             ),
           ),
         ],
+      ),
       ),
     );
   }

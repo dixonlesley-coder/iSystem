@@ -6,6 +6,7 @@ import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
 
 /// Left rail: multi-sheet navigation, slimmed to a compact tile strip so the
@@ -29,8 +30,11 @@ class SheetRail extends ConsumerWidget {
 
     return SizedBox(
       width: width,
-      child: ColoredBox(
-        color: colors.surface,
+      child: GlassSurface(
+        // Floats over the canvas; its right edge faces the drawing.
+        edge: Border(
+            right: BorderSide(
+                color: colors.glassEdge, width: MechXGlass.edgeWidth)),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

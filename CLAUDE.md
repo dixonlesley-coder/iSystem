@@ -44,7 +44,13 @@ The authoritative spec + running history is `MEP-PDF-Sizing-Tool-Build-Plan.md`
    breaking old `.mechx` files.
 8. **Custom design system — no Material/Fluent.** The app uses `WidgetsApp`
    (not `MaterialApp`) and `MechXTheme`; all styling comes from
-   `ui/theme/design_tokens.dart` (8pt grid, one type scale, light/dark).
+   `ui/theme/design_tokens.dart` (8pt grid, one type scale, light/dark). The
+   FLOATING CHROME is **Liquid Glass** (`ui/widgets/glass_surface.dart`
+   `GlassSurface` + `MechXGlass`/`MechXColors.glassFill/glassSheen/glassEdge`):
+   nav rail, top/status bars, inspector, sheet rail, electrical palette/toolbar
+   are translucent backdrop-blur surfaces; **content** (cards, tables, reports)
+   stays opaque for legibility. Apply glass to the navigation/control layer
+   only, never to content.
 
 ## Build / test / verify
 
