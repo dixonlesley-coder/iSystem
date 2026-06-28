@@ -134,6 +134,60 @@ void main() {
     expect(c.read(airUnsizedProvider).contains('d'), isFalse);
   });
 
+  test('an oversize air duct is flagged over-capacity (badge source)', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    // AHU → duct → diffuser carrying a huge airflow (20 m³/s): no standard duct
+    // (≤ 1000 mm round) can hold it within the velocity band, so the auto-sizer
+    // CLAMPS to the largest size and flags EdgeSizing.overCapacity — which
+    // airOverCapacityProvider surfaces (and the canvas paints as a red triangle).
+    c.read(networkControllerProvider.notifier).loadNetwork(Network(
+          nodes: [
+            const NetNode(
+              id: 'ahu',
+              sheetId: 's1',
+              x: 0,
+              y: 0,
+              floorIndex: 0,
+              role: NodeRole.plant,
+              component: NodeComponent.ahu,
+            ),
+            _diffuser(
+                id: 'd', airflow: const FlowRate(20.0), faceW: 600, faceH: 600),
+          ],
+          edges: [
+            const NetEdge(
+                id: 'duct', fromId: 'ahu', toId: 'd', service: ServiceType.duct),
+          ],
+        ));
+    expect(c.read(airOverCapacityProvider), contains('duct'));
+  });
+
+  test('an in-range air duct is NOT flagged over-capacity', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    c.read(networkControllerProvider.notifier).loadNetwork(Network(
+          nodes: [
+            const NetNode(
+              id: 'ahu',
+              sheetId: 's1',
+              x: 0,
+              y: 0,
+              floorIndex: 0,
+              role: NodeRole.plant,
+              component: NodeComponent.ahu,
+            ),
+            _diffuser(
+                id: 'd', airflow: const FlowRate(0.1), faceW: 300, faceH: 300),
+          ],
+          edges: [
+            const NetEdge(
+                id: 'duct', fromId: 'ahu', toId: 'd', service: ServiceType.duct),
+          ],
+        ));
+    expect(c.read(airOverCapacityProvider), isEmpty);
+  });
+
   test('setNodeFace sets then clears the face, preserving the airflow', () {
     final c = ProviderContainer();
     addTearDown(c.dispose);

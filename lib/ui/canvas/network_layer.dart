@@ -25,6 +25,11 @@ const Color _kSelection = Color(0xFF4C8DFF);
 /// Warning colour for an out-of-band air velocity (too high / too low).
 const Color _kWarn = Color(0xFFE8703A);
 
+/// Danger colour for an air duct clamped at the largest standard size
+/// (over capacity) — a harder limit than an out-of-band velocity, so it reads
+/// red (systemRed-tuned for the sheet) and as a distinct triangle shape.
+const Color _kOverCapacity = Color(0xFFDB3B3B);
+
 /// Muted colour for the softer "carries air but not yet sized" advisory.
 const Color _kUnsized = Color(0xFF9AA0A6);
 
@@ -71,6 +76,9 @@ class NetworkLayer extends ConsumerWidget {
     };
     // Air elements carrying air but not yet manually sized — a softer advisory.
     final unsizedIds = ref.watch(airUnsizedProvider);
+    // Air ducts clamped at the largest standard size (over capacity) — a hard
+    // limit that takes precedence over a plain velocity warning on the badge.
+    final overCapacityIds = ref.watch(airOverCapacityProvider);
     // Sheet scale (m per px) lets the painter mark a coupling joint every stock
     // pipe length along a run; null (uncalibrated) ⇒ no joint marks.
     final metersPerPixel =
@@ -116,6 +124,7 @@ class NetworkLayer extends ConsumerWidget {
           activeDiscipline: active,
           warningIds: warningIds,
           unsizedIds: unsizedIds,
+          overCapacityIds: overCapacityIds,
         ),
       ),
     );
@@ -165,6 +174,9 @@ class _NetworkPainter extends CustomPainter {
   /// Ids of air elements carrying air but not yet manually sized (soft advisory).
   final Set<String> unsizedIds;
 
+  /// Ids of air duct edges clamped at the largest standard size (over capacity).
+  final Set<String> overCapacityIds;
+
   _NetworkPainter({
     required this.net,
     required this.sheetId,
@@ -183,6 +195,7 @@ class _NetworkPainter extends CustomPainter {
     this.activeDiscipline,
     this.warningIds = const {},
     this.unsizedIds = const {},
+    this.overCapacityIds = const {},
   });
 
   bool _onThisFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
@@ -315,10 +328,13 @@ class _NetworkPainter extends CustomPainter {
           _label(canvas, (pa + pb) / 2, label);
         }
         // Air status badge (independent of the size-label toggle), active layer
-        // only: an out-of-band warning takes precedence over the unsized hint.
+        // only. Precedence: over-capacity (hard size limit) → out-of-band
+        // velocity warning → not-yet-sized advisory.
         if (opacity >= 1.0) {
           final mid = Offset((pa.dx + pb.dx) / 2, (pa.dy + pb.dy) / 2 - 13);
-          if (warningIds.contains(e.id)) {
+          if (overCapacityIds.contains(e.id)) {
+            _overCapacityBadge(canvas, mid);
+          } else if (warningIds.contains(e.id)) {
             _warnBadge(canvas, mid);
           } else if (unsizedIds.contains(e.id)) {
             _unsizedBadge(canvas, mid);
@@ -468,6 +484,35 @@ class _NetworkPainter extends CustomPainter {
       textDirection: TextDirection.ltr,
     )..layout();
     tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
+  }
+
+  /// A warning-TRIANGLE badge marking an air duct clamped at the largest
+  /// standard size (over capacity). The triangle shape (vs the round velocity
+  /// "!" dot) plus the red colour give a redundant, distinct cue that this is a
+  /// hard size limit, not merely an out-of-band velocity.
+  void _overCapacityBadge(Canvas canvas, Offset center) {
+    // White halo so it reads over the pipe body.
+    canvas.drawCircle(center, 7.5, Paint()..color = const Color(0xFFFFFFFF));
+    final tri = Path()
+      ..moveTo(center.dx, center.dy - 6.5)
+      ..lineTo(center.dx + 6.0, center.dy + 5.0)
+      ..lineTo(center.dx - 6.0, center.dy + 5.0)
+      ..close();
+    canvas.drawPath(tri, Paint()..color = _kOverCapacity);
+    final tp = TextPainter(
+      text: const TextSpan(
+        text: '!',
+        style: TextStyle(
+          color: Color(0xFFFFFFFF),
+          fontSize: 8,
+          fontFamily: 'Roboto',
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(
+        canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2 + 1.5));
   }
 
   /// Draws a run as a walled pipe: a darker casing stroke (the two visible wall
@@ -797,7 +842,8 @@ class _NetworkPainter extends CustomPainter {
       old.activeDiscipline != activeDiscipline ||
       !_sameSet(old.visibleDisciplines, visibleDisciplines) ||
       !_sameStrSet(old.warningIds, warningIds) ||
-      !_sameStrSet(old.unsizedIds, unsizedIds);
+      !_sameStrSet(old.unsizedIds, unsizedIds) ||
+      !_sameStrSet(old.overCapacityIds, overCapacityIds);
 
   static bool _sameSet(Set<DisciplineLayer> a, Set<DisciplineLayer> b) =>
       a.length == b.length && a.containsAll(b);

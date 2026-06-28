@@ -234,8 +234,11 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   ring source); a cable that can't meet `Iz ≥ In` raises a `cable-ampacity-inadequate`
   ERROR instead of failing silently; TT feeders now require a 300 mA S-type RCD and
   an uncovered TT way warns `tt-no-earth-fault-protection`; hand-entered motor FLC
-  includes a 0.88 efficiency factor. The over-capacity badge is Review-panel-only
-  (no on-plan marker yet — a future UI wave).
+  includes a 0.88 efficiency factor. The over-capacity duct now also carries an
+  **on-plan badge** — a red warning-TRIANGLE at the duct midpoint
+  (`network_layer.dart`, distinct shape from the round velocity "!" dot, taking
+  precedence over it), driven by `airOverCapacityProvider`, in addition to the
+  Review-panel warning.
 - Electrical ("E") domain — **now in scope**: this repo is being merged into the
   single M+E+P app **iSystem** (see the §15 decisions-log "Project merge" row).
   The electrical engine is being ported to pure Dart under
@@ -631,7 +634,9 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   over-target friction) — they must NOT `orElse: throw` (a throw aborts the whole
   solve). `EdgeSizing.overCapacity` threads the flag through `sizeEdge`; the app
   surfaces it via `airOverCapacityProvider` → `designIssuesProvider` as a per-edge
-  warning (Review panel only — no on-plan badge yet). `overCapacity` is a
+  warning AND as an on-plan red warning-triangle badge at the duct midpoint
+  (`network_layer.dart`, distinct shape from the round velocity "!" dot and taking
+  precedence over it). `overCapacity` is a
   robustness flag, NOT a standards value (no `// VERIFY`). Defaults false ⇒
   in-range ducts byte-identical. Rectangular ducts now honour equal-friction
   (`sizeRectangularByEqualFriction`) when `ctx.ductMethod == equalFriction` (in
