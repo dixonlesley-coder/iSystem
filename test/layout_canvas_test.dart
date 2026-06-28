@@ -173,7 +173,7 @@ void main() {
     // Navigate away and back via the relabelled rail item.
     final c = _containerOf(tester);
     await tester.tap(find.descendant(
-        of: find.byType(NavRail), matching: find.text('Riser')));
+        of: find.byType(NavRail), matching: find.text('Riser SLD')));
     await tester.pump();
     expect(find.byType(LayoutCanvas), findsNothing);
 

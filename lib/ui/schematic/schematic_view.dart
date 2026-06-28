@@ -69,6 +69,10 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
   /// The service a dropped riser carries.
   ServiceType _service = ServiceType.coldWater;
 
+  /// Auto-view system filter: null = the COMBINED single-line; a service = that
+  /// system only (cold/hot water, drainage, vent, rainwater/storm, air, fire).
+  ServiceType? _autoFocus;
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -80,8 +84,16 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
           _Toolbar(
             mode: _mode,
             service: _service,
+            autoFocus: _autoFocus,
+            presentServices: ref
+                .watch(networkControllerProvider)
+                .network
+                .edges
+                .map((e) => e.service)
+                .toSet(),
             onMode: (m) => setState(() => _mode = m),
             onService: (s) => setState(() => _service = s),
+            onAutoFocus: (s) => setState(() => _autoFocus = s),
           ),
           Container(height: 1, color: colors.border),
           Expanded(
@@ -91,7 +103,7 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
                     showHelp: _showHelp,
                     onToggleHelp: () => setState(() => _showHelp = !_showHelp),
                   )
-                : const _AutoElevation(),
+                : _AutoElevation(focus: _autoFocus),
           ),
         ],
       ),
@@ -106,14 +118,20 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
 class _Toolbar extends StatelessWidget {
   final _Mode mode;
   final ServiceType service;
+  final ServiceType? autoFocus;
+  final Set<ServiceType> presentServices;
   final ValueChanged<_Mode> onMode;
   final ValueChanged<ServiceType> onService;
+  final ValueChanged<ServiceType?> onAutoFocus;
 
   const _Toolbar({
     required this.mode,
     required this.service,
+    required this.autoFocus,
+    required this.presentServices,
     required this.onMode,
     required this.onService,
+    required this.onAutoFocus,
   });
 
   @override
@@ -136,6 +154,39 @@ class _Toolbar extends StatelessWidget {
             selected: mode == _Mode.edit,
             onTap: () => onMode(_Mode.edit),
           ),
+          // Auto mode: a per-SYSTEM filter so the single-line can be read one
+          // service at a time (clean / hot water, drainage, vent, rainwater,
+          // air, fire …) or combined ("All").
+          if (mode == _Mode.auto && presentServices.isNotEmpty) ...[
+            const SizedBox(width: MechXSpacing.md),
+            Container(width: 1, height: 22, color: colors.border),
+            const SizedBox(width: MechXSpacing.md),
+            Flexible(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _TabButton(
+                      label: context.strings(StringKey.schematicSystemAll),
+                      selected: autoFocus == null,
+                      onTap: () => onAutoFocus(null),
+                    ),
+                    const SizedBox(width: MechXSpacing.xs),
+                    for (final s in ServiceType.values)
+                      if (presentServices.contains(s)) ...[
+                        _ServiceChip(
+                          service: s,
+                          selected: autoFocus == s,
+                          onTap: () => onAutoFocus(s),
+                        ),
+                        const SizedBox(width: MechXSpacing.xs),
+                      ],
+                  ],
+                ),
+              ),
+            ),
+          ],
           if (mode == _Mode.edit) ...[
             const SizedBox(width: MechXSpacing.md),
             Container(width: 1, height: 22, color: colors.border),
@@ -280,7 +331,8 @@ class _ServiceChip extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _AutoElevation extends ConsumerWidget {
-  const _AutoElevation();
+  final ServiceType? focus;
+  const _AutoElevation({this.focus});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -312,6 +364,7 @@ class _AutoElevation extends ConsumerWidget {
             sizing: sizing,
             building: building,
             colors: colors,
+            focus: focus,
           ),
         );
       },
@@ -762,12 +815,17 @@ class _AutoSchematicPainter extends CustomPainter {
     required this.sizing,
     required this.building,
     required this.colors,
+    this.focus,
   });
 
   final Network network;
   final Map<String, EdgeSizing> sizing;
   final BuildingLevels building;
   final MechXColors colors;
+
+  /// When non-null, the single-line is filtered to ONE system (cold/hot water,
+  /// drainage, vent, rainwater, air, fire …); null shows the COMBINED riser.
+  final ServiceType? focus;
 
   static const double _sidePad = MechXSpacing.xl;
   static const double _nodeRadius = 4.0;
@@ -789,9 +847,25 @@ class _AutoSchematicPainter extends CustomPainter {
   double _bandCentreY(int floorIndex, double totalHeight) =>
       _bandTopY(floorIndex, totalHeight) + _bandHeight(totalHeight) / 2;
 
+  /// Node ids kept when a single system is focused — the endpoints of every
+  /// edge of that service (null ⇒ no filtering ⇒ the combined view).
+  Set<String>? _focusedNodeIds() {
+    if (focus == null) return null;
+    final ids = <String>{};
+    for (final e in network.edges) {
+      if (e.service == focus) {
+        ids.add(e.fromId);
+        ids.add(e.toId);
+      }
+    }
+    return ids;
+  }
+
   Map<String, Offset> _computeNodePositions(Size size) {
+    final visible = _focusedNodeIds();
     final byFloor = <int, List<NetNode>>{};
     for (final node in network.nodes) {
+      if (visible != null && !visible.contains(node.id)) continue;
       (byFloor[node.floorIndex] ??= []).add(node);
     }
 
@@ -857,6 +931,7 @@ class _AutoSchematicPainter extends CustomPainter {
 
   void _paintEdges(Canvas canvas, Map<String, Offset> nodePos) {
     for (final edge in network.edges) {
+      if (focus != null && edge.service != focus) continue;
       final from = nodePos[edge.fromId];
       final to = nodePos[edge.toId];
       if (from == null || to == null) continue;

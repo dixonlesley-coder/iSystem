@@ -119,6 +119,7 @@ enum StringKey {
   schematicAuto,
   schematicEdit,
   schematicRiserService,
+  schematicSystemAll,
   schematicNoNetwork,
   schematicPalette,
   schematicPaletteHelp,
@@ -234,7 +235,7 @@ enum StringKey {
 const Map<StringKey, String> _en = {
   StringKey.navGroupDesign: 'DESIGN',
   StringKey.navLayout: 'Layout',
-  StringKey.navSchematic: 'Riser',
+  StringKey.navSchematic: 'Riser SLD',
   StringKey.navElectrical: 'Electrical',
   StringKey.navBuilding: 'Building',
   StringKey.navReview: 'Review',
@@ -353,6 +354,7 @@ const Map<StringKey, String> _en = {
   StringKey.schematicAuto: 'Auto',
   StringKey.schematicEdit: 'Edit',
   StringKey.schematicRiserService: 'Riser service',
+  StringKey.schematicSystemAll: 'All',
   StringKey.schematicNoNetwork: 'No network drawn',
   StringKey.schematicPalette: 'PALETTE',
   StringKey.schematicPaletteHelp:
@@ -485,7 +487,7 @@ const Map<StringKey, String> _en = {
 const Map<StringKey, String> _id = {
   StringKey.navGroupDesign: 'DESAIN',
   StringKey.navLayout: 'Tata Letak',
-  StringKey.navSchematic: 'Riser',
+  StringKey.navSchematic: 'Riser SLD',
   StringKey.navElectrical: 'Listrik',
   StringKey.navBuilding: 'Bangunan',
   StringKey.navReview: 'Tinjauan',
@@ -607,6 +609,7 @@ const Map<StringKey, String> _id = {
   StringKey.schematicAuto: 'Otomatis',
   StringKey.schematicEdit: 'Edit',
   StringKey.schematicRiserService: 'Layanan riser',
+  StringKey.schematicSystemAll: 'Semua',
   StringKey.schematicNoNetwork: 'Belum ada jaringan digambar',
   StringKey.schematicPalette: 'PALET',
   StringKey.schematicPaletteHelp:
