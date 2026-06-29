@@ -1126,13 +1126,14 @@ class _PanelScheduleBody extends StatelessWidget {
   }
 
   /// The circuit id whose schedule row contains the body-local point, or null.
-  /// Engine row geometry (re-origined): header band `_headerH = 46`, then one
-  /// `_rowH = 20` row per circuit starting at `busTop + 6`.
+  /// Engine row geometry (re-origined): header band `_headerH = 46`, then the
+  /// column-header row, then one `_rowH = 20` row per circuit — so way `i` starts
+  /// at `headerH + 6 + (1 + i) * rowH` (the +1 skips the column-header row).
   String? _wayAt(Offset local, SldSheet sheet, Size size) {
     if (panel.circuits.isEmpty) return null;
     final t = _fitTransform(sheet, size);
     final world = t.screenToWorld(local);
-    const headerH = 46.0, rowH = 20.0, rowTop = headerH + 6.0;
+    const headerH = 46.0, rowH = 20.0, rowTop = headerH + 6.0 + rowH;
     final i = ((world.dy - rowTop) / rowH).floor();
     if (i < 0 || i >= panel.circuits.length) return null;
     return panel.circuits[i].circuitId;

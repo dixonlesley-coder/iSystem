@@ -97,7 +97,7 @@ class SldSheet {
 }
 
 // ── Block geometry (drawing units) ───────────────────────────────────────────
-const double _blockW = 720;
+const double _blockW = 820;
 const double _headerH = 46;
 const double _rowH = 20;
 const double _bodyPad = 12;
@@ -106,6 +106,18 @@ const double _indent = 64; // per feeder-depth level
 const double _busX = 44; // bus offset inside a block
 const double _brW = 15; // breaker symbol
 const double _brH = 10;
+
+// Aligned panel-schedule COLUMNS (x offset within the block) — the real BRI
+// `Diagram Panel` layout: GRUP | DEVICE | PENGHANTAR | DAYA | KETERANGAN, then
+// the R / S / T per-phase loading band on the right.
+const double _colGrup = 92; // way no (W1) — clears the breaker stub + symbol
+const double _colDevice = 116; // breaker (MCB 16A 1ph)
+const double _colPenghantar = 224; // conductor (NYY 4x6 mm2 + E6 mm2)
+const double _colDaya = 406; // connected load (DAYA, W/kW)
+const double _colKeterangan = 464; // load name / -> sub-panel
+const double _colR = 686; // per-phase loading band (R/S/T line currents)
+const double _colS = 730;
+const double _colT = 774;
 
 String _num(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
@@ -136,6 +148,17 @@ String breakerLabel(BreakerResult b, int poles) =>
 /// (`ph`, not the unicode phase glyph) so it never renders as tofu.
 String breakerScheduleLabel(BreakerResult b, int poles) =>
     '${_classCode(b.deviceClass)} ${_num(b.ratingA.amperes)}A ${poles}ph';
+
+/// The per-phase (R / S / T) loading strings for a way carrying line current
+/// [ib]: a single-phase way loads only its assigned line; a three-phase way
+/// loads all three (balanced). Empty string = no load on that line.
+(String, String, String) _phaseLoading(PhaseAssignment phase, String ib) =>
+    switch (phase) {
+      PhaseAssignment.l1 => (ib, '', ''),
+      PhaseAssignment.l2 => ('', ib, ''),
+      PhaseAssignment.l3 => ('', '', ib),
+      PhaseAssignment.threePhase => (ib, ib, ib),
+    };
 
 /// A cable label like `NYM 3x2.5` (family from the circuit when set, else a
 /// neutral `Cu`; cores = 3 for 1-phase L+N+E, 5 for 3-phase 3L+N+E).
@@ -208,13 +231,14 @@ SldSheet buildElectricalSld({
     // so the busbar + rows stay inside the box. 0 reserved + no footer growth ⇒
     // geometry is byte-identical to the pre-enrichment block.
     final spareWays = p.spareWaysReserved;
-    final scheduleRows = math.max(1, ways) + spareWays;
+    final bodyRows = math.max(1, ways) + spareWays;
     const footerH = _rowH; // the TOTAL footer line
     // Full single-line: indent by feeder depth. Single-panel detail filter:
     // re-origin to x=0 so the block frames cleanly in a panel rect.
     final blockX = onlyPanelId != null ? 0.0 : (depth[id] ?? 0) * _indent;
     final blockY = cursorY;
-    final blockH = _headerH + scheduleRows * _rowH + footerH + _bodyPad;
+    // +1 row for the column-header band (GRUP / PENGHANTAR / DAYA / R-S-T).
+    final blockH = _headerH + (1 + bodyRows) * _rowH + footerH + _bodyPad;
     boxTop[id] = (x: blockX, y: blockY);
     boxBottom[id] = blockY + blockH;
 
@@ -245,8 +269,8 @@ SldSheet buildElectricalSld({
     final busTop = blockY + _headerH;
     prims.add(SldLine(blockX, busTop, blockX + _blockW, busTop));
     // Busbar (two parallel verticals so it reads as a bar). The bar runs the
-    // full schedule height (real + spare ways), stopping above the TOTAL footer.
-    final busBot = busTop + scheduleRows * _rowH + 6;
+    // full body (column-header row + real + spare ways), stopping above TOTAL.
+    final busBot = busTop + (1 + bodyRows) * _rowH + 6;
     final bx = blockX + _busX;
     prims.add(SldLine(bx, busTop, bx, busBot, weight: SldWeight.thick));
     prims.add(SldLine(bx + 4, busTop, bx + 4, busBot, weight: SldWeight.thick));
@@ -254,15 +278,33 @@ SldSheet buildElectricalSld({
     // on the bus; named verbatim by the header sub-line "Incomer ...").
     prims.add(SldRect(bx + 2 - _brW / 2, busTop - _brH / 2, _brW, _brH));
 
-    // One row per way: schedule breaker (rating + phase first), cable (family +
-    // cores x CSA + a separate earth when the way carries one) + load name +
-    // phase + Ib + the connected DAYA (W/kW) + the feeder destination / VD flag.
+    // Column-header band (slot 0): the BRI `Diagram Panel` table columns.
+    final headY = busTop + 6 + _rowH / 2 + 3;
+    void colHead(double x, String t) =>
+        prims.add(SldLabel(blockX + x, headY, t, size: 7, bold: true));
+    colHead(_colGrup, 'GRUP');
+    colHead(_colDevice, 'DEVICE');
+    colHead(_colPenghantar, 'PENGHANTAR');
+    colHead(_colDaya, 'DAYA');
+    colHead(_colKeterangan, 'KETERANGAN');
+    colHead(_colR, 'R');
+    colHead(_colS, 'S');
+    colHead(_colT, 'T');
+    // Underline under the column-header row.
+    prims.add(SldLine(bx + 4, busTop + _rowH, blockX + _blockW - 8,
+        busTop + _rowH));
+
+    // One ROW per way, in ALIGNED columns: GRUP (way no) | DEVICE (breaker,
+    // rating + phase first) | PENGHANTAR (cable family + cores x CSA + separate
+    // earth) | DAYA (connected W/kW) | KETERANGAN (load name / -> sub-panel) |
+    // R/S/T (the line current on the way's phase(s) — the phase-loading band).
+    const rowSize = 7.5;
     for (var i = 0; i < ways; i++) {
       final c = p.circuits[i];
-      final rowY = busTop + 6 + i * _rowH + _rowH / 2;
-      // Stub from bus to breaker.
+      final slot = 1 + i; // +1 for the column-header row
+      final rowY = busTop + 6 + slot * _rowH + _rowH / 2;
+      // Stub from bus to breaker + the breaker symbol.
       prims.add(SldLine(bx + 4, rowY, bx + 28, rowY));
-      // Breaker symbol.
       prims.add(SldRect(bx + 28, rowY - _brH / 2, _brW, _brH));
       usedCurves.add(c.breaker.curve);
       usedClasses.add(c.breaker.deviceClass);
@@ -271,44 +313,67 @@ SldSheet buildElectricalSld({
         usedFamilies.add(circuit.cableType!);
       }
       final poles = c.threePhase ? 3 : 1;
-      final wayNo = 'W${i + 1}';
       final feeds = circuit?.feedsPanelId;
-      final dest = feeds != null
-          ? '  ->  ${result.panels[feeds]?.name ?? feeds}'
-          : '';
+      final keterangan = feeds != null
+          ? '-> ${result.panels[feeds]?.name ?? feeds}'
+          : c.name;
       final vd = c.voltageDrop.withinLimit ? '' : '  VD!';
-      // Cable with the mm2 unit + a separate-earth token (BRI "NYY 4x50 + E25")
-      // when the way's PE conductor CSA is known. No conduit data on the model,
-      // so no conduit token is invented.
       final earth = c.grounding.peCsaMm2 > 0
           ? ' + E${_num(c.grounding.peCsaMm2)} mm2'
           : '';
       final cable =
           '${cableLabel(circuit, c.cable.csaMm2, c.threePhase)} mm2$earth';
-      final daya = c.loadW > 0 ? '  ${_watts(c.loadW)}' : '';
-      final txt = '$wayNo  ${breakerScheduleLabel(c.breaker, poles)}  '
-          '$cable  ${c.name}  ${c.phase.label}  '
-          'Ib ${_num(c.designCurrent.amperes)}A$daya$dest$vd';
-      prims.add(SldLabel(bx + 50, rowY + 3, txt, size: 8.5));
-
+      final daya = c.loadW > 0 ? _watts(c.loadW) : '-';
+      final ib = _num(c.designCurrent.amperes);
+      prims.add(SldLabel(blockX + _colGrup, rowY + 3, 'W${i + 1}', size: rowSize));
+      prims.add(SldLabel(blockX + _colDevice, rowY + 3,
+          breakerScheduleLabel(c.breaker, poles), size: rowSize));
+      prims.add(SldLabel(blockX + _colPenghantar, rowY + 3, cable, size: rowSize));
+      prims.add(SldLabel(blockX + _colDaya, rowY + 3, daya, size: rowSize));
+      prims.add(SldLabel(
+          blockX + _colKeterangan, rowY + 3, '$keterangan$vd', size: rowSize));
+      // R/S/T loading band — the line current under the way's phase(s).
+      final (r, s, t) = _phaseLoading(c.phase, ib);
+      if (r.isNotEmpty) {
+        prims.add(SldLabel(blockX + _colR, rowY + 3, r, size: rowSize));
+      }
+      if (s.isNotEmpty) {
+        prims.add(SldLabel(blockX + _colS, rowY + 3, s, size: rowSize));
+      }
+      if (t.isNotEmpty) {
+        prims.add(SldLabel(blockX + _colT, rowY + 3, t, size: rowSize));
+      }
       if (feeds != null) {
         feederFrom[feeds] = (x: blockX + _blockW, y: rowY);
       }
     }
 
-    // CADANGAN (spare) ways — a stub + a labelled empty schedule row each.
+    // CADANGAN (spare) ways — a stub + a GRUP no + a KETERANGAN label each.
     for (var s = 0; s < spareWays; s++) {
-      final rowY = busTop + 6 + (ways + s) * _rowH + _rowH / 2;
+      final slot = 1 + ways + s;
+      final rowY = busTop + 6 + slot * _rowH + _rowH / 2;
       prims.add(SldLine(bx + 4, rowY, bx + 28, rowY));
-      prims.add(SldLabel(bx + 50, rowY + 3, 'W${ways + s + 1}  CADANGAN (spare)',
-          size: 8.5));
+      prims.add(
+          SldLabel(blockX + _colGrup, rowY + 3, 'W${ways + s + 1}', size: rowSize));
+      prims.add(SldLabel(
+          blockX + _colKeterangan, rowY + 3, 'CADANGAN (spare)', size: rowSize));
     }
 
-    // TOTAL footer — the panel's diversified demand (W/kW + line current).
+    // TOTAL footer — the panel's diversified demand (W/kW + line current) + the
+    // per-phase R/S/T line-current totals (the phase balance).
     final footerY = busBot + _rowH / 2 + 3;
     prims.add(SldLabel(blockX + 8, footerY,
         'TOTAL  ${_watts(p.demandW)} / ${_num(p.demandCurrent.amperes)}A',
         size: 8.5, bold: true));
+    if (p.system.isThreePhase) {
+      final pb = p.phaseBalance;
+      prims.add(SldLabel(blockX + _colR, footerY, _num(pb.l1),
+          size: rowSize, bold: true));
+      prims.add(SldLabel(blockX + _colS, footerY, _num(pb.l2),
+          size: rowSize, bold: true));
+      prims.add(SldLabel(blockX + _colT, footerY, _num(pb.l3),
+          size: rowSize, bold: true));
+    }
 
     cursorY = blockY + blockH + _gapY;
   }

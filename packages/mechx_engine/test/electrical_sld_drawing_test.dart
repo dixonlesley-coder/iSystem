@@ -85,18 +85,23 @@ void main() {
     expect(thick.length, greaterThanOrEqualTo(4));
   });
 
-  test('labels carry the drafter way content (breaker, cable, Ib)', () {
+  test('labels carry the drafter way content (table columns + breaker/cable)',
+      () {
     final texts =
         sheet.prims.whereType<SldLabel>().map((t) => t.text).toList();
     final joined = texts.join('\n');
     expect(joined, contains('Incomer'));
-    expect(joined, contains('Ib '));
     expect(joined, contains('MCB'));
+    // The aligned-table column headers (BRI DIAGRAM PANEL).
+    expect(joined, contains('GRUP'));
+    expect(joined, contains('PENGHANTAR'));
+    expect(joined, contains('DAYA'));
+    expect(joined, contains('KETERANGAN'));
     // The two cable families used appear verbatim.
     expect(joined, contains('NYM'));
     expect(joined, contains('NYY'));
-    // The sub-panel name reads on the feeding way.
-    expect(joined, contains('LP-1'));
+    // The sub-panel name reads in the feeding way's KETERANGAN column.
+    expect(joined, contains('-> LP-1'));
   });
 
   test('detail rows carry the Indonesian DIAGRAM PANEL conventions', () {

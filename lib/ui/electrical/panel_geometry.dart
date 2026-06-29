@@ -108,11 +108,14 @@ double panelCardHeight(ElectricalPanelResult panel) =>
 /// of a tall card of empty space.
 const double kPanelSummaryBodyH = 104;
 
-/// The board-schedule body height for a panel: the engine block height
-/// (`_headerH 46 + max(1,ways)*_rowH 20 + _bodyPad 12`) + a little card padding.
-/// Mirrors `buildElectricalPanelDetail` so the card sizes to its schedule.
-double panelScheduleHeight(int ways) =>
-    46 + math.max(1, ways) * 20 + 12 + 22;
+/// The board-schedule block height for a panel — mirrors
+/// `buildElectricalPanelDetail`: header `46` + a column-header row + one row per
+/// way + one per reserved spare + a TOTAL footer (`*20`) + body pad `12`, plus a
+/// little card padding. Keeps the canvas card sized to its schedule.
+double panelScheduleHeight(ElectricalPanelResult panel) {
+  final rows = 1 + math.max(1, panel.circuits.length) + panel.spareWaysReserved;
+  return 46 + (1 + rows) * 20 + 12 + 22;
+}
 
 /// Card footprint at the active LOD: the BOARD SCHEDULE height (grows with the
 /// way count) when [detail] — the card has no separate header band there, the
@@ -120,7 +123,7 @@ double panelScheduleHeight(int ways) =>
 /// summary body). Threaded through the canvas so the card height, the
 /// merged-node connector and the feeder endpoints all agree at every zoom.
 double panelFootprint(ElectricalPanelResult panel, bool detail) => detail
-    ? panelScheduleHeight(panel.circuits.length)
+    ? panelScheduleHeight(panel)
     : kPanelChrome + kPanelSummaryBodyH;
 
 /// The single service entrance — the utility-fed root with the most demand
