@@ -27,9 +27,11 @@ import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/electrical/spd.dart' show SpdTypeLabel;
 import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
+import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
+import '../../store/project_store.dart';
 import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
@@ -48,6 +50,7 @@ import 'electrical_inspector.dart' show ElectricalCircuitInspector;
 import 'electrical_palette.dart';
 import 'panel_geometry.dart';
 import 'power_oneline_view.dart';
+import 'sld_sheet_painter.dart';
 
 /// Identifies the circuit currently open in the inspector / context menu.
 class _CircuitRef {
@@ -57,9 +60,21 @@ class _CircuitRef {
 }
 
 /// Which tab the workspace shows. (Spatial placement on the PDF moved to the
-/// unified Layout canvas — the Electrical layer there — so this is the two
-/// abstract projections.)
-enum _Tab { singleLine, powerOneLine }
+/// unified Layout canvas — the Electrical layer there — so these are the
+/// abstract projections of the SAME solved model.)
+///
+///  • [singleLine]   — the interactive per-panel spatial single-line canvas;
+///  • [powerOneLine] — the hybrid power one-line (sources / MV / tx / busses);
+///  • [overview]     — the zoomed-out building single-line (whole distribution
+///    hierarchy as a compact tree, normal / essential colour split, source
+///    spine), rendered LIVE via `buildElectricalOverview`;
+///  • [riser]        — the floor-by-floor building riser (panels stacked by
+///    true building elevation, vertical riser feeders), via
+///    `buildElectricalRiser` over the live mechanical [BuildingLevels].
+///
+/// [overview] and [riser] are READ-ONLY renders of the same `SldSheet` geometry
+/// the PDF / DXF exporters draw — one source of truth, no parallel layout.
+enum _Tab { singleLine, powerOneLine, overview, riser }
 
 /// Renders the electrical single-line canvas and hosts the editing overlays.
 class ElectricalView extends ConsumerStatefulWidget {
@@ -72,6 +87,10 @@ class ElectricalView extends ConsumerStatefulWidget {
 class _ElectricalViewState extends ConsumerState<ElectricalView> {
   final GlobalKey<ElectricalCanvasState> _canvasKey =
       GlobalKey<ElectricalCanvasState>();
+  final GlobalKey<SldSheetViewState> _overviewKey =
+      GlobalKey<SldSheetViewState>();
+  final GlobalKey<SldSheetViewState> _riserKey =
+      GlobalKey<SldSheetViewState>();
 
   _Tab _tab = _Tab.singleLine;
 
@@ -143,6 +162,8 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             _Tab.powerOneLine => PowerOneLineView(
               oneLine: advanced.powerOneLine,
             ),
+            _Tab.overview => _buildOverviewArea(project, result),
+            _Tab.riser => _buildRiserArea(project, result),
           },
         ),
       ],
@@ -177,6 +198,8 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               onSldPdf: () => _runExport(exportElectricalSldPdf),
               onOverviewPdf: () => _runExport(exportElectricalOverviewPdf),
               onOverviewDxf: () => _runExport(exportElectricalOverviewDxf),
+              onRiserPdf: () => _runExport(exportElectricalRiserPdf),
+              onRiserDxf: () => _runExport(exportElectricalRiserDxf),
               onReport: () => _runExport(exportElectricalCalcReport),
               onPowerOneLine: () => _runExport(exportPowerOneLineDxf),
             ),
@@ -287,6 +310,49 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         ),
         const ElectricalPalette(),
       ],
+    );
+  }
+
+  /// The ZOOMED-OUT building single-line, rendered LIVE from the pure-engine
+  /// [buildElectricalOverview] geometry (the same `SldSheet` the PDF / DXF
+  /// exporters draw). Read-only — pan / zoom only, no palette.
+  Widget _buildOverviewArea(
+    ElectricalProject project,
+    ElectricalSystemResult result,
+  ) {
+    final sheet = buildElectricalOverview(
+      project: project,
+      result: result,
+      sourceChain: true,
+    );
+    return _SldProjectionArea(
+      sheetKey: _overviewKey,
+      sheet: sheet,
+      empty: project.panels.isEmpty,
+      onSetUp: _openService,
+      onAddPanel: _addPanel,
+    );
+  }
+
+  /// The FLOOR-BY-FLOOR building riser, rendered LIVE from
+  /// [buildElectricalRiser] over the live mechanical [BuildingLevels] (the
+  /// shared §10 geometry — panels stacked by true floor elevation). Read-only.
+  Widget _buildRiserArea(
+    ElectricalProject project,
+    ElectricalSystemResult result,
+  ) {
+    final building = ref.watch(projectControllerProvider).building;
+    final sheet = buildElectricalRiser(
+      project: project,
+      result: result,
+      building: building,
+    );
+    return _SldProjectionArea(
+      sheetKey: _riserKey,
+      sheet: sheet,
+      empty: project.panels.isEmpty,
+      onSetUp: _openService,
+      onAddPanel: _addPanel,
     );
   }
 
@@ -500,6 +566,18 @@ class _Toolbar extends StatelessWidget {
             selected: tab == _Tab.powerOneLine,
             onTap: () => onTab(_Tab.powerOneLine),
           ),
+          const SizedBox(width: MechXSpacing.xs),
+          MechXSegment(
+            label: 'Overview',
+            selected: tab == _Tab.overview,
+            onTap: () => onTab(_Tab.overview),
+          ),
+          const SizedBox(width: MechXSpacing.xs),
+          MechXSegment(
+            label: 'Riser',
+            selected: tab == _Tab.riser,
+            onTap: () => onTab(_Tab.riser),
+          ),
           const Spacer(),
           // Actions (right) — horizontally scrollable so a narrow window never
           // overflows the toolbar. The canonical MechXButton "gray button";
@@ -565,6 +643,8 @@ class _ExportMenu extends StatelessWidget {
   final VoidCallback onSldPdf;
   final VoidCallback onOverviewPdf;
   final VoidCallback onOverviewDxf;
+  final VoidCallback onRiserPdf;
+  final VoidCallback onRiserDxf;
   final VoidCallback onReport;
   final VoidCallback onPowerOneLine;
   const _ExportMenu({
@@ -572,6 +652,8 @@ class _ExportMenu extends StatelessWidget {
     required this.onSldPdf,
     required this.onOverviewPdf,
     required this.onOverviewDxf,
+    required this.onRiserPdf,
+    required this.onRiserDxf,
     required this.onReport,
     required this.onPowerOneLine,
   });
@@ -623,6 +705,16 @@ class _ExportMenu extends StatelessWidget {
               label: context.strings(StringKey.electricalExportOverview),
               sub: context.strings(StringKey.electricalExportOverviewDxf),
               onTap: onOverviewDxf,
+            ),
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportRiser),
+              sub: context.strings(StringKey.electricalExportRiserPdf),
+              onTap: onRiserPdf,
+            ),
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportRiser),
+              sub: context.strings(StringKey.electricalExportRiserDxf),
+              onTap: onRiserDxf,
             ),
             _ExportRow(
               label: context.strings(StringKey.electricalExportReport),
@@ -801,6 +893,53 @@ class _EmptyState extends StatelessWidget {
           MechXButton(label: 'Service & Earthing', onPressed: onSetUp),
         ],
       ),
+    );
+  }
+}
+
+// ── Read-only SldSheet projection (Overview / Riser) ────────────────────────
+
+/// Hosts a read-only [SldSheetView] (the Overview / Riser projection) with the
+/// shared on-canvas chrome: the zoom cluster (bottom-left) driving the sheet's
+/// imperative zoom API, and the branded empty-state card when there are no
+/// panels yet. The same layout as the single-line canvas area minus the
+/// interactive palette (these projections are renders, not editors).
+class _SldProjectionArea extends StatelessWidget {
+  final GlobalKey<SldSheetViewState> sheetKey;
+  final SldSheet sheet;
+  final bool empty;
+  final VoidCallback onSetUp;
+  final VoidCallback onAddPanel;
+
+  const _SldProjectionArea({
+    required this.sheetKey,
+    required this.sheet,
+    required this.empty,
+    required this.onSetUp,
+    required this.onAddPanel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(child: SldSheetView(key: sheetKey, sheet: sheet)),
+        Positioned(
+          left: MechXSpacing.md,
+          bottom: MechXSpacing.md,
+          child: ZoomControls(
+            onIn: () => sheetKey.currentState?.zoomIn(),
+            onOut: () => sheetKey.currentState?.zoomOut(),
+            onFit: () => sheetKey.currentState?.fitView(),
+          ),
+        ),
+        if (empty)
+          Positioned.fill(
+            child: Center(
+              child: _EmptyState(onSetUp: onSetUp, onAddPanel: onAddPanel),
+            ),
+          ),
+      ],
     );
   }
 }

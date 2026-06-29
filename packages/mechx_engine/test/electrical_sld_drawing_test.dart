@@ -1,8 +1,10 @@
 import 'dart:convert';
 
 import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
 import 'package:mechx_engine/report/electrical_pdf_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
@@ -95,6 +97,52 @@ void main() {
     expect(joined, contains('NYY'));
     // The sub-panel name reads on the feeding way.
     expect(joined, contains('LP-1'));
+  });
+
+  test('detail rows carry the Indonesian DIAGRAM PANEL conventions', () {
+    final joined =
+        sheet.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+    // Schedule breaker leads with rating + phase: `MCB <A>A 1ph|3ph`.
+    expect(RegExp(r'MC(B|CB) \d+A (1|3)ph').hasMatch(joined), isTrue);
+    // Cable carries the ASCII mm2 unit suffix.
+    expect(joined, contains('mm2'));
+    // DAYA(WATT): the LP-1 lighting way's connected 1500 W reads as 1.5kW.
+    expect(joined, contains('1.5kW'));
+    // Busbar make-up reads "Cu bus".
+    expect(joined, contains('Cu bus'));
+    // A TOTAL footer per block.
+    expect(joined, contains('TOTAL'));
+    // ASCII-safe: no unicode phase glyph / squared metres in the labels.
+    expect(joined.contains('Ø'), isFalse); // Ø
+    expect(joined.contains('²'), isFalse); // ²
+  });
+
+  test('a panel with spare-ways + a fault level shows CADANGAN + Icw', () {
+    // Headroom (2 spare ways) + an origin fault level (so the busbar withstand
+    // fold runs ⇒ Icw is reported). MDP carries the headroom + fault.
+    const hp = ElectricalProject(
+      id: 'hp',
+      name: 'Headroom',
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'MDP',
+          headroom: HeadroomSpec(sparePercentage: 20, spareWays: 2),
+          circuits: [
+            ElectricalCircuit(
+                id: 'm1', name: 'Pompa', loadKind: LoadKind.motor, motorKw: 5,
+                length: Length(20)),
+          ],
+        ),
+      ],
+    );
+    final hpResult = computeSystem(profile, hp,
+        originFaultLevel: const Current(16000), busbarClearingTimeS: 0.1);
+    final hpSheet = buildElectricalSld(project: hp, result: hpResult);
+    final joined =
+        hpSheet.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+    expect(joined, contains('CADANGAN'));
+    expect(joined, contains('Icw'));
   });
 
   test('the feeder is routed (medium lines) from the way to the sub-panel', () {
@@ -229,6 +277,72 @@ void main() {
       expect(dxf, contains('PP FIRE STAIRS'));
       // group code 62 with value 1 (red) appears for essential entities.
       expect(dxf, contains('62\n1\n'));
+    });
+
+    test('sourceChain=false is byte-identical to the default overview', () {
+      final a = buildElectricalOverview(project: ov, result: ovResult);
+      final b = buildElectricalOverview(
+          project: ov, result: ovResult, sourceChain: false);
+      // Same prim count, same first/last label text, same bounds + legend.
+      expect(b.prims.length, a.prims.length);
+      expect(b.minX, a.minX);
+      expect(b.maxY, a.maxY);
+      expect(b.legend.length, a.legend.length);
+      // And the PDF bytes are byte-identical (default off ⇒ no spine).
+      final pa = electricalSldToPdf(
+          project: ov, result: ovResult, overview: true);
+      final pb = electricalSldToPdf(
+          project: ov, result: ovResult, overview: true, sourceChain: false);
+      expect(pb, equals(pa));
+    });
+
+    test('sourceChain=true prepends source-role nodes + a TEGANGAN spine', () {
+      final src = buildElectricalOverview(
+          project: ov, result: ovResult, sourceChain: true);
+      final sourceRects = src.prims
+          .whereType<SldRect>()
+          .where((r) => r.role == SldRole.source);
+      // PLN + LV main (+ TX) at minimum.
+      expect(sourceRects.length, greaterThanOrEqualTo(3));
+      final joined =
+          src.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      expect(joined, contains('PLN MV STATION'));
+      expect(joined, contains('TEGANGAN RENDAH'));
+      // The legend gains the Source entry.
+      expect(src.legend.map((e) => e.code), contains('Source'));
+      // More prims than the default (the spine added rects + connectors).
+      final base = buildElectricalOverview(project: ov, result: ovResult);
+      expect(src.prims.length, greaterThan(base.prims.length));
+    });
+
+    test('a genset in sources adds a GENSET source node', () {
+      const withGen = ElectricalProject(
+        id: 'g',
+        name: 'Tower+gen',
+        sources: ElectricalSources(
+          generator: GeneratorSource(backupFraction: 0.5),
+        ),
+        panels: [
+          ElectricalPanel(
+            id: 'LVMDP',
+            name: 'LVMDP',
+            circuits: [
+              ElectricalCircuit(
+                  id: 'c1', name: 'Load', loadKind: LoadKind.general,
+                  loadW: 12000, length: Length(10)),
+            ],
+          ),
+        ],
+      );
+      final gr = computeSystem(profile, withGen);
+      final s = buildElectricalOverview(
+          project: withGen, result: gr, sourceChain: true);
+      final joined =
+          s.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      expect(joined, contains('GENSET'));
+      expect(joined, contains('CAPACITOR BANK'));
+      // dualTransformer is false but sources != null ⇒ the MV main is drawn.
+      expect(joined, contains('TEGANGAN MENENGAH'));
     });
   });
 }

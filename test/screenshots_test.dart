@@ -15,6 +15,7 @@ import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx/ui/electrical/electrical_canvas.dart';
+import 'package:mechx/ui/electrical/electrical_view.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -159,5 +160,30 @@ void main() {
     expect(find.textContaining('loads'), findsWidgets);
     await expectLater(
         app, matchesGoldenFile('goldens/08_electrical_collapsed.png'));
+
+    // Electrical OVERVIEW tab — the zoomed-out building single-line: every
+    // panel a compact node in a top-down tree (normal / essential colour split,
+    // PLN/MV/transformer/LV-main source spine), rendered LIVE from the pure
+    // `buildElectricalOverview` SldSheet via SldSheetView. Scoped to the
+    // electrical view so the tab tap is unambiguous.
+    Finder elecSegment(String label) => find.descendant(
+          of: find.byType(ElectricalView),
+          matching: find.text(label),
+        );
+    await tester.tap(elecSegment('Overview'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await expectLater(
+        app, matchesGoldenFile('goldens/09_electrical_overview.png'));
+
+    // Electrical RISER tab — the floor-by-floor building riser: panels stacked
+    // by true building elevation with vertical riser feeders + a floor/FFL
+    // gutter, via `buildElectricalRiser` over the live mechanical
+    // BuildingLevels.
+    await tester.tap(elecSegment('Riser'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await expectLater(
+        app, matchesGoldenFile('goldens/10_electrical_riser.png'));
   });
 }

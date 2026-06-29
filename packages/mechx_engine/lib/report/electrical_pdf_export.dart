@@ -61,27 +61,39 @@ String _textRgForRole(SldRole r) => switch (r) {
 
 /// Render the sized electrical single-line as a single-page PDF and return its
 /// bytes. [title] is stamped in the title block.
+///
+/// Supply EITHER [project] + [result] (the exporter builds the sheet — a detail
+/// single-line, or the [overview] / [sourceChain] variant) OR a prebuilt
+/// [sheet] (e.g. a riser built by the app with the live `BuildingLevels`) —
+/// keeping the [SldSheet] the single source of geometry.
 Uint8List electricalSldToPdf({
-  required ElectricalProject project,
-  required ElectricalSystemResult result,
+  ElectricalProject? project,
+  ElectricalSystemResult? result,
+  SldSheet? sheet,
   String title = 'iSystem electrical single-line',
   DrawingChrome? chrome,
   bool overview = false,
+  bool sourceChain = false,
 }) {
+  assert(sheet != null || (project != null && result != null),
+      'electricalSldToPdf needs either a prebuilt sheet or project+result');
   const pageW = 1190.55; // A3 landscape, points (420 mm)
   const pageH = 841.89; // 297 mm
   const margin = 40.0;
   const titleBlockH = 96.0; // reserved strip across the page bottom
 
-  // `overview` = the ZOOMED-OUT building single-line (compact panel tree, normal
-  // / essential colour split); the default is the per-panel detail single-line.
-  final sheet = overview
-      ? buildElectricalOverview(project: project, result: result)
-      : buildElectricalSld(project: project, result: result);
+  // A prebuilt [sheet] wins; else `overview` = the ZOOMED-OUT building
+  // single-line (compact panel tree, optional source spine), default = the
+  // per-panel detail single-line.
+  final sheetResolved = sheet ??
+      (overview
+          ? buildElectricalOverview(
+              project: project!, result: result!, sourceChain: sourceChain)
+          : buildElectricalSld(project: project!, result: result!));
 
   // ── Auto-fit the drawing into the area above the title block ────────────────
-  final spanX = math.max(1e-6, sheet.maxX - sheet.minX);
-  final spanY = math.max(1e-6, sheet.maxY - sheet.minY);
+  final spanX = math.max(1e-6, sheetResolved.maxX - sheetResolved.minX);
+  final spanY = math.max(1e-6, sheetResolved.maxY - sheetResolved.minY);
   const availW = pageW - 2 * margin;
   const availH = pageH - 2 * margin - titleBlockH;
   var scale = math.min(availW / spanX, availH / spanY);
@@ -92,8 +104,8 @@ Uint8List electricalSldToPdf({
   final offX = margin + (availW - drawnW) / 2;
   // Top of the drawing area (PDF y-up): just under the top margin.
   final topY = pageH - margin - (availH - drawnH) / 2;
-  double tx(double x) => offX + (x - sheet.minX) * scale;
-  double ty(double y) => topY - (y - sheet.minY) * scale; // flip y-down→y-up
+  double tx(double x) => offX + (x - sheetResolved.minX) * scale;
+  double ty(double y) => topY - (y - sheetResolved.minY) * scale; // flip y-down→y-up
 
   final cs = StringBuffer();
 
@@ -103,7 +115,7 @@ Uint8List electricalSldToPdf({
       '${_n(pageW - 2 * margin)} ${_n(pageH - 2 * margin)} re S');
 
   // ── Drawing content (panels / busbars / ways / feeders) ─────────────────────
-  for (final p in sheet.prims) {
+  for (final p in sheetResolved.prims) {
     switch (p) {
       case SldLine():
         cs.writeln('${_strokeRgForRole(p.role)} RG '
@@ -132,7 +144,9 @@ Uint8List electricalSldToPdf({
   // internal divider under the title
   cs.writeln('${_n(tbX)} ${_n(tbY + titleBlockH - 28)} m '
       '${_n(tbX + tbW)} ${_n(tbY + titleBlockH - 28)} l S');
-  final pname = project.name.isEmpty ? 'Untitled project' : project.name;
+  final pname = (project?.name.isNotEmpty ?? false)
+      ? project!.name
+      : 'Untitled project';
   cs.writeln('BT /F1 13 Tf 0 0 0 rg '
       '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 20)} Td (${_pdfText(pname)}) Tj ET');
   cs.writeln('BT /F1 11 Tf 0.15 0.15 0.15 rg '
@@ -143,7 +157,7 @@ Uint8List electricalSldToPdf({
       '(${_pdfText(title)}) Tj ET');
   cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
       '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 76)} Td '
-      '(${_pdfText(sheet.supplyNote)}) Tj ET');
+      '(${_pdfText(sheetResolved.supplyNote)}) Tj ET');
   if (chrome != null) {
     // Drawing number + revision (left of the sheet counter) — title-block facts.
     final dwg = <String>[
@@ -165,9 +179,9 @@ Uint8List electricalSldToPdf({
   }
 
   // ── Device legend (KETERANGAN, bottom-left) ─────────────────────────────────
-  if (sheet.legend.isNotEmpty) {
+  if (sheetResolved.legend.isNotEmpty) {
     const rowH = 11.0;
-    final lh = 18.0 + sheet.legend.length * rowH;
+    final lh = 18.0 + sheetResolved.legend.length * rowH;
     const lw = 240.0;
     const lx = margin + 4;
     const ly = margin + 2;
@@ -176,7 +190,7 @@ Uint8List electricalSldToPdf({
     cs.writeln('BT /F1 9 Tf 0 0 0 rg '
         '${_n(lx + 6)} ${_n(ly + lh - 12)} Td (${_pdfText('LEGEND')}) Tj ET');
     var row = 0;
-    for (final e in sheet.legend) {
+    for (final e in sheetResolved.legend) {
       final ry = ly + lh - 24 - row * rowH;
       cs.writeln('BT /F1 7.5 Tf 0.12 0.12 0.12 rg '
           '${_n(lx + 6)} ${_n(ry)} Td '

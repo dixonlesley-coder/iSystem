@@ -96,16 +96,23 @@ class _Dxf {
 /// on `frame`. The drawing is model-space (DXF Y up, so screen-space y-down is
 /// negated).
 String electricalSldToDxf({
-  required ElectricalProject project,
-  required ElectricalSystemResult result,
+  ElectricalProject? project,
+  ElectricalSystemResult? result,
+  SldSheet? sheet,
   bool overview = false,
+  bool sourceChain = false,
 }) {
+  assert(sheet != null || (project != null && result != null),
+      'electricalSldToDxf needs either a prebuilt sheet or project+result');
   final d = _Dxf()..begin();
-  // `overview` = the ZOOMED-OUT building single-line (compact panel tree, normal
-  // / essential colour split); default = the per-panel detail single-line.
-  final sheet = overview
-      ? buildElectricalOverview(project: project, result: result)
-      : buildElectricalSld(project: project, result: result);
+  // A prebuilt [sheet] wins; else `overview` = the ZOOMED-OUT building
+  // single-line (compact panel tree, optional source spine); default = the
+  // per-panel detail single-line.
+  final sheetResolved = sheet ??
+      (overview
+          ? buildElectricalOverview(
+              project: project!, result: result!, sourceChain: sourceChain)
+          : buildElectricalSld(project: project!, result: result!));
 
   // Essential prims are drawn ACI red (1); source MV-chain blue (5); normal
   // inherits the layer colour (null). Detail sheet is all-normal ⇒ unchanged.
@@ -118,7 +125,7 @@ String electricalSldToDxf({
   // Drawing-space primitives (panels / busbars / ways / feeders). A line that is
   // medium/thick weight is a busbar or feeder → the `feeders` layer; everything
   // else (block outlines, way stubs, breaker boxes, labels) → `panels`.
-  for (final p in sheet.prims) {
+  for (final p in sheetResolved.prims) {
     switch (p) {
       case SldLine():
         final layer = p.weight == SldWeight.thin ? 'panels' : 'feeders';
@@ -132,20 +139,22 @@ String electricalSldToDxf({
   }
 
   // ── Model-space title block + legend, laid out below the drawing ────────────
-  final frameTop = sheet.maxY + 60;
-  final pname = project.name.isEmpty ? 'Untitled project' : project.name;
-  d.box('frame', sheet.minX, frameTop, 360, 96);
-  d.text('frame', sheet.minX + 8, frameTop + 22, pname, size: 16);
-  d.text('frame', sheet.minX + 8, frameTop + 44, 'ELECTRICAL SINGLE-LINE DIAGRAM',
+  final frameTop = sheetResolved.maxY + 60;
+  final pname = (project?.name.isNotEmpty ?? false)
+      ? project!.name
+      : 'Untitled project';
+  d.box('frame', sheetResolved.minX, frameTop, 360, 96);
+  d.text('frame', sheetResolved.minX + 8, frameTop + 22, pname, size: 16);
+  d.text('frame', sheetResolved.minX + 8, frameTop + 44, 'ELECTRICAL SINGLE-LINE DIAGRAM',
       size: 12);
-  d.text('frame', sheet.minX + 8, frameTop + 66, sheet.supplyNote, size: 10);
+  d.text('frame', sheetResolved.minX + 8, frameTop + 66, sheetResolved.supplyNote, size: 10);
 
-  if (sheet.legend.isNotEmpty) {
-    final lx = sheet.minX + 400;
-    d.box('frame', lx, frameTop, 300, math.max(96, 22.0 + sheet.legend.length * 14));
+  if (sheetResolved.legend.isNotEmpty) {
+    final lx = sheetResolved.minX + 400;
+    d.box('frame', lx, frameTop, 300, math.max(96, 22.0 + sheetResolved.legend.length * 14));
     d.text('frame', lx + 8, frameTop + 16, 'LEGEND', size: 11);
     var row = 0;
-    for (final e in sheet.legend) {
+    for (final e in sheetResolved.legend) {
       d.text('frame', lx + 8, frameTop + 32 + row * 14, '${e.code}  -  ${e.meaning}',
           size: 9);
       row++;

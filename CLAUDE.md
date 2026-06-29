@@ -406,13 +406,40 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   → an `SldSheet` where every panel is a COMPACT node (name [tag] + incomer rating/poles + demand kW),
   laid out in a **top-down tree tiered by feeder depth** and wired parent→child with orthogonal
   feeders, carrying the **normal / essential colour split** of a real riser single-line (new `SldRole
-  {normal, essential, source}` on every primitive; a panel is essential when its name marks it
-  emergency, when it carries a life-safety way, or when its parent is — propagated down the emergency
-  sub-tree). The PDF + DXF exporters are now role-aware (PDF normal = the existing dark ink ⇒ the
+  {normal, essential, source}` on every primitive; a panel is essential when it is on the genset-backed
+  (emergency) supply — its explicit `ElectricalPanel.essential` flag — or its name marks it emergency,
+  or its parent is — propagated down the emergency sub-tree. A single life-safety WAY on an otherwise-
+  normal board does NOT make the whole board red (the emergency-supply flag is the cue, not one way)). The PDF + DXF exporters are now role-aware (PDF normal = the existing dark ink ⇒ the
   detail sheet is byte-identical, essential = red; DXF essential = ACI red 62/1) behind an `overview`
-  flag, wired into the Export menu as **'Building single-line (overview)' → PDF / DXF**. (Next: render
-  the overview LIVE on the electrical canvas as a zoom-LOD level + prepend the PLN/MV/transformer/genset
-  source chain.)
+  flag, wired into the Export menu as **'Building single-line (overview)' → PDF / DXF**. The
+  **overview + riser now render LIVE on the electrical canvas** via a reusable read-only
+  `ui/electrical/sld_sheet_painter.dart` (`SldSheetView`/`SldSheetPainter`) — a `ViewportTransform`-
+  driven surface that paints ANY pure-engine `SldSheet` (the SAME geometry the PDF/DXF exporters draw,
+  one source of truth) with the shared drafting grid + the role colour split (normal→ink, essential→
+  danger red, source→accent) and ASCII `fontFamily:'Roboto'` labels; `electrical_view.dart` `_Tab`
+  grew **`overview` + `riser`** tabs (was `{singleLine, powerOneLine}`). The **PLN/MV/transformer/
+  genset source chain is now prepended** (`_buildSourceSpine`, `sourceChain` flag): PLN MV STATION ->
+  (PANEL UTAMA TEGANGAN MENENGAH, only for a `dualTransformer`/`sources` project) -> TRANSFORMER
+  `<kVA>` -> PANEL UTAMA TEGANGAN RENDAH, with an optional GENSET UNIT (`selectGeneratorKva` over the
+  project `sources.generator` backup VA) + CAPACITOR BANK on the LV bus feeding each root — kVA snaps
+  to the genset ladder only, no invented physics (`// VERIFY`); default off ⇒ the overview export is
+  byte-identical. A **floor-by-floor electrical riser** landed (`buildElectricalRiser(project, result,
+  {building, mounting, sourceChain})`): panels placed on their building FLOOR by true §10 elevation
+  (highest at the top), left-to-right per band, feeders as a vertical riser in a right-hand channel +
+  horizontal branches, a left gutter with floor name + `FFL +12.50`; floor assignment =
+  `panel.layoutPos.floorIndex` (clamped) → feeder-depth tier → clamp, degrading to pure `Tier n` when
+  `BuildingLevels` is null/empty (never throws), fed the live mechanical `projectControllerProvider.
+  building`; exported via **'Building riser' → PDF / DXF** (`exportElectricalRiserPdf`/`Dxf`, the app
+  builds the sheet with live `BuildingLevels` and passes it to the prebuilt-`sheet` exporter param).
+  The **per-panel detail single-line now follows the real Indonesian schedule conventions** (BRI
+  `Diagram Panel`): `breakerScheduleLabel` rating-led notation (`MCB 16A 1ph`/`MCCB 40A 3ph`, ASCII
+  `ph`; the curve-led `breakerLabel` stays for the incomer sub-line + legend), cable with the `mm2`
+  unit + a separate-earth token (`NYY 3x6 mm2 + E6 mm2` from the way's PE CSA), per-way connected DAYA
+  (`W`/`kW`), a `Cu bus <csa>mm2  Icw <kA>kA` header, CADANGAN (spare) ways as stubbed rows (from
+  `spareWaysReserved`), and a TOTAL footer (diversified demand + line current) — 0-spare/withstand-off
+  panels stay geometrically byte-identical. New goldens `09_electrical_overview.png` +
+  `10_electrical_riser.png`. (Next: prepend the source spine onto the interactive single-line canvas
+  too, and a per-floor branch fan-out under each riser panel.)
   The i18n mechanism also gained **parameterized templates** — `MechXStringsData.format(key,
   {…})` substitutes `{name}` placeholders (EN+ID templates carry identical placeholders, pinned
   by a test) — and the Commercial workspace's dynamic captions (BOM/pricelist leads, unpriced
