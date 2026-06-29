@@ -30,6 +30,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 
 import '../../store/app_state.dart';
@@ -891,6 +892,56 @@ String _sizeLabel(EdgeSizing s) {
   return s.service.regime == FlowRegime.air ? 'D$mm' : 'DN$mm';
 }
 
+/// Industry single-line pipe tag — `SIZE-SERVICE-MATERIAL` (e.g. `100-CW-PPR`,
+/// matching Indonesian air-bersih riser drawings). Air keeps the duct Ø.
+String _pipeTag(EdgeSizing s, NetEdge edge) {
+  final mm = s.diameter.inMillimeters.round();
+  if (s.service.regime == FlowRegime.air) return 'Ø$mm';
+  return '$mm-${_serviceCode(edge.service)}-'
+      '${_pipeMaterialCode(edge.pipeProduct, edge.service)}';
+}
+
+/// Two-letter service code used on the single-line (CW = air bersih, etc.).
+String _serviceCode(ServiceType s) => switch (s) {
+      ServiceType.coldWater => 'CW',
+      ServiceType.hotWater => 'HW',
+      ServiceType.drainage => 'D',
+      ServiceType.vent => 'V',
+      ServiceType.rainwater => 'RW',
+      ServiceType.duct => 'SA',
+      ServiceType.returnAir => 'RA',
+      ServiceType.exhaust => 'EA',
+      ServiceType.fireSprinkler => 'SP',
+      ServiceType.fireHydrant => 'FH',
+    };
+
+/// Pipe material code — the edge's chosen product, else the conventional
+/// default for the service (clean/hot water ⇒ PPR, drainage/vent/storm ⇒ PVC,
+/// fire ⇒ black steel) so the tag always reads like a real drawing.
+String _pipeMaterialCode(PipeProduct? p, ServiceType s) {
+  if (p != null) {
+    return switch (p) {
+      PipeProduct.pprPn10 ||
+      PipeProduct.pprPn16 ||
+      PipeProduct.pprPn20 =>
+        'PPR',
+      PipeProduct.pvcAw || PipeProduct.pvcD || PipeProduct.pvcJis => 'PVC',
+      PipeProduct.acousticPvc => 'PVC',
+      PipeProduct.castIron => 'CI',
+      PipeProduct.hdpe => 'HDPE',
+    };
+  }
+  return switch (s) {
+    ServiceType.coldWater || ServiceType.hotWater => 'PPR',
+    ServiceType.drainage ||
+    ServiceType.vent ||
+    ServiceType.rainwater =>
+      'PVC',
+    ServiceType.fireSprinkler || ServiceType.fireHydrant => 'BS',
+    _ => 'GI',
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Auto-mode layout + inferred-riser geometry (shared by the painter that DRAWS
 // the single-line and the widget that makes the inferred risers CLICKABLE).
@@ -1219,7 +1270,7 @@ class _AutoSchematicPainter extends CustomPainter {
         if (s != null) {
           _drawText(
             canvas,
-            _sizeLabel(s),
+            _pipeTag(s, edge),
             Offset(midX + MechXSpacing.xs, arrowY - MechXSpacing.sm),
             fontSize: _labelFontSize,
             color: color,
@@ -1234,7 +1285,7 @@ class _AutoSchematicPainter extends CustomPainter {
           final midY = (from.dy + to.dy) / 2;
           _drawText(
             canvas,
-            _sizeLabel(s),
+            _pipeTag(s, edge),
             Offset(midX, midY - MechXSpacing.md),
             fontSize: _labelFontSize,
             color: color,
