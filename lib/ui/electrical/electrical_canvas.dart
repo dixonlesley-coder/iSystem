@@ -800,7 +800,17 @@ class _CanvasPainter extends CustomPainter {
         final end = transform.worldToScreen(
           Offset(toPos.dx + toW / 2, toPos.dy),
         );
-        _smoothFeeder(canvas, start, end);
+        // The feeder must turn BELOW the parent's load row (loads hang
+        // kLoadDropGap under the card and are kLoadNodeH tall), so its
+        // horizontal traverse never crosses the loads. Drop past that band
+        // before the elbow.
+        final loadBandBottom = transform
+            .worldToScreen(Offset(
+              fromPos.dx,
+              fromPos.dy + fromCardH + kLoadDropGap + kLoadNodeH + 16,
+            ))
+            .dy;
+        _smoothFeeder(canvas, start, end, clearY: loadBandBottom);
       }
     }
 
@@ -840,17 +850,24 @@ class _CanvasPainter extends CustomPainter {
   void _grid(Canvas canvas, Size size) =>
       paintCanvasGrid(canvas, size, transform, gridLine);
 
-  void _smoothFeeder(Canvas canvas, Offset a, Offset b) {
+  /// Orthogonal feeder from a parent way bottom [a] to a fed-panel incomer [b].
+  /// The horizontal traverse is placed at [clearY] when given — pushed below the
+  /// parent's load row so the feeder never overlaps the loads — else midway.
+  /// Clamped to stay between the two endpoints when the child sits close below.
+  void _smoothFeeder(Canvas canvas, Offset a, Offset b, {double? clearY}) {
     final paint = Paint()
       ..color = accent
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
     final midY = (a.dy + b.dy) / 2;
+    var elbowY = clearY == null ? midY : math.max(midY, clearY);
+    // Never overshoot the child incomer (keep the elbow above b).
+    if (b.dy > a.dy) elbowY = math.min(elbowY, b.dy);
     final path = Path()
       ..moveTo(a.dx, a.dy)
-      ..lineTo(a.dx, midY)
-      ..lineTo(b.dx, midY)
+      ..lineTo(a.dx, elbowY)
+      ..lineTo(b.dx, elbowY)
       ..lineTo(b.dx, b.dy);
     canvas.drawPath(path, paint);
     // Tap dot at the fed panel incomer.
