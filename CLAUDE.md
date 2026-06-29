@@ -448,7 +448,12 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (`sld_sheet_painter.dart`) into the card body, via a shared free fn `paintSldPrims(...)` factored out
   of `SldSheetPainter` (one prim-painting routine for overview/riser/in-card — golden rule 5). The deep
   tier keeps double-click/right-click editing via a local-y→schedule-row hit-test (`_PanelScheduleBody`).
-  The card footprint stays the detail height, so loads/feeders/merged-LOD are untouched. **Sources are
+  The card footprint stays the detail height, so loads/feeders/merged-LOD are untouched. At the
+  board-schedule tier the hanging **load nodes + drop lines are SUPPRESSED** and the card's own header
+  chrome is dropped (the engine schedule already lists every way left-to-right + draws its own header),
+  so the deep view reads as the clean left-to-right CAD board schedule — no redundant loads below it, no
+  duplicated panel-name header. Regression-covered by golden **11_electrical_schedule.png** (the canvas
+  `focusPanelSchedule(panelId)` frames one panel past the threshold). **Sources are
   now first-class + editable:** a **Sources** toolbar button opens a `_SourcesEditor` drawer (genset
   present/kVA[0=auto]/mode/transfer · capacitor kvar · transformer kVA · dual-transformer) wired through
   new store intents (`setGenerator`/`setGeneratorKva`/`setGeneratorMode`/`setGeneratorTransfer`/

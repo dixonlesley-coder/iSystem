@@ -382,6 +382,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                           transform: vt,
                           rootId: rootId,
                           detail: detail,
+                          scheduleDetail: scheduleDetail,
                           gridLine: colors.gridLine,
                           background: colors.canvas,
                           feederFrom: _feederFrom,
@@ -633,8 +634,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       return widgets;
     }
 
-    // Load nodes hanging below each non-feeder, non-spare way.
-    for (var i = 0; i < panel.circuits.length; i++) {
+    // Load nodes hanging below each non-feeder, non-spare way. SUPPRESSED at the
+    // board-schedule LOD — the schedule already lists every way left-to-right
+    // (GRUP / breaker / cable / load), so the hanging loads would be redundant.
+    for (var i = 0; !scheduleDetail && i < panel.circuits.length; i++) {
       final c = panel.circuits[i];
       if (c.loadKind == LoadKind.feeder || c.loadKind == LoadKind.spare) {
         continue;
@@ -715,6 +718,26 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     _fit(_positions(project, result));
   }
 
+  /// Frame a single panel's BOARD SCHEDULE — centre [panelId] at a scale past
+  /// [kBoardScheduleThreshold] so the deep-zoom engine schedule renders. No-op
+  /// if the panel/viewport isn't available yet. (Powers a "focus this panel"
+  /// gesture and the deep-zoom golden.)
+  void focusPanelSchedule(String panelId, {double? scale}) {
+    final project = ref.read(electricalProjectProvider);
+    final result = ref.read(electricalResultProvider);
+    final pos = _positions(project, result)[panelId];
+    final panel = result.panels[panelId];
+    if (pos == null || panel == null || _viewportSize.isEmpty) return;
+    final s = scale ?? (kBoardScheduleThreshold + 0.3);
+    final w = panelCardWidth(panel.circuits.length);
+    final h = panelFootprint(panel, true);
+    final worldCentre = Offset(pos.dx + w / 2, pos.dy + h / 2);
+    _setTransform(ViewportTransform(
+      scale: s,
+      offset: _viewportSize.center(Offset.zero) - worldCentre * s,
+    ));
+  }
+
   /// Zoom in just past the LOD threshold, anchored at [focalScreen], so a
   /// merged-loads node breaks out into its individual loads (double-tap to
   /// expand). No-op if already in detail.
@@ -745,6 +768,7 @@ class _CanvasPainter extends CustomPainter {
   final ViewportTransform transform;
   final String? rootId;
   final bool detail;
+  final bool scheduleDetail;
   final Color gridLine;
   final Color background;
   final String? feederFrom;
@@ -760,6 +784,7 @@ class _CanvasPainter extends CustomPainter {
     required this.transform,
     required this.rootId,
     required this.detail,
+    required this.scheduleDetail,
     required this.gridLine,
     required this.background,
     required this.feederFrom,
@@ -817,11 +842,15 @@ class _CanvasPainter extends CustomPainter {
     // Drop lines from each card's bottom to its load node (the segment OUTSIDE
     // the card — the in-card schematic is painted by the card widget itself so
     // the card's opaque surface doesn't cover it). A label carries cable + util.
-    for (final id in result.order) {
-      final panel = result.panels[id];
-      final pos = positions[id];
-      if (panel == null || pos == null) continue;
-      _loadDrops(canvas, panel, pos);
+    // Skipped at the board-schedule LOD — the schedule lists every way itself,
+    // so the hanging loads + their drop lines would be redundant.
+    if (!scheduleDetail) {
+      for (final id in result.order) {
+        final panel = result.panels[id];
+        final pos = positions[id];
+        if (panel == null || pos == null) continue;
+        _loadDrops(canvas, panel, pos);
+      }
     }
 
     // In-flight feeder rubber-band.
@@ -968,6 +997,7 @@ class _CanvasPainter extends CustomPainter {
       old.result != result ||
       old.transform != transform ||
       old.detail != detail ||
+      old.scheduleDetail != scheduleDetail ||
       old.feederFrom != feederFrom ||
       old.feederCursor != feederCursor ||
       old.feederHover != feederHover;
@@ -1452,14 +1482,17 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Header chrome — a fixed band (kPanelChrome) so the SVG below lines
-          // up summary-or-detail.
-          SizedBox(
-            height: kPanelChrome,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
-              child: _header(context),
+          // up summary-or-detail. DROPPED at the board-schedule LOD, where the
+          // engine schedule draws its OWN header (name [tag] + incomer line), so
+          // the card chrome would just repeat the panel name.
+          if (!widget.scheduleDetail)
+            SizedBox(
+              height: kPanelChrome,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+                child: _header(context),
+              ),
             ),
-          ),
           Expanded(
             // Cross-fade the summary ↔ detail schematic at the LOD threshold
             // instead of an instant swap.

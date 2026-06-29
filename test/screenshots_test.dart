@@ -185,5 +185,21 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await expectLater(
         app, matchesGoldenFile('goldens/10_electrical_riser.png'));
+
+    // Electrical board-schedule deep-zoom LOD — back on the Single-line tab,
+    // frame the MDP at a scale past `kBoardScheduleThreshold` so its full engine
+    // board schedule (the SAME geometry the PDF/DXF export draws, via
+    // `buildElectricalPanelDetail` + SldSheetPainter) renders in place of the
+    // mid-detail R-S-T busbar.
+    await tester.tap(elecSegment('Single-line'));
+    await tester.pump();
+    final schedCanvas =
+        tester.state<ElectricalCanvasState>(find.byType(ElectricalCanvas));
+    schedCanvas.focusPanelSchedule('mdp');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(schedCanvas.currentScale, greaterThanOrEqualTo(kBoardScheduleThreshold));
+    await expectLater(
+        app, matchesGoldenFile('goldens/11_electrical_schedule.png'));
   });
 }
