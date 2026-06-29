@@ -368,6 +368,47 @@ void main() {
       expect(codes, contains('Essential'));
     });
 
+    test('every feeder run carries a cable + breaker annotation', () {
+      // The four panels have three feeders (LP1, EMG, FS), each with a sized
+      // parent circuit ⇒ three resolvable cable+breaker labels.
+      final feederLabels = sheet.prims
+          .whereType<SldLabel>()
+          .where((l) => l.text.contains(' mm2 ') && l.text.contains('·'))
+          .toList();
+      expect(feederLabels.length, 3);
+      for (final l in feederLabels) {
+        // carries a cable family + a breaker token (MCB/MCCB ... ph).
+        expect(l.text, matches(RegExp(r'\dx\d')), reason: l.text);
+        expect(l.text, matches(RegExp(r'(MCB|MCCB) \d+(\.\d+)?A \dph')),
+            reason: l.text);
+        expect(l.size, lessThan(7.5)); // annotation, smaller than node text
+      }
+    });
+
+    test('the feeder annotation onto the essential board is essential-coloured',
+        () {
+      // The LV main -> MDP EMERGENCY feeder label inherits the essential role.
+      final l = sheet.prims.whereType<SldLabel>().firstWhere(
+          (l) => l.text.contains(' mm2 ') && l.role == SldRole.essential);
+      expect(l.text, matches(RegExp(r'(MCB|MCCB)')));
+    });
+
+    test('the compact node sub-line carries demand in kW AND kVA', () {
+      final sub = sheet.prims.whereType<SldLabel>().where((l) =>
+          !l.bold && l.text.contains('kW') && l.text.contains('kVA'));
+      expect(sub, isNotEmpty);
+      // format: '<In>A <poles>P · <kW>kW / <kVA>kVA'
+      expect(sub.first.text, matches(RegExp(r'\d+A \dP · .*kW / .*kVA')));
+    });
+
+    test('no label contains a non-ASCII tofu glyph (Ø / superscripts)', () {
+      for (final l in sheet.prims.whereType<SldLabel>()) {
+        expect(l.text.contains('Ø'), isFalse, reason: l.text);
+        expect(l.text.contains('²'), isFalse, reason: l.text);
+        expect(l.text.contains('³'), isFalse, reason: l.text);
+      }
+    });
+
     test('overview PDF colours the essential branch red, normal byte-stable',
         () {
       final s = latin1.decode(electricalSldToPdf(

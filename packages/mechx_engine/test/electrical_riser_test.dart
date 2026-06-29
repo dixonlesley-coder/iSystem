@@ -208,4 +208,54 @@ void main() {
         buildElectricalRiser(project: e, result: er, building: building);
     expect(sheet.prims.whereType<SldRect>(), isEmpty);
   });
+
+  test('feeder runs carry a cable + breaker annotation', () {
+    final sheet = buildElectricalRiser(
+        project: project, result: result, building: building);
+    // LVMDP feeds LPG / LP1 / EMG / UP — four resolvable feeder labels.
+    final feederLabels = sheet.prims
+        .whereType<SldLabel>()
+        .where((l) => l.text.contains(' mm2 ') && l.text.contains('·'))
+        .toList();
+    expect(feederLabels.length, project.panels.length - 1);
+    for (final l in feederLabels) {
+      expect(l.text, matches(RegExp(r'\dx\d')), reason: l.text); // cable cores
+      expect(l.text, matches(RegExp(r'(MCB|MCCB) \d+(\.\d+)?A \dph')),
+          reason: l.text);
+    }
+  });
+
+  test('per-floor branch fan-out: a board shows a labelled load-way stub', () {
+    final sheet = buildElectricalRiser(
+        project: project, result: result, building: building);
+    final joined =
+        sheet.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+    // LP-G distributes a 'Lighting' way; it hangs as a stub with its rating.
+    final stub = sheet.prims
+        .whereType<SldLabel>()
+        .where((l) =>
+            l.size == 6 && l.text.startsWith('Lighting') && l.text.contains('A'))
+        .toList();
+    expect(stub, isNotEmpty);
+    expect(joined, contains('Sockets')); // the unplaced board's load way
+  });
+
+  test('the compact node sub-line carries kW AND kVA demand', () {
+    final sheet = buildElectricalRiser(
+        project: project, result: result, building: building);
+    final sub = sheet.prims.whereType<SldLabel>().where(
+        (l) => !l.bold && l.text.contains('kW') && l.text.contains('kVA'));
+    expect(sub, isNotEmpty);
+    expect(sub.first.text, matches(RegExp(r'\d+A \dP · .*kW / .*kVA')));
+  });
+
+  test('no riser label contains a non-ASCII tofu glyph', () {
+    final sheet = buildElectricalRiser(
+        project: project, result: result, building: building);
+    for (final l in sheet.prims.whereType<SldLabel>()) {
+      expect(l.text.contains('Ø'), isFalse, reason: l.text);
+      expect(l.text.contains('²'), isFalse, reason: l.text);
+      expect(l.text.contains('³'), isFalse, reason: l.text);
+    }
+  });
 }

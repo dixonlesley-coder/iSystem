@@ -582,6 +582,72 @@ const double _ovH = 46;
 const double _ovHGap = 26;
 const double _ovTierH = 120;
 
+/// Assumed building power factor for the per-panel compact-node kVA sub-line —
+/// mirrors `compute.dart`'s `assumedBuildingPf` but inlined to keep this pure
+/// drawing file free of the compute dependency. A representative estimate, NOT
+/// an SNI/PUIL clause. // VERIFY
+const double _assumedPanelPf = 0.85;
+
+/// Resolve, per CHILD panel id, the PARENT'S feeding circuit (project model, for
+/// the cable family) + its sized [ElectricalCircuitResult] (for the cable CSA +
+/// breaker). Used to label each feeder run with its real cable + breaker. A
+/// child whose feeding circuit or sized result can't be resolved is absent ⇒ its
+/// feeder is left UNLABELLED (never fabricated). Shared by the overview + riser.
+(Map<String, ElectricalCircuit>, Map<String, ElectricalCircuitResult>)
+    _feederLabelLookups(
+  ElectricalProject project,
+  ElectricalSystemResult result,
+  Map<String, String> parentOf,
+) {
+  final feederCircuitOf = <String, ElectricalCircuit>{};
+  for (final parent in project.panels) {
+    for (final c in parent.circuits) {
+      final child = c.feedsPanelId;
+      if (child != null && result.panels.containsKey(child)) {
+        feederCircuitOf[child] = c;
+      }
+    }
+  }
+  final feederResultOf = <String, ElectricalCircuitResult>{};
+  feederCircuitOf.forEach((child, circ) {
+    final par = parentOf[child];
+    final pr = par == null ? null : result.panels[par];
+    if (pr == null) return;
+    for (final cr in pr.circuits) {
+      if (cr.circuitId == circ.id) {
+        feederResultOf[child] = cr;
+        break;
+      }
+    }
+  });
+  return (feederCircuitOf, feederResultOf);
+}
+
+/// The feeder cable + breaker annotation for a resolvable feeder, e.g.
+/// `NYY 4x50 mm2 · MCCB 250A 3ph`. Null when the child's feeding circuit or its
+/// sized result is unresolved (⇒ omit the label rather than guess). ASCII-safe
+/// (the bundled middle dot is allowed).
+String? _feederConnLabel(
+  Map<String, ElectricalCircuit> feederCircuitOf,
+  Map<String, ElectricalCircuitResult> feederResultOf,
+  String child,
+) {
+  final cr = feederResultOf[child];
+  final circ = feederCircuitOf[child];
+  if (cr == null || circ == null) return null;
+  final poles = cr.threePhase ? 3 : 1;
+  return '${cableLabel(circ, cr.cable.csaMm2, cr.threePhase)} mm2 · '
+      '${breakerScheduleLabel(cr.breaker, poles)}';
+}
+
+/// The compact-node sub-line: `<In>A <poles>P · <kW>kW / <kVA>kVA` (the panel's
+/// incomer rating + diversified demand in both kW and kVA). Shared by the
+/// overview + riser so they read identically. ASCII-safe.
+String _compactNodeSubLine(ElectricalPanelResult p) =>
+    '${_num(p.incomer.breaker.ratingA.amperes)}A ${p.incomer.poles}P · '
+    '${_num(p.demandW / 1000)}kW / '
+    '${_num(p.demandW / _assumedPanelPf / 1000)}kVA';
+
 /// Parent-of map over the feeder graph (childPanelId -> parentPanelId), limited
 /// to children that have a result. Shared by the overview + riser layouts.
 Map<String, String> _parentOf(
@@ -762,6 +828,8 @@ SldSheet buildElectricalOverview({
 }) {
   // children map over the feeder graph; parent + essential via shared helpers.
   final parentOf = _parentOf(project, result);
+  final (feederCircuitOf, feederResultOf) =
+      _feederLabelLookups(project, result, parentOf);
   final children = <String, List<String>>{};
   for (final entry in parentOf.entries) {
     (children[entry.value] ??= []).add(entry.key);
@@ -855,6 +923,13 @@ SldSheet buildElectricalOverview({
       prims.add(SldLine(ax, ay, ax, midY, weight: SldWeight.medium, role: role));
       prims.add(SldLine(ax, midY, zx, midY, weight: SldWeight.medium, role: role));
       prims.add(SldLine(zx, midY, zx, zy, weight: SldWeight.medium, role: role));
+      // Feeder annotation (cable + breaker) on the mid horizontal segment, just
+      // above the line; omitted when the parent feeding circuit can't resolve.
+      final lbl = _feederConnLabel(feederCircuitOf, feederResultOf, child);
+      if (lbl != null) {
+        prims.add(SldLabel(math.min(ax, zx) + 4, midY - 4, lbl,
+            size: 6.5, role: role));
+      }
     }
   }
 
@@ -869,13 +944,8 @@ SldSheet buildElectricalOverview({
     final tag = (p.tag != null && p.tag!.isNotEmpty) ? '  [${p.tag}]' : '';
     prims.add(SldLabel(x + 7, y + 17, '${p.name}$tag',
         size: 10, bold: true, role: role));
-    prims.add(SldLabel(
-        x + 7,
-        y + 33,
-        '${_num(p.incomer.breaker.ratingA.amperes)}A ${p.incomer.poles}P  '
-        '${_num(p.demandW / 1000)}kW',
-        size: 7.5,
-        role: role));
+    prims.add(SldLabel(x + 7, y + 33, _compactNodeSubLine(p),
+        size: 7.5, role: role));
   }
 
   // ── Bounds ─────────────────────────────────────────────────────────────────
@@ -942,8 +1012,16 @@ SldSheet buildElectricalOverview({
 
 /// Gutter + band geometry for the riser.
 const double _riserGutterW = 150;
-const double _riserBandH = 130;
+const double _riserBandH = 150;
 const double _riserPanelGap = 24;
+
+/// Per-floor branch fan-out: how many outgoing LOAD ways a riser panel shows as
+/// labelled stubs before collapsing the remainder to a `+N more` summary, the
+/// pitch of each stub row, and the reserved column height that the floor grid
+/// line clears (so the densest board never overruns the next band).
+const int kRiserFanMax = 4;
+const double _fanRowH = 11;
+const double _fanColH = (kRiserFanMax + 1) * _fanRowH + 6;
 
 /// Format a true elevation (m) as an FFL tag like `+12.50` / `-3.00`.
 String _ffl(double meters) {
@@ -975,6 +1053,16 @@ SldSheet buildElectricalRiser({
   final parentOf = _parentOf(project, result);
   final essential = _essentialIds(project, result);
   final panelModelById = {for (final p in project.panels) p.id: p};
+  final (feederCircuitOf, feederResultOf) =
+      _feederLabelLookups(project, result, parentOf);
+  // The circuit ids that are FEEDERS (supply a sub-panel) — excluded from a
+  // panel's per-floor load-way fan-out (a feeder is drawn as a riser branch,
+  // not a hanging stub).
+  final feederCircuitIds = <String>{
+    for (final p in project.panels)
+      for (final c in p.circuits)
+        if (c.feedsPanelId != null) c.id
+  };
 
   // Feeder depth per panel (root = 0). result.order is root-first.
   final depth = <String, int>{};
@@ -1064,6 +1152,13 @@ SldSheet buildElectricalRiser({
         weight: SldWeight.medium, role: role));
     prims.add(SldLine(channelX, cyy, cxx, cyy,
         weight: SldWeight.medium, role: role));
+    // Feeder annotation (cable + breaker) along the horizontal branch into the
+    // child, just above the line; omitted when the feeding circuit can't resolve.
+    final lbl = _feederConnLabel(feederCircuitOf, feederResultOf, child);
+    if (lbl != null) {
+      prims.add(SldLabel(math.min(cxx, channelX) + 6, cyy - 4, lbl,
+          size: 6.5, role: role));
+    }
   }
   sheetMaxX = math.max(sheetMaxX, channelX);
 
@@ -1086,7 +1181,9 @@ SldSheet buildElectricalRiser({
   // ── Floor gutter: per band, name + FFL + a hairline grid line ───────────────
   for (var i = 0; i < levelCount; i++) {
     final y = bandY(i) + contentOffsetY;
-    final gridY = y + _ovH + _riserPanelGap / 2;
+    // The hairline sits below the densest board's fan-out column so a board's
+    // load-way stubs never cross into the next floor band.
+    final gridY = y + _ovH + _fanColH + _riserPanelGap / 2;
     prims.add(SldLine(0, gridY, sheetMaxX, gridY, weight: SldWeight.thin));
     if (hasFloors) {
       final fl = building.floors[i];
@@ -1112,13 +1209,38 @@ SldSheet buildElectricalRiser({
     final tag = (p.tag != null && p.tag!.isNotEmpty) ? '  [${p.tag}]' : '';
     prims.add(SldLabel(x + 7, y + 17, '${p.name}$tag',
         size: 10, bold: true, role: role));
-    prims.add(SldLabel(
-        x + 7,
-        y + 33,
-        '${_num(p.incomer.breaker.ratingA.amperes)}A ${p.incomer.poles}P  '
-        '${_num(p.demandW / 1000)}kW',
-        size: 7.5,
-        role: role));
+    prims.add(SldLabel(x + 7, y + 33, _compactNodeSubLine(p),
+        size: 7.5, role: role));
+
+    // Per-floor branch fan-out: the panel's NON-FEEDER outgoing load ways as a
+    // compact column of short labelled stubs below the box — the real riser
+    // convention (what each board distributes on its floor). Capped at
+    // [kRiserFanMax]; the remainder collapses to a `+N more` row (summarised,
+    // never silently dropped).
+    final loadWays = [
+      for (final cr in p.circuits)
+        if (!feederCircuitIds.contains(cr.circuitId)) cr
+    ];
+    final shown = loadWays.length > kRiserFanMax
+        ? loadWays.sublist(0, kRiserFanMax)
+        : loadWays;
+    var row = 0;
+    for (final cr in shown) {
+      final sy = y + _ovH + 4 + row * _fanRowH;
+      prims.add(SldLine(x + 8, sy, x + 22, sy, weight: SldWeight.thin, role: role));
+      final nm = cr.name.length > 14 ? cr.name.substring(0, 14) : cr.name;
+      final ph = cr.threePhase ? ' 3ph' : '';
+      prims.add(SldLabel(x + 26, sy + 3,
+          '$nm ${_num(cr.breaker.ratingA.amperes)}A$ph',
+          size: 6, role: role));
+      row++;
+    }
+    if (loadWays.length > kRiserFanMax) {
+      final more = loadWays.length - kRiserFanMax;
+      final sy = y + _ovH + 4 + row * _fanRowH;
+      prims.add(SldLine(x + 8, sy, x + 22, sy, weight: SldWeight.thin, role: role));
+      prims.add(SldLabel(x + 26, sy + 3, '+$more more', size: 6, role: role));
+    }
   }
 
   // ── Bounds ─────────────────────────────────────────────────────────────────

@@ -439,6 +439,31 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `spareWaysReserved`), and a TOTAL footer (diversified demand + line current) — 0-spare/withstand-off
   panels stay geometrically byte-identical. New goldens `09_electrical_overview.png` +
   `10_electrical_riser.png`.
+  **The overview + riser then gained matching drafter rigor — feeder cable/breaker labels, kW/kVA
+  compact nodes, and a riser per-floor branch fan-out** (`electrical_sld_drawing.dart`, engine-only, no
+  new `SldPrim` so the PDF/DXF/canvas renderers are untouched; the per-panel DETAIL `buildElectricalSld`
+  path stays BYTE-IDENTICAL): **(1)** every FEEDER run in BOTH builders now carries its real cable +
+  breaker (e.g. `Cu 3x4 mm2 · MCB 25A 1ph` / `NYY 4x50 mm2 · MCCB 250A 3ph`) from the PARENT'S feeding
+  circuit — shared `_feederLabelLookups(project, result, parentOf)` resolves per child-panel id the
+  parent feeding `ElectricalCircuit` (by `feedsPanelId`, for the cable family) + its sized
+  `ElectricalCircuitResult` (cable CSA + breaker), and `_feederConnLabel(...)` formats `cableLabel(...) +
+  ' mm2 · ' + breakerScheduleLabel(...)`, returning **null when the feeding circuit or its sized result
+  can't resolve** (omit the label, never fabricate); placed on the overview feeder's mid horizontal
+  segment / the riser's horizontal branch into the panel, inheriting the feeder's normal/essential/source
+  role colour. **(2)** the compact-node sub-line is now `<In>A <poles>P · <kW>kW / <kVA>kVA` via shared
+  `_compactNodeSubLine(p)` (kVA = `demandW / _assumedPanelPf`, a file-level `_assumedPanelPf = 0.85`
+  mirroring `compute.dart`'s building PF but inlined to keep the drawing file compute-free —
+  representative `// VERIFY`, NOT an SNI/PUIL clause), in BOTH builders. **(3)** a riser-only per-floor
+  branch fan-out: under each riser panel its NON-FEEDER outgoing LOAD ways hang as a compact column of
+  short labelled stubs (`<name> <ratingA>A[ 3ph]`, name truncated to 14 chars) — the real riser
+  convention (what each board distributes on its floor); feeder ways (collected once into
+  `feederCircuitIds`) are excluded (drawn as a riser branch instead), capped at `kRiserFanMax = 4` with
+  the remainder collapsing to a `+N more` summary row (never silently dropped). Band geometry adjusted
+  (`_riserBandH` 130→150; the floor grid hairline drops below a reserved `_fanColH` fan column) so a
+  dense board never overruns the next floor band. The normal/essential/source colour split + the source
+  spine stay intact (feeder labels carry the feeder's role). Both builders feed the PDF/DXF exports AND
+  the live Overview/Riser canvas tabs, so the change shows on the exports + canvas for free. Goldens
+  **09 (Overview)** + **10 (Riser)** regenerated + verified; 05/08/11 + all other goldens BYTE-IDENTICAL.
   **Electrical single-line — LEFT-TO-RIGHT canvas + board-schedule LOD + editable source nodes landed**
   (`ui/electrical/electrical_canvas.dart` + `panel_geometry.dart` + `electrical_view.dart` +
   `store/electrical_store.dart`): the INTERACTIVE single-line canvas now flows LEFT-TO-RIGHT like a real
@@ -469,8 +494,9 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   canvas zoom, ONE `_buildSourceSpine` geometry across overview/riser/export/canvas) sits above the root
   panel, replacing the bare `_GridSourceNode` PLN head; double-click → Sources editor. Empty spine (no
   sources AND no demand) keeps the PLN head. Goldens 05/08/09/10 shifted only by the new Sources toolbar
-  button + the spine head replacing the PLN pill (no canvas-content regression). (Next: a per-floor
-  branch fan-out under each riser panel.)
+  button + the spine head replacing the PLN pill (no canvas-content regression). (The queued per-floor
+  branch fan-out under each riser panel has since landed — see the overview/riser drafter-rigor
+  paragraph above.)
   The i18n mechanism also gained **parameterized templates** — `MechXStringsData.format(key,
   {…})` substitutes `{name}` placeholders (EN+ID templates carry identical placeholders, pinned
   by a test) — and the Commercial workspace's dynamic captions (BOM/pricelist leads, unpriced
