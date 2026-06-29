@@ -648,9 +648,41 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   length = §10 elevation delta, one undo step). Drafter chrome: a toggleable **Legend (KETERANGAN)**
   box (bottom-left, on-diagram service codes) + a toggleable **title block** (bottom-right: project ·
   `SINGLE-LINE DIAGRAM` · `SHEET · <filter>` · date). All EN ⇒ goldens 04/09/10 shift only by the new
-  draughting content. Engine untouched; no `.mechx` change. (Queued: per-system single-line PDF/DXF
-  EXPORT reusing `DrawingChrome`, per-unit branch fan-out, the STP process-flow diagram, and bringing
-  the **electrical** SLD/exports to the same drafter quality.)
+  draughting content. Engine untouched; no `.mechx` change.
+  **The five remaining H101 (Diagram Sistem Air Bersih) elements then landed** (all on the Auto Riser
+  SLD `_AutoSchematicPainter` / `_AutoElevation` in `schematic_view.dart`, plus a pure helper in
+  `riser_tags.dart`): **(1) PUMP-SET PLANT DETAIL** — a compact top-right bordered callout
+  (`_paintPlantDetail`) with a ROOF-TANK glyph + real capacity (`m3` from the roofTank node's
+  `tankCapacityLitres`), a BOOSTER-PUMP glyph + real duty (`<kW>` from `pumpDutyProvider`'s
+  `selectedMotor`), a connecting leg, and the GRAVITASI / TRANSFER / BOOSTER leg labels (chosen from
+  the feed strategy + whether a ground tank exists) — drawn ONLY when the network actually has a
+  roofTank / groundTank / pump / boosterSet (else omitted entirely) and only on the clean-water focus;
+  **(2) VALVE-ASSEMBLY DETAIL CALLOUTS** — two bottom-centre bordered boxes (`_paintValveCallouts` +
+  the shared `_detailBox` / `_drawDetailGlyphRow` helpers) — DETAIL WATER METER (GV · WM · GV · U) and
+  DETAIL PRV SET (GV · STR · PRV · GV) — rows of schematic `paintComponentSymbol` valve glyphs joined
+  by a run line, each with a tiny ASCII abbrev (the glyph is schematic, the abbrev names the real
+  device); generic reference details (always available, width-guarded clear of the corner overlays);
+  **(3) FITTING LEGEND** — `_AutoLegend` gained a FITTINGS subsection beneath the on-diagram service
+  codes (CW · AAV · GV · CV · STR · PRV · WM · SF · CF · BV · FJ with full names), reference data, not
+  data-gated; **(4) SYSTEM-NOTES (KETERANGAN) card** — a bottom-right floating-glass `_SystemNotes`
+  card echoing ONLY real values: feed strategy (gravity downfeed vs upfeed / booster), each tank
+  present with its real `m3`, occupancy class, and the PEAK design flow (`L/s` from `pumpDutyProvider`,
+  upfeed-only — the engine has no daily-volume figure, so the demand line is OMITTED on downfeed rather
+  than fabricating a `m3/day`); stacked above the title block (both bottom-right); **(5) PER-FLOOR
+  BRANCH FAN-OUT** — under each floor band, a compact column of short labelled stubs for the FIXTURE
+  nodes that floor distributes (`_paintFloorFanOut`), driven by the pure, unit-tested
+  `floorFanOuts(net, {visibleNodeIds, labelOf, max:4})` → `FloorFanOut(floorIndex, labels, overflow)`
+  (groups `NodeRole.fixture` nodes per floor, deterministic by x-then-id, honours the focus filter,
+  caps at 4 with the overflow COUNTED and rendered as a `+N more` row — never silently dropped, never
+  overrunning the band). All four detail/notes blocks are toolbar-toggleable via two new chips
+  (**Details** / **Notes**, EN+ID `StringKey.schematicDetails`/`schematicNotes`, both default ON as
+  the deliverable); every NEW on-canvas label is ASCII (`m3`, `L/s`, `·`), no `Ø`/`m³`/superscripts.
+  Honest by construction: a detail is omitted when its data is absent (no roof tank ⇒ no pump-set
+  block). EN ⇒ goldens 04/09/10 shift only by the new draughting content; the Edit-mode (07) +
+  electrical (05/06/08/11/10_electrical) goldens stay BYTE-IDENTICAL. Engine untouched; no `.mechx`
+  change. (Queued: per-system single-line PDF/DXF EXPORT reusing `DrawingChrome` and the STP
+  process-flow diagram; per-unit branch fan-out and bringing the **electrical** SLD/exports to the
+  same drafter quality have since landed.)
   **Mechanical ↔ electrical theme convergence landed (Apple-consistency pass):** the
   electrical workspace (a PanelMaker port) now reads as one app with the mechanical one.
   Driven by an audit + re-review, converged: the electrical **Loads palette to the RIGHT**

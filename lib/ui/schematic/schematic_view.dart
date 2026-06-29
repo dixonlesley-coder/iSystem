@@ -94,6 +94,16 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
   /// adaptive drawing title + date). Default ON — toggleable from the toolbar.
   bool _showTitleBlock = true;
 
+  /// Auto-view: draw the H101-style DETAIL callouts — the pump-set / roof-tank
+  /// plant detail block + the water-meter / PRV valve-assembly callouts. Default
+  /// ON (part of the deliverable) — toggleable from the toolbar.
+  bool _showDetails = true;
+
+  /// Auto-view: show the system-NOTES (KETERANGAN) card — feed strategy, the
+  /// tank capacities present, occupancy, and the real peak design flow (when a
+  /// pump exists). Default ON — toggleable from the toolbar.
+  bool _showNotes = true;
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -115,12 +125,16 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
             inferRisers: _inferRisers,
             showLegend: _showLegend,
             showTitleBlock: _showTitleBlock,
+            showDetails: _showDetails,
+            showNotes: _showNotes,
             onMode: (m) => setState(() => _mode = m),
             onService: (s) => setState(() => _service = s),
             onAutoFocus: (s) => setState(() => _autoFocus = s),
             onInferRisers: (v) => setState(() => _inferRisers = v),
             onShowLegend: (v) => setState(() => _showLegend = v),
             onTitleBlock: (v) => setState(() => _showTitleBlock = v),
+            onShowDetails: (v) => setState(() => _showDetails = v),
+            onShowNotes: (v) => setState(() => _showNotes = v),
           ),
           Container(height: 1, color: colors.border),
           Expanded(
@@ -135,6 +149,8 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
                     inferRisers: _inferRisers,
                     showLegend: _showLegend,
                     showTitleBlock: _showTitleBlock,
+                    showDetails: _showDetails,
+                    showNotes: _showNotes,
                   ),
           ),
         ],
@@ -155,12 +171,16 @@ class _Toolbar extends StatelessWidget {
   final bool inferRisers;
   final bool showLegend;
   final bool showTitleBlock;
+  final bool showDetails;
+  final bool showNotes;
   final ValueChanged<_Mode> onMode;
   final ValueChanged<ServiceType> onService;
   final ValueChanged<ServiceType?> onAutoFocus;
   final ValueChanged<bool> onInferRisers;
   final ValueChanged<bool> onShowLegend;
   final ValueChanged<bool> onTitleBlock;
+  final ValueChanged<bool> onShowDetails;
+  final ValueChanged<bool> onShowNotes;
 
   const _Toolbar({
     required this.mode,
@@ -170,12 +190,16 @@ class _Toolbar extends StatelessWidget {
     required this.inferRisers,
     required this.showLegend,
     required this.showTitleBlock,
+    required this.showDetails,
+    required this.showNotes,
     required this.onMode,
     required this.onService,
     required this.onAutoFocus,
     required this.onInferRisers,
     required this.onShowLegend,
     required this.onTitleBlock,
+    required this.onShowDetails,
+    required this.onShowNotes,
   });
 
   @override
@@ -244,6 +268,18 @@ class _Toolbar extends StatelessWidget {
                       label: context.strings(StringKey.schematicTitleBlock),
                       selected: showTitleBlock,
                       onTap: () => onTitleBlock(!showTitleBlock),
+                    ),
+                    const SizedBox(width: MechXSpacing.xs),
+                    _TabButton(
+                      label: context.strings(StringKey.schematicDetails),
+                      selected: showDetails,
+                      onTap: () => onShowDetails(!showDetails),
+                    ),
+                    const SizedBox(width: MechXSpacing.xs),
+                    _TabButton(
+                      label: context.strings(StringKey.schematicNotes),
+                      selected: showNotes,
+                      onTap: () => onShowNotes(!showNotes),
                     ),
                   ],
                 ),
@@ -398,11 +434,15 @@ class _AutoElevation extends ConsumerStatefulWidget {
   final bool inferRisers;
   final bool showLegend;
   final bool showTitleBlock;
+  final bool showDetails;
+  final bool showNotes;
   const _AutoElevation({
     this.focus,
     this.inferRisers = false,
     this.showLegend = true,
     this.showTitleBlock = true,
+    this.showDetails = true,
+    this.showNotes = true,
   });
 
   @override
@@ -492,6 +532,8 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
             downfeed: feedStrategy == FeedStrategy.downfeed,
             riserTagsById: riserTags(network, widget.focus),
             detailByNode: detailByNode,
+            supplyPump: pump,
+            showDetails: widget.showDetails,
           ),
         );
         // Read-only unless inferred risers are shown — then the dashed
@@ -529,13 +571,24 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
                 bottom: MechXSpacing.md,
                 child: _AutoLegend(network: network, focus: widget.focus),
               ),
-            // The title block sits bottom-RIGHT, clear of the bottom-left
-            // legend / (Edit view's) zoom cluster convention.
-            if (widget.showTitleBlock)
+            // The system-NOTES (KETERANGAN) card + the title block both sit
+            // bottom-RIGHT, STACKED vertically (notes above the title block) so
+            // they never overlap — clear of the bottom-left legend.
+            if (widget.showNotes || widget.showTitleBlock)
               Positioned(
                 right: MechXSpacing.md,
                 bottom: MechXSpacing.md,
-                child: _TitleBlock(focus: widget.focus),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (widget.showNotes)
+                      _SystemNotes(focus: widget.focus, network: network),
+                    if (widget.showNotes && widget.showTitleBlock)
+                      const SizedBox(height: MechXSpacing.sm),
+                    if (widget.showTitleBlock) _TitleBlock(focus: widget.focus),
+                  ],
+                ),
               ),
           ],
         );
@@ -1261,12 +1314,22 @@ class _AutoSchematicPainter extends CustomPainter {
     this.downfeed = false,
     this.riserTagsById = const {},
     this.detailByNode = const {},
+    this.supplyPump,
+    this.showDetails = true,
   });
 
   final Network network;
   final Map<String, EdgeSizing> sizing;
   final BuildingLevels building;
   final MechXColors colors;
+
+  /// The system supply-pump duty (one trunk pump) — used for the plant-detail
+  /// callout's BOOSTER PUMP kW caption. Null ⇒ no kW caption (no fabricated duty).
+  final PumpDuty? supplyPump;
+
+  /// Draw the H101-style DETAIL callouts (plant detail + valve assemblies) and
+  /// the per-floor branch fan-out. Toolbar-toggleable, default on.
+  final bool showDetails;
 
   /// When non-null, the single-line is filtered to ONE system (cold/hot water,
   /// drainage, vent, rainwater, air, fire …); null shows the COMBINED riser.
@@ -1312,6 +1375,11 @@ class _AutoSchematicPainter extends CustomPainter {
     if (inferRisers) _paintInferredRisers(canvas, nodePos);
     _paintEdges(canvas, nodePos);
     _paintNodes(canvas, nodePos);
+    if (showDetails) {
+      _paintFloorFanOut(canvas, size);
+      _paintPlantDetail(canvas, size);
+      _paintValveCallouts(canvas, size);
+    }
   }
 
   /// A human label for [node] on the single-line — its equipment name
@@ -1594,6 +1662,325 @@ class _AutoSchematicPainter extends CustomPainter {
     }
   }
 
+  // ── H101 DETAIL CALLOUTS ────────────────────────────────────────────────────
+
+  /// A consistent drafting DETAIL box: a rounded rect (border over a canvas
+  /// fill) with a small title row across the top.
+  void _detailBox(Canvas canvas, Rect rect, String title,
+      {required Color titleColor}) {
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(4));
+    canvas.drawRRect(rrect, Paint()..color = colors.canvas);
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = colors.border
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+    _drawText(
+      canvas,
+      title,
+      Offset(rect.left + 6, rect.top + 4),
+      fontSize: 9,
+      color: titleColor,
+      fontWeight: FontWeight.w600,
+      maxWidth: rect.width - 12,
+    );
+  }
+
+  /// Lay out a left→right row of schematic valve/meter glyphs joined by a thin
+  /// run line, each with a tiny ASCII abbrev beneath it. Glyphs are schematic —
+  /// the abbrev names the real device.
+  void _drawDetailGlyphRow(
+    Canvas canvas,
+    Offset origin,
+    List<(NodeComponent, String)> items,
+    Color color, {
+    double glyph = 16.0,
+    double gap = 26.0,
+  }) {
+    if (items.isEmpty) return;
+    final cy = origin.dy + glyph / 2;
+    // The connecting run line spans the centres of the first and last glyph.
+    final firstCx = origin.dx + glyph / 2;
+    final lastCx = origin.dx + glyph / 2 + (items.length - 1) * gap;
+    canvas.drawLine(
+      Offset(firstCx - glyph / 2, cy),
+      Offset(lastCx + glyph / 2, cy),
+      Paint()
+        ..color = color
+        ..strokeWidth = 1
+        ..style = PaintingStyle.stroke,
+    );
+    for (var i = 0; i < items.length; i++) {
+      final (component, abbrev) = items[i];
+      final left = origin.dx + i * gap;
+      // Halo so the glyph reads over the run line.
+      canvas.drawCircle(
+          Offset(left + glyph / 2, cy), glyph * 0.62, Paint()..color = colors.canvas);
+      canvas.save();
+      canvas.translate(left, origin.dy);
+      paintComponentSymbol(canvas, Size(glyph, glyph), component, color);
+      canvas.restore();
+      _drawText(
+        canvas,
+        abbrev,
+        Offset(left + glyph / 2, origin.dy + glyph + 1),
+        fontSize: 8,
+        color: colors.textMuted,
+        fontWeight: FontWeight.w500,
+        centered: true,
+      );
+    }
+  }
+
+  /// Whether a non-air (clean-water) detail should draw for the active focus.
+  /// The plant/valve details are a clean-water convention: shown for the
+  /// combined view or a water filter, omitted when an air/fire/etc. system is
+  /// filtered.
+  bool get _waterFocus =>
+      focus == null ||
+      focus == ServiceType.coldWater ||
+      focus == ServiceType.hotWater;
+
+  /// Capacity (m3, ASCII) of the first node with [component], or null.
+  String? _tankM3(NodeComponent component) {
+    for (final n in network.nodes) {
+      if (n.component != component) continue;
+      final litres = n.tankCapacityLitres;
+      if (litres == null || litres <= 0) continue;
+      final m3 = litres / 1000.0;
+      final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
+      return s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
+    }
+    return null;
+  }
+
+  bool _hasComponent(NodeComponent component) =>
+      network.nodes.any((n) => n.component == component);
+
+  /// (1) PUMP-SET / ROOF-TANK PLANT DETAIL — a compact bordered callout in the
+  /// TOP-RIGHT (H101 convention): a roof-tank glyph + capacity, a booster-pump
+  /// glyph + duty, and the GRAVITASI / TRANSFER / BOOSTER leg labels. Drawn only
+  /// when the network actually has a roof-tank / ground-tank / pump / booster set
+  /// (else omitted entirely — honesty), and only on the clean-water view.
+  void _paintPlantDetail(Canvas canvas, Size size) {
+    if (!_waterFocus) return;
+    final hasRoof = _hasComponent(NodeComponent.roofTank);
+    final hasGround = _hasComponent(NodeComponent.groundTank);
+    final hasPump = _hasComponent(NodeComponent.pump) ||
+        _hasComponent(NodeComponent.boosterSet);
+    if (!hasRoof && !hasGround && !hasPump) return;
+
+    final color = serviceColor(ServiceType.coldWater);
+    const boxW = 210.0;
+    const boxH = 120.0;
+    const pad = MechXSpacing.md;
+    // Guard a too-narrow / too-short viewport.
+    if (size.width < boxW + 2 * pad || size.height < boxH + 2 * pad) return;
+    final rect =
+        Rect.fromLTWH(size.width - boxW - pad, pad, boxW, boxH);
+    _detailBox(canvas, rect, 'PUMP-SET DETAIL', titleColor: colors.textMuted);
+
+    const glyph = 22.0;
+    final leftX = rect.left + 14;
+    var y = rect.top + 22;
+
+    // ROOF TANK row.
+    if (hasRoof) {
+      canvas.save();
+      canvas.translate(leftX, y);
+      paintComponentSymbol(
+          canvas, const Size(glyph, glyph), NodeComponent.roofTank, color);
+      canvas.restore();
+      final m3 = _tankM3(NodeComponent.roofTank);
+      _drawText(
+        canvas,
+        m3 != null ? 'ROOF TANK $m3 m3' : 'ROOF TANK',
+        Offset(leftX + glyph + 8, y + glyph / 2 - 6),
+        fontSize: 9,
+        color: colors.textSecondary,
+        fontWeight: FontWeight.w500,
+        maxWidth: boxW - (glyph + 28),
+      );
+      // GRAVITASI leg label on the down-leg below the roof tank (downfeed feed).
+      if (downfeed) {
+        _drawText(
+          canvas,
+          'GRAVITASI',
+          Offset(leftX + glyph / 2 + 4, y + glyph + 1),
+          fontSize: 8,
+          color: color,
+          fontWeight: FontWeight.w600,
+        );
+      }
+      y += glyph + 18;
+    }
+
+    // A short vertical connecting leg down to the pump (when both present).
+    if (hasRoof && hasPump) {
+      canvas.drawLine(
+        Offset(leftX + glyph / 2, rect.top + 22 + glyph),
+        Offset(leftX + glyph / 2, y),
+        Paint()
+          ..color = color
+          ..strokeWidth = 1
+          ..style = PaintingStyle.stroke,
+      );
+    }
+
+    // BOOSTER PUMP row.
+    if (hasPump) {
+      final pumpC = _hasComponent(NodeComponent.boosterSet)
+          ? NodeComponent.boosterSet
+          : NodeComponent.pump;
+      canvas.save();
+      canvas.translate(leftX, y);
+      paintComponentSymbol(canvas, const Size(glyph, glyph), pumpC, color);
+      canvas.restore();
+      final kw = supplyPump != null
+          ? '${supplyPump!.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW'
+          : null;
+      _drawText(
+        canvas,
+        kw != null ? 'BOOSTER PUMP $kw' : 'BOOSTER PUMP',
+        Offset(leftX + glyph + 8, y + glyph / 2 - 6),
+        fontSize: 9,
+        color: colors.textSecondary,
+        fontWeight: FontWeight.w500,
+        maxWidth: boxW - (glyph + 28),
+      );
+      // TRANSFER (ground -> roof lift) when a ground tank exists; else BOOSTER
+      // (pump-up) on upfeed.
+      final leg = hasGround ? 'TRANSFER' : (!downfeed ? 'BOOSTER' : null);
+      if (leg != null) {
+        _drawText(
+          canvas,
+          leg,
+          Offset(leftX + glyph / 2 + 4, y + glyph + 1),
+          fontSize: 8,
+          color: color,
+          fontWeight: FontWeight.w600,
+        );
+      }
+    }
+  }
+
+  /// (2) VALVE-ASSEMBLY CALLOUTS — a row of two compact bordered detail boxes at
+  /// the BOTTOM-CENTRE (clear of the bottom-left legend + bottom-right title /
+  /// notes): a WATER METER set and a PRV set. Generic reference details (always
+  /// drawn when Details is on), each a row of valve glyphs + ASCII abbrevs. The
+  /// glyph is schematic; the abbrev names the real device (no exact-glyph claim).
+  void _paintValveCallouts(Canvas canvas, Size size) {
+    if (!_waterFocus) return;
+    final color = serviceColor(ServiceType.coldWater);
+    const boxW = 156.0;
+    const boxH = 64.0;
+    const gapBetween = MechXSpacing.md;
+    final totalW = boxW * 2 + gapBetween;
+    // Width guard: only draw when there's room clear of the corner overlays.
+    if (size.width < totalW + 320 || size.height < boxH + 2 * MechXSpacing.md) {
+      return;
+    }
+    final left = (size.width - totalW) / 2;
+    final top = size.height - boxH - MechXSpacing.md;
+
+    // Box A — DETAIL WATER METER.
+    final rectA = Rect.fromLTWH(left, top, boxW, boxH);
+    _detailBox(canvas, rectA, 'DETAIL WATER METER', titleColor: color);
+    _drawDetailGlyphRow(
+      canvas,
+      Offset(rectA.left + 12, rectA.top + 24),
+      const [
+        (NodeComponent.gateValve, 'GV'),
+        (NodeComponent.waterMeter, 'WM'),
+        (NodeComponent.gateValve, 'GV'),
+        (NodeComponent.gateValve, 'U'),
+      ],
+      color,
+      glyph: 15,
+      gap: 32,
+    );
+
+    // Box B — DETAIL PRV SET.
+    final rectB = Rect.fromLTWH(left + boxW + gapBetween, top, boxW, boxH);
+    _detailBox(canvas, rectB, 'DETAIL PRV SET', titleColor: color);
+    _drawDetailGlyphRow(
+      canvas,
+      Offset(rectB.left + 8, rectB.top + 24),
+      const [
+        (NodeComponent.gateValve, 'GV'),
+        (NodeComponent.strainer, 'STR'),
+        (NodeComponent.prv, 'PRV'),
+        (NodeComponent.gateValve, 'GV'),
+      ],
+      color,
+      glyph: 15,
+      gap: 32,
+    );
+  }
+
+  /// (5) PER-FLOOR BRANCH FAN-OUT — under each floor band, a compact column of
+  /// short labelled stubs for the FIXTURES/terminals that floor distributes,
+  /// capped at 4 with a `+N more` row (the cap is surfaced by [floorFanOuts], not
+  /// silently dropped). Anchored in the band's left gutter, below the FFL label,
+  /// honouring the focus filter.
+  void _paintFloorFanOut(Canvas canvas, Size size) {
+    final visible = _focusedNodeIds(network, focus);
+    final fans = floorFanOuts(
+      network,
+      visibleNodeIds: visible,
+      labelOf: (n) => _nodeLabel(n) ?? 'Fixture',
+    );
+    if (fans.isEmpty) return;
+    final n = building.levelCount;
+    final bandH = size.height / n;
+    const stubX = MechXSpacing.sm;
+    const rowPitch = 11.0;
+    const gutterW = 150.0;
+    for (final fan in fans) {
+      if (fan.floorIndex < 0 || fan.floorIndex >= n) continue;
+      final top = _bandTopY(fan.floorIndex, size.height);
+      // Start below the FFL label (which sits at top + xs, ~12px tall).
+      var y = top + 20;
+      final color =
+          focus != null ? serviceColor(focus!) : colors.textSecondary;
+      for (final label in fan.labels) {
+        if (y + rowPitch > top + bandH) break; // never overrun the band.
+        // A tiny tick + the fixture short-name.
+        canvas.drawLine(
+          Offset(stubX, y + 4),
+          Offset(stubX + 6, y + 4),
+          Paint()
+            ..color = color
+            ..strokeWidth = 1.2
+            ..style = PaintingStyle.stroke,
+        );
+        _drawText(
+          canvas,
+          label,
+          Offset(stubX + 10, y),
+          fontSize: 9,
+          color: colors.textMuted,
+          fontWeight: FontWeight.w400,
+          maxWidth: gutterW,
+        );
+        y += rowPitch;
+      }
+      if (fan.overflow > 0 && y + rowPitch <= top + bandH) {
+        _drawText(
+          canvas,
+          '+${fan.overflow} more',
+          Offset(stubX + 10, y),
+          fontSize: 9,
+          color: colors.textMuted,
+          fontWeight: FontWeight.w500,
+          maxWidth: gutterW,
+        );
+      }
+    }
+  }
+
   void _drawText(
     Canvas canvas,
     String text,
@@ -1632,7 +2019,9 @@ class _AutoSchematicPainter extends CustomPainter {
       old.inferRisers != inferRisers ||
       old.downfeed != downfeed ||
       old.riserTagsById != riserTagsById ||
-      old.detailByNode != detailByNode;
+      old.detailByNode != detailByNode ||
+      old.supplyPump != supplyPump ||
+      old.showDetails != showDetails;
 }
 
 // ---------------------------------------------------------------------------
@@ -1861,6 +2250,22 @@ class _AutoLegend extends StatelessWidget {
   final ServiceType? focus;
   const _AutoLegend({required this.network, required this.focus});
 
+  /// The H101 fitting / valve abbreviations — reference detail, ASCII-only, not
+  /// data-gated (always listed when the legend is shown).
+  static const List<(String, String)> _fittings = [
+    ('CW', 'Air bersih'),
+    ('AAV', 'Auto air vent'),
+    ('GV', 'Gate valve'),
+    ('CV', 'Check valve'),
+    ('STR', 'Strainer'),
+    ('PRV', 'Pressure reducing'),
+    ('WM', 'Water meter'),
+    ('SF', 'Sand filter'),
+    ('CF', 'Carbon filter'),
+    ('BV', 'Butterfly valve'),
+    ('FJ', 'Flexible joint'),
+  ];
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -1913,6 +2318,43 @@ class _AutoLegend extends StatelessWidget {
                     const SizedBox(width: MechXSpacing.xs),
                     Text(
                       serviceLabel(s),
+                      style: type.caption.copyWith(
+                          color: colors.textSecondary, fontFamily: 'Roboto'),
+                    ),
+                  ],
+                ),
+              ),
+            // The H101 fitting/valve abbreviation key — a reference subsection
+            // beneath the service codes.
+            const SizedBox(height: MechXSpacing.xs),
+            Container(height: 1, width: 120, color: colors.border),
+            const SizedBox(height: MechXSpacing.xs),
+            Text(
+              'FITTINGS',
+              style: type.caption.copyWith(
+                  color: colors.textMuted,
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'Roboto'),
+            ),
+            const SizedBox(height: 2),
+            for (final (abbr, full) in _fittings)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 1),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 30,
+                      child: Text(
+                        abbr,
+                        style: type.caption.copyWith(
+                            color: colors.textSecondary,
+                            fontWeight: FontWeight.w600,
+                            fontFamily: 'Roboto'),
+                      ),
+                    ),
+                    Text(
+                      full,
                       style: type.caption.copyWith(
                           color: colors.textSecondary, fontFamily: 'Roboto'),
                     ),
@@ -2000,6 +2442,103 @@ class _TitleBlock extends ConsumerWidget {
                 date,
                 style: type.caption.copyWith(color: colors.textMuted),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The system-NOTES (KETERANGAN) card for the Auto single-line — a compact
+/// floating-glass card that echoes the project inputs that actually exist:
+///   • the FEED strategy (gravity downfeed vs upfeed / booster);
+///   • each TANK present, with its real capacity (m3, from the node);
+///   • the OCCUPANCY class; and
+///   • the PEAK design flow (L/s) — shown ONLY when a supply pump was sized
+///     (upfeed). There is no daily-volume (m3/day) figure in the engine, so on a
+///     downfeed project the demand line is OMITTED rather than fabricated.
+///
+/// HONESTY: every line is a direct echo of a real provider / node value. A datum
+/// that doesn't exist (no tank, no pump on downfeed) is simply not drawn. Only
+/// rendered when a network exists (the parent early-returns 'No network').
+class _SystemNotes extends ConsumerWidget {
+  final ServiceType? focus;
+  final Network network;
+  const _SystemNotes({required this.focus, required this.network});
+
+  String _occupancyLabel(Occupancy o) => switch (o) {
+        Occupancy.private => 'Private',
+        Occupancy.public => 'Public',
+        Occupancy.assembly => 'Assembly',
+      };
+
+  /// Capacity (m3, ASCII) of the first node with [component] with a stored
+  /// capacity, or null.
+  String? _tankM3(NodeComponent component) {
+    for (final n in network.nodes) {
+      if (n.component != component) continue;
+      final litres = n.tankCapacityLitres;
+      if (litres == null || litres <= 0) continue;
+      final m3 = litres / 1000.0;
+      final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
+      return s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final feed = ref.watch(feedStrategyProvider);
+    final occupancy = ref.watch(occupancyProvider);
+    final pump = ref.watch(pumpDutyProvider);
+
+    final lines = <String>[
+      feed == FeedStrategy.downfeed
+          ? 'Feed: gravity downfeed (roof tank)'
+          : 'Feed: upfeed / booster pump',
+    ];
+    final roofM3 = _tankM3(NodeComponent.roofTank);
+    if (roofM3 != null) lines.add('Roof tank: $roofM3 m3');
+    final groundM3 = _tankM3(NodeComponent.groundTank);
+    if (groundM3 != null) lines.add('Ground tank: $groundM3 m3');
+    lines.add('Occupancy: ${_occupancyLabel(occupancy)}');
+    // Peak design flow is upfeed-only (pumpDutyProvider null on downfeed). Never
+    // fabricate a m3/day figure when no pump flow exists.
+    if (pump != null) {
+      lines.add(
+          'Peak design flow: ${pump.flow.inLitersPerSecond.toStringAsFixed(1)} L/s');
+    }
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 240),
+      child: GlassSurface(
+        borderRadius: MechXRadii.card,
+        shadow: MechXShadow.popover,
+        edge: Border.all(color: colors.glassEdge),
+        child: Padding(
+          padding: const EdgeInsets.all(MechXSpacing.sm),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                context.strings(StringKey.schematicNotes),
+                style: type.caption.copyWith(
+                    color: colors.textMuted, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: MechXSpacing.xs),
+              for (final line in lines)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Text(
+                    line,
+                    style: type.caption.copyWith(
+                        color: colors.textSecondary, fontFamily: 'Roboto'),
+                  ),
+                ),
             ],
           ),
         ),

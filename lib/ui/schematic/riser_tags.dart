@@ -212,3 +212,65 @@ class _RiserRef {
   final int floorIndex;
   const _RiserRef(this.edgeId, this.x, this.floorIndex);
 }
+
+/// One floor's branch fan-out for the riser single-line: the short labels of the
+/// fixtures/terminals that floor DISTRIBUTES, capped at [max] with the overflow
+/// count surfaced (never silently dropped — the painter renders it as a
+/// `+N more` row). Pure bookkeeping over the network (no fabricated value).
+class FloorFanOut {
+  /// The floor index this fan-out belongs to.
+  final int floorIndex;
+
+  /// The shown stub labels (length <= max).
+  final List<String> labels;
+
+  /// How many fixtures were elided past the cap (0 when none). Surfaced so the
+  /// cap is LOGGED, not silently dropped.
+  final int overflow;
+
+  const FloorFanOut(this.floorIndex, this.labels, this.overflow);
+}
+
+/// Group the demand-bearing FIXTURE/terminal nodes per floor into a capped
+/// fan-out — the per-floor branch list under each riser band. A node counts as a
+/// distributed fixture when its [NodeRole] is `fixture` (a WC / lavatory /
+/// diffuser / drain endpoint), which is what a floor's branch actually serves;
+/// plant + plain junctions + inline valves are excluded (they aren't fixtures
+/// the floor distributes to).
+///
+/// [visibleNodeIds] is the focus filter (null ⇒ all services). [labelOf] maps a
+/// node to its short stub label (the painter passes its own fixture/component
+/// label resolver). Deterministic ordering: by node x then id. Floors with no
+/// fixtures are omitted. Each floor keeps at most [max] labels; the rest are
+/// counted into [FloorFanOut.overflow].
+List<FloorFanOut> floorFanOuts(
+  Network net, {
+  Set<String>? visibleNodeIds,
+  required String Function(NetNode) labelOf,
+  int max = 4,
+}) {
+  final byFloor = <int, List<NetNode>>{};
+  for (final node in net.nodes) {
+    if (node.role != NodeRole.fixture) continue;
+    if (visibleNodeIds != null && !visibleNodeIds.contains(node.id)) continue;
+    (byFloor[node.floorIndex] ??= []).add(node);
+  }
+
+  final out = <FloorFanOut>[];
+  final floors = byFloor.keys.toList()..sort();
+  for (final floor in floors) {
+    final nodes = byFloor[floor]!
+      ..sort((a, b) {
+        final byX = a.x.compareTo(b.x);
+        return byX != 0 ? byX : a.id.compareTo(b.id);
+      });
+    final shown = <String>[];
+    for (final n in nodes) {
+      if (shown.length >= max) break;
+      shown.add(labelOf(n));
+    }
+    final overflow = nodes.length - shown.length;
+    out.add(FloorFanOut(floor, shown, overflow));
+  }
+  return out;
+}

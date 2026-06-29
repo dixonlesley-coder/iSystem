@@ -198,4 +198,79 @@ void main() {
       expect(riserTags(net, null), isEmpty);
     });
   });
+
+  group('floorFanOuts — per-floor branch fan-out', () {
+    NetNode fix(String id, double x, int floor) =>
+        _n(id, x, floor, role: NodeRole.fixture);
+
+    test('fixtures grouped per floor, ordered by x', () {
+      final net = Network(
+        nodes: [
+          fix('f0b', 300, 0),
+          fix('f0a', 100, 0),
+          fix('f1', 200, 1),
+          _n('junc', 500, 0), // a non-fixture junction — excluded
+        ],
+        edges: const [],
+      );
+      final fans = floorFanOuts(net, labelOf: (n) => n.id);
+      expect(fans.map((f) => f.floorIndex), [0, 1]);
+      // Floor 0: ordered by x (f0a at 100 before f0b at 300).
+      expect(fans[0].labels, ['f0a', 'f0b']);
+      expect(fans[0].overflow, 0);
+      expect(fans[1].labels, ['f1']);
+    });
+
+    test('cap + overflow surfaced (6 fixtures, max 4 => 4 labels + overflow 2)',
+        () {
+      final net = Network(
+        nodes: [
+          for (var i = 0; i < 6; i++) fix('f$i', i * 100.0, 0),
+        ],
+        edges: const [],
+      );
+      final fans = floorFanOuts(net, labelOf: (n) => n.id, max: 4);
+      expect(fans, hasLength(1));
+      expect(fans.first.labels, ['f0', 'f1', 'f2', 'f3']);
+      expect(fans.first.overflow, 2);
+    });
+
+    test('focus filter excludes nodes not in the visible set', () {
+      final net = Network(
+        nodes: [fix('keep', 100, 0), fix('drop', 200, 0)],
+        edges: const [],
+      );
+      final fans = floorFanOuts(
+        net,
+        visibleNodeIds: {'keep'},
+        labelOf: (n) => n.id,
+      );
+      expect(fans, hasLength(1));
+      expect(fans.first.labels, ['keep']);
+      expect(fans.first.overflow, 0);
+    });
+
+    test('floors with no fixtures are omitted', () {
+      final net = Network(
+        nodes: [
+          fix('f', 100, 2),
+          _n('j', 200, 0), // junction-only floor 0 => omitted
+        ],
+        edges: const [],
+      );
+      final fans = floorFanOuts(net, labelOf: (n) => n.id);
+      expect(fans.map((f) => f.floorIndex), [2]);
+    });
+
+    test('deterministic across repeated calls', () {
+      final net = Network(
+        nodes: [fix('a', 100, 0), fix('b', 200, 0)],
+        edges: const [],
+      );
+      String labels(List<FloorFanOut> f) =>
+          f.map((e) => '${e.floorIndex}:${e.labels.join(",")}').join('|');
+      expect(labels(floorFanOuts(net, labelOf: (n) => n.id)),
+          labels(floorFanOuts(net, labelOf: (n) => n.id)));
+    });
+  });
 }
