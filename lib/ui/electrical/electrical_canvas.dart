@@ -1546,14 +1546,19 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
               clipBehavior: Clip.none,
               children: [
                 Positioned.fill(child: card),
-                // The round outlet handle (drag → feeder).
+                // The round outlet handle (drag → feeder) — on the RIGHT edge,
+                // vertically centred, since the tree flows left-to-right and
+                // feeders exit a panel's right side toward its sub-panels.
                 Positioned(
-                  left: panelCardWidth(panel.circuits.length) / 2 - 13,
-                  bottom: -13,
-                  child: _OutletHandle(
-                    onDragStart: widget.onOutletDragStart,
-                    onDragUpdate: widget.onOutletDragUpdate,
-                    onDragEnd: widget.onOutletDragEnd,
+                  right: -13,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: _OutletHandle(
+                      onDragStart: widget.onOutletDragStart,
+                      onDragUpdate: widget.onOutletDragUpdate,
+                      onDragEnd: widget.onOutletDragEnd,
+                    ),
                   ),
                 ),
               ],
