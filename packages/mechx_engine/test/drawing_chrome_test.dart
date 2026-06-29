@@ -256,9 +256,12 @@ void main() {
           sheetTotal: 3,
         ),
       ));
-      expect(s, contains('(E-201) Tj'));
+      // The drawing number + revision are stamped in the title block, alongside
+      // the sheet counter. (A single-line is schematic — no north arrow.)
+      expect(s, contains('E-201'));
+      expect(s, contains('Rev. A'));
       expect(s, contains('(Sheet 1 of 3) Tj'));
-      expect(s, contains('(N) Tj'));
+      expect(s, contains('ELECTRICAL SINGLE-LINE DIAGRAM'));
       expect(s.trimRight().endsWith('%%EOF'), isTrue);
     });
   });

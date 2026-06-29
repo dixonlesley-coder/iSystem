@@ -1,13 +1,15 @@
-/// Minimal native PDF export of the electrical single-line — a self-contained
-/// vector drawing deliverable with NO third-party dependency. The electrical
-/// mirror of `pdf_export.dart` (`networkToPdf`). Pure: builds the PDF byte
-/// stream from the sized system; the app handles file IO. Zero Flutter imports.
+/// Native PDF export of the electrical single-line — a self-contained vector
+/// drawing deliverable with NO third-party dependency. The electrical mirror of
+/// `pdf_export.dart` (`networkToPdf`). Pure: builds the PDF byte stream from the
+/// sized system; the app handles file IO. Zero Flutter imports.
 ///
-/// A single A3-landscape page: each panel is a stroked rectangle (at its
-/// schematic canvas position when placed, else an auto-laid column) with its
-/// name + incomer rating as text, and feeders are grey lines parent→child. The
-/// drawing is auto-fitted (uniform scale, centred). PDF space is y-up, so the
-/// screen-space (y-down) layout coordinates are flipped during the fit.
+/// A single A3-landscape page. The professional single-line CONTENT — every
+/// panel as a distribution-board single-line (incomer breaker → busbar → one row
+/// per outgoing way with breaker / cable / load / phase / Ib, feeders routed to
+/// the sub-panel they supply) — is built once in `electrical_sld_drawing.dart`
+/// and rendered here; the sheet FRAME (title block + device legend + the opt-in
+/// `DrawingChrome` north/scale/revision) is stamped in page space so it stays
+/// legible regardless of the drawing's auto-fit scale.
 library;
 
 import 'dart:convert';
@@ -17,11 +19,7 @@ import 'dart:typed_data';
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import 'drawing_chrome.dart';
-
-/// Box footprint (layout units) for an auto-laid panel — matches the DXF export.
-const double _boxW = 200;
-const double _boxH = 90;
-const double _gapY = 80;
+import 'electrical_sld_drawing.dart';
 
 String _pdfText(String raw) {
   final b = StringBuffer();
@@ -35,11 +33,14 @@ String _pdfText(String raw) {
 
 String _n(double v) => v.toStringAsFixed(2);
 
-String _num(double v) =>
-    v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+double _weightPt(SldWeight w) => switch (w) {
+      SldWeight.thin => 0.6,
+      SldWeight.medium => 1.0,
+      SldWeight.thick => 1.8,
+    };
 
 /// Render the sized electrical single-line as a single-page PDF and return its
-/// bytes. [title] is stamped in the top-left corner.
+/// bytes. [title] is stamped in the title block.
 Uint8List electricalSldToPdf({
   required ElectricalProject project,
   required ElectricalSystemResult result,
@@ -48,112 +49,117 @@ Uint8List electricalSldToPdf({
 }) {
   const pageW = 1190.55; // A3 landscape, points (420 mm)
   const pageH = 841.89; // 297 mm
-  const margin = 48.0;
+  const margin = 40.0;
+  const titleBlockH = 96.0; // reserved strip across the page bottom
 
-  final modelById = {for (final p in project.panels) p.id: p};
+  final sheet = buildElectricalSld(project: project, result: result);
 
-  // Panel box top-left positions — placed canvas coords, else an auto column.
-  final pos = <String, ({double x, double y})>{};
-  var autoRow = 0;
-  for (final id in result.order) {
-    final m = modelById[id];
-    if (m?.x != null && m?.y != null) {
-      pos[id] = (x: m!.x!, y: m.y!);
-    } else {
-      pos[id] = (x: 0, y: autoRow * (_boxH + _gapY));
-      autoRow++;
-    }
-  }
-
-  // ── Bounds over every box corner ───────────────────────────────────────────
-  var minX = double.infinity, minY = double.infinity;
-  var maxX = -double.infinity, maxY = -double.infinity;
-  for (final p in pos.values) {
-    minX = math.min(minX, p.x);
-    minY = math.min(minY, p.y);
-    maxX = math.max(maxX, p.x + _boxW);
-    maxY = math.max(maxY, p.y + _boxH);
-  }
-  final hasContent = minX.isFinite;
-  if (!hasContent) {
-    minX = 0;
-    minY = 0;
-    maxX = 1;
-    maxY = 1;
-  }
-  final spanX = maxX - minX;
-  final spanY = maxY - minY;
+  // ── Auto-fit the drawing into the area above the title block ────────────────
+  final spanX = math.max(1e-6, sheet.maxX - sheet.minX);
+  final spanY = math.max(1e-6, sheet.maxY - sheet.minY);
   const availW = pageW - 2 * margin;
-  const availH = pageH - 2 * margin;
-  var scale = 1.0;
-  if (spanX > 0 || spanY > 0) {
-    final sx = spanX > 0 ? availW / spanX : double.infinity;
-    final sy = spanY > 0 ? availH / spanY : double.infinity;
-    scale = math.min(sx, sy);
-    if (!scale.isFinite || scale <= 0) scale = 1.0;
-  }
+  const availH = pageH - 2 * margin - titleBlockH;
+  var scale = math.min(availW / spanX, availH / spanY);
+  if (!scale.isFinite || scale <= 0) scale = 1.0;
+  scale = math.min(scale, 1.0); // never blow a tiny drawing up past 1:1
   final drawnW = spanX * scale;
   final drawnH = spanY * scale;
   final offX = margin + (availW - drawnW) / 2;
-  final offY = margin + (availH - drawnH) / 2;
-  double tx(double x) => offX + (x - minX) * scale;
-  double ty(double y) => (pageH - offY) - (y - minY) * scale; // flip y
+  // Top of the drawing area (PDF y-up): just under the top margin.
+  final topY = pageH - margin - (availH - drawnH) / 2;
+  double tx(double x) => offX + (x - sheet.minX) * scale;
+  double ty(double y) => topY - (y - sheet.minY) * scale; // flip y-down→y-up
 
-  ({double x, double y}) centre(String id) {
-    final p = pos[id]!;
-    return (x: p.x + _boxW / 2, y: p.y + _boxH / 2);
-  }
-
-  // ── Content stream ─────────────────────────────────────────────────────────
   final cs = StringBuffer();
-  cs.writeln('BT /F1 16 Tf 0 0 0 rg '
-      '${_n(margin)} ${_n(pageH - margin + 6)} Td (${_pdfText(title)}) Tj ET');
 
-  // Feeders first (grey), so the boxes read on top.
-  cs.writeln('0.55 0.55 0.55 RG 1.0 w');
-  for (final parent in project.panels) {
-    for (final c in parent.circuits) {
-      final child = c.feedsPanelId;
-      if (child == null) continue;
-      if (!pos.containsKey(parent.id) || !pos.containsKey(child)) continue;
-      final a = centre(parent.id);
-      final z = centre(child);
-      cs.writeln('${_n(tx(a.x))} ${_n(ty(a.y))} m '
-          '${_n(tx(z.x))} ${_n(ty(z.y))} l S');
+  // ── Sheet border ───────────────────────────────────────────────────────────
+  cs.writeln('0.20 0.20 0.20 RG 1.0 w');
+  cs.writeln('${_n(margin)} ${_n(margin)} '
+      '${_n(pageW - 2 * margin)} ${_n(pageH - 2 * margin)} re S');
+
+  // ── Drawing content (panels / busbars / ways / feeders) ─────────────────────
+  for (final p in sheet.prims) {
+    switch (p) {
+      case SldLine():
+        cs.writeln('0.12 0.12 0.12 RG ${_n(_weightPt(p.weight) * scale + 0.3)} w');
+        cs.writeln('${_n(tx(p.x1))} ${_n(ty(p.y1))} m '
+            '${_n(tx(p.x2))} ${_n(ty(p.y2))} l S');
+      case SldRect():
+        cs.writeln('0.12 0.20 0.40 RG ${_n(_weightPt(p.weight) * scale + 0.3)} w');
+        // PDF rect origin is the lower-left; flip the y-down top-left.
+        cs.writeln('${_n(tx(p.x))} ${_n(ty(p.y + p.h))} '
+            '${_n(p.w * scale)} ${_n(p.h * scale)} re S');
+      case SldLabel():
+        final fs = math.max(5.0, p.size * scale);
+        cs.writeln('BT /F1 ${_n(fs)} Tf 0 0 0 rg '
+            '${_n(tx(p.x))} ${_n(ty(p.y))} Td (${_pdfText(p.text)}) Tj ET');
     }
   }
 
-  // Panel boxes + labels.
-  cs.writeln('0.15 0.30 0.55 RG 1.4 w');
-  for (final id in result.order) {
-    final p = result.panels[id];
-    if (p == null) continue;
-    final at = pos[id]!;
-    // PDF rectangle: lower-left corner is the screen bottom-left (Y + height).
-    final llx = tx(at.x);
-    final lly = ty(at.y + _boxH);
-    cs.writeln('${_n(llx)} ${_n(lly)} ${_n(_boxW * scale)} '
-        '${_n(_boxH * scale)} re S');
-
-    final tag = p.tag != null && p.tag!.isNotEmpty ? ' [${p.tag}]' : '';
-    cs.writeln('BT /F1 11 Tf 0 0 0 rg '
-        '${_n(tx(at.x) + 6)} ${_n(ty(at.y) - 16)} Td '
-        '(${_pdfText('${p.name}$tag')}) Tj ET');
-    cs.writeln('BT /F1 8 Tf 0.25 0.25 0.25 rg '
-        '${_n(tx(at.x) + 6)} ${_n(ty(at.y) - 30)} Td '
-        '(${_pdfText('In ${_num(p.incomer.breaker.ratingA.amperes)} A · ${p.system.label}')}) Tj ET');
-    cs.writeln('BT /F1 8 Tf 0.25 0.25 0.25 rg '
-        '${_n(tx(at.x) + 6)} ${_n(ty(at.y) - 42)} Td '
-        '(${_pdfText('bus ${_num(p.busbar.csaMm2)} mm2')}) Tj ET');
+  // ── Title block (bottom-right) ──────────────────────────────────────────────
+  final tbW = math.min(360.0, pageW - 2 * margin);
+  final tbX = pageW - margin - tbW;
+  const tbY = margin;
+  cs.writeln('0.20 0.20 0.20 RG 1.0 w');
+  cs.writeln('${_n(tbX)} ${_n(tbY)} ${_n(tbW)} ${_n(titleBlockH)} re S');
+  // internal divider under the title
+  cs.writeln('${_n(tbX)} ${_n(tbY + titleBlockH - 28)} m '
+      '${_n(tbX + tbW)} ${_n(tbY + titleBlockH - 28)} l S');
+  final pname = project.name.isEmpty ? 'Untitled project' : project.name;
+  cs.writeln('BT /F1 13 Tf 0 0 0 rg '
+      '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 20)} Td (${_pdfText(pname)}) Tj ET');
+  cs.writeln('BT /F1 11 Tf 0.15 0.15 0.15 rg '
+      '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 46)} Td '
+      '(${_pdfText('ELECTRICAL SINGLE-LINE DIAGRAM')}) Tj ET');
+  cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
+      '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 62)} Td '
+      '(${_pdfText(title)}) Tj ET');
+  cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
+      '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 76)} Td '
+      '(${_pdfText(sheet.supplyNote)}) Tj ET');
+  if (chrome != null) {
+    // Drawing number + revision (left of the sheet counter) — title-block facts.
+    final dwg = <String>[
+      if (chrome.drawingNumber != null && chrome.drawingNumber!.isNotEmpty)
+        chrome.drawingNumber!,
+      if (chrome.revisionNumber != null && chrome.revisionNumber!.isNotEmpty)
+        chrome.revisionNumber!,
+    ].join('   ');
+    if (dwg.isNotEmpty) {
+      cs.writeln('BT /F1 9 Tf 0 0 0 rg '
+          '${_n(tbX + 8)} ${_n(tbY + 22)} Td (${_pdfText(dwg)}) Tj ET');
+    }
+    if (chrome.sheetIndex != null || chrome.sheetTotal != null) {
+      final i = chrome.sheetIndex ?? 1;
+      final t = chrome.sheetTotal ?? i;
+      cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
+          '${_n(tbX + 8)} ${_n(tbY + 8)} Td (${_pdfText('Sheet $i of $t')}) Tj ET');
+    }
   }
 
-  // ── Issuable-document chrome (opt-in; byte-identical when null) ─────────────
-  if (chrome != null && !chrome.isEmpty) {
-    cs.write(pdfRevisionBlock(chrome, pageW: pageW, pageH: pageH, margin: margin));
-    cs.write(pdfLegend(chrome, originX: margin, originY: margin + 28));
-    cs.write(pdfScaleBar(chrome, centerX: pageW / 2, baseY: margin));
-    cs.write(pdfNorthArrow(chrome, cx: pageW - margin - 18, cy: pageH - margin - 40));
+  // ── Device legend (KETERANGAN, bottom-left) ─────────────────────────────────
+  if (sheet.legend.isNotEmpty) {
+    const rowH = 11.0;
+    final lh = 18.0 + sheet.legend.length * rowH;
+    const lw = 240.0;
+    const lx = margin + 4;
+    const ly = margin + 2;
+    cs.writeln('0.20 0.20 0.20 RG 0.8 w');
+    cs.writeln('${_n(lx)} ${_n(ly)} ${_n(lw)} ${_n(lh)} re S');
+    cs.writeln('BT /F1 9 Tf 0 0 0 rg '
+        '${_n(lx + 6)} ${_n(ly + lh - 12)} Td (${_pdfText('LEGEND')}) Tj ET');
+    var row = 0;
+    for (final e in sheet.legend) {
+      final ry = ly + lh - 24 - row * rowH;
+      cs.writeln('BT /F1 7.5 Tf 0.12 0.12 0.12 rg '
+          '${_n(lx + 6)} ${_n(ry)} Td '
+          '(${_pdfText('${e.code}  -  ${e.meaning}')}) Tj ET');
+      row++;
+    }
   }
+
+  // A single-line is schematic, not geographic — no north arrow / scale bar.
+  // The DrawingChrome carries only the sheet number, stamped in the title block.
 
   // ── Object assembly with a byte-accurate cross-reference table ──────────────
   final content = cs.toString();

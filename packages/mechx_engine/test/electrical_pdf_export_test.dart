@@ -77,6 +77,20 @@ void main() {
     expect(s, contains('LP-1'));
   });
 
+  test('renders the professional single-line content + sheet frame', () {
+    final s = latin1.decode(
+        electricalSldToPdf(project: project, result: result, title: 'SLD'));
+    // Title block frame text.
+    expect(s, contains('ELECTRICAL SINGLE-LINE DIAGRAM'));
+    expect(s, contains('Test building')); // project name in the title block
+    expect(s, contains('LEGEND'));
+    // Per-way drafter content: incomer breaker + a way row with cable + Ib.
+    expect(s, contains('Incomer'));
+    expect(s, contains('Lighting')); // the LP-1 way name
+    expect(s, contains('Ib')); // design current label
+    expect(s, contains('MCB')); // a breaker class in the legend / rows
+  });
+
   test('the cross-reference offsets actually point at their objects', () {
     final s = latin1.decode(
         electricalSldToPdf(project: project, result: result));

@@ -384,6 +384,25 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   adds a native vector-PDF single-line (single A3 page, no third-party dep; panels as stroked
   rects at their schematic x/y, feeders as lines, labels as text, auto-fitted) alongside the DXF
   + Markdown, wired as a 'PDF (vector)' row in the toolbar Export menu.
+  **Electrical SLD export → professional drafter output landed** (the electrical analogue of the
+  mechanical single-line drafter pass): the PDF + DXF single-line exports no longer draw anonymous
+  name-only boxes — every panel is a real distribution-board single-line. New pure (Flutter-free,
+  unit-tested) `report/electrical_sld_drawing.dart` `buildElectricalSld` → an `SldSheet` of sealed
+  primitives (`SldLine`/`SldRect`/`SldLabel`) + a device legend + supply note, the ONE geometry both
+  formats render (so PDF and DXF agree). Each panel: a header (name [tag] + `Incomer <breaker> ·
+  system · V · bus · demand`), a header/body divider, a two-line **busbar** with the **incomer
+  breaker** on the divider, and **one ROW per outgoing way** — breaker (`MCB/MCCB <curve><rating>A/
+  <poles>P`), cable (`<family> <cores>×<csa>`), load name, phase, `Ib …A`, `-> <sub-panel>` for a
+  feeder, `VD!` when over-limit — with feeders routed orthogonally down a right-hand channel to the
+  sub-panel they supply (panels stacked root-first, indented by feeder depth). `electrical_pdf_export.dart`
+  stamps a page-fixed **title block** (project · ELECTRICAL SINGLE-LINE DIAGRAM · demand kW/kVA · the
+  `DrawingChrome` drawing-number/revision/`Sheet i of t`) + **device legend (KETERANGAN)** — a
+  single-line is schematic, so the north-arrow/scale-bar chrome is dropped; `electrical_dxf_export.dart`
+  renders the same primitives (`panels`/`feeders`/`frame` layers) + a model-space title block + legend
+  (`powerOneLineToDxf` untouched). Shared `breakerLabel`/`cableLabel` format the notation. Engine-only;
+  the app export wiring + signatures are unchanged (no `.mechx`/app-state change). (Next, per the
+  floor-by-floor riser reference: a building-wide electrical RISER single-line — panels per floor by
+  true elevation, feeders as vertical risers, normal/essential colour split.)
   The i18n mechanism also gained **parameterized templates** — `MechXStringsData.format(key,
   {…})` substitutes `{name}` placeholders (EN+ID templates carry identical placeholders, pinned
   by a test) — and the Commercial workspace's dynamic captions (BOM/pricelist leads, unpriced
