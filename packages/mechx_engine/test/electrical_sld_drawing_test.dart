@@ -180,6 +180,107 @@ void main() {
     expect(emptySheet.prims.whereType<SldRect>(), isEmpty);
   });
 
+  group('single-panel detail filter (onlyPanelId / buildElectricalPanelDetail)',
+      () {
+    test('emits ONE block at origin with only that panel\'s ways', () {
+      final detail =
+          buildElectricalPanelDetail(project: project, result: result,
+              panelId: 'LP1');
+      final joined =
+          detail.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      // The filtered panel's own content is present.
+      expect(joined, contains('LP-1'));
+      expect(joined, contains('Lighting'));
+      // The OTHER panel (MDP) and its motor way are excluded.
+      expect(joined, isNot(contains('Pompa')));
+      // Re-origined to x=0: the outer block starts at minX == 0.
+      expect(detail.minX, 0);
+      // No feeder channel ⇒ tighter than the full sheet's max width.
+      expect(detail.maxX, lessThanOrEqualTo(sheet.maxX));
+    });
+
+    test('an unknown panel id yields an empty sheet', () {
+      final none = buildElectricalSld(
+          project: project, result: result, onlyPanelId: 'NOPE');
+      expect(none.prims.whereType<SldRect>(), isEmpty);
+    });
+
+    test('onlyPanelId=null is byte-identical to the default full sheet', () {
+      final a = buildElectricalSld(project: project, result: result);
+      final b =
+          buildElectricalSld(project: project, result: result, onlyPanelId: null);
+      expect(b.prims.length, a.prims.length);
+      expect(b.minX, a.minX);
+      expect(b.maxX, a.maxX);
+      expect(b.maxY, a.maxY);
+    });
+  });
+
+  group('source-spine fields drive the spine (capacitor / transformer kVA)', () {
+    const basePanels = <ElectricalPanel>[
+      ElectricalPanel(
+        id: 'LVMDP',
+        name: 'LVMDP',
+        circuits: [
+          ElectricalCircuit(
+              id: 'c1', name: 'Load', loadKind: LoadKind.general,
+              loadW: 30000, length: Length(10)),
+        ],
+      ),
+    ];
+
+    test('an explicit transformerKva labels the TRANSFORMER node verbatim', () {
+      const withTx = ElectricalProject(
+        id: 's', name: 'Sources',
+        transformerKva: ApparentPower(630000),
+        panels: basePanels,
+      );
+      final r = computeSystem(profile, withTx);
+      final s =
+          buildElectricalOverview(project: withTx, result: r, sourceChain: true);
+      final joined = s.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      expect(joined, contains('TRANSFORMER 630 kVA'));
+    });
+
+    test('a capacitorBankKvar shows the kvar on the CAPACITOR BANK node', () {
+      const withCap = ElectricalProject(
+        id: 's', name: 'Sources',
+        capacitorBankKvar: 50,
+        panels: basePanels,
+      );
+      final r = computeSystem(profile, withCap);
+      final s =
+          buildElectricalOverview(project: withCap, result: r, sourceChain: true);
+      final joined = s.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      expect(joined, contains('CAPACITOR BANK'));
+      expect(joined, contains('50 kvar'));
+      // No bare proxy caption when a real bank is set.
+      expect(joined, isNot(contains('PF correction')));
+    });
+
+    test('buildElectricalSourceSpine: empty for a bare project, populated when '
+        'sources/fields set', () {
+      // Bare project (no demand, no sources) ⇒ empty spine.
+      const bare = ElectricalProject(id: 'b', name: 'Bare');
+      final br = computeSystem(profile, bare);
+      expect(
+          buildElectricalSourceSpine(project: bare, result: br).isEmpty, isTrue);
+
+      // A capacitor field alone is enough to draw the spine.
+      const withCap = ElectricalProject(
+        id: 's', name: 'Sources', capacitorBankKvar: 50, panels: basePanels);
+      final r = computeSystem(profile, withCap);
+      final spine = buildElectricalSourceSpine(project: withCap, result: r);
+      expect(spine.isEmpty, isFalse);
+      final joined =
+          spine.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      expect(joined, contains('PANEL UTAMA TEGANGAN RENDAH'));
+      expect(joined, contains('CAPACITOR BANK'));
+      // It carries the Source legend entry.
+      expect(spine.legend.map((e) => e.code), contains('Source'));
+    });
+  });
+
   group('buildElectricalOverview (zoomed-out building single-line)', () {
     // LV main feeds a normal sub-board (LP-1) and an EMERGENCY sub-board that
     // carries a life-safety load → the essential colour must propagate.

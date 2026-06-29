@@ -31,6 +31,34 @@ void main() {
     expect(json.containsKey('busbarClearingTimeS'), isFalse);
   });
 
+  group('ElectricalProject source-spine fields (capacitor / transformer kVA)',
+      () {
+    test('round-trips the capacitor bank + transformer rating', () {
+      const p = ElectricalProject(
+        id: 'p1',
+        name: 'X',
+        capacitorBankKvar: 50,
+        transformerKva: ApparentPower(630000),
+      );
+      final back = ElectricalProject.fromJson(p.toJson());
+      expect(back.capacitorBankKvar, 50);
+      expect(back.transformerKva!.inKilovoltAmperes, 630);
+    });
+
+    test('a legacy file without the keys decodes both as null', () {
+      final back = ElectricalProject.fromJson({'id': 'p', 'name': 'Y'});
+      expect(back.capacitorBankKvar, isNull);
+      expect(back.transformerKva, isNull);
+    });
+
+    test('unset fields are omitted from JSON (byte-identical)', () {
+      const p = ElectricalProject(id: 'p', name: 'Y');
+      final json = p.toJson();
+      expect(json.containsKey('capacitorBankKvar'), isFalse);
+      expect(json.containsKey('transformerKva'), isFalse);
+    });
+  });
+
   group('ElectricalCircuit.points (chained outlets)', () {
     test('round-trips and is omitted when 1 (default)', () {
       const c = ElectricalCircuit(id: 'c', name: 'Sockets', points: 3);

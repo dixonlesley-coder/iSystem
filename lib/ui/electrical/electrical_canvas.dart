@@ -33,6 +33,7 @@ import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/electrical/results.dart' show BreakerResult;
+import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/app_state.dart';
@@ -45,11 +46,21 @@ import 'electrical_format.dart';
 import 'electrical_palette.dart';
 import 'load_symbols.dart';
 import 'panel_geometry.dart';
+import 'sld_sheet_painter.dart';
 
 /// LOD threshold — at/above this zoom each panel shows its full internal
 /// schematic; below it, a compact summary card (PanelMaker `transform[2] >=
 /// 0.72`).
 const double kLodThreshold = 0.72;
+
+/// DEEP-zoom LOD threshold — at/above this zoom each panel's body swaps the
+/// hand-painted R-S-T busbar for the REAL engine board schedule
+/// (`buildElectricalPanelDetail`, the same geometry the PDF / DXF export draws),
+/// painted read-only via [SldBoardSchedulePainter]. Set well above the LOD
+/// threshold (and above the zoom golden 05 reaches) so the mid-detail schematic
+/// — which keeps the per-way edit hit-test — stays the default, and the board
+/// schedule is a deliberate "zoom right in" representation.
+const double kBoardScheduleThreshold = 1.35;
 
 /// Indonesian R-S-T / N / PE rail colours (hard hex, ported verbatim).
 const Color kRailR = Color(0xFFC92A2A); // L1 / R / single-phase live
@@ -83,6 +94,9 @@ class ElectricalCanvas extends ConsumerStatefulWidget {
   /// Open the Service & Earthing editor (double-click the PLN grid node).
   final VoidCallback onRequestService;
 
+  /// Open the Sources editor (double-click the source-spine strip).
+  final VoidCallback onRequestSources;
+
   const ElectricalCanvas({
     super.key,
     required this.onEditPanel,
@@ -90,6 +104,7 @@ class ElectricalCanvas extends ConsumerStatefulWidget {
     required this.onPanelMenu,
     required this.onCircuitMenu,
     required this.onRequestService,
+    required this.onRequestSources,
   });
 
   @override
@@ -350,6 +365,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               // so the panel-internal schematic + the load break-out/merge track
               // the real zoom from the first frame — not the pre-fit default.
               final detail = vt.scale >= kLodThreshold;
+              // DEEP zoom: swap the mid-detail R-S-T busbar for the real engine
+              // board schedule. Above the LOD threshold by construction, so the
+              // card footprint (detail height) is already reserved.
+              final scheduleDetail = vt.scale >= kBoardScheduleThreshold;
               return ClipRect(
                 child: Stack(
                   children: [
@@ -397,7 +416,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                         positions[panel.panelId] ?? Offset.zero,
                         vt,
                         detail,
+                        scheduleDetail,
                         project,
+                        result,
                         rootId,
                         positions,
                         result.panels,
@@ -425,7 +446,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     Offset world,
     ViewportTransform vt,
     bool detail,
+    bool scheduleDetail,
     ElectricalProject project,
+    ElectricalSystemResult result,
     String? rootId,
     Map<String, Offset> positions,
     Map<String, ElectricalPanelResult> panels,
@@ -443,30 +466,76 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
 
     final widgets = <Widget>[];
 
-    // PLN grid-supply head above the service-root utility panel.
+    // Above the service-root utility panel: the SOURCE SPINE strip (PLN -> MV ->
+    // transformer -> LV main + genset / capacitor) when the project carries any
+    // sources / dual-tx / explicit transformer / capacitor — the SAME
+    // `_buildSourceSpine` geometry the overview / riser / export draw, painted
+    // read-only here so the interactive single-line shows it too. Otherwise the
+    // bare PLN grid head (so a default project is byte-identical). Double-click
+    // either to open the Sources / Service editor.
     if (isRoot) {
-      final headWorld = Offset(
-        world.dx + w / 2 - kGridSrcW / 2,
-        world.dy - kGridSrcH - 30,
-      );
-      final hp = vt.worldToScreen(headWorld);
-      widgets.add(
-        Positioned(
-          left: hp.dx,
-          top: hp.dy,
-          width: kGridSrcW * scale,
-          height: kGridSrcH * scale,
-          child: _ScaledTap(
-            onDoubleTap: widget.onRequestService,
-            child: _ScaledChild(
-              scale: scale,
-              width: kGridSrcW,
-              height: kGridSrcH,
-              child: _GridSourceNode(voltage: panel.system),
+      final spine = buildElectricalSourceSpine(project: project, result: result);
+      if (!spine.isEmpty) {
+        // Place the spine so its bottom sits a gap above the root panel top,
+        // centred over the root (its horizontal mid aligns to the root centre).
+        final spineMidX = (spine.minX + spine.maxX) / 2;
+        final offset = Offset(
+          world.dx + w / 2 - spineMidX,
+          (world.dy - 30) - spine.maxY,
+        );
+        final bandTl = vt.worldToScreen(
+          Offset(spine.minX + offset.dx, spine.minY + offset.dy),
+        );
+        final bandW = (spine.maxX - spine.minX) * scale;
+        final bandH = (spine.maxY - spine.minY) * scale;
+        final colors = context.colors;
+        widgets.add(
+          Positioned(
+            left: bandTl.dx,
+            top: bandTl.dy,
+            width: bandW,
+            height: bandH,
+            child: _ScaledTap(
+              onDoubleTap: widget.onRequestSources,
+              child: CustomPaint(
+                painter: _SourceSpinePainter(
+                  sheet: spine,
+                  origin: Offset(spine.minX + offset.dx, spine.minY + offset.dy),
+                  scale: scale,
+                  ink: colors.textPrimary,
+                  source: colors.accent,
+                  essential: colors.danger,
+                  rectFill: colors.surface,
+                ),
+                child: const SizedBox.expand(),
+              ),
             ),
           ),
-        ),
-      );
+        );
+      } else {
+        final headWorld = Offset(
+          world.dx + w / 2 - kGridSrcW / 2,
+          world.dy - kGridSrcH - 30,
+        );
+        final hp = vt.worldToScreen(headWorld);
+        widgets.add(
+          Positioned(
+            left: hp.dx,
+            top: hp.dy,
+            width: kGridSrcW * scale,
+            height: kGridSrcH * scale,
+            child: _ScaledTap(
+              onDoubleTap: widget.onRequestService,
+              child: _ScaledChild(
+                scale: scale,
+                width: kGridSrcW,
+                height: kGridSrcH,
+                child: _GridSourceNode(voltage: panel.system),
+              ),
+            ),
+          ),
+        );
+      }
     }
 
     // The panel card. Also a DROP TARGET for a load node dragged off another
@@ -492,6 +561,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
             child: _PanelCardNode(
               panel: panel,
               detail: detail,
+              scheduleDetail: scheduleDetail,
+              project: project,
+              result: result,
               selected: _selectedPanel == panel.panelId,
               unfed: unfed,
               essential: modelPanel?.essential ?? false,
@@ -973,6 +1045,99 @@ class _SchematicSurface extends StatelessWidget {
   }
 }
 
+/// The in-card DEEP-zoom board-schedule surface: paints the real engine board
+/// schedule (`buildElectricalPanelDetail` — the SAME geometry the PDF / DXF
+/// export draws) fitted into the card body via [SldBoardSchedulePainter], and
+/// maps a double-click / right-click to the way under the local y (the engine
+/// lays one schedule ROW per circuit, so a local-y → row-index hit-test reaches
+/// the same `onWayDoubleTap` / `onWayMenu` as the mid-detail schematic).
+class _PanelScheduleBody extends StatelessWidget {
+  final ElectricalPanelResult panel;
+  final ElectricalProject project;
+  final ElectricalSystemResult result;
+  final ValueChanged<String> onWayDoubleTap;
+  final void Function(String, Offset) onWayMenu;
+
+  const _PanelScheduleBody({
+    required this.panel,
+    required this.project,
+    required this.result,
+    required this.onWayDoubleTap,
+    required this.onWayMenu,
+  });
+
+  /// The board-schedule sheet for this one panel, re-origined to (0,0).
+  SldSheet get _sheet => buildElectricalPanelDetail(
+        project: project,
+        result: result,
+        panelId: panel.panelId,
+      );
+
+  /// Fit transform mapping the sheet bounds into [size] (matching
+  /// [SldBoardSchedulePainter] so the hit-test agrees with the paint).
+  ViewportTransform _fitTransform(SldSheet sheet, Size size) {
+    final content = Size(
+      math.max(1.0, sheet.maxX - sheet.minX),
+      math.max(1.0, sheet.maxY - sheet.minY),
+    );
+    final fitted = ViewportTransform.fit(content, size, padding: 6);
+    return ViewportTransform(
+      scale: fitted.scale,
+      offset: fitted.offset - Offset(sheet.minX, sheet.minY) * fitted.scale,
+    );
+  }
+
+  /// The circuit id whose schedule row contains the body-local point, or null.
+  /// Engine row geometry (re-origined): header band `_headerH = 46`, then one
+  /// `_rowH = 20` row per circuit starting at `busTop + 6`.
+  String? _wayAt(Offset local, SldSheet sheet, Size size) {
+    if (panel.circuits.isEmpty) return null;
+    final t = _fitTransform(sheet, size);
+    final world = t.screenToWorld(local);
+    const headerH = 46.0, rowH = 20.0, rowTop = headerH + 6.0;
+    final i = ((world.dy - rowTop) / rowH).floor();
+    if (i < 0 || i >= panel.circuits.length) return null;
+    return panel.circuits[i].circuitId;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final sheet = _sheet;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = constraints.biggest;
+        return Listener(
+          onPointerDown: (e) {
+            if (e.buttons == kSecondaryButton) {
+              final box = context.findRenderObject() as RenderBox?;
+              final local = box?.globalToLocal(e.position) ?? Offset.zero;
+              final id = _wayAt(local, sheet, size);
+              if (id != null) onWayMenu(id, e.position);
+            }
+          },
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onDoubleTapDown: (d) {
+              final id = _wayAt(d.localPosition, sheet, size);
+              if (id != null) onWayDoubleTap(id);
+            },
+            onDoubleTap: () {},
+            child: CustomPaint(
+              painter: SldBoardSchedulePainter(
+                sheet: sheet,
+                ink: colors.textPrimary,
+                essential: colors.danger,
+              ),
+              child: const SizedBox.expand(),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // In-card schematic painter — the R-S-T / N / PE busbar + breaker taps, drawn
 // INSIDE the panel card at detail LOD (so the card's opaque surface doesn't
@@ -1185,6 +1350,13 @@ class SchematicPainter extends CustomPainter {
 class _PanelCardNode extends StatefulWidget {
   final ElectricalPanelResult panel;
   final bool detail;
+
+  /// DEEP zoom — render the real engine board schedule in the card body instead
+  /// of the hand-painted R-S-T busbar. Requires [project] / [result] to build
+  /// the single-panel detail [SldSheet].
+  final bool scheduleDetail;
+  final ElectricalProject project;
+  final ElectricalSystemResult result;
   final bool selected;
   final bool unfed;
   final bool essential;
@@ -1203,6 +1375,9 @@ class _PanelCardNode extends StatefulWidget {
   const _PanelCardNode({
     required this.panel,
     required this.detail,
+    required this.scheduleDetail,
+    required this.project,
+    required this.result,
     required this.selected,
     required this.unfed,
     required this.essential,
@@ -1275,21 +1450,32 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
               duration: MechXMotion.appear,
               switchInCurve: MechXMotion.standard,
               switchOutCurve: MechXMotion.standard,
-              child: widget.detail
+              child: widget.scheduleDetail
                   ? KeyedSubtree(
-                      key: const ValueKey('detail'),
-                      child: _SchematicSurface(
+                      key: const ValueKey('schedule'),
+                      child: _PanelScheduleBody(
                         panel: panel,
-                        accent: colors.accent,
+                        project: widget.project,
+                        result: widget.result,
                         onWayDoubleTap: widget.onWayDoubleTap,
                         onWayMenu: widget.onWayMenu,
                       ),
                     )
-                  : Padding(
-                      key: const ValueKey('summary'),
-                      padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-                      child: _PanelSummaryBody(panel: panel),
-                    ),
+                  : widget.detail
+                      ? KeyedSubtree(
+                          key: const ValueKey('detail'),
+                          child: _SchematicSurface(
+                            panel: panel,
+                            accent: colors.accent,
+                            onWayDoubleTap: widget.onWayDoubleTap,
+                            onWayMenu: widget.onWayMenu,
+                          ),
+                        )
+                      : Padding(
+                          key: const ValueKey('summary'),
+                          padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+                          child: _PanelSummaryBody(panel: panel),
+                        ),
             ),
           ),
         ],
@@ -1762,6 +1948,66 @@ class _StackedLoadsGlyph extends CustomPainter {
   @override
   bool shouldRepaint(_StackedLoadsGlyph old) =>
       old.color != color || old.fill != fill;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Source-spine strip painter — the read-only PLN/MV/transformer/LV-main +
+// genset/capacitor chain (`buildElectricalSourceSpine`) drawn ABOVE the root
+// panel, sharing the canvas zoom. The SAME geometry the overview / riser /
+// export draw — one source of truth (project guardrail 5).
+// ════════════════════════════════════════════════════════════════════════════
+
+class _SourceSpinePainter extends CustomPainter {
+  final SldSheet sheet;
+
+  /// World position of the band's top-left (= sheet (minX,minY) + placement
+  /// offset). Unused for the paint math (it cancels) but kept for clarity /
+  /// repaint identity.
+  final Offset origin;
+  final double scale;
+  final Color ink;
+  final Color source;
+  final Color essential;
+  final Color rectFill;
+
+  _SourceSpinePainter({
+    required this.sheet,
+    required this.origin,
+    required this.scale,
+    required this.ink,
+    required this.source,
+    required this.essential,
+    required this.rectFill,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // A transform mapping sheet-space directly into the band's local screen
+    // space: worldToScreen(p) = (p - sheet.min) * scale.
+    final transform = ViewportTransform(
+      scale: scale,
+      offset: -Offset(sheet.minX, sheet.minY) * scale,
+    );
+    paintSldPrims(
+      canvas,
+      sheet,
+      transform,
+      ink: ink,
+      essential: essential,
+      source: source,
+      rectFill: rectFill,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_SourceSpinePainter old) =>
+      old.sheet != sheet ||
+      old.origin != origin ||
+      old.scale != scale ||
+      old.ink != ink ||
+      old.source != source ||
+      old.essential != essential ||
+      old.rectFill != rectFill;
 }
 
 // ════════════════════════════════════════════════════════════════════════════

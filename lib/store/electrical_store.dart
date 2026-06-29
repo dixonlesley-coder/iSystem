@@ -23,6 +23,7 @@ import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -188,6 +189,100 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         : _withProject(busbarClearingTimeS: s);
   }
 
+  // ── Source-spine intents (genset / capacitor / transformer / dual-tx) ───────
+  // Edit the SOURCE chain drawn above the panel tree (the overview / riser /
+  // interactive-canvas head + the PDF / DXF export, one `_buildSourceSpine`
+  // geometry). All immutable, all through [_withProject] so the additive A8
+  // fields survive. The capacitor / transformer are DRAWING inputs only (they
+  // never feed a sizing path) — // VERIFY engineer-supplied values.
+
+  /// Rebuild [ElectricalSources] off the current project, replacing only the
+  /// generator (or clearing it). When the result has no generator / solar /
+  /// battery and no hybrid flag, collapses to null so an emptied editor leaves
+  /// no phantom `sources` map.
+  ElectricalSources? _sourcesWith({
+    GeneratorSource? generator,
+    bool clearGenerator = false,
+  }) {
+    final cur = state.sources;
+    final gen = clearGenerator ? null : (generator ?? cur?.generator);
+    final solar = cur?.solar;
+    final battery = cur?.battery;
+    final hybrid = cur?.hybridInverter;
+    if (gen == null && solar == null && battery == null && hybrid == null) {
+      return null;
+    }
+    return ElectricalSources(
+      generator: gen,
+      solar: solar,
+      battery: battery,
+      hybridInverter: hybrid,
+    );
+  }
+
+  /// Set (or clear) the standby/prime generator on the source spine.
+  void setGenerator(GeneratorSource? gen) {
+    final next = _sourcesWith(generator: gen, clearGenerator: gen == null);
+    state = next == null
+        ? _withProject(clearSources: true)
+        : _withProject(sources: next);
+  }
+
+  /// Set the genset rating (kVA). Null ⇒ auto-size from demand (the ladder
+  /// snap); non-positive ignored. Preserves the genset's mode / transfer.
+  void setGeneratorKva(ApparentPower? kva) {
+    if (kva != null && kva.voltAmperes <= 0) return;
+    final cur = state.sources?.generator ?? const GeneratorSource();
+    setGenerator(GeneratorSource(
+      kva: kva,
+      backupFraction: cur.backupFraction,
+      mode: cur.mode,
+      transfer: cur.transfer,
+    ));
+  }
+
+  /// Set the genset duty mode (standby / prime).
+  void setGeneratorMode(GeneratorMode mode) {
+    final cur = state.sources?.generator ?? const GeneratorSource();
+    setGenerator(GeneratorSource(
+      kva: cur.kva,
+      backupFraction: cur.backupFraction,
+      mode: mode,
+      transfer: cur.transfer,
+    ));
+  }
+
+  /// Set the genset transfer arrangement (ATS / manual).
+  void setGeneratorTransfer(GeneratorTransfer transfer) {
+    final cur = state.sources?.generator ?? const GeneratorSource();
+    setGenerator(GeneratorSource(
+      kva: cur.kva,
+      backupFraction: cur.backupFraction,
+      mode: cur.mode,
+      transfer: transfer,
+    ));
+  }
+
+  /// Set the installed PF-correction capacitor bank (kvar). Null / non-positive
+  /// ⇒ clear (falls back to the advanced study's recommended kvar caption).
+  void setCapacitorBankKvar(double? kvar) {
+    state = (kvar == null || kvar <= 0)
+        ? _withProject(clearCapacitorBankKvar: true)
+        : _withProject(capacitorBankKvar: kvar);
+  }
+
+  /// Set the explicit transformer rating (kVA). Null / non-positive ⇒ clear
+  /// (falls back to the demand-derived ladder snap).
+  void setTransformerKva(ApparentPower? kva) {
+    state = (kva == null || kva.voltAmperes <= 0)
+        ? _withProject(clearTransformerKva: true)
+        : _withProject(transformerKva: kva);
+  }
+
+  /// Force / clear the dual-transformer (split-bus) MV supply.
+  void setDualTransformer(bool value) =>
+      state = _withProject(dualTransformer: value);
+
   /// Rebuild the project carrying every field through, overriding only those
   /// supplied — so an edit to one field never silently drops the additive A8
   /// fields (sources / sites / dual-transformer / occupancy). A local helper
@@ -200,14 +295,21 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     bool clearOriginFaultLevelA = false,
     double? busbarClearingTimeS,
     bool clearBusbarClearingTimeS = false,
+    ElectricalSources? sources,
+    bool clearSources = false,
+    bool? dualTransformer,
+    double? capacitorBankKvar,
+    bool clearCapacitorBankKvar = false,
+    ApparentPower? transformerKva,
+    bool clearTransformerKva = false,
   }) =>
       ElectricalProject(
         id: state.id,
         name: name ?? state.name,
         panels: panels ?? state.panels,
         earthingSystem: earthingSystem ?? state.earthingSystem,
-        sources: state.sources,
-        dualTransformer: state.dualTransformer,
+        sources: clearSources ? null : (sources ?? state.sources),
+        dualTransformer: dualTransformer ?? state.dualTransformer,
         occupancy: state.occupancy,
         soilResistivityOhmM: state.soilResistivityOhmM,
         groundFlashDensity: state.groundFlashDensity,
@@ -222,6 +324,12 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         busbarClearingTimeS: clearBusbarClearingTimeS
             ? null
             : (busbarClearingTimeS ?? state.busbarClearingTimeS),
+        capacitorBankKvar: clearCapacitorBankKvar
+            ? null
+            : (capacitorBankKvar ?? state.capacitorBankKvar),
+        transformerKva: clearTransformerKva
+            ? null
+            : (transformerKva ?? state.transformerKva),
       );
 
   /// Restore the built-in sample project.

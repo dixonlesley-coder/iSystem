@@ -32,6 +32,82 @@ import '../theme/mechx_theme.dart';
 /// when zoomed far out; mirrors the interactive canvas's `_label` guard).
 const double _kMinLabelPx = 4.5;
 
+/// Stroke px per [SldWeight] bucket (shared by the painter + the free function).
+double _weightPxFor(SldWeight w) => switch (w) {
+      SldWeight.thin => 1.0,
+      SldWeight.medium => 1.8,
+      SldWeight.thick => 3.0,
+    };
+
+/// Paint just the sealed primitives of an [SldSheet] through [transform] (no
+/// grid, no background fill) — the ONE prim-painting routine shared by the
+/// full [SldSheetView] (overview / riser) and the in-card deep-zoom board
+/// schedule (`electrical_canvas.dart`). Role → colour via [ink] / [essential] /
+/// [source]; [rectFill] backs each box so its content stays legible.
+void paintSldPrims(
+  Canvas canvas,
+  SldSheet sheet,
+  ViewportTransform transform, {
+  required Color ink,
+  required Color essential,
+  required Color source,
+  required Color rectFill,
+}) {
+  Color roleColor(SldRole role) => switch (role) {
+        SldRole.normal => ink,
+        SldRole.essential => essential,
+        SldRole.source => source,
+      };
+  final s = transform.scale;
+  for (final prim in sheet.prims) {
+    switch (prim) {
+      case SldLine():
+        final a = transform.worldToScreen(Offset(prim.x1, prim.y1));
+        final b = transform.worldToScreen(Offset(prim.x2, prim.y2));
+        canvas.drawLine(
+          a,
+          b,
+          Paint()
+            ..color = roleColor(prim.role)
+            ..strokeWidth = (_weightPxFor(prim.weight) * s).clamp(0.6, 6.0)
+            ..strokeCap = StrokeCap.round,
+        );
+      case SldRect():
+        final tl = transform.worldToScreen(Offset(prim.x, prim.y));
+        final rect = Rect.fromLTWH(tl.dx, tl.dy, prim.w * s, prim.h * s);
+        final rrect = RRect.fromRectAndRadius(
+          rect,
+          Radius.circular(math.min(6 * s, rect.shortestSide / 4)),
+        );
+        canvas.drawRRect(rrect, Paint()..color = rectFill);
+        canvas.drawRRect(
+          rrect,
+          Paint()
+            ..color = roleColor(prim.role)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = (_weightPxFor(prim.weight) * s).clamp(0.8, 4.0),
+        );
+      case SldLabel():
+        final fontSize = prim.size * s;
+        if (fontSize < _kMinLabelPx) continue;
+        final at = transform.worldToScreen(Offset(prim.x, prim.y));
+        final tp = TextPainter(
+          text: TextSpan(
+            text: prim.text,
+            style: TextStyle(
+              fontFamily: 'Roboto',
+              fontSize: fontSize,
+              color: roleColor(prim.role),
+              fontWeight: prim.bold ? FontWeight.w700 : FontWeight.w400,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, at - Offset(0, tp.height * 0.78));
+    }
+  }
+}
+
 /// Paints an [SldSheet] in screen space through a [ViewportTransform].
 class SldSheetPainter extends CustomPainter {
   final SldSheet sheet;
@@ -55,83 +131,19 @@ class SldSheetPainter extends CustomPainter {
     required this.gridLine,
   });
 
-  Color _roleColor(SldRole role) => switch (role) {
-        SldRole.normal => ink,
-        SldRole.essential => essential,
-        SldRole.source => source,
-      };
-
-  double _weightPx(SldWeight w) => switch (w) {
-        SldWeight.thin => 1.0,
-        SldWeight.medium => 1.8,
-        SldWeight.thick => 3.0,
-      };
-
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..color = background);
     paintCanvasGrid(canvas, size, transform, gridLine);
-
-    final s = transform.scale;
-    for (final prim in sheet.prims) {
-      switch (prim) {
-        case SldLine():
-          final a = transform.worldToScreen(Offset(prim.x1, prim.y1));
-          final b = transform.worldToScreen(Offset(prim.x2, prim.y2));
-          canvas.drawLine(
-            a,
-            b,
-            Paint()
-              ..color = _roleColor(prim.role)
-              ..strokeWidth = (_weightPx(prim.weight) * s).clamp(0.6, 6.0)
-              ..strokeCap = StrokeCap.round,
-          );
-        case SldRect():
-          final tl = transform.worldToScreen(Offset(prim.x, prim.y));
-          final rect = Rect.fromLTWH(
-            tl.dx,
-            tl.dy,
-            prim.w * s,
-            prim.h * s,
-          );
-          final rrect = RRect.fromRectAndRadius(
-            rect,
-            Radius.circular(math.min(6 * s, rect.shortestSide / 4)),
-          );
-          // Opaque card fill (content stays legible) + a role-coloured border.
-          canvas.drawRRect(rrect, Paint()..color = background);
-          canvas.drawRRect(
-            rrect,
-            Paint()
-              ..color = _roleColor(prim.role)
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = (_weightPx(prim.weight) * s).clamp(0.8, 4.0),
-          );
-        case SldLabel():
-          _label(canvas, prim, s);
-      }
-    }
-  }
-
-  void _label(Canvas canvas, SldLabel prim, double s) {
-    final fontSize = prim.size * s;
-    if (fontSize < _kMinLabelPx) return;
-    final at = transform.worldToScreen(Offset(prim.x, prim.y));
-    final tp = TextPainter(
-      text: TextSpan(
-        text: prim.text,
-        style: TextStyle(
-          fontFamily: 'Roboto',
-          fontSize: fontSize,
-          color: _roleColor(prim.role),
-          fontWeight: prim.bold ? FontWeight.w700 : FontWeight.w400,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    // Engine labels are baseline-ish anchored (y at the text baseline in the
-    // exporters); paint with the top a touch above so it reads inside its row.
-    tp.paint(canvas, at - Offset(0, tp.height * 0.78));
+    paintSldPrims(
+      canvas,
+      sheet,
+      transform,
+      ink: ink,
+      essential: essential,
+      source: source,
+      rectFill: background,
+    );
   }
 
   @override
@@ -143,6 +155,58 @@ class SldSheetPainter extends CustomPainter {
       old.source != source ||
       old.background != background ||
       old.gridLine != gridLine;
+}
+
+/// A non-interactive painter that fits a single [SldSheet] (e.g. one panel's
+/// board schedule, `buildElectricalPanelDetail`) into the paint box with a
+/// fixed transform — no grid, no background fill (the host card surface shows
+/// through), so the engine board schedule renders as the deep-zoom level of
+/// detail INSIDE a panel card on the interactive single-line canvas. The SAME
+/// geometry the PDF / DXF export draws — one source of truth.
+class SldBoardSchedulePainter extends CustomPainter {
+  final SldSheet sheet;
+  final Color ink;
+  final Color essential;
+  final double pad;
+
+  SldBoardSchedulePainter({
+    required this.sheet,
+    required this.ink,
+    required this.essential,
+    this.pad = 6,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (sheet.isEmpty || size.isEmpty) return;
+    final content = Size(
+      math.max(1.0, sheet.maxX - sheet.minX),
+      math.max(1.0, sheet.maxY - sheet.minY),
+    );
+    final fitted = ViewportTransform.fit(content, size, padding: pad);
+    final transform = ViewportTransform(
+      scale: fitted.scale,
+      offset: fitted.offset - Offset(sheet.minX, sheet.minY) * fitted.scale,
+    );
+    // A panel's own schedule has no source spine inside it, so `source` reuses
+    // the ink colour (a normal panel reads as the existing dark schedule).
+    paintSldPrims(
+      canvas,
+      sheet,
+      transform,
+      ink: ink,
+      essential: essential,
+      source: ink,
+      rectFill: const Color(0x00000000),
+    );
+  }
+
+  @override
+  bool shouldRepaint(SldBoardSchedulePainter old) =>
+      old.sheet != sheet ||
+      old.ink != ink ||
+      old.essential != essential ||
+      old.pad != pad;
 }
 
 /// A small read-only host that frames an [SldSheet] and lets the user pan

@@ -25,6 +25,8 @@ import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/metering.dart' show MeteringKindLabel;
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/electrical/sources.dart'
+    show GeneratorMode, GeneratorSource, GeneratorTransfer;
 import 'package:mechx_engine/electrical/spd.dart' show SpdTypeLabel;
 import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
@@ -111,6 +113,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   /// Whether the Service & Earthing inspector is open.
   bool _showService = false;
 
+  /// Whether the Sources editor (genset / capacitor / transformer) is open.
+  bool _showSources = false;
+
   /// Whether the Export menu (SLD / report / power one-line) is open.
   bool _showExportMenu = false;
 
@@ -150,6 +155,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           onTab: (t) => setState(() => _tab = t),
           onIssues: () => setState(() => _showAdvanced = false),
           onService: _openService,
+          onSources: _openSources,
           onAddPanel: _addPanel,
           onExport: () => setState(() => _showExportMenu = !_showExportMenu),
           onToggleAdvanced: () =>
@@ -217,6 +223,10 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           _ServiceInspector(
             onClose: () => setState(() => _showService = false),
           ),
+        if (_showSources)
+          _SourcesEditor(
+            onClose: () => setState(() => _showSources = false),
+          ),
       ],
     );
   }
@@ -259,6 +269,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                     _menuAt = _toLocal(gp);
                   }),
                   onRequestService: _openService,
+                  onRequestSources: _openSources,
                 ),
               ),
               // Zoom controls (bottom-left).
@@ -387,7 +398,19 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       _circuitMenu = null;
       _editing = null;
       _showAdvanced = false;
+      _showSources = false;
       _showService = true;
+    });
+  }
+
+  void _openSources() {
+    setState(() {
+      _panelMenu = null;
+      _circuitMenu = null;
+      _editing = null;
+      _showAdvanced = false;
+      _showService = false;
+      _showSources = true;
     });
   }
 
@@ -523,6 +546,7 @@ class _Toolbar extends StatelessWidget {
   final ValueChanged<_Tab> onTab;
   final VoidCallback onIssues;
   final VoidCallback onService;
+  final VoidCallback onSources;
   final VoidCallback onAddPanel;
   final VoidCallback onExport;
   final VoidCallback onToggleAdvanced;
@@ -534,6 +558,7 @@ class _Toolbar extends StatelessWidget {
     required this.onTab,
     required this.onIssues,
     required this.onService,
+    required this.onSources,
     required this.onAddPanel,
     required this.onExport,
     required this.onToggleAdvanced,
@@ -602,6 +627,11 @@ class _Toolbar extends StatelessWidget {
                   MechXButton(
                     label: 'Service & Earthing',
                     onPressed: onService,
+                  ),
+                  const SizedBox(width: MechXSpacing.xs),
+                  MechXButton(
+                    label: context.strings(StringKey.electricalSources),
+                    onPressed: onSources,
                   ),
                   const SizedBox(width: MechXSpacing.xs),
                   MechXButton(label: '+ Panel', onPressed: onAddPanel),
@@ -1114,6 +1144,184 @@ class _ServiceInspector extends ConsumerWidget {
                       context.strings(
                         StringKey.electricalBusbarClearingTimeNote,
                       ),
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Sources editor (genset / capacitor / transformer / dual-tx) ─────────────
+
+/// Edit the SOURCE chain drawn above the panel tree (the overview / riser /
+/// interactive single-line head + the PDF / DXF exports — one
+/// `_buildSourceSpine` geometry). Genset present/rating/mode/transfer, the
+/// installed capacitor bank (kvar), an explicit transformer rating (kVA), and
+/// the dual-transformer split bus. All route through the store's
+/// field-preserving `_withProject`; the capacitor / transformer are drawing
+/// inputs only (// VERIFY, never a sizing path).
+class _SourcesEditor extends ConsumerWidget {
+  final VoidCallback onClose;
+  const _SourcesEditor({required this.onClose});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final project = ref.watch(electricalProjectProvider);
+    final ctrl = ref.read(electricalProjectProvider.notifier);
+    final gen = project.sources?.generator;
+
+    String genModeLabel(GeneratorMode m) => switch (m) {
+          GeneratorMode.standby =>
+            context.strings(StringKey.electricalGensetModeStandby),
+          GeneratorMode.prime =>
+            context.strings(StringKey.electricalGensetModePrime),
+        };
+    String genTransferLabel(GeneratorTransfer t) => switch (t) {
+          GeneratorTransfer.ats =>
+            context.strings(StringKey.electricalGensetTransferAts),
+          GeneratorTransfer.manual =>
+            context.strings(StringKey.electricalGensetTransferManual),
+        };
+
+    return _AnimatedDrawerShell(
+      width: 340,
+      onClose: onClose,
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          border: Border(left: BorderSide(color: colors.border)),
+          boxShadow: MechXShadow.popover,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                MechXSpacing.md,
+                MechXSpacing.md,
+                MechXSpacing.md,
+                MechXSpacing.sm + 4,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      context.strings(StringKey.electricalSources),
+                      style: type.title.copyWith(color: colors.textPrimary),
+                    ),
+                  ),
+                  MechXButton(
+                    label: 'Close',
+                    tertiary: true,
+                    onPressed: onClose,
+                  ),
+                ],
+              ),
+            ),
+            Container(height: 1, color: colors.border),
+            const SizedBox(height: MechXSpacing.xs),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(MechXSpacing.md),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // ── Genset ────────────────────────────────────────────
+                    Text(
+                      context.strings(StringKey.electricalGenset),
+                      style: type.label.copyWith(color: colors.textPrimary),
+                    ),
+                    const SizedBox(height: MechXSpacing.sm),
+                    ElectricalToggleRow(
+                      label: context.strings(StringKey.electricalGensetPresent),
+                      value: gen != null,
+                      onChanged: (on) => ctrl
+                          .setGenerator(on ? const GeneratorSource() : null),
+                    ),
+                    if (gen != null) ...[
+                      ElectricalField(
+                        label:
+                            context.strings(StringKey.electricalGensetKva),
+                        child: ElectricalNumInput(
+                          value: gen.kva?.inKilovoltAmperes ?? 0,
+                          onChanged: (v) => ctrl.setGeneratorKva(
+                            v > 0 ? ApparentPower.kilovoltAmperes(v) : null,
+                          ),
+                        ),
+                      ),
+                      ElectricalField(
+                        label:
+                            context.strings(StringKey.electricalGensetMode),
+                        child: ElectricalEnumPicker<GeneratorMode>(
+                          value: gen.mode,
+                          options: GeneratorMode.values,
+                          label: genModeLabel,
+                          onChanged: ctrl.setGeneratorMode,
+                        ),
+                      ),
+                      ElectricalField(
+                        label: context
+                            .strings(StringKey.electricalGensetTransfer),
+                        child: ElectricalEnumPicker<GeneratorTransfer>(
+                          value: gen.transfer,
+                          options: GeneratorTransfer.values,
+                          label: genTransferLabel,
+                          onChanged: ctrl.setGeneratorTransfer,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: MechXSpacing.sm),
+                    Container(height: 1, color: colors.border),
+                    const SizedBox(height: MechXSpacing.md),
+                    // ── Transformer ──────────────────────────────────────
+                    ElectricalField(
+                      label:
+                          context.strings(StringKey.electricalTransformerKva),
+                      child: ElectricalNumInput(
+                        value: project.transformerKva?.inKilovoltAmperes ?? 0,
+                        onChanged: (v) => ctrl.setTransformerKva(
+                          v > 0 ? ApparentPower.kilovoltAmperes(v) : null,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      context.strings(StringKey.electricalTransformerKvaNote),
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                    const SizedBox(height: MechXSpacing.md),
+                    // ── Capacitor bank ───────────────────────────────────
+                    ElectricalField(
+                      label:
+                          context.strings(StringKey.electricalCapacitorKvar),
+                      child: ElectricalNumInput(
+                        value: project.capacitorBankKvar ?? 0,
+                        onChanged: (v) =>
+                            ctrl.setCapacitorBankKvar(v > 0 ? v : null),
+                      ),
+                    ),
+                    Text(
+                      context.strings(StringKey.electricalCapacitorKvarNote),
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                    const SizedBox(height: MechXSpacing.md),
+                    // ── Dual transformer ─────────────────────────────────
+                    ElectricalToggleRow(
+                      label: context
+                          .strings(StringKey.electricalDualTransformer),
+                      value: project.dualTransformer,
+                      onChanged: ctrl.setDualTransformer,
+                    ),
+                    const SizedBox(height: MechXSpacing.sm),
+                    Text(
+                      context.strings(StringKey.electricalSourcesNote),
                       style: type.caption.copyWith(color: colors.textMuted),
                     ),
                   ],

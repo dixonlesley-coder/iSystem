@@ -438,8 +438,30 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (`W`/`kW`), a `Cu bus <csa>mm2  Icw <kA>kA` header, CADANGAN (spare) ways as stubbed rows (from
   `spareWaysReserved`), and a TOTAL footer (diversified demand + line current) — 0-spare/withstand-off
   panels stay geometrically byte-identical. New goldens `09_electrical_overview.png` +
-  `10_electrical_riser.png`. (Next: prepend the source spine onto the interactive single-line canvas
-  too, and a per-floor branch fan-out under each riser panel.)
+  `10_electrical_riser.png`.
+  **Electrical single-line — per-panel board-schedule deep-zoom LOD + editable source nodes landed**
+  (`ui/electrical/electrical_canvas.dart` + `electrical_view.dart` + `store/electrical_store.dart`):
+  the INTERACTIVE single-line canvas now has THREE zoom tiers — summary card (< `kLodThreshold` 0.72) →
+  mid-detail R-S-T busbar (`_SchematicSurface`, kept for per-way editing) → at/above
+  `kBoardScheduleThreshold = 1.35` the REAL engine board schedule (`buildElectricalPanelDetail`, the
+  SAME geometry the PDF/DXF export draws) painted read-only by `SldBoardSchedulePainter`
+  (`sld_sheet_painter.dart`) into the card body, via a shared free fn `paintSldPrims(...)` factored out
+  of `SldSheetPainter` (one prim-painting routine for overview/riser/in-card — golden rule 5). The deep
+  tier keeps double-click/right-click editing via a local-y→schedule-row hit-test (`_PanelScheduleBody`).
+  The card footprint stays the detail height, so loads/feeders/merged-LOD are untouched. **Sources are
+  now first-class + editable:** a **Sources** toolbar button opens a `_SourcesEditor` drawer (genset
+  present/kVA[0=auto]/mode/transfer · capacitor kvar · transformer kVA · dual-transformer) wired through
+  new store intents (`setGenerator`/`setGeneratorKva`/`setGeneratorMode`/`setGeneratorTransfer`/
+  `setCapacitorBankKvar`/`setTransformerKva`/`setDualTransformer`) on the field-preserving `_withProject`
+  (now carrying `sources`/`dualTransformer`/`capacitorBankKvar`/`transformerKva`); `_sourcesWith` rebuilds
+  `ElectricalSources` preserving solar/battery/hybrid + collapses to null when emptied. The source SPINE
+  now renders on the interactive single-line: when `buildElectricalSourceSpine(project, result)` is
+  non-empty a read-only band (PLN→MV→TX→LV main + genset/capacitor, `_SourceSpinePainter` sharing the
+  canvas zoom, ONE `_buildSourceSpine` geometry across overview/riser/export/canvas) sits above the root
+  panel, replacing the bare `_GridSourceNode` PLN head; double-click → Sources editor. Empty spine (no
+  sources AND no demand) keeps the PLN head. Goldens 05/08/09/10 shifted only by the new Sources toolbar
+  button + the spine head replacing the PLN pill (no canvas-content regression). (Next: a per-floor
+  branch fan-out under each riser panel.)
   The i18n mechanism also gained **parameterized templates** — `MechXStringsData.format(key,
   {…})` substitutes `{name}` placeholders (EN+ID templates carry identical placeholders, pinned
   by a test) — and the Commercial workspace's dynamic captions (BOM/pricelist leads, unpriced

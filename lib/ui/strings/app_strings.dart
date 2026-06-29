@@ -96,6 +96,24 @@ enum StringKey {
   electricalBusbarClearingTime,
   electricalBusbarClearingTimeNote,
 
+  // Electrical — Sources editor (genset / capacitor / transformer / dual-tx).
+  electricalSources,
+  electricalSourcesNote,
+  electricalGenset,
+  electricalGensetPresent,
+  electricalGensetKva,
+  electricalGensetMode,
+  electricalGensetTransfer,
+  electricalTransformerKva,
+  electricalTransformerKvaNote,
+  electricalCapacitorKvar,
+  electricalCapacitorKvarNote,
+  electricalDualTransformer,
+  electricalGensetModeStandby,
+  electricalGensetModePrime,
+  electricalGensetTransferAts,
+  electricalGensetTransferManual,
+
   // App shell — top bar.
   shellOpen,
   shellSave,
@@ -346,6 +364,31 @@ const Map<StringKey, String> _en = {
   StringKey.electricalBusbarClearingTimeNote:
       'Protective-device clearing time for the withstand '
           'thermal check (smaller = less oversize). Default 0.1 s.',
+
+  // Electrical — Sources editor.
+  StringKey.electricalSources: 'Sources',
+  StringKey.electricalSourcesNote:
+      'The genset, transformer and capacitor draw on the source spine '
+          '(Overview / Riser / single-line head + exports). Drawing inputs '
+          'only — all VERIFY.',
+  StringKey.electricalGenset: 'Standby generator (genset)',
+  StringKey.electricalGensetPresent: 'Genset present',
+  StringKey.electricalGensetKva: 'Genset rating (kVA, 0 = auto)',
+  StringKey.electricalGensetMode: 'Genset mode',
+  StringKey.electricalGensetTransfer: 'Transfer',
+  StringKey.electricalTransformerKva: 'Transformer (kVA, 0 = auto)',
+  StringKey.electricalTransformerKvaNote:
+      'Explicit MV/LV transformer rating. 0 derives it from the building '
+          'demand. VERIFY against the transformer schedule.',
+  StringKey.electricalCapacitorKvar: 'Capacitor bank (kvar, 0 = none)',
+  StringKey.electricalCapacitorKvarNote:
+      'Installed PF-correction bank. 0 shows the generic "PF correction" '
+          'note. VERIFY against the PF target / step plan.',
+  StringKey.electricalDualTransformer: 'Dual transformer (split bus)',
+  StringKey.electricalGensetModeStandby: 'Standby',
+  StringKey.electricalGensetModePrime: 'Prime',
+  StringKey.electricalGensetTransferAts: 'ATS',
+  StringKey.electricalGensetTransferManual: 'Manual',
 
   // App shell — top bar.
   StringKey.shellOpen: 'Open',
@@ -617,6 +660,31 @@ const Map<StringKey, String> _id = {
   StringKey.electricalBusbarClearingTimeNote:
       'Waktu pemutusan perangkat proteksi untuk pemeriksaan ketahanan '
           'termal (lebih kecil = lebih sedikit pembesaran). Default 0,1 s.',
+
+  // Electrical — Sources editor.
+  StringKey.electricalSources: 'Sumber',
+  StringKey.electricalSourcesNote:
+      'Genset, trafo, dan kapasitor digambar pada tulang sumber '
+          '(Ikhtisar / Riser / kepala satu-garis + ekspor). Hanya masukan '
+          'gambar — semua VERIFIKASI.',
+  StringKey.electricalGenset: 'Generator cadangan (genset)',
+  StringKey.electricalGensetPresent: 'Genset tersedia',
+  StringKey.electricalGensetKva: 'Daya genset (kVA, 0 = otomatis)',
+  StringKey.electricalGensetMode: 'Mode genset',
+  StringKey.electricalGensetTransfer: 'Transfer',
+  StringKey.electricalTransformerKva: 'Trafo (kVA, 0 = otomatis)',
+  StringKey.electricalTransformerKvaNote:
+      'Daya trafo MV/LV eksplisit. 0 menurunkannya dari beban gedung. '
+          'VERIFIKASI terhadap jadwal trafo.',
+  StringKey.electricalCapacitorKvar: 'Bank kapasitor (kvar, 0 = tidak ada)',
+  StringKey.electricalCapacitorKvarNote:
+      'Bank koreksi PF terpasang. 0 menampilkan catatan "PF correction" '
+          'umum. VERIFIKASI terhadap target / rencana langkah PF.',
+  StringKey.electricalDualTransformer: 'Trafo ganda (bus terpisah)',
+  StringKey.electricalGensetModeStandby: 'Cadangan',
+  StringKey.electricalGensetModePrime: 'Utama',
+  StringKey.electricalGensetTransferAts: 'ATS',
+  StringKey.electricalGensetTransferManual: 'Manual',
 
   // App shell — top bar.
   StringKey.shellOpen: 'Buka',

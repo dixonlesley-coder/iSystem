@@ -148,9 +148,15 @@ String cableLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase) {
 }
 
 /// Build the professional single-line for [project] / [result]. Pure geometry.
+///
+/// When [onlyPanelId] is set, emit JUST that one panel's board schedule
+/// (re-origined to (0,0), no feeder channel, bounds tightened to the block) —
+/// the per-panel DETAIL filter the interactive canvas paints as its deep-zoom
+/// LOD. Null ⇒ the full multi-panel single-line (byte-identical to before).
 SldSheet buildElectricalSld({
   required ElectricalProject project,
   required ElectricalSystemResult result,
+  String? onlyPanelId,
 }) {
   final modelById = {for (final p in project.panels) p.id: p};
   final circuitById = <String, ElectricalCircuit>{
@@ -174,6 +180,11 @@ SldSheet buildElectricalSld({
     depth[id] = p == null ? 0 : (depth[p] ?? 0) + 1;
   }
 
+  // Single-panel filter: lay only the requested panel, at depth 0 (origin).
+  final order = onlyPanelId == null
+      ? result.order
+      : [for (final id in result.order) if (id == onlyPanelId) id];
+
   final prims = <SldPrim>[];
   final usedCurves = <BreakerCurve>{};
   final usedClasses = <BreakerClass>{};
@@ -187,7 +198,7 @@ SldSheet buildElectricalSld({
   final feederFrom = <String, ({double x, double y})>{};
 
   var cursorY = 0.0;
-  for (final id in result.order) {
+  for (final id in order) {
     final p = result.panels[id];
     if (p == null) continue;
     final model = modelById[id];
@@ -199,7 +210,9 @@ SldSheet buildElectricalSld({
     final spareWays = p.spareWaysReserved;
     final scheduleRows = math.max(1, ways) + spareWays;
     const footerH = _rowH; // the TOTAL footer line
-    final blockX = (depth[id] ?? 0) * _indent;
+    // Full single-line: indent by feeder depth. Single-panel detail filter:
+    // re-origin to x=0 so the block frames cleanly in a panel rect.
+    final blockX = onlyPanelId != null ? 0.0 : (depth[id] ?? 0) * _indent;
     final blockY = cursorY;
     final blockH = _headerH + scheduleRows * _rowH + footerH + _bodyPad;
     boxTop[id] = (x: blockX, y: blockY);
@@ -319,20 +332,24 @@ SldSheet buildElectricalSld({
   }
 
   // Feeders: route from the feeding way's right edge down a vertical channel to
-  // the LEFT edge of the sub-panel block (orthogonal, riser-duct style).
-  final channelX = maxX + 30;
-  for (final entry in feederFrom.entries) {
-    final child = entry.key;
-    final from = entry.value;
-    final dst = boxTop[child];
-    if (dst == null) continue;
-    final dropY = dst.y + 18; // enter a touch below the child header top
-    // way right -> channel; channel down; channel -> child left.
-    prims.add(SldLine(from.x, from.y, channelX, from.y, weight: SldWeight.medium));
-    prims.add(SldLine(channelX, from.y, channelX, dropY, weight: SldWeight.medium));
-    prims.add(SldLine(channelX, dropY, dst.x, dropY, weight: SldWeight.medium));
+  // the LEFT edge of the sub-panel block (orthogonal, riser-duct style). Skipped
+  // for the single-panel detail filter (its sub-panels aren't laid out here) so
+  // the block frames tightly.
+  if (onlyPanelId == null) {
+    final channelX = maxX + 30;
+    for (final entry in feederFrom.entries) {
+      final child = entry.key;
+      final from = entry.value;
+      final dst = boxTop[child];
+      if (dst == null) continue;
+      final dropY = dst.y + 18; // enter a touch below the child header top
+      // way right -> channel; channel down; channel -> child left.
+      prims.add(SldLine(from.x, from.y, channelX, from.y, weight: SldWeight.medium));
+      prims.add(SldLine(channelX, from.y, channelX, dropY, weight: SldWeight.medium));
+      prims.add(SldLine(channelX, dropY, dst.x, dropY, weight: SldWeight.medium));
+    }
+    maxX = math.max(maxX, channelX);
   }
-  maxX = math.max(maxX, channelX);
 
   // ── Device legend (KETERANGAN) entries for the symbols actually used ────────
   final legend = <SldLegendEntry>[];
@@ -373,6 +390,86 @@ SldSheet buildElectricalSld({
   );
 }
 
+/// The DETAIL board schedule for ONE panel ([panelId]), re-origined to (0,0)
+/// with no feeder channel — the geometry the interactive single-line canvas
+/// paints as its deep-zoom LOD (`SldSheetPainter`), the SAME primitives the
+/// PDF/DXF export draws. A thin alias over `buildElectricalSld(onlyPanelId:)`.
+/// When [panelId] is absent from the result the sheet is empty (no block).
+SldSheet buildElectricalPanelDetail({
+  required ElectricalProject project,
+  required ElectricalSystemResult result,
+  required String panelId,
+}) =>
+    buildElectricalSld(project: project, result: result, onlyPanelId: panelId);
+
+/// The utility SOURCE-SPINE only (PLN MV -> [MV main] -> TRANSFORMER -> LV main,
+/// + optional GENSET / CAPACITOR BANK), as a standalone `SldSheet` for painting
+/// a read-only spine strip ABOVE the root panel on the interactive single-line
+/// canvas — ONE source-spine geometry shared with the overview / riser / export
+/// (the `_buildSourceSpine` body). `isEmpty` is true when there is no demand AND
+/// no sources / dual-tx / explicit transformer, so a bare project shows nothing
+/// new on the canvas (the existing PLN head stays).
+SldSheet buildElectricalSourceSpine({
+  required ElectricalProject project,
+  required ElectricalSystemResult result,
+}) {
+  final hasSource = project.sources != null ||
+      project.dualTransformer ||
+      project.transformerKva != null ||
+      project.capacitorBankKvar != null;
+  final hasDemand = result.supply.demandVa.inKilovoltAmperes > 0;
+  if (!hasSource && !hasDemand) {
+    return const SldSheet(
+      prims: [],
+      minX: 0,
+      minY: 0,
+      maxX: 1,
+      maxY: 1,
+      legend: [],
+      supplyNote: '',
+    );
+  }
+
+  final spine = _buildSourceSpine(project, result, _ovW);
+  // Bounds over the spine prims (it extends right for the GENSET / CAPACITOR
+  // side nodes and down to the LV main).
+  var minX = double.infinity, minY = double.infinity;
+  var maxX = -double.infinity, maxY = -double.infinity;
+  for (final pr in spine.prims) {
+    switch (pr) {
+      case SldRect():
+        minX = math.min(minX, pr.x);
+        minY = math.min(minY, pr.y);
+        maxX = math.max(maxX, pr.x + pr.w);
+        maxY = math.max(maxY, pr.y + pr.h);
+      case SldLine():
+        minX = math.min(minX, math.min(pr.x1, pr.x2));
+        minY = math.min(minY, math.min(pr.y1, pr.y2));
+        maxX = math.max(maxX, math.max(pr.x1, pr.x2));
+        maxY = math.max(maxY, math.max(pr.y1, pr.y2));
+      case SldLabel():
+        minX = math.min(minX, pr.x);
+        minY = math.min(minY, pr.y);
+    }
+  }
+  if (!minX.isFinite) {
+    minX = 0;
+    minY = 0;
+    maxX = 1;
+    maxY = 1;
+  }
+
+  return SldSheet(
+    prims: spine.prims,
+    minX: minX,
+    minY: minY,
+    maxX: maxX,
+    maxY: maxY,
+    legend: const [SldLegendEntry('Source', 'Utility / MV supply chain')],
+    supplyNote: '',
+  );
+}
+
 // ── ZOOMED-OUT building single-line (the whole distribution hierarchy) ───────
 
 /// Compact-node geometry for the overview / riser.
@@ -397,12 +494,13 @@ Map<String, String> _parentOf(
   return parentOf;
 }
 
-/// The set of ESSENTIAL panel ids — a panel is essential when its name marks it
-/// emergency (EMERGENCY / ESSENTIAL / DARURAT), when it carries a life-safety
-/// way, or when its parent is essential (the property propagates DOWN the
-/// emergency sub-tree). Shared by the overview + riser so their colour split is
-/// derived identically. `result.order` is root-first ⇒ a parent is decided
-/// before its children.
+/// The set of ESSENTIAL panel ids — a panel is essential when it is on the
+/// genset-backed (emergency) supply (its explicit [ElectricalPanel.essential]
+/// flag), when its name marks it emergency (EMERGENCY / ESSENTIAL / DARURAT), or
+/// when its parent is essential (the property propagates DOWN the emergency
+/// sub-tree). A single life-safety WAY does NOT make a whole board essential.
+/// Shared by the overview + riser so their colour split is derived identically.
+/// `result.order` is root-first ⇒ a parent is decided before its children.
 Set<String> _essentialIds(
     ElectricalProject project, ElectricalSystemResult result) {
   final modelById = {for (final p in project.panels) p.id: p};
@@ -456,16 +554,21 @@ Set<String> _essentialIds(
   final nodeX = centreX - _ovW / 2;
   final demandVa = result.supply.demandVa;
 
-  // Whole-spine kVA: the smallest standard rating covering the building demand
-  // VA (genset ladder, // VERIFY). Blank when there is no demand.
-  final txKva = demandVa.inKilovoltAmperes > 0
-      ? selectGeneratorKva(demandVa).inKilovoltAmperes
-      : 0.0;
+  // Whole-spine kVA: an EXPLICIT transformer rating wins; else the smallest
+  // standard rating covering the building demand VA (genset ladder, // VERIFY).
+  // Blank when neither is known.
+  final txKva = project.transformerKva?.inKilovoltAmperes ??
+      (demandVa.inKilovoltAmperes > 0
+          ? selectGeneratorKva(demandVa).inKilovoltAmperes
+          : 0.0);
   final txLabel = txKva > 0 ? 'TRANSFORMER ${_num(txKva)} kVA' : 'TRANSFORMER';
 
   // The vertical spine, top -> bottom. MV main is drawn only for a dual-tx /
-  // sources project (else the PLN node feeds the LV main directly).
-  final hasMv = project.dualTransformer || project.sources != null;
+  // sources / explicit-transformer project (else the PLN node feeds the LV main
+  // directly).
+  final hasMv = project.dualTransformer ||
+      project.sources != null ||
+      project.transformerKva != null;
   final spine = <({String name, String? sub})>[
     (name: 'PLN MV STATION', sub: null),
     if (hasMv) (name: 'PANEL UTAMA TEGANGAN MENENGAH', sub: 'MV main'),
@@ -512,12 +615,18 @@ Set<String> _essentialIds(
     prims.add(SldLine(nodeX + _ovW, gy + _ovH / 2, sideX, gy + _ovH / 2,
         weight: SldWeight.medium, role: SldRole.source));
   }
-  if (project.sources != null) {
+  // CAPACITOR BANK: drawn when a real bank is specified (kvar set) OR — kept as
+  // the historic proxy — whenever any distributed sources exist. The real field
+  // labels its kvar verbatim; the proxy stays the generic "PF correction".
+  if (project.capacitorBankKvar != null || project.sources != null) {
     final cy = lvMidY + 8;
+    final kvar = project.capacitorBankKvar;
+    final capSub =
+        (kvar != null && kvar > 0) ? '${_num(kvar)} kvar' : 'PF correction';
     prims.add(SldRect(sideX, cy, _ovW, _ovH, role: SldRole.source));
     prims.add(SldLabel(sideX + 7, cy + 17, 'CAPACITOR BANK',
         size: 8.5, bold: true, role: SldRole.source));
-    prims.add(SldLabel(sideX + 7, cy + 33, 'PF correction',
+    prims.add(SldLabel(sideX + 7, cy + 33, capSub,
         size: 7.5, role: SldRole.source));
     prims.add(SldLine(nodeX + _ovW, cy + _ovH / 2, sideX, cy + _ovH / 2,
         weight: SldWeight.medium, role: SldRole.source));
@@ -532,9 +641,11 @@ Set<String> _essentialIds(
 /// single-line. The detail (per-way breakers/cables) lives in
 /// [buildElectricalSld]; this is the overview companion.
 ///
-/// A panel is ESSENTIAL (drawn red) when its name marks it emergency, when it
-/// carries a life-safety way, or when its parent is essential (the property
-/// propagates down the emergency sub-tree).
+/// A panel is ESSENTIAL (drawn red) when it is on the genset-backed (emergency)
+/// supply (its explicit [ElectricalPanel.essential] flag), when its name marks
+/// it emergency, or when its parent is essential (the property propagates down
+/// the emergency sub-tree). A single life-safety way does NOT make a board
+/// essential.
 ///
 /// When [sourceChain] is true, a PLN MV -> (MV main) -> TRANSFORMER -> LV main
 /// source spine (+ optional GENSET / CAPACITOR BANK) is PREPENDED above the

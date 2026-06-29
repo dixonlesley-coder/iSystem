@@ -649,6 +649,24 @@ class ElectricalProject {
   /// Additive — see [originFaultLevelA].
   final double? busbarClearingTimeS;
 
+  /// Installed / specified power-factor-correction CAPACITOR BANK size (kvar) on
+  /// the LV main bus. Distinct from the advanced study's COMPUTED PF-correction
+  /// recommendation (`power_factor.dart`): this is the engineer-supplied
+  /// nameplate. When set it labels the CAPACITOR BANK source-spine node verbatim
+  /// (`CAPACITOR BANK <kvar> kvar`); when null the node falls back to the generic
+  /// "PF correction" caption. Drawing the node stays gated on `sources != null`
+  /// OR `capacitorBankKvar != null`. A drawing input only — it never feeds a
+  /// sizing path. // VERIFY — PF-target / step practice, not an SNI/PUIL clause.
+  /// Additive (default null ⇒ byte-identical).
+  final double? capacitorBankKvar;
+
+  /// Explicit MV/LV transformer rating (kVA), overriding the demand-derived
+  /// ladder snap (`selectGeneratorKva(demandVa)`) used to label the TRANSFORMER
+  /// source-spine node. Null ⇒ the existing derivation ⇒ byte-identical. A
+  /// drawing input only — it never feeds a sizing path. // VERIFY — rating ladder,
+  /// not an SNI/PUIL clause. Additive.
+  final ApparentPower? transformerKva;
+
   const ElectricalProject({
     this.id = '',
     this.name = '',
@@ -666,6 +684,8 @@ class ElectricalProject {
     this.buildingHeightM,
     this.originFaultLevelA,
     this.busbarClearingTimeS,
+    this.capacitorBankKvar,
+    this.transformerKva,
   });
 
   /// Serialize to a plain JSON map. Enums by `.name`; the panels recurse;
@@ -690,6 +710,8 @@ class ElectricalProject {
           'originFaultLevelA': originFaultLevelA!.amperes,
         if (busbarClearingTimeS != null)
           'busbarClearingTimeS': busbarClearingTimeS,
+        if (capacitorBankKvar != null) 'capacitorBankKvar': capacitorBankKvar,
+        if (transformerKva != null) 'transformerKva': transformerKva!.voltAmperes,
         'panels': [for (final p in panels) p.toJson()],
       };
 
@@ -723,6 +745,10 @@ class ElectricalProject {
             : Current((json['originFaultLevelA'] as num).toDouble()),
         busbarClearingTimeS:
             (json['busbarClearingTimeS'] as num?)?.toDouble(),
+        capacitorBankKvar: (json['capacitorBankKvar'] as num?)?.toDouble(),
+        transformerKva: json['transformerKva'] == null
+            ? null
+            : ApparentPower((json['transformerKva'] as num).toDouble()),
         panels: [
           for (final p in (json['panels'] as List? ?? const []))
             ElectricalPanel.fromJson(p as Map<String, dynamic>),
