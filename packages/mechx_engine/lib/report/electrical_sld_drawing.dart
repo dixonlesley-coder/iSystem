@@ -669,9 +669,10 @@ Map<String, String> _parentOf(
 /// flag), when its name marks it emergency (EMERGENCY / ESSENTIAL / DARURAT), or
 /// when its parent is essential (the property propagates DOWN the emergency
 /// sub-tree). A single life-safety WAY does NOT make a whole board essential.
-/// Shared by the overview + riser so their colour split is derived identically.
-/// `result.order` is root-first ⇒ a parent is decided before its children.
-Set<String> _essentialIds(
+/// Shared by the overview + riser so their colour split is derived identically,
+/// and PUBLIC so the interactive single-line canvas colours essential boards the
+/// same red. `result.order` is root-first ⇒ a parent is decided before children.
+Set<String> essentialPanelIds(
     ElectricalProject project, ElectricalSystemResult result) {
   final modelById = {for (final p in project.panels) p.id: p};
   final parentOf = _parentOf(project, result);
@@ -836,7 +837,7 @@ SldSheet buildElectricalOverview({
   }
   // Preserve result.order within each parent's child list (was insertion order
   // over the feeder graph; root-first order is a faithful proxy).
-  final essential = _essentialIds(project, result);
+  final essential = essentialPanelIds(project, result);
 
   // ── Tree layout: x by leaf order (in-order), y by depth ─────────────────────
   final depth = <String, int>{};
@@ -1051,7 +1052,7 @@ SldSheet buildElectricalRiser({
   bool sourceChain = false,
 }) {
   final parentOf = _parentOf(project, result);
-  final essential = _essentialIds(project, result);
+  final essential = essentialPanelIds(project, result);
   final panelModelById = {for (final p in project.panels) p.id: p};
   final (feederCircuitOf, feederResultOf) =
       _feederLabelLookups(project, result, parentOf);

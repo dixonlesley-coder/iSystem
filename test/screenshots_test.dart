@@ -169,20 +169,13 @@ void main() {
     await expectLater(
         app, matchesGoldenFile('goldens/08_electrical_collapsed.png'));
 
-    // Electrical OVERVIEW tab — the zoomed-out building single-line: every
-    // panel a compact node in a top-down tree (normal / essential colour split,
-    // PLN/MV/transformer/LV-main source spine), rendered LIVE from the pure
-    // `buildElectricalOverview` SldSheet via SldSheetView. Scoped to the
-    // electrical view so the tab tap is unambiguous.
+    // (The Overview tab was removed — its essential-red colouring + feeder
+    // cable/breaker labels folded into the Single-line canvas above; the compact
+    // whole-building Overview remains an EXPORT, not a tab.)
     Finder elecSegment(String label) => find.descendant(
           of: find.byType(ElectricalView),
           matching: find.text(label),
         );
-    await tester.tap(elecSegment('Overview'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    await expectLater(
-        app, matchesGoldenFile('goldens/09_electrical_overview.png'));
 
     // Electrical RISER tab — the floor-by-floor building riser: panels stacked
     // by true building elevation with vertical riser feeders + a floor/FFL

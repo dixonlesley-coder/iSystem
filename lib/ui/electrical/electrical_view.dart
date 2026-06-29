@@ -65,18 +65,19 @@ class _CircuitRef {
 /// unified Layout canvas — the Electrical layer there — so these are the
 /// abstract projections of the SAME solved model.)
 ///
-///  • [singleLine]   — the interactive per-panel spatial single-line canvas;
+///  • [singleLine]   — the interactive per-panel spatial single-line canvas
+///    (zoom out for the whole-building tree: essential boards + feeders read
+///    red, feeders carry their cable + breaker — the old Overview, folded in);
 ///  • [powerOneLine] — the hybrid power one-line (sources / MV / tx / busses);
-///  • [overview]     — the zoomed-out building single-line (whole distribution
-///    hierarchy as a compact tree, normal / essential colour split, source
-///    spine), rendered LIVE via `buildElectricalOverview`;
 ///  • [riser]        — the floor-by-floor building riser (panels stacked by
 ///    true building elevation, vertical riser feeders), via
 ///    `buildElectricalRiser` over the live mechanical [BuildingLevels].
 ///
-/// [overview] and [riser] are READ-ONLY renders of the same `SldSheet` geometry
-/// the PDF / DXF exporters draw — one source of truth, no parallel layout.
-enum _Tab { singleLine, powerOneLine, overview, riser }
+/// [riser] is a READ-ONLY render of the same `SldSheet` geometry the PDF / DXF
+/// exporters draw — one source of truth, no parallel layout. (The compact
+/// whole-building Overview remains an EXPORT — 'Building single-line (overview)'
+/// — but no longer a redundant tab now the single-line canvas covers it.)
+enum _Tab { singleLine, powerOneLine, riser }
 
 /// Renders the electrical single-line canvas and hosts the editing overlays.
 class ElectricalView extends ConsumerStatefulWidget {
@@ -89,8 +90,6 @@ class ElectricalView extends ConsumerStatefulWidget {
 class _ElectricalViewState extends ConsumerState<ElectricalView> {
   final GlobalKey<ElectricalCanvasState> _canvasKey =
       GlobalKey<ElectricalCanvasState>();
-  final GlobalKey<SldSheetViewState> _overviewKey =
-      GlobalKey<SldSheetViewState>();
   final GlobalKey<SldSheetViewState> _riserKey =
       GlobalKey<SldSheetViewState>();
 
@@ -168,7 +167,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             _Tab.powerOneLine => PowerOneLineView(
               oneLine: advanced.powerOneLine,
             ),
-            _Tab.overview => _buildOverviewArea(project, result),
             _Tab.riser => _buildRiserArea(project, result),
           },
         ),
@@ -321,27 +319,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         ),
         const ElectricalPalette(),
       ],
-    );
-  }
-
-  /// The ZOOMED-OUT building single-line, rendered LIVE from the pure-engine
-  /// [buildElectricalOverview] geometry (the same `SldSheet` the PDF / DXF
-  /// exporters draw). Read-only — pan / zoom only, no palette.
-  Widget _buildOverviewArea(
-    ElectricalProject project,
-    ElectricalSystemResult result,
-  ) {
-    final sheet = buildElectricalOverview(
-      project: project,
-      result: result,
-      sourceChain: true,
-    );
-    return _SldProjectionArea(
-      sheetKey: _overviewKey,
-      sheet: sheet,
-      empty: project.panels.isEmpty,
-      onSetUp: _openService,
-      onAddPanel: _addPanel,
     );
   }
 
@@ -590,12 +567,6 @@ class _Toolbar extends StatelessWidget {
             label: 'Power one-line',
             selected: tab == _Tab.powerOneLine,
             onTap: () => onTab(_Tab.powerOneLine),
-          ),
-          const SizedBox(width: MechXSpacing.xs),
-          MechXSegment(
-            label: 'Overview',
-            selected: tab == _Tab.overview,
-            onTap: () => onTab(_Tab.overview),
           ),
           const SizedBox(width: MechXSpacing.xs),
           MechXSegment(

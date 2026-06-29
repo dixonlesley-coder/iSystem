@@ -149,6 +149,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   ElectricalProjectController get _ctrl =>
       ref.read(electricalProjectProvider.notifier);
 
+  /// Propagated essential-board id set (recomputed each build); drives the red
+  /// essential colouring on cards + feeders.
+  Set<String> _essential = const {};
+
   ViewportTransform get _current =>
       _transform ?? const ViewportTransform(scale: 0.8);
 
@@ -341,6 +345,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     final result = ref.watch(electricalResultProvider);
     final positions = _positions(project, result);
     final rootId = serviceRootId(project, result);
+    // ESSENTIAL (genset-backed / emergency) boards — propagated down the
+    // emergency sub-tree — drive the red border + feeder colour, the riser
+    // convention folded in from the removed Overview tab.
+    _essential = essentialPanelIds(project, result);
 
     return Focus(
       focusNode: _focus,
@@ -393,6 +401,8 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                           feederHover: _feederHoverPanel,
                           accent: colors.accent,
                           onAccent: colors.onAccent,
+                          essential: _essential,
+                          essentialColor: colors.danger,
                         ),
                       ),
                     ),
@@ -570,7 +580,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               result: result,
               selected: _selectedPanel == panel.panelId,
               unfed: unfed,
-              essential: modelPanel?.essential ?? false,
+              essential: _essential.contains(panel.panelId),
               upsBacked: modelPanel?.upsBacked ?? false,
               submeter: modelPanel?.submeter ?? false,
               onTap: () => setState(() => _selectedPanel = panel.panelId),
@@ -786,6 +796,8 @@ class _CanvasPainter extends CustomPainter {
   final String? feederHover;
   final Color accent;
   final Color onAccent;
+  final Set<String> essential;
+  final Color essentialColor;
 
   _CanvasPainter({
     required this.project,
@@ -802,6 +814,8 @@ class _CanvasPainter extends CustomPainter {
     required this.feederHover,
     required this.accent,
     required this.onAccent,
+    required this.essential,
+    required this.essentialColor,
   });
 
   @override
@@ -830,7 +844,22 @@ class _CanvasPainter extends CustomPainter {
         final end = transform.worldToScreen(
           Offset(toPos.dx, toPos.dy + toH / 2),
         );
-        _smoothFeeder(canvas, start, end);
+        // Essential (emergency) feeders read red; the label carries the feeder's
+        // sized cable + breaker (folded in from the old Overview).
+        final isEss = essential.contains(fed);
+        final colour = isEss ? essentialColor : accent;
+        _smoothFeeder(canvas, start, end, colour: colour);
+        final cr = fromPanel.circuits
+            .where((r) => r.circuitId == c.id)
+            .firstOrNull;
+        if (cr != null) {
+          final poles = cr.threePhase ? 3 : 1;
+          final label = '${cableLabel(c, cr.cable.csaMm2, cr.threePhase)} mm2'
+              ' · ${breakerScheduleLabel(cr.breaker, poles)}';
+          final midX = (start.dx + end.dx) / 2;
+          _label(canvas, Offset(midX, start.dy - 7), label, transform.scale,
+              color: isEss ? essentialColor : onAccent);
+        }
       }
     }
 
@@ -877,9 +906,10 @@ class _CanvasPainter extends CustomPainter {
   /// Orthogonal LEFT-TO-RIGHT feeder from a parent's right edge [a] to a
   /// fed-panel's left edge [b]: right to a mid-X channel, vertical to the child's
   /// row, then right into it (the transpose of a top-down riser drop).
-  void _smoothFeeder(Canvas canvas, Offset a, Offset b) {
+  void _smoothFeeder(Canvas canvas, Offset a, Offset b, {Color? colour}) {
+    final col = colour ?? accent;
     final paint = Paint()
-      ..color = accent
+      ..color = col
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
@@ -891,7 +921,7 @@ class _CanvasPainter extends CustomPainter {
       ..lineTo(b.dx, b.dy);
     canvas.drawPath(path, paint);
     // Tap dot at the fed panel incomer.
-    canvas.drawCircle(b, 3, Paint()..color = accent);
+    canvas.drawCircle(b, 3, Paint()..color = col);
   }
 
   /// Connectors from the card's RIGHT edge to each load node in the right-hand
@@ -950,7 +980,8 @@ class _CanvasPainter extends CustomPainter {
     }
   }
 
-  void _label(Canvas canvas, Offset center, String text, double s) {
+  void _label(Canvas canvas, Offset center, String text, double s,
+      {Color? color}) {
     if (s < 0.4) return;
     final tp = TextPainter(
       text: TextSpan(
@@ -958,7 +989,7 @@ class _CanvasPainter extends CustomPainter {
         style: TextStyle(
           fontFamily: 'Roboto',
           fontSize: 9 * s,
-          color: onAccent,
+          color: color ?? onAccent,
           fontWeight: FontWeight.w600,
         ),
       ),
@@ -991,7 +1022,9 @@ class _CanvasPainter extends CustomPainter {
       old.scheduleDetail != scheduleDetail ||
       old.feederFrom != feederFrom ||
       old.feederCursor != feederCursor ||
-      old.feederHover != feederHover;
+      old.feederHover != feederHover ||
+      old.essential.length != essential.length ||
+      !old.essential.containsAll(essential);
 }
 
 // ── Shared rail / phase colour helpers ───────────────────────────────────────
@@ -1448,10 +1481,14 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
     final hasError = panel.warnings.any(
       (w) => w.severity == WarningSeverity.error,
     );
+    // Essential (genset-backed / emergency) boards read RED — the riser-drawing
+    // convention, folded in from the old Overview tab; error/selection/hover win.
     final borderColor = hasError
         ? colors.danger
         : (widget.selected || _hover || _dropHover)
         ? colors.accent
+        : widget.essential
+        ? colors.danger
         : colors.border;
 
     // The card reserves the full schematic height at BOTH LOD levels (header
