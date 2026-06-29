@@ -97,7 +97,7 @@ class SldSheet {
 }
 
 // ── Block geometry (drawing units) ───────────────────────────────────────────
-const double _blockW = 820;
+const double _blockW = 920;
 const double _headerH = 46;
 const double _rowH = 20;
 const double _bodyPad = 12;
@@ -112,12 +112,12 @@ const double _brH = 10;
 // the R / S / T per-phase loading band on the right.
 const double _colGrup = 92; // way no (W1) — clears the breaker stub + symbol
 const double _colDevice = 116; // breaker (MCB 16A 1ph)
-const double _colPenghantar = 224; // conductor (NYY 4x6 mm2 + E6 mm2)
-const double _colDaya = 406; // connected load (DAYA, W/kW)
-const double _colKeterangan = 464; // load name / -> sub-panel
-const double _colR = 686; // per-phase loading band (R/S/T line currents)
-const double _colS = 730;
-const double _colT = 774;
+const double _colPenghantar = 224; // conductor + conduit (NYY 4x6 + E6 · PVC 25)
+const double _colDaya = 446; // connected load (DAYA, W/kW)
+const double _colKeterangan = 506; // load name / -> sub-panel
+const double _colR = 726; // per-phase loading band (R/S/T line currents)
+const double _colS = 772;
+const double _colT = 818;
 
 String _num(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
@@ -159,6 +159,28 @@ String breakerScheduleLabel(BreakerResult b, int poles) =>
       PhaseAssignment.l3 => ('', '', ib),
       PhaseAssignment.threePhase => (ib, ib, ib),
     };
+
+/// A PVC conduit size (mm) derived from the conductor — a ~40 % fill general-
+/// practice estimate (// VERIFY, NOT an SNI clause; the model carries no conduit
+/// field). Returns null for large feeders (beyond the conduit range — they run
+/// on tray / cable-ladder, so no conduit token). A 3-phase run (5-core) bumps up
+/// one trade size for the extra cores.
+int? _conduitMm(double csaMm2, bool threePhase) {
+  final base = csaMm2 <= 4
+      ? 20
+      : csaMm2 <= 10
+          ? 25
+          : csaMm2 <= 16
+              ? 32
+              : csaMm2 <= 35
+                  ? 40
+                  : csaMm2 <= 70
+                      ? 50
+                      : 0;
+  if (base == 0) return null;
+  if (!threePhase || base >= 50) return base;
+  return switch (base) { 20 => 25, 25 => 32, 32 => 40, 40 => 50, _ => base };
+}
 
 /// A cable label like `NYM 3x2.5` (family from the circuit when set, else a
 /// neutral `Cu`; cores = 3 for 1-phase L+N+E, 5 for 3-phase 3L+N+E).
@@ -265,6 +287,21 @@ SldSheet buildElectricalSld({
     usedCurves.add(p.incomer.breaker.curve);
     usedClasses.add(p.incomer.breaker.deviceClass);
 
+    // Incomer METERING cluster (top-right of the header) — V / A / Hz meters +
+    // a CT note, the BRI `Diagram Panel` convention. Only on 3-phase boards
+    // (single-phase final boards carry no metering). Boxed letters read as the
+    // meter symbols without a new primitive.
+    if (p.system.isThreePhase) {
+      var mx = blockX + _blockW - 196;
+      const my = 12.0; // within the header band
+      for (final m in const ['V', 'A', 'Hz']) {
+        prims.add(SldRect(mx, blockY + my, 18, 18));
+        prims.add(SldLabel(mx + 4, blockY + my + 13, m, size: 8));
+        mx += 30;
+      }
+      prims.add(SldLabel(mx + 4, blockY + my + 13, 'CT', size: 8));
+    }
+
     // Header / body divider (full width) for a clean schedule look.
     final busTop = blockY + _headerH;
     prims.add(SldLine(blockX, busTop, blockX + _blockW, busTop));
@@ -321,8 +358,10 @@ SldSheet buildElectricalSld({
       final earth = c.grounding.peCsaMm2 > 0
           ? ' + E${_num(c.grounding.peCsaMm2)} mm2'
           : '';
+      final conduitMm = _conduitMm(c.cable.csaMm2, c.threePhase);
+      final conduit = conduitMm != null ? ' · PVC ${conduitMm}mm' : '';
       final cable =
-          '${cableLabel(circuit, c.cable.csaMm2, c.threePhase)} mm2$earth';
+          '${cableLabel(circuit, c.cable.csaMm2, c.threePhase)} mm2$earth$conduit';
       final daya = c.loadW > 0 ? _watts(c.loadW) : '-';
       final ib = _num(c.designCurrent.amperes);
       prims.add(SldLabel(blockX + _colGrup, rowY + 3, 'W${i + 1}', size: rowSize));
