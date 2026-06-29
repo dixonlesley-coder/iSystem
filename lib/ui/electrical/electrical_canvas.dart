@@ -365,10 +365,13 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               // so the panel-internal schematic + the load break-out/merge track
               // the real zoom from the first frame — not the pre-fit default.
               final detail = vt.scale >= kLodThreshold;
-              // DEEP zoom: swap the mid-detail R-S-T busbar for the real engine
-              // board schedule. Above the LOD threshold by construction, so the
-              // card footprint (detail height) is already reserved.
-              final scheduleDetail = vt.scale >= kBoardScheduleThreshold;
+              // Detail = the real engine BOARD SCHEDULE (vertical bus, way rows
+              // reading left-to-right) — the same geometry the PDF/DXF export
+              // draws. The whole panel reads left-to-right, so the way rows ARE
+              // the loads (no separate hanging load symbols) and feeders branch
+              // right to sub-panels. (One detail tier now; the summary card is
+              // the only other tier.)
+              final scheduleDetail = detail;
               return ClipRect(
                 child: Stack(
                   children: [
@@ -606,9 +609,12 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               c.loadKind != LoadKind.feeder && c.loadKind != LoadKind.spare)
           .length;
       if (loadCount > 0) {
+        // The merged "N loads" node sits to the RIGHT of the card (vertically
+        // centred) — the collapsed form of the right-hand load column, so a
+        // zoom-in breaks it out into that column / the schedule rows in place.
         final mergedWorld = Offset(
-          world.dx + w / 2 - kLoadW / 2,
-          world.dy + cardH + kLoadDropGap,
+          world.dx + w + kLoadGapX,
+          world.dy + cardH / 2 - kLoadNodeH / 2,
         );
         final mp = vt.worldToScreen(mergedWorld);
         final focal = mp + Offset(kLoadW * scale / 2, kLoadNodeH * scale / 2);
@@ -634,18 +640,22 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       return widgets;
     }
 
-    // Load nodes hanging below each non-feeder, non-spare way. SUPPRESSED at the
-    // board-schedule LOD — the schedule already lists every way left-to-right
-    // (GRUP / breaker / cable / load), so the hanging loads would be redundant.
+    // Load nodes branch to the RIGHT of the panel, stacked top-to-bottom (one
+    // per non-feeder/non-spare way) — a left-to-right column aligned with the
+    // board-schedule rows. SUPPRESSED at the board-schedule LOD, where the
+    // schedule lists every way itself, so zooming in morphs the column straight
+    // into the schedule rows. `j` indexes only the rendered loads (no gaps).
+    final loadsRightX = world.dx + w + kLoadGapX;
+    var j = -1;
     for (var i = 0; !scheduleDetail && i < panel.circuits.length; i++) {
       final c = panel.circuits[i];
       if (c.loadKind == LoadKind.feeder || c.loadKind == LoadKind.spare) {
         continue;
       }
-      final cx = wayColumnX(i);
+      j++;
       final loadWorld = Offset(
-        world.dx + cx - kLoadW / 2,
-        world.dy + cardH + kLoadDropGap,
+        loadsRightX,
+        world.dy + kPanelChrome + j * kLoadRowH,
       );
       final lp = vt.worldToScreen(loadWorld);
       final loadNode = _ScaledChild(
@@ -799,7 +809,9 @@ class _CanvasPainter extends CustomPainter {
     canvas.drawRect(Offset.zero & size, Paint()..color = background);
     _grid(canvas, size);
 
-    // Feeder lines: parent way bottom → fed panel top incomer.
+    // Feeder lines: parent RIGHT edge → fed-panel LEFT edge (left-to-right tree,
+    // like the CAD building single-line). The whole canvas flows left-to-right:
+    // bus on the left, loads + feeders branch right, sub-panels step rightward.
     for (final p in project.panels) {
       for (final c in p.circuits) {
         final fed = c.feedsPanelId;
@@ -808,34 +820,17 @@ class _CanvasPainter extends CustomPainter {
         final toPos = positions[fed];
         final fromPos = positions[p.id];
         if (fromPanel == null || toPos == null || fromPos == null) continue;
-        final wayIdx = fromPanel.circuits.indexWhere(
-          (r) => r.circuitId == c.id,
-        );
         final fromCardH = panelFootprint(fromPanel, detail);
-        final cx = wayIdx >= 0
-            ? wayColumnX(wayIdx)
-            : panelCardWidth(fromPanel.circuits.length) / 2;
+        final fromW = panelCardWidth(fromPanel.circuits.length);
         final start = transform.worldToScreen(
-          Offset(fromPos.dx + cx, fromPos.dy + fromCardH),
+          Offset(fromPos.dx + fromW, fromPos.dy + fromCardH / 2),
         );
         final toPanel = result.panels[fed];
-        final toW = toPanel == null
-            ? 280.0
-            : panelCardWidth(toPanel.circuits.length);
+        final toH = toPanel == null ? 160.0 : panelFootprint(toPanel, detail);
         final end = transform.worldToScreen(
-          Offset(toPos.dx + toW / 2, toPos.dy),
+          Offset(toPos.dx, toPos.dy + toH / 2),
         );
-        // The feeder must turn BELOW the parent's load row (loads hang
-        // kLoadDropGap under the card and are kLoadNodeH tall), so its
-        // horizontal traverse never crosses the loads. Drop past that band
-        // before the elbow.
-        final loadBandBottom = transform
-            .worldToScreen(Offset(
-              fromPos.dx,
-              fromPos.dy + fromCardH + kLoadDropGap + kLoadNodeH + 16,
-            ))
-            .dy;
-        _smoothFeeder(canvas, start, end, clearY: loadBandBottom);
+        _smoothFeeder(canvas, start, end);
       }
     }
 
@@ -861,7 +856,7 @@ class _CanvasPainter extends CustomPainter {
         final w = panelCardWidth(fromPanel.circuits.length);
         final h = panelFootprint(fromPanel, detail);
         final anchor = transform.worldToScreen(
-          Offset(fromPos.dx + w / 2, fromPos.dy + h),
+          Offset(fromPos.dx + w, fromPos.dy + h / 2),
         );
         canvas.drawLine(
           anchor,
@@ -879,83 +874,79 @@ class _CanvasPainter extends CustomPainter {
   void _grid(Canvas canvas, Size size) =>
       paintCanvasGrid(canvas, size, transform, gridLine);
 
-  /// Orthogonal feeder from a parent way bottom [a] to a fed-panel incomer [b].
-  /// The horizontal traverse is placed at [clearY] when given — pushed below the
-  /// parent's load row so the feeder never overlaps the loads — else midway.
-  /// Clamped to stay between the two endpoints when the child sits close below.
-  void _smoothFeeder(Canvas canvas, Offset a, Offset b, {double? clearY}) {
+  /// Orthogonal LEFT-TO-RIGHT feeder from a parent's right edge [a] to a
+  /// fed-panel's left edge [b]: right to a mid-X channel, vertical to the child's
+  /// row, then right into it (the transpose of a top-down riser drop).
+  void _smoothFeeder(Canvas canvas, Offset a, Offset b) {
     final paint = Paint()
       ..color = accent
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
-    final midY = (a.dy + b.dy) / 2;
-    var elbowY = clearY == null ? midY : math.max(midY, clearY);
-    // Never overshoot the child incomer (keep the elbow above b).
-    if (b.dy > a.dy) elbowY = math.min(elbowY, b.dy);
+    final midX = (a.dx + b.dx) / 2;
     final path = Path()
       ..moveTo(a.dx, a.dy)
-      ..lineTo(a.dx, elbowY)
-      ..lineTo(b.dx, elbowY)
+      ..lineTo(midX, a.dy)
+      ..lineTo(midX, b.dy)
       ..lineTo(b.dx, b.dy);
     canvas.drawPath(path, paint);
     // Tap dot at the fed panel incomer.
     canvas.drawCircle(b, 3, Paint()..color = accent);
   }
 
-  /// Drop lines from each way's bottom-of-card to its load node (the part of
-  /// the run OUTSIDE the card), labelled with cable + util. The in-card
+  /// Connectors from the card's RIGHT edge to each load node in the right-hand
+  /// column (the run OUTSIDE the card), labelled with cable + util. The in-card
   /// schematic itself is drawn by the card widget (see [SchematicPainter]).
   void _loadDrops(Canvas canvas, ElectricalPanelResult panel, Offset world) {
     final s = transform.scale;
     final cardH = panelFootprint(panel, detail);
-    final loadTop = cardH + kLoadDropGap;
+    final w = panelCardWidth(panel.circuits.length);
+    final rightEdge = world.dx + w;
+    final loadLeft = world.dx + w + kLoadGapX;
     final threePhase = panel.system == ElectricalSystem.threePhase;
-    // Collapsed (summary) view: one tidy drop line to the merged loads node,
-    // instead of a stem per way (which fans out and clutters the zoomed-out map).
+    // Collapsed (summary) view: one tidy connector from the card's right edge to
+    // the merged loads node (centred), instead of a stem per way.
     if (!detail) {
       final hasLoads = panel.circuits.any((c) =>
           c.loadKind != LoadKind.feeder && c.loadKind != LoadKind.spare);
       if (!hasLoads) return;
-      final cx = panelCardWidth(panel.circuits.length) / 2;
+      final midY = world.dy + cardH / 2;
       canvas.drawLine(
-        transform.worldToScreen(Offset(world.dx + cx, world.dy + cardH)),
-        transform.worldToScreen(Offset(world.dx + cx, world.dy + loadTop)),
+        transform.worldToScreen(Offset(rightEdge, midY)),
+        transform.worldToScreen(Offset(loadLeft, midY)),
         Paint()
           ..color = accent
           ..strokeWidth = 1.6 * s,
       );
       return;
     }
+    var j = -1;
     for (var i = 0; i < panel.circuits.length; i++) {
       final c = panel.circuits[i];
       if (c.loadKind == LoadKind.feeder || c.loadKind == LoadKind.spare) {
         continue;
       }
-      final cx = wayColumnX(i).toDouble();
+      j++;
+      final rowY = world.dy + kPanelChrome + j * kLoadRowH + kLoadNodeH / 2;
       final phaseColor = phaseColorFor(c.phase, threePhase);
       canvas.drawLine(
-        transform.worldToScreen(Offset(world.dx + cx, world.dy + cardH)),
-        transform.worldToScreen(Offset(world.dx + cx, world.dy + loadTop)),
+        transform.worldToScreen(Offset(rightEdge, rowY)),
+        transform.worldToScreen(Offset(loadLeft, rowY)),
         Paint()
           ..color = phaseColor
           ..strokeWidth = 1.6 * s,
       );
       // Cable label (size · util%) — only when zoomed enough to read.
-      if (detail) {
-        final util = _utilPct(c);
-        final lbl = util != null
-            ? '${c.grounding.cableSpec} · ${util.round()}%'
-            : c.grounding.cableSpec;
-        _label(
-          canvas,
-          transform.worldToScreen(
-            Offset(world.dx + cx + 6, world.dy + (cardH + loadTop) / 2),
-          ),
-          lbl,
-          s,
-        );
-      }
+      final util = _utilPct(c);
+      final lbl = util != null
+          ? '${c.grounding.cableSpec} · ${util.round()}%'
+          : c.grounding.cableSpec;
+      _label(
+        canvas,
+        transform.worldToScreen(Offset(rightEdge + 6, rowY - 9)),
+        lbl,
+        s,
+      );
     }
   }
 

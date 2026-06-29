@@ -38,6 +38,13 @@ const double kLoadW = 70;
 const double kLoadNodeH = 74;
 const double kLoadDropGap = 64;
 
+// Loads branch to the RIGHT of the panel (left-to-right, like the board
+// schedule's way rows), stacked top-to-bottom — so they read consistently with
+// the deep-zoom schedule and zooming in morphs them into its rows, and feeders
+// (which drop straight down) never cross them.
+const double kLoadGapX = 46; // horizontal gap from the card's right edge
+const double kLoadRowH = 82; // vertical pitch per load in the right column
+
 // ── PLN grid head ─────────────────────────────────────────────────────────────
 const double kGridSrcW = 158;
 const double kGridSrcH = 54;
@@ -101,12 +108,20 @@ double panelCardHeight(ElectricalPanelResult panel) =>
 /// of a tall card of empty space.
 const double kPanelSummaryBodyH = 104;
 
-/// Card footprint (header + body) at the active LOD: the full schematic band
-/// when [detail], else the compact summary band. Threaded through the canvas so
-/// the card height, its load/merged-node drop, and the feeder endpoints all
-/// agree at every zoom.
-double panelFootprint(ElectricalPanelResult panel, bool detail) =>
-    kPanelChrome + (detail ? panelGeometry(panel).height : kPanelSummaryBodyH);
+/// The board-schedule body height for a panel: the engine block height
+/// (`_headerH 46 + max(1,ways)*_rowH 20 + _bodyPad 12`) + a little card padding.
+/// Mirrors `buildElectricalPanelDetail` so the card sizes to its schedule.
+double panelScheduleHeight(int ways) =>
+    46 + math.max(1, ways) * 20 + 12 + 22;
+
+/// Card footprint at the active LOD: the BOARD SCHEDULE height (grows with the
+/// way count) when [detail] — the card has no separate header band there, the
+/// engine schedule draws its own — else the compact summary band (header +
+/// summary body). Threaded through the canvas so the card height, the
+/// merged-node connector and the feeder endpoints all agree at every zoom.
+double panelFootprint(ElectricalPanelResult panel, bool detail) => detail
+    ? panelScheduleHeight(panel.circuits.length)
+    : kPanelChrome + kPanelSummaryBodyH;
 
 /// The single service entrance — the utility-fed root with the most demand
 /// (PanelMaker `serviceRootId`): a utility panel that has feeder children,
@@ -145,9 +160,11 @@ String? serviceRootId(
   return roots.first.id;
 }
 
-/// Deterministic tidy-tree auto-layout: the service root at the top-left, fed
-/// panels stepping DOWN by feeder depth, siblings laid out left-to-right so
-/// feeders never cross. Breadth axis = X, depth axis = Y (vertical mode).
+/// Deterministic tidy-tree auto-layout: the service root at the top-LEFT, fed
+/// panels stepping RIGHT by feeder depth, siblings stacked top-to-bottom so
+/// feeders never cross. Depth axis = X, breadth axis = Y (left-to-right mode,
+/// like the CAD building single-line: bus on the left, loads + feeders branch
+/// right, sub-panels step rightward).
 Map<String, Offset> autoLayout(
     ElectricalProject project, ElectricalSystemResult result) {
   final positions = <String, Offset>{};
@@ -166,40 +183,43 @@ Map<String, Offset> autoLayout(
     }
   }
 
-  // The breadth pitch per panel = its card width + gap.
+  // The breadth (vertical) extent per panel = its board-schedule height + gap,
+  // so siblings stacked top-to-bottom never collide.
   double extentOf(String id) {
     final r = result.panels[id];
-    return (r == null ? kMinPanelWidth : panelCardWidth(r.circuits.length)) + 80;
+    if (r == null) return 160.0 + 60;
+    return panelFootprint(r, true) + 70;
   }
 
-  // Depth row pitch: tallest panel footprint + the load band + slack.
-  var maxH = 120.0;
+  // Depth column pitch (horizontal): the widest card + a feeder gap, so a child
+  // clears its parent.
+  var maxW = kMinPanelWidth;
   for (final p in project.panels) {
     final r = result.panels[p.id];
-    if (r != null) maxH = math.max(maxH, panelCardHeight(r));
+    if (r != null) maxW = math.max(maxW, panelCardWidth(r.circuits.length));
   }
-  final rowPitch = maxH + kPanelChrome + kLoadDropGap + kLoadNodeH + 80;
+  final colPitch = maxW + 180;
 
-  var cursorX = 40.0;
+  var cursorY = 40.0;
 
-  // Recursive subtree placement: a leaf consumes its extent; a parent is
-  // centred over its children.
+  // Recursive subtree placement: a leaf consumes its (vertical) extent; a parent
+  // is centred over its children.
   double place(String id, int depth, Set<String> seen) {
+    final x = 40 + depth * colPitch;
     if (!seen.add(id)) {
       // Cycle guard — place at the cursor and stop.
-      final x = cursorX;
-      cursorX += extentOf(id);
-      positions[id] = Offset(snap(x), snap(40 + depth * rowPitch));
-      return x + extentOf(id) / 2;
+      final y = cursorY;
+      cursorY += extentOf(id);
+      positions[id] = Offset(snap(x), snap(y));
+      return y + extentOf(id) / 2;
     }
     final kids = childrenOf[id] ?? const [];
-    final y = 40 + depth * rowPitch;
     if (kids.isEmpty) {
       final ext = extentOf(id);
-      final x = cursorX;
-      cursorX += ext;
+      final y = cursorY;
+      cursorY += ext;
       positions[id] = Offset(snap(x), snap(y));
-      return x + ext / 2;
+      return y + ext / 2;
     }
     final centers = <double>[];
     for (final k in kids) {
@@ -207,7 +227,7 @@ Map<String, Offset> autoLayout(
     }
     final center = (centers.first + centers.last) / 2;
     final ext = extentOf(id);
-    positions[id] = Offset(snap(center - ext / 2), snap(y));
+    positions[id] = Offset(snap(x), snap(center - ext / 2));
     return center;
   }
 
@@ -225,7 +245,7 @@ Map<String, Offset> autoLayout(
   final seen = <String>{};
   for (final r in roots) {
     place(r, 0, seen);
-    cursorX += 80; // forest separation between disjoint trees.
+    cursorY += 80; // forest separation between disjoint trees.
   }
   // Any orphan not reached (inside a cycle) gets a fallback slot.
   for (final p in project.panels) {

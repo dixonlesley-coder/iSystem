@@ -154,6 +154,14 @@ void main() {
     final overview =
         tester.state<ElectricalCanvasState>(find.byType(ElectricalCanvas));
     overview.fitView();
+    // The left-to-right tree is compact enough that fit can land in the detail
+    // (board-schedule) tier; zoom OUT below the LOD threshold so the panels
+    // collapse to their summary card + merged "N loads" node (this golden's
+    // whole point).
+    var zout = 0;
+    while (overview.currentScale >= kLodThreshold && zout++ < 8) {
+      overview.zoomOut();
+    }
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     // The merged-loads summary nodes are present at the overview scale.

@@ -439,18 +439,22 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `spareWaysReserved`), and a TOTAL footer (diversified demand + line current) — 0-spare/withstand-off
   panels stay geometrically byte-identical. New goldens `09_electrical_overview.png` +
   `10_electrical_riser.png`.
-  **Electrical single-line — per-panel board-schedule deep-zoom LOD + editable source nodes landed**
-  (`ui/electrical/electrical_canvas.dart` + `electrical_view.dart` + `store/electrical_store.dart`):
-  the INTERACTIVE single-line canvas now has THREE zoom tiers — summary card (< `kLodThreshold` 0.72) →
-  mid-detail R-S-T busbar (`_SchematicSurface`, kept for per-way editing) → at/above
-  `kBoardScheduleThreshold = 1.35` the REAL engine board schedule (`buildElectricalPanelDetail`, the
-  SAME geometry the PDF/DXF export draws) painted read-only by `SldBoardSchedulePainter`
-  (`sld_sheet_painter.dart`) into the card body, via a shared free fn `paintSldPrims(...)` factored out
-  of `SldSheetPainter` (one prim-painting routine for overview/riser/in-card — golden rule 5). The deep
-  tier keeps double-click/right-click editing via a local-y→schedule-row hit-test (`_PanelScheduleBody`).
-  The card footprint stays the detail height, so loads/feeders/merged-LOD are untouched. At the
-  board-schedule tier the hanging **load nodes + drop lines are SUPPRESSED** and the card's own header
-  chrome is dropped (the engine schedule already lists every way left-to-right + draws its own header),
+  **Electrical single-line — LEFT-TO-RIGHT canvas + board-schedule LOD + editable source nodes landed**
+  (`ui/electrical/electrical_canvas.dart` + `panel_geometry.dart` + `electrical_view.dart` +
+  `store/electrical_store.dart`): the INTERACTIVE single-line canvas now flows LEFT-TO-RIGHT like a real
+  CAD building single-line — `autoLayout` is transposed (depth = X, sub-panels step RIGHT by feeder
+  depth; breadth = Y, siblings stacked; feeders route parent-right-edge → mid-X channel → child-left-edge)
+  — with TWO clean zoom tiers: a summary card (< `kLodThreshold` 0.72) with its "N loads" merged node to
+  the RIGHT, and at/above `kLodThreshold` (`scheduleDetail = detail`) the REAL engine board schedule
+  (`buildElectricalPanelDetail`, the SAME geometry the PDF/DXF export draws — vertical bus on the left,
+  one way ROW reading left-to-right per circuit, own header + TOTAL footer) painted read-only by
+  `SldBoardSchedulePainter` (`sld_sheet_painter.dart`) into the card body, via a shared free fn
+  `paintSldPrims(...)` factored out of `SldSheetPainter` (one prim-painting routine for
+  overview/riser/in-card — golden rule 5). `panelFootprint(detail)` is the schedule height
+  (`panelScheduleHeight`, grows with the way count). The detail tier keeps double-click/right-click
+  editing via a local-y→schedule-row hit-test (`_PanelScheduleBody`). The way rows ARE the loads, so the
+  hanging IEC load symbols + drop lines are dropped at detail (redundant with — and orthogonal to — the
+  rows) and the card's own header chrome is dropped (the engine schedule draws its own header),
   so the deep view reads as the clean left-to-right CAD board schedule — no redundant loads below it, no
   duplicated panel-name header. Regression-covered by golden **11_electrical_schedule.png** (the canvas
   `focusPanelSchedule(panelId)` frames one panel past the threshold). **Sources are
