@@ -175,6 +175,8 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             child: _ExportMenu(
               onSld: () => _runExport(exportElectricalSldDxf),
               onSldPdf: () => _runExport(exportElectricalSldPdf),
+              onOverviewPdf: () => _runExport(exportElectricalOverviewPdf),
+              onOverviewDxf: () => _runExport(exportElectricalOverviewDxf),
               onReport: () => _runExport(exportElectricalCalcReport),
               onPowerOneLine: () => _runExport(exportPowerOneLineDxf),
             ),
@@ -561,11 +563,15 @@ const _electricalGuideItems = <String>[
 class _ExportMenu extends StatelessWidget {
   final VoidCallback onSld;
   final VoidCallback onSldPdf;
+  final VoidCallback onOverviewPdf;
+  final VoidCallback onOverviewDxf;
   final VoidCallback onReport;
   final VoidCallback onPowerOneLine;
   const _ExportMenu({
     required this.onSld,
     required this.onSldPdf,
+    required this.onOverviewPdf,
+    required this.onOverviewDxf,
     required this.onReport,
     required this.onPowerOneLine,
   });
@@ -607,6 +613,16 @@ class _ExportMenu extends StatelessWidget {
               label: context.strings(StringKey.electricalExportSld),
               sub: context.strings(StringKey.electricalExportSldPdf),
               onTap: onSldPdf,
+            ),
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportOverview),
+              sub: context.strings(StringKey.electricalExportOverviewPdf),
+              onTap: onOverviewPdf,
+            ),
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportOverview),
+              sub: context.strings(StringKey.electricalExportOverviewDxf),
+              onTap: onOverviewDxf,
             ),
             _ExportRow(
               label: context.strings(StringKey.electricalExportReport),

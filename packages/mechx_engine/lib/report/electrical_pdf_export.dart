@@ -39,6 +39,26 @@ double _weightPt(SldWeight w) => switch (w) {
       SldWeight.thick => 1.8,
     };
 
+// Role → ink. `normal` keeps the existing dark scheme (so the detail sheet, all
+// normal, is byte-identical); `essential` is red (emergency convention).
+String _strokeRgForRole(SldRole r) => switch (r) {
+      SldRole.normal => '0.12 0.12 0.12',
+      SldRole.essential => '0.80 0.13 0.13',
+      SldRole.source => '0.10 0.10 0.30',
+    };
+
+String _rectStrokeForRole(SldRole r) => switch (r) {
+      SldRole.normal => '0.12 0.20 0.40',
+      SldRole.essential => '0.80 0.13 0.13',
+      SldRole.source => '0.10 0.10 0.30',
+    };
+
+String _textRgForRole(SldRole r) => switch (r) {
+      SldRole.normal => '0 0 0',
+      SldRole.essential => '0.70 0.10 0.10',
+      SldRole.source => '0.10 0.10 0.30',
+    };
+
 /// Render the sized electrical single-line as a single-page PDF and return its
 /// bytes. [title] is stamped in the title block.
 Uint8List electricalSldToPdf({
@@ -46,13 +66,18 @@ Uint8List electricalSldToPdf({
   required ElectricalSystemResult result,
   String title = 'iSystem electrical single-line',
   DrawingChrome? chrome,
+  bool overview = false,
 }) {
   const pageW = 1190.55; // A3 landscape, points (420 mm)
   const pageH = 841.89; // 297 mm
   const margin = 40.0;
   const titleBlockH = 96.0; // reserved strip across the page bottom
 
-  final sheet = buildElectricalSld(project: project, result: result);
+  // `overview` = the ZOOMED-OUT building single-line (compact panel tree, normal
+  // / essential colour split); the default is the per-panel detail single-line.
+  final sheet = overview
+      ? buildElectricalOverview(project: project, result: result)
+      : buildElectricalSld(project: project, result: result);
 
   // ── Auto-fit the drawing into the area above the title block ────────────────
   final spanX = math.max(1e-6, sheet.maxX - sheet.minX);
@@ -81,17 +106,19 @@ Uint8List electricalSldToPdf({
   for (final p in sheet.prims) {
     switch (p) {
       case SldLine():
-        cs.writeln('0.12 0.12 0.12 RG ${_n(_weightPt(p.weight) * scale + 0.3)} w');
+        cs.writeln('${_strokeRgForRole(p.role)} RG '
+            '${_n(_weightPt(p.weight) * scale + 0.3)} w');
         cs.writeln('${_n(tx(p.x1))} ${_n(ty(p.y1))} m '
             '${_n(tx(p.x2))} ${_n(ty(p.y2))} l S');
       case SldRect():
-        cs.writeln('0.12 0.20 0.40 RG ${_n(_weightPt(p.weight) * scale + 0.3)} w');
+        cs.writeln('${_rectStrokeForRole(p.role)} RG '
+            '${_n(_weightPt(p.weight) * scale + 0.3)} w');
         // PDF rect origin is the lower-left; flip the y-down top-left.
         cs.writeln('${_n(tx(p.x))} ${_n(ty(p.y + p.h))} '
             '${_n(p.w * scale)} ${_n(p.h * scale)} re S');
       case SldLabel():
         final fs = math.max(5.0, p.size * scale);
-        cs.writeln('BT /F1 ${_n(fs)} Tf 0 0 0 rg '
+        cs.writeln('BT /F1 ${_n(fs)} Tf ${_textRgForRole(p.role)} rg '
             '${_n(tx(p.x))} ${_n(ty(p.y))} Td (${_pdfText(p.text)}) Tj ET');
     }
   }

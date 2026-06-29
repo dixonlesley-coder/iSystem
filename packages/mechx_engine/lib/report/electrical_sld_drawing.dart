@@ -24,6 +24,11 @@ import '../standards/puil.dart' show BreakerCurve, BreakerClass;
 /// Stroke weight buckets (mapped to real widths by each renderer).
 enum SldWeight { thin, medium, thick }
 
+/// Drafting role of a primitive — drives its COLOUR (mirroring the reference
+/// drawings' cyan-normal / red-essential split). `source` is the utility / MV /
+/// transformer supply chain.
+enum SldRole { normal, essential, source }
+
 /// A drawing primitive in y-down drawing space. Sealed so renderers switch
 /// exhaustively over the small closed set.
 sealed class SldPrim {
@@ -33,15 +38,17 @@ sealed class SldPrim {
 class SldLine extends SldPrim {
   final double x1, y1, x2, y2;
   final SldWeight weight;
+  final SldRole role;
   const SldLine(this.x1, this.y1, this.x2, this.y2,
-      {this.weight = SldWeight.thin});
+      {this.weight = SldWeight.thin, this.role = SldRole.normal});
 }
 
 class SldRect extends SldPrim {
   final double x, y, w, h;
   final SldWeight weight;
+  final SldRole role;
   const SldRect(this.x, this.y, this.w, this.h,
-      {this.weight = SldWeight.medium});
+      {this.weight = SldWeight.medium, this.role = SldRole.normal});
 }
 
 class SldLabel extends SldPrim {
@@ -49,8 +56,9 @@ class SldLabel extends SldPrim {
   final String text;
   final double size;
   final bool bold;
+  final SldRole role;
   const SldLabel(this.x, this.y, this.text,
-      {this.size = 9, this.bold = false});
+      {this.size = 9, this.bold = false, this.role = SldRole.normal});
 }
 
 /// One row of the drawing's device legend (symbol meaning).
@@ -308,6 +316,172 @@ SldSheet buildElectricalSld({
     maxX: maxX,
     maxY: maxY,
     legend: legend,
+    supplyNote: supplyNote,
+  );
+}
+
+// ── ZOOMED-OUT building single-line (the whole distribution hierarchy) ───────
+
+/// Compact-node geometry for the overview.
+const double _ovW = 168;
+const double _ovH = 46;
+const double _ovHGap = 26;
+const double _ovTierH = 120;
+
+/// Build the ZOOMED-OUT building single-line: every panel as a COMPACT node
+/// (name + incomer rating + demand), tiered top-down by feeder depth and wired
+/// parent→child, with the normal / essential colour split of a real riser
+/// single-line. The detail (per-way breakers/cables) lives in
+/// [buildElectricalSld]; this is the overview companion.
+///
+/// A panel is ESSENTIAL (drawn red) when its name marks it emergency, when it
+/// carries a life-safety way, or when its parent is essential (the property
+/// propagates down the emergency sub-tree).
+SldSheet buildElectricalOverview({
+  required ElectricalProject project,
+  required ElectricalSystemResult result,
+}) {
+  final modelById = {for (final p in project.panels) p.id: p};
+
+  // children / parent maps over the feeder graph.
+  final children = <String, List<String>>{};
+  final parentOf = <String, String>{};
+  for (final parent in project.panels) {
+    for (final c in parent.circuits) {
+      final child = c.feedsPanelId;
+      if (child != null && result.panels.containsKey(child)) {
+        (children[parent.id] ??= []).add(child);
+        parentOf[child] = parent.id;
+      }
+    }
+  }
+
+  // Essential propagation (root-first order ⇒ a parent is decided first).
+  bool ownEssential(ElectricalPanelResult p) {
+    final n = p.name.toUpperCase();
+    if (n.contains('EMERGENCY') ||
+        n.contains('ESSENTIAL') ||
+        n.contains('DARURAT')) {
+      return true;
+    }
+    final model = modelById[p.panelId];
+    return model?.circuits.any((c) => c.lifeSafety) ?? false;
+  }
+
+  final essential = <String>{};
+  for (final id in result.order) {
+    final p = result.panels[id];
+    if (p == null) continue;
+    final par = parentOf[id];
+    if ((par != null && essential.contains(par)) || ownEssential(p)) {
+      essential.add(id);
+    }
+  }
+
+  // ── Tree layout: x by leaf order (in-order), y by depth ─────────────────────
+  final depth = <String, int>{};
+  for (final id in result.order) {
+    final par = parentOf[id];
+    depth[id] = par == null ? 0 : (depth[par] ?? 0) + 1;
+  }
+  final roots = [
+    for (final id in result.order) if (!parentOf.containsKey(id)) id
+  ];
+  final cx = <String, double>{};
+  var nextLeafX = 0.0;
+  const pitch = _ovW + _ovHGap;
+
+  void place(String id) {
+    final kids = children[id] ?? const [];
+    if (kids.isEmpty) {
+      cx[id] = nextLeafX;
+      nextLeafX += pitch;
+      return;
+    }
+    for (final k in kids) {
+      place(k);
+    }
+    cx[id] = (cx[kids.first]! + cx[kids.last]!) / 2; // centre over children
+  }
+
+  for (final r in roots) {
+    place(r);
+  }
+
+  final prims = <SldPrim>[];
+  double nodeY(String id) => (depth[id] ?? 0) * _ovTierH;
+
+  // Feeders parent→child: drop from parent bottom, orthogonal, into child top.
+  for (final entry in children.entries) {
+    final ax = cx[entry.key]! + _ovW / 2;
+    final ay = nodeY(entry.key) + _ovH;
+    for (final child in entry.value) {
+      if (!cx.containsKey(child)) continue;
+      final zx = cx[child]! + _ovW / 2;
+      final zy = nodeY(child);
+      final role =
+          essential.contains(child) ? SldRole.essential : SldRole.normal;
+      final midY = (ay + zy) / 2;
+      prims.add(SldLine(ax, ay, ax, midY, weight: SldWeight.medium, role: role));
+      prims.add(SldLine(ax, midY, zx, midY, weight: SldWeight.medium, role: role));
+      prims.add(SldLine(zx, midY, zx, zy, weight: SldWeight.medium, role: role));
+    }
+  }
+
+  // Compact panel nodes.
+  for (final id in result.order) {
+    final p = result.panels[id];
+    if (p == null || !cx.containsKey(id)) continue;
+    final x = cx[id]!;
+    final y = nodeY(id);
+    final role = essential.contains(id) ? SldRole.essential : SldRole.normal;
+    prims.add(SldRect(x, y, _ovW, _ovH, role: role));
+    final tag = (p.tag != null && p.tag!.isNotEmpty) ? '  [${p.tag}]' : '';
+    prims.add(SldLabel(x + 7, y + 17, '${p.name}$tag',
+        size: 10, bold: true, role: role));
+    prims.add(SldLabel(
+        x + 7,
+        y + 33,
+        '${_num(p.incomer.breaker.ratingA.amperes)}A ${p.incomer.poles}P  '
+        '${_num(p.demandW / 1000)}kW',
+        size: 7.5,
+        role: role));
+  }
+
+  // ── Bounds ─────────────────────────────────────────────────────────────────
+  var minX = double.infinity, minY = double.infinity;
+  var maxX = -double.infinity, maxY = -double.infinity;
+  for (final id in result.order) {
+    if (!cx.containsKey(id)) continue;
+    final x = cx[id]!;
+    final y = nodeY(id);
+    minX = math.min(minX, x);
+    minY = math.min(minY, y);
+    maxX = math.max(maxX, x + _ovW);
+    maxY = math.max(maxY, y + _ovH);
+  }
+  if (!minX.isFinite) {
+    minX = 0;
+    minY = 0;
+    maxX = 1;
+    maxY = 1;
+  }
+
+  final s = result.supply;
+  final supplyNote = '${s.system.label}  ${_num(s.voltage.volts)}V  '
+      'demand ${_num(s.demandW / 1000)}kW / '
+      '${_num(s.demandVa.inKilovoltAmperes)}kVA';
+
+  return SldSheet(
+    prims: prims,
+    minX: minX,
+    minY: minY,
+    maxX: maxX,
+    maxY: maxY,
+    legend: const [
+      SldLegendEntry('Normal', 'Normal supply'),
+      SldLegendEntry('Essential', 'Essential / emergency supply'),
+    ],
     supplyNote: supplyNote,
   );
 }

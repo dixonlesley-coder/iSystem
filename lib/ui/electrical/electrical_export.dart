@@ -52,6 +52,39 @@ Future<void> exportElectricalSldPdf(WidgetRef ref) async {
   await File(full).writeAsBytes(bytes);
 }
 
+/// Export the ZOOMED-OUT building single-line (the whole distribution
+/// hierarchy, compact panel tree, normal/essential colour split) as a vector PDF.
+Future<void> exportElectricalOverviewPdf(WidgetRef ref) async {
+  final project = ref.read(electricalProjectProvider);
+  final result = ref.read(electricalResultProvider);
+  final bytes = electricalSldToPdf(
+    project: project,
+    result: result,
+    overview: true,
+    title: 'iSystem electrical single-line (overview)',
+    chrome: const DrawingChrome(sheetIndex: 1, sheetTotal: 1),
+  );
+  final base = project.name.isEmpty ? 'electrical' : project.name;
+  final path = await FilePicker.saveFile(
+    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleSldPdf),
+    fileName: '$base-overview-sld.pdf',
+    type: FileType.custom,
+    allowedExtensions: const ['pdf'],
+  );
+  if (path == null) return;
+  final full = path.endsWith('.pdf') ? path : '$path.pdf';
+  await File(full).writeAsBytes(bytes);
+}
+
+/// Export the ZOOMED-OUT building single-line as a DXF drawing file.
+Future<void> exportElectricalOverviewDxf(WidgetRef ref) async {
+  final project = ref.read(electricalProjectProvider);
+  final result = ref.read(electricalResultProvider);
+  final dxf = electricalSldToDxf(project: project, result: result, overview: true);
+  await _save(dxf, name: project.name, suffix: 'overview-sld', ext: 'dxf',
+      title: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleSldDxf));
+}
+
 /// Export the hybrid power one-line as a DXF drawing file. No-op (returns) when
 /// the project carries no energy sources, so there is no one-line to draw.
 Future<void> exportPowerOneLineDxf(WidgetRef ref) async {

@@ -46,10 +46,12 @@ class _Dxf {
   }
 
   /// A box (4 LINEs) with top-left at ([x],[y]) in screen space (Y negated).
-  void box(String layer, double x, double y, double w, double h) {
+  /// [color] is an optional ACI override (62) — null = inherit the layer colour.
+  void box(String layer, double x, double y, double w, double h, {int? color}) {
     void line(double x1, double y1, double x2, double y2) {
       g(0, 'LINE');
       g(8, layer);
+      if (color != null) g(62, color);
       g(10, x1);
       g(20, -y1);
       g(11, x2);
@@ -62,18 +64,22 @@ class _Dxf {
     line(x, y + h, x, y);
   }
 
-  void text(String layer, double x, double y, String value, {double size = 12}) {
+  void text(String layer, double x, double y, String value,
+      {double size = 12, int? color}) {
     g(0, 'TEXT');
     g(8, layer);
+    if (color != null) g(62, color);
     g(10, x);
     g(20, -y);
     g(40, size);
     g(1, value);
   }
 
-  void connector(String layer, double x1, double y1, double x2, double y2) {
+  void connector(String layer, double x1, double y1, double x2, double y2,
+      {int? color}) {
     g(0, 'LINE');
     g(8, layer);
+    if (color != null) g(62, color);
     g(10, x1);
     g(20, -y1);
     g(11, x2);
@@ -92,9 +98,22 @@ class _Dxf {
 String electricalSldToDxf({
   required ElectricalProject project,
   required ElectricalSystemResult result,
+  bool overview = false,
 }) {
   final d = _Dxf()..begin();
-  final sheet = buildElectricalSld(project: project, result: result);
+  // `overview` = the ZOOMED-OUT building single-line (compact panel tree, normal
+  // / essential colour split); default = the per-panel detail single-line.
+  final sheet = overview
+      ? buildElectricalOverview(project: project, result: result)
+      : buildElectricalSld(project: project, result: result);
+
+  // Essential prims are drawn ACI red (1); source MV-chain blue (5); normal
+  // inherits the layer colour (null). Detail sheet is all-normal ⇒ unchanged.
+  int? colorFor(SldRole r) => switch (r) {
+        SldRole.normal => null,
+        SldRole.essential => 1,
+        SldRole.source => 5,
+      };
 
   // Drawing-space primitives (panels / busbars / ways / feeders). A line that is
   // medium/thick weight is a busbar or feeder → the `feeders` layer; everything
@@ -103,11 +122,12 @@ String electricalSldToDxf({
     switch (p) {
       case SldLine():
         final layer = p.weight == SldWeight.thin ? 'panels' : 'feeders';
-        d.connector(layer, p.x1, p.y1, p.x2, p.y2);
+        d.connector(layer, p.x1, p.y1, p.x2, p.y2, color: colorFor(p.role));
       case SldRect():
-        d.box('panels', p.x, p.y, p.w, p.h);
+        d.box('panels', p.x, p.y, p.w, p.h, color: colorFor(p.role));
       case SldLabel():
-        d.text('panels', p.x, p.y, p.text, size: p.size * 1.3);
+        d.text('panels', p.x, p.y, p.text,
+            size: p.size * 1.3, color: colorFor(p.role));
     }
   }
 

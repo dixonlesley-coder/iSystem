@@ -400,9 +400,19 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   single-line is schematic, so the north-arrow/scale-bar chrome is dropped; `electrical_dxf_export.dart`
   renders the same primitives (`panels`/`feeders`/`frame` layers) + a model-space title block + legend
   (`powerOneLineToDxf` untouched). Shared `breakerLabel`/`cableLabel` format the notation. Engine-only;
-  the app export wiring + signatures are unchanged (no `.mechx`/app-state change). (Next, per the
-  floor-by-floor riser reference: a building-wide electrical RISER single-line — panels per floor by
-  true elevation, feeders as vertical risers, normal/essential colour split.)
+  the app export wiring + signatures are unchanged (no `.mechx`/app-state change).
+  **Zoomed-out building single-line landed** (the whole distribution hierarchy on one sheet, modelled
+  on a real project DXF): pure `buildElectricalOverview(project, result)` in `electrical_sld_drawing.dart`
+  → an `SldSheet` where every panel is a COMPACT node (name [tag] + incomer rating/poles + demand kW),
+  laid out in a **top-down tree tiered by feeder depth** and wired parent→child with orthogonal
+  feeders, carrying the **normal / essential colour split** of a real riser single-line (new `SldRole
+  {normal, essential, source}` on every primitive; a panel is essential when its name marks it
+  emergency, when it carries a life-safety way, or when its parent is — propagated down the emergency
+  sub-tree). The PDF + DXF exporters are now role-aware (PDF normal = the existing dark ink ⇒ the
+  detail sheet is byte-identical, essential = red; DXF essential = ACI red 62/1) behind an `overview`
+  flag, wired into the Export menu as **'Building single-line (overview)' → PDF / DXF**. (Next: render
+  the overview LIVE on the electrical canvas as a zoom-LOD level + prepend the PLN/MV/transformer/genset
+  source chain.)
   The i18n mechanism also gained **parameterized templates** — `MechXStringsData.format(key,
   {…})` substitutes `{name}` placeholders (EN+ID templates carry identical placeholders, pinned
   by a test) — and the Commercial workspace's dynamic captions (BOM/pricelist leads, unpriced
