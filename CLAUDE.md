@@ -519,6 +519,25 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   added rather than persistent prose: the Layout canvas mechanical guide notes that risers drawn
   on the plan stack vertically in the Riser view, and the Riser-view Edit help legend leads with
   an Auto-vs-Edit mode explainer (`StringKey.schematicHelpModes`, EN+ID).
+  **Single-line (Riser SLD) → professional drafter output landed (incremental, toward `H-101`):**
+  the Auto single-line is now a real Indonesian air-bersih riser drawing, not a wireframe. Nodes
+  carry their schematic SYMBOL (`_paintNodes` reuses `paintComponentSymbol`; fixtures = a drop
+  terminal) + an equipment/role LABEL, service-coloured. Piped runs read the industry tag
+  **`SIZE-SERVICE-MATERIAL`** (`_pipeTag` + `_serviceCode` CW/HW/D/V/RW/SA/RA/EA/SP/FH +
+  `_pipeMaterialCode` PPR/PVC/CI/HDPE/BS from `pipeProduct` or the service default), now with an
+  Indonesian FUNCTION suffix (**GRAVITASI / BOOSTER / TRANSFER**) and a per-riser TAG (**CW-R1** …)
+  from pure, unit-tested `ui/schematic/riser_tags.dart` (`riserFunctionFor`/`riserTags`/
+  `riserServiceCode` — function appended ONLY when confidently derivable from endpoints + feed
+  strategy, else nothing; every rule `// VERIFY`). A system-filter (All / per-service chips) divides
+  the diagram per system or shows a combined view. **Inferred risers** (`_computeInferredRisers`,
+  mutual-nearest per vertical stack) draw as dashed connectors when the `Infer risers` toggle is on
+  and are **one-click committable** to a real sized riser edge (`NetworkController.connectRiser`,
+  length = §10 elevation delta, one undo step). Drafter chrome: a toggleable **Legend (KETERANGAN)**
+  box (bottom-left, on-diagram service codes) + a toggleable **title block** (bottom-right: project ·
+  `SINGLE-LINE DIAGRAM` · `SHEET · <filter>` · date). All EN ⇒ goldens 04/09/10 shift only by the new
+  draughting content. Engine untouched; no `.mechx` change. (Queued: per-system single-line PDF/DXF
+  EXPORT reusing `DrawingChrome`, per-unit branch fan-out, the STP process-flow diagram, and bringing
+  the **electrical** SLD/exports to the same drafter quality.)
   **Mechanical ↔ electrical theme convergence landed (Apple-consistency pass):** the
   electrical workspace (a PanelMaker port) now reads as one app with the mechanical one.
   Driven by an audit + re-review, converged: the electrical **Loads palette to the RIGHT**

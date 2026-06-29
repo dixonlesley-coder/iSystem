@@ -29,7 +29,9 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/fan.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 
@@ -39,6 +41,7 @@ import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
+import '../../store/solve_store.dart';
 import '../canvas/edge_context_menu.dart';
 import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
@@ -47,7 +50,9 @@ import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
+import 'riser_tags.dart';
 
 // ---------------------------------------------------------------------------
 // Public widget
@@ -81,6 +86,14 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
   /// have no drawn vertical between them. Default OFF (byte-identical) — opt in.
   bool _inferRisers = false;
 
+  /// Auto-view: show the KETERANGAN / legend overlay (services present + codes).
+  /// Default ON — toggleable from the toolbar.
+  bool _showLegend = true;
+
+  /// Auto-view: show the bottom-right TITLE BLOCK overlay (project name +
+  /// adaptive drawing title + date). Default ON — toggleable from the toolbar.
+  bool _showTitleBlock = true;
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -100,10 +113,14 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
                 .map((e) => e.service)
                 .toSet(),
             inferRisers: _inferRisers,
+            showLegend: _showLegend,
+            showTitleBlock: _showTitleBlock,
             onMode: (m) => setState(() => _mode = m),
             onService: (s) => setState(() => _service = s),
             onAutoFocus: (s) => setState(() => _autoFocus = s),
             onInferRisers: (v) => setState(() => _inferRisers = v),
+            onShowLegend: (v) => setState(() => _showLegend = v),
+            onTitleBlock: (v) => setState(() => _showTitleBlock = v),
           ),
           Container(height: 1, color: colors.border),
           Expanded(
@@ -113,7 +130,12 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
                     showHelp: _showHelp,
                     onToggleHelp: () => setState(() => _showHelp = !_showHelp),
                   )
-                : _AutoElevation(focus: _autoFocus, inferRisers: _inferRisers),
+                : _AutoElevation(
+                    focus: _autoFocus,
+                    inferRisers: _inferRisers,
+                    showLegend: _showLegend,
+                    showTitleBlock: _showTitleBlock,
+                  ),
           ),
         ],
       ),
@@ -131,10 +153,14 @@ class _Toolbar extends StatelessWidget {
   final ServiceType? autoFocus;
   final Set<ServiceType> presentServices;
   final bool inferRisers;
+  final bool showLegend;
+  final bool showTitleBlock;
   final ValueChanged<_Mode> onMode;
   final ValueChanged<ServiceType> onService;
   final ValueChanged<ServiceType?> onAutoFocus;
   final ValueChanged<bool> onInferRisers;
+  final ValueChanged<bool> onShowLegend;
+  final ValueChanged<bool> onTitleBlock;
 
   const _Toolbar({
     required this.mode,
@@ -142,10 +168,14 @@ class _Toolbar extends StatelessWidget {
     required this.autoFocus,
     required this.presentServices,
     required this.inferRisers,
+    required this.showLegend,
+    required this.showTitleBlock,
     required this.onMode,
     required this.onService,
     required this.onAutoFocus,
     required this.onInferRisers,
+    required this.onShowLegend,
+    required this.onTitleBlock,
   });
 
   @override
@@ -202,6 +232,18 @@ class _Toolbar extends StatelessWidget {
                       label: context.strings(StringKey.schematicInferRisers),
                       selected: inferRisers,
                       onTap: () => onInferRisers(!inferRisers),
+                    ),
+                    const SizedBox(width: MechXSpacing.xs),
+                    _TabButton(
+                      label: context.strings(StringKey.schematicLegend),
+                      selected: showLegend,
+                      onTap: () => onShowLegend(!showLegend),
+                    ),
+                    const SizedBox(width: MechXSpacing.xs),
+                    _TabButton(
+                      label: context.strings(StringKey.schematicTitleBlock),
+                      selected: showTitleBlock,
+                      onTap: () => onTitleBlock(!showTitleBlock),
                     ),
                   ],
                 ),
@@ -354,7 +396,14 @@ class _ServiceChip extends StatelessWidget {
 class _AutoElevation extends ConsumerStatefulWidget {
   final ServiceType? focus;
   final bool inferRisers;
-  const _AutoElevation({this.focus, this.inferRisers = false});
+  final bool showLegend;
+  final bool showTitleBlock;
+  const _AutoElevation({
+    this.focus,
+    this.inferRisers = false,
+    this.showLegend = true,
+    this.showTitleBlock = true,
+  });
 
   @override
   ConsumerState<_AutoElevation> createState() => _AutoElevationState();
@@ -421,6 +470,16 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
           constraints.maxWidth.isFinite ? constraints.maxWidth : 800,
           constraints.maxHeight.isFinite ? constraints.maxHeight : 600,
         );
+        final feedStrategy = ref.watch(feedStrategyProvider);
+        // Resolve the equipment detail suffix per node (tank m³ / pump-fan kW)
+        // here, provider-free in the painter — a datum is included only when it
+        // genuinely exists (equipmentDetail returns null otherwise).
+        final pump = ref.watch(pumpDutyProvider);
+        final fan = ref.watch(ductFanProvider);
+        final detailByNode = <String, String>{
+          for (final node in network.nodes)
+            node.id: ?equipmentDetail(node, supplyPump: pump, fan: fan),
+        };
         final paint = CustomPaint(
           size: _size,
           painter: _AutoSchematicPainter(
@@ -430,29 +489,55 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
             colors: colors,
             focus: widget.focus,
             inferRisers: widget.inferRisers,
+            downfeed: feedStrategy == FeedStrategy.downfeed,
+            riserTagsById: riserTags(network, widget.focus),
+            detailByNode: detailByNode,
           ),
         );
         // Read-only unless inferred risers are shown — then the dashed
         // connectors become CLICKABLE: one tap commits a real sized riser.
-        if (!widget.inferRisers) return paint;
-        return MouseRegion(
-          cursor: _hoverInferred
-              ? SystemMouseCursors.click
-              : MouseCursor.defer,
-          onHover: (e) {
-            final over = _hit(e.localPosition, network, levels) != null;
-            if (over != _hoverInferred) {
-              setState(() => _hoverInferred = over);
-            }
-          },
-          onExit: (_) {
-            if (_hoverInferred) setState(() => _hoverInferred = false);
-          },
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapUp: (d) => _commit(d.localPosition, network, levels),
-            child: paint,
-          ),
+        final Widget body = !widget.inferRisers
+            ? paint
+            : MouseRegion(
+                cursor: _hoverInferred
+                    ? SystemMouseCursors.click
+                    : MouseCursor.defer,
+                onHover: (e) {
+                  final over = _hit(e.localPosition, network, levels) != null;
+                  if (over != _hoverInferred) {
+                    setState(() => _hoverInferred = over);
+                  }
+                },
+                onExit: (_) {
+                  if (_hoverInferred) setState(() => _hoverInferred = false);
+                },
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapUp: (d) => _commit(d.localPosition, network, levels),
+                  child: paint,
+                ),
+              );
+        // The KETERANGAN / legend overlay sits bottom-left (clear of where the
+        // Edit view parks its ZoomControls — the Auto view has none today), a
+        // floating-chrome card that lists the services actually drawn.
+        return Stack(
+          children: [
+            Positioned.fill(child: body),
+            if (widget.showLegend)
+              Positioned(
+                left: MechXSpacing.md,
+                bottom: MechXSpacing.md,
+                child: _AutoLegend(network: network, focus: widget.focus),
+              ),
+            // The title block sits bottom-RIGHT, clear of the bottom-left
+            // legend / (Edit view's) zoom cluster convention.
+            if (widget.showTitleBlock)
+              Positioned(
+                right: MechXSpacing.md,
+                bottom: MechXSpacing.md,
+                child: _TitleBlock(focus: widget.focus),
+              ),
+          ],
         );
       },
     );
@@ -893,27 +978,95 @@ String _sizeLabel(EdgeSizing s) {
 }
 
 /// Industry single-line pipe tag — `SIZE-SERVICE-MATERIAL` (e.g. `100-CW-PPR`,
-/// matching Indonesian air-bersih riser drawings). Air keeps the duct Ø.
-String _pipeTag(EdgeSizing s, NetEdge edge) {
+/// matching Indonesian air-bersih riser drawings). Air keeps the duct Ø. When a
+/// [function] is confidently derived (riserFunctionFor), a `-GRAVITASI` /
+/// `-BOOSTER` / `-TRANSFER` suffix is appended (piped services only).
+String _pipeTag(EdgeSizing s, NetEdge edge, {RiserFunction? function}) {
   final mm = s.diameter.inMillimeters.round();
   if (s.service.regime == FlowRegime.air) return 'Ø$mm';
-  return '$mm-${_serviceCode(edge.service)}-'
+  final base = '$mm-${_serviceCode(edge.service)}-'
       '${_pipeMaterialCode(edge.pipeProduct, edge.service)}';
+  return function != null ? '$base-${function.code}' : base;
 }
 
 /// Two-letter service code used on the single-line (CW = air bersih, etc.).
-String _serviceCode(ServiceType s) => switch (s) {
-      ServiceType.coldWater => 'CW',
-      ServiceType.hotWater => 'HW',
-      ServiceType.drainage => 'D',
-      ServiceType.vent => 'V',
-      ServiceType.rainwater => 'RW',
-      ServiceType.duct => 'SA',
-      ServiceType.returnAir => 'RA',
-      ServiceType.exhaust => 'EA',
-      ServiceType.fireSprinkler => 'SP',
-      ServiceType.fireHydrant => 'FH',
-    };
+/// Delegates to the shared [riserServiceCode] so both files share one mapping.
+String _serviceCode(ServiceType s) => riserServiceCode(s);
+
+/// The title-block DRAWING TITLE [StringKey] for the active Auto-view system
+/// [focus]: a per-service riser title (clean / hot water, drainage, vent, storm,
+/// air, fire) when one system is filtered, else the generic single-line title.
+///
+/// Returns a [StringKey] (not a localized string) so it is locale-independent
+/// and unit-testable; the widget localizes it. The mapping is TOTAL — every
+/// [ServiceType] plus null is covered, so the title is always a deterministic
+/// lookup, never a fabricated/guessed value.
+StringKey drawingTitleKey(ServiceType? focus) {
+  if (focus == null) return StringKey.schematicTitleSingleLine;
+  return switch (focus) {
+    ServiceType.coldWater => StringKey.schematicTitleCleanWaterRiser,
+    ServiceType.hotWater => StringKey.schematicTitleHotWaterRiser,
+    ServiceType.drainage => StringKey.schematicTitleDrainageRiser,
+    ServiceType.vent => StringKey.schematicTitleVentRiser,
+    ServiceType.rainwater => StringKey.schematicTitleStormRiser,
+    ServiceType.duct ||
+    ServiceType.returnAir ||
+    ServiceType.exhaust =>
+      StringKey.schematicTitleAirRiser,
+    ServiceType.fireSprinkler ||
+    ServiceType.fireHydrant =>
+      StringKey.schematicTitleFireRiser,
+  };
+}
+
+/// The equipment detail SUFFIX drawn beside an equipment symbol on the
+/// single-line — a tank capacity (`237 m³`) or a duty (`5.5 kW`) — or null when
+/// no datum genuinely exists (the node then keeps its plain name, no fabricated
+/// value). HONEST: a tank's m³ is a direct conversion of the stored
+/// [NetNode.tankCapacityLitres]; a duty is shown only when the matching system
+/// duty provider is non-null.
+///
+/// Pure + Flutter-free (engine types only) so it is unit-testable in isolation.
+String? equipmentDetail(
+  NetNode node, {
+  PumpDuty? supplyPump,
+  FanDuty? fan,
+  PumpDuty? firePump,
+}) {
+  final c = node.component;
+  if (c == null) return null;
+  switch (c) {
+    case NodeComponent.roofTank:
+    case NodeComponent.groundTank:
+    case NodeComponent.expansionTank:
+      final litres = node.tankCapacityLitres;
+      if (litres == null || litres <= 0) return null;
+      final m3 = litres / 1000.0;
+      // Whole-m³ for big cisterns, one decimal for small tanks; strip a '.0'.
+      final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
+      final clean = s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
+      return '$clean m³';
+    case NodeComponent.pump:
+    case NodeComponent.boosterSet:
+      // VERIFY: this is the SYSTEM supply-pump duty (one trunk pump), not a
+      // per-node solve — a project with several independent pumps would show the
+      // same duty on every pump node. Acceptable first pass (one supply pump is
+      // the norm); the fire pump is deliberately NOT attached here (no node-kind
+      // distinguishes a fire pump from a plumbing pump yet).
+      if (supplyPump == null) return null;
+      return '${supplyPump.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW';
+    case NodeComponent.ahu:
+    case NodeComponent.fcu:
+    case NodeComponent.supplyFan:
+    case NodeComponent.exhaustFan:
+      // VERIFY: same system-level caveat as the pump — the central duct-fan duty
+      // is attached to every air-unit node of this kind (no per-unit fan solve).
+      if (fan == null) return null;
+      return '${fan.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW';
+    default:
+      return null;
+  }
+}
 
 /// Pipe material code — the edge's chosen product, else the conventional
 /// default for the service (clean/hot water ⇒ PPR, drainage/vent/storm ⇒ PVC,
@@ -1105,6 +1258,9 @@ class _AutoSchematicPainter extends CustomPainter {
     required this.colors,
     this.focus,
     this.inferRisers = false,
+    this.downfeed = false,
+    this.riserTagsById = const {},
+    this.detailByNode = const {},
   });
 
   final Network network;
@@ -1120,6 +1276,19 @@ class _AutoSchematicPainter extends CustomPainter {
   /// service but have no DRAWN riser between them (a convenience overlay — the
   /// engineer hasn't routed the vertical, so it's shown dashed + flagged).
   final bool inferRisers;
+
+  /// Project feed strategy — true for roof-tank downfeed, false for upfeed.
+  /// Threaded into the pipe-tag FUNCTION-suffix heuristic (riserFunctionFor).
+  final bool downfeed;
+
+  /// Per-edge riser tag (`CW-R1` …) for every riser edge, drawn boxed near the
+  /// riser top. Computed once in the widget via [riserTags].
+  final Map<String, String> riserTagsById;
+
+  /// Per-node equipment detail suffix (capacity `237 m³` / duty `5.5 kW`),
+  /// appended to the node's name. Resolved provider-free in the widget via
+  /// [equipmentDetail]; absent nodes keep their plain name.
+  final Map<String, String> detailByNode;
 
   static const double _nodeRadius = 4.0;
   static const double _edgeStroke = 2.0;
@@ -1253,6 +1422,9 @@ class _AutoSchematicPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round;
 
+      // FUNCTION suffix — appended only when confidently derivable (else null).
+      final fn = riserFunctionFor(network, edge, downfeed: downfeed);
+
       if (edge.kind == EdgeKind.riser) {
         final midX = (from.dx + to.dx) / 2;
         final path = Path()
@@ -1270,11 +1442,23 @@ class _AutoSchematicPainter extends CustomPainter {
         if (s != null) {
           _drawText(
             canvas,
-            _pipeTag(s, edge),
+            _pipeTag(s, edge, function: fn),
             Offset(midX + MechXSpacing.xs, arrowY - MechXSpacing.sm),
             fontSize: _labelFontSize,
             color: color,
             fontWeight: FontWeight.w500,
+          );
+        }
+
+        // A small boxed riser tag (CW-R1 …) near the riser TOP.
+        final tag = riserTagsById[edge.id];
+        if (tag != null) {
+          final topY = math.min(from.dy, to.dy);
+          _drawBoxedTag(
+            canvas,
+            tag,
+            Offset(midX, topY + MechXSpacing.sm + 3),
+            color,
           );
         }
       } else {
@@ -1285,7 +1469,7 @@ class _AutoSchematicPainter extends CustomPainter {
           final midY = (from.dy + to.dy) / 2;
           _drawText(
             canvas,
-            _pipeTag(s, edge),
+            _pipeTag(s, edge, function: fn),
             Offset(midX, midY - MechXSpacing.md),
             fontSize: _labelFontSize,
             color: color,
@@ -1295,6 +1479,42 @@ class _AutoSchematicPainter extends CustomPainter {
         }
       }
     }
+  }
+
+  /// A compact boxed tag (rounded rect, service-colour outline over a canvas
+  /// halo fill) centred on [anchor] — used for the riser tags (CW-R1 …).
+  void _drawBoxedTag(Canvas canvas, String text, Offset anchor, Color color) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontFamily: 'Roboto',
+          fontSize: 9,
+          color: color,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    )..layout();
+    const padX = 4.0;
+    const padY = 2.0;
+    final rect = Rect.fromCenter(
+      center: anchor,
+      width: tp.width + padX * 2,
+      height: tp.height + padY * 2,
+    );
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(3));
+    canvas.drawRRect(rrect, Paint()..color = colors.canvas);
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+    tp.paint(
+        canvas, Offset(anchor.dx - tp.width / 2, anchor.dy - tp.height / 2));
   }
 
   void _drawArrow(Canvas canvas, Offset tip, bool pointUp, Color color) {
@@ -1353,18 +1573,22 @@ class _AutoSchematicPainter extends CustomPainter {
         canvas.drawCircle(pos, _nodeRadius, Paint()..color = color);
       }
 
-      // Fixture / equipment label, centred just below the symbol.
+      // Fixture / equipment label, centred just below the symbol. When the node
+      // carries an equipment detail (capacity / duty), append it after a '·'
+      // (e.g. 'Roof tank · 237 m³', 'Booster set · 5.5 kW').
       final label = node == null ? null : _nodeLabel(node);
       if (label != null) {
+        final detail = node == null ? null : detailByNode[node.id];
+        final text = detail != null ? '$label · $detail' : label;
         _drawText(
           canvas,
-          label,
+          text,
           Offset(pos.dx, pos.dy + 13),
           fontSize: 9,
           color: colors.textMuted,
           fontWeight: FontWeight.w500,
           centered: true,
-          maxWidth: 90,
+          maxWidth: 130,
         );
       }
     }
@@ -1405,7 +1629,10 @@ class _AutoSchematicPainter extends CustomPainter {
       old.building != building ||
       old.colors != colors ||
       old.focus != focus ||
-      old.inferRisers != inferRisers;
+      old.inferRisers != inferRisers ||
+      old.downfeed != downfeed ||
+      old.riserTagsById != riserTagsById ||
+      old.detailByNode != detailByNode;
 }
 
 // ---------------------------------------------------------------------------
@@ -1621,6 +1848,165 @@ class _EditSchematicPainter extends CustomPainter {
 // ---------------------------------------------------------------------------
 // Canvas chrome (banner, zoom controls, help)
 // ---------------------------------------------------------------------------
+
+/// The KETERANGAN / legend overlay for the Auto single-line: a floating-glass
+/// card listing the services actually drawn (colour swatch + code + full name).
+/// It is a pure render of [network] + [focus] — no clock, no engine call, no
+/// derived value (every swatch/code/name is a fixed lookup for an enum that is
+/// genuinely present in the drawing). When a system [focus] is active it
+/// collapses to exactly that one service (and only if still present). Renders
+/// nothing when no service has any edge.
+class _AutoLegend extends StatelessWidget {
+  final Network network;
+  final ServiceType? focus;
+  const _AutoLegend({required this.network, required this.focus});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final present = focus != null
+        ? <ServiceType>[
+            if (network.edges.any((e) => e.service == focus)) focus!,
+          ]
+        : <ServiceType>[
+            for (final s in ServiceType.values)
+              if (network.edges.any((e) => e.service == s)) s,
+          ];
+    if (present.isEmpty) return const SizedBox.shrink();
+    return GlassSurface(
+      borderRadius: MechXRadii.card,
+      shadow: MechXShadow.popover,
+      edge: Border.all(color: colors.glassEdge),
+      child: Padding(
+        padding: const EdgeInsets.all(MechXSpacing.sm),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              context.strings(StringKey.schematicLegend),
+              style: type.caption.copyWith(
+                  color: colors.textMuted, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: MechXSpacing.xs),
+            for (final s in present)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                          color: serviceColor(s), shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: MechXSpacing.sm),
+                    Text(
+                      _serviceCode(s),
+                      style: type.caption.copyWith(
+                          color: colors.textSecondary,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: 'Roboto'),
+                    ),
+                    const SizedBox(width: MechXSpacing.xs),
+                    Text(
+                      serviceLabel(s),
+                      style: type.caption.copyWith(
+                          color: colors.textSecondary, fontFamily: 'Roboto'),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The bottom-right TITLE BLOCK overlay for the Auto single-line — a compact
+/// floating-glass card echoing a real drawing's kop gambar: the project NAME, an
+/// adaptive DRAWING TITLE (per the active system [focus] via [drawingTitleKey]),
+/// the DATE, and a sheet/system line.
+///
+/// HONESTY: the project name always exists (defaults to 'Untitled project') and
+/// is never fabricated; the drawing title is a deterministic, total lookup over
+/// [focus] (never guessed); the DATE is read in the WIDGET (DateTime.now()),
+/// NEVER in a painter/engine — it is a real machine date, not a heuristic. The
+/// sheet/system line shows a fixed lead-in + the focused service (or 'All') and
+/// deliberately does NOT invent a sheet number. Only ever rendered when a
+/// project/network exists (the parent early-returns 'No network' otherwise).
+class _TitleBlock extends ConsumerWidget {
+  final ServiceType? focus;
+  const _TitleBlock({required this.focus});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final name = ref.watch(projectControllerProvider).name;
+    // The DATE is read here in the widget (yyyy-MM-dd) — NEVER in the painter or
+    // engine (no clock in either). A real machine date, so no // VERIFY.
+    final now = DateTime.now();
+    final date = '${now.year.toString().padLeft(4, '0')}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+    final title = context.strings(drawingTitleKey(focus));
+    // VERIFY: a real sheet number / revision is not plumbed into the Auto view,
+    // so the sheet line stays generic ('SHEET · <system>') rather than
+    // fabricating a 'X of Y' count (matches DrawingChrome's deferred number).
+    final sheetLine = '${context.strings(StringKey.schematicTitleSheet)} · '
+        '${focus == null ? context.strings(StringKey.schematicSystemAll) : serviceLabel(focus!)}';
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 240),
+      child: GlassSurface(
+        borderRadius: MechXRadii.card,
+        shadow: MechXShadow.popover,
+        edge: Border.all(color: colors.glassEdge),
+        child: Padding(
+          padding: const EdgeInsets.all(MechXSpacing.sm),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 220),
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: type.label.copyWith(
+                      color: colors.textPrimary, fontWeight: FontWeight.w600),
+                ),
+              ),
+              const SizedBox(height: MechXSpacing.xs),
+              Container(height: 1, width: 220, color: colors.border),
+              const SizedBox(height: MechXSpacing.xs),
+              Text(
+                title,
+                style: type.caption.copyWith(
+                    color: colors.textSecondary, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                sheetLine,
+                style: type.caption.copyWith(color: colors.textMuted),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                date,
+                style: type.caption.copyWith(color: colors.textMuted),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _Banner extends StatelessWidget {
   final String text;
