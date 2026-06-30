@@ -438,7 +438,30 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (`W`/`kW`), a `Cu bus <csa>mm2  Icw <kA>kA` header, CADANGAN (spare) ways as stubbed rows (from
   `spareWaysReserved`), and a TOTAL footer (diversified demand + line current) — 0-spare/withstand-off
   panels stay geometrically byte-identical. New goldens `09_electrical_overview.png` +
-  `10_electrical_riser.png`.
+  `10_electrical_riser.png`. The schedule was then brought to the BRI `Diagram Panel`'s ALIGNED-TABLE
+  form (column-header band GRUP | DEVICE | PENGHANTAR | DAYA | KETERANGAN | R | S | T at fixed columns,
+  block width 920, a per-way `· PVC <n>mm` conduit token from the pure `_conduitMm`), and three further
+  DXF-parity gaps (verified against the client's real EL1004 `Diagram Panel BRI` DXF) then closed in
+  `electrical_sld_drawing.dart`: **(a) STARTER / CONTROL token** — the way's `ElectricalCircuit.starterType`
+  (resolved by the same `circuitById` lookup that feeds `cableType`) is mapped to an ASCII token by the
+  pure `_starterCode` (`dol`->`DOL`, `starDelta`->`star-delta` [NOT the unicode `Y-D`], `reversing`->`REV`,
+  `softStarter`->`soft-start`, `vfd`->`VFD`, `ats`->`ATS`, `pump`->`pump`) and APPENDED to the DEVICE cell
+  as `<breaker> · <token>`, shown ONLY when a way carries a real `starterType` (else bare — most final
+  lighting/socket ways have none); **(b) DAYA in WATT** — the cell switched from `_watts()` (kW) to the
+  pure, unit-tested `_wattsId(double w)` → integer watts with the Indonesian DOT thousands separator +
+  ` WATT` (`190 WATT`, `1.100 WATT`, `4.400 WATT`, `52.871 WATT`; rounds to the nearest watt, from the
+  solved `ElectricalCircuitResult.loadW`), a feeder (loadW 0) staying `-`; **(c) circle V/A/Hz meters** —
+  a new SEALED `SldCircle` primitive `{ cx, cy, r; weight; role }` replaces the boxed incomer-metering
+  cluster on 3-phase boards with three small role-coloured CIRCLES (each a centred letter) + the kept `CT`
+  note, handled EXHAUSTIVELY in all FOUR `SldPrim` switch sites (`electrical_sld_drawing.dart` overview/
+  riser prim loops + bounds; `electrical_pdf_export.dart` 4-bezier kappa≈0.5523 circle; `electrical_dxf_export.dart`
+  new `_Dxf.circle` → `0/CIRCLE`, `10`/`20` centre Y-negated, `40`/radius; `sld_sheet_painter.dart`
+  `paintSldPrims` → `canvas.drawCircle`) — a new sealed subtype forcing every renderer to handle it
+  (golden rule 5). All three are drawing-fidelity, `// VERIFY`-free; honesty-by-construction (starter only
+  when real, DAYA from the real loadW). The per-panel DETAIL is the only path touched (overview/riser stay
+  byte-identical bar the new `SldCircle` bounds/translate case). Goldens **05_electrical** +
+  **11_electrical_schedule** regenerated (circle meters + WATT-dot DAYA on the MDP schedule); mechanical
+  **04/07/09/10_single_line** BYTE-IDENTICAL.
   **The overview + riser then gained matching drafter rigor — feeder cable/breaker labels, kW/kVA
   compact nodes, and a riser per-floor branch fan-out** (`electrical_sld_drawing.dart`, engine-only, no
   new `SldPrim` so the PDF/DXF/canvas renderers are untouched; the per-panel DETAIL `buildElectricalSld`

@@ -75,6 +75,15 @@ class _Dxf {
     g(1, value);
   }
 
+  void circle(String layer, double cx, double cy, double r, {int? color}) {
+    g(0, 'CIRCLE');
+    g(8, layer);
+    if (color != null) g(62, color);
+    g(10, cx);
+    g(20, -cy); // DXF Y negated, like box/text/connector
+    g(40, r);
+  }
+
   void connector(String layer, double x1, double y1, double x2, double y2,
       {int? color}) {
     g(0, 'LINE');
@@ -135,6 +144,8 @@ String electricalSldToDxf({
       case SldLabel():
         d.text('panels', p.x, p.y, p.text,
             size: p.size * 1.3, color: colorFor(p.role));
+      case SldCircle():
+        d.circle('panels', p.cx, p.cy, p.r, color: colorFor(p.role));
     }
   }
 

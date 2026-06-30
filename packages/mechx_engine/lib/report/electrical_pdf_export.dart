@@ -132,6 +132,22 @@ Uint8List electricalSldToPdf({
         final fs = math.max(5.0, p.size * scale);
         cs.writeln('BT /F1 ${_n(fs)} Tf ${_textRgForRole(p.role)} rg '
             '${_n(tx(p.x))} ${_n(ty(p.y))} Td (${_pdfText(p.text)}) Tj ET');
+      case SldCircle():
+        // A stroked circle approximated by 4 cubic beziers (kappa ~= 0.5523).
+        cs.writeln('${_strokeRgForRole(p.role)} RG '
+            '${_n(_weightPt(p.weight) * scale + 0.3)} w');
+        final cx = tx(p.cx), cy = ty(p.cy), r = p.r * scale;
+        const k = 0.5523;
+        cs.writeln('${_n(cx + r)} ${_n(cy)} m');
+        cs.writeln('${_n(cx + r)} ${_n(cy + r * k)} '
+            '${_n(cx + r * k)} ${_n(cy + r)} ${_n(cx)} ${_n(cy + r)} c');
+        cs.writeln('${_n(cx - r * k)} ${_n(cy + r)} '
+            '${_n(cx - r)} ${_n(cy + r * k)} ${_n(cx - r)} ${_n(cy)} c');
+        cs.writeln('${_n(cx - r)} ${_n(cy - r * k)} '
+            '${_n(cx - r * k)} ${_n(cy - r)} ${_n(cx)} ${_n(cy - r)} c');
+        cs.writeln('${_n(cx + r * k)} ${_n(cy - r)} '
+            '${_n(cx + r)} ${_n(cy - r * k)} ${_n(cx + r)} ${_n(cy)} c');
+        cs.writeln('S');
     }
   }
 

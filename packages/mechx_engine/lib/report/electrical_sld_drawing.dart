@@ -16,6 +16,7 @@ library;
 
 import 'dart:math' as math;
 
+import '../electrical/control/starter.dart' show StarterType;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/results.dart' show BreakerResult;
@@ -63,6 +64,14 @@ class SldLabel extends SldPrim {
   final SldRole role;
   const SldLabel(this.x, this.y, this.text,
       {this.size = 9, this.bold = false, this.role = SldRole.normal});
+}
+
+class SldCircle extends SldPrim {
+  final double cx, cy, r;
+  final SldWeight weight;
+  final SldRole role;
+  const SldCircle(this.cx, this.cy, this.r,
+      {this.weight = SldWeight.thin, this.role = SldRole.normal});
 }
 
 /// One row of the drawing's device legend (symbol meaning).
@@ -125,6 +134,34 @@ String _num(double v) =>
 /// A connected-load (DAYA) figure: `W` under 1 kW, else `kW`.
 String _watts(double w) =>
     w >= 1000 ? '${_num(w / 1000)}kW' : '${_num(w)}W';
+
+/// The DAYA cell figure in the Indonesian DIAGRAM-PANEL convention: integer
+/// WATT with a DOT thousands separator + ` WATT` (e.g. 4400 -> `4.400 WATT`,
+/// 190 -> `190 WATT`, 52871 -> `52.871 WATT`). Rounds to the nearest watt.
+String _wattsId(double w) {
+  final n = w.round();
+  final neg = n < 0;
+  final digits = n.abs().toString();
+  final buf = StringBuffer();
+  for (var i = 0; i < digits.length; i++) {
+    if (i > 0 && (digits.length - i) % 3 == 0) buf.write('.');
+    buf.write(digits[i]);
+  }
+  return '${neg ? '-' : ''}$buf WATT';
+}
+
+/// The ASCII control / starter token for a way's [StarterType] (BRI `Diagram
+/// Panel` motor-control convention: DOL / VSD / star-delta). ASCII-only — never
+/// the model's own `Y-D` label (the unicode would tofu in the goldens/exports).
+String _starterCode(StarterType s) => switch (s) {
+      StarterType.dol => 'DOL',
+      StarterType.starDelta => 'star-delta',
+      StarterType.reversing => 'REV',
+      StarterType.softStarter => 'soft-start',
+      StarterType.vfd => 'VFD',
+      StarterType.ats => 'ATS',
+      StarterType.pump => 'pump',
+    };
 
 String _curveCode(BreakerCurve c) => switch (c) {
       BreakerCurve.b => 'B',
@@ -289,14 +326,16 @@ SldSheet buildElectricalSld({
 
     // Incomer METERING cluster (top-right of the header) — V / A / Hz meters +
     // a CT note, the BRI `Diagram Panel` convention. Only on 3-phase boards
-    // (single-phase final boards carry no metering). Boxed letters read as the
-    // meter symbols without a new primitive.
+    // (single-phase final boards carry no metering). The meters draw as CIRCLE
+    // symbols (the DXF convention), each with a centred letter.
     if (p.system.isThreePhase) {
       var mx = blockX + _blockW - 196;
       const my = 12.0; // within the header band
+      const mr = 9.0; // meter circle radius (fits the old 18px slot)
       for (final m in const ['V', 'A', 'Hz']) {
-        prims.add(SldRect(mx, blockY + my, 18, 18));
-        prims.add(SldLabel(mx + 4, blockY + my + 13, m, size: 8));
+        final cx = mx + mr, cy = blockY + my + mr;
+        prims.add(SldCircle(cx, cy, mr));
+        prims.add(SldLabel(cx - m.length * 2.0, cy + 3, m, size: 7));
         mx += 30;
       }
       prims.add(SldLabel(mx + 4, blockY + my + 13, 'CT', size: 8));
@@ -362,11 +401,18 @@ SldSheet buildElectricalSld({
       final conduit = conduitMm != null ? ' · PVC ${conduitMm}mm' : '';
       final cable =
           '${cableLabel(circuit, c.cable.csaMm2, c.threePhase)} mm2$earth$conduit';
-      final daya = c.loadW > 0 ? _watts(c.loadW) : '-';
+      // DAYA in WATT (integer, dot thousands separator); a feeder (loadW 0) → '-'.
+      final daya = c.loadW > 0 ? _wattsId(c.loadW) : '-';
+      // DEVICE: breaker label + the motor-control / starter token (DOL / VSD /
+      // star-delta) APPENDED only when the way carries a real starterType —
+      // most final lighting/socket ways have none, so the cell stays bare.
+      final starter = circuit?.starterType;
+      final device = starter != null
+          ? '${breakerScheduleLabel(c.breaker, poles)} · ${_starterCode(starter)}'
+          : breakerScheduleLabel(c.breaker, poles);
       final ib = _num(c.designCurrent.amperes);
       prims.add(SldLabel(blockX + _colGrup, rowY + 3, 'W${i + 1}', size: rowSize));
-      prims.add(SldLabel(blockX + _colDevice, rowY + 3,
-          breakerScheduleLabel(c.breaker, poles), size: rowSize));
+      prims.add(SldLabel(blockX + _colDevice, rowY + 3, device, size: rowSize));
       prims.add(SldLabel(blockX + _colPenghantar, rowY + 3, cable, size: rowSize));
       prims.add(SldLabel(blockX + _colDaya, rowY + 3, daya, size: rowSize));
       prims.add(SldLabel(
@@ -554,6 +600,11 @@ SldSheet buildElectricalSourceSpine({
       case SldLabel():
         minX = math.min(minX, pr.x);
         minY = math.min(minY, pr.y);
+      case SldCircle():
+        minX = math.min(minX, pr.cx - pr.r);
+        minY = math.min(minY, pr.cy - pr.r);
+        maxX = math.max(maxX, pr.cx + pr.r);
+        maxY = math.max(maxY, pr.cy + pr.r);
     }
   }
   if (!minX.isFinite) {
@@ -979,6 +1030,11 @@ SldSheet buildElectricalOverview({
         case SldLabel():
           minX = math.min(minX, pr.x);
           minY = math.min(minY, pr.y);
+        case SldCircle():
+          minX = math.min(minX, pr.cx - pr.r);
+          minY = math.min(minY, pr.cy - pr.r);
+          maxX = math.max(maxX, pr.cx + pr.r);
+          maxY = math.max(maxY, pr.cy + pr.r);
       }
     }
   }
@@ -1258,6 +1314,10 @@ SldSheet buildElectricalRiser({
         maxX = math.max(maxX, math.max(pr.x1, pr.x2));
       case SldLabel():
         minY = math.min(minY, pr.y);
+      case SldCircle():
+        minY = math.min(minY, pr.cy - pr.r);
+        maxY = math.max(maxY, pr.cy + pr.r);
+        maxX = math.max(maxX, pr.cx + pr.r);
     }
   }
   if (!minY.isFinite) {

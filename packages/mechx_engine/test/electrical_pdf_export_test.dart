@@ -91,6 +91,15 @@ void main() {
     expect(s, contains('MCB')); // a breaker class in the legend / rows
   });
 
+  test('the 3-phase MDP incomer metering draws as stroked circles (beziers)',
+      () {
+    final s = latin1.decode(
+        electricalSldToPdf(project: project, result: result, title: 'SLD'));
+    // A circle is 4 cubic-bezier ` c` ops then a stroke ` S`; the V/A/Hz
+    // meters add at least three (12 bezier segments) on a 3-phase board.
+    expect(' c\n'.allMatches(s).length, greaterThanOrEqualTo(12));
+  });
+
   test('the cross-reference offsets actually point at their objects', () {
     final s = latin1.decode(
         electricalSldToPdf(project: project, result: result));

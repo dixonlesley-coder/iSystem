@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
@@ -111,8 +112,9 @@ void main() {
     expect(RegExp(r'MC(B|CB) \d+A (1|3)ph').hasMatch(joined), isTrue);
     // Cable carries the ASCII mm2 unit suffix.
     expect(joined, contains('mm2'));
-    // DAYA(WATT): the LP-1 lighting way's connected 1500 W reads as 1.5kW.
-    expect(joined, contains('1.5kW'));
+    // DAYA(WATT): the LP-1 lighting way's connected 1500 W reads in the
+    // Indonesian DIAGRAM PANEL convention — integer WATT, dot thousands sep.
+    expect(joined, contains('1.500 WATT'));
     // Busbar make-up reads "Cu bus".
     expect(joined, contains('Cu bus'));
     // A TOTAL footer per block.
@@ -218,6 +220,107 @@ void main() {
       expect(b.minX, a.minX);
       expect(b.maxX, a.maxX);
       expect(b.maxY, a.maxY);
+    });
+  });
+
+  group('metering circles + starter column + DAYA in WATT', () {
+    // A 3-phase MDP with a DOL motor way carrying a real connected load, plus a
+    // 1-phase final board (no metering). Loads chosen to exercise the WATT dot-
+    // grouping: 190 W, 4400 W, 52871 W.
+    const dp = ElectricalProject(
+      id: 'dp',
+      name: 'DiagramPanel',
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'MDP',
+          circuits: [
+            ElectricalCircuit(
+              id: 'm1',
+              name: 'Pompa',
+              loadKind: LoadKind.motor,
+              starterType: StarterType.dol,
+              loadW: 4400,
+              length: Length(20),
+            ),
+            ElectricalCircuit(
+              id: 'g1',
+              name: 'Chiller plant',
+              loadKind: LoadKind.general,
+              loadW: 52871,
+              length: Length(18),
+            ),
+            ElectricalCircuit(
+              id: 'g2',
+              name: 'Exhaust fan',
+              loadKind: LoadKind.general,
+              loadW: 190,
+              length: Length(12),
+            ),
+          ],
+        ),
+        ElectricalPanel(
+          id: 'SP1',
+          name: 'SP-1',
+          system: ElectricalSystem.singlePhase,
+          voltage: Voltage(220),
+          circuits: [
+            ElectricalCircuit(
+              id: 'c1',
+              name: 'Lighting',
+              loadKind: LoadKind.lighting,
+              isLighting: true,
+              loadW: 1100,
+              length: Length(15),
+            ),
+          ],
+        ),
+      ],
+    );
+    final dpResult = computeSystem(profile, dp);
+
+    test('a 3-phase board emits metering circles; a 1-phase board emits none',
+        () {
+      final mdp = buildElectricalPanelDetail(
+          project: dp, result: dpResult, panelId: 'MDP');
+      final sp1 = buildElectricalPanelDetail(
+          project: dp, result: dpResult, panelId: 'SP1');
+      // V / A / Hz meters → at least three circles on the 3-phase MDP.
+      expect(mdp.prims.whereType<SldCircle>().length, greaterThanOrEqualTo(3));
+      // The single-phase board carries no metering cluster.
+      expect(sp1.prims.whereType<SldCircle>(), isEmpty);
+    });
+
+    test('a motor way with a starterType shows its ASCII control token (DOL)',
+        () {
+      final joined = buildElectricalPanelDetail(
+              project: dp, result: dpResult, panelId: 'MDP')
+          .prims
+          .whereType<SldLabel>()
+          .map((t) => t.text)
+          .join('\n');
+      // The DOL token appears appended to the motor way's DEVICE cell.
+      expect(joined, contains('DOL'));
+      // A way with NO starter (the general loads) does not invent a token.
+      expect(joined, isNot(contains('VFD')));
+      expect(joined, isNot(contains('star-delta')));
+    });
+
+    test('DAYA cells read integer WATT with the dot thousands separator', () {
+      final joined = dpResult.panels.keys
+          .map((id) =>
+              buildElectricalPanelDetail(project: dp, result: dpResult, panelId: id)
+                  .prims
+                  .whereType<SldLabel>()
+                  .map((t) => t.text)
+                  .join('\n'))
+          .join('\n');
+      expect(joined, contains('190 WATT')); // < 1000, no separator
+      expect(joined, contains('1.100 WATT')); // SP-1 lighting
+      expect(joined, contains('4.400 WATT')); // motor
+      expect(joined, contains('52.871 WATT')); // chiller (5 digits)
+      // The old kW form is gone from the per-way DAYA cell.
+      expect(joined, isNot(contains('4.4kW')));
     });
   });
 

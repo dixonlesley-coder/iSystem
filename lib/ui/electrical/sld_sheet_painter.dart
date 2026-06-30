@@ -104,6 +104,18 @@ void paintSldPrims(
           textDirection: TextDirection.ltr,
         )..layout();
         tp.paint(canvas, at - Offset(0, tp.height * 0.78));
+      case SldCircle():
+        final c = transform.worldToScreen(Offset(prim.cx, prim.cy));
+        canvas.drawCircle(
+            c, prim.r * s, Paint()..color = rectFill);
+        canvas.drawCircle(
+          c,
+          prim.r * s,
+          Paint()
+            ..color = roleColor(prim.role)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = (_weightPxFor(prim.weight) * s).clamp(0.8, 4.0),
+        );
     }
   }
 }
