@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/autosave.dart';
+import '../data/dxf_import.dart';
 import '../data/pdf_import.dart';
 import '../data/project_document.dart';
 import '../data/recovery.dart';
@@ -228,26 +229,28 @@ class _ElectricalInspectorColumn extends StatelessWidget {
 class _TopBar extends ConsumerWidget {
   const _TopBar();
 
-  Future<void> _pickAndLoadPdf(BuildContext context, WidgetRef ref) async {
+  Future<void> _pickAndLoadPlan(BuildContext context, WidgetRef ref) async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const ['pdf'],
+      allowedExtensions: const ['pdf', 'dxf'],
       allowMultiple: false,
     );
     if (result == null || result.files.isEmpty) return;
     final path = result.files.single.path;
     if (path == null || path.isEmpty) return;
 
+    final isDxf = path.toLowerCase().endsWith('.dxf');
+    final what = isDxf ? 'DXF' : 'PDF';
     try {
-      var sheets = await importPdf(path);
+      var sheets = isDxf ? await importDxf(path) : await importPdf(path);
       if (sheets.isEmpty) {
         ref
             .read(loadErrorProvider.notifier)
-            .set('That PDF had no importable pages.');
+            .set('That $what had no importable geometry.');
         return;
       }
       // Multi-page PDF: let the user pick which pages to bring in (single-page
-      // documents import straight through, unchanged).
+      // documents — and every DXF, which is one sheet — import straight through).
       if (sheets.length > 1 && context.mounted) {
         final chosen = await showPdfPagePicker(context, sheets);
         if (chosen == null) return; // cancelled — keep the current project
@@ -259,10 +262,10 @@ class _TopBar extends ConsumerWidget {
       final n = sheets.length;
       ref
           .read(statusMessageProvider.notifier)
-          .showStatus('$n ${n == 1 ? 'page' : 'pages'} imported');
+          .showStatus('$n ${n == 1 ? 'sheet' : 'sheets'} imported');
     } catch (e) {
       // Surface the failure instead of silently keeping the old sheets.
-      ref.read(loadErrorProvider.notifier).set('Could not import PDF: $e');
+      ref.read(loadErrorProvider.notifier).set('Could not import $what: $e');
     }
   }
 
@@ -388,7 +391,7 @@ class _TopBar extends ConsumerWidget {
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
               label: context.strings(StringKey.shellImportPdf),
-              onPressed: () => _pickAndLoadPdf(context, ref),
+              onPressed: () => _pickAndLoadPlan(context, ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(

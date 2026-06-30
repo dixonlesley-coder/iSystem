@@ -102,7 +102,8 @@ packages/mechx_engine/lib/         PURE-DART CALC ENGINE (no Flutter)
   standards/sni.dart               SniProfile: fixture-unit (UBAP) loads, Hunter demand
                                    curve, pressures/velocities, materials, verifyChecklist
   geometry/                        scale_calibration.dart, building.dart (floors,
-                                   elevations, MountingHeights, ceiling/fixture elevations)
+                                   elevations, MountingHeights, ceiling/fixture elevations),
+                                   dxf_drawing.dart (parseDxf → DxfDrawing for the canvas background)
   network/                         network.dart (NetNode w/ role+elevation+fixture+airflow,
                                    NetEdge, nodeElevation, edgeLength), pressure_solve.dart
                                    (solvePressurized upfeed + solveDownfeed roof-tank),
@@ -127,7 +128,7 @@ lib/                               FLUTTER APP
                                    UncontrolledProviderScope
   app.dart                         MechXApp (WidgetsApp + MechXTheme)
   data/                            project_document.dart (versioned .mechx JSON),
-                                   pdf_import.dart, recovery.dart + autosave.dart
+                                   pdf_import.dart, dxf_import.dart, recovery.dart + autosave.dart
   store/                           Riverpod controllers (the app's brain):
                                    network_store (drawing + edit + undo + duplicateFloor +
                                    ortho), project_store (floors/calibration + undo),
@@ -144,7 +145,11 @@ lib/                               FLUTTER APP
 
 ## Feature state (what's built)
 
-PDF import (pdfrx) + multi-sheet rail; per-sheet scale calibration; per-floor
+PDF import (pdfrx) **+ DXF import** (pure-engine `geometry/dxf_drawing.dart`
+`parseDxf` → LINE/LWPOLYLINE/POLYLINE/CIRCLE/ARC + INSERT/BLOCKS expansion,
+rendered by `ui/canvas/dxf_sheet_page.dart` as a calibratable background via
+`Sheet.dxfPath`; a DISPLAY substrate only, length still from calibration) +
+multi-sheet rail; per-sheet scale calibration; per-floor
 heights + role-aware elevations; draw runs/risers for 10 services (cold/hot
 water, drainage, vent, rainwater, supply/return/exhaust air, sprinkler,
 hydrant); **select / edit / delete / drag** nodes & edges, **multi-floor

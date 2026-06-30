@@ -38,6 +38,12 @@ void main() {
           pdfPath: '/x/plan.pdf',
           sizePx: Size(800, 600),
         ),
+        Sheet(
+          id: 'cad#0',
+          name: 'cad plan',
+          dxfPath: '/x/plan.dxf',
+          sizePx: Size(1684, 900),
+        ),
       ],
       viewports: {
         's1': ViewportTransform(scale: 0.5, offset: Offset(12, 34)),
@@ -97,10 +103,15 @@ void main() {
     expect(decoded.floors.length, 2);
     expect(decoded.floors.first.height.meters, 4.0);
     expect(decoded.calibrations['s1']?.metersPerPixel, 0.02);
-    expect(decoded.sheets.length, 2);
+    expect(decoded.sheets.length, 3);
     expect(decoded.sheets[1].pdfPath, '/x/plan.pdf');
     expect(decoded.sheets[1].sizePx, const Size(800, 600));
     expect(decoded.sheets.first.pdfPath, isNull);
+    // DXF-backed sheet round-trips its dxfPath (and carries no pdfPath).
+    expect(decoded.sheets[2].dxfPath, '/x/plan.dxf');
+    expect(decoded.sheets[2].pdfPath, isNull);
+    expect(decoded.sheets[2].sizePx, const Size(1684, 900));
+    expect(decoded.sheets[1].dxfPath, isNull);
     expect(decoded.network.nodes.length, 3);
     expect(decoded.network.nodes[1].x, 110);
     // node role / explicit elevation / fixture type round-trip
