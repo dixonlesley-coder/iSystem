@@ -53,6 +53,7 @@ import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
 import 'riser_tags.dart';
+import 'schematic_export.dart';
 
 // ---------------------------------------------------------------------------
 // Public widget
@@ -87,12 +88,17 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
   bool _inferRisers = false;
 
   /// Auto-view: show the KETERANGAN / legend overlay (services present + codes).
-  /// Default ON — toggleable from the toolbar.
-  bool _showLegend = true;
+  /// Default OFF — the legend is DRAWING CHROME that rides the export (PDF/DXF),
+  /// keeping the live editing canvas uncluttered. Toggle ON to preview it.
+  bool _showLegend = false;
 
   /// Auto-view: show the bottom-right TITLE BLOCK overlay (project name +
-  /// adaptive drawing title + date). Default ON — toggleable from the toolbar.
-  bool _showTitleBlock = true;
+  /// adaptive drawing title + date). Default OFF — like the legend, it is export
+  /// chrome (it always renders on the exported sheet); toggle ON to preview it.
+  bool _showTitleBlock = false;
+
+  /// Whether the Export menu (riser single-line PDF / DXF) is open.
+  bool _showExportMenu = false;
 
   /// Auto-view: draw the H101-style DETAIL callouts — the pump-set / roof-tank
   /// plant detail block + the water-meter / PRV valve-assembly callouts. Default
@@ -104,56 +110,169 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
   /// pump exists). Default ON — toggleable from the toolbar.
   bool _showNotes = true;
 
+  /// Close the export menu and run the chosen export against the live providers
+  /// (the file dialog + IO live in `schematic_export.dart`).
+  void _runExport(Future<void> Function(WidgetRef, ServiceType?) action) {
+    setState(() => _showExportMenu = false);
+    action(ref, _autoFocus);
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return ColoredBox(
-      color: colors.canvas,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _Toolbar(
-            mode: _mode,
-            service: _service,
-            autoFocus: _autoFocus,
-            presentServices: ref
-                .watch(networkControllerProvider)
-                .network
-                .edges
-                .map((e) => e.service)
-                .toSet(),
-            inferRisers: _inferRisers,
-            showLegend: _showLegend,
-            showTitleBlock: _showTitleBlock,
-            showDetails: _showDetails,
-            showNotes: _showNotes,
-            onMode: (m) => setState(() => _mode = m),
-            onService: (s) => setState(() => _service = s),
-            onAutoFocus: (s) => setState(() => _autoFocus = s),
-            onInferRisers: (v) => setState(() => _inferRisers = v),
-            onShowLegend: (v) => setState(() => _showLegend = v),
-            onTitleBlock: (v) => setState(() => _showTitleBlock = v),
-            onShowDetails: (v) => setState(() => _showDetails = v),
-            onShowNotes: (v) => setState(() => _showNotes = v),
+    final body = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Toolbar(
+          mode: _mode,
+          service: _service,
+          autoFocus: _autoFocus,
+          presentServices: ref
+              .watch(networkControllerProvider)
+              .network
+              .edges
+              .map((e) => e.service)
+              .toSet(),
+          inferRisers: _inferRisers,
+          showLegend: _showLegend,
+          showTitleBlock: _showTitleBlock,
+          showDetails: _showDetails,
+          showNotes: _showNotes,
+          onMode: (m) => setState(() => _mode = m),
+          onService: (s) => setState(() => _service = s),
+          onAutoFocus: (s) => setState(() => _autoFocus = s),
+          onInferRisers: (v) => setState(() => _inferRisers = v),
+          onShowLegend: (v) => setState(() => _showLegend = v),
+          onTitleBlock: (v) => setState(() => _showTitleBlock = v),
+          onShowDetails: (v) => setState(() => _showDetails = v),
+          onShowNotes: (v) => setState(() => _showNotes = v),
+          onExport: () => setState(() => _showExportMenu = !_showExportMenu),
+        ),
+        Container(height: 1, color: colors.border),
+        Expanded(
+          child: _mode == _Mode.edit
+              ? _EditElevation(
+                  service: _service,
+                  showHelp: _showHelp,
+                  onToggleHelp: () => setState(() => _showHelp = !_showHelp),
+                )
+              : _AutoElevation(
+                  focus: _autoFocus,
+                  inferRisers: _inferRisers,
+                  showLegend: _showLegend,
+                  showTitleBlock: _showTitleBlock,
+                  showDetails: _showDetails,
+                  showNotes: _showNotes,
+                ),
+        ),
+      ],
+    );
+
+    return Stack(
+      children: [
+        Positioned.fill(child: ColoredBox(color: colors.canvas, child: body)),
+        // Tap-away scrim behind the open export menu.
+        if (_showExportMenu)
+          Positioned.fill(
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) => setState(() => _showExportMenu = false),
+              child: const SizedBox.expand(),
+            ),
           ),
-          Container(height: 1, color: colors.border),
-          Expanded(
-            child: _mode == _Mode.edit
-                ? _EditElevation(
-                    service: _service,
-                    showHelp: _showHelp,
-                    onToggleHelp: () => setState(() => _showHelp = !_showHelp),
-                  )
-                : _AutoElevation(
-                    focus: _autoFocus,
-                    inferRisers: _inferRisers,
-                    showLegend: _showLegend,
-                    showTitleBlock: _showTitleBlock,
-                    showDetails: _showDetails,
-                    showNotes: _showNotes,
-                  ),
+        if (_showExportMenu)
+          Positioned(
+            top: 48,
+            right: MechXSpacing.md,
+            child: _RiserExportMenu(
+              onPdf: () => _runExport(exportMechanicalRiserPdf),
+              onDxf: () => _runExport(exportMechanicalRiserDxf),
+            ),
           ),
-        ],
+      ],
+    );
+  }
+}
+
+/// The riser single-line Export popover — a vector PDF or DXF of the current
+/// (focused) Auto riser diagram, with the KETERANGAN legend + title block on the
+/// sheet. Mirrors the electrical `_ExportMenu` look.
+class _RiserExportMenu extends StatelessWidget {
+  final VoidCallback onPdf;
+  final VoidCallback onDxf;
+  const _RiserExportMenu({required this.onPdf, required this.onDxf});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: MechXMotion.appear,
+      curve: MechXMotion.standard,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.scale(
+          scale: 0.95 + 0.05 * t,
+          alignment: Alignment.topRight,
+          child: child,
+        ),
+      ),
+      child: SizedBox(
+        width: 240,
+        child: GlassSurface(
+          borderRadius: MechXRadii.card,
+          blurSigma: MechXGlass.blurSigmaLight,
+          shadow: MechXShadow.popover,
+          child: Padding(
+            padding: const EdgeInsets.all(MechXSpacing.xs),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _RiserExportRow(
+                  label: context.strings(StringKey.electricalExportSld),
+                  sub: context.strings(StringKey.electricalExportSldPdf),
+                  onTap: onPdf,
+                ),
+                _RiserExportRow(
+                  label: context.strings(StringKey.electricalExportSld),
+                  sub: context.strings(StringKey.electricalExportSldDxf),
+                  onTap: onDxf,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RiserExportRow extends StatelessWidget {
+  final String label;
+  final String sub;
+  final VoidCallback onTap;
+  const _RiserExportRow(
+      {required this.label, required this.sub, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+            horizontal: MechXSpacing.sm, vertical: MechXSpacing.sm),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(label,
+                  style: type.body.copyWith(color: colors.textPrimary)),
+            ),
+            Text(sub, style: type.caption.copyWith(color: colors.textMuted)),
+          ],
+        ),
       ),
     );
   }
@@ -181,6 +300,7 @@ class _Toolbar extends StatelessWidget {
   final ValueChanged<bool> onTitleBlock;
   final ValueChanged<bool> onShowDetails;
   final ValueChanged<bool> onShowNotes;
+  final VoidCallback onExport;
 
   const _Toolbar({
     required this.mode,
@@ -200,6 +320,7 @@ class _Toolbar extends StatelessWidget {
     required this.onTitleBlock,
     required this.onShowDetails,
     required this.onShowNotes,
+    required this.onExport,
   });
 
   @override
@@ -284,6 +405,14 @@ class _Toolbar extends StatelessWidget {
                   ],
                 ),
               ),
+            ),
+            const SizedBox(width: MechXSpacing.sm),
+            Container(width: 1, height: 22, color: colors.border),
+            const SizedBox(width: MechXSpacing.sm),
+            _TabButton(
+              label: 'Export',
+              selected: false,
+              onTap: onExport,
             ),
           ],
           if (mode == _Mode.edit) ...[

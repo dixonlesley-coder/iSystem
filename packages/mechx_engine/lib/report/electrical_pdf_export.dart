@@ -71,6 +71,7 @@ Uint8List electricalSldToPdf({
   ElectricalSystemResult? result,
   SldSheet? sheet,
   String title = 'iSystem electrical single-line',
+  String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
   DrawingChrome? chrome,
   bool overview = false,
   bool sourceChain = false,
@@ -167,7 +168,7 @@ Uint8List electricalSldToPdf({
       '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 20)} Td (${_pdfText(pname)}) Tj ET');
   cs.writeln('BT /F1 11 Tf 0.15 0.15 0.15 rg '
       '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 46)} Td '
-      '(${_pdfText('ELECTRICAL SINGLE-LINE DIAGRAM')}) Tj ET');
+      '(${_pdfText(diagramTitle)}) Tj ET');
   cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
       '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 62)} Td '
       '(${_pdfText(title)}) Tj ET');

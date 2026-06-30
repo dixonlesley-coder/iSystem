@@ -113,6 +113,14 @@ packages/mechx_engine/lib/         PURE-DART CALC ENGINE (no Flutter)
                                    hot_water (recirc), bom (+ fittings), fire_sprinkler,
                                    fire_standpipe, supply_design, grille_sizing
   report/calc_report.dart          Markdown calculation report generator (pure)
+  report/sld_sheet.dart            discipline-neutral single-line DRAWING primitives
+                                   (SldSheet/SldPrim/Line/Rect/Label/Circle/LegendEntry) —
+                                   one geometry, rendered by PDF/DXF/canvas (golden rule 5)
+  report/riser_tags.dart           pure riser FUNCTION-suffix + per-service tag + floorFanOuts
+                                   (shared by the schematic painter AND the mech riser builder)
+  report/mechanical_sld_drawing.dart buildMechanicalRiserSld → SldSheet (floors by §10
+                                   elevation, SIZE-SERVICE-MATERIAL tags, fan-out, KETERANGAN)
+  report/sld_export.dart           sldSheetToPdf/sldSheetToDxf — render ANY SldSheet to vector
 
 lib/                               FLUTTER APP
   main.dart                        bootstrap: pdfrx init, autosave loop, recovery check,
@@ -703,9 +711,25 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   Honest by construction: a detail is omitted when its data is absent (no roof tank ⇒ no pump-set
   block). EN ⇒ goldens 04/09/10 shift only by the new draughting content; the Edit-mode (07) +
   electrical (05/06/08/11/10_electrical) goldens stay BYTE-IDENTICAL. Engine untouched; no `.mechx`
-  change. (Queued: per-system single-line PDF/DXF EXPORT reusing `DrawingChrome` and the STP
-  process-flow diagram; per-unit branch fan-out and bringing the **electrical** SLD/exports to the
-  same drafter quality have since landed.)
+  change. (Queued: the STP process-flow diagram; per-unit branch fan-out and bringing the
+  **electrical** SLD/exports to the same drafter quality have since landed.)
+  **Mechanical Riser SLD vector EXPORT landed (PDF + DXF); legend/title block moved to the export**:
+  the mechanical riser single-line now exports as crisp vector via the discipline-neutral engine
+  `SldSheet` pipeline (extracted to `report/sld_sheet.dart`, re-exported from `electrical_sld_drawing`
+  ⇒ electrical byte-identical). New pure `report/mechanical_sld_drawing.dart` `buildMechanicalRiserSld`
+  builds the riser sheet (floors by §10 elevation + FFL gutter, `SIZE-SERVICE-MATERIAL[-FUNCTION]` pipe
+  tags + `CW-R1` riser ids, fixture markers, per-floor fan-out, the KETERANGAN fitting legend); the pure
+  tag helpers moved INTO the engine (`report/riser_tags.dart`, one-line re-export shim left at the old
+  app path). The electrical PDF/DXF exporters gained a `diagramTitle` param (default electrical ⇒
+  byte-identical) + a neutral `report/sld_export.dart` `sldSheetToPdf`/`sldSheetToDxf` wrapper, so the
+  mechanical side renders the same vector formats with a mechanical heading (`DIAGRAM SISTEM AIR BERSIH`
+  / per-service). App wiring `lib/ui/schematic/schematic_export.dart` (`exportMechanicalRiserPdf`/`Dxf`)
+  builds the sheet from the live providers for the current Auto-view focus + an honest supply note, saved
+  via the file picker, behind a new **Export** toolbar button + `_RiserExportMenu`. The legend + title
+  block are now DRAWING CHROME that ride the EXPORT — the live-canvas `_showLegend`/`_showTitleBlock`
+  default OFF (the toolbar chips still preview them); Details/Notes stay ON. Goldens 04/09/10 shift only
+  by the decluttered working canvas + the Export button; electrical 05/06/08/11 BYTE-IDENTICAL. No
+  `.mechx`/version change (export is build-time).
   **Mechanical ↔ electrical theme convergence landed (Apple-consistency pass):** the
   electrical workspace (a PanelMaker port) now reads as one app with the mechanical one.
   Driven by an audit + re-review, converged: the electrical **Loads palette to the RIGHT**

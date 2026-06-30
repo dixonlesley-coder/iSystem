@@ -108,6 +108,7 @@ String electricalSldToDxf({
   ElectricalProject? project,
   ElectricalSystemResult? result,
   SldSheet? sheet,
+  String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
   bool overview = false,
   bool sourceChain = false,
 }) {
@@ -156,7 +157,7 @@ String electricalSldToDxf({
       : 'Untitled project';
   d.box('frame', sheetResolved.minX, frameTop, 360, 96);
   d.text('frame', sheetResolved.minX + 8, frameTop + 22, pname, size: 16);
-  d.text('frame', sheetResolved.minX + 8, frameTop + 44, 'ELECTRICAL SINGLE-LINE DIAGRAM',
+  d.text('frame', sheetResolved.minX + 8, frameTop + 44, diagramTitle,
       size: 12);
   d.text('frame', sheetResolved.minX + 8, frameTop + 66, sheetResolved.supplyNote, size: 10);
 

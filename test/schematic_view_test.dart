@@ -132,8 +132,17 @@ void main() {
       await tester.pump();
 
       expect(tester.takeException(), isNull);
-      // 'Legend' appears twice: the toolbar toggle button + the legend card
-      // header (the legend is ON by default).
+      // The legend is now DRAWING CHROME — OFF by default on the live canvas
+      // (it rides the export). So only the toolbar toggle button shows 'Legend'
+      // and 'Cold water' (the chip), with no legend card yet.
+      expect(find.text('Legend'), findsOneWidget);
+      expect(find.text('Cold water'), findsOneWidget);
+
+      // Tapping the toggle previews the legend overlay on the canvas.
+      await tester.tap(find.text('Legend'));
+      await tester.pump();
+
+      // Now 'Legend' appears twice (toolbar button + legend card header).
       expect(find.text('Legend'), findsNWidgets(2));
       // Pipe tags are CustomPaint-only, so a found 'CW' Text widget proves the
       // legend (the only place 'CW' is a Flutter Text) rendered, and the full
