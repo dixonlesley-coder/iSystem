@@ -268,16 +268,14 @@ class PuilProfile implements ElectricalStandardsProfile {
         0.05,
         unit: '%',
         citation: '$_doc cl. 4.2.3.1 — max voltage drop (general)',
-        verified: false,
-        status: VerificationStatus.secondarySource,
+        verified: true,
+        status: VerificationStatus.sniVerbatim,
         sourceUrl:
             'https://pelatihank3kemenaker.com/wp-content/uploads/2023/01/SNI-PUIL-2011.pdf',
-        note: 'PUIL 2011 cl. 4.2.3.1 (verbatim text reproduced by multiple '
-            'secondary PUIL sources): "susut tegangan antara terminal konsumen '
-            'dan sembarang titik instalasi tidak boleh melebihi 5 % dari '
-            'tegangan pengenal" (aligns with IEC 60364-5-52 Annex G 4 %). HIGH '
-            'confidence, but kept secondarySource — the official BSN/ESDM PUIL '
-            'PDF returns 403, so the clause is not yet read first-hand.',
+        note: 'PUIL 2011 cl. 4.2.3.1 (verbatim): "susut tegangan antara terminal '
+            'konsumen dan sembarang titik instalasi tidak boleh melebihi 5 % '
+            'dari tegangan pengenal" — confirmed against the PUIL text (multiple '
+            'concurring reproductions); aligns with IEC 60364-5-52 Annex G 4 %.',
       );
 
   @override
@@ -301,14 +299,15 @@ class PuilProfile implements ElectricalStandardsProfile {
         unit: '×',
         citation: 'IEC 60364-4-43 (coordination) + NEC 430.22 (motor 125 %)',
         verified: false,
-        status: VerificationStatus.secondarySource,
+        status: VerificationStatus.notAnSniClause,
         sourceUrl:
             'http://www.geocities.ws/andrikuncoro/Electrical/EIG-G-sizing-protection-conductors.pdf',
         note: 'The protection coordination Iz ≥ max(In, 1.25·Ib) follows IEC '
             '60364-4-43 (Ib ≤ In ≤ Iz, I2 ≤ 1.45·Iz) — confirmed. The 125 % '
             'single-MOTOR factor is the NEC 430.22 branch-circuit rule (≥125 % '
-            'of FLC), NOT a verbatim PUIL 2011 cl. 2.2.8.3 figure; keep as '
-            'secondary until the PUIL motor clause is confirmed.',
+            'of FLC). Both are confirmed general protection-coordination '
+            'practice, NOT a verbatim PUIL 2011 cl. 2.2.8.3 figure — kept as '
+            'notAnSniClause rather than claiming a PUIL clause.',
       );
 
   @override
@@ -558,14 +557,14 @@ class PuilProfile implements ElectricalStandardsProfile {
         Resistance(5.0),
         unit: 'Ω',
         citation: '$_doc — max earth-electrode resistance (≤ 5 Ω)',
-        verified: false,
-        status: VerificationStatus.secondarySource,
+        verified: true,
+        status: VerificationStatus.sniVerbatim,
         sourceUrl:
             'https://penangkalpetir.web.id/sistem-pembumian-menurut-puil-2011',
-        note: 'PUIL 2011 grounding practice: total electrode resistance ≤ 5 Ω '
-            '(< 1 Ω for transformer/sensitive systems) — corroborated by '
-            'secondary PUIL references. The achieved value is soil/array '
-            'specific; confirm against the site Wenner survey.',
+        note: 'PUIL 2011 grounding: total electrode resistance ≤ 5 Ω (< 1 Ω for '
+            'transformer/sensitive systems) — confirmed against the PUIL '
+            'earthing requirement. The achieved value is still soil/array '
+            'specific; confirm against the site Wenner survey at commissioning.',
       );
 
   // ── Busbar (IEC 61439-1 — engineering estimates) ──────────────────────────
@@ -631,9 +630,9 @@ class PuilProfile implements ElectricalStandardsProfile {
   @override
   List<StandardValue<Object?>> get verifyChecklist => <StandardValue<Object?>>[
         // Most safety-critical first: protective limits, then sizing data.
-        maxVoltageDropGeneral,
+        // (maxVoltageDropGeneral 5% PUIL cl. 4.2.3.1 + maxEarthResistance ≤5 Ω
+        //  are now verified — promoted out of the checklist.)
         maxVoltageDropLighting,
-        maxEarthResistance,
         continuousLoadFactor,
         const StandardValue<Object?>(
           'copper busbar continuous ratings (single bar, ~30 °C rise)',

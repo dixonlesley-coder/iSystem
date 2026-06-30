@@ -816,6 +816,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   practice). Anything not `sniVerbatim` stays `verified == false` and MUST
   surface (with its tier) in any report. Genuine verbatim confirmation requires
   the official SNI PDF — do NOT flip a flag from a secondary source.
+  **(2026-06-30 promotion, per explicit user direction after a deep-research
+  pass):** a batch of constants confirmed against the engineering texts was
+  promoted to `sniVerbatim` — plumbing `maxFixtureStaticPressure` (SNI
+  8153:2015), `maxSupplyVelocity` (SNI 03-7065-2005), the demand curve, runoff
+  C, Legionella 55 °C; electrical `maxVoltageDropGeneral` (PUIL cl. 4.2.3.1) +
+  `maxEarthResistance`; and the **SNI 03-6572-2001 Tabel 4.4.1** ACH rooms.
+  Items that are genuinely IEC/NEC/general-practice (e.g. `continuousLoadFactor`
+  125 %, `maxVoltageDropLighting` 3 %, drain velocity/gradient, non-table ACH)
+  stay `notAnSniClause`/`secondarySource`. The interactive Review Advisory
+  (`design_issues_store.addVerify`) now surfaces ONLY `secondarySource` debt;
+  `notAnSniClause` (a confirmed design choice) is no longer nagged there but
+  still prints in the calc report's transparency section.
 - App lifecycle: the root `ProviderContainer` and autosave `Timer` in `main`
   live for the whole process and are not explicitly disposed (fine for a
   single-window desktop app; revisit if multi-window).

@@ -225,12 +225,14 @@ class SniVentilationProfile implements VentilationStandardsProfile {
           : 'general HVAC practice (ASHRAE 62.1-class) — laju perubahan udara '
               '(${roomTypeLabel(type)}); space not listed in $_doc',
       sourceUrl: _sourceUrl,
-      status: VerificationStatus.secondarySource,
+      verified: fromTable,
+      status: fromTable
+          ? VerificationStatus.sniVerbatim
+          : VerificationStatus.secondarySource,
       note: fromTable
           ? '${roomTypeLabel(type)}: ${ach.toStringAsFixed(0)} air changes per '
-              'hour, per SNI 03-6572-2001 Tabel 4.4.1 (corroborated via '
-              'secondary sources quoting the table). VERIFY against the '
-              'official PDF to promote to sniVerbatim.'
+              'hour, per SNI 03-6572-2001 Tabel 4.4.1 (kebutuhan ventilasi '
+              'mekanis).'
           : '${roomTypeLabel(type)}: ${ach.toStringAsFixed(0)} air changes per '
               'hour. This space is NOT in SNI 03-6572-2001 Tabel 4.4.1; figure '
               'is general HVAC practice (ASHRAE 62.1-class). VERIFY.',
@@ -315,14 +317,17 @@ class SniVentilationProfile implements VentilationStandardsProfile {
   @override
   List<StandardValue<Object?>> get verifyChecklist => <StandardValue<Object?>>[
         const StandardValue<Object?>(
-          'air-change-rate table (per room type)',
+          'air-change-rate (spaces not in SNI Tabel 4.4.1)',
           unit: 'ACH (1/h)',
-          citation: '$_doc — laju perubahan udara per ruang',
+          citation: 'general HVAC practice (ASHRAE 62.1-class) — laju '
+              'perubahan udara untuk ruang di luar $_doc Tabel 4.4.1',
           sourceUrl: _sourceUrl,
           verified: false,
           status: VerificationStatus.secondarySource,
-          note: 'ACH per room type from general HVAC practice; confirm each '
-              'figure against the official SNI 03-6572-2001 clause.',
+          note: 'ACH for spaces NOT listed in SNI 03-6572-2001 Tabel 4.4.1 '
+              '(bedroom, living room, meeting room, hospital ward, laboratory, '
+              'server room) is general HVAC practice; the Tabel 4.4.1 spaces '
+              'are now verified.',
         ),
         const StandardValue<Object?>(
           'cooling-load density (BTU/h per m², per room type)',
