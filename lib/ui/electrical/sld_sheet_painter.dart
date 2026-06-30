@@ -175,17 +175,32 @@ class SldSheetPainter extends CustomPainter {
 /// through), so the engine board schedule renders as the deep-zoom level of
 /// detail INSIDE a panel card on the interactive single-line canvas. The SAME
 /// geometry the PDF / DXF export draws — one source of truth.
+/// Schedule row geometry (sheet-space), shared by the painter's row highlight
+/// and the body's hit-test so they agree: header band `46` + `6` pad + the
+/// column-header row (`rowH`), then one `rowH` per way.
+const double kScheduleHeaderH = 46;
+const double kScheduleRowH = 20;
+double scheduleRowTop(int wayIndex) =>
+    kScheduleHeaderH + 6 + kScheduleRowH + wayIndex * kScheduleRowH;
+
 class SldBoardSchedulePainter extends CustomPainter {
   final SldSheet sheet;
   final Color ink;
   final Color essential;
   final double pad;
 
+  /// The way (circuit) ROW the pointer is hovering, painted as a highlight band;
+  /// null = none. Drawn in [highlight] (the accent) behind the schedule text.
+  final int? hoveredRow;
+  final Color? highlight;
+
   SldBoardSchedulePainter({
     required this.sheet,
     required this.ink,
     required this.essential,
     this.pad = 6,
+    this.hoveredRow,
+    this.highlight,
   });
 
   @override
@@ -200,6 +215,20 @@ class SldBoardSchedulePainter extends CustomPainter {
       scale: fitted.scale,
       offset: fitted.offset - Offset(sheet.minX, sheet.minY) * fitted.scale,
     );
+    // Hover highlight band BEHIND the schedule text (the row the pointer is on).
+    if (hoveredRow != null && hoveredRow! >= 0 && highlight != null) {
+      final top = scheduleRowTop(hoveredRow!);
+      final tl = transform.worldToScreen(Offset(sheet.minX + 2, top));
+      final w = (sheet.maxX - sheet.minX - 4) * transform.scale;
+      final h = kScheduleRowH * transform.scale;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(tl.dx, tl.dy, w, h),
+          Radius.circular(3 * transform.scale),
+        ),
+        Paint()..color = highlight!.withAlpha(30),
+      );
+    }
     // A panel's own schedule has no source spine inside it, so `source` reuses
     // the ink colour (a normal panel reads as the existing dark schedule).
     paintSldPrims(
@@ -218,7 +247,9 @@ class SldBoardSchedulePainter extends CustomPainter {
       old.sheet != sheet ||
       old.ink != ink ||
       old.essential != essential ||
-      old.pad != pad;
+      old.pad != pad ||
+      old.hoveredRow != hoveredRow ||
+      old.highlight != highlight;
 }
 
 /// A small read-only host that frames an [SldSheet] and lets the user pan

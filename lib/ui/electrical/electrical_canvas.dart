@@ -872,8 +872,11 @@ class _CanvasPainter extends CustomPainter {
           final label = '${cableLabel(c, cr.cable.csaMm2, cr.threePhase)} mm2'
               ' · ${breakerScheduleLabel(cr.breaker, poles)}';
           final midX = (start.dx + end.dx) / 2;
+          // Clear the parent's outlet handle (which sits ~13 px past the right
+          // edge, scaled with the card) so the label never overlaps the dot.
           _label(canvas, Offset(midX, start.dy - 7), label, transform.scale,
-              color: isEss ? essentialColor : onAccent);
+              color: isEss ? essentialColor : onAccent,
+              minLeftX: start.dx + 26 * transform.scale);
         }
       }
     }
@@ -996,7 +999,7 @@ class _CanvasPainter extends CustomPainter {
   }
 
   void _label(Canvas canvas, Offset center, String text, double s,
-      {Color? color}) {
+      {Color? color, double? minLeftX}) {
     if (s < 0.4) return;
     final tp = TextPainter(
       text: TextSpan(
@@ -1010,8 +1013,14 @@ class _CanvasPainter extends CustomPainter {
       ),
       textDirection: TextDirection.ltr,
     )..layout();
+    // Keep the pill's LEFT edge clear of [minLeftX] (e.g. a panel's outlet
+    // handle), shifting the whole label right so it never overlaps it.
+    final halfW = (tp.width + 8 * s) / 2;
+    var cx = center.dx;
+    if (minLeftX != null && cx - halfW < minLeftX) cx = minLeftX + halfW;
+    final at = Offset(cx, center.dy);
     final rect = Rect.fromCenter(
-      center: center,
+      center: at,
       width: tp.width + 8 * s,
       height: tp.height + 4 * s,
     );
@@ -1019,7 +1028,7 @@ class _CanvasPainter extends CustomPainter {
       RRect.fromRectAndRadius(rect, Radius.circular(3 * s)),
       Paint()..color = const Color(0xD915171B),
     );
-    tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
+    tp.paint(canvas, at - Offset(tp.width / 2, tp.height / 2));
   }
 
   double? _utilPct(ElectricalCircuitResult c) {
@@ -1137,7 +1146,7 @@ class _SchematicSurface extends StatelessWidget {
 /// maps a double-click / right-click to the way under the local y (the engine
 /// lays one schedule ROW per circuit, so a local-y → row-index hit-test reaches
 /// the same `onWayDoubleTap` / `onWayMenu` as the mid-detail schematic).
-class _PanelScheduleBody extends StatelessWidget {
+class _PanelScheduleBody extends StatefulWidget {
   final ElectricalPanelResult panel;
   final ElectricalProject project;
   final ElectricalSystemResult result;
@@ -1152,11 +1161,19 @@ class _PanelScheduleBody extends StatelessWidget {
     required this.onWayMenu,
   });
 
+  @override
+  State<_PanelScheduleBody> createState() => _PanelScheduleBodyState();
+}
+
+class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
+  /// The way ROW index the pointer is over (null = none) — drives the highlight.
+  int? _hoveredRow;
+
   /// The board-schedule sheet for this one panel, re-origined to (0,0).
   SldSheet get _sheet => buildElectricalPanelDetail(
-        project: project,
-        result: result,
-        panelId: panel.panelId,
+        project: widget.project,
+        result: widget.result,
+        panelId: widget.panel.panelId,
       );
 
   /// Fit transform mapping the sheet bounds into [size] (matching
@@ -1173,18 +1190,21 @@ class _PanelScheduleBody extends StatelessWidget {
     );
   }
 
-  /// The circuit id whose schedule row contains the body-local point, or null.
-  /// Engine row geometry (re-origined): header band `_headerH = 46`, then the
-  /// column-header row, then one `_rowH = 20` row per circuit — so way `i` starts
-  /// at `headerH + 6 + (1 + i) * rowH` (the +1 skips the column-header row).
-  String? _wayAt(Offset local, SldSheet sheet, Size size) {
-    if (panel.circuits.isEmpty) return null;
+  /// The way ROW index under the body-local point, or null. Shared row geometry
+  /// (`scheduleRowTop`) so the hit-test agrees with the painter's highlight.
+  int? _wayIndexAt(Offset local, SldSheet sheet, Size size) {
+    if (widget.panel.circuits.isEmpty) return null;
     final t = _fitTransform(sheet, size);
     final world = t.screenToWorld(local);
-    const headerH = 46.0, rowH = 20.0, rowTop = headerH + 6.0 + rowH;
-    final i = ((world.dy - rowTop) / rowH).floor();
-    if (i < 0 || i >= panel.circuits.length) return null;
-    return panel.circuits[i].circuitId;
+    final i =
+        ((world.dy - scheduleRowTop(0)) / kScheduleRowH).floor();
+    if (i < 0 || i >= widget.panel.circuits.length) return null;
+    return i;
+  }
+
+  String? _wayAt(Offset local, SldSheet sheet, Size size) {
+    final i = _wayIndexAt(local, sheet, size);
+    return i == null ? null : widget.panel.circuits[i].circuitId;
   }
 
   @override
@@ -1194,29 +1214,42 @@ class _PanelScheduleBody extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = constraints.biggest;
-        return Listener(
-          onPointerDown: (e) {
-            if (e.buttons == kSecondaryButton) {
-              final box = context.findRenderObject() as RenderBox?;
-              final local = box?.globalToLocal(e.position) ?? Offset.zero;
-              final id = _wayAt(local, sheet, size);
-              if (id != null) onWayMenu(id, e.position);
-            }
+        void updateHover(Offset local) {
+          final i = _wayIndexAt(local, sheet, size);
+          if (i != _hoveredRow) setState(() => _hoveredRow = i);
+        }
+
+        return MouseRegion(
+          onHover: (e) => updateHover(e.localPosition),
+          onExit: (_) {
+            if (_hoveredRow != null) setState(() => _hoveredRow = null);
           },
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onDoubleTapDown: (d) {
-              final id = _wayAt(d.localPosition, sheet, size);
-              if (id != null) onWayDoubleTap(id);
+          child: Listener(
+            onPointerDown: (e) {
+              if (e.buttons == kSecondaryButton) {
+                final box = context.findRenderObject() as RenderBox?;
+                final local = box?.globalToLocal(e.position) ?? Offset.zero;
+                final id = _wayAt(local, sheet, size);
+                if (id != null) widget.onWayMenu(id, e.position);
+              }
             },
-            onDoubleTap: () {},
-            child: CustomPaint(
-              painter: SldBoardSchedulePainter(
-                sheet: sheet,
-                ink: colors.textPrimary,
-                essential: colors.danger,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onDoubleTapDown: (d) {
+                final id = _wayAt(d.localPosition, sheet, size);
+                if (id != null) widget.onWayDoubleTap(id);
+              },
+              onDoubleTap: () {},
+              child: CustomPaint(
+                painter: SldBoardSchedulePainter(
+                  sheet: sheet,
+                  ink: colors.textPrimary,
+                  essential: colors.danger,
+                  hoveredRow: _hoveredRow,
+                  highlight: colors.accent,
+                ),
+                child: const SizedBox.expand(),
               ),
-              child: const SizedBox.expand(),
             ),
           ),
         );
@@ -1590,32 +1623,28 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
         return MouseRegion(
           onEnter: (_) => setState(() => _hover = true),
           onExit: (_) => setState(() => _hover = false),
-          // Subtle hover lift — a pre-click affordance.
-          child: AnimatedScale(
-            scale: (_hover && !widget.selected) ? MechXMotion.hoverLift : 1.0,
-            duration: MechXMotion.hover,
-            curve: MechXMotion.standard,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Positioned.fill(child: card),
-                // The round outlet handle (drag → feeder) — on the RIGHT edge,
-                // vertically centred, since the tree flows left-to-right and
-                // feeders exit a panel's right side toward its sub-panels.
-                Positioned(
-                  right: -13,
-                  top: 0,
-                  bottom: 0,
-                  child: Center(
-                    child: _OutletHandle(
-                      onDragStart: widget.onOutletDragStart,
-                      onDragUpdate: widget.onOutletDragUpdate,
-                      onDragEnd: widget.onOutletDragEnd,
-                    ),
+          // Hover shows the border/shadow highlight only (the card decoration) —
+          // NO scale/zoom animation (it read as the panel jumping at the user).
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned.fill(child: card),
+              // The round outlet handle (drag → feeder) — on the RIGHT edge,
+              // vertically centred, since the tree flows left-to-right and
+              // feeders exit a panel's right side toward its sub-panels.
+              Positioned(
+                right: -13,
+                top: 0,
+                bottom: 0,
+                child: Center(
+                  child: _OutletHandle(
+                    onDragStart: widget.onOutletDragStart,
+                    onDragUpdate: widget.onOutletDragUpdate,
+                    onDragEnd: widget.onOutletDragEnd,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         );
       },
