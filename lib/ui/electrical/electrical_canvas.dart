@@ -187,16 +187,28 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   /// the viewport (null when nothing to frame).
   ViewportTransform? _fitTransform(Map<String, Offset> positions) {
     if (positions.isEmpty || _viewportSize.isEmpty) return null;
-    final panels = ref.read(electricalResultProvider).panels;
+    final project = ref.read(electricalProjectProvider);
+    final result = ref.read(electricalResultProvider);
+    final panels = result.panels;
+    // The horizontal source chain extends LEFT of the service-root board; reserve
+    // room for it so it isn't clipped off the canvas's left edge.
+    final rootId = serviceRootId(project, result);
+    final spine = buildElectricalSourceSpine(
+        project: project, result: result, horizontal: true);
+    final spineW = spine.isEmpty ? 0.0 : (spine.maxX - spine.minX) + 14;
     var minX = double.infinity, minY = double.infinity;
     var maxX = -double.infinity, maxY = -double.infinity;
     positions.forEach((id, p) {
       final panel = panels[id];
-      final w = panel == null ? 280.0 : panelCardWidth(panel.circuits.length);
+      final w = panel == null
+          ? 280.0
+          : math.max(panelCardWidth(panel.circuits.length), panelDetailWidth());
       final h = panel == null
           ? 160.0
           : panelCardHeight(panel) + kPanelChrome + kLoadDropGap + kLoadNodeH;
-      minX = math.min(minX, p.dx);
+      // The root carries the source chain to its left (else the PLN head above).
+      final leftExtent = id == rootId ? spineW : 0.0;
+      minX = math.min(minX, p.dx - leftExtent);
       minY = math.min(minY, p.dy - kGridSrcH - 30);
       maxX = math.max(maxX, p.dx + w);
       maxY = math.max(maxY, p.dy + h);
@@ -327,8 +339,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       if (entry.key == exclude) continue;
       final panel = panels[entry.key];
       if (panel == null) continue;
-      final w = panelCardWidth(panel.circuits.length);
-      final h = panelFootprint(panel, vt.scale >= kLodThreshold);
+      final detail = vt.scale >= kLodThreshold;
+      final w = panelCardWidthAt(panel, detail);
+      final h = panelFootprint(panel, detail);
       final tl = vt.worldToScreen(entry.value);
       final rect = Rect.fromLTWH(tl.dx, tl.dy, w * vt.scale, h * vt.scale);
       if (rect.contains(local)) return entry.key;
@@ -469,7 +482,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   ) {
     final scale = vt.scale;
     final tl = vt.worldToScreen(world);
-    final w = panelCardWidth(panel.circuits.length);
+    final w = panelCardWidthAt(panel, detail);
     final cardH = panelFootprint(panel, detail);
     final modelPanel = project.panels
         .where((p) => p.id == panel.panelId)
@@ -480,22 +493,24 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
 
     final widgets = <Widget>[];
 
-    // Above the service-root utility panel: the SOURCE SPINE strip (PLN -> MV ->
-    // transformer -> LV main + genset / capacitor) when the project carries any
-    // sources / dual-tx / explicit transformer / capacitor — the SAME
-    // `_buildSourceSpine` geometry the overview / riser / export draw, painted
-    // read-only here so the interactive single-line shows it too. Otherwise the
-    // bare PLN grid head (so a default project is byte-identical). Double-click
-    // either to open the Sources / Service editor.
+    // To the LEFT of the service-root board: the SOURCE CHAIN (PLN -> MV ->
+    // transformer -> LV main + genset / capacitor) drawn as real single-line
+    // SYMBOLS, flowing left-to-right INTO the root board (matching the canvas's
+    // left-to-right flow) when the project carries any sources / dual-tx /
+    // explicit transformer / capacitor. Otherwise the bare PLN grid head (so a
+    // default project is byte-identical). Double-click either to open the
+    // Sources / Service editor.
     if (isRoot) {
-      final spine = buildElectricalSourceSpine(project: project, result: result);
+      final spine = buildElectricalSourceSpine(
+          project: project, result: result, horizontal: true);
       if (!spine.isEmpty) {
-        // Place the spine so its bottom sits a gap above the root panel top,
-        // centred over the root (its horizontal mid aligns to the root centre).
-        final spineMidX = (spine.minX + spine.maxX) / 2;
+        // Place the chain's right edge a small gap LEFT of the root's left edge,
+        // its baseline (y=0, the LV-main feed) on the board's vertical centre, so
+        // the LV-main bus feeds rightward into the board.
+        const gap = 14.0;
         final offset = Offset(
-          world.dx + w / 2 - spineMidX,
-          (world.dy - 30) - spine.maxY,
+          (world.dx - gap) - spine.maxX,
+          world.dy + cardH / 2,
         );
         final bandTl = vt.worldToScreen(
           Offset(spine.minX + offset.dx, spine.minY + offset.dy),
@@ -749,7 +764,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     final panel = result.panels[panelId];
     if (pos == null || panel == null || _viewportSize.isEmpty) return;
     final s = scale ?? (kBoardScheduleThreshold + 0.3);
-    final w = panelCardWidth(panel.circuits.length);
+    final w = panelCardWidthAt(panel, true);
     final h = panelFootprint(panel, true);
     final worldCentre = Offset(pos.dx + w / 2, pos.dy + h / 2);
     _setTransform(ViewportTransform(
@@ -835,7 +850,7 @@ class _CanvasPainter extends CustomPainter {
         final fromPos = positions[p.id];
         if (fromPanel == null || toPos == null || fromPos == null) continue;
         final fromCardH = panelFootprint(fromPanel, detail);
-        final fromW = panelCardWidth(fromPanel.circuits.length);
+        final fromW = panelCardWidthAt(fromPanel, detail);
         final start = transform.worldToScreen(
           Offset(fromPos.dx + fromW, fromPos.dy + fromCardH / 2),
         );
@@ -882,7 +897,7 @@ class _CanvasPainter extends CustomPainter {
       final fromPos = positions[feederFrom];
       final fromPanel = result.panels[feederFrom];
       if (fromPos != null && fromPanel != null) {
-        final w = panelCardWidth(fromPanel.circuits.length);
+        final w = panelCardWidthAt(fromPanel, detail);
         final h = panelFootprint(fromPanel, detail);
         final anchor = transform.worldToScreen(
           Offset(fromPos.dx + w, fromPos.dy + h / 2),

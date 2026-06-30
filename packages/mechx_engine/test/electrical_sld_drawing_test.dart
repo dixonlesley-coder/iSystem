@@ -173,10 +173,19 @@ void main() {
     const profile = PuilProfile();
     final b = profile.breakerClassFor(16);
     expect(b, BreakerClass.mcb);
-    // 1-phase lighting cable: 3-core notation, family preserved.
-    expect(cableLabel(null, 2.5, false), 'Cu 3x2.5');
+    // No circuit / no explicit cableType: the conventional power default NYY
+    // (never the bare conductor material "Cu"); 3-core 1-phase notation.
+    expect(cableLabel(null, 2.5, false), 'NYY 3x2.5');
     // 3-phase: 5-core notation.
-    expect(cableLabel(null, 6, true), 'Cu 5x6');
+    expect(cableLabel(null, 6, true), 'NYY 5x6');
+    // A final lighting circuit (no explicit cableType) defaults to NYM.
+    const lightingWay = ElectricalCircuit(
+        id: 'l', name: 'Lights', loadKind: LoadKind.lighting, isLighting: true);
+    expect(cableLabel(lightingWay, 2.5, false), 'NYM 3x2.5');
+    // A feeder defaults to NYY (power / sub-main cable).
+    const feederWay = ElectricalCircuit(
+        id: 'f', name: 'Feeder', loadKind: LoadKind.feeder, feedsPanelId: 'x');
+    expect(cableLabel(feederWay, 16, true), 'NYY 5x16');
   });
 
   test('an empty project yields an empty drawing (no blocks)', () {
@@ -549,11 +558,12 @@ void main() {
     test('sourceChain=true prepends source-role nodes + a TEGANGAN spine', () {
       final src = buildElectricalOverview(
           project: ov, result: ovResult, sourceChain: true);
-      final sourceRects = src.prims
-          .whereType<SldRect>()
-          .where((r) => r.role == SldRole.source);
-      // PLN + LV main (+ TX) at minimum.
-      expect(sourceRects.length, greaterThanOrEqualTo(3));
+      // The spine draws real single-line SYMBOLS, not boxes: the PLN supply
+      // circle + the transformer's TWO winding circles ⇒ ≥ 3 source circles.
+      final sourceCircles = src.prims
+          .whereType<SldCircle>()
+          .where((c) => c.role == SldRole.source);
+      expect(sourceCircles.length, greaterThanOrEqualTo(2)); // the transformer windings
       final joined =
           src.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
       expect(joined, contains('PLN MV STATION'));

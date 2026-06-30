@@ -192,9 +192,12 @@ void main() {
         result: result,
         building: building,
         sourceChain: true);
-    final sourceRects =
-        sheet.prims.whereType<SldRect>().where((r) => r.role == SldRole.source);
-    expect(sourceRects.length, greaterThanOrEqualTo(3));
+    // The spine draws single-line SYMBOLS: the PLN supply circle + the two
+    // transformer winding circles ⇒ at least 3 source circles (not boxes).
+    final sourceCircles = sheet.prims
+        .whereType<SldCircle>()
+        .where((c) => c.role == SldRole.source);
+    expect(sourceCircles.length, greaterThanOrEqualTo(2)); // the transformer windings
     final joined =
         sheet.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
     expect(joined, contains('PLN MV STATION'));

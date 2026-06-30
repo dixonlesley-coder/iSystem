@@ -137,9 +137,11 @@ class HttpUpdateBackend implements UpdateBackend {
 
   @override
   Future<void> launchInstaller(String path) async {
-    // Inno Setup honours /SILENT (progress bar, no wizard). CloseApplications +
-    // RestartApplications in the .iss let it replace the running exe. Detach so
-    // the installer survives our exit.
+    // Inno Setup honours /SILENT (progress bar, no wizard). We exit(0) right
+    // after launching so the running exe is unlocked for replacement; the .iss
+    // [Run] entry gated on `Check: WizardSilent` then RELAUNCHES iSystem once the
+    // silent install finishes (the app auto-restarts itself). Detach so the
+    // installer survives our exit.
     await Process.start(
       path,
       const ['/SILENT'],

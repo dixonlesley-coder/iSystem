@@ -15,6 +15,7 @@
 library;
 
 import '../standards/puil.dart' show ConductorInsulation;
+import 'load_kind.dart' show LoadKind;
 
 /// The conductor insulation temperature-class for each cable family:
 ///   • NYY (0.6/1 kV power), NYM (300/500 V sheathed), NYA (450/750 V single-
@@ -37,3 +38,23 @@ ConductorInsulation insulationForCableType(
   required ConductorInsulation fallback,
 }) =>
     cableType == null ? fallback : (cableFamilyInsulation[cableType] ?? fallback);
+
+/// The conventional cable FAMILY for a circuit that hasn't been assigned an
+/// explicit [ElectricalCircuit.cableType] — so a drawing names a real cable
+/// construction (NYY / NYM) instead of the bare conductor material ("Cu"). The
+/// Indonesian building convention:
+///   • final sub-circuits (lighting / socket / general / heating) → **NYM**
+///     (300/500 V sheathed PVC, the workhorse final-circuit cable);
+///   • everything else — feeders, sub-mains, motors, pumps, HVAC, EV, welding,
+///     UPS, capacitors, spares → **NYY** (0.6/1 kV power cable).
+/// A drawing/labelling default only (the engineer overrides via `cableType`);
+/// it never changes sizing (KHA still uses the panel-wide insulation fallback
+/// when `cableType` is null). // VERIFY — drawing convention, not a PUIL clause.
+String defaultCableFamily(LoadKind? kind) => switch (kind) {
+      LoadKind.lighting ||
+      LoadKind.socket ||
+      LoadKind.general ||
+      LoadKind.heating =>
+        'NYM',
+      _ => 'NYY',
+    };
