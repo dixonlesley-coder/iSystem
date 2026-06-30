@@ -496,9 +496,15 @@ SldSheet buildElectricalPanelDetail({
 /// (the `_buildSourceSpine` body). `isEmpty` is true when there is no demand AND
 /// no sources / dual-tx / explicit transformer, so a bare project shows nothing
 /// new on the canvas (the existing PLN head stays).
+/// [horizontal] lays the chain out LEFT-TO-RIGHT (PLN -> MV -> transformer -> LV
+/// main, genset/capacitor dropping BELOW the LV bus) for the left-to-right
+/// interactive single-line canvas — the source sits to the LEFT of the root
+/// board and flows right into it. The default vertical layout is used by the
+/// top-down overview + the floor-stacked riser.
 SldSheet buildElectricalSourceSpine({
   required ElectricalProject project,
   required ElectricalSystemResult result,
+  bool horizontal = false,
 }) {
   final hasSource = project.sources != null ||
       project.dualTransformer ||
@@ -517,7 +523,9 @@ SldSheet buildElectricalSourceSpine({
     );
   }
 
-  final spine = _buildSourceSpine(project, result, _ovW);
+  final spine = horizontal
+      ? _buildSourceSpineH(project, result)
+      : _buildSourceSpine(project, result, _ovW);
   // Bounds over the spine prims (it extends right for the GENSET / CAPACITOR
   // side nodes and down to the LV main).
   var minX = double.infinity, minY = double.infinity;
@@ -692,6 +700,100 @@ Set<String> essentialPanelIds(
   return essential;
 }
 
+// ── Source-chain schematic SYMBOLS (IEC 60617) ───────────────────────────────
+// The utility incoming is a real single-line, not a row of boxes: the
+// transformer is the two-winding double circle, the genset a circle-G, the
+// capacitor bank the two-plate symbol, the utility a supply circle, and a main
+// switchboard a busbar. Each emits sealed [SldPrim]s so the PDF / DXF / canvas
+// renderers draw them identically (golden rule 5).
+
+/// A DELTA (triangle, pointing up) winding mark inside a circle at ([cx],[cy]).
+void _emitDelta(List<SldPrim> out, double cx, double cy, double r,
+    SldRole role) {
+  final s = r * 0.62;
+  final ax = cx, ay = cy - s; // apex
+  final bx = cx - s * 0.87, by = cy + s * 0.5;
+  final dx = cx + s * 0.87, dy = cy + s * 0.5;
+  out
+    ..add(SldLine(ax, ay, bx, by, role: role))
+    ..add(SldLine(bx, by, dx, dy, role: role))
+    ..add(SldLine(dx, dy, ax, ay, role: role));
+}
+
+/// A WYE (star, three legs at 90/210/330°) winding mark inside a circle.
+void _emitWye(List<SldPrim> out, double cx, double cy, double r, SldRole role) {
+  final s = r * 0.62;
+  out
+    ..add(SldLine(cx, cy, cx, cy - s, role: role)) // up
+    ..add(SldLine(cx, cy, cx - s * 0.87, cy + s * 0.5, role: role)) // down-left
+    ..add(SldLine(cx, cy, cx + s * 0.87, cy + s * 0.5, role: role)); // down-right
+}
+
+/// Two-winding TRANSFORMER at the two given circle centres (primary = circle 1
+/// with a DELTA winding, secondary = circle 2 with a WYE — the Dyn vector group
+/// the project transformers use). The spine connectors enter as the leads.
+void _emitTransformerPair(List<SldPrim> out, double c1x, double c1y, double c2x,
+    double c2y, double r, SldRole role) {
+  out
+    ..add(SldCircle(c1x, c1y, r, weight: SldWeight.medium, role: role))
+    ..add(SldCircle(c2x, c2y, r, weight: SldWeight.medium, role: role));
+  _emitDelta(out, c1x, c1y, r, role);
+  _emitWye(out, c2x, c2y, r, role);
+}
+
+/// Two-winding TRANSFORMER, circles STACKED vertically (primary above), centred
+/// on [cx] within the slot [topY..topY+h] — for the vertical overview/riser spine.
+void _emitTransformer(
+    List<SldPrim> out, double cx, double topY, double h, SldRole role) {
+  final r = (h * 0.28).clamp(8.0, 13.0);
+  _emitTransformerPair(
+      out, cx, topY + h / 2 - r * 0.65, cx, topY + h / 2 + r * 0.65, r, role);
+}
+
+/// Utility / MV-incoming BOWTIE (two triangles meeting at a point) — the
+/// isolator/incoming symbol on the far left of the DXF, centred at ([cx],[cy]).
+void _emitBowtie(List<SldPrim> out, double cx, double cy, double r,
+    SldRole role) {
+  final t = r * 0.9;
+  // Left triangle (apex at centre), right triangle (apex at centre).
+  out
+    ..add(SldLine(cx - r, cy - t, cx - r, cy + t, weight: SldWeight.medium,
+        role: role))
+    ..add(SldLine(cx - r, cy - t, cx, cy, role: role))
+    ..add(SldLine(cx - r, cy + t, cx, cy, role: role))
+    ..add(SldLine(cx + r, cy - t, cx + r, cy + t, weight: SldWeight.medium,
+        role: role))
+    ..add(SldLine(cx + r, cy - t, cx, cy, role: role))
+    ..add(SldLine(cx + r, cy + t, cx, cy, role: role));
+}
+
+/// A small labelled PANEL BOX (MVMDP / LVMDP) centred on the baseline — the DXF
+/// draws each distribution board as a rectangle, not a busbar.
+void _emitPanelBox(List<SldPrim> out, double cx, double cy, double w, double h,
+    String label, SldRole role) {
+  out.add(SldRect(cx - w / 2, cy - h / 2, w, h, role: role));
+  out.add(SldLabel(cx - w / 2 + 5, cy + 3, label,
+      size: 8, bold: true, role: role));
+}
+
+/// GENERATOR (genset): a circle with a centred "G".
+void _emitGenerator(List<SldPrim> out, double cx, double cy, double r,
+    SldRole role) {
+  out.add(SldCircle(cx, cy, r, weight: SldWeight.medium, role: role));
+  out.add(SldLabel(cx - 3.5, cy + 4, 'G', size: 11, bold: true, role: role));
+}
+
+/// CAPACITOR: two parallel plates with leads, centred on ([cx],[cy]).
+void _emitCapacitor(List<SldPrim> out, double cx, double cy, SldRole role) {
+  const pw = 9.0; // half plate width
+  out.add(SldLine(cx - pw, cy - 3, cx + pw, cy - 3,
+      weight: SldWeight.medium, role: role));
+  out.add(SldLine(cx - pw, cy + 3, cx + pw, cy + 3,
+      weight: SldWeight.medium, role: role));
+  out.add(SldLine(cx, cy - 11, cx, cy - 3, role: role)); // top lead
+  out.add(SldLine(cx, cy + 3, cx, cy + 11, role: role)); // bottom lead
+}
+
 /// Synthesize the utility source spine drawn ABOVE the panel tree (overview) or
 /// the top floor band (riser): PLN MV STATION -> (MV main, when a dual-tx /
 /// sources project) -> TRANSFORMER <kVA> -> PANEL UTAMA TEGANGAN RENDAH (LV
@@ -728,35 +830,51 @@ Set<String> essentialPanelIds(
   final hasMv = project.dualTransformer ||
       project.sources != null ||
       project.transformerKva != null;
-  final spine = <({String name, String? sub})>[
-    (name: 'PLN MV STATION', sub: null),
-    if (hasMv) (name: 'PANEL UTAMA TEGANGAN MENENGAH', sub: 'MV main'),
-    (name: txLabel, sub: null),
-    (name: 'PANEL UTAMA TEGANGAN RENDAH', sub: 'LV main'),
+  // Each spine element carries its SYMBOL kind so it draws as a real single-line
+  // device, not a labelled box.
+  final spine = <({String name, String? sub, String kind})>[
+    (name: 'PLN MV STATION', sub: null, kind: 'supply'),
+    if (hasMv)
+      (name: 'PANEL UTAMA TEGANGAN MENENGAH', sub: 'MV main', kind: 'bus'),
+    (name: txLabel, sub: null, kind: 'transformer'),
+    (name: 'PANEL UTAMA TEGANGAN RENDAH', sub: 'LV main', kind: 'bus'),
   ];
 
+  const role = SldRole.source;
   var y = 0.0;
-  double? prevCx, prevBottom;
+  double? prevBottom;
   for (final node in spine) {
-    prims.add(SldRect(nodeX, y, _ovW, _ovH, role: SldRole.source));
-    prims.add(SldLabel(nodeX + 7, y + 17, node.name,
-        size: node.name.length > 22 ? 8 : 9.5,
-        bold: true,
-        role: SldRole.source));
-    if (node.sub != null) {
-      prims.add(SldLabel(nodeX + 7, y + 33, node.sub!,
-          size: 7.5, role: SldRole.source));
+    final midY = y + _ovH / 2;
+    // The vertical riser leg from the previous element's bottom into this one.
+    if (prevBottom != null) {
+      prims.add(SldLine(centreX, prevBottom, centreX, y,
+          weight: SldWeight.medium, role: role));
     }
-    // Vertical connector from the previous node's bottom into this one's top.
-    if (prevCx != null && prevBottom != null) {
-      prims.add(SldLine(prevCx, prevBottom, centreX, y,
-          weight: SldWeight.medium, role: SldRole.source));
+    switch (node.kind) {
+      case 'transformer':
+        _emitTransformer(prims, centreX, y, _ovH, role);
+        // kVA label to the RIGHT of the windings.
+        prims.add(SldLabel(centreX + 22, midY + 3, node.name,
+            size: 8.5, bold: true, role: role));
+      case 'supply':
+        // The MV incoming isolator (bowtie).
+        _emitBowtie(prims, centreX, midY, 11, role);
+        prims.add(SldLabel(centreX + 22, midY + 3, node.name,
+            size: 8.5, bold: true, role: role));
+      case 'bus':
+      default:
+        // A distribution board: a labelled BOX (the DXF convention), with the
+        // tier sub below it.
+        _emitPanelBox(prims, centreX, midY, _ovW, _ovH - 8, node.name, role);
+        if (node.sub != null) {
+          prims.add(SldLabel(nodeX, y + _ovH + 1, node.sub!,
+              size: 7.5, role: role));
+        }
     }
-    prevCx = centreX;
     prevBottom = y + _ovH;
     y += _ovH + _ovHGap;
   }
-  final lvBottom = y - _ovHGap; // bottom of the LV-main node
+  final lvBottom = y - _ovHGap; // bottom of the LV-main bus band
 
   // GENSET + CAPACITOR BANK hang off the LV-main bus to the right.
   final lvMidY = lvBottom - _ovH / 2;
@@ -766,32 +884,129 @@ Set<String> essentialPanelIds(
     final backupVa = ApparentPower(demandVa.voltAmperes * gen.backupFraction);
     final genKva = (gen.kva ?? selectGeneratorKva(backupVa)).inKilovoltAmperes;
     final gy = lvMidY - _ovH - 8;
-    prims.add(SldRect(sideX, gy, _ovW, _ovH, role: SldRole.source));
-    prims.add(SldLabel(sideX + 7, gy + 17, 'GENSET UNIT ${_num(genKva)} kVA',
+    final gcy = gy + _ovH / 2;
+    _emitGenerator(prims, sideX + 14, gcy, 13, SldRole.source);
+    prims.add(SldLabel(sideX + 34, gcy - 2, 'GENSET ${_num(genKva)} kVA',
         size: 8.5, bold: true, role: SldRole.source));
-    prims.add(SldLabel(sideX + 7, gy + 33, gen.mode.label,
+    prims.add(SldLabel(sideX + 34, gcy + 12, gen.mode.label,
         size: 7.5, role: SldRole.source));
-    prims.add(SldLine(nodeX + _ovW, gy + _ovH / 2, sideX, gy + _ovH / 2,
+    prims.add(SldLine(nodeX + _ovW, gcy, sideX + 1, gcy,
         weight: SldWeight.medium, role: SldRole.source));
   }
   // CAPACITOR BANK: drawn when a real bank is specified (kvar set) OR — kept as
   // the historic proxy — whenever any distributed sources exist. The real field
   // labels its kvar verbatim; the proxy stays the generic "PF correction".
   if (project.capacitorBankKvar != null || project.sources != null) {
-    final cy = lvMidY + 8;
+    final cy = lvMidY + 8 + _ovH / 2;
     final kvar = project.capacitorBankKvar;
     final capSub =
         (kvar != null && kvar > 0) ? '${_num(kvar)} kvar' : 'PF correction';
-    prims.add(SldRect(sideX, cy, _ovW, _ovH, role: SldRole.source));
-    prims.add(SldLabel(sideX + 7, cy + 17, 'CAPACITOR BANK',
+    _emitCapacitor(prims, sideX + 14, cy, SldRole.source);
+    prims.add(SldLabel(sideX + 34, cy - 2, 'CAPACITOR BANK',
         size: 8.5, bold: true, role: SldRole.source));
-    prims.add(SldLabel(sideX + 7, cy + 33, capSub,
+    prims.add(SldLabel(sideX + 34, cy + 12, capSub,
         size: 7.5, role: SldRole.source));
-    prims.add(SldLine(nodeX + _ovW, cy + _ovH / 2, sideX, cy + _ovH / 2,
+    prims.add(SldLine(nodeX + _ovW, cy, sideX + 14, cy,
         weight: SldWeight.medium, role: SldRole.source));
   }
 
   return (prims: prims, height: lvBottom, feedX: centreX, feedY: lvBottom);
+}
+
+/// HORIZONTAL (left-to-right) source chain for the interactive single-line
+/// canvas: PLN supply -> [MV bus] -> two-winding transformer -> LV-main bus,
+/// flowing rightward, with the GENSET / CAPACITOR BANK dropping BELOW the LV bus
+/// (so they never collide with the root board placed to the right). The feed
+/// anchor is the LV-main board (at the baseline) — the root board connects to
+/// it. Uses the compact Indonesian board codes (PLN / MVMDP / LVMDP) since a
+/// horizontal chain has no room for the full names; the transformer is the
+/// Δ-Y (DyN) two-winding symbol, panels are boxes — matching the EL10011003 DXF.
+({List<SldPrim> prims, double height, double feedX, double feedY})
+    _buildSourceSpineH(
+  ElectricalProject project,
+  ElectricalSystemResult result,
+) {
+  final prims = <SldPrim>[];
+  const role = SldRole.source;
+  final demandVa = result.supply.demandVa;
+  final txKva = project.transformerKva?.inKilovoltAmperes ??
+      (demandVa.inKilovoltAmperes > 0
+          ? selectGeneratorKva(demandVa).inKilovoltAmperes
+          : 0.0);
+  final txLabel = txKva > 0 ? 'TRAFO ${_num(txKva)} kVA' : 'TRAFO';
+  final hasMv = project.dualTransformer ||
+      project.sources != null ||
+      project.transformerKva != null;
+  final chain = <({String name, String kind})>[
+    (name: 'PLN', kind: 'supply'),
+    if (hasMv) (name: 'MVMDP', kind: 'bus'),
+    (name: txLabel, kind: 'transformer'),
+    (name: 'LVMDP', kind: 'bus'),
+  ];
+
+  const pitchX = 132.0;
+  const yMid = 0.0;
+  const boxW = 58.0, boxH = 24.0;
+  var x = 0.0;
+  double? prevCx;
+  for (final node in chain) {
+    if (prevCx != null) {
+      prims.add(SldLine(prevCx, yMid, x, yMid,
+          weight: SldWeight.medium, role: role));
+    }
+    switch (node.kind) {
+      case 'transformer':
+        const r = 11.0;
+        _emitTransformerPair(
+            prims, x - r * 0.62, yMid, x + r * 0.62, yMid, r, role);
+        prims.add(SldLabel(x - 30, yMid + 28, node.name,
+            size: 8, bold: true, role: role));
+      case 'supply':
+        // MV incoming isolator (bowtie), with the PLN label below.
+        _emitBowtie(prims, x, yMid, 11, role);
+        prims.add(SldLabel(x - 10, yMid + 26, node.name,
+            size: 8.5, bold: true, role: role));
+      case 'bus':
+      default:
+        // A distribution board as a labelled BOX (DXF convention).
+        _emitPanelBox(prims, x, yMid, boxW, boxH, node.name, role);
+    }
+    prevCx = x;
+    x += pitchX;
+  }
+  final lvX = x - pitchX; // the LV-main board (feed-out to the root)
+
+  // GENSET + CAPACITOR drop BELOW the LV bus, STACKED vertically on the bus x
+  // with their labels to the RIGHT (clear of the root board, no label overlap).
+  final hasGen = project.sources?.generator != null;
+  if (hasGen) {
+    final gen = project.sources!.generator!;
+    final backupVa = ApparentPower(demandVa.voltAmperes * gen.backupFraction);
+    final genKva = (gen.kva ?? selectGeneratorKva(backupVa)).inKilovoltAmperes;
+    const gcy = yMid + 64;
+    prims.add(SldLine(lvX, yMid + 17, lvX, gcy - 13,
+        weight: SldWeight.medium, role: role));
+    _emitGenerator(prims, lvX, gcy, 13, role);
+    // Labels to the LEFT (ending left of the bus x) so they stay clear of the
+    // root board placed to the right.
+    prims.add(SldLabel(lvX - 104, gcy - 1, 'GENSET ${_num(genKva)} kVA',
+        size: 7.5, bold: true, role: role));
+    prims.add(SldLabel(lvX - 104, gcy + 11, gen.mode.label, size: 7, role: role));
+  }
+  if (project.capacitorBankKvar != null || project.sources != null) {
+    final kvar = project.capacitorBankKvar;
+    final capSub =
+        (kvar != null && kvar > 0) ? '${_num(kvar)} kvar' : 'PF correction';
+    final ccy = hasGen ? yMid + 122 : yMid + 64;
+    final dropFrom = hasGen ? yMid + 77 : yMid + 17;
+    prims.add(SldLine(lvX, dropFrom, lvX, ccy - 11,
+        weight: SldWeight.medium, role: role));
+    _emitCapacitor(prims, lvX, ccy, role);
+    prims.add(SldLabel(lvX - 96, ccy + 2, 'CAP $capSub',
+        size: 7.5, bold: true, role: role));
+  }
+
+  return (prims: prims, height: yMid, feedX: lvX, feedY: yMid);
 }
 
 /// Build the ZOOMED-OUT building single-line: every panel as a COMPACT node

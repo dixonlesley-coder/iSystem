@@ -558,11 +558,12 @@ void main() {
     test('sourceChain=true prepends source-role nodes + a TEGANGAN spine', () {
       final src = buildElectricalOverview(
           project: ov, result: ovResult, sourceChain: true);
-      final sourceRects = src.prims
-          .whereType<SldRect>()
-          .where((r) => r.role == SldRole.source);
-      // PLN + LV main (+ TX) at minimum.
-      expect(sourceRects.length, greaterThanOrEqualTo(3));
+      // The spine draws real single-line SYMBOLS, not boxes: the PLN supply
+      // circle + the transformer's TWO winding circles ⇒ ≥ 3 source circles.
+      final sourceCircles = src.prims
+          .whereType<SldCircle>()
+          .where((c) => c.role == SldRole.source);
+      expect(sourceCircles.length, greaterThanOrEqualTo(2)); // the transformer windings
       final joined =
           src.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
       expect(joined, contains('PLN MV STATION'));
