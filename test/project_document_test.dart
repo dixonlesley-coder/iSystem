@@ -44,6 +44,13 @@ void main() {
           dxfPath: '/x/plan.dxf',
           sizePx: Size(1684, 900),
         ),
+        Sheet(
+          id: 'dwg#0',
+          name: 'dwg plan',
+          dxfPath: '/cache/plan.dxf',
+          dwgPath: '/x/plan.dwg',
+          sizePx: Size(1684, 1000),
+        ),
       ],
       viewports: {
         's1': ViewportTransform(scale: 0.5, offset: Offset(12, 34)),
@@ -103,7 +110,7 @@ void main() {
     expect(decoded.floors.length, 2);
     expect(decoded.floors.first.height.meters, 4.0);
     expect(decoded.calibrations['s1']?.metersPerPixel, 0.02);
-    expect(decoded.sheets.length, 3);
+    expect(decoded.sheets.length, 4);
     expect(decoded.sheets[1].pdfPath, '/x/plan.pdf');
     expect(decoded.sheets[1].sizePx, const Size(800, 600));
     expect(decoded.sheets.first.pdfPath, isNull);
@@ -112,6 +119,10 @@ void main() {
     expect(decoded.sheets[2].pdfPath, isNull);
     expect(decoded.sheets[2].sizePx, const Size(1684, 900));
     expect(decoded.sheets[1].dxfPath, isNull);
+    // DWG-backed sheet round-trips both the converted dxfPath + the dwg source.
+    expect(decoded.sheets[3].dxfPath, '/cache/plan.dxf');
+    expect(decoded.sheets[3].dwgPath, '/x/plan.dwg');
+    expect(decoded.sheets[2].dwgPath, isNull);
     expect(decoded.network.nodes.length, 3);
     expect(decoded.network.nodes[1].x, 110);
     // node role / explicit elevation / fixture type round-trip

@@ -6,6 +6,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/autosave.dart';
+import '../data/dwg_converter.dart';
+import '../data/dwg_import.dart';
 import '../data/dxf_import.dart';
 import '../data/pdf_import.dart';
 import '../data/project_document.dart';
@@ -232,17 +234,28 @@ class _TopBar extends ConsumerWidget {
   Future<void> _pickAndLoadPlan(BuildContext context, WidgetRef ref) async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const ['pdf', 'dxf'],
+      allowedExtensions: const ['pdf', 'dxf', 'dwg'],
       allowMultiple: false,
     );
     if (result == null || result.files.isEmpty) return;
     final path = result.files.single.path;
     if (path == null || path.isEmpty) return;
 
-    final isDxf = path.toLowerCase().endsWith('.dxf');
-    final what = isDxf ? 'DXF' : 'PDF';
+    final lower = path.toLowerCase();
+    final isDxf = lower.endsWith('.dxf');
+    final isDwg = lower.endsWith('.dwg');
+    final what = isDwg
+        ? 'DWG'
+        : isDxf
+            ? 'DXF'
+            : 'PDF';
     try {
-      var sheets = isDxf ? await importDxf(path) : await importPdf(path);
+      var sheets = isDwg
+          ? await importDwg(path,
+              converter: const OdaDwgConverter(), outDir: dwgCacheDir())
+          : isDxf
+              ? await importDxf(path)
+              : await importPdf(path);
       if (sheets.isEmpty) {
         ref
             .read(loadErrorProvider.notifier)

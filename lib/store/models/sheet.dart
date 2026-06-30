@@ -16,6 +16,13 @@ class Sheet {
   /// backed by EITHER a PDF page ([pdfPath]) OR a DXF drawing ([dxfPath]) — never
   /// both; an absent value on both is the P0 placeholder page.
   final String? dxfPath;
+
+  /// Path to the ORIGINAL DWG on disk when this sheet came from a DWG import, or
+  /// null. DWG is a binary CAD format we cannot read directly, so on import it is
+  /// converted to DXF ([dxfPath] points at the converted file, which is what the
+  /// canvas renders); [dwgPath] is kept purely as provenance (so a future reload
+  /// can re-convert if the DXF cache is gone).
+  final String? dwgPath;
   final int pageIndex;
 
   /// Natural content size in pixels.
@@ -26,6 +33,7 @@ class Sheet {
     required this.name,
     this.pdfPath,
     this.dxfPath,
+    this.dwgPath,
     this.pageIndex = 0,
     this.sizePx = const Size(1684, 1190), // ~A3 landscape placeholder
   });
@@ -36,6 +44,7 @@ class Sheet {
     String? name,
     String? pdfPath,
     String? dxfPath,
+    String? dwgPath,
     int? pageIndex,
     Size? sizePx,
   }) =>
@@ -44,6 +53,7 @@ class Sheet {
         name: name ?? this.name,
         pdfPath: pdfPath ?? this.pdfPath,
         dxfPath: dxfPath ?? this.dxfPath,
+        dwgPath: dwgPath ?? this.dwgPath,
         pageIndex: pageIndex ?? this.pageIndex,
         sizePx: sizePx ?? this.sizePx,
       );
@@ -55,10 +65,11 @@ class Sheet {
       other.name == name &&
       other.pdfPath == pdfPath &&
       other.dxfPath == dxfPath &&
+      other.dwgPath == dwgPath &&
       other.pageIndex == pageIndex &&
       other.sizePx == sizePx;
 
   @override
   int get hashCode =>
-      Object.hash(id, name, pdfPath, dxfPath, pageIndex, sizePx);
+      Object.hash(id, name, pdfPath, dxfPath, dwgPath, pageIndex, sizePx);
 }
