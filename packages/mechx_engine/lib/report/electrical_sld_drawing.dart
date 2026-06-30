@@ -126,6 +126,16 @@ String breakerScheduleLabel(BreakerResult b, int poles) =>
       PhaseAssignment.threePhase => (ib, ib, ib),
     };
 
+/// The protective-earth conductor token in the BRI DIAGRAM PANEL convention
+/// (EL1004 DXF): an insulated single-core **NYA** for small earths, **BC** (bare
+/// copper) for large ones — the DXF uses `+ NYA <csa> mm2` up to ~10 mm2 and
+/// `+ BC <csa> mm2` from ~16 mm2 (so the protective conductor reads as a real
+/// cable, not a generic `+ E`). // VERIFY — drawing convention, not a clause.
+String _earthConductor(double peCsaMm2) {
+  final family = peCsaMm2 >= 16 ? 'BC' : 'NYA';
+  return ' + $family ${_num(peCsaMm2)} mm2';
+}
+
 /// A PVC conduit size (mm) derived from the conductor — a ~40 % fill general-
 /// practice estimate (// VERIFY, NOT an SNI clause; the model carries no conduit
 /// field). Returns null for large feeders (beyond the conduit range — they run
@@ -332,7 +342,7 @@ SldSheet buildElectricalSld({
           : c.name;
       final vd = c.voltageDrop.withinLimit ? '' : '  VD!';
       final earth = c.grounding.peCsaMm2 > 0
-          ? ' + E${_num(c.grounding.peCsaMm2)} mm2'
+          ? _earthConductor(c.grounding.peCsaMm2)
           : '';
       final conduitMm = _conduitMm(c.cable.csaMm2, c.threePhase);
       final conduit = conduitMm != null ? ' · PVC ${conduitMm}mm' : '';
