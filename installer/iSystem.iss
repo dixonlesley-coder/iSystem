@@ -44,11 +44,17 @@ OutputBaseFilename=iSystem-{#AppVersion}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-; On upgrade, gracefully close the running app and relaunch it afterwards so a
-; locked exe never blocks the update (the auto-update path runs the installer
-; silently while iSystem is open).
+; On upgrade, gracefully close the running app so a locked exe never blocks the
+; update (the auto-update path runs the installer silently while iSystem is
+; open). Relaunch is handled EXPLICITLY by the [Run] entries below, NOT by the
+; Restart Manager: the in-app updater self-exits (exit(0)) before the installer
+; copies files, so Setup never closes iSystem via the Restart Manager and so
+; RestartApplications has nothing to restart — leaving the app dead after a
+; silent update. Keep CloseApplications (close any still-running instance) but
+; turn RestartApplications OFF so the explicit [Run] relaunch is the single,
+; reliable restart path (no Restart-Manager double-launch).
 CloseApplications=yes
-RestartApplications=yes
+RestartApplications=no
 ; Unsigned build: end users see a one-time SmartScreen "unknown publisher"
 ; prompt on first install. Sign the .exe with an Authenticode cert to remove it.
 
@@ -70,7 +76,15 @@ Name: "{autodesktop}\iSystem"; Filename: "{app}\{#AppExeName}"; Tasks: desktopic
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Run]
-; Postinstall relaunch. `nowait` so the wizard can finish; `skipifsilent` keeps
-; a silent (/SILENT) auto-update from popping a window unexpectedly — but
-; RestartApplications above still relaunches the app that was closed for upgrade.
-Filename: "{app}\{#AppExeName}"; Description: "Launch iSystem"; Flags: nowait postinstall skipifsilent
+; Relaunch iSystem after the update, on BOTH paths:
+;   • INTERACTIVE install — a checkbox on the Finished wizard page (postinstall).
+;     `skipifsilent` keeps it from showing during a silent auto-update.
+; `runasoriginaluser` relaunches as the logged-in user (not elevated) when the
+; installer ran per-machine, so the app doesn't come back up with admin rights.
+Filename: "{app}\{#AppExeName}"; Description: "Launch iSystem"; Flags: nowait postinstall skipifsilent runasoriginaluser
+;   • SILENT auto-update (the in-app updater runs the installer with /SILENT and
+;     self-exits) — there is no Finished page, so relaunch automatically. Gated by
+;     the built-in WizardSilent() so it fires ONLY on the silent path (the
+;     interactive path uses the checkbox above), giving exactly ONE relaunch.
+;     This is what makes the app auto-restart itself after an auto-update.
+Filename: "{app}\{#AppExeName}"; Flags: nowait runasoriginaluser; Check: WizardSilent
