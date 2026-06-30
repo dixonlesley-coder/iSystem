@@ -15,6 +15,7 @@ import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx/ui/electrical/electrical_canvas.dart';
+import 'package:mechx/ui/electrical/electrical_view.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -153,11 +154,53 @@ void main() {
     final overview =
         tester.state<ElectricalCanvasState>(find.byType(ElectricalCanvas));
     overview.fitView();
+    // The left-to-right tree is compact enough that fit can land in the detail
+    // (board-schedule) tier; zoom OUT below the LOD threshold so the panels
+    // collapse to their summary card + merged "N loads" node (this golden's
+    // whole point).
+    var zout = 0;
+    while (overview.currentScale >= kLodThreshold && zout++ < 8) {
+      overview.zoomOut();
+    }
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     // The merged-loads summary nodes are present at the overview scale.
     expect(find.textContaining('loads'), findsWidgets);
     await expectLater(
         app, matchesGoldenFile('goldens/08_electrical_collapsed.png'));
+
+    // (The Overview tab was removed — its essential-red colouring + feeder
+    // cable/breaker labels folded into the Single-line canvas above; the compact
+    // whole-building Overview remains an EXPORT, not a tab.)
+    Finder elecSegment(String label) => find.descendant(
+          of: find.byType(ElectricalView),
+          matching: find.text(label),
+        );
+
+    // Electrical RISER tab — the floor-by-floor building riser: panels stacked
+    // by true building elevation with vertical riser feeders + a floor/FFL
+    // gutter, via `buildElectricalRiser` over the live mechanical
+    // BuildingLevels.
+    await tester.tap(elecSegment('Riser'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await expectLater(
+        app, matchesGoldenFile('goldens/10_electrical_riser.png'));
+
+    // Electrical board-schedule deep-zoom LOD — back on the Single-line tab,
+    // frame the MDP at a scale past `kBoardScheduleThreshold` so its full engine
+    // board schedule (the SAME geometry the PDF/DXF export draws, via
+    // `buildElectricalPanelDetail` + SldSheetPainter) renders in place of the
+    // mid-detail R-S-T busbar.
+    await tester.tap(elecSegment('Single-line'));
+    await tester.pump();
+    final schedCanvas =
+        tester.state<ElectricalCanvasState>(find.byType(ElectricalCanvas));
+    schedCanvas.focusPanelSchedule('mdp');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(schedCanvas.currentScale, greaterThanOrEqualTo(kBoardScheduleThreshold));
+    await expectLater(
+        app, matchesGoldenFile('goldens/11_electrical_schedule.png'));
   });
 }

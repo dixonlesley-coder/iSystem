@@ -996,4 +996,98 @@ void main() {
       expect(mdpOf(c).circuits.where((w) => w.id == feeder.id), isNotEmpty);
     });
   });
+
+  group('Source-spine intents (genset / capacitor / transformer / dual-tx)', () {
+    test('genset present/rating/mode/transfer round-trip + collapse', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ElectricalProject proj() => c.read(electricalProjectProvider);
+
+      // Sample starts with no sources.
+      expect(proj().sources, isNull);
+
+      ctrl.setGenerator(const GeneratorSource());
+      expect(proj().sources?.generator, isNotNull);
+
+      ctrl.setGeneratorKva(ApparentPower.kilovoltAmperes(250));
+      expect(proj().sources!.generator!.kva!.inKilovoltAmperes, 250);
+
+      ctrl.setGeneratorMode(GeneratorMode.prime);
+      expect(proj().sources!.generator!.mode, GeneratorMode.prime);
+      // Mode change preserves the rating.
+      expect(proj().sources!.generator!.kva!.inKilovoltAmperes, 250);
+
+      ctrl.setGeneratorTransfer(GeneratorTransfer.manual);
+      expect(proj().sources!.generator!.transfer, GeneratorTransfer.manual);
+
+      // Non-positive kVA ignored.
+      ctrl.setGeneratorKva(const ApparentPower(0));
+      expect(proj().sources!.generator!.kva!.inKilovoltAmperes, 250);
+
+      // Removing the only source collapses `sources` to null (no phantom map).
+      ctrl.setGenerator(null);
+      expect(proj().sources, isNull);
+    });
+
+    test('genset removal keeps a co-existing solar source', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ElectricalProject proj() => c.read(electricalProjectProvider);
+
+      ctrl.setProject(const ElectricalProject(
+        id: 'p',
+        sources: ElectricalSources(
+          generator: GeneratorSource(),
+          solar: SolarSource(panels: 12),
+        ),
+      ));
+      ctrl.setGenerator(null);
+      expect(proj().sources, isNotNull); // solar survives
+      expect(proj().sources!.generator, isNull);
+      expect(proj().sources!.solar!.panels, 12);
+    });
+
+    test('capacitor + transformer + dual-tx set/clear', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ElectricalProject proj() => c.read(electricalProjectProvider);
+
+      ctrl.setCapacitorBankKvar(50);
+      expect(proj().capacitorBankKvar, 50);
+      ctrl.setTransformerKva(ApparentPower.kilovoltAmperes(630));
+      expect(proj().transformerKva!.inKilovoltAmperes, 630);
+      ctrl.setDualTransformer(true);
+      expect(proj().dualTransformer, isTrue);
+
+      // 0 / null clears.
+      ctrl.setCapacitorBankKvar(0);
+      expect(proj().capacitorBankKvar, isNull);
+      ctrl.setTransformerKva(null);
+      expect(proj().transformerKva, isNull);
+    });
+
+    test('an unrelated edit preserves the source-spine fields', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ElectricalProject proj() => c.read(electricalProjectProvider);
+
+      ctrl.setGenerator(const GeneratorSource());
+      ctrl.setCapacitorBankKvar(40);
+      ctrl.setTransformerKva(ApparentPower.kilovoltAmperes(400));
+      ctrl.setDualTransformer(true);
+
+      // A per-panel edit must not drop them (the _withProject contract).
+      ctrl.setName('renamed');
+      ctrl.addPanel(name: 'SP-9');
+
+      expect(proj().sources?.generator, isNotNull);
+      expect(proj().capacitorBankKvar, 40);
+      expect(proj().transformerKva!.inKilovoltAmperes, 400);
+      expect(proj().dualTransformer, isTrue);
+    });
+  });
 }

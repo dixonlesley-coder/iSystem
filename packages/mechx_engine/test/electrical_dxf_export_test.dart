@@ -86,10 +86,21 @@ void main() {
       expect(dxf, contains('feeders'));
     });
 
-    test('incomer rating is labelled as TEXT', () {
+    test('the 3-phase MDP incomer metering draws as CIRCLE entities', () {
+      // The V/A/Hz meters on a 3-phase board emit CIRCLE entities (code 40 =
+      // radius) on the panels layer.
+      expect(dxf, contains('CIRCLE'));
+      expect('CIRCLE'.allMatches(dxf).length, greaterThanOrEqualTo(3));
+    });
+
+    test('renders the professional single-line content as TEXT', () {
       expect(dxf, contains('TEXT'));
-      // The MDP incomer rating appears with the "A" suffix.
-      expect(dxf, contains(' A '));
+      // The incomer breaker, a way row + Ib, and the title-block / legend frame.
+      expect(dxf, contains('Incomer'));
+      expect(dxf, contains('Ib '));
+      expect(dxf, contains('ELECTRICAL SINGLE-LINE DIAGRAM'));
+      expect(dxf, contains('LEGEND'));
+      expect(dxf, contains('frame'));
     });
   });
 

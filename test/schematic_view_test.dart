@@ -123,5 +123,47 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.byType(CustomPaint), findsWidgets);
     });
+
+    testWidgets('Auto legend lists every service present in the demo network',
+        (tester) async {
+      await tester.pumpWidget(
+        _harness(const SchematicView(), overrides: _demoOverrides()),
+      );
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      // The legend is now DRAWING CHROME — OFF by default on the live canvas
+      // (it rides the export). So only the toolbar toggle button shows 'Legend'
+      // and 'Cold water' (the chip), with no legend card yet.
+      expect(find.text('Legend'), findsOneWidget);
+      expect(find.text('Cold water'), findsOneWidget);
+
+      // Tapping the toggle previews the legend overlay on the canvas.
+      await tester.tap(find.text('Legend'));
+      await tester.pump();
+
+      // Now 'Legend' appears twice (toolbar button + legend card header).
+      expect(find.text('Legend'), findsNWidgets(2));
+      // Pipe tags are CustomPaint-only, so a found 'CW' Text widget proves the
+      // legend (the only place 'CW' is a Flutter Text) rendered, and the full
+      // serviceLabel row confirms the service is listed by name.
+      expect(find.text('CW'), findsWidgets);
+      // 'Cold water' appears in the toolbar service chip AND the legend row.
+      expect(find.text('Cold water'), findsNWidgets(2));
+    });
+  });
+
+  group('SchematicView — legend on empty network', () {
+    testWidgets('legend overlay is unreachable for an empty network',
+        (tester) async {
+      await tester.pumpWidget(_harness(const SchematicView()));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      // The Auto view early-returns the empty-state text before the legend
+      // Stack, so no legend service row renders.
+      expect(find.text('No network drawn'), findsOneWidget);
+      expect(find.text('Cold water'), findsNothing);
+    });
   });
 }

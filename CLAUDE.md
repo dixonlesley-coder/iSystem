@@ -113,6 +113,14 @@ packages/mechx_engine/lib/         PURE-DART CALC ENGINE (no Flutter)
                                    hot_water (recirc), bom (+ fittings), fire_sprinkler,
                                    fire_standpipe, supply_design, grille_sizing
   report/calc_report.dart          Markdown calculation report generator (pure)
+  report/sld_sheet.dart            discipline-neutral single-line DRAWING primitives
+                                   (SldSheet/SldPrim/Line/Rect/Label/Circle/LegendEntry) —
+                                   one geometry, rendered by PDF/DXF/canvas (golden rule 5)
+  report/riser_tags.dart           pure riser FUNCTION-suffix + per-service tag + floorFanOuts
+                                   (shared by the schematic painter AND the mech riser builder)
+  report/mechanical_sld_drawing.dart buildMechanicalRiserSld → SldSheet (floors by §10
+                                   elevation, SIZE-SERVICE-MATERIAL tags, fan-out, KETERANGAN)
+  report/sld_export.dart           sldSheetToPdf/sldSheetToDxf — render ANY SldSheet to vector
 
 lib/                               FLUTTER APP
   main.dart                        bootstrap: pdfrx init, autosave loop, recovery check,
@@ -384,6 +392,142 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   adds a native vector-PDF single-line (single A3 page, no third-party dep; panels as stroked
   rects at their schematic x/y, feeders as lines, labels as text, auto-fitted) alongside the DXF
   + Markdown, wired as a 'PDF (vector)' row in the toolbar Export menu.
+  **Electrical SLD export → professional drafter output landed** (the electrical analogue of the
+  mechanical single-line drafter pass): the PDF + DXF single-line exports no longer draw anonymous
+  name-only boxes — every panel is a real distribution-board single-line. New pure (Flutter-free,
+  unit-tested) `report/electrical_sld_drawing.dart` `buildElectricalSld` → an `SldSheet` of sealed
+  primitives (`SldLine`/`SldRect`/`SldLabel`) + a device legend + supply note, the ONE geometry both
+  formats render (so PDF and DXF agree). Each panel: a header (name [tag] + `Incomer <breaker> ·
+  system · V · bus · demand`), a header/body divider, a two-line **busbar** with the **incomer
+  breaker** on the divider, and **one ROW per outgoing way** — breaker (`MCB/MCCB <curve><rating>A/
+  <poles>P`), cable (`<family> <cores>×<csa>`), load name, phase, `Ib …A`, `-> <sub-panel>` for a
+  feeder, `VD!` when over-limit — with feeders routed orthogonally down a right-hand channel to the
+  sub-panel they supply (panels stacked root-first, indented by feeder depth). `electrical_pdf_export.dart`
+  stamps a page-fixed **title block** (project · ELECTRICAL SINGLE-LINE DIAGRAM · demand kW/kVA · the
+  `DrawingChrome` drawing-number/revision/`Sheet i of t`) + **device legend (KETERANGAN)** — a
+  single-line is schematic, so the north-arrow/scale-bar chrome is dropped; `electrical_dxf_export.dart`
+  renders the same primitives (`panels`/`feeders`/`frame` layers) + a model-space title block + legend
+  (`powerOneLineToDxf` untouched). Shared `breakerLabel`/`cableLabel` format the notation. Engine-only;
+  the app export wiring + signatures are unchanged (no `.mechx`/app-state change).
+  **Zoomed-out building single-line landed** (the whole distribution hierarchy on one sheet, modelled
+  on a real project DXF): pure `buildElectricalOverview(project, result)` in `electrical_sld_drawing.dart`
+  → an `SldSheet` where every panel is a COMPACT node (name [tag] + incomer rating/poles + demand kW),
+  laid out in a **top-down tree tiered by feeder depth** and wired parent→child with orthogonal
+  feeders, carrying the **normal / essential colour split** of a real riser single-line (new `SldRole
+  {normal, essential, source}` on every primitive; a panel is essential when it is on the genset-backed
+  (emergency) supply — its explicit `ElectricalPanel.essential` flag — or its name marks it emergency,
+  or its parent is — propagated down the emergency sub-tree. A single life-safety WAY on an otherwise-
+  normal board does NOT make the whole board red (the emergency-supply flag is the cue, not one way)). The PDF + DXF exporters are now role-aware (PDF normal = the existing dark ink ⇒ the
+  detail sheet is byte-identical, essential = red; DXF essential = ACI red 62/1) behind an `overview`
+  flag, wired into the Export menu as **'Building single-line (overview)' → PDF / DXF**. The
+  **overview + riser now render LIVE on the electrical canvas** via a reusable read-only
+  `ui/electrical/sld_sheet_painter.dart` (`SldSheetView`/`SldSheetPainter`) — a `ViewportTransform`-
+  driven surface that paints ANY pure-engine `SldSheet` (the SAME geometry the PDF/DXF exporters draw,
+  one source of truth) with the shared drafting grid + the role colour split (normal→ink, essential→
+  danger red, source→accent) and ASCII `fontFamily:'Roboto'` labels; `electrical_view.dart` `_Tab`
+  grew **`overview` + `riser`** tabs (was `{singleLine, powerOneLine}`). The **PLN/MV/transformer/
+  genset source chain is now prepended** (`_buildSourceSpine`, `sourceChain` flag): PLN MV STATION ->
+  (PANEL UTAMA TEGANGAN MENENGAH, only for a `dualTransformer`/`sources` project) -> TRANSFORMER
+  `<kVA>` -> PANEL UTAMA TEGANGAN RENDAH, with an optional GENSET UNIT (`selectGeneratorKva` over the
+  project `sources.generator` backup VA) + CAPACITOR BANK on the LV bus feeding each root — kVA snaps
+  to the genset ladder only, no invented physics (`// VERIFY`); default off ⇒ the overview export is
+  byte-identical. A **floor-by-floor electrical riser** landed (`buildElectricalRiser(project, result,
+  {building, mounting, sourceChain})`): panels placed on their building FLOOR by true §10 elevation
+  (highest at the top), left-to-right per band, feeders as a vertical riser in a right-hand channel +
+  horizontal branches, a left gutter with floor name + `FFL +12.50`; floor assignment =
+  `panel.layoutPos.floorIndex` (clamped) → feeder-depth tier → clamp, degrading to pure `Tier n` when
+  `BuildingLevels` is null/empty (never throws), fed the live mechanical `projectControllerProvider.
+  building`; exported via **'Building riser' → PDF / DXF** (`exportElectricalRiserPdf`/`Dxf`, the app
+  builds the sheet with live `BuildingLevels` and passes it to the prebuilt-`sheet` exporter param).
+  The **per-panel detail single-line now follows the real Indonesian schedule conventions** (BRI
+  `Diagram Panel`): `breakerScheduleLabel` rating-led notation (`MCB 16A 1ph`/`MCCB 40A 3ph`, ASCII
+  `ph`; the curve-led `breakerLabel` stays for the incomer sub-line + legend), cable with the `mm2`
+  unit + a separate-earth token (`NYY 3x6 mm2 + E6 mm2` from the way's PE CSA), per-way connected DAYA
+  (`W`/`kW`), a `Cu bus <csa>mm2  Icw <kA>kA` header, CADANGAN (spare) ways as stubbed rows (from
+  `spareWaysReserved`), and a TOTAL footer (diversified demand + line current) — 0-spare/withstand-off
+  panels stay geometrically byte-identical. New goldens `09_electrical_overview.png` +
+  `10_electrical_riser.png`. The schedule was then brought to the BRI `Diagram Panel`'s ALIGNED-TABLE
+  form (column-header band GRUP | DEVICE | PENGHANTAR | DAYA | KETERANGAN | R | S | T at fixed columns,
+  block width 920, a per-way `· PVC <n>mm` conduit token from the pure `_conduitMm`), and three further
+  DXF-parity gaps (verified against the client's real EL1004 `Diagram Panel BRI` DXF) then closed in
+  `electrical_sld_drawing.dart`: **(a) STARTER / CONTROL token** — the way's `ElectricalCircuit.starterType`
+  (resolved by the same `circuitById` lookup that feeds `cableType`) is mapped to an ASCII token by the
+  pure `_starterCode` (`dol`->`DOL`, `starDelta`->`star-delta` [NOT the unicode `Y-D`], `reversing`->`REV`,
+  `softStarter`->`soft-start`, `vfd`->`VFD`, `ats`->`ATS`, `pump`->`pump`) and APPENDED to the DEVICE cell
+  as `<breaker> · <token>`, shown ONLY when a way carries a real `starterType` (else bare — most final
+  lighting/socket ways have none); **(b) DAYA in WATT** — the cell switched from `_watts()` (kW) to the
+  pure, unit-tested `_wattsId(double w)` → integer watts with the Indonesian DOT thousands separator +
+  ` WATT` (`190 WATT`, `1.100 WATT`, `4.400 WATT`, `52.871 WATT`; rounds to the nearest watt, from the
+  solved `ElectricalCircuitResult.loadW`), a feeder (loadW 0) staying `-`; **(c) circle V/A/Hz meters** —
+  a new SEALED `SldCircle` primitive `{ cx, cy, r; weight; role }` replaces the boxed incomer-metering
+  cluster on 3-phase boards with three small role-coloured CIRCLES (each a centred letter) + the kept `CT`
+  note, handled EXHAUSTIVELY in all FOUR `SldPrim` switch sites (`electrical_sld_drawing.dart` overview/
+  riser prim loops + bounds; `electrical_pdf_export.dart` 4-bezier kappa≈0.5523 circle; `electrical_dxf_export.dart`
+  new `_Dxf.circle` → `0/CIRCLE`, `10`/`20` centre Y-negated, `40`/radius; `sld_sheet_painter.dart`
+  `paintSldPrims` → `canvas.drawCircle`) — a new sealed subtype forcing every renderer to handle it
+  (golden rule 5). All three are drawing-fidelity, `// VERIFY`-free; honesty-by-construction (starter only
+  when real, DAYA from the real loadW). The per-panel DETAIL is the only path touched (overview/riser stay
+  byte-identical bar the new `SldCircle` bounds/translate case). Goldens **05_electrical** +
+  **11_electrical_schedule** regenerated (circle meters + WATT-dot DAYA on the MDP schedule); mechanical
+  **04/07/09/10_single_line** BYTE-IDENTICAL.
+  **The overview + riser then gained matching drafter rigor — feeder cable/breaker labels, kW/kVA
+  compact nodes, and a riser per-floor branch fan-out** (`electrical_sld_drawing.dart`, engine-only, no
+  new `SldPrim` so the PDF/DXF/canvas renderers are untouched; the per-panel DETAIL `buildElectricalSld`
+  path stays BYTE-IDENTICAL): **(1)** every FEEDER run in BOTH builders now carries its real cable +
+  breaker (e.g. `Cu 3x4 mm2 · MCB 25A 1ph` / `NYY 4x50 mm2 · MCCB 250A 3ph`) from the PARENT'S feeding
+  circuit — shared `_feederLabelLookups(project, result, parentOf)` resolves per child-panel id the
+  parent feeding `ElectricalCircuit` (by `feedsPanelId`, for the cable family) + its sized
+  `ElectricalCircuitResult` (cable CSA + breaker), and `_feederConnLabel(...)` formats `cableLabel(...) +
+  ' mm2 · ' + breakerScheduleLabel(...)`, returning **null when the feeding circuit or its sized result
+  can't resolve** (omit the label, never fabricate); placed on the overview feeder's mid horizontal
+  segment / the riser's horizontal branch into the panel, inheriting the feeder's normal/essential/source
+  role colour. **(2)** the compact-node sub-line is now `<In>A <poles>P · <kW>kW / <kVA>kVA` via shared
+  `_compactNodeSubLine(p)` (kVA = `demandW / _assumedPanelPf`, a file-level `_assumedPanelPf = 0.85`
+  mirroring `compute.dart`'s building PF but inlined to keep the drawing file compute-free —
+  representative `// VERIFY`, NOT an SNI/PUIL clause), in BOTH builders. **(3)** a riser-only per-floor
+  branch fan-out: under each riser panel its NON-FEEDER outgoing LOAD ways hang as a compact column of
+  short labelled stubs (`<name> <ratingA>A[ 3ph]`, name truncated to 14 chars) — the real riser
+  convention (what each board distributes on its floor); feeder ways (collected once into
+  `feederCircuitIds`) are excluded (drawn as a riser branch instead), capped at `kRiserFanMax = 4` with
+  the remainder collapsing to a `+N more` summary row (never silently dropped). Band geometry adjusted
+  (`_riserBandH` 130→150; the floor grid hairline drops below a reserved `_fanColH` fan column) so a
+  dense board never overruns the next floor band. The normal/essential/source colour split + the source
+  spine stay intact (feeder labels carry the feeder's role). Both builders feed the PDF/DXF exports AND
+  the live Overview/Riser canvas tabs, so the change shows on the exports + canvas for free. Goldens
+  **09 (Overview)** + **10 (Riser)** regenerated + verified; 05/08/11 + all other goldens BYTE-IDENTICAL.
+  **Electrical single-line — LEFT-TO-RIGHT canvas + board-schedule LOD + editable source nodes landed**
+  (`ui/electrical/electrical_canvas.dart` + `panel_geometry.dart` + `electrical_view.dart` +
+  `store/electrical_store.dart`): the INTERACTIVE single-line canvas now flows LEFT-TO-RIGHT like a real
+  CAD building single-line — `autoLayout` is transposed (depth = X, sub-panels step RIGHT by feeder
+  depth; breadth = Y, siblings stacked; feeders route parent-right-edge → mid-X channel → child-left-edge)
+  — with TWO clean zoom tiers: a summary card (< `kLodThreshold` 0.72) with its "N loads" merged node to
+  the RIGHT, and at/above `kLodThreshold` (`scheduleDetail = detail`) the REAL engine board schedule
+  (`buildElectricalPanelDetail`, the SAME geometry the PDF/DXF export draws — vertical bus on the left,
+  one way ROW reading left-to-right per circuit, own header + TOTAL footer) painted read-only by
+  `SldBoardSchedulePainter` (`sld_sheet_painter.dart`) into the card body, via a shared free fn
+  `paintSldPrims(...)` factored out of `SldSheetPainter` (one prim-painting routine for
+  overview/riser/in-card — golden rule 5). `panelFootprint(detail)` is the schedule height
+  (`panelScheduleHeight`, grows with the way count). The detail tier keeps double-click/right-click
+  editing via a local-y→schedule-row hit-test (`_PanelScheduleBody`). The way rows ARE the loads, so the
+  hanging IEC load symbols + drop lines are dropped at detail (redundant with — and orthogonal to — the
+  rows) and the card's own header chrome is dropped (the engine schedule draws its own header),
+  so the deep view reads as the clean left-to-right CAD board schedule — no redundant loads below it, no
+  duplicated panel-name header. Regression-covered by golden **11_electrical_schedule.png** (the canvas
+  `focusPanelSchedule(panelId)` frames one panel past the threshold). **Sources are
+  now first-class + editable:** a **Sources** toolbar button opens a `_SourcesEditor` drawer (genset
+  present/kVA[0=auto]/mode/transfer · capacitor kvar · transformer kVA · dual-transformer) wired through
+  new store intents (`setGenerator`/`setGeneratorKva`/`setGeneratorMode`/`setGeneratorTransfer`/
+  `setCapacitorBankKvar`/`setTransformerKva`/`setDualTransformer`) on the field-preserving `_withProject`
+  (now carrying `sources`/`dualTransformer`/`capacitorBankKvar`/`transformerKva`); `_sourcesWith` rebuilds
+  `ElectricalSources` preserving solar/battery/hybrid + collapses to null when emptied. The source SPINE
+  now renders on the interactive single-line: when `buildElectricalSourceSpine(project, result)` is
+  non-empty a read-only band (PLN→MV→TX→LV main + genset/capacitor, `_SourceSpinePainter` sharing the
+  canvas zoom, ONE `_buildSourceSpine` geometry across overview/riser/export/canvas) sits above the root
+  panel, replacing the bare `_GridSourceNode` PLN head; double-click → Sources editor. Empty spine (no
+  sources AND no demand) keeps the PLN head. Goldens 05/08/09/10 shifted only by the new Sources toolbar
+  button + the spine head replacing the PLN pill (no canvas-content regression). (The queued per-floor
+  branch fan-out under each riser panel has since landed — see the overview/riser drafter-rigor
+  paragraph above.)
   The i18n mechanism also gained **parameterized templates** — `MechXStringsData.format(key,
   {…})` substitutes `{name}` placeholders (EN+ID templates carry identical placeholders, pinned
   by a test) — and the Commercial workspace's dynamic captions (BOM/pricelist leads, unpriced
@@ -519,6 +663,73 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   added rather than persistent prose: the Layout canvas mechanical guide notes that risers drawn
   on the plan stack vertically in the Riser view, and the Riser-view Edit help legend leads with
   an Auto-vs-Edit mode explainer (`StringKey.schematicHelpModes`, EN+ID).
+  **Single-line (Riser SLD) → professional drafter output landed (incremental, toward `H-101`):**
+  the Auto single-line is now a real Indonesian air-bersih riser drawing, not a wireframe. Nodes
+  carry their schematic SYMBOL (`_paintNodes` reuses `paintComponentSymbol`; fixtures = a drop
+  terminal) + an equipment/role LABEL, service-coloured. Piped runs read the industry tag
+  **`SIZE-SERVICE-MATERIAL`** (`_pipeTag` + `_serviceCode` CW/HW/D/V/RW/SA/RA/EA/SP/FH +
+  `_pipeMaterialCode` PPR/PVC/CI/HDPE/BS from `pipeProduct` or the service default), now with an
+  Indonesian FUNCTION suffix (**GRAVITASI / BOOSTER / TRANSFER**) and a per-riser TAG (**CW-R1** …)
+  from pure, unit-tested `ui/schematic/riser_tags.dart` (`riserFunctionFor`/`riserTags`/
+  `riserServiceCode` — function appended ONLY when confidently derivable from endpoints + feed
+  strategy, else nothing; every rule `// VERIFY`). A system-filter (All / per-service chips) divides
+  the diagram per system or shows a combined view. **Inferred risers** (`_computeInferredRisers`,
+  mutual-nearest per vertical stack) draw as dashed connectors when the `Infer risers` toggle is on
+  and are **one-click committable** to a real sized riser edge (`NetworkController.connectRiser`,
+  length = §10 elevation delta, one undo step). Drafter chrome: a toggleable **Legend (KETERANGAN)**
+  box (bottom-left, on-diagram service codes) + a toggleable **title block** (bottom-right: project ·
+  `SINGLE-LINE DIAGRAM` · `SHEET · <filter>` · date). All EN ⇒ goldens 04/09/10 shift only by the new
+  draughting content. Engine untouched; no `.mechx` change.
+  **The five remaining H101 (Diagram Sistem Air Bersih) elements then landed** (all on the Auto Riser
+  SLD `_AutoSchematicPainter` / `_AutoElevation` in `schematic_view.dart`, plus a pure helper in
+  `riser_tags.dart`): **(1) PUMP-SET PLANT DETAIL** — a compact top-right bordered callout
+  (`_paintPlantDetail`) with a ROOF-TANK glyph + real capacity (`m3` from the roofTank node's
+  `tankCapacityLitres`), a BOOSTER-PUMP glyph + real duty (`<kW>` from `pumpDutyProvider`'s
+  `selectedMotor`), a connecting leg, and the GRAVITASI / TRANSFER / BOOSTER leg labels (chosen from
+  the feed strategy + whether a ground tank exists) — drawn ONLY when the network actually has a
+  roofTank / groundTank / pump / boosterSet (else omitted entirely) and only on the clean-water focus;
+  **(2) VALVE-ASSEMBLY DETAIL CALLOUTS** — two bottom-centre bordered boxes (`_paintValveCallouts` +
+  the shared `_detailBox` / `_drawDetailGlyphRow` helpers) — DETAIL WATER METER (GV · WM · GV · U) and
+  DETAIL PRV SET (GV · STR · PRV · GV) — rows of schematic `paintComponentSymbol` valve glyphs joined
+  by a run line, each with a tiny ASCII abbrev (the glyph is schematic, the abbrev names the real
+  device); generic reference details (always available, width-guarded clear of the corner overlays);
+  **(3) FITTING LEGEND** — `_AutoLegend` gained a FITTINGS subsection beneath the on-diagram service
+  codes (CW · AAV · GV · CV · STR · PRV · WM · SF · CF · BV · FJ with full names), reference data, not
+  data-gated; **(4) SYSTEM-NOTES (KETERANGAN) card** — a bottom-right floating-glass `_SystemNotes`
+  card echoing ONLY real values: feed strategy (gravity downfeed vs upfeed / booster), each tank
+  present with its real `m3`, occupancy class, and the PEAK design flow (`L/s` from `pumpDutyProvider`,
+  upfeed-only — the engine has no daily-volume figure, so the demand line is OMITTED on downfeed rather
+  than fabricating a `m3/day`); stacked above the title block (both bottom-right); **(5) PER-FLOOR
+  BRANCH FAN-OUT** — under each floor band, a compact column of short labelled stubs for the FIXTURE
+  nodes that floor distributes (`_paintFloorFanOut`), driven by the pure, unit-tested
+  `floorFanOuts(net, {visibleNodeIds, labelOf, max:4})` → `FloorFanOut(floorIndex, labels, overflow)`
+  (groups `NodeRole.fixture` nodes per floor, deterministic by x-then-id, honours the focus filter,
+  caps at 4 with the overflow COUNTED and rendered as a `+N more` row — never silently dropped, never
+  overrunning the band). All four detail/notes blocks are toolbar-toggleable via two new chips
+  (**Details** / **Notes**, EN+ID `StringKey.schematicDetails`/`schematicNotes`, both default ON as
+  the deliverable); every NEW on-canvas label is ASCII (`m3`, `L/s`, `·`), no `Ø`/`m³`/superscripts.
+  Honest by construction: a detail is omitted when its data is absent (no roof tank ⇒ no pump-set
+  block). EN ⇒ goldens 04/09/10 shift only by the new draughting content; the Edit-mode (07) +
+  electrical (05/06/08/11/10_electrical) goldens stay BYTE-IDENTICAL. Engine untouched; no `.mechx`
+  change. (Queued: the STP process-flow diagram; per-unit branch fan-out and bringing the
+  **electrical** SLD/exports to the same drafter quality have since landed.)
+  **Mechanical Riser SLD vector EXPORT landed (PDF + DXF); legend/title block moved to the export**:
+  the mechanical riser single-line now exports as crisp vector via the discipline-neutral engine
+  `SldSheet` pipeline (extracted to `report/sld_sheet.dart`, re-exported from `electrical_sld_drawing`
+  ⇒ electrical byte-identical). New pure `report/mechanical_sld_drawing.dart` `buildMechanicalRiserSld`
+  builds the riser sheet (floors by §10 elevation + FFL gutter, `SIZE-SERVICE-MATERIAL[-FUNCTION]` pipe
+  tags + `CW-R1` riser ids, fixture markers, per-floor fan-out, the KETERANGAN fitting legend); the pure
+  tag helpers moved INTO the engine (`report/riser_tags.dart`, one-line re-export shim left at the old
+  app path). The electrical PDF/DXF exporters gained a `diagramTitle` param (default electrical ⇒
+  byte-identical) + a neutral `report/sld_export.dart` `sldSheetToPdf`/`sldSheetToDxf` wrapper, so the
+  mechanical side renders the same vector formats with a mechanical heading (`DIAGRAM SISTEM AIR BERSIH`
+  / per-service). App wiring `lib/ui/schematic/schematic_export.dart` (`exportMechanicalRiserPdf`/`Dxf`)
+  builds the sheet from the live providers for the current Auto-view focus + an honest supply note, saved
+  via the file picker, behind a new **Export** toolbar button + `_RiserExportMenu`. The legend + title
+  block are now DRAWING CHROME that ride the EXPORT — the live-canvas `_showLegend`/`_showTitleBlock`
+  default OFF (the toolbar chips still preview them); Details/Notes stay ON. Goldens 04/09/10 shift only
+  by the decluttered working canvas + the Export button; electrical 05/06/08/11 BYTE-IDENTICAL. No
+  `.mechx`/version change (export is build-time).
   **Mechanical ↔ electrical theme convergence landed (Apple-consistency pass):** the
   electrical workspace (a PanelMaker port) now reads as one app with the mechanical one.
   Driven by an audit + re-review, converged: the electrical **Loads palette to the RIGHT**

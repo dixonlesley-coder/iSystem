@@ -25,11 +25,15 @@ import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/metering.dart' show MeteringKindLabel;
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/electrical/sources.dart'
+    show GeneratorMode, GeneratorSource, GeneratorTransfer;
 import 'package:mechx_engine/electrical/spd.dart' show SpdTypeLabel;
 import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
+import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
+import '../../store/project_store.dart';
 import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
@@ -48,6 +52,7 @@ import 'electrical_inspector.dart' show ElectricalCircuitInspector;
 import 'electrical_palette.dart';
 import 'panel_geometry.dart';
 import 'power_oneline_view.dart';
+import 'sld_sheet_painter.dart';
 
 /// Identifies the circuit currently open in the inspector / context menu.
 class _CircuitRef {
@@ -57,9 +62,22 @@ class _CircuitRef {
 }
 
 /// Which tab the workspace shows. (Spatial placement on the PDF moved to the
-/// unified Layout canvas — the Electrical layer there — so this is the two
-/// abstract projections.)
-enum _Tab { singleLine, powerOneLine }
+/// unified Layout canvas — the Electrical layer there — so these are the
+/// abstract projections of the SAME solved model.)
+///
+///  • [singleLine]   — the interactive per-panel spatial single-line canvas
+///    (zoom out for the whole-building tree: essential boards + feeders read
+///    red, feeders carry their cable + breaker — the old Overview, folded in);
+///  • [powerOneLine] — the hybrid power one-line (sources / MV / tx / busses);
+///  • [riser]        — the floor-by-floor building riser (panels stacked by
+///    true building elevation, vertical riser feeders), via
+///    `buildElectricalRiser` over the live mechanical [BuildingLevels].
+///
+/// [riser] is a READ-ONLY render of the same `SldSheet` geometry the PDF / DXF
+/// exporters draw — one source of truth, no parallel layout. (The compact
+/// whole-building Overview remains an EXPORT — 'Building single-line (overview)'
+/// — but no longer a redundant tab now the single-line canvas covers it.)
+enum _Tab { singleLine, powerOneLine, riser }
 
 /// Renders the electrical single-line canvas and hosts the editing overlays.
 class ElectricalView extends ConsumerStatefulWidget {
@@ -72,6 +90,8 @@ class ElectricalView extends ConsumerStatefulWidget {
 class _ElectricalViewState extends ConsumerState<ElectricalView> {
   final GlobalKey<ElectricalCanvasState> _canvasKey =
       GlobalKey<ElectricalCanvasState>();
+  final GlobalKey<SldSheetViewState> _riserKey =
+      GlobalKey<SldSheetViewState>();
 
   _Tab _tab = _Tab.singleLine;
 
@@ -91,6 +111,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
 
   /// Whether the Service & Earthing inspector is open.
   bool _showService = false;
+
+  /// Whether the Sources editor (genset / capacitor / transformer) is open.
+  bool _showSources = false;
 
   /// Whether the Export menu (SLD / report / power one-line) is open.
   bool _showExportMenu = false;
@@ -131,6 +154,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           onTab: (t) => setState(() => _tab = t),
           onIssues: () => setState(() => _showAdvanced = false),
           onService: _openService,
+          onSources: _openSources,
           onAddPanel: _addPanel,
           onExport: () => setState(() => _showExportMenu = !_showExportMenu),
           onToggleAdvanced: () =>
@@ -143,6 +167,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             _Tab.powerOneLine => PowerOneLineView(
               oneLine: advanced.powerOneLine,
             ),
+            _Tab.riser => _buildRiserArea(project, result),
           },
         ),
       ],
@@ -175,6 +200,10 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             child: _ExportMenu(
               onSld: () => _runExport(exportElectricalSldDxf),
               onSldPdf: () => _runExport(exportElectricalSldPdf),
+              onOverviewPdf: () => _runExport(exportElectricalOverviewPdf),
+              onOverviewDxf: () => _runExport(exportElectricalOverviewDxf),
+              onRiserPdf: () => _runExport(exportElectricalRiserPdf),
+              onRiserDxf: () => _runExport(exportElectricalRiserDxf),
               onReport: () => _runExport(exportElectricalCalcReport),
               onPowerOneLine: () => _runExport(exportPowerOneLineDxf),
             ),
@@ -191,6 +220,10 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         if (_showService)
           _ServiceInspector(
             onClose: () => setState(() => _showService = false),
+          ),
+        if (_showSources)
+          _SourcesEditor(
+            onClose: () => setState(() => _showSources = false),
           ),
       ],
     );
@@ -234,6 +267,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                     _menuAt = _toLocal(gp);
                   }),
                   onRequestService: _openService,
+                  onRequestSources: _openSources,
                 ),
               ),
               // Zoom controls (bottom-left).
@@ -288,6 +322,28 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     );
   }
 
+  /// The FLOOR-BY-FLOOR building riser, rendered LIVE from
+  /// [buildElectricalRiser] over the live mechanical [BuildingLevels] (the
+  /// shared §10 geometry — panels stacked by true floor elevation). Read-only.
+  Widget _buildRiserArea(
+    ElectricalProject project,
+    ElectricalSystemResult result,
+  ) {
+    final building = ref.watch(projectControllerProvider).building;
+    final sheet = buildElectricalRiser(
+      project: project,
+      result: result,
+      building: building,
+    );
+    return _SldProjectionArea(
+      sheetKey: _riserKey,
+      sheet: sheet,
+      empty: project.panels.isEmpty,
+      onSetUp: _openService,
+      onAddPanel: _addPanel,
+    );
+  }
+
   // ── Geometry helpers ────────────────────────────────────────────────────────
 
   Offset _toLocal(Offset global) {
@@ -319,7 +375,19 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       _circuitMenu = null;
       _editing = null;
       _showAdvanced = false;
+      _showSources = false;
       _showService = true;
+    });
+  }
+
+  void _openSources() {
+    setState(() {
+      _panelMenu = null;
+      _circuitMenu = null;
+      _editing = null;
+      _showAdvanced = false;
+      _showService = false;
+      _showSources = true;
     });
   }
 
@@ -455,6 +523,7 @@ class _Toolbar extends StatelessWidget {
   final ValueChanged<_Tab> onTab;
   final VoidCallback onIssues;
   final VoidCallback onService;
+  final VoidCallback onSources;
   final VoidCallback onAddPanel;
   final VoidCallback onExport;
   final VoidCallback onToggleAdvanced;
@@ -466,6 +535,7 @@ class _Toolbar extends StatelessWidget {
     required this.onTab,
     required this.onIssues,
     required this.onService,
+    required this.onSources,
     required this.onAddPanel,
     required this.onExport,
     required this.onToggleAdvanced,
@@ -498,6 +568,12 @@ class _Toolbar extends StatelessWidget {
             selected: tab == _Tab.powerOneLine,
             onTap: () => onTab(_Tab.powerOneLine),
           ),
+          const SizedBox(width: MechXSpacing.xs),
+          MechXSegment(
+            label: 'Riser',
+            selected: tab == _Tab.riser,
+            onTap: () => onTab(_Tab.riser),
+          ),
           const Spacer(),
           // Actions (right) — horizontally scrollable so a narrow window never
           // overflows the toolbar. The canonical MechXButton "gray button";
@@ -522,6 +598,11 @@ class _Toolbar extends StatelessWidget {
                   MechXButton(
                     label: 'Service & Earthing',
                     onPressed: onService,
+                  ),
+                  const SizedBox(width: MechXSpacing.xs),
+                  MechXButton(
+                    label: context.strings(StringKey.electricalSources),
+                    onPressed: onSources,
                   ),
                   const SizedBox(width: MechXSpacing.xs),
                   MechXButton(label: '+ Panel', onPressed: onAddPanel),
@@ -561,11 +642,19 @@ const _electricalGuideItems = <String>[
 class _ExportMenu extends StatelessWidget {
   final VoidCallback onSld;
   final VoidCallback onSldPdf;
+  final VoidCallback onOverviewPdf;
+  final VoidCallback onOverviewDxf;
+  final VoidCallback onRiserPdf;
+  final VoidCallback onRiserDxf;
   final VoidCallback onReport;
   final VoidCallback onPowerOneLine;
   const _ExportMenu({
     required this.onSld,
     required this.onSldPdf,
+    required this.onOverviewPdf,
+    required this.onOverviewDxf,
+    required this.onRiserPdf,
+    required this.onRiserDxf,
     required this.onReport,
     required this.onPowerOneLine,
   });
@@ -607,6 +696,26 @@ class _ExportMenu extends StatelessWidget {
               label: context.strings(StringKey.electricalExportSld),
               sub: context.strings(StringKey.electricalExportSldPdf),
               onTap: onSldPdf,
+            ),
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportOverview),
+              sub: context.strings(StringKey.electricalExportOverviewPdf),
+              onTap: onOverviewPdf,
+            ),
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportOverview),
+              sub: context.strings(StringKey.electricalExportOverviewDxf),
+              onTap: onOverviewDxf,
+            ),
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportRiser),
+              sub: context.strings(StringKey.electricalExportRiserPdf),
+              onTap: onRiserPdf,
+            ),
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportRiser),
+              sub: context.strings(StringKey.electricalExportRiserDxf),
+              onTap: onRiserDxf,
             ),
             _ExportRow(
               label: context.strings(StringKey.electricalExportReport),
@@ -789,6 +898,53 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
+// ── Read-only SldSheet projection (Overview / Riser) ────────────────────────
+
+/// Hosts a read-only [SldSheetView] (the Overview / Riser projection) with the
+/// shared on-canvas chrome: the zoom cluster (bottom-left) driving the sheet's
+/// imperative zoom API, and the branded empty-state card when there are no
+/// panels yet. The same layout as the single-line canvas area minus the
+/// interactive palette (these projections are renders, not editors).
+class _SldProjectionArea extends StatelessWidget {
+  final GlobalKey<SldSheetViewState> sheetKey;
+  final SldSheet sheet;
+  final bool empty;
+  final VoidCallback onSetUp;
+  final VoidCallback onAddPanel;
+
+  const _SldProjectionArea({
+    required this.sheetKey,
+    required this.sheet,
+    required this.empty,
+    required this.onSetUp,
+    required this.onAddPanel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(child: SldSheetView(key: sheetKey, sheet: sheet)),
+        Positioned(
+          left: MechXSpacing.md,
+          bottom: MechXSpacing.md,
+          child: ZoomControls(
+            onIn: () => sheetKey.currentState?.zoomIn(),
+            onOut: () => sheetKey.currentState?.zoomOut(),
+            onFit: () => sheetKey.currentState?.fitView(),
+          ),
+        ),
+        if (empty)
+          Positioned.fill(
+            child: Center(
+              child: _EmptyState(onSetUp: onSetUp, onAddPanel: onAddPanel),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 // ── Animated drawer shell ───────────────────────────────────────────────────
 
 /// A right-anchored sheet drawer: the modal scrim fades in over the content
@@ -959,6 +1115,184 @@ class _ServiceInspector extends ConsumerWidget {
                       context.strings(
                         StringKey.electricalBusbarClearingTimeNote,
                       ),
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Sources editor (genset / capacitor / transformer / dual-tx) ─────────────
+
+/// Edit the SOURCE chain drawn above the panel tree (the overview / riser /
+/// interactive single-line head + the PDF / DXF exports — one
+/// `_buildSourceSpine` geometry). Genset present/rating/mode/transfer, the
+/// installed capacitor bank (kvar), an explicit transformer rating (kVA), and
+/// the dual-transformer split bus. All route through the store's
+/// field-preserving `_withProject`; the capacitor / transformer are drawing
+/// inputs only (// VERIFY, never a sizing path).
+class _SourcesEditor extends ConsumerWidget {
+  final VoidCallback onClose;
+  const _SourcesEditor({required this.onClose});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final project = ref.watch(electricalProjectProvider);
+    final ctrl = ref.read(electricalProjectProvider.notifier);
+    final gen = project.sources?.generator;
+
+    String genModeLabel(GeneratorMode m) => switch (m) {
+          GeneratorMode.standby =>
+            context.strings(StringKey.electricalGensetModeStandby),
+          GeneratorMode.prime =>
+            context.strings(StringKey.electricalGensetModePrime),
+        };
+    String genTransferLabel(GeneratorTransfer t) => switch (t) {
+          GeneratorTransfer.ats =>
+            context.strings(StringKey.electricalGensetTransferAts),
+          GeneratorTransfer.manual =>
+            context.strings(StringKey.electricalGensetTransferManual),
+        };
+
+    return _AnimatedDrawerShell(
+      width: 340,
+      onClose: onClose,
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          border: Border(left: BorderSide(color: colors.border)),
+          boxShadow: MechXShadow.popover,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                MechXSpacing.md,
+                MechXSpacing.md,
+                MechXSpacing.md,
+                MechXSpacing.sm + 4,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      context.strings(StringKey.electricalSources),
+                      style: type.title.copyWith(color: colors.textPrimary),
+                    ),
+                  ),
+                  MechXButton(
+                    label: 'Close',
+                    tertiary: true,
+                    onPressed: onClose,
+                  ),
+                ],
+              ),
+            ),
+            Container(height: 1, color: colors.border),
+            const SizedBox(height: MechXSpacing.xs),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(MechXSpacing.md),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // ── Genset ────────────────────────────────────────────
+                    Text(
+                      context.strings(StringKey.electricalGenset),
+                      style: type.label.copyWith(color: colors.textPrimary),
+                    ),
+                    const SizedBox(height: MechXSpacing.sm),
+                    ElectricalToggleRow(
+                      label: context.strings(StringKey.electricalGensetPresent),
+                      value: gen != null,
+                      onChanged: (on) => ctrl
+                          .setGenerator(on ? const GeneratorSource() : null),
+                    ),
+                    if (gen != null) ...[
+                      ElectricalField(
+                        label:
+                            context.strings(StringKey.electricalGensetKva),
+                        child: ElectricalNumInput(
+                          value: gen.kva?.inKilovoltAmperes ?? 0,
+                          onChanged: (v) => ctrl.setGeneratorKva(
+                            v > 0 ? ApparentPower.kilovoltAmperes(v) : null,
+                          ),
+                        ),
+                      ),
+                      ElectricalField(
+                        label:
+                            context.strings(StringKey.electricalGensetMode),
+                        child: ElectricalEnumPicker<GeneratorMode>(
+                          value: gen.mode,
+                          options: GeneratorMode.values,
+                          label: genModeLabel,
+                          onChanged: ctrl.setGeneratorMode,
+                        ),
+                      ),
+                      ElectricalField(
+                        label: context
+                            .strings(StringKey.electricalGensetTransfer),
+                        child: ElectricalEnumPicker<GeneratorTransfer>(
+                          value: gen.transfer,
+                          options: GeneratorTransfer.values,
+                          label: genTransferLabel,
+                          onChanged: ctrl.setGeneratorTransfer,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: MechXSpacing.sm),
+                    Container(height: 1, color: colors.border),
+                    const SizedBox(height: MechXSpacing.md),
+                    // ── Transformer ──────────────────────────────────────
+                    ElectricalField(
+                      label:
+                          context.strings(StringKey.electricalTransformerKva),
+                      child: ElectricalNumInput(
+                        value: project.transformerKva?.inKilovoltAmperes ?? 0,
+                        onChanged: (v) => ctrl.setTransformerKva(
+                          v > 0 ? ApparentPower.kilovoltAmperes(v) : null,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      context.strings(StringKey.electricalTransformerKvaNote),
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                    const SizedBox(height: MechXSpacing.md),
+                    // ── Capacitor bank ───────────────────────────────────
+                    ElectricalField(
+                      label:
+                          context.strings(StringKey.electricalCapacitorKvar),
+                      child: ElectricalNumInput(
+                        value: project.capacitorBankKvar ?? 0,
+                        onChanged: (v) =>
+                            ctrl.setCapacitorBankKvar(v > 0 ? v : null),
+                      ),
+                    ),
+                    Text(
+                      context.strings(StringKey.electricalCapacitorKvarNote),
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                    const SizedBox(height: MechXSpacing.md),
+                    // ── Dual transformer ─────────────────────────────────
+                    ElectricalToggleRow(
+                      label: context
+                          .strings(StringKey.electricalDualTransformer),
+                      value: project.dualTransformer,
+                      onChanged: ctrl.setDualTransformer,
+                    ),
+                    const SizedBox(height: MechXSpacing.sm),
+                    Text(
+                      context.strings(StringKey.electricalSourcesNote),
                       style: type.caption.copyWith(color: colors.textMuted),
                     ),
                   ],

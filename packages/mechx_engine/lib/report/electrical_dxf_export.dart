@@ -1,28 +1,31 @@
-/// Minimal ASCII DXF (R12) export of the electrical single-line — a real
-/// CAD-importable drawing deliverable. The electrical mirror of
-/// `dxf_export.dart` (`networkToDxf`). Pure: builds a string from the sized
-/// system; the app handles file IO. Zero Flutter imports.
+/// ASCII DXF (R12) export of the electrical single-line — a real CAD-importable
+/// drawing deliverable. The electrical mirror of `dxf_export.dart`
+/// (`networkToDxf`). Pure: builds a string from the sized system; the app
+/// handles file IO. Zero Flutter imports.
 ///
-/// [electricalSldToDxf] draws each panel as a labelled box (its schematic
-/// canvas position when placed, else an auto-laid column), wires feeders as LINE
-/// entities parent→child, and labels each box with its name + incomer rating.
+/// [electricalSldToDxf] renders the SAME professional single-line built in
+/// `electrical_sld_drawing.dart` as the PDF — every panel a distribution-board
+/// single-line (incomer breaker → busbar → one row per outgoing way with
+/// breaker / cable / load / phase / Ib, feeders routed to the sub-panel they
+/// supply) — plus a model-space title block + device legend. Panels go on the
+/// `panels` layer, feeders on `feeders`, the sheet frame on `frame`.
 /// [powerOneLineToDxf] renders the hybrid power one-line (utility / genset / PV
 /// / battery) as boxed nodes joined by feeder LINEs. DXF Y is up, so screen Y is
 /// negated.
 library;
 
+import 'dart:math' as math;
+
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
+import 'electrical_sld_drawing.dart';
 
 /// Box footprint (DXF units) for an auto-laid panel / node.
 const double _boxW = 200;
 const double _boxH = 90;
 const double _gapX = 120;
 const double _gapY = 80;
-
-String _n(double v) =>
-    v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
 
 class _Dxf {
   final StringBuffer b = StringBuffer();
@@ -43,10 +46,12 @@ class _Dxf {
   }
 
   /// A box (4 LINEs) with top-left at ([x],[y]) in screen space (Y negated).
-  void box(String layer, double x, double y, double w, double h) {
+  /// [color] is an optional ACI override (62) — null = inherit the layer colour.
+  void box(String layer, double x, double y, double w, double h, {int? color}) {
     void line(double x1, double y1, double x2, double y2) {
       g(0, 'LINE');
       g(8, layer);
+      if (color != null) g(62, color);
       g(10, x1);
       g(20, -y1);
       g(11, x2);
@@ -59,18 +64,31 @@ class _Dxf {
     line(x, y + h, x, y);
   }
 
-  void text(String layer, double x, double y, String value, {double size = 12}) {
+  void text(String layer, double x, double y, String value,
+      {double size = 12, int? color}) {
     g(0, 'TEXT');
     g(8, layer);
+    if (color != null) g(62, color);
     g(10, x);
     g(20, -y);
     g(40, size);
     g(1, value);
   }
 
-  void connector(String layer, double x1, double y1, double x2, double y2) {
+  void circle(String layer, double cx, double cy, double r, {int? color}) {
+    g(0, 'CIRCLE');
+    g(8, layer);
+    if (color != null) g(62, color);
+    g(10, cx);
+    g(20, -cy); // DXF Y negated, like box/text/connector
+    g(40, r);
+  }
+
+  void connector(String layer, double x1, double y1, double x2, double y2,
+      {int? color}) {
     g(0, 'LINE');
     g(8, layer);
+    if (color != null) g(62, color);
     g(10, x1);
     g(20, -y1);
     g(11, x2);
@@ -81,61 +99,78 @@ class _Dxf {
   String toString() => b.toString();
 }
 
-/// Render the sized electrical single-line as a DXF document. Panels are boxes
-/// on the `panels` layer (at their schematic [ElectricalPanel.x]/[y] when
-/// placed, else auto-laid in root-first order); feeders are LINEs on the
-/// `feeders` layer between a parent panel and the sub-panel it feeds.
+/// Render the sized electrical single-line as a DXF document, drawing the SAME
+/// professional content as the PDF (`buildElectricalSld`): panel blocks on the
+/// `panels` layer, feeder routing on `feeders`, the title block + legend frame
+/// on `frame`. The drawing is model-space (DXF Y up, so screen-space y-down is
+/// negated).
 String electricalSldToDxf({
-  required ElectricalProject project,
-  required ElectricalSystemResult result,
+  ElectricalProject? project,
+  ElectricalSystemResult? result,
+  SldSheet? sheet,
+  String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
+  bool overview = false,
+  bool sourceChain = false,
 }) {
+  assert(sheet != null || (project != null && result != null),
+      'electricalSldToDxf needs either a prebuilt sheet or project+result');
   final d = _Dxf()..begin();
-  final modelById = {for (final p in project.panels) p.id: p};
+  // A prebuilt [sheet] wins; else `overview` = the ZOOMED-OUT building
+  // single-line (compact panel tree, optional source spine); default = the
+  // per-panel detail single-line.
+  final sheetResolved = sheet ??
+      (overview
+          ? buildElectricalOverview(
+              project: project!, result: result!, sourceChain: sourceChain)
+          : buildElectricalSld(project: project!, result: result!));
 
-  // Resolve each panel's box top-left. Placed panels use their canvas position;
-  // unplaced panels stack in a single auto-laid column (root-first order).
-  final pos = <String, ({double x, double y})>{};
-  var autoRow = 0;
-  for (final id in result.order) {
-    final model = modelById[id];
-    if (model?.x != null && model?.y != null) {
-      pos[id] = (x: model!.x!, y: model.y!);
-    } else {
-      pos[id] = (x: 0, y: autoRow * (_boxH + _gapY));
-      autoRow++;
+  // Essential prims are drawn ACI red (1); source MV-chain blue (5); normal
+  // inherits the layer colour (null). Detail sheet is all-normal ⇒ unchanged.
+  int? colorFor(SldRole r) => switch (r) {
+        SldRole.normal => null,
+        SldRole.essential => 1,
+        SldRole.source => 5,
+      };
+
+  // Drawing-space primitives (panels / busbars / ways / feeders). A line that is
+  // medium/thick weight is a busbar or feeder → the `feeders` layer; everything
+  // else (block outlines, way stubs, breaker boxes, labels) → `panels`.
+  for (final p in sheetResolved.prims) {
+    switch (p) {
+      case SldLine():
+        final layer = p.weight == SldWeight.thin ? 'panels' : 'feeders';
+        d.connector(layer, p.x1, p.y1, p.x2, p.y2, color: colorFor(p.role));
+      case SldRect():
+        d.box('panels', p.x, p.y, p.w, p.h, color: colorFor(p.role));
+      case SldLabel():
+        d.text('panels', p.x, p.y, p.text,
+            size: p.size * 1.3, color: colorFor(p.role));
+      case SldCircle():
+        d.circle('panels', p.cx, p.cy, p.r, color: colorFor(p.role));
     }
   }
 
-  // Feeders: a parent panel's circuit that feeds a sub-panel → a LINE between
-  // the two box centres.
-  ({double x, double y}) centre(String id) {
-    final p = pos[id]!;
-    return (x: p.x + _boxW / 2, y: p.y + _boxH / 2);
-  }
+  // ── Model-space title block + legend, laid out below the drawing ────────────
+  final frameTop = sheetResolved.maxY + 60;
+  final pname = (project?.name.isNotEmpty ?? false)
+      ? project!.name
+      : 'Untitled project';
+  d.box('frame', sheetResolved.minX, frameTop, 360, 96);
+  d.text('frame', sheetResolved.minX + 8, frameTop + 22, pname, size: 16);
+  d.text('frame', sheetResolved.minX + 8, frameTop + 44, diagramTitle,
+      size: 12);
+  d.text('frame', sheetResolved.minX + 8, frameTop + 66, sheetResolved.supplyNote, size: 10);
 
-  for (final parent in project.panels) {
-    for (final c in parent.circuits) {
-      final child = c.feedsPanelId;
-      if (child == null) continue;
-      if (!pos.containsKey(parent.id) || !pos.containsKey(child)) continue;
-      final a = centre(parent.id);
-      final z = centre(child);
-      d.connector('feeders', a.x, a.y, z.x, z.y);
+  if (sheetResolved.legend.isNotEmpty) {
+    final lx = sheetResolved.minX + 400;
+    d.box('frame', lx, frameTop, 300, math.max(96, 22.0 + sheetResolved.legend.length * 14));
+    d.text('frame', lx + 8, frameTop + 16, 'LEGEND', size: 11);
+    var row = 0;
+    for (final e in sheetResolved.legend) {
+      d.text('frame', lx + 8, frameTop + 32 + row * 14, '${e.code}  -  ${e.meaning}',
+          size: 9);
+      row++;
     }
-  }
-
-  // Panel boxes + labels (drawn after feeders so the boxes read on top).
-  for (final id in result.order) {
-    final p = result.panels[id];
-    if (p == null) continue;
-    final at = pos[id]!;
-    d.box('panels', at.x, at.y, _boxW, _boxH);
-    final tag = p.tag != null && p.tag!.isNotEmpty ? ' [${p.tag}]' : '';
-    d.text('panels', at.x + 8, at.y + 24, '${p.name}$tag', size: 14);
-    d.text('panels', at.x + 8, at.y + 48,
-        'In ${_n(p.incomer.breaker.ratingA.amperes)} A · ${p.system.label}');
-    d.text('panels', at.x + 8, at.y + 70,
-        'bus ${_n(p.busbar.csaMm2)} mm²');
   }
 
   d.end();
