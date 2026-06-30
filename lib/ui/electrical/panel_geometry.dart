@@ -52,9 +52,38 @@ const double kGridSrcH = 54;
 // ── Auto-layout grid ──────────────────────────────────────────────────────────
 const int kGrid = 16;
 
-/// Card width: `max(280, LEFT + max(ways,1)*WAY_W + RIGHT_PAD)`.
+/// Card width (SUMMARY LOD): `max(280, LEFT + max(ways,1)*WAY_W + RIGHT_PAD)`.
 double panelCardWidth(int ways) => math.max(
     kMinPanelWidth, (kLeft + math.max(ways, 1) * kWayW + kRightPad).toDouble());
+
+/// The engine board-schedule sheet WIDTH (mirrors `_blockW` in
+/// `report/electrical_sld_drawing.dart`). EVERY panel's schedule shares this
+/// width — the DXF/PDF convention (one uniform column layout) — so at the detail
+/// LOD the canvas renders them all at one consistent, readable scale.
+const double kScheduleSheetWidth = 920;
+
+/// The on-canvas scale the schedule sheet renders at (so 920 -> ~736 world px),
+/// keeping a multi-way board about the readable size it had before.
+const double kScheduleScale = 0.8;
+
+/// The engine schedule sheet HEIGHT for a panel — mirrors
+/// `buildElectricalPanelDetail`: header `46` + a column-header row + one row per
+/// way + one per reserved spare + a TOTAL footer (`*20`) + body pad `12`.
+double scheduleSheetHeight(ElectricalPanelResult panel) {
+  final rows = 1 + math.max(1, panel.circuits.length) + panel.spareWaysReserved;
+  return 46 + (1 + rows) * 20 + 12.0;
+}
+
+/// The detail-LOD card WIDTH — the schedule sheet width at [kScheduleScale], the
+/// SAME for every panel, so a 1-way board (e.g. LP-1) reads as a SHORT version
+/// of the MDP schedule rather than a squished narrow strip with the row jammed
+/// at the top.
+double panelDetailWidth() => kScheduleSheetWidth * kScheduleScale;
+
+/// Card WIDTH at the active LOD: the uniform schedule width when [detail], else
+/// the way-count summary width.
+double panelCardWidthAt(ElectricalPanelResult panel, bool detail) =>
+    detail ? panelDetailWidth() : panelCardWidth(panel.circuits.length);
 
 /// Centre x of way column [i].
 double wayColumnX(int i) => kLeft + i * kWayW + kWayW / 2;
@@ -108,14 +137,14 @@ double panelCardHeight(ElectricalPanelResult panel) =>
 /// of a tall card of empty space.
 const double kPanelSummaryBodyH = 104;
 
-/// The board-schedule block height for a panel — mirrors
-/// `buildElectricalPanelDetail`: header `46` + a column-header row + one row per
-/// way + one per reserved spare + a TOTAL footer (`*20`) + body pad `12`, plus a
-/// little card padding. Keeps the canvas card sized to its schedule.
-double panelScheduleHeight(ElectricalPanelResult panel) {
-  final rows = 1 + math.max(1, panel.circuits.length) + panel.spareWaysReserved;
-  return 46 + (1 + rows) * 20 + 12 + 22;
-}
+/// The detail-LOD card HEIGHT — the schedule sheet height at [kScheduleScale].
+/// Because the card width is also the sheet width at the SAME scale
+/// ([panelDetailWidth]), the card's aspect ratio equals the schedule sheet's, so
+/// `ViewportTransform.fit` fills the card EXACTLY — the schedule fills the panel
+/// instead of being letter-boxed as a strip at the top (the "loads on top of the
+/// panel" artefact a fixed-width sheet caused in a narrow card).
+double panelScheduleHeight(ElectricalPanelResult panel) =>
+    scheduleSheetHeight(panel) * kScheduleScale;
 
 /// Card footprint at the active LOD: the BOARD SCHEDULE height (grows with the
 /// way count) when [detail] — the card has no separate header band there, the
@@ -195,8 +224,9 @@ Map<String, Offset> autoLayout(
   }
 
   // Depth column pitch (horizontal): the widest card + a feeder gap, so a child
-  // clears its parent.
-  var maxW = kMinPanelWidth;
+  // clears its parent at EITHER LOD — include the uniform detail width so even an
+  // all-small-panel project doesn't overlap once zoomed into the schedules.
+  var maxW = math.max(kMinPanelWidth, panelDetailWidth());
   for (final p in project.panels) {
     final r = result.panels[p.id];
     if (r != null) maxW = math.max(maxW, panelCardWidth(r.circuits.length));

@@ -16,6 +16,7 @@ library;
 
 import 'dart:math' as math;
 
+import '../electrical/cable_family.dart' show defaultCableFamily;
 import '../electrical/control/starter.dart' show StarterType;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
@@ -147,15 +148,23 @@ int? _conduitMm(double csaMm2, bool threePhase) {
   return switch (base) { 20 => 25, 25 => 32, 32 => 40, 40 => 50, _ => base };
 }
 
-/// A cable label like `NYM 3x2.5` (family from the circuit when set, else a
-/// neutral `Cu`; cores = 3 for 1-phase L+N+E, 5 for 3-phase 3L+N+E).
+/// A cable label like `NYM 3x2.5` — the family from the circuit's explicit
+/// [ElectricalCircuit.cableType] when set, else the conventional default for its
+/// load kind ([defaultCableFamily]: NYM for final circuits, NYY otherwise) so a
+/// drawing always names a real cable construction, never the bare conductor
+/// material. Cores = 3 for 1-phase L+N+E, 5 for 3-phase 3L+N+E.
 String cableLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase) {
-  final family = (circuit?.cableType != null && circuit!.cableType!.isNotEmpty)
-      ? circuit.cableType!
-      : 'Cu';
+  final family = resolvedCableFamily(circuit);
   final cores = threePhase ? 5 : 3;
   return '$family ${cores}x${_num(csaMm2)}';
 }
+
+/// The cable family a circuit's label/legend should show: its explicit
+/// `cableType` when set, else the convention default for its load kind.
+String resolvedCableFamily(ElectricalCircuit? circuit) =>
+    (circuit?.cableType != null && circuit!.cableType!.isNotEmpty)
+        ? circuit.cableType!
+        : defaultCableFamily(circuit?.loadKind);
 
 /// Build the professional single-line for [project] / [result]. Pure geometry.
 ///
@@ -313,9 +322,9 @@ SldSheet buildElectricalSld({
       usedCurves.add(c.breaker.curve);
       usedClasses.add(c.breaker.deviceClass);
       final circuit = circuitById[c.circuitId];
-      if (circuit?.cableType != null && circuit!.cableType!.isNotEmpty) {
-        usedFamilies.add(circuit.cableType!);
-      }
+      // Surface the cable family actually drawn (the explicit type, else the
+      // convention default) so the KETERANGAN legend matches the rows.
+      usedFamilies.add(resolvedCableFamily(circuit));
       final poles = c.threePhase ? 3 : 1;
       final feeds = circuit?.feedsPanelId;
       final keterangan = feeds != null

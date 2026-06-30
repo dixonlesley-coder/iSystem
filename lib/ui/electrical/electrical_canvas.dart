@@ -192,7 +192,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     var maxX = -double.infinity, maxY = -double.infinity;
     positions.forEach((id, p) {
       final panel = panels[id];
-      final w = panel == null ? 280.0 : panelCardWidth(panel.circuits.length);
+      final w = panel == null
+          ? 280.0
+          : math.max(panelCardWidth(panel.circuits.length), panelDetailWidth());
       final h = panel == null
           ? 160.0
           : panelCardHeight(panel) + kPanelChrome + kLoadDropGap + kLoadNodeH;
@@ -327,8 +329,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       if (entry.key == exclude) continue;
       final panel = panels[entry.key];
       if (panel == null) continue;
-      final w = panelCardWidth(panel.circuits.length);
-      final h = panelFootprint(panel, vt.scale >= kLodThreshold);
+      final detail = vt.scale >= kLodThreshold;
+      final w = panelCardWidthAt(panel, detail);
+      final h = panelFootprint(panel, detail);
       final tl = vt.worldToScreen(entry.value);
       final rect = Rect.fromLTWH(tl.dx, tl.dy, w * vt.scale, h * vt.scale);
       if (rect.contains(local)) return entry.key;
@@ -469,7 +472,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   ) {
     final scale = vt.scale;
     final tl = vt.worldToScreen(world);
-    final w = panelCardWidth(panel.circuits.length);
+    final w = panelCardWidthAt(panel, detail);
     final cardH = panelFootprint(panel, detail);
     final modelPanel = project.panels
         .where((p) => p.id == panel.panelId)
@@ -749,7 +752,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     final panel = result.panels[panelId];
     if (pos == null || panel == null || _viewportSize.isEmpty) return;
     final s = scale ?? (kBoardScheduleThreshold + 0.3);
-    final w = panelCardWidth(panel.circuits.length);
+    final w = panelCardWidthAt(panel, true);
     final h = panelFootprint(panel, true);
     final worldCentre = Offset(pos.dx + w / 2, pos.dy + h / 2);
     _setTransform(ViewportTransform(
@@ -835,7 +838,7 @@ class _CanvasPainter extends CustomPainter {
         final fromPos = positions[p.id];
         if (fromPanel == null || toPos == null || fromPos == null) continue;
         final fromCardH = panelFootprint(fromPanel, detail);
-        final fromW = panelCardWidth(fromPanel.circuits.length);
+        final fromW = panelCardWidthAt(fromPanel, detail);
         final start = transform.worldToScreen(
           Offset(fromPos.dx + fromW, fromPos.dy + fromCardH / 2),
         );
@@ -882,7 +885,7 @@ class _CanvasPainter extends CustomPainter {
       final fromPos = positions[feederFrom];
       final fromPanel = result.panels[feederFrom];
       if (fromPos != null && fromPanel != null) {
-        final w = panelCardWidth(fromPanel.circuits.length);
+        final w = panelCardWidthAt(fromPanel, detail);
         final h = panelFootprint(fromPanel, detail);
         final anchor = transform.worldToScreen(
           Offset(fromPos.dx + w, fromPos.dy + h / 2),
