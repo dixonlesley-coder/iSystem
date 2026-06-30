@@ -426,10 +426,13 @@ class SniProfile implements StandardsProfile {
         const StandardValue<Object?>(
           0.005,
           unit: 'm/m',
-          citation: '$_doc — minimum self-cleansing drainage gradient',
+          citation: 'general self-cleansing minimum (NOT an SNI 8153 figure)',
           status: VerificationStatus.notAnSniClause,
-          note: 'Minimum branch gradient ≈ 0.005 (1:200) for self-cleansing; '
-              'general plumbing practice — confirm vs SNI 8153 gradient table.',
+          note: 'The advisory threshold 0.005 (1:200) is the general '
+              'self-cleansing minimum for large horizontal drains. SNI 8153:2015 '
+              'actually prescribes STEEPER laid slopes of 1 % / 2 % / 4 % '
+              '(1:100 / 1:50 / 1:25) by pipe size — so 0.005 is a conservative '
+              'floor below SNI, not an SNI clause.',
         ),
         const StandardValue<Object?>(
           32.0,

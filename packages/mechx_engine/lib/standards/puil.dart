@@ -267,24 +267,30 @@ class PuilProfile implements ElectricalStandardsProfile {
   StandardValue<double> get maxVoltageDropGeneral => const StandardValue(
         0.05,
         unit: '%',
-        citation: '$_doc cl. 4.2.3.1 / IEC 60364-5-52 — max voltage drop '
-            '(general)',
+        citation: '$_doc cl. 4.2.3.1 — max voltage drop (general)',
         verified: false,
-        note: 'Drop tegangan maks. 5 % dari titik suplai ke beban (umum), per '
-            'PUIL 2011 cl. 4.2.3.1 (corroborated via secondary sources; VERIFY '
-            'against the official PDF).',
+        status: VerificationStatus.secondarySource,
+        sourceUrl:
+            'https://pelatihank3kemenaker.com/wp-content/uploads/2023/01/SNI-PUIL-2011.pdf',
+        note: 'PUIL 2011 cl. 4.2.3.1 (verbatim text reproduced by multiple '
+            'secondary PUIL sources): "susut tegangan antara terminal konsumen '
+            'dan sembarang titik instalasi tidak boleh melebihi 5 % dari '
+            'tegangan pengenal" (aligns with IEC 60364-5-52 Annex G 4 %). HIGH '
+            'confidence, but kept secondarySource — the official BSN/ESDM PUIL '
+            'PDF returns 403, so the clause is not yet read first-hand.',
       );
 
   @override
   StandardValue<double> get maxVoltageDropLighting => const StandardValue(
         0.03,
         unit: '%',
-        citation: '$_doc cl. 4.2.3.1 / IEC 60364-5-52 — max voltage drop '
-            '(lighting)',
+        citation: 'Design target — max voltage drop (lighting)',
         verified: false,
-        note: 'Drop tegangan maks. 3 % untuk sirkit penerangan (PUIL 2011 '
-            'cl. 4.2.3.1 general limit is 5 %; 3 % is the tighter lighting '
-            'target). VERIFY against the official PDF.',
+        status: VerificationStatus.notAnSniClause,
+        note: 'PUIL 2011 cl. 4.2.3.1 sets ONE general 5 % limit — it does NOT '
+            'prescribe a separate lighting figure. 3 % is a tighter DESIGN '
+            'TARGET (NEC 210.19 informational-note style: 3 % branch / 5 % '
+            'total), not a PUIL clause.',
       );
 
   // ── Cable sizing constants ────────────────────────────────────────────────
@@ -293,12 +299,16 @@ class PuilProfile implements ElectricalStandardsProfile {
   StandardValue<double> get continuousLoadFactor => const StandardValue(
         1.25,
         unit: '×',
-        citation: '$_doc cl. 2.2.8.3 / IEC 60364-4-43 — continuous-load factor '
-            '(Iz ≥ 1.25·Ib)',
+        citation: 'IEC 60364-4-43 (coordination) + NEC 430.22 (motor 125 %)',
         verified: false,
-        note: 'A final circuit cable KHA must be ≥ 125 % of the full-load '
-            'current for a single motor (PUIL 2011 cl. 2.2.8.3); Iz ≥ '
-            'max(In, 1.25·Ib). VERIFY against the official PDF.',
+        status: VerificationStatus.secondarySource,
+        sourceUrl:
+            'http://www.geocities.ws/andrikuncoro/Electrical/EIG-G-sizing-protection-conductors.pdf',
+        note: 'The protection coordination Iz ≥ max(In, 1.25·Ib) follows IEC '
+            '60364-4-43 (Ib ≤ In ≤ Iz, I2 ≤ 1.45·Iz) — confirmed. The 125 % '
+            'single-MOTOR factor is the NEC 430.22 branch-circuit rule (≥125 % '
+            'of FLC), NOT a verbatim PUIL 2011 cl. 2.2.8.3 figure; keep as '
+            'secondary until the PUIL motor clause is confirmed.',
       );
 
   @override
@@ -547,10 +557,15 @@ class PuilProfile implements ElectricalStandardsProfile {
   StandardValue<Resistance> get maxEarthResistance => const StandardValue(
         Resistance(5.0),
         unit: 'Ω',
-        citation: '$_doc §3 — max earth-electrode resistance',
+        citation: '$_doc — max earth-electrode resistance (≤ 5 Ω)',
         verified: false,
-        note: 'Target electrode resistance ≤ 5 Ω (PUIL practice). '
-            'Confirm against site Wenner survey + the PUIL clause.',
+        status: VerificationStatus.secondarySource,
+        sourceUrl:
+            'https://penangkalpetir.web.id/sistem-pembumian-menurut-puil-2011',
+        note: 'PUIL 2011 grounding practice: total electrode resistance ≤ 5 Ω '
+            '(< 1 Ω for transformer/sensitive systems) — corroborated by '
+            'secondary PUIL references. The achieved value is soil/array '
+            'specific; confirm against the site Wenner survey.',
       );
 
   // ── Busbar (IEC 61439-1 — engineering estimates) ──────────────────────────

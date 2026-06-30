@@ -130,8 +130,11 @@ class SniVentilationProfile implements VentilationStandardsProfile {
   const SniVentilationProfile();
 
   static const String _doc = 'SNI 03-6572-2001';
+  // Corroborating academic reproduction of SNI 03-6572-2001 Tabel 4.4.1 (office
+  // 6, retail 6, restaurant 6, classroom 4, lobby/corridor 10, toilet 20,
+  // kitchen 6 ACH); still VERIFY against the official BSN PDF before promoting.
   static const String _sourceUrl =
-      'https://www.bsn.go.id/'; // VERIFY against official SNI 03-6572-2001 PDF.
+      'https://jshee.ppns.ac.id/index.php/JSHEE/article/download/14/18/100';
 
   @override
   String get name => 'SNI (ventilation / ACH)';
