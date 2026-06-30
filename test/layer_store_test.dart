@@ -9,11 +9,13 @@ import 'package:mechx_engine/network/network.dart';
 void main() {
   group('disciplineOf / servicesFor (pure mapping)', () {
     test('each service maps to its engineering-system layer', () {
-      expect(disciplineOf(ServiceType.coldWater), DisciplineLayer.water);
-      expect(disciplineOf(ServiceType.hotWater), DisciplineLayer.water);
-      expect(disciplineOf(ServiceType.drainage), DisciplineLayer.sanitary);
-      expect(disciplineOf(ServiceType.vent), DisciplineLayer.sanitary);
-      expect(disciplineOf(ServiceType.rainwater), DisciplineLayer.storm);
+      // All plumbing pipework — water, sanitary, storm — is the ONE plumbing
+      // layer (drawn together; separated by ServiceType downstream).
+      expect(disciplineOf(ServiceType.coldWater), DisciplineLayer.plumbing);
+      expect(disciplineOf(ServiceType.hotWater), DisciplineLayer.plumbing);
+      expect(disciplineOf(ServiceType.drainage), DisciplineLayer.plumbing);
+      expect(disciplineOf(ServiceType.vent), DisciplineLayer.plumbing);
+      expect(disciplineOf(ServiceType.rainwater), DisciplineLayer.plumbing);
       expect(disciplineOf(ServiceType.fireSprinkler), DisciplineLayer.fire);
       expect(disciplineOf(ServiceType.fireHydrant), DisciplineLayer.fire);
       expect(disciplineOf(ServiceType.duct), DisciplineLayer.hvac);
@@ -72,9 +74,9 @@ void main() {
       return c;
     }
 
-    test('defaults: water active, all layers visible', () {
+    test('defaults: plumbing active, all layers visible', () {
       final c = make();
-      expect(c.read(activeDisciplineProvider), DisciplineLayer.water);
+      expect(c.read(activeDisciplineProvider), DisciplineLayer.plumbing);
       expect(c.read(layerVisibilityProvider), DisciplineLayer.values.toSet());
     });
 
@@ -104,10 +106,10 @@ void main() {
 
     test('the active layer cannot be toggled off (you edit it)', () {
       final c = make();
-      // water active by default — toggling it off is a no-op.
-      c.read(layerVisibilityProvider.notifier).toggle(DisciplineLayer.water);
+      // plumbing active by default — toggling it off is a no-op.
+      c.read(layerVisibilityProvider.notifier).toggle(DisciplineLayer.plumbing);
       expect(
-          c.read(layerVisibilityProvider).contains(DisciplineLayer.water),
+          c.read(layerVisibilityProvider).contains(DisciplineLayer.plumbing),
           isTrue);
     });
 
