@@ -7,10 +7,17 @@
 /// airflow. The per-room-type ACH values below are general HVAC engineering
 /// practice (ASHRAE 62.1 / CIBSE Guide B style figures) cross-checked against
 /// Indonesian ventilation guidance (SNI 03-6572-2001, "Tata cara perancangan
-/// sistem ventilasi dan pengkondisian udara pada bangunan gedung"). They are
-/// NOT confirmed verbatim against the official SNI PDF, so every value is
-/// flagged [VerificationStatus.secondarySource] and surfaced as UNVERIFIED in
-/// any report — keep that honesty surface intact.
+/// sistem ventilasi dan pengkondisian udara pada bangunan gedung"). Spaces
+/// covered by that standard's Tabel 4.4.1 are [VerificationStatus.sniVerbatim];
+/// spaces the table does not enumerate (bedroom, living room, meeting room,
+/// hospital ward, laboratory, server room) — confirmed absent from the
+/// standard's structure (2026-07 research pass, `docs/standards-references.md`)
+/// — are [VerificationStatus.notAnSniClause]: a deliberate general-practice
+/// figure, not debt pending confirmation. The cooling-load area-density rule
+/// ([coolingLoadDensityBtuPerHrM2]) is likewise [VerificationStatus.notAnSniClause]
+/// for every room type — no Indonesian SNI prescribes an area-density (BTU/h
+/// per m²) cooling design figure; SNI 03-6572-2001 itself is ACH/fresh-air
+/// based, not area-density based.
 ///
 /// Reuses [StandardValue] / [VerificationStatus] from `standards/sni.dart` and
 /// [GrilleApplication] from `sizing/grille_sizing.dart`. Zero Flutter imports.
@@ -124,8 +131,11 @@ abstract interface class VentilationStandardsProfile {
 }
 
 /// SNI-context ventilation profile. ACH figures are general HVAC practice
-/// corroborated against SNI 03-6572-2001; pending verbatim confirmation they
-/// are all [VerificationStatus.secondarySource].
+/// corroborated against SNI 03-6572-2001. Tabel 4.4.1 spaces are
+/// [VerificationStatus.sniVerbatim]; spaces outside the table's scope (and the
+/// area-density cooling rule, which the standard does not cover at all) are
+/// [VerificationStatus.notAnSniClause] — general practice, not verification
+/// debt.
 class SniVentilationProfile implements VentilationStandardsProfile {
   const SniVentilationProfile();
 
@@ -142,8 +152,10 @@ class SniVentilationProfile implements VentilationStandardsProfile {
   @override
   String get revision =>
       'ACH values are general HVAC practice (ASHRAE 62.1 / CIBSE Guide B) '
-      'cross-checked against SNI 03-6572-2001; pending the official PDF every '
-      'value is secondarySource (UNVERIFIED).';
+      'cross-checked against SNI 03-6572-2001. Tabel 4.4.1 spaces are '
+      'sniVerbatim; spaces outside the table (and the area-density cooling '
+      'rule) are notAnSniClause — confirmed general practice, not pending '
+      'debt (2026-07 research pass).';
 
   /// Bare ACH number per room type. Kept private so the public API always
   /// returns a provenance-tagged [StandardValue].
@@ -171,7 +183,7 @@ class SniVentilationProfile implements VentilationStandardsProfile {
         return 10.0; // kamar mandi / WC
       case RoomType.commercialKitchen:
         return 20.0; // dapur
-      // ── Not in Tabel 4.4.1 — general HVAC practice (secondarySource) ───────
+      // ── Not in Tabel 4.4.1 — general HVAC practice (notAnSniClause) ────────
       case RoomType.bedroom:
         return 5.0;
       case RoomType.livingRoom:
@@ -188,9 +200,11 @@ class SniVentilationProfile implements VentilationStandardsProfile {
   }
 
   /// Whether [type]'s ACH comes directly from SNI 03-6572-2001 Tabel 4.4.1
-  /// (vs general HVAC practice for spaces the table doesn't list). Drives the
-  /// citation precision — both tiers remain [VerificationStatus.secondarySource]
-  /// until the official PDF is read verbatim (then table values may promote).
+  /// (vs general HVAC practice for spaces the table doesn't list). Drives both
+  /// the citation precision and the provenance tier: table spaces are
+  /// [VerificationStatus.sniVerbatim]; off-table spaces are
+  /// [VerificationStatus.notAnSniClause] (confirmed out of the table's scope,
+  /// not pending confirmation — see `docs/standards-references.md`).
   static bool _fromSniTable(RoomType type) {
     switch (type) {
       case RoomType.corridor:
@@ -223,19 +237,22 @@ class SniVentilationProfile implements VentilationStandardsProfile {
           ? '$_doc Tabel 4.4.1 — kebutuhan ventilasi mekanis '
               '(${roomTypeLabel(type)})'
           : 'general HVAC practice (ASHRAE 62.1-class) — laju perubahan udara '
-              '(${roomTypeLabel(type)}); space not listed in $_doc',
+              '(${roomTypeLabel(type)}); not governed by any $_doc clause',
       sourceUrl: _sourceUrl,
       verified: fromTable,
       status: fromTable
           ? VerificationStatus.sniVerbatim
-          : VerificationStatus.secondarySource,
+          : VerificationStatus.notAnSniClause,
       note: fromTable
           ? '${roomTypeLabel(type)}: ${ach.toStringAsFixed(0)} air changes per '
               'hour, per SNI 03-6572-2001 Tabel 4.4.1 (kebutuhan ventilasi '
               'mekanis).'
           : '${roomTypeLabel(type)}: ${ach.toStringAsFixed(0)} air changes per '
-              'hour. This space is NOT in SNI 03-6572-2001 Tabel 4.4.1; figure '
-              'is general HVAC practice (ASHRAE 62.1-class). VERIFY.',
+              'hour. Confirmed NOT in SNI 03-6572-2001 Tabel 4.4.1 (the table '
+              'enumerates office/restaurant/retail/workshop/classroom/lobby/'
+              'toilet/kitchen only, per docs/standards-references.md); figure '
+              'is general HVAC practice (ASHRAE 62.1-class), deliberately not '
+              'an SNI clause.',
     );
   }
 
@@ -279,13 +296,17 @@ class SniVentilationProfile implements VentilationStandardsProfile {
     return StandardValue<double>(
       d,
       unit: 'BTU/h per m2',
-      citation: '$_doc — beban pendinginan per luas (${roomTypeLabel(type)})',
+      citation: 'general HVAC / AC-installer practice — beban pendinginan per '
+          'luas (${roomTypeLabel(type)}); not governed by any $_doc clause',
       sourceUrl: _sourceUrl,
-      status: VerificationStatus.secondarySource,
+      status: VerificationStatus.notAnSniClause,
       note: '${roomTypeLabel(type)}: ${d.toStringAsFixed(0)} BTU/h per m2 floor. '
           'Corroborated against the common Indonesian rule of ~600 (well '
           'insulated) to ~800 (sun-exposed / poorly insulated) BTU/h per m2; '
-          'low-gain spaces ~400-500, equipment-heavy ~900-1000. VERIFY.',
+          'low-gain spaces ~400-500, equipment-heavy ~900-1000. Confirmed: '
+          'SNI 03-6572-2001 is ACH/fresh-air based and prescribes no '
+          'area-density (BTU/h per m2) cooling figure — this is deliberately '
+          'general practice, not an SNI clause.',
     );
   }
 
@@ -323,21 +344,26 @@ class SniVentilationProfile implements VentilationStandardsProfile {
               'perubahan udara untuk ruang di luar $_doc Tabel 4.4.1',
           sourceUrl: _sourceUrl,
           verified: false,
-          status: VerificationStatus.secondarySource,
+          status: VerificationStatus.notAnSniClause,
           note: 'ACH for spaces NOT listed in SNI 03-6572-2001 Tabel 4.4.1 '
               '(bedroom, living room, meeting room, hospital ward, laboratory, '
-              'server room) is general HVAC practice; the Tabel 4.4.1 spaces '
-              'are now verified.',
+              'server room) is general HVAC practice; confirmed these spaces '
+              'are outside the table\'s scope (2026-07 research pass), so this '
+              'is deliberate general practice, not pending SNI confirmation. '
+              'The Tabel 4.4.1 spaces are separately verified.',
         ),
         const StandardValue<Object?>(
           'cooling-load density (BTU/h per m², per room type)',
           unit: 'BTU/h per m2',
-          citation: '$_doc — beban pendinginan per luas',
+          citation: 'general HVAC / AC-installer practice — beban pendinginan '
+              'per luas; not governed by any $_doc clause',
           sourceUrl: _sourceUrl,
           verified: false,
-          status: VerificationStatus.secondarySource,
-          note: 'Area-density AC sizing figures from general HVAC practice; '
-              'confirm against an SNI / cooling-load study.',
+          status: VerificationStatus.notAnSniClause,
+          note: 'Area-density AC sizing figures from general HVAC practice. '
+              'Confirmed (2026-07 research pass): SNI 03-6572-2001 is '
+              'ACH/fresh-air based and prescribes no area-density cooling '
+              'figure — no Indonesian SNI governs this rule of thumb.',
         ),
       ];
 }

@@ -845,6 +845,21 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (`design_issues_store.addVerify`) now surfaces ONLY `secondarySource` debt;
   `notAnSniClause` (a confirmed design choice) is no longer nagged there but
   still prints in the calc report's transparency section.
+  **(2026-07-01 follow-up pass, `docs/standards-references.md`):** the ACH
+  figures outside SNI 03-6572-2001 Tabel 4.4.1 and the cooling-load
+  area-density rule (`ventilation.dart`) were confirmed genuinely out of
+  scope and reclassified `secondarySource` → `notAnSniClause`. The 5
+  remaining electrical items in `puil.dart` (nominal 400/220/230 V, the KHA
+  ampacity table, the IEC derating tables) got sharper citations (SNI IEC
+  60038:2013 for the 400 V nominal; PUIL's own Tabel 41.1 for U0) and a spot
+  check (1 KHA entry + 2 derating points, matched) but were **NOT** promoted:
+  this session's network egress policy hard-blocked every external document
+  host (policy-level 403 at the proxy gateway — confirmed via
+  `$HTTPS_PROXY/__agentproxy/status`), so no primary PUIL/SPLN text could be
+  read. A genuine open discrepancy was surfaced rather than guessed: sources
+  conflict on whether the current Indonesian residential single-phase
+  nominal is 220 V or 230 V. Completing promotion of those 5 needs either
+  unblocked network egress or a locally-supplied PUIL 2011 / SPLN 1 text.
 - App lifecycle: the root `ProviderContainer` and autosave `Timer` in `main`
   live for the whole process and are not explicitly disposed (fine for a
   single-window desktop app; revisit if multi-window).

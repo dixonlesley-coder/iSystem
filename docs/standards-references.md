@@ -39,17 +39,22 @@ promoted to `sniVerbatim`. **Do not** promote on the strength of secondary sourc
 | Ruang rapat (meeting room) | —  | specified per-person: 1.05 (smoking) / 0.21 (non-smoking) m³/min, not as ACH |
 
 Spaces NOT in Tabel 4.4.1 (bedroom, living room, hospital ward, laboratory, server room)
-remain general HVAC practice (`secondarySource`, ASHRAE 62.1-class).
+remain general HVAC practice (`notAnSniClause`, ASHRAE 62.1-class) — **2026-07 research pass:**
+confirmed these spaces are genuinely outside the table's scope (not debt pending confirmation),
+so they were reclassified `secondarySource` → `notAnSniClause`.
 
 > Drives `standards/ventilation.dart` `_achValue`. The draft values that differed from the
 > table (classroom 6→8, retail 8→6, restaurant 10→6, toilet 12→10, lobby 5→4) have been
 > **corrected** to these SNI figures (standards-citation pass, 2026-06); table-sourced values
 > now cite `Tabel 4.4.1` and are pinned by a `ventilation_test.dart` test, while off-table
-> spaces (bedroom/living/ward/lab/server/meeting) carry a general-practice citation. Both tiers
-> stay `secondarySource` until the official PDF is read verbatim.
+> spaces (bedroom/living/ward/lab/server/meeting) carry a general-practice citation and are
+> `notAnSniClause` (2026-07). Table values stay `secondarySource`-tier-confirmed-as-`sniVerbatim`
+> per the 2026-06-30 pass; off-table values will never become `sniVerbatim` (there is no clause
+> to find), only re-confirmed as `notAnSniClause`.
 
 ACH cooling-load BTU/m² densities and AC PK conventions are NOT from this standard —
-they stay general practice (`secondarySource`); see `sizing/cooling_load.dart`.
+they are `notAnSniClause` (confirmed 2026-07: SNI 03-6572-2001 is ACH/fresh-air based and
+prescribes no area-density cooling figure); see `sizing/cooling_load.dart`.
 
 ---
 
@@ -80,6 +85,53 @@ Revision/merge of SNI 03-6481-2000 + SNI 03-7065-2005; method based on UPC 2012 
 
 > Drives `standards/puil.dart` voltage-drop limit, the 125 % continuous-load rule, and the
 > derating basis (`electrical/sizing.dart` `deratingFactor`).
+
+### Nominal voltages + U0 (2026-07 research pass — citations sharpened, NOT promoted)
+
+`standards/puil.dart`'s `nominalLineVoltage` (400 V) / `nominalSinglePhaseVoltage` (220 V) /
+`nominalPhaseVoltage` (U0 = 230 V) stayed `secondarySource` this pass — this session's network
+egress policy blocked every external document host tried (see "Network access" below), so no
+primary text was read. What WebSearch did surface, without a full-page fetch:
+
+- **SNI IEC 60038:2013**, titled "Tegangan standar IEC", is BSN's direct adoption of IEC 60038
+  Ed. 7.0 (2009-06) — confirmed via the BSN product listing snippet (`pesta.bsn.go.id`, page
+  itself not fetchable). IEC 60038 sets 230/400 V as the harmonised public-LV standard voltage;
+  this is now the citation for `nominalLineVoltage` (400 V) in place of a bare "confirm against
+  PUIL" pointer.
+- **PUIL 2011 has its own "Tabel 41.1"** for maximum ADS disconnection time — the same table
+  number as IEC 60364-4-41 Table 41.1 — corroborated via search snippets referencing a TN-system
+  0.4 s figure, consistent with the U0 ≤ 230 V band. Now cited for `nominalPhaseVoltage` (U0).
+- **Open discrepancy, deliberately NOT resolved:** secondary sources conflict on whether the
+  CURRENT declared residential single-phase nominal is 220 V (historical PLN 220/380 V) or
+  230 V (the IEC 60038-harmonised figure already used for U0). PLN's own "SPLN 1" is quoted both
+  ways across different write-ups, and the commonly-cited PLN service-voltage tolerance band
+  (198–231 V) is arithmetically a 220 V nominal at −10 %/+5 %, not a 230 V nominal. Flagged as an
+  explicit open question on `nominalSinglePhaseVoltage` rather than picking a side without primary
+  text.
+
+### Cable ampacity (KHA) + derating tables — spot-checked, not fully verified
+
+- One KHA table entry was independently spot-checked: **Cu/PVC, method B1 (conduit), 4 mm² =
+  34 A** — matched secondary sources reproducing Indonesian NYY KHA tables (search query did not
+  lead the result). Only 1 of the 16 sections × 4 methods × 2 insulations in
+  `PuilProfile._khaCuPvcB1` etc. was checked.
+- Two IEC 60364-5-52 Table B.52.14 ambient-correction points were spot-checked: **XLPE @ 45 °C =
+  0.87**, **PVC @ 50 °C = 0.71** — both matched `PuilProfile._ambientXlpe`/`_ambientPvc`. Only 2 of
+  the ~30 tabulated ambient/grouping/soil-thermal points were checked; the PUIL 2011 Amendment
+  1:2013 Tabel K.52.3.2 cross-reference itself was not independently located this pass.
+
+### Network access (2026-07 research pass)
+
+This session's outbound network policy rejected the CONNECT (policy-level 403 at the egress
+gateway, confirmed via `$HTTPS_PROXY/__agentproxy/status`) for every external document host
+tried, including `gatrik.esdm.go.id` (the official PUIL 2011 PDF), Scribd, archive.org, and even
+Wikipedia — a stricter block than the earlier 2026-06 pass, which got HTTP 403 from individual
+sites but could still read some sources (e.g. the SNI 8153:2015 archive.org text). `WebSearch`
+(routed separately from the blocked fetch path) still returned search-result snippets, which is
+how the corroboration above was gathered; no full primary-document text was read this pass, so
+nothing in `puil.dart` was promoted to `sniVerbatim`. A future session with unblocked network
+egress, or a locally-supplied PUIL 2011 / SPLN 1 text, is needed to complete verbatim promotion
+of the 5 electrical items above.
 
 ---
 
@@ -115,7 +167,14 @@ Revision/merge of SNI 03-6481-2000 + SNI 03-7065-2005; method based on UPC 2012 
 - SNI 03-3989-2000 — <https://muhyidin.id/wp-content/uploads/2020/07/SNI-03-3989-2000-Tata-cara-perencanaan-dan-pemasangan-sistem-springkler-otomatik-untuk-pencegahan-bahaya-kebakaran-pada-bangunan-gedung.pdf>
 - SNI 03-1745-2000 — <https://katigaku.top/wp-content/uploads/2016/03/sni_pipa_1745_2000.pdf>
 - SNI 6390:2020 (AC energy / EER labels) — corroborated earlier: split-AC MEPS EER 8.53→10.41 BTU/h·W (COP ≈ 2.5–3.05).
+- SNI IEC 60038:2013 "Tegangan standar IEC" — <https://pesta.bsn.go.id/produk/detail/9459-sniiec600382013> (BSN product listing; title/adoption confirmed via search snippet, page not fetchable).
+- IEC 60364-5-52 Table B.52.14 — <https://www.ti-soft.com/en/support/help/electricaldesign/standards/iec-60364-5-52/cables-installed-in-air/correction-factor-k1/table-b_52_14> (page not fetchable; two data points corroborated via search snippet).
+- Indonesian NYY KHA tables (Supreme / Kabelindo) — <https://kabel.co.id/wp-content/uploads/2017/09/NYY.pdf>, <https://www.sucaco.com/assets/img/pdf/Catalog%20Low%20Voltage%20PVC%20Cable.pdf>, <https://www.scribd.com/doc/254415184/Tabel-KHA-Kabel-Supreme> (none fetchable this session; one entry spot-checked via search snippet).
 
 > Direct PDF fetch was blocked (HTTP 403) through the build proxy during research; the
 > values above were corroborated via multiple sources quoting these documents. Reading the
 > official PDFs end-to-end is the remaining step to promote matching values to `sniVerbatim`.
+> **2026-07 update:** the block widened from per-site HTTP 403 to a session-wide egress-policy
+> 403 at the proxy gateway (confirmed via `$HTTPS_PROXY/__agentproxy/status`) — no external
+> document host was fetchable this pass, including hosts that worked in June (e.g. archive.org).
+> See the "Network access" note under PUIL 2011 above.
