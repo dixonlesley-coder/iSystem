@@ -28,9 +28,11 @@ String projectAssetsDir() {
 /// placeholder sheet with nothing to embed.
 String? sheetSourcePath(Sheet sheet) => sheet.pdfPath ?? sheet.dxfPath;
 
-/// Read every distinct sheet source file and return `path → base64(bytes)`,
-/// ready to attach as [ProjectDocument.assets]. A missing/unreadable file is
-/// skipped (the project still saves; that sheet just isn't portable).
+/// Read every distinct sheet source file and return `path → base64(gzip(bytes))`,
+/// ready to attach as [ProjectDocument.assets]. Plans are gzip-compressed before
+/// base64 (PDF/DXF are highly compressible), clawing back most of base64's ~33 %
+/// inflation. A missing/unreadable file is skipped (the project still saves; that
+/// sheet just isn't portable).
 Map<String, String> gatherSheetAssets(List<Sheet> sheets) {
   final out = <String, String>{};
   for (final s in sheets) {
@@ -39,12 +41,22 @@ Map<String, String> gatherSheetAssets(List<Sheet> sheets) {
     try {
       final f = File(path);
       if (!f.existsSync()) continue;
-      out[path] = base64Encode(f.readAsBytesSync());
+      out[path] = base64Encode(gzip.encode(f.readAsBytesSync()));
     } catch (_) {
       // Unreadable — skip; the rest of the project still embeds.
     }
   }
   return out;
+}
+
+/// Decode one embedded asset's base64 payload back to the original file bytes.
+/// Payloads are gzip-compressed (detected by the `1f 8b` magic); a raw-base64
+/// payload from before compression landed is passed through unchanged, so older
+/// portable files still open.
+List<int> _decodeAsset(String b64) {
+  final raw = base64Decode(b64);
+  final gzipped = raw.length >= 2 && raw[0] == 0x1f && raw[1] == 0x8b;
+  return gzipped ? gzip.decode(raw) : raw;
 }
 
 /// Return a copy of [doc] with every embedded asset extracted to a local file
@@ -59,7 +71,7 @@ ProjectDocument rehydrateAssets(ProjectDocument doc) {
   final localForKey = <String, String>{};
   doc.assets.forEach((key, b64) {
     try {
-      final bytes = base64Decode(b64);
+      final bytes = _decodeAsset(b64);
       final ext = key.toLowerCase().endsWith('.pdf') ? 'pdf' : 'dxf';
       final id = '${key.hashCode.toUnsigned(32).toRadixString(16)}_${bytes.length}';
       final file = File('$dir/$id.$ext');

@@ -1061,8 +1061,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   only writes recovery when the work differs from the last clean Save
   (`lastSavedSignatureProvider`), so a saved project leaves no phantom recovery.
   **Portable `.mechx`**: Save EMBEDS the source plans (`ProjectDocument.assets`
-  = source path → base64, via `data/project_assets.dart` `gatherSheetAssets`),
-  so the file is self-contained across machines; Open `rehydrateAssets` extracts
+  = source path → base64 of gzip-compressed bytes, via `data/project_assets.dart`
+  `gatherSheetAssets`; ~88 % smaller than raw base64 on a real DXF), so the file
+  is self-contained across machines; Open `rehydrateAssets` (gunzips via the
+  `1f 8b` magic, raw-base64 passthrough for older files) extracts
   them to `mechx_assets/` (systemTemp) and repoints the sheet paths so the
   path-based PDF/DXF renderers are unchanged. A DWG sheet embeds its CONVERTED
   DXF (portable without ODA). The autosave "clean baseline" signature stays the

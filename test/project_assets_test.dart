@@ -36,7 +36,42 @@ void main() {
     final assets = gatherSheetAssets(sheets);
     expect(assets.keys, containsAll([pdf.path, dxf.path]));
     expect(assets.length, 2); // the shared PDF embedded once
-    expect(base64Decode(assets[pdf.path]!), [1, 2, 3, 4]);
+    // Payload is gzip-compressed (1f 8b magic) then base64; decompress to verify.
+    final raw = base64Decode(assets[pdf.path]!);
+    expect(raw.sublist(0, 2), [0x1f, 0x8b]);
+    expect(gzip.decode(raw), [1, 2, 3, 4]);
+  });
+
+  test('embedded plans are gzip-compressed (smaller than raw base64)', () {
+    // A highly compressible DXF (repeated linework) — real plans compress well.
+    final dxf = File('${tmp.path}/big.dxf')
+      ..writeAsStringSync('0\nLINE\n10\n0\n20\n0\n11\n100\n21\n50\n' * 4000);
+    final sheets = [Sheet(id: 'c', name: 'big', dxfPath: dxf.path)];
+
+    final assets = gatherSheetAssets(sheets);
+    final rawFileLen = dxf.lengthSync();
+    final rawBase64Len = base64Encode(dxf.readAsBytesSync()).length;
+    final compressedLen = assets[dxf.path]!.length;
+
+    // Compressed+base64 is far smaller than plain base64 of the raw file.
+    expect(compressedLen, lessThan(rawBase64Len));
+    expect(compressedLen, lessThan(rawFileLen));
+  });
+
+  test('a legacy raw-base64 (uncompressed) payload still rehydrates', () {
+    // A portable file written before gzip landed: assets are plain base64 bytes.
+    final legacy = ProjectDocument(
+      projectName: 'P',
+      floors: const [Floor('G', Length(3.0))],
+      calibrations: const {},
+      sheets: const [Sheet(id: 'a', name: 'p', pdfPath: '/orig/plan.pdf')],
+      network: const Network(nodes: [], edges: []),
+      assets: {'/orig/plan.pdf': base64Encode([5, 6, 7])},
+    );
+    final hydrated = rehydrateAssets(legacy);
+    final extracted = File(hydrated.sheets.single.pdfPath!);
+    expect(extracted.existsSync(), isTrue);
+    expect(extracted.readAsBytesSync(), [5, 6, 7]); // passthrough, no gunzip
   });
 
   test('a missing source file is skipped, not fatal', () {
