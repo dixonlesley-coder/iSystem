@@ -60,10 +60,10 @@ desktop build deps**, so you can run tests and `flutter analyze` but CANNOT
 
 ```bash
 # Engine (pure Dart) — run FROM the engine package:
-cd packages/mechx_engine && dart test          # ~334 tests
+cd packages/mechx_engine && dart test          # ~1057 tests
 
 # App (Flutter) — run FROM the repo root:
-flutter test                                   # ~80 tests incl. golden screenshots
+flutter test                                   # ~481 tests incl. golden screenshots
 flutter analyze                                 # must be clean
 
 # Regenerate the UI golden screenshots after any visual change:
@@ -380,6 +380,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   the screenshot suite is tagged `golden` and the **release** gate runs `flutter test
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
+  Releases have continued through the same workflow — the **current published build
+  is `v1.8.1`** (`pubspec.yaml` is the version source of truth; each release = bump
+  → merge to the default branch → `release.yml` `workflow_dispatch` with
+  `publish=true`).
   **Wave 4b (electrical drawings export) landed**: pure-engine
   `report/electrical_calc_report.dart` (Markdown over the sized system + power one-line
   + verify items) and `report/electrical_dxf_export.dart` (R12 DXF single-line —
