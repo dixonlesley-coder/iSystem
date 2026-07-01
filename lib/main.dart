@@ -6,6 +6,7 @@ import 'app.dart';
 import 'data/autosave.dart';
 import 'data/recovery.dart';
 import 'store/models/sheet.dart';
+import 'ui/canvas/dxf_sheet_page.dart';
 import 'ui/canvas/pdf_sheet_page.dart';
 import 'ui/canvas/sheet_canvas.dart';
 
@@ -22,6 +23,9 @@ void main() async {
         (BuildContext context, Sheet sheet) {
           if (sheet.pdfPath != null) {
             return PdfSheetPage(sheet: sheet);
+          }
+          if (sheet.dxfPath != null) {
+            return DxfSheetPage(sheet: sheet);
           }
           return PlaceholderSheetPage(sheet: sheet);
         },

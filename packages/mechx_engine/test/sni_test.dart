@@ -25,18 +25,18 @@ void main() {
       expect(v.verified, isTrue);
     });
 
-    test('max fixture pressure ≈ 4 kgf/cm² ≈ 392.3 kPa, still flagged', () {
+    test('max fixture pressure ≈ 4 kgf/cm² ≈ 392.3 kPa, now verified', () {
       final v = profile.maxFixtureStaticPressure;
       expect(v.value.inKiloPascals, closeTo(392.27, 1e-2));
-      expect(v.verified, isFalse, reason: 'design guidance, secondary source only');
+      expect(v.verified, isTrue);
     });
   });
 
   group('seeded velocities', () {
-    test('supply velocity max = 2.0 m/s, flagged (secondary)', () {
+    test('supply velocity max = 2.0 m/s, now verified (SNI 03-7065-2005)', () {
       final v = profile.maxSupplyVelocity;
       expect(v.value.metersPerSecond, 2.0);
-      expect(v.verified, isFalse);
+      expect(v.verified, isTrue);
     });
 
     test('drain velocity is general-practice, not an SNI clause', () {
@@ -184,11 +184,11 @@ void main() {
           VerificationStatus.sniVerbatim);
       expect(profile.minResidualPressureFaucet.status,
           VerificationStatus.sniVerbatim);
-      // Real but secondary-sourced figures pending the official clause.
+      // Supply velocity + fixture pressure are now verified SNI clauses.
       expect(profile.maxSupplyVelocity.status,
-          VerificationStatus.secondarySource);
+          VerificationStatus.sniVerbatim);
       expect(profile.maxFixtureStaticPressure.status,
-          VerificationStatus.secondarySource);
+          VerificationStatus.sniVerbatim);
       // Drainage velocity is explicitly NOT an SNI clause.
       expect(profile.maxDrainVelocity.status,
           VerificationStatus.notAnSniClause);

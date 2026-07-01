@@ -2,11 +2,13 @@
 /// that puts the MEP systems on ONE shared PDF substrate ("same PDF, work on it
 /// at different layers").
 ///
-/// Each layer is an engineering SYSTEM (not the old single "Plumbing" bucket),
-/// mapped onto the EXISTING model with no new copy:
-///  • [DisciplineLayer.water]     — domestic water supply (cold + hot water);
-///  • [DisciplineLayer.sanitary]  — soil / waste + vent (drainage, vent);
-///  • [DisciplineLayer.storm]     — rainwater / storm (rainwater);
+/// Each layer is an engineering DISCIPLINE (the MEP+FP breakdown), mapped onto
+/// the EXISTING model with no new copy. PLUMBING is ONE unified layer — you draw
+/// all the plumbing pipework on a single canvas, and the elements stay separated
+/// by their `ServiceType` for the riser / sizing / reports downstream:
+///  • [DisciplineLayer.plumbing]  — ALL plumbing pipework: domestic water (cold
+///    + hot), sanitary (drainage + vent), and storm (rainwater) — drawn together,
+///    separated by service later;
 ///  • [DisciplineLayer.fire]      — fire protection (sprinkler, hydrant);
 ///  • [DisciplineLayer.hvac]      — the mechanical air services (supply / return
 ///    / exhaust), via the engine's `ServiceType.isAir`;
@@ -26,15 +28,15 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 
-/// A design discipline / system shown as a layer on the unified Layout canvas.
-enum DisciplineLayer { water, sanitary, storm, fire, hvac, electrical }
+/// A design discipline shown as a layer on the unified Layout canvas. PLUMBING
+/// is one bucket for all pipework (water + sanitary + storm); FIRE / HVAC /
+/// ELECTRICAL are their own disciplines.
+enum DisciplineLayer { plumbing, fire, hvac, electrical }
 
 extension DisciplineLayerInfo on DisciplineLayer {
   /// Short label for the layer switcher / chips.
   String get label => switch (this) {
-        DisciplineLayer.water => 'Water',
-        DisciplineLayer.sanitary => 'Sanitary',
-        DisciplineLayer.storm => 'Storm',
+        DisciplineLayer.plumbing => 'Plumbing',
         DisciplineLayer.fire => 'Fire',
         DisciplineLayer.hvac => 'HVAC',
         DisciplineLayer.electrical => 'Electrical',
@@ -45,12 +47,18 @@ extension DisciplineLayerInfo on DisciplineLayer {
   bool get isMechanical => this != DisciplineLayer.electrical;
 }
 
-/// The discipline a mechanical [ServiceType] belongs to — its engineering
-/// system. (Electrical has no `ServiceType` — it's a separate model.)
+/// The discipline a mechanical [ServiceType] belongs to. All the plumbing
+/// pipework — water, sanitary (drainage/vent), and storm — maps to the ONE
+/// [DisciplineLayer.plumbing] layer (drawn together; the elements keep their
+/// own `ServiceType` so the riser/sizing/reports still separate them).
+/// (Electrical has no `ServiceType` — it's a separate model.)
 DisciplineLayer disciplineOf(ServiceType service) => switch (service) {
-      ServiceType.coldWater || ServiceType.hotWater => DisciplineLayer.water,
-      ServiceType.drainage || ServiceType.vent => DisciplineLayer.sanitary,
-      ServiceType.rainwater => DisciplineLayer.storm,
+      ServiceType.coldWater ||
+      ServiceType.hotWater ||
+      ServiceType.drainage ||
+      ServiceType.vent ||
+      ServiceType.rainwater =>
+        DisciplineLayer.plumbing,
       ServiceType.fireSprinkler ||
       ServiceType.fireHydrant =>
         DisciplineLayer.fire,
@@ -70,8 +78,8 @@ List<ServiceType> servicesFor(DisciplineLayer layer) => layer ==
         .where((s) => disciplineOf(s) == layer)
         .toList(growable: false);
 
-/// The active (editable) discipline layer. Defaults to water supply — the
-/// canvas's first drawing discipline. Setting it leaves visibility untouched (a
+/// The active (editable) discipline layer. Defaults to plumbing — the canvas's
+/// first drawing discipline. Setting it leaves visibility untouched (a
 /// layer can be active without being toggled off, and the switcher keeps the
 /// active layer visible).
 final activeDisciplineProvider =
@@ -81,7 +89,7 @@ final activeDisciplineProvider =
 
 class ActiveDisciplineController extends Notifier<DisciplineLayer> {
   @override
-  DisciplineLayer build() => DisciplineLayer.water;
+  DisciplineLayer build() => DisciplineLayer.plumbing;
 
   void set(DisciplineLayer layer) {
     if (state == layer) return;

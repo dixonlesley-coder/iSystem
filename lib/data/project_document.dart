@@ -313,6 +313,15 @@ class ProjectDocument {
   /// null for a v1 file or a project with no electrical design yet.
   final ElectricalProject? electrical;
 
+  /// EMBEDDED source plans, keyed by the sheet path that references them, value =
+  /// base64 of the file bytes. When present, the `.mechx` is self-contained /
+  /// portable across machines: the referenced PDF/DXF need not travel alongside
+  /// it. Empty when embedding is off (recovery snapshots) or no plan is loaded,
+  /// so a path-only project stays byte-identical. Multi-page PDFs share one
+  /// entry (keyed by the single source path). Additive — an older build ignores
+  /// the key; a build without the source files falls back to the paths.
+  final Map<String, String> assets;
+
   const ProjectDocument({
     this.version = currentVersion,
     required this.projectName,
@@ -327,7 +336,28 @@ class ProjectDocument {
     this.measurements = const [],
     this.tanks = const [],
     this.rooms = const [],
+    this.assets = const {},
   });
+
+  /// A copy with [sheets] (and optionally [assets]) replaced — used by asset
+  /// rehydration to repoint sheet paths at the extracted local files.
+  ProjectDocument withSheets(List<Sheet> sheets, {Map<String, String>? assets}) =>
+      ProjectDocument(
+        version: version,
+        projectName: projectName,
+        floors: floors,
+        calibrations: calibrations,
+        sheets: sheets,
+        network: network,
+        viewports: viewports,
+        sheetFloors: sheetFloors,
+        settings: settings,
+        electrical: electrical,
+        measurements: measurements,
+        tanks: tanks,
+        rooms: rooms,
+        assets: assets ?? this.assets,
+      );
 
   Map<String, dynamic> toJson() => {
         'version': version,
@@ -346,6 +376,8 @@ class ProjectDocument {
               'id': s.id,
               'name': s.name,
               'pdfPath': s.pdfPath,
+              if (s.dxfPath != null) 'dxfPath': s.dxfPath,
+              if (s.dwgPath != null) 'dwgPath': s.dwgPath,
               'pageIndex': s.pageIndex,
               'w': s.sizePx.width,
               'h': s.sizePx.height,
@@ -367,6 +399,9 @@ class ProjectDocument {
         'tanks': [for (final t in tanks) t.toJson()],
         'rooms': [for (final r in rooms) r.toJson()],
         if (electrical != null) 'electrical': electrical!.toJson(),
+        // Embedded source plans (base64), only when present ⇒ path-only projects
+        // stay byte-identical.
+        if (assets.isNotEmpty) 'assets': assets,
         'network': {
           'nodes': [
             for (final n in network.nodes)
@@ -446,6 +481,8 @@ class ProjectDocument {
           id: (s as Map)['id'] as String,
           name: s['name'] as String,
           pdfPath: s['pdfPath'] as String?,
+          dxfPath: s['dxfPath'] as String?,
+          dwgPath: s['dwgPath'] as String?,
           pageIndex: (s['pageIndex'] as num).toInt(),
           sizePx: Size((s['w'] as num).toDouble(), (s['h'] as num).toDouble()),
         ),
@@ -549,6 +586,12 @@ class ProjectDocument {
     final rooms = <RoomArea>[
       for (final r in (json['rooms'] as List? ?? const [])) ?RoomArea.fromJson(r),
     ];
+    // Embedded source plans (additive; absent ⇒ empty ⇒ paths used as-is).
+    final assets = <String, String>{
+      for (final e in (json['assets'] as Map? ?? const {}).entries)
+        if (e.key is String && e.value is String)
+          e.key as String: e.value as String,
+    };
     return ProjectDocument(
       version: version,
       projectName: project['name'] as String? ?? 'Untitled project',
@@ -563,6 +606,7 @@ class ProjectDocument {
       measurements: measurements,
       tanks: tanks,
       rooms: rooms,
+      assets: assets,
     );
   }
 

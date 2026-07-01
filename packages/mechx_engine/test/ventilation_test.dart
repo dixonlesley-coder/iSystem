@@ -57,14 +57,31 @@ void main() {
       }
     });
 
-    test('all ACH values are surfaced as UNVERIFIED (secondarySource)', () {
-      // Provenance honesty (§12.6): nothing is sniVerbatim until the official
-      // SNI 03-6572-2001 PDF is checked.
+    test('Tabel 4.4.1 spaces are verified; spaces outside it stay secondary',
+        () {
+      // Provenance (§12.6): the SNI 03-6572-2001 Tabel 4.4.1 spaces are
+      // promoted to verified; spaces NOT in the table remain general HVAC
+      // practice (secondarySource, surfaced as UNVERIFIED).
+      const tableRooms = <RoomType>{
+        RoomType.corridor,
+        RoomType.lobby,
+        RoomType.office,
+        RoomType.classroom,
+        RoomType.retail,
+        RoomType.restaurant,
+        RoomType.toilet,
+        RoomType.commercialKitchen,
+      };
       for (final t in RoomType.values) {
         final v = profile.recommendedAch(t);
-        expect(v.verified, isFalse);
-        expect(v.status, VerificationStatus.secondarySource);
-        expect(v.isUnverified, isTrue);
+        if (tableRooms.contains(t)) {
+          expect(v.verified, isTrue, reason: '${roomTypeLabel(t)} in Tabel 4.4.1');
+          expect(v.status, VerificationStatus.sniVerbatim);
+        } else {
+          expect(v.verified, isFalse);
+          expect(v.status, VerificationStatus.secondarySource);
+          expect(v.isUnverified, isTrue);
+        }
       }
     });
 

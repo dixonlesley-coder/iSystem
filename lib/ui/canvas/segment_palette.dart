@@ -55,10 +55,10 @@ class SegmentPalette extends ConsumerWidget {
     // Equipment groups scope to the SYSTEM layer they belong to (and the
     // Schematic view, which has no layer concept, shows everything).
     final showAll = !onLayout;
-    final showWater = showAll || active == DisciplineLayer.water;
-    final showDrains = showAll ||
-        active == DisciplineLayer.sanitary ||
-        active == DisciplineLayer.storm;
+    // Plumbing is one layer (water + sanitary + storm), so its water plant AND
+    // drains both show when it's active.
+    final showWater = showAll || active == DisciplineLayer.plumbing;
+    final showDrains = showAll || active == DisciplineLayer.plumbing;
     final showFire = showAll || active == DisciplineLayer.fire;
     final showAir = showAll || active == DisciplineLayer.hvac;
 

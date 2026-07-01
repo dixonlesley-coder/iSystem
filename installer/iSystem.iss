@@ -66,6 +66,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; DLLs), recursively. The runner exe is renamed to the product name on install.
 Source: "..\build\windows\x64\runner\Release\{#BuiltExeName}"; DestDir: "{app}"; DestName: "{#AppExeName}"; Flags: ignoreversion
 Source: "..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Excludes: "{#BuiltExeName}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; OPTIONAL DWG support: the ODA File Converter (DWG->DXF). Not redistributed in
+; this repo (ODA's licence governs it) — the maintainer drops the converter into
+; installer\vendor\oda\ before building and it is bundled at {app}\oda\, where
+; OdaDwgConverter.resolveBinary looks for it. `skipifsourcedoesntexist` makes the
+; build succeed when it is absent (DWG import then reports "converter not found").
+Source: "vendor\oda\*"; DestDir: "{app}\oda"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\iSystem"; Filename: "{app}\{#AppExeName}"

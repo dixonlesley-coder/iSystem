@@ -395,7 +395,7 @@ const Map<StringKey, String> _en = {
   // App shell — top bar.
   StringKey.shellOpen: 'Open',
   StringKey.shellSave: 'Save',
-  StringKey.shellImportPdf: 'Import PDF',
+  StringKey.shellImportPdf: 'Import plan',
   StringKey.shellDark: 'Dark',
   StringKey.shellLight: 'Light',
   StringKey.shellSwitchToDark: 'Switch to dark',
@@ -693,7 +693,7 @@ const Map<StringKey, String> _id = {
   // App shell — top bar.
   StringKey.shellOpen: 'Buka',
   StringKey.shellSave: 'Simpan',
-  StringKey.shellImportPdf: 'Impor PDF',
+  StringKey.shellImportPdf: 'Impor denah',
   StringKey.shellDark: 'Gelap',
   StringKey.shellLight: 'Terang',
   StringKey.shellSwitchToDark: 'Ke mode gelap',

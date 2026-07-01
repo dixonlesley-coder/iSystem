@@ -55,7 +55,7 @@ void main() {
     expect(find.byType(LayerSwitcher), findsOneWidget);
     // The system layers offered (in the switcher) + the mechanical network.
     expect(find.descendant(
-        of: find.byType(LayerSwitcher), matching: find.text('Water')),
+        of: find.byType(LayerSwitcher), matching: find.text('Plumbing')),
         findsOneWidget);
     expect(find.descendant(
         of: find.byType(LayerSwitcher), matching: find.text('HVAC')),
@@ -73,7 +73,7 @@ void main() {
     await tester.pump();
 
     final c = _containerOf(tester);
-    expect(c.read(activeDisciplineProvider), DisciplineLayer.water);
+    expect(c.read(activeDisciplineProvider), DisciplineLayer.plumbing);
     // The mechanical project inspector (with its DRAW section) is the right pane.
     expect(find.byType(ProjectPanel), findsOneWidget);
     expect(find.text('DRAW'), findsOneWidget);
@@ -136,7 +136,7 @@ void main() {
 
     // Make a mechanical layer active (electrical becomes a faded layer) — still
     // drawn for coordination.
-    c.read(activeDisciplineProvider.notifier).set(DisciplineLayer.water);
+    c.read(activeDisciplineProvider.notifier).set(DisciplineLayer.plumbing);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('MDP'), findsWidgets);

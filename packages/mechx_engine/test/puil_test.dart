@@ -174,9 +174,16 @@ void main() {
       expect(p.mainBondingConductorMm2(120), 25); // 60 → capped 25
     });
 
-    test('max earth-electrode resistance = 5 Ω, unverified', () {
+    test('max earth-electrode resistance = 5 Ω, now verified (PUIL grounding)',
+        () {
       expect(p.maxEarthResistance.value.ohms, 5.0);
-      expect(p.maxEarthResistance.isUnverified, isTrue);
+      expect(p.maxEarthResistance.isUnverified, isFalse);
+    });
+
+    test('the 5 % general voltage drop is verified (PUIL cl. 4.2.3.1)', () {
+      expect(p.maxVoltageDropGeneral.value, 0.05);
+      expect(p.maxVoltageDropGeneral.isUnverified, isFalse);
+      expect(p.maxVoltageDropGeneral.status, VerificationStatus.sniVerbatim);
     });
   });
 
@@ -186,9 +193,9 @@ void main() {
       expect(p.verifyChecklist.every((v) => v.isUnverified), isTrue);
     });
 
-    test('NOTHING is sniVerbatim until the official PUIL PDF is checked', () {
-      // Every surfaced value is a secondary source (or general practice) — no
-      // value may claim verbatim confirmation yet.
+    test('the verify checklist carries no verbatim (promoted) values', () {
+      // Promoted items (5 % VD, ≤5 Ω earth) leave the checklist; only the
+      // genuine secondary-source / general-practice debt remains here.
       for (final v in p.verifyChecklist) {
         expect(v.status, isNot(VerificationStatus.sniVerbatim));
       }

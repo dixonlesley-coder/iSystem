@@ -273,8 +273,14 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   }
 
   // ── 6. Unverified // VERIFY standards (info, not locatable) ─────────────────
+  // Only values genuinely PENDING official confirmation (secondarySource) are
+  // surfaced here as "Unverified standard". A notAnSniClause value is a confirmed
+  // general-practice/design choice — NOT a verification debt — so it is not
+  // nagged in the interactive Review (it still appears in the calc report's
+  // transparency section for submission honesty).
   void addVerify(StandardValue<Object?> v) {
     if (!v.isUnverified) return;
+    if (v.status != VerificationStatus.secondarySource) return;
     infos.add(DesignIssue(
       severity: IssueSeverity.info,
       title: 'Unverified standard',

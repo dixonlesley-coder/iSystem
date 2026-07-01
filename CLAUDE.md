@@ -102,7 +102,8 @@ packages/mechx_engine/lib/         PURE-DART CALC ENGINE (no Flutter)
   standards/sni.dart               SniProfile: fixture-unit (UBAP) loads, Hunter demand
                                    curve, pressures/velocities, materials, verifyChecklist
   geometry/                        scale_calibration.dart, building.dart (floors,
-                                   elevations, MountingHeights, ceiling/fixture elevations)
+                                   elevations, MountingHeights, ceiling/fixture elevations),
+                                   dxf_drawing.dart (parseDxf → DxfDrawing for the canvas background)
   network/                         network.dart (NetNode w/ role+elevation+fixture+airflow,
                                    NetEdge, nodeElevation, edgeLength), pressure_solve.dart
                                    (solvePressurized upfeed + solveDownfeed roof-tank),
@@ -127,7 +128,8 @@ lib/                               FLUTTER APP
                                    UncontrolledProviderScope
   app.dart                         MechXApp (WidgetsApp + MechXTheme)
   data/                            project_document.dart (versioned .mechx JSON),
-                                   pdf_import.dart, recovery.dart + autosave.dart
+                                   pdf_import.dart, dxf_import.dart, dwg_import.dart +
+                                   dwg_converter.dart (ODA DWG→DXF), recovery.dart + autosave.dart
   store/                           Riverpod controllers (the app's brain):
                                    network_store (drawing + edit + undo + duplicateFloor +
                                    ortho), project_store (floors/calibration + undo),
@@ -144,7 +146,14 @@ lib/                               FLUTTER APP
 
 ## Feature state (what's built)
 
-PDF import (pdfrx) + multi-sheet rail; per-sheet scale calibration; per-floor
+PDF import (pdfrx) **+ DXF import** (pure-engine `geometry/dxf_drawing.dart`
+`parseDxf` → LINE/LWPOLYLINE/POLYLINE/CIRCLE/ARC + INSERT/BLOCKS expansion,
+rendered by `ui/canvas/dxf_sheet_page.dart` as a calibratable background via
+`Sheet.dxfPath`; a DISPLAY substrate only, length still from calibration)
+**+ DWG import** (`data/dwg_converter.dart` `OdaDwgConverter` shells out to a
+bundled ODA File Converter for DWG→DXF, then the DXF pipeline; `Sheet.dwgPath`
+keeps the source; ODA binary supplied by the maintainer in `installer/vendor/oda/`)
++ multi-sheet rail; per-sheet scale calibration; per-floor
 heights + role-aware elevations; draw runs/risers for 10 services (cold/hot
 water, drainage, vent, rainwater, supply/return/exhaust air, sprinkler,
 hydrant); **select / edit / delete / drag** nodes & edges, **multi-floor
@@ -337,7 +346,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   **Unified one-PDF layered Layout canvas landed — the convergence** (`lib/store/layer_store.dart`
   + `lib/ui/layout/{layout_canvas,layer_switcher,electrical_layer}.dart`): the mechanical Plan
   and the electrical Layout merged into ONE **Layout** workspace on one shared PDF/viewport with
-  a **Plumbing · HVAC · Electrical** layer switcher + visibility toggles. The active layer edits
+  a **Plumbing · Fire · HVAC · Electrical** layer switcher + visibility toggles (PLUMBING is ONE
+  unified layer — cold/hot water + drainage/vent + rainwater drawn together on one canvas, the
+  elements separated by their `ServiceType` for the riser/sizing/reports downstream;
+  `disciplineOf` maps all five plumbing services → `DisciplineLayer.plumbing`). The active layer edits
   (DRAW inspector scoped to its services for Plumbing/HVAC via `isAir`; the Loads palette +
   place/move for Electrical); visible-but-inactive layers render **faded/ghosted** for
   coordination; hidden layers omitted; both ride the same sheet viewport + §10 geometry. Left-nav
@@ -813,6 +825,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   practice). Anything not `sniVerbatim` stays `verified == false` and MUST
   surface (with its tier) in any report. Genuine verbatim confirmation requires
   the official SNI PDF — do NOT flip a flag from a secondary source.
+  **(2026-06-30 promotion, per explicit user direction after a deep-research
+  pass):** a batch of constants confirmed against the engineering texts was
+  promoted to `sniVerbatim` — plumbing `maxFixtureStaticPressure` (SNI
+  8153:2015), `maxSupplyVelocity` (SNI 03-7065-2005), the demand curve, runoff
+  C, Legionella 55 °C; electrical `maxVoltageDropGeneral` (PUIL cl. 4.2.3.1) +
+  `maxEarthResistance`; and the **SNI 03-6572-2001 Tabel 4.4.1** ACH rooms.
+  Items that are genuinely IEC/NEC/general-practice (e.g. `continuousLoadFactor`
+  125 %, `maxVoltageDropLighting` 3 %, drain velocity/gradient, non-table ACH)
+  stay `notAnSniClause`/`secondarySource`. The interactive Review Advisory
+  (`design_issues_store.addVerify`) now surfaces ONLY `secondarySource` debt;
+  `notAnSniClause` (a confirmed design choice) is no longer nagged there but
+  still prints in the calc report's transparency section.
 - App lifecycle: the root `ProviderContainer` and autosave `Timer` in `main`
   live for the whole process and are not explicitly disposed (fine for a
   single-window desktop app; revisit if multi-window).
@@ -1036,3 +1060,13 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   hazard, theme) round-trip via `DesignSettings` in the `.mechx` file; autosave
   only writes recovery when the work differs from the last clean Save
   (`lastSavedSignatureProvider`), so a saved project leaves no phantom recovery.
+  **Portable `.mechx`**: Save EMBEDS the source plans (`ProjectDocument.assets`
+  = source path → base64 of gzip-compressed bytes, via `data/project_assets.dart`
+  `gatherSheetAssets`; ~88 % smaller than raw base64 on a real DXF), so the file
+  is self-contained across machines; Open `rehydrateAssets` (gunzips via the
+  `1f 8b` magic, raw-base64 passthrough for older files) extracts
+  them to `mechx_assets/` (systemTemp) and repoints the sheet paths so the
+  path-based PDF/DXF renderers are unchanged. A DWG sheet embeds its CONVERTED
+  DXF (portable without ODA). The autosave "clean baseline" signature stays the
+  PATH-ONLY encode (autosave never embeds ⇒ recovery is lightweight, no phantom
+  recovery). Empty `assets` ⇒ byte-identical (no version bump).
