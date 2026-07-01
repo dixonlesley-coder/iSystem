@@ -28,13 +28,16 @@ void main() {
     });
 
     test('falls back to a bundled binary beside the app', () {
+      // Separator-agnostic: _join uses the platform separator ('\' on Windows,
+      // '/' elsewhere), so match on the components, not a hardcoded slash path.
       final p = OdaDwgConverter.resolveBinary(
         environment: const {},
-        appDir: '/app',
-        exists: (path) => path.startsWith('/app/oda/ODAFileConverter'),
+        appDir: 'APPDIR',
+        exists: (path) => path.contains('oda') && path.contains('ODAFileConverter'),
       );
       expect(p, isNotNull);
-      expect(p, contains('/app/oda/ODAFileConverter'));
+      expect(p, contains('APPDIR'));
+      expect(p, contains('ODAFileConverter'));
     });
 
     test('returns null (→ bare PATH name) when nothing is found', () {
