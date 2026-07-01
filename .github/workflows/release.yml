@@ -96,6 +96,57 @@ jobs:
       - name: Build Windows (release)
         run: flutter build windows --release
 
+      # Fetch the ODA File Converter bundle (DWG->DXF) so the installer can embed
+      # it at installer\vendor\oda\ (see installer/vendor/oda/README.md). The
+      # binary is NOT committed (large + ODA's licence governs redistribution),
+      # so CI pulls it from a maintainer-provided source:
+      #   1. the ODA_ZIP_URL secret (a direct download URL to a .zip), else
+      #   2. a one-time `vendor-oda` GitHub Release asset in THIS repo (a .zip),
+      #      downloaded with the built-in token.
+      # Absent from both ⇒ the step is a no-op and the installer ships without
+      # DWG conversion (DWG import then reports "converter not found"); PDF/DXF
+      # are unaffected. continue-on-error keeps a missing bundle from failing the
+      # release.
+      - name: Fetch bundled ODA File Converter (optional)
+        continue-on-error: true
+        shell: bash
+        env:
+          ODA_ZIP_URL: ${{ secrets.ODA_ZIP_URL }}
+        run: |
+          set -uo pipefail
+          mkdir -p installer/vendor/oda
+          if [[ -n "${ODA_ZIP_URL:-}" ]]; then
+            echo "Fetching ODA bundle from ODA_ZIP_URL secret"
+            curl -fSL "$ODA_ZIP_URL" -o oda.zip || true
+          fi
+          if [[ ! -f oda.zip ]]; then
+            echo "Trying the 'vendor-oda' release asset in $GITHUB_REPOSITORY"
+            gh release download vendor-oda --repo "$GITHUB_REPOSITORY" \
+              --pattern '*.zip' --output oda.zip --clobber || true
+          fi
+          if [[ ! -f oda.zip ]]; then
+            echo "::warning::No ODA bundle found (no ODA_ZIP_URL secret and no vendor-oda release). Installer will ship without DWG conversion."
+            exit 0
+          fi
+          echo "Extracting ODA bundle"
+          powershell -NoProfile -Command \
+            "Expand-Archive -Path oda.zip -DestinationPath installer/vendor/oda -Force"
+          # The .iss bundles installer\vendor\oda\* into {app}\oda, where the app
+          # looks for ODAFileConverter.exe at the TOP level — flatten a zip that
+          # nests everything under one folder.
+          exe="$(find installer/vendor/oda -iname 'ODAFileConverter.exe' | head -1 || true)"
+          if [[ -z "$exe" ]]; then
+            echo "::warning::ODA bundle had no ODAFileConverter.exe — ignoring."
+            rm -rf installer/vendor/oda && mkdir -p installer/vendor/oda
+            exit 0
+          fi
+          dir="$(dirname "$exe")"
+          if [[ "$dir" != "installer/vendor/oda" ]]; then
+            echo "Flattening nested ODA folder ($dir -> installer/vendor/oda)"
+            mv "$dir"/* installer/vendor/oda/
+          fi
+          echo "ODA bundled:"; ls installer/vendor/oda | head -20
+
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
