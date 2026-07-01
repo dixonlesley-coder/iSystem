@@ -150,11 +150,13 @@ PDF import (pdfrx) **+ DXF import** (pure-engine `geometry/dxf_drawing.dart`
 `parseDxf` → LINE/LWPOLYLINE/POLYLINE/CIRCLE/ARC + INSERT/BLOCKS expansion,
 rendered by `ui/canvas/dxf_sheet_page.dart` as a calibratable background via
 `Sheet.dxfPath`; a DISPLAY substrate only, length still from calibration)
-**+ DWG import** (`data/dwg_converter.dart` `OdaDwgConverter` shells out to a
-bundled ODA File Converter for DWG→DXF, then the DXF pipeline; `Sheet.dwgPath`
-keeps the source; the ODA binary is fetched at release-build time — `release.yml`
-`Fetch bundled ODA File Converter` step pulls an `ODA_ZIP_URL` secret or a
-`vendor-oda` repo release asset into `installer/vendor/oda/`, absent ⇒ no-op)
+**+ DWG import** (`data/dwg_converter.dart` `OdaDwgConverter` shells out to the
+ODA File Converter for DWG→DXF, then the DXF pipeline; `Sheet.dwgPath` keeps the
+source; binary resolution = `ODA_CONVERTER` env → bundled `{app}\oda\` →
+auto-detected Program-Files ODA install (`systemOdaCandidates`) → PATH, so a
+normal ODA MSI install is found with zero config; the bundled copy is fetched at
+release-build time via `release.yml` from an `ODA_ZIP_URL` secret / `vendor-oda`
+repo release asset, absent ⇒ no-op)
 + multi-sheet rail; per-sheet scale calibration; per-floor
 heights + role-aware elevations; draw runs/risers for 10 services (cold/hot
 water, drainage, vent, rainwater, supply/return/exhaust air, sprinkler,

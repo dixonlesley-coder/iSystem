@@ -5,6 +5,22 @@ free **ODA File Converter** from the Open Design Alliance. DWG is a proprietary
 binary format with no in-process reader, so this external converter is the
 offline-friendly path (it batch-converts DWG↔DXF with no network).
 
+## Easiest for private use: just install ODA on the machine
+
+`OdaDwgConverter` auto-detects a **normally-installed** ODA File Converter — its
+MSI installs to `C:\Program Files\ODA\ODAFileConverter <ver>\`, and the app scans
+there (`systemOdaCandidates`) on every DWG import. So for a small/private
+deployment you don't need to bundle or host anything: **run ODA's own MSI once on
+each machine that opens DWGs**, and iSystem finds it automatically. The bundling
+below is only for shipping the converter *inside* the installer.
+
+The resolution order is: `ODA_CONVERTER` env var → bundled `{app}\oda\` → a
+Program-Files ODA install → the bare name on `PATH`.
+
+---
+
+## Bundling it into the installer (optional)
+
 The converter binary is **not committed to this repo** — it is large and ODA's
 licence governs its redistribution. Instead, the **release workflow fetches it at
 build time** and Inno Setup bundles it into `{app}\oda\`, where the app's

@@ -51,7 +51,10 @@ abstract interface class DwgConverter {
 /// beside the app when the maintainer supplies it. Resolution order:
 /// 1. the `ODA_CONVERTER` environment variable (full path to the exe),
 /// 2. `<app dir>/oda/ODAFileConverter[.exe]` (bundled),
-/// 3. the bare name on `PATH`.
+/// 3. a NORMALLY-INSTALLED ODA File Converter found under Program Files (so an
+///    engineer can just run ODA's own MSI and iSystem auto-detects it — no
+///    bundling), and
+/// 4. the bare name on `PATH`.
 class OdaDwgConverter implements DwgConverter {
   /// Output DXF version handed to ODA (a widely-compatible recent ACAD format).
   static const String outputVersion = 'ACAD2018';
@@ -63,11 +66,14 @@ class OdaDwgConverter implements DwgConverter {
       Platform.isWindows ? 'ODAFileConverter.exe' : 'ODAFileConverter';
 
   /// Resolve the converter binary path, or null to fall back to the bare name on
-  /// `PATH`. Pure (takes the env + app dir) so it is unit-testable.
+  /// `PATH`. Pure (takes the env + app dir + any discovered system installs) so
+  /// it is unit-testable; [extraCandidates] are already-formed exe paths tried
+  /// after the bundled copy (see [systemOdaCandidates]).
   static String? resolveBinary({
     required Map<String, String> environment,
     required String appDir,
     required bool Function(String path) exists,
+    List<String> extraCandidates = const [],
   }) {
     final fromEnv = environment['ODA_CONVERTER'];
     if (fromEnv != null && fromEnv.isNotEmpty && exists(fromEnv)) {
@@ -75,7 +81,50 @@ class OdaDwgConverter implements DwgConverter {
     }
     final bundled = _join(_join(appDir, 'oda'), _exeName);
     if (exists(bundled)) return bundled;
+    for (final c in extraCandidates) {
+      if (exists(c)) return c;
+    }
     return null; // let Process resolve the bare name on PATH
+  }
+
+  /// Candidate `ODAFileConverter.exe` paths from a NORMAL ODA install (its MSI
+  /// installs to `C:\Program Files\ODA\ODAFileConverter <ver>\`). Scans the
+  /// Program Files roots for `ODA\ODAFileConverter*` folders, newest-name first,
+  /// so a version-suffixed install is found without the user configuring
+  /// anything. Non-Windows / no install ⇒ empty. Never throws.
+  static List<String> systemOdaCandidates() {
+    if (!Platform.isWindows) return const [];
+    final roots = <String>{
+      for (final k in const ['ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432'])
+        if ((Platform.environment[k] ?? '').isNotEmpty)
+          Platform.environment[k]!,
+      r'C:\Program Files',
+      r'C:\Program Files (x86)',
+    };
+    final out = <String>[];
+    for (final root in roots) {
+      try {
+        final odaDir = Directory(_join(root, 'ODA'));
+        if (!odaDir.existsSync()) continue;
+        final installs = odaDir
+            .listSync()
+            .whereType<Directory>()
+            .where((d) => d.uri.pathSegments
+                .where((s) => s.isNotEmpty)
+                .last
+                .toLowerCase()
+                .startsWith('odafileconverter'))
+            .toList()
+          // Newest version-suffixed folder first.
+          ..sort((a, b) => b.path.compareTo(a.path));
+        for (final d in installs) {
+          out.add(_join(d.path, _exeName));
+        }
+      } catch (_) {
+        // Unreadable root — skip.
+      }
+    }
+    return out;
   }
 
   /// The positional argument list ODA File Converter expects:
@@ -103,6 +152,7 @@ class OdaDwgConverter implements DwgConverter {
           environment: Platform.environment,
           appDir: appDir,
           exists: (p) => File(p).existsSync(),
+          extraCandidates: systemOdaCandidates(),
         ) ??
         _exeName;
 
