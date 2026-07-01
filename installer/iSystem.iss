@@ -71,7 +71,7 @@ Source: "..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Excludes: "{#
 ; installer\vendor\oda\ before building and it is bundled at {app}\oda\, where
 ; OdaDwgConverter.resolveBinary looks for it. `skipifsourcedoesntexist` makes the
 ; build succeed when it is absent (DWG import then reports "converter not found").
-Source: "vendor\oda\*"; DestDir: "{app}\oda"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "vendor\oda\*"; DestDir: "{app}\oda"; Excludes: "README.md"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\iSystem"; Filename: "{app}\{#AppExeName}"
