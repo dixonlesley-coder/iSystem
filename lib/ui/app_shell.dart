@@ -10,6 +10,7 @@ import '../data/dwg_converter.dart';
 import '../data/dwg_import.dart';
 import '../data/dxf_import.dart';
 import '../data/pdf_import.dart';
+import '../data/project_assets.dart';
 import '../data/project_document.dart';
 import '../data/recovery.dart';
 import '../store/app_state.dart';
@@ -293,16 +294,21 @@ class _TopBar extends ConsumerWidget {
     );
     if (path == null) return;
     final full = path.endsWith('.mechx') ? path : '$path.mechx';
-    final encoded = doc.encode();
+    // The path-only encoding is the "clean baseline" the autosave loop compares
+    // against (autosave never embeds) — so a just-saved project leaves no phantom
+    // recovery. The FILE on disk, however, embeds the source plans so it is
+    // portable across machines.
+    final baseline = doc.encode();
+    final portable = doc.withSheets(doc.sheets, assets: gatherSheetAssets(doc.sheets));
     try {
-      await File(full).writeAsString(encoded);
+      await File(full).writeAsString(portable.encode());
     } catch (e) {
       ref.read(loadErrorProvider.notifier).set('Could not save project: $e');
       return;
     }
     // The work is now safely on disk — record it as the clean baseline and
     // drop any recovery snapshot/offer.
-    ref.read(lastSavedSignatureProvider.notifier).set(encoded);
+    ref.read(lastSavedSignatureProvider.notifier).set(baseline);
     await clearRecovery();
     ref.read(recoveryDocProvider.notifier).clear();
     ref
@@ -320,7 +326,9 @@ class _TopBar extends ConsumerWidget {
     if (path == null) return;
     try {
       final doc = ProjectDocument.decode(await File(path).readAsString());
-      applyDocument(ref.read, doc);
+      // Extract any embedded source plans to local files + repoint the sheets,
+      // so a portable project renders even without the original plan files here.
+      applyDocument(ref.read, rehydrateAssets(doc));
       // The just-loaded state is the clean baseline; capture its canonical
       // encoding so autosave won't immediately mirror it to recovery.
       ref
@@ -715,8 +723,9 @@ class _RecoveryBanner extends ConsumerWidget {
                       // Restore the full snapshot (drawing + settings). We
                       // deliberately do NOT mark it as the clean baseline:
                       // recovered work is still unsaved, so autosave should keep
-                      // mirroring it after dismiss.
-                      applyDocument(ref.read, doc);
+                      // mirroring it after dismiss. (Recovery snapshots embed no
+                      // assets, so rehydrate is a no-op here — kept for symmetry.)
+                      applyDocument(ref.read, rehydrateAssets(doc));
                       dismiss();
                     },
                   ),
