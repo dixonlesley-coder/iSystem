@@ -218,7 +218,13 @@ class PuilProfile implements ElectricalStandardsProfile {
       'PUIL 2011 (SNI 0225:2011, amd. 2020) values ported 2026-06 from the '
       'PanelMaker reference app (Supreme Cable / SUCACO catalogues + '
       'IEC 60364-5-52/54, IEC 60898/60947). All secondary-sourced — clauses '
-      'pending confirmation against the official PUIL PDF.';
+      'pending confirmation against the official PUIL PDF. A 2026-07 research '
+      'pass sharpened several citations (SNI IEC 60038:2013 for nominal '
+      'voltages, PUIL Tabel 41.1 for the U0/ADS disconnection-time basis, '
+      'spot-checked KHA/derating figures) but could NOT read the primary PUIL '
+      'text end-to-end (every external document host was blocked by this '
+      'environment\'s network egress policy that session) — nothing here was '
+      'promoted to sniVerbatim on the strength of that pass alone.';
 
   // ── Supply / voltages ─────────────────────────────────────────────────────
 
@@ -226,30 +232,55 @@ class PuilProfile implements ElectricalStandardsProfile {
   StandardValue<Voltage> get nominalLineVoltage => const StandardValue(
         Voltage(400.0),
         unit: 'V',
-        citation: '$_doc — nominal LV line voltage (3-phase)',
+        citation: 'SNI IEC 60038:2013 "Tegangan standar IEC" (identical '
+            'adoption of IEC 60038 Ed. 7.0:2009) — nominal LV line voltage '
+            '(3-phase)',
         verified: false,
-        note: 'Indonesian LV three-phase nominal 400 V (230/400 V). '
-            'Confirm clause against the official PUIL text.',
+        note: 'Indonesian LV three-phase nominal 400 V (230/400 V system). '
+            '2026-07 research pass: confirmed BSN publishes SNI IEC '
+            '60038:2013 as a direct adoption of IEC 60038 (which sets '
+            '230/400 V as the harmonised public-LV standard voltage); the '
+            'SNI\'s own text was not read verbatim (host blocked), so this '
+            'stays secondarySource — the specific SNI is now named rather '
+            'than a generic "confirm against PUIL" pointer.',
       );
 
   @override
   StandardValue<Voltage> get nominalSinglePhaseVoltage => const StandardValue(
         Voltage(220.0),
         unit: 'V',
-        citation: '$_doc — nominal LV single-phase voltage',
+        citation: '$_doc / SPLN 1 — nominal LV single-phase voltage',
         verified: false,
-        note: 'Indonesian residential single-phase nominal 220 V. '
-            'Confirm clause against the official PUIL text.',
+        note: 'Indonesian residential single-phase nominal 220 V (the '
+            'historical PLN 220/380 V system). 2026-07 research pass found '
+            'CONFLICTING secondary sources on whether the current declared '
+            'nominal is still 220 V or has moved to 230 V under the IEC '
+            '60038 / SNI IEC 60038:2013 harmonised 230/400 V system (PLN\'s '
+            'own SPLN 1 is cited both ways in different secondary write-ups, '
+            'and the ±5 %/-10 % tolerance band commonly quoted, 198-231 V, '
+            'is arithmetically consistent with a 220 V nominal, not 230 V — '
+            'suggesting the 220 V figure may still be the operative PLN '
+            'value even where 230/400 V is quoted as the harmonised target). '
+            'This discrepancy is unresolved without reading SPLN 1 / PUIL '
+            'directly — flagged here rather than silently picking a side.',
       );
 
   @override
   StandardValue<Voltage> get nominalPhaseVoltage => const StandardValue(
         Voltage(230.0),
         unit: 'V',
-        citation: '$_doc / IEC 60364 — phase-to-neutral voltage U0 (fault/Zs)',
+        citation: '$_doc Tabel 41.1 / IEC 60364-4-41 Table 41.1 — '
+            'phase-to-neutral voltage U0 (fault/Zs, ADS disconnection time)',
         verified: false,
         note: 'U0 = 230 V used for earth-fault-loop (Zs) and ADS limits. '
-            'IEC harmonised value; confirm against PUIL.',
+            '2026-07 research pass: corroborated (via secondary training/'
+            'reference material, not the primary PDF) that PUIL 2011 '
+            'carries its own "Tabel 41.1" for maximum ADS disconnection '
+            'time — the same table number as IEC 60364-4-41 Table 41.1 — '
+            'with a 0.4 s TN-system figure consistent with the U0 ≤ 230 V '
+            'band; the exact U0 = 230 V wording itself was not read '
+            'verbatim, so this stays secondarySource with a sharper clause '
+            'pointer (Tabel 41.1) rather than a bare "IEC harmonised value".',
       );
 
   @override
@@ -663,15 +694,28 @@ class PuilProfile implements ElectricalStandardsProfile {
           citation: '$_doc / IEC 60364-5-52 — Supreme Cable (SUCACO) catalogue',
           verified: false,
           note: 'Transcribed from the Supreme NYY 0.6/1 kV catalogue '
-              '(IEC/SNI 60502-1). Verify against the manufacturer datasheet '
-              'and the PUIL ampacity table for the specific construction.',
+              '(IEC/SNI 60502-1). 2026-07 research pass: independently '
+              'spot-checked one entry (Cu/PVC method B1, 4 mm2 = 34 A) '
+              'against secondary sources reproducing Indonesian NYY KHA '
+              'tables — matched. Only 1 of 16 sections × 4 methods × 2 '
+              'insulations was checked (every document host was blocked by '
+              'this environment\'s network egress policy that session); the '
+              'full matrix still needs the manufacturer datasheet and the '
+              'PUIL ampacity table for the specific construction.',
         ),
         const StandardValue<Object?>(
           'ambient / grouping / soil-thermal derating factors',
           unit: 'table',
           citation: 'IEC 60364-5-52 Tables B.52.14 / B.52.17 / B.52.16',
           verified: false,
-          note: 'IEC reference values; confirm against the IEC tables (and any '
+          note: '2026-07 research pass: spot-checked two Table B.52.14 '
+              'ambient-correction points (XLPE @ 45 C = 0.87, PVC @ 50 C = '
+              '0.71) against secondary engineering references — matched. '
+              'Only 2 of the ~30 tabulated ambient/grouping/soil points were '
+              'checked (network access was blocked), and the PUIL 2011 '
+              'Amendment 1:2013 Tabel K.52.3.2 cross-reference itself was '
+              'not independently located this pass. IEC reference values; '
+              'confirm against the IEC tables (and any '
               'PUIL-specific Indonesian adjustment).',
         ),
         nominalLineVoltage,

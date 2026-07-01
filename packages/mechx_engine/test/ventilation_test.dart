@@ -57,11 +57,13 @@ void main() {
       }
     });
 
-    test('Tabel 4.4.1 spaces are verified; spaces outside it stay secondary',
+    test(
+        'Tabel 4.4.1 spaces are verified; spaces outside it are notAnSniClause',
         () {
       // Provenance (§12.6): the SNI 03-6572-2001 Tabel 4.4.1 spaces are
-      // promoted to verified; spaces NOT in the table remain general HVAC
-      // practice (secondarySource, surfaced as UNVERIFIED).
+      // promoted to verified; spaces NOT in the table are confirmed outside
+      // the standard's scope (2026-07 research pass) — deliberate general
+      // HVAC practice (notAnSniClause), not debt pending confirmation.
       const tableRooms = <RoomType>{
         RoomType.corridor,
         RoomType.lobby,
@@ -79,7 +81,7 @@ void main() {
           expect(v.status, VerificationStatus.sniVerbatim);
         } else {
           expect(v.verified, isFalse);
-          expect(v.status, VerificationStatus.secondarySource);
+          expect(v.status, VerificationStatus.notAnSniClause);
           expect(v.isUnverified, isTrue);
         }
       }
@@ -105,11 +107,11 @@ void main() {
       );
     });
 
-    test('every room type has a positive density, all UNVERIFIED', () {
+    test('every room type has a positive density, all notAnSniClause', () {
       for (final t in RoomType.values) {
         final v = profile.coolingLoadDensityBtuPerHrM2(t);
         expect(v.value, greaterThan(0.0));
-        expect(v.status, VerificationStatus.secondarySource);
+        expect(v.status, VerificationStatus.notAnSniClause);
         expect(v.verified, isFalse);
       }
     });
