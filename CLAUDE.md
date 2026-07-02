@@ -254,6 +254,11 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
+- **CAD-output + UX review (2026-07-02) — the plan of record for output/UX parity**:
+  `CAD-OUTPUT-UX-REVIEW.md` (root) holds 78 code-verified findings — professional-CAD
+  gaps in the plan/riser/electrical exports + reports, and Apple-lens UI/workflow gaps —
+  grouped into themes A–J and sequenced into 5 implementation waves. Work new
+  output/UX improvements from that document rather than re-reviewing.
 - **Audit-fix wave (2026-06-28) — resolved** (`AUDIT-REPORT.md`, see the §15 row):
   the over-capacity air duct no longer THROWS (clamps + `EdgeSizing.overCapacity`
   flag → Review warning via `airOverCapacityProvider`); rectangular ducts honour
