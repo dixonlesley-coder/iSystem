@@ -191,6 +191,33 @@ class StatusMessageController extends Notifier<String?> {
   }
 }
 
+/// One-shot session nudge for the FIRST auto-size: the moment the live sizing
+/// solve (`sizingProvider`) transitions from empty to non-empty, a listener
+/// (hosted in `AppShell`, see `app_shell.dart`) calls [maybeFire] with the
+/// count of newly-sized edges. Guarded so it fires at most ONCE per session —
+/// subsequent re-solves (editing a run, reopening a project that already has a
+/// sized network) never re-nudge. False at rest; no persistence, so a fresh
+/// session always gets the nudge again.
+final firstAutoSizeNudgeProvider =
+    NotifierProvider<FirstAutoSizeNudgeController, bool>(
+  FirstAutoSizeNudgeController.new,
+);
+
+class FirstAutoSizeNudgeController extends Notifier<bool> {
+  @override
+  bool build() => false; // true once the nudge has fired this session
+
+  /// Show the "Auto-sized N runs" confirmation for [count] edges, unless the
+  /// nudge has already fired this session or there is nothing to report.
+  void maybeFire(int count) {
+    if (state || count <= 0) return;
+    state = true;
+    ref
+        .read(statusMessageProvider.notifier)
+        .showStatus('Auto-sized $count runs - sizes shown on the plan');
+  }
+}
+
 /// A transient "busy" message for a slow foreground operation (importing a
 /// plan, converting a DWG, opening/saving a project). Null at rest — so the
 /// status bar shows no busy pill and the goldens are unchanged. Set/cleared in

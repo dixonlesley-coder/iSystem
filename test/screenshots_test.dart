@@ -68,6 +68,18 @@ void main() {
     container.read(showSizingProvider.notifier).toggle();
     await tester.pump(const Duration(milliseconds: 250));
 
+    // Drawing the network above triggers the live sizing solve, which fires
+    // the one-shot "Auto-sized N runs" status confirmation (J2,
+    // `firstAutoSizeNudgeProvider` via the `AppShell` `ref.listen`, which
+    // resolves on the pump above). That pill is transient (self-clearing
+    // after 3s) and orthogonal to what these screenshots capture, so clear it
+    // here rather than let it linger across every golden below (covered on
+    // its own in `test/app_state_test.dart`) — then pump once more so the
+    // pill widget (built while the message was briefly set) actually
+    // rebuilds to its collapsed null form before anything is captured.
+    container.read(statusMessageProvider.notifier).clear();
+    await tester.pump();
+
     final app = find.byType(MechXApp);
 
     await expectLater(app, matchesGoldenFile('goldens/01_plan_dark.png'));

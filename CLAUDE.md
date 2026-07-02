@@ -291,7 +291,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   Design Issues with a Review→Electrical jump (`electrical_focus_store`); unsaved-work
   guards (`isProjectDirty` + Save/Discard/Cancel dialog on Open/Import/quit) and a
   status-bar busy pill + off-thread portable save (`gatherSheetAssetsAsync`).
-  Waves 4–5 remain.
+  **Wave 4 (the submittal package) LANDED** (see the §15 row): the four flagship
+  reports refactored onto a sealed `RptBlock` model (`report/report_blocks.dart`,
+  Markdown proven byte-identical via characterization hashes) with a paginating
+  A4 typesetter (`report/report_pdf.dart` — cover, `Page X of Y` footer, AFM-width
+  text wrap, ruled tables split across pages, embedded `SldSheet` figures) wired as
+  PDF exports (Projects screen + Review deliverables card; the MEP PDF embeds the
+  riser + electrical single-lines); Bahasa Indonesia report BODIES
+  (`report/report_strings.dart`, EN default byte-identical, threaded from the app
+  locale); equipment-schedule CSV sibling + the BOM CSV split into clean
+  `-bom.csv`/`-fittings.csv` with per-floor grouping (`buildBom(groupByFloor:)`) and
+  the cut-plan stock/bars/waste columns joined per (service,DN); calibration/first-size
+  status handoffs + the Review-hub 'Export deliverables' card. Wave 5 remains.
 - **Audit-fix wave (2026-06-28) — resolved** (`AUDIT-REPORT.md`, see the §15 row):
   the over-capacity air duct no longer THROWS (clamps + `EdgeSizing.overCapacity`
   flag → Review warning via `airOverCapacityProvider`); rectangular ducts honour

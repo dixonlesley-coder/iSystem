@@ -14,6 +14,7 @@ import '../store/electrical_store.dart';
 import '../store/layer_store.dart';
 import '../store/project_store.dart';
 import '../store/sheets_store.dart';
+import '../store/sizing_store.dart';
 import '../update/update_banner.dart';
 import '../update/version_label.dart';
 import 'ai/copilot_panel.dart';
@@ -84,6 +85,17 @@ class AppShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
+    // First-auto-size nudge (J2): fires once per session, the moment the live
+    // sizing solve goes from empty to non-empty. Note: OPENING a project whose
+    // network sizes on load is also a genuine empty→non-empty transition, so
+    // the (one-shot) nudge fires there too — acceptable, since the sizes shown
+    // on the plan really were just auto-computed. AppShell is the
+    // always-mounted host; the guard itself lives in `firstAutoSizeNudgeProvider`.
+    ref.listen(sizingProvider, (previous, next) {
+      if ((previous == null || previous.isEmpty) && next.isNotEmpty) {
+        ref.read(firstAutoSizeNudgeProvider.notifier).maybeFire(next.length);
+      }
+    });
     // The auto-update banner + command palette are stacked on top as non-layout
     // overlays (each renders nothing when idle).
     return Focus(
@@ -455,11 +467,18 @@ class _StatusBar extends ConsumerWidget {
             // Busy pill for a slow foreground operation (importing / converting /
             // opening / saving). Null at rest, so it collapses to nothing and the
             // goldens are unchanged; it shows a small animated arc + message while
-            // the operation runs.
+            // the operation runs. A bare (non-flex) child, same as `WorkflowStepper`
+            // above — a plain `Flexible`/`Expanded` here would default to flex: 1
+            // and compete with the two flanking `Expanded` groups for the row's
+            // free space, halving their width even while this pill is empty. The
+            // pill instead bounds its OWN max width internally (see
+            // `_BusyIndicator`) so a long message ellipsises without disturbing
+            // the row's flex balance.
             const _BusyIndicator(),
             // Transient confirmation pill (Saved / opened / imported). Null at
             // rest, so this collapses to nothing and the goldens are unchanged;
             // it cross-fades in/out via AnimatedSwitcher when a message arrives.
+            // Same non-flex reasoning as `_BusyIndicator` above.
             const _StatusConfirmation(),
             // Right group: standards provenance + input hints.
             Expanded(
@@ -526,31 +545,44 @@ class _StatusConfirmation extends ConsumerWidget {
           : Padding(
               key: const ValueKey('status-confirmation'),
               padding: const EdgeInsets.only(right: MechXSpacing.md),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: MechXSpacing.sm,
-                  vertical: MechXSpacing.xxs,
-                ),
-                decoration: BoxDecoration(
-                  color: colors.success.withAlpha(30),
-                  borderRadius: MechXRadii.control,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // A small custom-painted check (Roboto-safe, can't tofu).
-                    CustomPaint(
-                      size: const Size(10, 10),
-                      painter: _CheckMark(color: colors.success),
-                    ),
-                    const SizedBox(width: MechXSpacing.xs),
-                    Text(
-                      message,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: type.caption.copyWith(color: colors.success),
-                    ),
-                  ],
+              // Bounds the pill's OWN max width (rather than a row-level
+              // Flexible — see the call site's comment) so a long message
+              // (e.g. the first-auto-size nudge's run count) ellipsises
+              // instead of demanding its full intrinsic width and pushing the
+              // status bar's flanking Expanded groups into overflow.
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 260),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: MechXSpacing.sm,
+                    vertical: MechXSpacing.xxs,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colors.success.withAlpha(30),
+                    borderRadius: MechXRadii.control,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // A small custom-painted check (Roboto-safe, can't tofu).
+                      CustomPaint(
+                        size: const Size(10, 10),
+                        painter: _CheckMark(color: colors.success),
+                      ),
+                      const SizedBox(width: MechXSpacing.xs),
+                      // Flexible so the message ellipsises against the
+                      // ConstrainedBox's bound instead of the Row demanding
+                      // its full intrinsic width.
+                      Flexible(
+                        child: Text(
+                          message,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: type.caption.copyWith(color: colors.success),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -601,27 +633,37 @@ class _BusyIndicator extends ConsumerWidget {
     return Padding(
       key: const ValueKey('busy-indicator'),
       padding: const EdgeInsets.only(right: MechXSpacing.md),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: MechXSpacing.sm,
-          vertical: MechXSpacing.xxs,
-        ),
-        decoration: BoxDecoration(
-          color: colors.accent.withAlpha(30),
-          borderRadius: MechXRadii.control,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _BusySpinner(color: colors.accent),
-            const SizedBox(width: MechXSpacing.xs),
-            Text(
-              message,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: type.caption.copyWith(color: colors.accent),
-            ),
-          ],
+      // Same bounded-max-width reasoning as `_StatusConfirmation` — the pill
+      // caps its OWN width rather than becoming a row-level flex participant.
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 260),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: MechXSpacing.sm,
+            vertical: MechXSpacing.xxs,
+          ),
+          decoration: BoxDecoration(
+            color: colors.accent.withAlpha(30),
+            borderRadius: MechXRadii.control,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _BusySpinner(color: colors.accent),
+              const SizedBox(width: MechXSpacing.xs),
+              // Flexible so the message ellipsises against the
+              // ConstrainedBox's bound instead of the Row demanding its full
+              // intrinsic width.
+              Flexible(
+                child: Text(
+                  message,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: type.caption.copyWith(color: colors.accent),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

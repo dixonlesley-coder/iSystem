@@ -1,13 +1,15 @@
-/// Electrical calculation-report generator — renders the sized electrical
+/// Electrical calculation-report generator — builds the sized electrical
 /// system (panels, incomers, busbars, circuits, earthing, the optional hybrid
-/// power one-line and warnings) as Markdown. The electrical mirror of
-/// `calc_report.dart`.
+/// power one-line and warnings) as a neutral [RptBlock] list
+/// ([buildElectricalCalcReportBlocks]) rendered to Markdown by
+/// [buildElectricalCalcReport] or typeset to PDF by `report_pdf.dart`. The
+/// electrical mirror of `calc_report.dart`.
 ///
 /// Pure: takes already-computed result records in [ElectricalCalcReportData]
-/// and returns a string. Zero Flutter imports — the app gathers provider values
-/// into the data struct and handles file IO. Every unverified value is surfaced
-/// in a dedicated "Unverified values" section so the report never hides
-/// provenance gaps (§8 / golden rule 6).
+/// and returns blocks / a string. Zero Flutter imports — the app gathers
+/// provider values into the data struct and handles file IO. Every unverified
+/// value is surfaced in a dedicated "Unverified values" section so the report
+/// never hides provenance gaps (§8 / golden rule 6).
 library;
 
 import '../electrical/model.dart';
@@ -15,6 +17,8 @@ import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BusbarSizingReason;
 import '../standards/sni.dart' show Revision;
+import 'report_blocks.dart';
+import 'report_strings.dart';
 
 /// All inputs the electrical calc report renders. The [project] supplies the
 /// input model (panel tags / order) and [result] the sizing; [powerOneLine] and
@@ -77,204 +81,297 @@ String _severityTag(WarningSeverity s) => switch (s) {
       WarningSeverity.info => 'INFO',
     };
 
-/// Render the electrical **Design Basis / Inputs & Assumptions** register into
-/// [b] from [data] — supply system/voltage, connected/diversified load, earthing
-/// system, and (when set) the Fold-1 fault target + clearing time. Shared with
-/// the unified MEP report. Caller writes the `##` heading.
-void writeElectricalDesignBasis(StringBuffer b, ElectricalCalcReportData data) {
+/// The electrical **Design Basis / Inputs & Assumptions** register as a
+/// key-value block — supply system/voltage, connected/diversified load,
+/// earthing system, and (when set) the Fold-1 fault target + clearing time.
+/// Shared with the unified MEP report. Caller adds the `##` heading.
+RptKeyValue electricalDesignBasisBlock(ElectricalCalcReportData data,
+    [ReportStrings strings = const ReportStrings.en()]) {
   final s = data.result.supply;
-  b.writeln('- Supply: **${s.system.label}, ${_n(s.voltage.volts)} V**');
-  b.writeln('- Connected load: **${_n(s.connectedW)} W** · diversified demand '
-      '**${_n(s.demandW)} W** (${_n(s.demandVa.inKilovoltAmperes)} kVA)');
-  b.writeln('- Earthing system: **${data.result.earthing.label}**');
-  if (data.originFaultLevelA != null) {
-    b.writeln('- Origin fault level: '
-        '**${_n(data.originFaultLevelA! / 1000)} kA**'
-        '${data.busbarClearingTimeS != null ? ' · clearing time '
-            '**${data.busbarClearingTimeS!.toStringAsFixed(2)} s**' : ''} '
-        '(busbar short-circuit-withstand basis)');
+  return RptKeyValue([
+    (
+      strings(RptStringKey.edbSupply),
+      '**${s.system.label}, ${_n(s.voltage.volts)} V**'
+    ),
+    (
+      strings(RptStringKey.edbConnectedLoad),
+      strings.format(RptStringKey.edbConnectedLoadValue, {
+        'w': _n(s.connectedW),
+        'dw': _n(s.demandW),
+        'kva': _n(s.demandVa.inKilovoltAmperes),
+      })
+    ),
+    (
+      strings(RptStringKey.edbEarthingSystem),
+      '**${data.result.earthing.label}**'
+    ),
+    if (data.originFaultLevelA != null)
+      (
+        strings(RptStringKey.edbOriginFault),
+        strings.format(RptStringKey.edbOriginFaultValue, {
+          'ka': _n(data.originFaultLevelA! / 1000),
+          'ct': data.busbarClearingTimeS != null
+              ? strings.format(RptStringKey.edbClearingTime,
+                  {'s': data.busbarClearingTimeS!.toStringAsFixed(2)})
+              : '',
+        })
+      ),
+  ]);
+}
+
+/// Render the electrical Design Basis register into [b] (legacy writer, shared
+/// with the unified MEP report's Markdown path). Rows only — no trailing blank
+/// line; caller writes the `##` heading.
+void writeElectricalDesignBasis(StringBuffer b, ElectricalCalcReportData data,
+    [ReportStrings strings = const ReportStrings.en()]) {
+  for (final (key, value) in electricalDesignBasisBlock(data, strings).rows) {
+    b.writeln('- $key $value');
   }
+}
+
+/// The electrical Revision-history section as blocks (heading + table). Empty
+/// [revisions] ⇒ an empty list.
+List<RptBlock> electricalRevisionHistoryBlocks(List<Revision> revisions,
+    [ReportStrings strings = const ReportStrings.en()]) {
+  if (revisions.isEmpty) return const [];
+  return [
+    RptHeading(2, strings(RptStringKey.headingRevisionHistory)),
+    RptTable(
+      [strings(RptStringKey.tblDate), strings(RptStringKey.tblDescription)],
+      [
+        for (final r in revisions) [_md(r.date), _md(r.description)],
+      ],
+      mdSeparator: '| --- | --- |',
+    ),
+  ];
 }
 
 /// Render a Revision-history table into [b]. No-op when [revisions] is empty.
-void writeElectricalRevisionHistory(StringBuffer b, List<Revision> revisions) {
-  if (revisions.isEmpty) return;
-  b.writeln('## Revision history');
-  b.writeln();
-  b.writeln('| Date | Description |');
-  b.writeln('| --- | --- |');
-  for (final r in revisions) {
-    b.writeln('| ${_md(r.date)} | ${_md(r.description)} |');
-  }
-  b.writeln();
+void writeElectricalRevisionHistory(StringBuffer b, List<Revision> revisions,
+    [ReportStrings strings = const ReportStrings.en()]) {
+  b.write(renderRptMarkdown(electricalRevisionHistoryBlocks(revisions, strings)));
 }
 
-/// Render [data] as a Markdown electrical calculation report.
-String buildElectricalCalcReport(ElectricalCalcReportData data) {
-  final b = StringBuffer();
+/// Build [data] as the neutral block list — the one content model behind both
+/// the Markdown render ([buildElectricalCalcReport]) and the PDF typesetter.
+List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
+    [ReportStrings strings = const ReportStrings.en()]) {
   final r = data.result;
   final modelById = {for (final p in data.project.panels) p.id: p};
 
-  b.writeln('# Electrical calculation report — ${data.projectName}');
-  b.writeln();
-  b.writeln('- Date: ${data.date}');
-  b.writeln(
-      '- Standard: ${data.standardsName} ${data.standardsRevision}'.trimRight());
-  b.writeln();
+  final blocks = <RptBlock>[
+    RptHeading(1,
+        strings.format(RptStringKey.elecTitle, {'name': data.projectName})),
+    RptKeyValue([
+      (strings(RptStringKey.elecDate), data.date),
+      (
+        strings(RptStringKey.elecStandard),
+        '${data.standardsName} ${data.standardsRevision}'.trimRight()
+      ),
+    ]),
 
-  // ── Design basis / inputs & assumptions ─────────────────────────────────────
-  b.writeln('## Design basis');
-  b.writeln();
-  writeElectricalDesignBasis(b, data);
-  b.writeln();
+    // ── Design basis / inputs & assumptions ───────────────────────────────────
+    RptHeading(2, strings(RptStringKey.headingDesignBasis)),
+    electricalDesignBasisBlock(data, strings),
 
-  // ── Revision history (only when the caller tracks revisions) ────────────────
-  writeElectricalRevisionHistory(b, data.revisions);
+    // ── Revision history (only when the caller tracks revisions) ──────────────
+    ...electricalRevisionHistoryBlocks(data.revisions, strings),
+  ];
 
   // ── Supply summary ────────────────────────────────────────────────────────
   final s = r.supply;
-  b.writeln('## Supply summary');
-  b.writeln();
-  b.writeln('- System: ${s.system.label}, ${_n(s.voltage.volts)} V');
-  b.writeln('- Connected load: ${_n(s.connectedW)} W');
-  b.writeln(
-      '- Diversified demand: ${_n(s.demandW)} W (${_n(s.demandVa.inKilovoltAmperes)} kVA)');
-  b.writeln('- Origin diversified demand: ${_n(r.totalDemandW)} W');
-  b.writeln('- Earthing system: ${r.earthing.label}');
-  b.writeln();
+  blocks
+    ..add(RptHeading(2, strings(RptStringKey.headingSupplySummary)))
+    ..add(RptKeyValue([
+      (strings(RptStringKey.ssSystem), '${s.system.label}, ${_n(s.voltage.volts)} V'),
+      (strings(RptStringKey.edbConnectedLoad), '${_n(s.connectedW)} W'),
+      (
+        strings(RptStringKey.ssDiversifiedDemand),
+        '${_n(s.demandW)} W (${_n(s.demandVa.inKilovoltAmperes)} kVA)'
+      ),
+      (strings(RptStringKey.ssOriginDemand), '${_n(r.totalDemandW)} W'),
+      (strings(RptStringKey.edbEarthingSystem), r.earthing.label),
+    ]));
 
   // ── Panels ────────────────────────────────────────────────────────────────
-  b.writeln('## Panels');
-  b.writeln();
+  blocks.add(RptHeading(2, strings(RptStringKey.headingPanels)));
   for (final id in r.order) {
     final p = r.panels[id];
     if (p == null) continue;
     final model = modelById[id];
     final tag = p.tag != null && p.tag!.isNotEmpty ? ' [${p.tag}]' : '';
-    b.writeln('### ${p.name}$tag — ${p.system.label}'
-        '${model != null ? ', ${_n(model.voltage.volts)} V' : ''}');
-    b.writeln();
-    b.writeln('- Incomer: ${_a(p.incomer.breaker.ratingA.amperes)} '
-        '${p.incomer.breaker.deviceClass.name.toUpperCase()} '
-        '${p.incomer.poles}P');
+    blocks.add(RptHeading(
+        3,
+        '${p.name}$tag — ${p.system.label}'
+        '${model != null ? ', ${_n(model.voltage.volts)} V' : ''}'));
 
+    // Panel summary bullets: conditional bullets with an indented withstand
+    // sub-bullet — a stubborn legacy construct, kept verbatim via RptMarkdown.
+    final pb = StringBuffer();
+    pb.writeln(strings.format(RptStringKey.panelIncomer, {
+      'rating': _a(p.incomer.breaker.ratingA.amperes),
+      'class': p.incomer.breaker.deviceClass.name.toUpperCase(),
+      'poles': p.incomer.poles,
+    }));
     final bus = p.busbar;
     final busGeom = bus.widthMm > 0 && bus.thicknessMm > 0
         ? '${_n(bus.widthMm)}×${_n(bus.thicknessMm)} mm (${_n(bus.csaMm2)} mm²)'
         : '${_n(bus.csaMm2)} mm²';
     final reason = bus.sizingReason == BusbarSizingReason.withstand
-        ? 'short-circuit withstand'
-        : 'continuous current';
-    b.writeln('- Main busbar: $busGeom, ampacity ${_a(bus.ampacityA.amperes)} '
-        '— governed by $reason');
+        ? strings(RptStringKey.busbarReasonWithstand)
+        : strings(RptStringKey.busbarReasonContinuous);
+    pb.writeln(strings.format(RptStringKey.panelMainBusbar, {
+      'geom': busGeom,
+      'amp': _a(bus.ampacityA.amperes),
+      'reason': reason,
+    }));
     final w = bus.withstand;
     if (w != null) {
-      final verdict = w.adequate ? 'OK' : 'OVER';
-      b.writeln('  - Withstand: fault ${_n(w.faultKa)} kA for ${_n(w.durationS)} s, '
-          'Icw ${_n(w.icwKa)} kA, margin ${_n(w.marginKa)} kA ($verdict)');
+      final verdict = w.adequate
+          ? strings(RptStringKey.verdictOk)
+          : strings(RptStringKey.verdictOver);
+      pb.writeln(strings.format(RptStringKey.panelWithstand, {
+        'fault': _n(w.faultKa),
+        'dur': _n(w.durationS),
+        'icw': _n(w.icwKa),
+        'margin': _n(w.marginKa),
+        'verdict': verdict,
+      }));
     }
     if (p.busbarSections.length > 1) {
-      b.writeln('- Busbar sections: ${p.busbarSections.length} '
-          '(radial split, IEC 61439-1)');
+      pb.writeln(strings.format(RptStringKey.panelBusbarSections,
+          {'n': p.busbarSections.length}));
     }
-    b.writeln('- Neutral bar: ${_n(p.neutralPeBars.neutralCsaMm2)} mm²'
-        '${p.neutralPeBars.neutralOversizeFactor > 1 ? ' (×${_n(p.neutralPeBars.neutralOversizeFactor)} triplen oversize)' : ''}'
-        ', PE bar: ${_n(p.neutralPeBars.peCsaMm2)} mm²');
-    b.writeln('- Demand: connected ${_n(p.connectedW)} W, '
-        'diversified ${_n(p.demandW)} W, ${_a(p.demandCurrent.amperes)}');
+    pb.writeln(strings.format(RptStringKey.panelNeutralBar, {
+      'n': _n(p.neutralPeBars.neutralCsaMm2),
+      'oversize': p.neutralPeBars.neutralOversizeFactor > 1
+          ? strings.format(RptStringKey.panelNeutralOversize,
+              {'f': _n(p.neutralPeBars.neutralOversizeFactor)})
+          : '',
+      'pe': _n(p.neutralPeBars.peCsaMm2),
+    }));
+    pb.writeln(strings.format(RptStringKey.panelDemand, {
+      'c': _n(p.connectedW),
+      'd': _n(p.demandW),
+      'a': _a(p.demandCurrent.amperes),
+    }));
     if (p.system.isThreePhase) {
-      b.writeln('- Phase balance: L1 ${_n(p.phaseBalance.l1)} A · '
-          'L2 ${_n(p.phaseBalance.l2)} A · L3 ${_n(p.phaseBalance.l3)} A '
-          '(imbalance ${_n(p.imbalancePercent)} %)');
+      pb.writeln(strings.format(RptStringKey.panelPhaseBalance, {
+        'l1': _n(p.phaseBalance.l1),
+        'l2': _n(p.phaseBalance.l2),
+        'l3': _n(p.phaseBalance.l3),
+        'imb': _n(p.imbalancePercent),
+      }));
     }
-    b.writeln();
+    pb.writeln();
+    blocks.add(RptMarkdown(pb.toString()));
 
     // Circuits table.
     final branches = p.circuits;
     if (branches.isNotEmpty) {
-      b.writeln('| Way | Type | Ib | Phase | Breaker | Cable | Vdrop (cum) | RCD |');
-      b.writeln('| --- | --- | --- | --- | --- | --- | --- | --- |');
-      for (final c in branches) {
-        final br = '${_a(c.breaker.ratingA.amperes)} '
-            '${c.breaker.deviceClass.name.toUpperCase()}/${c.breaker.curve.name.toUpperCase()}';
-        final runs =
-            (c.cable.runsPerPhase ?? 1) > 1 ? '${c.cable.runsPerPhase}×' : '';
-        final cable = '$runs${_n(c.cable.csaMm2)} mm²';
-        final vd = '${_n(c.voltageDrop.dropPercent)}% '
-            '(${_n(c.cumulativeDropPercent)}%)'
-            '${c.voltageDrop.withinLimit ? '' : ' OVER'}';
-        final rcd = c.rcd.required
-            ? '${c.rcd.ratingMa} mA${c.rcd.type != null ? ' ${c.rcd.type!.name.toUpperCase()}' : ''}'
-            : '—';
-        b.writeln('| ${_md(c.name)} | ${c.loadKind.name} | ${_a(c.designCurrent.amperes)} '
-            '| ${c.phase.label} | $br | $cable | $vd | $rcd |');
-      }
-      b.writeln();
+      blocks.add(RptTable(
+        [
+          strings(RptStringKey.tblWay),
+          strings(RptStringKey.tblType),
+          strings(RptStringKey.tblIb),
+          strings(RptStringKey.tblPhase),
+          strings(RptStringKey.tblBreaker),
+          strings(RptStringKey.tblCable),
+          strings(RptStringKey.tblVdropCum),
+          strings(RptStringKey.tblRcd),
+        ],
+        [
+          for (final c in branches)
+            [
+              _md(c.name),
+              c.loadKind.name,
+              _a(c.designCurrent.amperes),
+              c.phase.label,
+              '${_a(c.breaker.ratingA.amperes)} '
+                  '${c.breaker.deviceClass.name.toUpperCase()}/${c.breaker.curve.name.toUpperCase()}',
+              '${(c.cable.runsPerPhase ?? 1) > 1 ? '${c.cable.runsPerPhase}×' : ''}'
+                  '${_n(c.cable.csaMm2)} mm²',
+              '${_n(c.voltageDrop.dropPercent)}% '
+                  '(${_n(c.cumulativeDropPercent)}%)'
+                  '${c.voltageDrop.withinLimit ? '' : ' ${strings(RptStringKey.verdictOver)}'}',
+              c.rcd.required
+                  ? '${c.rcd.ratingMa} mA${c.rcd.type != null ? ' ${c.rcd.type!.name.toUpperCase()}' : ''}'
+                  : '—',
+            ],
+        ],
+        mdSeparator: '| --- | --- | --- | --- | --- | --- | --- | --- |',
+      ));
     }
 
     // Per-panel warnings.
     if (p.warnings.isNotEmpty) {
-      for (final w in p.warnings) {
-        b.writeln('- _${_severityTag(w.severity)}_: ${w.message}');
-      }
-      b.writeln();
+      blocks.add(RptKeyValue([
+        for (final w in p.warnings)
+          ('', '_${_severityTag(w.severity)}_: ${w.message}'),
+      ]));
     }
   }
 
   // ── Earthing ────────────────────────────────────────────────────────────--
   final e = r.earthing;
-  b.writeln('## Earthing');
-  b.writeln();
-  b.writeln('- System: ${e.label}');
-  b.writeln('- Main earthing conductor: ${_n(e.mainEarthingConductorMm2)} mm²');
-  b.writeln('- Main bonding conductor: ${_n(e.mainBondingConductorMm2)} mm²');
-  b.writeln(
-      '- Electrode resistance target: ${_n(e.electrodeResistanceTarget.ohms)} Ω');
-  if (e.note.isNotEmpty) b.writeln('- ${e.note}');
-  b.writeln();
+  blocks
+    ..add(RptHeading(2, strings(RptStringKey.headingEarthing)))
+    ..add(RptKeyValue([
+      (strings(RptStringKey.ssSystem), e.label),
+      (strings(RptStringKey.eMainEarthing), '${_n(e.mainEarthingConductorMm2)} mm²'),
+      (strings(RptStringKey.eMainBonding), '${_n(e.mainBondingConductorMm2)} mm²'),
+      (
+        strings(RptStringKey.eElectrodeTarget),
+        '${_n(e.electrodeResistanceTarget.ohms)} Ω'
+      ),
+      if (e.note.isNotEmpty) ('', e.note),
+    ]));
 
   // ── Power one-line ─────────────────────────────────────────────────────────
   final ol = data.powerOneLine;
   if (ol != null && ol.nodes.isNotEmpty) {
-    b.writeln('## Power one-line');
-    b.writeln();
-    for (final node in ol.nodes) {
-      final sub = node.sub != null ? ' — ${node.sub}' : '';
-      b.writeln('- ${node.label} (${node.kind.name})$sub');
-    }
+    blocks
+      ..add(RptHeading(2, strings(RptStringKey.headingPowerOneLine)))
+      ..add(RptKeyValue([
+        for (final node in ol.nodes)
+          (
+            '',
+            '${node.label} (${node.kind.name})'
+                '${node.sub != null ? ' — ${node.sub}' : ''}'
+          ),
+      ]));
     if (ol.interlocks.isNotEmpty) {
-      b.writeln();
-      b.writeln('### Source interlocks');
-      b.writeln();
-      for (final il in ol.interlocks) {
-        b.writeln('- _${il.kind.name}_: ${il.note}');
-      }
+      blocks
+        ..add(RptHeading(3, strings(RptStringKey.headingSourceInterlocks)))
+        ..add(RptKeyValue([
+          for (final il in ol.interlocks)
+            ('', '_${il.kind.name}_: ${il.note}'),
+        ]));
     }
-    b.writeln();
   }
 
   // ── System warnings ─────────────────────────────────────────────────────--
   if (r.warnings.isNotEmpty) {
-    b.writeln('## Warnings');
-    b.writeln();
-    for (final w in r.warnings) {
-      b.writeln('- _${_severityTag(w.severity)}_: ${w.message}');
-    }
-    b.writeln();
+    blocks
+      ..add(RptHeading(2, strings(RptStringKey.headingWarnings)))
+      ..add(RptKeyValue([
+        for (final w in r.warnings)
+          ('', '_${_severityTag(w.severity)}_: ${w.message}'),
+      ]));
   }
 
   // ── Unverified values ──────────────────────────────────────────────────────
   if (data.verifyItems.isNotEmpty) {
-    b.writeln('## Unverified values');
-    b.writeln();
-    b.writeln('These values are not yet confirmed verbatim against the official '
-        'PUIL/SNI clause and should be verified before construction:');
-    b.writeln();
-    for (final v in data.verifyItems) {
-      b.writeln('- $v');
-    }
-    b.writeln();
+    blocks
+      ..add(RptHeading(2, strings(RptStringKey.headingUnverifiedElec)))
+      ..add(RptParagraph(strings(RptStringKey.unverifiedElecIntro)))
+      ..add(RptKeyValue([for (final v in data.verifyItems) ('', v)]));
   }
 
-  return b.toString();
+  return blocks;
 }
+
+/// Render [data] as a Markdown electrical calculation report.
+String buildElectricalCalcReport(ElectricalCalcReportData data,
+        [ReportStrings strings = const ReportStrings.en()]) =>
+    renderRptMarkdown(buildElectricalCalcReportBlocks(data, strings));

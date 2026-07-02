@@ -5,6 +5,8 @@
 /// pin the APP gathers the right live state.)
 library;
 
+import 'dart:convert';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -16,8 +18,23 @@ import 'package:mechx/ui/electrical/electrical_export.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
 import 'package:mechx/ui/schematic/schematic_export.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/calc_report.dart' show buildCalcReportBlocks;
+import 'package:mechx_engine/report/electrical_sld_drawing.dart'
+    show buildElectricalSld;
+import 'package:mechx_engine/report/equipment_schedule.dart'
+    show
+        buildEquipmentScheduleBlocks,
+        buildEquipmentScheduleRows,
+        equipmentScheduleToCsv;
+import 'package:mechx_engine/report/mep_report.dart'
+    show buildMepUnifiedReportBlocks;
+import 'package:mechx_engine/report/report_blocks.dart';
+import 'package:mechx_engine/report/report_pdf.dart' show reportBlocksToPdf;
 import 'package:mechx_engine/report/sld_sheet.dart' show SldLabel;
+import 'package:mechx_engine/sizing/bom.dart';
+import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/standards/sni.dart' show Revision;
+import 'package:mechx_engine/units.dart';
 
 void main() {
   /// Pump a minimal ProviderScope and capture a live [WidgetRef] + its
@@ -210,5 +227,201 @@ void main() {
     expect(err, contains('zero length'));
     expect(err, contains('riser drawing set'));
     expect(container.read(statusMessageProvider), isNull);
+  });
+
+  // ── D6/D5: floor-grouped BOM CSV + joined cut-plan columns ─────────────────
+  //
+  // bomCsvWithCutPlan is a pure seam (no widget needed): a floor-grouped BOM
+  // (built with groupByFloor:true) joined with the pipeCutPlan output.
+  //
+  // BOM (hand-built, already sorted):
+  //   coldWater run  floor 0 (human 1) DN25  5.00 m ×1
+  //   coldWater run  floor 1 (human 2) DN25  3.00 m ×1
+  //   coldWater riser (null floor)      DN50  3.50 m ×1
+  //
+  // Cut plan for (coldWater, DN25): stock 4.0 m, fullBars 2, one packed bar
+  // holding a 1.0 m remainder, requiredM 9.0.
+  //   totalBars     = 2 + 1                 = 3
+  //   purchasedM    = 3 × 4.0               = 12.0 m
+  //   wasteM        = 12.0 − 9.0            = 3.0 m
+  //   wastePercent  = 100 × 3.0 / 12.0      = 25.0 %
+  // No plan entry for DN50 (a riser-only size — excluded from the chains).
+  test(
+      'bomCsvWithCutPlan: floor column + cut-plan columns joined per '
+      '(service, DN), emitted once, empty when no plan entry', () {
+    final bom = [
+      BomLine(
+        service: ServiceType.coldWater,
+        kind: EdgeKind.run,
+        diameterMm: 25,
+        totalLength: const Length(5.0),
+        segmentCount: 1,
+        floorIndex: 0,
+      ),
+      BomLine(
+        service: ServiceType.coldWater,
+        kind: EdgeKind.run,
+        diameterMm: 25,
+        totalLength: const Length(3.0),
+        segmentCount: 1,
+        floorIndex: 1,
+      ),
+      const BomLine(
+        service: ServiceType.coldWater,
+        kind: EdgeKind.riser,
+        diameterMm: 50,
+        totalLength: Length(3.5),
+        segmentCount: 1,
+      ),
+    ];
+    final cutPlan = [
+      const PipeCutGroup(
+        service: ServiceType.coldWater,
+        diameterMm: 25,
+        stockLengthM: 4.0,
+        plan: StockCutPlan(
+          stockLengthM: 4.0,
+          fullBars: 2,
+          packedBars: [CutBar([1.0])],
+          requiredM: 9.0,
+        ),
+      ),
+    ];
+
+    final lines = bomCsvWithCutPlan(bom, cutPlan).trim().split('\n');
+    expect(
+        lines.first,
+        'service,kind,floor,nominal_dn_mm,length_m,segments,'
+        'stock_length_m,bars_purchased,waste_pct');
+    // First DN25 run row carries the plan; the 1-based floor is 1.
+    expect(lines[1], 'coldWater,run,1,25,5.00,1,4.0,3,25.0');
+    // Second DN25 row (same group) leaves the plan columns EMPTY (sum-safe).
+    expect(lines[2], 'coldWater,run,2,25,3.00,1,,,');
+    // The riser: null floor → empty, and no plan entry → empty plan columns.
+    expect(lines[3], 'coldWater,riser,,50,3.50,1,,,');
+  });
+
+  // ── D1: the typeset-PDF report seams (Wave 4) ──────────────────────────────
+  //
+  // The full export fns pop the OS file picker (no platform in a headless
+  // test), so — exactly as the existing seam tests do — these pin the APP
+  // GATHER + assembly the export fn runs internally: the live report data +
+  // the embedded figure(s) rendered by `reportBlocksToPdf`. A conforming PDF
+  // begins with the `%PDF` magic.
+  String magic(List<int> bytes) => latin1.decode(bytes.sublist(0, 4));
+
+  testWidgets(
+      'the calc-report PDF seam renders %PDF bytes with the riser figure '
+      'appended', (tester) async {
+    final (ref, container) = await harness(tester);
+    // A roof-tank riser so the embedded figure has real prims (mirrors the
+    // buildLiveRiserSheet parity test).
+    const net = Network(nodes: [
+      NetNode(
+        id: 'rt',
+        sheetId: 's1',
+        x: 0,
+        y: 0,
+        floorIndex: 1,
+        role: NodeRole.plant,
+        component: NodeComponent.roofTank,
+        tankCapacityLitres: 5000,
+      ),
+      NetNode(id: 'm', sheetId: 's1', x: 0, y: 100, floorIndex: 0),
+    ], edges: [
+      NetEdge(
+          id: 'r1',
+          fromId: 'rt',
+          toId: 'm',
+          service: ServiceType.coldWater,
+          kind: EdgeKind.riser),
+    ]);
+    container.read(networkControllerProvider.notifier).loadNetwork(net);
+
+    final data = buildMechanicalReportData(ref);
+    final blocks = [
+      ...buildCalcReportBlocks(data),
+      RptFigure(buildLiveRiserSheet(ref, null),
+          caption: 'Mechanical riser single-line diagram'),
+    ];
+    // The riser figure is the LAST block (appended after the report body).
+    expect(blocks.last, isA<RptFigure>());
+    final bytes = reportBlocksToPdf(
+      blocks,
+      docTitle: 'MEP Calculation Report',
+      projectName: 'P',
+      standardsLine: '${data.standardsName} (${data.standardsRevision})',
+    );
+    expect(magic(bytes), '%PDF');
+    expect(bytes.length, greaterThan(1000));
+  });
+
+  testWidgets(
+      'the unified-MEP PDF seam renders %PDF bytes with BOTH single-line '
+      'figures appended', (tester) async {
+    final (ref, container) = await harness(tester);
+    expect(container.read(electricalResultProvider).order, isNotEmpty,
+        reason: 'the sample electrical project must carry panels');
+
+    final mechanical = buildMechanicalReportData(ref);
+    final electrical = buildElectricalReportData(ref);
+    final blocks = [
+      ...buildMepUnifiedReportBlocks(
+        mechanical: mechanical,
+        electrical: electrical,
+        compliance: buildComplianceSummary(ref),
+      ),
+      const RptHeading(1, 'Drawings'),
+      RptFigure(buildLiveRiserSheet(ref, null),
+          caption: 'Mechanical riser single-line diagram'),
+      RptFigure(
+        buildElectricalSld(
+          project: container.read(electricalProjectProvider),
+          result: container.read(electricalResultProvider),
+          breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+        ),
+        caption: 'Electrical single-line diagram',
+      ),
+    ];
+    // Two figures ride the PDF — the mechanical riser + the electrical SLD.
+    expect(blocks.whereType<RptFigure>().length, 2);
+    final bytes = reportBlocksToPdf(
+      blocks,
+      docTitle: 'MEP Building-Services Report',
+      projectName: 'P',
+    );
+    expect(magic(bytes), '%PDF');
+  });
+
+  testWidgets('the equipment-schedule PDF seam renders %PDF bytes',
+      (tester) async {
+    final (ref, _) = await harness(tester);
+    final data = gatherEquipmentScheduleData(ref);
+    final bytes = reportBlocksToPdf(
+      buildEquipmentScheduleBlocks(data),
+      docTitle: 'Equipment Schedule',
+      projectName: 'P',
+    );
+    expect(magic(bytes), '%PDF');
+  });
+
+  // ── D5: the equipment-schedule CSV sibling (Wave 4) ────────────────────────
+  testWidgets(
+      'the equipment-schedule CSV seam emits the header row + one line per '
+      'scheduled item', (tester) async {
+    final (ref, container) = await harness(tester);
+    expect(container.read(electricalResultProvider).order, isNotEmpty,
+        reason: 'the sample electrical project must carry panels');
+    final data = gatherEquipmentScheduleData(ref);
+    final rows = buildEquipmentScheduleRows(data);
+    expect(rows, isNotEmpty,
+        reason: 'the sample project schedules at least the electrical panels');
+
+    final csv = equipmentScheduleToCsv(rows);
+    expect(csv, isNotEmpty);
+    final lines = csv.trim().split('\n');
+    expect(lines.first, 'tag,category,service,duty,size,model_spec,qty');
+    // Header + one line per scheduled row.
+    expect(lines.length, rows.length + 1);
   });
 }

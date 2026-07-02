@@ -357,7 +357,8 @@ A1 underlay (PDF image XObject + DXF re-emit) · A5 symbol library + UP/DN ·
 B1 riser export parity · B2 drainage/vent treatment ‖ I1 electrical undo · I2 issues fan-in ·
 I3 panel editor · F2 dirty guards · F3 busy feedback.
 
-**Wave 4 — the submittal package.**
+**Wave 4 — the submittal package. ✅ LANDED 2026-07-02**
+(see the §15 decisions-log row for the change detail)
 D1 typeset PDF report (block-list refactor first, Markdown pinned byte-identical) · D4 ID bodies ·
 D5 CSVs · D6 MTO/wastage · J2/J3 stage handoffs + Review→export.
 

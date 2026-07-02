@@ -19,6 +19,7 @@ import 'package:mechx_engine/standards/puil.dart';
 import '../../store/app_state.dart';
 import '../../store/document_control_store.dart';
 import '../../store/electrical_store.dart';
+import '../inspector/project_panel.dart' show reportStringsFor;
 import '../../store/project_store.dart';
 import '../strings/app_strings.dart';
 
@@ -248,7 +249,7 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) async {
     powerOneLine: advanced.powerOneLine,
     verifyItems: advanced.verifyItems,
     revisions: ref.read(documentControlProvider).revisions,
-  ));
+  ), reportStringsFor(ref));
   await _save(md, name: project.name, suffix: 'electrical-report', ext: 'md',
       title: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleElectricalReport));
 }

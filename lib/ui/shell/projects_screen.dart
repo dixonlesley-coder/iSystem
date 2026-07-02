@@ -6,10 +6,13 @@ import '../inspector/project_panel.dart'
     show
         exportAnnotatedPlanPdf,
         exportCalcReport,
+        exportCalcReportPdf,
         exportDrawingDxf,
         exportDrawingPdf,
         exportEquipmentSchedule,
-        exportMepUnifiedReport;
+        exportEquipmentSchedulePdf,
+        exportMepUnifiedReport,
+        exportMepUnifiedReportPdf;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -67,13 +70,28 @@ class ProjectsScreen extends ConsumerWidget {
                     onPressed: () => exportCalcReport(ref),
                   ),
                   MechXButton(
+                    label: context
+                        .strings(StringKey.inspectorExportCalcReportPdfBtn),
+                    onPressed: () => exportCalcReportPdf(ref),
+                  ),
+                  MechXButton(
                     label: context.strings(StringKey.inspectorExportMepReportMd),
                     onPressed: () => exportMepUnifiedReport(ref),
+                  ),
+                  MechXButton(
+                    label: context
+                        .strings(StringKey.inspectorExportMepReportPdfBtn),
+                    onPressed: () => exportMepUnifiedReportPdf(ref),
                   ),
                   MechXButton(
                     label: context.strings(
                         StringKey.inspectorExportEquipmentScheduleMd),
                     onPressed: () => exportEquipmentSchedule(ref),
+                  ),
+                  MechXButton(
+                    label: context.strings(
+                        StringKey.inspectorExportEquipmentSchedulePdfBtn),
+                    onPressed: () => exportEquipmentSchedulePdf(ref),
                   ),
                   MechXButton(
                     label: context.strings(StringKey.inspectorExportDrawingDxf),

@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
@@ -39,6 +40,12 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
         .read(projectControllerProvider.notifier)
         .setCalibration(widget.sheetId, cal);
     ref.read(calibrationControllerProvider.notifier).cancel();
+    // Confirm the resolved scale and point at the next workflow step (Floors)
+    // — the completed-stage speaks instead of leaving the engineer to notice
+    // the sheet-rail dot change on their own.
+    final pxPerMetre = (1 / cal.metersPerPixel).round();
+    ref.read(statusMessageProvider.notifier).showStatus(
+        'Scale set: 1 m = $pxPerMetre px - next: set floor heights (Floors)');
   }
 
   /// The live implied-scale read-out beneath the entry field. Renders nothing

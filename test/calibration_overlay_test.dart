@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/calibration_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/ui/canvas/calibration_overlay.dart';
@@ -75,6 +76,13 @@ void main() {
     final cal = container.read(projectControllerProvider).calibrationFor('s1');
     expect(cal, isNotNull);
     expect(cal!.metersPerPixel, closeTo(0.025, 1e-12));
+
+    // J2: the commit confirms the resolved scale and points at the next
+    // workflow step. 0.025 m/px -> 1 / 0.025 = 40 px per metre exactly.
+    expect(
+      container.read(statusMessageProvider),
+      'Scale set: 1 m = 40 px - next: set floor heights (Floors)',
+    );
   });
 
   testWidgets(

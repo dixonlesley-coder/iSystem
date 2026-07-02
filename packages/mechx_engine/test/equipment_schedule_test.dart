@@ -190,4 +190,53 @@ void main() {
     final rows = buildEquipmentScheduleRows(data);
     expect(rows.map((r) => r.tag), ['P-01', 'P-02']);
   });
+
+  // ── CSV emitter ──────────────────────────────────────────────────────────
+  group('equipmentScheduleToCsv', () {
+    test('emits the header plus one plain line per row', () {
+      // Pump duty as in the first test: 20.0 L/s @ 30.0 m → 11.00 kW motor.
+      final pump = sizePump(flow: const FlowRate(0.02), head: const Head(30));
+      final rows = buildEquipmentScheduleRows(EquipmentScheduleData(
+        projectName: 'B',
+        date: 'd',
+        pumps: [
+          PumpScheduleItem(
+              duty: pump, service: 'Domestic water supply', tag: 'P-01'),
+        ],
+      ));
+      expect(
+        equipmentScheduleToCsv(rows),
+        'tag,category,service,duty,size,model_spec,qty\n'
+        'P-01,pump,Domestic water supply,20.0 L/s @ 30.0 m,11.00 kW motor,—,1\n',
+      );
+    });
+
+    test('quotes cells containing commas / quotes / newlines (pinned)', () {
+      // Hand-built row so every escape case is exercised: a comma in the
+      // service, an embedded double quote (doubled per RFC 4180) in the
+      // model/spec, and a newline in the duty.
+      const rows = [
+        EquipmentScheduleRow(
+          tag: 'F-01',
+          service: 'Kitchen, exhaust',
+          duty: '150 L/s\n@ 50 Pa',
+          size: '0.37 kW motor',
+          modelSpec: 'per "approved" datasheet',
+          qty: 2,
+          category: EquipmentCategory.fan,
+        ),
+      ];
+      expect(
+        equipmentScheduleToCsv(rows),
+        'tag,category,service,duty,size,model_spec,qty\n'
+        'F-01,fan,"Kitchen, exhaust","150 L/s\n@ 50 Pa",0.37 kW motor,'
+        '"per ""approved"" datasheet",2\n',
+      );
+    });
+
+    test('an empty row list yields the header only', () {
+      expect(equipmentScheduleToCsv(const []),
+          'tag,category,service,duty,size,model_spec,qty\n');
+    });
+  });
 }
