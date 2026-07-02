@@ -27,8 +27,10 @@ import 'confirm_discard_dialog.dart';
 /// dirty, prompt Save / Discard / Cancel before an action that REPLACES it.
 /// Returns `true` to PROCEED (clean, discarded, or saved successfully), `false`
 /// to ABORT (Cancel/dismiss, or a Save the user backed out of). Uses the
-/// FRESH [isProjectDirty] check, not the timer-fed UI hint.
-Future<bool> _confirmDiscardIfDirty(BuildContext context, WidgetRef ref) async {
+/// FRESH [isProjectDirty] check, not the timer-fed UI hint. Public so every
+/// project-replacing (or process-ending — the updater's "Restart & update")
+/// entry point runs the exact same guard.
+Future<bool> confirmDiscardIfDirty(BuildContext context, WidgetRef ref) async {
   if (!isProjectDirty(ref.read)) return true;
   final choice = await showConfirmDiscardDialog(context);
   switch (choice) {
@@ -48,7 +50,7 @@ Future<bool> _confirmDiscardIfDirty(BuildContext context, WidgetRef ref) async {
 /// Pick and import a PDF / DXF / DWG floor plan into the sheet rail.
 Future<void> importPlan(BuildContext context, WidgetRef ref) async {
   // Importing REPLACES the current sheets, orphaning drawn nodes — guard first.
-  if (!await _confirmDiscardIfDirty(context, ref)) return;
+  if (!await confirmDiscardIfDirty(context, ref)) return;
   if (!context.mounted) return;
   final result = await FilePicker.pickFiles(
     type: FileType.custom,
@@ -106,11 +108,28 @@ Future<void> importPlan(BuildContext context, WidgetRef ref) async {
   }
 }
 
+/// True while a [saveProject] run (including its OS Save dialog) is in flight —
+/// a second Ctrl+S meanwhile is a no-op instead of a concurrent write to the
+/// same file (the busy pill already tells the user a save is running).
+bool _saveInFlight = false;
+
 /// Save the project. Writes IN PLACE to the remembered file when one exists
 /// (the document-app Ctrl+S convention); falls back to the OS Save dialog for
 /// a brand-new project. [saveAs] forces the dialog (Ctrl+Shift+S / the
-/// palette's explicit Save As).
+/// palette's explicit Save As). The write is ATOMIC (temp + rename, keeping
+/// the displaced previous file as `.bak`) so a crash mid-save can never
+/// destroy the only copy.
 Future<void> saveProject(WidgetRef ref, {bool saveAs = false}) async {
+  if (_saveInFlight) return;
+  _saveInFlight = true;
+  try {
+    await _saveProjectLocked(ref, saveAs: saveAs);
+  } finally {
+    _saveInFlight = false;
+  }
+}
+
+Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   final project = ref.read(projectControllerProvider);
   final doc = buildDocument(ref.read);
   var full = saveAs ? null : ref.read(currentProjectPathProvider);
@@ -139,7 +158,9 @@ Future<void> saveProject(WidgetRef ref, {bool saveAs = false}) async {
     // a real window freeze on a large project) so the app stays responsive.
     final assets = await gatherSheetAssetsAsync(doc.sheets);
     final portable = doc.withSheets(doc.sheets, assets: assets);
-    await File(full).writeAsString(portable.encode());
+    // Atomic: a torn write can only ever hit the `.tmp` file; the previous
+    // save survives as the target or its `.bak`.
+    await atomicWriteString(full, portable.encode());
   } catch (e) {
     ref.read(loadErrorProvider.notifier).set('Could not save project: $e');
     return;
@@ -148,7 +169,11 @@ Future<void> saveProject(WidgetRef ref, {bool saveAs = false}) async {
   }
   // The work is now safely on disk — record it as the clean baseline, remember
   // the home file for the next quick save, and drop any recovery snapshot.
+  // Resetting the autosave mirror means work that turns dirty again AFTER this
+  // save (even by undoing to a previously-mirrored state) gets a fresh
+  // recovery snapshot on the next tick.
   ref.read(lastSavedSignatureProvider.notifier).set(baseline);
+  ref.read(autosaveMirrorProvider.notifier).clear();
   ref.read(currentProjectPathProvider.notifier).set(full);
   ref.read(projectDirtyProvider.notifier).set(false);
   await clearRecovery();
@@ -163,7 +188,7 @@ Future<void> saveProject(WidgetRef ref, {bool saveAs = false}) async {
 /// so it needs a [BuildContext] to host the confirm dialog.
 Future<void> openProject(BuildContext context, WidgetRef ref) async {
   // Opening REPLACES the whole project — guard before touching anything.
-  if (!await _confirmDiscardIfDirty(context, ref)) return;
+  if (!await confirmDiscardIfDirty(context, ref)) return;
   final result = await FilePicker.pickFiles(
     type: FileType.custom,
     allowedExtensions: const ['mechx', 'json'],
@@ -183,6 +208,8 @@ Future<void> openProject(BuildContext context, WidgetRef ref) async {
     ref
         .read(lastSavedSignatureProvider.notifier)
         .set(buildDocument(ref.read).encode());
+    // Fresh baseline ⇒ fresh mirror: any later divergence must re-snapshot.
+    ref.read(autosaveMirrorProvider.notifier).clear();
     ref.read(currentProjectPathProvider.notifier).set(path);
     ref.read(projectDirtyProvider.notifier).set(false);
     await clearRecovery();

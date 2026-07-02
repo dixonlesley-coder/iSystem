@@ -8,8 +8,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/data/project_document.dart';
+import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/commercial_store.dart';
+import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/models/sheet.dart';
+import 'package:mechx/store/network_store.dart';
 import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -65,16 +68,32 @@ void main() {
   });
 
   group('derived providers recompute', () {
+    // A2: build() starts EMPTY — seed the sample switchboard explicitly so the
+    // commercial pipeline has content to derive from.
+    void seedSample(ProviderContainer c) => c
+        .read(electricalProjectProvider.notifier)
+        .setProject(sampleElectricalProject());
+
     test('the BOM is non-empty for the sample electrical project', () {
       final c = ProviderContainer();
       addTearDown(c.dispose);
+      seedSample(c);
       expect(c.read(electricalBomProvider).lines, isNotEmpty);
+    });
+
+    test('a fresh (empty) electrical project prices NOTHING (A2 — the demo '
+        'switchboard never leaks into a quotation)', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      expect(c.read(electricalBomProvider).lines, isEmpty);
+      expect(c.read(electricalCostProvider).grandTotal, 0);
     });
 
     test('empty pricelist → cost 0 and every line unmatched; pricing lifts it',
         () {
       final c = ProviderContainer();
       addTearDown(c.dispose);
+      seedSample(c);
 
       final bom = c.read(electricalBomProvider);
       final cost0 = c.read(electricalCostProvider);
@@ -98,6 +117,7 @@ void main() {
     test('changing the margin recomputes the quotation grand total', () {
       final c = ProviderContainer();
       addTearDown(c.dispose);
+      seedSample(c);
       final ctrl = c.read(commercialSettingsProvider.notifier);
       for (final l in c.read(electricalBomProvider).lines) {
         if (l.sku != null) ctrl.setPrice(l.sku!, 1000);
@@ -158,6 +178,11 @@ void main() {
         tester.element(find.byType(MechXApp)),
         listen: false,
       );
+      // A2: the sample is no longer auto-seeded — load it explicitly so the
+      // BOM/pricelist/quotation have content.
+      container
+          .read(electricalProjectProvider.notifier)
+          .setProject(sampleElectricalProject());
       container.read(shellSectionProvider.notifier).set(ShellSection.commercial);
       await tester.pump();
 
@@ -167,6 +192,56 @@ void main() {
       expect(find.text('Export BOM (CSV)'), findsOneWidget);
       // The empty-pricelist state lists unmatched lines.
       expect(find.text('unmatched'), findsWidgets);
+    });
+
+    testWidgets('both commercial exports route through the shared zero-length '
+        'export guard (H3 — block + loadError, no silent write)',
+        (tester) async {
+      setDesktopSurface(tester);
+      await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+      await tester.pump();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(MechXApp)),
+        listen: false,
+      );
+      container
+          .read(electricalProjectProvider.notifier)
+          .setProject(sampleElectricalProject());
+      // A run drawn on the UNCALIBRATED demo sheet sizes to ZERO length — the
+      // shared export gate must fire before any file dialog.
+      container.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [
+              NetNode(id: 'na', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+              NetNode(id: 'nb', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+            ], edges: [
+              NetEdge(
+                  id: 'e1',
+                  fromId: 'na',
+                  toId: 'nb',
+                  service: ServiceType.coldWater),
+            ]),
+          );
+      container.read(shellSectionProvider.notifier).set(ShellSection.commercial);
+      await tester.pump();
+      expect(container.read(loadErrorProvider), isNull);
+
+      await tester.tap(find.text('Export BOM (CSV)'));
+      await tester.pump();
+      var err = container.read(loadErrorProvider);
+      expect(err, isNotNull);
+      expect(err, contains('zero length'));
+      expect(err, contains('electrical BOM'));
+      // Blocked — no success pill.
+      expect(container.read(statusMessageProvider), isNull);
+
+      container.read(loadErrorProvider.notifier).set(null);
+      await tester.tap(find.text('Export proposal (Markdown)'));
+      await tester.pump();
+      err = container.read(loadErrorProvider);
+      expect(err, isNotNull);
+      expect(err, contains('quotation proposal'));
+      expect(container.read(statusMessageProvider), isNull);
     });
   });
 }

@@ -4,8 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/project_store.dart';
+import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/review/review_hub.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 
 import 'test_util.dart';
 
@@ -69,6 +72,48 @@ void main() {
     );
     expect(find.text('Export calc report (MD)'), findsOneWidget);
     expect(find.text('Export unified MEP report (MD)'), findsOneWidget);
-    expect(find.text('Export equipment schedule (MD)'), findsOneWidget);
+    // H8: the MD equipment-schedule export also writes a CSV sibling — the
+    // button says so.
+    expect(find.text('Export equipment schedule (MD + CSV)'), findsOneWidget);
+  });
+
+  testWidgets(
+      'H2: the compliance verdict re-computes LIVE as issues are fixed '
+      '(no stale snapshot)', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MechXTheme(
+          data: MechXThemeData.dark,
+          child: const Directionality(
+            textDirection: TextDirection.ltr,
+            child: ReviewHub(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(ReviewHub)),
+      listen: false,
+    );
+
+    // Seed three uncalibrated sheets — the calibration row must flip to
+    // REVIEW on the ALREADY-MOUNTED cards (pre-H2 the const-mounted cards
+    // kept the boot-time verdict until the user left and returned).
+    container.read(sheetsControllerProvider.notifier).loadDemoSheets();
+    await tester.pump();
+    expect(find.text('3 uncalibrated'), findsWidgets);
+
+    // Fix the issue in place: calibrate every sheet → the row re-verdicts to
+    // PASS without remounting the screen.
+    final project = container.read(projectControllerProvider.notifier);
+    for (final s in kDemoSheets) {
+      project.setCalibration(s.id, const ScaleCalibration(0.01));
+    }
+    await tester.pump();
+    expect(find.text('3 uncalibrated'), findsNothing);
+    expect(find.text('all sheets calibrated'), findsWidgets);
   });
 }

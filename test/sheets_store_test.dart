@@ -12,28 +12,45 @@ void main() {
     return c;
   }
 
-  test('starts with demo sheets, first selected', () {
+  /// A1: production launches EMPTY; the placeholder sheets are a test/golden
+  /// seed only. Tests below that navigate/map sheets seed them explicitly.
+  ProviderContainer makeSeededContainer() {
+    final c = makeContainer();
+    c.read(sheetsControllerProvider.notifier).loadDemoSheets();
+    return c;
+  }
+
+  test('starts EMPTY — no placeholder sheets on first launch (A1)', () {
     final c = makeContainer();
     final s = c.read(sheetsControllerProvider);
+    expect(s.isEmpty, isTrue);
+    expect(s.sheets, isEmpty);
+    expect(s.current, isNull);
+  });
+
+  test('loadDemoSheets seeds the demo project, first selected', () {
+    final c = makeSeededContainer();
+    final s = c.read(sheetsControllerProvider);
     expect(s.sheets.length, 3);
+    expect(s.sheets, kDemoSheets);
     expect(s.currentIndex, 0);
     expect(s.current?.name, 'Ground Floor');
   });
 
   test('selectSheet changes the current sheet', () {
-    final c = makeContainer();
+    final c = makeSeededContainer();
     c.read(sheetsControllerProvider.notifier).selectSheet(2);
     expect(c.read(sheetsControllerProvider).current?.id, 's3');
   });
 
   test('selectSheet ignores out-of-range indices', () {
-    final c = makeContainer();
+    final c = makeSeededContainer();
     c.read(sheetsControllerProvider.notifier).selectSheet(99);
     expect(c.read(sheetsControllerProvider).currentIndex, 0);
   });
 
   test('viewport persists per sheet and restores; others stay unframed', () {
-    final c = makeContainer();
+    final c = makeSeededContainer();
     final ctrl = c.read(sheetsControllerProvider.notifier);
     const vt = ViewportTransform(scale: 2.5, offset: Offset(12, 34));
     ctrl.setViewport('s2', vt);
@@ -42,7 +59,7 @@ void main() {
   });
 
   test('loadSheets replaces and resets selection + viewports', () {
-    final c = makeContainer();
+    final c = makeSeededContainer();
     final ctrl = c.read(sheetsControllerProvider.notifier);
     ctrl.setViewport('s1', const ViewportTransform(scale: 3));
     ctrl.loadSheets(const [Sheet(id: 'x', name: 'X')]);
@@ -53,7 +70,7 @@ void main() {
   });
 
   test('floorFor: positional default, explicit override, clamped', () {
-    final c = makeContainer();
+    final c = makeSeededContainer();
     final ctrl = c.read(sheetsControllerProvider.notifier);
     // 3 demo sheets s1,s2,s3 → positional floors 0,1,2 within a 3-floor model.
     var s = c.read(sheetsControllerProvider);
@@ -69,7 +86,7 @@ void main() {
   });
 
   test('setSheetFloor is undoable via the global history timeline', () {
-    final c = makeContainer();
+    final c = makeSeededContainer();
     final sheets = c.read(sheetsControllerProvider.notifier);
     final history = c.read(historyProvider.notifier);
 
@@ -88,7 +105,7 @@ void main() {
   });
 
   test('loadSheets clears the sheet-floor undo stack', () {
-    final c = makeContainer();
+    final c = makeSeededContainer();
     final sheets = c.read(sheetsControllerProvider.notifier);
 
     sheets.setSheetFloor('s3', 0);

@@ -47,35 +47,67 @@ import 'widgets/severity_glyph.dart';
 /// slim top bar · body · status-bar column. The rail picks the [ShellSection];
 /// the body is the workspace (Plan / Schematic / Electrical) or a hub/screen.
 /// No Material Scaffold — a restrained, custom shell (§4).
-class AppShell extends ConsumerWidget {
+class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key});
 
-  /// Global hotkey handler, mounted as a non-focus-stealing ancestor [Focus]
-  /// (see [build]). Key events bubble UP from the focused canvas/field to this
-  /// node, so Ctrl/Cmd+K opens the command palette without grabbing focus from
-  /// in-canvas editing. Esc closes the palette when it's open.
-  KeyEventResult _onKey(BuildContext context, WidgetRef ref, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+  @override
+  ConsumerState<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends ConsumerState<AppShell> {
+  @override
+  void initState() {
+    super.initState();
+    // Focus-independent shell hotkeys (I1): a raw [HardwareKeyboard] handler
+    // runs BEFORE focus dispatch, so Ctrl/Cmd+K / S / Shift+S / O work on
+    // every screen — Projects / Review / Commercial / Building / Preferences
+    // and the Riser view, where nothing holds focus and a bubble-phase Focus
+    // ancestor never sees the keys.
+    HardwareKeyboard.instance.addHandler(_onHardwareKey);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
+    super.dispose();
+  }
+
+  /// Handles ONLY the four global combos (Ctrl/Cmd+K, S, Shift+S, O).
+  /// Returns true when consumed so the focus system doesn't double-dispatch
+  /// the event to a focused canvas/field; everything else returns false and
+  /// flows through the normal focus chain untouched.
+  bool _onHardwareKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
     final key = event.logicalKey;
     final mod = HardwareKeyboard.instance.isControlPressed ||
         HardwareKeyboard.instance.isMetaPressed;
-    if (mod && key == LogicalKeyboardKey.keyK) {
+    if (!mod) return false;
+    if (key == LogicalKeyboardKey.keyK) {
       ref.read(commandPaletteOpenProvider.notifier).toggle();
-      return KeyEventResult.handled;
+      return true;
     }
     // Document-app save/open conventions: Ctrl/Cmd+S saves in place (Shift
     // forces Save-As), Ctrl/Cmd+O opens — matching every desktop authoring
     // tool a CAD engineer is trained on. Open guards unsaved work, so it needs
     // the shell context to host the confirm dialog.
-    if (mod && key == LogicalKeyboardKey.keyS) {
+    if (key == LogicalKeyboardKey.keyS) {
       saveProject(ref, saveAs: HardwareKeyboard.instance.isShiftPressed);
-      return KeyEventResult.handled;
+      return true;
     }
-    if (mod && key == LogicalKeyboardKey.keyO) {
+    if (key == LogicalKeyboardKey.keyO) {
       openProject(context, ref);
-      return KeyEventResult.handled;
+      return true;
     }
-    if (key == LogicalKeyboardKey.escape &&
+    return false;
+  }
+
+  /// Bubble-phase Esc handler (kept as a non-focus-stealing ancestor [Focus]):
+  /// closes the command palette when it's open. The global combos moved to
+  /// [_onHardwareKey] — they must not also be handled here, or one keypress
+  /// would dispatch twice.
+  KeyEventResult _onKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.escape &&
         ref.read(commandPaletteOpenProvider)) {
       ref.read(commandPaletteOpenProvider.notifier).close();
       return KeyEventResult.handled;
@@ -84,7 +116,7 @@ class AppShell extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final colors = context.colors;
     // First-auto-size nudge (J2): fires once per session, the moment the live
     // sizing solve goes from empty to non-empty. Note: OPENING a project whose
@@ -101,11 +133,11 @@ class AppShell extends ConsumerWidget {
     // overlays (each renders nothing when idle).
     return Focus(
       // A bubble-phase listener high in the tree: it never requests focus
-      // itself, so it doesn't disturb in-canvas editing — Ctrl/Cmd+K bubbles up
-      // here when the focused descendant ignores it.
+      // itself, so it doesn't disturb in-canvas editing — Esc bubbles up here
+      // when the focused descendant ignores it.
       canRequestFocus: false,
       skipTraversal: true,
-      onKeyEvent: (_, event) => _onKey(context, ref, event),
+      onKeyEvent: (_, event) => _onKey(event),
       child: Stack(
         children: [
           ColoredBox(
@@ -824,6 +856,10 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
     final snapshot = ref.watch(recoveryDocProvider);
     final colors = context.colors;
     final type = context.type;
+    // A snapshot record with a null doc = the file exists but could not be
+    // decoded (torn by an interrupted write). Surfaced distinctly — it can't
+    // be restored, but it must never masquerade as a clean exit.
+    final doc = snapshot?.doc;
 
     return _AnimatedBanner(
       child: snapshot == null
@@ -840,26 +876,33 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
                 children: [
                   Expanded(
                     child: Text(
-                      context.strings.format(StringKey.shellRecoverPrompt, {
-                        'name': snapshot.doc.projectName,
-                        'when': _recoveryWhen(context, snapshot.savedAt),
-                      }),
+                      doc == null
+                          ? 'A recovery snapshot from the previous session '
+                              'exists but could not be read - it was likely '
+                              'torn by an interrupted write and cannot be '
+                              'restored.'
+                          : context.strings
+                              .format(StringKey.shellRecoverPrompt, {
+                              'name': doc.projectName,
+                              'when': _recoveryWhen(context, snapshot.savedAt),
+                            }),
                       style: type.caption.copyWith(color: colors.textPrimary),
                     ),
                   ),
-                  MechXButton(
-                    label: context.strings(StringKey.shellRestore),
-                    primary: true,
-                    onPressed: () {
-                      // Restore the full snapshot (drawing + settings). We
-                      // deliberately do NOT mark it as the clean baseline:
-                      // recovered work is still unsaved, so autosave should keep
-                      // mirroring it after dismiss. (Recovery snapshots embed no
-                      // assets, so rehydrate is a no-op here — kept for symmetry.)
-                      applyDocument(ref.read, rehydrateAssets(snapshot.doc));
-                      _discard();
-                    },
-                  ),
+                  if (doc != null)
+                    MechXButton(
+                      label: context.strings(StringKey.shellRestore),
+                      primary: true,
+                      onPressed: () {
+                        // Restore the full snapshot (drawing + settings). We
+                        // deliberately do NOT mark it as the clean baseline:
+                        // recovered work is still unsaved, so autosave should keep
+                        // mirroring it after dismiss. (Recovery snapshots embed no
+                        // assets, so rehydrate is a no-op here — kept for symmetry.)
+                        applyDocument(ref.read, rehydrateAssets(doc));
+                        _discard();
+                      },
+                    ),
                   const SizedBox(width: MechXSpacing.sm),
                   MechXButton(
                     key: const ValueKey('recovery-discard'),

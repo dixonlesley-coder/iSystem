@@ -105,6 +105,28 @@ void main() {
     expect(find.byKey(const ValueKey('recovery-banner')), findsOneWidget);
   });
 
+  testWidgets(
+      'an unreadable (torn) snapshot is surfaced distinctly: the banner says '
+      'it cannot be read and offers no Restore', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    final container = containerFor(tester);
+
+    // A null doc = the recovery FILE exists but could not be decoded (torn by
+    // an interrupted write) — must never masquerade as a clean exit.
+    container
+        .read(recoveryDocProvider.notifier)
+        .set((doc: null, savedAt: null));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('recovery-banner')), findsOneWidget);
+    expect(find.textContaining('could not be read'), findsOneWidget);
+    // Nothing restorable — only the (two-step) discard remains.
+    expect(find.text('Restore'), findsNothing);
+    expect(find.text('Discard snapshot'), findsOneWidget);
+  });
+
   testWidgets('the second, confirming tap clears the recovery snapshot',
       (tester) async {
     setDesktopSurface(tester);

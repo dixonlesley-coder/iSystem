@@ -1,5 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/data/autosave.dart';
+import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
@@ -73,5 +75,33 @@ void main() {
     hist.reset();
     expect(hist.canUndo, isFalse);
     expect(hist.canRedo, isFalse);
+  });
+
+  test(
+      'record() flips the dirty flag eagerly (no autosave tick needed), and '
+      'undo/redo re-check the real signature', () {
+    final c = makeContainer();
+    final proj = c.read(projectControllerProvider.notifier);
+    final hist = c.read(historyProvider.notifier);
+
+    // Virgin launch: clean. No autosave loop runs in this test — every flip
+    // below is the history timeline's own doing.
+    expect(c.read(projectDirtyProvider), isFalse);
+
+    // A recorded mutation raises the flag IMMEDIATELY (B9: the edited dot
+    // must not lag the 15 s autosave tick).
+    proj.setFloorHeight(0, const Length(2.0));
+    expect(c.read(projectDirtyProvider), isTrue);
+
+    // Undo returns the work to the untouched virgin default — the immediate
+    // signature re-check lowers the flag without waiting for a tick.
+    hist.undo();
+    expect(isProjectDirty(c.read), isFalse); // ground truth
+    expect(c.read(projectDirtyProvider), isFalse);
+
+    // Redo diverges again — the re-check raises it.
+    hist.redo();
+    expect(isProjectDirty(c.read), isTrue);
+    expect(c.read(projectDirtyProvider), isTrue);
   });
 }

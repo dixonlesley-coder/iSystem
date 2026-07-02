@@ -2,14 +2,17 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show EditableText;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/store/calibration_store.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/ui/canvas/calibration_overlay.dart';
 import 'package:mechx/ui/canvas/canvas_grid.dart';
 import 'package:mechx/ui/canvas/network_layer.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
@@ -278,5 +281,63 @@ void main() {
     final net = c.read(networkControllerProvider).network;
     expect(net.edgeById(sel.edgeIds.single)!.service, ServiceType.coldWater);
     expect(sel.nodeIds.length, 2);
+  });
+
+  testWidgets(
+      'B4: Backspace / Ctrl+A typed into the calibration field edit the FIELD '
+      '- they never delete the selected node or grab the drawing selection',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final c = _containerOf(tester);
+    final ctrl = c.read(networkControllerProvider.notifier);
+    final sheet = c.read(sheetsControllerProvider).current!;
+    ctrl.addSegment(sheet.id, 0, const Offset(400, 400),
+        service: ServiceType.coldWater);
+    final node = c.read(networkControllerProvider).network.nodes.first;
+    c.read(selectionProvider.notifier).selectNode(node.id);
+    await tester.pump();
+
+    // Drive calibration to the distance-entry phase — its "Known distance"
+    // field is a DESCENDANT of the Layout canvas's key-handling Focus.
+    final cal = c.read(calibrationControllerProvider.notifier);
+    cal.start();
+    cal.addWorldPoint(const Offset(0, 0));
+    cal.addWorldPoint(const Offset(0, 200));
+    await tester.pump();
+    expect(find.text('Known distance'), findsOneWidget);
+
+    // Type into the field (this focuses its EditableText), then press
+    // Backspace — the empirically-proven probe that used to DELETE the node.
+    final field = find.descendant(
+        of: find.byType(CalibrationOverlay),
+        matching: find.byType(EditableText));
+    await tester.enterText(field, '5.0');
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+    await tester.pump();
+
+    // The keystroke edited the FIELD (the root DefaultTextEditingShortcuts
+    // got it) — the drawing is untouched.
+    expect(tester.widget<EditableText>(field).controller.text, '5.');
+    expect(
+      c.read(networkControllerProvider).network.nodes.any((n) => n.id == node.id),
+      isTrue,
+      reason: 'Backspace in a text field must never delete the selected node',
+    );
+
+    // Ctrl+A while the field is focused selects the field text — it must NOT
+    // run the canvas select-all (which would grab the run's nodes + edge).
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    final sel = c.read(selectionProvider);
+    expect(sel.nodeId, node.id);
+    expect(sel.edgeIds, isEmpty,
+        reason: 'Ctrl+A in a text field must not select-all on the canvas');
   });
 }

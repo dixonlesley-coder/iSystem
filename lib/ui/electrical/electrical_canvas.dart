@@ -43,6 +43,7 @@ import '../../store/app_state.dart';
 import '../../store/electrical_store.dart';
 import '../../store/history_store.dart';
 import '../canvas/canvas_grid.dart';
+import '../canvas/text_entry_guard.dart';
 import '../canvas/viewport.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -299,6 +300,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    // B4 — while the user is typing in a text field, every canvas shortcut
+    // (Delete/Backspace on the selection, Ctrl+Z/Y, Esc) belongs to the field:
+    // never let an editing keystroke mutate the drawing.
+    if (isTextEntryFocused()) return KeyEventResult.ignored;
     final key = event.logicalKey;
     // Undo / redo route through the GLOBAL timeline (history_store), matching
     // the Layout canvas — so Ctrl+Z reverts the genuinely most-recent edit
@@ -491,7 +496,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                     Positioned.fill(
                       child: _CanvasDropTarget(
                         transform: vt,
-                        panelCount: project.panels.length,
+                        nextPanelOrdinal: nextSubPanelOrdinal(project.panels),
                         controller: _ctrl,
                         onToast: (m) =>
                             ref.read(statusMessageProvider.notifier).showStatus(m),
@@ -2206,13 +2211,17 @@ class _ScaledTap extends StatelessWidget {
 
 class _CanvasDropTarget extends StatefulWidget {
   final ViewportTransform transform;
-  final int panelCount;
+
+  /// The first free 'Sub-panel N' / 'SP-N' ordinal (G8) — minted by the shared
+  /// [nextSubPanelOrdinal] at build time so a feeder drop never re-mints a
+  /// designation an existing (or previously issued) board already carries.
+  final int nextPanelOrdinal;
   final ElectricalProjectController controller;
   final ValueChanged<String> onToast;
 
   const _CanvasDropTarget({
     required this.transform,
-    required this.panelCount,
+    required this.nextPanelOrdinal,
     required this.controller,
     required this.onToast,
   });
@@ -2275,7 +2284,7 @@ class _CanvasDropTargetState extends State<_CanvasDropTarget> {
         final x = (world.dx / kGrid).round() * kGrid.toDouble();
         final y = (world.dy / kGrid).round() * kGrid.toDouble();
         if (load.kind == LoadKind.feeder) {
-          final n = widget.panelCount + 1;
+          final n = widget.nextPanelOrdinal;
           widget.controller.addPanelAt(
             name: 'Sub-panel $n',
             tag: 'SP-$n',

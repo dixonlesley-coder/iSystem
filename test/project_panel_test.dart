@@ -9,18 +9,30 @@ import 'package:mechx/store/document_control_store.dart';
 import 'package:mechx/store/inspector_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/sizing_store.dart';
+import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
 import 'package:mechx/ui/widgets/mechx_text_field.dart';
 import 'package:mechx_engine/network/network.dart';
 
 import 'test_util.dart';
 
+/// Pumps the app with the demo sheets seeded (production launches EMPTY per
+/// A1; these inspector tests exercise the sheet-bearing Layout state).
+Future<void> _pumpAppWithDemoSheets(WidgetTester tester) async {
+  setDesktopSurface(tester);
+  await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+  await tester.pump();
+  ProviderScope.containerOf(
+    tester.element(find.byType(MechXApp)),
+    listen: false,
+  ).read(sheetsControllerProvider.notifier).loadDemoSheets();
+  await tester.pump();
+}
+
 void main() {
   testWidgets('project panel shows its sections + a building summary',
       (tester) async {
-    setDesktopSurface(tester);
-    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
-    await tester.pump();
+    await _pumpAppWithDemoSheets(tester);
 
     // inspector sections. PROJECT (name + exports) moved to the Projects page;
     // the BUILDING section is now a compact summary that opens the dedicated
@@ -36,9 +48,7 @@ void main() {
   });
 
   testWidgets('uncalibrated sheet shows a calibration prompt', (tester) async {
-    setDesktopSurface(tester);
-    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
-    await tester.pump();
+    await _pumpAppWithDemoSheets(tester);
     expect(find.textContaining('Not calibrated'), findsOneWidget);
   });
 
@@ -100,9 +110,7 @@ void main() {
   testWidgets(
       'document control section is collapsed by default and commits edits '
       'to the store', (tester) async {
-    setDesktopSurface(tester);
-    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
-    await tester.pump();
+    await _pumpAppWithDemoSheets(tester);
 
     // Collapsed by default: the header shows, the fields do not — a blank
     // launch stays canvas-focused (only the small header row is new).
@@ -152,9 +160,7 @@ void main() {
   testWidgets(
       'Tanks master-detail expands exactly one editor at a time (H6)',
       (tester) async {
-    setDesktopSurface(tester);
-    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
-    await tester.pump();
+    await _pumpAppWithDemoSheets(tester);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(MechXApp)),

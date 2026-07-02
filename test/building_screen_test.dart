@@ -7,10 +7,16 @@ import 'package:mechx/ui/shell/nav_rail.dart';
 
 import 'test_util.dart';
 
-/// Opens the dedicated Building page from the nav rail.
+/// Opens the dedicated Building page from the nav rail. Seeds the demo sheets
+/// first (production launches EMPTY per A1; the plan picker below needs them).
 Future<void> _openBuilding(WidgetTester tester) async {
   setDesktopSurface(tester);
   await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+  await tester.pump();
+  ProviderScope.containerOf(
+    tester.element(find.byType(MechXApp)),
+    listen: false,
+  ).read(sheetsControllerProvider.notifier).loadDemoSheets();
   await tester.pump();
   await tester.tap(find.descendant(
       of: find.byType(NavRail), matching: find.text('Building')));

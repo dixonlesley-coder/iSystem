@@ -2,11 +2,11 @@
 /// for the [ElectricalProject] the A7 UI renders. The project is sized live by
 /// the pure A4 engine (`computeSystem`), exposed as a derived [Provider].
 ///
-/// For this first cut the controller seeds a small built-in SAMPLE project (one
-/// 3-phase MDP with mixed final circuits plus a single-phase lighting sub-panel)
-/// so the Electrical workspace has something meaningful to render. The parent
-/// will later wire the MechX pump/fan auto-feed (A5) and `.mechx` persistence
-/// (A6) into this store — keep it cleanly the single owner of the project.
+/// A fresh launch starts from an EMPTY project (A2 — a fictional demo
+/// switchboard must never ride into a real `.mechx` / BOM / quotation). The
+/// built-in SAMPLE project (one 3-phase MDP with mixed final circuits plus a
+/// single-phase lighting sub-panel) stays available behind the empty-state
+/// card's explicit "Load sample project" action ([resetToSample]).
 ///
 /// Riverpod: a [Notifier] for the mutable project, a [Provider] for the derived
 /// result (recomputed whenever the project changes), mirroring the app's other
@@ -212,7 +212,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         placedEquipmentCircuitsProvider, (_, next) => syncMepEquipment(next));
     Future.microtask(
         () => syncMepEquipment(ref.read(placedEquipmentCircuitsProvider)));
-    return sampleElectricalProject();
+    // A2 — a fresh project is EMPTY: the fictional sample switchboard must
+    // never leak into a real `.mechx` / BOM / quotation. The sample stays one
+    // explicit click away ([resetToSample], the empty-state action).
+    return const ElectricalProject();
   }
 
   bool get canUndo => _undo.isNotEmpty;
@@ -437,7 +440,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
             : (transformerKva ?? state.transformerKva),
       );
 
-  /// Restore the built-in sample project (a user action — undoable).
+  /// Load the built-in sample project (a user action — undoable, so one
+  /// Ctrl+Z returns to the pre-sample project). Surfaced as the empty-state
+  /// card's "Load sample project" action.
   void resetToSample() => _commit(sampleElectricalProject());
 
   // ── Edit intents (the interactive editor) ──────────────────────────────────
@@ -1069,6 +1074,12 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// reactive listener re-asserts it on the next equipment change).
   void syncMepEquipment(List<ElectricalCircuit> circuits) {
     const mepPanelId = 'mep-equipment';
+    // Strict no-op when there is nothing to sync AND no MEP panel to remove —
+    // so the reactive listener can never touch (let alone resurrect a panel
+    // on) an empty project: a fresh launch stays `const ElectricalProject()`.
+    if (circuits.isEmpty && !state.panels.any((p) => p.id == mepPanelId)) {
+      return;
+    }
     final others = state.panels.where((p) => p.id != mepPanelId).toList();
     state = _withProject(
       panels: circuits.isEmpty
@@ -1087,10 +1098,37 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   }
 }
 
+/// The machine-minted new-board designations ('Sub-panel N' name / 'SP-N' tag).
+final RegExp _kSubPanelNamePattern =
+    RegExp(r'^sub-panel\s+(\d+)$', caseSensitive: false);
+final RegExp _kSpTagPattern = RegExp(r'^sp-(\d+)$', caseSensitive: false);
+
+/// The first FREE ordinal for a freshly minted 'Sub-panel N' / 'SP-N' board
+/// (G8): max+1 across BOTH the existing panel NAMES and TAGS, so deleting
+/// SP-2 of three then adding never re-mints a designation an issued schedule
+/// already carries (collision-proof by construction — simpler than hole
+/// filling, and a designation is never reused). Shared by both mint sites
+/// (the toolbar Add-panel and the blank-canvas feeder drop).
+int nextSubPanelOrdinal(List<ElectricalPanel> panels) {
+  var maxSeen = 0;
+  for (final p in panels) {
+    for (final match in [
+      _kSubPanelNamePattern.firstMatch(p.name.trim()),
+      if (p.tag != null) _kSpTagPattern.firstMatch(p.tag!.trim()),
+    ]) {
+      final n = match == null ? null : int.tryParse(match.group(1)!);
+      if (n != null && n > maxSeen) maxSeen = n;
+    }
+  }
+  return maxSeen + 1;
+}
+
 /// A small, representative built-in project: a 3-phase main distribution panel
 /// (MDP) fed from the utility, with a mix of lighting, socket, HVAC, motor and
 /// feeder ways, feeding a single-phase lighting panel (LP-1). Demonstrates the
 /// schedule, phase balancing, the feeder tree and the supply summary.
+/// NOT auto-seeded (A2) — loaded only by the explicit [ElectricalProjectController.resetToSample]
+/// user action (the empty-state "Load sample project" button) and by tests.
 ElectricalProject sampleElectricalProject() {
   const lp1 = ElectricalPanel(
     id: 'lp1',

@@ -36,6 +36,9 @@ void main() {
       listen: false,
     );
     final ctrl = container.read(electricalProjectProvider.notifier);
+    // A2: the sample is no longer auto-seeded — load it explicitly.
+    ctrl.setProject(sampleElectricalProject());
+    await tester.pump();
 
     // A self-feed is refused with a reason — the exact case the canvas feeds to
     // the status pill in _onFeederDragEnd.

@@ -11,6 +11,8 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../data/autosave.dart';
+import '../data/recovery.dart';
 import 'update_check.dart';
 import 'update_service.dart';
 
@@ -71,9 +73,17 @@ class UpdateController extends Notifier<UpdateStatus> {
 
   /// Launches the downloaded installer ("Restart & update"). No-op unless an
   /// installer has actually been downloaded for this session.
+  ///
+  /// Installing exits the process via `exit(0)` — the one exit that bypasses
+  /// `AppLifecycleListener.onExitRequested` — so a final recovery snapshot of
+  /// the live work is written (and awaited) FIRST: whatever the caller's
+  /// unsaved-work dialog decided, nothing beyond this instant can be lost.
+  /// (The UI-side dirty check + Save/Discard/Cancel dialog runs in the update
+  /// banner, which owns a BuildContext; this is the context-free backstop.)
   Future<void> installUpdate() async {
     final s = state;
     if (s is! UpdateDownloaded) return;
+    await writeRecovery(buildDocument(ref.read));
     await _resolvedRunner.backend.launchInstaller(s.path);
   }
 

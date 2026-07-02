@@ -4,8 +4,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
-import 'package:mechx_engine/electrical/panel_results.dart'
-    show WarningSeverity;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
@@ -39,6 +37,7 @@ import '../../store/air_warnings_store.dart';
 import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
+import '../../store/compliance_store.dart';
 import '../../store/design_issues_store.dart';
 import '../../store/document_control_store.dart';
 import '../../store/electrical_store.dart';
@@ -152,12 +151,18 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
 /// reuses the same self-clearing mechanism as Save / Open / Import. Public so
 /// the other export surfaces (e.g. `schematic_export.dart`'s riser drawing
 /// set) route through the SAME guard + feedback.
+///
+/// [requireSizedGeometry] opts an export out of the MECHANICAL zero-length
+/// gate (1) — electrical/commercial deliverables don't depend on the drawn
+/// mechanical geometry — while keeping the try/catch + success pill +
+/// Report-stage credit. Defaults to today's gated behaviour.
 Future<void> runExportGuarded(
   WidgetRef ref, {
   required String name,
   required Future<bool> Function() write,
+  bool requireSizedGeometry = true,
 }) async {
-  if (ref.read(exportHasZeroLengthEdgesProvider)) {
+  if (requireSizedGeometry && ref.read(exportHasZeroLengthEdgesProvider)) {
     final n = ref.read(zeroLengthSizedEdgeCountProvider);
     ref.read(loadErrorProvider.notifier).set(
           '$n drawn element(s) have zero length — calibrate the sheet before '
@@ -302,98 +307,12 @@ Future<void> exportCalcReportPdf(WidgetRef ref) => runExportGuarded(
       },
     );
 
-/// Build the compliance pass/fail roll-up from the live aggregated design
-/// issues. Pure read of `designIssuesProvider` + the electrical solve (no new
-/// checks). COMPLETE by construction: the three named checks match their
-/// categories, every REMAINING aggregated issue title gets its own row (so a
-/// present — or future — issue kind can never be silently omitted and the
-/// table can't say PASS beside an unlisted finding), and the electrical
-/// system's own warnings feed a dedicated row (they are not part of
-/// `designIssuesProvider`).
-ComplianceSummary buildComplianceSummary(WidgetRef ref) {
-  final issues = ref.read(designIssuesProvider);
-
-  bool isFail(DesignIssue i) =>
-      i.severity == IssueSeverity.warning ||
-      i.severity == IssueSeverity.critical;
-
-  // The three named checks (kept as positive confirmations on a clean
-  // project). Track which issues they account for; everything else rolls up
-  // into per-title rows below.
-  final accounted = <DesignIssue>{};
-  List<DesignIssue> claim(bool Function(DesignIssue) test) {
-    final matched = issues.where(test).toList();
-    accounted.addAll(matched);
-    return matched;
-  }
-
-  // Velocity: any out-of-band air-velocity warning fails the check.
-  final velocityWarnings =
-      claim((i) => i.title.contains('velocity')).where(isFail).length;
-  // Calibration: any uncalibrated-sheet issue fails the check — a blank sheet
-  // is a warning, an edge-bearing one is escalated to critical, and BOTH must
-  // fail the 'Sheet calibration' compliance item.
-  final calibrationWarnings =
-      claim((i) => i.title.contains('calibrated')).where(isFail).length;
-  // Standards verification: unverified-standard info items.
-  final unverified = claim((i) => i.title == 'Unverified standard').length;
-  // Electrical warnings are fanned into designIssuesProvider (Wave 3) with an
-  // 'Electrical: ' title prefix — claim them here so the dedicated
-  // 'Electrical circuit sizing' row below (counted from the solved system
-  // directly) stays the single source and nothing double-counts.
-  claim((i) => i.title.startsWith('Electrical:'));
-
-  // Every other aggregated issue, grouped by title — duct over-capacity,
-  // network connectivity, unsized air elements, drainage/Legionella
-  // advisories, and whatever lands in the aggregator next.
-  final remainder = <String, List<DesignIssue>>{};
-  for (final i in issues) {
-    if (accounted.contains(i)) continue;
-    remainder.putIfAbsent(i.title, () => []).add(i);
-  }
-
-  // Electrical sizing: the solved system's own warning list (error severity —
-  // e.g. cable-ampacity-inadequate — must fail the sign-off).
-  final eWarnings = ref.read(electricalResultProvider).warnings;
-  final eErrors =
-      eWarnings.where((w) => w.severity == WarningSeverity.error).length;
-  final eWarns =
-      eWarnings.where((w) => w.severity == WarningSeverity.warning).length;
-
-  return ComplianceSummary(
-    date: DateTime.now().toIso8601String().split('T').first,
-    items: [
-      ComplianceItem('Air velocities within band',
-          pass: velocityWarnings == 0,
-          detail: velocityWarnings == 0
-              ? 'all within band'
-              : '$velocityWarnings out of band'),
-      ComplianceItem('Sheet calibration',
-          pass: calibrationWarnings == 0,
-          detail: calibrationWarnings == 0
-              ? 'all sheets calibrated'
-              : '$calibrationWarnings uncalibrated'),
-      ComplianceItem('Standards verification',
-          pass: unverified == 0,
-          detail: unverified == 0
-              ? 'all values verified'
-              : '$unverified value(s) require verification before submission'),
-      for (final e in remainder.entries)
-        ComplianceItem(e.key,
-            pass: !e.value.any(isFail),
-            detail: e.value.any(isFail)
-                ? '${e.value.where(isFail).length} finding(s)'
-                : '${e.value.length} advisory note(s)'),
-      ComplianceItem('Electrical circuit sizing',
-          pass: eErrors == 0,
-          detail: eErrors == 0
-              ? (eWarns == 0
-                  ? 'no sizing errors'
-                  : '$eWarns warning(s), no errors')
-              : '$eErrors error(s), $eWarns warning(s)'),
-    ],
-  );
-}
+/// The compliance pass/fail roll-up. The fan-in moved to
+/// `store/compliance_store.dart` (H2) as a WATCHED provider so the Review
+/// hub's verdict re-computes live; this thin read keeps the export call sites
+/// (and their tests) on one entry point.
+ComplianceSummary buildComplianceSummary(WidgetRef ref) =>
+    ref.read(complianceSummaryProvider);
 
 /// Gather BOTH the mechanical and electrical designs into one unified MEP
 /// building-services report (with a compliance summary) and write it to a
@@ -2297,18 +2216,27 @@ class _ResultsSection extends ConsumerWidget {
         // Two clean single-schema files (Excel-aligned) instead of one mixed CSV.
         name: 'BOM (-bom.csv + -fittings.csv)',
         write: () async {
+          // H8: the default name carries the PROJECT name like every other
+          // export — never the internal 'mechx' codename.
+          final projectName = ref.read(projectControllerProvider).name;
+          final defaultBase = projectName.isEmpty ? 'project' : projectName;
           final path = await FilePicker.saveFile(
             dialogTitle: dialogTitle,
-            fileName: 'mechx-bom.csv',
+            fileName: '$defaultBase-bom.csv',
             type: FileType.custom,
             allowedExtensions: const ['csv'],
           );
           if (path == null) return false;
-          // Derive a base by stripping a trailing .csv, then write the two
-          // aligned files: <base>-bom.csv + <base>-fittings.csv.
-          final base = path.endsWith('.csv')
+          // Derive a base by stripping a trailing .csv (and a trailing '-bom',
+          // so accepting the suggested name yields '<name>-bom.csv', not
+          // '<name>-bom-bom.csv'), then write the two aligned files:
+          // <base>-bom.csv + <base>-fittings.csv.
+          var base = path.endsWith('.csv')
               ? path.substring(0, path.length - 4)
               : path;
+          if (base.endsWith('-bom')) {
+            base = base.substring(0, base.length - 4);
+          }
           // Rebuild the BOM grouped by floor (bomProvider is un-grouped) and
           // join the live stock-bar cut plan onto the CSV.
           final project = ref.read(projectControllerProvider);

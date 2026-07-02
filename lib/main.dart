@@ -34,14 +34,16 @@ void main() async {
   );
 
   // Crash recovery: if a snapshot from a previous (unclean) session exists,
-  // offer to restore it (with its autosaved-at time for the banner copy).
+  // offer to restore it (with its autosaved-at time for the banner copy). An
+  // UNREADABLE snapshot (torn by an interrupted write) is surfaced too — with
+  // a null doc — so it is never silently indistinguishable from a clean exit.
   // Then start the periodic autosave loop.
-  final recovered = await readRecovery();
-  if (recovered != null) {
+  final recovered = await readRecoveryStatus();
+  if (recovered.status != RecoveryReadStatus.absent) {
     final savedAt = await recoverySnapshotMtime();
     container
         .read(recoveryDocProvider.notifier)
-        .set((doc: recovered, savedAt: savedAt));
+        .set((doc: recovered.doc, savedAt: savedAt));
   }
   startAutosave(container);
 

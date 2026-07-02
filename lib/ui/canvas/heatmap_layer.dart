@@ -69,7 +69,7 @@ class HeatmapLayer extends ConsumerWidget {
           Positioned(
             right: MechXSpacing.md,
             bottom: MechXSpacing.md,
-            child: _HeatmapLegend(minKpa: minKpa, maxKpa: maxKpa),
+            child: HeatmapLegend(minKpa: minKpa, maxKpa: maxKpa),
           ),
         ],
       ),
@@ -79,11 +79,16 @@ class HeatmapLayer extends ConsumerWidget {
 
 /// A small, self-explaining legend so the heatmap colours are readable: a
 /// red→amber→teal ramp from the lowest to the highest residual pressure.
-class _HeatmapLegend extends StatelessWidget {
+/// Sized to the labels' INTRINSIC width (J2): the numeric endpoints are the
+/// legend's whole point, so they must never ellipsize — the ramp bar
+/// stretches to match instead of pinning the row to a fixed 148 px. Public
+/// (rather than file-private) so the no-truncation contract is unit-testable.
+class HeatmapLegend extends StatelessWidget {
   final double minKpa;
   final double maxKpa;
 
-  const _HeatmapLegend({required this.minKpa, required this.maxKpa});
+  const HeatmapLegend(
+      {super.key, required this.minKpa, required this.maxKpa});
 
   @override
   Widget build(BuildContext context) {
@@ -103,57 +108,51 @@ class _HeatmapLegend extends StatelessWidget {
         borderRadius: MechXRadii.control,
         border: Border.all(color: colors.border),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('Residual pressure',
-              style: type.caption.copyWith(color: colors.textSecondary)),
-          const SizedBox(height: MechXSpacing.xs),
-          Container(
-            width: 148,
-            height: 8,
-            decoration: BoxDecoration(
-              borderRadius: const BorderRadius.all(Radius.circular(4)),
-              gradient: const LinearGradient(
-                colors: [_kRampLow, _kRampMid, _kRampHigh],
+      child: IntrinsicWidth(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Residual pressure',
+                style: type.caption.copyWith(color: colors.textSecondary)),
+            const SizedBox(height: MechXSpacing.xs),
+            // The ramp bar stretches to the widest line (title / label row).
+            Container(
+              height: 8,
+              decoration: const BoxDecoration(
+                borderRadius: BorderRadius.all(Radius.circular(4)),
+                gradient: LinearGradient(
+                  colors: [_kRampLow, _kRampMid, _kRampHigh],
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: MechXSpacing.xxs),
-          // Always show the numeric min/max kPa endpoints — even when the field
-          // is (near-)uniform, where both ends read the same value.
-          SizedBox(
-            width: 148,
-            child: Row(
+            const SizedBox(height: MechXSpacing.xxs),
+            // Always show the numeric min/max kPa endpoints — whole, never
+            // truncated — even when the field is (near-)uniform, where both
+            // ends read the same value.
+            Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Flexible(
-                  child: Text('Low ${bar(minKpa)}',
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.ellipsis,
-                      style: type.mono.copyWith(color: colors.textMuted)),
-                ),
+                Text('Low ${bar(minKpa)}',
+                    maxLines: 1,
+                    softWrap: false,
+                    style: type.mono.copyWith(color: colors.textMuted)),
                 const SizedBox(width: MechXSpacing.xs),
-                Flexible(
-                  child: Text('High ${bar(maxKpa)}',
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.right,
-                      style: type.mono.copyWith(color: colors.textMuted)),
-                ),
+                Text('High ${bar(maxKpa)}',
+                    maxLines: 1,
+                    softWrap: false,
+                    textAlign: TextAlign.right,
+                    style: type.mono.copyWith(color: colors.textMuted)),
               ],
             ),
-          ),
-          if (uniform)
-            Padding(
-              padding: const EdgeInsets.only(top: MechXSpacing.xxs),
-              child: Text('uniform field',
-                  style: type.caption.copyWith(color: colors.textMuted)),
-            ),
-        ],
+            if (uniform)
+              Padding(
+                padding: const EdgeInsets.only(top: MechXSpacing.xxs),
+                child: Text('uniform field',
+                    style: type.caption.copyWith(color: colors.textMuted)),
+              ),
+          ],
+        ),
       ),
     );
   }

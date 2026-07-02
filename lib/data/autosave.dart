@@ -27,8 +27,11 @@ typedef ProviderReader = T Function<T>(ProviderListenable<T> provider);
 /// A recovery snapshot found on launch: the decoded document plus the
 /// snapshot file's mtime (null when the mtime couldn't be read). Carrying the
 /// timestamp alongside the doc lets the recovery banner say *when* the work
-/// was last autosaved, not just that some work exists.
-typedef RecoverySnapshot = ({ProjectDocument doc, DateTime? savedAt});
+/// was last autosaved, not just that some work exists. A null [doc] means a
+/// snapshot file EXISTS but could not be decoded (torn by an interrupted
+/// write) — the banner surfaces that distinctly instead of restoring nothing
+/// silently, so a torn snapshot is never indistinguishable from a clean exit.
+typedef RecoverySnapshot = ({ProjectDocument? doc, DateTime? savedAt});
 
 /// A recovery snapshot found on launch (previous session ended without a
 /// clean exit). Non-null ⇒ the shell offers to restore it.
@@ -57,6 +60,25 @@ class LastSavedController extends Notifier<String?> {
   String? build() => null;
 
   void set(String? signature) => state = signature;
+}
+
+/// The last encoded content the autosave tick mirrored to the recovery file —
+/// hoisted OUT of the timer closure so Save/Open can reset it. Without the
+/// reset, undoing back to a previously-mirrored state after a Save would skip
+/// the recovery rewrite (the stale mirror still matches), leaving dirty work
+/// with zero snapshot: dirty-after-Save must get a fresh snapshot on the next
+/// tick. Null means "nothing mirrored since the last clean Save/Open".
+final autosaveMirrorProvider =
+    NotifierProvider<AutosaveMirrorController, String?>(
+  AutosaveMirrorController.new,
+);
+
+class AutosaveMirrorController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? encoded) => state = encoded;
+  void clear() => state = null;
 }
 
 /// Build a [ProjectDocument] from the live state reachable via [read].
@@ -228,7 +250,6 @@ Timer startAutosave(
   ProviderContainer c, {
   Duration interval = const Duration(seconds: 15),
 }) {
-  String? lastWritten; // last content we mirrored to the recovery file
   return Timer.periodic(interval, (_) {
     final doc = buildDocument(c.read);
     final encoded = doc.encode();
@@ -242,11 +263,12 @@ Timer startAutosave(
     // already doing (Save/Open clear it eagerly; this catches new edits).
     c.read(projectDirtyProvider.notifier).set(!clean);
     // Skip when the work already matches the clean baseline (no phantom
-    // recovery), or when we've already mirrored this exact content.
-    if (clean || encoded == lastWritten) {
+    // recovery), or when we've already mirrored this exact content. The mirror
+    // lives in [autosaveMirrorProvider] (not a closure) so Save/Open reset it.
+    if (clean || encoded == c.read(autosaveMirrorProvider)) {
       return;
     }
-    lastWritten = encoded;
+    c.read(autosaveMirrorProvider.notifier).set(encoded);
     writeRecovery(doc);
   });
 }

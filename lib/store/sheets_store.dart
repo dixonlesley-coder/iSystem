@@ -57,15 +57,19 @@ class SheetsState {
       );
 }
 
-class SheetsController extends Notifier<SheetsState> {
-  // Placeholder sheets so P0 demonstrates multi-sheet navigation before PDF
-  // import (P1) replaces them.
-  static const List<Sheet> _demoSheets = [
-    Sheet(id: 's1', name: 'Ground Floor', sizePx: Size(1684, 1190)),
-    Sheet(id: 's2', name: 'First Floor', sizePx: Size(1684, 1190)),
-    Sheet(id: 's3', name: 'Roof Plan', sizePx: Size(1190, 1684)),
-  ];
+/// The P0 placeholder demo sheets. Production launches EMPTY (A1) — work drawn
+/// on placeholder paper is a dead end that Import then discards, and the Layout
+/// empty-state card (Import plan… / New from template…) is only reachable when
+/// no sheet exists. Kept public so tests and the golden screenshot suite can
+/// seed a deterministic multi-sheet project explicitly
+/// ([SheetsController.loadDemoSheets]).
+const List<Sheet> kDemoSheets = [
+  Sheet(id: 's1', name: 'Ground Floor', sizePx: Size(1684, 1190)),
+  Sheet(id: 's2', name: 'First Floor', sizePx: Size(1684, 1190)),
+  Sheet(id: 's3', name: 'Roof Plan', sizePx: Size(1190, 1684)),
+];
 
+class SheetsController extends Notifier<SheetsState> {
   // Local snapshot stacks for the sheet→floor mapping edits, mirroring
   // ProjectController. Only the undoable mutation (setSheetFloor) pushes here;
   // navigation / viewport / load do not record undo.
@@ -73,7 +77,11 @@ class SheetsController extends Notifier<SheetsState> {
   final List<SheetsState> _redo = [];
 
   @override
-  SheetsState build() => const SheetsState(sheets: _demoSheets);
+  SheetsState build() => const SheetsState();
+
+  /// Seed the [kDemoSheets] placeholder project — a test/golden hook only (a
+  /// real project starts empty and gets its sheets from Import / Open).
+  void loadDemoSheets() => loadSheets(kDemoSheets);
 
   bool get canUndo => _undo.isNotEmpty;
   bool get canRedo => _redo.isNotEmpty;

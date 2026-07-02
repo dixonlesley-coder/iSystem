@@ -18,15 +18,19 @@ import 'package:mechx_engine/units.dart';
 
 void main() {
   group('designIssuesProvider', () {
+    // Production launches EMPTY (A1); this group's tests exercise the
+    // uncalibrated-sheet fan-in, so the demo sheets are seeded explicitly —
+    // the exact state the pre-A1 default provided.
     ProviderContainer makeContainer() {
       final c = ProviderContainer();
       addTearDown(c.dispose);
+      c.read(sheetsControllerProvider.notifier).loadDemoSheets();
       return c;
     }
 
     test('uncalibrated demo sheets surface as warning issues with sheetId', () {
       final c = makeContainer();
-      // The default SheetsState has three demo sheets and no calibration set,
+      // The seeded SheetsState has three demo sheets and no calibration set,
       // so each should appear as a "Sheet not calibrated" warning.
       final issues = c.read(designIssuesProvider);
       final calibIssues =

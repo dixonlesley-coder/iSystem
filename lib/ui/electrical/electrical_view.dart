@@ -359,6 +359,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                     child: _EmptyState(
                       onSetUp: _openService,
                       onAddPanel: _addPanel,
+                      onLoadSample: _controller.resetToSample,
                     ),
                   ),
                 ),
@@ -389,6 +390,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       empty: project.panels.isEmpty,
       onSetUp: _openService,
       onAddPanel: _addPanel,
+      onLoadSample: _controller.resetToSample,
     );
   }
 
@@ -402,7 +404,10 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   // ── Edit-intent wiring ──────────────────────────────────────────────────────
 
   void _addPanel() {
-    final n = ref.read(electricalProjectProvider).panels.length + 1;
+    // G8 — mint the first FREE SP-N ordinal (max+1 across existing names AND
+    // tags), so deleting a board never lets a later add re-mint its
+    // designation onto an issued schedule.
+    final n = nextSubPanelOrdinal(ref.read(electricalProjectProvider).panels);
     _controller.addPanelAt(
       name: 'Sub-panel $n',
       tag: 'SP-$n',
@@ -1044,26 +1049,45 @@ class _MiniMapPainter extends CustomPainter {
 class _EmptyState extends StatelessWidget {
   final VoidCallback onSetUp;
   final VoidCallback onAddPanel;
-  const _EmptyState({required this.onSetUp, required this.onAddPanel});
+  final VoidCallback onLoadSample;
+  const _EmptyState({
+    required this.onSetUp,
+    required this.onAddPanel,
+    required this.onLoadSample,
+  });
 
   @override
   Widget build(BuildContext context) {
     // The shared branded empty-state card (matching the mechanical Layout
-    // canvas's), with the two service set-up actions.
+    // canvas's), with the two service set-up actions plus the explicit
+    // "Load sample project" secondary action (A2 — the sample switchboard is
+    // never auto-seeded; it lives one click away here). A Wrap so three
+    // buttons flow to a second line inside the 360-px card, never overflow.
     return Padding(
       padding: const EdgeInsets.all(MechXSpacing.lg),
       child: MechXEmptyStateCard(
         title: context.strings(StringKey.electricalEmptyTitle),
         body: context.strings(StringKey.electricalEmptyBody),
         actions: [
-          MechXButton(
-            label: context.strings(StringKey.electricalAddPanel),
-            onPressed: onAddPanel,
-          ),
-          const SizedBox(width: MechXSpacing.sm),
-          MechXButton(
-            label: context.strings(StringKey.electricalServiceEarthing),
-            onPressed: onSetUp,
+          Expanded(
+            child: Wrap(
+              spacing: MechXSpacing.sm,
+              runSpacing: MechXSpacing.sm,
+              children: [
+                MechXButton(
+                  label: context.strings(StringKey.electricalAddPanel),
+                  onPressed: onAddPanel,
+                ),
+                MechXButton(
+                  label: context.strings(StringKey.electricalServiceEarthing),
+                  onPressed: onSetUp,
+                ),
+                MechXButton(
+                  label: 'Load sample project',
+                  onPressed: onLoadSample,
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -1084,6 +1108,7 @@ class _SldProjectionArea extends StatelessWidget {
   final bool empty;
   final VoidCallback onSetUp;
   final VoidCallback onAddPanel;
+  final VoidCallback onLoadSample;
 
   const _SldProjectionArea({
     required this.sheetKey,
@@ -1091,6 +1116,7 @@ class _SldProjectionArea extends StatelessWidget {
     required this.empty,
     required this.onSetUp,
     required this.onAddPanel,
+    required this.onLoadSample,
   });
 
   @override
@@ -1110,7 +1136,11 @@ class _SldProjectionArea extends StatelessWidget {
         if (empty)
           Positioned.fill(
             child: Center(
-              child: _EmptyState(onSetUp: onSetUp, onAddPanel: onAddPanel),
+              child: _EmptyState(
+                onSetUp: onSetUp,
+                onAddPanel: onAddPanel,
+                onLoadSample: onLoadSample,
+              ),
             ),
           ),
       ],

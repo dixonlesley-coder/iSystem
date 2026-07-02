@@ -44,6 +44,7 @@ import '../../store/solve_store.dart';
 import '../canvas/edge_context_menu.dart';
 import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
+import '../canvas/text_entry_guard.dart';
 import '../canvas/viewport.dart';
 import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
@@ -116,10 +117,14 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
   bool _showNotes = true;
 
   /// Close the export menu and run the chosen export against the live providers
-  /// (the file dialog + IO live in `schematic_export.dart`).
-  void _runExport(Future<void> Function(WidgetRef, ServiceType?) action) {
+  /// (the file dialog + IO live in `schematic_export.dart`). Awaited so the
+  /// guarded export's success/failure feedback completes as part of this call
+  /// (every riser export routes through `runExportGuarded`, which owns the
+  /// pill/error reporting).
+  Future<void> _runExport(
+      Future<void> Function(WidgetRef, ServiceType?) action) async {
     setState(() => _showExportMenu = false);
-    action(ref, _autoFocus);
+    await action(ref, _autoFocus);
   }
 
   @override
@@ -785,6 +790,12 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   // In-flight horizontal riser drag.
   String? _draggingRiser;
 
+  // F3: the undo snapshot is DEFERRED from pointer-down to the FIRST move of
+  // an actual riser drag (the onPanStart semantics the Layout / electrical
+  // canvases use) — a plain select-to-inspect click must not push a phantom
+  // undo step or clear the redo stack.
+  bool _dragSnapshotPending = false;
+
   /// World-px gap between adjacent floor bands. The vertical axis is laid out by
   /// floor index (true elevation order) at a fixed band height — the riser's
   /// REAL length is still the elevation delta (used for the label + sizing),
@@ -878,7 +889,8 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       if (hit != null) {
         _draggingRiser = hit;
         ref.read(selectionProvider.notifier).selectEdge(hit);
-        ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+        // The snapshot waits for the first real movement (F3).
+        _dragSnapshotPending = true;
       }
     }
   }
@@ -891,6 +903,12 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     }
     final dragging = _draggingRiser;
     if (dragging != null) {
+      // First movement of a genuine drag: NOW record the one undo step for the
+      // whole move (moveRiserHorizontal itself never records — live drag).
+      if (_dragSnapshotPending) {
+        _dragSnapshotPending = false;
+        ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+      }
       final w = _current.screenToWorld(event.localPosition);
       ref
           .read(networkControllerProvider.notifier)
@@ -901,6 +919,7 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   void _onPointerUp(PointerUpEvent event) {
     _panning = false;
     _draggingRiser = null;
+    _dragSnapshotPending = false;
   }
 
   void _onScaleStart(ScaleStartDetails details) => _lastScale = 1.0;
@@ -931,6 +950,9 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    // B4: while a text field owns the keyboard, Delete/Backspace edit TEXT —
+    // never the drawing (the shared guard the Layout/electrical canvases use).
+    if (isTextEntryFocused()) return KeyEventResult.ignored;
     if (event.logicalKey == LogicalKeyboardKey.delete ||
         event.logicalKey == LogicalKeyboardKey.backspace) {
       final sel = ref.read(selectionProvider);
@@ -2756,9 +2778,16 @@ class _SystemNotes extends ConsumerWidget {
     final occupancy = ref.watch(occupancyProvider);
     final pump = ref.watch(pumpDutyProvider);
 
+    // F9: assert '(roof tank)' ONLY when a roofTank actually exists in the
+    // network (mirrors the export `_supplyNote`) — the notes must never claim
+    // equipment the design doesn't contain.
+    final hasRoofTank =
+        network.nodes.any((n) => n.component == NodeComponent.roofTank);
     final lines = <String>[
       feed == FeedStrategy.downfeed
-          ? 'Feed: gravity downfeed (roof tank)'
+          ? (hasRoofTank
+              ? 'Feed: gravity downfeed (roof tank)'
+              : 'Feed: gravity downfeed')
           : 'Feed: upfeed / booster pump',
     ];
     final roofM3 = _tankM3(NodeComponent.roofTank);

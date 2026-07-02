@@ -8,6 +8,7 @@ import 'package:mechx_engine/electrical/commercial_export.dart';
 import '../../store/app_state.dart';
 import '../../store/commercial_store.dart';
 import '../../store/project_store.dart';
+import '../inspector/project_panel.dart' show runExportGuarded;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -86,35 +87,50 @@ class _ExportBar extends ConsumerWidget {
     );
   }
 
-  Future<void> _exportBomCsv(WidgetRef ref) async {
-    final name = ref.read(projectControllerProvider).name;
-    final csv = costEstimateToCsv(ref.read(electricalCostProvider));
-    final path = await FilePicker.saveFile(
-      dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleElectricalBom),
-      fileName: '$name-electrical-bom.csv',
-      type: FileType.custom,
-      allowedExtensions: const ['csv'],
-    );
-    if (path == null) return;
-    final full = path.endsWith('.csv') ? path : '$path.csv';
-    await File(full).writeAsString(csv);
-  }
+  // Both commercial exports route through the shared export guard (H3): the
+  // zero-length completeness gate, cancel ⇒ no pill, success ⇒ the "Exported
+  // ..." confirmation, and an IO failure surfaces instead of no-oping.
+  Future<void> _exportBomCsv(WidgetRef ref) => runExportGuarded(
+        ref,
+        name: 'electrical BOM',
+        write: () async {
+          final name = ref.read(projectControllerProvider).name;
+          final csv = costEstimateToCsv(ref.read(electricalCostProvider));
+          final path = await FilePicker.saveFile(
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleElectricalBom),
+            fileName: '$name-electrical-bom.csv',
+            type: FileType.custom,
+            allowedExtensions: const ['csv'],
+          );
+          if (path == null) return false;
+          final full = path.endsWith('.csv') ? path : '$path.csv';
+          await File(full).writeAsString(csv);
+          return true;
+        },
+      );
 
-  Future<void> _exportProposalMarkdown(WidgetRef ref) async {
-    final name = ref.read(projectControllerProvider).name;
-    final md = quotationToMarkdown(
-      ref.read(electricalQuotationProvider),
-      ref.read(electricalCostProvider),
-      projectName: name,
-    );
-    final path = await FilePicker.saveFile(
-      dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleElectricalProposal),
-      fileName: '$name-electrical-proposal.md',
-      type: FileType.custom,
-      allowedExtensions: const ['md'],
-    );
-    if (path == null) return;
-    final full = path.endsWith('.md') ? path : '$path.md';
-    await File(full).writeAsString(md);
-  }
+  Future<void> _exportProposalMarkdown(WidgetRef ref) => runExportGuarded(
+        ref,
+        name: 'quotation proposal',
+        write: () async {
+          final name = ref.read(projectControllerProvider).name;
+          final md = quotationToMarkdown(
+            ref.read(electricalQuotationProvider),
+            ref.read(electricalCostProvider),
+            projectName: name,
+          );
+          final path = await FilePicker.saveFile(
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleElectricalProposal),
+            fileName: '$name-electrical-proposal.md',
+            type: FileType.custom,
+            allowedExtensions: const ['md'],
+          );
+          if (path == null) return false;
+          final full = path.endsWith('.md') ? path : '$path.md';
+          await File(full).writeAsString(md);
+          return true;
+        },
+      );
 }

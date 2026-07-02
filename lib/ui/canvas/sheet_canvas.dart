@@ -295,10 +295,17 @@ class PlaceholderSheetPage extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
+            // Plain user language (A1) — no internal milestone jargon. ASCII +
+            // Roboto so the caption renders cleanly in goldens.
             Text(
-              '${sheet.sizePx.width.round()} × ${sheet.sizePx.height.round()} px'
-              '   ·   PDF import in P1',
+              'No plan attached'
+              '   ·   ${sheet.sizePx.width.round()} x ${sheet.sizePx.height.round()} px',
               style: const TextStyle(fontFamily: 'Roboto', fontSize: 18, color: _ink),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Import a PDF or DXF floor plan to draw to scale',
+              style: TextStyle(fontFamily: 'Roboto', fontSize: 14, color: _ink),
             ),
           ],
         ),

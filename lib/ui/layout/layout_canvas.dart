@@ -40,6 +40,7 @@ import '../../store/solve_store.dart';
 import '../canvas/calibration_overlay.dart';
 import '../canvas/canvas_grid.dart' show calibratedGridWorldStep;
 import '../canvas/canvas_view.dart';
+import '../canvas/text_entry_guard.dart';
 import '../canvas/drawing_overlay.dart';
 import '../canvas/drop_overlay.dart';
 import '../canvas/heatmap_layer.dart';
@@ -388,6 +389,25 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     final mod = HardwareKeyboard.instance.isControlPressed ||
         HardwareKeyboard.instance.isMetaPressed;
     final shift = HardwareKeyboard.instance.isShiftPressed;
+
+    // A focused text field owns its editing keys (B4): Backspace/Delete and
+    // the select-all/clipboard/undo combos must edit the FIELD, not the
+    // drawing. This ancestor Focus sits BELOW the app-root
+    // DefaultTextEditingShortcuts on the bubble path, so returning ignored
+    // here lets the field's own handling run. (Descendants include the
+    // calibration "Known distance" field, the smart input bar and the
+    // electrical inspectors.)
+    if (isTextEntryFocused() &&
+        (key == LogicalKeyboardKey.delete ||
+            key == LogicalKeyboardKey.backspace ||
+            (mod &&
+                (key == LogicalKeyboardKey.keyA ||
+                    key == LogicalKeyboardKey.keyC ||
+                    key == LogicalKeyboardKey.keyV ||
+                    key == LogicalKeyboardKey.keyZ ||
+                    key == LogicalKeyboardKey.keyY)))) {
+      return KeyEventResult.ignored;
+    }
 
     if (mod && key == LogicalKeyboardKey.keyZ && !shift) {
       ref.read(historyProvider.notifier).undo();

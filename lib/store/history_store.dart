@@ -1,5 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../data/autosave.dart';
+import 'app_state.dart';
 import 'electrical_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
@@ -31,6 +33,10 @@ class HistoryController extends Notifier<int> {
     _past.add(domain);
     _future.clear();
     if (_past.length > 1000) _past.removeAt(0);
+    // Eager "edited" flip (B9): the dirty dot must not lag the 15 s autosave
+    // tick. A recorded mutation always diverges from the clean baseline, so a
+    // boolean set is enough — no document encode on the hot mutation path.
+    ref.read(projectDirtyProvider.notifier).set(true);
     state++;
   }
 
@@ -40,6 +46,7 @@ class HistoryController extends Notifier<int> {
     final domain = _past.removeLast();
     _revert(domain, redo: false);
     _future.add(domain);
+    _refreshDirty();
     state++;
   }
 
@@ -49,8 +56,16 @@ class HistoryController extends Notifier<int> {
     final domain = _future.removeLast();
     _revert(domain, redo: true);
     _past.add(domain);
+    _refreshDirty();
     state++;
   }
+
+  /// One immediate signature re-check after undo/redo: stepping the timeline
+  /// may have returned the work to (or away from) the clean baseline, which a
+  /// boolean flip can't know — recompute from the real encode so the edited
+  /// dot tracks reality instead of waiting for the next autosave tick.
+  void _refreshDirty() =>
+      ref.read(projectDirtyProvider.notifier).set(isProjectDirty(ref.read));
 
   void _revert(UndoDomain domain, {required bool redo}) {
     switch (domain) {
