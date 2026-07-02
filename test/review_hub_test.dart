@@ -57,5 +57,18 @@ void main() {
     expect(find.text('REVIEW REQUIRED'), findsOneWidget);
     // 'REVIEW' verdict labels appear at least for the Standards row.
     expect(find.text('REVIEW'), findsWidgets);
+
+    // J3: the hub ends in an 'Export deliverables' card leading with the
+    // verdict (the "check, then issue" pairing), followed by the reused
+    // export buttons — no new export path, just the existing Projects-screen
+    // functions surfaced here too.
+    expect(find.text('Export deliverables'), findsOneWidget);
+    expect(
+      find.text('REVIEW REQUIRED — you decide whether to issue'),
+      findsOneWidget,
+    );
+    expect(find.text('Export calc report (MD)'), findsOneWidget);
+    expect(find.text('Export unified MEP report (MD)'), findsOneWidget);
+    expect(find.text('Export equipment schedule (MD)'), findsOneWidget);
   });
 }

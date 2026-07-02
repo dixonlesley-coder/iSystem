@@ -7,6 +7,7 @@ import '../ai/ai_client.dart';
 import '../store/annotation_store.dart';
 import '../store/app_state.dart';
 import '../store/commercial_store.dart';
+import '../store/document_control_store.dart';
 import '../store/electrical_store.dart';
 import '../store/fire_store.dart';
 import '../store/fixture_library_store.dart';
@@ -23,18 +24,24 @@ import 'recovery.dart';
 /// autosave loop.
 typedef ProviderReader = T Function<T>(ProviderListenable<T> provider);
 
-/// A recovery document found on launch (previous session ended without a clean
-/// exit). Non-null ⇒ the shell offers to restore it.
+/// A recovery snapshot found on launch: the decoded document plus the
+/// snapshot file's mtime (null when the mtime couldn't be read). Carrying the
+/// timestamp alongside the doc lets the recovery banner say *when* the work
+/// was last autosaved, not just that some work exists.
+typedef RecoverySnapshot = ({ProjectDocument doc, DateTime? savedAt});
+
+/// A recovery snapshot found on launch (previous session ended without a
+/// clean exit). Non-null ⇒ the shell offers to restore it.
 final recoveryDocProvider =
-    NotifierProvider<RecoveryController, ProjectDocument?>(
+    NotifierProvider<RecoveryController, RecoverySnapshot?>(
   RecoveryController.new,
 );
 
-class RecoveryController extends Notifier<ProjectDocument?> {
+class RecoveryController extends Notifier<RecoverySnapshot?> {
   @override
-  ProjectDocument? build() => null;
+  RecoverySnapshot? build() => null;
 
-  void set(ProjectDocument? doc) => state = doc;
+  void set(RecoverySnapshot? snapshot) => state = snapshot;
   void clear() => state = null;
 }
 
@@ -88,6 +95,15 @@ ProjectDocument buildDocument(ProviderReader read) {
       anthropicApiKey: read(aiApiKeyProvider),
       aiModel: read(aiModelProvider),
       aiProvider: read(aiProviderProvider).name,
+      // Document control (drawing number/revision/client/DRAWN-CHECKED-APPROVED
+      // + revision history) round-trips with the project.
+      documentNumber: read(documentControlProvider).documentNumber,
+      revisionTag: read(documentControlProvider).revisionTag,
+      clientName: read(documentControlProvider).clientName,
+      preparedBy: read(documentControlProvider).preparedBy,
+      checkedBy: read(documentControlProvider).checkedBy,
+      approvedBy: read(documentControlProvider).approvedBy,
+      revisions: read(documentControlProvider).revisions,
     ),
     // The electrical sub-model (v2) round-trips alongside the plumbing project.
     electrical: read(electricalProjectProvider),
@@ -98,6 +114,32 @@ ProjectDocument buildDocument(ProviderReader read) {
     // Designated room/zone areas round-trip with the project.
     rooms: read(roomAreasProvider),
   );
+}
+
+/// The canonical encoding of a brand-new, untouched project — the default
+/// settings plus whatever the stores seed on a fresh launch (notably the
+/// built-in sample electrical board), with nothing drawn. Computed once from a
+/// throwaway [ProviderContainer] so the dirty guard and the autosave loop agree
+/// on exactly what "virgin" looks like, and memoized (the defaults are constant).
+/// The container is deliberately not disposed — a single tiny leak for the
+/// process, mirroring the root container the app never disposes — so the
+/// electrical controller's post-build sync microtask never reads a disposed ref.
+String? _virginSignature;
+String virginDocumentSignature() =>
+    _virginSignature ??= buildDocument(ProviderContainer().read).encode();
+
+/// Whether the live work reachable via [read] genuinely differs from the last
+/// clean Save — the GUARD-time dirty check (computed FRESH, unlike the timer-fed
+/// [projectDirtyProvider] UI hint). A project that was saved/opened is dirty when
+/// it no longer matches that baseline; a never-saved project is dirty only once
+/// it diverges from the untouched virgin default (so a blank launch — or one that
+/// only seeded the sample board — is NOT dirty and is never destroyed silently).
+bool isProjectDirty(ProviderReader read) {
+  final encoded = buildDocument(read).encode();
+  final saved = read(lastSavedSignatureProvider);
+  return saved != null
+      ? encoded != saved
+      : encoded != virginDocumentSignature();
 }
 
 /// Load [doc] into every live store/provider reachable via [read] — the drawn
@@ -147,6 +189,17 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(aiApiKeyProvider.notifier).set(s.anthropicApiKey);
   read(aiModelProvider.notifier).set(s.aiModel);
   read(aiProviderProvider.notifier).set(aiProviderFromName(s.aiProvider));
+  // Restore document control (absent on an older file ⇒ all unset / no
+  // revisions, the controller's own defaults).
+  read(documentControlProvider.notifier).set(DocumentControl(
+    documentNumber: s.documentNumber,
+    revisionTag: s.revisionTag,
+    clientName: s.clientName,
+    preparedBy: s.preparedBy,
+    checkedBy: s.checkedBy,
+    approvedBy: s.approvedBy,
+    revisions: s.revisions,
+  ));
   // Restore the electrical project. A v2 file carries one; a plumbing-only / v1
   // document has NO electrical sub-model — fall back to an EMPTY project (no
   // fictitious sample switchboard), so its BOM / equipment schedule / unified
@@ -164,24 +217,33 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
 }
 
 /// Start the periodic autosave loop: every [interval], snapshot the current
-/// work to the recovery file — but only once there's a drawn network worth
-/// saving AND the work differs from the last clean save (so a saved project
-/// never leaves a stale recovery snapshot behind). Returns the timer so the
-/// caller can cancel it.
+/// work to the recovery file — but only once the work differs from a clean
+/// baseline (so a saved project never leaves a stale recovery snapshot behind).
+/// The baseline is the last clean Save/Open when one exists, else the untouched
+/// virgin default: a blank launch (or one that only carries the seeded sample
+/// board) is clean and writes nothing, while an electrical-only or measurement-
+/// only project — which has no drawn network nodes — DOES get recovered. Returns
+/// the timer so the caller can cancel it.
 Timer startAutosave(
   ProviderContainer c, {
   Duration interval = const Duration(seconds: 15),
 }) {
   String? lastWritten; // last content we mirrored to the recovery file
   return Timer.periodic(interval, (_) {
-    final network = c.read(networkControllerProvider).network;
-    if (network.nodes.isEmpty) return; // nothing worth recovering yet
     final doc = buildDocument(c.read);
     final encoded = doc.encode();
-    // Skip when the work already matches the last clean Save (no phantom
+    final saved = c.read(lastSavedSignatureProvider);
+    // Clean when it matches the last real Save, or (never saved yet) still equals
+    // the untouched virgin default — either way there is nothing worth recovering.
+    final clean = saved != null
+        ? encoded == saved
+        : encoded == virginDocumentSignature();
+    // Piggy-back the "edited" indicator on the signature comparison we're
+    // already doing (Save/Open clear it eagerly; this catches new edits).
+    c.read(projectDirtyProvider.notifier).set(!clean);
+    // Skip when the work already matches the clean baseline (no phantom
     // recovery), or when we've already mirrored this exact content.
-    if (encoded == c.read(lastSavedSignatureProvider) ||
-        encoded == lastWritten) {
+    if (clean || encoded == lastWritten) {
       return;
     }
     lastWritten = encoded;

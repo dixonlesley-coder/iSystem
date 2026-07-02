@@ -405,4 +405,144 @@ void main() {
           'service,kind,nominal_dn_mm,length_m,segments');
     });
   });
+
+  // ── D6: per-floor grouping ────────────────────────────────────────────────
+  //
+  // Two-floor fixture (reuses _building = ground 4.0 m, level-1 3.5 m; _cal
+  // 0.05 m/px):
+  //   Floor 0 (human 1):  nA(0,0)  nB(100,0)   rA nA→nB run, DN25
+  //                        length = 100 px × 0.05 = 5.000 m
+  //   Floor 1 (human 2):  nC(0,0)  nD(60,0)    rB nC→nD run, DN25 (SAME DN)
+  //                        length = 60  px × 0.05 = 3.000 m
+  //   Riser:              rC nC→nA riser, DN50, floors 1→0 (default mains)
+  //                        ceiling(0)=4.0−0.3=3.7 m; ceiling(1)=4.0+3.5−0.3=7.2 m
+  //                        length = |7.2 − 3.7| = 3.500 m
+  group('buildBom — groupByFloor', () {
+    const nA = NetNode(id: 'nA', sheetId: 's1', x: 0, y: 0, floorIndex: 0);
+    const nB = NetNode(id: 'nB', sheetId: 's1', x: 100, y: 0, floorIndex: 0);
+    const nC = NetNode(id: 'nC', sheetId: 's1', x: 0, y: 0, floorIndex: 1);
+    const nD = NetNode(id: 'nD', sheetId: 's1', x: 60, y: 0, floorIndex: 1);
+    const rA = NetEdge(
+        id: 'rA',
+        fromId: 'nA',
+        toId: 'nB',
+        service: ServiceType.coldWater,
+        kind: EdgeKind.run);
+    const rB = NetEdge(
+        id: 'rB',
+        fromId: 'nC',
+        toId: 'nD',
+        service: ServiceType.coldWater,
+        kind: EdgeKind.run);
+    const rC = NetEdge(
+        id: 'rC',
+        fromId: 'nC',
+        toId: 'nA',
+        service: ServiceType.coldWater,
+        kind: EdgeKind.riser);
+    const twoFloorNet =
+        Network(nodes: [nA, nB, nC, nD], edges: [rA, rB, rC]);
+    const dn25 = EdgeSizing(
+      edgeId: 'x',
+      service: ServiceType.coldWater,
+      flow: FlowRate(0.001),
+      diameter: Diameter(0.025),
+      velocity: Velocity(1.0),
+    );
+    const dn50 = EdgeSizing(
+      edgeId: 'x',
+      service: ServiceType.coldWater,
+      flow: FlowRate(0.001),
+      diameter: Diameter(0.050),
+      velocity: Velocity(0.5),
+    );
+    const twoFloorSizing = <String, EdgeSizing>{
+      'rA': dn25,
+      'rB': dn25,
+      'rC': dn50,
+    };
+
+    test(
+        'default (groupByFloor:false) merges the same DN across floors — every '
+        'line carries a null floorIndex (byte-identity pin)', () {
+      final bom = buildBom(
+        net: twoFloorNet,
+        sizing: twoFloorSizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      // rA + rB (DN25 runs) merge into one line; the riser is the other.
+      expect(bom, hasLength(2));
+      expect(bom.every((l) => l.floorIndex == null), isTrue);
+      final run = bom.firstWhere((l) => l.kind == EdgeKind.run);
+      expect(run.segmentCount, 2);
+      // 5.000 + 3.000 = 8.000 m
+      expect(run.totalLength.meters, closeTo(8.000, 1e-9));
+    });
+
+    test(
+        'groupByFloor:true splits the same DN onto per-floor lines; the riser '
+        'stays a single ungrouped (null-floor) line', () {
+      final bom = buildBom(
+        net: twoFloorNet,
+        sizing: twoFloorSizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+        groupByFloor: true,
+      );
+      // Two run lines (floor 0 + floor 1) + one riser line = 3 lines.
+      expect(bom, hasLength(3));
+
+      final runF0 = bom.singleWhere(
+          (l) => l.kind == EdgeKind.run && l.floorIndex == 0);
+      final runF1 = bom.singleWhere(
+          (l) => l.kind == EdgeKind.run && l.floorIndex == 1);
+      final riser = bom.singleWhere((l) => l.kind == EdgeKind.riser);
+
+      expect(runF0.diameterMm, 25);
+      expect(runF0.segmentCount, 1);
+      expect(runF0.totalLength.meters, closeTo(5.000, 1e-9));
+      expect(runF1.diameterMm, 25);
+      expect(runF1.segmentCount, 1);
+      expect(runF1.totalLength.meters, closeTo(3.000, 1e-9));
+      // The riser spans floors → null floorIndex, one line, 3.500 m.
+      expect(riser.floorIndex, isNull);
+      expect(riser.diameterMm, 50);
+      expect(riser.totalLength.meters, closeTo(3.500, 1e-9));
+
+      // Sort: run/floor0 → run/floor1 → riser.
+      expect(bom[0], same(runF0));
+      expect(bom[1], same(runF1));
+      expect(bom[2], same(riser));
+    });
+
+    test('bomToCsv emits a 1-based floor column (empty for risers)', () {
+      final bom = buildBom(
+        net: twoFloorNet,
+        sizing: twoFloorSizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+        groupByFloor: true,
+      );
+      final lines = bomToCsv(bom).trim().split('\n');
+      expect(lines.first,
+          'service,kind,floor,nominal_dn_mm,length_m,segments');
+      // Floor 0 → human 1, floor 1 → human 2, riser → empty.
+      expect(lines, contains('coldWater,run,1,25,5.00,1'));
+      expect(lines, contains('coldWater,run,2,25,3.00,1'));
+      expect(lines, contains('coldWater,riser,,50,3.50,1'));
+    });
+
+    test('bomToCsv stays byte-identical (no floor column) for the default build',
+        () {
+      final bom = buildBom(
+        net: twoFloorNet,
+        sizing: twoFloorSizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      expect(bomToCsv(bom).split('\n').first,
+          'service,kind,nominal_dn_mm,length_m,segments');
+    });
+  });
 }

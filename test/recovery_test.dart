@@ -51,4 +51,19 @@ void main() {
     expect(await File(path).exists(), isFalse);
     expect(await readRecovery(path: path), isNull);
   });
+
+  test('recoverySnapshotMtime reads the write time alongside readRecovery',
+      () async {
+    final before = DateTime.now().subtract(const Duration(seconds: 2));
+    await writeRecovery(doc, path: path);
+    final mtime = await recoverySnapshotMtime(path: path);
+    expect(mtime, isNotNull);
+    // The stat time must be sane — at/after the moment we started writing.
+    expect(mtime!.isBefore(before), isFalse);
+  });
+
+  test('recoverySnapshotMtime returns null when there is no recovery file',
+      () async {
+    expect(await recoverySnapshotMtime(path: path), isNull);
+  });
 }

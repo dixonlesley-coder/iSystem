@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
+import 'package:mechx_engine/electrical/earthing.dart' show EarthingSystem;
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
@@ -84,6 +85,30 @@ void main() {
     // Two panels → at least two outer blocks; each bus is two thick verticals.
     expect(rects, greaterThanOrEqualTo(2));
     expect(thick.length, greaterThanOrEqualTo(4));
+  });
+
+  test('the board schedule is a RULED table — column verticals + row rules',
+      () {
+    // Single-panel detail re-origins the block to x=0, so the rule positions
+    // are exact: 7 column separators (6 px left of DEVICE / PENGHANTAR /
+    // DAYA / KETERANGAN / R / S / T) spanning header band → bus bottom, and
+    // one horizontal rule under each body row (MDP has 2 ways, 0 spares).
+    final detail = buildElectricalSld(
+        project: project, result: result, onlyPanelId: 'MDP');
+    final lines = detail.prims.whereType<SldLine>().toList();
+    const busTop = 46.0; // _headerH
+    const busBot = busTop + 3 * 20.0 + 6; // (1 header + 2 way rows) · _rowH + 6
+    for (final colX in const [116.0, 224.0, 446.0, 506.0, 726.0, 772.0, 818.0]) {
+      final vert = lines.where((l) =>
+          l.x1 == colX - 6 && l.x2 == colX - 6 && l.y1 == busTop && l.y2 == busBot);
+      expect(vert.length, 1, reason: 'column separator at ${colX - 6}');
+    }
+    // Row rules under way 1 (y 92) and way 2 (y 112 — the TOTAL divider).
+    for (final ruleY in const [92.0, 112.0]) {
+      final horiz = lines.where(
+          (l) => l.y1 == ruleY && l.y2 == ruleY && l.x2 - l.x1 > 500);
+      expect(horiz.length, 1, reason: 'row rule at y=$ruleY');
+    }
   });
 
   test('labels carry the drafter way content (table columns + breaker/cable)',
@@ -229,6 +254,61 @@ void main() {
       expect(b.minX, a.minX);
       expect(b.maxX, a.maxX);
       expect(b.maxY, a.maxY);
+    });
+  });
+
+  group('C5 — breaker breaking capacity (Icu kA) in the device notation', () {
+    test('an omitted / empty map is byte-identical to the default sheet', () {
+      final a = buildElectricalSld(project: project, result: result);
+      final b = buildElectricalSld(
+          project: project, result: result, breakerIcuKaByPanelId: null);
+      final c = buildElectricalSld(
+          project: project, result: result, breakerIcuKaByPanelId: const {});
+      String labels(SldSheet s) =>
+          s.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      expect(b.prims.length, a.prims.length);
+      expect(c.prims.length, a.prims.length);
+      expect(labels(b), labels(a));
+      expect(labels(c), labels(a));
+      // The default project carries no fault level ⇒ no kA anywhere.
+      expect(labels(a), isNot(contains('kA')));
+    });
+
+    test('a mapped kA appears on the incomer sub-line + DEVICE cell of that '
+        'panel only', () {
+      const map = {'MDP': 25.0};
+      final mdp = buildElectricalPanelDetail(
+          project: project, result: result, panelId: 'MDP',
+          breakerIcuKaByPanelId: map);
+      final lp1 = buildElectricalPanelDetail(
+          project: project, result: result, panelId: 'LP1',
+          breakerIcuKaByPanelId: map);
+      final mdpLabels =
+          mdp.prims.whereType<SldLabel>().map((t) => t.text).toList();
+      // The incomer sub-line carries the kA.
+      expect(
+          mdpLabels.any((t) => t.startsWith('Incomer') && t.contains('25kA')),
+          isTrue);
+      // A DEVICE cell (a bare breaker row, NOT the incomer sub-line) carries it
+      // too — the way's required Icu equals the board's prospective fault.
+      expect(
+          mdpLabels.any((t) =>
+              !t.startsWith('Incomer') &&
+              RegExp(r'MC(B|CB) \d+A (1|3)ph 25kA').hasMatch(t)),
+          isTrue);
+      // The UNMAPPED panel (LP-1) gets nothing appended.
+      final lp1Joined =
+          lp1.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      expect(lp1Joined, isNot(contains('25kA')));
+    });
+
+    test('a fractional Icu renders to one decimal (ASCII kA)', () {
+      final d = buildElectricalPanelDetail(
+          project: project, result: result, panelId: 'MDP',
+          breakerIcuKaByPanelId: const {'MDP': 15.5});
+      final joined =
+          d.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      expect(joined, contains('15.5kA'));
     });
   });
 
@@ -603,6 +683,90 @@ void main() {
       expect(joined, contains('CAPACITOR BANK'));
       // dualTransformer is false but sources != null ⇒ the MV main is drawn.
       expect(joined, contains('TEGANGAN MENENGAH'));
+    });
+  });
+
+  group('C6 — source-spine system-earthing mark + designation', () {
+    // A TT-earthed installation with an explicit transformer, so the source
+    // spine (and its earthing mark) can be drawn and the designation ('TT')
+    // checked verbatim.
+    const ep = ElectricalProject(
+      id: 'ep',
+      name: 'Earth',
+      earthingSystem: EarthingSystem.tt,
+      transformerKva: ApparentPower(400000),
+      panels: [
+        ElectricalPanel(
+          id: 'LVMDP',
+          name: 'LVMDP',
+          circuits: [
+            ElectricalCircuit(
+                id: 'c1', name: 'Load', loadKind: LoadKind.general,
+                loadW: 30000, length: Length(10)),
+          ],
+        ),
+      ],
+    );
+    final epResult = computeSystem(profile, ep);
+
+    // The earth mark's narrowing BOTTOM bar is a distinctive 4px-wide source-
+    // role horizontal (halfWidth 2 ⇒ width 4) — no other source line matches.
+    Iterable<SldLine> earthBottomBars(SldSheet s) =>
+        s.prims.whereType<SldLine>().where((l) =>
+            l.role == SldRole.source && l.y1 == l.y2 && (l.x2 - l.x1) == 4.0);
+
+    test('sourceChain off ⇒ no earth mark, no Earth legend (byte-identical)',
+        () {
+      final s = buildElectricalOverview(project: ep, result: epResult);
+      expect(earthBottomBars(s), isEmpty);
+      expect(s.legend.map((e) => e.code), isNot(contains('Earth')));
+    });
+
+    test('sourceChain on ⇒ earth bars + Earth legend + the designation label',
+        () {
+      final s = buildElectricalOverview(
+          project: ep, result: epResult, sourceChain: true);
+      expect(earthBottomBars(s), isNotEmpty);
+      expect(s.legend.map((e) => e.code), contains('Earth'));
+      // The installation earthing-system designation is drawn on the spine.
+      expect(s.prims.whereType<SldLabel>().any((t) => t.text == 'TT'), isTrue);
+    });
+
+    test('the riser prepends the earth mark when sourceChain is on', () {
+      final off = buildElectricalRiser(project: ep, result: epResult);
+      final on = buildElectricalRiser(
+          project: ep, result: epResult, sourceChain: true);
+      expect(earthBottomBars(off), isEmpty);
+      expect(off.legend.map((e) => e.code), isNot(contains('Earth')));
+      expect(earthBottomBars(on), isNotEmpty);
+      expect(on.legend.map((e) => e.code), contains('Earth'));
+      expect(on.prims.whereType<SldLabel>().any((t) => t.text == 'TT'), isTrue);
+    });
+
+    test('buildElectricalSourceSpine carries the earth mark + Earth legend', () {
+      final spine = buildElectricalSourceSpine(project: ep, result: epResult);
+      expect(spine.isEmpty, isFalse);
+      expect(earthBottomBars(spine), isNotEmpty);
+      expect(spine.legend.map((e) => e.code), contains('Earth'));
+      expect(
+          spine.prims.whereType<SldLabel>().any((t) => t.text == 'TT'), isTrue);
+    });
+
+    test('the horizontal source spine also draws the earth mark', () {
+      final spine = buildElectricalSourceSpine(
+          project: ep, result: epResult, horizontal: true);
+      expect(earthBottomBars(spine), isNotEmpty);
+      expect(
+          spine.prims.whereType<SldLabel>().any((t) => t.text == 'TT'), isTrue);
+    });
+
+    test('the earth label is ASCII (no tofu glyphs)', () {
+      final s = buildElectricalOverview(
+          project: ep, result: epResult, sourceChain: true);
+      for (final l in s.prims.whereType<SldLabel>()) {
+        expect(l.text.contains('Ø'), isFalse, reason: l.text);
+        expect(l.text.contains('²'), isFalse, reason: l.text);
+      }
     });
   });
 }

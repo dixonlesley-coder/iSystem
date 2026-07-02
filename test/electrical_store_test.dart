@@ -4,10 +4,12 @@ import 'package:mechx/app.dart';
 import 'package:mechx/data/autosave.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/electrical_store.dart';
+import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
+import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/sources.dart';
@@ -1088,6 +1090,318 @@ void main() {
       expect(proj().capacitorBankKvar, 40);
       expect(proj().transformerKva!.inKilovoltAmperes, 400);
       expect(proj().dualTransformer, isTrue);
+    });
+  });
+
+  group('electrical undo/redo (I1 — the global-timeline seam)', () {
+    test('addCircuit then a global undo restores the prior project', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      final hist = c.read(historyProvider.notifier);
+      ElectricalProject proj() => c.read(electricalProjectProvider);
+
+      final before = proj().panels.firstWhere((p) => p.id == 'mdp');
+      expect(hist.canUndo, isFalse);
+
+      ctrl.addCircuit('mdp', kind: LoadKind.socket);
+      expect(
+        proj().panels.firstWhere((p) => p.id == 'mdp').circuits.length,
+        before.circuits.length + 1,
+      );
+      expect(ctrl.canUndo, isTrue);
+      expect(hist.canUndo, isTrue);
+
+      hist.undo();
+      expect(
+        proj().panels.firstWhere((p) => p.id == 'mdp').circuits.length,
+        before.circuits.length,
+      );
+      expect(ctrl.canRedo, isTrue);
+
+      // Redo replays the add.
+      hist.redo();
+      expect(
+        proj().panels.firstWhere((p) => p.id == 'mdp').circuits.length,
+        before.circuits.length + 1,
+      );
+    });
+
+    test('undo reverts the most-recent edit ACROSS domains, in order', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final elec = c.read(electricalProjectProvider.notifier);
+      final mech = c.read(projectControllerProvider.notifier);
+      final hist = c.read(historyProvider.notifier);
+      ElectricalProject proj() => c.read(electricalProjectProvider);
+
+      final wayCount =
+          proj().panels.firstWhere((p) => p.id == 'mdp').circuits.length;
+
+      // 1) an electrical edit, 2) a mechanical (project) edit.
+      elec.addCircuit('mdp', kind: LoadKind.lighting);
+      mech.setFloorHeight(0, const Length(2.0));
+
+      // A single Ctrl+Z reverts the MECHANICAL edit (the most recent) and
+      // leaves the electrical way in place — the pre-I1 behaviour would have
+      // silently reverted the wrong domain.
+      hist.undo();
+      expect(c.read(projectControllerProvider).floors.first.height.meters, 4.0);
+      expect(
+        proj().panels.firstWhere((p) => p.id == 'mdp').circuits.length,
+        wayCount + 1,
+      );
+
+      // The next undo reverts the electrical edit.
+      hist.undo();
+      expect(
+        proj().panels.firstWhere((p) => p.id == 'mdp').circuits.length,
+        wayCount,
+      );
+    });
+
+    test('syncMepEquipment is a derived sync — it never records an undo step',
+        () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      final hist = c.read(historyProvider.notifier);
+
+      ctrl.syncMepEquipment(const [
+        ElectricalCircuit(
+          id: 'eq-1',
+          name: 'Booster pump',
+          loadKind: LoadKind.pump,
+          motorKw: 5.5,
+        ),
+      ]);
+      // The MEP panel appeared, but no snapshot / timeline entry was pushed.
+      expect(
+        c
+            .read(electricalProjectProvider)
+            .panels
+            .any((p) => p.id == 'mep-equipment'),
+        isTrue,
+      );
+      expect(ctrl.canUndo, isFalse);
+      expect(hist.canUndo, isFalse);
+    });
+
+    test('live-drag position intents do not record; pushUndoSnapshot pairs '
+        'the whole move into one step', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      final hist = c.read(historyProvider.notifier);
+      ElectricalPanel mdp() => c
+          .read(electricalProjectProvider)
+          .panels
+          .firstWhere((p) => p.id == 'mdp');
+
+      // A drag: ONE snapshot at drag start, then live per-frame moves.
+      ctrl.pushUndoSnapshot();
+      ctrl.setPanelPosition('mdp', 10, 10);
+      ctrl.setPanelPosition('mdp', 20, 20);
+      ctrl.setPanelPosition('mdp', 32, 32);
+      expect(mdp().x, 32);
+
+      // One undo collapses the whole move back to the pre-drag position.
+      hist.undo();
+      expect(mdp().x, isNull);
+      expect(hist.canUndo, isFalse);
+    });
+
+    test('applyDocument (open / recovery) resets the stacks and the timeline',
+        () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      final hist = c.read(historyProvider.notifier);
+
+      ctrl.addCircuit('mdp', kind: LoadKind.socket);
+      expect(ctrl.canUndo, isTrue);
+      expect(hist.canUndo, isTrue);
+
+      const doc = ProjectDocument(
+        projectName: 'Fresh baseline',
+        floors: [Floor('Ground', Length(4.0))],
+        calibrations: {},
+        sheets: [],
+        network: Network(),
+        electrical: ElectricalProject(id: 'x', name: 'Loaded'),
+      );
+      applyDocument(c.read, doc);
+
+      // A loaded document is a fresh baseline — nothing to undo into.
+      expect(ctrl.canUndo, isFalse);
+      expect(ctrl.canRedo, isFalse);
+      expect(hist.canUndo, isFalse);
+      expect(c.read(electricalProjectProvider).name, 'Loaded');
+    });
+  });
+
+  group('duplicatePanel (I5)', () {
+    test('copies the board + circuits with fresh ids; drops tag + feeder target',
+        () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      final before = c.read(electricalProjectProvider).panels.length;
+      ctrl.duplicatePanel('mdp');
+      final panels = c.read(electricalProjectProvider).panels;
+      expect(panels.length, before + 1);
+
+      final copy = panels.last;
+      expect(copy.id, isNot('mdp'));
+      expect(copy.name, 'Main Distribution Panel (copy)');
+      // Tag dropped so the drawings never carry two identical designations.
+      expect(copy.tag, isNull);
+      // A duplicate starts utility-fed (the original's feeder still feeds it).
+      expect(copy.sourceType, PanelSource.utility);
+      expect(copy.fedByCircuitId, isNull);
+
+      // Every circuit got a fresh id.
+      final srcIds = panels
+          .firstWhere((p) => p.id == 'mdp')
+          .circuits
+          .map((c0) => c0.id)
+          .toSet();
+      for (final cc in copy.circuits) {
+        expect(srcIds.contains(cc.id), isFalse);
+      }
+      // The copied feeder dropped its target (a feeder supplies one panel).
+      final feeder =
+          copy.circuits.firstWhere((c0) => c0.loadKind == LoadKind.feeder);
+      expect(feeder.feedsPanelId == 'lp1', isFalse);
+
+      // The copy sizes (appears in the result with an incomer).
+      final r = c.read(electricalResultProvider).panels[copy.id];
+      expect(r, isNotNull);
+      expect(r!.incomer.breaker.ratingA.amperes, greaterThan(0));
+    });
+
+    test('offsets both position spaces so the copy does not overlap', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ctrl.setPanelPosition('mdp', 100, 200);
+      ctrl.setPanelLayoutPos(
+          'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 12, y: 34));
+      ctrl.duplicatePanel('mdp');
+      final copy = c.read(electricalProjectProvider).panels.last;
+      expect(copy.x, 140);
+      expect(copy.y, 240);
+      expect(copy.layoutPos!.x, 52);
+      expect(copy.layoutPos!.y, 74);
+    });
+
+    test('is undoable in one step', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      final hist = c.read(historyProvider.notifier);
+      final before = c.read(electricalProjectProvider).panels.length;
+      ctrl.duplicatePanel('mdp');
+      expect(c.read(electricalProjectProvider).panels.length, before + 1);
+      hist.undo();
+      expect(c.read(electricalProjectProvider).panels.length, before);
+    });
+
+    test('unknown id is a no-op', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      final before = c.read(electricalProjectProvider).panels.length;
+      ctrl.duplicatePanel('nope');
+      expect(c.read(electricalProjectProvider).panels.length, before);
+    });
+  });
+
+  group('electricalSelectionProvider (I5)', () {
+    test('select panel / circuit / clear', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final s = c.read(electricalSelectionProvider.notifier);
+
+      expect(c.read(electricalSelectionProvider), isNull);
+
+      s.selectPanel('mdp');
+      final panelSel = c.read(electricalSelectionProvider)!;
+      expect(panelSel.panelId, 'mdp');
+      expect(panelSel.isCircuit, isFalse);
+      expect(panelSel, const ElectricalSelection.panel('mdp'));
+
+      s.selectCircuit('mdp', 'mdp-c1');
+      final circuitSel = c.read(electricalSelectionProvider)!;
+      expect(circuitSel.isCircuit, isTrue);
+      expect(circuitSel.panelId, 'mdp');
+      expect(circuitSel.circuitId, 'mdp-c1');
+
+      s.clear();
+      expect(c.read(electricalSelectionProvider), isNull);
+    });
+  });
+
+  group('panel-properties intents (I3)', () {
+    test('renamePanel / setPanelTag are undoable through the new funnel', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      final hist = c.read(historyProvider.notifier);
+      ElectricalPanel mdp() => c
+          .read(electricalProjectProvider)
+          .panels
+          .firstWhere((p) => p.id == 'mdp');
+
+      ctrl.renamePanel('mdp', 'Panel Utama');
+      ctrl.setPanelTag('mdp', 'PU-1');
+      expect(mdp().name, 'Panel Utama');
+      expect(mdp().tag, 'PU-1');
+
+      hist.undo(); // reverts the tag
+      expect(mdp().tag, 'MDP');
+      expect(mdp().name, 'Panel Utama');
+      hist.undo(); // reverts the rename
+      expect(mdp().name, 'Main Distribution Panel');
+    });
+
+    test('setPanelTag with an empty string clears the tag', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ctrl.setPanelTag('mdp', '');
+      expect(
+        c
+            .read(electricalProjectProvider)
+            .panels
+            .firstWhere((p) => p.id == 'mdp')
+            .tag,
+        isNull,
+      );
+    });
+
+    test('setPanelHeadroom sets the spec; a 0%-0-way spec collapses to null',
+        () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ElectricalPanel mdp() => c
+          .read(electricalProjectProvider)
+          .panels
+          .firstWhere((p) => p.id == 'mdp');
+
+      ctrl.setPanelHeadroom(
+          'mdp', const HeadroomSpec(sparePercentage: 25, spareWays: 4));
+      expect(mdp().headroom!.sparePercentage, 25);
+      expect(mdp().headroom!.spareWays, 4);
+      // The CADANGAN rows show up in the sized result.
+      expect(c.read(electricalResultProvider).panels['mdp']!.spareWaysReserved,
+          4);
+
+      // Emptying the editor leaves the sizing byte-identical (null spec).
+      ctrl.setPanelHeadroom('mdp', const HeadroomSpec());
+      expect(mdp().headroom, isNull);
     });
   });
 }

@@ -191,6 +191,79 @@ class StatusMessageController extends Notifier<String?> {
   }
 }
 
+/// One-shot session nudge for the FIRST auto-size: the moment the live sizing
+/// solve (`sizingProvider`) transitions from empty to non-empty, a listener
+/// (hosted in `AppShell`, see `app_shell.dart`) calls [maybeFire] with the
+/// count of newly-sized edges. Guarded so it fires at most ONCE per session —
+/// subsequent re-solves (editing a run, reopening a project that already has a
+/// sized network) never re-nudge. False at rest; no persistence, so a fresh
+/// session always gets the nudge again.
+final firstAutoSizeNudgeProvider =
+    NotifierProvider<FirstAutoSizeNudgeController, bool>(
+  FirstAutoSizeNudgeController.new,
+);
+
+class FirstAutoSizeNudgeController extends Notifier<bool> {
+  @override
+  bool build() => false; // true once the nudge has fired this session
+
+  /// Show the "Auto-sized N runs" confirmation for [count] edges, unless the
+  /// nudge has already fired this session or there is nothing to report.
+  void maybeFire(int count) {
+    if (state || count <= 0) return;
+    state = true;
+    ref
+        .read(statusMessageProvider.notifier)
+        .showStatus('Auto-sized $count runs - sizes shown on the plan');
+  }
+}
+
+/// A transient "busy" message for a slow foreground operation (importing a
+/// plan, converting a DWG, opening/saving a project). Null at rest — so the
+/// status bar shows no busy pill and the goldens are unchanged. Set/cleared in
+/// a try/finally around the slow path; the pill mounts only while non-null.
+final busyProvider =
+    NotifierProvider<BusyController, String?>(BusyController.new);
+
+class BusyController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? message) => state = message;
+  void clear() => state = null;
+}
+
+/// The file the open project lives in — set on a successful Open or Save, so
+/// Ctrl/Cmd+S saves IN PLACE instead of re-opening the OS dialog every time.
+/// Null until the project has a home (a brand-new project Save-As's first).
+/// Machine-local session state — deliberately NOT persisted into `.mechx`.
+final currentProjectPathProvider =
+    NotifierProvider<CurrentProjectPathController, String?>(
+  CurrentProjectPathController.new,
+);
+
+class CurrentProjectPathController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? path) => state = path;
+}
+
+/// Whether the live work differs from the last clean Save — drives the small
+/// "edited" dot beside the project name. Maintained by the autosave loop's
+/// existing signature comparison (no per-frame encode) and cleared eagerly on
+/// Save/Open. False at rest ⇒ the goldens (no autosave timer in tests) are
+/// unchanged.
+final projectDirtyProvider =
+    NotifierProvider<ProjectDirtyController, bool>(ProjectDirtyController.new);
+
+class ProjectDirtyController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void set(bool dirty) => state = dirty;
+}
+
 /// App-wide light/dark brightness. Defaults to dark (the restrained, low-glare
 /// default for a drawing tool). Persisted to the project file later.
 final brightnessProvider = NotifierProvider<BrightnessController, Brightness>(

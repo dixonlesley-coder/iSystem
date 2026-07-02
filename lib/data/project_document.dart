@@ -131,6 +131,24 @@ class DesignSettings {
   /// (backup). Defaults to Anthropic; unknown values fall back to it on load.
   final String aiProvider;
 
+  /// Document-control identity fields feeding every report head + PDF/DXF title
+  /// block: the drawing/document number, the current revision tag (e.g. `'A'`),
+  /// the client name, and the preparer/checker/approver names (a DRAWN/CHECKED/
+  /// APPROVED block). All nullable — a project that has never set them prints no
+  /// document-control chrome, byte-identical to before this feature.
+  final String? documentNumber;
+  final String? revisionTag;
+  final String? clientName;
+  final String? preparedBy;
+  final String? checkedBy;
+  final String? approvedBy;
+
+  /// The revision history (date + description), reusing the engine's own
+  /// `Revision` value object (`standards/sni.dart`) so this is the one revision
+  /// table type in the app, not a duplicate. Defaults to empty — an untouched
+  /// project has no revision table.
+  final List<Revision> revisions;
+
   const DesignSettings({
     this.occupancy = Occupancy.private,
     this.upfeed = false,
@@ -153,6 +171,13 @@ class DesignSettings {
     this.anthropicApiKey = '',
     this.aiModel = 'claude-sonnet-4-6',
     this.aiProvider = 'anthropic',
+    this.documentNumber,
+    this.revisionTag,
+    this.clientName,
+    this.preparedBy,
+    this.checkedBy,
+    this.approvedBy,
+    this.revisions = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -182,6 +207,20 @@ class DesignSettings {
         'anthropicApiKey': anthropicApiKey,
         'aiModel': aiModel,
         'aiProvider': aiProvider,
+        // Document control (additive; encoded only when set/non-empty so an
+        // untouched project stays byte-identical).
+        if (documentNumber != null && documentNumber!.isNotEmpty)
+          'documentNumber': documentNumber,
+        if (revisionTag != null && revisionTag!.isNotEmpty)
+          'revisionTag': revisionTag,
+        if (clientName != null && clientName!.isNotEmpty) 'clientName': clientName,
+        if (preparedBy != null && preparedBy!.isNotEmpty) 'preparedBy': preparedBy,
+        if (checkedBy != null && checkedBy!.isNotEmpty) 'checkedBy': checkedBy,
+        if (approvedBy != null && approvedBy!.isNotEmpty) 'approvedBy': approvedBy,
+        if (revisions.isNotEmpty)
+          'revisions': [
+            for (final r in revisions) {'date': r.date, 'description': r.description},
+          ],
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -232,6 +271,20 @@ class DesignSettings {
         aiProvider: const {'openai', 'glm'}.contains(json['aiProvider'])
             ? json['aiProvider'] as String
             : 'anthropic',
+        documentNumber: json['documentNumber'] is String
+            ? json['documentNumber'] as String
+            : null,
+        revisionTag:
+            json['revisionTag'] is String ? json['revisionTag'] as String : null,
+        clientName:
+            json['clientName'] is String ? json['clientName'] as String : null,
+        preparedBy:
+            json['preparedBy'] is String ? json['preparedBy'] as String : null,
+        checkedBy:
+            json['checkedBy'] is String ? json['checkedBy'] as String : null,
+        approvedBy:
+            json['approvedBy'] is String ? json['approvedBy'] as String : null,
+        revisions: _revisionsFromJson(json['revisions']),
       );
 
   /// Clamp the multi-zone diversity factor into (0,1]; absent/invalid ⇒ 0.9.
@@ -254,6 +307,19 @@ class DesignSettings {
     for (final e in raw) {
       final f = CustomFixture.fromJson(e);
       if (f != null) out.add(f);
+    }
+    return out;
+  }
+
+  /// Tolerantly read the revision history: a non-list (or absent) value yields
+  /// an empty history; each entry missing `date`/`description` is dropped.
+  static List<Revision> _revisionsFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <Revision>[];
+    for (final e in raw) {
+      if (e is Map && e['date'] is String && e['description'] is String) {
+        out.add(Revision(e['date'] as String, e['description'] as String));
+      }
     }
     return out;
   }

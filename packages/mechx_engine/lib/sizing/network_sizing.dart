@@ -102,6 +102,13 @@ class EdgeSizing {
   /// design issue. Default false ⇒ in-range ducts are byte-identical.
   final bool overCapacity;
 
+  /// The edge endpoint the flow comes FROM (== [edgeId]'s owning [NetEdge]'s
+  /// `fromId` or `toId`), i.e. the upstream node — a READ-ONLY orientation
+  /// record for drawing a flow-direction arrow. NEVER affects any computed size
+  /// or flow number. Null when direction cannot be confidently determined (e.g.
+  /// a vent, a near-zero balanced ring edge). Default null ⇒ byte-identical.
+  final String? flowFromId;
+
   const EdgeSizing({
     required this.edgeId,
     required this.service,
@@ -111,10 +118,25 @@ class EdgeSizing {
     this.width,
     this.height,
     this.overCapacity = false,
+    this.flowFromId,
   });
 
   /// True when this edge is a rectangular duct (carries W×H).
   bool get isRectangular => width != null && height != null;
+
+  /// A copy carrying the given flow-direction origin ([flowFromId]); all sizing
+  /// fields are preserved unchanged (this is metadata only).
+  EdgeSizing withFlowFrom(String? fromId) => EdgeSizing(
+        edgeId: edgeId,
+        service: service,
+        flow: flow,
+        diameter: diameter,
+        velocity: velocity,
+        width: width,
+        height: height,
+        overCapacity: overCapacity,
+        flowFromId: fromId,
+      );
 }
 
 /// Accumulate downstream demand onto every edge of [service], treating the
@@ -124,11 +146,14 @@ class EdgeSizing {
 ///
 /// Assumes the service subgraph is acyclic (a distribution/collection tree);
 /// cycles would need the P4 node solve instead.
+/// When [edgeParent] is supplied it is filled with edgeId → the ROOT-SIDE
+/// (parent) endpoint of that edge, so the caller can orient a flow arrow.
 Map<String, FlowRate> accumulateFlows({
   required Network net,
   required ServiceType service,
   required String rootId,
   required Map<String, FlowRate> terminalDemand,
+  Map<String, String>? edgeParent,
 }) {
   final adjacency = <String, List<({String edgeId, String other})>>{};
   for (final e in net.edges) {
@@ -150,6 +175,7 @@ Map<String, FlowRate> accumulateFlows({
         if (visited.contains(link.other)) continue;
         final childDemand = subtreeDemand(link.other);
         edgeFlow[link.edgeId] = FlowRate(childDemand);
+        edgeParent?[link.edgeId] = node; // [node] is the root-side endpoint
         sum += childDemand;
       }
     }
@@ -169,11 +195,15 @@ Map<String, FlowRate> accumulateFlows({
 /// Hunter/UBAP demand curve (diversified simultaneous demand), NOT from a sum
 /// of peak fixture flows — hence units are accumulated here and converted to a
 /// flow per edge by the caller.
+///
+/// When [edgeParent] is supplied it is filled with edgeId → the ROOT-SIDE
+/// (parent) endpoint of that edge, so the caller can orient a flow arrow.
 Map<String, double> accumulateFixtureUnits({
   required Network net,
   required ServiceType service,
   required String rootId,
   required Map<String, double> terminalUnits,
+  Map<String, String>? edgeParent,
 }) {
   final adjacency = <String, List<({String edgeId, String other})>>{};
   for (final e in net.edges) {
@@ -194,6 +224,7 @@ Map<String, double> accumulateFixtureUnits({
         if (visited.contains(link.other)) continue;
         final child = subtreeUnits(link.other);
         edgeUnits[link.edgeId] = child;
+        edgeParent?[link.edgeId] = node; // [node] is the root-side endpoint
         sum += child;
       }
     }
@@ -362,6 +393,14 @@ Map<String, EdgeSizing> autoSizeNetwork(
   final allFlows = <String, FlowRate>{};
   final sanitary = <String, EdgeSizing>{}; // DFU-sized drainage/vent edges
   final stormSizing = <String, EdgeSizing>{}; // rainwater downpipes
+
+  // Read-only flow orientation per edge (edgeId → the endpoint flow comes FROM).
+  // Populated below where direction is confidently known; attached to the final
+  // sizings without ever altering a size/flow. Absent ⇒ EdgeSizing.flowFromId
+  // stays null (byte-identical for callers that ignore it). A supply edge points
+  // AWAY from the source (root → demand); a gravity edge points TOWARD the
+  // collection root (demand → root); a vent carries no flow → left null.
+  final edgeFlowFrom = <String, String>{};
 
   bool isWaterSupply(ServiceType s) =>
       s == ServiceType.coldWater || s == ServiceType.hotWater;
@@ -565,6 +604,16 @@ Map<String, EdgeSizing> autoSizeNetwork(
         for (final entry in balanced.edgeFlow.entries) {
           allFlows[entry.key] = FlowRate(entry.value.abs());
         }
+        // Orient each ring edge from the balanced flow SIGN (positive = from→to,
+        // per LoopBalanceResult); a near-zero edge stays undirected (null).
+        for (final e in componentEdges) {
+          final q = balanced.edgeFlow[e.id] ?? 0.0;
+          if (q > 1e-12) {
+            edgeFlowFrom[e.id] = e.fromId;
+          } else if (q < -1e-12) {
+            edgeFlowFrom[e.id] = e.toId;
+          }
+        }
         continue;
       }
 
@@ -573,26 +622,39 @@ Map<String, EdgeSizing> autoSizeNetwork(
         // capacity table (branch vs stack), not from Manning flow.
         final terminalUnits =
             terminalMap(component, root, nodeDrainageUnits, kDefaultLeafDfu);
+        final edgeParents = <String, String>{};
         final edgeUnits = accumulateFixtureUnits(
           net: net,
           service: service,
           rootId: root,
           terminalUnits: terminalUnits,
+          edgeParent: edgeParents,
         );
         for (final entry in edgeUnits.entries) {
           final edge = net.edges.firstWhere((e) => e.id == entry.key);
           sanitary[entry.key] = _sizeSanitaryEdge(edge, entry.value, ctx);
+          // Drainage flows DOWNHILL toward the collection root, so it comes FROM
+          // the away-from-root (demand) endpoint. A vent carries no flow → skip.
+          if (edge.service == ServiceType.drainage) {
+            final parent = edgeParents[entry.key];
+            if (parent != null) {
+              edgeFlowFrom[entry.key] =
+                  parent == edge.fromId ? edge.toId : edge.fromId;
+            }
+          }
         }
       } else if (service == ServiceType.rainwater) {
         // Accumulate storm runoff and size each downpipe from the rainwater
         // capacity table (not Manning).
         final terminalDemand =
             terminalMap(component, root, nodeFlowDemand, demand);
+        final edgeParents = <String, String>{};
         final flows = accumulateFlows(
           net: net,
           service: service,
           rootId: root,
           terminalDemand: terminalDemand,
+          edgeParent: edgeParents,
         );
         for (final entry in flows.entries) {
           final r = storm.sizeRainwaterDownpipe(entry.value);
@@ -603,37 +665,56 @@ Map<String, EdgeSizing> autoSizeNetwork(
             diameter: r.diameter,
             velocity: velocityFromFlow(entry.value, r.diameter),
           );
+          // Storm runoff drains TOWARD the outlet root, so it comes FROM the
+          // away-from-root (roof-drain) endpoint.
+          final parent = edgeParents[entry.key];
+          if (parent != null) {
+            final edge = net.edges.firstWhere((e) => e.id == entry.key);
+            edgeFlowFrom[entry.key] =
+                parent == edge.fromId ? edge.toId : edge.fromId;
+          }
         }
       } else if (useUbap) {
         // Per-fixture UBAP when a node carries a fixture type; else the flat
         // default for that water service.
         final terminalUnits =
             terminalMap(component, root, nodeFixtureUnits, fuPerLeaf);
+        final edgeParents = <String, String>{};
         final edgeUnits = accumulateFixtureUnits(
           net: net,
           service: service,
           rootId: root,
           terminalUnits: terminalUnits,
+          edgeParent: edgeParents,
         );
         for (final entry in edgeUnits.entries) {
           allFlows[entry.key] = profile.probableFlowForFixtureUnits(
             entry.value,
             system: flushSystem,
           );
+          // Supply flows AWAY from the source root, so it comes FROM the
+          // root-side (parent) endpoint.
+          final parent = edgeParents[entry.key];
+          if (parent != null) edgeFlowFrom[entry.key] = parent;
         }
       } else {
         // Per-node flow where set (e.g. a diffuser's airflow); else the flat
         // default for the service.
         final terminalDemand =
             terminalMap(component, root, nodeFlowDemand, demand);
+        final edgeParents = <String, String>{};
         allFlows.addAll(
           accumulateFlows(
             net: net,
             service: service,
             rootId: root,
             terminalDemand: terminalDemand,
+            edgeParent: edgeParents,
           ),
         );
+        // Supply/air flows AWAY from the source root → comes FROM the root-side
+        // (parent) endpoint.
+        edgeFlowFrom.addAll(edgeParents);
       }
     }
   }
@@ -650,6 +731,12 @@ Map<String, EdgeSizing> autoSizeNetwork(
     final override = sizeOverrides[entry.key];
     result[entry.key] =
         override == null ? entry.value : applySizeOverride(entry.value, override);
+  }
+  // Attach the read-only flow orientation last (after overrides), so the arrow
+  // record survives an override without touching any computed size/flow.
+  for (final id in edgeFlowFrom.keys) {
+    final sized = result[id];
+    if (sized != null) result[id] = sized.withFlowFrom(edgeFlowFrom[id]);
   }
   return result;
 }

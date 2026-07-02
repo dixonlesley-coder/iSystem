@@ -12,14 +12,18 @@ library;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/network/connectivity.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/riser_tags.dart'
+    show drainageStackBasesLackingCleanout;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 
 import 'air_warnings_store.dart';
+import 'electrical_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sheets_store.dart';
@@ -36,25 +40,43 @@ import 'solve_store.dart';
 enum IssueSeverity { critical, warning, info }
 
 /// Where an issue lives on the drawing, so the Review row can jump to it.
-/// [sheetId] is always present for a locatable issue; [nodeId]/[edgeId] point at
-/// the specific element when one is known.
+/// [sheetId] is present for a MECHANICAL (PDF-sheet) issue; [nodeId]/[edgeId]
+/// point at the specific element when one is known. An ELECTRICAL issue instead
+/// carries [panelId] (+ optionally [circuitId]) and leaves [sheetId] empty — it
+/// is located on the single-line, not a floor plan (the jump keys off panelId).
 @immutable
 class IssueLocation {
   final String sheetId;
   final String? nodeId;
   final String? edgeId;
 
-  const IssueLocation(this.sheetId, {this.nodeId, this.edgeId});
+  /// Electrical target: the panel the issue belongs to (the Review→Electrical
+  /// jump focuses this panel). Null for a mechanical / sheet-based issue.
+  final String? panelId;
+
+  /// Electrical target: the specific circuit (way) when known. Null otherwise.
+  final String? circuitId;
+
+  const IssueLocation(
+    this.sheetId, {
+    this.nodeId,
+    this.edgeId,
+    this.panelId,
+    this.circuitId,
+  });
 
   @override
   bool operator ==(Object other) =>
       other is IssueLocation &&
       other.sheetId == sheetId &&
       other.nodeId == nodeId &&
-      other.edgeId == edgeId;
+      other.edgeId == edgeId &&
+      other.panelId == panelId &&
+      other.circuitId == circuitId;
 
   @override
-  int get hashCode => Object.hash(sheetId, nodeId, edgeId);
+  int get hashCode =>
+      Object.hash(sheetId, nodeId, edgeId, panelId, circuitId);
 }
 
 /// One aggregated design issue: a [severity], a short [title] + [message], and
@@ -260,6 +282,24 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
+  // ── 4b. Drainage stack base without a cleanout (info, locatable) ────────────
+  // B2: the riser drawing draws a cleanout ONLY where the engineer placed one;
+  // a stack whose lowest node lacks a cleanout at/beside its base is surfaced
+  // here as a muted advisory instead of fabricating the symbol. Pure engine
+  // detection (`drainageStackBasesLackingCleanout`), shared with the drawing.
+  for (final id in drainageStackBasesLackingCleanout(net)) {
+    final node = nodeById[id];
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      title: 'Drainage stack has no cleanout at its base',
+      message: 'A drainage stack reaches its lowest drawn point here with no '
+          'cleanout component at or beside the base — rodding access is '
+          'conventional at every stack base. Place a cleanout, or confirm '
+          'access exists elsewhere.',
+      locate: node == null ? null : IssueLocation(node.sheetId, nodeId: id),
+    ));
+  }
+
   // ── 5. Hot-water anti-Legionella return temperature (info, not locatable) ───
   if (legionellaReturnTempC != null) {
     infos.add(DesignIssue(
@@ -270,6 +310,44 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
           'anti-Legionella floor (~55 °C). Reduce the loop temperature drop or '
           'add trace heating. (// VERIFY vs SNI / WHO guidance.)',
     ));
+  }
+
+  // ── 5b. Electrical sizing warnings (fanned in from the solved system) ───────
+  // Every ElectricalWarning the A4 orchestrator raises (cable-ampacity, voltage
+  // drop, earthing, phase imbalance, …) becomes a DesignIssue so the one Review
+  // list — not a bare count — carries the electrical health of an M+E+P design.
+  // Severity maps straight across: error ⇒ critical (a blocker — e.g. a way its
+  // cable can't protect), warning ⇒ warning, info ⇒ info. Nothing is skipped.
+  // An electrical issue is located on the single-line via its [panelId] (the
+  // sheetId is empty/unused), so the Review row jumps to the Electrical
+  // workspace + focuses the panel rather than a floor plan. A system-level
+  // warning with no panel is non-locatable.
+  final electrical = ref.watch(electricalResultProvider);
+  for (final w in electrical.warnings) {
+    final severity = switch (w.severity) {
+      WarningSeverity.error => IssueSeverity.critical,
+      WarningSeverity.warning => IssueSeverity.warning,
+      WarningSeverity.info => IssueSeverity.info,
+    };
+    final issue = DesignIssue(
+      severity: severity,
+      // A short humanized form of the code (e.g. 'cable-ampacity-inadequate' →
+      // 'Electrical: cable ampacity inadequate'); the engine message carries
+      // the specifics.
+      title: 'Electrical: ${w.code.replaceAll('-', ' ')}',
+      message: w.message,
+      locate: w.panelId == null
+          ? null
+          : IssueLocation('', panelId: w.panelId, circuitId: w.circuitId),
+    );
+    switch (severity) {
+      case IssueSeverity.critical:
+        criticals.add(issue);
+      case IssueSeverity.warning:
+        warnings.add(issue);
+      case IssueSeverity.info:
+        infos.add(issue);
+    }
   }
 
   // ── 6. Unverified // VERIFY standards (info, not locatable) ─────────────────

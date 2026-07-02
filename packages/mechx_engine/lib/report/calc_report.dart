@@ -1,10 +1,13 @@
-/// Calculation-report generator — renders a full MEP design summary as
-/// Markdown (engineer-friendly, plain-text, diffable, convertible to PDF).
+/// Calculation-report generator — builds a full MEP design summary as a
+/// neutral [RptBlock] list ([buildCalcReportBlocks]) rendered to Markdown
+/// (engineer-friendly, plain-text, diffable) by [buildCalcReportMarkdown] or
+/// typeset to PDF by `report_pdf.dart`.
 ///
-/// Pure: takes already-computed typed results in [CalcReportData] and returns a
-/// string. Zero Flutter imports — the app gathers provider values into the data
-/// struct and handles file IO. Every UNVERIFIED standard value is surfaced in a
-/// dedicated section so the report never hides provenance gaps (§8).
+/// Pure: takes already-computed typed results in [CalcReportData] and returns
+/// blocks / a string. Zero Flutter imports — the app gathers provider values
+/// into the data struct and handles file IO. Every UNVERIFIED standard value is
+/// surfaced in a dedicated section so the report never hides provenance gaps
+/// (§8).
 library;
 
 import '../geometry/building.dart';
@@ -21,6 +24,8 @@ import '../sizing/operating_point.dart';
 import '../sizing/pump.dart';
 import '../standards/sni.dart';
 import '../units.dart';
+import 'report_blocks.dart';
+import 'report_strings.dart';
 
 /// All inputs the calc report renders. Systems that aren't present are null /
 /// empty and their sections are skipped.
@@ -116,314 +121,454 @@ class CalcReportData {
   });
 }
 
-String _occupancyLabel(Occupancy o) => switch (o) {
-      Occupancy.private => 'Private',
-      Occupancy.public => 'Public',
-      Occupancy.assembly => 'Assembly',
+String _occupancyLabel(Occupancy o, ReportStrings s) => switch (o) {
+      Occupancy.private => s(RptStringKey.occPrivate),
+      Occupancy.public => s(RptStringKey.occPublic),
+      Occupancy.assembly => s(RptStringKey.occAssembly),
     };
 
 /// A short, honest label for an unverified value's provenance tier.
-String _statusTag(VerificationStatus s) => switch (s) {
+String _statusTag(VerificationStatus st, ReportStrings s) => switch (st) {
       VerificationStatus.sniVerbatim => '',
-      VerificationStatus.secondarySource =>
-        ' _(secondary source — confirm against the SNI clause)_',
-      VerificationStatus.notAnSniClause =>
-        ' _(not an SNI clause — general engineering practice)_',
+      VerificationStatus.secondarySource => s(RptStringKey.statusSecondary),
+      VerificationStatus.notAnSniClause => s(RptStringKey.statusNotSni),
     };
 
-String _service(ServiceType s) => switch (s) {
-      ServiceType.coldWater => 'Cold water',
-      ServiceType.hotWater => 'Hot water',
-      ServiceType.drainage => 'Drainage',
-      ServiceType.vent => 'Vent',
-      ServiceType.rainwater => 'Rainwater',
-      ServiceType.duct => 'Supply air',
-      ServiceType.returnAir => 'Return air',
-      ServiceType.exhaust => 'Exhaust',
-      ServiceType.fireSprinkler => 'Sprinkler',
-      ServiceType.fireHydrant => 'Hydrant',
+String _service(ServiceType type, ReportStrings s) => switch (type) {
+      ServiceType.coldWater => s(RptStringKey.svcColdWater),
+      ServiceType.hotWater => s(RptStringKey.svcHotWater),
+      ServiceType.drainage => s(RptStringKey.svcDrainage),
+      ServiceType.vent => s(RptStringKey.svcVent),
+      ServiceType.rainwater => s(RptStringKey.svcRainwater),
+      ServiceType.duct => s(RptStringKey.svcSupplyAir),
+      ServiceType.returnAir => s(RptStringKey.svcReturnAir),
+      ServiceType.exhaust => s(RptStringKey.svcExhaust),
+      ServiceType.fireSprinkler => s(RptStringKey.svcSprinkler),
+      ServiceType.fireHydrant => s(RptStringKey.svcHydrant),
     };
 
-/// Render the mechanical **Design Basis / Inputs & Assumptions** register into
-/// [b] from [d]. A bulleted echo of the actual project inputs (building,
+/// The mechanical **Design Basis / Inputs & Assumptions** register as a
+/// key-value block — a bulleted echo of the actual project inputs (building,
 /// occupancy, feed, residual target, fire systems, rainfall) so the report
 /// states the assumptions it was computed under. Shared with the unified MEP
-/// report so both surfaces read the same basis. Caller writes the `##` heading.
-void writeMechanicalDesignBasis(StringBuffer b, CalcReportData d) {
-  b.writeln('- Levels: **${d.building.levelCount}**, total height '
-      '**${d.building.totalHeight.meters.toStringAsFixed(2)} m**');
-  if (d.occupancy != null) {
-    b.writeln('- Occupancy class: **${_occupancyLabel(d.occupancy!)}** '
-        '(UBAP fixture-unit loads / Hunter demand)');
-  }
-  b.writeln('- Water feed strategy: **${d.feedStrategy}**');
-  b.writeln('- Target fixture residual: '
-      '**${d.targetResidual.inKiloPascals.toStringAsFixed(0)} kPa**');
-  b.writeln('- Design rainfall: **${d.rainfallMmPerHr.toStringAsFixed(0)} mm/hr** '
-      '· runoff C **${d.runoffCoefficient.toStringAsFixed(2)}** (rational method)');
+/// report so both surfaces read the same basis. Caller adds the `##` heading.
+RptKeyValue mechanicalDesignBasisBlock(CalcReportData d,
+    [ReportStrings strings = const ReportStrings.en()]) {
   final fireSystems = <String>[
-    if (d.sprinkler != null) 'sprinkler',
-    if (d.standpipe != null) 'standpipe / hydrant',
+    if (d.sprinkler != null) strings(RptStringKey.dbFireSprinkler),
+    if (d.standpipe != null) strings(RptStringKey.dbFireStandpipe),
   ];
-  b.writeln('- Fire protection: '
-      '**${fireSystems.isEmpty ? 'none modelled' : fireSystems.join(' + ')}**');
+  return RptKeyValue([
+    (
+      strings(RptStringKey.dbLevels),
+      strings.format(RptStringKey.dbLevelsValue, {
+        'count': d.building.levelCount,
+        'height': d.building.totalHeight.meters.toStringAsFixed(2),
+      })
+    ),
+    if (d.occupancy != null)
+      (
+        strings(RptStringKey.dbOccupancy),
+        strings.format(RptStringKey.dbOccupancyValue,
+            {'label': _occupancyLabel(d.occupancy!, strings)})
+      ),
+    (strings(RptStringKey.dbFeedStrategy), '**${d.feedStrategy}**'),
+    (
+      strings(RptStringKey.dbTargetResidual),
+      '**${d.targetResidual.inKiloPascals.toStringAsFixed(0)} kPa**'
+    ),
+    (
+      strings(RptStringKey.dbDesignRainfall),
+      strings.format(RptStringKey.dbDesignRainfallValue, {
+        'mm': d.rainfallMmPerHr.toStringAsFixed(0),
+        'c': d.runoffCoefficient.toStringAsFixed(2),
+      })
+    ),
+    (
+      strings(RptStringKey.dbFireProtection),
+      '**${fireSystems.isEmpty ? strings(RptStringKey.dbFireNoneModelled) : fireSystems.join(' + ')}**'
+    ),
+  ]);
+}
+
+/// Render the mechanical Design Basis register into [b] (legacy writer, shared
+/// with the unified MEP report's Markdown path). Rows only — no trailing blank
+/// line; caller writes the `##` heading.
+void writeMechanicalDesignBasis(StringBuffer b, CalcReportData d,
+    [ReportStrings strings = const ReportStrings.en()]) {
+  for (final (key, value) in mechanicalDesignBasisBlock(d, strings).rows) {
+    b.writeln('- $key $value');
+  }
+}
+
+/// The Revision-history section as blocks (heading + table). Empty [revisions]
+/// ⇒ an empty list, so a caller that does not track revisions gets
+/// byte-identical legacy output.
+List<RptBlock> revisionHistoryBlocks(List<Revision> revisions,
+    [ReportStrings strings = const ReportStrings.en()]) {
+  if (revisions.isEmpty) return const [];
+  return [
+    RptHeading(2, strings(RptStringKey.headingRevisionHistory)),
+    RptTable(
+      [strings(RptStringKey.tblDate), strings(RptStringKey.tblDescription)],
+      [
+        for (final r in revisions)
+          [r.date, r.description.replaceAll('|', r'\|').replaceAll('\n', ' ')],
+      ],
+      mdSeparator: '|---|---|',
+    ),
+  ];
 }
 
 /// Render a Revision-history table into [b]. No-op when [revisions] is empty, so
 /// a caller that does not track revisions gets byte-identical legacy output.
-void writeRevisionHistory(StringBuffer b, List<Revision> revisions) {
-  if (revisions.isEmpty) return;
-  b.writeln('## Revision history');
-  b.writeln();
-  b.writeln('| Date | Description |');
-  b.writeln('|---|---|');
-  for (final r in revisions) {
-    final desc = r.description.replaceAll('|', r'\|').replaceAll('\n', ' ');
-    b.writeln('| ${r.date} | $desc |');
-  }
-  b.writeln();
+void writeRevisionHistory(StringBuffer b, List<Revision> revisions,
+    [ReportStrings strings = const ReportStrings.en()]) {
+  b.write(renderRptMarkdown(revisionHistoryBlocks(revisions, strings)));
 }
 
-/// Render [d] as a Markdown calculation report.
-String buildCalcReportMarkdown(CalcReportData d) {
-  final b = StringBuffer();
-  b.writeln('# MEP Calculation Report — ${d.projectName}');
-  b.writeln();
-  b.writeln('_Generated ${d.date} · MechX_');
-  b.writeln();
-  b.writeln('**Standards basis:** ${d.standardsName} (${d.standardsRevision})');
-  b.writeln();
+/// Build [d] as the neutral block list — the one content model behind both the
+/// Markdown render ([buildCalcReportMarkdown]) and the PDF typesetter.
+List<RptBlock> buildCalcReportBlocks(CalcReportData d,
+    [ReportStrings strings = const ReportStrings.en()]) {
+  final blocks = <RptBlock>[
+    RptHeading(1,
+        strings.format(RptStringKey.calcTitle, {'name': d.projectName})),
+    RptParagraph(strings.format(RptStringKey.calcGenerated, {'date': d.date})),
+    RptParagraph(strings.format(RptStringKey.calcStandardsBasis,
+        {'name': d.standardsName, 'rev': d.standardsRevision})),
 
-  // ── Design basis / inputs & assumptions ─────────────────────────────────────
-  b.writeln('## Design basis');
-  b.writeln();
-  writeMechanicalDesignBasis(b, d);
-  b.writeln();
+    // ── Design basis / inputs & assumptions ───────────────────────────────────
+    RptHeading(2, strings(RptStringKey.headingDesignBasis)),
+    mechanicalDesignBasisBlock(d, strings),
 
-  // ── Revision history (only when the caller tracks revisions) ────────────────
-  writeRevisionHistory(b, d.revisions);
+    // ── Revision history (only when the caller tracks revisions) ──────────────
+    ...revisionHistoryBlocks(d.revisions, strings),
+  ];
 
   // ── Unverified values (provenance honesty) ─────────────────────────────────
   final unverified = d.verifyItems.where((v) => v.isUnverified).toList();
-  b.writeln('## ⚠ Unverified values');
+  // Tight: the legacy report runs this heading straight into its paragraph.
+  blocks.add(RptHeading(2, strings(RptStringKey.headingUnverified), tight: true));
   if (unverified.isEmpty) {
-    b.writeln('All standard values used are verified against source text.');
+    blocks.add(RptParagraph(strings(RptStringKey.unverifiedAllVerified)));
   } else {
-    b.writeln('The following values are placeholders / secondary-sourced and '
-        'MUST be confirmed against the official standard before this report '
-        'is used for a submission:');
-    b.writeln();
-    for (final v in unverified) {
-      // Print the citation plus the human-readable `note` (which carries the
-      // correctly-scaled value, e.g. "≈392 kPa"). We deliberately do NOT print
-      // the raw `value`+`unit` pair: typed quantities store SI base units
-      // (Pressure in Pa) while `unit` is a display label (kPa), so pairing them
-      // would mis-scale numbers by 1000×. Fall back to value+unit only when no
-      // note is supplied (those entries are non-numeric, e.g. the demand curve).
-      final detail = v.note ?? '${v.value} ${v.unit}';
-      b.writeln('- **${v.citation}**${_statusTag(v.status)} — $detail');
-    }
+    blocks.add(RptParagraph(strings(RptStringKey.unverifiedIntro)));
+    // Print the citation plus the human-readable `note` (which carries the
+    // correctly-scaled value, e.g. "≈392 kPa"). We deliberately do NOT print
+    // the raw `value`+`unit` pair: typed quantities store SI base units
+    // (Pressure in Pa) while `unit` is a display label (kPa), so pairing them
+    // would mis-scale numbers by 1000×. Fall back to value+unit only when no
+    // note is supplied (those entries are non-numeric, e.g. the demand curve).
+    blocks.add(RptKeyValue([
+      for (final v in unverified)
+        (
+          '',
+          '**${v.citation}**${_statusTag(v.status, strings)} — '
+              '${v.note ?? '${v.value} ${v.unit}'}'
+        ),
+    ]));
   }
-  b.writeln();
 
   // ── Building ────────────────────────────────────────────────────────────────
-  b.writeln('## Building');
-  b.writeln();
-  b.writeln('| Floor | Height (m) | Elevation (m) |');
-  b.writeln('|---|---:|---:|');
-  for (var i = d.building.levelCount - 1; i >= 0; i--) {
-    final f = d.building.floors[i];
-    b.writeln('| ${f.name} | ${f.height.meters.toStringAsFixed(2)} '
-        '| ${d.building.elevationOf(i).meters.toStringAsFixed(2)} |');
-  }
-  b.writeln();
-  b.writeln('Total height: **${d.building.totalHeight.meters.toStringAsFixed(2)} m** '
-      'over ${d.building.levelCount} levels.');
-  b.writeln();
+  blocks
+    ..add(RptHeading(2, strings(RptStringKey.headingBuilding)))
+    ..add(RptTable(
+      [
+        strings(RptStringKey.tblFloor),
+        strings(RptStringKey.tblHeightM),
+        strings(RptStringKey.tblElevationM),
+      ],
+      [
+        for (var i = d.building.levelCount - 1; i >= 0; i--)
+          [
+            d.building.floors[i].name,
+            d.building.floors[i].height.meters.toStringAsFixed(2),
+            d.building.elevationOf(i).meters.toStringAsFixed(2),
+          ],
+      ],
+      mdSeparator: '|---|---:|---:|',
+    ))
+    ..add(RptParagraph(strings.format(RptStringKey.buildingTotalHeight, {
+      'height': d.building.totalHeight.meters.toStringAsFixed(2),
+      'levels': d.building.levelCount,
+    })));
 
   // ── Water supply ──────────────────────────────────────────────────────────
-  b.writeln('## Water supply');
-  b.writeln();
-  b.writeln('- Feed strategy: **${d.feedStrategy}**');
-  b.writeln('- Target fixture residual: '
-      '**${d.targetResidual.inKiloPascals.toStringAsFixed(0)} kPa**');
+  // The bullet cluster mixes conditional bullets with indented sub-bullets
+  // (operating point, Legionella advisory) — a stubborn legacy construct, so
+  // it rides the transitional RptMarkdown hatch verbatim.
+  blocks.add(RptHeading(2, strings(RptStringKey.headingWaterSupply)));
+  final ws = StringBuffer();
+  ws.writeln(strings
+      .format(RptStringKey.wsFeedStrategy, {'strategy': d.feedStrategy}));
+  ws.writeln(strings.format(RptStringKey.wsTargetResidual,
+      {'kpa': d.targetResidual.inKiloPascals.toStringAsFixed(0)}));
   if (d.pump != null) {
-    b.writeln('- Pump head: **${d.pump!.head.meters.toStringAsFixed(1)} m**');
-    b.writeln('- Pump motor: '
-        '**${d.pump!.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW**');
+    ws.writeln(strings.format(RptStringKey.wsPumpHead,
+        {'m': d.pump!.head.meters.toStringAsFixed(1)}));
+    ws.writeln(strings.format(RptStringKey.wsPumpMotor,
+        {'kw': d.pump!.selectedMotor.inKiloWatts.toStringAsFixed(2)}));
   }
   final pop = d.pumpOperatingPoint ?? d.pump?.operatingPoint;
   if (pop != null) {
-    b.writeln('- Operating point (system × pump curve): '
-        '**${pop.operatingFlow.inLitersPerSecond.toStringAsFixed(1)} L/s** '
-        '@ **${pop.operatingHead.meters.toStringAsFixed(1)} m** '
-        '(${(pop.flowRatio * 100).toStringAsFixed(0)} % of design flow) · '
-        '${pop.stable ? 'stable match' : '**unstable / hunting match**'} '
-        '_(H_sys = static + k·Q² × pump curve — // VERIFY curve coefficients)_');
-    b.writeln('  - System curve: static '
-        '${pop.systemStaticHead.meters.toStringAsFixed(1)} m + k·Q² · '
-        'pump shutoff ${pop.equipmentShutoffHead.meters.toStringAsFixed(1)} m '
-        '_(representative curve, not certified pump data — // VERIFY)_');
-    b.writeln('  - NPSH: available '
-        '**${pop.npshAvailable.meters.toStringAsFixed(1)} m** vs required '
-        '~${pop.npshRequired.meters.toStringAsFixed(1)} m · '
-        '${pop.cavitationRisk ? '**⚠ cavitation risk**' : 'adequate margin'} '
-        '_(NPSH_required is a // VERIFY estimate, not a certified curve)_');
+    ws.writeln(strings.format(RptStringKey.wsOperatingPoint, {
+      'lps': pop.operatingFlow.inLitersPerSecond.toStringAsFixed(1),
+      'm': pop.operatingHead.meters.toStringAsFixed(1),
+      'pct': (pop.flowRatio * 100).toStringAsFixed(0),
+      'match': pop.stable
+          ? strings(RptStringKey.wsMatchStable)
+          : strings(RptStringKey.wsMatchUnstable),
+    }));
+    ws.writeln(strings.format(RptStringKey.wsSystemCurve, {
+      'static': pop.systemStaticHead.meters.toStringAsFixed(1),
+      'shutoff': pop.equipmentShutoffHead.meters.toStringAsFixed(1),
+    }));
+    ws.writeln(strings.format(RptStringKey.wsNpsh, {
+      'avail': pop.npshAvailable.meters.toStringAsFixed(1),
+      'req': pop.npshRequired.meters.toStringAsFixed(1),
+      'cav': pop.cavitationRisk
+          ? strings(RptStringKey.wsCavRisk)
+          : strings(RptStringKey.wsCavAdequate),
+    }));
   }
   if (d.boosterHead != null) {
-    b.writeln('- Downfeed: '
-        '${d.gravitySufficient ? '**gravity sufficient**' : 'booster **+${d.boosterHead!.meters.toStringAsFixed(1)} m**'}');
+    ws.writeln(strings.format(RptStringKey.wsDownfeed, {
+      'status': d.gravitySufficient
+          ? strings(RptStringKey.wsDownfeedGravity)
+          : strings.format(RptStringKey.wsDownfeedBooster,
+              {'m': d.boosterHead!.meters.toStringAsFixed(1)}),
+    }));
   }
   final hwr = d.hotWaterRecirc;
   if (hwr != null) {
-    b.writeln('- Hot-water recirculation: '
-        '**${hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2)} L/s** · '
-        'loop ${hwr.loopHead.meters.toStringAsFixed(1)} m · '
-        'pump ${hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW · '
-        'return ${hwr.returnTempC.toStringAsFixed(0)} °C');
+    ws.writeln(strings.format(RptStringKey.wsHotWaterRecirc, {
+      'lps': hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2),
+      'loop': hwr.loopHead.meters.toStringAsFixed(1),
+      'kw': hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2),
+      'c': hwr.returnTempC.toStringAsFixed(0),
+    }));
     if (hwr.legionellaRisk) {
-      b.writeln('  - ⚠ Modelled return temperature '
-          '${hwr.returnTempC.toStringAsFixed(0)} °C is below the anti-Legionella '
-          'floor (~55 °C). Reduce the loop temperature drop or add trace '
-          'heating. _(general guidance — // VERIFY vs SNI)_');
+      ws.writeln(strings.format(RptStringKey.wsLegionella,
+          {'c': hwr.returnTempC.toStringAsFixed(0)}));
     }
   }
+  ws.writeln(); // closes the cluster (one blank line, zones or not).
+  blocks.add(RptMarkdown(ws.toString()));
   if (d.zones.isNotEmpty) {
-    b.writeln();
-    b.writeln('### Pressure zones (PRV)');
-    b.writeln();
-    b.writeln('| Zone (floors) | Top residual (kPa) | Bottom static (kPa) | Within limit |');
-    b.writeln('|---|---:|---:|---|');
-    for (var i = 0; i < d.zones.length; i++) {
-      final z = d.zones[i];
-      b.writeln('| ${z.zone.bottomFloorIndex + 1}–${z.zone.topFloorIndex + 1} '
-          '| ${z.topResidual.inKiloPascals.toStringAsFixed(0)} '
-          '| ${z.bottomStatic.inKiloPascals.toStringAsFixed(0)} '
-          '| ${z.withinLimit ? 'OK' : 'OVER'} |');
-    }
+    blocks
+      ..add(RptHeading(3, strings(RptStringKey.headingPressureZones)))
+      ..add(RptTable(
+        [
+          strings(RptStringKey.tblZoneFloors),
+          strings(RptStringKey.tblTopResidual),
+          strings(RptStringKey.tblBottomStatic),
+          strings(RptStringKey.tblWithinLimit),
+        ],
+        [
+          for (final z in d.zones)
+            [
+              '${z.zone.bottomFloorIndex + 1}–${z.zone.topFloorIndex + 1}',
+              z.topResidual.inKiloPascals.toStringAsFixed(0),
+              z.bottomStatic.inKiloPascals.toStringAsFixed(0),
+              z.withinLimit
+                  ? strings(RptStringKey.verdictOk)
+                  : strings(RptStringKey.verdictOver),
+            ],
+        ],
+        mdSeparator: '|---|---:|---:|---|',
+      ));
   }
-  b.writeln();
 
   // ── Fire ────────────────────────────────────────────────────────────────────
   if (d.sprinkler != null ||
       d.standpipe != null ||
       d.sprinklerRemoteArea != null ||
       d.firePumpRating != null) {
-    b.writeln('## Fire protection');
-    b.writeln();
     final sp = d.sprinkler;
-    if (sp != null) {
-      b.writeln('- Sprinkler (${sp.hazard.name}): '
-          '**${sp.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s** '
-          'over ${sp.sprinklerCount} heads');
-    }
     final ra = d.sprinklerRemoteArea;
-    if (ra != null) {
-      b.writeln('- Remote-area head (K = ${ra.kFactor.toStringAsFixed(0)}): '
-          '${ra.remoteHeadFlow.inLitersPerMinute.toStringAsFixed(0)} L/min '
-          '@ **${ra.remoteHeadPressure.inBar.toStringAsFixed(2)} bar** '
-          '(min ${ra.minOperatingPressure.inBar.toStringAsFixed(2)} bar) · '
-          'branch friction ${ra.branchLineFrictionHead.meters.toStringAsFixed(1)} m · '
-          '**${ra.verdict}** '
-          '_(K-factor + min head pressure — general practice, // VERIFY)_');
-    }
     final st = d.standpipe;
-    if (st != null) {
-      b.writeln('- Standpipe: '
-          '**${st.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s** · '
-          'fire pump ${st.pumpHead.meters.toStringAsFixed(0)} m · '
-          '${st.pumpShaftPower.inKiloWatts.toStringAsFixed(1)} kW · '
-          'min riser ${st.minRiserDiameter.inMillimeters.round()} mm');
-    }
     final fp = d.firePumpRating;
-    if (fp != null) {
-      final duty =
-          fp.designation == PumpDesignation.duty ? 'duty' : 'standby';
-      b.writeln('- Fire-pump rating curve (NFPA 20, $duty pump): '
-          'rated ${fp.ratedFlow.inLitersPerSecond.toStringAsFixed(0)} L/s '
-          '@ ${fp.ratedHead.meters.toStringAsFixed(0)} m · '
-          'churn ${fp.churn.head.meters.toStringAsFixed(0)} m (140 %) · '
-          '150 % flow @ ${fp.overload.head.meters.toStringAsFixed(0)} m (65 %) · '
-          'motor **${fp.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW** · '
-          '**${fp.verdict}** '
-          '_(curve acceptance ratios — NFPA 20 limits, // VERIFY)_');
-      b.writeln('- Jockey pump: '
-          '${fp.jockeyFlow.inLitersPerSecond.toStringAsFixed(2)} L/s '
-          '@ ${fp.jockeyHead.meters.toStringAsFixed(0)} m '
-          '(pressure maintenance)'
-          '${fp.standbyRecommended ? ' · standby pump recommended' : ''}');
-    }
-    b.writeln();
+    blocks
+      ..add(RptHeading(2, strings(RptStringKey.headingFireProtection)))
+      ..add(RptKeyValue([
+        if (sp != null)
+          (
+            strings.format(
+                RptStringKey.fireSprinklerKey, {'hazard': sp.hazard.name}),
+            strings.format(RptStringKey.fireSprinklerValue, {
+              'lps': sp.requiredFlow.inLitersPerSecond.toStringAsFixed(1),
+              'count': sp.sprinklerCount,
+            })
+          ),
+        if (ra != null)
+          (
+            strings.format(RptStringKey.fireRemoteAreaKey,
+                {'k': ra.kFactor.toStringAsFixed(0)}),
+            strings.format(RptStringKey.fireRemoteAreaValue, {
+              'lpm': ra.remoteHeadFlow.inLitersPerMinute.toStringAsFixed(0),
+              'bar': ra.remoteHeadPressure.inBar.toStringAsFixed(2),
+              'minbar': ra.minOperatingPressure.inBar.toStringAsFixed(2),
+              'fric': ra.branchLineFrictionHead.meters.toStringAsFixed(1),
+              'verdict': ra.verdict,
+            })
+          ),
+        if (st != null)
+          (
+            strings(RptStringKey.fireStandpipeKey),
+            strings.format(RptStringKey.fireStandpipeValue, {
+              'lps': st.requiredFlow.inLitersPerSecond.toStringAsFixed(1),
+              'm': st.pumpHead.meters.toStringAsFixed(0),
+              'kw': st.pumpShaftPower.inKiloWatts.toStringAsFixed(1),
+              'mm': st.minRiserDiameter.inMillimeters.round(),
+            })
+          ),
+        if (fp != null)
+          (
+            strings.format(RptStringKey.firePumpKey, {
+              'des': fp.designation == PumpDesignation.duty
+                  ? strings(RptStringKey.firePumpDuty)
+                  : strings(RptStringKey.firePumpStandby),
+            }),
+            strings.format(RptStringKey.firePumpValue, {
+              'rated': fp.ratedFlow.inLitersPerSecond.toStringAsFixed(0),
+              'head': fp.ratedHead.meters.toStringAsFixed(0),
+              'churn': fp.churn.head.meters.toStringAsFixed(0),
+              'overload': fp.overload.head.meters.toStringAsFixed(0),
+              'motor': fp.selectedMotor.inKiloWatts.toStringAsFixed(1),
+              'verdict': fp.verdict,
+            })
+          ),
+        if (fp != null)
+          (
+            strings(RptStringKey.fireJockeyKey),
+            strings.format(RptStringKey.fireJockeyValue, {
+              'lps': fp.jockeyFlow.inLitersPerSecond.toStringAsFixed(2),
+              'm': fp.jockeyHead.meters.toStringAsFixed(0),
+              'standby': fp.standbyRecommended
+                  ? strings(RptStringKey.fireJockeyStandby)
+                  : '',
+            })
+          ),
+      ]));
   }
 
   // ── HVAC ──────────────────────────────────────────────────────────────────
-  if (d.fan != null) {
-    b.writeln('## HVAC (air)');
-    b.writeln();
-    b.writeln('- Trunk airflow: '
-        '**${d.fan!.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s**');
-    b.writeln('- Fan total static: '
-        '**${d.fan!.totalStaticPressure.pascals.toStringAsFixed(0)} Pa**');
-    b.writeln('- Fan motor: '
-        '**${d.fan!.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW**');
-    final fop = d.fanOperatingPoint ?? d.fan!.operatingPoint;
-    if (fop != null) {
-      b.writeln('- Operating point (system × fan curve): '
-          '**${fop.operatingFlow.inLitersPerSecond.toStringAsFixed(0)} L/s** '
-          '@ **${fop.operatingPressure.pascals.toStringAsFixed(0)} Pa** '
-          '(${(fop.flowRatio * 100).toStringAsFixed(0)} % of design flow) · '
-          '${fop.stable ? 'stable match' : '**unstable / hunting match**'} · '
-          'fan shutoff ${fop.equipmentShutoffPressure.pascals.toStringAsFixed(0)} Pa '
-          '_(Δp_sys = k·Q² × fan curve — // VERIFY curve coefficients)_');
-    }
-    if (d.returnAirflowLps > 0) {
-      b.writeln('- Air balance: supply ${d.supplyAirflowLps.toStringAsFixed(0)} '
-          'L/s vs return ${d.returnAirflowLps.toStringAsFixed(0)} L/s');
-    }
-    b.writeln();
+  final fan = d.fan;
+  if (fan != null) {
+    final fop = d.fanOperatingPoint ?? fan.operatingPoint;
+    blocks
+      ..add(RptHeading(2, strings(RptStringKey.headingHvac)))
+      ..add(RptKeyValue([
+        (
+          strings(RptStringKey.hvacTrunkAirflow),
+          '**${fan.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s**'
+        ),
+        (
+          strings(RptStringKey.hvacFanStatic),
+          '**${fan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa**'
+        ),
+        (
+          strings(RptStringKey.hvacFanMotor),
+          '**${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW**'
+        ),
+        if (fop != null)
+          (
+            strings(RptStringKey.hvacOperatingPoint),
+            strings.format(RptStringKey.hvacOperatingPointValue, {
+              'lps': fop.operatingFlow.inLitersPerSecond.toStringAsFixed(0),
+              'pa': fop.operatingPressure.pascals.toStringAsFixed(0),
+              'pct': (fop.flowRatio * 100).toStringAsFixed(0),
+              'match': fop.stable
+                  ? strings(RptStringKey.wsMatchStable)
+                  : strings(RptStringKey.wsMatchUnstable),
+              'shutoff':
+                  fop.equipmentShutoffPressure.pascals.toStringAsFixed(0),
+            })
+          ),
+        if (d.returnAirflowLps > 0)
+          (
+            strings(RptStringKey.hvacAirBalance),
+            strings.format(RptStringKey.hvacAirBalanceValue, {
+              'sup': d.supplyAirflowLps.toStringAsFixed(0),
+              'ret': d.returnAirflowLps.toStringAsFixed(0),
+            })
+          ),
+      ]));
   }
 
   // ── Storm / rainwater ───────────────────────────────────────────────────────
-  b.writeln('## Storm / rainwater');
-  b.writeln();
-  b.writeln('- Design rainfall intensity: '
-      '**${d.rainfallMmPerHr.toStringAsFixed(0)} mm/hr**');
-  b.writeln('- Runoff coefficient C: '
-      '**${d.runoffCoefficient.toStringAsFixed(2)}** '
-      '_(surface/region-dependent — // VERIFY vs SNI)_');
-  b.writeln();
+  blocks
+    ..add(RptHeading(2, strings(RptStringKey.headingStorm)))
+    ..add(RptKeyValue([
+      (
+        strings(RptStringKey.stormRainfall),
+        '**${d.rainfallMmPerHr.toStringAsFixed(0)} mm/hr**'
+      ),
+      (
+        strings(RptStringKey.stormRunoffC),
+        strings.format(RptStringKey.stormRunoffCValue,
+            {'c': d.runoffCoefficient.toStringAsFixed(2)})
+      ),
+    ]));
 
   // ── Bill of materials ───────────────────────────────────────────────────────
   if (d.bom.isNotEmpty) {
-    b.writeln('## Bill of materials');
-    b.writeln();
-    b.writeln('| Service | Type | Size | Length (m) | Segments |');
-    b.writeln('|---|---|---|---:|---:|');
-    for (final line in d.bom) {
-      final size = line.service.isAir
-          ? 'Ø${line.diameterMm}'
-          : 'DN${line.diameterMm}';
-      b.writeln('| ${_service(line.service)} '
-          '| ${line.kind == EdgeKind.riser ? 'riser' : 'run'} '
-          '| $size | ${line.totalLength.meters.toStringAsFixed(1)} '
-          '| ${line.segmentCount} |');
-    }
-    b.writeln();
+    blocks
+      ..add(RptHeading(2, strings(RptStringKey.headingBom)))
+      ..add(RptTable(
+        [
+          strings(RptStringKey.tblService),
+          strings(RptStringKey.tblType),
+          strings(RptStringKey.tblSize),
+          strings(RptStringKey.tblLengthM),
+          strings(RptStringKey.tblSegments),
+        ],
+        [
+          for (final line in d.bom)
+            [
+              _service(line.service, strings),
+              line.kind == EdgeKind.riser
+                  ? strings(RptStringKey.bomRiser)
+                  : strings(RptStringKey.bomRun),
+              line.service.isAir ? 'Ø${line.diameterMm}' : 'DN${line.diameterMm}',
+              line.totalLength.meters.toStringAsFixed(1),
+              '${line.segmentCount}',
+            ],
+        ],
+        mdSeparator: '|---|---|---|---:|---:|',
+      ));
   }
   if (d.fittings.isNotEmpty) {
-    b.writeln('### Fittings (estimated)');
-    b.writeln();
-    b.writeln('| Service | Fitting | Size | Count |');
-    b.writeln('|---|---|---|---:|');
-    for (final f in d.fittings) {
-      b.writeln('| ${_service(f.service)} | ${f.type.name} '
-          '| DN${f.diameterMm} | ${f.count} |');
-    }
-    b.writeln();
+    blocks
+      ..add(RptHeading(3, strings(RptStringKey.headingFittings)))
+      ..add(RptTable(
+        [
+          strings(RptStringKey.tblService),
+          strings(RptStringKey.tblFitting),
+          strings(RptStringKey.tblSize),
+          strings(RptStringKey.tblCount),
+        ],
+        [
+          for (final f in d.fittings)
+            [
+              _service(f.service, strings),
+              f.type.name,
+              'DN${f.diameterMm}',
+              '${f.count}'
+            ],
+        ],
+        mdSeparator: '|---|---|---|---:|',
+      ));
   }
 
-  b.writeln('---');
-  b.writeln('_Sizes are auto-calculated to SNI velocity/demand rules. Confirm '
-      'all UNVERIFIED values and review against the applicable SNI before use._');
-  return b.toString();
+  blocks
+    ..add(const RptMarkdown('---\n'))
+    ..add(RptNote(strings(RptStringKey.calcClosingNote)));
+  return blocks;
 }
+
+/// Render [d] as a Markdown calculation report.
+String buildCalcReportMarkdown(CalcReportData d,
+        [ReportStrings strings = const ReportStrings.en()]) =>
+    renderRptMarkdown(buildCalcReportBlocks(d, strings));

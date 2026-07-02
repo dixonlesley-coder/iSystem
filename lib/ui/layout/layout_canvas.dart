@@ -38,11 +38,13 @@ import '../../store/models/sheet.dart';
 import '../../store/sheets_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/calibration_overlay.dart';
+import '../canvas/canvas_grid.dart' show calibratedGridWorldStep;
 import '../canvas/canvas_view.dart';
 import '../canvas/drawing_overlay.dart';
 import '../canvas/drop_overlay.dart';
 import '../canvas/heatmap_layer.dart';
 import '../canvas/measurement_overlay.dart';
+import '../canvas/mode_pill.dart';
 import '../canvas/smart_input_bar.dart';
 import '../canvas/tank_overlay.dart';
 import '../canvas/room_overlay.dart';
@@ -54,7 +56,10 @@ import '../canvas/zoom_controls.dart';
 import '../electrical/electrical_inspector.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../shell/project_io.dart';
+import '../shell/templates_dialog.dart';
 import '../widgets/canvas_guide_popover.dart';
+import '../widgets/mechx_button.dart';
 import '../widgets/mechx_empty_state_card.dart';
 import 'electrical_layer.dart';
 import 'layer_switcher.dart';
@@ -79,6 +84,9 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
 
   /// The electrical circuit/panel open in the inspector / a context menu.
   ElectricalEditTarget? _editing;
+
+  /// The panel whose PROPERTIES drawer is open (null = closed).
+  String? _panelEditing;
   ElectricalPanelMenuTarget? _panelMenu;
   ElectricalEditTarget? _circuitMenu;
   Offset _menuAt = Offset.zero;
@@ -95,6 +103,15 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   // CanvasView below. Drives the live canvas via [canvasKeyFor].
   bool _midPanning = false;
   Offset _midLast = Offset.zero;
+
+  /// Hold-Space pan: while the space bar is held the interactive overlays
+  /// ignore pointers, so a plain left-drag falls through to the CanvasView's
+  /// pan (with the grab cursor) — the CAD-standard answer to "left-drag never
+  /// pans with a mechanical layer active". Tracked from the canvas key handler;
+  /// disengaged whenever a text-entry surface could own the space bar
+  /// (drawing's smart input bar, calibration's length field, the electrical
+  /// edit overlays).
+  bool _spaceHeld = false;
 
   void midPanDown(PointerDownEvent e) {
     if (e.buttons & kMiddleMouseButton != 0) {
@@ -139,6 +156,13 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     return Focus(
       canRequestFocus: false,
       onKeyEvent: (_, event) => _onKey(event),
+      // If focus leaves this subtree while Space is held (a click into an
+      // inspector text field, an Alt+Tab away), the KeyUp is delivered
+      // elsewhere and the overlays would stay trapped in IgnorePointer with
+      // no on-screen cue — release the pan latch whenever focus departs.
+      onFocusChange: (has) {
+        if (!has && _spaceHeld) setState(() => _spaceHeld = false);
+      },
       child: Stack(
         children: [
           Positioned.fill(
@@ -164,7 +188,10 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
             ),
           ),
           // Electrical edit overlays (scrim + menus + inspector), hosted here.
-          if (_editing != null || _panelMenu != null || _circuitMenu != null)
+          if (_editing != null ||
+              _panelEditing != null ||
+              _panelMenu != null ||
+              _circuitMenu != null)
             Positioned.fill(
               child: Listener(
                 behavior: HitTestBehavior.translucent,
@@ -175,6 +202,7 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
           if (_circuitMenu != null) _buildCircuitMenu(),
           if (_panelMenu != null) _buildPanelMenu(),
           if (_editing != null) _buildInspector(),
+          if (_panelEditing != null) _buildPanelInspector(),
         ],
       ),
     );
@@ -190,33 +218,25 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     return box?.globalToLocal(global) ?? global;
   }
 
-  Offset _canvasCenter() {
-    final box = context.findRenderObject() as RenderBox?;
-    final size = box?.size ?? const Size(800, 600);
-    return Offset(size.width / 2, size.height / 2);
-  }
-
   void _closeOverlays() {
-    if (_editing != null || _panelMenu != null || _circuitMenu != null) {
+    if (_editing != null ||
+        _panelEditing != null ||
+        _panelMenu != null ||
+        _circuitMenu != null) {
       setState(() {
         _editing = null;
+        _panelEditing = null;
         _panelMenu = null;
         _circuitMenu = null;
       });
     }
   }
 
-  void onEditPanel(String panelId) {
-    final project = ref.read(electricalProjectProvider);
-    final panel = project.panels.where((p) => p.id == panelId).firstOrNull;
-    final first =
-        panel?.circuits.where((c) => c.loadKind != LoadKind.feeder).firstOrNull;
-    if (panel != null && first != null) {
-      setState(() => _editing = ElectricalEditTarget(panelId, first.id));
-    } else {
-      onPanelMenu(panelId, _canvasCenter());
-    }
-  }
+  /// Panel double-click opens the panel PROPERTIES drawer (name / tag /
+  /// diversity / headroom); a way / load double-click keeps opening the
+  /// circuit editor via [onEditCircuit].
+  void onEditPanel(String panelId) =>
+      setState(() => _panelEditing = panelId);
 
   void onEditCircuit(String panelId, String circuitId) =>
       setState(() => _editing = ElectricalEditTarget(panelId, circuitId));
@@ -226,6 +246,7 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       _panelMenu = ElectricalPanelMenuTarget(panelId);
       _circuitMenu = null;
       _editing = null;
+      _panelEditing = null;
       _menuAt = _toLocal(globalPos);
     });
   }
@@ -235,6 +256,7 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       _circuitMenu = ElectricalEditTarget(panelId, circuitId);
       _panelMenu = null;
       _editing = null;
+      _panelEditing = null;
       _menuAt = _toLocal(globalPos);
     });
   }
@@ -273,6 +295,10 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         child: ElectricalPanelMenu(
           panel: panel,
           controller: _ctrl,
+          onProperties: () => setState(() {
+            _panelMenu = null;
+            _panelEditing = panel.id;
+          }),
           onOpen: () {
             final first = panel.circuits
                 .where((c) => c.loadKind != LoadKind.feeder)
@@ -315,9 +341,48 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     );
   }
 
+  Widget _buildPanelInspector() {
+    final panelId = _panelEditing!;
+    final project = ref.watch(electricalProjectProvider);
+    final panel = project.panels.where((p) => p.id == panelId).firstOrNull;
+    if (panel == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      top: 0,
+      right: 0,
+      bottom: 0,
+      child: ElectricalPanelInspector(
+        key: ValueKey('panel/$panelId'),
+        panel: panel,
+        controller: _ctrl,
+        onClose: _closeOverlays,
+      ),
+    );
+  }
+
   // ── Keyboard (delete / undo / redo / escape), shared with the Plan canvas ───
 
   KeyEventResult _onKey(KeyEvent event) {
+    // Hold-Space pan — tracked on both key-down AND key-up (everything below
+    // is key-down only). Space is left alone while a text-entry surface could
+    // legitimately want it (the smart input bar while drawing, the calibration
+    // length field, the electrical circuit/panel editors).
+    if (event.logicalKey == LogicalKeyboardKey.space) {
+      if (event is KeyUpEvent) {
+        if (!_spaceHeld) return KeyEventResult.ignored;
+        setState(() => _spaceHeld = false);
+        return KeyEventResult.handled;
+      }
+      final textEntryPossible = _editing != null ||
+          _panelEditing != null ||
+          ref.read(calibrationControllerProvider).isActive ||
+          ref.read(networkControllerProvider).isDrawing;
+      if (textEntryPossible) return KeyEventResult.ignored;
+      if (!_spaceHeld) setState(() => _spaceHeld = true);
+      return KeyEventResult.handled; // KeyDownEvent + KeyRepeatEvent
+    }
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
     final mod = HardwareKeyboard.instance.isControlPressed ||
@@ -364,6 +429,23 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
           .paste(sheetId: sheet.id, floorIndex: floorIndex);
       return KeyEventResult.handled;
     }
+    // Ctrl/Cmd+A — select all on the current sheet/floor, scoped to the ACTIVE
+    // discipline's services (Ctrl+A on Plumbing doesn't grab the HVAC ducts).
+    if (activeMechanical && mod && key == LogicalKeyboardKey.keyA) {
+      final sheet = ref.read(sheetsControllerProvider).current;
+      if (sheet == null) return KeyEventResult.ignored;
+      final levelCount =
+          ref.read(projectControllerProvider).building.levelCount;
+      final floorIndex =
+          ref.read(sheetsControllerProvider).floorFor(sheet.id, levelCount);
+      ref.read(selectionProvider.notifier).selectAllOnFloor(
+            sheet.id,
+            floorIndex,
+            services:
+                servicesFor(ref.read(activeDisciplineProvider)).toSet(),
+          );
+      return KeyEventResult.handled;
+    }
     if (activeMechanical &&
         (key == LogicalKeyboardKey.delete ||
             key == LogicalKeyboardKey.backspace)) {
@@ -380,10 +462,33 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       ref.read(selectionProvider.notifier).clear();
       return KeyEventResult.handled;
     }
+    // Electrical layer active: Delete removes the selected circuit (or panel)
+    // via the undoable store intents — parity with the mechanical branch.
+    if (!activeMechanical &&
+        (key == LogicalKeyboardKey.delete ||
+            key == LogicalKeyboardKey.backspace)) {
+      final sel = ref.read(electricalSelectionProvider);
+      if (sel == null) return KeyEventResult.ignored;
+      final ctrl = ref.read(electricalProjectProvider.notifier);
+      if (sel.isCircuit) {
+        ctrl.deleteCircuit(sel.panelId, sel.circuitId!);
+      } else {
+        ctrl.deletePanel(sel.panelId);
+      }
+      ref.read(electricalSelectionProvider.notifier).clear();
+      return KeyEventResult.handled;
+    }
 
     if (key == LogicalKeyboardKey.escape) {
-      if (_editing != null || _panelMenu != null || _circuitMenu != null) {
+      if (_editing != null ||
+          _panelEditing != null ||
+          _panelMenu != null ||
+          _circuitMenu != null) {
         _closeOverlays();
+        return KeyEventResult.handled;
+      }
+      if (ref.read(electricalSelectionProvider) != null) {
+        ref.read(electricalSelectionProvider.notifier).clear();
         return KeyEventResult.handled;
       }
       if (ref.read(calibrationControllerProvider).isActive) {
@@ -392,6 +497,25 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       }
       if (ref.read(networkControllerProvider).pendingPoint != null) {
         ref.read(networkControllerProvider.notifier).cancelPending();
+        return KeyEventResult.handled;
+      }
+      // Step out of any active canvas MODE back to Select — Esc must always
+      // back out (the tool buttons live behind two collapsible layers, so a
+      // key path is the only reliable exit).
+      if (ref.read(measureModeProvider)) {
+        ref.read(measureModeProvider.notifier).set(false);
+        return KeyEventResult.handled;
+      }
+      if (ref.read(tankModeProvider)) {
+        ref.read(tankModeProvider.notifier).set(false);
+        return KeyEventResult.handled;
+      }
+      if (ref.read(roomModeProvider)) {
+        ref.read(roomModeProvider.notifier).set(false);
+        return KeyEventResult.handled;
+      }
+      if (ref.read(networkControllerProvider).tool != DrawTool.select) {
+        ref.read(networkControllerProvider.notifier).setTool(DrawTool.select);
         return KeyEventResult.handled;
       }
       if (!ref.read(selectionProvider).isEmpty) {
@@ -474,15 +598,26 @@ class _SharedSheet extends ConsumerWidget {
 
     if (sheet == null) {
       // A branded empty-state card (the shared one, matching the electrical
-      // workspace's), not bare text — so an empty canvas reads as one app in
-      // both workspaces.
+      // workspace's), not bare text — and it CARRIES its actions (the Apple
+      // empty-state rule) instead of describing buttons that live elsewhere.
       return ColoredBox(
         color: colors.canvas,
-        child: const Center(
+        child: Center(
           child: MechXEmptyStateCard(
             title: 'No sheet loaded',
             body: 'Import a PDF floor plan to begin — then calibrate its '
                 'scale and draw on the Plumbing, HVAC and Electrical layers.',
+            actions: [
+              MechXButton(
+                label: 'Import plan...',
+                primary: true,
+                onPressed: () => importPlan(context, ref),
+              ),
+              MechXButton(
+                label: 'New from template...',
+                onPressed: () => showTemplatesDialog(context),
+              ),
+            ],
           ),
         ),
       );
@@ -492,8 +627,9 @@ class _SharedSheet extends ConsumerWidget {
     final calibrating = ref.watch(calibrationControllerProvider).isActive;
     final drawing = ref.watch(networkControllerProvider).isDrawing;
     final showHeatmap = ref.watch(showHeatmapProvider);
-    final calibrated =
-        ref.watch(projectControllerProvider).calibrationFor(sheet.id) != null;
+    final calibration =
+        ref.watch(projectControllerProvider).calibrationFor(sheet.id);
+    final calibrated = calibration != null;
 
     final levelCount = ref.watch(projectControllerProvider).building.levelCount;
     final floorIndex = sheetsState.floorFor(sheet.id, levelCount);
@@ -513,6 +649,21 @@ class _SharedSheet extends ConsumerWidget {
     // layer reads, so both disciplines ride the SAME pan/zoom.
     final vt = sheetsState.viewportFor(sheet.id) ?? const ViewportTransform();
 
+    // Hold-Space pan: the interactive overlays stand down (IgnorePointer) so a
+    // left-drag reaches the CanvasView's pan, with the default grab cursor.
+    final spaceHeld = host._spaceHeld;
+    // The honest cursor for the active mode (the canvas otherwise advertises a
+    // grab-pan that the overlays repurpose): precise while a placement/measure
+    // tool or calibration owns the click, the plain arrow in Select mode, and
+    // the default grab affordance only while Space-pan actually pans.
+    final MouseCursor? canvasCursor = spaceHeld
+        ? null
+        : (calibrating ||
+                (mechanicalActive &&
+                    (drawing || measureMode || tankMode || roomMode))
+            ? SystemMouseCursors.precise
+            : SystemMouseCursors.basic);
+
     return Listener(
       // Middle-button drag pans, mouse-wheel zooms — both handled above the
       // opaque overlays that would otherwise swallow the events.
@@ -531,6 +682,13 @@ class _SharedSheet extends ConsumerWidget {
             initialTransform: sheetsState.viewportFor(sheet.id),
             background: colors.canvas,
             gridColor: colors.gridLine,
+            // A calibrated sheet snaps the grid minors to a round 1-2-5 metre
+            // ladder (majors on the 4x multiple); uncalibrated keeps the
+            // default 32 px texture.
+            gridWorldStep: calibration == null
+                ? null
+                : calibratedGridWorldStep(calibration.metersPerPixel),
+            cursor: canvasCursor,
             onTransformChanged: (t) => ref
                 .read(sheetsControllerProvider.notifier)
                 .setViewport(sheet.id, t),
@@ -559,15 +717,18 @@ class _SharedSheet extends ConsumerWidget {
         // layer, hidden when toggled off.
         if (electricalVisible)
           Positioned.fill(
-            child: ElectricalLayoutLayer(
-              transform: vt,
-              sheetId: sheet.id,
-              floorIndex: floorIndex,
-              interactive: electricalActive,
-              onEditPanel: host.onEditPanel,
-              onEditCircuit: host.onEditCircuit,
-              onPanelMenu: host.onPanelMenu,
-              onCircuitMenu: host.onCircuitMenu,
+            child: IgnorePointer(
+              ignoring: spaceHeld,
+              child: ElectricalLayoutLayer(
+                transform: vt,
+                sheetId: sheet.id,
+                floorIndex: floorIndex,
+                interactive: electricalActive,
+                onEditPanel: host.onEditPanel,
+                onEditCircuit: host.onEditCircuit,
+                onPanelMenu: host.onPanelMenu,
+                onCircuitMenu: host.onCircuitMenu,
+              ),
             ),
           ),
         // Measurement annotations — saved dimensions always render (when a
@@ -575,30 +736,39 @@ class _SharedSheet extends ConsumerWidget {
         // active (and never while drawing/calibrating).
         if (mechanicalVisible && !calibrating)
           Positioned.fill(
-            child: MeasurementOverlay(
-              sheetId: sheet.id,
-              floorIndex: floorIndex,
-              active: mechanicalActive && measureMode && !drawing,
+            child: IgnorePointer(
+              ignoring: spaceHeld,
+              child: MeasurementOverlay(
+                sheetId: sheet.id,
+                floorIndex: floorIndex,
+                active: mechanicalActive && measureMode && !drawing,
+              ),
             ),
           ),
         // Tank areas — saved footprints always render (mechanical layer visible);
         // the tank tool captures a drag only when active.
         if (mechanicalVisible && !calibrating)
           Positioned.fill(
-            child: TankOverlay(
-              sheetId: sheet.id,
-              floorIndex: floorIndex,
-              active: mechanicalActive && tankMode && !drawing,
+            child: IgnorePointer(
+              ignoring: spaceHeld,
+              child: TankOverlay(
+                sheetId: sheet.id,
+                floorIndex: floorIndex,
+                active: mechanicalActive && tankMode && !drawing,
+              ),
             ),
           ),
         // Room/zone areas — saved footprints always render (mechanical layer
         // visible); the room tool captures a drag only when active.
         if (mechanicalVisible && !calibrating)
           Positioned.fill(
-            child: RoomOverlay(
-              sheetId: sheet.id,
-              floorIndex: floorIndex,
-              active: mechanicalActive && roomMode && !drawing,
+            child: IgnorePointer(
+              ignoring: spaceHeld,
+              child: RoomOverlay(
+                sheetId: sheet.id,
+                floorIndex: floorIndex,
+                active: mechanicalActive && roomMode && !drawing,
+              ),
             ),
           ),
         // Mechanical drawing / drop / selection overlays — ONLY when a mechanical
@@ -619,9 +789,14 @@ class _SharedSheet extends ConsumerWidget {
             !tankMode &&
             !roomMode)
           Positioned.fill(
-            child: NetworkSelectionOverlay(
-              sheetId: sheet.id,
-              floorIndex: floorIndex,
+            child: IgnorePointer(
+              ignoring: spaceHeld,
+              child: NetworkSelectionOverlay(
+                sheetId: sheet.id,
+                floorIndex: floorIndex,
+                onFitView: () =>
+                    host.canvasKeyFor(sheet.id).currentState?.fitView(),
+              ),
             ),
           ),
         // The drop target sits ABOVE the selection overlay so a dragged palette
@@ -635,7 +810,11 @@ class _SharedSheet extends ConsumerWidget {
             !tankMode &&
             !roomMode)
           Positioned.fill(
-            child: DropOverlay(sheetId: sheet.id, floorIndex: floorIndex),
+            child: IgnorePointer(
+              ignoring: spaceHeld,
+              child:
+                  DropOverlay(sheetId: sheet.id, floorIndex: floorIndex),
+            ),
           ),
         if (calibrating)
           Positioned.fill(child: CalibrationOverlay(sheetId: sheet.id)),
@@ -646,6 +825,16 @@ class _SharedSheet extends ConsumerWidget {
             left: 0,
             right: 0,
             child: Center(child: _CalibrateHint()),
+          ),
+        // On-canvas mode pill — the active tool made visible on the canvas
+        // itself (renders nothing in Select mode). Drops below the calibrate
+        // nudge when both are up.
+        if (mechanicalActive && !calibrating)
+          Positioned(
+            top: (!calibrated) ? MechXSpacing.md + 40 : MechXSpacing.md,
+            left: 0,
+            right: 0,
+            child: const Center(child: ModePill()),
           ),
         // On-canvas zoom controls (bottom-left) — the same cluster the
         // electrical canvas shows, so both workspaces share the affordance.
@@ -709,7 +898,7 @@ const _mechanicalLayerGuideItems = <String>[
   'Right-click a segment to set its size (inches) or material',
   'Drag a segment endpoint to resize it — it snaps to nearby fittings',
   'Left-click to select; Shift+click or rubber-band for multi-select',
-  'Drag the empty canvas to pan; scroll to zoom',
+  'Middle-drag or hold Space to pan; scroll to zoom',
   'Risers drawn here stack vertically in the Riser view (left nav)',
 ];
 

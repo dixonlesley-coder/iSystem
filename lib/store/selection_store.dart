@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/network/network.dart';
 
 import 'network_store.dart';
 
@@ -99,6 +100,59 @@ class SelectionController extends Notifier<Selection> {
     return Selection(edgeId: edges.first, nodeIds: nodes, edgeIds: edges);
   }
 
+  /// UNION [nodeIds]/[edgeIds] into the current selection (a Shift-marquee
+  /// ADDS to the selection instead of replacing it). Empty input is a no-op —
+  /// an additive gesture never clears what's already picked.
+  void addMulti(Set<String> nodeIds, Set<String> edgeIds) {
+    if (nodeIds.isEmpty && edgeIds.isEmpty) return;
+    setMulti({...state.nodeIds, ...nodeIds}, {...state.edgeIds, ...edgeIds});
+  }
+
+  /// Select EVERYTHING on [sheetId]/[floorIndex] — every run edge (both
+  /// endpoints on the floor) plus every on-floor node — optionally filtered to
+  /// [services] (the active discipline layer's services, so Ctrl+A on the
+  /// Plumbing layer doesn't grab the HVAC ducts). A node carries no service,
+  /// so its membership mirrors the layer painter: it matches when ANY incident
+  /// edge's service passes the filter, and a FREE node (no edges) always
+  /// belongs (freestanding fittings/fixtures aren't lost). No-op when the
+  /// floor is empty. A pure selection change — records no undo step.
+  void selectAllOnFloor(
+    String sheetId,
+    int floorIndex, {
+    Set<ServiceType>? services,
+  }) {
+    final net = ref.read(networkControllerProvider).network;
+    bool serviceOk(ServiceType s) => services == null || services.contains(s);
+    bool onFloor(NetNode n) =>
+        n.sheetId == sheetId && n.floorIndex == floorIndex;
+
+    final edgeIds = <String>{};
+    for (final e in net.edges) {
+      if (e.kind != EdgeKind.run || !serviceOk(e.service)) continue;
+      final a = net.nodeById(e.fromId);
+      final b = net.nodeById(e.toId);
+      if (a == null || b == null || !onFloor(a) || !onFloor(b)) continue;
+      edgeIds.add(e.id);
+    }
+    final nodeIds = <String>{};
+    for (final n in net.nodes) {
+      if (!onFloor(n)) continue;
+      var touched = false;
+      var matches = false;
+      for (final e in net.edges) {
+        if (e.fromId != n.id && e.toId != n.id) continue;
+        touched = true;
+        if (serviceOk(e.service)) {
+          matches = true;
+          break;
+        }
+      }
+      if (!touched || matches) nodeIds.add(n.id);
+    }
+    if (nodeIds.isEmpty && edgeIds.isEmpty) return;
+    setMulti(nodeIds, edgeIds);
+  }
+
   /// Set the full multi-selection (e.g. a rubber-band result). The primary is
   /// set to one of the members (a node first, else an edge); empty input clears.
   void setMulti(Set<String> nodeIds, Set<String> edgeIds) {
@@ -155,3 +209,27 @@ class SelectionController extends Notifier<Selection> {
 
 final selectionProvider =
     NotifierProvider<SelectionController, Selection>(SelectionController.new);
+
+/// The single node/edge under the cursor while the Select tool hovers — the
+/// DETECTION half of hover pre-highlight. The selection gesture layer runs its
+/// hit-test on pointer hover and publishes the hit here; the network painter
+/// reads it to draw a subtle rollover halo. At most one of the two ids is set.
+/// Null when nothing is under the cursor (and on pointer exit), so an idle
+/// canvas is byte-identical. Record equality makes [set] notify only on CHANGE
+/// — per-frame hover churn over the same element never rebuilds a watcher.
+typedef HoverTarget = ({String? nodeId, String? edgeId});
+
+class HoverTargetController extends Notifier<HoverTarget?> {
+  @override
+  HoverTarget? build() => null;
+
+  void set(HoverTarget? target) {
+    if (state != target) state = target;
+  }
+
+  void clear() => set(null);
+}
+
+final hoverTargetProvider =
+    NotifierProvider<HoverTargetController, HoverTarget?>(
+        HoverTargetController.new);

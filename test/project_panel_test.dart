@@ -2,11 +2,15 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/document_control_store.dart';
+import 'package:mechx/store/inspector_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
+import 'package:mechx/ui/widgets/mechx_text_field.dart';
 import 'package:mechx_engine/network/network.dart';
 
 import 'test_util.dart';
@@ -91,5 +95,107 @@ void main() {
     expect(err, contains('zero length'));
     // No success pill on a blocked export.
     expect(container.read(statusMessageProvider), isNull);
+  });
+
+  testWidgets(
+      'document control section is collapsed by default and commits edits '
+      'to the store', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+
+    // Collapsed by default: the header shows, the fields do not — a blank
+    // launch stays canvas-focused (only the small header row is new).
+    expect(find.text('DOCUMENT CONTROL'), findsOneWidget);
+    expect(find.text('Document no.'), findsNothing);
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.text('DOCUMENT CONTROL')),
+      listen: false,
+    );
+    container
+        .read(sectionVisibilityProvider.notifier)
+        .toggle('Document control', false);
+    await tester.pumpAndSettle();
+    expect(find.text('Document no.'), findsOneWidget);
+
+    // The six identity fields then the two add-revision fields, in build
+    // order. Typing commits straight into the store (the setter normalizes).
+    final fields = find.byType(MechXTextField);
+    expect(fields, findsNWidgets(8));
+    await tester.enterText(fields.at(0), 'M-101');
+    await tester.enterText(fields.at(1), 'B');
+    await tester.enterText(fields.at(2), 'PT Contoh');
+    expect(container.read(documentControlProvider).documentNumber, 'M-101');
+    expect(container.read(documentControlProvider).revisionTag, 'B');
+    expect(container.read(documentControlProvider).clientName, 'PT Contoh');
+
+    // An emptied field clears back to null (absent ⇒ row omitted downstream).
+    await tester.enterText(fields.at(1), '');
+    expect(container.read(documentControlProvider).revisionTag, isNull);
+
+    // Add a revision row through the editor: date + description + Add.
+    await tester.enterText(fields.at(6), '2026-07-02');
+    await tester.enterText(fields.at(7), 'Issued for review');
+    await tester.ensureVisible(find.text('Add revision'));
+    await tester.tap(find.text('Add revision'));
+    await tester.pumpAndSettle();
+
+    final revisions = container.read(documentControlProvider).revisions;
+    expect(revisions, hasLength(1));
+    expect(revisions.single.date, '2026-07-02');
+    expect(revisions.single.description, 'Issued for review');
+    // The row renders (date · description) with a remove glyph beside it.
+    expect(find.text('2026-07-02 · Issued for review'), findsOneWidget);
+  });
+
+  testWidgets(
+      'Tanks master-detail expands exactly one editor at a time (H6)',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+
+    // Two tanks on the demo sheet, named so the compact rows are distinct.
+    final tanks = container.read(tankAreasProvider.notifier);
+    tanks.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 200);
+    tanks.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 200);
+    final ids =
+        container.read(tankAreasProvider).map((t) => t.id).toList();
+    tanks.setName(ids[0], 'Alpha');
+    tanks.setName(ids[1], 'Beta');
+    await tester.pump();
+
+    // The section renders two compact rows; NO editor is open yet, so the
+    // per-item 'Depth' stepper label is absent (collapsed master-detail).
+    expect(find.textContaining('Alpha'), findsOneWidget);
+    expect(find.textContaining('Beta'), findsOneWidget);
+    expect(find.text('Depth'), findsNothing);
+
+    // Expand Alpha → exactly one editor (one 'Depth' stepper) appears.
+    await tester.ensureVisible(find.textContaining('Alpha'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Alpha'));
+    await tester.pumpAndSettle();
+    expect(find.text('Depth'), findsOneWidget);
+
+    // Expand Beta → Alpha collapses; still exactly ONE editor open.
+    await tester.ensureVisible(find.textContaining('Beta'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Beta'), warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(find.text('Depth'), findsOneWidget);
+
+    // Tapping the open row again collapses it — back to none.
+    await tester.ensureVisible(find.textContaining('Beta'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Beta'), warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(find.text('Depth'), findsNothing);
   });
 }

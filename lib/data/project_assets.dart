@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'project_document.dart';
 import '../store/models/sheet.dart';
@@ -33,11 +34,31 @@ String? sheetSourcePath(Sheet sheet) => sheet.pdfPath ?? sheet.dxfPath;
 /// base64 (PDF/DXF are highly compressible), clawing back most of base64's ~33 %
 /// inflation. A missing/unreadable file is skipped (the project still saves; that
 /// sheet just isn't portable).
-Map<String, String> gatherSheetAssets(List<Sheet> sheets) {
-  final out = <String, String>{};
+Map<String, String> gatherSheetAssets(List<Sheet> sheets) =>
+    _gatherFromPaths(_distinctSheetSourcePaths(sheets));
+
+/// The distinct source paths [sheets] render from, in first-seen order (the same
+/// dedup [gatherSheetAssets] applies) — the sendable input for the off-thread
+/// gather. Sheets aren't trivially isolate-portable, but their plain-string paths
+/// are, so we reduce to paths on the caller's thread.
+List<String> _distinctSheetSourcePaths(List<Sheet> sheets) {
+  final paths = <String>[];
+  final seen = <String>{};
   for (final s in sheets) {
     final path = sheetSourcePath(s);
-    if (path == null || out.containsKey(path)) continue;
+    if (path == null || !seen.add(path)) continue;
+    paths.add(path);
+  }
+  return paths;
+}
+
+/// Read every path and return `path → base64(gzip(bytes))`. The pure, sendable
+/// half of the gather (plain [String] paths in, a `Map<String,String>` out) so it
+/// runs verbatim on the caller's thread OR inside an [Isolate]. Byte-identical to
+/// [gatherSheetAssets] for the same path set.
+Map<String, String> _gatherFromPaths(List<String> paths) {
+  final out = <String, String>{};
+  for (final path in paths) {
     try {
       final f = File(path);
       if (!f.existsSync()) continue;
@@ -47,6 +68,18 @@ Map<String, String> gatherSheetAssets(List<Sheet> sheets) {
     }
   }
   return out;
+}
+
+/// The off-UI-thread variant of [gatherSheetAssets]: the synchronous gzip+base64
+/// of every plan (a real window freeze on a large project) runs on an [Isolate]
+/// so the UI stays responsive during a portable Save. The distinct paths are
+/// resolved on the caller's thread (only sendable [String]s cross the boundary),
+/// and the returned map is byte-identical to the synchronous [gatherSheetAssets].
+/// An empty path set skips the isolate spin-up entirely.
+Future<Map<String, String>> gatherSheetAssetsAsync(List<Sheet> sheets) async {
+  final paths = _distinctSheetSourcePaths(sheets);
+  if (paths.isEmpty) return const {};
+  return Isolate.run(() => _gatherFromPaths(paths));
 }
 
 /// Decode one embedded asset's base64 payload back to the original file bytes.

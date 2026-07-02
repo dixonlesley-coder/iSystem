@@ -254,6 +254,67 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
+- **CAD-output + UX review (2026-07-02) — the plan of record for output/UX parity**:
+  `CAD-OUTPUT-UX-REVIEW.md` (root) holds 78 code-verified findings — professional-CAD
+  gaps in the plan/riser/electrical exports + reports, and Apple-lens UI/workflow gaps —
+  grouped into themes A–J and sequenced into 5 implementation waves. Work new
+  output/UX improvements from that document rather than re-reviewing. **Wave 1
+  (the 13 high-impact small fixes) LANDED** (see the §15 row): ruled board-schedule
+  grid (C2), complete compliance roll-up incl. electrical errors (D2), Esc-exits-any-mode
+  + right-click-ends-run (G1), on-canvas mode pill (G2), rubber-band live length + snap
+  ring (G3), save-in-place + Ctrl+S/O + edited dot (F1, `ui/shell/project_io.dart`),
+  empty-state actions (J1), selection-first inspector w/ auto-scroll (H1),
+  discipline-scoped node fields (H3), fire hazard-class input (H5), honest Report stage
+  via `reportExportedProvider` (J4), 'Riser'/'Building riser' naming (J5), ASCII `m3`/`O`
+  notation on the riser canvas (B8). **Wave 2 (issuable-sheet credibility) LANDED**
+  (see the §15 row): shared ISO title block/sheet frame + honest real-metre scale bar +
+  AIA-style DXF layer/linetype/ACI tables in `drawing_chrome.dart`; plan exporters take
+  `metersPerPixel` (mm-unit DXF w/ HEADER+TABLES, snapped `1 : N @ A3` or honest NTS,
+  stroke bands + service dashes, rotated/collision-managed labels via `placeEdgeLabel`);
+  `SldLine.layer/dashed` across all renderers; electrical DXF class layers (E-BUS…);
+  `electricalSldToPdfPaginated` (one schedule per page) + `sldSheetsToPdf`;
+  breaker kA notation (`breakerIcuKaByPanelId` from the fault study's `incomerKa`) +
+  source-spine IEC earth mark; mech riser per-service layers/dashed vent/medium pipes +
+  label collision w/ leaders; canvas linetypes + rotated/LOD labels + `flowFromId`
+  chevrons; document control (`DesignSettings` + `document_control_store` + inspector
+  section) feeding title blocks + report revision tables; riser 'Export all systems'
+  set + electrical 'Panel schedules' exports. **Wave 3 (the two big CAD lifts + the
+  electrical-parity track) LANDED** (see the §15 row): the floor-plan UNDERLAY prints
+  beneath every plan export (`PlanUnderlay` vector/raster model + `lib/data/plan_underlay.dart`,
+  null ⇒ byte-identical); `report/plan_symbols.dart` component glyphs + `UP`/`DN` riser
+  tags + flow chevrons in all three plan exporters; the riser sheet reached canvas
+  parity (glyphs, capacity suffixes, KETERANGAN notes, detail callouts via
+  `buildLiveRiserSheet`) + drainage/vent conventions (CO/VTR/tee, data-gated, Indonesian
+  sheet titles); ELECTRICAL UNDO on the global timeline (`UndoDomain.electrical`,
+  `syncMepEquipment` exempt, drag = one step); the panel-properties drawer
+  (double-click; `setPanelTag`/`setPanelHeadroom`); electrical warnings fan into
+  Design Issues with a Review→Electrical jump (`electrical_focus_store`); unsaved-work
+  guards (`isProjectDirty` + Save/Discard/Cancel dialog on Open/Import/quit) and a
+  status-bar busy pill + off-thread portable save (`gatherSheetAssetsAsync`).
+  **Wave 4 (the submittal package) LANDED** (see the §15 row): the four flagship
+  reports refactored onto a sealed `RptBlock` model (`report/report_blocks.dart`,
+  Markdown proven byte-identical via characterization hashes) with a paginating
+  A4 typesetter (`report/report_pdf.dart` — cover, `Page X of Y` footer, AFM-width
+  text wrap, ruled tables split across pages, embedded `SldSheet` figures) wired as
+  PDF exports (Projects screen + Review deliverables card; the MEP PDF embeds the
+  riser + electrical single-lines); Bahasa Indonesia report BODIES
+  (`report/report_strings.dart`, EN default byte-identical, threaded from the app
+  locale); equipment-schedule CSV sibling + the BOM CSV split into clean
+  `-bom.csv`/`-fittings.csv` with per-floor grouping (`buildBom(groupByFloor:)`) and
+  the cut-plan stock/bars/waste columns joined per (service,DN); calibration/first-size
+  status handoffs + the Review-hub 'Export deliverables' card. **Wave 5 (structural
+  consolidation) LANDED** (see the §15 row) — paper sizes A3/A2/A1 on the plan PDFs,
+  one-drag-one-undo + node/canvas context menus + Space-pan + select-all + double-click-opens
+  + hover halo + metre-snapped major/minor grid, `SteppedValueField` type-in steppers +
+  Rooms/Tanks master-detail + the Fire ResultCard, electrical way selection +
+  `duplicatePanel` + the last EN-only workspace localized + one honest LOD tier + a live
+  minimap, riser Edit-mode symbols + ONE shared `riserLayoutPositions` for canvas/export,
+  true-width ducts + real dimension style + `CW-R1` plan tags, the power one-line on the
+  SldSheet pipeline, quotation number formatting, and a contextual two-tap recovery banner.
+  **All 5 waves are complete** — every actionable finding of the 78 is landed or explicitly
+  dispositioned; the one open item is the A8 full plan-exporters-onto-SldSheet unification,
+  deliberately deferred (waves 2-3 landed its content per-exporter with byte-level pins,
+  making consolidation high-risk/low-yield) along with an app-side A3/A2/A1 paper picker.
 - **Audit-fix wave (2026-06-28) — resolved** (`AUDIT-REPORT.md`, see the §15 row):
   the over-capacity air duct no longer THROWS (clamps + `EdgeSizing.overCapacity`
   flag → Review warning via `airOverCapacityProvider`); rectangular ducts honour

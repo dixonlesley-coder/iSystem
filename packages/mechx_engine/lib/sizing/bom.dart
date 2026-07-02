@@ -22,12 +22,18 @@ class BomLine {
   final Length totalLength;
   final int segmentCount;
 
+  /// 0-based building floor this line belongs to, when the BOM was built with
+  /// `groupByFloor: true` (a RUN's floor = its from-node's floorIndex). Null for
+  /// risers (they span floors) and for the default un-grouped-by-floor build.
+  final int? floorIndex;
+
   const BomLine({
     required this.service,
     required this.kind,
     required this.diameterMm,
     required this.totalLength,
     required this.segmentCount,
+    this.floorIndex,
   });
 }
 
@@ -42,18 +48,27 @@ class BomLine {
 ///
 /// Edges absent from [sizing] are silently skipped (unsized / ignored segments).
 ///
+/// When [groupByFloor] is true the group key gains the floor: a RUN's floor is
+/// its from-node's `floorIndex` (so the same DN on two floors becomes two lines),
+/// while RISERS span floors and stay ungrouped-by-floor (`floorIndex == null`) as
+/// their own rows. Default false ⇒ the pre-floor grouping (every line's
+/// [BomLine.floorIndex] is null), byte-identical.
+///
 /// Returns lines sorted by:
 ///   1. [ServiceType] index (enum declaration order),
 ///   2. [EdgeKind] index (run before riser),
-///   3. [BomLine.diameterMm] ascending.
+///   3. [BomLine.floorIndex] ascending (null treated as -1; uniform within a
+///      kind group, so the default build reduces to the pre-floor order),
+///   4. [BomLine.diameterMm] ascending.
 List<BomLine> buildBom({
   required Network net,
   required Map<String, EdgeSizing> sizing,
   required Map<String, ScaleCalibration> calibrationBySheet,
   required BuildingLevels building,
+  bool groupByFloor = false,
 }) {
   // Accumulator: key → (totalMeters, segmentCount).
-  final acc = <({ServiceType service, EdgeKind kind, int diameterMm}),
+  final acc = <({ServiceType service, EdgeKind kind, int diameterMm, int? floorIndex}),
       ({double meters, int count})>{};
 
   for (final edge in net.edges) {
@@ -61,7 +76,17 @@ List<BomLine> buildBom({
     if (es == null) continue;
 
     final diameterMm = es.diameter.inMillimeters.round();
-    final key = (service: edge.service, kind: edge.kind, diameterMm: diameterMm);
+    // Runs group by their from-node floor when requested; risers span floors so
+    // they always stay ungrouped-by-floor (null).
+    final floorIndex = (groupByFloor && edge.kind == EdgeKind.run)
+        ? net.nodeById(edge.fromId)?.floorIndex
+        : null;
+    final key = (
+      service: edge.service,
+      kind: edge.kind,
+      diameterMm: diameterMm,
+      floorIndex: floorIndex,
+    );
 
     final len = edgeLength(
       edge,
@@ -84,6 +109,7 @@ List<BomLine> buildBom({
         diameterMm: entry.key.diameterMm,
         totalLength: Length(entry.value.meters),
         segmentCount: entry.value.count,
+        floorIndex: entry.key.floorIndex,
       ),
   ];
 
@@ -92,6 +118,8 @@ List<BomLine> buildBom({
     if (svc != 0) return svc;
     final knd = a.kind.index.compareTo(b.kind.index);
     if (knd != 0) return knd;
+    final flr = (a.floorIndex ?? -1).compareTo(b.floorIndex ?? -1);
+    if (flr != 0) return flr;
     return a.diameterMm.compareTo(b.diameterMm);
   });
 
@@ -211,14 +239,28 @@ Length totalLengthForService(List<BomLine> bom, ServiceType service) {
 
 /// Render [bom] as CSV (one header row + one row per line). Lengths are in
 /// metres to two decimals. Pure — the app handles the file IO.
+///
+/// When any line carries a [BomLine.floorIndex] (i.e. the BOM was built with
+/// `groupByFloor: true`) a `floor` column is inserted — the 1-based human floor
+/// number, empty for risers. When no line carries a floor (the default build)
+/// the CSV is byte-identical to the pre-floor format.
 String bomToCsv(List<BomLine> bom) {
-  final buffer = StringBuffer('service,kind,nominal_dn_mm,length_m,segments\n');
+  final includeFloor = bom.any((l) => l.floorIndex != null);
+  final buffer = StringBuffer(includeFloor
+      ? 'service,kind,floor,nominal_dn_mm,length_m,segments\n'
+      : 'service,kind,nominal_dn_mm,length_m,segments\n');
   for (final line in bom) {
     buffer
       ..write(line.service.name)
       ..write(',')
       ..write(line.kind.name)
-      ..write(',')
+      ..write(',');
+    if (includeFloor) {
+      buffer
+        ..write(line.floorIndex == null ? '' : (line.floorIndex! + 1))
+        ..write(',');
+    }
+    buffer
       ..write(line.diameterMm)
       ..write(',')
       ..write(line.totalLength.meters.toStringAsFixed(2))

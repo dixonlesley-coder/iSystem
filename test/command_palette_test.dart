@@ -79,7 +79,8 @@ void main() {
       expect(s.active, WorkflowStage.draw);
     });
 
-    test('drawing an edge marks Draw + Size + Report done', () {
+    test('drawing an edge marks Draw + Size done; Report needs a real export',
+        () {
       final c = makeContainer();
       final net = c.read(networkControllerProvider.notifier);
       net.setService(ServiceType.coldWater);
@@ -93,7 +94,13 @@ void main() {
       final s = c.read(workflowStageStateProvider);
       expect(s.isDone(WorkflowStage.draw), isTrue);
       expect(s.isDone(WorkflowStage.size), isTrue);
-      expect(s.isDone(WorkflowStage.report), isTrue);
+      // Report must NOT claim completion off the same predicate as Size — it
+      // is done only once a deliverable has actually been exported.
+      expect(s.isDone(WorkflowStage.report), isFalse);
+      c.read(reportExportedProvider.notifier).markExported();
+      expect(
+          c.read(workflowStageStateProvider).isDone(WorkflowStage.report),
+          isTrue);
     });
 
     test('single-floor building: Floors NOT done', () {

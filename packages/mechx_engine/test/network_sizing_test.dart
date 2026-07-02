@@ -693,4 +693,124 @@ void main() {
       expect(auto['e']!.velocity.metersPerSecond, closeTo(expectedV, 1e-9));
     });
   });
+
+  group('E3 flow orientation (EdgeSizing.flowFromId) — read-only metadata', () {
+    test('a supply tree orients each edge from the source toward the demand', () {
+      // source (plant) —e1→ junction —e2→ f1 and —e3→ f2, with e2 drawn
+      // BACKWARDS (f1→j) to prove flowFromId is the true upstream node, not just
+      // the edge's fromId. Supply flow runs source → demand.
+      const net = Network(
+        nodes: [
+          NetNode(
+            id: 'src',
+            sheetId: 's1',
+            x: 0,
+            y: 0,
+            floorIndex: 0,
+            role: NodeRole.plant,
+          ),
+          NetNode(id: 'j', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+          NetNode(
+            id: 'f1',
+            sheetId: 's1',
+            x: 200,
+            y: -50,
+            floorIndex: 0,
+            role: NodeRole.fixture,
+          ),
+          NetNode(
+            id: 'f2',
+            sheetId: 's1',
+            x: 200,
+            y: 50,
+            floorIndex: 0,
+            role: NodeRole.fixture,
+          ),
+        ],
+        edges: [
+          NetEdge(id: 'e1', fromId: 'src', toId: 'j', service: ServiceType.duct),
+          // Drawn f1→j (against the flow) on purpose.
+          NetEdge(id: 'e2', fromId: 'f1', toId: 'j', service: ServiceType.duct),
+          NetEdge(id: 'e3', fromId: 'j', toId: 'f2', service: ServiceType.duct),
+        ],
+      );
+      final sized = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.duct: FlowRate(0)},
+        nodeFlowDemand: const {'f1': FlowRate(0.10), 'f2': FlowRate(0.20)},
+      );
+
+      // Sizes are computed exactly as before (orientation is metadata only):
+      // the trunk carries the sum, each branch its own leaf.
+      expect(sized['e1']!.flow.cubicMetersPerSecond, closeTo(0.30, 1e-9));
+      expect(sized['e2']!.flow.cubicMetersPerSecond, closeTo(0.10, 1e-9));
+      expect(sized['e3']!.flow.cubicMetersPerSecond, closeTo(0.20, 1e-9));
+
+      // From first principles: with the plant rooted at src, accumulation orients
+      // parent→child (root-side → demand). Supply flow comes FROM the root side:
+      //   e1 (src↔j): upstream = src   (== the drawn fromId)
+      //   e2 (f1↔j) : upstream = j     (== the drawn TOId — proves it isn't fromId)
+      //   e3 (j↔f2) : upstream = j
+      expect(sized['e1']!.flowFromId, 'src');
+      expect(sized['e2']!.flowFromId, 'j');
+      expect(sized['e3']!.flowFromId, 'j');
+
+      // The record NEVER escapes the edge's own endpoints.
+      for (final e in net.edges) {
+        final from = sized[e.id]!.flowFromId;
+        expect(from == e.fromId || from == e.toId, isTrue);
+      }
+    });
+
+    test('a looped ring carries a non-null orientation per edge (balanced sign)',
+        () {
+      // The square ring from the Hardy-Cross test: s(plant) → A, then A—B—C and
+      // A—D—C with the draw at C. Every leg is drawn toward C, so the balanced
+      // flow is positive (from→to) and each edge is oriented along its drawing.
+      const net = Network(
+        nodes: [
+          NetNode(
+            id: 's',
+            sheetId: 's1',
+            x: 0,
+            y: 100,
+            floorIndex: 0,
+            role: NodeRole.plant,
+          ),
+          NetNode(id: 'A', sheetId: 's1', x: 100, y: 100, floorIndex: 0),
+          NetNode(id: 'B', sheetId: 's1', x: 200, y: 0, floorIndex: 0),
+          NetNode(id: 'C', sheetId: 's1', x: 300, y: 100, floorIndex: 0),
+          NetNode(id: 'D', sheetId: 's1', x: 200, y: 200, floorIndex: 0),
+        ],
+        edges: [
+          NetEdge(id: 'feed', fromId: 's', toId: 'A', service: ServiceType.duct),
+          NetEdge(id: 'AB', fromId: 'A', toId: 'B', service: ServiceType.duct),
+          NetEdge(id: 'BC', fromId: 'B', toId: 'C', service: ServiceType.duct),
+          NetEdge(id: 'AD', fromId: 'A', toId: 'D', service: ServiceType.duct),
+          NetEdge(id: 'DC', fromId: 'D', toId: 'C', service: ServiceType.duct),
+        ],
+      );
+      final sized = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.duct: FlowRate(0)},
+        nodeFlowDemand: const {'C': FlowRate(0.40)},
+      );
+
+      // Every ring edge is oriented (non-null) and stays within its endpoints.
+      for (final e in net.edges) {
+        final s = sized[e.id]!;
+        expect(s.flowFromId, isNotNull, reason: '${e.id} should be oriented');
+        expect(s.flowFromId == e.fromId || s.flowFromId == e.toId, isTrue);
+      }
+      // Positive balanced flow (all legs drawn toward C) ⇒ from == the drawn
+      // fromId, and the two legs feed INTO C (upstream ≠ C).
+      expect(sized['feed']!.flowFromId, 's');
+      expect(sized['AB']!.flowFromId, 'A');
+      expect(sized['BC']!.flowFromId, 'B');
+      expect(sized['AD']!.flowFromId, 'A');
+      expect(sized['DC']!.flowFromId, 'D');
+    });
+  });
 }

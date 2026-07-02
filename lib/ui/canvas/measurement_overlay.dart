@@ -164,50 +164,96 @@ class _MeasurementPainter extends CustomPainter {
     return m >= 10 ? '${m.toStringAsFixed(1)} m' : '${m.toStringAsFixed(2)} m';
   }
 
+  /// Perpendicular offset (screen px) of the dimension line from the picked
+  /// points, and how far the thin extension lines run past it.
+  static const double _dimOffset = 16;
+  static const double _extBeyond = 5;
+
   void _drawDim(Canvas canvas, Offset aw, Offset bw, double pixelLength) {
     final a = transform.worldToScreen(aw);
     final b = transform.worldToScreen(bw);
     final line = Paint()
       ..color = color
-      ..strokeWidth = 1.5
+      ..strokeWidth = 1.4
       ..style = PaintingStyle.stroke;
-    canvas.drawLine(a, b, line);
-    // End ticks (perpendicular).
-    final dir = (b - a);
-    final len = dir.distance;
-    if (len > 0.001) {
-      final n = Offset(-dir.dy / len, dir.dx / len) * 5;
-      canvas.drawLine(a - n, a + n, line);
-      canvas.drawLine(b - n, b + n, line);
-    }
-    final dot = Paint()..color = color;
-    canvas.drawCircle(a, 2.5, dot);
-    canvas.drawCircle(b, 2.5, dot);
 
-    // Length label at the midpoint, on a filled chip for legibility.
+    final dir = b - a;
+    final len = dir.distance;
+    // Degenerate (first click before the cursor has moved): just a point.
+    if (len <= 0.001) {
+      canvas.drawCircle(a, 2.5, Paint()..color = color);
+      return;
+    }
+    final u = dir / len;
+    // Perpendicular, pinned to a CONSISTENT side (toward smaller screen y).
+    var perp = Offset(-u.dy, u.dx);
+    if (perp.dy > 0) perp = -perp;
+
+    // The offset dimension line, clear of the object being measured.
+    final da = a + perp * _dimOffset;
+    final db = b + perp * _dimOffset;
+
+    // Thin extension lines from each picked point to just past the dim line
+    // (a small gap from the point, the CAD convention).
+    final ext = Paint()
+      ..color = color
+      ..strokeWidth = 0.8
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(a + perp * 2, a + perp * (_dimOffset + _extBeyond), ext);
+    canvas.drawLine(b + perp * 2, b + perp * (_dimOffset + _extBeyond), ext);
+
+    // The dimension line itself + filled arrowheads at each end pointing
+    // outward toward the extension lines.
+    canvas.drawLine(da, db, line);
+    _arrowHead(canvas, da, -u, perp);
+    _arrowHead(canvas, db, u, perp);
+
+    // Length text rotated along the line, sitting just ABOVE it on a smaller
+    // translucent chip (no longer covering the dimension line).
     final tp = TextPainter(
       text: TextSpan(
         text: _label(pixelLength),
         style: TextStyle(
           color: textColor,
-          fontSize: 11,
+          fontSize: 10.5,
           fontFamily: 'Roboto',
           fontWeight: FontWeight.w600,
         ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
-    final mid = Offset((a.dx + b.dx) / 2, (a.dy + b.dy) / 2);
-    final rect = Rect.fromCenter(
-      center: mid,
-      width: tp.width + 10,
-      height: tp.height + 6,
-    );
+    final boxW = tp.width + 6;
+    final boxH = tp.height + 3;
+    final midDim = (da + db) / 2;
+    // Just above the dim line (further along perp) by half the chip height + a
+    // hair, so the chip clears the line rather than sitting on it.
+    final center = midDim + perp * (boxH / 2 + 2);
+    var angle = math.atan2(u.dy, u.dx);
+    if (angle > math.pi / 2 || angle < -math.pi / 2) angle += math.pi;
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(angle);
+    final rect = Rect.fromCenter(center: Offset.zero, width: boxW, height: boxH);
     canvas.drawRRect(
-      RRect.fromRectAndRadius(rect, const Radius.circular(4)),
-      Paint()..color = labelBg,
+      RRect.fromRectAndRadius(rect, const Radius.circular(3)),
+      Paint()..color = labelBg.withAlpha(0xCC),
     );
-    tp.paint(canvas, Offset(rect.left + 5, rect.top + 3));
+    tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+    canvas.restore();
+  }
+
+  /// A small filled arrowhead at [tip] pointing along unit direction [along],
+  /// with [perp] the (unit) perpendicular that fixes its width.
+  void _arrowHead(Canvas canvas, Offset tip, Offset along, Offset perp) {
+    const l = 7.0; // length back from the tip
+    const w = 2.6; // half-width
+    final base = tip + along * l;
+    final path = Path()
+      ..moveTo(tip.dx, tip.dy)
+      ..lineTo(base.dx + perp.dx * w, base.dy + perp.dy * w)
+      ..lineTo(base.dx - perp.dx * w, base.dy - perp.dy * w)
+      ..close();
+    canvas.drawPath(path, Paint()..color = color);
   }
 
   @override

@@ -2,10 +2,12 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/design_issues_store.dart';
+import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
+import '../shell/nav_rail.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/severity_glyph.dart';
@@ -81,6 +83,16 @@ class IssuesCard extends ConsumerWidget {
     void locate(DesignIssue issue) {
       final loc = issue.locate;
       if (loc == null) return;
+      // An electrical issue lives on the single-line, not a floor plan: switch
+      // to the Electrical workspace and hand the panel id to the focus seam
+      // (the ElectricalView consumes it centrally). Mirrors the mechanical jump
+      // below (sheet + selection + view), just on the electrical axis.
+      if (loc.panelId != null) {
+        ref.read(shellSectionProvider.notifier).set(ShellSection.design);
+        ref.read(workspaceViewProvider.notifier).set(WorkspaceView.electrical);
+        ref.read(electricalFocusProvider.notifier).request(loc.panelId!);
+        return;
+      }
       ref.read(sheetsControllerProvider.notifier).selectSheetById(loc.sheetId);
       final sel = ref.read(selectionProvider.notifier);
       if (loc.nodeId != null) {

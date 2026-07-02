@@ -29,7 +29,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
-import 'package:mechx_engine/sizing/fan.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
@@ -54,6 +53,12 @@ import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
 import 'riser_tags.dart';
 import 'schematic_export.dart';
+
+// `equipmentDetail` was lifted into the engine (`report/riser_tags.dart`) so
+// the riser single-line EXPORT builds the same per-node capacity/duty suffixes
+// the canvas draws (B1 export parity); re-exported so existing importers and
+// tests keep resolving it from this library.
+export 'riser_tags.dart' show equipmentDetail;
 
 // ---------------------------------------------------------------------------
 // Public widget
@@ -187,6 +192,8 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
             child: _RiserExportMenu(
               onPdf: () => _runExport(exportMechanicalRiserPdf),
               onDxf: () => _runExport(exportMechanicalRiserDxf),
+              onSetPdf: () => _runExport(exportMechanicalRiserSetPdf),
+              onSetDxf: () => _runExport(exportMechanicalRiserSetDxf),
             ),
           ),
       ],
@@ -200,7 +207,14 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
 class _RiserExportMenu extends StatelessWidget {
   final VoidCallback onPdf;
   final VoidCallback onDxf;
-  const _RiserExportMenu({required this.onPdf, required this.onDxf});
+  final VoidCallback onSetPdf;
+  final VoidCallback onSetDxf;
+  const _RiserExportMenu({
+    required this.onPdf,
+    required this.onDxf,
+    required this.onSetPdf,
+    required this.onSetDxf,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -237,6 +251,19 @@ class _RiserExportMenu extends StatelessWidget {
                   label: context.strings(StringKey.electricalExportSld),
                   sub: context.strings(StringKey.electricalExportSldDxf),
                   onTap: onDxf,
+                ),
+                // The issuable drawing SET — every present service + the
+                // combined sheet, numbered `Sheet i of t` (one multi-page PDF /
+                // a per-service DXF series).
+                _RiserExportRow(
+                  label: context.strings(StringKey.mechExportAllSystems),
+                  sub: context.strings(StringKey.mechExportAllSystemsPdf),
+                  onTap: onSetPdf,
+                ),
+                _RiserExportRow(
+                  label: context.strings(StringKey.mechExportAllSystems),
+                  sub: context.strings(StringKey.mechExportAllSystemsDxf),
+                  onTap: onSetDxf,
                 ),
               ],
             ),
@@ -640,7 +667,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
           constraints.maxHeight.isFinite ? constraints.maxHeight : 600,
         );
         final feedStrategy = ref.watch(feedStrategyProvider);
-        // Resolve the equipment detail suffix per node (tank m³ / pump-fan kW)
+        // Resolve the equipment detail suffix per node (tank m3 / pump-fan kW)
         // here, provider-free in the painter — a datum is included only when it
         // genuinely exists (equipmentDetail returns null otherwise).
         final pump = ref.watch(pumpDutyProvider);
@@ -1160,12 +1187,14 @@ String _sizeLabel(EdgeSizing s) {
 }
 
 /// Industry single-line pipe tag — `SIZE-SERVICE-MATERIAL` (e.g. `100-CW-PPR`,
-/// matching Indonesian air-bersih riser drawings). Air keeps the duct Ø. When a
-/// [function] is confidently derived (riserFunctionFor), a `-GRAVITASI` /
-/// `-BOOSTER` / `-TRANSFER` suffix is appended (piped services only).
+/// matching Indonesian air-bersih riser drawings). Air uses the ASCII duct
+/// `O<mm>` form (the same stand-in the export/PDF path uses — one drawing must
+/// not mix two notations). When a [function] is confidently derived
+/// (riserFunctionFor), a `-GRAVITASI` / `-BOOSTER` / `-TRANSFER` suffix is
+/// appended (piped services only).
 String _pipeTag(EdgeSizing s, NetEdge edge, {RiserFunction? function}) {
   final mm = s.diameter.inMillimeters.round();
-  if (s.service.regime == FlowRegime.air) return 'Ø$mm';
+  if (s.service.regime == FlowRegime.air) return 'O$mm';
   final base = '$mm-${_serviceCode(edge.service)}-'
       '${_pipeMaterialCode(edge.pipeProduct, edge.service)}';
   return function != null ? '$base-${function.code}' : base;
@@ -1199,55 +1228,6 @@ StringKey drawingTitleKey(ServiceType? focus) {
     ServiceType.fireHydrant =>
       StringKey.schematicTitleFireRiser,
   };
-}
-
-/// The equipment detail SUFFIX drawn beside an equipment symbol on the
-/// single-line — a tank capacity (`237 m³`) or a duty (`5.5 kW`) — or null when
-/// no datum genuinely exists (the node then keeps its plain name, no fabricated
-/// value). HONEST: a tank's m³ is a direct conversion of the stored
-/// [NetNode.tankCapacityLitres]; a duty is shown only when the matching system
-/// duty provider is non-null.
-///
-/// Pure + Flutter-free (engine types only) so it is unit-testable in isolation.
-String? equipmentDetail(
-  NetNode node, {
-  PumpDuty? supplyPump,
-  FanDuty? fan,
-  PumpDuty? firePump,
-}) {
-  final c = node.component;
-  if (c == null) return null;
-  switch (c) {
-    case NodeComponent.roofTank:
-    case NodeComponent.groundTank:
-    case NodeComponent.expansionTank:
-      final litres = node.tankCapacityLitres;
-      if (litres == null || litres <= 0) return null;
-      final m3 = litres / 1000.0;
-      // Whole-m³ for big cisterns, one decimal for small tanks; strip a '.0'.
-      final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
-      final clean = s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
-      return '$clean m³';
-    case NodeComponent.pump:
-    case NodeComponent.boosterSet:
-      // VERIFY: this is the SYSTEM supply-pump duty (one trunk pump), not a
-      // per-node solve — a project with several independent pumps would show the
-      // same duty on every pump node. Acceptable first pass (one supply pump is
-      // the norm); the fire pump is deliberately NOT attached here (no node-kind
-      // distinguishes a fire pump from a plumbing pump yet).
-      if (supplyPump == null) return null;
-      return '${supplyPump.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW';
-    case NodeComponent.ahu:
-    case NodeComponent.fcu:
-    case NodeComponent.supplyFan:
-    case NodeComponent.exhaustFan:
-      // VERIFY: same system-level caveat as the pump — the central duct-fan duty
-      // is attached to every air-unit node of this kind (no per-unit fan solve).
-      if (fan == null) return null;
-      return '${fan.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW';
-    default:
-      return null;
-  }
 }
 
 /// Pipe material code — the edge's chosen product, else the conventional
@@ -1300,7 +1280,11 @@ Set<String>? _focusedNodeIds(Network network, ServiceType? focus) {
 }
 
 /// Screen position of each (visible) node: floors stacked by index (floor 0 at
-/// the bottom), nodes spread left→right across the band by their x order.
+/// the bottom), nodes placed left→right by the SHARED [riserLayoutPositions]
+/// column layout (B7) — a normalized x in [0,1] mapped into the drawing band —
+/// so a vertical riser stack reads as one column both here and in the exported
+/// sheet (the export consumes the same helper), instead of the two jogging
+/// apart. A single column (all nodes aligned, or one node) centres at 0.5.
 Map<String, Offset> _autoNodePositions(
     Network network, int levelCount, Size size,
     {ServiceType? focus}) {
@@ -1310,26 +1294,16 @@ Map<String, Offset> _autoNodePositions(
     return bandH * ((n - 1) - floorIndex) + bandH / 2;
   }
 
-  final visible = _focusedNodeIds(network, focus);
-  final byFloor = <int, List<NetNode>>{};
-  for (final node in network.nodes) {
-    if (visible != null && !visible.contains(node.id)) continue;
-    (byFloor[node.floorIndex] ??= []).add(node);
-  }
-  final positions = <String, Offset>{};
+  final norm = riserLayoutPositions(network, focus: focus);
   final drawWidth = size.width - 2 * _kAutoSidePad;
-  for (final entry in byFloor.entries) {
-    final nodes = List<NetNode>.from(entry.value)
-      ..sort((a, b) => a.x.compareTo(b.x));
-    final cy = bandCentreY(entry.key);
-    if (nodes.length == 1) {
-      positions[nodes.first.id] = Offset(size.width / 2, cy);
-    } else {
-      final step = drawWidth / (nodes.length - 1);
-      for (var i = 0; i < nodes.length; i++) {
-        positions[nodes[i].id] = Offset(_kAutoSidePad + i * step, cy);
-      }
-    }
+  final positions = <String, Offset>{};
+  for (final entry in norm.entries) {
+    final node = network.nodeById(entry.key);
+    if (node == null) continue;
+    positions[entry.key] = Offset(
+      _kAutoSidePad + entry.value * drawWidth,
+      bandCentreY(node.floorIndex),
+    );
   }
   return positions;
 }
@@ -1477,7 +1451,7 @@ class _AutoSchematicPainter extends CustomPainter {
   /// riser top. Computed once in the widget via [riserTags].
   final Map<String, String> riserTagsById;
 
-  /// Per-node equipment detail suffix (capacity `237 m³` / duty `5.5 kW`),
+  /// Per-node equipment detail suffix (capacity `237 m3` / duty `5.5 kW`),
   /// appended to the node's name. Resolved provider-free in the widget via
   /// [equipmentDetail]; absent nodes keep their plain name.
   final Map<String, String> detailByNode;
@@ -1508,6 +1482,7 @@ class _AutoSchematicPainter extends CustomPainter {
       _paintFloorFanOut(canvas, size);
       _paintPlantDetail(canvas, size);
       _paintValveCallouts(canvas, size);
+      _paintStackDetails(canvas, size, nodePos);
     }
   }
 
@@ -1772,7 +1747,7 @@ class _AutoSchematicPainter extends CustomPainter {
 
       // Fixture / equipment label, centred just below the symbol. When the node
       // carries an equipment detail (capacity / duty), append it after a '·'
-      // (e.g. 'Roof tank · 237 m³', 'Booster set · 5.5 kW').
+      // (e.g. 'Roof tank · 237 m3', 'Booster set · 5.5 kW').
       final label = node == null ? null : _nodeLabel(node);
       if (label != null) {
         final detail = node == null ? null : detailByNode[node.id];
@@ -2049,6 +2024,74 @@ class _AutoSchematicPainter extends CustomPainter {
     );
   }
 
+  /// (B2) STACK DETAIL — the drainage/vent riser conventions, all data-gated on
+  /// the DRAWN network (never a fabricated cleanout / vent):
+  ///   • a `CO` tag beside each cleanout that actually serves a drainage stack
+  ///     base (the missing-cleanout case is a Review ADVISORY instead);
+  ///   • a short tee bar where a vent riser ties into the soil stack;
+  ///   • a VTR (vent-through-roof) stub + label where a vent riser reaches the
+  ///     top floor.
+  /// Mirrors the export builder's stack details (one convention, two renders).
+  void _paintStackDetails(
+      Canvas canvas, Size size, Map<String, Offset> nodePos) {
+    final ventColor = serviceColor(ServiceType.vent);
+    final drainColor = serviceColor(ServiceType.drainage);
+    if (focus == null || focus == ServiceType.vent) {
+      final topFloor = building.levelCount - 1;
+      for (final id in ventTopTerminalIds(network, topFloor: topFloor)) {
+        final p = nodePos[id];
+        if (p == null) continue;
+        final stubTop = Offset(p.dx, p.dy - 34);
+        final paint = Paint()
+          ..color = ventColor
+          ..strokeWidth = 1.5
+          ..style = PaintingStyle.stroke;
+        canvas.drawLine(Offset(p.dx, p.dy - 10), stubTop, paint);
+        // Roof-penetration cap tick.
+        canvas.drawLine(Offset(p.dx - 4, stubTop.dy),
+            Offset(p.dx + 4, stubTop.dy), paint);
+        _drawText(
+          canvas,
+          'VTR',
+          Offset(p.dx + 6, stubTop.dy - 4),
+          fontSize: 9,
+          color: ventColor,
+          fontWeight: FontWeight.w600,
+        );
+      }
+    }
+    if (focus == null ||
+        focus == ServiceType.vent ||
+        focus == ServiceType.drainage) {
+      for (final id in ventSoilTeeNodeIds(network)) {
+        final p = nodePos[id];
+        if (p == null) continue;
+        canvas.drawLine(
+          Offset(p.dx - 9, p.dy),
+          Offset(p.dx + 9, p.dy),
+          Paint()
+            ..color = drainColor
+            ..strokeWidth = 2
+            ..style = PaintingStyle.stroke,
+        );
+      }
+    }
+    if (focus == null || focus == ServiceType.drainage) {
+      for (final id in cleanoutAtStackBaseIds(network)) {
+        final p = nodePos[id];
+        if (p == null) continue;
+        _drawText(
+          canvas,
+          'CO',
+          Offset(p.dx - 22, p.dy - 18),
+          fontSize: 9,
+          color: drainColor,
+          fontWeight: FontWeight.w600,
+        );
+      }
+    }
+  }
+
   /// (5) PER-FLOOR BRANCH FAN-OUT — under each floor band, a compact column of
   /// short labelled stubs for the FIXTURES/terminals that floor distributes,
   /// capped at 4 with a `+N more` row (the cap is surfaced by [floorFanOuts], not
@@ -2243,33 +2286,47 @@ class _EditSchematicPainter extends CustomPainter {
 
       final fromS = transform.worldToScreen(_worldOf(a));
       final toS = transform.worldToScreen(_worldOf(b));
+      final isRiser = edge.kind == EdgeKind.riser;
 
-      if (edge.id == selectedEdgeId) {
+      // A riser routes as the same orthogonal L-shape the Auto painter uses
+      // (horizontal at the from-y, vertical at the mid-x, horizontal to the
+      // to-x) so a riser joining two nodes at different x reads as a clean
+      // vertical, not a diagonal (B6). Runs stay straight.
+      final midX = (fromS.dx + toS.dx) / 2;
+      Path riserPath() => Path()
+        ..moveTo(fromS.dx, fromS.dy)
+        ..lineTo(midX, fromS.dy)
+        ..lineTo(midX, toS.dy)
+        ..lineTo(toS.dx, toS.dy);
+
+      if (selected) {
         // Selection halo behind the line — a soft, blurred glow so the
         // selection 'floats' (Apple-soft) rather than reading as a hard band.
-        canvas.drawLine(
-          fromS,
-          toS,
-          Paint()
-            ..color = colors.accent.withAlpha(64)
-            ..strokeWidth = 7
-            ..strokeCap = StrokeCap.round
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
-        );
+        final halo = Paint()
+          ..color = colors.accent.withAlpha(64)
+          ..strokeWidth = 7
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
+        if (isRiser) {
+          canvas.drawPath(riserPath(), halo);
+        } else {
+          canvas.drawLine(fromS, toS, halo);
+        }
       }
 
-      final stroke = (edge.kind == EdgeKind.riser ? 2.5 : 2.0) *
-          (selected ? 1.3 : 1.0);
+      final stroke = (isRiser ? 2.5 : 2.0) * (selected ? 1.3 : 1.0);
       final linePaint = Paint()
         ..color = color
         ..strokeWidth = stroke
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round;
-      canvas.drawLine(fromS, toS, linePaint);
 
-      if (edge.kind == EdgeKind.riser) {
+      if (isRiser) {
+        canvas.drawPath(riserPath(), linePaint);
         final goingUp = toS.dy < fromS.dy;
-        final mid = Offset((fromS.dx + toS.dx) / 2, (fromS.dy + toS.dy) / 2);
+        final arrowY = (fromS.dy + toS.dy) / 2;
+        final mid = Offset(midX, arrowY);
         _drawArrow(canvas, mid, goingUp, color);
 
         // Length (elevation delta) + sized diameter label.
@@ -2288,6 +2345,7 @@ class _EditSchematicPainter extends CustomPainter {
           fontWeight: FontWeight.w600,
         );
       } else {
+        canvas.drawLine(fromS, toS, linePaint);
         final s = sizing[edge.id];
         if (s != null) {
           final mid = Offset((fromS.dx + toS.dx) / 2, (fromS.dy + toS.dy) / 2);
@@ -2305,11 +2363,85 @@ class _EditSchematicPainter extends CustomPainter {
     }
   }
 
+  /// A representative colour for [node]: the service of any edge touching it
+  /// (Edit shows every service — no focus), else neutral. Mirrors the Auto
+  /// painter's combined-view `_nodeColor`.
+  Color _nodeColor(NetNode node) {
+    for (final e in network.edges) {
+      if (e.fromId == node.id || e.toId == node.id) {
+        return serviceColor(e.service);
+      }
+    }
+    return colors.textSecondary;
+  }
+
+  /// A human label for [node] — its equipment name or fixture type — or null for
+  /// a plain junction. Mirrors the Auto painter.
+  String? _nodeLabel(NetNode node) {
+    final c = node.component;
+    if (c != null) return c.label;
+    final f = node.fixture;
+    if (f != null) return _fixtureLabel(f);
+    return null;
+  }
+
+  String _fixtureLabel(PlumbingFixture f) => switch (f) {
+        PlumbingFixture.waterClosetFlushValve => 'WC',
+        PlumbingFixture.waterClosetFlushTank => 'WC',
+        PlumbingFixture.urinalFlushTank => 'Urinal',
+        PlumbingFixture.lavatory => 'Lavatory',
+        PlumbingFixture.shower => 'Shower',
+        PlumbingFixture.bathtub => 'Bathtub',
+        PlumbingFixture.kitchenSink => 'Sink',
+        PlumbingFixture.hoseBibb => 'Hose bibb',
+      };
+
+  /// Nodes carry their schematic symbol (equipment glyph / fixture drop-triangle
+  /// / plain junction) + a label — reusing the Auto painter's treatment (B6), so
+  /// the Edit surface reads like an engineered riser rather than anonymous dots.
   void _paintNodes(Canvas canvas) {
+    const box = 20.0;
     for (final node in network.nodes) {
       final pos = transform.worldToScreen(_worldOf(node));
-      canvas.drawCircle(pos, 5, Paint()..color = colors.canvas);
-      canvas.drawCircle(pos, 3.5, Paint()..color = colors.textSecondary);
+      final color = _nodeColor(node);
+
+      if (node.component != null) {
+        // A halo so the glyph reads over the run line, then the equipment glyph.
+        canvas.drawCircle(pos, box * 0.62, Paint()..color = colors.canvas);
+        canvas.save();
+        canvas.translate(pos.dx - box / 2, pos.dy - box / 2);
+        paintComponentSymbol(
+            canvas, const Size(box, box), node.component!, color);
+        canvas.restore();
+      } else if (node.role == NodeRole.fixture) {
+        // A fixture drop — a small filled down-triangle terminal.
+        const r = 6.0;
+        canvas.drawCircle(pos, r + 2.5, Paint()..color = colors.canvas);
+        final tri = Path()
+          ..moveTo(pos.dx - r, pos.dy - r * 0.7)
+          ..lineTo(pos.dx + r, pos.dy - r * 0.7)
+          ..lineTo(pos.dx, pos.dy + r)
+          ..close();
+        canvas.drawPath(tri, Paint()..color = color);
+      } else {
+        // A plain junction.
+        canvas.drawCircle(pos, 5.5, Paint()..color = colors.canvas);
+        canvas.drawCircle(pos, 4, Paint()..color = color);
+      }
+
+      final label = _nodeLabel(node);
+      if (label != null) {
+        _drawText(
+          canvas,
+          label,
+          Offset(pos.dx, pos.dy + 13),
+          fontSize: 9,
+          color: colors.textMuted,
+          fontWeight: FontWeight.w500,
+          centered: true,
+          maxWidth: 130,
+        );
+      }
     }
   }
 

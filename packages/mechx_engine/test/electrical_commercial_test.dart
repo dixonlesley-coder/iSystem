@@ -18,6 +18,7 @@ import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/electrical/quotation.dart';
 import 'package:mechx_engine/electrical/results.dart';
+import 'package:mechx_engine/report/number_format.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -548,13 +549,35 @@ void main() {
       expect(csvLines.first, startsWith('qty,category,description'));
       expect(csvLines.length, cost.lines.length + 2);
       expect(csv, contains('Material subtotal'));
+      // D7 — CSV money cells stay UNGROUPED (spreadsheet-parseable) but are
+      // fixed to 2 dp: every priced unit price here is 1000 -> `1000.00`, and
+      // the subtotal row carries the grand total at 2 dp too.
+      expect(csv, contains(',1000.00,'));
+      expect(csv, contains('${cost.grandTotal.toStringAsFixed(2)},\n'));
+      // No trailing `.0`-style raw doubles slipped into a money cell.
+      expect(csv, isNot(contains(',1000,')));
 
       final md = quotationToMarkdown(q, cost, projectName: 'Tower A');
       expect(md, contains('# Electrical proposal — Tower A'));
       expect(md, contains('Grand total'));
+      // D7 — proposal money is GROUPED (Indonesian dot thousands) + 2 dp comma
+      // decimals. The material subtotal is the grand total of all priced lines;
+      // re-derive its formatted string from the same money() helper the export
+      // uses so the pin tracks the formatter, not a magic literal.
+      expect(md, contains('| Material | ${money(q.materialSubtotal, dp: 2)} |'));
+      expect(md, contains('**${money(q.grandTotal, dp: 2)}**'));
+      // The unit price 1000 renders grouped as `1.000,00` (was raw `1000`).
+      expect(md, contains('1.000,00'));
 
       final pl = priceListToCsv(priceList);
       expect(pl.split('\n').first, 'sku,unit_price');
+    });
+
+    test('D7: money() drives the quotation proposal formatting', () {
+      // A focused pin on the shared formatter's client-facing output.
+      expect(money(1181250, dp: 2), '1.181.250,00');
+      expect(money(3703.68, dp: 2), '3.703,68');
+      expect(groupThousands(52871), '52.871');
     });
   });
 }

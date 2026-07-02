@@ -6,14 +6,18 @@
 /// (project name + sheet name + a date STRING the caller passes — the engine
 /// never reads the clock).
 ///
-/// A single A3-landscape page. Runs become coloured stroked LINES on a
-/// per-service colour, risers a small circle marker at their on-floor node,
-/// nodes small filled dots, and each sized edge a TEXT label. The drawing is
-/// auto-fitted (uniform scale, centred) into the page with a margin. PDF space
-/// is y-up, so the screen-space (y-down) coordinates are flipped during the fit.
+/// A single landscape page (A3 by default; A2/A1 via `paper`). Runs become
+/// coloured stroked LINES on a
+/// per-service colour with an A6 three-band line-weight hierarchy + the
+/// per-service dash pattern, risers a small circle marker at their on-floor
+/// node, nodes small filled dots, and each sized edge a TEXT label rotated to
+/// its edge bearing with greedy collision avoidance (A7). The drawing is
+/// auto-fitted (uniform scale, centred) into the page with a margin — and
+/// SNAPPED to a standard plotted scale when the caller passes the sheet
+/// calibration (A3). PDF space is y-up, so the screen-space (y-down)
+/// coordinates are flipped during the fit.
 library;
 
-import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -21,6 +25,8 @@ import '../network/network.dart';
 import '../sizing/network_sizing.dart';
 import '../units.dart';
 import 'drawing_chrome.dart';
+import 'plan_symbols.dart';
+import 'sld_sheet.dart';
 
 /// Per-service stroke colour as RGB in the 0..1 range (no Flutter `Color`).
 /// Matches `pdf_export.dart` so the annotated and plain PDFs read the same.
@@ -46,6 +52,17 @@ String _sizeLabel(NetEdge e, EdgeSizing s) {
   }
   final mm = s.diameter.inMillimeters.round();
   return e.service.isAir ? 'O$mm' : 'DN$mm';
+}
+
+/// The A6 line-weight band for a sized edge — rectangular ducts band on their
+/// larger side, round ducts on Ø, pipes on DN (see `strokeBandFor`).
+int _strokeBand(EdgeSizing s) {
+  if (s.isRectangular) {
+    final side = math.max(s.width!.inMillimeters, s.height!.inMillimeters);
+    return strokeBandFor(sizeMm: side, isDuct: true);
+  }
+  return strokeBandFor(
+      sizeMm: s.diameter.inMillimeters, isDuct: s.service.isAir);
 }
 
 /// A human metres string for a length label: `3.5 m` (one decimal, trimmed).
@@ -75,6 +92,29 @@ String _n(double v) => v.toStringAsFixed(2);
 /// (the engine's `edgeLength`) and passes it so this stays a pure draw routine.
 /// [projectName] / [sheetName] / [dateString] populate the title block — the
 /// engine NEVER calls `DateTime.now()`; the caller passes the formatted date.
+///
+/// With [chrome] present the issued sheet carries an ISO-5457 frame + an
+/// ISO-7200 title block bottom-right (PROJECT/TITLE/DATE fed from this
+/// function's own params when the chrome doesn't override them) instead of the
+/// loose top-left text lines (A4). When [metersPerPixel] (the sheet
+/// calibration) is set, the raw auto-fit is SNAPPED to the nearest standard
+/// plotted scale (`kPlanScaleLadder`, always the larger denominator so the
+/// drawing never draws larger than the honest snap), the SCALE row reads
+/// `1 : N @ <paper>` (naming the ACTUAL [paper]), and an honest divided scale
+/// bar is drawn from the resulting points-per-metre. When null the sheet is
+/// NTS and NO divided bar is printed — a bar at an arbitrary auto-fit ratio is
+/// a bar an engineer could scale wrong dimensions from (CAD-OUTPUT-UX-REVIEW
+/// A3).
+///
+/// [paper] selects the landscape sheet size (default A3 ⇒ byte-identical); A2
+/// / A1 enlarge the page, margins, fit, chrome anchoring and scale text alike.
+///
+/// With [underlay] present (A1) the floor-plan substrate is painted FIRST,
+/// beneath every network stroke: a [VectorPlanUnderlay] as pale-grey thin
+/// linework, a [RasterPlanUnderlay] as a FlateDecode image XObject scaled to
+/// the sheet frame's fitted rect. The underlay's sheet frame joins the fit
+/// bounds so the whole plan lands on the page. Null keeps the output
+/// byte-identical.
 Uint8List planToPdf({
   required Network net,
   required Map<String, EdgeSizing> sizing,
@@ -85,50 +125,46 @@ Uint8List planToPdf({
   required String sheetName,
   required String dateString,
   DrawingChrome? chrome,
+  double? metersPerPixel,
+  PlanUnderlay? underlay,
+  PaperSize paper = PaperSize.a3Landscape,
 }) {
-  const pageW = 1190.55; // A3 landscape, points (420 mm)
-  const pageH = 841.89; // 297 mm
+  final pageW = paper.widthPt; // landscape sheet width, points
+  final pageH = paper.heightPt; // landscape sheet height, points
   const margin = 48.0;
 
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
 
-  // ── Bounds of everything we'll draw, in screen pixels ──────────────────────
-  var minX = double.infinity, minY = double.infinity;
-  var maxX = -double.infinity, maxY = -double.infinity;
-  void include(NetNode n) {
-    minX = math.min(minX, n.x);
-    minY = math.min(minY, n.y);
-    maxX = math.max(maxX, n.x);
-    maxY = math.max(maxY, n.y);
-  }
-
-  for (final e in net.edges) {
-    final a = net.nodeById(e.fromId);
-    final c = net.nodeById(e.toId);
-    if (a == null || c == null) continue;
-    if (e.kind == EdgeKind.run) {
-      if (onFloor(a) && onFloor(c)) {
-        include(a);
-        include(c);
-      }
-    } else {
-      if (onFloor(a)) include(a);
-      if (onFloor(c)) include(c);
-    }
-  }
-
-  final hasContent = minX.isFinite;
-  if (!hasContent) {
-    minX = 0;
-    minY = 0;
-    maxX = 1;
-    maxY = 1;
-  }
+  // ── Bounds of everything we'll draw, in screen pixels (A1: incl. underlay) ──
+  final fit = planFitBounds(net, sheetId, floorIndex, underlay);
+  final minX = fit.minX, minY = fit.minY, maxX = fit.maxX, maxY = fit.maxY;
+  final hasContent = fit.hasContent;
+  final hasChrome = chrome != null && !chrome.isEmpty;
+  // The title block's TITLE/DATE rows fall back to this function's own
+  // sheet-name/date params, so the issued sheet never loses them.
+  final blockTitle = hasChrome ? (chrome.drawingTitle ?? sheetName) : sheetName;
+  final blockDate = hasChrome ? (chrome.dateString ?? dateString) : dateString;
+  // A4: reserve the ISO-7200 title-block strip at the bottom. The row COUNT
+  // (so the height) doesn't depend on the final scale text — with chrome the
+  // SCALE row is always stamped ('NTS' or '1 : N @ A3') — so probe with a
+  // placeholder here and render with the real text after the fit.
+  final blockH = hasChrome
+      ? pdfTitleBlock(chrome,
+              pageW: pageW,
+              pageH: pageH,
+              margin: margin,
+              projectName: projectName,
+              scaleTextOverride: 'NTS',
+              titleTextOverride: blockTitle,
+              dateTextOverride: blockDate)
+          .height
+      : 0.0;
   final spanX = maxX - minX;
   final spanY = maxY - minY;
-  const availW = pageW - 2 * margin;
-  // Reserve a little headroom for the two-line title block.
-  const availH = pageH - 2 * margin - 24;
+  final availW = pageW - 2 * margin;
+  // Reserve the title-block strip (chrome) or a little headroom for the
+  // legacy two-line top-left title.
+  final availH = pageH - 2 * margin - (hasChrome ? blockH : 24.0);
   var scale = 1.0;
   if (spanX > 0 || spanY > 0) {
     final sx = spanX > 0 ? availW / spanX : double.infinity;
@@ -136,6 +172,18 @@ Uint8List planToPdf({
     scale = math.min(sx, sy);
     if (!scale.isFinite || scale <= 0) scale = 1.0;
   }
+
+  // ── A3 true plotted scale: snap the raw auto-fit to a standard scale, the
+  // snapped-scale text naming the ACTUAL paper (`1 : N @ A2`). ───────────────
+  final snap = snapPlottedScale(
+      rawScale: scale,
+      metersPerPixel: metersPerPixel,
+      hasContent: hasContent,
+      paperLabel: paper.label);
+  scale = snap.scale;
+  final scaleRow = snap.scaleRow;
+  final pointsPerMeter = snap.pointsPerMeter;
+
   final drawnW = spanX * scale;
   final drawnH = spanY * scale;
   final offX = margin + (availW - drawnW) / 2;
@@ -146,15 +194,33 @@ Uint8List planToPdf({
   // ── Content stream ─────────────────────────────────────────────────────────
   final cs = StringBuffer();
 
-  // Title block, top-left, two lines (project name; sheet name + date).
-  cs.writeln('BT /F1 16 Tf 0 0 0 rg '
-      '${_n(margin)} ${_n(pageH - margin + 6)} Td '
-      '(${_pdfText(projectName)}) Tj ET');
-  final counter = chrome?.sheetCounter;
-  cs.writeln('BT /F1 10 Tf 0.25 0.25 0.25 rg '
-      '${_n(margin)} ${_n(pageH - margin - 9)} Td '
-      '(${_pdfText('$sheetName   -   $dateString'
-          '${counter != null ? '   -   Sheet $counter' : ''}')}) Tj ET');
+  // A1: the floor-plan underlay paints FIRST — every network stroke, label and
+  // chrome overprints the pale plan.
+  switch (underlay) {
+    case final VectorPlanUnderlay v:
+      cs.write(pdfVectorUnderlayOps(v, tx: tx, ty: ty, pageScale: scale));
+    case final RasterPlanUnderlay r:
+      cs.write(pdfRasterUnderlayOps(
+          x: tx(0),
+          y: ty(r.sheetHeightPx),
+          w: r.sheetWidthPx * scale,
+          h: r.sheetHeightPx * scale));
+    case null:
+      break;
+  }
+
+  if (!hasChrome) {
+    // Title block, top-left, two lines (project name; sheet name + date) —
+    // an issued sheet carries these in the ISO-7200 title block instead.
+    cs.writeln('BT /F1 16 Tf 0 0 0 rg '
+        '${_n(margin)} ${_n(pageH - margin + 6)} Td '
+        '(${_pdfText(projectName)}) Tj ET');
+    final counter = chrome?.sheetCounter;
+    cs.writeln('BT /F1 10 Tf 0.25 0.25 0.25 rg '
+        '${_n(margin)} ${_n(pageH - margin - 9)} Td '
+        '(${_pdfText('$sheetName   -   $dateString'
+            '${counter != null ? '   -   Sheet $counter' : ''}')}) Tj ET');
+  }
 
   void strokeColor(ServiceType s) {
     final (r, g, b) = _serviceColor(s);
@@ -176,8 +242,79 @@ Uint8List planToPdf({
     cs.writeln(fill ? 'f' : 'S');
   }
 
+  // A5 flow arrow: one small OPEN chevron at the 2/3 point of a long-enough
+  // sized run along its flow direction ([upstream]→[downstream] in page
+  // points), mirroring the on-canvas `network_layer._flowChevron`.
+  void flowChevron(double ux, double uy, double dxp, double dyp, double len,
+      ServiceType service) {
+    const arm = 5.0;
+    final dirx = (dxp - ux) / len, diry = (dyp - uy) / len;
+    final perpx = -diry, perpy = dirx;
+    final atx = ux + dirx * (len * 2 / 3), aty = uy + diry * (len * 2 / 3);
+    final tipx = atx + dirx * (arm * 0.5), tipy = aty + diry * (arm * 0.5);
+    final backx = tipx - dirx * arm, backy = tipy - diry * arm;
+    final w1x = backx + perpx * (arm * 0.75), w1y = backy + perpy * (arm * 0.75);
+    final w2x = backx - perpx * (arm * 0.75), w2y = backy - perpy * (arm * 0.75);
+    final (r, g, b) = _serviceColor(service);
+    cs.writeln('${_n(r)} ${_n(g)} ${_n(b)} RG');
+    cs.writeln('1.60 w');
+    cs.writeln('${_n(w1x)} ${_n(w1y)} m ${_n(tipx)} ${_n(tipy)} l S');
+    cs.writeln('${_n(w2x)} ${_n(w2y)} m ${_n(tipx)} ${_n(tipy)} l S');
+  }
+
+  // A5 node symbol: stroke a plan-symbol prim list (page points, y-DOWN) in
+  // the given colour, MIRRORED about the node's baseline [pageCy] (the prims
+  // are y-down; the PDF page is y-up). Only [SldLine]/[SldCircle] arise here.
+  void strokePrims(
+      List<SldPrim> prims, double pageCy, (double, double, double) col) {
+    final (r, g, b) = col;
+    cs.writeln('${_n(r)} ${_n(g)} ${_n(b)} RG');
+    cs.writeln('1.00 w');
+    for (final pr in prims) {
+      switch (pr) {
+        case final SldLine l:
+          cs.writeln('${_n(l.x1)} ${_n(2 * pageCy - l.y1)} m '
+              '${_n(l.x2)} ${_n(2 * pageCy - l.y2)} l S');
+        case final SldCircle cc:
+          circle(cc.cx, 2 * pageCy - cc.cy, cc.r);
+        case SldRect():
+        case SldLabel():
+          break; // never produced by the plan-symbol library
+      }
+    }
+  }
+
+  // The service of a node's first incident edge (for its symbol colour), or
+  // null when unconnected → neutral dark.
+  ServiceType? domService(NetNode n) {
+    for (final e in net.edges) {
+      if (e.fromId == n.id || e.toId == n.id) return e.service;
+    }
+    return null;
+  }
+
+  // A7 label discipline: rotate to the edge bearing (a `Tm` text matrix),
+  // offset to the consistent upper side, drop on unresolvable collision.
+  final placedLabels = <LabelBox>[];
+  void edgeLabel(double ax, double ay, double bx, double by, String text) {
+    const size = 9.0;
+    final p = placeEdgeLabel(
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+        text: text,
+        textSize: size,
+        placed: placedLabels);
+    if (p == null) return; // dropped rather than overprinting
+    final rad = p.angleDeg * math.pi / 180;
+    final pc = math.cos(rad), ps = math.sin(rad);
+    cs.writeln('BT /F1 9 Tf 0 0 0 rg '
+        '${_n(pc)} ${_n(ps)} ${_n(-ps)} ${_n(pc)} '
+        '${_n(p.x)} ${_n(p.y)} Tm (${_pdfText(text)}) Tj ET');
+  }
+
   // Edges: lines (runs) + riser markers, each labelled size · length.
-  cs.writeln('1.4 w');
   for (final e in net.edges) {
     final a = net.nodeById(e.fromId);
     final c = net.nodeById(e.toId);
@@ -194,75 +331,110 @@ Uint8List planToPdf({
     if (e.kind == EdgeKind.run) {
       if (!onFloor(a) || !onFloor(c)) continue;
       strokeColor(e.service);
+      // A6 line-weight hierarchy: three bands from the sized dimension;
+      // unsized edges keep the legacy 1.4 w.
+      cs.writeln('${_n(s == null ? 1.4 : kPdfStrokeWidths[_strokeBand(s)])} w');
+      final dash = serviceDashPatternPdf(e.service);
+      if (dash != null) cs.writeln('[${dash.map(_n).join(' ')}] 0 d');
       cs.writeln('${_n(tx(a.x))} ${_n(ty(a.y))} m '
           '${_n(tx(c.x))} ${_n(ty(c.y))} l S');
+      if (dash != null) cs.writeln('[] 0 d'); // back to solid
+      // A5 flow arrow on a sized run with a known orientation and enough length.
+      if (s != null && s.flowFromId != null) {
+        final ax = tx(a.x), ay = ty(a.y), bx = tx(c.x), by = ty(c.y);
+        final flen = math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
+        if (flen > 30) {
+          final upIsA = s.flowFromId == a.id;
+          flowChevron(upIsA ? ax : bx, upIsA ? ay : by, upIsA ? bx : ax,
+              upIsA ? by : ay, flen, e.service);
+        }
+      }
       if (label != null) {
-        cs.writeln('BT /F1 9 Tf 0 0 0 rg '
-            '${_n(tx((a.x + c.x) / 2))} ${_n(ty((a.y + c.y) / 2) + 3)} Td '
-            '(${_pdfText(label)}) Tj ET');
+        edgeLabel(tx(a.x), ty(a.y), tx(c.x), ty(c.y), label);
       }
     } else {
       strokeColor(e.service);
+      cs.writeln('1.4 w'); // markers keep the symbol weight, solid
       for (final n in [a, c]) {
         if (!onFloor(n)) continue;
         circle(tx(n.x), ty(n.y), 5);
+        // A5 riser UP/DN sense from the endpoints' floor indices, above marker.
+        final other = n.id == a.id ? c : a;
+        final sense =
+            riserUpDown(hereFloor: n.floorIndex, otherFloor: other.floorIndex);
+        if (sense != null) {
+          cs.writeln('BT /F1 9 Tf 0 0 0 rg '
+              '${_n(tx(n.x) + 8)} ${_n(ty(n.y) - 8)} Td (${_pdfText(sense)}) Tj ET');
+        }
       }
-      // Riser length label at the on-floor end.
+      // Riser length label at the on-floor end. A riser has no on-plan
+      // bearing, so it stays horizontal; its box is recorded so later run
+      // labels dodge it (A7 greedy collision).
       final marker = onFloor(a) ? a : (onFloor(c) ? c : null);
       if (marker != null && label != null) {
+        final lx = tx(marker.x) + 8;
+        final ly = ty(marker.y) + 3;
         cs.writeln('BT /F1 9 Tf 0 0 0 rg '
-            '${_n(tx(marker.x) + 8)} ${_n(ty(marker.y) + 3)} Td '
+            '${_n(lx)} ${_n(ly)} Td '
             '(${_pdfText(label)}) Tj ET');
+        placedLabels.add((
+          minX: lx,
+          minY: ly,
+          maxX: lx + label.length * 9 * 0.55,
+          maxY: ly + 9,
+        ));
       }
     }
   }
 
-  // Nodes: small filled dots on top, so junctions read clearly.
-  cs.writeln('0.20 0.20 0.20 rg');
+  // Nodes on top: a component node draws its equipment glyph, a fixture-role
+  // node a drop triangle, and a plain junction keeps the small filled dot
+  // (A5 — replacing the anonymous dot for component/fixture nodes).
   for (final n in net.nodes) {
     if (!onFloor(n)) continue;
-    circle(tx(n.x), ty(n.y), 2, fill: true);
+    final px = tx(n.x), py = ty(n.y);
+    final svc = domService(n);
+    final col = svc == null ? (0.20, 0.20, 0.20) : _serviceColor(svc);
+    final comp = n.component;
+    if (comp != null) {
+      strokePrims(planComponentPrims(comp, cx: px, cy: py, size: 14), py, col);
+    } else if (n.role == NodeRole.fixture) {
+      strokePrims(planFixturePrims(cx: px, cy: py, size: 14), py, col);
+    } else {
+      cs.writeln('0.20 0.20 0.20 rg');
+      circle(px, py, 2, fill: true);
+    }
   }
 
   // ── Issuable-document chrome (opt-in; byte-identical when null) ─────────────
-  if (chrome != null && !chrome.isEmpty) {
-    cs.write(pdfRevisionBlock(chrome, pageW: pageW, pageH: pageH, margin: margin));
+  if (hasChrome) {
+    cs.write(pdfSheetFrame(pageW: pageW, pageH: pageH, margin: margin));
+    cs.write(pdfTitleBlock(chrome,
+            pageW: pageW,
+            pageH: pageH,
+            margin: margin,
+            projectName: projectName,
+            scaleTextOverride: scaleRow,
+            titleTextOverride: blockTitle,
+            dateTextOverride: blockDate)
+        .ops);
     cs.write(pdfLegend(chrome, originX: margin, originY: margin + 28));
-    cs.write(pdfScaleBar(chrome, centerX: pageW / 2, baseY: margin));
     cs.write(pdfNorthArrow(chrome, cx: pageW - margin - 18, cy: pageH - margin - 40));
+  }
+  // The honest divided scale bar rides the calibration (A3): drawn ONLY when a
+  // real points-per-metre exists — never at an arbitrary auto-fit ratio.
+  if (pointsPerMeter != null) {
+    cs.write(pdfScaleBarReal(
+        pointsPerMeter: pointsPerMeter, centerX: pageW / 2, baseY: margin));
   }
 
   // ── Object assembly with a byte-accurate cross-reference table ──────────────
-  final content = cs.toString();
-  final contentLen = latin1.encode(content).length;
-  final objects = <String>[
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R '
-        '/MediaBox [0 0 ${_n(pageW)} ${_n(pageH)}] '
-        '/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
-    '<< /Length $contentLen >>\nstream\n$content\nendstream',
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-  ];
-
-  final out = BytesBuilder();
-  void w(String s) => out.add(latin1.encode(s));
-  w('%PDF-1.4\n');
-  w('%âãÏÓ\n'); // binary marker
-  final offsets = <int>[];
-  for (var i = 0; i < objects.length; i++) {
-    offsets.add(out.length);
-    w('${i + 1} 0 obj\n');
-    w(objects[i]);
-    w('\nendobj\n');
-  }
-  final xref = out.length;
-  w('xref\n0 ${objects.length + 1}\n');
-  w('0000000000 65535 f \n');
-  for (final off in offsets) {
-    w('${off.toString().padLeft(10, '0')} 00000 n \n');
-  }
-  w('trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n');
-  w('startxref\n$xref\n%%EOF\n');
-  return out.toBytes();
+  // A1: a raster underlay adds one image XObject (object 6); the shared
+  // assembler keeps the plain object sequence + xref byte-accurate.
+  return assemblePlanPdfDocument(
+    content: cs.toString(),
+    pageW: pageW,
+    pageH: pageH,
+    raster: underlay is RasterPlanUnderlay ? underlay : null,
+  );
 }

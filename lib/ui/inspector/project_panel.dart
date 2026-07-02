@@ -4,18 +4,25 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show WarningSeverity;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
+import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/equipment_schedule.dart';
 import 'package:mechx_engine/report/mep_report.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
+import 'package:mechx_engine/report/report_blocks.dart';
+import 'package:mechx_engine/report/report_pdf.dart';
+import 'package:mechx_engine/report/report_strings.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
+import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pipe_optimizer.dart';
@@ -27,12 +34,15 @@ import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../data/plan_underlay.dart';
 import '../../store/air_warnings_store.dart';
 import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/design_issues_store.dart';
+import '../../store/document_control_store.dart';
 import '../../store/electrical_store.dart';
+import '../../store/command_store.dart';
 import '../../store/fire_store.dart';
 import '../../store/fixture_library_store.dart';
 import '../../store/history_store.dart';
@@ -46,6 +56,8 @@ import '../../store/solve_store.dart';
 import '../canvas/segment_palette.dart';
 import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
+import '../electrical/electrical_export.dart' show breakerIcuKaByPanel;
+import '../schematic/schematic_export.dart' show buildLiveRiserSheet;
 import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
 import 'disclosure_header.dart';
@@ -55,12 +67,16 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_text_field.dart';
 import '../widgets/section_label.dart';
+import '../widgets/severity_glyph.dart';
+import '../widgets/stepped_value_field.dart';
 
 /// Gather the live mechanical/plumbing design results into a [CalcReportData].
 /// Shared by the standalone calc-report export and the unified MEP report so
-/// both render the same mechanical basis + sections.
-CalcReportData _buildMechanicalReportData(WidgetRef ref) {
+/// both render the same mechanical basis + sections. Public for the export
+/// wiring test (the document-control revisions must reach the report head).
+CalcReportData buildMechanicalReportData(WidgetRef ref) {
   final project = ref.read(projectControllerProvider);
   final strategy = ref.read(feedStrategyProvider);
   final downfeed = ref.read(downfeedProvider);
@@ -95,6 +111,32 @@ CalcReportData _buildMechanicalReportData(WidgetRef ref) {
     bom: ref.read(bomProvider),
     fittings: ref.read(fittingsProvider),
     occupancy: ref.read(occupancyProvider),
+    revisions: ref.read(documentControlProvider).revisions,
+  );
+}
+
+/// Gather the live electrical design into an [ElectricalCalcReportData] with the
+/// document-control revisions. Shared by the unified MEP report exports (MD +
+/// PDF) so both render the same electrical basis + sections. Public for the
+/// export wiring test.
+ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
+  final project = ref.read(projectControllerProvider);
+  final eProject = ref.read(electricalProjectProvider);
+  final eResult = ref.read(electricalResultProvider);
+  final eAdvanced = ref.read(electricalAdvancedProvider);
+  const eProfile = PuilProfile();
+  return ElectricalCalcReportData(
+    projectName: project.name,
+    date: DateTime.now().toIso8601String().split('T').first,
+    standardsName: eProfile.name,
+    standardsRevision: eProfile.revision,
+    project: eProject,
+    result: eResult,
+    powerOneLine: eAdvanced.powerOneLine,
+    verifyItems: eAdvanced.verifyItems,
+    originFaultLevelA: eProject.originFaultLevelA?.amperes,
+    busbarClearingTimeS: eProject.busbarClearingTimeS,
+    revisions: ref.read(documentControlProvider).revisions,
   );
 }
 
@@ -107,8 +149,10 @@ CalcReportData _buildMechanicalReportData(WidgetRef ref) {
 /// `write` returns false when the user cancelled the file picker (no pill), true
 /// after a successful write ⇒ a transient "Exported `name`" confirmation pill;
 /// any thrown error ⇒ a "Could not export `name`" warning. The success pill
-/// reuses the same self-clearing mechanism as Save / Open / Import.
-Future<void> _runExport(
+/// reuses the same self-clearing mechanism as Save / Open / Import. Public so
+/// the other export surfaces (e.g. `schematic_export.dart`'s riser drawing
+/// set) route through the SAME guard + feedback.
+Future<void> runExportGuarded(
   WidgetRef ref, {
   required String name,
   required Future<bool> Function() write,
@@ -125,6 +169,9 @@ Future<void> _runExport(
     final wrote = await write();
     if (wrote) {
       ref.read(statusMessageProvider.notifier).showStatus('Exported $name');
+      // The stepper's Report stage is DONE only once a deliverable actually
+      // exists — this one line covers every export routed through here.
+      ref.read(reportExportedProvider.notifier).markExported();
     }
   } catch (e) {
     ref
@@ -133,14 +180,67 @@ Future<void> _runExport(
   }
 }
 
+/// Render the floor-grouped [bom] as CSV with the stock-bar cut-plan columns
+/// (`stock_length_m`, `bars_purchased`, `waste_pct`) joined per (service, DN)
+/// from [cutPlan] (the `pipeCutPlanProvider` output). [bom] must be built with
+/// `groupByFloor: true` so runs carry their floor.
+///
+/// The three cut-plan columns are a per-(service, DN) property (the plan packs
+/// all runs of a size into shared stock bars; risers are excluded from the
+/// chains), so they are emitted ONCE on the first BOM row of each (service, DN)
+/// group — sum-safe — and left empty on the rest, and empty when the plan has no
+/// entry for a group (a riser-only DN, an air duct: never invented).
+String bomCsvWithCutPlan(List<BomLine> bom, List<PipeCutGroup> cutPlan) {
+  final planByKey = <({ServiceType service, int mm}), PipeCutGroup>{
+    for (final g in cutPlan) (service: g.service, mm: g.diameterMm): g,
+  };
+  final emitted = <({ServiceType service, int mm})>{};
+  final buffer = StringBuffer(
+      'service,kind,floor,nominal_dn_mm,length_m,segments,'
+      'stock_length_m,bars_purchased,waste_pct\n');
+  for (final line in bom) {
+    final key = (service: line.service, mm: line.diameterMm);
+    final g = planByKey[key];
+    final showPlan = g != null && emitted.add(key);
+    buffer
+      ..write(line.service.name)
+      ..write(',')
+      ..write(line.kind.name)
+      ..write(',')
+      ..write(line.floorIndex == null ? '' : (line.floorIndex! + 1))
+      ..write(',')
+      ..write(line.diameterMm)
+      ..write(',')
+      ..write(line.totalLength.meters.toStringAsFixed(2))
+      ..write(',')
+      ..write(line.segmentCount)
+      ..write(',')
+      ..write(showPlan ? g.stockLengthM.toStringAsFixed(1) : '')
+      ..write(',')
+      ..write(showPlan ? '${g.plan.totalBars}' : '')
+      ..write(',')
+      ..write(showPlan ? g.plan.wastePercent.toStringAsFixed(1) : '')
+      ..write('\n');
+  }
+  return buffer.toString();
+}
+
+
+/// The report-body language for the active app locale (D4): Indonesian report
+/// bodies when the app runs in ID, byte-identical EN otherwise.
+ReportStrings reportStringsFor(WidgetRef ref) =>
+    ref.read(localeProvider) == AppLocale.id
+        ? const ReportStrings.id()
+        : const ReportStrings.en();
+
 /// Gather the live design results into a calc report and write it to a Markdown
 /// file chosen by the user.
-Future<void> exportCalcReport(WidgetRef ref) => _runExport(
+Future<void> exportCalcReport(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'calc report',
       write: () async {
         final project = ref.read(projectControllerProvider);
-        final data = _buildMechanicalReportData(ref);
+        final data = buildMechanicalReportData(ref);
 
         final path = await FilePicker.saveFile(
           dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -151,35 +251,114 @@ Future<void> exportCalcReport(WidgetRef ref) => _runExport(
         );
         if (path == null) return false;
         final full = path.endsWith('.md') ? path : '$path.md';
-        await File(full).writeAsString(buildCalcReportMarkdown(data));
+        await File(full).writeAsString(
+            buildCalcReportMarkdown(data, reportStringsFor(ref)));
+        return true;
+      },
+    );
+
+/// D1 — the TYPESET PDF calculation report: the SAME live data as the Markdown
+/// export ([exportCalcReport]), rendered to a submittable A4-portrait PDF with
+/// the document-control identity on the cover, and the mechanical riser
+/// single-line appended as an embedded vector figure. The figure rides the PDF
+/// build only — the Markdown output stays byte-identical.
+Future<void> exportCalcReportPdf(WidgetRef ref) => runExportGuarded(
+      ref,
+      name: 'calc report (PDF)',
+      write: () async {
+        final project = ref.read(projectControllerProvider);
+        final data = buildMechanicalReportData(ref);
+        final doc = ref.read(documentControlProvider);
+        final blocks = [
+          ...buildCalcReportBlocks(data, reportStringsFor(ref)),
+          RptFigure(buildLiveRiserSheet(ref, null),
+              caption: 'Mechanical riser single-line diagram'),
+        ];
+        final bytes = reportBlocksToPdf(
+          blocks,
+          docTitle: 'MEP Calculation Report',
+          projectName:
+              project.name.isEmpty ? 'Untitled project' : project.name,
+          documentNumber: doc.documentNumber,
+          revisionTag: doc.revisionTag,
+          dateString: data.date,
+          standardsLine: '${data.standardsName} (${data.standardsRevision})',
+          preparedBy: doc.preparedBy,
+          checkedBy: doc.checkedBy,
+          approvedBy: doc.approvedBy,
+        );
+        final base = project.name.isEmpty ? 'project' : project.name;
+        final path = await FilePicker.saveFile(
+          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleCalcReportPdf),
+          fileName: '$base-report.pdf',
+          type: FileType.custom,
+          allowedExtensions: const ['pdf'],
+        );
+        if (path == null) return false;
+        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+        await File(full).writeAsBytes(bytes);
         return true;
       },
     );
 
 /// Build the compliance pass/fail roll-up from the live aggregated design
-/// issues. Pure read of `designIssuesProvider` (no new checks): warnings drive
-/// fail/review verdicts, info-tier items (unverified standards, advisories) are
-/// summarised but kept as PASS-with-note categories.
+/// issues. Pure read of `designIssuesProvider` + the electrical solve (no new
+/// checks). COMPLETE by construction: the three named checks match their
+/// categories, every REMAINING aggregated issue title gets its own row (so a
+/// present — or future — issue kind can never be silently omitted and the
+/// table can't say PASS beside an unlisted finding), and the electrical
+/// system's own warnings feed a dedicated row (they are not part of
+/// `designIssuesProvider`).
 ComplianceSummary buildComplianceSummary(WidgetRef ref) {
   final issues = ref.read(designIssuesProvider);
 
-  int countWhere(bool Function(DesignIssue) test) =>
-      issues.where(test).length;
+  bool isFail(DesignIssue i) =>
+      i.severity == IssueSeverity.warning ||
+      i.severity == IssueSeverity.critical;
+
+  // The three named checks (kept as positive confirmations on a clean
+  // project). Track which issues they account for; everything else rolls up
+  // into per-title rows below.
+  final accounted = <DesignIssue>{};
+  List<DesignIssue> claim(bool Function(DesignIssue) test) {
+    final matched = issues.where(test).toList();
+    accounted.addAll(matched);
+    return matched;
+  }
 
   // Velocity: any out-of-band air-velocity warning fails the check.
-  final velocityWarnings = countWhere((i) =>
-      i.severity == IssueSeverity.warning &&
-      (i.title.contains('velocity')));
+  final velocityWarnings =
+      claim((i) => i.title.contains('velocity')).where(isFail).length;
   // Calibration: any uncalibrated-sheet issue fails the check — a blank sheet
   // is a warning, an edge-bearing one is escalated to critical, and BOTH must
   // fail the 'Sheet calibration' compliance item.
-  final calibrationWarnings = countWhere((i) =>
-      (i.severity == IssueSeverity.warning ||
-          i.severity == IssueSeverity.critical) &&
-      i.title.contains('calibrated'));
+  final calibrationWarnings =
+      claim((i) => i.title.contains('calibrated')).where(isFail).length;
   // Standards verification: unverified-standard info items.
-  final unverified =
-      countWhere((i) => i.title == 'Unverified standard');
+  final unverified = claim((i) => i.title == 'Unverified standard').length;
+  // Electrical warnings are fanned into designIssuesProvider (Wave 3) with an
+  // 'Electrical: ' title prefix — claim them here so the dedicated
+  // 'Electrical circuit sizing' row below (counted from the solved system
+  // directly) stays the single source and nothing double-counts.
+  claim((i) => i.title.startsWith('Electrical:'));
+
+  // Every other aggregated issue, grouped by title — duct over-capacity,
+  // network connectivity, unsized air elements, drainage/Legionella
+  // advisories, and whatever lands in the aggregator next.
+  final remainder = <String, List<DesignIssue>>{};
+  for (final i in issues) {
+    if (accounted.contains(i)) continue;
+    remainder.putIfAbsent(i.title, () => []).add(i);
+  }
+
+  // Electrical sizing: the solved system's own warning list (error severity —
+  // e.g. cable-ampacity-inadequate — must fail the sign-off).
+  final eWarnings = ref.read(electricalResultProvider).warnings;
+  final eErrors =
+      eWarnings.where((w) => w.severity == WarningSeverity.error).length;
+  final eWarns =
+      eWarnings.where((w) => w.severity == WarningSeverity.warning).length;
 
   return ComplianceSummary(
     date: DateTime.now().toIso8601String().split('T').first,
@@ -199,6 +378,19 @@ ComplianceSummary buildComplianceSummary(WidgetRef ref) {
           detail: unverified == 0
               ? 'all values verified'
               : '$unverified value(s) require verification before submission'),
+      for (final e in remainder.entries)
+        ComplianceItem(e.key,
+            pass: !e.value.any(isFail),
+            detail: e.value.any(isFail)
+                ? '${e.value.where(isFail).length} finding(s)'
+                : '${e.value.length} advisory note(s)'),
+      ComplianceItem('Electrical circuit sizing',
+          pass: eErrors == 0,
+          detail: eErrors == 0
+              ? (eWarns == 0
+                  ? 'no sizing errors'
+                  : '$eWarns warning(s), no errors')
+              : '$eErrors error(s), $eWarns warning(s)'),
     ],
   );
 }
@@ -206,34 +398,19 @@ ComplianceSummary buildComplianceSummary(WidgetRef ref) {
 /// Gather BOTH the mechanical and electrical designs into one unified MEP
 /// building-services report (with a compliance summary) and write it to a
 /// Markdown file chosen by the user.
-Future<void> exportMepUnifiedReport(WidgetRef ref) => _runExport(
+Future<void> exportMepUnifiedReport(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'MEP report',
       write: () async {
         final project = ref.read(projectControllerProvider);
-        final mechanical = _buildMechanicalReportData(ref);
-
-        final eProject = ref.read(electricalProjectProvider);
-        final eResult = ref.read(electricalResultProvider);
-        final eAdvanced = ref.read(electricalAdvancedProvider);
-        const eProfile = PuilProfile();
-        final electrical = ElectricalCalcReportData(
-          projectName: project.name,
-          date: DateTime.now().toIso8601String().split('T').first,
-          standardsName: eProfile.name,
-          standardsRevision: eProfile.revision,
-          project: eProject,
-          result: eResult,
-          powerOneLine: eAdvanced.powerOneLine,
-          verifyItems: eAdvanced.verifyItems,
-          originFaultLevelA: eProject.originFaultLevelA?.amperes,
-          busbarClearingTimeS: eProject.busbarClearingTimeS,
-        );
+        final mechanical = buildMechanicalReportData(ref);
+        final electrical = buildElectricalReportData(ref);
 
         final md = buildMepUnifiedReport(
           mechanical: mechanical,
           electrical: electrical,
           compliance: buildComplianceSummary(ref),
+          strings: reportStringsFor(ref),
         );
 
         final base = project.name.isEmpty ? 'project' : project.name;
@@ -251,18 +428,93 @@ Future<void> exportMepUnifiedReport(WidgetRef ref) => _runExport(
       },
     );
 
+/// D1 — the TYPESET PDF unified MEP report: the SAME mechanical + electrical +
+/// compliance data as the Markdown export ([exportMepUnifiedReport]), rendered
+/// to a submittable A4-portrait PDF with the document-control identity on the
+/// cover, and BOTH single-line diagrams appended as embedded vector figures —
+/// the mechanical riser (combined focus) and the electrical single-line (with
+/// the C5 fault-study breaking-capacity notation). The figures ride the PDF
+/// build only — the Markdown output stays byte-identical.
+Future<void> exportMepUnifiedReportPdf(WidgetRef ref) => runExportGuarded(
+      ref,
+      name: 'MEP report (PDF)',
+      write: () async {
+        final project = ref.read(projectControllerProvider);
+        final mechanical = buildMechanicalReportData(ref);
+        final electrical = buildElectricalReportData(ref);
+        final doc = ref.read(documentControlProvider);
+
+        final blocks = [
+          ...buildMepUnifiedReportBlocks(
+            mechanical: mechanical,
+            electrical: electrical,
+            compliance: buildComplianceSummary(ref),
+            strings: reportStringsFor(ref),
+          ),
+          const RptHeading(1, 'Drawings'),
+          RptFigure(buildLiveRiserSheet(ref, null),
+              caption: 'Mechanical riser single-line diagram'),
+          RptFigure(
+            buildElectricalSld(
+              project: ref.read(electricalProjectProvider),
+              result: ref.read(electricalResultProvider),
+              breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+            ),
+            caption: 'Electrical single-line diagram',
+          ),
+        ];
+        final bytes = reportBlocksToPdf(
+          blocks,
+          docTitle: 'MEP Building-Services Report',
+          projectName:
+              project.name.isEmpty ? 'Untitled project' : project.name,
+          documentNumber: doc.documentNumber,
+          revisionTag: doc.revisionTag,
+          dateString: mechanical.date,
+          standardsLine:
+              '${mechanical.standardsName} (${mechanical.standardsRevision})'
+              ' / ${electrical.standardsName} ${electrical.standardsRevision}',
+          preparedBy: doc.preparedBy,
+          checkedBy: doc.checkedBy,
+          approvedBy: doc.approvedBy,
+        );
+
+        final base = project.name.isEmpty ? 'project' : project.name;
+        final path = await FilePicker.saveFile(
+          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleMepReportPdf),
+          fileName: '$base-mep-report.pdf',
+          type: FileType.custom,
+          allowedExtensions: const ['pdf'],
+        );
+        if (path == null) return false;
+        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+        await File(full).writeAsBytes(bytes);
+        return true;
+      },
+    );
+
 /// Gather the live solved equipment (pumps, fans, room AHU/FCU/AC, and
 /// electrical panels) into an [EquipmentScheduleData] and write the equipment
 /// schedule to a Markdown file chosen by the user. The engine only tabulates
 /// already-solved duties — no new sizing here. Tags are assigned at gather time
 /// (sequential when not user-named), so the engine results stay untouched.
-Future<void> exportEquipmentSchedule(WidgetRef ref) => _runExport(
+Future<void> exportEquipmentSchedule(WidgetRef ref) => runExportGuarded(
       ref,
-      name: 'equipment schedule',
+      // The MD deliverable now writes a matching spreadsheet sibling too
+      // (`-equipment-schedule.md` + `-equipment-schedule.csv`, mirroring the
+      // BOM export's dual-file pattern) so the engineer gets both from one
+      // dialog.
+      name: 'equipment schedule (MD + CSV)',
       write: () => _writeEquipmentSchedule(ref),
     );
 
-Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
+/// Gather the live solved equipment (pumps, fans, room AHU/FCU/AC, and
+/// electrical panels) into an [EquipmentScheduleData]. Shared by the MD/CSV and
+/// PDF exports; the engine only TABULATES already-solved duties (no new sizing).
+/// Tags are assigned here (sequential when a source carries none), so the engine
+/// results stay untouched. Public for the export wiring test.
+EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   final project = ref.read(projectControllerProvider);
 
   // Pumps: the domestic-supply booster (upfeed) + the standpipe fire pump.
@@ -319,13 +571,18 @@ Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
     ));
   }
 
-  final data = EquipmentScheduleData(
+  return EquipmentScheduleData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,
     pumps: pumps,
     fans: fans,
     electrical: ref.read(electricalResultProvider),
   );
+}
+
+Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
+  final project = ref.read(projectControllerProvider);
+  final data = gatherEquipmentScheduleData(ref);
 
   final base = project.name.isEmpty ? 'project' : project.name;
   final path = await FilePicker.saveFile(
@@ -336,19 +593,64 @@ Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
     allowedExtensions: const ['md'],
   );
   if (path == null) return false;
-  final full = path.endsWith('.md') ? path : '$path.md';
-  await File(full).writeAsString(buildEquipmentScheduleMarkdown(data));
+  // Write the Markdown at the chosen path plus a spreadsheet CSV sibling
+  // (D5: the row model was designed for a CSV emitter). The engineer picks
+  // one name; both files land beside it (the BOM export's dual-file pattern).
+  final stem = path.endsWith('.md') ? path.substring(0, path.length - 3) : path;
+  await File('$stem.md')
+      .writeAsString(buildEquipmentScheduleMarkdown(data, reportStringsFor(ref)));
+  await File('$stem.csv')
+      .writeAsString(equipmentScheduleToCsv(buildEquipmentScheduleRows(data)));
   return true;
 }
 
+/// D1 — the TYPESET PDF equipment schedule: the SAME live solved equipment as
+/// the MD/CSV export ([exportEquipmentSchedule]), rendered to a submittable
+/// A4-portrait PDF with the document-control identity on the cover.
+Future<void> exportEquipmentSchedulePdf(WidgetRef ref) => runExportGuarded(
+      ref,
+      name: 'equipment schedule (PDF)',
+      write: () async {
+        final project = ref.read(projectControllerProvider);
+        final data = gatherEquipmentScheduleData(ref);
+        final doc = ref.read(documentControlProvider);
+        final bytes = reportBlocksToPdf(
+          buildEquipmentScheduleBlocks(data, reportStringsFor(ref)),
+          docTitle: 'Equipment Schedule',
+          projectName:
+              project.name.isEmpty ? 'Untitled project' : project.name,
+          documentNumber: doc.documentNumber,
+          revisionTag: doc.revisionTag,
+          dateString: data.date,
+          preparedBy: doc.preparedBy,
+          checkedBy: doc.checkedBy,
+          approvedBy: doc.approvedBy,
+        );
+        final base = project.name.isEmpty ? 'project' : project.name;
+        final path = await FilePicker.saveFile(
+          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleEquipmentSchedulePdf),
+          fileName: '$base-equipment-schedule.pdf',
+          type: FileType.custom,
+          allowedExtensions: const ['pdf'],
+        );
+        if (path == null) return false;
+        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+        await File(full).writeAsBytes(bytes);
+        return true;
+      },
+    );
+
 /// Build the issuable-drawing chrome (legend / scale bar / north arrow / sheet
-/// "X of Y" / drawing-number block) for the current [sheetId]/[floorIndex].
+/// "X of Y" / ISO-7200 title block) for the current [sheetId]/[floorIndex].
 /// The legend lists the services actually present on this floor; the sheet
-/// counter is the sheet's position in the rail. Drawing number / revision aren't
-/// tracked in the project model yet (a future DesignSettings wave), so they're
-/// left null — the block then only shows the sheet counter. North defaults to 0
-/// (page-up). Pure-data: the export engine renders it.
-DrawingChrome _issuableChrome(
+/// counter is the sheet's position in the rail. The document-control identity
+/// (D3: drawing number, revision tag, client, DRAWN/CHECKED/APPROVED) comes
+/// from [documentControlProvider] — an unset field stays null so its title-block
+/// row is simply omitted. The issue DATE is formatted HERE (the engine never
+/// reads the clock). North defaults to 0 (page-up). Pure-data: the export
+/// engine renders it. Public for the export wiring test.
+DrawingChrome issuableChrome(
   WidgetRef ref, {
   required String sheetId,
   required int floorIndex,
@@ -373,15 +675,23 @@ DrawingChrome _issuableChrome(
   ];
 
   final idx = sheets.indexWhere((s) => s.id == sheetId);
+  final doc = ref.read(documentControlProvider);
   return DrawingChrome(
     sheetIndex: idx >= 0 ? idx + 1 : null,
     sheetTotal: sheets.isNotEmpty ? sheets.length : null,
     legendServices: legend,
+    drawingNumber: doc.documentNumber,
+    revisionNumber: doc.revisionTag,
+    clientName: doc.clientName,
+    drawnBy: doc.preparedBy,
+    checkedBy: doc.checkedBy,
+    approvedBy: doc.approvedBy,
+    dateString: DateTime.now().toIso8601String().split('T').first,
   );
 }
 
 /// Export the current sheet/floor's drawn network as a DXF drawing file.
-Future<void> exportDrawingDxf(WidgetRef ref) => _runExport(
+Future<void> exportDrawingDxf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'DXF drawing',
       write: () => _writeDrawingDxf(ref),
@@ -391,14 +701,23 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
   if (sheet == null) return false;
-  final levelCount = ref.read(projectControllerProvider).building.levelCount;
+  final project = ref.read(projectControllerProvider);
+  final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
+  // A1: the floor-plan underlay — DXF sheets only here (the R12 re-emit is
+  // vector-only; a PDF-backed sheet's raster rides the PDF exports instead).
+  final planUnderlay =
+      sheet.dxfPath != null ? await buildPlanUnderlay(sheet) : null;
   final dxf = networkToDxf(
     net: ref.read(networkControllerProvider).network,
     sizing: ref.read(sizingProvider),
     sheetId: sheet.id,
     floorIndex: floorIndex,
-    chrome: _issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    // A2: the sheet calibration lets the DXF emit true-scale mm world units
+    // (HEADER/$INSUNITS + named layers); null keeps the legacy pixel DXF.
+    metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
+    underlay: planUnderlay is VectorPlanUnderlay ? planUnderlay : null,
   );
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingDxf),
@@ -413,7 +732,7 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
 }
 
 /// Export the current sheet/floor's drawn network as a native (vector) PDF.
-Future<void> exportDrawingPdf(WidgetRef ref) => _runExport(
+Future<void> exportDrawingPdf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'PDF drawing',
       write: () => _writeDrawingPdf(ref),
@@ -423,7 +742,8 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
   if (sheet == null) return false;
-  final levelCount = ref.read(projectControllerProvider).building.levelCount;
+  final project = ref.read(projectControllerProvider);
+  final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
   final bytes = networkToPdf(
     net: ref.read(networkControllerProvider).network,
@@ -431,7 +751,14 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
     sheetId: sheet.id,
     floorIndex: floorIndex,
     title: sheet.name,
-    chrome: _issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    // A3: the sheet calibration snaps the plot to a standard scale (1:N) and
+    // makes the scale bar honest; null keeps the auto-fit + an NTS scale row.
+    metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
+    // A1: the floor-plan substrate beneath the network — vector for a DXF
+    // sheet, faded raster for a PDF sheet; null (placeholder / unreadable
+    // source) keeps the plain export.
+    underlay: await buildPlanUnderlay(sheet),
   );
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingPdf),
@@ -450,7 +777,7 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
 /// date) and real §10 run/riser LENGTHS folded into each size label. The real
 /// lengths are pre-computed here (the engine `edgeLength` over the live
 /// calibrations + building) and passed to the pure `planToPdf`.
-Future<void> exportAnnotatedPlanPdf(WidgetRef ref) => _runExport(
+Future<void> exportAnnotatedPlanPdf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'annotated plan PDF',
       write: () => _writeAnnotatedPlanPdf(ref),
@@ -486,7 +813,14 @@ Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     projectName: project.name,
     sheetName: sheet.name,
     dateString: DateTime.now().toIso8601String().split('T').first,
-    chrome: _issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    // A3: the sheet calibration snaps the plot to a standard scale (1:N) and
+    // makes the scale bar honest; null keeps the auto-fit + an NTS scale row.
+    metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
+    // A1: the floor-plan substrate beneath the network — vector for a DXF
+    // sheet, faded raster for a PDF sheet; null (placeholder / unreadable
+    // source) keeps the plain export.
+    underlay: await buildPlanUnderlay(sheet),
   );
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -517,13 +851,26 @@ const List<ServiceType> kDrawServices = [
 
 /// Right inspector: project details, per-floor heights (the vertical
 /// length source of truth, §10), and the per-sheet scale-calibration status.
-class ProjectPanel extends ConsumerWidget {
+class ProjectPanel extends ConsumerStatefulWidget {
   const ProjectPanel({super.key});
 
   static const double width = 272;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProjectPanel> createState() => _ProjectPanelState();
+}
+
+class _ProjectPanelState extends ConsumerState<ProjectPanel> {
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
     final project = ref.watch(projectControllerProvider);
@@ -532,15 +879,29 @@ class ProjectPanel extends ConsumerWidget {
     final calibration =
         currentSheet == null ? null : project.calibrationFor(currentSheet.id);
 
+    // Context before document (the Keynote inspector rule): the selection
+    // editor is pinned FIRST, and picking something on canvas snaps the panel
+    // to the top so the pick is immediately visible — the panel otherwise
+    // gives no cue that anything changed.
+    ref.listen(selectionProvider, (prev, next) {
+      if ((prev == null || prev.isEmpty) && !next.isEmpty && _scroll.hasClients) {
+        _scroll.jumpTo(0);
+      }
+    });
+
     return SizedBox(
-      width: width,
+      width: ProjectPanel.width,
       // Transparent: the inspector floats on a Liquid-Glass surface
       // (CollapsibleInspector) so the canvas refracts through behind it.
       child: SingleChildScrollView(
+          controller: _scroll,
           padding: const EdgeInsets.all(MechXSpacing.md),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // ── Selection (only shown when something is selected) ─────────
+              const _SelectionSection(),
+
               // ── Building (summary → its own page) ─────────────────────────
               // The full floor/level editor (+ per-floor fixture heights) now
               // lives on the dedicated Building page so the inspector stays
@@ -566,9 +927,6 @@ class ProjectPanel extends ConsumerWidget {
               // ── Rooms (only shown when the sheet has designated rooms) ─────
               const _RoomsSection(),
 
-              // ── Selection (only shown when something is selected) ─────────
-              const _SelectionSection(),
-
               // ── Sizing ────────────────────────────────────────────────────
               const _SizingSection(),
               const SizedBox(height: MechXSpacing.lg),
@@ -583,6 +941,10 @@ class ProjectPanel extends ConsumerWidget {
 
               // ── HVAC / ducting ────────────────────────────────────────────
               const _HvacSection(),
+              const SizedBox(height: MechXSpacing.lg),
+
+              // ── Document control (issuable-sheet identity, D3) ────────────
+              const _DocumentControlSection(),
               const SizedBox(height: MechXSpacing.lg),
 
               // ── Sheet → floor mapping ─────────────────────────────────────
@@ -826,6 +1188,147 @@ class _GlyphButtonState extends State<_GlyphButton> {
   }
 }
 
+/// Document control — the issuable-sheet identity (D3): document/drawing
+/// number, revision tag, client, and the DRAWN/CHECKED/APPROVED names, plus a
+/// minimal revision-history editor. All fields commit straight into
+/// [documentControlProvider] (persisted with the project), from where they feed
+/// every report head ([buildMechanicalReportData]) and PDF/DXF title block
+/// ([issuableChrome], the riser/electrical export chromes). Collapsed by
+/// default so a blank launch stays canvas-focused.
+class _DocumentControlSection extends ConsumerStatefulWidget {
+  const _DocumentControlSection();
+
+  @override
+  ConsumerState<_DocumentControlSection> createState() =>
+      _DocumentControlSectionState();
+}
+
+class _DocumentControlSectionState
+    extends ConsumerState<_DocumentControlSection> {
+  // The pending add-revision row. The epoch keys the row's text fields so a
+  // successful Add remounts them EMPTY — an EditableText keeps its own text
+  // while focused, so clearing the state alone would not clear the field.
+  String _revDate = '';
+  String _revDesc = '';
+  int _addEpoch = 0;
+
+  void _addRevision() {
+    final date = _revDate.trim();
+    final desc = _revDesc.trim();
+    if (date.isEmpty && desc.isEmpty) return;
+    ref.read(documentControlProvider.notifier).addRevision(date, desc);
+    setState(() {
+      _revDate = '';
+      _revDesc = '';
+      _addEpoch++;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final doc = ref.watch(documentControlProvider);
+    final ctrl = ref.read(documentControlProvider.notifier);
+
+    // A labelled single-line field. The store setter normalizes (trims; an
+    // emptied field clears back to null), so committing on every change is
+    // safe — the same idiom as the project-name field on the Projects page.
+    Widget field(
+      StringKey label,
+      String? value,
+      ValueChanged<String> onChanged,
+    ) =>
+        Padding(
+          padding: const EdgeInsets.only(bottom: MechXSpacing.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(context.strings(label),
+                  style: type.caption.copyWith(color: colors.textMuted)),
+              const SizedBox(height: MechXSpacing.xs),
+              MechXTextField(value: value ?? '', onChanged: onChanged),
+            ],
+          ),
+        );
+
+    return DisclosureSection(
+      name: 'Document control',
+      defaultExpanded: false,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          field(StringKey.inspectorDocNumber, doc.documentNumber,
+              ctrl.setDocumentNumber),
+          field(StringKey.inspectorRevisionTag, doc.revisionTag,
+              ctrl.setRevisionTag),
+          field(StringKey.inspectorClient, doc.clientName, ctrl.setClientName),
+          field(StringKey.inspectorPreparedBy, doc.preparedBy,
+              ctrl.setPreparedBy),
+          field(StringKey.inspectorCheckedBy, doc.checkedBy, ctrl.setCheckedBy),
+          field(StringKey.inspectorApprovedBy, doc.approvedBy,
+              ctrl.setApprovedBy),
+
+          // ── Revision history (date + description rows) ───────────────────
+          Text(context.strings(StringKey.inspectorRevisionHistory),
+              style: type.caption.copyWith(color: colors.textMuted)),
+          const SizedBox(height: MechXSpacing.xs),
+          for (var i = 0; i < doc.revisions.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${doc.revisions[i].date} · ${doc.revisions[i].description}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          type.caption.copyWith(color: colors.textSecondary),
+                    ),
+                  ),
+                  _GlyphButton(
+                    glyph: '−',
+                    onTap: () => ctrl.removeRevisionAt(i),
+                  ),
+                ],
+              ),
+            ),
+          Row(
+            key: ValueKey('doc-rev-add-$_addEpoch'),
+            children: [
+              SizedBox(
+                width: 92,
+                child: MechXTextField(
+                  value: '',
+                  hint: context.strings(StringKey.inspectorRevisionDateHint),
+                  onChanged: (v) => _revDate = v,
+                ),
+              ),
+              const SizedBox(width: MechXSpacing.xs),
+              Expanded(
+                child: MechXTextField(
+                  value: '',
+                  hint: context.strings(StringKey.inspectorRevisionDescHint),
+                  onChanged: (v) => _revDesc = v,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MechXButton(
+              label: context.strings(StringKey.inspectorAddRevision),
+              onPressed: _addRevision,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _DrawSection extends ConsumerWidget {
   const _DrawSection();
 
@@ -978,9 +1481,116 @@ class _DrawSection extends ConsumerWidget {
   }
 }
 
-/// Lists the tank areas designated on the CURRENT sheet, with a depth stepper +
-/// material picker + computed capacity + delete. Hidden when there are none, so
-/// the at-rest inspector (and the goldens) are unchanged.
+// Which tank / room row is expanded in the inspector's master-detail list. A
+// transient, file-local UI state (never persisted to `.mechx`); null ⇒ all rows
+// collapsed. Exactly one item is open at a time (H6), so eight tanks/rooms no
+// longer stack ~3000 px of always-expanded editors in a 272-px panel.
+final _expandedTankIdProvider = StateProvider<String?>((ref) => null);
+final _expandedRoomIdProvider = StateProvider<String?>((ref) => null);
+
+/// How many BOM lines the Network section lists inline before collapsing the
+/// rest into a '+N more' summary (the full breakdown is in the CSV export).
+const int _kBomInlineCap = 6;
+
+/// The tappable compact header of a master-detail list item: a rotating chevron,
+/// the item title, an optional warning glyph, and a right-aligned headline
+/// figure. Tapping toggles the item's editor open (via the owning section's
+/// expanded-id provider). Custom-painted chevron/glyph so nothing renders tofu.
+class _MasterRow extends StatelessWidget {
+  final String title;
+  final String headline;
+  final bool expanded;
+  final bool warning;
+  final VoidCallback onTap;
+
+  const _MasterRow({
+    required this.title,
+    required this.headline,
+    required this.expanded,
+    required this.onTap,
+    this.warning = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: MechXFocusRing(
+        onActivated: onTap,
+        borderRadius: MechXRadii.control,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Row(
+            children: [
+              AnimatedRotation(
+                turns: expanded ? 0.25 : 0.0,
+                duration: MechXMotion.appear,
+                curve: MechXMotion.standard,
+                child: CustomPaint(
+                  size: const Size(12, 12),
+                  painter: _MasterChevronPainter(color: colors.textMuted),
+                ),
+              ),
+              const SizedBox(width: MechXSpacing.xs),
+              Expanded(
+                child: Text(title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: type.body.copyWith(color: colors.textPrimary)),
+              ),
+              if (warning) ...[
+                const SizedBox(width: MechXSpacing.xs),
+                CustomPaint(
+                  size: const Size(13, 13),
+                  painter: SeverityGlyph(
+                      kind: SeverityGlyphKind.warn, color: colors.danger),
+                ),
+              ],
+              const SizedBox(width: MechXSpacing.sm),
+              Text(headline,
+                  style: type.caption.copyWith(color: colors.accent)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A single right-pointing chevron (no glyph font ⇒ never tofu); the caller's
+/// [AnimatedRotation] turns it down when the item is expanded.
+class _MasterChevronPainter extends CustomPainter {
+  final Color color;
+  _MasterChevronPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final w = size.width;
+    final h = size.height;
+    final path = Path()
+      ..moveTo(w * 0.40, h * 0.24)
+      ..lineTo(w * 0.66, h * 0.50)
+      ..lineTo(w * 0.40, h * 0.76);
+    canvas.drawPath(path, stroke);
+  }
+
+  @override
+  bool shouldRepaint(_MasterChevronPainter old) => old.color != color;
+}
+
+/// Lists the tank areas designated on the CURRENT sheet as compact master-detail
+/// rows — one expanded editor at a time (depth stepper + material + delete).
+/// Hidden when there are none, so the at-rest inspector (and goldens) are
+/// unchanged.
 class _TanksSection extends ConsumerWidget {
   const _TanksSection();
 
@@ -1013,6 +1623,7 @@ class _TanksSection extends ConsumerWidget {
           '${(t.heightPx * mpp).toStringAsFixed(1)} m';
     }
 
+    final expandedId = ref.watch(_expandedTankIdProvider);
     return DisclosureSection(
       name: 'Tanks',
       child: Column(
@@ -1029,56 +1640,66 @@ class _TanksSection extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text('${t.name} · ${dims(t)}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: type.body.copyWith(color: colors.textPrimary)),
-                    ),
-                    _GlyphButton(
-                        glyph: '×', onTap: () => ctrl.removeById(t.id)),
-                  ],
+                _MasterRow(
+                  title: '${t.name} · ${dims(t)}',
+                  headline: capacity(t),
+                  expanded: expandedId == t.id,
+                  onTap: () =>
+                      ref.read(_expandedTankIdProvider.notifier).state =
+                          expandedId == t.id ? null : t.id,
                 ),
-                const SizedBox(height: MechXSpacing.xxs),
-                Text(capacity(t),
-                    style: type.caption.copyWith(color: colors.accent)),
-                const SizedBox(height: MechXSpacing.xs),
-                Row(
-                  children: [
-                    Text('Depth',
-                        style:
-                            type.caption.copyWith(color: colors.textMuted)),
-                    const Spacer(),
-                    _GlyphButton(
-                        glyph: '−',
-                        onTap: () => ctrl.setDepth(t.id, t.depthM - 0.25)),
-                    SizedBox(
-                      width: 56,
-                      child: Text('${t.depthM.toStringAsFixed(2)} m',
-                          textAlign: TextAlign.center,
+                if (expandedId == t.id) ...[
+                  const SizedBox(height: MechXSpacing.sm),
+                  Row(
+                    children: [
+                      Text('Depth',
                           style:
-                              type.mono.copyWith(color: colors.textPrimary)),
-                    ),
-                    _GlyphButton(
-                        glyph: '+',
-                        onTap: () => ctrl.setDepth(t.id, t.depthM + 0.25)),
-                  ],
-                ),
-                const SizedBox(height: MechXSpacing.xs),
-                Wrap(
-                  spacing: MechXSpacing.xs,
-                  runSpacing: MechXSpacing.xs,
-                  children: [
-                    for (final m in TankMaterial.values)
-                      _Pill(
-                        label: m.label,
-                        selected: t.material == m,
-                        onTap: () => ctrl.setMaterial(t.id, m),
+                              type.caption.copyWith(color: colors.textMuted)),
+                      const Spacer(),
+                      SteppedValueField(
+                        display: '${t.depthM.toStringAsFixed(2)} m',
+                        editSeed: t.depthM.toStringAsFixed(2),
+                        gap: 0,
+                        valueWidth: 56,
+                        valueAlign: TextAlign.center,
+                        valueColor: colors.textPrimary,
+                        min: 0.1,
+                        max: 20,
+                        onDecrement: () =>
+                            ctrl.setDepth(t.id, t.depthM - 0.25),
+                        onIncrement: () =>
+                            ctrl.setDepth(t.id, t.depthM + 0.25),
+                        onSubmit: (v) {
+                          if (v != null) ctrl.setDepth(t.id, v);
+                        },
                       ),
-                  ],
-                ),
+                    ],
+                  ),
+                  const SizedBox(height: MechXSpacing.xs),
+                  Wrap(
+                    spacing: MechXSpacing.xs,
+                    runSpacing: MechXSpacing.xs,
+                    children: [
+                      for (final m in TankMaterial.values)
+                        _Pill(
+                          label: m.label,
+                          selected: t.material == m,
+                          onTap: () => ctrl.setMaterial(t.id, m),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: MechXSpacing.sm),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: MechXButton(
+                      label: 'Delete tank',
+                      onPressed: () {
+                        ctrl.removeById(t.id);
+                        ref.read(_expandedTankIdProvider.notifier).state = null;
+                      },
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1109,6 +1730,7 @@ class _RoomsSection extends ConsumerWidget {
     final ducts = ref.watch(ductSettingsProvider);
     final ctrl = ref.read(roomAreasProvider.notifier);
     final nodes = ref.watch(networkControllerProvider).network.nodes;
+    final expandedRoomId = ref.watch(_expandedRoomIdProvider);
 
     String pkStr(double pk) =>
         pk == pk.roundToDouble() ? pk.toStringAsFixed(0) : pk.toString();
@@ -1153,6 +1775,19 @@ class _RoomsSection extends ConsumerWidget {
               ductShape: ducts.shape,
               ductMethod: ducts.method,
             );
+            // AC cooling — computed once so the compact row can flag an
+            // over-range unit and the expanded editor can detail it.
+            final acs = [
+              for (final n in nodes)
+                if (RoomArea.isAcComponent(n.component) &&
+                    r.containsNode(n.sheetId, n.floorIndex, n.x, n.y))
+                  n,
+            ];
+            final load = r.coolingLoad(cal?.metersPerPixel);
+            final perUnit = (acs.isNotEmpty && load != null)
+                ? selectAc(load.btuPerHr / acs.length)
+                : null;
+            final expanded = expandedRoomId == r.id;
             return Container(
               padding: const EdgeInsets.all(MechXSpacing.sm),
               decoration: BoxDecoration(
@@ -1163,200 +1798,206 @@ class _RoomsSection extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                            '${roomTypeLabel(r.roomType)} · ${dims(r)}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: type.body
-                                .copyWith(color: colors.textPrimary)),
-                      ),
-                      _GlyphButton(
-                          glyph: '×', onTap: () => ctrl.removeById(r.id)),
-                    ],
+                  _MasterRow(
+                    title: '${roomTypeLabel(r.roomType)} · ${dims(r)}',
+                    headline:
+                        s == null ? 'set scale' : '${s.airflowCfm.round()} CFM',
+                    warning: perUnit?.exceedsRange ?? false,
+                    expanded: expanded,
+                    onTap: () =>
+                        ref.read(_expandedRoomIdProvider.notifier).state =
+                            expanded ? null : r.id,
                   ),
-                  const SizedBox(height: MechXSpacing.xxs),
-                  if (s == null)
-                    Text('set scale',
-                        style: type.caption.copyWith(color: colors.textMuted))
-                  else ...[
-                    Text(
-                        '${s.airflowCfm.round()} CFM · '
-                        '${s.airflow.inLitersPerSecond.round()} L/s · '
-                        '${s.airflow.inCubicMetersPerHour.round()} m3/h',
-                        style: type.caption.copyWith(color: colors.accent)),
-                    const SizedBox(height: MechXSpacing.xxs),
-                    Text(duct(s),
-                        style:
-                            type.caption.copyWith(color: colors.textMuted)),
-                    Text('Supply ${bank(s.supply)}',
-                        style:
-                            type.caption.copyWith(color: colors.textMuted)),
-                    Text('Return ${bank(s.return_)}',
-                        style:
-                            type.caption.copyWith(color: colors.textMuted)),
-                    Text(equip(s),
-                        style:
-                            type.caption.copyWith(color: colors.textMuted)),
-                  ],
-                  // Cooling (AC) — shown only when an AC indoor unit sits in
-                  // the room. Auto-computes the BTU/h + PK requirement and a
-                  // per-unit recommendation split across the placed units.
-                  ...() {
-                    final acs = [
-                      for (final n in nodes)
-                        if (RoomArea.isAcComponent(n.component) &&
-                            r.containsNode(n.sheetId, n.floorIndex, n.x, n.y))
-                          n,
-                    ];
-                    final load = r.coolingLoad(cal?.metersPerPixel);
-                    if (acs.isEmpty || load == null) return const <Widget>[];
-                    final perUnit = selectAc(load.btuPerHr / acs.length);
-                    final labels = {for (final n in acs) n.component!.label};
-                    final typeStr =
-                        labels.length == 1 ? labels.first : 'mixed';
-                    return <Widget>[
+                  if (expanded) ...[
+                    const SizedBox(height: MechXSpacing.sm),
+                    if (s == null)
+                      Text('set scale',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted))
+                    else ...[
+                      Text(
+                          '${s.airflowCfm.round()} CFM · '
+                          '${s.airflow.inLitersPerSecond.round()} L/s · '
+                          '${s.airflow.inCubicMetersPerHour.round()} m3/h',
+                          style:
+                              type.caption.copyWith(color: colors.accent)),
                       const SizedBox(height: MechXSpacing.xxs),
-                      Text(
-                        // The raw computed load PK (= BTU/h ÷ 9000); the unit
-                        // line below shows the recommended market-ladder PK, so
-                        // the two figures are labelled to read as distinct.
-                        'Cooling (AC): ${load.btuPerHr.round()} BTU/h · '
-                        '${load.pk.toStringAsFixed(1)} PK (load)',
-                        style: type.caption.copyWith(color: colors.accent),
-                      ),
-                      Text(
-                        '${acs.length} ${acs.length == 1 ? 'unit' : 'units'} '
-                        '($typeStr) -> ${pkStr(perUnit.pk)} PK each (recommended) '
-                        '(${perUnit.nominalBtuPerHr.round()} BTU/h, '
-                        '~${(acInputPowerW(coolingBtuPerHr: perUnit.nominalBtuPerHr) / 1000).toStringAsFixed(2)} kW)',
-                        style: type.caption.copyWith(
-                          color: perUnit.exceedsRange
-                              ? colors.danger
-                              : colors.textMuted,
-                        ),
-                      ),
-                      Text('Feeds the electrical panel at the kW above.',
+                      Text(duct(s),
                           style:
                               type.caption.copyWith(color: colors.textMuted)),
-                      if (perUnit.exceedsRange)
+                      Text('Supply ${bank(s.supply)}',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted)),
+                      Text('Return ${bank(s.return_)}',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted)),
+                      Text(equip(s),
+                          style:
+                              type.caption.copyWith(color: colors.textMuted)),
+                    ],
+                    // Cooling (AC) — shown only when an AC indoor unit sits in
+                    // the room. Auto-computes the BTU/h + PK requirement and a
+                    // per-unit recommendation split across the placed units.
+                    if (perUnit != null) ...() {
+                      final labels = {for (final n in acs) n.component!.label};
+                      final typeStr =
+                          labels.length == 1 ? labels.first : 'mixed';
+                      return <Widget>[
+                        const SizedBox(height: MechXSpacing.xxs),
                         Text(
-                          'Load exceeds the largest single unit — add more units.',
-                          style:
-                              type.caption.copyWith(color: colors.danger),
+                          // The raw computed load PK (= BTU/h ÷ 9000); the unit
+                          // line below shows the recommended market-ladder PK,
+                          // so the two figures are labelled to read as distinct.
+                          'Cooling (AC): ${load!.btuPerHr.round()} BTU/h · '
+                          '${load.pk.toStringAsFixed(1)} PK (load)',
+                          style: type.caption.copyWith(color: colors.accent),
                         ),
-                    ];
-                  }(),
-                  const SizedBox(height: MechXSpacing.xs),
-                  // Ceiling height stepper.
-                  Row(
-                    children: [
-                      Text('Ceiling',
-                          style:
-                              type.caption.copyWith(color: colors.textMuted)),
-                      const Spacer(),
-                      _GlyphButton(
-                          glyph: '−',
-                          onTap: () =>
-                              ctrl.setCeiling(r.id, r.ceilingHeightM - 0.25)),
-                      SizedBox(
-                        width: 56,
-                        child: Text('${r.ceilingHeightM.toStringAsFixed(2)} m',
-                            textAlign: TextAlign.center,
-                            style: type.mono
-                                .copyWith(color: colors.textPrimary)),
-                      ),
-                      _GlyphButton(
-                          glyph: '+',
-                          onTap: () =>
-                              ctrl.setCeiling(r.id, r.ceilingHeightM + 0.25)),
-                    ],
-                  ),
-                  const SizedBox(height: MechXSpacing.xxs),
-                  // ACH stepper (override; 'Auto' resets to the room-type value).
-                  Row(
-                    children: [
-                      Text('ACH',
-                          style:
-                              type.caption.copyWith(color: colors.textMuted)),
-                      const SizedBox(width: MechXSpacing.xs),
-                      _Pill(
-                        label: 'Auto',
-                        selected: r.achOverride == null,
-                        onTap: () => ctrl.setAch(r.id, null),
-                      ),
-                      const Spacer(),
-                      _GlyphButton(
-                          glyph: '−',
-                          onTap: () =>
-                              ctrl.setAch(r.id, r.effectiveAch() - 1)),
-                      SizedBox(
-                        width: 56,
-                        child: Text(
-                            '${r.effectiveAch().toStringAsFixed(0)}/h',
-                            textAlign: TextAlign.center,
-                            style: type.mono
-                                .copyWith(color: colors.textPrimary)),
-                      ),
-                      _GlyphButton(
-                          glyph: '+',
-                          onTap: () =>
-                              ctrl.setAch(r.id, r.effectiveAch() + 1)),
-                    ],
-                  ),
-                  const SizedBox(height: MechXSpacing.xs),
-                  Wrap(
-                    spacing: MechXSpacing.xs,
-                    runSpacing: MechXSpacing.xs,
-                    children: [
-                      for (final t in RoomType.values)
-                        _Pill(
-                          label: roomTypeLabel(t),
-                          selected: r.roomType == t,
-                          onTap: () => ctrl.setRoomType(r.id, t),
+                        Text(
+                          '${acs.length} ${acs.length == 1 ? 'unit' : 'units'} '
+                          '($typeStr) -> ${pkStr(perUnit.pk)} PK each (recommended) '
+                          '(${perUnit.nominalBtuPerHr.round()} BTU/h, '
+                          '~${(acInputPowerW(coolingBtuPerHr: perUnit.nominalBtuPerHr) / 1000).toStringAsFixed(2)} kW)',
+                          style: type.caption.copyWith(
+                            color: perUnit.exceedsRange
+                                ? colors.danger
+                                : colors.textMuted,
+                          ),
                         ),
-                    ],
-                  ),
-                  const SizedBox(height: MechXSpacing.xs),
-                  Wrap(
-                    spacing: MechXSpacing.xs,
-                    runSpacing: MechXSpacing.xs,
-                    children: [
-                      for (final k in AirEquipmentKind.values)
-                        _Pill(
-                          label: airEquipmentLabel(k),
-                          selected: r.equipmentKind == k,
-                          onTap: () => ctrl.setEquipment(r.id, k),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: MechXSpacing.xs),
-                  // Drop the sized supply diffusers + a return grille onto the
-                  // plan inside this room's footprint, in one undo step.
-                  Row(
-                    children: [
-                      MechXButton(
-                        label: 'Auto-place diffusers',
-                        onPressed: (s != null && cal != null)
-                            ? () => ref
-                                .read(networkControllerProvider.notifier)
-                                .autoPlaceRoomTerminals(
-                                  room: r,
-                                  metersPerPixel: cal.metersPerPixel,
-                                  ductShape: ducts.shape,
-                                  ductMethod: ducts.method,
-                                )
-                            : null,
-                      ),
-                      const Spacer(),
-                      if (s != null)
-                        Text('${s.supply.count} + 1',
+                        Text('Feeds the electrical panel at the kW above.',
                             style: type.caption
                                 .copyWith(color: colors.textMuted)),
-                    ],
-                  ),
+                        if (perUnit.exceedsRange)
+                          Text(
+                            'Load exceeds the largest single unit — add more units.',
+                            style:
+                                type.caption.copyWith(color: colors.danger),
+                          ),
+                      ];
+                    }(),
+                    const SizedBox(height: MechXSpacing.xs),
+                    // Ceiling height stepper.
+                    Row(
+                      children: [
+                        Text('Ceiling',
+                            style: type.caption
+                                .copyWith(color: colors.textMuted)),
+                        const Spacer(),
+                        SteppedValueField(
+                          display: '${r.ceilingHeightM.toStringAsFixed(2)} m',
+                          editSeed: r.ceilingHeightM.toStringAsFixed(2),
+                          gap: 0,
+                          valueWidth: 56,
+                          valueAlign: TextAlign.center,
+                          valueColor: colors.textPrimary,
+                          min: 1.5,
+                          max: 12,
+                          onDecrement: () =>
+                              ctrl.setCeiling(r.id, r.ceilingHeightM - 0.25),
+                          onIncrement: () =>
+                              ctrl.setCeiling(r.id, r.ceilingHeightM + 0.25),
+                          onSubmit: (v) {
+                            if (v != null) ctrl.setCeiling(r.id, v);
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: MechXSpacing.xxs),
+                    // ACH stepper (override; 'Auto' resets to the room-type value).
+                    Row(
+                      children: [
+                        Text('ACH',
+                            style: type.caption
+                                .copyWith(color: colors.textMuted)),
+                        const SizedBox(width: MechXSpacing.xs),
+                        _Pill(
+                          label: 'Auto',
+                          selected: r.achOverride == null,
+                          onTap: () => ctrl.setAch(r.id, null),
+                        ),
+                        const Spacer(),
+                        SteppedValueField(
+                          display: '${r.effectiveAch().toStringAsFixed(0)}/h',
+                          editSeed: r.effectiveAch().toStringAsFixed(0),
+                          gap: 0,
+                          valueWidth: 56,
+                          valueAlign: TextAlign.center,
+                          valueColor: colors.textPrimary,
+                          min: 0.5,
+                          max: 60,
+                          onDecrement: () =>
+                              ctrl.setAch(r.id, r.effectiveAch() - 1),
+                          onIncrement: () =>
+                              ctrl.setAch(r.id, r.effectiveAch() + 1),
+                          onSubmit: (v) {
+                            if (v != null) ctrl.setAch(r.id, v);
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: MechXSpacing.xs),
+                    Wrap(
+                      spacing: MechXSpacing.xs,
+                      runSpacing: MechXSpacing.xs,
+                      children: [
+                        for (final t in RoomType.values)
+                          _Pill(
+                            label: roomTypeLabel(t),
+                            selected: r.roomType == t,
+                            onTap: () => ctrl.setRoomType(r.id, t),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: MechXSpacing.xs),
+                    Wrap(
+                      spacing: MechXSpacing.xs,
+                      runSpacing: MechXSpacing.xs,
+                      children: [
+                        for (final k in AirEquipmentKind.values)
+                          _Pill(
+                            label: airEquipmentLabel(k),
+                            selected: r.equipmentKind == k,
+                            onTap: () => ctrl.setEquipment(r.id, k),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: MechXSpacing.xs),
+                    // Drop the sized supply diffusers + a return grille onto the
+                    // plan inside this room's footprint, in one undo step.
+                    Row(
+                      children: [
+                        MechXButton(
+                          label: 'Auto-place diffusers',
+                          onPressed: (s != null && cal != null)
+                              ? () => ref
+                                  .read(networkControllerProvider.notifier)
+                                  .autoPlaceRoomTerminals(
+                                    room: r,
+                                    metersPerPixel: cal.metersPerPixel,
+                                    ductShape: ducts.shape,
+                                    ductMethod: ducts.method,
+                                  )
+                              : null,
+                        ),
+                        const Spacer(),
+                        if (s != null)
+                          Text('${s.supply.count} + 1',
+                              style: type.caption
+                                  .copyWith(color: colors.textMuted)),
+                      ],
+                    ),
+                    const SizedBox(height: MechXSpacing.sm),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: MechXButton(
+                        label: 'Delete room',
+                        onPressed: () {
+                          ctrl.removeById(r.id);
+                          ref.read(_expandedRoomIdProvider.notifier).state =
+                              null;
+                        },
+                      ),
+                    ),
+                  ],
                 ],
               ),
             );
@@ -1422,19 +2063,21 @@ class _SizingSection extends ConsumerWidget {
               child: Text('Rainfall (storm)',
                   style: type.caption.copyWith(color: colors.textMuted)),
             ),
-            _GlyphButton(
-              glyph: '−',
-              onTap: () =>
+            SteppedValueField(
+              display: '${ref.watch(rainfallIntensityProvider).round()} mm/hr',
+              editSeed: '${ref.watch(rainfallIntensityProvider).round()}',
+              gap: MechXSpacing.xs,
+              min: 50,
+              max: 600,
+              onDecrement: () =>
                   ref.read(rainfallIntensityProvider.notifier).nudge(-25),
-            ),
-            const SizedBox(width: MechXSpacing.xs),
-            Text('${ref.watch(rainfallIntensityProvider).round()} mm/hr',
-                style: type.mono.copyWith(color: colors.textSecondary)),
-            const SizedBox(width: MechXSpacing.xs),
-            _GlyphButton(
-              glyph: '+',
-              onTap: () =>
+              onIncrement: () =>
                   ref.read(rainfallIntensityProvider.notifier).nudge(25),
+              onSubmit: (v) {
+                if (v != null) {
+                  ref.read(rainfallIntensityProvider.notifier).set(v);
+                }
+              },
             ),
           ],
         ),
@@ -1445,19 +2088,21 @@ class _SizingSection extends ConsumerWidget {
               child: Text('Runoff coefficient',
                   style: type.caption.copyWith(color: colors.textMuted)),
             ),
-            _GlyphButton(
-              glyph: '−',
-              onTap: () =>
+            SteppedValueField(
+              display: ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
+              editSeed: ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
+              gap: MechXSpacing.xs,
+              min: 0.5,
+              max: 1.0,
+              onDecrement: () =>
                   ref.read(runoffCoefficientProvider.notifier).nudge(-0.05),
-            ),
-            const SizedBox(width: MechXSpacing.xs),
-            Text(ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
-                style: type.mono.copyWith(color: colors.textSecondary)),
-            const SizedBox(width: MechXSpacing.xs),
-            _GlyphButton(
-              glyph: '+',
-              onTap: () =>
+              onIncrement: () =>
                   ref.read(runoffCoefficientProvider.notifier).nudge(0.05),
+              onSubmit: (v) {
+                if (v != null) {
+                  ref.read(runoffCoefficientProvider.notifier).set(v);
+                }
+              },
             ),
           ],
         ),
@@ -1575,10 +2220,10 @@ class _ResultsSection extends ConsumerWidget {
         ],
         const SizedBox(height: MechXSpacing.sm),
         if (strategy == FeedStrategy.upfeed) ...[
+          // 'Motor' kW is promoted to the ResultCard above; keep only the
+          // distinct supporting figure here (H8 — no headline/kv duplication).
           _kv(context, 'Pump head',
               solution == null ? '—' : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m'),
-          _kv(context, 'Motor',
-              pump == null ? '—' : '${pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
         ] else ...[
           _kv(context, 'Top residual',
               downfeed == null ? '—' : '${downfeed.minResidual.inKiloPascals.toStringAsFixed(0)} kPa'),
@@ -1608,13 +2253,23 @@ class _ResultsSection extends ConsumerWidget {
         _kv(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
         if (bom.isNotEmpty) ...[
           const SizedBox(height: MechXSpacing.xs),
-          for (final line in bom)
+          // Cap the per-line listing so a big BOM doesn't push the whole panel
+          // off-screen; the overflow is summarised, never silently dropped (the
+          // full breakdown is in the CSV export below). (H6/H8.)
+          for (final line in bom.take(_kBomInlineCap))
             _kv(
               context,
               '${line.diameterMm}${line.service.regime == FlowRegime.air ? ' Ø' : ' DN'}'
                   ' · ${serviceLabel(line.service)}'
                   ' ${line.kind == EdgeKind.riser ? 'riser' : 'run'}',
               '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
+            ),
+          if (bom.length > _kBomInlineCap)
+            _kv(
+              context,
+              '+${bom.length - _kBomInlineCap} more line'
+                  '${bom.length - _kBomInlineCap == 1 ? '' : 's'}',
+              'see CSV',
             ),
           if (fittings.isNotEmpty)
             _kv(context, 'Fittings (est.)',
@@ -1624,7 +2279,7 @@ class _ResultsSection extends ConsumerWidget {
             alignment: Alignment.centerLeft,
             child: MechXButton(
               label: 'Export BOM (CSV)',
-              onPressed: () => _exportBom(ref, bom, fittings,
+              onPressed: () => _exportBom(ref, fittings,
                   MechXStringsData(ref.read(localeProvider))(
                       StringKey.exportTitleBom)),
             ),
@@ -1635,11 +2290,12 @@ class _ResultsSection extends ConsumerWidget {
     );
   }
 
-  Future<void> _exportBom(WidgetRef ref, List<BomLine> bom,
-          List<FittingLine> fittings, String dialogTitle) =>
-      _runExport(
+  Future<void> _exportBom(WidgetRef ref, List<FittingLine> fittings,
+          String dialogTitle) =>
+      runExportGuarded(
         ref,
-        name: 'BOM',
+        // Two clean single-schema files (Excel-aligned) instead of one mixed CSV.
+        name: 'BOM (-bom.csv + -fittings.csv)',
         write: () async {
           final path = await FilePicker.saveFile(
             dialogTitle: dialogTitle,
@@ -1648,14 +2304,26 @@ class _ResultsSection extends ConsumerWidget {
             allowedExtensions: const ['csv'],
           );
           if (path == null) return false;
-          final full = path.endsWith('.csv') ? path : '$path.csv';
-          final csv = StringBuffer()
-            ..writeln('# Pipe / duct')
-            ..write(bomToCsv(bom))
-            ..writeln()
-            ..writeln('# Fittings (estimated)')
-            ..write(fittingsToCsv(fittings));
-          await File(full).writeAsString(csv.toString());
+          // Derive a base by stripping a trailing .csv, then write the two
+          // aligned files: <base>-bom.csv + <base>-fittings.csv.
+          final base = path.endsWith('.csv')
+              ? path.substring(0, path.length - 4)
+              : path;
+          // Rebuild the BOM grouped by floor (bomProvider is un-grouped) and
+          // join the live stock-bar cut plan onto the CSV.
+          final project = ref.read(projectControllerProvider);
+          final floorBom = buildBom(
+            net: ref.read(networkControllerProvider).network,
+            sizing: ref.read(sizingProvider),
+            calibrationBySheet: project.calibrations,
+            building: project.building,
+            groupByFloor: true,
+          );
+          final cutPlan = ref.read(pipeCutPlanProvider);
+          await File('$base-bom.csv')
+              .writeAsString(bomCsvWithCutPlan(floorBom, cutPlan));
+          await File('$base-fittings.csv')
+              .writeAsString(fittingsToCsv(fittings));
           return true;
         },
       );
@@ -1696,6 +2364,7 @@ class _FireSection extends ConsumerWidget {
     final type = context.type;
     final sprinkler = ref.watch(sprinklerDesignProvider);
     final standpipe = ref.watch(standpipeDesignProvider);
+    final rating = ref.watch(firePumpRatingProvider);
 
     Widget kv(String key, String value) => Padding(
           padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
@@ -1719,18 +2388,54 @@ class _FireSection extends ConsumerWidget {
           ),
         );
 
+    // The one INPUT the whole fire design derives from — previously settable
+    // only through the New-from-template dialog (a results panel with an
+    // invisible input); mirrors the Sizing section's Occupancy pill row.
+    String hazardLabel(FireHazardClass h) => switch (h) {
+          FireHazardClass.lightHazard => 'Light',
+          FireHazardClass.ordinaryHazard1 => 'Ordinary 1',
+          FireHazardClass.ordinaryHazard2 => 'Ordinary 2',
+          FireHazardClass.extraHazard => 'Extra',
+        };
+
     return DisclosureSection(
       name: 'Fire',
       child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Text('Hazard class',
+            style: type.caption.copyWith(color: colors.textMuted)),
+        const SizedBox(height: MechXSpacing.xs),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            for (final h in FireHazardClass.values)
+              _Pill(
+                label: hazardLabel(h),
+                selected: ref.watch(fireHazardProvider) == h,
+                onTap: () => ref.read(fireHazardProvider.notifier).set(h),
+              ),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        // Promoted headline: the standpipe fire-pump duty, with the NFPA 20
+        // rating-curve verdict — 'rated' when the curve sits inside the standard
+        // frame, 'oversized' when the largest standard motor is still below the
+        // overload shaft power. Demotes the pump figure from the kv rows (H8).
+        ResultCard(
+          headline:
+              '${standpipe.pumpHead.meters.toStringAsFixed(0)} m · ${standpipe.pumpShaftPower.inKiloWatts.toStringAsFixed(1)} kW',
+          label: 'Fire pump (standpipe)',
+          verdict: rating.oversized ? 'oversized' : 'rated',
+          verdictColor: rating.oversized ? colors.warning : colors.success,
+        ),
+        const SizedBox(height: MechXSpacing.xs),
         kv('Sprinkler flow',
             '${sprinkler.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),
         kv('Sprinkler heads', '${sprinkler.sprinklerCount}'),
         kv('Standpipe flow',
             '${standpipe.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),
-        kv('Fire pump',
-            '${standpipe.pumpHead.meters.toStringAsFixed(0)} m · ${standpipe.pumpShaftPower.inKiloWatts.toStringAsFixed(1)} kW'),
         const SizedBox(height: MechXSpacing.xs),
         Row(
           children: [
@@ -1957,6 +2662,48 @@ class _SelectionSection extends ConsumerWidget {
     final project = ref.watch(projectControllerProvider);
     final elev = nodeElevation(node, project.building).meters;
 
+    // Scope the fixture field groups to the node's ACTUAL discipline, derived
+    // from its connected edges — a WC must not offer a diffuser-airflow
+    // stepper, nor a supply diffuser the WC/urinal pills. An unconnected node
+    // falls back to showing a group (nothing becomes unreachable before its
+    // pipes are drawn) unless its component already rules the group out; a
+    // group with a value set always shows so it stays editable/clearable.
+    final net = ref.watch(networkControllerProvider).network;
+    final touching = <ServiceType>{
+      for (final e in net.edges)
+        if (e.fromId == node.id || e.toId == node.id) e.service,
+    };
+    final airTerminal = switch (node.component) {
+      NodeComponent.supplyDiffuser ||
+      NodeComponent.returnGrille ||
+      NodeComponent.exhaustGrille ||
+      NodeComponent.linearDiffuser =>
+        true,
+      _ => false,
+    };
+    final plumbingTouch = touching.any((s) =>
+        s == ServiceType.coldWater ||
+        s == ServiceType.hotWater ||
+        s == ServiceType.drainage ||
+        s == ServiceType.vent);
+    final airTouch = touching.any((s) => s.isAir);
+    final rainTouch = touching.contains(ServiceType.rainwater);
+    final unconnected = touching.isEmpty;
+    final showFixtureType = plumbingTouch ||
+        node.fixture != null ||
+        node.customFixtureId != null ||
+        (unconnected && !airTerminal);
+    final showAirflow = airTouch ||
+        airTerminal ||
+        node.airflow != null ||
+        (unconnected &&
+            node.fixture == null &&
+            node.customFixtureId == null);
+    final showRoofArea = rainTouch ||
+        node.roofAreaM2 != null ||
+        node.component == NodeComponent.roofDrain ||
+        (unconnected && !airTerminal);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1994,31 +2741,23 @@ class _SelectionSection extends ConsumerWidget {
                 style: context.type.caption
                     .copyWith(color: context.colors.textMuted)),
             const SizedBox(height: MechXSpacing.xxs),
-            Row(
-              children: [
-                _GlyphButton(
-                  glyph: '−',
-                  onTap: () {
-                    final next = (node.tankCapacityLitres ?? 0) - 500;
-                    ctrl.setNodeTankCapacity(
-                        node.id, next <= 0 ? null : next);
-                  },
-                ),
-                const SizedBox(width: MechXSpacing.sm),
-                Text(
-                  node.tankCapacityLitres == null
-                      ? '—'
-                      : '${node.tankCapacityLitres!.round()} L',
-                  style: context.type.mono
-                      .copyWith(color: context.colors.textSecondary),
-                ),
-                const SizedBox(width: MechXSpacing.sm),
-                _GlyphButton(
-                  glyph: '+',
-                  onTap: () => ctrl.setNodeTankCapacity(
-                      node.id, (node.tankCapacityLitres ?? 0) + 500),
-                ),
-              ],
+            SteppedValueField(
+              display: node.tankCapacityLitres == null
+                  ? '—'
+                  : '${node.tankCapacityLitres!.round()} L',
+              editSeed: node.tankCapacityLitres == null
+                  ? ''
+                  : node.tankCapacityLitres!.round().toString(),
+              gap: MechXSpacing.sm,
+              min: 0,
+              onDecrement: () {
+                final next = (node.tankCapacityLitres ?? 0) - 500;
+                ctrl.setNodeTankCapacity(node.id, next <= 0 ? null : next);
+              },
+              onIncrement: () => ctrl.setNodeTankCapacity(
+                  node.id, (node.tankCapacityLitres ?? 0) + 500),
+              onSubmit: (v) => ctrl.setNodeTankCapacity(
+                  node.id, (v == null || v <= 0) ? null : v),
             ),
           ],
           // A motorised component (pump / fan / air unit) is INTER-RELATED with
@@ -2031,40 +2770,34 @@ class _SelectionSection extends ConsumerWidget {
                 style: context.type.caption
                     .copyWith(color: context.colors.textMuted)),
             const SizedBox(height: MechXSpacing.xxs),
-            Row(
-              children: [
-                _GlyphButton(
-                  glyph: '−',
-                  onTap: () {
-                    final base = node.electricalLoadW ??
-                        node.component!.defaultMotorKw * 1000;
-                    final next = base - 250;
-                    ctrl.setNodeElectricalLoad(
-                        node.id, next <= 0 ? null : next);
-                  },
-                ),
-                const SizedBox(width: MechXSpacing.sm),
-                Text(
-                  () {
-                    final w = node.electricalLoadW ??
-                        node.component!.defaultMotorKw * 1000;
-                    final suffix =
-                        node.electricalLoadW == null ? ' · default' : '';
-                    return '${(w / 1000).toStringAsFixed(2)} kW$suffix';
-                  }(),
-                  style: context.type.mono
-                      .copyWith(color: context.colors.textSecondary),
-                ),
-                const SizedBox(width: MechXSpacing.sm),
-                _GlyphButton(
-                  glyph: '+',
-                  onTap: () {
-                    final base = node.electricalLoadW ??
-                        node.component!.defaultMotorKw * 1000;
-                    ctrl.setNodeElectricalLoad(node.id, base + 250);
-                  },
-                ),
-              ],
+            SteppedValueField(
+              display: () {
+                final w = node.electricalLoadW ??
+                    node.component!.defaultMotorKw * 1000;
+                final suffix =
+                    node.electricalLoadW == null ? ' · default' : '';
+                return '${(w / 1000).toStringAsFixed(2)} kW$suffix';
+              }(),
+              editSeed: ((node.electricalLoadW ??
+                          node.component!.defaultMotorKw * 1000) /
+                      1000)
+                  .toStringAsFixed(2),
+              gap: MechXSpacing.sm,
+              min: 0,
+              onDecrement: () {
+                final base = node.electricalLoadW ??
+                    node.component!.defaultMotorKw * 1000;
+                final next = base - 250;
+                ctrl.setNodeElectricalLoad(node.id, next <= 0 ? null : next);
+              },
+              onIncrement: () {
+                final base = node.electricalLoadW ??
+                    node.component!.defaultMotorKw * 1000;
+                ctrl.setNodeElectricalLoad(node.id, base + 250);
+              },
+              // The typed value is in kW (the displayed unit); store it as W.
+              onSubmit: (v) => ctrl.setNodeElectricalLoad(
+                  node.id, (v == null || v <= 0) ? null : v * 1000),
             ),
           ],
         ],
@@ -2091,9 +2824,16 @@ class _SelectionSection extends ConsumerWidget {
         const SizedBox(height: MechXSpacing.xs),
         Row(
           children: [
-            _GlyphButton(
-              glyph: '−',
-              onTap: () {
+            SteppedValueField(
+              display: node.mountHeight == null
+                  ? 'default'
+                  : '${(node.mountHeight!.meters * 100).round()} cm',
+              editSeed: node.mountHeight == null
+                  ? ''
+                  : (node.mountHeight!.meters * 100).round().toString(),
+              gap: MechXSpacing.sm,
+              min: 0,
+              onDecrement: () {
                 final base = node.mountHeight?.meters ??
                     const MountingHeights().fixtureHeight.meters;
                 final next = base - 0.05;
@@ -2101,23 +2841,15 @@ class _SelectionSection extends ConsumerWidget {
                 ctrl.setNodeMountHeight(
                     node.id, next <= 0 ? null : Length(next));
               },
-            ),
-            const SizedBox(width: MechXSpacing.sm),
-            Text(
-              node.mountHeight == null
-                  ? 'default'
-                  : '${(node.mountHeight!.meters * 100).round()} cm',
-              style: context.type.mono
-                  .copyWith(color: context.colors.textSecondary),
-            ),
-            const SizedBox(width: MechXSpacing.sm),
-            _GlyphButton(
-              glyph: '+',
-              onTap: () {
+              onIncrement: () {
                 final base = node.mountHeight?.meters ??
                     const MountingHeights().fixtureHeight.meters;
                 ctrl.setNodeMountHeight(node.id, Length(base + 0.05));
               },
+              // The typed value is in cm (the displayed unit); store as metres.
+              // A non-positive / empty entry reverts to the role default.
+              onSubmit: (v) => ctrl.setNodeMountHeight(
+                  node.id, (v == null || v <= 0) ? null : Length(v / 100)),
             ),
             if (node.mountHeight != null) ...[
               const SizedBox(width: MechXSpacing.sm),
@@ -2130,6 +2862,7 @@ class _SelectionSection extends ConsumerWidget {
           ],
         ),
         if (node.role == NodeRole.fixture) ...[
+          if (showFixtureType) ...[
           const SizedBox(height: MechXSpacing.sm),
           Text('Fixture type',
               style: context.type.caption
@@ -2174,38 +2907,33 @@ class _SelectionSection extends ConsumerWidget {
               onPressed: () => showFixtureLibraryEditor(context, ref),
             ),
           ),
+          ],
+          if (showAirflow) ...[
           const SizedBox(height: MechXSpacing.sm),
           Text('Air terminal (diffuser) airflow',
               style: context.type.caption
                   .copyWith(color: context.colors.textMuted)),
           const SizedBox(height: MechXSpacing.xs),
-          Row(
-            children: [
-              _GlyphButton(
-                glyph: '−',
-                onTap: () {
-                  final lps = (node.airflow?.inLitersPerSecond ?? 0) - 5;
-                  ctrl.setNodeAirflow(
-                      node.id, lps <= 0 ? null : FlowRate.litersPerSecond(lps));
-                },
-              ),
-              const SizedBox(width: MechXSpacing.sm),
-              Text(
-                node.airflow == null
-                    ? '—'
-                    : '${node.airflow!.inLitersPerSecond.toStringAsFixed(0)} L/s',
-                style: context.type.mono
-                    .copyWith(color: context.colors.textSecondary),
-              ),
-              const SizedBox(width: MechXSpacing.sm),
-              _GlyphButton(
-                glyph: '+',
-                onTap: () {
-                  final lps = (node.airflow?.inLitersPerSecond ?? 0) + 5;
-                  ctrl.setNodeAirflow(node.id, FlowRate.litersPerSecond(lps));
-                },
-              ),
-            ],
+          SteppedValueField(
+            display: node.airflow == null
+                ? '—'
+                : '${node.airflow!.inLitersPerSecond.toStringAsFixed(0)} L/s',
+            editSeed: node.airflow == null
+                ? ''
+                : node.airflow!.inLitersPerSecond.toStringAsFixed(0),
+            gap: MechXSpacing.sm,
+            min: 0,
+            onDecrement: () {
+              final lps = (node.airflow?.inLitersPerSecond ?? 0) - 5;
+              ctrl.setNodeAirflow(
+                  node.id, lps <= 0 ? null : FlowRate.litersPerSecond(lps));
+            },
+            onIncrement: () {
+              final lps = (node.airflow?.inLitersPerSecond ?? 0) + 5;
+              ctrl.setNodeAirflow(node.id, FlowRate.litersPerSecond(lps));
+            },
+            onSubmit: (v) => ctrl.setNodeAirflow(node.id,
+                (v == null || v <= 0) ? null : FlowRate.litersPerSecond(v)),
           ),
           // Manually chosen diffuser/grille FACE size + a face-velocity warning.
           // Lets the engineer pick a size for aesthetics and be told when the
@@ -2257,36 +2985,32 @@ class _SelectionSection extends ConsumerWidget {
               );
             }),
           ],
+          ],
+          if (showRoofArea) ...[
           const SizedBox(height: MechXSpacing.sm),
           Text('Rainwater outlet roof area',
               style: context.type.caption
                   .copyWith(color: context.colors.textMuted)),
           const SizedBox(height: MechXSpacing.xs),
-          Row(
-            children: [
-              _GlyphButton(
-                glyph: '−',
-                onTap: () {
-                  final a = (node.roofAreaM2 ?? 0) - 50;
-                  ctrl.setNodeRoofArea(node.id, a <= 0 ? null : a);
-                },
-              ),
-              const SizedBox(width: MechXSpacing.sm),
-              Text(
-                node.roofAreaM2 == null
-                    ? '—'
-                    : '${node.roofAreaM2!.toStringAsFixed(0)} m2',
-                style: context.type.mono
-                    .copyWith(color: context.colors.textSecondary),
-              ),
-              const SizedBox(width: MechXSpacing.sm),
-              _GlyphButton(
-                glyph: '+',
-                onTap: () => ctrl.setNodeRoofArea(
-                    node.id, (node.roofAreaM2 ?? 0) + 50),
-              ),
-            ],
+          SteppedValueField(
+            display: node.roofAreaM2 == null
+                ? '—'
+                : '${node.roofAreaM2!.toStringAsFixed(0)} m2',
+            editSeed: node.roofAreaM2 == null
+                ? ''
+                : node.roofAreaM2!.toStringAsFixed(0),
+            gap: MechXSpacing.sm,
+            min: 0,
+            onDecrement: () {
+              final a = (node.roofAreaM2 ?? 0) - 50;
+              ctrl.setNodeRoofArea(node.id, a <= 0 ? null : a);
+            },
+            onIncrement: () =>
+                ctrl.setNodeRoofArea(node.id, (node.roofAreaM2 ?? 0) + 50),
+            onSubmit: (v) =>
+                ctrl.setNodeRoofArea(node.id, (v == null || v <= 0) ? null : v),
           ),
+          ],
         ],
         const SizedBox(height: MechXSpacing.sm),
         Align(
@@ -2513,14 +3237,12 @@ class _HvacSection extends ConsumerWidget {
             verdictColor: colors.success,
           ),
           const SizedBox(height: MechXSpacing.xs),
+          // 'Fan static' + 'Fan motor' are the ResultCard headline/label above;
+          // keep only the distinct supporting figures (H8 — no duplication).
           kv('Trunk airflow',
               '${fan.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s'),
-          kv('Fan static',
-              '${fan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa'),
           kv('Fan power',
               '${fan.shaftPower.inKiloWatts.toStringAsFixed(2)} kW'),
-          kv('Fan motor',
-              '${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
         ],
         if (balance != null) ...[
           const SizedBox(height: MechXSpacing.xs),

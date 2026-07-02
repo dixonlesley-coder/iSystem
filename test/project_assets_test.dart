@@ -127,4 +127,32 @@ void main() {
     expect(doc.encode(), isNot(contains('"assets"')));
     expect(rehydrateAssets(doc).encode(), doc.encode());
   });
+
+  test('gatherSheetAssetsAsync produces bytes identical to the sync gather',
+      () async {
+    // The off-UI-thread (Isolate) variant must be byte-for-byte identical to the
+    // synchronous gather over the same distinct source set (multi-page dedup +
+    // a DXF sheet), so the portable file is unchanged.
+    final pdf = File('${tmp.path}/plan.pdf')..writeAsBytesSync([1, 2, 3, 4, 5]);
+    final dxf = File('${tmp.path}/plan.dxf')
+      ..writeAsStringSync('0\nLINE\n10\n0\n20\n0\n' * 200);
+    final sheets = [
+      Sheet(id: 'a', name: 'p1', pdfPath: pdf.path, pageIndex: 0),
+      Sheet(id: 'b', name: 'p2', pdfPath: pdf.path, pageIndex: 1), // shared PDF
+      Sheet(id: 'c', name: 'cad', dxfPath: dxf.path),
+    ];
+
+    final sync = gatherSheetAssets(sheets);
+    final async = await gatherSheetAssetsAsync(sheets);
+    expect(async, sync); // identical keys AND identical base64 payloads
+  });
+
+  test('gatherSheetAssetsAsync with no source files returns empty (no isolate)',
+      () async {
+    // A placeholder-only project has nothing to embed — the async gather short-
+    // circuits before spinning up an isolate.
+    final assets = await gatherSheetAssetsAsync(
+        [const Sheet(id: 'a', name: 'ph')]);
+    expect(assets, isEmpty);
+  });
 }

@@ -27,6 +27,7 @@ import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../inspector/project_panel.dart' show exportCalcReport;
 import '../shell/nav_rail.dart';
+import '../shell/project_io.dart';
 import '../shell/templates_dialog.dart';
 import '../theme/design_tokens.dart';
 import '../widgets/glass_surface.dart';
@@ -197,6 +198,16 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       title: 'Export calculation report',
       subtitle: 'Markdown',
       run: () => exportCalcReport(ref),
+    ),
+    _Command(
+      title: 'Save project',
+      subtitle: 'Ctrl+S — saves to the open file',
+      run: () => saveProject(ref),
+    ),
+    _Command(
+      title: 'Save project as...',
+      subtitle: 'Ctrl+Shift+S — pick a new file',
+      run: () => saveProject(ref, saveAs: true),
     ),
     _Command(
       title: 'Toggle light / dark',

@@ -83,7 +83,7 @@ class WorkflowStepper extends ConsumerWidget {
       );
 }
 
-class _StageChip extends StatelessWidget {
+class _StageChip extends StatefulWidget {
   final String label;
   final bool done;
   final bool active;
@@ -97,9 +97,18 @@ class _StageChip extends StatelessWidget {
   });
 
   @override
+  State<_StageChip> createState() => _StageChipState();
+}
+
+class _StageChipState extends State<_StageChip> {
+  bool _hover = false;
+
+  @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    final done = widget.done;
+    final active = widget.active;
 
     final Color fg;
     if (done) {
@@ -116,7 +125,12 @@ class _StageChip extends StatelessWidget {
         vertical: MechXSpacing.xxs,
       ),
       decoration: BoxDecoration(
-        color: active ? colors.accentMuted : const Color(0x00000000),
+        // The standard nav-item hover fill: the chip is a documented click
+        // target, so it should look like one before the click — not only via
+        // the cursor change.
+        color: active
+            ? colors.accentMuted
+            : (_hover ? colors.surfaceHover : const Color(0x00000000)),
         borderRadius: MechXRadii.small,
       ),
       child: Row(
@@ -129,7 +143,7 @@ class _StageChip extends StatelessWidget {
           ),
           const SizedBox(width: MechXSpacing.xs),
           Text(
-            label,
+            widget.label,
             style: type.caption.copyWith(
               color: fg,
               fontWeight: active ? FontWeight.w600 : FontWeight.w500,
@@ -142,9 +156,11 @@ class _StageChip extends StatelessWidget {
     // Each stage jumps to where that step is performed.
     return MouseRegion(
       cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: onTap,
+        onTap: widget.onTap,
         child: chip,
       ),
     );

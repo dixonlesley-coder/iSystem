@@ -14,6 +14,7 @@ library;
 import 'package:flutter/widgets.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
@@ -38,16 +39,17 @@ class PaletteLoad {
   const PaletteLoad(this.kind, {this.phases, this.loadW = 0, this.motorKw});
 }
 
-/// A palette card descriptor.
+/// A palette card descriptor (its label is a [StringKey] so the palette is
+/// localised — I6).
 class _Card {
-  final String label;
+  final StringKey label;
   final PaletteLoad load;
   const _Card(this.label, this.load);
 }
 
 /// A palette group (a faint header + its cards).
 class _Group {
-  final String title;
+  final StringKey title;
   final List<_Card> cards;
   const _Group(this.title, this.cards);
 }
@@ -55,55 +57,64 @@ class _Group {
 // The groups + cards, transcribed from PanelMaker (sub-panel = the feeder kind,
 // which the canvas turns into a new board on a blank drop).
 const List<_Group> _groups = [
-  _Group('Loads', [
-    _Card('Lighting', PaletteLoad(LoadKind.lighting, loadW: 1200)),
-    _Card('Sockets', PaletteLoad(LoadKind.socket, loadW: 2000)),
-    _Card('Air-con (1φ)', PaletteLoad(LoadKind.hvac, phases: 1, loadW: 2500)),
-    _Card('Air-con (3φ)', PaletteLoad(LoadKind.hvac, phases: 3, loadW: 5500)),
+  _Group(StringKey.electricalPaletteLoads, [
+    _Card(StringKey.electricalLoadLighting,
+        PaletteLoad(LoadKind.lighting, loadW: 1200)),
+    _Card(StringKey.electricalLoadSockets,
+        PaletteLoad(LoadKind.socket, loadW: 2000)),
+    _Card(StringKey.electricalLoadAircon1,
+        PaletteLoad(LoadKind.hvac, phases: 1, loadW: 2500)),
+    _Card(StringKey.electricalLoadAircon3,
+        PaletteLoad(LoadKind.hvac, phases: 3, loadW: 5500)),
     _Card(
-      'Water heater (1φ)',
+      StringKey.electricalLoadWaterHeater1,
       PaletteLoad(LoadKind.heating, phases: 1, loadW: 3000),
     ),
     _Card(
-      'Water heater (3φ)',
+      StringKey.electricalLoadWaterHeater3,
       PaletteLoad(LoadKind.heating, phases: 3, loadW: 9000),
     ),
     _Card(
-      'EV charger (1φ)',
+      StringKey.electricalLoadEv1,
       PaletteLoad(LoadKind.evCharger, phases: 1, loadW: 7400),
     ),
     _Card(
-      'EV charger (3φ)',
+      StringKey.electricalLoadEv3,
       PaletteLoad(LoadKind.evCharger, phases: 3, loadW: 22000),
     ),
     _Card(
-      'Industrial socket (3φ)',
+      StringKey.electricalLoadIndustrialSocket3,
       PaletteLoad(LoadKind.socket, phases: 3, loadW: 7500),
     ),
-    _Card('UPS / IT load', PaletteLoad(LoadKind.ups, loadW: 3000)),
+    _Card(StringKey.electricalLoadUpsIt, PaletteLoad(LoadKind.ups, loadW: 3000)),
     _Card(
-      'Welding set (3φ)',
+      StringKey.electricalLoadWelding3,
       PaletteLoad(LoadKind.welding, phases: 3, loadW: 8000),
     ),
     _Card(
-      'Custom load (1φ)',
+      StringKey.electricalLoadCustom1,
       PaletteLoad(LoadKind.general, phases: 1, loadW: 2000),
     ),
     _Card(
-      'Custom load (3φ)',
+      StringKey.electricalLoadCustom3,
       PaletteLoad(LoadKind.general, phases: 3, loadW: 7500),
     ),
   ]),
-  _Group('Motors & pumps', [
-    _Card('Motor (DOL)', PaletteLoad(LoadKind.motor, motorKw: 5.5)),
-    _Card('Motor (large)', PaletteLoad(LoadKind.motor, motorKw: 15)),
-    _Card('Pump (1φ)', PaletteLoad(LoadKind.pump, phases: 1, motorKw: 0.75)),
-    _Card('Pump (3φ)', PaletteLoad(LoadKind.pump, phases: 3, motorKw: 4)),
-    _Card('Fire pump', PaletteLoad(LoadKind.pump, motorKw: 15)),
+  _Group(StringKey.electricalPaletteMotorsPumps, [
+    _Card(StringKey.electricalLoadMotorDol,
+        PaletteLoad(LoadKind.motor, motorKw: 5.5)),
+    _Card(StringKey.electricalLoadMotorLarge,
+        PaletteLoad(LoadKind.motor, motorKw: 15)),
+    _Card(StringKey.electricalLoadPump1,
+        PaletteLoad(LoadKind.pump, phases: 1, motorKw: 0.75)),
+    _Card(StringKey.electricalLoadPump3,
+        PaletteLoad(LoadKind.pump, phases: 3, motorKw: 4)),
+    _Card(StringKey.electricalLoadFirePump,
+        PaletteLoad(LoadKind.pump, motorKw: 15)),
   ]),
-  _Group('Distribution', [
-    _Card('Spare MCB way', PaletteLoad(LoadKind.spare)),
-    _Card('Sub-panel', PaletteLoad(LoadKind.feeder)),
+  _Group(StringKey.electricalPaletteDistribution, [
+    _Card(StringKey.electricalLoadSpareMcb, PaletteLoad(LoadKind.spare)),
+    _Card(StringKey.electricalLoadSubPanel, PaletteLoad(LoadKind.feeder)),
   ]),
 ];
 
@@ -123,14 +134,15 @@ class ElectricalPalette extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
               MechXSpacing.md,
               MechXSpacing.md,
               MechXSpacing.md,
               MechXSpacing.xs,
             ),
-            child: MechXSectionLabel('Loads'),
+            child: MechXSectionLabel(
+                context.strings(StringKey.electricalPaletteLoads)),
           ),
           const SizedBox(height: MechXSpacing.sm),
           Expanded(
@@ -153,13 +165,14 @@ class ElectricalPalette extends StatelessWidget {
                           top: MechXSpacing.sm,
                           bottom: MechXSpacing.xs,
                         ),
-                        child: MechXSectionLabel(_groups[i].title),
+                        child: MechXSectionLabel(
+                            context.strings(_groups[i].title)),
                       ),
                     for (final c in _groups[i].cards)
                       Padding(
                         padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
                         child: PaletteCard<PaletteLoad>(
-                          label: c.label,
+                          label: context.strings(c.label),
                           swatch: c.load.kind == LoadKind.feeder
                               ? colors.success
                               : colors.accent,

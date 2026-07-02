@@ -32,6 +32,7 @@ import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/project_store.dart';
 import '../canvas/zoom_controls.dart';
@@ -48,7 +49,8 @@ import 'electrical_canvas.dart';
 import 'electrical_controls.dart';
 import 'electrical_export.dart';
 import 'electrical_format.dart';
-import 'electrical_inspector.dart' show ElectricalCircuitInspector;
+import 'electrical_inspector.dart'
+    show ElectricalCircuitInspector, ElectricalPanelInspector;
 import 'electrical_palette.dart';
 import 'panel_geometry.dart';
 import 'power_oneline_view.dart';
@@ -98,6 +100,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   /// The circuit whose inspector panel is open (null = closed).
   _CircuitRef? _editing;
 
+  /// The panel whose PROPERTIES drawer is open (null = closed).
+  String? _panelEditing;
+
   /// An open right-click context menu (panel or circuit) + its anchor.
   _PanelMenuState? _panelMenu;
   _CircuitRef? _circuitMenu;
@@ -118,13 +123,29 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   /// Whether the Export menu (SLD / report / power one-line) is open.
   bool _showExportMenu = false;
 
+  /// The single-line canvas's live viewport (transform + size), published by
+  /// the canvas so the minimap (I8) can draw a truthful viewport rectangle and
+  /// pan-to-tap. A [ValueNotifier] so a pan repaints only the minimap, not the
+  /// whole view.
+  final ValueNotifier<CanvasViewport?> _viewport = ValueNotifier(null);
+
+  @override
+  void dispose() {
+    _viewport.dispose();
+    super.dispose();
+  }
+
   ElectricalProjectController get _controller =>
       ref.read(electricalProjectProvider.notifier);
 
   void _closeOverlays() {
-    if (_editing != null || _panelMenu != null || _circuitMenu != null) {
+    if (_editing != null ||
+        _panelEditing != null ||
+        _panelMenu != null ||
+        _circuitMenu != null) {
       setState(() {
         _editing = null;
+        _panelEditing = null;
         _panelMenu = null;
         _circuitMenu = null;
       });
@@ -144,6 +165,18 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     final result = ref.watch(electricalResultProvider);
     final project = ref.watch(electricalProjectProvider);
     final advanced = ref.watch(electricalAdvancedProvider);
+
+    // The Review → Electrical jump seam: a located issue hands a panel id via
+    // electricalFocusProvider; consume it once — switch to the single-line
+    // tab, frame that panel's board schedule, and clear the request.
+    ref.listen(electricalFocusProvider, (prev, panelId) {
+      if (panelId == null) return;
+      if (_tab != _Tab.singleLine) setState(() => _tab = _Tab.singleLine);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _canvasKey.currentState?.focusPanelSchedule(panelId);
+        ref.read(electricalFocusProvider.notifier).clear();
+      });
+    });
 
     final body = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -180,6 +213,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         ),
         // Tap-away scrim behind any open menu / inspector.
         if (_editing != null ||
+            _panelEditing != null ||
             _panelMenu != null ||
             _circuitMenu != null ||
             _showExportMenu)
@@ -200,17 +234,21 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             child: _ExportMenu(
               onSld: () => _runExport(exportElectricalSldDxf),
               onSldPdf: () => _runExport(exportElectricalSldPdf),
+              onSchedulesPdf: () =>
+                  _runExport(exportElectricalPanelSchedulesPdf),
               onOverviewPdf: () => _runExport(exportElectricalOverviewPdf),
               onOverviewDxf: () => _runExport(exportElectricalOverviewDxf),
               onRiserPdf: () => _runExport(exportElectricalRiserPdf),
               onRiserDxf: () => _runExport(exportElectricalRiserDxf),
               onReport: () => _runExport(exportElectricalCalcReport),
               onPowerOneLine: () => _runExport(exportPowerOneLineDxf),
+              onPowerOneLinePdf: () => _runExport(exportPowerOneLinePdf),
             ),
           ),
         if (_circuitMenu != null) _buildCircuitMenu(),
         if (_panelMenu != null) _buildPanelMenu(),
         if (_editing != null) _buildInspector(),
+        if (_panelEditing != null) _buildPanelInspector(),
         if (_showAdvanced)
           _AdvancedDrawer(
             advanced: advanced,
@@ -244,20 +282,12 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               Positioned.fill(
                 child: ElectricalCanvas(
                   key: _canvasKey,
-                  onEditPanel: (panelId) {
-                    // Open the inspector on the panel's first editable way.
-                    final panel = project.panels
-                        .where((p) => p.id == panelId)
-                        .firstOrNull;
-                    final first = panel?.circuits
-                        .where((c) => c.loadKind != LoadKind.feeder)
-                        .firstOrNull;
-                    if (panel != null && first != null) {
-                      setState(() => _editing = _CircuitRef(panelId, first.id));
-                    } else {
-                      _openPanelMenu(panelId, _canvasCenter());
-                    }
-                  },
+                  viewport: _viewport,
+                  // Panel double-click opens the panel PROPERTIES drawer
+                  // (name / tag / diversity / headroom); a way row double-click
+                  // keeps opening the circuit editor below.
+                  onEditPanel: (panelId) =>
+                      setState(() => _panelEditing = panelId),
                   onEditCircuit: (panelId, circuitId) => setState(
                     () => _editing = _CircuitRef(panelId, circuitId),
                   ),
@@ -280,11 +310,21 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                   onFit: () => _canvasKey.currentState?.fitView(),
                 ),
               ),
-              // Minimap (bottom-right).
+              // Minimap (bottom-right) — tracks the live viewport + dragged
+              // panels, and pans the canvas on tap (I8).
               Positioned(
                 right: MechXSpacing.md,
                 bottom: MechXSpacing.md,
-                child: _MiniMap(project: project, result: result),
+                child: ValueListenableBuilder<CanvasViewport?>(
+                  valueListenable: _viewport,
+                  builder: (context, vp, _) => _MiniMap(
+                    project: project,
+                    result: result,
+                    viewport: vp,
+                    onCentre: (world) =>
+                        _canvasKey.currentState?.centreOn(world),
+                  ),
+                ),
               ),
               // Gesture-help (?) (top-left).
               Positioned(
@@ -300,7 +340,15 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                   left: MechXSpacing.md,
                   top: 48,
                   child: CanvasGuideLegend(
-                    items: _electricalGuideItems,
+                    items: [
+                      context.strings(StringKey.electricalGuide1),
+                      context.strings(StringKey.electricalGuide2),
+                      context.strings(StringKey.electricalGuide3),
+                      context.strings(StringKey.electricalGuide4),
+                      context.strings(StringKey.electricalGuide5),
+                      context.strings(StringKey.electricalGuide6),
+                      context.strings(StringKey.electricalGuide7),
+                    ],
                     onClose: () => setState(() => _showHelp = false),
                   ),
                 ),
@@ -349,12 +397,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   Offset _toLocal(Offset global) {
     final box = context.findRenderObject() as RenderBox?;
     return box?.globalToLocal(global) ?? global;
-  }
-
-  Offset _canvasCenter() {
-    final box = context.findRenderObject() as RenderBox?;
-    final size = box?.size ?? const Size(800, 600);
-    return Offset(size.width / 2, size.height / 2);
   }
 
   // ── Edit-intent wiring ──────────────────────────────────────────────────────
@@ -409,17 +451,19 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       child: ElectricalMenu(
         items: [
           ElectricalMenuAction(
-            'Edit',
+            context.strings(StringKey.electricalMenuEdit),
             () => setState(() {
               _editing = ref0;
               _circuitMenu = null;
             }),
           ),
-          ElectricalMenuAction('Duplicate', () {
+          ElectricalMenuAction(context.strings(StringKey.electricalMenuDuplicate),
+              () {
             _controller.duplicateCircuit(ref0.panelId, ref0.circuitId);
             setState(() => _circuitMenu = null);
           }),
-          ElectricalMenuAction('Delete', () {
+          ElectricalMenuAction(context.strings(StringKey.electricalMenuDelete),
+              () {
             _controller.deleteCircuit(ref0.panelId, ref0.circuitId);
             setState(() => _circuitMenu = null);
           }, danger: true),
@@ -441,7 +485,15 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       top: _menuAt.dy,
       child: ElectricalMenu(
         items: [
-          ElectricalMenuAction('Open panel', () {
+          ElectricalMenuAction(
+              context.strings(StringKey.electricalPanelProperties), () {
+            setState(() {
+              _panelMenu = null;
+              _panelEditing = panel.id;
+            });
+          }),
+          ElectricalMenuAction(
+              context.strings(StringKey.electricalMenuOpenPanel), () {
             final first = panel.circuits
                 .where((c) => c.loadKind != LoadKind.feeder)
                 .firstOrNull;
@@ -453,29 +505,44 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             });
           }),
           ElectricalMenuAction(
-            panel.essential ? 'Unmark essential' : 'Mark essential',
+            context.strings(panel.essential
+                ? StringKey.electricalMenuUnmarkEssential
+                : StringKey.electricalMenuMarkEssential),
             () {
               _controller.setPanelEssential(panel.id, !panel.essential);
               setState(() => _panelMenu = null);
             },
           ),
           ElectricalMenuAction(
-            panel.upsBacked ? 'Unmark critical (UPS)' : 'Mark critical (UPS)',
+            context.strings(panel.upsBacked
+                ? StringKey.electricalMenuUnmarkCritical
+                : StringKey.electricalMenuMarkCritical),
             () {
               _controller.setPanelUpsBacked(panel.id, !panel.upsBacked);
               setState(() => _panelMenu = null);
             },
           ),
-          ElectricalMenuAction(panel.submeter ? 'Remove submeter' : 'Add submeter', () {
+          ElectricalMenuAction(
+              context.strings(panel.submeter
+                  ? StringKey.electricalMenuRemoveSubmeter
+                  : StringKey.electricalMenuAddSubmeter), () {
             _controller.setPanelSubmeter(panel.id, !panel.submeter);
             setState(() => _panelMenu = null);
           }),
+          // Duplicate the whole board (fresh ids, undoable one step — I5).
+          ElectricalMenuAction(
+              context.strings(StringKey.electricalMenuDuplicatePanel), () {
+            _controller.duplicatePanel(panel.id);
+            setState(() => _panelMenu = null);
+          }),
           if (panel.fedByCircuitId != null)
-            ElectricalMenuAction('Disconnect feeder', () {
+            ElectricalMenuAction(
+                context.strings(StringKey.electricalMenuDisconnectFeeder), () {
               _controller.disconnectFeeder(panel.id);
               setState(() => _panelMenu = null);
             }),
-          ElectricalMenuAction('Delete panel', () {
+          ElectricalMenuAction(
+              context.strings(StringKey.electricalMenuDeletePanel), () {
             _controller.deletePanel(panel.id);
             setState(() => _panelMenu = null);
           }, danger: true),
@@ -503,6 +570,27 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         key: ValueKey('${ref0.panelId}/${ref0.circuitId}'),
         panel: panel,
         circuit: circuit,
+        controller: _controller,
+        onClose: _closeOverlays,
+      ),
+    );
+  }
+
+  Widget _buildPanelInspector() {
+    final panelId = _panelEditing!;
+    final project = ref.watch(electricalProjectProvider);
+    final panel = project.panels.where((p) => p.id == panelId).firstOrNull;
+    if (panel == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      top: 0,
+      right: 0,
+      bottom: 0,
+      child: ElectricalPanelInspector(
+        key: ValueKey('panel/$panelId'),
+        panel: panel,
         controller: _controller,
         onClose: _closeOverlays,
       ),
@@ -558,19 +646,21 @@ class _Toolbar extends StatelessWidget {
         children: [
           // Tabs (left) — the shared selectable-segment vocabulary.
           MechXSegment(
-            label: 'Single-line',
+            label: context.strings(StringKey.electricalTabSingleLine),
             selected: tab == _Tab.singleLine,
             onTap: () => onTab(_Tab.singleLine),
           ),
           const SizedBox(width: MechXSpacing.xs),
           MechXSegment(
-            label: 'Power one-line',
+            label: context.strings(StringKey.electricalTabPowerOneLine),
             selected: tab == _Tab.powerOneLine,
             onTap: () => onTab(_Tab.powerOneLine),
           ),
           const SizedBox(width: MechXSpacing.xs),
           MechXSegment(
-            label: 'Riser',
+            // 'Building riser' — disambiguated from the nav rail's mechanical
+            // Riser view (one word must not name two destinations).
+            label: context.strings(StringKey.electricalTabBuildingRiser),
             selected: tab == _Tab.riser,
             onTap: () => onTab(_Tab.riser),
           ),
@@ -587,8 +677,10 @@ class _Toolbar extends StatelessWidget {
                 children: [
                   MechXButton(
                     label: warningCount > 0
-                        ? 'Issues ($warningCount)'
-                        : 'Issues',
+                        ? context.strings.format(
+                            StringKey.electricalToolbarIssuesCount,
+                            {'n': warningCount})
+                        : context.strings(StringKey.electricalToolbarIssues),
                     tone: warningCount > 0
                         ? MechXButtonTone.danger
                         : MechXButtonTone.normal,
@@ -596,7 +688,7 @@ class _Toolbar extends StatelessWidget {
                   ),
                   const SizedBox(width: MechXSpacing.xs),
                   MechXButton(
-                    label: 'Service & Earthing',
+                    label: context.strings(StringKey.electricalServiceEarthing),
                     onPressed: onService,
                   ),
                   const SizedBox(width: MechXSpacing.xs),
@@ -605,10 +697,13 @@ class _Toolbar extends StatelessWidget {
                     onPressed: onSources,
                   ),
                   const SizedBox(width: MechXSpacing.xs),
-                  MechXButton(label: '+ Panel', onPressed: onAddPanel),
+                  MechXButton(
+                    label: context.strings(StringKey.electricalAddPanel),
+                    onPressed: onAddPanel,
+                  ),
                   const SizedBox(width: MechXSpacing.xs),
                   MechXButton(
-                    label: 'Export',
+                    label: context.strings(StringKey.electricalExport),
                     tone: MechXButtonTone.muted,
                     onPressed: onExport,
                   ),
@@ -625,38 +720,30 @@ class _Toolbar extends StatelessWidget {
 
 // ── Canvas chrome (zoom, minimap, help) ─────────────────────────────────────
 
-/// The electrical canvas gesture-help items, ported verbatim from PanelMaker's
-/// CanvasHelp HELP_ITEMS. Rendered via the shared [CanvasGuideLegend].
-const _electricalGuideItems = <String>[
-  'Double-click a component to edit its size, type or label',
-  'Right-click a component for compatible replacement parts',
-  'Drag a card from the palette onto a panel to add a way',
-  "Drag a panel's round outlet onto another panel to feed it",
-  'Drag a load onto a panel to wire it (creates the MCB)',
-  'Select a panel or floating load and press Delete; right-click a way to delete it',
-  'Drag the empty canvas to pan; scroll to zoom; panels reveal their internals up close',
-];
-
 /// The Export popover (anchored under the toolbar's Export button) — single-line
 /// DXF, electrical report (Markdown) and power one-line DXF.
 class _ExportMenu extends StatelessWidget {
   final VoidCallback onSld;
   final VoidCallback onSldPdf;
+  final VoidCallback onSchedulesPdf;
   final VoidCallback onOverviewPdf;
   final VoidCallback onOverviewDxf;
   final VoidCallback onRiserPdf;
   final VoidCallback onRiserDxf;
   final VoidCallback onReport;
   final VoidCallback onPowerOneLine;
+  final VoidCallback onPowerOneLinePdf;
   const _ExportMenu({
     required this.onSld,
     required this.onSldPdf,
+    required this.onSchedulesPdf,
     required this.onOverviewPdf,
     required this.onOverviewDxf,
     required this.onRiserPdf,
     required this.onRiserDxf,
     required this.onReport,
     required this.onPowerOneLine,
+    required this.onPowerOneLinePdf,
   });
 
   @override
@@ -697,6 +784,13 @@ class _ExportMenu extends StatelessWidget {
               sub: context.strings(StringKey.electricalExportSldPdf),
               onTap: onSldPdf,
             ),
+            // The issuable schedule SET — one board schedule per page, real
+            // `Sheet i of t` counters (C1 pagination).
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportSchedules),
+              sub: context.strings(StringKey.electricalExportSchedulesPdf),
+              onTap: onSchedulesPdf,
+            ),
             _ExportRow(
               label: context.strings(StringKey.electricalExportOverview),
               sub: context.strings(StringKey.electricalExportOverviewPdf),
@@ -726,6 +820,14 @@ class _ExportMenu extends StatelessWidget {
               label: context.strings(StringKey.electricalExportPowerOneLine),
               sub: context.strings(StringKey.electricalExportPowerOneLineSub),
               onTap: onPowerOneLine,
+            ),
+            // C7 — the PDF companion (same shared SldSheet geometry as the DXF).
+            // Reuses the generic 'PDF (vector)' string; a dedicated
+            // power-one-line-PDF key is owned by app_strings.dart (see followUps).
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportPowerOneLine),
+              sub: context.strings(StringKey.electricalExportSldPdf),
+              onTap: onPowerOneLinePdf,
             ),
           ],
             ),
@@ -796,55 +898,22 @@ class _ExportRowState extends State<_ExportRow> {
   }
 }
 
-/// A small static minimap (bottom-right): every panel as a coloured rectangle.
-class _MiniMap extends StatelessWidget {
-  final ElectricalProject project;
-  final ElectricalSystemResult result;
-  const _MiniMap({required this.project, required this.result});
+/// The minimap frame size (the paint box, so the widget + painter agree on the
+/// world↔minimap mapping for the tap hit-test).
+const Size _kMiniMapSize = Size(150, 100);
 
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Container(
-      width: 150,
-      height: 100,
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: colors.border),
-        boxShadow: MechXShadow.card,
-      ),
-      child: ClipRRect(
-        borderRadius: MechXRadii.control,
-        child: CustomPaint(
-          painter: _MiniMapPainter(
-            project: project,
-            result: result,
-            accent: colors.accent,
-            muted: colors.textMuted,
-          ),
-        ),
-      ),
-    );
-  }
-}
+/// The minimap-space mapping of the panel layout — the SAME `resolvePanelPositions`
+/// the canvas uses (so it tracks DRAGGED panels, not the auto-layout only, I8).
+/// Exposes `toMini` / `toWorld` so the painter draws + the widget hit-tests
+/// through one geometry.
+class _MiniMapGeometry {
+  final double minX, minY, scale, ox, oy;
+  const _MiniMapGeometry(this.minX, this.minY, this.scale, this.ox, this.oy);
 
-class _MiniMapPainter extends CustomPainter {
-  final ElectricalProject project;
-  final ElectricalSystemResult result;
-  final Color accent;
-  final Color muted;
-  _MiniMapPainter({
-    required this.project,
-    required this.result,
-    required this.accent,
-    required this.muted,
-  });
+  static const double _padX = 80, _padY = 60;
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final positions = autoLayout(project, result);
-    if (positions.isEmpty) return;
+  static _MiniMapGeometry? of(Map<String, Offset> positions, Size size) {
+    if (positions.isEmpty || size.isEmpty) return null;
     var minX = double.infinity, minY = double.infinity;
     var maxX = -double.infinity, maxY = -double.infinity;
     positions.forEach((id, p) {
@@ -858,16 +927,116 @@ class _MiniMapPainter extends CustomPainter {
     final scale = (size.width / spanX).clamp(0.0, size.height / spanY) * 0.9;
     final ox = (size.width - spanX * scale) / 2;
     final oy = (size.height - spanY * scale) / 2;
+    return _MiniMapGeometry(minX, minY, scale, ox, oy);
+  }
+
+  Offset toMini(Offset world) => Offset(
+        ox + (world.dx - minX + _padX) * scale,
+        oy + (world.dy - minY + _padY) * scale,
+      );
+
+  Offset toWorld(Offset mini) => Offset(
+        (mini.dx - ox) / scale + minX - _padX,
+        (mini.dy - oy) / scale + minY - _padY,
+      );
+}
+
+/// A small minimap (bottom-right): every panel as a coloured rectangle, the live
+/// viewport as an outlined rectangle, and a tap pans the canvas to that point.
+class _MiniMap extends StatelessWidget {
+  final ElectricalProject project;
+  final ElectricalSystemResult result;
+  final CanvasViewport? viewport;
+  final ValueChanged<Offset> onCentre;
+  const _MiniMap({
+    required this.project,
+    required this.result,
+    required this.viewport,
+    required this.onCentre,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final positions = resolvePanelPositions(project, result);
+    final geo = _MiniMapGeometry.of(positions, _kMiniMapSize);
+    return SizedBox.fromSize(
+      size: _kMiniMapSize,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: MechXRadii.control,
+          border: Border.all(color: colors.border),
+          boxShadow: MechXShadow.card,
+        ),
+        child: ClipRRect(
+          borderRadius: MechXRadii.control,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapUp: (d) {
+              if (geo == null) return;
+              onCentre(geo.toWorld(d.localPosition));
+            },
+            child: CustomPaint(
+              painter: _MiniMapPainter(
+                positions: positions,
+                viewport: viewport,
+                accent: colors.accent,
+                muted: colors.textMuted,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniMapPainter extends CustomPainter {
+  final Map<String, Offset> positions;
+  final CanvasViewport? viewport;
+  final Color accent;
+  final Color muted;
+  _MiniMapPainter({
+    required this.positions,
+    required this.viewport,
+    required this.accent,
+    required this.muted,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final geo = _MiniMapGeometry.of(positions, size);
+    if (geo == null) return;
     positions.forEach((id, p) {
-      final x = ox + (p.dx - minX + 80) * scale;
-      final y = oy + (p.dy - minY + 60) * scale;
-      canvas.drawRect(Rect.fromLTWH(x, y, 14, 8), Paint()..color = accent);
+      final at = geo.toMini(p);
+      canvas.drawRect(
+          Rect.fromLTWH(at.dx, at.dy, 14, 8), Paint()..color = accent);
     });
+    // The live viewport rectangle — the world region on screen, mapped through
+    // the same minimap geometry (I8). Skipped until the canvas has a viewport.
+    final vp = viewport;
+    if (vp != null && !vp.size.isEmpty) {
+      final tl = geo.toMini(vp.transform.screenToWorld(Offset.zero));
+      final br = geo.toMini(
+          vp.transform.screenToWorld(vp.size.bottomRight(Offset.zero)));
+      final rect = Rect.fromPoints(tl, br);
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..color = muted
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2,
+      );
+    }
   }
 
   @override
   bool shouldRepaint(_MiniMapPainter old) =>
-      old.project != project || old.result != result;
+      old.positions != positions ||
+      old.viewport != viewport ||
+      old.accent != accent ||
+      old.muted != muted;
 }
 
 // ── Empty state ───────────────────────────────────────────────────────────────
@@ -884,14 +1053,18 @@ class _EmptyState extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.all(MechXSpacing.lg),
       child: MechXEmptyStateCard(
-        title: 'Set up your service',
-        body: 'Add a distribution panel, then drag loads from the palette '
-            'onto it. Set the supply phase and earthing from Service & '
-            'Earthing.',
+        title: context.strings(StringKey.electricalEmptyTitle),
+        body: context.strings(StringKey.electricalEmptyBody),
         actions: [
-          MechXButton(label: '+ Panel', onPressed: onAddPanel),
+          MechXButton(
+            label: context.strings(StringKey.electricalAddPanel),
+            onPressed: onAddPanel,
+          ),
           const SizedBox(width: MechXSpacing.sm),
-          MechXButton(label: 'Service & Earthing', onPressed: onSetUp),
+          MechXButton(
+            label: context.strings(StringKey.electricalServiceEarthing),
+            onPressed: onSetUp,
+          ),
         ],
       ),
     );
@@ -1051,12 +1224,12 @@ class _ServiceInspector extends ConsumerWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      'Service & Earthing',
+                      context.strings(StringKey.electricalServiceEarthing),
                       style: type.title.copyWith(color: colors.textPrimary),
                     ),
                   ),
                   MechXButton(
-                    label: 'Close',
+                    label: context.strings(StringKey.electricalClose),
                     tertiary: true,
                     onPressed: onClose,
                   ),
@@ -1072,7 +1245,8 @@ class _ServiceInspector extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     ElectricalField(
-                      label: 'Earthing system',
+                      label:
+                          context.strings(StringKey.electricalFieldEarthingSystem),
                       child: ElectricalEnumPicker<EarthingSystem>(
                         value: project.earthingSystem,
                         options: EarthingSystem.values,
@@ -1190,7 +1364,7 @@ class _SourcesEditor extends ConsumerWidget {
                     ),
                   ),
                   MechXButton(
-                    label: 'Close',
+                    label: context.strings(StringKey.electricalClose),
                     tertiary: true,
                     onPressed: onClose,
                   ),

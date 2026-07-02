@@ -1,17 +1,20 @@
 /// The electrical SINGLE-LINE spatial canvas — a faithful Flutter port of
 /// PanelMaker's `BuildingSingleLine.tsx`. Panels are boxes on a pannable /
-/// zoomable canvas, wired by feeder lines, with each panel's loads hanging as
-/// nodes below it and a **zoom-driven level-of-detail** (a summary card when
-/// zoomed out → the full internal R-S-T busbar + breakers when zoomed in).
+/// zoomable canvas, wired by feeder lines, with a **zoom-driven
+/// level-of-detail across ONE honest tier boundary** ([kLodThreshold]): a
+/// compact summary card when zoomed out, the full engine board schedule when
+/// zoomed in. (The old mid-detail hand-painted busbar was an unreachable middle
+/// tier and has been removed — I7.) A summary card carries an explicit expand
+/// chevron (frames its board schedule); a tap on empty schedule chrome zooms
+/// back out to the summary.
 ///
 /// Anatomy (mirrors the reference):
 ///  • a [ViewportTransform]-driven canvas (reusing the mechanical canvas's
 ///    zoom-to-cursor / middle-drag-pan / scroll math) with a dark grid;
 ///  • panel nodes positioned at their `x,y` (auto-layout when null — service
 ///    root left, fed panels by depth to the right, grid-snapped);
-///  • the internal R-S-T / N / PE busbar (colourised) drawn past the LOD
-///    threshold, with each way as a breaker tapping the bus + a load node on a
-///    drop line a fixed distance below;
+///  • the real engine board schedule (`buildElectricalPanelDetail`) drawn past
+///    the LOD threshold — the same geometry the PDF / DXF export draws;
 ///  • a PLN grid-supply node above the service-root panel;
 ///  • a left Loads palette ([Draggable]) — drop on a panel adds a way, drop on
 ///    blank canvas adds a floating load / sub-panel;
@@ -38,6 +41,7 @@ import 'package:mechx_engine/units.dart';
 
 import '../../store/app_state.dart';
 import '../../store/electrical_store.dart';
+import '../../store/history_store.dart';
 import '../canvas/canvas_grid.dart';
 import '../canvas/viewport.dart';
 import '../theme/design_tokens.dart';
@@ -53,13 +57,12 @@ import 'sld_sheet_painter.dart';
 /// 0.72`).
 const double kLodThreshold = 0.72;
 
-/// DEEP-zoom LOD threshold — at/above this zoom each panel's body swaps the
-/// hand-painted R-S-T busbar for the REAL engine board schedule
-/// (`buildElectricalPanelDetail`, the same geometry the PDF / DXF export draws),
-/// painted read-only via [SldBoardSchedulePainter]. Set well above the LOD
-/// threshold (and above the zoom golden 05 reaches) so the mid-detail schematic
-/// — which keeps the per-way edit hit-test — stays the default, and the board
-/// schedule is a deliberate "zoom right in" representation.
+/// The zoom the "focus this panel" gesture ([ElectricalCanvasState.focusPanelSchedule])
+/// frames a board at — a comfortable schedule-reading scale, well above
+/// [kLodThreshold] (which is the ONE tier boundary between the summary card and
+/// the board schedule). No longer a separate rendering threshold: the board
+/// schedule now renders for any zoom at/above [kLodThreshold] (I7 removed the
+/// dead mid-detail tier); this is purely the focus/deep-zoom target.
 const double kBoardScheduleThreshold = 1.35;
 
 /// Indonesian R-S-T / N / PE rail colours (hard hex, ported verbatim).
@@ -75,6 +78,23 @@ typedef CircuitEdit = void Function(String panelId, String circuitId);
 typedef PanelMenu = void Function(String panelId, Offset globalPos);
 typedef CircuitMenu =
     void Function(String panelId, String circuitId, Offset globalPos);
+
+/// The canvas's live viewport (transform + widget size), published to the host
+/// (the minimap, I8) via a [ValueNotifier] so the minimap can draw a truthful
+/// viewport rectangle and pan-to-tap without the host rebuilding on every pan.
+typedef CanvasViewport = ({ViewportTransform transform, Size size});
+
+/// A selected element on the single-line canvas — a panel, or one way within a
+/// panel. Selecting a way (schedule row) highlights it and lets Delete remove
+/// the circuit (I5); at most one of [panelId]-only or [panelId]+[circuitId].
+@immutable
+class _CanvasSelection {
+  final String panelId;
+  final String? circuitId;
+  const _CanvasSelection.panel(this.panelId) : circuitId = null;
+  const _CanvasSelection.circuit(this.panelId, String this.circuitId);
+  bool get isCircuit => circuitId != null;
+}
 
 /// The spatial single-line canvas. Stateful: it owns the [ViewportTransform]
 /// (electrical has no per-sheet viewport store) and the in-flight feeder-drag.
@@ -97,6 +117,10 @@ class ElectricalCanvas extends ConsumerStatefulWidget {
   /// Open the Sources editor (double-click the source-spine strip).
   final VoidCallback onRequestSources;
 
+  /// Published each frame with the live transform + viewport size so the host's
+  /// minimap (I8) tracks the real view. Optional; null ⇒ nothing published.
+  final ValueNotifier<CanvasViewport?>? viewport;
+
   const ElectricalCanvas({
     super.key,
     required this.onEditPanel,
@@ -105,6 +129,7 @@ class ElectricalCanvas extends ConsumerStatefulWidget {
     required this.onCircuitMenu,
     required this.onRequestService,
     required this.onRequestSources,
+    this.viewport,
   });
 
   @override
@@ -126,8 +151,20 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   Offset _feederCursor = Offset.zero;
   String? _feederHoverPanel;
 
-  // The selected panel (for the Delete key + selection ring).
-  String? _selectedPanel;
+  // The selected element (a panel, or a way within one) — drives the selection
+  // ring / row highlight + the Delete key (I5).
+  _CanvasSelection? _selection;
+
+  String? get _selectedPanel =>
+      _selection != null && !_selection!.isCircuit ? _selection!.panelId : null;
+
+  void _selectPanel(String id) =>
+      setState(() => _selection = _CanvasSelection.panel(id));
+  void _selectCircuit(String panelId, String circuitId) =>
+      setState(() => _selection = _CanvasSelection.circuit(panelId, circuitId));
+  void _clearSelection() {
+    if (_selection != null) setState(() => _selection = null);
+  }
 
   /// Frame the content on the first layout — computed SYNCHRONOUSLY (assigning
   /// the field, not via setState) so even a single-frame render is framed, not
@@ -164,19 +201,13 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   // ── Layout ─────────────────────────────────────────────────────────────────
 
   /// Resolve each panel's world position: saved `x,y` wins, else the
-  /// deterministic tidy-tree auto-layout.
+  /// deterministic tidy-tree auto-layout. Delegates to the shared
+  /// [resolvePanelPositions] (so the minimap tracks the same dragged positions).
   Map<String, Offset> _positions(
     ElectricalProject project,
     ElectricalSystemResult result,
-  ) {
-    final auto = autoLayout(project, result);
-    return {
-      for (final p in project.panels)
-        p.id: (p.x != null && p.y != null)
-            ? Offset(p.x!, p.y!)
-            : (auto[p.id] ?? Offset.zero),
-    };
-  }
+  ) =>
+      resolvePanelPositions(project, result);
 
   void _fit(Map<String, Offset> positions) {
     final t = _fitTransform(positions);
@@ -269,12 +300,38 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
+    // Undo / redo route through the GLOBAL timeline (history_store), matching
+    // the Layout canvas — so Ctrl+Z reverts the genuinely most-recent edit
+    // across domains, never silently undoing another workspace's work.
+    final mod = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+    if (mod && key == LogicalKeyboardKey.keyZ && !shift) {
+      ref.read(historyProvider.notifier).undo();
+      return KeyEventResult.handled;
+    }
+    if (mod &&
+        ((key == LogicalKeyboardKey.keyZ && shift) ||
+            key == LogicalKeyboardKey.keyY)) {
+      ref.read(historyProvider.notifier).redo();
+      return KeyEventResult.handled;
+    }
     if (key == LogicalKeyboardKey.delete ||
         key == LogicalKeyboardKey.backspace) {
-      final sel = _selectedPanel;
+      final sel = _selection;
       if (sel != null) {
-        _ctrl.deletePanel(sel);
-        setState(() => _selectedPanel = null);
+        if (sel.isCircuit) {
+          _ctrl.deleteCircuit(sel.panelId, sel.circuitId!);
+        } else {
+          _ctrl.deletePanel(sel.panelId);
+        }
+        setState(() => _selection = null);
+        return KeyEventResult.handled;
+      }
+    }
+    if (key == LogicalKeyboardKey.escape) {
+      if (_selection != null) {
+        setState(() => _selection = null);
         return KeyEventResult.handled;
       }
     }
@@ -376,23 +433,32 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
           behavior: HitTestBehavior.opaque,
           onScaleStart: _onScaleStart,
           onScaleUpdate: _onScaleUpdate,
-          onTap: () => setState(() => _selectedPanel = null),
+          onTap: _clearSelection,
           child: LayoutBuilder(
             builder: (context, constraints) {
               _viewportSize = constraints.biggest;
               _ensureInitialTransform(positions);
               final vt = _current;
               // Compute LOD from the RESOLVED viewport (after the initial fit),
-              // so the panel-internal schematic + the load break-out/merge track
-              // the real zoom from the first frame — not the pre-fit default.
+              // so the board schedule tracks the real zoom from the first frame.
+              // ONE tier boundary now (I7): summary card below [kLodThreshold],
+              // the real engine board schedule at/above it (the way rows ARE the
+              // loads, feeders branch right to sub-panels).
               final detail = vt.scale >= kLodThreshold;
-              // Detail = the real engine BOARD SCHEDULE (vertical bus, way rows
-              // reading left-to-right) — the same geometry the PDF/DXF export
-              // draws. The whole panel reads left-to-right, so the way rows ARE
-              // the loads (no separate hanging load symbols) and feeders branch
-              // right to sub-panels. (One detail tier now; the summary card is
-              // the only other tier.)
-              final scheduleDetail = detail;
+              // Publish the live viewport for the minimap (I8). Deferred to after
+              // the frame — the minimap's ValueListenableBuilder is a SIBLING (not
+              // a descendant of this LayoutBuilder), so notifying it mid-build
+              // would markNeedsBuild during build; a post-frame set is safe, and
+              // record equality means an unchanged view never notifies.
+              final vpNotifier = widget.viewport;
+              if (vpNotifier != null) {
+                final nextVp = (transform: vt, size: _viewportSize);
+                if (vpNotifier.value != nextVp) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) vpNotifier.value = nextVp;
+                  });
+                }
+              }
               return ClipRect(
                 child: Stack(
                   children: [
@@ -406,7 +472,6 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                           transform: vt,
                           rootId: rootId,
                           detail: detail,
-                          scheduleDetail: scheduleDetail,
                           gridLine: colors.gridLine,
                           background: colors.canvas,
                           feederFrom: _feederFrom,
@@ -443,7 +508,6 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                         positions[panel.panelId] ?? Offset.zero,
                         vt,
                         detail,
-                        scheduleDetail,
                         project,
                         result,
                         rootId,
@@ -466,14 +530,14 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   double cardFootprint(ElectricalPanelResult panel) =>
       panelFootprint(panel, currentScale >= kLodThreshold);
 
-  /// Build the panel card, its PLN head (root only) and one load node per
-  /// non-feeder / non-spare way.
+  /// Build the panel card + its PLN head (root only). Below [kLodThreshold] the
+  /// card is a summary + a merged "N loads" node; at/above it the card is the
+  /// engine board schedule (the way rows ARE the loads). One tier boundary (I7).
   List<Widget> _panelWidgets(
     ElectricalPanelResult panel,
     Offset world,
     ViewportTransform vt,
     bool detail,
-    bool scheduleDetail,
     ElectricalProject project,
     ElectricalSystemResult result,
     String? rootId,
@@ -590,17 +654,27 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
             child: _PanelCardNode(
               panel: panel,
               detail: detail,
-              scheduleDetail: scheduleDetail,
               project: project,
               result: result,
               selected: _selectedPanel == panel.panelId,
+              selectedCircuitId:
+                  (_selection?.isCircuit ?? false) &&
+                          _selection!.panelId == panel.panelId
+                      ? _selection!.circuitId
+                      : null,
               unfed: unfed,
               essential: _essential.contains(panel.panelId),
               upsBacked: modelPanel?.upsBacked ?? false,
               submeter: modelPanel?.submeter ?? false,
-              onTap: () => setState(() => _selectedPanel = panel.panelId),
+              onTap: () => _selectPanel(panel.panelId),
               onDoubleTap: () => widget.onEditPanel(panel.panelId),
               onMenu: (gp) => widget.onPanelMenu(panel.panelId, gp),
+              // Summary card → expand chevron frames the board schedule (I7).
+              onExpandSchedule: () => focusPanelSchedule(panel.panelId),
+              // A way row → select it (ring / row highlight, Delete removes);
+              // a tap on empty schedule chrome zooms back out to the summary.
+              onSelectWay: (cid) => _selectCircuit(panel.panelId, cid),
+              onCollapse: () => collapseToSummary(panel.panelId),
               onWayDoubleTap: (cid) => widget.onEditCircuit(panel.panelId, cid),
               onWayMenu: (cid, gp) =>
                   widget.onCircuitMenu(panel.panelId, cid, gp),
@@ -650,7 +724,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
             width: kLoadW * scale,
             height: kLoadNodeH * scale,
             child: _ScaledTap(
-              onTap: () => setState(() => _selectedPanel = null),
+              onTap: _clearSelection,
               onDoubleTap: () => _expandLoadsAt(focal),
               child: _ScaledChild(
                 scale: scale,
@@ -662,78 +736,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
           ),
         );
       }
-      return widgets;
     }
-
-    // Load nodes branch to the RIGHT of the panel, stacked top-to-bottom (one
-    // per non-feeder/non-spare way) — a left-to-right column aligned with the
-    // board-schedule rows. SUPPRESSED at the board-schedule LOD, where the
-    // schedule lists every way itself, so zooming in morphs the column straight
-    // into the schedule rows. `j` indexes only the rendered loads (no gaps).
-    final loadsRightX = world.dx + w + kLoadGapX;
-    var j = -1;
-    for (var i = 0; !scheduleDetail && i < panel.circuits.length; i++) {
-      final c = panel.circuits[i];
-      if (c.loadKind == LoadKind.feeder || c.loadKind == LoadKind.spare) {
-        continue;
-      }
-      j++;
-      final loadWorld = Offset(
-        loadsRightX,
-        world.dy + kPanelChrome + j * kLoadRowH,
-      );
-      final lp = vt.worldToScreen(loadWorld);
-      final loadNode = _ScaledChild(
-        scale: scale,
-        width: kLoadW,
-        height: kLoadNodeH,
-        child: _LoadNode(circuit: c),
-      );
-      widgets.add(
-        Positioned(
-          left: lp.dx,
-          top: lp.dy,
-          width: kLoadW * scale,
-          height: kLoadNodeH * scale,
-          // Drop another load HERE to CHAIN them onto one breaker (same panel),
-          // or drag a load onto a panel to RE-PARENT the circuit there.
-          child: DragTarget<_LoadRef>(
-            onWillAcceptWithDetails: (d) => d.data.circuitId != c.circuitId,
-            onAcceptWithDetails: (d) {
-              if (d.data.fromPanelId == panel.panelId) {
-                _ctrl.mergeCircuit(
-                    panel.panelId, d.data.circuitId, c.circuitId);
-              } else {
-                _ctrl.moveCircuit(
-                    d.data.fromPanelId, d.data.circuitId, panel.panelId);
-              }
-            },
-            builder: (ctx, cand, rej) => Draggable<_LoadRef>(
-              data: _LoadRef(panel.panelId, c.circuitId),
-              dragAnchorStrategy: childDragAnchorStrategy,
-              feedback: Opacity(
-                opacity: 0.85,
-                child: SizedBox(
-                  width: kLoadW * scale,
-                  height: kLoadNodeH * scale,
-                  child: loadNode,
-                ),
-              ),
-              childWhenDragging: Opacity(opacity: 0.35, child: loadNode),
-              child: _ScaledTap(
-                onTap: () => setState(() => _selectedPanel = null),
-                onDoubleTap: () =>
-                    widget.onEditCircuit(panel.panelId, c.circuitId),
-                onMenu: (gp) =>
-                    widget.onCircuitMenu(panel.panelId, c.circuitId, gp),
-                child: loadNode,
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
+    // At the board-schedule LOD (detail) the way rows ARE the loads — no
+    // separate hanging load nodes (the old mid-detail tier was removed, I7).
     return widgets;
   }
 
@@ -781,6 +786,36 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     _setTransform(_current.zoomedTo(kLodThreshold + 0.06, focalScreen));
   }
 
+  /// Zoom back OUT to the summary card for [panelId] (I7) — frame it just below
+  /// [kLodThreshold], the collapse counterpart of [focusPanelSchedule]. No-op if
+  /// the panel / viewport isn't ready.
+  void collapseToSummary(String panelId) {
+    final project = ref.read(electricalProjectProvider);
+    final result = ref.read(electricalResultProvider);
+    final pos = _positions(project, result)[panelId];
+    final panel = result.panels[panelId];
+    if (pos == null || panel == null || _viewportSize.isEmpty) return;
+    const s = kLodThreshold - 0.12; // below the tier boundary → summary card
+    final w = panelCardWidthAt(panel, false);
+    final h = panelFootprint(panel, false);
+    final worldCentre = Offset(pos.dx + w / 2, pos.dy + h / 2);
+    _setTransform(ViewportTransform(
+      scale: s,
+      offset: _viewportSize.center(Offset.zero) - worldCentre * s,
+    ));
+  }
+
+  /// Pan (keeping the current zoom) so [world] lands at the viewport centre —
+  /// the minimap tap-to-navigate target (I8). No-op before the first layout.
+  void centreOn(Offset world) {
+    if (_viewportSize.isEmpty) return;
+    final s = _current.scale;
+    _setTransform(ViewportTransform(
+      scale: s,
+      offset: _viewportSize.center(Offset.zero) - world * s,
+    ));
+  }
+
   ViewportTransform get transform => _current;
 }
 
@@ -803,7 +838,6 @@ class _CanvasPainter extends CustomPainter {
   final ViewportTransform transform;
   final String? rootId;
   final bool detail;
-  final bool scheduleDetail;
   final Color gridLine;
   final Color background;
   final String? feederFrom;
@@ -821,7 +855,6 @@ class _CanvasPainter extends CustomPainter {
     required this.transform,
     required this.rootId,
     required this.detail,
-    required this.scheduleDetail,
     required this.gridLine,
     required this.background,
     required this.feederFrom,
@@ -881,12 +914,10 @@ class _CanvasPainter extends CustomPainter {
       }
     }
 
-    // Drop lines from each card's bottom to its load node (the segment OUTSIDE
-    // the card — the in-card schematic is painted by the card widget itself so
-    // the card's opaque surface doesn't cover it). A label carries cable + util.
-    // Skipped at the board-schedule LOD — the schedule lists every way itself,
-    // so the hanging loads + their drop lines would be redundant.
-    if (!scheduleDetail) {
+    // The connector from each summary card's right edge to its merged "N loads"
+    // node. Only in the summary view — at the board-schedule LOD the schedule
+    // lists every way itself, so the connector would be redundant.
+    if (!detail) {
       for (final id in result.order) {
         final panel = result.panels[id];
         final pos = positions[id];
@@ -942,60 +973,26 @@ class _CanvasPainter extends CustomPainter {
     canvas.drawCircle(b, 3, Paint()..color = col);
   }
 
-  /// Connectors from the card's RIGHT edge to each load node in the right-hand
-  /// column (the run OUTSIDE the card), labelled with cable + util. The in-card
-  /// schematic itself is drawn by the card widget (see [SchematicPainter]).
+  /// The single connector from a SUMMARY card's right edge to its merged
+  /// "N loads" node (only called in the summary view — the board-schedule LOD
+  /// lists every way itself, so per-way stems would be redundant).
   void _loadDrops(Canvas canvas, ElectricalPanelResult panel, Offset world) {
     final s = transform.scale;
-    final cardH = panelFootprint(panel, detail);
+    final cardH = panelFootprint(panel, false);
     final w = panelCardWidth(panel.circuits.length);
     final rightEdge = world.dx + w;
     final loadLeft = world.dx + w + kLoadGapX;
-    final threePhase = panel.system == ElectricalSystem.threePhase;
-    // Collapsed (summary) view: one tidy connector from the card's right edge to
-    // the merged loads node (centred), instead of a stem per way.
-    if (!detail) {
-      final hasLoads = panel.circuits.any((c) =>
-          c.loadKind != LoadKind.feeder && c.loadKind != LoadKind.spare);
-      if (!hasLoads) return;
-      final midY = world.dy + cardH / 2;
-      canvas.drawLine(
-        transform.worldToScreen(Offset(rightEdge, midY)),
-        transform.worldToScreen(Offset(loadLeft, midY)),
-        Paint()
-          ..color = accent
-          ..strokeWidth = 1.6 * s,
-      );
-      return;
-    }
-    var j = -1;
-    for (var i = 0; i < panel.circuits.length; i++) {
-      final c = panel.circuits[i];
-      if (c.loadKind == LoadKind.feeder || c.loadKind == LoadKind.spare) {
-        continue;
-      }
-      j++;
-      final rowY = world.dy + kPanelChrome + j * kLoadRowH + kLoadNodeH / 2;
-      final phaseColor = phaseColorFor(c.phase, threePhase);
-      canvas.drawLine(
-        transform.worldToScreen(Offset(rightEdge, rowY)),
-        transform.worldToScreen(Offset(loadLeft, rowY)),
-        Paint()
-          ..color = phaseColor
-          ..strokeWidth = 1.6 * s,
-      );
-      // Cable label (size · util%) — only when zoomed enough to read.
-      final util = _utilPct(c);
-      final lbl = util != null
-          ? '${c.grounding.cableSpec} · ${util.round()}%'
-          : c.grounding.cableSpec;
-      _label(
-        canvas,
-        transform.worldToScreen(Offset(rightEdge + 6, rowY - 9)),
-        lbl,
-        s,
-      );
-    }
+    final hasLoads = panel.circuits.any((c) =>
+        c.loadKind != LoadKind.feeder && c.loadKind != LoadKind.spare);
+    if (!hasLoads) return;
+    final midY = world.dy + cardH / 2;
+    canvas.drawLine(
+      transform.worldToScreen(Offset(rightEdge, midY)),
+      transform.worldToScreen(Offset(loadLeft, midY)),
+      Paint()
+        ..color = accent
+        ..strokeWidth = 1.6 * s,
+    );
   }
 
   void _label(Canvas canvas, Offset center, String text, double s,
@@ -1031,19 +1028,12 @@ class _CanvasPainter extends CustomPainter {
     tp.paint(canvas, at - Offset(tp.width / 2, tp.height / 2));
   }
 
-  double? _utilPct(ElectricalCircuitResult c) {
-    final rating = c.breaker.ratingA.amperes;
-    if (rating <= 0) return null;
-    return (c.designCurrent.amperes / rating) * 100;
-  }
-
   @override
   bool shouldRepaint(_CanvasPainter old) =>
       old.project != project ||
       old.result != result ||
       old.transform != transform ||
       old.detail != detail ||
-      old.scheduleDetail != scheduleDetail ||
       old.feederFrom != feederFrom ||
       old.feederCursor != feederCursor ||
       old.feederHover != feederHover ||
@@ -1090,57 +1080,7 @@ Color phaseColorFor(PhaseAssignment phase, bool threePhase) => switch (phase) {
 String amp0(double a) =>
     a == a.roundToDouble() ? a.toInt().toString() : a.toStringAsFixed(0);
 
-/// The in-card schematic surface: paints the busbar + breakers and maps a
-/// double-click / right-click to the way under the local x (column hit-test).
-class _SchematicSurface extends StatelessWidget {
-  final ElectricalPanelResult panel;
-  final Color accent;
-  final ValueChanged<String> onWayDoubleTap;
-  final void Function(String, Offset) onWayMenu;
-
-  const _SchematicSurface({
-    required this.panel,
-    required this.accent,
-    required this.onWayDoubleTap,
-    required this.onWayMenu,
-  });
-
-  /// The way whose column contains the local x, or null.
-  String? _wayAt(double localX) {
-    if (panel.circuits.isEmpty) return null;
-    final i = ((localX - kLeft) / kWayW).floor();
-    if (i < 0 || i >= panel.circuits.length) return null;
-    return panel.circuits[i].circuitId;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Listener(
-      onPointerDown: (e) {
-        if (e.buttons == kSecondaryButton) {
-          final box = context.findRenderObject() as RenderBox?;
-          final local = box?.globalToLocal(e.position) ?? Offset.zero;
-          final id = _wayAt(local.dx);
-          if (id != null) onWayMenu(id, e.position);
-        }
-      },
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onDoubleTapDown: (d) {
-          final id = _wayAt(d.localPosition.dx);
-          if (id != null) onWayDoubleTap(id);
-        },
-        onDoubleTap: () {},
-        child: CustomPaint(
-          painter: SchematicPainter(panel: panel, accent: accent),
-          child: const SizedBox.expand(),
-        ),
-      ),
-    );
-  }
-}
-
-/// The in-card DEEP-zoom board-schedule surface: paints the real engine board
+/// The in-card board-schedule surface: paints the real engine board
 /// schedule (`buildElectricalPanelDetail` — the SAME geometry the PDF / DXF
 /// export draws) fitted into the card body via [SldBoardSchedulePainter], and
 /// maps a double-click / right-click to the way under the local y (the engine
@@ -1153,12 +1093,24 @@ class _PanelScheduleBody extends StatefulWidget {
   final ValueChanged<String> onWayDoubleTap;
   final void Function(String, Offset) onWayMenu;
 
+  /// A single tap on a way ROW selects that circuit (ring / row highlight,
+  /// Delete removes it — I5); a tap on empty schedule chrome zooms out to the
+  /// summary card ([onCollapse] — I7).
+  final ValueChanged<String> onSelectWay;
+  final VoidCallback onCollapse;
+
+  /// The currently-selected circuit id (drives the row selection band).
+  final String? selectedCircuitId;
+
   const _PanelScheduleBody({
     required this.panel,
     required this.project,
     required this.result,
     required this.onWayDoubleTap,
     required this.onWayMenu,
+    required this.onSelectWay,
+    required this.onCollapse,
+    required this.selectedCircuitId,
   });
 
   @override
@@ -1207,6 +1159,14 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
     return i == null ? null : widget.panel.circuits[i].circuitId;
   }
 
+  /// The row index of the selected circuit on this panel, or null.
+  int? get _selectedRow {
+    final id = widget.selectedCircuitId;
+    if (id == null) return null;
+    final i = widget.panel.circuits.indexWhere((c) => c.circuitId == id);
+    return i < 0 ? null : i;
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -1235,20 +1195,50 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
             },
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
+              // A single tap over a way row selects it; a tap on empty schedule
+              // chrome (header / footer) zooms back out to the summary card.
+              onTapUp: (d) {
+                final id = _wayAt(d.localPosition, sheet, size);
+                if (id != null) {
+                  widget.onSelectWay(id);
+                } else {
+                  widget.onCollapse();
+                }
+              },
               onDoubleTapDown: (d) {
                 final id = _wayAt(d.localPosition, sheet, size);
                 if (id != null) widget.onWayDoubleTap(id);
               },
               onDoubleTap: () {},
-              child: CustomPaint(
-                painter: SldBoardSchedulePainter(
-                  sheet: sheet,
-                  ink: colors.textPrimary,
-                  essential: colors.danger,
-                  hoveredRow: _hoveredRow,
-                  highlight: colors.accent,
-                ),
-                child: const SizedBox.expand(),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: SldBoardSchedulePainter(
+                        sheet: sheet,
+                        ink: colors.textPrimary,
+                        essential: colors.danger,
+                        hoveredRow: _hoveredRow,
+                        highlight: colors.accent,
+                      ),
+                      child: const SizedBox.expand(),
+                    ),
+                  ),
+                  // The selection ring for the chosen way row (I5) — a stronger
+                  // accent band than the hover highlight, drawn as a foreground
+                  // overlay so the shared read-only schedule painter is untouched.
+                  if (_selectedRow != null)
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: _RowSelectionPainter(
+                          transform: _fitTransform(sheet, size),
+                          sheet: sheet,
+                          row: _selectedRow!,
+                          color: colors.accent,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ),
@@ -1258,210 +1248,51 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
   }
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// In-card schematic painter — the R-S-T / N / PE busbar + breaker taps, drawn
-// INSIDE the panel card at detail LOD (so the card's opaque surface doesn't
-// cover it). Local (card) coordinates; the card reserves the full schematic
-// height so it doesn't grow over the load nodes.
-// ════════════════════════════════════════════════════════════════════════════
+/// Paints the selection ring for one board-schedule row (a stroked accent band
+/// over the row), placed with the SAME fit transform + row geometry the
+/// [SldBoardSchedulePainter] uses so it lands exactly on the selected way.
+class _RowSelectionPainter extends CustomPainter {
+  final ViewportTransform transform;
+  final SldSheet sheet;
+  final int row;
+  final Color color;
 
-class SchematicPainter extends CustomPainter {
-  final ElectricalPanelResult panel;
-  final Color accent;
-
-  SchematicPainter({required this.panel, required this.accent});
+  _RowSelectionPainter({
+    required this.transform,
+    required this.sheet,
+    required this.row,
+    required this.color,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final geom = panelGeometry(panel);
-    final bars = geom.bars;
-    final right = panelCardWidth(panel.circuits.length) - kRightPad;
-    final threePhase = panel.system == ElectricalSystem.threePhase;
-
-    // Rails + left identity pills.
-    bars.forEach((key, ly) {
-      final color = railColorFor(key);
-      canvas.drawLine(
-        Offset(kLeft.toDouble(), ly),
-        Offset(right, ly),
-        Paint()
-          ..color = color
-          ..strokeWidth = key == 'PE'
-              ? 3.5
-              : key == 'N'
-              ? 4.0
-              : 5.0
-          ..strokeCap = StrokeCap.round,
-      );
-      _pill(canvas, Offset(6, ly), railLetterFor(key), color);
-    });
-
-    // Incomer head.
-    final incRect = Rect.fromLTWH(
-      kLeft.toDouble(),
-      kIncomerY.toDouble(),
-      148,
-      kIncomerH.toDouble(),
+    final top = scheduleRowTop(row);
+    final tl = transform.worldToScreen(Offset(sheet.minX + 2, top));
+    final w = (sheet.maxX - sheet.minX - 4) * transform.scale;
+    final h = kScheduleRowH * transform.scale;
+    final rect = Rect.fromLTWH(tl.dx, tl.dy, w, h);
+    final r = Radius.circular(3 * transform.scale);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, r),
+      Paint()..color = color.withAlpha(28),
     );
     canvas.drawRRect(
-      RRect.fromRectAndRadius(incRect, const Radius.circular(4)),
-      Paint()..color = accent.withAlpha(40),
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(incRect, const Radius.circular(4)),
+      RRect.fromRectAndRadius(rect, r),
       Paint()
-        ..color = accent
-        ..strokeWidth = 1.4
-        ..style = PaintingStyle.stroke,
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5,
     );
-    _text(
-      canvas,
-      incRect.topLeft + const Offset(6, 6),
-      'INC ${amp0(panel.incomer.breaker.ratingA.amperes)}/${panel.incomer.poles}P',
-      9.5,
-      accent,
-      bold: true,
-    );
-    canvas.drawLine(
-      Offset(incRect.left + 16, incRect.bottom),
-      Offset(kLeft + 16, bars['N'] ?? bars.values.last),
-      Paint()
-        ..color = accent.withAlpha(150)
-        ..strokeWidth = 2,
-    );
-
-    final lastBarY = bars.values.reduce(math.max);
-    final brkTop = lastBarY + kBrkGap;
-    final outY = geom.outY;
-
-    for (var i = 0; i < panel.circuits.length; i++) {
-      final c = panel.circuits[i];
-      final cx = wayColumnX(i).toDouble();
-      final isSpare = c.loadKind == LoadKind.spare;
-      final phaseColor = phaseColorFor(c.phase, threePhase);
-
-      final liveBars = c.phase == PhaseAssignment.threePhase
-          ? const ['L1', 'L2', 'L3']
-          : [phaseKeyFor(c.phase)];
-      var j = 0;
-      for (final k in liveBars) {
-        final by = bars[k] ?? bars['L1'] ?? lastBarY;
-        final offX = liveBars.length == 3 ? (j - 1) * 5.0 : 0.0;
-        canvas.drawLine(
-          Offset(cx + offX, by),
-          Offset(cx + offX, brkTop),
-          Paint()
-            ..color = railColorFor(k)
-            ..strokeWidth = 1.8,
-        );
-        j++;
-      }
-      // PE drop.
-      final peY = bars['PE'];
-      if (peY != null) {
-        _dashed(canvas, Offset(cx + 12, peY), Offset(cx + 12, outY), kRailPE);
-      }
-      // Breaker glyph + run + terminal + rating.
-      _breaker(canvas, Offset(cx, brkTop), phaseColor);
-      canvas.drawLine(
-        Offset(cx, brkTop + kBrkH),
-        Offset(cx, outY),
-        Paint()
-          ..color = isSpare
-              ? const Color(0x66888888)
-              : (c.phase == PhaseAssignment.threePhase
-                    ? const Color(0xFFAAB2BD)
-                    : phaseColor)
-          ..strokeWidth = 1.8,
-      );
-      canvas.drawCircle(Offset(cx, outY), 2.4, Paint()..color = phaseColor);
-      _text(
-        canvas,
-        Offset(cx + 9, brkTop + 4),
-        '${amp0(c.breaker.ratingA.amperes)}A',
-        9,
-        accent,
-        bold: true,
-      );
-    }
-  }
-
-  void _pill(Canvas canvas, Offset at, String letter, Color color) {
-    final rect = Rect.fromLTWH(at.dx, at.dy - 6, 16, 12);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(rect, const Radius.circular(3)),
-      Paint()..color = color,
-    );
-    _text(
-      canvas,
-      rect.topLeft + const Offset(3, 0.5),
-      letter,
-      8.5,
-      const Color(0xFFFFFFFF),
-      bold: true,
-    );
-  }
-
-  void _breaker(Canvas canvas, Offset top, Color color) {
-    final p = Paint()
-      ..color = color
-      ..strokeWidth = 1.6
-      ..strokeCap = StrokeCap.round;
-    canvas.drawCircle(top + const Offset(0, 2), 1.6, Paint()..color = color);
-    canvas.drawLine(top + const Offset(0, 2), top + const Offset(7, 12), p);
-    canvas.drawCircle(top + const Offset(0, 16), 1.4, Paint()..color = color);
-    canvas.drawLine(
-      top + const Offset(0, 16),
-      top + Offset(0, kBrkH.toDouble()),
-      p,
-    );
-    canvas.drawRect(
-      Rect.fromLTWH(top.dx + 4, top.dy + 6, 5, 5),
-      p..style = PaintingStyle.stroke,
-    );
-  }
-
-  void _dashed(Canvas canvas, Offset a, Offset b, Color color) {
-    final total = (b - a).distance;
-    final dir = (b - a) / (total == 0 ? 1 : total);
-    const dash = 4.0, gap = 2.0;
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 1.4;
-    var t = 0.0;
-    while (t < total) {
-      canvas.drawLine(a + dir * t, a + dir * math.min(t + dash, total), paint);
-      t += dash + gap;
-    }
-  }
-
-  void _text(
-    Canvas canvas,
-    Offset at,
-    String text,
-    double size,
-    Color color, {
-    bool bold = false,
-  }) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: TextStyle(
-          fontFamily: 'Roboto',
-          fontSize: size,
-          color: color,
-          fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(canvas, at);
   }
 
   @override
-  bool shouldRepaint(SchematicPainter old) =>
-      old.panel != panel || old.accent != accent;
+  bool shouldRepaint(_RowSelectionPainter old) =>
+      old.transform != transform ||
+      old.sheet != sheet ||
+      old.row != row ||
+      old.color != color;
 }
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // Panel card node (summary + detail share the same header chrome).
@@ -1469,15 +1300,16 @@ class SchematicPainter extends CustomPainter {
 
 class _PanelCardNode extends StatefulWidget {
   final ElectricalPanelResult panel;
-  final bool detail;
 
-  /// DEEP zoom — render the real engine board schedule in the card body instead
-  /// of the hand-painted R-S-T busbar. Requires [project] / [result] to build
-  /// the single-panel detail [SldSheet].
-  final bool scheduleDetail;
+  /// At/above the LOD threshold: render the real engine board schedule in the
+  /// card body (the one tier boundary — I7). Below it: the summary body.
+  final bool detail;
   final ElectricalProject project;
   final ElectricalSystemResult result;
   final bool selected;
+
+  /// The selected WAY on this panel (its schedule row is ringed — I5), or null.
+  final String? selectedCircuitId;
   final bool unfed;
   final bool essential;
   final bool upsBacked;
@@ -1485,6 +1317,15 @@ class _PanelCardNode extends StatefulWidget {
   final VoidCallback onTap;
   final VoidCallback onDoubleTap;
   final ValueChanged<Offset> onMenu;
+
+  /// Summary card → the expand chevron frames the board schedule (I7).
+  final VoidCallback onExpandSchedule;
+
+  /// A schedule way row → select it (I5).
+  final ValueChanged<String> onSelectWay;
+
+  /// A tap on empty schedule chrome → zoom back out to the summary (I7).
+  final VoidCallback onCollapse;
   final ValueChanged<String> onWayDoubleTap;
   final void Function(String, Offset) onWayMenu;
   final ValueChanged<PaletteLoad> onDropLoad;
@@ -1495,10 +1336,10 @@ class _PanelCardNode extends StatefulWidget {
   const _PanelCardNode({
     required this.panel,
     required this.detail,
-    required this.scheduleDetail,
     required this.project,
     required this.result,
     required this.selected,
+    required this.selectedCircuitId,
     required this.unfed,
     required this.essential,
     required this.upsBacked,
@@ -1506,6 +1347,9 @@ class _PanelCardNode extends StatefulWidget {
     required this.onTap,
     required this.onDoubleTap,
     required this.onMenu,
+    required this.onExpandSchedule,
+    required this.onSelectWay,
+    required this.onCollapse,
     required this.onWayDoubleTap,
     required this.onWayMenu,
     required this.onDropLoad,
@@ -1558,11 +1402,11 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Header chrome — a fixed band (kPanelChrome) so the SVG below lines
-          // up summary-or-detail. DROPPED at the board-schedule LOD, where the
-          // engine schedule draws its OWN header (name [tag] + incomer line), so
-          // the card chrome would just repeat the panel name.
-          if (!widget.scheduleDetail)
+          // Header chrome — a fixed band (kPanelChrome). DROPPED at the
+          // board-schedule LOD, where the engine schedule draws its OWN header
+          // (name [tag] + incomer line), so the card chrome would just repeat
+          // the panel name.
+          if (!widget.detail)
             SizedBox(
               height: kPanelChrome,
               child: Padding(
@@ -1571,38 +1415,31 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
               ),
             ),
           Expanded(
-            // Cross-fade the summary ↔ detail schematic at the LOD threshold
-            // instead of an instant swap.
+            // Cross-fade the summary ↔ board-schedule body across the one tier
+            // boundary instead of an instant swap.
             child: AnimatedSwitcher(
               duration: MechXMotion.appear,
               switchInCurve: MechXMotion.standard,
               switchOutCurve: MechXMotion.standard,
-              child: widget.scheduleDetail
+              child: widget.detail
                   ? KeyedSubtree(
                       key: const ValueKey('schedule'),
                       child: _PanelScheduleBody(
                         panel: panel,
                         project: widget.project,
                         result: widget.result,
+                        selectedCircuitId: widget.selectedCircuitId,
+                        onSelectWay: widget.onSelectWay,
+                        onCollapse: widget.onCollapse,
                         onWayDoubleTap: widget.onWayDoubleTap,
                         onWayMenu: widget.onWayMenu,
                       ),
                     )
-                  : widget.detail
-                      ? KeyedSubtree(
-                          key: const ValueKey('detail'),
-                          child: _SchematicSurface(
-                            panel: panel,
-                            accent: colors.accent,
-                            onWayDoubleTap: widget.onWayDoubleTap,
-                            onWayMenu: widget.onWayMenu,
-                          ),
-                        )
-                      : Padding(
-                          key: const ValueKey('summary'),
-                          padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-                          child: _PanelSummaryBody(panel: panel),
-                        ),
+                  : Padding(
+                      key: const ValueKey('summary'),
+                      padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+                      child: _PanelSummaryBody(panel: panel),
+                    ),
             ),
           ),
         ],
@@ -1704,6 +1541,10 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
             ),
             const SizedBox(width: MechXSpacing.xs),
             ..._badges(context),
+            // Explicit expand affordance (I7) — frames this board's schedule
+            // (the LOD flip was previously an invisible zoom threshold).
+            const SizedBox(width: MechXSpacing.xxs),
+            _ExpandChevron(onTap: widget.onExpandSchedule),
           ],
         ),
       ),
@@ -1904,95 +1745,69 @@ class _Badge extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Load node (hangs below the panel).
+// Expand chevron — the summary card's explicit "open the board schedule"
+// affordance (I7), replacing the old invisible zoom threshold.
 // ════════════════════════════════════════════════════════════════════════════
 
-class _LoadNode extends StatefulWidget {
-  final ElectricalCircuitResult circuit;
-  const _LoadNode({required this.circuit});
-
-  @override
-  State<_LoadNode> createState() => _LoadNodeState();
-}
-
-class _LoadNodeState extends State<_LoadNode> {
-  bool _hover = false;
+class _ExpandChevron extends StatelessWidget {
+  final VoidCallback onTap;
+  const _ExpandChevron({required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final type = context.type;
-    final c = widget.circuit;
-    final rating = c.breaker.ratingA.amperes;
-    final util = rating > 0 ? (c.designCurrent.amperes / rating * 100) : null;
-    final utilColor = util == null
-        ? colors.textMuted
-        : util >= 100
-        ? colors.danger
-        : util >= 85
-        ? colors.warning
-        : colors.textMuted;
-
     return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      // Subtle hover lift + an accent ring preview.
-      child: AnimatedScale(
-        scale: _hover ? MechXMotion.hoverLift : 1.0,
-        duration: MechXMotion.hover,
-        curve: MechXMotion.standard,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          padding: const EdgeInsets.all(5),
-          decoration: BoxDecoration(
-            color: colors.surface,
-            borderRadius: MechXRadii.control,
-            border: Border.all(color: _hover ? colors.accent : colors.border),
-            boxShadow: _hover
-                ? MechXShadow.card
-                : const [
-                    BoxShadow(
-                      color: Color(0x22000000),
-                      blurRadius: 4,
-                      offset: Offset(0, 1),
-                    ),
-                  ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              LoadSymbol(
-                kind: c.loadKind,
-                color: colors.textSecondary,
-                size: 22,
-              ),
-              const SizedBox(height: 2),
-              Text(
-                c.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontFamily: 'Roboto',
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              Text(
-                util != null
-                    ? '${fmtAmp0(rating)}A · ${util.round()}%'
-                    : '${fmtAmp0(rating)}A',
-                textAlign: TextAlign.center,
-                style: type.caption.copyWith(fontSize: 9, color: utilColor),
-              ),
-            ],
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(2),
+          child: CustomPaint(
+            size: const Size(12, 12),
+            painter: _ExpandChevronGlyph(colors.textMuted),
           ),
         ),
       ),
     );
   }
+}
 
+/// Two chevrons pointing apart — a plain "expand / zoom in" glyph (ASCII-free,
+/// so no tofu risk).
+class _ExpandChevronGlyph extends CustomPainter {
+  final Color color;
+  const _ExpandChevronGlyph(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..strokeJoin = StrokeJoin.round
+      ..strokeCap = StrokeCap.round;
+    final w = size.width, h = size.height;
+    // Top chevron pointing up.
+    canvas.drawPath(
+      Path()
+        ..moveTo(w * 0.28, h * 0.42)
+        ..lineTo(w * 0.5, h * 0.2)
+        ..lineTo(w * 0.72, h * 0.42),
+      p,
+    );
+    // Bottom chevron pointing down.
+    canvas.drawPath(
+      Path()
+        ..moveTo(w * 0.28, h * 0.58)
+        ..lineTo(w * 0.5, h * 0.8)
+        ..lineTo(w * 0.72, h * 0.58),
+      p,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_ExpandChevronGlyph old) => old.color != color;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2292,7 +2107,12 @@ class _PanelDraggableState extends State<_PanelDraggable> {
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onPanStart: (_) => _dragWorld = widget.world,
+      onPanStart: (_) {
+        // One undo snapshot per drag — the live `setPanelPosition` updates
+        // don't record, so the whole move collapses into a single undo step.
+        widget.controller.pushUndoSnapshot();
+        _dragWorld = widget.world;
+      },
       onPanUpdate: (d) {
         final next = (_dragWorld ?? widget.world) + d.delta / widget.scale;
         _dragWorld = next;
@@ -2361,30 +2181,21 @@ class _ScaledChild extends StatelessWidget {
 class _ScaledTap extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onDoubleTap;
-  final ValueChanged<Offset>? onMenu;
   final Widget child;
 
   const _ScaledTap({
     this.onTap,
     this.onDoubleTap,
-    this.onMenu,
     required this.child,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Listener(
-      onPointerDown: (e) {
-        if (e.buttons == kSecondaryButton && onMenu != null) {
-          onMenu!(e.position);
-        }
-      },
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        onDoubleTap: onDoubleTap,
-        child: child,
-      ),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      onDoubleTap: onDoubleTap,
+      child: child,
     );
   }
 }

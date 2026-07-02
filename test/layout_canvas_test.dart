@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,8 +8,11 @@ import 'package:mechx/app.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/ui/canvas/canvas_grid.dart';
 import 'package:mechx/ui/canvas/network_layer.dart';
+import 'package:mechx/ui/canvas/viewport.dart';
 import 'package:mechx/ui/electrical/electrical_palette.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
 import 'package:mechx/ui/layout/layout_canvas.dart';
@@ -173,7 +177,7 @@ void main() {
     // Navigate away and back via the relabelled rail item.
     final c = _containerOf(tester);
     await tester.tap(find.descendant(
-        of: find.byType(NavRail), matching: find.text('Riser SLD')));
+        of: find.byType(NavRail), matching: find.text('Riser')));
     await tester.pump();
     expect(find.byType(LayoutCanvas), findsNothing);
 
@@ -182,5 +186,97 @@ void main() {
     await tester.pump();
     expect(c.read(workspaceViewProvider), WorkspaceView.plan);
     expect(find.byType(LayoutCanvas), findsOneWidget);
+  });
+
+  group('calibratedGridWorldStep (E8 — grid tied to round metres)', () {
+    test('snaps the minor step to the 1-2-5 metre ladder nearest the default '
+        'texture', () {
+      // 0.02 m/px → 50 px/m. Candidates: 0.5 m = 25 px (|ln 25/32| ≈ 0.247)
+      // beats 1 m = 50 px (|ln 50/32| ≈ 0.446) → 0.5 m minors.
+      expect(calibratedGridWorldStep(0.02), closeTo(25.0, 1e-9));
+      // 0.05 m/px → 20 px/m. 2 m = 40 px (≈0.223) beats 1 m = 20 px (≈0.470).
+      expect(calibratedGridWorldStep(0.05), closeTo(40.0, 1e-9));
+      // An exact 1 m = 32 px scale keeps the default spacing on the metre.
+      expect(calibratedGridWorldStep(1 / 32), closeTo(32.0, 1e-9));
+    });
+
+    test('invalid scales fall back to the uncalibrated default', () {
+      expect(calibratedGridWorldStep(0), 32.0);
+      expect(calibratedGridWorldStep(-1), 32.0);
+      expect(calibratedGridWorldStep(double.nan), 32.0);
+      expect(calibratedGridWorldStep(double.infinity), 32.0);
+    });
+  });
+
+  test('paintCanvasGrid draws major/minor hierarchy without hanging on panned '
+      '/ far-out transforms', () {
+    // A paint smoke over awkward transforms (negative pan, tiny scale where
+    // minors hide but majors survive, zero-ish step guard).
+    final rec = ui.PictureRecorder();
+    final canvas = ui.Canvas(rec);
+    const size = Size(800, 600);
+    paintCanvasGrid(
+        canvas,
+        size,
+        const ViewportTransform(offset: Offset(-1234.5, 987.0), scale: 1.0),
+        const Color(0xFF888888));
+    paintCanvasGrid(
+        canvas,
+        size,
+        const ViewportTransform(offset: Offset(50, -50), scale: 0.1),
+        const Color(0xFF888888),
+        worldStep: 40); // minors 4 px < 6 → majors only (16 px)
+    paintCanvasGrid(
+        canvas,
+        size,
+        const ViewportTransform(scale: 0.001),
+        const Color(0xFF888888)); // everything below threshold → no lines
+    rec.endRecording();
+  });
+
+  testWidgets('hold-Space engages pan pass-through and releases cleanly',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // Space down then up over the layout canvas must not throw and must leave
+    // the app interactive (the flag is internal; this is a lifecycle smoke).
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.space);
+    await tester.pump();
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.space);
+    await tester.pump();
+    expect(find.byType(LayoutCanvas), findsOneWidget);
+  });
+
+  testWidgets('Ctrl+A selects all on the floor scoped to the active layer',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final c = _containerOf(tester);
+    final ctrl = c.read(networkControllerProvider.notifier);
+    final sheet = c.read(sheetsControllerProvider).current!;
+    // A plumbing run + an HVAC duct on the same floor.
+    ctrl.addSegment(sheet.id, 0, const Offset(400, 400),
+        service: ServiceType.coldWater);
+    ctrl.addSegment(sheet.id, 0, const Offset(400, 600),
+        service: ServiceType.duct);
+    await tester.pump();
+
+    // Active layer defaults to Plumbing — Ctrl+A grabs only the plumbing run.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+
+    final sel = c.read(selectionProvider);
+    expect(sel.edgeIds.length, 1);
+    final net = c.read(networkControllerProvider).network;
+    expect(net.edgeById(sel.edgeIds.single)!.service, ServiceType.coldWater);
+    expect(sel.nodeIds.length, 2);
   });
 }

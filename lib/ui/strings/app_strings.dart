@@ -89,6 +89,13 @@ enum StringKey {
   electricalExportReportSub,
   electricalExportPowerOneLine,
   electricalExportPowerOneLineSub,
+  electricalExportSchedules,
+  electricalExportSchedulesPdf,
+
+  // Mechanical riser — Export menu (the B3 drawing set).
+  mechExportAllSystems,
+  mechExportAllSystemsPdf,
+  mechExportAllSystemsDxf,
 
   // Electrical — Service & Earthing (Fold-1 fields).
   electricalOriginFaultLevel,
@@ -131,9 +138,29 @@ enum StringKey {
   shellViewportHints,
 
   // App shell — banners.
-  shellRecoverPrompt,
+  shellRecoverPrompt, // {name} {when}
+  shellRecoverJustNow,
+  shellRecoverMinutesAgo, // {n}
+  shellRecoverHoursAgo, // {n}
+  shellRecoverAtTime, // {time}
+  shellRecoverEarlier,
   shellRestore,
   shellDismiss,
+  shellDiscardSnapshot,
+  shellDiscardConfirm,
+
+  // App shell — busy pill (slow foreground operations).
+  busyImportingPlan,
+  busyConvertingDwg,
+  busyOpeningProject,
+  busySaving,
+
+  // Unsaved-changes guard dialog (Open / Import / quit).
+  confirmDiscardTitle,
+  confirmDiscardBody,
+  confirmDiscardSave,
+  confirmDiscardDiscard,
+  confirmDiscardCancel,
 
   // App shell — Layout electrical inspector.
   shellElectricalLayer,
@@ -189,8 +216,11 @@ enum StringKey {
 
   // Inspector — Project section.
   inspectorExportCalcReportMd,
+  inspectorExportCalcReportPdfBtn,
   inspectorExportMepReportMd,
+  inspectorExportMepReportPdfBtn,
   inspectorExportEquipmentScheduleMd,
+  inspectorExportEquipmentSchedulePdfBtn,
   inspectorExportDrawingDxf,
   inspectorExportDrawingPdf,
   inspectorExportAnnotatedPlanPdf,
@@ -252,20 +282,133 @@ enum StringKey {
   inspectorRoleFixture,
   inspectorRoleSource,
 
+  // Inspector — Document control section (D3 issuable-sheet identity).
+  inspectorDocNumber,
+  inspectorRevisionTag,
+  inspectorClient,
+  inspectorPreparedBy,
+  inspectorCheckedBy,
+  inspectorApprovedBy,
+  inspectorRevisionHistory,
+  inspectorAddRevision,
+  inspectorRevisionDateHint,
+  inspectorRevisionDescHint,
+
   // Export — OS save-dialog titles.
   exportTitleCalcReport,
   exportTitleMepReport,
   exportTitleEquipmentSchedule,
+  exportTitleCalcReportPdf,
+  exportTitleMepReportPdf,
+  exportTitleEquipmentSchedulePdf,
   exportTitleDrawingDxf,
   exportTitleDrawingPdf,
   exportTitleAnnotatedPlanPdf,
   exportTitleBom,
   exportTitleSldDxf,
   exportTitleSldPdf,
+  exportTitleRiserSetPdf,
+  exportTitleRiserSetDxf,
+  exportTitlePanelSchedulesPdf,
   exportTitlePowerOneLineDxf,
   exportTitleElectricalReport,
   exportTitleElectricalBom,
   exportTitleElectricalProposal,
+
+  // Electrical workspace — toolbar tabs + buttons (I6).
+  electricalTabSingleLine,
+  electricalTabPowerOneLine,
+  electricalTabBuildingRiser,
+  electricalToolbarIssues,
+  electricalToolbarIssuesCount, // {n}
+  electricalServiceEarthing,
+  electricalAddPanel,
+  electricalExport,
+  electricalClose,
+
+  // Electrical workspace — context-menu rows.
+  electricalMenuEdit,
+  electricalMenuDuplicate,
+  electricalMenuDelete,
+  electricalPanelProperties,
+  electricalMenuOpenPanel,
+  electricalMenuMarkEssential,
+  electricalMenuUnmarkEssential,
+  electricalMenuMarkCritical,
+  electricalMenuUnmarkCritical,
+  electricalMenuAddSubmeter,
+  electricalMenuRemoveSubmeter,
+  electricalMenuDisconnectFeeder,
+  electricalMenuDeletePanel,
+  electricalMenuDuplicatePanel,
+
+  // Electrical workspace — circuit inspector.
+  electricalCircuitEditTitle,
+  electricalFieldName,
+  electricalFieldLoadKind,
+  electricalFieldMotorPower,
+  electricalFieldLoadW,
+  electricalFieldCosPhi,
+  electricalFieldDemandFactor,
+  electricalFieldRunLength,
+  electricalFieldSupplyPhase,
+  electricalPhaseAuto,
+  electricalPhase1,
+  electricalPhase3,
+  electricalFieldCableType,
+  electricalCablePanelDefault,
+  electricalToggleLighting,
+  electricalToggleLifeSafety,
+
+  // Electrical workspace — panel inspector.
+  electricalFieldTag,
+  electricalFieldDiversity,
+  electricalFieldHeadroomSpare,
+  electricalFieldSpareWays,
+  electricalToggleEssential,
+  electricalToggleCritical,
+  electricalToggleSubmeter,
+
+  // Electrical workspace — Service & Earthing field.
+  electricalFieldEarthingSystem,
+
+  // Electrical workspace — Loads palette group headers.
+  electricalPaletteLoads,
+  electricalPaletteMotorsPumps,
+  electricalPaletteDistribution,
+
+  // Electrical workspace — Loads palette card labels.
+  electricalLoadLighting,
+  electricalLoadSockets,
+  electricalLoadAircon1,
+  electricalLoadAircon3,
+  electricalLoadWaterHeater1,
+  electricalLoadWaterHeater3,
+  electricalLoadEv1,
+  electricalLoadEv3,
+  electricalLoadIndustrialSocket3,
+  electricalLoadUpsIt,
+  electricalLoadWelding3,
+  electricalLoadCustom1,
+  electricalLoadCustom3,
+  electricalLoadMotorDol,
+  electricalLoadMotorLarge,
+  electricalLoadPump1,
+  electricalLoadPump3,
+  electricalLoadFirePump,
+  electricalLoadSpareMcb,
+  electricalLoadSubPanel,
+
+  // Electrical workspace — empty state + gesture-guide items.
+  electricalEmptyTitle,
+  electricalEmptyBody,
+  electricalGuide1,
+  electricalGuide2,
+  electricalGuide3,
+  electricalGuide4,
+  electricalGuide5,
+  electricalGuide6,
+  electricalGuide7,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -273,7 +416,7 @@ enum StringKey {
 const Map<StringKey, String> _en = {
   StringKey.navGroupDesign: 'DESIGN',
   StringKey.navLayout: 'Layout',
-  StringKey.navSchematic: 'Riser SLD',
+  StringKey.navSchematic: 'Riser',
   StringKey.navElectrical: 'Electrical',
   StringKey.navBuilding: 'Building',
   StringKey.navReview: 'Review',
@@ -355,6 +498,13 @@ const Map<StringKey, String> _en = {
   StringKey.electricalExportReportSub: 'Markdown',
   StringKey.electricalExportPowerOneLine: 'Power one-line',
   StringKey.electricalExportPowerOneLineSub: 'DXF (needs energy sources)',
+  StringKey.electricalExportSchedules: 'Panel schedules',
+  StringKey.electricalExportSchedulesPdf: 'PDF (one panel per sheet)',
+
+  // Mechanical riser — Export menu (the B3 drawing set).
+  StringKey.mechExportAllSystems: 'All systems (drawing set)',
+  StringKey.mechExportAllSystemsPdf: 'PDF (multi-page)',
+  StringKey.mechExportAllSystemsDxf: 'DXF (one file per system)',
 
   // Electrical — Service & Earthing (Fold-1 fields).
   StringKey.electricalOriginFaultLevel: 'Origin fault level (kA)',
@@ -406,12 +556,35 @@ const Map<StringKey, String> _en = {
   StringKey.shellUncalibrated: 'Uncalibrated',
   StringKey.shellCalibrated: 'Calibrated',
   StringKey.shellStandardsProvenance: 'SNI 8153:2015 (draft)',
-  StringKey.shellViewportHints: 'scroll zoom · drag pan · F fit · Ctrl+0 100%',
+  StringKey.shellViewportHints:
+      'scroll zoom · Space/middle-drag pan · F fit · Ctrl+0 100%',
 
   // App shell — banners.
-  StringKey.shellRecoverPrompt: 'Recover unsaved work from your last session?',
+  StringKey.shellRecoverPrompt: 'Recover "{name}" — autosaved {when}?',
+  StringKey.shellRecoverJustNow: 'just now',
+  StringKey.shellRecoverMinutesAgo: '{n} min ago',
+  StringKey.shellRecoverHoursAgo: '{n} h ago',
+  StringKey.shellRecoverAtTime: 'at {time}',
+  StringKey.shellRecoverEarlier: 'earlier',
   StringKey.shellRestore: 'Restore',
   StringKey.shellDismiss: 'Dismiss',
+  StringKey.shellDiscardSnapshot: 'Discard snapshot',
+  StringKey.shellDiscardConfirm: 'Discard - sure?',
+
+  // App shell — busy pill.
+  StringKey.busyImportingPlan: 'Importing plan...',
+  StringKey.busyConvertingDwg: 'Converting DWG...',
+  StringKey.busyOpeningProject: 'Opening project...',
+  StringKey.busySaving: 'Saving...',
+
+  // Unsaved-changes guard dialog.
+  StringKey.confirmDiscardTitle: 'Unsaved changes',
+  StringKey.confirmDiscardBody:
+      'This project has changes that are not saved. Save them before '
+          'continuing?',
+  StringKey.confirmDiscardSave: 'Save',
+  StringKey.confirmDiscardDiscard: 'Discard',
+  StringKey.confirmDiscardCancel: 'Cancel',
 
   // App shell — Layout electrical inspector.
   StringKey.shellElectricalLayer: 'Electrical layer',
@@ -481,8 +654,11 @@ const Map<StringKey, String> _en = {
 
   // Inspector — Project section.
   StringKey.inspectorExportCalcReportMd: 'Export calc report (MD)',
+  StringKey.inspectorExportCalcReportPdfBtn: 'Export calc report (PDF)',
   StringKey.inspectorExportMepReportMd: 'Export unified MEP report (MD)',
+  StringKey.inspectorExportMepReportPdfBtn: 'Export unified MEP report (PDF)',
   StringKey.inspectorExportEquipmentScheduleMd: 'Export equipment schedule (MD)',
+  StringKey.inspectorExportEquipmentSchedulePdfBtn: 'Export equipment schedule (PDF)',
   StringKey.inspectorExportDrawingDxf: 'Export drawing (DXF)',
   StringKey.inspectorExportDrawingPdf: 'Export drawing (PDF)',
   StringKey.inspectorExportAnnotatedPlanPdf: 'Export annotated plan (PDF)',
@@ -549,20 +725,143 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorRoleFixture: 'Fixture',
   StringKey.inspectorRoleSource: 'Source / tank',
 
+  // Inspector — Document control section.
+  StringKey.inspectorDocNumber: 'Document no.',
+  StringKey.inspectorRevisionTag: 'Revision',
+  StringKey.inspectorClient: 'Client',
+  StringKey.inspectorPreparedBy: 'Prepared by',
+  StringKey.inspectorCheckedBy: 'Checked by',
+  StringKey.inspectorApprovedBy: 'Approved by',
+  StringKey.inspectorRevisionHistory: 'Revision history',
+  StringKey.inspectorAddRevision: 'Add revision',
+  StringKey.inspectorRevisionDateHint: 'YYYY-MM-DD',
+  StringKey.inspectorRevisionDescHint: 'Description',
+
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Export calculation report',
   StringKey.exportTitleMepReport: 'Export unified MEP report',
   StringKey.exportTitleEquipmentSchedule: 'Export equipment schedule',
+  StringKey.exportTitleCalcReportPdf: 'Export calculation report (PDF)',
+  StringKey.exportTitleMepReportPdf: 'Export unified MEP report (PDF)',
+  StringKey.exportTitleEquipmentSchedulePdf: 'Export equipment schedule (PDF)',
   StringKey.exportTitleDrawingDxf: 'Export drawing (DXF)',
   StringKey.exportTitleDrawingPdf: 'Export drawing (PDF)',
   StringKey.exportTitleAnnotatedPlanPdf: 'Export annotated plan (PDF)',
   StringKey.exportTitleBom: 'Export bill of materials',
   StringKey.exportTitleSldDxf: 'Export single-line (DXF)',
   StringKey.exportTitleSldPdf: 'Export single-line (PDF)',
+  StringKey.exportTitleRiserSetPdf: 'Export riser drawing set (PDF)',
+  StringKey.exportTitleRiserSetDxf: 'Export riser drawing set (DXF)',
+  StringKey.exportTitlePanelSchedulesPdf: 'Export panel schedules (PDF)',
   StringKey.exportTitlePowerOneLineDxf: 'Export power one-line (DXF)',
   StringKey.exportTitleElectricalReport: 'Export electrical report',
   StringKey.exportTitleElectricalBom: 'Export electrical BOM',
   StringKey.exportTitleElectricalProposal: 'Export electrical proposal',
+
+  // Electrical workspace — toolbar tabs + buttons.
+  StringKey.electricalTabSingleLine: 'Single-line',
+  StringKey.electricalTabPowerOneLine: 'Power one-line',
+  StringKey.electricalTabBuildingRiser: 'Building riser',
+  StringKey.electricalToolbarIssues: 'Issues',
+  StringKey.electricalToolbarIssuesCount: 'Issues ({n})',
+  StringKey.electricalServiceEarthing: 'Service & Earthing',
+  StringKey.electricalAddPanel: '+ Panel',
+  StringKey.electricalExport: 'Export',
+  StringKey.electricalClose: 'Close',
+
+  // Electrical workspace — context-menu rows.
+  StringKey.electricalMenuEdit: 'Edit',
+  StringKey.electricalMenuDuplicate: 'Duplicate',
+  StringKey.electricalMenuDelete: 'Delete',
+  StringKey.electricalPanelProperties: 'Panel properties',
+  StringKey.electricalMenuOpenPanel: 'Open panel',
+  StringKey.electricalMenuMarkEssential: 'Mark essential',
+  StringKey.electricalMenuUnmarkEssential: 'Unmark essential',
+  StringKey.electricalMenuMarkCritical: 'Mark critical (UPS)',
+  StringKey.electricalMenuUnmarkCritical: 'Unmark critical (UPS)',
+  StringKey.electricalMenuAddSubmeter: 'Add submeter',
+  StringKey.electricalMenuRemoveSubmeter: 'Remove submeter',
+  StringKey.electricalMenuDisconnectFeeder: 'Disconnect feeder',
+  StringKey.electricalMenuDeletePanel: 'Delete panel',
+  StringKey.electricalMenuDuplicatePanel: 'Duplicate panel',
+
+  // Electrical workspace — circuit inspector.
+  StringKey.electricalCircuitEditTitle: 'Edit circuit',
+  StringKey.electricalFieldName: 'Name',
+  StringKey.electricalFieldLoadKind: 'Load kind',
+  StringKey.electricalFieldMotorPower: 'Motor power (kW)',
+  StringKey.electricalFieldLoadW: 'Load (W)',
+  StringKey.electricalFieldCosPhi: 'cos phi',
+  StringKey.electricalFieldDemandFactor: 'Demand factor',
+  StringKey.electricalFieldRunLength: 'Run length (m)',
+  StringKey.electricalFieldSupplyPhase: 'Supply phase',
+  StringKey.electricalPhaseAuto: 'Auto',
+  StringKey.electricalPhase1: '1-phase',
+  StringKey.electricalPhase3: '3-phase',
+  StringKey.electricalFieldCableType: 'Cable type',
+  StringKey.electricalCablePanelDefault: 'Panel default',
+  StringKey.electricalToggleLighting: 'Lighting circuit (3% Vd limit)',
+  StringKey.electricalToggleLifeSafety: 'Life-safety (no RCD)',
+
+  // Electrical workspace — panel inspector.
+  StringKey.electricalFieldTag: 'Tag (e.g. LP-1)',
+  StringKey.electricalFieldDiversity: 'Diversity factor',
+  StringKey.electricalFieldHeadroomSpare: 'Headroom — spare demand (%)',
+  StringKey.electricalFieldSpareWays: 'Spare ways (CADANGAN)',
+  StringKey.electricalToggleEssential: 'Essential (genset-backed)',
+  StringKey.electricalToggleCritical: 'Critical (UPS-backed)',
+  StringKey.electricalToggleSubmeter: 'Tenant submeter',
+
+  // Electrical workspace — Service & Earthing field.
+  StringKey.electricalFieldEarthingSystem: 'Earthing system',
+
+  // Electrical workspace — Loads palette group headers.
+  StringKey.electricalPaletteLoads: 'Loads',
+  StringKey.electricalPaletteMotorsPumps: 'Motors & pumps',
+  StringKey.electricalPaletteDistribution: 'Distribution',
+
+  // Electrical workspace — Loads palette card labels.
+  StringKey.electricalLoadLighting: 'Lighting',
+  StringKey.electricalLoadSockets: 'Sockets',
+  StringKey.electricalLoadAircon1: 'Air-con (1φ)',
+  StringKey.electricalLoadAircon3: 'Air-con (3φ)',
+  StringKey.electricalLoadWaterHeater1: 'Water heater (1φ)',
+  StringKey.electricalLoadWaterHeater3: 'Water heater (3φ)',
+  StringKey.electricalLoadEv1: 'EV charger (1φ)',
+  StringKey.electricalLoadEv3: 'EV charger (3φ)',
+  StringKey.electricalLoadIndustrialSocket3: 'Industrial socket (3φ)',
+  StringKey.electricalLoadUpsIt: 'UPS / IT load',
+  StringKey.electricalLoadWelding3: 'Welding set (3φ)',
+  StringKey.electricalLoadCustom1: 'Custom load (1φ)',
+  StringKey.electricalLoadCustom3: 'Custom load (3φ)',
+  StringKey.electricalLoadMotorDol: 'Motor (DOL)',
+  StringKey.electricalLoadMotorLarge: 'Motor (large)',
+  StringKey.electricalLoadPump1: 'Pump (1φ)',
+  StringKey.electricalLoadPump3: 'Pump (3φ)',
+  StringKey.electricalLoadFirePump: 'Fire pump',
+  StringKey.electricalLoadSpareMcb: 'Spare MCB way',
+  StringKey.electricalLoadSubPanel: 'Sub-panel',
+
+  // Electrical workspace — empty state + gesture-guide items.
+  StringKey.electricalEmptyTitle: 'Set up your service',
+  StringKey.electricalEmptyBody:
+      'Add a distribution panel, then drag loads from the palette '
+          'onto it. Set the supply phase and earthing from Service & '
+          'Earthing.',
+  StringKey.electricalGuide1:
+      'Double-click a component to edit its size, type or label',
+  StringKey.electricalGuide2:
+      'Right-click a component for compatible replacement parts',
+  StringKey.electricalGuide3:
+      'Drag a card from the palette onto a panel to add a way',
+  StringKey.electricalGuide4:
+      "Drag a panel's round outlet onto another panel to feed it",
+  StringKey.electricalGuide5:
+      'Drag a load onto a panel to wire it (creates the MCB)',
+  StringKey.electricalGuide6:
+      'Select a panel or floating load and press Delete; right-click a way to delete it',
+  StringKey.electricalGuide7:
+      'Drag the empty canvas to pan; scroll to zoom; panels reveal their internals up close',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -570,7 +869,7 @@ const Map<StringKey, String> _en = {
 const Map<StringKey, String> _id = {
   StringKey.navGroupDesign: 'DESAIN',
   StringKey.navLayout: 'Tata Letak',
-  StringKey.navSchematic: 'Riser SLD',
+  StringKey.navSchematic: 'Riser',
   StringKey.navElectrical: 'Listrik',
   StringKey.navBuilding: 'Bangunan',
   StringKey.navReview: 'Tinjauan',
@@ -653,6 +952,13 @@ const Map<StringKey, String> _id = {
   StringKey.electricalExportReportSub: 'Markdown',
   StringKey.electricalExportPowerOneLine: 'Diagram daya satu-garis',
   StringKey.electricalExportPowerOneLineSub: 'DXF (perlu sumber energi)',
+  StringKey.electricalExportSchedules: 'Diagram panel',
+  StringKey.electricalExportSchedulesPdf: 'PDF (satu panel per lembar)',
+
+  // Mechanical riser — Export menu (the B3 drawing set).
+  StringKey.mechExportAllSystems: 'Semua sistem (set gambar)',
+  StringKey.mechExportAllSystemsPdf: 'PDF (multi-halaman)',
+  StringKey.mechExportAllSystemsDxf: 'DXF (satu berkas per sistem)',
 
   // Electrical — Service & Earthing (Fold-1 fields).
   StringKey.electricalOriginFaultLevel: 'Tingkat gangguan sumber (kA)',
@@ -705,13 +1011,35 @@ const Map<StringKey, String> _id = {
   StringKey.shellCalibrated: 'Terkalibrasi',
   StringKey.shellStandardsProvenance: 'SNI 8153:2015 (draf)',
   StringKey.shellViewportHints:
-      'gulir zoom · seret geser · F pas · Ctrl+0 100%',
+      'gulir zoom · Spasi/seret-tengah geser · F pas · Ctrl+0 100%',
 
   // App shell — banners.
   StringKey.shellRecoverPrompt:
-      'Pulihkan pekerjaan yang belum disimpan dari sesi terakhir Anda?',
+      'Pulihkan "{name}" — disimpan otomatis {when}?',
+  StringKey.shellRecoverJustNow: 'baru saja',
+  StringKey.shellRecoverMinutesAgo: '{n} menit lalu',
+  StringKey.shellRecoverHoursAgo: '{n} jam lalu',
+  StringKey.shellRecoverAtTime: 'pukul {time}',
+  StringKey.shellRecoverEarlier: 'sebelumnya',
   StringKey.shellRestore: 'Pulihkan',
   StringKey.shellDismiss: 'Tutup',
+  StringKey.shellDiscardSnapshot: 'Buang cadangan',
+  StringKey.shellDiscardConfirm: 'Buang - yakin?',
+
+  // App shell — busy pill.
+  StringKey.busyImportingPlan: 'Mengimpor denah...',
+  StringKey.busyConvertingDwg: 'Mengonversi DWG...',
+  StringKey.busyOpeningProject: 'Membuka proyek...',
+  StringKey.busySaving: 'Menyimpan...',
+
+  // Unsaved-changes guard dialog.
+  StringKey.confirmDiscardTitle: 'Perubahan belum disimpan',
+  StringKey.confirmDiscardBody:
+      'Proyek ini memiliki perubahan yang belum disimpan. Simpan sebelum '
+          'melanjutkan?',
+  StringKey.confirmDiscardSave: 'Simpan',
+  StringKey.confirmDiscardDiscard: 'Buang',
+  StringKey.confirmDiscardCancel: 'Batal',
 
   // App shell — Layout electrical inspector.
   StringKey.shellElectricalLayer: 'Lapisan listrik',
@@ -782,8 +1110,11 @@ const Map<StringKey, String> _id = {
 
   // Inspector — Project section.
   StringKey.inspectorExportCalcReportMd: 'Ekspor laporan hitung (MD)',
+  StringKey.inspectorExportCalcReportPdfBtn: 'Ekspor laporan hitung (PDF)',
   StringKey.inspectorExportMepReportMd: 'Ekspor laporan MEP terpadu (MD)',
+  StringKey.inspectorExportMepReportPdfBtn: 'Ekspor laporan MEP terpadu (PDF)',
   StringKey.inspectorExportEquipmentScheduleMd: 'Ekspor jadwal peralatan (MD)',
+  StringKey.inspectorExportEquipmentSchedulePdfBtn: 'Ekspor jadwal peralatan (PDF)',
   StringKey.inspectorExportDrawingDxf: 'Ekspor gambar (DXF)',
   StringKey.inspectorExportDrawingPdf: 'Ekspor gambar (PDF)',
   StringKey.inspectorExportAnnotatedPlanPdf: 'Ekspor denah beranotasi (PDF)',
@@ -851,20 +1182,143 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorRoleFixture: 'Fikstur',
   StringKey.inspectorRoleSource: 'Sumber / tangki',
 
+  // Inspector — Document control section.
+  StringKey.inspectorDocNumber: 'No. dokumen',
+  StringKey.inspectorRevisionTag: 'Revisi',
+  StringKey.inspectorClient: 'Klien',
+  StringKey.inspectorPreparedBy: 'Disiapkan oleh',
+  StringKey.inspectorCheckedBy: 'Diperiksa oleh',
+  StringKey.inspectorApprovedBy: 'Disetujui oleh',
+  StringKey.inspectorRevisionHistory: 'Riwayat revisi',
+  StringKey.inspectorAddRevision: 'Tambah revisi',
+  StringKey.inspectorRevisionDateHint: 'YYYY-MM-DD',
+  StringKey.inspectorRevisionDescHint: 'Uraian',
+
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Ekspor laporan perhitungan',
   StringKey.exportTitleMepReport: 'Ekspor laporan MEP terpadu',
   StringKey.exportTitleEquipmentSchedule: 'Ekspor jadwal peralatan',
+  StringKey.exportTitleCalcReportPdf: 'Ekspor laporan perhitungan (PDF)',
+  StringKey.exportTitleMepReportPdf: 'Ekspor laporan MEP terpadu (PDF)',
+  StringKey.exportTitleEquipmentSchedulePdf: 'Ekspor jadwal peralatan (PDF)',
   StringKey.exportTitleDrawingDxf: 'Ekspor gambar (DXF)',
   StringKey.exportTitleDrawingPdf: 'Ekspor gambar (PDF)',
   StringKey.exportTitleAnnotatedPlanPdf: 'Ekspor denah beranotasi (PDF)',
   StringKey.exportTitleBom: 'Ekspor daftar material',
   StringKey.exportTitleSldDxf: 'Ekspor satu-garis (DXF)',
   StringKey.exportTitleSldPdf: 'Ekspor satu-garis (PDF)',
+  StringKey.exportTitleRiserSetPdf: 'Ekspor set gambar riser (PDF)',
+  StringKey.exportTitleRiserSetDxf: 'Ekspor set gambar riser (DXF)',
+  StringKey.exportTitlePanelSchedulesPdf: 'Ekspor diagram panel (PDF)',
   StringKey.exportTitlePowerOneLineDxf: 'Ekspor daya satu-garis (DXF)',
   StringKey.exportTitleElectricalReport: 'Ekspor laporan kelistrikan',
   StringKey.exportTitleElectricalBom: 'Ekspor BOM kelistrikan',
   StringKey.exportTitleElectricalProposal: 'Ekspor proposal kelistrikan',
+
+  // Electrical workspace — toolbar tabs + buttons.
+  StringKey.electricalTabSingleLine: 'Satu-garis',
+  StringKey.electricalTabPowerOneLine: 'Daya satu-garis',
+  StringKey.electricalTabBuildingRiser: 'Riser bangunan',
+  StringKey.electricalToolbarIssues: 'Masalah',
+  StringKey.electricalToolbarIssuesCount: 'Masalah ({n})',
+  StringKey.electricalServiceEarthing: 'Sambungan & Pembumian',
+  StringKey.electricalAddPanel: '+ Panel',
+  StringKey.electricalExport: 'Ekspor',
+  StringKey.electricalClose: 'Tutup',
+
+  // Electrical workspace — context-menu rows.
+  StringKey.electricalMenuEdit: 'Ubah',
+  StringKey.electricalMenuDuplicate: 'Duplikat',
+  StringKey.electricalMenuDelete: 'Hapus',
+  StringKey.electricalPanelProperties: 'Properti panel',
+  StringKey.electricalMenuOpenPanel: 'Buka panel',
+  StringKey.electricalMenuMarkEssential: 'Tandai esensial',
+  StringKey.electricalMenuUnmarkEssential: 'Hapus tanda esensial',
+  StringKey.electricalMenuMarkCritical: 'Tandai kritis (UPS)',
+  StringKey.electricalMenuUnmarkCritical: 'Hapus tanda kritis (UPS)',
+  StringKey.electricalMenuAddSubmeter: 'Tambah submeter',
+  StringKey.electricalMenuRemoveSubmeter: 'Hapus submeter',
+  StringKey.electricalMenuDisconnectFeeder: 'Putuskan feeder',
+  StringKey.electricalMenuDeletePanel: 'Hapus panel',
+  StringKey.electricalMenuDuplicatePanel: 'Duplikat panel',
+
+  // Electrical workspace — circuit inspector.
+  StringKey.electricalCircuitEditTitle: 'Ubah sirkuit',
+  StringKey.electricalFieldName: 'Nama',
+  StringKey.electricalFieldLoadKind: 'Jenis beban',
+  StringKey.electricalFieldMotorPower: 'Daya motor (kW)',
+  StringKey.electricalFieldLoadW: 'Beban (W)',
+  StringKey.electricalFieldCosPhi: 'cos phi',
+  StringKey.electricalFieldDemandFactor: 'Faktor permintaan',
+  StringKey.electricalFieldRunLength: 'Panjang tarikan (m)',
+  StringKey.electricalFieldSupplyPhase: 'Fasa suplai',
+  StringKey.electricalPhaseAuto: 'Otomatis',
+  StringKey.electricalPhase1: '1-fasa',
+  StringKey.electricalPhase3: '3-fasa',
+  StringKey.electricalFieldCableType: 'Jenis kabel',
+  StringKey.electricalCablePanelDefault: 'Default panel',
+  StringKey.electricalToggleLighting: 'Sirkuit pencahayaan (batas Vd 3%)',
+  StringKey.electricalToggleLifeSafety: 'Keselamatan jiwa (tanpa RCD)',
+
+  // Electrical workspace — panel inspector.
+  StringKey.electricalFieldTag: 'Tag (mis. LP-1)',
+  StringKey.electricalFieldDiversity: 'Faktor diversitas',
+  StringKey.electricalFieldHeadroomSpare: 'Cadangan — permintaan luang (%)',
+  StringKey.electricalFieldSpareWays: 'Jalur cadangan (CADANGAN)',
+  StringKey.electricalToggleEssential: 'Esensial (didukung genset)',
+  StringKey.electricalToggleCritical: 'Kritis (didukung UPS)',
+  StringKey.electricalToggleSubmeter: 'Submeter penyewa',
+
+  // Electrical workspace — Service & Earthing field.
+  StringKey.electricalFieldEarthingSystem: 'Sistem pembumian',
+
+  // Electrical workspace — Loads palette group headers.
+  StringKey.electricalPaletteLoads: 'Beban',
+  StringKey.electricalPaletteMotorsPumps: 'Motor & pompa',
+  StringKey.electricalPaletteDistribution: 'Distribusi',
+
+  // Electrical workspace — Loads palette card labels.
+  StringKey.electricalLoadLighting: 'Pencahayaan',
+  StringKey.electricalLoadSockets: 'Stopkontak',
+  StringKey.electricalLoadAircon1: 'AC (1φ)',
+  StringKey.electricalLoadAircon3: 'AC (3φ)',
+  StringKey.electricalLoadWaterHeater1: 'Pemanas air (1φ)',
+  StringKey.electricalLoadWaterHeater3: 'Pemanas air (3φ)',
+  StringKey.electricalLoadEv1: 'Pengisi EV (1φ)',
+  StringKey.electricalLoadEv3: 'Pengisi EV (3φ)',
+  StringKey.electricalLoadIndustrialSocket3: 'Stopkontak industri (3φ)',
+  StringKey.electricalLoadUpsIt: 'Beban UPS / IT',
+  StringKey.electricalLoadWelding3: 'Mesin las (3φ)',
+  StringKey.electricalLoadCustom1: 'Beban khusus (1φ)',
+  StringKey.electricalLoadCustom3: 'Beban khusus (3φ)',
+  StringKey.electricalLoadMotorDol: 'Motor (DOL)',
+  StringKey.electricalLoadMotorLarge: 'Motor (besar)',
+  StringKey.electricalLoadPump1: 'Pompa (1φ)',
+  StringKey.electricalLoadPump3: 'Pompa (3φ)',
+  StringKey.electricalLoadFirePump: 'Pompa kebakaran',
+  StringKey.electricalLoadSpareMcb: 'Jalur MCB cadangan',
+  StringKey.electricalLoadSubPanel: 'Sub-panel',
+
+  // Electrical workspace — empty state + gesture-guide items.
+  StringKey.electricalEmptyTitle: 'Siapkan sambungan Anda',
+  StringKey.electricalEmptyBody:
+      'Tambahkan panel distribusi, lalu seret beban dari palet ke '
+          'atasnya. Atur fasa suplai dan pembumian dari Sambungan & '
+          'Pembumian.',
+  StringKey.electricalGuide1:
+      'Klik ganda komponen untuk mengubah ukuran, jenis, atau labelnya',
+  StringKey.electricalGuide2:
+      'Klik-kanan komponen untuk suku cadang pengganti yang cocok',
+  StringKey.electricalGuide3:
+      'Seret kartu dari palet ke panel untuk menambah jalur',
+  StringKey.electricalGuide4:
+      'Seret keluaran bundar sebuah panel ke panel lain untuk memberinya suplai',
+  StringKey.electricalGuide5:
+      'Seret beban ke panel untuk mengkabelkannya (membuat MCB)',
+  StringKey.electricalGuide6:
+      'Pilih panel atau beban mengambang lalu tekan Delete; klik-kanan jalur untuk menghapusnya',
+  StringKey.electricalGuide7:
+      'Seret kanvas kosong untuk menggeser; gulir untuk zoom; panel menampilkan isinya saat didekatkan',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

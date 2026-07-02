@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/riser_tags.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
@@ -68,6 +69,9 @@ class NetworkLayer extends ConsumerWidget {
     final sizing = ref.watch(sizingProvider);
     final showLabels = ref.watch(showSizingProvider);
     final selection = ref.watch(selectionProvider);
+    // Hover pre-highlight (E7): the single node/edge under the Select cursor,
+    // published by the gesture layer. Null at idle ⇒ no halo (byte-identical).
+    final hover = ref.watch(hoverTargetProvider);
     // Ids of air elements whose velocity is out of band — get an on-plan badge.
     final checks = ref.watch(airVelocityChecksProvider);
     final warningIds = <String>{
@@ -119,6 +123,8 @@ class NetworkLayer extends ConsumerWidget {
           selectedEdgeId: selection.edgeId,
           selectedNodeIds: selection.nodeIds,
           selectedEdgeIds: selection.edgeIds,
+          hoveredNodeId: hover?.nodeId,
+          hoveredEdgeId: hover?.edgeId,
           layerFiltered: layerFiltered,
           visibleDisciplines: visible,
           activeDiscipline: active,
@@ -162,6 +168,13 @@ class _NetworkPainter extends CustomPainter {
   final Set<String> selectedNodeIds;
   final Set<String> selectedEdgeIds;
 
+  /// The single node/edge under the Select cursor (E7 hover pre-highlight), or
+  /// null when nothing is hovered. Gets a subtler, slightly-wider halo painted
+  /// UNDER the selection halo. A stale id (a just-deleted element) simply never
+  /// matches a drawn element, so the painter tolerates it with no extra guard.
+  final String? hoveredNodeId;
+  final String? hoveredEdgeId;
+
   /// Discipline-layer filtering (unified canvas). When [layerFiltered] is false
   /// the other two fields are ignored and every service draws full-opacity.
   final bool layerFiltered;
@@ -190,6 +203,8 @@ class _NetworkPainter extends CustomPainter {
     required this.selectedEdgeId,
     this.selectedNodeIds = const {},
     this.selectedEdgeIds = const {},
+    this.hoveredNodeId,
+    this.hoveredEdgeId,
     this.layerFiltered = false,
     this.visibleDisciplines = const {},
     this.activeDiscipline,
@@ -207,6 +222,10 @@ class _NetworkPainter extends CustomPainter {
   /// A node is highlighted when it's the primary OR in the multi-selection set.
   bool _nodeSelected(String id) =>
       id == selectedNodeId || selectedNodeIds.contains(id);
+
+  /// The subtler hover pre-highlight, drawn under the selection halo.
+  bool _edgeHovered(String id) => id == hoveredEdgeId;
+  bool _nodeHovered(String id) => id == hoveredNodeId;
 
   /// Whether a service's discipline should be drawn at all (visibility).
   bool _serviceVisible(ServiceType s) =>
@@ -251,6 +270,32 @@ class _NetworkPainter extends CustomPainter {
     // pipes meet.
     final joints = <String, _Joint>{};
 
+    // Screen-space bounds of every run label already placed this frame, so a
+    // later label that would collide can dodge to the other side / quarter-point
+    // or be dropped. Deterministic (edge-list order).
+    final placedLabels = <Rect>[];
+
+    // E6 — one label convention across plan and riser. Compute the deterministic
+    // per-riser tags (CW-R1 …) ONCE per paint (shared with the schematic view's
+    // engine helper), and whether MULTIPLE distinct services are visible on this
+    // floor: on a multi-service layer a run label carries its service code
+    // (DN15-CW); on a single-service view it stays bare (DN15).
+    final riserTagById = riserTags(net, null);
+    final visibleServices = <ServiceType>{};
+    for (final e in net.edges) {
+      if (!_serviceVisible(e.service)) continue;
+      final a = net.nodeById(e.fromId);
+      final b = net.nodeById(e.toId);
+      if (a == null || b == null) continue;
+      if (e.kind == EdgeKind.run) {
+        if (!_onThisFloor(a) || !_onThisFloor(b)) continue;
+      } else if (!_onThisFloor(a) && !_onThisFloor(b)) {
+        continue;
+      }
+      visibleServices.add(e.service);
+    }
+    final multiService = visibleServices.length > 1;
+
     for (final e in net.edges) {
       final a = net.nodeById(e.fromId);
       final b = net.nodeById(e.toId);
@@ -266,6 +311,20 @@ class _NetworkPainter extends CustomPainter {
         final s = sizing[e.id];
         final outer = _pipeOuterPx(s, e.service);
 
+        // Hover pre-highlight (E7) — a wider, fainter version of the selection
+        // halo, drawn UNDER it so a hovered-and-selected edge still reads as
+        // selected. Null hover ⇒ never drawn (idle byte-identical).
+        if (_edgeHovered(e.id)) {
+          canvas.drawLine(
+            pa,
+            pb,
+            Paint()
+              ..color = _kSelection.withAlpha(45)
+              ..strokeWidth = outer + 8
+              ..strokeCap = StrokeCap.round
+              ..style = PaintingStyle.stroke,
+          );
+        }
         if (_edgeSelected(e.id)) {
           canvas.drawLine(
             pa,
@@ -279,7 +338,11 @@ class _NetworkPainter extends CustomPainter {
         }
         // The pipe as a walled body: a darker casing stroke with the service-
         // colour bore inside it — two parallel wall lines, not a single line.
-        _paintPipe(canvas, pa, pb, color, outer);
+        // A dash-patterned service (vent/return air dashed, fire dash-dot) walks
+        // its bore as dash segments over a thinner casing; solid services are
+        // byte-identical to before.
+        _paintPipe(canvas, pa, pb, color, outer,
+            dash: serviceDashPattern(e.service));
 
         // Record incidence at both ends (direction points AWAY from the node).
         final len = (pb - pa).distance;
@@ -312,6 +375,18 @@ class _NetworkPainter extends CustomPainter {
           }
         }
 
+        // Flow-direction chevron: one small open chevron at the 2/3 point of a
+        // long-enough run whose sizing knows its orientation (EdgeSizing.
+        // flowFromId). Above the pipe body, beneath the labels; faded on a
+        // coordination layer with everything else.
+        if (s?.flowFromId != null && len > 48) {
+          final upstream = s!.flowFromId == a.id ? pa : pb;
+          final downstream = upstream == pa ? pb : pa;
+          final fdir = (downstream - upstream) / len;
+          final at = upstream + fdir * (len * 2 / 3);
+          _flowChevron(canvas, at, fdir, serviceColor(e.service), opacity);
+        }
+
         // Size labels are drawn only when the toggle is on, and never on a faded
         // (coordination) layer — to keep the active layer's annotation readable.
         if (s != null && showLabels && opacity >= 1.0) {
@@ -323,9 +398,12 @@ class _NetworkPainter extends CustomPainter {
             final mm = s.diameter.inMillimeters.round();
             label = e.service.regime == FlowRegime.air ? 'Ø$mm' : 'DN$mm';
           }
+          // On a multi-service layer append the service code (DN15-CW) so the
+          // run is cross-referenced like the riser tags; bare on a single view.
+          if (multiService) label = '$label-${riserServiceCode(e.service)}';
           final tag = _productTag(e, s);
           if (tag != null) label = '$label  $tag';
-          _label(canvas, (pa + pb) / 2, label);
+          _label(canvas, pa, pb, outer, label, placedLabels);
         }
         // Air status badge (independent of the size-label toggle), active layer
         // only. Precedence: over-capacity (hard size limit) → out-of-band
@@ -342,14 +420,26 @@ class _NetworkPainter extends CustomPainter {
         }
       } else {
         final lowFloor = math.min(a.floorIndex, b.floorIndex);
+        final tag = riserTagById[e.id];
         for (final n in [a, b]) {
           if (_onThisFloor(n)) {
             final mp = transform.worldToScreen(Offset(n.x, n.y));
+            if (_edgeHovered(e.id)) {
+              canvas.drawCircle(mp, 13,
+                  Paint()..color = _kSelection.withAlpha(45));
+            }
             if (_edgeSelected(e.id)) {
               canvas.drawCircle(mp, 11,
                   Paint()..color = _kSelection.withAlpha(90));
             }
             _riserMarker(canvas, mp, color, up: n.floorIndex == lowFloor);
+            // E6 — the engine's per-service riser id (CW-R1) beside the marker,
+            // in the service colour, closing the plan↔riser cross-reference.
+            // Gated to the active layer (like the size labels) so a ghosted
+            // coordination layer stays uncluttered.
+            if (tag != null && opacity >= 1.0) {
+              _riserTagLabel(canvas, mp, tag, color);
+            }
           }
         }
       }
@@ -375,6 +465,10 @@ class _NetworkPainter extends CustomPainter {
       final layer = _nodeLayer(n);
       if (!layer.visible) continue;
       final p = transform.worldToScreen(Offset(n.x, n.y));
+      // Hover pre-highlight (E7) — a wider, fainter ring under the selection ring.
+      if (_nodeHovered(n.id)) {
+        canvas.drawCircle(p, 11, Paint()..color = _kSelection.withAlpha(45));
+      }
       final selected = _nodeSelected(n.id);
       if (selected) {
         canvas.drawCircle(p, 9, Paint()..color = _kSelection.withAlpha(70));
@@ -438,16 +532,31 @@ class _NetworkPainter extends CustomPainter {
   /// grows with its DN. Kept in screen px (constant at any zoom) and clamped to
   /// a sane band so the thinnest still reads as a pipe and the fattest doesn't
   /// dominate. Ducts use a gentler slope (their mm are far larger).
+  ///
+  /// E4 — TRUE-WIDTH when calibrated: once the sheet has a real scale
+  /// ([metersPerPixel]) the painter also knows the element's PHYSICAL footprint
+  /// in screen px (`mm/1000 / metresPerPixel × transform.scale`). The final
+  /// width is `max(clampedPx, min(truePx, cap))`: at a zoomed-OUT view the
+  /// physical footprint is tiny so the clamp floor wins (byte-identical to
+  /// before — a 600×400 duct no longer paints ~13 px at every zoom), and as the
+  /// engineer zooms IN the duct/large-pipe grows to its real footprint (capped
+  /// so a trunk can't swamp the sheet). Uncalibrated sheets keep the pure
+  /// screen-px band.
   double _pipeOuterPx(EdgeSizing? s, ServiceType svc) {
     final double mm = s == null
         ? 20
         : (s.isRectangular
             ? math.max(s.width!.inMillimeters, s.height!.inMillimeters)
             : s.diameter.inMillimeters);
-    if (svc.regime == FlowRegime.air) {
-      return (6.0 + mm * 0.012).clamp(8.0, 20.0);
-    }
-    return (3.6 + mm * 0.06).clamp(4.0, 16.0);
+    final double clamped = svc.regime == FlowRegime.air
+        ? (6.0 + mm * 0.012).clamp(8.0, 20.0)
+        : (3.6 + mm * 0.06).clamp(4.0, 16.0);
+    final mpp = metersPerPixel;
+    if (mpp == null || mpp <= 0) return clamped;
+    // Physical footprint of the element in screen pixels at the current zoom.
+    final truePx = (mm / 1000.0) / mpp * transform.scale;
+    // 120 px cap so a large trunk grows realistically without dominating.
+    return math.max(clamped, math.min(truePx, 120.0));
   }
 
   /// A coupling joint mark across a pipe — a short perpendicular steel collar at
@@ -516,28 +625,104 @@ class _NetworkPainter extends CustomPainter {
   }
 
   /// Draws a run as a walled pipe: a darker casing stroke (the two visible wall
-  /// lines) with the service-colour bore inside it.
-  void _paintPipe(Canvas canvas, Offset pa, Offset pb, Color color, double outer) {
+  /// lines) with the service-colour bore inside it. When [dash] is null (solid
+  /// services) this is byte-identical to before. When [dash] is a stroke recipe
+  /// ([serviceDashPattern] — dashed vent/return air, dash-dot fire) the bore is
+  /// walked as dash segments over a THINNER solid casing so the line reads as its
+  /// drafting linetype while still showing pipe width.
+  void _paintPipe(Canvas canvas, Offset pa, Offset pb, Color color, double outer,
+      {List<double>? dash}) {
     final wall = Color.lerp(color, const Color(0xFF000000), 0.45)!;
+    if (dash == null) {
+      canvas.drawLine(
+        pa,
+        pb,
+        Paint()
+          ..color = wall
+          ..strokeWidth = outer
+          ..strokeCap = StrokeCap.round
+          ..style = PaintingStyle.stroke,
+      );
+      final bore = (outer - 2.6).clamp(1.2, outer);
+      canvas.drawLine(
+        pa,
+        pb,
+        Paint()
+          ..color = color
+          ..strokeWidth = bore
+          ..strokeCap = StrokeCap.round
+          ..style = PaintingStyle.stroke,
+      );
+      return;
+    }
+    // Dashed linetype: a thinner solid casing, then the coloured bore walked as
+    // dash segments over it.
+    final casingW = math.max(2.4, outer - 2.0);
     canvas.drawLine(
       pa,
       pb,
       Paint()
         ..color = wall
-        ..strokeWidth = outer
+        ..strokeWidth = casingW
         ..strokeCap = StrokeCap.round
         ..style = PaintingStyle.stroke,
     );
-    final bore = (outer - 2.6).clamp(1.2, outer);
-    canvas.drawLine(
+    final boreW = math.max(1.2, casingW - 2.0);
+    _walkDash(
+      canvas,
       pa,
       pb,
+      dash,
       Paint()
         ..color = color
-        ..strokeWidth = bore
-        ..strokeCap = StrokeCap.round
+        ..strokeWidth = boreW
+        ..strokeCap = StrokeCap.butt
         ..style = PaintingStyle.stroke,
     );
+  }
+
+  /// Walks a `[on, off, on, off, …]` dash [pattern] from [a] to [b], drawing the
+  /// "on" segments with [paint] (crib of the inferred-riser dash loop, generalised
+  /// to an alternating multi-element pattern so a dash-dot recipe works too).
+  void _walkDash(
+      Canvas canvas, Offset a, Offset b, List<double> pattern, Paint paint) {
+    final total = (b - a).distance;
+    if (total <= 0 || pattern.isEmpty) return;
+    final dir = (b - a) / total;
+    var dist = 0.0;
+    var idx = 0;
+    var on = true; // pattern[0] is a drawn dash
+    while (dist < total) {
+      final seg = pattern[idx % pattern.length];
+      final end = math.min(dist + seg, total);
+      if (on && end > dist) {
+        canvas.drawLine(a + dir * dist, a + dir * end, paint);
+      }
+      dist = end;
+      idx++;
+      on = !on;
+    }
+  }
+
+  /// A small open flow-direction chevron (two short strokes, an arrow-head with
+  /// no base) at [p] pointing along the unit flow direction [dir], in the service
+  /// [base] colour at reduced alpha (scaled by the layer [opacity] so it fades
+  /// with a coordination layer).
+  void _flowChevron(
+      Canvas canvas, Offset p, Offset dir, Color base, double opacity) {
+    const arm = 5.0;
+    final perp = Offset(-dir.dy, dir.dx);
+    final tip = p + dir * (arm * 0.5);
+    final back = tip - dir * arm;
+    final wing1 = back + perp * (arm * 0.75);
+    final wing2 = back - perp * (arm * 0.75);
+    final paint = Paint()
+      ..color = base.withAlpha((150 * opacity).round().clamp(0, 255))
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(wing1, tip, paint);
+    canvas.drawLine(wing2, tip, paint);
   }
 
   /// Draws the fitting at a junction. The body is built from short, fat metal
@@ -768,6 +953,32 @@ class _NetworkPainter extends CustomPainter {
     canvas.drawPath(path, Paint()..color = color);
   }
 
+  /// The per-service riser id (e.g. `CW-R1`) drawn just to the right of a riser
+  /// marker in the service [color], on a translucent chip for legibility — the
+  /// plan↔riser cross-reference tag (E6). ASCII-only (Roboto-safe).
+  void _riserTagLabel(Canvas canvas, Offset marker, String tag, Color color) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: tag,
+        style: TextStyle(
+          fontFamily: 'Roboto',
+          fontSize: 9.5,
+          color: color,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final left = marker.dx + 9;
+    final top = marker.dy - tp.height / 2;
+    final rect = Rect.fromLTWH(left - 2, top - 1, tp.width + 4, tp.height + 2);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(2.5)),
+      Paint()..color = const Color(0xCCFFFFFF),
+    );
+    tp.paint(canvas, Offset(left, top));
+  }
+
   /// Compact ASCII-safe material tag for an edge ("PPR16", "PVC-AW", "BJLS 0.6",
   /// "PU"), or null when no material is set. BJLS shows its auto sheet thickness
   /// derived from the sized largest side. No symbol glyphs (Roboto-safe).
@@ -799,7 +1010,13 @@ class _NetworkPainter extends CustomPainter {
     return null;
   }
 
-  void _label(Canvas canvas, Offset center, String text) {
+  /// Draws a run's size label ALONG the run: rotated to the edge bearing (flipped
+  /// 180° when it would read upside-down), offset perpendicular clear of the pipe
+  /// body on the "upper" side, with LOD (skipped when the run is shorter than the
+  /// text) and a per-frame collision dodge (opposite side → quarter-point → drop).
+  /// [placedLabels] carries the screen-space bounds already placed this frame.
+  void _label(Canvas canvas, Offset pa, Offset pb, double outer, String text,
+      List<Rect> placedLabels) {
     final tp = TextPainter(
       text: TextSpan(
         text: text,
@@ -812,16 +1029,56 @@ class _NetworkPainter extends CustomPainter {
       ),
       textDirection: TextDirection.ltr,
     )..layout();
-    final rect = Rect.fromCenter(
-      center: center,
-      width: tp.width + 8,
-      height: tp.height + 4,
-    );
+
+    final runLen = (pb - pa).distance;
+    final boxW = tp.width + 8;
+    final boxH = tp.height + 4;
+    // LOD: don't crowd a short run with a label longer than it (plus a margin).
+    if (runLen < tp.width + 12) return;
+
+    final u = (pb - pa) / runLen;
+    // Perpendicular pointing "up" (toward smaller screen y) for a consistent side.
+    var perp = Offset(-u.dy, u.dx);
+    if (perp.dy > 0) perp = -perp;
+    final mid = (pa + pb) / 2;
+    // Offset the chip centre clear of the pipe: half its width + 5 + half the
+    // label height so the chip edge clears the wall.
+    final off = outer / 2 + 5 + boxH / 2;
+
+    // Candidate centres in order: upper side, opposite side, quarter-point upper.
+    final quarter = pa + u * (runLen * 0.25);
+    final candidates = <Offset>[
+      mid + perp * off,
+      mid - perp * off,
+      quarter + perp * off,
+    ];
+    Offset? center;
+    for (final c in candidates) {
+      // Collision test uses the axis-aligned chip box (a good-enough proxy for
+      // the rotated label); deterministic in edge-list order.
+      final r = Rect.fromCenter(center: c, width: boxW, height: boxH);
+      if (!placedLabels.any(r.overlaps)) {
+        center = c;
+        placedLabels.add(r);
+        break;
+      }
+    }
+    if (center == null) return; // still colliding → drop (size is one click away)
+
+    // Rotate to the bearing; flip 180° when it would read upside-down.
+    var angle = math.atan2(u.dy, u.dx);
+    if (angle > math.pi / 2 || angle < -math.pi / 2) angle += math.pi;
+
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(angle);
+    final rect = Rect.fromCenter(center: Offset.zero, width: boxW, height: boxH);
     canvas.drawRRect(
       RRect.fromRectAndRadius(rect, const Radius.circular(3)),
       Paint()..color = const Color(0xD915171B),
     );
-    tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
+    tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+    canvas.restore();
   }
 
   @override
@@ -836,6 +1093,8 @@ class _NetworkPainter extends CustomPainter {
       !identical(old.edgeCuts, edgeCuts) ||
       old.selectedNodeId != selectedNodeId ||
       old.selectedEdgeId != selectedEdgeId ||
+      old.hoveredNodeId != hoveredNodeId ||
+      old.hoveredEdgeId != hoveredEdgeId ||
       !_sameStrSet(old.selectedNodeIds, selectedNodeIds) ||
       !_sameStrSet(old.selectedEdgeIds, selectedEdgeIds) ||
       old.layerFiltered != layerFiltered ||

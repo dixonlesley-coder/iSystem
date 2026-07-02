@@ -75,12 +75,26 @@ class WorkflowState {
   }
 }
 
+/// Whether any deliverable has been EXPORTED this session — the honest input
+/// for the stepper's Report stage (previously aliased to `sized`, so Report
+/// claimed completion the moment any edge was sized, before any report
+/// existed). Session-transient by design: a fresh open starts un-exported.
+final reportExportedProvider = NotifierProvider<ReportExportedController, bool>(
+    ReportExportedController.new);
+
+class ReportExportedController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void markExported() => state = true;
+}
+
 /// Live workflow stage state for the status-bar stepper. Done when:
 ///  • Calibrate — any loaded sheet has a calibration;
 ///  • Floors    — the building has more than the single default floor;
 ///  • Draw      — the network has at least one edge;
 ///  • Size      — at least one edge is sized;
-///  • Report    — the network is sized (a calc report can be produced).
+///  • Report    — a deliverable (report/drawing/BOM) was exported this session.
 final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   final project = ref.watch(projectControllerProvider);
   final sheets = ref.watch(sheetsControllerProvider).sheets;
@@ -100,7 +114,7 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
     WorkflowStage.floors: floorsSet,
     WorkflowStage.draw: hasNetwork,
     WorkflowStage.size: sized,
-    WorkflowStage.report: sized,
+    WorkflowStage.report: ref.watch(reportExportedProvider),
   });
 });
 

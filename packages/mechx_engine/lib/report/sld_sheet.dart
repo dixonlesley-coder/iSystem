@@ -28,8 +28,22 @@ class SldLine extends SldPrim {
   final double x1, y1, x2, y2;
   final SldWeight weight;
   final SldRole role;
+
+  /// Optional explicit CAD layer name (e.g. `E-BUS`). When set, the DXF
+  /// renderer places the entity on this layer AS-IS (the builder namespaces
+  /// it); null ⇒ the renderer routes by class/weight. PDF + canvas ignore it
+  /// (they have no layer concept). Default null ⇒ byte-identical.
+  final String? layer;
+
+  /// True ⇒ render as a DASHED line (PDF dash pattern, DXF `DASHED` linetype,
+  /// canvas walked dash segments). Default false ⇒ solid, byte-identical.
+  final bool dashed;
+
   const SldLine(this.x1, this.y1, this.x2, this.y2,
-      {this.weight = SldWeight.thin, this.role = SldRole.normal});
+      {this.weight = SldWeight.thin,
+      this.role = SldRole.normal,
+      this.layer,
+      this.dashed = false});
 }
 
 class SldRect extends SldPrim {

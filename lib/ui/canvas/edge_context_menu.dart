@@ -2,11 +2,14 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/duct_sizing.dart' show standardDuctDiametersMm;
+import 'package:mechx_engine/sizing/grille_sizing.dart'
+    show standardGrilleFacesMm;
 import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
@@ -66,10 +69,12 @@ void showEdgeContextMenu(
   overlay.insert(entry);
 }
 
-/// Show the per-junction right-click Fitting menu (Auto / Coupling / Elbow /
-/// Tee / Wye / Tee-wye / Cross / End cap) for node [nodeId]. Same overlay /
-/// barrier / theme-reprovide mechanics as [showEdgeContextMenu].
-void showNodeFittingMenu(
+/// Show the right-click menu for ANY node: the Fitting picker (Auto /
+/// Coupling / Elbow / Tee / Wye / …) ONLY for a bare junction, the face-size
+/// ladder for an air terminal (mirroring the inspector's picker), and Select
+/// similar + Delete node for everything. Same overlay / barrier /
+/// theme-reprovide mechanics as [showEdgeContextMenu].
+void showNodeContextMenu(
   BuildContext context,
   WidgetRef ref,
   String nodeId,
@@ -81,7 +86,7 @@ void showNodeFittingMenu(
   entry = OverlayEntry(
     builder: (ctx) => MechXTheme(
       data: theme,
-      child: _NodeFittingLayer(
+      child: _NodeMenuLayer(
         anchor: globalPosition,
         nodeId: nodeId,
         onDismiss: () => entry.remove(),
@@ -91,12 +96,44 @@ void showNodeFittingMenu(
   overlay.insert(entry);
 }
 
-class _NodeFittingLayer extends ConsumerWidget {
+/// Show the EMPTY-CANVAS right-click menu at [globalPosition]: Paste here
+/// (when the clipboard holds something, pasted centred on the clicked [world]
+/// point), Select all on this floor (scoped to the active discipline layer's
+/// services), and Fit view (when the host provides the canvas handle).
+void showCanvasContextMenu(
+  BuildContext context,
+  WidgetRef ref,
+  Offset globalPosition, {
+  required Offset world,
+  required String sheetId,
+  required int floorIndex,
+  VoidCallback? onFitView,
+}) {
+  final overlay = Overlay.of(context, rootOverlay: true);
+  final theme = MechXTheme.of(context);
+  late OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (ctx) => MechXTheme(
+      data: theme,
+      child: _CanvasMenuLayer(
+        anchor: globalPosition,
+        world: world,
+        sheetId: sheetId,
+        floorIndex: floorIndex,
+        onFitView: onFitView,
+        onDismiss: () => entry.remove(),
+      ),
+    ),
+  );
+  overlay.insert(entry);
+}
+
+class _NodeMenuLayer extends ConsumerWidget {
   final Offset anchor;
   final String nodeId;
   final VoidCallback onDismiss;
 
-  const _NodeFittingLayer({
+  const _NodeMenuLayer({
     required this.anchor,
     required this.nodeId,
     required this.onDismiss,
@@ -115,7 +152,131 @@ class _NodeFittingLayer extends ConsumerWidget {
     final left =
         anchor.dx.clamp(0.0, (size.width - menuWidth).clamp(0.0, size.width));
     final top = anchor.dy.clamp(0.0, (size.height - 80).clamp(0.0, size.height));
+    final maxHeight = size.height - 16;
     final ctrl = ref.read(networkControllerProvider.notifier);
+    final sel = ref.read(selectionProvider.notifier);
+
+    // A bare junction (no component, main role) gets the Fitting picker; an
+    // air terminal (a diffuser/grille component, or any node carrying airflow)
+    // gets the face-size ladder — the same picker the inspector offers.
+    final isBareJunction =
+        node.component == null && node.role == NodeRole.main;
+    final isAirTerminal = node.airflow != null ||
+        node.component == NodeComponent.supplyDiffuser ||
+        node.component == NodeComponent.returnGrille ||
+        node.component == NodeComponent.exhaustGrille ||
+        node.component == NodeComponent.linearDiffuser;
+
+    final children = <Widget>[
+      if (isBareJunction) ...[
+        const MechXMenuHeader('Fitting'),
+        for (final f in JunctionFitting.values)
+          MechXMenuRow(
+            label: f.label,
+            selected: (node.fittingType ?? JunctionFitting.auto) == f,
+            onTap: () {
+              ctrl.setNodeFittingType(nodeId, f);
+              sel.selectNode(nodeId);
+              onDismiss();
+            },
+          ),
+        const MechXMenuDivider(),
+      ],
+      if (isAirTerminal) ...[
+        const MechXMenuHeader('Face size'),
+        MechXMenuRow(
+          label: 'Auto',
+          selected: node.faceWidthMm == null || node.faceHeightMm == null,
+          onTap: () {
+            ctrl.setNodeFace(nodeId, null, null);
+            sel.selectNode(nodeId);
+            onDismiss();
+          },
+        ),
+        for (final face in standardGrilleFacesMm)
+          MechXMenuRow(
+            label: '${face.$1.round()}x${face.$2.round()}',
+            mono: true,
+            selected:
+                node.faceWidthMm == face.$1 && node.faceHeightMm == face.$2,
+            onTap: () {
+              ctrl.setNodeFace(nodeId, face.$1, face.$2);
+              sel.selectNode(nodeId);
+              onDismiss();
+            },
+          ),
+        const MechXMenuDivider(),
+      ],
+      MechXMenuRow(
+        label: 'Select similar',
+        onTap: () {
+          sel.selectSimilarNodes(nodeId);
+          onDismiss();
+        },
+      ),
+      const MechXMenuDivider(),
+      MechXMenuRow(
+        label: 'Delete node',
+        danger: true,
+        onTap: () {
+          ctrl.deleteNode(nodeId);
+          sel.clear();
+          onDismiss();
+        },
+      ),
+    ];
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onDismiss,
+            onSecondaryTap: onDismiss,
+            child: const SizedBox.expand(),
+          ),
+        ),
+        Positioned(
+          left: left,
+          top: top,
+          width: menuWidth,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxHeight),
+            // The face ladder makes the air-terminal menu tall — it scrolls.
+            child: MechXContextMenu(scrollable: true, children: children),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CanvasMenuLayer extends ConsumerWidget {
+  final Offset anchor;
+  final Offset world;
+  final String sheetId;
+  final int floorIndex;
+  final VoidCallback? onFitView;
+  final VoidCallback onDismiss;
+
+  const _CanvasMenuLayer({
+    required this.anchor,
+    required this.world,
+    required this.sheetId,
+    required this.floorIndex,
+    required this.onFitView,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final size = MediaQuery.sizeOf(context);
+    const menuWidth = 208.0;
+    final left =
+        anchor.dx.clamp(0.0, (size.width - menuWidth).clamp(0.0, size.width));
+    final top = anchor.dy.clamp(0.0, (size.height - 80).clamp(0.0, size.height));
+    final ctrl = ref.read(networkControllerProvider.notifier);
+    final fit = onFitView;
 
     return Stack(
       children: [
@@ -133,27 +294,36 @@ class _NodeFittingLayer extends ConsumerWidget {
           width: menuWidth,
           child: MechXContextMenu(
             children: [
-              const MechXMenuHeader('Fitting'),
-              for (final f in JunctionFitting.values)
+              if (ctrl.hasClipboard)
                 MechXMenuRow(
-                  label: f.label,
-                  selected: (node.fittingType ?? JunctionFitting.auto) == f,
+                  label: 'Paste here',
                   onTap: () {
-                    ctrl.setNodeFittingType(nodeId, f);
-                    ref.read(selectionProvider.notifier).selectNode(nodeId);
+                    ctrl.pasteAt(
+                        sheetId: sheetId, floorIndex: floorIndex, world: world);
                     onDismiss();
                   },
                 ),
-              const MechXMenuDivider(),
               MechXMenuRow(
-                label: 'Select similar',
+                label: 'Select all on this floor',
                 onTap: () {
-                  ref
-                      .read(selectionProvider.notifier)
-                      .selectSimilarNodes(nodeId);
+                  final services =
+                      servicesFor(ref.read(activeDisciplineProvider)).toSet();
+                  ref.read(selectionProvider.notifier).selectAllOnFloor(
+                        sheetId,
+                        floorIndex,
+                        services: services.isEmpty ? null : services,
+                      );
                   onDismiss();
                 },
               ),
+              if (fit != null)
+                MechXMenuRow(
+                  label: 'Fit view',
+                  onTap: () {
+                    fit();
+                    onDismiss();
+                  },
+                ),
             ],
           ),
         ),

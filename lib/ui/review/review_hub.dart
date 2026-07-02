@@ -5,10 +5,19 @@ import 'package:mechx_engine/network/network.dart';
 import '../../store/electrical_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/service_style.dart';
-import '../inspector/project_panel.dart' show buildComplianceSummary;
+import '../inspector/project_panel.dart'
+    show
+        buildComplianceSummary,
+        exportCalcReport,
+        exportCalcReportPdf,
+        exportEquipmentSchedule,
+        exportEquipmentSchedulePdf,
+        exportMepUnifiedReport,
+        exportMepUnifiedReportPdf;
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
+import '../widgets/mechx_button.dart';
 import '../widgets/severity_glyph.dart';
 import 'issues_card.dart';
 
@@ -27,7 +36,6 @@ class ReviewHub extends ConsumerWidget {
     final bom = ref.watch(bomProvider);
     final cutPlan = ref.watch(pipeCutPlanProvider);
 
-    final warnings = elec.warnings.length;
     final panels = elec.panels.length;
 
     // Overall pipe efficiency across all (service, diameter) groups.
@@ -46,10 +54,13 @@ class ReviewHub extends ConsumerWidget {
       children: [
         const _ComplianceCard(),
         const SizedBox(height: MechXSpacing.md),
+        // The bare 'Electrical warnings' count is now redundant: every
+        // ElectricalWarning fans into the unified IssuesCard below (grouped by
+        // severity, locatable) and the compliance card's 'Electrical circuit
+        // sizing' row. Panels-sized + BOM line items stay unique.
         HubStatRow(
           stats: [
             ('Panels sized', '$panels'),
-            ('Electrical warnings', '$warnings'),
             ('BOM line items', '${bom.length}'),
           ],
         ),
@@ -76,7 +87,108 @@ class ReviewHub extends ConsumerWidget {
           'waste; couplings and duct flanges on the canvas fall at these '
           'boundaries. Export the Markdown calc report for the full breakdown.',
         ),
+        const SizedBox(height: MechXSpacing.md),
+        const _ExportDeliverablesCard(),
       ],
+    );
+  }
+}
+
+/// The Review hub's final stop: the same PASS / REVIEW REQUIRED verdict as
+/// [_ComplianceCard] (reusing [buildComplianceSummary] so the two never
+/// disagree) leading straight into the deliverable exports — making the
+/// "check, then issue" pairing explicit. Exports stay enabled on REVIEW
+/// REQUIRED: the compliance summary is advisory, the engineer decides whether
+/// to issue. The three buttons reuse the SAME export functions already wired
+/// on the Projects screen (`project_panel.dart`'s `exportCalcReport` /
+/// `exportMepUnifiedReport` / `exportEquipmentSchedule`) — no new export path.
+/// Per-sheet drawing exports (DXF/PDF) need a current-sheet context that the
+/// Review hub doesn't have, so they're represented by a hint pointing at
+/// Layout rather than duplicated here.
+class _ExportDeliverablesCard extends ConsumerWidget {
+  const _ExportDeliverablesCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final summary = buildComplianceSummary(ref);
+    final allPass = summary.allPass;
+    final verdictColor = allPass ? colors.success : colors.warning;
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        border: Border.all(color: colors.border),
+      ),
+      padding: const EdgeInsets.all(MechXSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Export deliverables',
+              style: type.subtitle.copyWith(color: colors.textPrimary)),
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              CustomPaint(
+                size: const Size(14, 14),
+                painter: SeverityGlyph(
+                  kind: allPass
+                      ? SeverityGlyphKind.check
+                      : SeverityGlyphKind.warn,
+                  color: verdictColor,
+                ),
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              Text(
+                allPass
+                    ? 'PASS — ready to issue'
+                    : 'REVIEW REQUIRED — you decide whether to issue',
+                style: type.caption.copyWith(color: verdictColor),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Wrap(
+            spacing: MechXSpacing.xs,
+            runSpacing: MechXSpacing.xs,
+            children: [
+              MechXButton(
+                label: 'Export calc report (MD)',
+                onPressed: () => exportCalcReport(ref),
+              ),
+              MechXButton(
+                label: 'Export calc report (PDF)',
+                onPressed: () => exportCalcReportPdf(ref),
+              ),
+              MechXButton(
+                label: 'Export unified MEP report (MD)',
+                onPressed: () => exportMepUnifiedReport(ref),
+              ),
+              MechXButton(
+                label: 'Export unified MEP report (PDF)',
+                onPressed: () => exportMepUnifiedReportPdf(ref),
+              ),
+              MechXButton(
+                label: 'Export equipment schedule (MD)',
+                onPressed: () => exportEquipmentSchedule(ref),
+              ),
+              MechXButton(
+                label: 'Export equipment schedule (PDF)',
+                onPressed: () => exportEquipmentSchedulePdf(ref),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Text(
+            "Drawing exports (DXF/PDF) are per-sheet — go to Layout to export "
+            "the current sheet's plan or riser.",
+            style: type.caption.copyWith(color: colors.textMuted),
+          ),
+        ],
+      ),
     );
   }
 }

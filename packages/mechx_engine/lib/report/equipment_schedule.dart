@@ -22,6 +22,8 @@ import '../electrical/model.dart' show ElectricalSystemInfo;
 import '../electrical/panel_results.dart';
 import '../sizing/fan.dart';
 import '../sizing/pump.dart';
+import 'report_blocks.dart';
+import 'report_strings.dart';
 
 /// The category a schedule row belongs to — drives the section grouping.
 enum EquipmentCategory { pump, fan, airHandling, panel }
@@ -223,40 +225,99 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
   return rows;
 }
 
-/// Render the full equipment schedule as Markdown.
-String buildEquipmentScheduleMarkdown(EquipmentScheduleData data) {
-  final rows = buildEquipmentScheduleRows(data);
-  final b = StringBuffer();
+/// Build the equipment schedule as the neutral block list — the one content
+/// model behind the Markdown render ([buildEquipmentScheduleMarkdown]) and the
+/// PDF typesetter.
+/// The localized schedule-section heading for [cat] (the [EquipmentCategoryInfo]
+/// extension getter stays the EN default for callers that don't localize).
+String _categoryHeading(EquipmentCategory cat, ReportStrings strings) =>
+    switch (cat) {
+      EquipmentCategory.pump => strings(RptStringKey.catPumps),
+      EquipmentCategory.fan => strings(RptStringKey.catFans),
+      EquipmentCategory.airHandling => strings(RptStringKey.catAirHandling),
+      EquipmentCategory.panel => strings(RptStringKey.catPanels),
+    };
 
-  b.writeln('# Equipment schedule');
-  b.writeln();
-  b.writeln('**Project:** ${data.projectName}  ');
-  b.writeln('**Date:** ${data.date}');
-  b.writeln();
+List<RptBlock> buildEquipmentScheduleBlocks(EquipmentScheduleData data,
+    [ReportStrings strings = const ReportStrings.en()]) {
+  final rows = buildEquipmentScheduleRows(data);
+  final blocks = <RptBlock>[
+    RptHeading(1, strings(RptStringKey.headingEquipmentSchedule)),
+    // The project/date pair uses a Markdown two-space hard break between the
+    // lines — a stubborn legacy construct, kept verbatim via RptMarkdown.
+    RptMarkdown(strings.format(RptStringKey.esProjectDate,
+        {'name': data.projectName, 'date': data.date})),
+  ];
 
   if (rows.isEmpty) {
-    b.writeln('_(no equipment scheduled)_');
-    return b.toString();
+    blocks.add(RptNote(strings(RptStringKey.esNoEquipment)));
+    return blocks;
   }
 
   // One section per non-empty category, in enum order.
   for (final cat in EquipmentCategory.values) {
     final inCat = [for (final r in rows) if (r.category == cat) r];
     if (inCat.isEmpty) continue;
-    b.writeln('## ${cat.heading}');
-    b.writeln();
-    b.writeln('| Tag | Service | Duty | Size | Model / spec | Qty |');
-    b.writeln('| --- | --- | --- | --- | --- | --- |');
-    for (final r in inCat) {
-      b.writeln('| ${r.tag} | ${r.service} | ${r.duty} | '
-          '${r.size} | ${r.modelSpec} | ${r.qty} |');
-    }
-    b.writeln();
+    blocks
+      ..add(RptHeading(2, _categoryHeading(cat, strings)))
+      ..add(RptTable(
+        [
+          strings(RptStringKey.tblTag),
+          strings(RptStringKey.tblService),
+          strings(RptStringKey.tblDuty),
+          strings(RptStringKey.tblSize),
+          strings(RptStringKey.tblModelSpec),
+          strings(RptStringKey.tblQty),
+        ],
+        [
+          for (final r in inCat)
+            [r.tag, r.service, r.duty, r.size, r.modelSpec, '${r.qty}'],
+        ],
+        mdSeparator: '| --- | --- | --- | --- | --- | --- |',
+      ));
   }
 
-  b.writeln('_Model / spec is a placeholder for the engineer to complete from '
-      'the selected manufacturer datasheet; iSystem sizes the duty, not the '
-      'catalogue model._');
+  blocks.add(RptNote(strings(RptStringKey.esClosingNote)));
 
+  return blocks;
+}
+
+/// Render the full equipment schedule as Markdown.
+String buildEquipmentScheduleMarkdown(EquipmentScheduleData data,
+        [ReportStrings strings = const ReportStrings.en()]) =>
+    renderRptMarkdown(buildEquipmentScheduleBlocks(data, strings));
+
+/// Escape a value for a CSV cell: wrap in quotes and double any embedded
+/// quotes when it contains a comma, quote or newline (mirrors
+/// `electrical/commercial_export.dart`).
+String _csv(String v) {
+  if (v.contains(',') || v.contains('"') || v.contains('\n')) {
+    return '"${v.replaceAll('"', '""')}"';
+  }
+  return v;
+}
+
+/// Render [rows] (from [buildEquipmentScheduleRows]) as CSV — the spreadsheet
+/// deliverable the row model was designed for. One header line, then one line
+/// per row: `tag,category,service,duty,size,model_spec,qty`.
+String equipmentScheduleToCsv(List<EquipmentScheduleRow> rows) {
+  final b = StringBuffer('tag,category,service,duty,size,model_spec,qty\n');
+  for (final r in rows) {
+    b
+      ..write(_csv(r.tag))
+      ..write(',')
+      ..write(_csv(r.category.name))
+      ..write(',')
+      ..write(_csv(r.service))
+      ..write(',')
+      ..write(_csv(r.duty))
+      ..write(',')
+      ..write(_csv(r.size))
+      ..write(',')
+      ..write(_csv(r.modelSpec))
+      ..write(',')
+      ..write(r.qty)
+      ..write('\n');
+  }
   return b.toString();
 }

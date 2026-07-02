@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/electrical_focus_store.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
@@ -8,6 +9,8 @@ import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
+import 'package:mechx_engine/electrical/load_kind.dart';
+import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -81,6 +84,59 @@ void main() {
       expect(velIssue.locate, isNotNull);
       expect(velIssue.locate!.edgeId, 'e1');
       expect(velIssue.locate!.sheetId, sheetId);
+    });
+
+    test('a drainage stack base without a cleanout surfaces an info advisory; '
+        'a served base stays silent', () {
+      final c = makeContainer();
+      const sheetId = 's1';
+      const title = 'Drainage stack has no cleanout at its base';
+      // A soil riser dropping from floor 1 to its base on floor 0, no cleanout
+      // anywhere — the base is surfaced as a muted (info) locatable advisory.
+      const j1 = NetNode(id: 'j1', sheetId: sheetId, x: 0, y: 0, floorIndex: 1);
+      const base =
+          NetNode(id: 'base', sheetId: sheetId, x: 0, y: 100, floorIndex: 0);
+      const soil = NetEdge(
+        id: 'soil',
+        fromId: 'j1',
+        toId: 'base',
+        service: ServiceType.drainage,
+        kind: EdgeKind.riser,
+      );
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [j1, base], edges: [soil]),
+          );
+      final issue = c.read(designIssuesProvider).firstWhere(
+            (i) => i.title == title,
+            orElse: () => fail('expected the cleanout advisory'),
+          );
+      expect(issue.severity, IssueSeverity.info);
+      expect(issue.locate, isNotNull);
+      expect(issue.locate!.nodeId, 'base');
+      expect(issue.locate!.sheetId, sheetId);
+
+      // Branching a cleanout beside the base clears the advisory (never a
+      // fabricated symbol — the engineer placed the real component).
+      const co = NetNode(
+        id: 'co',
+        sheetId: sheetId,
+        x: 40,
+        y: 100,
+        floorIndex: 0,
+        role: NodeRole.fixture,
+        component: NodeComponent.cleanout,
+      );
+      const branch = NetEdge(
+        id: 'cob',
+        fromId: 'base',
+        toId: 'co',
+        service: ServiceType.drainage,
+      );
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [j1, base, co], edges: [soil, branch]),
+          );
+      expect(
+          c.read(designIssuesProvider).where((i) => i.title == title), isEmpty);
     });
 
     test('unverified standards surface as info-level issues', () {
@@ -367,6 +423,94 @@ void main() {
       expect(c.read(sheetsControllerProvider).current!.id, sheetId);
       expect(c.read(selectionProvider).edgeId, 'e1');
       expect(c.read(workspaceViewProvider), WorkspaceView.plan);
+    });
+  });
+
+  group('electrical warnings fan-in', () {
+    ProviderContainer makeContainer() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    // A single-phase panel with one heavy socket way crushed by an extreme
+    // derating (60 °C ambient ⇒ ×0.5, 9 grouped circuits ⇒ ×0.5 ⇒ df 0.25) so
+    // even the largest cable can't reach the required Iz: the breaker In then
+    // exceeds the conductor Iz ⇒ a `cable-ampacity-inadequate` ERROR warning.
+    // (Mirrors the engine's electrical_compute_test fixture.)
+    const heavyPanel = ElectricalPanel(
+      id: 'HV',
+      name: 'Heavy',
+      system: ElectricalSystem.singlePhase,
+      voltage: Voltage(230),
+      ambientTempC: 60,
+      groupingCount: 9,
+      circuits: [
+        ElectricalCircuit(
+          id: 'big',
+          name: 'Big load',
+          loadKind: LoadKind.socket,
+          loadW: 200000, // ~870 A single-phase
+          cosPhi: 1.0,
+          length: Length(5),
+        ),
+      ],
+    );
+
+    test('an error-severity electrical warning surfaces as a critical '
+        'DesignIssue located on its panel', () {
+      final c = makeContainer();
+      c.read(electricalProjectProvider.notifier).setProject(
+            const ElectricalProject(id: 'p', name: 'p', panels: [heavyPanel]),
+          );
+
+      // Sanity: the solved system really does raise the error warning.
+      final elec = c.read(electricalResultProvider);
+      final w = elec.warnings
+          .where((w) => w.code == 'cable-ampacity-inadequate')
+          .toList();
+      expect(w, hasLength(1));
+
+      final issues = c.read(designIssuesProvider);
+      final issue = issues.firstWhere(
+        (i) => i.title == 'Electrical: cable ampacity inadequate',
+        orElse: () => fail('expected an electrical ampacity DesignIssue'),
+      );
+      // error ⇒ critical, and it locates on the panel (not a sheet).
+      expect(issue.severity, IssueSeverity.critical);
+      expect(issue.message, w.single.message);
+      expect(issue.locate, isNotNull);
+      expect(issue.locate!.panelId, 'HV');
+      expect(issue.locate!.circuitId, 'big');
+      expect(issue.locate!.sheetId, '');
+      // It bumps the critical count the export gate reads.
+      expect(c.read(designIssueCriticalCountProvider), greaterThanOrEqualTo(1));
+    });
+
+    test('an empty electrical project adds no electrical issues '
+        '(mechanical list byte-identical)', () {
+      final c = makeContainer();
+      // Baseline mechanical-only issue list (default network + the sample
+      // electrical project's own non-error warnings, if any).
+      c.read(electricalProjectProvider.notifier).setProject(
+            const ElectricalProject(id: 'e', name: 'e'),
+          );
+      final issues = c.read(designIssuesProvider);
+      // No electrical-sourced issue title and no panel-located issue at all.
+      expect(issues.where((i) => i.title.startsWith('Electrical:')), isEmpty);
+      expect(issues.where((i) => i.locate?.panelId != null), isEmpty);
+      // An empty electrical system raises no error warnings ⇒ no criticals from
+      // the electrical side (the default demo network is blank ⇒ 0 criticals).
+      expect(c.read(designIssueCriticalCountProvider), 0);
+    });
+
+    test('locate-request store round-trip: request then clear', () {
+      final c = makeContainer();
+      expect(c.read(electricalFocusProvider), isNull);
+      c.read(electricalFocusProvider.notifier).request('MDP');
+      expect(c.read(electricalFocusProvider), 'MDP');
+      c.read(electricalFocusProvider.notifier).clear();
+      expect(c.read(electricalFocusProvider), isNull);
     });
   });
 }
