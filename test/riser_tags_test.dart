@@ -199,6 +199,84 @@ void main() {
     });
   });
 
+  group('B2 stack-detail bookkeeping (cleanout / tee / VTR)', () {
+    // A soil riser j1(f1) → base(f0), a vent riser teeing off j1 up to the
+    // top floor, and (optionally) a cleanout branched beside the stack base.
+    Network stack({bool withCleanout = true}) => Network(
+          nodes: [
+            _n('base', 200, 0),
+            _n('j1', 200, 1),
+            _n('top', 200, 2),
+            if (withCleanout)
+              _n('co', 140, 0,
+                  role: NodeRole.fixture, component: NodeComponent.cleanout),
+          ],
+          edges: [
+            _e('soil', 'j1', 'base', ServiceType.drainage,
+                kind: EdgeKind.riser),
+            _e('vent', 'j1', 'top', ServiceType.vent, kind: EdgeKind.riser),
+            if (withCleanout)
+              _e('cob', 'base', 'co', ServiceType.drainage),
+          ],
+        );
+
+    test('drainageStackBaseIds finds the stack LOWEST node only', () {
+      expect(drainageStackBaseIds(stack()), {'base'});
+      // A 2-storey stack: the mid node is the lower end of the top riser but
+      // also the upper end of the bottom one, so only 'b' is a base.
+      final twoStorey = Network(
+        nodes: [_n('b', 100, 0), _n('m', 100, 1), _n('t', 100, 2)],
+        edges: [
+          _e('r0', 'm', 'b', ServiceType.drainage, kind: EdgeKind.riser),
+          _e('r1', 't', 'm', ServiceType.drainage, kind: EdgeKind.riser),
+        ],
+      );
+      expect(drainageStackBaseIds(twoStorey), {'b'});
+    });
+
+    test('drainageStackBasesLackingCleanout fires ONLY for an unserved base',
+        () {
+      // A cleanout branched beside the base serves it — no advisory.
+      expect(drainageStackBasesLackingCleanout(stack()), isEmpty);
+      // No cleanout drawn anywhere — the base is surfaced.
+      expect(drainageStackBasesLackingCleanout(stack(withCleanout: false)),
+          ['base']);
+      // A cleanout ON the base node itself also serves it.
+      final onBase = Network(
+        nodes: [
+          _n('b', 100, 0,
+              role: NodeRole.fixture, component: NodeComponent.cleanout),
+          _n('m', 100, 1),
+        ],
+        edges: [_e('r', 'm', 'b', ServiceType.drainage, kind: EdgeKind.riser)],
+      );
+      expect(drainageStackBasesLackingCleanout(onBase), isEmpty);
+    });
+
+    test('cleanoutAtStackBaseIds returns only DRAWN cleanouts serving a base',
+        () {
+      expect(cleanoutAtStackBaseIds(stack()), {'co'});
+      expect(cleanoutAtStackBaseIds(stack(withCleanout: false)), isEmpty);
+    });
+
+    test('ventSoilTeeNodeIds is the shared vent-riser/soil junction only', () {
+      expect(ventSoilTeeNodeIds(stack()), {'j1'});
+      // A vent riser touching no drainage edge has no tee.
+      final lone = Network(
+        nodes: [_n('a', 100, 0), _n('b', 100, 1)],
+        edges: [_e('v', 'a', 'b', ServiceType.vent, kind: EdgeKind.riser)],
+      );
+      expect(ventSoilTeeNodeIds(lone), isEmpty);
+    });
+
+    test('ventTopTerminalIds keeps only vent risers REACHING the top floor',
+        () {
+      expect(ventTopTerminalIds(stack(), topFloor: 2), {'top'});
+      // A taller building: the same vent stops short of the roof — no VTR.
+      expect(ventTopTerminalIds(stack(), topFloor: 3), isEmpty);
+    });
+  });
+
   group('floorFanOuts — per-floor branch fan-out', () {
     NetNode fix(String id, double x, int floor) =>
         _n(id, x, floor, role: NodeRole.fixture);

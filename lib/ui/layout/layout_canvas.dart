@@ -83,6 +83,9 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
 
   /// The electrical circuit/panel open in the inspector / a context menu.
   ElectricalEditTarget? _editing;
+
+  /// The panel whose PROPERTIES drawer is open (null = closed).
+  String? _panelEditing;
   ElectricalPanelMenuTarget? _panelMenu;
   ElectricalEditTarget? _circuitMenu;
   Offset _menuAt = Offset.zero;
@@ -168,7 +171,10 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
             ),
           ),
           // Electrical edit overlays (scrim + menus + inspector), hosted here.
-          if (_editing != null || _panelMenu != null || _circuitMenu != null)
+          if (_editing != null ||
+              _panelEditing != null ||
+              _panelMenu != null ||
+              _circuitMenu != null)
             Positioned.fill(
               child: Listener(
                 behavior: HitTestBehavior.translucent,
@@ -179,6 +185,7 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
           if (_circuitMenu != null) _buildCircuitMenu(),
           if (_panelMenu != null) _buildPanelMenu(),
           if (_editing != null) _buildInspector(),
+          if (_panelEditing != null) _buildPanelInspector(),
         ],
       ),
     );
@@ -194,33 +201,25 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     return box?.globalToLocal(global) ?? global;
   }
 
-  Offset _canvasCenter() {
-    final box = context.findRenderObject() as RenderBox?;
-    final size = box?.size ?? const Size(800, 600);
-    return Offset(size.width / 2, size.height / 2);
-  }
-
   void _closeOverlays() {
-    if (_editing != null || _panelMenu != null || _circuitMenu != null) {
+    if (_editing != null ||
+        _panelEditing != null ||
+        _panelMenu != null ||
+        _circuitMenu != null) {
       setState(() {
         _editing = null;
+        _panelEditing = null;
         _panelMenu = null;
         _circuitMenu = null;
       });
     }
   }
 
-  void onEditPanel(String panelId) {
-    final project = ref.read(electricalProjectProvider);
-    final panel = project.panels.where((p) => p.id == panelId).firstOrNull;
-    final first =
-        panel?.circuits.where((c) => c.loadKind != LoadKind.feeder).firstOrNull;
-    if (panel != null && first != null) {
-      setState(() => _editing = ElectricalEditTarget(panelId, first.id));
-    } else {
-      onPanelMenu(panelId, _canvasCenter());
-    }
-  }
+  /// Panel double-click opens the panel PROPERTIES drawer (name / tag /
+  /// diversity / headroom); a way / load double-click keeps opening the
+  /// circuit editor via [onEditCircuit].
+  void onEditPanel(String panelId) =>
+      setState(() => _panelEditing = panelId);
 
   void onEditCircuit(String panelId, String circuitId) =>
       setState(() => _editing = ElectricalEditTarget(panelId, circuitId));
@@ -230,6 +229,7 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       _panelMenu = ElectricalPanelMenuTarget(panelId);
       _circuitMenu = null;
       _editing = null;
+      _panelEditing = null;
       _menuAt = _toLocal(globalPos);
     });
   }
@@ -239,6 +239,7 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       _circuitMenu = ElectricalEditTarget(panelId, circuitId);
       _panelMenu = null;
       _editing = null;
+      _panelEditing = null;
       _menuAt = _toLocal(globalPos);
     });
   }
@@ -277,6 +278,10 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         child: ElectricalPanelMenu(
           panel: panel,
           controller: _ctrl,
+          onProperties: () => setState(() {
+            _panelMenu = null;
+            _panelEditing = panel.id;
+          }),
           onOpen: () {
             final first = panel.circuits
                 .where((c) => c.loadKind != LoadKind.feeder)
@@ -313,6 +318,27 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         key: ValueKey('${target.panelId}/${target.circuitId}'),
         panel: panel,
         circuit: circuit,
+        controller: _ctrl,
+        onClose: _closeOverlays,
+      ),
+    );
+  }
+
+  Widget _buildPanelInspector() {
+    final panelId = _panelEditing!;
+    final project = ref.watch(electricalProjectProvider);
+    final panel = project.panels.where((p) => p.id == panelId).firstOrNull;
+    if (panel == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      top: 0,
+      right: 0,
+      bottom: 0,
+      child: ElectricalPanelInspector(
+        key: ValueKey('panel/$panelId'),
+        panel: panel,
         controller: _ctrl,
         onClose: _closeOverlays,
       ),
@@ -386,7 +412,10 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     }
 
     if (key == LogicalKeyboardKey.escape) {
-      if (_editing != null || _panelMenu != null || _circuitMenu != null) {
+      if (_editing != null ||
+          _panelEditing != null ||
+          _panelMenu != null ||
+          _circuitMenu != null) {
         _closeOverlays();
         return KeyEventResult.handled;
       }

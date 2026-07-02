@@ -10,6 +10,7 @@
 library;
 
 import 'package:flutter/widgets.dart';
+import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/units.dart';
@@ -67,17 +68,19 @@ class ElectricalCircuitMenu extends StatelessWidget {
   }
 }
 
-/// Panel right-click menu: Open / essential / critical / submeter / disconnect /
-/// delete. Mirrors the electrical single-line canvas's panel menu.
+/// Panel right-click menu: properties / open / essential / critical / submeter /
+/// disconnect / delete. Mirrors the electrical single-line canvas's panel menu.
 class ElectricalPanelMenu extends StatelessWidget {
   final ElectricalPanel panel;
   final ElectricalProjectController controller;
+  final VoidCallback onProperties;
   final VoidCallback onOpen;
   final VoidCallback onDone;
   const ElectricalPanelMenu({
     super.key,
     required this.panel,
     required this.controller,
+    required this.onProperties,
     required this.onOpen,
     required this.onDone,
   });
@@ -86,6 +89,7 @@ class ElectricalPanelMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     return ElectricalMenu(
       items: [
+        ElectricalMenuAction('Panel properties', onProperties),
         ElectricalMenuAction('Open panel', onOpen),
         ElectricalMenuAction(
           panel.essential ? 'Unmark essential' : 'Mark essential',
@@ -358,6 +362,163 @@ class ElectricalCircuitInspector extends StatelessWidget {
                         circuit.id,
                         lifeSafety: v,
                       ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Panel inspector (the I3 properties drawer) ───────────────────────────────
+
+/// The panel PROPERTIES drawer — name / tag / diversity / headroom (spare % +
+/// CADANGAN spare ways) / supply flags — opened on panel double-click or the
+/// 'Panel properties' context-menu row. Same 340-px right-drawer idiom as
+/// [ElectricalCircuitInspector]; every edit routes through the controller's
+/// undoable intents.
+class ElectricalPanelInspector extends StatelessWidget {
+  final ElectricalPanel panel;
+  final ElectricalProjectController controller;
+  final VoidCallback onClose;
+
+  const ElectricalPanelInspector({
+    super.key,
+    required this.panel,
+    required this.controller,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final headroom = panel.headroom ?? HeadroomSpec.none;
+
+    // Slide-in from the right + fade on open (host keys this by panel), the
+    // same iOS sheet idiom as the circuit inspector.
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: MechXMotion.appear,
+      curve: MechXMotion.standard,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(
+          offset: Offset(340 * (1 - t), 0),
+          child: child,
+        ),
+      ),
+      child: Container(
+        width: 340,
+        decoration: BoxDecoration(
+          color: colors.surface,
+          border: Border(left: BorderSide(color: colors.border)),
+          boxShadow: MechXShadow.popover,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                MechXSpacing.md,
+                MechXSpacing.md,
+                MechXSpacing.sm,
+                MechXSpacing.sm,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Panel properties',
+                      style: type.title.copyWith(color: colors.textPrimary),
+                    ),
+                  ),
+                  MechXButton(
+                    label: 'Close',
+                    tertiary: true,
+                    onPressed: onClose,
+                  ),
+                ],
+              ),
+            ),
+            Container(height: 1, color: colors.border),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(MechXSpacing.md),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ElectricalField(
+                      label: 'Name',
+                      child: ElectricalTextInput(
+                        value: panel.name,
+                        onChanged: (v) => controller.renamePanel(panel.id, v),
+                      ),
+                    ),
+                    ElectricalField(
+                      label: 'Tag (e.g. LP-1)',
+                      child: ElectricalTextInput(
+                        value: panel.tag ?? '',
+                        onChanged: (v) => controller.setPanelTag(panel.id, v),
+                      ),
+                    ),
+                    ElectricalField(
+                      label: 'Diversity factor',
+                      child: ElectricalNumInput(
+                        value: panel.diversityFactor,
+                        onChanged: (v) => controller.setPanelDiversity(
+                          panel.id,
+                          v.clamp(0.0, 1.0),
+                        ),
+                      ),
+                    ),
+                    ElectricalField(
+                      label: 'Headroom — spare demand (%)',
+                      child: ElectricalNumInput(
+                        value: headroom.sparePercentage,
+                        onChanged: (v) => controller.setPanelHeadroom(
+                          panel.id,
+                          HeadroomSpec(
+                            sparePercentage: v.clamp(0.0, 100.0),
+                            spareWays: headroom.spareWays,
+                          ),
+                        ),
+                      ),
+                    ),
+                    ElectricalField(
+                      label: 'Spare ways (CADANGAN)',
+                      child: ElectricalNumInput(
+                        value: headroom.spareWays.toDouble(),
+                        onChanged: (v) => controller.setPanelHeadroom(
+                          panel.id,
+                          HeadroomSpec(
+                            sparePercentage: headroom.sparePercentage,
+                            spareWays: v.round().clamp(0, 60),
+                          ),
+                        ),
+                      ),
+                    ),
+                    ElectricalToggleRow(
+                      label: 'Essential (genset-backed)',
+                      value: panel.essential,
+                      onChanged: (v) =>
+                          controller.setPanelEssential(panel.id, v),
+                    ),
+                    ElectricalToggleRow(
+                      label: 'Critical (UPS-backed)',
+                      value: panel.upsBacked,
+                      onChanged: (v) =>
+                          controller.setPanelUpsBacked(panel.id, v),
+                    ),
+                    ElectricalToggleRow(
+                      label: 'Tenant submeter',
+                      value: panel.submeter,
+                      onChanged: (v) =>
+                          controller.setPanelSubmeter(panel.id, v),
                     ),
                   ],
                 ),

@@ -278,7 +278,20 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   label collision w/ leaders; canvas linetypes + rotated/LOD labels + `flowFromId`
   chevrons; document control (`DesignSettings` + `document_control_store` + inspector
   section) feeding title blocks + report revision tables; riser 'Export all systems'
-  set + electrical 'Panel schedules' exports. Waves 3–5 remain.
+  set + electrical 'Panel schedules' exports. **Wave 3 (the two big CAD lifts + the
+  electrical-parity track) LANDED** (see the §15 row): the floor-plan UNDERLAY prints
+  beneath every plan export (`PlanUnderlay` vector/raster model + `lib/data/plan_underlay.dart`,
+  null ⇒ byte-identical); `report/plan_symbols.dart` component glyphs + `UP`/`DN` riser
+  tags + flow chevrons in all three plan exporters; the riser sheet reached canvas
+  parity (glyphs, capacity suffixes, KETERANGAN notes, detail callouts via
+  `buildLiveRiserSheet`) + drainage/vent conventions (CO/VTR/tee, data-gated, Indonesian
+  sheet titles); ELECTRICAL UNDO on the global timeline (`UndoDomain.electrical`,
+  `syncMepEquipment` exempt, drag = one step); the panel-properties drawer
+  (double-click; `setPanelTag`/`setPanelHeadroom`); electrical warnings fan into
+  Design Issues with a Review→Electrical jump (`electrical_focus_store`); unsaved-work
+  guards (`isProjectDirty` + Save/Discard/Cancel dialog on Open/Import/quit) and a
+  status-bar busy pill + off-thread portable save (`gatherSheetAssetsAsync`).
+  Waves 4–5 remain.
 - **Audit-fix wave (2026-06-28) — resolved** (`AUDIT-REPORT.md`, see the §15 row):
   the over-capacity air duct no longer THROWS (clamps + `EdgeSizing.overCapacity`
   flag → Review warning via `airOverCapacityProvider`); rectangular ducts honour

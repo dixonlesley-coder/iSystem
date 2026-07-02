@@ -351,7 +351,8 @@ D3 document control → A4/C3 title blocks + sheet frame · A2/C4 DXF units + TA
 A3 true scale/NTS · C1 pagination → B3 drawing set · A6 + B4 + E1 lineweights/linetypes ·
 C5 kA · C6 earthing · A7/B5/E2 label discipline · E3 flow arrows.
 
-**Wave 3 — the two big CAD lifts + the electrical-parity track (parallel).**
+**Wave 3 — the two big CAD lifts + the electrical-parity track (parallel). ✅ LANDED 2026-07-02**
+(see the §15 decisions-log row for the change detail)
 A1 underlay (PDF image XObject + DXF re-emit) · A5 symbol library + UP/DN ·
 B1 riser export parity · B2 drainage/vent treatment ‖ I1 electrical undo · I2 issues fan-in ·
 I3 panel editor · F2 dirty guards · F3 busy feedback.

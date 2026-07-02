@@ -30,6 +30,7 @@ import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../data/plan_underlay.dart';
 import '../../store/air_warnings_store.dart';
 import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
@@ -204,6 +205,11 @@ ComplianceSummary buildComplianceSummary(WidgetRef ref) {
       claim((i) => i.title.contains('calibrated')).where(isFail).length;
   // Standards verification: unverified-standard info items.
   final unverified = claim((i) => i.title == 'Unverified standard').length;
+  // Electrical warnings are fanned into designIssuesProvider (Wave 3) with an
+  // 'Electrical: ' title prefix — claim them here so the dedicated
+  // 'Electrical circuit sizing' row below (counted from the solved system
+  // directly) stays the single source and nothing double-counts.
+  claim((i) => i.title.startsWith('Electrical:'));
 
   // Every other aggregated issue, grouped by title — duct over-capacity,
   // network connectivity, unsized air elements, drainage/Legionella
@@ -459,6 +465,10 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
   final project = ref.read(projectControllerProvider);
   final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
+  // A1: the floor-plan underlay — DXF sheets only here (the R12 re-emit is
+  // vector-only; a PDF-backed sheet's raster rides the PDF exports instead).
+  final planUnderlay =
+      sheet.dxfPath != null ? await buildPlanUnderlay(sheet) : null;
   final dxf = networkToDxf(
     net: ref.read(networkControllerProvider).network,
     sizing: ref.read(sizingProvider),
@@ -468,6 +478,7 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
     // A2: the sheet calibration lets the DXF emit true-scale mm world units
     // (HEADER/$INSUNITS + named layers); null keeps the legacy pixel DXF.
     metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
+    underlay: planUnderlay is VectorPlanUnderlay ? planUnderlay : null,
   );
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingDxf),
@@ -505,6 +516,10 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
     // A3: the sheet calibration snaps the plot to a standard scale (1:N) and
     // makes the scale bar honest; null keeps the auto-fit + an NTS scale row.
     metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
+    // A1: the floor-plan substrate beneath the network — vector for a DXF
+    // sheet, faded raster for a PDF sheet; null (placeholder / unreadable
+    // source) keeps the plain export.
+    underlay: await buildPlanUnderlay(sheet),
   );
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingPdf),
@@ -563,6 +578,10 @@ Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     // A3: the sheet calibration snaps the plot to a standard scale (1:N) and
     // makes the scale bar honest; null keeps the auto-fit + an NTS scale row.
     metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
+    // A1: the floor-plan substrate beneath the network — vector for a DXF
+    // sheet, faded raster for a PDF sheet; null (placeholder / unreadable
+    // source) keeps the plain export.
+    underlay: await buildPlanUnderlay(sheet),
   );
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(

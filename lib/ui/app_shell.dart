@@ -52,7 +52,7 @@ class AppShell extends ConsumerWidget {
   /// (see [build]). Key events bubble UP from the focused canvas/field to this
   /// node, so Ctrl/Cmd+K opens the command palette without grabbing focus from
   /// in-canvas editing. Esc closes the palette when it's open.
-  KeyEventResult _onKey(WidgetRef ref, KeyEvent event) {
+  KeyEventResult _onKey(BuildContext context, WidgetRef ref, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
     final mod = HardwareKeyboard.instance.isControlPressed ||
@@ -63,13 +63,14 @@ class AppShell extends ConsumerWidget {
     }
     // Document-app save/open conventions: Ctrl/Cmd+S saves in place (Shift
     // forces Save-As), Ctrl/Cmd+O opens — matching every desktop authoring
-    // tool a CAD engineer is trained on.
+    // tool a CAD engineer is trained on. Open guards unsaved work, so it needs
+    // the shell context to host the confirm dialog.
     if (mod && key == LogicalKeyboardKey.keyS) {
       saveProject(ref, saveAs: HardwareKeyboard.instance.isShiftPressed);
       return KeyEventResult.handled;
     }
     if (mod && key == LogicalKeyboardKey.keyO) {
-      openProject(ref);
+      openProject(context, ref);
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.escape &&
@@ -91,7 +92,7 @@ class AppShell extends ConsumerWidget {
       // here when the focused descendant ignores it.
       canRequestFocus: false,
       skipTraversal: true,
-      onKeyEvent: (_, event) => _onKey(ref, event),
+      onKeyEvent: (_, event) => _onKey(context, ref, event),
       child: Stack(
         children: [
           ColoredBox(
@@ -324,7 +325,7 @@ class _TopBar extends ConsumerWidget {
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
               label: context.strings(StringKey.shellOpen),
-              onPressed: () => openProject(ref),
+              onPressed: () => openProject(context, ref),
             ),
             const SizedBox(width: MechXSpacing.xs),
             MechXButton(
@@ -451,6 +452,11 @@ class _StatusBar extends ConsumerWidget {
               ),
             ),
             const SizedBox(width: MechXSpacing.md),
+            // Busy pill for a slow foreground operation (importing / converting /
+            // opening / saving). Null at rest, so it collapses to nothing and the
+            // goldens are unchanged; it shows a small animated arc + message while
+            // the operation runs.
+            const _BusyIndicator(),
             // Transient confirmation pill (Saved / opened / imported). Null at
             // rest, so this collapses to nothing and the goldens are unchanged;
             // it cross-fades in/out via AnimatedSwitcher when a message arrives.
@@ -577,6 +583,108 @@ class _CheckMark extends CustomPainter {
 
   @override
   bool shouldRepaint(_CheckMark old) => old.color != color;
+}
+
+/// The busy pill in the status bar. Reads [busyProvider] (null at rest,
+/// rendering nothing so the goldens are unchanged) and shows a small animated
+/// arc + the busy message while a slow operation runs. The animation ticker
+/// exists only while mounted (i.e. only while busy), never at rest.
+class _BusyIndicator extends ConsumerWidget {
+  const _BusyIndicator();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final message = ref.watch(busyProvider);
+    if (message == null) return const SizedBox.shrink();
+    final colors = context.colors;
+    final type = context.type;
+    return Padding(
+      key: const ValueKey('busy-indicator'),
+      padding: const EdgeInsets.only(right: MechXSpacing.md),
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: MechXSpacing.sm,
+          vertical: MechXSpacing.xxs,
+        ),
+        decoration: BoxDecoration(
+          color: colors.accent.withAlpha(30),
+          borderRadius: MechXRadii.control,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _BusySpinner(color: colors.accent),
+            const SizedBox(width: MechXSpacing.xs),
+            Text(
+              message,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: type.caption.copyWith(color: colors.accent),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A small custom-painted indeterminate spinner arc — a Roboto-safe, Material-
+/// free progress cue. Spins a repeating [AnimationController]; mounted only by
+/// [_BusyIndicator] while busy, so there is no ticker (and no repaint) at rest.
+class _BusySpinner extends StatefulWidget {
+  final Color color;
+  const _BusySpinner({required this.color});
+
+  @override
+  State<_BusySpinner> createState() => _BusySpinnerState();
+}
+
+class _BusySpinnerState extends State<_BusySpinner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) => CustomPaint(
+        size: const Size(11, 11),
+        painter: _SpinnerArc(color: widget.color, t: _controller.value),
+      ),
+    );
+  }
+}
+
+/// Paints a 270-degree arc rotated by [t] (0..1) — the indeterminate cue.
+class _SpinnerArc extends CustomPainter {
+  final Color color;
+  final double t;
+  const _SpinnerArc({required this.color, required this.t});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round;
+    final rect = Offset.zero & size;
+    final start = t * 2 * 3.1415926535;
+    // A 270-degree sweep leaves a visible gap so the rotation reads.
+    canvas.drawArc(rect.deflate(1), start, 4.71238898, false, stroke);
+  }
+
+  @override
+  bool shouldRepaint(_SpinnerArc old) => old.t != t || old.color != color;
 }
 
 /// Eases a shell banner in and out: the height collapses ([AnimatedSize]) and

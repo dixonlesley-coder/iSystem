@@ -21,6 +21,8 @@ import 'dart:typed_data';
 import '../network/network.dart';
 import '../sizing/network_sizing.dart';
 import 'drawing_chrome.dart';
+import 'plan_symbols.dart';
+import 'sld_sheet.dart';
 
 /// Per-service stroke colour as RGB in the 0..1 range (no Flutter `Color`).
 (double, double, double) _serviceColor(ServiceType s) => switch (s) {
@@ -82,6 +84,13 @@ String _n(double v) => v.toStringAsFixed(2);
 /// sheet is NTS and NO divided bar is printed — a bar at an arbitrary
 /// auto-fit ratio is a bar an engineer could scale wrong dimensions from
 /// (CAD-OUTPUT-UX-REVIEW A3).
+///
+/// With [underlay] present (A1) the floor-plan substrate is painted FIRST,
+/// beneath every network stroke: a [VectorPlanUnderlay] as pale-grey thin
+/// linework, a [RasterPlanUnderlay] as a FlateDecode image XObject scaled to
+/// the sheet frame's fitted rect. The underlay's sheet frame joins the fit
+/// bounds so the whole plan lands on the page. Null keeps the output
+/// byte-identical.
 Uint8List networkToPdf({
   required Network net,
   required Map<String, EdgeSizing> sizing,
@@ -90,6 +99,7 @@ Uint8List networkToPdf({
   String title = 'MechX drawing',
   DrawingChrome? chrome,
   double? metersPerPixel,
+  PlanUnderlay? underlay,
 }) {
   const pageW = 1190.55; // A3 landscape, points (420 mm)
   const pageH = 841.89; // 297 mm
@@ -120,6 +130,15 @@ Uint8List networkToPdf({
       if (onFloor(a)) include(a);
       if (onFloor(c)) include(c);
     }
+  }
+
+  // A1: an underlay covers the full sheet frame — include it in the fit so
+  // the whole floor plan lands on the page (null keeps the network-only fit).
+  if (underlay != null) {
+    minX = math.min(minX, 0);
+    minY = math.min(minY, 0);
+    maxX = math.max(maxX, underlay.sheetWidthPx);
+    maxY = math.max(maxY, underlay.sheetHeightPx);
   }
 
   final hasContent = minX.isFinite;
@@ -188,6 +207,20 @@ Uint8List networkToPdf({
 
   // ── Content stream ─────────────────────────────────────────────────────────
   final cs = StringBuffer();
+  // A1: the floor-plan underlay paints FIRST — every network stroke, label and
+  // chrome overprints the pale plan.
+  switch (underlay) {
+    case final VectorPlanUnderlay v:
+      cs.write(pdfVectorUnderlayOps(v, tx: tx, ty: ty, pageScale: scale));
+    case final RasterPlanUnderlay r:
+      cs.write(pdfRasterUnderlayOps(
+          x: tx(0),
+          y: ty(r.sheetHeightPx),
+          w: r.sheetWidthPx * scale,
+          h: r.sheetHeightPx * scale));
+    case null:
+      break;
+  }
   if (!hasChrome) {
     // Title, top-left, black (an issued sheet carries it in the title block).
     cs.writeln('BT /F1 16 Tf 0 0 0 rg '
@@ -211,6 +244,59 @@ Uint8List networkToPdf({
     cs.writeln('${_n(cx + k * r)} ${_n(cy - r)} ${_n(cx + r)} ${_n(cy - k * r)} '
         '${_n(cx + r)} ${_n(cy)} c');
     cs.writeln('S');
+  }
+
+  // A5 flow arrow: one small OPEN chevron at the 2/3 point of a long-enough
+  // sized run along its flow direction ([upstream]→[downstream] in page
+  // points), mirroring the on-canvas `network_layer._flowChevron`. Drawn on
+  // top of the run in the service colour.
+  void flowChevron(double ux, double uy, double dxp, double dyp, double len,
+      ServiceType service) {
+    const arm = 5.0;
+    final dirx = (dxp - ux) / len, diry = (dyp - uy) / len;
+    final perpx = -diry, perpy = dirx;
+    final atx = ux + dirx * (len * 2 / 3), aty = uy + diry * (len * 2 / 3);
+    final tipx = atx + dirx * (arm * 0.5), tipy = aty + diry * (arm * 0.5);
+    final backx = tipx - dirx * arm, backy = tipy - diry * arm;
+    final w1x = backx + perpx * (arm * 0.75), w1y = backy + perpy * (arm * 0.75);
+    final w2x = backx - perpx * (arm * 0.75), w2y = backy - perpy * (arm * 0.75);
+    final (r, g, b) = _serviceColor(service);
+    cs.writeln('${_n(r)} ${_n(g)} ${_n(b)} RG');
+    cs.writeln('1.60 w');
+    cs.writeln('${_n(w1x)} ${_n(w1y)} m ${_n(tipx)} ${_n(tipy)} l S');
+    cs.writeln('${_n(w2x)} ${_n(w2y)} m ${_n(tipx)} ${_n(tipy)} l S');
+  }
+
+  // A5 node symbol: stroke a plan-symbol prim list (already in page points,
+  // y-DOWN) in the service colour of the node's dominant edge, MIRRORED about
+  // the node's baseline [pageCy] (the prims are authored y-down; the PDF page
+  // is y-up). Only [SldLine]/[SldCircle] arise from the plan-symbol library.
+  void strokePrims(
+      List<SldPrim> prims, double pageCy, (double, double, double) col) {
+    final (r, g, b) = col;
+    cs.writeln('${_n(r)} ${_n(g)} ${_n(b)} RG');
+    cs.writeln('1.00 w');
+    for (final pr in prims) {
+      switch (pr) {
+        case final SldLine l:
+          cs.writeln('${_n(l.x1)} ${_n(2 * pageCy - l.y1)} m '
+              '${_n(l.x2)} ${_n(2 * pageCy - l.y2)} l S');
+        case final SldCircle cc:
+          circle(cc.cx, 2 * pageCy - cc.cy, cc.r);
+        case SldRect():
+        case SldLabel():
+          break; // never produced by the plan-symbol library
+      }
+    }
+  }
+
+  // The service of a node's first incident edge (for its symbol colour), or
+  // null when the node is unconnected → neutral dark.
+  ServiceType? domService(NetNode n) {
+    for (final e in net.edges) {
+      if (e.fromId == n.id || e.toId == n.id) return e.service;
+    }
+    return null;
   }
 
   // A7 label discipline: rotate to the edge bearing (a `Tm` text matrix),
@@ -251,6 +337,16 @@ Uint8List networkToPdf({
       cs.writeln('${_n(tx(a.x))} ${_n(ty(a.y))} m '
           '${_n(tx(c.x))} ${_n(ty(c.y))} l S');
       if (dash != null) cs.writeln('[] 0 d'); // back to solid
+      // A5 flow arrow on a sized run with a known orientation and enough length.
+      if (s != null && s.flowFromId != null) {
+        final ax = tx(a.x), ay = ty(a.y), bx = tx(c.x), by = ty(c.y);
+        final len = math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
+        if (len > 30) {
+          final upIsA = s.flowFromId == a.id;
+          flowChevron(upIsA ? ax : bx, upIsA ? ay : by, upIsA ? bx : ax,
+              upIsA ? by : ay, len, e.service);
+        }
+      }
       if (s != null) {
         edgeLabel(tx(a.x), ty(a.y), tx(c.x), ty(c.y), _sizeLabel(e, s));
       }
@@ -260,7 +356,31 @@ Uint8List networkToPdf({
       for (final n in [a, c]) {
         if (!onFloor(n)) continue;
         circle(tx(n.x), ty(n.y), 5);
+        // A5 riser UP/DN sense from the endpoints' floor indices.
+        final other = n.id == a.id ? c : a;
+        final sense =
+            riserUpDown(hereFloor: n.floorIndex, otherFloor: other.floorIndex);
+        if (sense != null) {
+          cs.writeln('BT /F1 9 Tf 0 0 0 rg '
+              '${_n(tx(n.x) + 8)} ${_n(ty(n.y) - 3)} Td (${_pdfText(sense)}) Tj ET');
+        }
       }
+    }
+  }
+
+  // A5 node symbols: draw the equipment glyph for a component node and a drop
+  // triangle for a fixture-role node, replacing the anonymous dot. Plain main
+  // junctions are unchanged (this exporter never dotted them).
+  for (final n in net.nodes) {
+    if (!onFloor(n)) continue;
+    final px = tx(n.x), py = ty(n.y);
+    final svc = domService(n);
+    final col = svc == null ? (0.20, 0.20, 0.20) : _serviceColor(svc);
+    final comp = n.component;
+    if (comp != null) {
+      strokePrims(planComponentPrims(comp, cx: px, cy: py, size: 14), py, col);
+    } else if (n.role == NodeRole.fixture) {
+      strokePrims(planFixturePrims(cx: px, cy: py, size: 14), py, col);
     }
   }
 
@@ -287,14 +407,21 @@ Uint8List networkToPdf({
   // ── Object assembly with a byte-accurate cross-reference table ──────────────
   final content = cs.toString();
   final contentLen = latin1.encode(content).length;
-  final objects = <String>[
+  // A1: a raster underlay adds one image XObject (object 6) referenced from
+  // the page resources; the object list stays a plain sequence so the xref
+  // offsets below remain byte-accurate. Text objects stay latin1 strings.
+  final raster = underlay is RasterPlanUnderlay ? underlay : null;
+  final objects = <Object>[
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
     '<< /Type /Page /Parent 2 0 R '
         '/MediaBox [0 0 ${_n(pageW)} ${_n(pageH)}] '
-        '/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+        '/Resources << /Font << /F1 5 0 R >> '
+        '${raster != null ? '/XObject << /Im1 6 0 R >> ' : ''}'
+        '>> /Contents 4 0 R >>',
     '<< /Length $contentLen >>\nstream\n$content\nendstream',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    if (raster != null) pdfRasterUnderlayObject(raster),
   ];
 
   final out = BytesBuilder();
@@ -305,7 +432,12 @@ Uint8List networkToPdf({
   for (var i = 0; i < objects.length; i++) {
     offsets.add(out.length);
     w('${i + 1} 0 obj\n');
-    w(objects[i]);
+    final o = objects[i];
+    if (o is String) {
+      w(o);
+    } else {
+      out.add(o as List<int>); // the binary image object
+    }
     w('\nendobj\n');
   }
   final xref = out.length;

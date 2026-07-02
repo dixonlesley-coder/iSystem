@@ -127,6 +127,28 @@ bool _labelBoxesIntersect(SldLabel a, SldLabel b) {
   return a.x < bMaxX && b.x < aMaxX && aMinY < b.y && bMinY < a.y;
 }
 
+/// A soil + vent stack (B2): a drainage riser dropping to a ground-floor base,
+/// a vent riser teeing off the shared mid junction, optionally reaching the
+/// top floor (VTR) and optionally a cleanout beside the stack base.
+Network _stackNet({bool withCleanout = true, bool ventToTop = true}) => Network(
+      nodes: [
+        _n('base', 200, 0),
+        _n('j1', 200, 1),
+        if (ventToTop) _n('top', 200, 2) else _n('v0', 260, 0),
+        if (withCleanout)
+          _n('co', 140, 0,
+              role: NodeRole.fixture, component: NodeComponent.cleanout),
+      ],
+      edges: [
+        _e('soil', 'j1', 'base', ServiceType.drainage, kind: EdgeKind.riser),
+        if (ventToTop)
+          _e('vent', 'j1', 'top', ServiceType.vent, kind: EdgeKind.riser)
+        else
+          _e('vent', 'v0', 'j1', ServiceType.vent, kind: EdgeKind.riser),
+        if (withCleanout) _e('cob', 'base', 'co', ServiceType.drainage),
+      ],
+    );
+
 const _levels = BuildingLevels([
   Floor('Ground', Length(4)),
   Floor('Level 1', Length(4)),
@@ -279,13 +301,17 @@ void main() {
       );
       final lines = s.prims.whereType<SldLine>().toList();
       // Datum baselines: one per building floor, all THIN and un-layered.
+      // Re-derived for the B1 symbol pass: equipment/fixture GLYPH strokes are
+      // thin un-layered lines too now, so a datum is additionally identified by
+      // its full-band horizontal span (a glyph stroke is ≤ ~20 units long).
       final datums = lines
-          .where((l) => l.weight == SldWeight.thin && l.layer == null)
+          .where((l) =>
+              l.weight == SldWeight.thin &&
+              l.layer == null &&
+              l.y1 == l.y2 &&
+              (l.x2 - l.x1).abs() > 800)
           .toList();
       expect(datums.length, greaterThanOrEqualTo(3)); // Ground / L1 / Roof
-      for (final d in datums) {
-        expect(d.y1, d.y2); // datum is a pure horizontal baseline
-      }
       // Every cold-water pipe run/riser is MEDIUM and carries the CW layer —
       // re-derived per CAD-OUTPUT-UX-REVIEW B4 (runs were formerly thin).
       final cwPipes = lines.where((l) => l.layer == 'CW').toList();
@@ -370,6 +396,190 @@ void main() {
       final leaders = s.prims.whereType<SldLine>().where((l) =>
           l.weight == SldWeight.thin && l.x1 != l.x2 && l.y1 != l.y2);
       expect(leaders, isNotEmpty);
+    });
+
+    // ── B1: export parity with the live Auto canvas ──────────────────────────
+    test('B1: nodes carry real schematic symbols, not anonymous boxes', () {
+      // A pump component renders the plan-symbol glyph (its casing CIRCLE) in
+      // the plant SOURCE role; the old node treatment had no such circle.
+      final net = Network(
+        nodes: [
+          _n('p', 100, 0, role: NodeRole.plant, component: NodeComponent.pump),
+          _n('m', 300, 0),
+        ],
+        edges: [_e('e', 'p', 'm', ServiceType.coldWater)],
+      );
+      final s = buildMechanicalRiserSld(network: net, building: _levels);
+      expect(
+          s.prims
+              .whereType<SldCircle>()
+              .where((c) => c.role == SldRole.source),
+          isNotEmpty);
+      // Fixtures switched from the open circle to the drop-triangle marker and
+      // the roof-tank glyph is pure line-work, so the riser net has NO circles.
+      final riser = buildMechanicalRiserSld(
+          network: _riserNet(), building: _levels, downfeed: true);
+      expect(riser.prims.whereType<SldCircle>(), isEmpty);
+    });
+
+    test('B1: an equipment detail suffix is appended to the node label', () {
+      final s = buildMechanicalRiserSld(
+        network: _riserNet(),
+        building: _levels,
+        downfeed: true,
+        equipmentDetailByNodeId: const {'rt': '5 m3'},
+      );
+      expect(_labels(s), contains('Roof tank · 5 m3'));
+      // No supplied detail => the plain name (nothing fabricated).
+      final plain = buildMechanicalRiserSld(
+          network: _riserNet(), building: _levels, downfeed: true);
+      expect(_labels(plain), contains('Roof tank'));
+      expect(_labels(plain), isNot(contains('· 5 m3')));
+    });
+
+    test('B1: a flow chevron (3 lines) draws ONLY when the solve knows the '
+        'direction', () {
+      final noDir = buildMechanicalRiserSld(
+        network: _riserNet(),
+        sizing: {'b1': _sz('b1', ServiceType.coldWater, 40)},
+        building: _levels,
+        downfeed: true,
+      );
+      final withDir = buildMechanicalRiserSld(
+        network: _riserNet(),
+        sizing: {
+          'b1': _sz('b1', ServiceType.coldWater, 40).withFlowFrom('m'),
+        },
+        building: _levels,
+        downfeed: true,
+      );
+      final n0 = noDir.prims.whereType<SldLine>().length;
+      final n1 = withDir.prims.whereType<SldLine>().length;
+      // A chevron is exactly 3 SldLines (a short shaft + two arrowhead legs).
+      expect(n1, n0 + 3);
+    });
+
+    test('B1: the new detail params default EMPTY => byte-identical output',
+        () {
+      final base = buildMechanicalRiserSld(
+        network: _riserNet(),
+        sizing: {'riser': _sz('riser', ServiceType.coldWater, 50)},
+        building: _levels,
+        downfeed: true,
+      );
+      final explicit = buildMechanicalRiserSld(
+        network: _riserNet(),
+        sizing: {'riser': _sz('riser', ServiceType.coldWater, 50)},
+        building: _levels,
+        downfeed: true,
+        equipmentDetailByNodeId: const {},
+        notes: const [],
+        detailCallouts: false,
+      );
+      // Pin byte-identity through a full render (geometry AND ordering).
+      expect(sldSheetToDxf(sheet: explicit), sldSheetToDxf(sheet: base));
+      // And none of the gated content leaks into the default sheet.
+      final text = _labels(base);
+      expect(text, isNot(contains('KETERANGAN')));
+      expect(text, isNot(contains('DETAIL WATER METER')));
+      expect(text, isNot(contains('PUMP-SET DETAIL')));
+    });
+
+    test('B1: notes render as a bordered KETERANGAN block that grows the sheet',
+        () {
+      final s = buildMechanicalRiserSld(
+        network: _riserNet(),
+        building: _levels,
+        downfeed: true,
+        notes: const [
+          'Feed: gravity downfeed (roof tank)',
+          'Roof tank: 5 m3',
+        ],
+      );
+      final text = _labels(s);
+      expect(text, contains('KETERANGAN'));
+      expect(text, contains('Feed: gravity downfeed (roof tank)'));
+      expect(text, contains('Roof tank: 5 m3'));
+      // The block border rect (width 240 — the notes block) was emitted and the
+      // bounds grew downward to carry it.
+      expect(s.prims.whereType<SldRect>().any((r) => r.w == 240), isTrue);
+      final plain = buildMechanicalRiserSld(
+          network: _riserNet(), building: _levels, downfeed: true);
+      expect(s.maxY, greaterThan(plain.maxY));
+    });
+
+    test('B1: detailCallouts draws the valve references + the data-gated '
+        'plant detail on the water focus only', () {
+      final s = buildMechanicalRiserSld(
+        network: _riserNet(),
+        building: _levels,
+        downfeed: true,
+        detailCallouts: true,
+        equipmentDetailByNodeId: const {'rt': '5 m3'},
+      );
+      final text = _labels(s);
+      expect(text, contains('DETAIL WATER METER'));
+      expect(text, contains('DETAIL PRV SET'));
+      expect(text, contains('PRV'));
+      // The plant detail carries the ROOF TANK row with its REAL capacity and
+      // the downfeed GRAVITASI leg label.
+      expect(text, contains('PUMP-SET DETAIL'));
+      expect(text, contains('ROOF TANK 5 m3'));
+      expect(text, contains('GRAVITASI'));
+      // Honesty: no supplied capacity => the row stays plain.
+      final noCap = buildMechanicalRiserSld(
+          network: _riserNet(),
+          building: _levels,
+          downfeed: true,
+          detailCallouts: true);
+      expect(_labels(noCap), contains('ROOF TANK'));
+      expect(_labels(noCap), isNot(contains('ROOF TANK 5 m3')));
+      // No plant nodes at all => the plant detail is omitted entirely (the
+      // generic valve references still draw — they are reference details).
+      final noPlant = buildMechanicalRiserSld(
+          network: _stackNet(), building: _levels, detailCallouts: true);
+      expect(_labels(noPlant), contains('DETAIL WATER METER'));
+      expect(_labels(noPlant), isNot(contains('PUMP-SET DETAIL')));
+      // A non-water focus omits the clean-water details entirely.
+      final drain = buildMechanicalRiserSld(
+          network: _stackNet(),
+          building: _levels,
+          focus: ServiceType.drainage,
+          detailCallouts: true);
+      expect(_labels(drain), isNot(contains('DETAIL WATER METER')));
+    });
+
+    // ── B2: drainage / vent stack detail ─────────────────────────────────────
+    test('B2: VTR + CO + the vent tee draw only from the DRAWN network', () {
+      final s = buildMechanicalRiserSld(network: _stackNet(), building: _levels);
+      final text = _labels(s);
+      // The vent riser reaches the top floor => a VTR termination.
+      expect(text, contains('VTR'));
+      // A drawn cleanout serves the stack base => the CO tag.
+      expect(text, contains('CO'));
+      // The vent-to-soil tee: a short (18-unit) D-layer bar at the shared
+      // junction — p.dx ± 9 by construction.
+      expect(
+          s.prims.whereType<SldLine>().any((l) =>
+              l.layer == 'D' && l.y1 == l.y2 && (l.x2 - l.x1).abs() == 18),
+          isTrue);
+      // No cleanout drawn => no CO tag (that case is a Review ADVISORY, never a
+      // fabricated symbol).
+      final bare = buildMechanicalRiserSld(
+          network: _stackNet(withCleanout: false), building: _levels);
+      expect(_labels(bare), isNot(contains('CO')));
+      // A vent stopping below the roof is NOT a VTR.
+      final short = buildMechanicalRiserSld(
+          network: _stackNet(ventToTop: false), building: _levels);
+      expect(_labels(short), isNot(contains('VTR')));
+    });
+
+    test('B2: the legend speaks the Indonesian sheet language for '
+        'drainage/vent/rainwater', () {
+      final s = buildMechanicalRiserSld(network: _stackNet(), building: _levels);
+      final meanings = {for (final e in s.legend) e.code: e.meaning};
+      expect(meanings['D'], 'Air kotor & bekas (drainage)');
+      expect(meanings['V'], 'Ven (vent)');
     });
 
     test('focus filter keeps only that service (drainage absent => fewer prims)',

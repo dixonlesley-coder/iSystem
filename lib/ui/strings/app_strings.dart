@@ -142,6 +142,19 @@ enum StringKey {
   shellRestore,
   shellDismiss,
 
+  // App shell — busy pill (slow foreground operations).
+  busyImportingPlan,
+  busyConvertingDwg,
+  busyOpeningProject,
+  busySaving,
+
+  // Unsaved-changes guard dialog (Open / Import / quit).
+  confirmDiscardTitle,
+  confirmDiscardBody,
+  confirmDiscardSave,
+  confirmDiscardDiscard,
+  confirmDiscardCancel,
+
   // App shell — Layout electrical inspector.
   shellElectricalLayer,
   shellElectricalLayerHelp,
@@ -441,6 +454,21 @@ const Map<StringKey, String> _en = {
   StringKey.shellRecoverPrompt: 'Recover unsaved work from your last session?',
   StringKey.shellRestore: 'Restore',
   StringKey.shellDismiss: 'Dismiss',
+
+  // App shell — busy pill.
+  StringKey.busyImportingPlan: 'Importing plan...',
+  StringKey.busyConvertingDwg: 'Converting DWG...',
+  StringKey.busyOpeningProject: 'Opening project...',
+  StringKey.busySaving: 'Saving...',
+
+  // Unsaved-changes guard dialog.
+  StringKey.confirmDiscardTitle: 'Unsaved changes',
+  StringKey.confirmDiscardBody:
+      'This project has changes that are not saved. Save them before '
+          'continuing?',
+  StringKey.confirmDiscardSave: 'Save',
+  StringKey.confirmDiscardDiscard: 'Discard',
+  StringKey.confirmDiscardCancel: 'Cancel',
 
   // App shell — Layout electrical inspector.
   StringKey.shellElectricalLayer: 'Electrical layer',
@@ -763,6 +791,21 @@ const Map<StringKey, String> _id = {
       'Pulihkan pekerjaan yang belum disimpan dari sesi terakhir Anda?',
   StringKey.shellRestore: 'Pulihkan',
   StringKey.shellDismiss: 'Tutup',
+
+  // App shell — busy pill.
+  StringKey.busyImportingPlan: 'Mengimpor denah...',
+  StringKey.busyConvertingDwg: 'Mengonversi DWG...',
+  StringKey.busyOpeningProject: 'Membuka proyek...',
+  StringKey.busySaving: 'Menyimpan...',
+
+  // Unsaved-changes guard dialog.
+  StringKey.confirmDiscardTitle: 'Perubahan belum disimpan',
+  StringKey.confirmDiscardBody:
+      'Proyek ini memiliki perubahan yang belum disimpan. Simpan sebelum '
+          'melanjutkan?',
+  StringKey.confirmDiscardSave: 'Simpan',
+  StringKey.confirmDiscardDiscard: 'Buang',
+  StringKey.confirmDiscardCancel: 'Batal',
 
   // App shell — Layout electrical inspector.
   StringKey.shellElectricalLayer: 'Lapisan listrik',

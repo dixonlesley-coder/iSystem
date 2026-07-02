@@ -38,6 +38,7 @@ import 'package:mechx_engine/units.dart';
 
 import '../../store/app_state.dart';
 import '../../store/electrical_store.dart';
+import '../../store/history_store.dart';
 import '../canvas/canvas_grid.dart';
 import '../canvas/viewport.dart';
 import '../theme/design_tokens.dart';
@@ -269,6 +270,22 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
+    // Undo / redo route through the GLOBAL timeline (history_store), matching
+    // the Layout canvas — so Ctrl+Z reverts the genuinely most-recent edit
+    // across domains, never silently undoing another workspace's work.
+    final mod = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+    if (mod && key == LogicalKeyboardKey.keyZ && !shift) {
+      ref.read(historyProvider.notifier).undo();
+      return KeyEventResult.handled;
+    }
+    if (mod &&
+        ((key == LogicalKeyboardKey.keyZ && shift) ||
+            key == LogicalKeyboardKey.keyY)) {
+      ref.read(historyProvider.notifier).redo();
+      return KeyEventResult.handled;
+    }
     if (key == LogicalKeyboardKey.delete ||
         key == LogicalKeyboardKey.backspace) {
       final sel = _selectedPanel;
@@ -2292,7 +2309,12 @@ class _PanelDraggableState extends State<_PanelDraggable> {
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onPanStart: (_) => _dragWorld = widget.world,
+      onPanStart: (_) {
+        // One undo snapshot per drag — the live `setPanelPosition` updates
+        // don't record, so the whole move collapses into a single undo step.
+        widget.controller.pushUndoSnapshot();
+        _dragWorld = widget.world;
+      },
       onPanUpdate: (d) {
         final next = (_dragWorld ?? widget.world) + d.delta / widget.scale;
         _dragWorld = next;

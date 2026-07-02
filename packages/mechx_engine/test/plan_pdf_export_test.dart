@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:mechx_engine/geometry/dxf_drawing.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
@@ -164,6 +165,152 @@ void main() {
 
   test('null chrome leaves the bytes byte-identical', () {
     expect(build(), equals(build()));
+  });
+
+  group('A1 floor-plan underlay', () {
+    // Vector fixture: a plan spanning world (0,0)–(100,80) fitted into a
+    // 500 × 400 sheet-pixel frame → k = 500/100 = 5 (the canvas fit).
+    const vector = VectorPlanUnderlay(
+      drawing: DxfDrawing(
+        polylines: [
+          DxfPolyline([DxfPoint(0, 0), DxfPoint(100, 80)]),
+        ],
+        circles: [],
+        arcs: [],
+        bounds: DxfBounds(0, 0, 100, 80),
+      ),
+      sheetWidthPx: 500,
+      sheetHeightPx: 400,
+    );
+
+    Uint8List withUnderlay(PlanUnderlay u) => planToPdf(
+        net: net,
+        sizing: sizing,
+        edgeLengths: lengths,
+        sheetId: 's1',
+        floorIndex: 0,
+        projectName: 'Tower A',
+        sheetName: 'Ground Floor',
+        dateString: '2026-06-27',
+        underlay: u);
+
+    test('vector: the pale-grey stroke precedes the first service stroke',
+        () {
+      final s = latin1.decode(withUnderlay(vector));
+      final grey = s.indexOf('0.75 0.75 0.75 RG'); // 25 % ink
+      expect(grey, greaterThanOrEqualTo(0));
+      expect(s, contains('0.50 w')); // the thin underlay stroke
+      // Painted FIRST: before the cold-water stroke colour is ever set.
+      expect(grey, lessThan(s.indexOf('0.13 0.45 0.85 RG')));
+    });
+
+    test('raster: a FlateDecode /Image XObject, painted before the network',
+        () {
+      // A 2×2 pre-faded RGB image covering the same 500 × 400 frame.
+      final raster = RasterPlanUnderlay(
+        rgbPixels: Uint8List.fromList(
+            [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]),
+        pixelWidth: 2,
+        pixelHeight: 2,
+        sheetWidthPx: 500,
+        sheetHeightPx: 400,
+      );
+      final s = latin1.decode(withUnderlay(raster));
+      expect(s, contains('/XObject << /Im1 6 0 R >>'));
+      expect(s, contains('/Subtype /Image'));
+      expect(s, contains('/Width 2 /Height 2'));
+      expect(s, contains('/Filter /FlateDecode'));
+      // The image paints FIRST — its Do op precedes the first network stroke.
+      expect(s.indexOf('/Im1 Do'), greaterThanOrEqualTo(0));
+      expect(s.indexOf('/Im1 Do'), lessThan(s.indexOf('0.13 0.45 0.85 RG')));
+    });
+
+    test('null underlay leaves the bytes byte-identical', () {
+      expect(
+          build(),
+          equals(planToPdf(
+              net: net,
+              sizing: sizing,
+              edgeLengths: lengths,
+              sheetId: 's1',
+              floorIndex: 0,
+              projectName: 'Tower A',
+              sheetName: 'Ground Floor',
+              dateString: '2026-06-27',
+              underlay: null)));
+    });
+  });
+
+  test('A5: a riser to a higher floor labels UP', () {
+    // e1 rises from n1 (floor 0) to n2 (floor 1); on-floor marker n1 → 'UP'.
+    expect(latin1.decode(build()), contains('(UP) Tj'));
+  });
+
+  test('A5: a plain junction keeps its filled dot', () {
+    // n0/n1 are plain main junctions → the 2 pt filled dot (a `f` fill op).
+    expect(latin1.decode(build()), contains('\nf\n'));
+  });
+
+  test('A5: a component node draws its equipment glyph; plain nodes do not', () {
+    // strokePrims (the glyph path) uses the distinctive 1.00 w stroke weight;
+    // an unsized run strokes at 1.4 w and plain dots only fill, so 1.00 w marks
+    // the pump glyph uniquely.
+    const pumpNet = Network(
+      nodes: [
+        NetNode(id: 'p', sheetId: 's1', x: 100, y: 200, floorIndex: 0,
+            role: NodeRole.plant, component: NodeComponent.pump),
+        NetNode(id: 'q', sheetId: 's1', x: 400, y: 200, floorIndex: 0),
+      ],
+      edges: [
+        NetEdge(id: 'e', fromId: 'p', toId: 'q', service: ServiceType.coldWater),
+      ],
+    );
+    const plainNet = Network(
+      nodes: [
+        NetNode(id: 'p', sheetId: 's1', x: 100, y: 200, floorIndex: 0),
+        NetNode(id: 'q', sheetId: 's1', x: 400, y: 200, floorIndex: 0),
+      ],
+      edges: [
+        NetEdge(id: 'e', fromId: 'p', toId: 'q', service: ServiceType.coldWater),
+      ],
+    );
+    String render(Network n) => latin1.decode(planToPdf(
+          net: n,
+          sizing: const {},
+          edgeLengths: const {},
+          sheetId: 's1',
+          floorIndex: 0,
+          projectName: 'T',
+          sheetName: 'S',
+          dateString: 'd',
+        ));
+    expect(render(pumpNet), contains('1.00 w')); // the glyph stroke
+    expect(render(plainNet), isNot(contains('1.00 w'))); // dots only, no glyph
+  });
+
+  test('A5: a sized run with a flow origin draws a flow chevron', () {
+    const oriented = {
+      'e0': EdgeSizing(
+        edgeId: 'e0',
+        service: ServiceType.coldWater,
+        flow: FlowRate(0.005),
+        diameter: Diameter(0.05),
+        velocity: Velocity(1.8),
+        flowFromId: 'n0',
+      ),
+    };
+    final arrowed = latin1.decode(planToPdf(
+      net: net,
+      sizing: oriented,
+      edgeLengths: lengths,
+      sheetId: 's1',
+      floorIndex: 0,
+      projectName: 'Tower A',
+      sheetName: 'Ground Floor',
+      dateString: '2026-06-27',
+    ));
+    expect(arrowed, contains('1.60 w')); // the chevron stroke weight
+    expect(latin1.decode(build()), isNot(contains('1.60 w'))); // baseline: none
   });
 
   test('an empty floor still produces a valid (title-only) page', () {

@@ -3,6 +3,8 @@
 /// SCALE BAR, a NORTH arrow, a sheet "X of Y" counter, and a revision /
 /// drawing-number title block. Used by the four export engines
 /// (`pdf_export`, `plan_pdf_export`, `dxf_export`, `electrical_pdf_export`).
+/// Also home of the A1 floor-plan UNDERLAY model + renderers (the substrate
+/// the engineer drew on, printed beneath the exported network).
 ///
 /// PURE: emits PDF content-stream fragments (y-up page space, points) and DXF
 /// entity fragments (y-up, world units) as strings; never reads the clock, no
@@ -10,8 +12,12 @@
 /// [DrawingChrome] is byte-identical to before this module existed.
 library;
 
+import 'dart:convert';
+import 'dart:io' show zlib;
 import 'dart:math' as math;
+import 'dart:typed_data';
 
+import '../geometry/dxf_drawing.dart';
 import '../network/network.dart';
 
 /// The issuable-document parameters a caller stamps onto an exported drawing.
@@ -821,4 +827,268 @@ EdgeLabelPlacement? placeEdgeLabel({
     }
   }
   return null;
+}
+
+// ── A1 floor-plan UNDERLAY (printed beneath the exported network) ───────────
+//
+// The plan exporters historically drew the network floating on white — the
+// sheet's PDF raster and parsed `DxfDrawing` both exist in the product but
+// never reached an export (CAD-OUTPUT-UX-REVIEW A1). The underlay is OPT-IN
+// like the chrome: a null underlay keeps every exporter byte-identical.
+
+/// DXF layer the re-emitted floor-plan underlay entities live on, so a CAD
+/// user can toggle/lock the background plan independently of the MEP work.
+const kDxfLayerUnderlay = 'G-ANNO-UNDR';
+
+/// ACI colour for the underlay layer/entities — 8 (grey), the CAD convention
+/// for background/reference linework.
+const kDxfUnderlayAci = 8;
+
+/// The floor-plan substrate to print BENEATH an exported network — either the
+/// already-parsed vector [DxfDrawing] (a DXF-backed sheet) or a pre-rendered,
+/// pre-faded raster (a PDF-backed sheet). Both carry the sheet's content-frame
+/// size in SHEET PIXELS — the same frame the drawn nodes' x/y live in — so the
+/// exporters map the underlay through their own fitted transform and it lands
+/// exactly under the network.
+sealed class PlanUnderlay {
+  const PlanUnderlay();
+
+  /// The sheet content-frame width in sheet pixels (`Sheet.sizePx`).
+  double get sheetWidthPx;
+
+  /// The sheet content-frame height in sheet pixels (`Sheet.sizePx`).
+  double get sheetHeightPx;
+}
+
+/// The VECTOR underlay: a parsed [DxfDrawing] plus the sheet-pixel frame it is
+/// uniformly fitted into. The fit REPRODUCES the canvas one
+/// (`dxf_import.dxfContentSize` + `dxf_sheet_page._DxfPainter`): world
+/// coordinates (y-up) are scaled by [worldToSheetScale] and Y-flipped into the
+/// y-down sheet-pixel frame, so the underlay lands in the SAME frame as the
+/// drawn nodes.
+class VectorPlanUnderlay extends PlanUnderlay {
+  final DxfDrawing drawing;
+  @override
+  final double sheetWidthPx;
+  @override
+  final double sheetHeightPx;
+
+  const VectorPlanUnderlay({
+    required this.drawing,
+    required this.sheetWidthPx,
+    required this.sheetHeightPx,
+  });
+
+  /// The uniform DXF-world → sheet-pixel scale — the canvas rule verbatim:
+  /// width ratio when the bounds width is non-degenerate, else the height
+  /// ratio, else 1 (a degenerate drawing maps 1:1).
+  double get worldToSheetScale {
+    final b = drawing.bounds;
+    final kx = b.width > 1e-9 ? sheetWidthPx / b.width : 0.0;
+    final ky = b.height > 1e-9 ? sheetHeightPx / b.height : 0.0;
+    if (kx != 0.0) return kx;
+    return ky != 0.0 ? ky : 1.0;
+  }
+
+  /// DXF world (x, y — y-up) → sheet pixels (y-down):
+  /// `x' = (x − minX)·k`, `y' = (maxY − y)·k` — the exact map the canvas
+  /// paints the DXF background with.
+  (double, double) toSheetPx(double x, double y) {
+    final b = drawing.bounds;
+    final k = worldToSheetScale;
+    return ((x - b.minX) * k, (b.maxY - y) * k);
+  }
+}
+
+/// The RASTER underlay: pre-rendered RGB8 pixel rows covering the FULL sheet
+/// frame `[0, sheetWidthPx] × [0, sheetHeightPx]`, row 0 = the sheet TOP
+/// (matching a PDF image XObject's row order). The app pre-fades the pixels
+/// toward white before handing them over — the engine embeds them verbatim.
+class RasterPlanUnderlay extends PlanUnderlay {
+  /// Raw RGB rows, 3 bytes per pixel, row-major from the top —
+  /// `pixelWidth × pixelHeight × 3` bytes.
+  final Uint8List rgbPixels;
+  final int pixelWidth;
+  final int pixelHeight;
+  @override
+  final double sheetWidthPx;
+  @override
+  final double sheetHeightPx;
+
+  const RasterPlanUnderlay({
+    required this.rgbPixels,
+    required this.pixelWidth,
+    required this.pixelHeight,
+    required this.sheetWidthPx,
+    required this.sheetHeightPx,
+  }) : assert(rgbPixels.length == pixelWidth * pixelHeight * 3,
+            'rgbPixels must be width × height × 3 bytes of RGB8');
+}
+
+/// A stroked PDF bezier circle (the exporters' own 4-arc kappa construction).
+void _pdfCircleOps(StringBuffer cs, double cx, double cy, double r) {
+  const k = 0.5523;
+  cs.writeln('${_n(cx + r)} ${_n(cy)} m');
+  cs.writeln('${_n(cx + r)} ${_n(cy + k * r)} ${_n(cx + k * r)} ${_n(cy + r)} '
+      '${_n(cx)} ${_n(cy + r)} c');
+  cs.writeln('${_n(cx - k * r)} ${_n(cy + r)} ${_n(cx - r)} ${_n(cy + k * r)} '
+      '${_n(cx - r)} ${_n(cy)} c');
+  cs.writeln('${_n(cx - r)} ${_n(cy - k * r)} ${_n(cx - k * r)} ${_n(cy - r)} '
+      '${_n(cx)} ${_n(cy - r)} c');
+  cs.writeln('${_n(cx + k * r)} ${_n(cy - r)} ${_n(cx + r)} ${_n(cy - k * r)} '
+      '${_n(cx + r)} ${_n(cy)} c');
+  cs.writeln('S');
+}
+
+/// The underlay ink: 25 % grey at a thin 0.5 pt — unmistakably background, so
+/// the coloured network strokes always read on top (a draughting *style*
+/// choice, not an engineering value).
+const double _kUnderlayGrey = 0.75;
+const double _kUnderlayStrokeW = 0.5;
+
+/// PDF content-stream ops stroking [u]'s DXF linework as the pale-grey
+/// underlay — an exporter writes this FIRST so every network stroke, label and
+/// chrome overprints it. [tx]/[ty] are the exporter's own sheet-pixel → page
+/// transform (y-flip included); [pageScale] its sheet-px → page-points factor,
+/// used for radii. Arcs are flattened to short chords (the underlay is a
+/// display background, never survey data — same simplification the canvas
+/// makes for polyline bulges).
+String pdfVectorUnderlayOps(
+  VectorPlanUnderlay u, {
+  required double Function(double x) tx,
+  required double Function(double y) ty,
+  required double pageScale,
+}) {
+  final cs = StringBuffer();
+  cs.writeln('${_n(_kUnderlayGrey)} ${_n(_kUnderlayGrey)} '
+      '${_n(_kUnderlayGrey)} RG');
+  cs.writeln('${_n(_kUnderlayStrokeW)} w');
+  final k = u.worldToSheetScale;
+  (double, double) map(double x, double y) {
+    final (sx, sy) = u.toSheetPx(x, y);
+    return (tx(sx), ty(sy));
+  }
+
+  for (final pl in u.drawing.polylines) {
+    if (pl.points.length < 2) continue;
+    final (x0, y0) = map(pl.points.first.x, pl.points.first.y);
+    cs.write('${_n(x0)} ${_n(y0)} m');
+    for (var i = 1; i < pl.points.length; i++) {
+      final (x, y) = map(pl.points[i].x, pl.points[i].y);
+      cs.write(' ${_n(x)} ${_n(y)} l');
+    }
+    cs.writeln(pl.closed ? ' h S' : ' S');
+  }
+  for (final c in u.drawing.circles) {
+    final (cx, cy) = map(c.center.x, c.center.y);
+    _pdfCircleOps(cs, cx, cy, c.radius * k * pageScale);
+  }
+  for (final a in u.drawing.arcs) {
+    // Sample the CCW sweep in world space and map each point — the sheet-px
+    // Y-flip and the page fit both ride the shared map, so no angle algebra.
+    var sweep = a.endDeg - a.startDeg;
+    while (sweep <= 0) {
+      sweep += 360;
+    }
+    final steps = math.max(4, (sweep / 12).ceil());
+    for (var i = 0; i <= steps; i++) {
+      final rad = (a.startDeg + sweep * i / steps) * math.pi / 180;
+      final (x, y) = map(a.center.x + a.radius * math.cos(rad),
+          a.center.y + a.radius * math.sin(rad));
+      cs.write(i == 0 ? '${_n(x)} ${_n(y)} m' : ' ${_n(x)} ${_n(y)} l');
+    }
+    cs.writeln(' S');
+  }
+  return cs.toString();
+}
+
+/// The content-stream ops painting the raster underlay image `/Im1` into its
+/// fitted page rect ([x]/[y] = the rect's BOTTOM-LEFT in points). A PDF image
+/// fills the unit square with pixel row 0 at the TOP, matching the raster's
+/// top-down sheet rows — so a plain scale-to-rect `cm` places it upright.
+String pdfRasterUnderlayOps({
+  required double x,
+  required double y,
+  required double w,
+  required double h,
+}) =>
+    'q ${_n(w)} 0 0 ${_n(h)} ${_n(x)} ${_n(y)} cm /Im1 Do Q\n';
+
+/// The complete PDF object BODY (dict + stream) for a raster underlay's
+/// FlateDecode `/Image` XObject — the raw RGB8 rows zlib-deflated (`dart:io`'s
+/// [zlib] produces exactly the zlib-wrapped DEFLATE that `/FlateDecode`
+/// decodes). Returned as raw BYTES because the deflated stream is binary,
+/// unlike the exporters' latin1-text objects; the exporter writes it between
+/// its own `N 0 obj` / `endobj` markers and names it `/Im1` in the page
+/// resources.
+List<int> pdfRasterUnderlayObject(RasterPlanUnderlay u) {
+  final deflated = zlib.encode(u.rgbPixels);
+  final head = '<< /Type /XObject /Subtype /Image '
+      '/Width ${u.pixelWidth} /Height ${u.pixelHeight} '
+      '/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode '
+      '/Length ${deflated.length} >>\nstream\n';
+  return [...latin1.encode(head), ...deflated, ...latin1.encode('\nendstream')];
+}
+
+/// Re-emit [u]'s parsed DXF primitives as underlay ENTITIES on
+/// [kDxfLayerUnderlay] — LINEs per polyline segment (mirroring what `parseDxf`
+/// yields for LINE/LWPOLYLINE/POLYLINE), plus native CIRCLE/ARC — transformed
+/// into the export's world frame. [unitsPerSheetPx] is 1 for the legacy
+/// pixel-space document and `mmPerPx` for the professional millimetre one.
+///
+/// The net map is `X = (x − minX)·k`, `Y = (y − maxY)·k` (sheet pixels are
+/// y-DOWN and the DXF export negates Y back to y-up) — a pure translate +
+/// uniform scale of the source geometry, so ARC angles and sweeps carry over
+/// UNCHANGED. Each entity carries group 62 = [kDxfUnderlayAci] so the underlay
+/// reads grey even in the legacy document, which has no LAYER table.
+String dxfUnderlayEntities(
+  VectorPlanUnderlay u, {
+  double unitsPerSheetPx = 1.0,
+}) {
+  final b = StringBuffer();
+  final bnd = u.drawing.bounds;
+  final k = u.worldToSheetScale * unitsPerSheetPx;
+  (double, double) map(double x, double y) =>
+      ((x - bnd.minX) * k, (y - bnd.maxY) * k);
+
+  void head(String type) {
+    _g(b, 0, type);
+    _g(b, 8, kDxfLayerUnderlay);
+    _g(b, 62, kDxfUnderlayAci);
+  }
+
+  void line(DxfPoint p1, DxfPoint p2) {
+    final (x1, y1) = map(p1.x, p1.y);
+    final (x2, y2) = map(p2.x, p2.y);
+    head('LINE');
+    _g(b, 10, x1);
+    _g(b, 20, y1);
+    _g(b, 11, x2);
+    _g(b, 21, y2);
+  }
+
+  for (final pl in u.drawing.polylines) {
+    final pts = pl.points;
+    for (var i = 0; i + 1 < pts.length; i++) {
+      line(pts[i], pts[i + 1]);
+    }
+    if (pl.closed && pts.length > 2) line(pts.last, pts.first);
+  }
+  for (final c in u.drawing.circles) {
+    final (cx, cy) = map(c.center.x, c.center.y);
+    head('CIRCLE');
+    _g(b, 10, cx);
+    _g(b, 20, cy);
+    _g(b, 40, c.radius * k);
+  }
+  for (final a in u.drawing.arcs) {
+    final (cx, cy) = map(a.center.x, a.center.y);
+    head('ARC');
+    _g(b, 10, cx);
+    _g(b, 20, cy);
+    _g(b, 40, a.radius * k);
+    _g(b, 50, a.startDeg);
+    _g(b, 51, a.endDeg);
+  }
+  return b.toString();
 }

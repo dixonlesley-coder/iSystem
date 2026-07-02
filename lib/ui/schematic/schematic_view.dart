@@ -29,7 +29,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
-import 'package:mechx_engine/sizing/fan.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
@@ -54,6 +53,12 @@ import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
 import 'riser_tags.dart';
 import 'schematic_export.dart';
+
+// `equipmentDetail` was lifted into the engine (`report/riser_tags.dart`) so
+// the riser single-line EXPORT builds the same per-node capacity/duty suffixes
+// the canvas draws (B1 export parity); re-exported so existing importers and
+// tests keep resolving it from this library.
+export 'riser_tags.dart' show equipmentDetail;
 
 // ---------------------------------------------------------------------------
 // Public widget
@@ -1225,57 +1230,6 @@ StringKey drawingTitleKey(ServiceType? focus) {
   };
 }
 
-/// The equipment detail SUFFIX drawn beside an equipment symbol on the
-/// single-line — a tank capacity (`237 m3`) or a duty (`5.5 kW`) — or null when
-/// no datum genuinely exists (the node then keeps its plain name, no fabricated
-/// value). HONEST: a tank's m3 is a direct conversion of the stored
-/// [NetNode.tankCapacityLitres]; a duty is shown only when the matching system
-/// duty provider is non-null.
-///
-/// Pure + Flutter-free (engine types only) so it is unit-testable in isolation.
-String? equipmentDetail(
-  NetNode node, {
-  PumpDuty? supplyPump,
-  FanDuty? fan,
-  PumpDuty? firePump,
-}) {
-  final c = node.component;
-  if (c == null) return null;
-  switch (c) {
-    case NodeComponent.roofTank:
-    case NodeComponent.groundTank:
-    case NodeComponent.expansionTank:
-      final litres = node.tankCapacityLitres;
-      if (litres == null || litres <= 0) return null;
-      final m3 = litres / 1000.0;
-      // Whole-m3 for big cisterns, one decimal for small tanks; strip a '.0'.
-      // ASCII 'm3' — matching the plant-detail callout, the notes card and the
-      // export (the PDF sanitizer would mangle a real superscript to '?').
-      final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
-      final clean = s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
-      return '$clean m3';
-    case NodeComponent.pump:
-    case NodeComponent.boosterSet:
-      // VERIFY: this is the SYSTEM supply-pump duty (one trunk pump), not a
-      // per-node solve — a project with several independent pumps would show the
-      // same duty on every pump node. Acceptable first pass (one supply pump is
-      // the norm); the fire pump is deliberately NOT attached here (no node-kind
-      // distinguishes a fire pump from a plumbing pump yet).
-      if (supplyPump == null) return null;
-      return '${supplyPump.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW';
-    case NodeComponent.ahu:
-    case NodeComponent.fcu:
-    case NodeComponent.supplyFan:
-    case NodeComponent.exhaustFan:
-      // VERIFY: same system-level caveat as the pump — the central duct-fan duty
-      // is attached to every air-unit node of this kind (no per-unit fan solve).
-      if (fan == null) return null;
-      return '${fan.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW';
-    default:
-      return null;
-  }
-}
-
 /// Pipe material code — the edge's chosen product, else the conventional
 /// default for the service (clean/hot water ⇒ PPR, drainage/vent/storm ⇒ PVC,
 /// fire ⇒ black steel) so the tag always reads like a real drawing.
@@ -1534,6 +1488,7 @@ class _AutoSchematicPainter extends CustomPainter {
       _paintFloorFanOut(canvas, size);
       _paintPlantDetail(canvas, size);
       _paintValveCallouts(canvas, size);
+      _paintStackDetails(canvas, size, nodePos);
     }
   }
 
@@ -2073,6 +2028,74 @@ class _AutoSchematicPainter extends CustomPainter {
       glyph: 15,
       gap: 32,
     );
+  }
+
+  /// (B2) STACK DETAIL — the drainage/vent riser conventions, all data-gated on
+  /// the DRAWN network (never a fabricated cleanout / vent):
+  ///   • a `CO` tag beside each cleanout that actually serves a drainage stack
+  ///     base (the missing-cleanout case is a Review ADVISORY instead);
+  ///   • a short tee bar where a vent riser ties into the soil stack;
+  ///   • a VTR (vent-through-roof) stub + label where a vent riser reaches the
+  ///     top floor.
+  /// Mirrors the export builder's stack details (one convention, two renders).
+  void _paintStackDetails(
+      Canvas canvas, Size size, Map<String, Offset> nodePos) {
+    final ventColor = serviceColor(ServiceType.vent);
+    final drainColor = serviceColor(ServiceType.drainage);
+    if (focus == null || focus == ServiceType.vent) {
+      final topFloor = building.levelCount - 1;
+      for (final id in ventTopTerminalIds(network, topFloor: topFloor)) {
+        final p = nodePos[id];
+        if (p == null) continue;
+        final stubTop = Offset(p.dx, p.dy - 34);
+        final paint = Paint()
+          ..color = ventColor
+          ..strokeWidth = 1.5
+          ..style = PaintingStyle.stroke;
+        canvas.drawLine(Offset(p.dx, p.dy - 10), stubTop, paint);
+        // Roof-penetration cap tick.
+        canvas.drawLine(Offset(p.dx - 4, stubTop.dy),
+            Offset(p.dx + 4, stubTop.dy), paint);
+        _drawText(
+          canvas,
+          'VTR',
+          Offset(p.dx + 6, stubTop.dy - 4),
+          fontSize: 9,
+          color: ventColor,
+          fontWeight: FontWeight.w600,
+        );
+      }
+    }
+    if (focus == null ||
+        focus == ServiceType.vent ||
+        focus == ServiceType.drainage) {
+      for (final id in ventSoilTeeNodeIds(network)) {
+        final p = nodePos[id];
+        if (p == null) continue;
+        canvas.drawLine(
+          Offset(p.dx - 9, p.dy),
+          Offset(p.dx + 9, p.dy),
+          Paint()
+            ..color = drainColor
+            ..strokeWidth = 2
+            ..style = PaintingStyle.stroke,
+        );
+      }
+    }
+    if (focus == null || focus == ServiceType.drainage) {
+      for (final id in cleanoutAtStackBaseIds(network)) {
+        final p = nodePos[id];
+        if (p == null) continue;
+        _drawText(
+          canvas,
+          'CO',
+          Offset(p.dx - 22, p.dy - 18),
+          fontSize: 9,
+          color: drainColor,
+          fontWeight: FontWeight.w600,
+        );
+      }
+    }
   }
 
   /// (5) PER-FLOOR BRANCH FAN-OUT — under each floor band, a compact column of

@@ -20,6 +20,7 @@ import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/fault.dart' show defaultLvUtilityFaultKa;
 import 'package:mechx_engine/electrical/geo_length.dart';
+import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
@@ -28,6 +29,7 @@ import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'electrical_feed.dart';
+import 'history_store.dart';
 import 'project_store.dart';
 
 /// The outcome of a [ElectricalProjectController.connectFeeder] attempt — a
@@ -144,6 +146,16 @@ final electricalAdvancedProvider = Provider<AdvancedStudy>(
 
 @immutable
 class ElectricalProjectController extends Notifier<ElectricalProject> {
+  // Local snapshot stacks (the house undo pattern — mirrors NetworkController /
+  // ProjectController): the state is an immutable [ElectricalProject], so a
+  // snapshot is just the previous state reference. Every USER mutation funnels
+  // through [_commit], which pushes a snapshot AND records
+  // [UndoDomain.electrical] on the single global timeline (`history_store`);
+  // `historyProvider.undo()` pops the timeline and drives [undo] here, so
+  // Ctrl+Z reverts the genuinely most-recent edit across domains.
+  final List<ElectricalProject> _undo = [];
+  final List<ElectricalProject> _redo = [];
+
   @override
   ElectricalProject build() {
     // Keep the "MEP Equipment" panel in sync with the motorised equipment NODES
@@ -160,33 +172,83 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     return sampleElectricalProject();
   }
 
-  /// Replace the whole project (used by A6 persistence / A5 auto-feed later).
-  void setProject(ElectricalProject project) => state = project;
+  bool get canUndo => _undo.isNotEmpty;
+  bool get canRedo => _redo.isNotEmpty;
+
+  /// The single forward-mutation funnel: snapshot the current project onto the
+  /// undo stack, record this domain on the global timeline (which clears the
+  /// global redo branch), clear the local redo stack, and apply [next]. Every
+  /// USER edit intent routes through here — programmatic replacements
+  /// ([setProject] loads, [syncMepEquipment] derived syncs) deliberately don't.
+  void _commit(ElectricalProject next) {
+    _undo.add(state);
+    if (_undo.length > 200) _undo.removeAt(0);
+    _redo.clear();
+    ref.read(historyProvider.notifier).record(UndoDomain.electrical);
+    state = next;
+  }
+
+  /// Snapshot the current project onto the undo stack WITHOUT changing state —
+  /// call once at the start of a drag (or before a non-recording placement) so
+  /// the whole move collapses into a single undo step. Mirrors
+  /// `NetworkController.pushUndoSnapshot`.
+  void pushUndoSnapshot() {
+    _undo.add(state);
+    if (_undo.length > 200) _undo.removeAt(0);
+    _redo.clear();
+    ref.read(historyProvider.notifier).record(UndoDomain.electrical);
+  }
+
+  /// Revert the most recent committed edit. Driven by the global
+  /// [historyProvider] (which owns cross-domain ordering) — not called
+  /// directly by widgets.
+  void undo() {
+    if (_undo.isEmpty) return;
+    _redo.add(state);
+    state = _undo.removeLast();
+  }
+
+  /// Replay the most recently undone edit (see [undo]).
+  void redo() {
+    if (_redo.isEmpty) return;
+    _undo.add(state);
+    state = _redo.removeLast();
+  }
+
+  /// Replace the whole project (A6 persistence load / crash recovery). A loaded
+  /// document is a fresh baseline, so BOTH local stacks clear — the caller
+  /// (`applyDocument`) resets the global timeline to match, like the other
+  /// domain controllers clearing their stacks on load. Never records undo.
+  void setProject(ElectricalProject project) {
+    _undo.clear();
+    _redo.clear();
+    state = project;
+  }
 
   /// Rename the project.
-  void setName(String name) => state = _withProject(name: name);
+  void setName(String name) => _commit(_withProject(name: name));
 
   /// Set the installation earthing system (drives RCD policy + main earthing).
   void setEarthingSystem(EarthingSystem system) =>
-      state = _withProject(earthingSystem: system);
+      _commit(_withProject(earthingSystem: system));
 
   /// Set the prospective origin fault level (Fold-1 busbar short-circuit
   /// withstand). Null resets to the app default (16 kA). Non-positive values are
   /// ignored (the engine guards faultKa ≤ 0, but we avoid persisting garbage).
   void setOriginFaultLevel(Current? a) {
     if (a != null && a.amperes <= 0) return;
-    state = a == null
+    _commit(a == null
         ? _withProject(clearOriginFaultLevelA: true)
-        : _withProject(originFaultLevelA: a);
+        : _withProject(originFaultLevelA: a));
   }
 
   /// Set the busbar clearing time (s) for the Fold-1 withstand thermal check.
   /// Null resets to the app default (0.1 s). Non-positive values are ignored.
   void setBusbarClearingTime(double? s) {
     if (s != null && s <= 0) return;
-    state = s == null
+    _commit(s == null
         ? _withProject(clearBusbarClearingTimeS: true)
-        : _withProject(busbarClearingTimeS: s);
+        : _withProject(busbarClearingTimeS: s));
   }
 
   // ── Source-spine intents (genset / capacitor / transformer / dual-tx) ───────
@@ -223,9 +285,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Set (or clear) the standby/prime generator on the source spine.
   void setGenerator(GeneratorSource? gen) {
     final next = _sourcesWith(generator: gen, clearGenerator: gen == null);
-    state = next == null
+    _commit(next == null
         ? _withProject(clearSources: true)
-        : _withProject(sources: next);
+        : _withProject(sources: next));
   }
 
   /// Set the genset rating (kVA). Null ⇒ auto-size from demand (the ladder
@@ -266,22 +328,22 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Set the installed PF-correction capacitor bank (kvar). Null / non-positive
   /// ⇒ clear (falls back to the advanced study's recommended kvar caption).
   void setCapacitorBankKvar(double? kvar) {
-    state = (kvar == null || kvar <= 0)
+    _commit((kvar == null || kvar <= 0)
         ? _withProject(clearCapacitorBankKvar: true)
-        : _withProject(capacitorBankKvar: kvar);
+        : _withProject(capacitorBankKvar: kvar));
   }
 
   /// Set the explicit transformer rating (kVA). Null / non-positive ⇒ clear
   /// (falls back to the demand-derived ladder snap).
   void setTransformerKva(ApparentPower? kva) {
-    state = (kva == null || kva.voltAmperes <= 0)
+    _commit((kva == null || kva.voltAmperes <= 0)
         ? _withProject(clearTransformerKva: true)
-        : _withProject(transformerKva: kva);
+        : _withProject(transformerKva: kva));
   }
 
   /// Force / clear the dual-transformer (split-bus) MV supply.
   void setDualTransformer(bool value) =>
-      state = _withProject(dualTransformer: value);
+      _commit(_withProject(dualTransformer: value));
 
   /// Rebuild the project carrying every field through, overriding only those
   /// supplied — so an edit to one field never silently drops the additive A8
@@ -332,8 +394,8 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
             : (transformerKva ?? state.transformerKva),
       );
 
-  /// Restore the built-in sample project.
-  void resetToSample() => state = sampleElectricalProject();
+  /// Restore the built-in sample project (a user action — undoable).
+  void resetToSample() => _commit(sampleElectricalProject());
 
   // ── Edit intents (the interactive editor) ──────────────────────────────────
   // Every method rebuilds the panel list immutably and routes through
@@ -342,25 +404,36 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
 
   /// Replace one panel within the list (by id), preserving order. No-op when the
   /// id is unknown. The single funnel every per-panel edit routes through.
-  void _replacePanel(String panelId, ElectricalPanel Function(ElectricalPanel) f) {
+  /// [record] = false skips the undo snapshot (LIVE-DRAG intents only — pair
+  /// with [pushUndoSnapshot] at drag start, like the mechanical `moveNode`).
+  void _replacePanel(String panelId, ElectricalPanel Function(ElectricalPanel) f,
+      {bool record = true}) {
     var changed = false;
     final panels = [
       for (final p in state.panels)
         if (p.id == panelId) (changed = true, f(p)).$2 else p,
     ];
-    if (changed) state = _withProject(panels: panels);
+    if (!changed) return;
+    final next = _withProject(panels: panels);
+    if (record) {
+      _commit(next);
+    } else {
+      state = next;
+    }
   }
 
   /// Replace one circuit on one panel (by id), preserving order. No-op when
   /// either id is unknown.
   void _replaceCircuit(String panelId, String circuitId,
-      ElectricalCircuit Function(ElectricalCircuit) f) {
+      ElectricalCircuit Function(ElectricalCircuit) f,
+      {bool record = true}) {
     _replacePanel(
       panelId,
       (p) => p.copyWith(circuits: [
         for (final c in p.circuits)
           if (c.id == circuitId) f(c) else c,
       ]),
+      record: record,
     );
   }
 
@@ -500,7 +573,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         else
           p,
     ];
-    state = _withProject(panels: panels);
+    _commit(_withProject(panels: panels));
   }
 
   /// CHAIN one load onto another on the SAME panel — the [sourceId] circuit's
@@ -545,7 +618,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         else
           p,
     ];
-    state = _withProject(panels: panels);
+    _commit(_withProject(panels: panels));
   }
 
   /// Add a new (empty) panel. When [fedByCircuitId] is given it is a fed
@@ -567,26 +640,45 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           fedByCircuitId != null ? PanelSource.feeder : PanelSource.utility,
       fedByCircuitId: fedByCircuitId,
     );
-    state = _withProject(panels: [...state.panels, panel]);
+    _commit(_withProject(panels: [...state.panels, panel]));
   }
 
   /// Delete a panel by id.
   void deletePanel(String id) {
-    state = _withProject(
+    _commit(_withProject(
       panels: [
         for (final p in state.panels)
           if (p.id != id) p,
       ],
-    );
+    ));
   }
 
   /// Rename a panel.
   void renamePanel(String id, String name) =>
       _replacePanel(id, (p) => p.copyWith(name: name));
 
+  /// Set (or clear, with null/empty) a panel's short designation tag
+  /// ("LP-1", "MDP") — the id printed on the issued drawings.
+  void setPanelTag(String id, String? tag) => _replacePanel(
+      id,
+      (p) => (tag == null || tag.isEmpty)
+          ? p.copyWith(clearTag: true)
+          : p.copyWith(tag: tag));
+
   /// Set a panel's diversity factor (clamped 0–1).
   void setPanelDiversity(String id, double factor) => _replacePanel(
       id, (p) => p.copyWith(diversityFactor: factor.clamp(0.0, 1.0)));
+
+  /// Set (or clear, with null / a no-op spec) a panel's spare-ways /
+  /// future-load headroom — the CADANGAN rows + the incomer/busbar future
+  /// uplift. A 0 %-0-way spec collapses to null so an emptied editor leaves
+  /// the sizing byte-identical.
+  void setPanelHeadroom(String id, HeadroomSpec? spec) => _replacePanel(
+      id,
+      (p) => (spec == null ||
+              (spec.sparePercentage <= 0 && spec.spareWays <= 0))
+          ? p.copyWith(clearHeadroom: true)
+          : p.copyWith(headroom: spec));
 
   /// Toggle the essential (genset-backed) flag.
   void setPanelEssential(String id, bool value) =>
@@ -606,9 +698,11 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   // through the per-panel/per-project replacers.
 
   /// Set a panel's canvas position (world px) — the live-drag intent (mirrors
-  /// the mechanical canvas `moveNode`). No-op when the id is unknown.
+  /// the mechanical canvas `moveNode`: no undo recording — pair with
+  /// [pushUndoSnapshot] at drag start so the whole move is ONE undo step).
+  /// No-op when the id is unknown.
   void setPanelPosition(String id, double x, double y) =>
-      _replacePanel(id, (p) => p.copyWith(x: x, y: y));
+      _replacePanel(id, (p) => p.copyWith(x: x, y: y), record: false);
 
   /// Add a new panel at a canvas position. When [fedByCircuitId] is given it is
   /// a fed sub-board; otherwise a utility-fed board.
@@ -633,7 +727,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       x: x,
       y: y,
     );
-    state = _withProject(panels: [...state.panels, panel]);
+    _commit(_withProject(panels: [...state.panels, panel]));
   }
 
   /// Connect [fromPanelId] → [toPanelId] as a feeder: append a feeder way on the
@@ -679,7 +773,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         else
           p,
     ];
-    state = _withProject(panels: panels);
+    _commit(_withProject(panels: panels));
     return const ConnectFeederResult.connected();
   }
 
@@ -722,7 +816,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
               if (c.id != feederId) c,
           ]),
     ];
-    state = _withProject(panels: panels);
+    _commit(_withProject(panels: panels));
   }
 
   /// Add a floating load (a final circuit) as a one-way sub-panel placed at a
@@ -766,7 +860,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       y: y,
       circuits: [circuit],
     );
-    state = _withProject(panels: [...state.panels, panel]);
+    _commit(_withProject(panels: [...state.panels, panel]));
   }
 
   // ── Geo-layout intents (Wave 6) ────────────────────────────────────────────
@@ -777,16 +871,20 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   // cable run length from the placement (`resolveCircuitLength`).
 
   /// Place / move a panel on the calibrated layout (or clear with a null [pos]).
-  /// No-op when the id is unknown.
+  /// No-op when the id is unknown. A LIVE-DRAG intent (called per pan-update),
+  /// so it never records undo itself — callers [pushUndoSnapshot] at drag start
+  /// / before a one-shot placement so the move is ONE undo step.
   void setPanelLayoutPos(String panelId, LayoutPos? pos) => _replacePanel(
         panelId,
         (p) => pos == null
             ? p.copyWith(clearLayoutPos: true)
             : p.copyWith(layoutPos: pos),
+        record: false,
       );
 
   /// Place / move one circuit's LOAD on the calibrated layout (or clear with a
-  /// null [pos]). No-op when either id is unknown.
+  /// null [pos]). No-op when either id is unknown. A LIVE-DRAG intent — see
+  /// [setPanelLayoutPos] for the undo pairing.
   void setLoadPos(String panelId, String circuitId, LayoutPos? pos) =>
       _replaceCircuit(
         panelId,
@@ -794,6 +892,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         (c) => pos == null
             ? c.copyWith(clearLoadPos: true)
             : c.copyWith(loadPos: pos),
+        record: false,
       );
 
   /// Add a new way to [panelId] already PLACED on the layout at [pos] — the
@@ -872,7 +971,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       y: pos.y,
       circuits: [circuit],
     );
-    state = _withProject(panels: [...state.panels, panel]);
+    _commit(_withProject(panels: [...state.panels, panel]));
   }
 
   /// Monotonic id source for new panels / circuits (deterministic per process,
@@ -885,6 +984,11 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// circuits already carry `sourceEquipmentId`). Empty [circuits] removes the
   /// panel. This is the unified payoff: a pump/fan/fire-pump the mechanical
   /// engine sized appears here as a sized electrical circuit, no re-entry.
+  ///
+  /// UNDO-EXEMPT: a DERIVED MEP-feed sync, not a user edit — it neither pushes
+  /// a snapshot nor records a timeline entry, and it leaves both stacks intact
+  /// (an undo to a pre-sync snapshot simply predates the synced panel; the
+  /// reactive listener re-asserts it on the next equipment change).
   void syncMepEquipment(List<ElectricalCircuit> circuits) {
     const mepPanelId = 'mep-equipment';
     final others = state.panels.where((p) => p.id != mepPanelId).toList();

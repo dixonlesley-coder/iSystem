@@ -16,13 +16,40 @@ import '../../store/app_state.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../sheets/pdf_page_picker.dart';
+import '../strings/app_strings.dart';
+import 'confirm_discard_dialog.dart';
 
 /// Project file I/O shared by the top bar, the global Ctrl/Cmd+S/O hotkeys,
 /// the command palette, and the first-launch empty-state actions — lifted out
 /// of `_TopBar` so every entry point runs the exact same code.
 
+/// Guard against silently destroying unsaved work: when the live project is
+/// dirty, prompt Save / Discard / Cancel before an action that REPLACES it.
+/// Returns `true` to PROCEED (clean, discarded, or saved successfully), `false`
+/// to ABORT (Cancel/dismiss, or a Save the user backed out of). Uses the
+/// FRESH [isProjectDirty] check, not the timer-fed UI hint.
+Future<bool> _confirmDiscardIfDirty(BuildContext context, WidgetRef ref) async {
+  if (!isProjectDirty(ref.read)) return true;
+  final choice = await showConfirmDiscardDialog(context);
+  switch (choice) {
+    case DiscardChoice.save:
+      await saveProject(ref);
+      // If the user cancelled the OS Save dialog the work is still dirty — don't
+      // proceed to destroy it.
+      return !isProjectDirty(ref.read);
+    case DiscardChoice.discard:
+      return true;
+    case DiscardChoice.cancel:
+    case null:
+      return false;
+  }
+}
+
 /// Pick and import a PDF / DXF / DWG floor plan into the sheet rail.
 Future<void> importPlan(BuildContext context, WidgetRef ref) async {
+  // Importing REPLACES the current sheets, orphaning drawn nodes — guard first.
+  if (!await _confirmDiscardIfDirty(context, ref)) return;
+  if (!context.mounted) return;
   final result = await FilePicker.pickFiles(
     type: FileType.custom,
     allowedExtensions: const ['pdf', 'dxf', 'dwg'],
@@ -40,6 +67,10 @@ Future<void> importPlan(BuildContext context, WidgetRef ref) async {
       : isDxf
           ? 'DXF'
           : 'PDF';
+  // A DWG shells out to the ODA converter (seconds); a PDF/DXF still parses on
+  // the UI thread — either way, tell the user we're working.
+  ref.read(busyProvider.notifier).set(MechXStringsData(ref.read(localeProvider))(
+      isDwg ? StringKey.busyConvertingDwg : StringKey.busyImportingPlan));
   try {
     var sheets = isDwg
         ? await importDwg(path,
@@ -70,6 +101,8 @@ Future<void> importPlan(BuildContext context, WidgetRef ref) async {
   } catch (e) {
     // Surface the failure instead of silently keeping the old sheets.
     ref.read(loadErrorProvider.notifier).set('Could not import $what: $e');
+  } finally {
+    ref.read(busyProvider.notifier).clear();
   }
 }
 
@@ -96,12 +129,22 @@ Future<void> saveProject(WidgetRef ref, {bool saveAs = false}) async {
   // recovery. The FILE on disk, however, embeds the source plans so it is
   // portable across machines.
   final baseline = doc.encode();
-  final portable = doc.withSheets(doc.sheets, assets: gatherSheetAssets(doc.sheets));
+  // Tell the user we're working: embedding gzips every plan, and even without
+  // assets the write touches disk.
+  ref
+      .read(busyProvider.notifier)
+      .set(MechXStringsData(ref.read(localeProvider))(StringKey.busySaving));
   try {
+    // Embed the source plans OFF the UI thread (the gzip+base64 of every plan is
+    // a real window freeze on a large project) so the app stays responsive.
+    final assets = await gatherSheetAssetsAsync(doc.sheets);
+    final portable = doc.withSheets(doc.sheets, assets: assets);
     await File(full).writeAsString(portable.encode());
   } catch (e) {
     ref.read(loadErrorProvider.notifier).set('Could not save project: $e');
     return;
+  } finally {
+    ref.read(busyProvider.notifier).clear();
   }
   // The work is now safely on disk — record it as the clean baseline, remember
   // the home file for the next quick save, and drop any recovery snapshot.
@@ -115,8 +158,12 @@ Future<void> saveProject(WidgetRef ref, {bool saveAs = false}) async {
       .showStatus('Saved ${full.split(Platform.pathSeparator).last}');
 }
 
-/// Open a `.mechx` project, replacing the live state.
-Future<void> openProject(WidgetRef ref) async {
+/// Open a `.mechx` project, replacing the live state. Guards unsaved work first
+/// (Open would otherwise silently discard it AND delete the recovery snapshot),
+/// so it needs a [BuildContext] to host the confirm dialog.
+Future<void> openProject(BuildContext context, WidgetRef ref) async {
+  // Opening REPLACES the whole project — guard before touching anything.
+  if (!await _confirmDiscardIfDirty(context, ref)) return;
   final result = await FilePicker.pickFiles(
     type: FileType.custom,
     allowedExtensions: const ['mechx', 'json'],
@@ -124,6 +171,8 @@ Future<void> openProject(WidgetRef ref) async {
   );
   final path = result?.files.single.path;
   if (path == null) return;
+  ref.read(busyProvider.notifier).set(
+      MechXStringsData(ref.read(localeProvider))(StringKey.busyOpeningProject));
   try {
     final doc = ProjectDocument.decode(await File(path).readAsString());
     // Extract any embedded source plans to local files + repoint the sheets,
@@ -145,5 +194,7 @@ Future<void> openProject(WidgetRef ref) async {
     ref.read(loadErrorProvider.notifier).set(e.message);
   } catch (e) {
     ref.read(loadErrorProvider.notifier).set('Could not open project: $e');
+  } finally {
+    ref.read(busyProvider.notifier).clear();
   }
 }

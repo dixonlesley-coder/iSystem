@@ -191,6 +191,21 @@ class StatusMessageController extends Notifier<String?> {
   }
 }
 
+/// A transient "busy" message for a slow foreground operation (importing a
+/// plan, converting a DWG, opening/saving a project). Null at rest — so the
+/// status bar shows no busy pill and the goldens are unchanged. Set/cleared in
+/// a try/finally around the slow path; the pill mounts only while non-null.
+final busyProvider =
+    NotifierProvider<BusyController, String?>(BusyController.new);
+
+class BusyController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? message) => state = message;
+  void clear() => state = null;
+}
+
 /// The file the open project lives in — set on a successful Open or Save, so
 /// Ctrl/Cmd+S saves IN PLACE instead of re-opening the OS dialog every time.
 /// Null until the project has a home (a brand-new project Save-As's first).

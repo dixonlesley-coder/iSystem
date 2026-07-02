@@ -32,6 +32,7 @@ import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/project_store.dart';
 import '../canvas/zoom_controls.dart';
@@ -48,7 +49,8 @@ import 'electrical_canvas.dart';
 import 'electrical_controls.dart';
 import 'electrical_export.dart';
 import 'electrical_format.dart';
-import 'electrical_inspector.dart' show ElectricalCircuitInspector;
+import 'electrical_inspector.dart'
+    show ElectricalCircuitInspector, ElectricalPanelInspector;
 import 'electrical_palette.dart';
 import 'panel_geometry.dart';
 import 'power_oneline_view.dart';
@@ -98,6 +100,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   /// The circuit whose inspector panel is open (null = closed).
   _CircuitRef? _editing;
 
+  /// The panel whose PROPERTIES drawer is open (null = closed).
+  String? _panelEditing;
+
   /// An open right-click context menu (panel or circuit) + its anchor.
   _PanelMenuState? _panelMenu;
   _CircuitRef? _circuitMenu;
@@ -122,9 +127,13 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       ref.read(electricalProjectProvider.notifier);
 
   void _closeOverlays() {
-    if (_editing != null || _panelMenu != null || _circuitMenu != null) {
+    if (_editing != null ||
+        _panelEditing != null ||
+        _panelMenu != null ||
+        _circuitMenu != null) {
       setState(() {
         _editing = null;
+        _panelEditing = null;
         _panelMenu = null;
         _circuitMenu = null;
       });
@@ -144,6 +153,18 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     final result = ref.watch(electricalResultProvider);
     final project = ref.watch(electricalProjectProvider);
     final advanced = ref.watch(electricalAdvancedProvider);
+
+    // The Review → Electrical jump seam: a located issue hands a panel id via
+    // electricalFocusProvider; consume it once — switch to the single-line
+    // tab, frame that panel's board schedule, and clear the request.
+    ref.listen(electricalFocusProvider, (prev, panelId) {
+      if (panelId == null) return;
+      if (_tab != _Tab.singleLine) setState(() => _tab = _Tab.singleLine);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _canvasKey.currentState?.focusPanelSchedule(panelId);
+        ref.read(electricalFocusProvider.notifier).clear();
+      });
+    });
 
     final body = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -180,6 +201,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         ),
         // Tap-away scrim behind any open menu / inspector.
         if (_editing != null ||
+            _panelEditing != null ||
             _panelMenu != null ||
             _circuitMenu != null ||
             _showExportMenu)
@@ -213,6 +235,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         if (_circuitMenu != null) _buildCircuitMenu(),
         if (_panelMenu != null) _buildPanelMenu(),
         if (_editing != null) _buildInspector(),
+        if (_panelEditing != null) _buildPanelInspector(),
         if (_showAdvanced)
           _AdvancedDrawer(
             advanced: advanced,
@@ -246,20 +269,11 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               Positioned.fill(
                 child: ElectricalCanvas(
                   key: _canvasKey,
-                  onEditPanel: (panelId) {
-                    // Open the inspector on the panel's first editable way.
-                    final panel = project.panels
-                        .where((p) => p.id == panelId)
-                        .firstOrNull;
-                    final first = panel?.circuits
-                        .where((c) => c.loadKind != LoadKind.feeder)
-                        .firstOrNull;
-                    if (panel != null && first != null) {
-                      setState(() => _editing = _CircuitRef(panelId, first.id));
-                    } else {
-                      _openPanelMenu(panelId, _canvasCenter());
-                    }
-                  },
+                  // Panel double-click opens the panel PROPERTIES drawer
+                  // (name / tag / diversity / headroom); a way row double-click
+                  // keeps opening the circuit editor below.
+                  onEditPanel: (panelId) =>
+                      setState(() => _panelEditing = panelId),
                   onEditCircuit: (panelId, circuitId) => setState(
                     () => _editing = _CircuitRef(panelId, circuitId),
                   ),
@@ -353,12 +367,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     return box?.globalToLocal(global) ?? global;
   }
 
-  Offset _canvasCenter() {
-    final box = context.findRenderObject() as RenderBox?;
-    final size = box?.size ?? const Size(800, 600);
-    return Offset(size.width / 2, size.height / 2);
-  }
-
   // ── Edit-intent wiring ──────────────────────────────────────────────────────
 
   void _addPanel() {
@@ -443,6 +451,12 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       top: _menuAt.dy,
       child: ElectricalMenu(
         items: [
+          ElectricalMenuAction('Panel properties', () {
+            setState(() {
+              _panelMenu = null;
+              _panelEditing = panel.id;
+            });
+          }),
           ElectricalMenuAction('Open panel', () {
             final first = panel.circuits
                 .where((c) => c.loadKind != LoadKind.feeder)
@@ -505,6 +519,27 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         key: ValueKey('${ref0.panelId}/${ref0.circuitId}'),
         panel: panel,
         circuit: circuit,
+        controller: _controller,
+        onClose: _closeOverlays,
+      ),
+    );
+  }
+
+  Widget _buildPanelInspector() {
+    final panelId = _panelEditing!;
+    final project = ref.watch(electricalProjectProvider);
+    final panel = project.panels.where((p) => p.id == panelId).firstOrNull;
+    if (panel == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
+      return const SizedBox.shrink();
+    }
+    return Positioned(
+      top: 0,
+      right: 0,
+      bottom: 0,
+      child: ElectricalPanelInspector(
+        key: ValueKey('panel/$panelId'),
+        panel: panel,
         controller: _controller,
         onClose: _closeOverlays,
       ),

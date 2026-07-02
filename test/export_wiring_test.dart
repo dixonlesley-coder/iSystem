@@ -16,6 +16,7 @@ import 'package:mechx/ui/electrical/electrical_export.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
 import 'package:mechx/ui/schematic/schematic_export.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/sld_sheet.dart' show SldLabel;
 import 'package:mechx_engine/standards/sni.dart' show Revision;
 
 void main() {
@@ -141,6 +142,47 @@ void main() {
         [ServiceType.coldWater, ServiceType.drainage]);
     // A network with no edges yields no per-service sheets.
     expect(riserSetServices(const Network(nodes: [], edges: [])), isEmpty);
+  });
+
+  testWidgets(
+      'buildLiveRiserSheet carries the B1 canvas-parity extras (equipment '
+      'detail suffix + KETERANGAN notes + detail callouts)', (tester) async {
+    final (ref, container) = await harness(tester);
+    // A roof tank with a REAL stored capacity feeding a ground-floor main —
+    // the exported sheet must carry at least what the Auto canvas draws.
+    const net = Network(nodes: [
+      NetNode(
+        id: 'rt',
+        sheetId: 's1',
+        x: 0,
+        y: 0,
+        floorIndex: 1,
+        role: NodeRole.plant,
+        component: NodeComponent.roofTank,
+        tankCapacityLitres: 5000,
+      ),
+      NetNode(id: 'm', sheetId: 's1', x: 0, y: 100, floorIndex: 0),
+    ], edges: [
+      NetEdge(
+          id: 'r1',
+          fromId: 'rt',
+          toId: 'm',
+          service: ServiceType.coldWater,
+          kind: EdgeKind.riser),
+    ]);
+    container.read(networkControllerProvider.notifier).loadNetwork(net);
+    final sheet = buildLiveRiserSheet(ref, null);
+    final labels =
+        sheet.prims.whereType<SldLabel>().map((l) => l.text).join('\n');
+    // Equipment detail suffix from the live node value (5000 L => 5 m3).
+    expect(labels, contains('Roof tank · 5 m3'));
+    // The KETERANGAN system-notes block echoes the live feed strategy.
+    expect(labels, contains('KETERANGAN'));
+    expect(labels, contains('Feed:'));
+    // The H101 detail callouts ride the export (detailCallouts: true).
+    expect(labels, contains('DETAIL WATER METER'));
+    expect(labels, contains('DETAIL PRV SET'));
+    expect(labels, contains('ROOF TANK 5 m3'));
   });
 
   testWidgets(

@@ -19,15 +19,18 @@ import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_pdf_export.dart'
     show electricalSldSheetsToPdf;
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
-import 'package:mechx_engine/report/riser_tags.dart' show riserServiceCode;
+import 'package:mechx_engine/report/riser_tags.dart'
+    show equipmentDetail, riserServiceCode;
 import 'package:mechx_engine/report/sld_export.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
+import 'package:mechx_engine/standards/sni.dart' show Occupancy;
 
 import '../../store/app_state.dart';
 import '../../store/document_control_store.dart';
 import '../../store/project_store.dart';
 import '../../store/network_store.dart';
 import '../../store/sizing_store.dart';
+import '../../store/solve_store.dart';
 import '../inspector/project_panel.dart' show kDrawServices, runExportGuarded;
 import '../strings/app_strings.dart';
 
@@ -39,9 +42,11 @@ String _diagramTitle(ServiceType? focus) {
   return switch (focus) {
     ServiceType.coldWater => 'DIAGRAM SISTEM AIR BERSIH',
     ServiceType.hotWater => 'HOT WATER RISER DIAGRAM',
-    ServiceType.drainage => 'DRAINAGE RISER DIAGRAM',
-    ServiceType.vent => 'VENT RISER DIAGRAM',
-    ServiceType.rainwater => 'STORMWATER RISER DIAGRAM',
+    // B2: drainage / vent / storm carry the same Indonesian sheet language as
+    // the air-bersih deliverable.
+    ServiceType.drainage => 'DIAGRAM SISTEM AIR KOTOR & BEKAS',
+    ServiceType.vent => 'DIAGRAM SISTEM VEN',
+    ServiceType.rainwater => 'DIAGRAM SISTEM AIR HUJAN',
     ServiceType.duct ||
     ServiceType.returnAir ||
     ServiceType.exhaust =>
@@ -73,13 +78,70 @@ String _supplyNote(Network net, FeedStrategy feed) {
   return parts.join(' - ');
 }
 
+/// The KETERANGAN system-notes lines for the exported sheet — the SAME live
+/// echoes the canvas `_SystemNotes` card shows: the feed strategy, each tank
+/// actually present with its REAL capacity, the occupancy class, and the peak
+/// design flow when a supply pump was sized (upfeed). HONEST: a datum that
+/// doesn't exist (no tank, no pump on downfeed) is simply not written.
+List<String> _systemNotes(WidgetRef ref, Network net) {
+  final feed = ref.read(feedStrategyProvider);
+  final occupancy = ref.read(occupancyProvider);
+  final pump = ref.read(pumpDutyProvider);
+
+  // Capacity of the first node with [component] carrying a stored capacity —
+  // the shared engine `equipmentDetail` ('237 m3'), so the note matches the
+  // on-node suffix exactly.
+  String? tankM3(NodeComponent component) {
+    for (final n in net.nodes) {
+      if (n.component != component) continue;
+      final d = equipmentDetail(n);
+      if (d != null) return d;
+    }
+    return null;
+  }
+
+  final lines = <String>[
+    feed == FeedStrategy.downfeed
+        ? 'Feed: gravity downfeed (roof tank)'
+        : 'Feed: upfeed / booster pump',
+  ];
+  final roofM3 = tankM3(NodeComponent.roofTank);
+  if (roofM3 != null) lines.add('Roof tank: $roofM3');
+  final groundM3 = tankM3(NodeComponent.groundTank);
+  if (groundM3 != null) lines.add('Ground tank: $groundM3');
+  lines.add('Occupancy: ${switch (occupancy) {
+    Occupancy.private => 'Private',
+    Occupancy.public => 'Public',
+    Occupancy.assembly => 'Assembly',
+  }}');
+  // Peak design flow is upfeed-only (pumpDutyProvider null on downfeed). Never
+  // fabricate a m3/day figure when no pump flow exists.
+  if (pump != null) {
+    lines.add('Peak design flow: '
+        '${pump.flow.inLitersPerSecond.toStringAsFixed(1)} L/s');
+  }
+  return lines;
+}
+
 /// Build the live mechanical riser [SldSheet] for [focus] from the current
-/// project providers (the SAME §10 geometry the working canvas reads).
-SldSheet _buildSheet(WidgetRef ref, ServiceType? focus) {
+/// project providers (the SAME §10 geometry the working canvas reads), with
+/// the B1 export-parity extras the on-screen Auto view already draws: per-node
+/// equipment detail suffixes (tank m3 / pump-fan kW), the KETERANGAN system
+/// notes, and the H101 detail callouts — so the issued sheet is always >= the
+/// preview. Public for the export wiring test.
+SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
   final network = ref.read(networkControllerProvider).network;
   final sizing = ref.read(sizingProvider);
   final building = ref.read(projectControllerProvider).building;
   final feed = ref.read(feedStrategyProvider);
+  // Per-node capacity/duty suffixes — the same provider-fed resolution the
+  // canvas uses (`equipmentDetail` returns null when no datum exists).
+  final pump = ref.read(pumpDutyProvider);
+  final fan = ref.read(ductFanProvider);
+  final detailByNode = <String, String>{
+    for (final node in network.nodes)
+      node.id: ?equipmentDetail(node, supplyPump: pump, fan: fan),
+  };
   return buildMechanicalRiserSld(
     network: network,
     sizing: sizing,
@@ -87,6 +149,9 @@ SldSheet _buildSheet(WidgetRef ref, ServiceType? focus) {
     focus: focus,
     downfeed: feed == FeedStrategy.downfeed,
     supplyNote: _supplyNote(network, feed),
+    equipmentDetailByNodeId: detailByNode,
+    notes: _systemNotes(ref, network),
+    detailCallouts: true,
   );
 }
 
@@ -113,7 +178,7 @@ DrawingChrome _riserChrome(WidgetRef ref,
 
 /// Export the mechanical riser single-line as a native (vector) PDF.
 Future<void> exportMechanicalRiserPdf(WidgetRef ref, ServiceType? focus) async {
-  final sheet = _buildSheet(ref, focus);
+  final sheet = buildLiveRiserSheet(ref, focus);
   final bytes = sldSheetToPdf(
     sheet: sheet,
     title: 'iSystem mechanical single-line',
@@ -136,7 +201,7 @@ Future<void> exportMechanicalRiserPdf(WidgetRef ref, ServiceType? focus) async {
 
 /// Export the mechanical riser single-line as a DXF (R12) drawing file.
 Future<void> exportMechanicalRiserDxf(WidgetRef ref, ServiceType? focus) async {
-  final sheet = _buildSheet(ref, focus);
+  final sheet = buildLiveRiserSheet(ref, focus);
   final dxf = sldSheetToDxf(
     sheet: sheet,
     diagramTitle: _diagramTitle(focus),
@@ -188,7 +253,7 @@ Future<void> exportMechanicalRiserSetPdf(
         final foci = _riserSetFoci(ref);
         final project = ref.read(projectControllerProvider);
         final bytes = electricalSldSheetsToPdf(
-          sheets: [for (final f in foci) _buildSheet(ref, f)],
+          sheets: [for (final f in foci) buildLiveRiserSheet(ref, f)],
           title: 'iSystem mechanical riser drawing set',
           diagramTitles: [for (final f in foci) _diagramTitle(f)],
           chrome: _riserChrome(ref, index: 1, total: foci.length),
@@ -238,7 +303,7 @@ Future<void> exportMechanicalRiserSetDxf(
           final f = foci[i];
           final code = f == null ? 'ALL' : riserServiceCode(f);
           final dxf = sldSheetToDxf(
-            sheet: _buildSheet(ref, f),
+            sheet: buildLiveRiserSheet(ref, f),
             diagramTitle: _diagramTitle(f),
             chrome: _riserChrome(ref, index: i + 1, total: foci.length),
           );

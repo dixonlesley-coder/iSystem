@@ -21,6 +21,7 @@ import '../network/network.dart';
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../standards/pipe_products.dart' show PipeProduct;
 import '../standards/sni.dart' show PlumbingFixture;
+import 'plan_symbols.dart' show planComponentPrims, planFixturePrims;
 import 'riser_tags.dart';
 import 'sld_sheet.dart';
 
@@ -31,7 +32,17 @@ const double _sidePad = 48; // inset for node x within the band
 const double _bandH = 150; // per-floor band height
 const double _topPad = 24;
 const double _nodeBox = 12; // schematic node marker half-extent
+const double _symbolSize = 20; // equipment glyph box (matches the canvas)
 const double _fanColW = 150; // per-floor fan-out column width (right gutter)
+
+// ── B1 detail-callout / notes geometry (drawn only when supplied) ────────────
+const double _calloutW = 170; // valve-assembly reference detail box width
+const double _calloutH = 64; // valve-assembly reference detail box height
+const double _calloutGlyph = 15; // glyph box inside a callout row
+const double _plantW = 220; // pump-set plant detail box width
+const double _plantH = 120; // pump-set plant detail box height
+const double _notesW = 240; // KETERANGAN system-notes block width
+const double _notesLineH = 11; // per-note line pitch
 
 // ── Label-collision metrics (B5) ─────────────────────────────────────────────
 // A single per-size character-advance used to size every label's collision box
@@ -52,12 +63,30 @@ const double _kSpreadStep = 18;
 /// Build the mechanical riser single-line as an [SldSheet] for [network].
 ///
 /// [sizing] maps edgeId → its sized record (for the `SIZE-SERVICE-MATERIAL` tag;
-/// an edge with no sizing falls back to a service-only tag). [building] supplies
+/// an edge with no sizing falls back to a service-only tag, and its
+/// `flowFromId` — when the solve confidently knows the direction — draws a
+/// small flow chevron on the run). [building] supplies
 /// the true floor elevations for the FFL gutter labels (degrades to `Level n`
 /// when absent). [focus] filters to a single service (null ⇒ the combined view).
 /// [downfeed] is the feed strategy (drives the GRAVITASI/BOOSTER/TRANSFER
 /// function suffix). [projectName] + [tanksNote] feed the title-block supply
-/// line. Pure — no clock, no IO.
+/// line.
+///
+/// B1 export-parity extras — every one OPTIONAL, defaulting empty/off so the
+/// existing output is BYTE-IDENTICAL when the app supplies nothing:
+///   • [equipmentDetailByNodeId] — a per-node capacity/duty suffix (e.g.
+///     `237 m3` / `5.5 kW`, from [equipmentDetail]) appended to the node label
+///     as `Roof tank · 237 m3`;
+///   • [notes] — real project echoes rendered as a bordered KETERANGAN block
+///     bottom-right (above where the renderers stamp the title block);
+///   • [detailCallouts] — the H101 reference details on the clean-water focus:
+///     DETAIL WATER METER (GV·WM·GV·U) + DETAIL PRV SET (GV·STR·PRV·GV)
+///     bottom-centre, and the PUMP-SET plant detail (roof-tank glyph +
+///     capacity, booster glyph + duty, GRAVITASI/TRANSFER/BOOSTER leg labels)
+///     in a right margin column — the plant detail drawn ONLY when the network
+///     actually carries the relevant plant nodes, its capacity/duty text only
+///     when [equipmentDetailByNodeId] supplies it (absent data ⇒ omitted).
+/// Pure — no clock, no IO.
 SldSheet buildMechanicalRiserSld({
   required Network network,
   Map<String, EdgeSizing> sizing = const {},
@@ -65,6 +94,9 @@ SldSheet buildMechanicalRiserSld({
   ServiceType? focus,
   bool downfeed = false,
   String supplyNote = '',
+  Map<String, String> equipmentDetailByNodeId = const {},
+  List<String> notes = const [],
+  bool detailCallouts = false,
 }) {
   final prims = <SldPrim>[];
 
@@ -186,6 +218,53 @@ SldSheet buildMechanicalRiserSld({
     }
   }
 
+  // ── B2 STACK DETAIL: cleanouts, the vent tee, VTR terminations ──────────────
+  // Data-gated on the DRAWN network (positions exist only for focus-visible
+  // nodes, so a filtered system omits the other system's marks). Reserved
+  // before the movable band tags so they divert around these fixed marks.
+  if (focus == null || focus == ServiceType.vent) {
+    // A vent riser reaching the TOP floor terminates through the roof: a short
+    // dashed stub above the band + the 'VTR' code.
+    for (final id in ventTopTerminalIds(network, topFloor: hiFloor)) {
+      final p = posById[id];
+      if (p == null) continue;
+      final stubTop = bandTop(hiFloor) - 10;
+      prims.add(SldLine(p.dx, p.dy, p.dx, stubTop,
+          weight: SldWeight.medium,
+          layer: riserServiceCode(ServiceType.vent),
+          dashed: true));
+      // Roof-penetration cap tick.
+      prims.add(SldLine(p.dx - 4, stubTop, p.dx + 4, stubTop,
+          weight: SldWeight.medium,
+          layer: riserServiceCode(ServiceType.vent)));
+      placer.reserve(SldLabel(p.dx + 6, stubTop + 6, 'VTR', size: 7, bold: true));
+    }
+  }
+  if (focus == null ||
+      focus == ServiceType.vent ||
+      focus == ServiceType.drainage) {
+    // The drawn vent-to-soil tee: a short bar across the shared junction.
+    for (final id in ventSoilTeeNodeIds(network)) {
+      final p = posById[id];
+      if (p == null) continue;
+      prims.add(SldLine(p.dx - 9, p.dy, p.dx + 9, p.dy,
+          weight: SldWeight.medium,
+          layer: riserServiceCode(ServiceType.drainage)));
+    }
+  }
+  if (focus == null || focus == ServiceType.drainage) {
+    // 'CO' code beside each cleanout that serves a drainage stack base — only
+    // cleanouts the engineer actually drew (a missing one is an ADVISORY in the
+    // Review panel, never fabricated here).
+    for (final id in cleanoutAtStackBaseIds(network)) {
+      final p = posById[id];
+      if (p == null) continue;
+      placer.reserve(SldLabel(
+          p.dx - _symbolSize / 2 - 2, p.dy - _symbolSize / 2 - 4, 'CO',
+          size: 7, bold: true));
+    }
+  }
+
   // ── Edges: runs + risers with the SIZE-SERVICE-MATERIAL[-FUNCTION] tag ───────
   // B4: every pipe run/riser is MEDIUM weight (vs the thin datum), carries its
   // service code as the CAD layer, and the vent service draws DASHED.
@@ -198,6 +277,7 @@ SldSheet buildMechanicalRiserSld({
     final role = _edgeRole(network, e);
     final layer = riserServiceCode(e.service);
     final dashed = e.service == ServiceType.vent;
+    final sz = sizing[e.id];
     // Orthogonal L-route: horizontal at the from-y, then vertical to the to-y.
     prims.add(SldLine(a.dx, a.dy, b.dx, a.dy,
         weight: SldWeight.medium, role: role, layer: layer, dashed: dashed));
@@ -206,8 +286,16 @@ SldSheet buildMechanicalRiserSld({
           weight: SldWeight.medium, role: role, layer: layer, dashed: dashed));
     }
 
+    // B1 flow chevron — only where the solve confidently recorded the
+    // direction (EdgeSizing.flowFromId); null ⇒ nothing (byte-identical).
+    final flowFrom = sz?.flowFromId;
+    if (flowFrom == e.fromId || (flowFrom != null && flowFrom == e.toId)) {
+      _addFlowChevron(prims, a, b,
+          reversed: flowFrom == e.toId, role: role, layer: layer);
+    }
+
     final fn = riserFunctionFor(network, e, downfeed: downfeed);
-    final tag = _pipeTag(sizing[e.id], e, function: fn);
+    final tag = _pipeTag(sz, e, function: fn);
     if (e.kind == EdgeKind.riser) {
       // Tag + riser id beside the vertical leg.
       final midY = (a.dy + b.dy) / 2;
@@ -239,20 +327,36 @@ SldSheet buildMechanicalRiserSld({
     }
   }
 
-  // ── Nodes: a schematic marker + the component / fixture label ───────────────
+  // ── Nodes: the schematic symbol + the component / fixture label ─────────────
+  // B1: a node with a component draws its REAL equipment glyph (the shared
+  // plan-symbol library — one geometry with the plan exports), a fixture its
+  // drop-triangle terminal; only a plain junction keeps the anonymous box.
   for (final n in nodes) {
     final p = posById[n.id]!;
     final role = _nodeRole(n);
-    if (n.role == NodeRole.fixture) {
-      // A drop terminal — a small open circle.
-      prims.add(SldCircle(p.dx, p.dy, _nodeBox / 2, role: role));
+    final c = n.component;
+    final double labelInset;
+    if (c != null) {
+      prims.addAll(_withRole(
+          planComponentPrims(c, cx: p.dx, cy: p.dy, size: _symbolSize), role));
+      labelInset = _symbolSize / 2;
+    } else if (n.role == NodeRole.fixture) {
+      // A fixture drop terminal — the down-triangle marker.
+      prims.addAll(
+          _withRole(planFixturePrims(cx: p.dx, cy: p.dy, size: _nodeBox), role));
+      labelInset = _nodeBox / 2;
     } else {
       prims.add(SldRect(p.dx - _nodeBox / 2, p.dy - _nodeBox / 2, _nodeBox,
           _nodeBox, weight: SldWeight.thin, role: role));
+      labelInset = _nodeBox / 2;
     }
-    final label = _nodeLabel(n);
-    if (label != null) {
-      placer.place(p.dx + _nodeBox / 2 + 4, p.dy + 3, label,
+    final base = _nodeLabel(n);
+    if (base != null) {
+      // B1 equipment-detail suffix (capacity / duty) — only when the app
+      // supplied a real datum for this node.
+      final detail = equipmentDetailByNodeId[n.id];
+      final label = detail == null ? base : '$base · $detail';
+      placer.place(p.dx + labelInset + 4, p.dy + 3, label,
           size: 8,
           role: role,
           anchorX: p.dx,
@@ -261,9 +365,59 @@ SldSheet buildMechanicalRiserSld({
     }
   }
 
+  // ── B1 detail callouts + system-notes block (drawn only when supplied) ──────
+  // The callouts sit in a strip BELOW the floor bands (clear of every band tag)
+  // and the plant detail in a right margin column, so the placer never has to
+  // divert around them; the bounds grow to include whatever was drawn.
+  const contentMaxX = _gutterW + _drawW + _fanColW;
+  var maxX = contentMaxX;
+  final extrasTop = _topPad + bandCount * _bandH + 12.0;
+  var extrasBottom = extrasTop;
+
+  final waterFocus = focus == null ||
+      focus == ServiceType.coldWater ||
+      focus == ServiceType.hotWater;
+  if (detailCallouts && waterFocus) {
+    if (_emitPlantDetail(prims, network, contentMaxX + 12, _topPad,
+        equipmentDetailByNodeId: equipmentDetailByNodeId, downfeed: downfeed)) {
+      maxX = contentMaxX + 12 + _plantW;
+    }
+    // Generic valve-assembly reference details, bottom-centre of the band.
+    const totalW = _calloutW * 2 + 16;
+    const left = _gutterW + (_drawW - totalW) / 2;
+    _emitDetailBox(prims, left, extrasTop, 'DETAIL WATER METER', const [
+      (NodeComponent.gateValve, 'GV'),
+      (NodeComponent.waterMeter, 'WM'),
+      (NodeComponent.gateValve, 'GV'),
+      (NodeComponent.gateValve, 'U'),
+    ]);
+    _emitDetailBox(
+        prims, left + _calloutW + 16, extrasTop, 'DETAIL PRV SET', const [
+      (NodeComponent.gateValve, 'GV'),
+      (NodeComponent.strainer, 'STR'),
+      (NodeComponent.prv, 'PRV'),
+      (NodeComponent.gateValve, 'GV'),
+    ]);
+    extrasBottom = math.max(extrasBottom, extrasTop + _calloutH);
+  }
+  if (notes.isNotEmpty) {
+    // The KETERANGAN system-notes block, bottom-RIGHT (the renderers stamp the
+    // page-fixed title block below/beside it in page space).
+    final noteH = 20 + notes.length * _notesLineH + 6;
+    const left = contentMaxX - _notesW;
+    prims.add(SldRect(left, extrasTop, _notesW, noteH, weight: SldWeight.thin));
+    prims.add(SldLabel(left + 6, extrasTop + 12, 'KETERANGAN',
+        size: 7, bold: true));
+    var y = extrasTop + 24.0;
+    for (final line in notes) {
+      prims.add(SldLabel(left + 6, y, line, size: 7));
+      y += _notesLineH;
+    }
+    extrasBottom = math.max(extrasBottom, extrasTop + noteH);
+  }
+
   // ── Bounds ──────────────────────────────────────────────────────────────────
-  const maxX = _gutterW + _drawW + _fanColW;
-  final maxY = _topPad + bandCount * _bandH + 12;
+  final maxY = extrasBottom == extrasTop ? extrasTop : extrasBottom + 12;
   return SldSheet(
     prims: prims,
     minX: 0,
@@ -411,15 +565,201 @@ List<SldLegendEntry> _fittingLegend(Network network, ServiceType? focus) {
 String _serviceMeaning(ServiceType s) => switch (s) {
       ServiceType.coldWater => 'Air bersih (cold water)',
       ServiceType.hotWater => 'Hot water',
-      ServiceType.drainage => 'Drainage',
-      ServiceType.vent => 'Vent',
-      ServiceType.rainwater => 'Rainwater / storm',
+      // B2: the Indonesian sheet-language meanings, matching the air-bersih
+      // entry (Diagram Air Kotor drawing convention).
+      ServiceType.drainage => 'Air kotor & bekas (drainage)',
+      ServiceType.vent => 'Ven (vent)',
+      ServiceType.rainwater => 'Air hujan (rainwater / storm)',
       ServiceType.duct => 'Supply air',
       ServiceType.returnAir => 'Return air',
       ServiceType.exhaust => 'Exhaust air',
       ServiceType.fireSprinkler => 'Sprinkler',
       ServiceType.fireHydrant => 'Hydrant',
     };
+
+/// Re-colour a symbol-library prim list with [role] (the plan-symbol library
+/// emits geometry-only prims; the riser drawing owns the plant/source split).
+/// Normal role passes the list through untouched.
+List<SldPrim> _withRole(List<SldPrim> prims, SldRole role) {
+  if (role == SldRole.normal) return prims;
+  return [
+    for (final p in prims)
+      switch (p) {
+        final SldLine l => SldLine(l.x1, l.y1, l.x2, l.y2,
+            weight: l.weight, role: role, layer: l.layer, dashed: l.dashed),
+        final SldRect r =>
+          SldRect(r.x, r.y, r.w, r.h, weight: r.weight, role: role),
+        final SldCircle c =>
+          SldCircle(c.cx, c.cy, c.r, weight: c.weight, role: role),
+        final SldLabel lb => SldLabel(lb.x, lb.y, lb.text,
+            size: lb.size, bold: lb.bold, role: role),
+      },
+  ];
+}
+
+/// A small 3-line flow chevron (two arrowhead legs + a short shaft) on the
+/// edge's L-route, pointing WITH the solved flow. The chevron rides the longer
+/// leg (horizontal preferred) at its 2/3 point measured from the flow's start
+/// of that leg. [reversed] flips the direction (flow enters at the edge's `to`
+/// endpoint). Read-only drawing of the solve's own orientation — never a guess.
+void _addFlowChevron(
+  List<SldPrim> prims,
+  Offset a,
+  Offset b, {
+  required bool reversed,
+  required SldRole role,
+  String? layer,
+}) {
+  // L-route legs: horizontal a→corner at y=a.dy, vertical corner→b at x=b.dx.
+  final hLen = (b.dx - a.dx).abs();
+  final vLen = (b.dy - a.dy).abs();
+  if (hLen < 24 && vLen < 24) return; // too short to carry a readable chevron
+  final double px, py, ux, uy;
+  if (hLen >= vLen) {
+    // Along the horizontal leg, 2/3 from the flow's entry end.
+    final startX = reversed ? b.dx : a.dx;
+    final endX = reversed ? a.dx : b.dx;
+    px = startX + (endX - startX) * (2 / 3);
+    py = a.dy;
+    ux = endX >= startX ? 1 : -1;
+    uy = 0;
+  } else {
+    // Along the vertical leg, 2/3 from the flow's entry end.
+    final startY = reversed ? b.dy : a.dy;
+    final endY = reversed ? a.dy : b.dy;
+    px = b.dx;
+    py = startY + (endY - startY) * (2 / 3);
+    ux = 0;
+    uy = endY >= startY ? 1 : -1;
+  }
+  // Perpendicular unit.
+  final wx = -uy, wy = ux;
+  const legBack = 7.0, halfSpread = 3.5, shaft = 8.0;
+  final tipX = px + ux * 4, tipY = py + uy * 4;
+  prims
+    ..add(SldLine(tipX - ux * shaft, tipY - uy * shaft, tipX, tipY,
+        weight: SldWeight.thin, role: role, layer: layer))
+    ..add(SldLine(tipX, tipY, tipX - ux * legBack + wx * halfSpread,
+        tipY - uy * legBack + wy * halfSpread,
+        weight: SldWeight.thin, role: role, layer: layer))
+    ..add(SldLine(tipX, tipY, tipX - ux * legBack - wx * halfSpread,
+        tipY - uy * legBack - wy * halfSpread,
+        weight: SldWeight.thin, role: role, layer: layer));
+}
+
+// ── B1 detail callouts (export analogues of the canvas H101 details) ─────────
+
+/// One bordered DETAIL box with a title + a left→right row of valve/meter
+/// glyphs joined by a run line, each with its ASCII abbrev beneath — the export
+/// analogue of the canvas `_drawDetailGlyphRow`. A generic REFERENCE assembly
+/// (the abbrev names the real device; no claim about a specific drawn valve).
+void _emitDetailBox(List<SldPrim> prims, double left, double top, String title,
+    List<(NodeComponent, String)> items) {
+  prims.add(SldRect(left, top, _calloutW, _calloutH, weight: SldWeight.thin));
+  prims.add(SldLabel(left + 6, top + 12, title, size: 7, bold: true));
+  const gap = 36.0;
+  final cy = top + 34.0;
+  final firstCx = left + 18.0;
+  final lastCx = firstCx + (items.length - 1) * gap;
+  // The connecting run line spans the first and last glyph centres.
+  prims.add(SldLine(
+      firstCx - _calloutGlyph / 2, cy, lastCx + _calloutGlyph / 2, cy,
+      weight: SldWeight.thin));
+  for (var i = 0; i < items.length; i++) {
+    final (component, abbrev) = items[i];
+    final cx = firstCx + i * gap;
+    prims.addAll(
+        planComponentPrims(component, cx: cx, cy: cy, size: _calloutGlyph));
+    prims.add(SldLabel(cx - _labelWidth(abbrev, 7) / 2,
+        cy + _calloutGlyph / 2 + 10, abbrev, size: 7));
+  }
+}
+
+/// The PUMP-SET / ROOF-TANK plant detail (H101 top-right convention), emitted
+/// in a right margin column: a roof-tank glyph + its real capacity, a
+/// booster-pump glyph + its real duty, a connecting leg and the GRAVITASI /
+/// TRANSFER / BOOSTER leg labels. Drawn ONLY when [network] actually carries a
+/// roof-tank / ground-tank / pump / booster set (returns false ⇒ nothing
+/// emitted); the capacity/duty text appears only when [equipmentDetailByNodeId]
+/// supplies it (honesty: absent data ⇒ omitted). Mirrors the canvas
+/// `_paintPlantDetail`.
+bool _emitPlantDetail(
+  List<SldPrim> prims,
+  Network network,
+  double left,
+  double top, {
+  required Map<String, String> equipmentDetailByNodeId,
+  required bool downfeed,
+}) {
+  bool has(NodeComponent c) => network.nodes.any((n) => n.component == c);
+  String? detailOf(NodeComponent c) {
+    for (final n in network.nodes) {
+      if (n.component != c) continue;
+      final d = equipmentDetailByNodeId[n.id];
+      if (d != null) return d;
+    }
+    return null;
+  }
+
+  final hasRoof = has(NodeComponent.roofTank);
+  final hasGround = has(NodeComponent.groundTank);
+  final hasPump = has(NodeComponent.pump) || has(NodeComponent.boosterSet);
+  if (!hasRoof && !hasGround && !hasPump) return false;
+
+  prims.add(SldRect(left, top, _plantW, _plantH, weight: SldWeight.thin));
+  prims.add(
+      SldLabel(left + 6, top + 12, 'PUMP-SET DETAIL', size: 7, bold: true));
+
+  const glyph = 20.0;
+  final glyphX = left + 14.0;
+  var y = top + 24.0;
+  final roofRowTop = y;
+
+  if (hasRoof) {
+    prims.addAll(_withRole(
+        planComponentPrims(NodeComponent.roofTank,
+            cx: glyphX + glyph / 2, cy: y + glyph / 2, size: glyph),
+        SldRole.source));
+    final m3 = detailOf(NodeComponent.roofTank);
+    prims.add(SldLabel(glyphX + glyph + 8, y + glyph / 2 + 3,
+        m3 != null ? 'ROOF TANK $m3' : 'ROOF TANK',
+        size: 7, role: SldRole.source));
+    if (downfeed) {
+      prims.add(SldLabel(glyphX + glyph / 2 + 4, y + glyph + 10, 'GRAVITASI',
+          size: 7, bold: true, role: SldRole.source));
+    }
+    y += glyph + 22;
+  }
+
+  // A short vertical connecting leg down to the pump (when both present).
+  if (hasRoof && hasPump) {
+    prims.add(SldLine(glyphX + glyph / 2, roofRowTop + glyph,
+        glyphX + glyph / 2, y,
+        weight: SldWeight.thin, role: SldRole.source));
+  }
+
+  if (hasPump) {
+    final pumpC = has(NodeComponent.boosterSet)
+        ? NodeComponent.boosterSet
+        : NodeComponent.pump;
+    prims.addAll(_withRole(
+        planComponentPrims(pumpC,
+            cx: glyphX + glyph / 2, cy: y + glyph / 2, size: glyph),
+        SldRole.source));
+    final kw = detailOf(pumpC);
+    prims.add(SldLabel(glyphX + glyph + 8, y + glyph / 2 + 3,
+        kw != null ? 'BOOSTER PUMP $kw' : 'BOOSTER PUMP',
+        size: 7, role: SldRole.source));
+    // TRANSFER (ground -> roof lift) when a ground tank exists; else BOOSTER
+    // (pump-up) on upfeed. Mirrors the canvas leg labels.
+    final leg = hasGround ? 'TRANSFER' : (!downfeed ? 'BOOSTER' : null);
+    if (leg != null) {
+      prims.add(SldLabel(glyphX + glyph / 2 + 4, y + glyph + 10, leg,
+          size: 7, bold: true, role: SldRole.source));
+    }
+  }
+  return true;
+}
 
 // ── Label collision avoidance (B5) ───────────────────────────────────────────
 

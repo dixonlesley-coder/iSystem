@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io' show zlib;
 import 'dart:typed_data';
 
+import 'package:mechx_engine/geometry/dxf_drawing.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
@@ -156,6 +158,156 @@ void main() {
             floorIndex: 0,
             title: 'Ground Floor (cold)',
             chrome: null)));
+  });
+
+  test('A5: a riser to a higher floor labels UP', () {
+    // e1 rises from n1 (floor 0) to n2 (floor 1); the on-floor marker is n1,
+    // whose other endpoint is higher → 'UP'.
+    final s = latin1.decode(build());
+    expect(s, contains('(UP) Tj'));
+  });
+
+  test('A5: a component node draws its equipment glyph (a pump circle)', () {
+    // A run with a pump node and NO riser — so the only bezier curve in the
+    // stream must come from the pump body circle (this exporter never dots a
+    // plain junction), proving the equipment glyph is drawn.
+    const pumpNet = Network(
+      nodes: [
+        NetNode(id: 'p', sheetId: 's1', x: 100, y: 200, floorIndex: 0,
+            role: NodeRole.plant, component: NodeComponent.pump),
+        NetNode(id: 'q', sheetId: 's1', x: 400, y: 200, floorIndex: 0),
+      ],
+      edges: [
+        NetEdge(id: 'e', fromId: 'p', toId: 'q', service: ServiceType.coldWater),
+      ],
+    );
+    final s = latin1.decode(networkToPdf(
+        net: pumpNet, sizing: const {}, sheetId: 's1', floorIndex: 0,
+        title: 'Pump'));
+    expect(s, contains(' c\n')); // a bezier curve → the pump body circle
+  });
+
+  test('A5: a sized run with a flow origin draws a flow chevron', () {
+    // e0 gets a flowFromId (n0 upstream); its 300-px run is far longer than the
+    // 30-pt threshold, so a chevron is stroked at the distinctive 1.60 w.
+    const oriented = {
+      'e0': EdgeSizing(
+        edgeId: 'e0',
+        service: ServiceType.coldWater,
+        flow: FlowRate(0.005),
+        diameter: Diameter(0.05),
+        velocity: Velocity(1.8),
+        flowFromId: 'n0',
+      ),
+    };
+    final withArrow = latin1.decode(networkToPdf(
+        net: net, sizing: oriented, sheetId: 's1', floorIndex: 0, title: 'x'));
+    expect(withArrow, contains('1.60 w')); // the chevron stroke weight
+    // The baseline (flowFromId null) draws no chevron.
+    expect(latin1.decode(build()), isNot(contains('1.60 w')));
+  });
+
+  group('A1 floor-plan underlay', () {
+    // Vector fixture: a plan spanning world (0,0)–(100,80) fitted into a
+    // 500 × 400 sheet-pixel frame → k = 500/100 = 5 (the canvas fit).
+    const vector = VectorPlanUnderlay(
+      drawing: DxfDrawing(
+        polylines: [
+          DxfPolyline([DxfPoint(0, 0), DxfPoint(100, 80)]),
+        ],
+        circles: [],
+        arcs: [],
+        bounds: DxfBounds(0, 0, 100, 80),
+      ),
+      sheetWidthPx: 500,
+      sheetHeightPx: 400,
+    );
+
+    // Raster fixture: a 2×2 RGB image covering the same 500 × 400 frame.
+    final rgb = Uint8List.fromList(
+        [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]);
+    final raster = RasterPlanUnderlay(
+      rgbPixels: rgb,
+      pixelWidth: 2,
+      pixelHeight: 2,
+      sheetWidthPx: 500,
+      sheetHeightPx: 400,
+    );
+
+    Uint8List withUnderlay(PlanUnderlay u) => networkToPdf(
+        net: net,
+        sizing: sizing,
+        sheetId: 's1',
+        floorIndex: 0,
+        title: 'Ground Floor (cold)',
+        underlay: u);
+
+    test('vector: the pale-grey stroke precedes the first service stroke',
+        () {
+      final s = latin1.decode(withUnderlay(vector));
+      final grey = s.indexOf('0.75 0.75 0.75 RG'); // 25 % ink
+      expect(grey, greaterThanOrEqualTo(0));
+      expect(s, contains('0.50 w')); // the thin underlay stroke
+      // Painted FIRST: before the cold-water stroke colour is ever set.
+      expect(grey, lessThan(s.indexOf('0.13 0.45 0.85 RG')));
+    });
+
+    test('raster: a FlateDecode /Image XObject, painted before the network',
+        () {
+      final bytes = withUnderlay(raster);
+      final s = latin1.decode(bytes);
+      expect(s, contains('/XObject << /Im1 6 0 R >>'));
+      expect(s, contains('/Subtype /Image'));
+      expect(s, contains('/Width 2 /Height 2'));
+      expect(s, contains('/ColorSpace /DeviceRGB'));
+      expect(s, contains('/Filter /FlateDecode'));
+      // The image paints FIRST — its Do op precedes the first network stroke.
+      expect(s.indexOf('/Im1 Do'), greaterThanOrEqualTo(0));
+      expect(s.indexOf('/Im1 Do'), lessThan(s.indexOf('0.13 0.45 0.85 RG')));
+    });
+
+    test('raster: the image stream is the zlib-deflated RGB rows (verbatim)',
+        () {
+      final bytes = withUnderlay(raster);
+      final s = latin1.decode(bytes); // latin1 is byte-1:1, indices match
+      final dictIdx = s.indexOf('/Subtype /Image');
+      final n = int.parse(RegExp(r'/Length (\d+) >>')
+          .firstMatch(s.substring(dictIdx))!
+          .group(1)!);
+      final streamStart = s.indexOf('stream\n', dictIdx) + 'stream\n'.length;
+      final deflated = bytes.sublist(streamStart, streamStart + n);
+      // FlateDecode = zlib-wrapped DEFLATE; the engine embedded the app's
+      // pre-faded pixels verbatim, so the round-trip is exact.
+      expect(zlib.decode(deflated), equals(rgb));
+    });
+
+    test('raster: the xref offsets still point at their objects (incl. 6)',
+        () {
+      final bytes = withUnderlay(raster);
+      final s = latin1.decode(bytes);
+      final sx = s.lastIndexOf('startxref');
+      final xrefOffset = int.parse(
+          s.substring(sx + 'startxref'.length, s.indexOf('%%EOF', sx)).trim());
+      expect(s.substring(xrefOffset, xrefOffset + 4), 'xref');
+      final lines = s.substring(xrefOffset).split('\n');
+      // lines[0]='xref', [1]='0 7', [2]=free, [3..8]=objects 1..6.
+      final obj1Offset = int.parse(lines[3].substring(0, 10));
+      expect(s.substring(obj1Offset).startsWith('1 0 obj'), isTrue);
+      final obj6Offset = int.parse(lines[8].substring(0, 10));
+      expect(s.substring(obj6Offset).startsWith('6 0 obj'), isTrue);
+    });
+
+    test('null underlay leaves the bytes byte-identical', () {
+      expect(
+          build(),
+          equals(networkToPdf(
+              net: net,
+              sizing: sizing,
+              sheetId: 's1',
+              floorIndex: 0,
+              title: 'Ground Floor (cold)',
+              underlay: null)));
+    });
   });
 
   test('an empty floor still produces a valid (title-only) page', () {

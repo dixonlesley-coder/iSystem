@@ -219,6 +219,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
           enabled: interactive,
           scale: vt.scale,
           world: Offset(pos.x, pos.y),
+          onDragStart: ctrl.pushUndoSnapshot,
           onMove: (w) =>
               ctrl.setPanelLayoutPos(panel.id, pos.copyWith(x: w.dx, y: w.dy)),
           child: _ScaledLayoutChild(
@@ -288,6 +289,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
             enabled: interactive,
             scale: vt.scale,
             world: Offset(lp.x, lp.y),
+            onDragStart: ctrl.pushUndoSnapshot,
             onMove: (w) =>
                 ctrl.setLoadPos(panel.id, c.id, lp.copyWith(x: w.dx, y: w.dy)),
             // Dropped ONTO another load on the SAME panel → CHAIN them (one
@@ -766,6 +768,10 @@ class _LayoutNodeDraggable extends StatefulWidget {
   final bool enabled;
   final double scale;
   final Offset world;
+
+  /// Fired once at drag start — the host pushes one undo snapshot here so the
+  /// whole move (live [onMove] updates don't record) is a single undo step.
+  final VoidCallback? onDragStart;
   final ValueChanged<Offset> onMove;
 
   /// Fired on release with the final world position — lets the host decide
@@ -777,6 +783,7 @@ class _LayoutNodeDraggable extends StatefulWidget {
     required this.enabled,
     required this.scale,
     required this.world,
+    this.onDragStart,
     required this.onMove,
     this.onDropAt,
     required this.child,
@@ -794,7 +801,10 @@ class _LayoutNodeDraggableState extends State<_LayoutNodeDraggable> {
     if (!widget.enabled) return widget.child;
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onPanStart: (_) => _dragWorld = widget.world,
+      onPanStart: (_) {
+        widget.onDragStart?.call();
+        _dragWorld = widget.world;
+      },
       onPanUpdate: (d) {
         final next = (_dragWorld ?? widget.world) + d.delta / widget.scale;
         _dragWorld = next;
@@ -1185,15 +1195,19 @@ class _UnplacedTray extends StatelessWidget {
                     _TrayItem(
                       label: p.tag ?? p.name,
                       kind: _TrayKind.panel,
-                      onPlaced: (pos, ctrl) =>
-                          ctrl.setPanelLayoutPos(p.id, pos),
+                      // One-shot placement of a live-drag intent — snapshot
+                      // first so the placement is a single undo step.
+                      onPlaced: (pos, ctrl) => ctrl
+                        ..pushUndoSnapshot()
+                        ..setPanelLayoutPos(p.id, pos),
                     ),
                   for (final t in unplacedLoads)
                     _TrayItem(
                       label: t.circuit.name,
                       kind: _TrayKind.load,
-                      onPlaced: (pos, ctrl) =>
-                          ctrl.setLoadPos(t.panelId, t.circuit.id, pos),
+                      onPlaced: (pos, ctrl) => ctrl
+                        ..pushUndoSnapshot()
+                        ..setLoadPos(t.panelId, t.circuit.id, pos),
                     ),
                 ],
               ),

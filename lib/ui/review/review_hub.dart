@@ -27,7 +27,6 @@ class ReviewHub extends ConsumerWidget {
     final bom = ref.watch(bomProvider);
     final cutPlan = ref.watch(pipeCutPlanProvider);
 
-    final warnings = elec.warnings.length;
     final panels = elec.panels.length;
 
     // Overall pipe efficiency across all (service, diameter) groups.
@@ -46,10 +45,13 @@ class ReviewHub extends ConsumerWidget {
       children: [
         const _ComplianceCard(),
         const SizedBox(height: MechXSpacing.md),
+        // The bare 'Electrical warnings' count is now redundant: every
+        // ElectricalWarning fans into the unified IssuesCard below (grouped by
+        // severity, locatable) and the compliance card's 'Electrical circuit
+        // sizing' row. Panels-sized + BOM line items stay unique.
         HubStatRow(
           stats: [
             ('Panels sized', '$panels'),
-            ('Electrical warnings', '$warnings'),
             ('BOM line items', '${bom.length}'),
           ],
         ),

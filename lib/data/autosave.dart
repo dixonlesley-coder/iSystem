@@ -110,6 +110,32 @@ ProjectDocument buildDocument(ProviderReader read) {
   );
 }
 
+/// The canonical encoding of a brand-new, untouched project — the default
+/// settings plus whatever the stores seed on a fresh launch (notably the
+/// built-in sample electrical board), with nothing drawn. Computed once from a
+/// throwaway [ProviderContainer] so the dirty guard and the autosave loop agree
+/// on exactly what "virgin" looks like, and memoized (the defaults are constant).
+/// The container is deliberately not disposed — a single tiny leak for the
+/// process, mirroring the root container the app never disposes — so the
+/// electrical controller's post-build sync microtask never reads a disposed ref.
+String? _virginSignature;
+String virginDocumentSignature() =>
+    _virginSignature ??= buildDocument(ProviderContainer().read).encode();
+
+/// Whether the live work reachable via [read] genuinely differs from the last
+/// clean Save — the GUARD-time dirty check (computed FRESH, unlike the timer-fed
+/// [projectDirtyProvider] UI hint). A project that was saved/opened is dirty when
+/// it no longer matches that baseline; a never-saved project is dirty only once
+/// it diverges from the untouched virgin default (so a blank launch — or one that
+/// only seeded the sample board — is NOT dirty and is never destroyed silently).
+bool isProjectDirty(ProviderReader read) {
+  final encoded = buildDocument(read).encode();
+  final saved = read(lastSavedSignatureProvider);
+  return saved != null
+      ? encoded != saved
+      : encoded != virginDocumentSignature();
+}
+
 /// Load [doc] into every live store/provider reachable via [read] — the drawn
 /// project AND the non-network design settings (occupancy, feed, ducts,
 /// rainfall, fire hazard, theme). Used by both Open and crash-recovery restore.
@@ -185,25 +211,31 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
 }
 
 /// Start the periodic autosave loop: every [interval], snapshot the current
-/// work to the recovery file — but only once there's a drawn network worth
-/// saving AND the work differs from the last clean save (so a saved project
-/// never leaves a stale recovery snapshot behind). Returns the timer so the
-/// caller can cancel it.
+/// work to the recovery file — but only once the work differs from a clean
+/// baseline (so a saved project never leaves a stale recovery snapshot behind).
+/// The baseline is the last clean Save/Open when one exists, else the untouched
+/// virgin default: a blank launch (or one that only carries the seeded sample
+/// board) is clean and writes nothing, while an electrical-only or measurement-
+/// only project — which has no drawn network nodes — DOES get recovered. Returns
+/// the timer so the caller can cancel it.
 Timer startAutosave(
   ProviderContainer c, {
   Duration interval = const Duration(seconds: 15),
 }) {
   String? lastWritten; // last content we mirrored to the recovery file
   return Timer.periodic(interval, (_) {
-    final network = c.read(networkControllerProvider).network;
-    if (network.nodes.isEmpty) return; // nothing worth recovering yet
     final doc = buildDocument(c.read);
     final encoded = doc.encode();
-    final clean = encoded == c.read(lastSavedSignatureProvider);
+    final saved = c.read(lastSavedSignatureProvider);
+    // Clean when it matches the last real Save, or (never saved yet) still equals
+    // the untouched virgin default — either way there is nothing worth recovering.
+    final clean = saved != null
+        ? encoded == saved
+        : encoded == virginDocumentSignature();
     // Piggy-back the "edited" indicator on the signature comparison we're
     // already doing (Save/Open clear it eagerly; this catches new edits).
     c.read(projectDirtyProvider.notifier).set(!clean);
-    // Skip when the work already matches the last clean Save (no phantom
+    // Skip when the work already matches the clean baseline (no phantom
     // recovery), or when we've already mirrored this exact content.
     if (clean || encoded == lastWritten) {
       return;

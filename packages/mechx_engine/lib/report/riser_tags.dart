@@ -15,6 +15,8 @@
 library;
 
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
+import 'package:mechx_engine/sizing/pump.dart' show PumpDuty;
 
 /// The Indonesian drawing-convention FUNCTION of a supply riser/run, appended to
 /// the single-line pipe tag (e.g. `100-CW-PPR-BOOSTER`).
@@ -229,6 +231,161 @@ class FloorFanOut {
   final int overflow;
 
   const FloorFanOut(this.floorIndex, this.labels, this.overflow);
+}
+
+/// The equipment detail SUFFIX drawn beside an equipment symbol on the
+/// single-line — a tank capacity (`237 m3`) or a duty (`5.5 kW`) — or null when
+/// no datum genuinely exists (the node then keeps its plain name, no fabricated
+/// value). HONEST: a tank's m3 is a direct conversion of the stored
+/// [NetNode.tankCapacityLitres]; a duty is shown only when the matching system
+/// duty provider is non-null.
+///
+/// Pure + Flutter-free (engine types only) so it is unit-testable in isolation
+/// and shared by the schematic painter AND the riser single-line EXPORT builder
+/// (`mechanical_sld_drawing.dart` `equipmentDetailByNodeId` — B1 parity).
+String? equipmentDetail(
+  NetNode node, {
+  PumpDuty? supplyPump,
+  FanDuty? fan,
+  PumpDuty? firePump,
+}) {
+  final c = node.component;
+  if (c == null) return null;
+  switch (c) {
+    case NodeComponent.roofTank:
+    case NodeComponent.groundTank:
+    case NodeComponent.expansionTank:
+      final litres = node.tankCapacityLitres;
+      if (litres == null || litres <= 0) return null;
+      final m3 = litres / 1000.0;
+      // Whole-m3 for big cisterns, one decimal for small tanks; strip a '.0'.
+      // ASCII 'm3' — matching the plant-detail callout, the notes card and the
+      // export (the PDF sanitizer would mangle a real superscript to '?').
+      final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
+      final clean = s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
+      return '$clean m3';
+    case NodeComponent.pump:
+    case NodeComponent.boosterSet:
+      // VERIFY: this is the SYSTEM supply-pump duty (one trunk pump), not a
+      // per-node solve — a project with several independent pumps would show the
+      // same duty on every pump node. Acceptable first pass (one supply pump is
+      // the norm); the fire pump is deliberately NOT attached here (no node-kind
+      // distinguishes a fire pump from a plumbing pump yet).
+      if (supplyPump == null) return null;
+      return '${supplyPump.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW';
+    case NodeComponent.ahu:
+    case NodeComponent.fcu:
+    case NodeComponent.supplyFan:
+    case NodeComponent.exhaustFan:
+      // VERIFY: same system-level caveat as the pump — the central duct-fan duty
+      // is attached to every air-unit node of this kind (no per-unit fan solve).
+      if (fan == null) return null;
+      return '${fan.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW';
+    default:
+      return null;
+  }
+}
+
+// ── B2 stack-detail bookkeeping (drainage / vent riser conventions) ──────────
+// Pure detections over the DRAWN network for the Diagram Air Kotor treatment:
+// the cleanout at a drainage stack base, the vent-to-soil tee, and the
+// vent-through-roof (VTR) termination. HONESTY: each returns only what the
+// engineer actually drew — a missing cleanout is SURFACED (advisory), never
+// fabricated into the drawing.
+
+/// Node ids at the BASE of a drainage stack: the LOWER endpoint of a drainage
+/// riser that is not itself the UPPER endpoint of another drainage riser (i.e.
+/// the stack's lowest drawn point). Deterministic bookkeeping, no geometry.
+Set<String> drainageStackBaseIds(Network net) {
+  final lowerIds = <String>{};
+  final upperIds = <String>{};
+  for (final e in net.edges) {
+    if (e.service != ServiceType.drainage || e.kind != EdgeKind.riser) continue;
+    final a = net.nodeById(e.fromId);
+    final b = net.nodeById(e.toId);
+    if (a == null || b == null) continue;
+    final lower = a.floorIndex <= b.floorIndex ? a : b;
+    final upper = identical(lower, a) ? b : a;
+    lowerIds.add(lower.id);
+    upperIds.add(upper.id);
+  }
+  return lowerIds.difference(upperIds);
+}
+
+/// Whether stack base [nodeId] is served by a cleanout — the base node itself,
+/// or an immediately drainage-connected neighbour, carries
+/// [NodeComponent.cleanout] (the conventional rodding point beside the base).
+bool _stackBaseHasCleanout(Network net, String nodeId) {
+  if (net.nodeById(nodeId)?.component == NodeComponent.cleanout) return true;
+  for (final e in net.edgesAt(nodeId)) {
+    if (e.service != ServiceType.drainage) continue;
+    final otherId = e.fromId == nodeId ? e.toId : e.fromId;
+    if (net.nodeById(otherId)?.component == NodeComponent.cleanout) return true;
+  }
+  return false;
+}
+
+/// Drainage stack bases LACKING a cleanout at/beside the base — the advisory
+/// feed ('Drainage stack has no cleanout at its base'). Sorted by node id so the
+/// issue list is deterministic. Empty when every stack base is served (or there
+/// are no drainage risers at all).
+List<String> drainageStackBasesLackingCleanout(Network net) {
+  final out = [
+    for (final id in drainageStackBaseIds(net))
+      if (!_stackBaseHasCleanout(net, id)) id,
+  ]..sort();
+  return out;
+}
+
+/// Ids of the CLEANOUT nodes that serve a drainage stack base (the base node
+/// itself or a drainage-connected neighbour) — the nodes that carry the `CO`
+/// tag on the riser drawing. Only cleanouts the engineer actually drew.
+Set<String> cleanoutAtStackBaseIds(Network net) {
+  final out = <String>{};
+  for (final baseId in drainageStackBaseIds(net)) {
+    if (net.nodeById(baseId)?.component == NodeComponent.cleanout) {
+      out.add(baseId);
+    }
+    for (final e in net.edgesAt(baseId)) {
+      if (e.service != ServiceType.drainage) continue;
+      final otherId = e.fromId == baseId ? e.toId : e.fromId;
+      if (net.nodeById(otherId)?.component == NodeComponent.cleanout) {
+        out.add(otherId);
+      }
+    }
+  }
+  return out;
+}
+
+/// Node ids where a VENT riser tees into the soil stack: a vent-riser endpoint
+/// that also touches a drainage edge (the drawn vent-to-soil connection).
+Set<String> ventSoilTeeNodeIds(Network net) {
+  final out = <String>{};
+  for (final e in net.edges) {
+    if (e.service != ServiceType.vent || e.kind != EdgeKind.riser) continue;
+    for (final id in [e.fromId, e.toId]) {
+      if (net.edgesAt(id).any((d) => d.service == ServiceType.drainage)) {
+        out.add(id);
+      }
+    }
+  }
+  return out;
+}
+
+/// UPPER endpoints of vent risers that REACH [topFloor] — the vent-through-roof
+/// (VTR) terminations. A vent riser stopping short of the top floor is NOT a
+/// VTR (never fabricate the roof penetration).
+Set<String> ventTopTerminalIds(Network net, {required int topFloor}) {
+  final out = <String>{};
+  for (final e in net.edges) {
+    if (e.service != ServiceType.vent || e.kind != EdgeKind.riser) continue;
+    final a = net.nodeById(e.fromId);
+    final b = net.nodeById(e.toId);
+    if (a == null || b == null) continue;
+    final upper = a.floorIndex >= b.floorIndex ? a : b;
+    if (upper.floorIndex == topFloor) out.add(upper.id);
+  }
+  return out;
 }
 
 /// Group the demand-bearing FIXTURE/terminal nodes per floor into a capped
