@@ -832,6 +832,111 @@ void main() {
     expect(decoded.settings.fixtureLibrary.single.id, 'ok');
   });
 
+  test('document control round-trips (identity fields + revision history)',
+      () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      settings: DesignSettings(
+        documentNumber: 'M-101',
+        revisionTag: 'B',
+        clientName: 'PT Contoh',
+        preparedBy: 'A. Engineer',
+        checkedBy: 'B. Checker',
+        approvedBy: 'C. Approver',
+        revisions: [
+          Revision('2026-01-10', 'Issued for construction'),
+          Revision('2026-03-02', 'Revised per client comments'),
+        ],
+      ),
+    );
+    final decoded = ProjectDocument.decode(doc.encode());
+    final s = decoded.settings;
+    expect(s.documentNumber, 'M-101');
+    expect(s.revisionTag, 'B');
+    expect(s.clientName, 'PT Contoh');
+    expect(s.preparedBy, 'A. Engineer');
+    expect(s.checkedBy, 'B. Checker');
+    expect(s.approvedBy, 'C. Approver');
+    expect(s.revisions, hasLength(2));
+    expect(s.revisions[0].date, '2026-01-10');
+    expect(s.revisions[0].description, 'Issued for construction');
+    expect(s.revisions[1].date, '2026-03-02');
+    expect(s.revisions[1].description, 'Revised per client comments');
+  });
+
+  test('a document without document-control fields decodes to defaults', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    // An old file omits the document-control keys entirely (no 'settings'
+    // remove needed — the default DesignSettings already leaves them unset).
+    final json = doc.toJson();
+    final settingsJson = json['settings'] as Map;
+    for (final key in [
+      'documentNumber',
+      'revisionTag',
+      'clientName',
+      'preparedBy',
+      'checkedBy',
+      'approvedBy',
+      'revisions',
+    ]) {
+      expect(settingsJson.containsKey(key), isFalse);
+    }
+    final decoded = ProjectDocument.fromJson(json).settings;
+    expect(decoded.documentNumber, isNull);
+    expect(decoded.revisionTag, isNull);
+    expect(decoded.clientName, isNull);
+    expect(decoded.preparedBy, isNull);
+    expect(decoded.checkedBy, isNull);
+    expect(decoded.approvedBy, isNull);
+    expect(decoded.revisions, isEmpty);
+  });
+
+  test(
+      'an untouched project (no document-control fields set) encodes '
+      'byte-identically to a document explicitly constructed the same way',
+      () {
+    const withDefaults = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    const explicit = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      settings: DesignSettings(),
+    );
+    expect(withDefaults.encode(), explicit.encode());
+    // And the settings block itself carries none of the new keys.
+    final settingsJson = withDefaults.toJson()['settings'] as Map;
+    expect(
+      settingsJson.keys.toSet().intersection({
+        'documentNumber',
+        'revisionTag',
+        'clientName',
+        'preparedBy',
+        'checkedBy',
+        'approvedBy',
+        'revisions',
+      }),
+      isEmpty,
+    );
+  });
+
   test('a v3 (newer) file is rejected with ProjectDocumentException', () {
     const doc = ProjectDocument(
       projectName: 'X',

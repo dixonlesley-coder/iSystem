@@ -200,6 +200,8 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             child: _ExportMenu(
               onSld: () => _runExport(exportElectricalSldDxf),
               onSldPdf: () => _runExport(exportElectricalSldPdf),
+              onSchedulesPdf: () =>
+                  _runExport(exportElectricalPanelSchedulesPdf),
               onOverviewPdf: () => _runExport(exportElectricalOverviewPdf),
               onOverviewDxf: () => _runExport(exportElectricalOverviewDxf),
               onRiserPdf: () => _runExport(exportElectricalRiserPdf),
@@ -644,6 +646,7 @@ const _electricalGuideItems = <String>[
 class _ExportMenu extends StatelessWidget {
   final VoidCallback onSld;
   final VoidCallback onSldPdf;
+  final VoidCallback onSchedulesPdf;
   final VoidCallback onOverviewPdf;
   final VoidCallback onOverviewDxf;
   final VoidCallback onRiserPdf;
@@ -653,6 +656,7 @@ class _ExportMenu extends StatelessWidget {
   const _ExportMenu({
     required this.onSld,
     required this.onSldPdf,
+    required this.onSchedulesPdf,
     required this.onOverviewPdf,
     required this.onOverviewDxf,
     required this.onRiserPdf,
@@ -698,6 +702,13 @@ class _ExportMenu extends StatelessWidget {
               label: context.strings(StringKey.electricalExportSld),
               sub: context.strings(StringKey.electricalExportSldPdf),
               onTap: onSldPdf,
+            ),
+            // The issuable schedule SET — one board schedule per page, real
+            // `Sheet i of t` counters (C1 pagination).
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportSchedules),
+              sub: context.strings(StringKey.electricalExportSchedulesPdf),
+              onTap: onSchedulesPdf,
             ),
             _ExportRow(
               label: context.strings(StringKey.electricalExportOverview),

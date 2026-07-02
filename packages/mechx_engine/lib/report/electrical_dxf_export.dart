@@ -7,11 +7,16 @@
 /// `electrical_sld_drawing.dart` as the PDF — every panel a distribution-board
 /// single-line (incomer breaker → busbar → one row per outgoing way with
 /// breaker / cable / load / phase / Ib, feeders routed to the sub-panel they
-/// supply) — plus a model-space title block + device legend. Panels go on the
-/// `panels` layer, feeders on `feeders`, the sheet frame on `frame`.
+/// supply) — preceded by a TABLES section (CONTINUOUS/DASHED line-types + the
+/// class layers) and followed by a model-space title block + device legend.
+/// Prims route to CLASS layers a CAD reviewer expects: busbars (thick lines)
+/// on `E-BUS`, feeder routing (medium) on `E-FEEDER`, device/way graphics
+/// (thin lines, blocks, meter circles) on `E-BREAKER`, labels on `E-TEXT`,
+/// the frame/legend on `E-FRAME`, and essential-role graphics on
+/// `E-ESSENTIAL` (ACI red) — an explicit `SldLine.layer` wins, used as-is.
 /// [powerOneLineToDxf] renders the hybrid power one-line (utility / genset / PV
-/// / battery) as boxed nodes joined by feeder LINEs. DXF Y is up, so screen Y is
-/// negated.
+/// / battery) as boxed nodes joined by feeder LINEs (unchanged — no TABLES).
+/// DXF Y is up, so screen Y is negated.
 library;
 
 import 'dart:math' as math;
@@ -19,6 +24,7 @@ import 'dart:math' as math;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
+import 'drawing_chrome.dart' show DrawingChrome, dxfTablesSection;
 import 'electrical_sld_drawing.dart';
 
 /// Box footprint (DXF units) for an auto-laid panel / node.
@@ -26,6 +32,33 @@ const double _boxW = 200;
 const double _boxH = 90;
 const double _gapX = 120;
 const double _gapY = 80;
+
+// ── Electrical class layers (drafting-style CAD conventions, no `// VERIFY`) ──
+
+/// Busbars — the thick vertical bus lines.
+const kDxfLayerEBus = 'E-BUS';
+
+/// Feeder routing runs (medium-weight lines).
+const kDxfLayerEFeeder = 'E-FEEDER';
+
+/// Device / board graphics — thin lines, block outlines, meter circles.
+const kDxfLayerEBreaker = 'E-BREAKER';
+
+/// All annotation text.
+const kDxfLayerEText = 'E-TEXT';
+
+/// Sheet frame: title block + legend.
+const kDxfLayerEFrame = 'E-FRAME';
+
+/// Essential (emergency-supply) graphics — ACI red, toggleable as one layer.
+const kDxfLayerEEssential = 'E-ESSENTIAL';
+
+/// DXF group-370 lineweight (1/100 mm) per [SldWeight] bucket.
+int _lineweightFor(SldWeight w) => switch (w) {
+      SldWeight.thin => 13,
+      SldWeight.medium => 25,
+      SldWeight.thick => 50,
+    };
 
 class _Dxf {
   final StringBuffer b = StringBuffer();
@@ -47,11 +80,14 @@ class _Dxf {
 
   /// A box (4 LINEs) with top-left at ([x],[y]) in screen space (Y negated).
   /// [color] is an optional ACI override (62) — null = inherit the layer colour.
-  void box(String layer, double x, double y, double w, double h, {int? color}) {
+  /// [lineweight] is an optional group-370 width (1/100 mm).
+  void box(String layer, double x, double y, double w, double h,
+      {int? color, int? lineweight}) {
     void line(double x1, double y1, double x2, double y2) {
       g(0, 'LINE');
       g(8, layer);
       if (color != null) g(62, color);
+      if (lineweight != null) g(370, lineweight);
       g(10, x1);
       g(20, -y1);
       g(11, x2);
@@ -75,20 +111,24 @@ class _Dxf {
     g(1, value);
   }
 
-  void circle(String layer, double cx, double cy, double r, {int? color}) {
+  void circle(String layer, double cx, double cy, double r,
+      {int? color, int? lineweight}) {
     g(0, 'CIRCLE');
     g(8, layer);
     if (color != null) g(62, color);
+    if (lineweight != null) g(370, lineweight);
     g(10, cx);
     g(20, -cy); // DXF Y negated, like box/text/connector
     g(40, r);
   }
 
   void connector(String layer, double x1, double y1, double x2, double y2,
-      {int? color}) {
+      {int? color, int? lineweight, String? linetype}) {
     g(0, 'LINE');
     g(8, layer);
+    if (linetype != null) g(6, linetype);
     if (color != null) g(62, color);
+    if (lineweight != null) g(370, lineweight);
     g(10, x1);
     g(20, -y1);
     g(11, x2);
@@ -100,10 +140,15 @@ class _Dxf {
 }
 
 /// Render the sized electrical single-line as a DXF document, drawing the SAME
-/// professional content as the PDF (`buildElectricalSld`): panel blocks on the
-/// `panels` layer, feeder routing on `feeders`, the title block + legend frame
-/// on `frame`. The drawing is model-space (DXF Y up, so screen-space y-down is
-/// negated).
+/// professional content as the PDF (`buildElectricalSld`) on the class layers
+/// (see the library doc), preceded by a TABLES section defining the line-types
+/// + layers so a CAD app resolves colour and dash without guessing. The
+/// drawing is model-space (DXF Y up, so screen-space y-down is negated).
+///
+/// [chrome], when present, extends the frame's title block with the CLIENT /
+/// DWG NO / REV / SCALE (`NTS` when unset — a single-line is schematic) /
+/// DATE / DRAWN / CHECKED / APPROVED / SHEET rows as a ruled label|value band;
+/// null ⇒ the original 96-tall block, byte-identical.
 String electricalSldToDxf({
   ElectricalProject? project,
   ElectricalSystemResult? result,
@@ -111,6 +156,7 @@ String electricalSldToDxf({
   String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
   bool overview = false,
   bool sourceChain = false,
+  DrawingChrome? chrome,
 }) {
   assert(sheet != null || (project != null && result != null),
       'electricalSldToDxf needs either a prebuilt sheet or project+result');
@@ -132,49 +178,146 @@ String electricalSldToDxf({
         SldRole.source => 5,
       };
 
-  // Drawing-space primitives (panels / busbars / ways / feeders). A line that is
-  // medium/thick weight is a busbar or feeder → the `feeders` layer; everything
-  // else (block outlines, way stubs, breaker boxes, labels) → `panels`.
+  // Class-layer routing: an explicit [SldLine.layer] WINS (used as-is); the
+  // essential role isolates onto E-ESSENTIAL (one CAD toggle for the emergency
+  // sub-tree); else a line routes by weight — thick busbars → E-BUS, medium
+  // feeder runs → E-FEEDER, thin device/way graphics → E-BREAKER.
+  String lineLayer(SldLine l) =>
+      l.layer ??
+      (l.role == SldRole.essential
+          ? kDxfLayerEEssential
+          : switch (l.weight) {
+              SldWeight.thick => kDxfLayerEBus,
+              SldWeight.medium => kDxfLayerEFeeder,
+              SldWeight.thin => kDxfLayerEBreaker,
+            });
+  String shapeLayer(SldRole role) =>
+      role == SldRole.essential ? kDxfLayerEEssential : kDxfLayerEBreaker;
+
+  // Drawing-space primitives (panels / busbars / ways / feeders).
   for (final p in sheetResolved.prims) {
     switch (p) {
       case SldLine():
-        final layer = p.weight == SldWeight.thin ? 'panels' : 'feeders';
-        d.connector(layer, p.x1, p.y1, p.x2, p.y2, color: colorFor(p.role));
+        d.connector(lineLayer(p), p.x1, p.y1, p.x2, p.y2,
+            color: colorFor(p.role),
+            lineweight: _lineweightFor(p.weight),
+            linetype: p.dashed ? 'DASHED' : null);
       case SldRect():
-        d.box('panels', p.x, p.y, p.w, p.h, color: colorFor(p.role));
+        d.box(shapeLayer(p.role), p.x, p.y, p.w, p.h,
+            color: colorFor(p.role), lineweight: _lineweightFor(p.weight));
       case SldLabel():
-        d.text('panels', p.x, p.y, p.text,
+        d.text(kDxfLayerEText, p.x, p.y, p.text,
             size: p.size * 1.3, color: colorFor(p.role));
       case SldCircle():
-        d.circle('panels', p.cx, p.cy, p.r, color: colorFor(p.role));
+        d.circle(shapeLayer(p.role), p.cx, p.cy, p.r,
+            color: colorFor(p.role), lineweight: _lineweightFor(p.weight));
     }
   }
 
   // ── Model-space title block + legend, laid out below the drawing ────────────
+  // The chrome's extra rows grow the block below the supply note; absent
+  // chrome ⇒ the original 96-tall block (byte-identical bar the layer names).
+  final rows = _chromeFrameRows(chrome);
+  const rowH = 18.0;
+  const tbW = 360.0;
+  const labelW = 88.0;
+  final tbH = rows.isEmpty ? 96.0 : 84.0 + rows.length * rowH + 6.0;
   final frameTop = sheetResolved.maxY + 60;
   final pname = (project?.name.isNotEmpty ?? false)
       ? project!.name
       : 'Untitled project';
-  d.box('frame', sheetResolved.minX, frameTop, 360, 96);
-  d.text('frame', sheetResolved.minX + 8, frameTop + 22, pname, size: 16);
-  d.text('frame', sheetResolved.minX + 8, frameTop + 44, diagramTitle,
+  d.box(kDxfLayerEFrame, sheetResolved.minX, frameTop, tbW, tbH);
+  d.text(kDxfLayerEFrame, sheetResolved.minX + 8, frameTop + 22, pname,
+      size: 16);
+  d.text(kDxfLayerEFrame, sheetResolved.minX + 8, frameTop + 44, diagramTitle,
       size: 12);
-  d.text('frame', sheetResolved.minX + 8, frameTop + 66, sheetResolved.supplyNote, size: 10);
+  d.text(kDxfLayerEFrame, sheetResolved.minX + 8, frameTop + 66,
+      sheetResolved.supplyNote,
+      size: 10);
+  if (rows.isNotEmpty) {
+    final x0 = sheetResolved.minX;
+    const bandPad = 84.0; // band top, below the supply-note line
+    final bandTop = frameTop + bandPad;
+    final bandBot = bandTop + rows.length * rowH;
+    // Band top rule + full-height label|value divider (the box bottom closes
+    // the band 6 units below).
+    d.connector(kDxfLayerEFrame, x0, bandTop, x0 + tbW, bandTop);
+    d.connector(kDxfLayerEFrame, x0 + labelW, bandTop, x0 + labelW, bandBot);
+    for (var i = 0; i < rows.length; i++) {
+      final (label, value) = rows[i];
+      final rowTop = bandTop + i * rowH;
+      if (i > 0) d.connector(kDxfLayerEFrame, x0, rowTop, x0 + tbW, rowTop);
+      d.text(kDxfLayerEFrame, x0 + 8, rowTop + 13, label, size: 7);
+      d.text(kDxfLayerEFrame, x0 + labelW + 8, rowTop + 13, value, size: 10);
+    }
+    d.connector(kDxfLayerEFrame, x0, bandBot, x0 + tbW, bandBot);
+  }
 
   if (sheetResolved.legend.isNotEmpty) {
     final lx = sheetResolved.minX + 400;
-    d.box('frame', lx, frameTop, 300, math.max(96, 22.0 + sheetResolved.legend.length * 14));
-    d.text('frame', lx + 8, frameTop + 16, 'LEGEND', size: 11);
+    d.box(kDxfLayerEFrame, lx, frameTop, 300,
+        math.max(96, 22.0 + sheetResolved.legend.length * 14));
+    d.text(kDxfLayerEFrame, lx + 8, frameTop + 16, 'LEGEND', size: 11);
     var row = 0;
     for (final e in sheetResolved.legend) {
-      d.text('frame', lx + 8, frameTop + 32 + row * 14, '${e.code}  -  ${e.meaning}',
+      d.text(kDxfLayerEFrame, lx + 8, frameTop + 32 + row * 14,
+          '${e.code}  -  ${e.meaning}',
           size: 9);
       row++;
     }
   }
 
   d.end();
-  return d.toString();
+
+  // TABLES precede ENTITIES: the shared CONTINUOUS/DASHED/DASHDOT line-types
+  // + one LAYER record per class layer (E-ESSENTIAL red; feeder cyan mirroring
+  // the reference drawings' cyan-normal; chrome grey; 7 elsewhere), plus any
+  // explicit per-prim layer name (colour 7, CONTINUOUS) so nothing references
+  // an undefined layer.
+  final classNames = {
+    kDxfLayerEBus,
+    kDxfLayerEFeeder,
+    kDxfLayerEBreaker,
+    kDxfLayerEText,
+    kDxfLayerEFrame,
+    kDxfLayerEEssential,
+  };
+  final explicit = <String>{
+    for (final p in sheetResolved.prims)
+      if (p is SldLine && p.layer != null && !classNames.contains(p.layer))
+        p.layer!,
+  }.toList()
+    ..sort();
+  final tables = dxfTablesSection(layers: [
+    (kDxfLayerEBus, 7, 'CONTINUOUS'),
+    (kDxfLayerEFeeder, 4, 'CONTINUOUS'),
+    (kDxfLayerEBreaker, 7, 'CONTINUOUS'),
+    (kDxfLayerEText, 7, 'CONTINUOUS'),
+    (kDxfLayerEFrame, 8, 'CONTINUOUS'),
+    (kDxfLayerEEssential, 1, 'CONTINUOUS'),
+    for (final name in explicit) (name, 7, 'CONTINUOUS'),
+  ]);
+  return tables + d.toString();
+}
+
+/// The chrome's title-block rows for the DXF frame — CLIENT / DWG NO / REV /
+/// SCALE / DATE / DRAWN / CHECKED / APPROVED / SHEET, filtered present. SCALE
+/// defaults `NTS` whenever the chrome is non-empty (a single-line is
+/// schematic); null / empty chrome ⇒ no rows.
+List<(String, String)> _chromeFrameRows(DrawingChrome? chrome) {
+  if (chrome == null || chrome.isEmpty) return const [];
+  bool has(String? s) => s != null && s.isNotEmpty;
+  return [
+    if (has(chrome.clientName)) ('CLIENT', chrome.clientName!),
+    if (has(chrome.drawingNumber)) ('DWG NO', chrome.drawingNumber!),
+    if (has(chrome.revisionNumber)) ('REV', chrome.revisionNumber!),
+    ('SCALE', has(chrome.scaleText) ? chrome.scaleText! : 'NTS'),
+    if (has(chrome.dateString)) ('DATE', chrome.dateString!),
+    if (has(chrome.drawnBy)) ('DRAWN', chrome.drawnBy!),
+    if (has(chrome.checkedBy)) ('CHECKED', chrome.checkedBy!),
+    if (has(chrome.approvedBy)) ('APPROVED', chrome.approvedBy!),
+    if (chrome.sheetCounter != null) ('SHEET', chrome.sheetCounter!),
+  ];
 }
 
 /// Render a [PowerOneLine] as a DXF document — each node a labelled box, each

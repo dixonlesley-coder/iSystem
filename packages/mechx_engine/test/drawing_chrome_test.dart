@@ -69,6 +69,192 @@ void main() {
       expect(const DrawingChrome(sheetTotal: 4).sheetCounter, '1 of 4');
       expect(const DrawingChrome().sheetCounter, isNull);
     });
+
+    test('isEmpty covers the new title-block fields (additive contract)', () {
+      // An all-null chrome stays empty (existing renderers keep byte-identity).
+      expect(const DrawingChrome().isEmpty, isTrue);
+      // Each new field alone makes it non-empty.
+      expect(const DrawingChrome(clientName: 'Acme').isEmpty, isFalse);
+      expect(const DrawingChrome(drawingTitle: 'PLAN').isEmpty, isFalse);
+      expect(const DrawingChrome(drawnBy: 'AB').isEmpty, isFalse);
+      expect(const DrawingChrome(checkedBy: 'CD').isEmpty, isFalse);
+      expect(const DrawingChrome(approvedBy: 'EF').isEmpty, isFalse);
+      expect(const DrawingChrome(dateString: '2026-07-02').isEmpty, isFalse);
+      expect(const DrawingChrome(scaleText: '1 : 100').isEmpty, isFalse);
+    });
+  });
+
+  group('pdfSheetFrame', () {
+    test('draws one thin (0.8 w) border rectangle at the margin', () {
+      final f = pdfSheetFrame(pageW: 842, pageH: 595, margin: 24);
+      expect(f, contains('0.8 w'));
+      // A3 landscape 842x595, margin 24 -> inner 794 x 547 at (24, 24).
+      expect(f, contains('24.00 24.00 794.00 547.00 re S'));
+    });
+  });
+
+  group('pdfTitleBlock', () {
+    test('renders only rows whose value is present + a positive height', () {
+      // drawingTitle + drawnBy set; clientName intentionally absent.
+      const c = DrawingChrome(
+        drawingNumber: 'M-101',
+        drawingTitle: 'GROUND FLOOR PLUMBING',
+        drawnBy: 'AB',
+      );
+      final tb = pdfTitleBlock(
+        c,
+        pageW: 842,
+        pageH: 595,
+        margin: 24,
+        projectName: 'Tower A',
+      );
+      // Present rows: PROJECT, TITLE, DWG NO, DRAWN -> 4 rows * 13pt = 52.
+      expect(tb.height, closeTo(52.0, 1e-9));
+      expect(tb.ops, contains('(PROJECT) Tj'));
+      expect(tb.ops, contains('(Tower A) Tj'));
+      expect(tb.ops, contains('(TITLE) Tj'));
+      expect(tb.ops, contains('(GROUND FLOOR PLUMBING) Tj'));
+      expect(tb.ops, contains('(DRAWN) Tj'));
+      // Absent rows are not drawn.
+      expect(tb.ops, isNot(contains('(CLIENT) Tj')));
+      expect(tb.ops, isNot(contains('(REV) Tj')));
+    });
+
+    test('scaleTextOverride wins over chrome.scaleText; empty -> no rows', () {
+      const c = DrawingChrome(scaleText: '1 : 50');
+      final tb = pdfTitleBlock(
+        c,
+        pageW: 842,
+        pageH: 595,
+        margin: 24,
+        projectName: 'P',
+        scaleTextOverride: '1 : 100',
+      );
+      expect(tb.ops, contains('(SCALE) Tj'));
+      expect(tb.ops, contains('(1 : 100) Tj'));
+      expect(tb.ops, isNot(contains('(1 : 50) Tj')));
+
+      // With a blank project name and no other rows, nothing is drawn.
+      final empty = pdfTitleBlock(
+        const DrawingChrome(),
+        pageW: 842,
+        pageH: 595,
+        margin: 24,
+        projectName: '',
+      );
+      expect(empty.ops, '');
+      expect(empty.height, 0.0);
+    });
+  });
+
+  group('pdfScaleBarReal', () {
+    test('empty when pointsPerMeter is not finite/positive', () {
+      expect(
+          pdfScaleBarReal(pointsPerMeter: 0, centerX: 100, baseY: 20), '');
+      expect(
+          pdfScaleBarReal(pointsPerMeter: -5, centerX: 100, baseY: 20), '');
+      expect(
+          pdfScaleBarReal(
+              pointsPerMeter: double.infinity, centerX: 100, baseY: 20),
+          '');
+      expect(
+          pdfScaleBarReal(
+              pointsPerMeter: double.nan, centerX: 100, baseY: 20),
+          '');
+    });
+
+    test('at 12 pt/m the 10 m bar is nearest 120 pt (0 / 5 m / 10 m)', () {
+      // Ladder drawn widths: 1->12, 2->24, 5->60, 10->120 (exact), 20->240.
+      // The 10 m bar (120 pt) is nearest the 120 pt target; mid = 5 m.
+      final s = pdfScaleBarReal(pointsPerMeter: 12, centerX: 200, baseY: 30);
+      expect(s, contains('(0) Tj'));
+      expect(s, contains('(5 m) Tj'));
+      expect(s, contains('(10 m) Tj'));
+    });
+
+    test('at 2 pt/m the 50 m bar is nearest 120 pt (0 / 25 m / 50 m)', () {
+      // Ladder drawn widths: 20->40, 50->100 (err 20), 100->200 (err 80).
+      // The 50 m bar (100 pt) is nearest the 120 pt target; mid = 25 m.
+      final s = pdfScaleBarReal(pointsPerMeter: 2, centerX: 200, baseY: 30);
+      expect(s, contains('(0) Tj'));
+      expect(s, contains('(25 m) Tj'));
+      expect(s, contains('(50 m) Tj'));
+    });
+  });
+
+  group('DXF service tables', () {
+    test('layer / colour / line-type / dash are total over ServiceType', () {
+      for (final s in ServiceType.values) {
+        expect(dxfLayerNameFor(s), isNotEmpty);
+        expect(serviceAciColorFor(s), inInclusiveRange(1, 255));
+        final lt = dxfLinetypeFor(s);
+        expect(const ['CONTINUOUS', 'DASHED', 'DASHDOT'], contains(lt));
+        // Dash pattern must be consistent with the line-type name.
+        final dash = serviceDashPatternPdf(s);
+        if (lt == 'CONTINUOUS') {
+          expect(dash, isNull);
+        } else {
+          expect(dash, isNotNull);
+        }
+      }
+    });
+
+    test('dash + line-type tables match the documented services', () {
+      expect(serviceDashPatternPdf(ServiceType.vent), const [6, 4]);
+      expect(serviceDashPatternPdf(ServiceType.returnAir), const [6, 4]);
+      expect(
+          serviceDashPatternPdf(ServiceType.fireSprinkler), const [10, 3, 2, 3]);
+      expect(
+          serviceDashPatternPdf(ServiceType.fireHydrant), const [10, 3, 2, 3]);
+      expect(serviceDashPatternPdf(ServiceType.coldWater), isNull);
+      expect(dxfLinetypeFor(ServiceType.vent), 'DASHED');
+      expect(dxfLinetypeFor(ServiceType.fireHydrant), 'DASHDOT');
+      expect(dxfLinetypeFor(ServiceType.coldWater), 'CONTINUOUS');
+    });
+
+    test('dxfTablesSection defines the LTYPE + LAYER records', () {
+      final tables = dxfTablesForServices(
+          const [ServiceType.coldWater, ServiceType.vent]);
+      expect(tables, contains('SECTION'));
+      expect(tables, contains('TABLES'));
+      expect(tables, contains('LTYPE'));
+      expect(tables, contains('CONTINUOUS'));
+      expect(tables, contains('DASHED'));
+      expect(tables, contains('DASHDOT'));
+      expect(tables, contains('LAYER'));
+      expect(tables, contains('P-DOM-CWS')); // coldWater layer
+      expect(tables, contains('P-SAN-VENT')); // vent layer
+      expect(tables, contains(kDxfLayerAnno));
+      expect(tables, contains(kDxfLayerFrame));
+      expect(tables.trimRight(), endsWith('ENDSEC'));
+    });
+  });
+
+  group('dxfTitleBlock', () {
+    test('renders present rows as TEXT on the frame layer', () {
+      final tb = dxfTitleBlock(
+        const DrawingChrome(drawingNumber: 'M-101', drawingTitle: 'PLAN'),
+        minX: 0,
+        minY: -300,
+        maxX: 400,
+        maxY: 0,
+        projectName: 'Tower A',
+      );
+      expect(tb, contains('M-101'));
+      expect(tb, contains('PLAN'));
+      expect(tb, contains('Tower A'));
+      expect(tb, contains(kDxfLayerFrame));
+      // No rows -> empty string.
+      final empty = dxfTitleBlock(
+        const DrawingChrome(),
+        minX: 0,
+        minY: -300,
+        maxX: 400,
+        maxY: 0,
+        projectName: '',
+      );
+      expect(empty, '');
+    });
   });
 
   group('plain network PDF chrome', () {
@@ -85,8 +271,12 @@ void main() {
       expect(a, equals(b));
     });
 
-    test('chrome stamps drawing-number, revision, sheet, legend, scale, north',
-        () {
+    test('chrome stamps title block, sheet row, legend, NTS scale, north', () {
+      // A4 (CAD-OUTPUT-UX-REVIEW): the loose revision-block corner text is
+      // replaced by the ISO-7200 title block, whose rows carry the same data
+      // (the SHEET value cell is '2 of 5', not 'Sheet 2 of 5'); the
+      // uncalibrated divided scale bar is gone (A3) — the SCALE row reads
+      // NTS instead.
       final s = latin1.decode(networkToPdf(
         net: net,
         sizing: sizing,
@@ -95,16 +285,17 @@ void main() {
         title: 'T',
         chrome: chrome,
       ));
-      // Revision / drawing-number block.
+      // Title-block rows.
       expect(s, contains('(M-101) Tj'));
       expect(s, contains('(Rev. B) Tj'));
-      expect(s, contains('(Sheet 2 of 5) Tj'));
+      expect(s, contains('(2 of 5) Tj'));
+      expect(s, contains('(NTS) Tj'));
       // Legend.
       expect(s, contains('(LEGEND) Tj'));
       expect(s, contains('(Cold water) Tj'));
       expect(s, contains('(Sprinkler) Tj'));
-      // Scale bar label + a north 'N'.
-      expect(s, contains('(SCALE  1 : 100) Tj'));
+      // No divided bar at an arbitrary auto-fit ratio; the north 'N' stays.
+      expect(s, isNot(contains('(SCALE  1 : 100) Tj')));
       expect(s, contains('(N) Tj'));
       // Still a valid PDF (chrome inserted before xref).
       expect(s.startsWith('%PDF-1.4'), isTrue);
@@ -161,8 +352,10 @@ void main() {
       expect(a, equals(b));
     });
 
-    test('chrome adds the sheet counter on the title line + the chrome marks',
-        () {
+    test('chrome adds the title block (sheet row) + the chrome marks', () {
+      // A4 (CAD-OUTPUT-UX-REVIEW): the loose two-line top-left title is
+      // replaced by the ISO-7200 title block; the exporter's own
+      // sheet-name/date params feed the TITLE/DATE rows.
       final s = latin1.decode(planToPdf(
         net: net,
         sizing: sizing,
@@ -174,8 +367,11 @@ void main() {
         dateString: '2026-06-27',
         chrome: chrome,
       ));
-      expect(s, contains('Sheet 2 of 5')); // on the sheet-name line
+      expect(s, contains('(2 of 5) Tj')); // the SHEET row value
       expect(s, contains('(M-101) Tj'));
+      expect(s, contains('(P) Tj')); // PROJECT row
+      expect(s, contains('(GF) Tj')); // TITLE row (from sheetName)
+      expect(s, contains('(2026-06-27) Tj')); // DATE row (from dateString)
       expect(s, contains('(LEGEND) Tj'));
       expect(s, contains('(N) Tj'));
     });

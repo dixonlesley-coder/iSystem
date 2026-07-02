@@ -89,6 +89,13 @@ enum StringKey {
   electricalExportReportSub,
   electricalExportPowerOneLine,
   electricalExportPowerOneLineSub,
+  electricalExportSchedules,
+  electricalExportSchedulesPdf,
+
+  // Mechanical riser — Export menu (the B3 drawing set).
+  mechExportAllSystems,
+  mechExportAllSystemsPdf,
+  mechExportAllSystemsDxf,
 
   // Electrical — Service & Earthing (Fold-1 fields).
   electricalOriginFaultLevel,
@@ -252,6 +259,18 @@ enum StringKey {
   inspectorRoleFixture,
   inspectorRoleSource,
 
+  // Inspector — Document control section (D3 issuable-sheet identity).
+  inspectorDocNumber,
+  inspectorRevisionTag,
+  inspectorClient,
+  inspectorPreparedBy,
+  inspectorCheckedBy,
+  inspectorApprovedBy,
+  inspectorRevisionHistory,
+  inspectorAddRevision,
+  inspectorRevisionDateHint,
+  inspectorRevisionDescHint,
+
   // Export — OS save-dialog titles.
   exportTitleCalcReport,
   exportTitleMepReport,
@@ -262,6 +281,9 @@ enum StringKey {
   exportTitleBom,
   exportTitleSldDxf,
   exportTitleSldPdf,
+  exportTitleRiserSetPdf,
+  exportTitleRiserSetDxf,
+  exportTitlePanelSchedulesPdf,
   exportTitlePowerOneLineDxf,
   exportTitleElectricalReport,
   exportTitleElectricalBom,
@@ -355,6 +377,13 @@ const Map<StringKey, String> _en = {
   StringKey.electricalExportReportSub: 'Markdown',
   StringKey.electricalExportPowerOneLine: 'Power one-line',
   StringKey.electricalExportPowerOneLineSub: 'DXF (needs energy sources)',
+  StringKey.electricalExportSchedules: 'Panel schedules',
+  StringKey.electricalExportSchedulesPdf: 'PDF (one panel per sheet)',
+
+  // Mechanical riser — Export menu (the B3 drawing set).
+  StringKey.mechExportAllSystems: 'All systems (drawing set)',
+  StringKey.mechExportAllSystemsPdf: 'PDF (multi-page)',
+  StringKey.mechExportAllSystemsDxf: 'DXF (one file per system)',
 
   // Electrical — Service & Earthing (Fold-1 fields).
   StringKey.electricalOriginFaultLevel: 'Origin fault level (kA)',
@@ -549,6 +578,18 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorRoleFixture: 'Fixture',
   StringKey.inspectorRoleSource: 'Source / tank',
 
+  // Inspector — Document control section.
+  StringKey.inspectorDocNumber: 'Document no.',
+  StringKey.inspectorRevisionTag: 'Revision',
+  StringKey.inspectorClient: 'Client',
+  StringKey.inspectorPreparedBy: 'Prepared by',
+  StringKey.inspectorCheckedBy: 'Checked by',
+  StringKey.inspectorApprovedBy: 'Approved by',
+  StringKey.inspectorRevisionHistory: 'Revision history',
+  StringKey.inspectorAddRevision: 'Add revision',
+  StringKey.inspectorRevisionDateHint: 'YYYY-MM-DD',
+  StringKey.inspectorRevisionDescHint: 'Description',
+
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Export calculation report',
   StringKey.exportTitleMepReport: 'Export unified MEP report',
@@ -559,6 +600,9 @@ const Map<StringKey, String> _en = {
   StringKey.exportTitleBom: 'Export bill of materials',
   StringKey.exportTitleSldDxf: 'Export single-line (DXF)',
   StringKey.exportTitleSldPdf: 'Export single-line (PDF)',
+  StringKey.exportTitleRiserSetPdf: 'Export riser drawing set (PDF)',
+  StringKey.exportTitleRiserSetDxf: 'Export riser drawing set (DXF)',
+  StringKey.exportTitlePanelSchedulesPdf: 'Export panel schedules (PDF)',
   StringKey.exportTitlePowerOneLineDxf: 'Export power one-line (DXF)',
   StringKey.exportTitleElectricalReport: 'Export electrical report',
   StringKey.exportTitleElectricalBom: 'Export electrical BOM',
@@ -653,6 +697,13 @@ const Map<StringKey, String> _id = {
   StringKey.electricalExportReportSub: 'Markdown',
   StringKey.electricalExportPowerOneLine: 'Diagram daya satu-garis',
   StringKey.electricalExportPowerOneLineSub: 'DXF (perlu sumber energi)',
+  StringKey.electricalExportSchedules: 'Diagram panel',
+  StringKey.electricalExportSchedulesPdf: 'PDF (satu panel per lembar)',
+
+  // Mechanical riser — Export menu (the B3 drawing set).
+  StringKey.mechExportAllSystems: 'Semua sistem (set gambar)',
+  StringKey.mechExportAllSystemsPdf: 'PDF (multi-halaman)',
+  StringKey.mechExportAllSystemsDxf: 'DXF (satu berkas per sistem)',
 
   // Electrical — Service & Earthing (Fold-1 fields).
   StringKey.electricalOriginFaultLevel: 'Tingkat gangguan sumber (kA)',
@@ -851,6 +902,18 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorRoleFixture: 'Fikstur',
   StringKey.inspectorRoleSource: 'Sumber / tangki',
 
+  // Inspector — Document control section.
+  StringKey.inspectorDocNumber: 'No. dokumen',
+  StringKey.inspectorRevisionTag: 'Revisi',
+  StringKey.inspectorClient: 'Klien',
+  StringKey.inspectorPreparedBy: 'Disiapkan oleh',
+  StringKey.inspectorCheckedBy: 'Diperiksa oleh',
+  StringKey.inspectorApprovedBy: 'Disetujui oleh',
+  StringKey.inspectorRevisionHistory: 'Riwayat revisi',
+  StringKey.inspectorAddRevision: 'Tambah revisi',
+  StringKey.inspectorRevisionDateHint: 'YYYY-MM-DD',
+  StringKey.inspectorRevisionDescHint: 'Uraian',
+
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Ekspor laporan perhitungan',
   StringKey.exportTitleMepReport: 'Ekspor laporan MEP terpadu',
@@ -861,6 +924,9 @@ const Map<StringKey, String> _id = {
   StringKey.exportTitleBom: 'Ekspor daftar material',
   StringKey.exportTitleSldDxf: 'Ekspor satu-garis (DXF)',
   StringKey.exportTitleSldPdf: 'Ekspor satu-garis (PDF)',
+  StringKey.exportTitleRiserSetPdf: 'Ekspor set gambar riser (PDF)',
+  StringKey.exportTitleRiserSetDxf: 'Ekspor set gambar riser (DXF)',
+  StringKey.exportTitlePanelSchedulesPdf: 'Ekspor diagram panel (PDF)',
   StringKey.exportTitlePowerOneLineDxf: 'Ekspor daya satu-garis (DXF)',
   StringKey.exportTitleElectricalReport: 'Ekspor laporan kelistrikan',
   StringKey.exportTitleElectricalBom: 'Ekspor BOM kelistrikan',

@@ -4,10 +4,14 @@
 /// file IO. Zero Flutter imports.
 ///
 /// The PDF is a single A3-landscape page. Runs become coloured stroked LINES on
-/// a per-service colour, risers a small circle marker at their on-floor node,
-/// and each sized edge a TEXT label (DN / Ø / W×H). The drawing is auto-fitted
-/// (uniform scale, centred) into the page with a margin. PDF space is y-up, so
-/// the screen-space (y-down) coordinates are flipped during the fit.
+/// a per-service colour with an A6 three-band line-weight hierarchy + the
+/// per-service dash pattern, risers a small circle marker at their on-floor
+/// node, and each sized edge a TEXT label (DN / Ø / W×H) rotated to its edge
+/// bearing with greedy collision avoidance (A7). The drawing is auto-fitted
+/// (uniform scale, centred) into the page with a margin — and SNAPPED to a
+/// standard plotted scale when the caller passes the sheet calibration (A3).
+/// PDF space is y-up, so the screen-space (y-down) coordinates are flipped
+/// during the fit.
 library;
 
 import 'dart:convert';
@@ -40,6 +44,17 @@ String _sizeLabel(NetEdge e, EdgeSizing s) {
   return e.service.isAir ? 'O$mm' : 'DN$mm';
 }
 
+/// The A6 line-weight band for a sized edge — rectangular ducts band on their
+/// larger side, round ducts on Ø, pipes on DN (see `strokeBandFor`).
+int _strokeBand(EdgeSizing s) {
+  if (s.isRectangular) {
+    final side = math.max(s.width!.inMillimeters, s.height!.inMillimeters);
+    return strokeBandFor(sizeMm: side, isDuct: true);
+  }
+  return strokeBandFor(
+      sizeMm: s.diameter.inMillimeters, isDuct: s.service.isAir);
+}
+
 /// Keep PDF text to printable ASCII (WinAnsi-safe) and escape the three PDF
 /// string metacharacters so a sheet name or label never breaks the syntax.
 String _pdfText(String raw) {
@@ -55,7 +70,18 @@ String _pdfText(String raw) {
 String _n(double v) => v.toStringAsFixed(2);
 
 /// Render the [sheetId]/[floorIndex] slice of [net] as a single-page PDF and
-/// return its bytes. [title] is stamped in the top-left corner.
+/// return its bytes. [title] is stamped in the top-left corner — or becomes
+/// the title-block PROJECT row when [chrome] is present (A4: the issued sheet
+/// carries a frame + an ISO-7200 title block instead of loose corner text).
+///
+/// When [metersPerPixel] (the sheet calibration) is set, the raw auto-fit is
+/// SNAPPED to the nearest standard plotted scale (`kPlanScaleLadder`, always
+/// the larger denominator so the drawing never draws larger than the honest
+/// snap), the title-block SCALE row reads `1 : N @ A3`, and an honest divided
+/// scale bar is drawn from the resulting points-per-metre. When null the
+/// sheet is NTS and NO divided bar is printed — a bar at an arbitrary
+/// auto-fit ratio is a bar an engineer could scale wrong dimensions from
+/// (CAD-OUTPUT-UX-REVIEW A3).
 Uint8List networkToPdf({
   required Network net,
   required Map<String, EdgeSizing> sizing,
@@ -63,6 +89,7 @@ Uint8List networkToPdf({
   required int floorIndex,
   String title = 'MechX drawing',
   DrawingChrome? chrome,
+  double? metersPerPixel,
 }) {
   const pageW = 1190.55; // A3 landscape, points (420 mm)
   const pageH = 841.89; // 297 mm
@@ -102,10 +129,24 @@ Uint8List networkToPdf({
     maxX = 1;
     maxY = 1;
   }
+  final hasChrome = chrome != null && !chrome.isEmpty;
+  // A4: reserve the ISO-7200 title-block strip at the bottom. The row COUNT
+  // (so the height) doesn't depend on the final scale text — with chrome the
+  // SCALE row is always stamped ('NTS' or '1 : N @ A3') — so probe with a
+  // placeholder here and render with the real text after the fit.
+  final blockH = hasChrome
+      ? pdfTitleBlock(chrome,
+              pageW: pageW,
+              pageH: pageH,
+              margin: margin,
+              projectName: title,
+              scaleTextOverride: 'NTS')
+          .height
+      : 0.0;
   final spanX = maxX - minX;
   final spanY = maxY - minY;
   const availW = pageW - 2 * margin;
-  const availH = pageH - 2 * margin;
+  final availH = pageH - 2 * margin - blockH;
   var scale = 1.0;
   if (spanX > 0 || spanY > 0) {
     final sx = spanX > 0 ? availW / spanX : double.infinity;
@@ -113,6 +154,31 @@ Uint8List networkToPdf({
     scale = math.min(sx, sy);
     if (!scale.isFinite || scale <= 0) scale = 1.0;
   }
+
+  // ── A3 true plotted scale: snap the raw auto-fit to a standard scale ───────
+  var scaleRow = 'NTS';
+  double? pointsPerMeter;
+  if (metersPerPixel != null && metersPerPixel > 0 && hasContent) {
+    const mmPerPoint = 25.4 / 72; // PDF points → paper millimetres
+    // The raw fit's plotted-scale denominator: real-world mm per paper mm.
+    final rawN = metersPerPixel * 1000 / (scale * mmPerPoint);
+    int? snappedN;
+    for (final n in kPlanScaleLadder) {
+      if (n >= rawN - 1e-9) {
+        snappedN = n;
+        break;
+      }
+    }
+    if (snappedN != null) {
+      // Re-fit at the snapped scale — a denominator >= the raw fit's, so the
+      // drawing never draws larger than the honest snap.
+      scale = metersPerPixel * 1000 / (snappedN * mmPerPoint);
+      scaleRow = '1 : $snappedN @ A3';
+      pointsPerMeter = scale / metersPerPixel;
+    }
+    // else: too large even for 1:1000 — keep the honest auto-fit, stay NTS.
+  }
+
   final drawnW = spanX * scale;
   final drawnH = spanY * scale;
   final offX = margin + (availW - drawnW) / 2;
@@ -122,9 +188,11 @@ Uint8List networkToPdf({
 
   // ── Content stream ─────────────────────────────────────────────────────────
   final cs = StringBuffer();
-  // Title, top-left, black.
-  cs.writeln('BT /F1 16 Tf 0 0 0 rg '
-      '${_n(margin)} ${_n(pageH - margin + 6)} Td (${_pdfText(title)}) Tj ET');
+  if (!hasChrome) {
+    // Title, top-left, black (an issued sheet carries it in the title block).
+    cs.writeln('BT /F1 16 Tf 0 0 0 rg '
+        '${_n(margin)} ${_n(pageH - margin + 6)} Td (${_pdfText(title)}) Tj ET');
+  }
 
   void strokeColor(ServiceType s) {
     final (r, g, b) = _serviceColor(s);
@@ -145,7 +213,27 @@ Uint8List networkToPdf({
     cs.writeln('S');
   }
 
-  cs.writeln('1.4 w');
+  // A7 label discipline: rotate to the edge bearing (a `Tm` text matrix),
+  // offset to the consistent upper side, drop on unresolvable collision.
+  final placedLabels = <LabelBox>[];
+  void edgeLabel(double ax, double ay, double bx, double by, String text) {
+    const size = 9.0;
+    final p = placeEdgeLabel(
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+        text: text,
+        textSize: size,
+        placed: placedLabels);
+    if (p == null) return; // dropped rather than overprinting
+    final rad = p.angleDeg * math.pi / 180;
+    final pc = math.cos(rad), ps = math.sin(rad);
+    cs.writeln('BT /F1 9 Tf 0 0 0 rg '
+        '${_n(pc)} ${_n(ps)} ${_n(-ps)} ${_n(pc)} '
+        '${_n(p.x)} ${_n(p.y)} Tm (${_pdfText(text)}) Tj ET');
+  }
+
   for (final e in net.edges) {
     final a = net.nodeById(e.fromId);
     final c = net.nodeById(e.toId);
@@ -153,17 +241,22 @@ Uint8List networkToPdf({
 
     if (e.kind == EdgeKind.run) {
       if (!onFloor(a) || !onFloor(c)) continue;
+      final s = sizing[e.id];
       strokeColor(e.service);
+      // A6 line-weight hierarchy: three bands from the sized dimension;
+      // unsized edges keep the legacy 1.4 w.
+      cs.writeln('${_n(s == null ? 1.4 : kPdfStrokeWidths[_strokeBand(s)])} w');
+      final dash = serviceDashPatternPdf(e.service);
+      if (dash != null) cs.writeln('[${dash.map(_n).join(' ')}] 0 d');
       cs.writeln('${_n(tx(a.x))} ${_n(ty(a.y))} m '
           '${_n(tx(c.x))} ${_n(ty(c.y))} l S');
-      final s = sizing[e.id];
+      if (dash != null) cs.writeln('[] 0 d'); // back to solid
       if (s != null) {
-        cs.writeln('BT /F1 9 Tf 0 0 0 rg '
-            '${_n(tx((a.x + c.x) / 2))} ${_n(ty((a.y + c.y) / 2) + 3)} Td '
-            '(${_pdfText(_sizeLabel(e, s))}) Tj ET');
+        edgeLabel(tx(a.x), ty(a.y), tx(c.x), ty(c.y), _sizeLabel(e, s));
       }
     } else {
       strokeColor(e.service);
+      cs.writeln('1.4 w'); // markers keep the symbol weight, solid
       for (final n in [a, c]) {
         if (!onFloor(n)) continue;
         circle(tx(n.x), ty(n.y), 5);
@@ -172,11 +265,23 @@ Uint8List networkToPdf({
   }
 
   // ── Issuable-document chrome (opt-in; byte-identical when null) ─────────────
-  if (chrome != null && !chrome.isEmpty) {
-    cs.write(pdfRevisionBlock(chrome, pageW: pageW, pageH: pageH, margin: margin));
+  if (hasChrome) {
+    cs.write(pdfSheetFrame(pageW: pageW, pageH: pageH, margin: margin));
+    cs.write(pdfTitleBlock(chrome,
+            pageW: pageW,
+            pageH: pageH,
+            margin: margin,
+            projectName: title,
+            scaleTextOverride: scaleRow)
+        .ops);
     cs.write(pdfLegend(chrome, originX: margin, originY: margin + 28));
-    cs.write(pdfScaleBar(chrome, centerX: pageW / 2, baseY: margin));
     cs.write(pdfNorthArrow(chrome, cx: pageW - margin - 18, cy: pageH - margin - 40));
+  }
+  // The honest divided scale bar rides the calibration (A3): drawn ONLY when a
+  // real points-per-metre exists — never at an arbitrary auto-fit ratio.
+  if (pointsPerMeter != null) {
+    cs.write(pdfScaleBarReal(
+        pointsPerMeter: pointsPerMeter, centerX: pageW / 2, baseY: margin));
   }
 
   // ── Object assembly with a byte-accurate cross-reference table ──────────────

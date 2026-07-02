@@ -251,6 +251,11 @@ class _NetworkPainter extends CustomPainter {
     // pipes meet.
     final joints = <String, _Joint>{};
 
+    // Screen-space bounds of every run label already placed this frame, so a
+    // later label that would collide can dodge to the other side / quarter-point
+    // or be dropped. Deterministic (edge-list order).
+    final placedLabels = <Rect>[];
+
     for (final e in net.edges) {
       final a = net.nodeById(e.fromId);
       final b = net.nodeById(e.toId);
@@ -279,7 +284,11 @@ class _NetworkPainter extends CustomPainter {
         }
         // The pipe as a walled body: a darker casing stroke with the service-
         // colour bore inside it — two parallel wall lines, not a single line.
-        _paintPipe(canvas, pa, pb, color, outer);
+        // A dash-patterned service (vent/return air dashed, fire dash-dot) walks
+        // its bore as dash segments over a thinner casing; solid services are
+        // byte-identical to before.
+        _paintPipe(canvas, pa, pb, color, outer,
+            dash: serviceDashPattern(e.service));
 
         // Record incidence at both ends (direction points AWAY from the node).
         final len = (pb - pa).distance;
@@ -312,6 +321,18 @@ class _NetworkPainter extends CustomPainter {
           }
         }
 
+        // Flow-direction chevron: one small open chevron at the 2/3 point of a
+        // long-enough run whose sizing knows its orientation (EdgeSizing.
+        // flowFromId). Above the pipe body, beneath the labels; faded on a
+        // coordination layer with everything else.
+        if (s?.flowFromId != null && len > 48) {
+          final upstream = s!.flowFromId == a.id ? pa : pb;
+          final downstream = upstream == pa ? pb : pa;
+          final fdir = (downstream - upstream) / len;
+          final at = upstream + fdir * (len * 2 / 3);
+          _flowChevron(canvas, at, fdir, serviceColor(e.service), opacity);
+        }
+
         // Size labels are drawn only when the toggle is on, and never on a faded
         // (coordination) layer — to keep the active layer's annotation readable.
         if (s != null && showLabels && opacity >= 1.0) {
@@ -325,7 +346,7 @@ class _NetworkPainter extends CustomPainter {
           }
           final tag = _productTag(e, s);
           if (tag != null) label = '$label  $tag';
-          _label(canvas, (pa + pb) / 2, label);
+          _label(canvas, pa, pb, outer, label, placedLabels);
         }
         // Air status badge (independent of the size-label toggle), active layer
         // only. Precedence: over-capacity (hard size limit) → out-of-band
@@ -516,28 +537,104 @@ class _NetworkPainter extends CustomPainter {
   }
 
   /// Draws a run as a walled pipe: a darker casing stroke (the two visible wall
-  /// lines) with the service-colour bore inside it.
-  void _paintPipe(Canvas canvas, Offset pa, Offset pb, Color color, double outer) {
+  /// lines) with the service-colour bore inside it. When [dash] is null (solid
+  /// services) this is byte-identical to before. When [dash] is a stroke recipe
+  /// ([serviceDashPattern] — dashed vent/return air, dash-dot fire) the bore is
+  /// walked as dash segments over a THINNER solid casing so the line reads as its
+  /// drafting linetype while still showing pipe width.
+  void _paintPipe(Canvas canvas, Offset pa, Offset pb, Color color, double outer,
+      {List<double>? dash}) {
     final wall = Color.lerp(color, const Color(0xFF000000), 0.45)!;
+    if (dash == null) {
+      canvas.drawLine(
+        pa,
+        pb,
+        Paint()
+          ..color = wall
+          ..strokeWidth = outer
+          ..strokeCap = StrokeCap.round
+          ..style = PaintingStyle.stroke,
+      );
+      final bore = (outer - 2.6).clamp(1.2, outer);
+      canvas.drawLine(
+        pa,
+        pb,
+        Paint()
+          ..color = color
+          ..strokeWidth = bore
+          ..strokeCap = StrokeCap.round
+          ..style = PaintingStyle.stroke,
+      );
+      return;
+    }
+    // Dashed linetype: a thinner solid casing, then the coloured bore walked as
+    // dash segments over it.
+    final casingW = math.max(2.4, outer - 2.0);
     canvas.drawLine(
       pa,
       pb,
       Paint()
         ..color = wall
-        ..strokeWidth = outer
+        ..strokeWidth = casingW
         ..strokeCap = StrokeCap.round
         ..style = PaintingStyle.stroke,
     );
-    final bore = (outer - 2.6).clamp(1.2, outer);
-    canvas.drawLine(
+    final boreW = math.max(1.2, casingW - 2.0);
+    _walkDash(
+      canvas,
       pa,
       pb,
+      dash,
       Paint()
         ..color = color
-        ..strokeWidth = bore
-        ..strokeCap = StrokeCap.round
+        ..strokeWidth = boreW
+        ..strokeCap = StrokeCap.butt
         ..style = PaintingStyle.stroke,
     );
+  }
+
+  /// Walks a `[on, off, on, off, …]` dash [pattern] from [a] to [b], drawing the
+  /// "on" segments with [paint] (crib of the inferred-riser dash loop, generalised
+  /// to an alternating multi-element pattern so a dash-dot recipe works too).
+  void _walkDash(
+      Canvas canvas, Offset a, Offset b, List<double> pattern, Paint paint) {
+    final total = (b - a).distance;
+    if (total <= 0 || pattern.isEmpty) return;
+    final dir = (b - a) / total;
+    var dist = 0.0;
+    var idx = 0;
+    var on = true; // pattern[0] is a drawn dash
+    while (dist < total) {
+      final seg = pattern[idx % pattern.length];
+      final end = math.min(dist + seg, total);
+      if (on && end > dist) {
+        canvas.drawLine(a + dir * dist, a + dir * end, paint);
+      }
+      dist = end;
+      idx++;
+      on = !on;
+    }
+  }
+
+  /// A small open flow-direction chevron (two short strokes, an arrow-head with
+  /// no base) at [p] pointing along the unit flow direction [dir], in the service
+  /// [base] colour at reduced alpha (scaled by the layer [opacity] so it fades
+  /// with a coordination layer).
+  void _flowChevron(
+      Canvas canvas, Offset p, Offset dir, Color base, double opacity) {
+    const arm = 5.0;
+    final perp = Offset(-dir.dy, dir.dx);
+    final tip = p + dir * (arm * 0.5);
+    final back = tip - dir * arm;
+    final wing1 = back + perp * (arm * 0.75);
+    final wing2 = back - perp * (arm * 0.75);
+    final paint = Paint()
+      ..color = base.withAlpha((150 * opacity).round().clamp(0, 255))
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(wing1, tip, paint);
+    canvas.drawLine(wing2, tip, paint);
   }
 
   /// Draws the fitting at a junction. The body is built from short, fat metal
@@ -799,7 +896,13 @@ class _NetworkPainter extends CustomPainter {
     return null;
   }
 
-  void _label(Canvas canvas, Offset center, String text) {
+  /// Draws a run's size label ALONG the run: rotated to the edge bearing (flipped
+  /// 180° when it would read upside-down), offset perpendicular clear of the pipe
+  /// body on the "upper" side, with LOD (skipped when the run is shorter than the
+  /// text) and a per-frame collision dodge (opposite side → quarter-point → drop).
+  /// [placedLabels] carries the screen-space bounds already placed this frame.
+  void _label(Canvas canvas, Offset pa, Offset pb, double outer, String text,
+      List<Rect> placedLabels) {
     final tp = TextPainter(
       text: TextSpan(
         text: text,
@@ -812,16 +915,56 @@ class _NetworkPainter extends CustomPainter {
       ),
       textDirection: TextDirection.ltr,
     )..layout();
-    final rect = Rect.fromCenter(
-      center: center,
-      width: tp.width + 8,
-      height: tp.height + 4,
-    );
+
+    final runLen = (pb - pa).distance;
+    final boxW = tp.width + 8;
+    final boxH = tp.height + 4;
+    // LOD: don't crowd a short run with a label longer than it (plus a margin).
+    if (runLen < tp.width + 12) return;
+
+    final u = (pb - pa) / runLen;
+    // Perpendicular pointing "up" (toward smaller screen y) for a consistent side.
+    var perp = Offset(-u.dy, u.dx);
+    if (perp.dy > 0) perp = -perp;
+    final mid = (pa + pb) / 2;
+    // Offset the chip centre clear of the pipe: half its width + 5 + half the
+    // label height so the chip edge clears the wall.
+    final off = outer / 2 + 5 + boxH / 2;
+
+    // Candidate centres in order: upper side, opposite side, quarter-point upper.
+    final quarter = pa + u * (runLen * 0.25);
+    final candidates = <Offset>[
+      mid + perp * off,
+      mid - perp * off,
+      quarter + perp * off,
+    ];
+    Offset? center;
+    for (final c in candidates) {
+      // Collision test uses the axis-aligned chip box (a good-enough proxy for
+      // the rotated label); deterministic in edge-list order.
+      final r = Rect.fromCenter(center: c, width: boxW, height: boxH);
+      if (!placedLabels.any(r.overlaps)) {
+        center = c;
+        placedLabels.add(r);
+        break;
+      }
+    }
+    if (center == null) return; // still colliding → drop (size is one click away)
+
+    // Rotate to the bearing; flip 180° when it would read upside-down.
+    var angle = math.atan2(u.dy, u.dx);
+    if (angle > math.pi / 2 || angle < -math.pi / 2) angle += math.pi;
+
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(angle);
+    final rect = Rect.fromCenter(center: Offset.zero, width: boxW, height: boxH);
     canvas.drawRRect(
       RRect.fromRectAndRadius(rect, const Radius.circular(3)),
       Paint()..color = const Color(0xD915171B),
     );
-    tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
+    tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+    canvas.restore();
   }
 
   @override

@@ -33,6 +33,22 @@ const double _topPad = 24;
 const double _nodeBox = 12; // schematic node marker half-extent
 const double _fanColW = 150; // per-floor fan-out column width (right gutter)
 
+// ── Label-collision metrics (B5) ─────────────────────────────────────────────
+// A single per-size character-advance used to size every label's collision box
+// (width = chars x size x this). Pinned to the run-tag centring already used
+// below (`length x 2.4` half-width at size 8 => 4.8/char = 0.6 x 8), so the
+// default (uncollided) run tag stays centred exactly as before.
+// VERIFY: a representative average glyph advance for the drawing font — a
+// drafting collision metric, not a standard. Public so the collision unit test
+// can size boxes with the SAME constant the builder uses.
+const double kMechRiserLabelCharW = 0.6;
+// A chosen label slot pulled more than this far (drawing units) from its default
+// anchor gets a short leader line back to the element it tags.
+const double _kLeaderThreshold = 14;
+// Minimal x nudge per coincident node so two fixtures at the same world x don't
+// stack their markers/labels.
+const double _kSpreadStep = 18;
+
 /// Build the mechanical riser single-line as an [SldSheet] for [network].
 ///
 /// [sizing] maps edgeId → its sized record (for the `SIZE-SERVICE-MATERIAL` tag;
@@ -104,7 +120,35 @@ SldSheet buildMechanicalRiserSld({
     for (final n in nodes) n.id: posOf(n),
   };
 
+  // ── Spread coincident node positions minimally in x (B5) ─────────────────────
+  // Two fixtures at the same world x land on the same band point and stack their
+  // markers/labels; nudge each such group apart in x, centred on the shared
+  // point, deterministically (by node id).
+  final coincident = <String, List<NetNode>>{};
+  for (final n in nodes) {
+    final p = posById[n.id]!;
+    (coincident['${n.floorIndex}:${p.dx.round()}'] ??= <NetNode>[]).add(n);
+  }
+  for (final group in coincident.values) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => a.id.compareTo(b.id));
+    final baseX = posById[group.first.id]!.dx;
+    for (var i = 0; i < group.length; i++) {
+      final dx = (i - (group.length - 1) / 2) * _kSpreadStep;
+      final p = posById[group[i].id]!;
+      posById[group[i].id] = Offset(baseX + dx, p.dy);
+    }
+  }
+
+  // The greedy label placer tracks every emitted label rect and diverts a
+  // colliding tag along an offset ladder, adding a leader when pulled far off
+  // its anchor (B5). Fixed labels (gutter, fan-out) are reserved FIRST so the
+  // movable band tags divert around them.
+  final placer = _LabelPlacer(prims);
+
   // ── Floor bands: a baseline hairline + the FFL gutter label ─────────────────
+  // Datum baselines stay THIN so a pipe run/riser (medium, below) reads as
+  // distinct ink from the floor line (B4).
   for (var f = loFloor; f <= hiFloor; f++) {
     final top = bandTop(f);
     final yBase = top + _bandH - 1;
@@ -113,16 +157,38 @@ SldSheet buildMechanicalRiserSld({
     final name = (building != null && f < building.levelCount)
         ? building.floors[f].name
         : 'Level ${f + 1}';
-    prims.add(SldLabel(8, top + 18, name, size: 10, bold: true));
+    placer.reserve(SldLabel(8, top + 18, name, size: 10, bold: true));
     if (building != null && f < building.levelCount) {
       final ffl = building.elevationOf(f).meters;
-      prims.add(SldLabel(
+      placer.reserve(SldLabel(
           8, top + 32, 'FFL +${ffl.toStringAsFixed(2)}',
           size: 8, role: SldRole.source));
     }
   }
 
+  // ── Per-floor branch fan-out: the fixtures each floor distributes ───────────
+  // Reserved (fixed right-column stubs) before the movable band tags.
+  final fanOuts = floorFanOuts(network,
+      visibleNodeIds: visible, labelOf: (n) => _nodeLabel(n) ?? 'Fixture');
+  const fanX = _gutterW + _drawW + 12;
+  for (final fo in fanOuts) {
+    if (fo.floorIndex < loFloor || fo.floorIndex > hiFloor) continue;
+    var y = bandTop(fo.floorIndex) + 18;
+    placer.reserve(SldLabel(fanX, y, 'BRANCHES', size: 7, bold: true));
+    for (final lbl in fo.labels) {
+      y += 12;
+      placer.reserve(SldLabel(fanX + 6, y, lbl, size: 7));
+    }
+    if (fo.overflow > 0) {
+      y += 12;
+      placer.reserve(SldLabel(fanX + 6, y, '+${fo.overflow} more', size: 7,
+          role: SldRole.source));
+    }
+  }
+
   // ── Edges: runs + risers with the SIZE-SERVICE-MATERIAL[-FUNCTION] tag ───────
+  // B4: every pipe run/riser is MEDIUM weight (vs the thin datum), carries its
+  // service code as the CAD layer, and the vent service draws DASHED.
   final tags = riserTags(network, focus);
   for (final e in network.edges) {
     if (focus != null && e.service != focus) continue;
@@ -130,11 +196,14 @@ SldSheet buildMechanicalRiserSld({
     final b = posById[e.toId];
     if (a == null || b == null) continue;
     final role = _edgeRole(network, e);
-    final weight = e.kind == EdgeKind.riser ? SldWeight.medium : SldWeight.thin;
+    final layer = riserServiceCode(e.service);
+    final dashed = e.service == ServiceType.vent;
     // Orthogonal L-route: horizontal at the from-y, then vertical to the to-y.
-    prims.add(SldLine(a.dx, a.dy, b.dx, a.dy, weight: weight, role: role));
+    prims.add(SldLine(a.dx, a.dy, b.dx, a.dy,
+        weight: SldWeight.medium, role: role, layer: layer, dashed: dashed));
     if ((b.dy - a.dy).abs() > 0.5) {
-      prims.add(SldLine(b.dx, a.dy, b.dx, b.dy, weight: weight, role: role));
+      prims.add(SldLine(b.dx, a.dy, b.dx, b.dy,
+          weight: SldWeight.medium, role: role, layer: layer, dashed: dashed));
     }
 
     final fn = riserFunctionFor(network, e, downfeed: downfeed);
@@ -142,17 +211,31 @@ SldSheet buildMechanicalRiserSld({
     if (e.kind == EdgeKind.riser) {
       // Tag + riser id beside the vertical leg.
       final midY = (a.dy + b.dy) / 2;
-      prims.add(SldLabel(b.dx + 6, midY, tag, size: 8, role: role));
+      placer.place(b.dx + 6, midY, tag,
+          size: 8,
+          role: role,
+          anchorX: b.dx,
+          anchorY: midY,
+          candidates: _riserLadder(tag));
       final rt = tags[e.id];
       if (rt != null) {
-        prims.add(SldLabel(b.dx + 6, midY + 12, rt,
-            size: 8, bold: true, role: role));
+        placer.place(b.dx + 6, midY + 12, rt,
+            size: 8,
+            bold: true,
+            role: role,
+            anchorX: b.dx,
+            anchorY: midY + 12,
+            candidates: _riserLadder(rt));
       }
     } else {
-      // Tag above the horizontal mid.
+      // Tag centred above the horizontal mid.
       final midX = (a.dx + b.dx) / 2;
-      prims.add(SldLabel(midX - tag.length * 2.4, a.dy - 6, tag,
-          size: 8, role: role));
+      placer.place(midX - _labelWidth(tag, 8) / 2, a.dy - 6, tag,
+          size: 8,
+          role: role,
+          anchorX: midX,
+          anchorY: a.dy,
+          candidates: _runLadder(tag));
     }
   }
 
@@ -169,27 +252,12 @@ SldSheet buildMechanicalRiserSld({
     }
     final label = _nodeLabel(n);
     if (label != null) {
-      prims.add(SldLabel(p.dx + _nodeBox / 2 + 4, p.dy + 3, label, size: 8,
-          role: role));
-    }
-  }
-
-  // ── Per-floor branch fan-out: the fixtures each floor distributes ───────────
-  final fanOuts = floorFanOuts(network,
-      visibleNodeIds: visible, labelOf: (n) => _nodeLabel(n) ?? 'Fixture');
-  const fanX = _gutterW + _drawW + 12;
-  for (final fo in fanOuts) {
-    if (fo.floorIndex < loFloor || fo.floorIndex > hiFloor) continue;
-    var y = bandTop(fo.floorIndex) + 18;
-    prims.add(SldLabel(fanX, y, 'BRANCHES', size: 7, bold: true));
-    for (final lbl in fo.labels) {
-      y += 12;
-      prims.add(SldLabel(fanX + 6, y, lbl, size: 7));
-    }
-    if (fo.overflow > 0) {
-      y += 12;
-      prims.add(SldLabel(fanX + 6, y, '+${fo.overflow} more', size: 7,
-          role: SldRole.source));
+      placer.place(p.dx + _nodeBox / 2 + 4, p.dy + 3, label,
+          size: 8,
+          role: role,
+          anchorX: p.dx,
+          anchorY: p.dy,
+          candidates: _nodeLadder(label));
     }
   }
 
@@ -352,6 +420,138 @@ String _serviceMeaning(ServiceType s) => switch (s) {
       ServiceType.fireSprinkler => 'Sprinkler',
       ServiceType.fireHydrant => 'Hydrant',
     };
+
+// ── Label collision avoidance (B5) ───────────────────────────────────────────
+
+/// A label's collision box width — a single per-size character advance times the
+/// text length (see [_kLabelCharW]).
+double _labelWidth(String text, double size) =>
+    text.length * size * kMechRiserLabelCharW;
+
+/// An axis-aligned label box in drawing space (baseline at [maxY], the text
+/// rising to [minY]).
+class _LabelRect {
+  final double minX, minY, maxX, maxY;
+  const _LabelRect(this.minX, this.minY, this.maxX, this.maxY);
+
+  /// Overlap AREA with [o] (0 when disjoint) — used to pick the least-bad slot.
+  double overlap(_LabelRect o) {
+    final dx = math.min(maxX, o.maxX) - math.max(minX, o.minX);
+    final dy = math.min(maxY, o.maxY) - math.max(minY, o.minY);
+    return (dx <= 0 || dy <= 0) ? 0 : dx * dy;
+  }
+}
+
+/// Greedy label placer: tracks every emitted label's box and, for a movable
+/// tag, walks an offset ladder until it clears all placed boxes — falling back
+/// to the LEAST-overlapping slot (a tag is the drawing's content: never dropped)
+/// and adding a thin leader when the chosen slot is pulled far off its anchor.
+/// Appends its output straight into the shared prim list. Deterministic given a
+/// stable emission order.
+class _LabelPlacer {
+  final List<SldPrim> prims;
+  final List<_LabelRect> _placed = <_LabelRect>[];
+  _LabelPlacer(this.prims);
+
+  _LabelRect _rectFor(double x, double y, String text, double size) =>
+      _LabelRect(x, y - size, x + _labelWidth(text, size), y);
+
+  /// Emit a FIXED-position label (gutter / fan-out) and record its box so
+  /// movable tags divert around it.
+  void reserve(SldLabel label) {
+    _placed.add(_rectFor(label.x, label.y, label.text, label.size));
+    prims.add(label);
+  }
+
+  /// Place a MOVABLE tag at its default ([defaultX], [defaultY]) trying the
+  /// [candidates] offsets (candidates[0] == the default) in order; the first
+  /// slot clearing every placed box wins, else the least-overlapping. A slot
+  /// displaced more than [_kLeaderThreshold] from the default gets a thin leader
+  /// from ([anchorX], [anchorY]) — the element the tag names — to the label.
+  void place(
+    double defaultX,
+    double defaultY,
+    String text, {
+    double size = 8,
+    bool bold = false,
+    SldRole role = SldRole.normal,
+    required double anchorX,
+    required double anchorY,
+    List<Offset> candidates = const [Offset(0, 0)],
+  }) {
+    Offset best = candidates.isEmpty ? const Offset(0, 0) : candidates.first;
+    var bestOverlap = double.infinity;
+    for (final c in candidates) {
+      final r = _rectFor(defaultX + c.dx, defaultY + c.dy, text, size);
+      var total = 0.0;
+      for (final p in _placed) {
+        total += p.overlap(r);
+      }
+      if (total <= 0) {
+        best = c;
+        bestOverlap = 0;
+        break;
+      }
+      if (total < bestOverlap) {
+        bestOverlap = total;
+        best = c;
+      }
+    }
+    final lx = defaultX + best.dx;
+    final ly = defaultY + best.dy;
+    _placed.add(_rectFor(lx, ly, text, size));
+    // A tag pulled well off its default anchor gets a leader so its element
+    // stays legible.
+    if (math.sqrt(best.dx * best.dx + best.dy * best.dy) > _kLeaderThreshold) {
+      prims.add(SldLine(anchorX, anchorY, lx, ly,
+          weight: SldWeight.thin, role: role));
+    }
+    prims.add(SldLabel(lx, ly, text, size: size, bold: bold, role: role));
+  }
+}
+
+/// Offset ladder for a RUN tag (default centred above the run): try below the
+/// run, then shift along it, then the diagonal slots. // VERIFY: a drafting
+/// declutter heuristic, not a standard.
+List<Offset> _runLadder(String text) {
+  final w = _labelWidth(text, 8);
+  return [
+    const Offset(0, 0), // default: above the run
+    const Offset(0, 18), // below the run
+    Offset(w * 0.6, 0), // shift right, above
+    Offset(-w * 0.6, 0), // shift left, above
+    Offset(w * 0.6, 18), // right, below
+    Offset(-w * 0.6, 18), // left, below
+  ];
+}
+
+/// Offset ladder for a RISER tag/id (default right of the vertical leg): try the
+/// LEFT of the riser, then up/down, then the diagonal slots.
+List<Offset> _riserLadder(String text) {
+  final w = _labelWidth(text, 8);
+  return [
+    const Offset(0, 0), // default: right of the leg
+    Offset(-(w + 12), 0), // left of the riser
+    const Offset(0, 16), // down, right
+    const Offset(0, -16), // up, right
+    Offset(-(w + 12), 16), // left + down
+    Offset(-(w + 12), -16), // left + up
+  ];
+}
+
+/// Offset ladder for a NODE label (default right of the marker): try below,
+/// above, then the LEFT of the node.
+List<Offset> _nodeLadder(String text) {
+  final w = _labelWidth(text, 8);
+  return [
+    const Offset(0, 0), // default: right of the marker
+    const Offset(0, 12), // below
+    const Offset(0, -12), // above
+    Offset(-(w + _nodeBox + 8), 0), // left of the node
+    const Offset(0, 24), // further below
+    const Offset(0, -24), // further above
+  ];
+}
 
 /// Minimal y-down 2-vector (the engine has no Flutter `Offset`).
 class Offset {

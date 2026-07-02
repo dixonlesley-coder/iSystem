@@ -39,6 +39,26 @@ double _weightPxFor(SldWeight w) => switch (w) {
       SldWeight.thick => 3.0,
     };
 
+/// Dash run lengths (screen px, zoom-independent like a CAD screen linetype)
+/// for a dashed [SldLine] — mirrors the PDF's `[4 3]` pattern.
+const double _kDashOnPx = 4.0;
+const double _kDashOffPx = 3.0;
+
+/// Walk a dashed line as plain segments (pure canvas math — Flutter has no
+/// stroke dash). Solid lines never come here, so they stay byte-identical.
+void _drawDashedLine(Canvas canvas, Offset a, Offset b, Paint paint) {
+  final delta = b - a;
+  final len = delta.distance;
+  if (len <= 0) return;
+  final dir = delta / len;
+  var t = 0.0;
+  while (t < len) {
+    final e = math.min(t + _kDashOnPx, len);
+    canvas.drawLine(a + dir * t, a + dir * e, paint);
+    t = e + _kDashOffPx;
+  }
+}
+
 /// Paint just the sealed primitives of an [SldSheet] through [transform] (no
 /// grid, no background fill) — the ONE prim-painting routine shared by the
 /// full [SldSheetView] (overview / riser) and the in-card deep-zoom board
@@ -64,14 +84,15 @@ void paintSldPrims(
       case SldLine():
         final a = transform.worldToScreen(Offset(prim.x1, prim.y1));
         final b = transform.worldToScreen(Offset(prim.x2, prim.y2));
-        canvas.drawLine(
-          a,
-          b,
-          Paint()
-            ..color = roleColor(prim.role)
-            ..strokeWidth = (_weightPxFor(prim.weight) * s).clamp(0.6, 6.0)
-            ..strokeCap = StrokeCap.round,
-        );
+        final paint = Paint()
+          ..color = roleColor(prim.role)
+          ..strokeWidth = (_weightPxFor(prim.weight) * s).clamp(0.6, 6.0)
+          ..strokeCap = StrokeCap.round;
+        if (prim.dashed) {
+          _drawDashedLine(canvas, a, b, paint);
+        } else {
+          canvas.drawLine(a, b, paint);
+        }
       case SldRect():
         final tl = transform.worldToScreen(Offset(prim.x, prim.y));
         final rect = Rect.fromLTWH(tl.dx, tl.dy, prim.w * s, prim.h * s);

@@ -345,7 +345,8 @@ C2 ruled schedule · D2 compliance roll-up · G1 Esc ladder + right-click-end ·
 G3 rubber-band feedback · F1 Ctrl+S/current-file · J1 empty-state actions · H1 selection-first ·
 H3 discipline-scoped fields · H5 fire input · J4 honest stepper · J5 naming · B8 ASCII notation.
 
-**Wave 2 — issuable-sheet credibility (engine, medium).**
+**Wave 2 — issuable-sheet credibility (engine, medium). ✅ LANDED 2026-07-02**
+(see the §15 decisions-log row for the change detail)
 D3 document control → A4/C3 title blocks + sheet frame · A2/C4 DXF units + TABLES/layers ·
 A3 true scale/NTS · C1 pagination → B3 drawing set · A6 + B4 + E1 lineweights/linetypes ·
 C5 kA · C6 earthing · A7/B5/E2 label discipline · E3 flow arrows.

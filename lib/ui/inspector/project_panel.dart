@@ -35,6 +35,7 @@ import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/design_issues_store.dart';
+import '../../store/document_control_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/command_store.dart';
 import '../../store/fire_store.dart';
@@ -59,12 +60,14 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_text_field.dart';
 import '../widgets/section_label.dart';
 
 /// Gather the live mechanical/plumbing design results into a [CalcReportData].
 /// Shared by the standalone calc-report export and the unified MEP report so
-/// both render the same mechanical basis + sections.
-CalcReportData _buildMechanicalReportData(WidgetRef ref) {
+/// both render the same mechanical basis + sections. Public for the export
+/// wiring test (the document-control revisions must reach the report head).
+CalcReportData buildMechanicalReportData(WidgetRef ref) {
   final project = ref.read(projectControllerProvider);
   final strategy = ref.read(feedStrategyProvider);
   final downfeed = ref.read(downfeedProvider);
@@ -99,6 +102,7 @@ CalcReportData _buildMechanicalReportData(WidgetRef ref) {
     bom: ref.read(bomProvider),
     fittings: ref.read(fittingsProvider),
     occupancy: ref.read(occupancyProvider),
+    revisions: ref.read(documentControlProvider).revisions,
   );
 }
 
@@ -111,8 +115,10 @@ CalcReportData _buildMechanicalReportData(WidgetRef ref) {
 /// `write` returns false when the user cancelled the file picker (no pill), true
 /// after a successful write ⇒ a transient "Exported `name`" confirmation pill;
 /// any thrown error ⇒ a "Could not export `name`" warning. The success pill
-/// reuses the same self-clearing mechanism as Save / Open / Import.
-Future<void> _runExport(
+/// reuses the same self-clearing mechanism as Save / Open / Import. Public so
+/// the other export surfaces (e.g. `schematic_export.dart`'s riser drawing
+/// set) route through the SAME guard + feedback.
+Future<void> runExportGuarded(
   WidgetRef ref, {
   required String name,
   required Future<bool> Function() write,
@@ -142,12 +148,12 @@ Future<void> _runExport(
 
 /// Gather the live design results into a calc report and write it to a Markdown
 /// file chosen by the user.
-Future<void> exportCalcReport(WidgetRef ref) => _runExport(
+Future<void> exportCalcReport(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'calc report',
       write: () async {
         final project = ref.read(projectControllerProvider);
-        final data = _buildMechanicalReportData(ref);
+        final data = buildMechanicalReportData(ref);
 
         final path = await FilePicker.saveFile(
           dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -254,12 +260,12 @@ ComplianceSummary buildComplianceSummary(WidgetRef ref) {
 /// Gather BOTH the mechanical and electrical designs into one unified MEP
 /// building-services report (with a compliance summary) and write it to a
 /// Markdown file chosen by the user.
-Future<void> exportMepUnifiedReport(WidgetRef ref) => _runExport(
+Future<void> exportMepUnifiedReport(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'MEP report',
       write: () async {
         final project = ref.read(projectControllerProvider);
-        final mechanical = _buildMechanicalReportData(ref);
+        final mechanical = buildMechanicalReportData(ref);
 
         final eProject = ref.read(electricalProjectProvider);
         final eResult = ref.read(electricalResultProvider);
@@ -276,6 +282,7 @@ Future<void> exportMepUnifiedReport(WidgetRef ref) => _runExport(
           verifyItems: eAdvanced.verifyItems,
           originFaultLevelA: eProject.originFaultLevelA?.amperes,
           busbarClearingTimeS: eProject.busbarClearingTimeS,
+          revisions: ref.read(documentControlProvider).revisions,
         );
 
         final md = buildMepUnifiedReport(
@@ -304,7 +311,7 @@ Future<void> exportMepUnifiedReport(WidgetRef ref) => _runExport(
 /// schedule to a Markdown file chosen by the user. The engine only tabulates
 /// already-solved duties — no new sizing here. Tags are assigned at gather time
 /// (sequential when not user-named), so the engine results stay untouched.
-Future<void> exportEquipmentSchedule(WidgetRef ref) => _runExport(
+Future<void> exportEquipmentSchedule(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'equipment schedule',
       write: () => _writeEquipmentSchedule(ref),
@@ -390,13 +397,15 @@ Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
 }
 
 /// Build the issuable-drawing chrome (legend / scale bar / north arrow / sheet
-/// "X of Y" / drawing-number block) for the current [sheetId]/[floorIndex].
+/// "X of Y" / ISO-7200 title block) for the current [sheetId]/[floorIndex].
 /// The legend lists the services actually present on this floor; the sheet
-/// counter is the sheet's position in the rail. Drawing number / revision aren't
-/// tracked in the project model yet (a future DesignSettings wave), so they're
-/// left null — the block then only shows the sheet counter. North defaults to 0
-/// (page-up). Pure-data: the export engine renders it.
-DrawingChrome _issuableChrome(
+/// counter is the sheet's position in the rail. The document-control identity
+/// (D3: drawing number, revision tag, client, DRAWN/CHECKED/APPROVED) comes
+/// from [documentControlProvider] — an unset field stays null so its title-block
+/// row is simply omitted. The issue DATE is formatted HERE (the engine never
+/// reads the clock). North defaults to 0 (page-up). Pure-data: the export
+/// engine renders it. Public for the export wiring test.
+DrawingChrome issuableChrome(
   WidgetRef ref, {
   required String sheetId,
   required int floorIndex,
@@ -421,15 +430,23 @@ DrawingChrome _issuableChrome(
   ];
 
   final idx = sheets.indexWhere((s) => s.id == sheetId);
+  final doc = ref.read(documentControlProvider);
   return DrawingChrome(
     sheetIndex: idx >= 0 ? idx + 1 : null,
     sheetTotal: sheets.isNotEmpty ? sheets.length : null,
     legendServices: legend,
+    drawingNumber: doc.documentNumber,
+    revisionNumber: doc.revisionTag,
+    clientName: doc.clientName,
+    drawnBy: doc.preparedBy,
+    checkedBy: doc.checkedBy,
+    approvedBy: doc.approvedBy,
+    dateString: DateTime.now().toIso8601String().split('T').first,
   );
 }
 
 /// Export the current sheet/floor's drawn network as a DXF drawing file.
-Future<void> exportDrawingDxf(WidgetRef ref) => _runExport(
+Future<void> exportDrawingDxf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'DXF drawing',
       write: () => _writeDrawingDxf(ref),
@@ -439,14 +456,18 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
   if (sheet == null) return false;
-  final levelCount = ref.read(projectControllerProvider).building.levelCount;
+  final project = ref.read(projectControllerProvider);
+  final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
   final dxf = networkToDxf(
     net: ref.read(networkControllerProvider).network,
     sizing: ref.read(sizingProvider),
     sheetId: sheet.id,
     floorIndex: floorIndex,
-    chrome: _issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    // A2: the sheet calibration lets the DXF emit true-scale mm world units
+    // (HEADER/$INSUNITS + named layers); null keeps the legacy pixel DXF.
+    metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
   );
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingDxf),
@@ -461,7 +482,7 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
 }
 
 /// Export the current sheet/floor's drawn network as a native (vector) PDF.
-Future<void> exportDrawingPdf(WidgetRef ref) => _runExport(
+Future<void> exportDrawingPdf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'PDF drawing',
       write: () => _writeDrawingPdf(ref),
@@ -471,7 +492,8 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
   if (sheet == null) return false;
-  final levelCount = ref.read(projectControllerProvider).building.levelCount;
+  final project = ref.read(projectControllerProvider);
+  final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
   final bytes = networkToPdf(
     net: ref.read(networkControllerProvider).network,
@@ -479,7 +501,10 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
     sheetId: sheet.id,
     floorIndex: floorIndex,
     title: sheet.name,
-    chrome: _issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    // A3: the sheet calibration snaps the plot to a standard scale (1:N) and
+    // makes the scale bar honest; null keeps the auto-fit + an NTS scale row.
+    metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
   );
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingPdf),
@@ -498,7 +523,7 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
 /// date) and real §10 run/riser LENGTHS folded into each size label. The real
 /// lengths are pre-computed here (the engine `edgeLength` over the live
 /// calibrations + building) and passed to the pure `planToPdf`.
-Future<void> exportAnnotatedPlanPdf(WidgetRef ref) => _runExport(
+Future<void> exportAnnotatedPlanPdf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'annotated plan PDF',
       write: () => _writeAnnotatedPlanPdf(ref),
@@ -534,7 +559,10 @@ Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     projectName: project.name,
     sheetName: sheet.name,
     dateString: DateTime.now().toIso8601String().split('T').first,
-    chrome: _issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    // A3: the sheet calibration snaps the plot to a standard scale (1:N) and
+    // makes the scale bar honest; null keeps the auto-fit + an NTS scale row.
+    metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
   );
   final path = await FilePicker.saveFile(
     dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -655,6 +683,10 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
 
               // ── HVAC / ducting ────────────────────────────────────────────
               const _HvacSection(),
+              const SizedBox(height: MechXSpacing.lg),
+
+              // ── Document control (issuable-sheet identity, D3) ────────────
+              const _DocumentControlSection(),
               const SizedBox(height: MechXSpacing.lg),
 
               // ── Sheet → floor mapping ─────────────────────────────────────
@@ -893,6 +925,147 @@ class _GlyphButtonState extends State<_GlyphButton> {
           onTapCancel: enabled ? () => setState(() => _down = false) : null,
           child: glyph,
         ),
+      ),
+    );
+  }
+}
+
+/// Document control — the issuable-sheet identity (D3): document/drawing
+/// number, revision tag, client, and the DRAWN/CHECKED/APPROVED names, plus a
+/// minimal revision-history editor. All fields commit straight into
+/// [documentControlProvider] (persisted with the project), from where they feed
+/// every report head ([buildMechanicalReportData]) and PDF/DXF title block
+/// ([issuableChrome], the riser/electrical export chromes). Collapsed by
+/// default so a blank launch stays canvas-focused.
+class _DocumentControlSection extends ConsumerStatefulWidget {
+  const _DocumentControlSection();
+
+  @override
+  ConsumerState<_DocumentControlSection> createState() =>
+      _DocumentControlSectionState();
+}
+
+class _DocumentControlSectionState
+    extends ConsumerState<_DocumentControlSection> {
+  // The pending add-revision row. The epoch keys the row's text fields so a
+  // successful Add remounts them EMPTY — an EditableText keeps its own text
+  // while focused, so clearing the state alone would not clear the field.
+  String _revDate = '';
+  String _revDesc = '';
+  int _addEpoch = 0;
+
+  void _addRevision() {
+    final date = _revDate.trim();
+    final desc = _revDesc.trim();
+    if (date.isEmpty && desc.isEmpty) return;
+    ref.read(documentControlProvider.notifier).addRevision(date, desc);
+    setState(() {
+      _revDate = '';
+      _revDesc = '';
+      _addEpoch++;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final doc = ref.watch(documentControlProvider);
+    final ctrl = ref.read(documentControlProvider.notifier);
+
+    // A labelled single-line field. The store setter normalizes (trims; an
+    // emptied field clears back to null), so committing on every change is
+    // safe — the same idiom as the project-name field on the Projects page.
+    Widget field(
+      StringKey label,
+      String? value,
+      ValueChanged<String> onChanged,
+    ) =>
+        Padding(
+          padding: const EdgeInsets.only(bottom: MechXSpacing.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(context.strings(label),
+                  style: type.caption.copyWith(color: colors.textMuted)),
+              const SizedBox(height: MechXSpacing.xs),
+              MechXTextField(value: value ?? '', onChanged: onChanged),
+            ],
+          ),
+        );
+
+    return DisclosureSection(
+      name: 'Document control',
+      defaultExpanded: false,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          field(StringKey.inspectorDocNumber, doc.documentNumber,
+              ctrl.setDocumentNumber),
+          field(StringKey.inspectorRevisionTag, doc.revisionTag,
+              ctrl.setRevisionTag),
+          field(StringKey.inspectorClient, doc.clientName, ctrl.setClientName),
+          field(StringKey.inspectorPreparedBy, doc.preparedBy,
+              ctrl.setPreparedBy),
+          field(StringKey.inspectorCheckedBy, doc.checkedBy, ctrl.setCheckedBy),
+          field(StringKey.inspectorApprovedBy, doc.approvedBy,
+              ctrl.setApprovedBy),
+
+          // ── Revision history (date + description rows) ───────────────────
+          Text(context.strings(StringKey.inspectorRevisionHistory),
+              style: type.caption.copyWith(color: colors.textMuted)),
+          const SizedBox(height: MechXSpacing.xs),
+          for (var i = 0; i < doc.revisions.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${doc.revisions[i].date} · ${doc.revisions[i].description}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          type.caption.copyWith(color: colors.textSecondary),
+                    ),
+                  ),
+                  _GlyphButton(
+                    glyph: '−',
+                    onTap: () => ctrl.removeRevisionAt(i),
+                  ),
+                ],
+              ),
+            ),
+          Row(
+            key: ValueKey('doc-rev-add-$_addEpoch'),
+            children: [
+              SizedBox(
+                width: 92,
+                child: MechXTextField(
+                  value: '',
+                  hint: context.strings(StringKey.inspectorRevisionDateHint),
+                  onChanged: (v) => _revDate = v,
+                ),
+              ),
+              const SizedBox(width: MechXSpacing.xs),
+              Expanded(
+                child: MechXTextField(
+                  value: '',
+                  hint: context.strings(StringKey.inspectorRevisionDescHint),
+                  onChanged: (v) => _revDesc = v,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MechXButton(
+              label: context.strings(StringKey.inspectorAddRevision),
+              onPressed: _addRevision,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1709,7 +1882,7 @@ class _ResultsSection extends ConsumerWidget {
 
   Future<void> _exportBom(WidgetRef ref, List<BomLine> bom,
           List<FittingLine> fittings, String dialogTitle) =>
-      _runExport(
+      runExportGuarded(
         ref,
         name: 'BOM',
         write: () async {

@@ -4,9 +4,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/document_control_store.dart';
+import 'package:mechx/store/inspector_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
+import 'package:mechx/ui/widgets/mechx_text_field.dart';
 import 'package:mechx_engine/network/network.dart';
 
 import 'test_util.dart';
@@ -91,5 +94,57 @@ void main() {
     expect(err, contains('zero length'));
     // No success pill on a blocked export.
     expect(container.read(statusMessageProvider), isNull);
+  });
+
+  testWidgets(
+      'document control section is collapsed by default and commits edits '
+      'to the store', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+
+    // Collapsed by default: the header shows, the fields do not — a blank
+    // launch stays canvas-focused (only the small header row is new).
+    expect(find.text('DOCUMENT CONTROL'), findsOneWidget);
+    expect(find.text('Document no.'), findsNothing);
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.text('DOCUMENT CONTROL')),
+      listen: false,
+    );
+    container
+        .read(sectionVisibilityProvider.notifier)
+        .toggle('Document control', false);
+    await tester.pumpAndSettle();
+    expect(find.text('Document no.'), findsOneWidget);
+
+    // The six identity fields then the two add-revision fields, in build
+    // order. Typing commits straight into the store (the setter normalizes).
+    final fields = find.byType(MechXTextField);
+    expect(fields, findsNWidgets(8));
+    await tester.enterText(fields.at(0), 'M-101');
+    await tester.enterText(fields.at(1), 'B');
+    await tester.enterText(fields.at(2), 'PT Contoh');
+    expect(container.read(documentControlProvider).documentNumber, 'M-101');
+    expect(container.read(documentControlProvider).revisionTag, 'B');
+    expect(container.read(documentControlProvider).clientName, 'PT Contoh');
+
+    // An emptied field clears back to null (absent ⇒ row omitted downstream).
+    await tester.enterText(fields.at(1), '');
+    expect(container.read(documentControlProvider).revisionTag, isNull);
+
+    // Add a revision row through the editor: date + description + Add.
+    await tester.enterText(fields.at(6), '2026-07-02');
+    await tester.enterText(fields.at(7), 'Issued for review');
+    await tester.ensureVisible(find.text('Add revision'));
+    await tester.tap(find.text('Add revision'));
+    await tester.pumpAndSettle();
+
+    final revisions = container.read(documentControlProvider).revisions;
+    expect(revisions, hasLength(1));
+    expect(revisions.single.date, '2026-07-02');
+    expect(revisions.single.description, 'Issued for review');
+    // The row renders (date · description) with a remove glyph beside it.
+    expect(find.text('2026-07-02 · Issued for review'), findsOneWidget);
   });
 }

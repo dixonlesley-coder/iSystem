@@ -187,6 +187,8 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
             child: _RiserExportMenu(
               onPdf: () => _runExport(exportMechanicalRiserPdf),
               onDxf: () => _runExport(exportMechanicalRiserDxf),
+              onSetPdf: () => _runExport(exportMechanicalRiserSetPdf),
+              onSetDxf: () => _runExport(exportMechanicalRiserSetDxf),
             ),
           ),
       ],
@@ -200,7 +202,14 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
 class _RiserExportMenu extends StatelessWidget {
   final VoidCallback onPdf;
   final VoidCallback onDxf;
-  const _RiserExportMenu({required this.onPdf, required this.onDxf});
+  final VoidCallback onSetPdf;
+  final VoidCallback onSetDxf;
+  const _RiserExportMenu({
+    required this.onPdf,
+    required this.onDxf,
+    required this.onSetPdf,
+    required this.onSetDxf,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -237,6 +246,19 @@ class _RiserExportMenu extends StatelessWidget {
                   label: context.strings(StringKey.electricalExportSld),
                   sub: context.strings(StringKey.electricalExportSldDxf),
                   onTap: onDxf,
+                ),
+                // The issuable drawing SET — every present service + the
+                // combined sheet, numbered `Sheet i of t` (one multi-page PDF /
+                // a per-service DXF series).
+                _RiserExportRow(
+                  label: context.strings(StringKey.mechExportAllSystems),
+                  sub: context.strings(StringKey.mechExportAllSystemsPdf),
+                  onTap: onSetPdf,
+                ),
+                _RiserExportRow(
+                  label: context.strings(StringKey.mechExportAllSystems),
+                  sub: context.strings(StringKey.mechExportAllSystemsDxf),
+                  onTap: onSetDxf,
                 ),
               ],
             ),

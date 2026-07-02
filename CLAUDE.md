@@ -266,7 +266,19 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   empty-state actions (J1), selection-first inspector w/ auto-scroll (H1),
   discipline-scoped node fields (H3), fire hazard-class input (H5), honest Report stage
   via `reportExportedProvider` (J4), 'Riser'/'Building riser' naming (J5), ASCII `m3`/`O`
-  notation on the riser canvas (B8). Waves 2–5 remain.
+  notation on the riser canvas (B8). **Wave 2 (issuable-sheet credibility) LANDED**
+  (see the §15 row): shared ISO title block/sheet frame + honest real-metre scale bar +
+  AIA-style DXF layer/linetype/ACI tables in `drawing_chrome.dart`; plan exporters take
+  `metersPerPixel` (mm-unit DXF w/ HEADER+TABLES, snapped `1 : N @ A3` or honest NTS,
+  stroke bands + service dashes, rotated/collision-managed labels via `placeEdgeLabel`);
+  `SldLine.layer/dashed` across all renderers; electrical DXF class layers (E-BUS…);
+  `electricalSldToPdfPaginated` (one schedule per page) + `sldSheetsToPdf`;
+  breaker kA notation (`breakerIcuKaByPanelId` from the fault study's `incomerKa`) +
+  source-spine IEC earth mark; mech riser per-service layers/dashed vent/medium pipes +
+  label collision w/ leaders; canvas linetypes + rotated/LOD labels + `flowFromId`
+  chevrons; document control (`DesignSettings` + `document_control_store` + inspector
+  section) feeding title blocks + report revision tables; riser 'Export all systems'
+  set + electrical 'Panel schedules' exports. Waves 3–5 remain.
 - **Audit-fix wave (2026-06-28) — resolved** (`AUDIT-REPORT.md`, see the §15 row):
   the over-capacity air duct no longer THROWS (clamps + `EdgeSizing.overCapacity`
   flag → Review warning via `airOverCapacityProvider`); rectangular ducts honour

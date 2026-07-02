@@ -17,6 +17,24 @@ Color serviceColor(ServiceType service) => switch (service) {
       ServiceType.fireHydrant => const Color(0xFFB02525),
     };
 
+/// On-canvas dash pattern per service (a `[dash, gap, …]` stroke recipe walked
+/// by the painter), or null when the service is drawn SOLID. Vent + return air
+/// read dashed; the two fire services read dash-dot — the standard drafting
+/// convention for these lines.
+///
+/// This deliberately MIRRORS the engine-side chrome dash table the same way
+/// [serviceColor] mirrors `serviceChromeColor`: two parallel lookups, one
+/// convention. A parallel agent adds the engine-side table this stage, so this
+/// intentionally does NOT import `drawing_chrome` (the app canvas has no engine
+/// chrome dependency here) — keep the two in step by hand.
+List<double>? serviceDashPattern(ServiceType service) => switch (service) {
+      ServiceType.vent || ServiceType.returnAir => const [6, 4],
+      ServiceType.fireSprinkler ||
+      ServiceType.fireHydrant =>
+        const [10, 3, 2, 3],
+      _ => null,
+    };
+
 String serviceLabel(ServiceType service) => switch (service) {
       ServiceType.coldWater => 'Cold water',
       ServiceType.hotWater => 'Hot water',

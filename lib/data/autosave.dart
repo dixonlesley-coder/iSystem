@@ -7,6 +7,7 @@ import '../ai/ai_client.dart';
 import '../store/annotation_store.dart';
 import '../store/app_state.dart';
 import '../store/commercial_store.dart';
+import '../store/document_control_store.dart';
 import '../store/electrical_store.dart';
 import '../store/fire_store.dart';
 import '../store/fixture_library_store.dart';
@@ -88,6 +89,15 @@ ProjectDocument buildDocument(ProviderReader read) {
       anthropicApiKey: read(aiApiKeyProvider),
       aiModel: read(aiModelProvider),
       aiProvider: read(aiProviderProvider).name,
+      // Document control (drawing number/revision/client/DRAWN-CHECKED-APPROVED
+      // + revision history) round-trips with the project.
+      documentNumber: read(documentControlProvider).documentNumber,
+      revisionTag: read(documentControlProvider).revisionTag,
+      clientName: read(documentControlProvider).clientName,
+      preparedBy: read(documentControlProvider).preparedBy,
+      checkedBy: read(documentControlProvider).checkedBy,
+      approvedBy: read(documentControlProvider).approvedBy,
+      revisions: read(documentControlProvider).revisions,
     ),
     // The electrical sub-model (v2) round-trips alongside the plumbing project.
     electrical: read(electricalProjectProvider),
@@ -147,6 +157,17 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(aiApiKeyProvider.notifier).set(s.anthropicApiKey);
   read(aiModelProvider.notifier).set(s.aiModel);
   read(aiProviderProvider.notifier).set(aiProviderFromName(s.aiProvider));
+  // Restore document control (absent on an older file ⇒ all unset / no
+  // revisions, the controller's own defaults).
+  read(documentControlProvider.notifier).set(DocumentControl(
+    documentNumber: s.documentNumber,
+    revisionTag: s.revisionTag,
+    clientName: s.clientName,
+    preparedBy: s.preparedBy,
+    checkedBy: s.checkedBy,
+    approvedBy: s.approvedBy,
+    revisions: s.revisions,
+  ));
   // Restore the electrical project. A v2 file carries one; a plumbing-only / v1
   // document has NO electrical sub-model — fall back to an EMPTY project (no
   // fictitious sample switchboard), so its BOM / equipment schedule / unified
