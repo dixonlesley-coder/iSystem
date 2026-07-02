@@ -34,10 +34,14 @@ void main() async {
   );
 
   // Crash recovery: if a snapshot from a previous (unclean) session exists,
-  // offer to restore it. Then start the periodic autosave loop.
+  // offer to restore it (with its autosaved-at time for the banner copy).
+  // Then start the periodic autosave loop.
   final recovered = await readRecovery();
   if (recovered != null) {
-    container.read(recoveryDocProvider.notifier).set(recovered);
+    final savedAt = await recoverySnapshotMtime();
+    container
+        .read(recoveryDocProvider.notifier)
+        .set((doc: recovered, savedAt: savedAt));
   }
   startAutosave(container);
 

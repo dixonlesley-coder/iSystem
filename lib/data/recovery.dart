@@ -32,6 +32,21 @@ Future<ProjectDocument?> readRecovery({String? path}) async {
   }
 }
 
+/// Best-effort last-modified time of the recovery snapshot, read alongside
+/// [readRecovery] at launch so the UI can tell the engineer *when* the work
+/// was autosaved (not just that some work exists). Null when the file is
+/// missing or its mtime can't be read — the banner degrades to a generic
+/// "earlier" phrasing rather than throwing.
+Future<DateTime?> recoverySnapshotMtime({String? path}) async {
+  try {
+    final file = File(path ?? recoveryFilePath());
+    if (!await file.exists()) return null;
+    return (await file.stat()).modified;
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Delete the recovery snapshot (after an explicit Save, restore, or dismiss).
 Future<void> clearRecovery({String? path}) async {
   try {

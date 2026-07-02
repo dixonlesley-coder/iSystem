@@ -302,7 +302,19 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   locale); equipment-schedule CSV sibling + the BOM CSV split into clean
   `-bom.csv`/`-fittings.csv` with per-floor grouping (`buildBom(groupByFloor:)`) and
   the cut-plan stock/bars/waste columns joined per (service,DN); calibration/first-size
-  status handoffs + the Review-hub 'Export deliverables' card. Wave 5 remains.
+  status handoffs + the Review-hub 'Export deliverables' card. **Wave 5 (structural
+  consolidation) LANDED** (see the §15 row) — paper sizes A3/A2/A1 on the plan PDFs,
+  one-drag-one-undo + node/canvas context menus + Space-pan + select-all + double-click-opens
+  + hover halo + metre-snapped major/minor grid, `SteppedValueField` type-in steppers +
+  Rooms/Tanks master-detail + the Fire ResultCard, electrical way selection +
+  `duplicatePanel` + the last EN-only workspace localized + one honest LOD tier + a live
+  minimap, riser Edit-mode symbols + ONE shared `riserLayoutPositions` for canvas/export,
+  true-width ducts + real dimension style + `CW-R1` plan tags, the power one-line on the
+  SldSheet pipeline, quotation number formatting, and a contextual two-tap recovery banner.
+  **All 5 waves are complete** — every actionable finding of the 78 is landed or explicitly
+  dispositioned; the one open item is the A8 full plan-exporters-onto-SldSheet unification,
+  deliberately deferred (waves 2-3 landed its content per-exporter with byte-level pins,
+  making consolidation high-risk/low-yield) along with an app-side A3/A2/A1 paper picker.
 - **Audit-fix wave (2026-06-28) — resolved** (`AUDIT-REPORT.md`, see the §15 row):
   the over-capacity air duct no longer THROWS (clamps + `EdgeSizing.overCapacity`
   flag → Review warning via `airOverCapacityProvider`); rectangular ducts honour

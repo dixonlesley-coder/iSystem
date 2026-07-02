@@ -21,12 +21,14 @@ import '../electrical/control/starter.dart' show StarterType;
 import '../electrical/earthing.dart' show EarthingSystemInfo;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
+import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BreakerResult;
 import '../electrical/sources.dart'
     show GeneratorModeInfo, selectGeneratorKva;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart' show BreakerCurve, BreakerClass;
 import '../units.dart' show ApparentPower;
+import 'number_format.dart' show groupThousands;
 import 'sld_sheet.dart';
 
 // The drawing-primitive types (SldSheet / SldPrim / SldLine / SldRect /
@@ -68,17 +70,7 @@ String _watts(double w) =>
 /// The DAYA cell figure in the Indonesian DIAGRAM-PANEL convention: integer
 /// WATT with a DOT thousands separator + ` WATT` (e.g. 4400 -> `4.400 WATT`,
 /// 190 -> `190 WATT`, 52871 -> `52.871 WATT`). Rounds to the nearest watt.
-String _wattsId(double w) {
-  final n = w.round();
-  final neg = n < 0;
-  final digits = n.abs().toString();
-  final buf = StringBuffer();
-  for (var i = 0; i < digits.length; i++) {
-    if (i > 0 && (digits.length - i) % 3 == 0) buf.write('.');
-    buf.write(digits[i]);
-  }
-  return '${neg ? '-' : ''}$buf WATT';
-}
+String _wattsId(double w) => '${groupThousands(w)} WATT';
 
 /// The ASCII control / starter token for a way's [StarterType] (BRI `Diagram
 /// Panel` motor-control convention: DOL / VSD / star-delta). ASCII-only — never
@@ -1602,6 +1594,186 @@ SldSheet buildElectricalRiser({
       if (sourceChain) const SldLegendEntry('Source', 'Utility / MV supply chain'),
       // The source spine draws the system-earthing mark, so surface it too.
       if (sourceChain) const SldLegendEntry('Earth', 'System earthing point'),
+    ],
+    supplyNote: supplyNote,
+  );
+}
+
+// ── Hybrid POWER one-line (C7) ───────────────────────────────────────────────
+
+/// Node footprint + tier geometry for the power one-line.
+const double _polW = 172;
+const double _polH = 44;
+const double _polSymR = 14; // generator / utility symbol radius
+const double _polGapX = 44; // horizontal gap between siblings in a tier
+const double _polTierH = 120; // vertical pitch between tiers
+
+/// The label (name + optional sub) beside a SYMBOL node (utility / generator),
+/// placed to the right of the glyph so all content stays inside the footprint.
+void _polSymLabel(
+    List<SldPrim> out, double x, double cy, PowerNode n, SldRole role) {
+  out.add(SldLabel(x, cy - 3, n.label, size: 9, bold: true, role: role));
+  if (n.sub != null && n.sub!.isNotEmpty) {
+    out.add(SldLabel(x, cy + 9, n.sub!, size: 7, role: role));
+  }
+}
+
+/// Build the hybrid power one-line ([PowerOneLine]) as an [SldSheet] on the
+/// shared drawing pipeline (C7) — the fourth electrical output, now rendered
+/// identically by the PDF + DXF exporters via their prebuilt-`sheet` params
+/// (replacing the old centre-to-centre wireframe grid).
+///
+/// Nodes are laid out top-down in longest-path TIERS from the supply roots
+/// (utility / generator / PV / battery) and wired edge-to-edge with the same
+/// orthogonal 3-segment feeder routing the overview uses. Source equipment
+/// reuses the IEC symbol emitters — the utility a BOWTIE, a generator the
+/// G-in-a-circle — and every other node (buses, inverters, PV/battery, main
+/// panel) is a labelled board box. Every SUPPLY node carries `SldRole.source`;
+/// only the main panel (the load side) is `normal`, so a renderer's role-colour
+/// split reads the supply chain as one.
+SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
+  final nodes = oneLine.nodes;
+  final byId = {for (final n in nodes) n.id: n};
+
+  // Longest-path tier from the roots (a node with no incoming edge). The model
+  // is a DAG by construction; a per-node iteration cap guards any accidental
+  // cycle so relaxation always terminates.
+  final tier = <String, int>{for (final n in nodes) n.id: 0};
+  for (var pass = 0; pass < nodes.length; pass++) {
+    var changed = false;
+    for (final e in oneLine.edges) {
+      if (!byId.containsKey(e.from) || !byId.containsKey(e.to)) continue;
+      final want = tier[e.from]! + 1;
+      if (want > tier[e.to]!) {
+        tier[e.to] = want;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  // Group node ids by tier (insertion order preserved for stable packing).
+  final maxTier = tier.values.isEmpty ? 0 : tier.values.reduce(math.max);
+  final byTier = <int, List<String>>{};
+  for (final n in nodes) {
+    (byTier[tier[n.id]!] ??= []).add(n.id);
+  }
+
+  // Place: x by index within the tier, y by tier (top-left of each footprint).
+  final pos = <String, ({double x, double y})>{};
+  for (var t = 0; t <= maxTier; t++) {
+    final row = byTier[t] ?? const [];
+    for (var i = 0; i < row.length; i++) {
+      pos[row[i]] = (x: i * (_polW + _polGapX), y: t * _polTierH);
+    }
+  }
+
+  final prims = <SldPrim>[];
+
+  // Edges first (under the node graphics): the overview orthogonal 3-segment
+  // route — source bottom-centre down to a mid line, across, then down into the
+  // target top-centre. The role follows the TARGET: the run into the main panel
+  // (the load side) is normal, everything else is a supply run.
+  for (final e in oneLine.edges) {
+    final a = pos[e.from];
+    final z = pos[e.to];
+    if (a == null || z == null) continue;
+    final role = byId[e.to]!.kind == PowerNodeKind.mainPanel
+        ? SldRole.normal
+        : SldRole.source;
+    final ax = a.x + _polW / 2;
+    final ay = a.y + _polH;
+    final zx = z.x + _polW / 2;
+    final zy = z.y;
+    final midY = (ay + zy) / 2;
+    prims
+      ..add(SldLine(ax, ay, ax, midY, weight: SldWeight.medium, role: role))
+      ..add(SldLine(ax, midY, zx, midY, weight: SldWeight.medium, role: role))
+      ..add(SldLine(zx, midY, zx, zy, weight: SldWeight.medium, role: role));
+    if (e.label != null && e.label!.isNotEmpty) {
+      prims.add(SldLabel(math.min(ax, zx) + 4, midY - 4, e.label!,
+          size: 6.5, role: role));
+    }
+  }
+
+  // Nodes: source symbols reuse the IEC emitters; every other node is a box.
+  for (final n in nodes) {
+    final at = pos[n.id]!;
+    final role =
+        n.kind == PowerNodeKind.mainPanel ? SldRole.normal : SldRole.source;
+    final cx = at.x + _polW / 2;
+    final cy = at.y + _polH / 2;
+    switch (n.kind) {
+      case PowerNodeKind.utility:
+        final symX = at.x + _polSymR + 8;
+        _emitBowtie(prims, symX, cy, _polSymR, role);
+        _polSymLabel(prims, symX + _polSymR + 12, cy, n, role);
+      case PowerNodeKind.generator:
+        final symX = at.x + _polSymR + 8;
+        _emitGenerator(prims, symX, cy, _polSymR, role);
+        _polSymLabel(prims, symX + _polSymR + 12, cy, n, role);
+      default:
+        _emitPanelBox(prims, cx, cy, _polW, _polH, n.label, role);
+        if (n.sub != null && n.sub!.isNotEmpty) {
+          prims.add(SldLabel(at.x + 5, at.y + _polH + 11, n.sub!,
+              size: 7, role: role));
+        }
+    }
+  }
+
+  // ── Bounds ─────────────────────────────────────────────────────────────────
+  var minX = double.infinity, minY = double.infinity;
+  var maxX = -double.infinity, maxY = -double.infinity;
+  for (final pr in prims) {
+    switch (pr) {
+      case SldRect():
+        minX = math.min(minX, pr.x);
+        minY = math.min(minY, pr.y);
+        maxX = math.max(maxX, pr.x + pr.w);
+        maxY = math.max(maxY, pr.y + pr.h);
+      case SldLine():
+        minX = math.min(minX, math.min(pr.x1, pr.x2));
+        minY = math.min(minY, math.min(pr.y1, pr.y2));
+        maxX = math.max(maxX, math.max(pr.x1, pr.x2));
+        maxY = math.max(maxY, math.max(pr.y1, pr.y2));
+      case SldLabel():
+        minX = math.min(minX, pr.x);
+        minY = math.min(minY, pr.y);
+        maxY = math.max(maxY, pr.y);
+      case SldCircle():
+        minX = math.min(minX, pr.cx - pr.r);
+        minY = math.min(minY, pr.cy - pr.r);
+        maxX = math.max(maxX, pr.cx + pr.r);
+        maxY = math.max(maxY, pr.cy + pr.r);
+    }
+  }
+  if (!minX.isFinite) {
+    minX = 0;
+    minY = 0;
+    maxX = 1;
+    maxY = 1;
+  }
+
+  // Supply note lists the present sources, honestly (no invented content).
+  final present = <String>[
+    if (oneLine.nodeOfKind(PowerNodeKind.utility) != null) 'PLN utility',
+    if (oneLine.nodeOfKind(PowerNodeKind.generator) != null) 'genset',
+    if (oneLine.nodeOfKind(PowerNodeKind.pv) != null) 'PV',
+    if (oneLine.nodeOfKind(PowerNodeKind.battery) != null) 'battery',
+  ];
+  final supplyNote =
+      'Power one-line - ${present.isEmpty ? 'no sources' : present.join(' / ')}';
+
+  return SldSheet(
+    prims: prims,
+    minX: minX,
+    minY: minY,
+    maxX: maxX,
+    maxY: maxY,
+    legend: const [
+      SldLegendEntry('Source', 'Supply source / equipment'),
+      SldLegendEntry('G', 'Standby generator (genset)'),
+      SldLegendEntry('Board', 'Distribution board / bus'),
     ],
     supplyNote: supplyNote,
   );

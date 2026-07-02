@@ -221,13 +221,18 @@ void main() {
         .edges
         .where((e) => e.kind == EdgeKind.riser)
         .length;
-    // Two aligned stacks (a↔c on the left, b↔d on the right) ⇒ two inferred
-    // connectors. Their vertical legs sit at the leftmost / rightmost node x.
-    await tester.tapAt(const Offset(32, 400)); // left stack
+    // Two mutual-nearest pairs (a↔c on the left, b↔d on the right) ⇒ two
+    // inferred connectors. Under the shared column layout (B7) a node sits at
+    // `sidePad + rank/(cols-1) * drawWidth`: with 4 distinct x-buckets and a
+    // 1100-wide canvas (sidePad 32, drawWidth 1036) the ranks are a=0, c=1,
+    // b=2, d=3, so a=32, c=32+1036/3=377.3, b=32+2*1036/3=722.7, d=1068. Each
+    // dashed connector's clickable vertical leg sits at its endpoints' mid-x:
+    // left = (32+377.3)/2 ≈ 205, right = (722.7+1068)/2 ≈ 895.
+    await tester.tapAt(const Offset(205, 400)); // left pair mid-x
     await tester.pump();
     expect(hasRiser(), isTrue);
     expect(riserCount(), 1);
-    await tester.tapAt(const Offset(1068, 400)); // right stack
+    await tester.tapAt(const Offset(895, 400)); // right pair mid-x
     // Drain the transient 'Riser added' status-message timers before teardown.
     await tester.pump(const Duration(seconds: 4));
 

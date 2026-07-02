@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -753,24 +754,79 @@ class _AnimatedBanner extends StatelessWidget {
   }
 }
 
+/// Human-readable "autosaved …" fragment for the recovery banner: a short
+/// delta for anything within the last day, else the wall-clock time the
+/// snapshot was written; a missing mtime (unreadable stat) degrades to a
+/// generic "earlier" rather than guessing. ASCII only. A negative delta
+/// (clock skew) falls into the "just now" bucket rather than throwing.
+String _recoveryWhen(BuildContext context, DateTime? savedAt) {
+  if (savedAt == null) return context.strings(StringKey.shellRecoverEarlier);
+  final delta = DateTime.now().difference(savedAt);
+  if (delta.inMinutes < 1) {
+    return context.strings(StringKey.shellRecoverJustNow);
+  }
+  if (delta.inMinutes < 60) {
+    return context.strings
+        .format(StringKey.shellRecoverMinutesAgo, {'n': delta.inMinutes});
+  }
+  if (delta.inHours < 24) {
+    return context.strings
+        .format(StringKey.shellRecoverHoursAgo, {'n': delta.inHours});
+  }
+  final hh = savedAt.hour.toString().padLeft(2, '0');
+  final mm = savedAt.minute.toString().padLeft(2, '0');
+  return context.strings
+      .format(StringKey.shellRecoverAtTime, {'time': '$hh:$mm'});
+}
+
 /// Offers to restore a crash-recovery snapshot from a previous session that
-/// ended without a clean exit. Restore loads it; Dismiss discards it.
-class _RecoveryBanner extends ConsumerWidget {
+/// ended without a clean exit. Names the project and says when it was
+/// autosaved (rather than a bare "unsaved work?"), and discard is made
+/// deliberate: the first tap on "Discard snapshot" only arms a
+/// confirmation (relabelling the button), timing back out after a few
+/// seconds; only the SECOND, confirming tap actually clears the snapshot —
+/// so a stray click can never destroy the only copy.
+class _RecoveryBanner extends ConsumerStatefulWidget {
   const _RecoveryBanner();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final doc = ref.watch(recoveryDocProvider);
+  ConsumerState<_RecoveryBanner> createState() => _RecoveryBannerState();
+}
+
+class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
+  bool _confirmingDiscard = false;
+  Timer? _confirmTimer;
+
+  static const _confirmWindow = Duration(seconds: 4);
+
+  @override
+  void dispose() {
+    _confirmTimer?.cancel();
+    super.dispose();
+  }
+
+  void _armDiscardConfirm() {
+    _confirmTimer?.cancel();
+    setState(() => _confirmingDiscard = true);
+    _confirmTimer = Timer(_confirmWindow, () {
+      if (mounted) setState(() => _confirmingDiscard = false);
+    });
+  }
+
+  Future<void> _discard() async {
+    _confirmTimer?.cancel();
+    await clearRecovery();
+    ref.read(recoveryDocProvider.notifier).clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final snapshot = ref.watch(recoveryDocProvider);
     final colors = context.colors;
     final type = context.type;
 
-    Future<void> dismiss() async {
-      await clearRecovery();
-      ref.read(recoveryDocProvider.notifier).clear();
-    }
-
     return _AnimatedBanner(
-      child: doc == null
+      child: snapshot == null
           ? null
           : Container(
               key: const ValueKey('recovery-banner'),
@@ -784,7 +840,10 @@ class _RecoveryBanner extends ConsumerWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      context.strings(StringKey.shellRecoverPrompt),
+                      context.strings.format(StringKey.shellRecoverPrompt, {
+                        'name': snapshot.doc.projectName,
+                        'when': _recoveryWhen(context, snapshot.savedAt),
+                      }),
                       style: type.caption.copyWith(color: colors.textPrimary),
                     ),
                   ),
@@ -797,14 +856,20 @@ class _RecoveryBanner extends ConsumerWidget {
                       // recovered work is still unsaved, so autosave should keep
                       // mirroring it after dismiss. (Recovery snapshots embed no
                       // assets, so rehydrate is a no-op here — kept for symmetry.)
-                      applyDocument(ref.read, rehydrateAssets(doc));
-                      dismiss();
+                      applyDocument(ref.read, rehydrateAssets(snapshot.doc));
+                      _discard();
                     },
                   ),
                   const SizedBox(width: MechXSpacing.sm),
                   MechXButton(
-                      label: context.strings(StringKey.shellDismiss),
-                      onPressed: dismiss),
+                    key: const ValueKey('recovery-discard'),
+                    label: context.strings(_confirmingDiscard
+                        ? StringKey.shellDiscardConfirm
+                        : StringKey.shellDiscardSnapshot),
+                    tone: MechXButtonTone.danger,
+                    onPressed:
+                        _confirmingDiscard ? _discard : _armDiscardConfirm,
+                  ),
                 ],
               ),
             ),

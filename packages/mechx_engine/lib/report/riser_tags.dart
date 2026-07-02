@@ -215,6 +215,67 @@ class _RiserRef {
   const _RiserRef(this.edgeId, this.x, this.floorIndex);
 }
 
+/// px tolerance for grouping nodes into one vertical COLUMN — shared with
+/// [riserTags]'s stack bucket so a co-linear riser stack that shares a tag id
+/// also shares a layout column.
+const double kRiserColumnBucket = 12.0;
+
+/// Visible node ids under a single-service [focus] — endpoints of that service's
+/// edges (null ⇒ the combined view, no filter). Shared by [riserLayoutPositions]
+/// and mirrors the painter/export focus filters.
+Set<String>? _layoutFocusedNodeIds(Network net, ServiceType? focus) {
+  if (focus == null) return null;
+  final ids = <String>{};
+  for (final e in net.edges) {
+    if (e.service == focus) {
+      ids
+        ..add(e.fromId)
+        ..add(e.toId);
+    }
+  }
+  return ids;
+}
+
+/// The ONE horizontal-layout helper shared by the on-canvas Auto riser painter
+/// and the vector EXPORT builder (B7), so a vertical riser stack reads as a
+/// single clean column on BOTH surfaces instead of jogging into L-shapes.
+///
+/// Returns a NORMALIZED x in [0, 1] per visible node id — 0 = the left edge of
+/// the placement band, 1 = the right edge — which each consumer maps into its
+/// own band width (`left + t * innerWidth`). A single column (every node
+/// vertically aligned, or a lone node) maps to 0.5 (centred), matching both
+/// consumers' prior single-node/zero-span centring.
+///
+/// Nodes are grouped into vertical COLUMNS by bucketing their world x with the
+/// [kRiserColumnBucket] tolerance (the same bucket the riser tags use), so
+/// co-linear nodes across floors — a riser stack — land in ONE column and read
+/// vertical regardless of how many other nodes each floor carries. The distinct
+/// buckets are ranked left→right by x, so non-stack nodes keep their horizontal
+/// rank order. [focus] restricts to a single service's node set (null ⇒ the
+/// combined view). Pure + deterministic (bucket rounding + a stable rank).
+Map<String, double> riserLayoutPositions(Network net, {ServiceType? focus}) {
+  final visible = _layoutFocusedNodeIds(net, focus);
+  final nodes = <NetNode>[
+    for (final n in net.nodes)
+      if (visible == null || visible.contains(n.id)) n,
+  ];
+  if (nodes.isEmpty) return const {};
+
+  double bucketOf(double x) => (x / kRiserColumnBucket).round() * kRiserColumnBucket;
+
+  // Distinct column buckets, sorted ascending → a stable left→right rank.
+  final buckets = <double>{for (final n in nodes) bucketOf(n.x)}.toList()..sort();
+  final rankOf = <double, int>{
+    for (var i = 0; i < buckets.length; i++) buckets[i]: i,
+  };
+  final columns = buckets.length;
+
+  return <String, double>{
+    for (final n in nodes)
+      n.id: columns <= 1 ? 0.5 : rankOf[bucketOf(n.x)]! / (columns - 1),
+  };
+}
+
 /// One floor's branch fan-out for the riser single-line: the short labels of the
 /// fixtures/terminals that floor DISTRIBUTES, capped at [max] with the overflow
 /// count surfaced (never silently dropped — the painter renders it as a

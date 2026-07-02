@@ -143,6 +143,69 @@ void main() {
     expect(s, contains('(2 m) Tj'));
   });
 
+  group('paper size (A5 Wave-5 addition)', () {
+    // A3 (default) MediaBox from the historical constants.
+    test('default A3 carries the 1190.55 x 841.89 MediaBox', () {
+      final s = latin1.decode(build());
+      expect(s, contains('/MediaBox [0 0 1190.55 841.89]'));
+    });
+
+    test('A2 carries the larger 1683.78 x 1190.55 MediaBox', () {
+      final s = latin1.decode(networkToPdf(
+        net: net,
+        sizing: sizing,
+        sheetId: 's1',
+        floorIndex: 0,
+        title: 'Ground Floor (cold)',
+        paper: PaperSize.a2Landscape,
+      ));
+      expect(s, contains('/MediaBox [0 0 1683.78 1190.55]'));
+    });
+
+    test('A1 carries the largest 2383.94 x 1683.78 MediaBox', () {
+      final s = latin1.decode(networkToPdf(
+        net: net,
+        sizing: sizing,
+        sheetId: 's1',
+        floorIndex: 0,
+        title: 'Ground Floor (cold)',
+        paper: PaperSize.a1Landscape,
+      ));
+      expect(s, contains('/MediaBox [0 0 2383.94 1683.78]'));
+    });
+
+    test('the snapped scale text names the ACTUAL paper (@ A2)', () {
+      // The larger A2 sheet still snaps the same 300-px run — the raw fit at
+      // A2 is bigger (availW = 1683.78 − 96 = 1587.78 pt → 5.29 pt/px →
+      // N = 0.05·1000 / (5.29·0.35278) = 26.8 → snapped to 50) — so the SCALE
+      // row must read "@ A2", never a stale "@ A3".
+      final s = latin1.decode(networkToPdf(
+        net: net,
+        sizing: sizing,
+        sheetId: 's1',
+        floorIndex: 0,
+        title: 'Ground Floor (cold)',
+        chrome: const DrawingChrome(drawingNumber: 'M-101'),
+        metersPerPixel: 0.05,
+        paper: PaperSize.a2Landscape,
+      ));
+      expect(s, contains('(1 : 50 @ A2) Tj'));
+      expect(s, isNot(contains('@ A3')));
+    });
+
+    test('default paper is byte-identical to the explicit A3', () {
+      expect(
+          build(),
+          equals(networkToPdf(
+              net: net,
+              sizing: sizing,
+              sheetId: 's1',
+              floorIndex: 0,
+              title: 'Ground Floor (cold)',
+              paper: PaperSize.a3Landscape)));
+    });
+  });
+
   test('A6: the DN50 run strokes at the small band 1.0 w', () {
     // DN50 → pipe band small (DN <= 50) → kPdfStrokeWidths[0] = 1.0.
     final s = latin1.decode(build());

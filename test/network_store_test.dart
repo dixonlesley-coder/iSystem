@@ -4,12 +4,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/annotation_store.dart';
+import 'package:mechx/store/history_store.dart';
+import 'package:mechx/store/inspector_store.dart';
 import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/canvas/selection_overlay.dart';
+import 'package:mechx/ui/widgets/context_menu.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
@@ -505,6 +508,144 @@ void main() {
       final branch = net.edgesAt(fixture.id).single;
       expect(branch.service, ServiceType.coldWater);
     });
+
+    test('one drag + snap-merge is ONE undo step back to the pre-drag network',
+        () {
+      // G4: the drag pushes its snapshot at onPanStart (pushUndoSnapshot); the
+      // drag-end merge must NOT push a second one — the first Ctrl+Z restores
+      // the exact pre-drag network, never an unmerged intermediate.
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(100, 0), spanPx: 100); // ~(50)-(150)
+      n.addSegment('s1', 0, const Offset(300, 0), spanPx: 100); // ~(250)-(350)
+      var net = c.read(networkControllerProvider).network;
+      final dragged = net.nodes.firstWhere((nd) => (nd.x - 150).abs() < 1e-6);
+      final target = net.nodes.firstWhere((nd) => (nd.x - 250).abs() < 1e-6);
+
+      n.pushUndoSnapshot(); // drag start
+      n.moveNode(dragged.id, target.x + 2, target.y); // live drag
+      n.endNodeDragWithSnap(dragged.id, 14); // drag end — merge
+      expect(c.read(networkControllerProvider).network.nodes.length, 3);
+
+      // ONE undo — straight back to the pre-drag network.
+      n.undo();
+      net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 4);
+      expect(net.edges.length, 2);
+      final restored = net.nodeById(dragged.id)!;
+      expect(restored.x, closeTo(150, 1e-9));
+      expect(restored.y, closeTo(0, 1e-9));
+      // And redo re-applies the whole drag+merge as one step.
+      n.redo();
+      expect(c.read(networkControllerProvider).network.nodes.length, 3);
+      expect(c.read(networkControllerProvider).network.nodeById(dragged.id),
+          isNull);
+    });
+
+    test('one drag + snap is ONE entry on the GLOBAL history timeline', () {
+      // The merge path must not record a second timeline entry either, or the
+      // global Ctrl+Z would pop a no-op before reverting the drag.
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(100, 0), spanPx: 100);
+      n.addSegment('s1', 0, const Offset(300, 0), spanPx: 100);
+      var net = c.read(networkControllerProvider).network;
+      final dragged = net.nodes.firstWhere((nd) => (nd.x - 150).abs() < 1e-6);
+      final target = net.nodes.firstWhere((nd) => (nd.x - 250).abs() < 1e-6);
+
+      n.pushUndoSnapshot();
+      n.moveNode(dragged.id, target.x + 2, target.y);
+      n.endNodeDragWithSnap(dragged.id, 14);
+
+      // ONE global undo reverts the whole drag (to 4 unmerged nodes at the
+      // original positions), not to a half-done intermediate.
+      c.read(historyProvider.notifier).undo();
+      net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 4);
+      expect(net.nodeById(dragged.id)!.x, closeTo(150, 1e-9));
+    });
+
+    test('drag + tap-in of a free fixture is ONE undo step', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(100, 0),
+          spanPx: 100, service: ServiceType.coldWater);
+      n.addTerminal('s1', 0, const Offset(100, 40),
+          fixture: PlumbingFixture.lavatory);
+      final fixture = c
+          .read(networkControllerProvider)
+          .network
+          .nodes
+          .firstWhere((nd) => nd.fixture == PlumbingFixture.lavatory);
+
+      n.pushUndoSnapshot();
+      n.moveNode(fixture.id, 100, 6);
+      n.endNodeDragWithSnap(fixture.id, 14);
+      expect(c.read(networkControllerProvider).network.edges.length, 3);
+
+      // ONE undo restores the free fixture at its pre-drag spot.
+      n.undo();
+      final net = c.read(networkControllerProvider).network;
+      expect(net.edges.length, 1);
+      expect(net.nodes.length, 3);
+      final restored = net.nodeById(fixture.id)!;
+      expect(restored.x, closeTo(100, 1e-9));
+      expect(restored.y, closeTo(40, 1e-9));
+    });
+
+    test(
+        'endNodeDragWithSnap WITHOUT a prior snapshot still records its own '
+        'undo step (safe programmatic path)', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(100, 0), spanPx: 100); // ~(50)-(150)
+      n.addSegment('s1', 0, const Offset(320, 0), spanPx: 100); // ~(270)-(370)
+      final net0 = c.read(networkControllerProvider).network;
+      final dragged =
+          net0.nodes.firstWhere((nd) => (nd.x - 150).abs() < 1e-6);
+
+      // A silent live move, then the snap — but NO pushUndoSnapshot: the merge
+      // must fall back to a full commit so it stays undoable on its own.
+      n.moveNode(dragged.id, 268, 0);
+      n.endNodeDragWithSnap(dragged.id, 14);
+      expect(c.read(networkControllerProvider).network.nodes.length, 3);
+
+      // Undo restores the pre-MERGE state (the unmerged 4-node network).
+      n.undo();
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 4);
+      expect(net.nodeById(dragged.id), isNotNull);
+    });
+
+    test('a drag with no merge does not bleed into the NEXT edit\'s undo', () {
+      // pushUndoSnapshot arms the drag-end replace; a plain move (no snap)
+      // never commits, so the NEXT ordinary edit must still push its own
+      // snapshot — one undo reverts only that edit, a second the drag.
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addFitting('s1', 0, const Offset(10, 10));
+      n.addFitting('s1', 0, const Offset(500, 500));
+      final net0 = c.read(networkControllerProvider).network;
+      final moved = net0.nodes.first;
+      final other = net0.nodes.last;
+
+      n.pushUndoSnapshot();
+      n.moveNode(moved.id, 60, 60);
+      n.endNodeDragWithSnap(moved.id, 14); // nothing nearby — no commit
+
+      n.deleteNode(other.id); // an ordinary edit after the drag
+      expect(c.read(networkControllerProvider).network.nodes.length, 1);
+
+      // First undo: only the delete comes back — the drag survives.
+      n.undo();
+      var net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 2);
+      expect(net.nodeById(moved.id)!.x, closeTo(60, 1e-9));
+      // Second undo: the drag itself.
+      n.undo();
+      net = c.read(networkControllerProvider).network;
+      expect(net.nodeById(moved.id)!.x, closeTo(10, 1e-9));
+    });
   });
 
   group('drawRunFromNode (pull a mainline out of a node)', () {
@@ -748,6 +889,197 @@ void main() {
     // The accessories note shows in both the menu and the inspector selection.
     expect(find.textContaining('Accessories:'), findsWidgets);
     expect(find.textContaining('covering angle'), findsWidgets);
+  });
+
+  testWidgets(
+      'right-clicking an EQUIPMENT node opens the node menu (select similar / '
+      'delete; no fitting rows)', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50)); // first-frame fit
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    final ctrl = container.read(networkControllerProvider.notifier);
+    ctrl.addComponentNode(
+        's1', 0, const Offset(700, 360), NodeComponent.gateValve);
+    await tester.pump();
+    final nodeId =
+        container.read(networkControllerProvider).network.nodes.single.id;
+
+    final transform =
+        container.read(sheetsControllerProvider).viewportFor('s1')!;
+    final overlayBox = tester.renderObject<RenderBox>(
+        find.byType(NetworkSelectionOverlay).first);
+    final globalPos =
+        overlayBox.localToGlobal(transform.worldToScreen(const Offset(700, 360)));
+    final gesture =
+        await tester.startGesture(globalPos, buttons: kSecondaryButton);
+    await gesture.up();
+    await tester.pump();
+
+    // The generalized node menu: Select similar + Delete for any node; the
+    // fitting rows only belong to a bare junction, and a valve isn't one.
+    // (Finders are scoped to the menu — the inspector Selection section can
+    // carry look-alike labels.)
+    final menu = find.byType(MechXContextMenu);
+    expect(menu, findsOneWidget);
+    expect(find.descendant(of: menu, matching: find.text('Select similar')),
+        findsOneWidget);
+    expect(find.descendant(of: menu, matching: find.text('Delete node')),
+        findsOneWidget);
+    expect(find.descendant(of: menu, matching: find.text('FITTING')),
+        findsNothing);
+    expect(container.read(selectionProvider).nodeId, nodeId);
+
+    await tester.tap(find.descendant(of: menu, matching: find.text('Delete node')));
+    await tester.pump();
+    expect(container.read(networkControllerProvider).network.nodes, isEmpty);
+    expect(find.byType(MechXContextMenu), findsNothing);
+  });
+
+  testWidgets(
+      'right-clicking an AIR TERMINAL offers the face-size ladder '
+      '(mirrors the inspector picker)', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    final ctrl = container.read(networkControllerProvider.notifier);
+    ctrl.addComponentNode(
+        's1', 0, const Offset(700, 360), NodeComponent.supplyDiffuser);
+    await tester.pump();
+    final nodeId =
+        container.read(networkControllerProvider).network.nodes.single.id;
+
+    final transform =
+        container.read(sheetsControllerProvider).viewportFor('s1')!;
+    final overlayBox = tester.renderObject<RenderBox>(
+        find.byType(NetworkSelectionOverlay).first);
+    final globalPos =
+        overlayBox.localToGlobal(transform.worldToScreen(const Offset(700, 360)));
+    final gesture =
+        await tester.startGesture(globalPos, buttons: kSecondaryButton);
+    await gesture.up();
+    await tester.pump();
+
+    final menu = find.byType(MechXContextMenu);
+    expect(find.descendant(of: menu, matching: find.text('FACE SIZE')),
+        findsOneWidget);
+    await tester.tap(find.descendant(of: menu, matching: find.text('600x600')));
+    await tester.pump();
+
+    final node =
+        container.read(networkControllerProvider).network.nodeById(nodeId)!;
+    expect(node.faceWidthMm, 600);
+    expect(node.faceHeightMm, 600);
+  });
+
+  testWidgets(
+      'right-clicking EMPTY canvas opens the canvas menu; Select all / Paste '
+      'here work', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    final ctrl = container.read(networkControllerProvider.notifier);
+    ctrl.setService(ServiceType.coldWater);
+    ctrl.setTool(DrawTool.drawRun);
+    ctrl.placeRunPoint('s1', 0, const Offset(360, 360));
+    ctrl.placeRunPoint('s1', 0, const Offset(1040, 360));
+    ctrl.setTool(DrawTool.select);
+    final net = container.read(networkControllerProvider).network;
+    ctrl.copySelection(net.nodes.map((nd) => nd.id).toSet(),
+        net.edges.map((e) => e.id).toSet());
+    await tester.pump();
+
+    final transform =
+        container.read(sheetsControllerProvider).viewportFor('s1')!;
+    final overlayBox = tester.renderObject<RenderBox>(
+        find.byType(NetworkSelectionOverlay).first);
+    // An empty spot well away from the drawn run.
+    final globalPos =
+        overlayBox.localToGlobal(transform.worldToScreen(const Offset(700, 800)));
+    final gesture =
+        await tester.startGesture(globalPos, buttons: kSecondaryButton);
+    await gesture.up();
+    await tester.pump();
+
+    expect(find.text('Paste here'), findsOneWidget);
+    expect(find.text('Select all on this floor'), findsOneWidget);
+    expect(find.text('Fit view'), findsOneWidget);
+
+    await tester.tap(find.text('Select all on this floor'));
+    await tester.pump();
+    final sel = container.read(selectionProvider);
+    expect(sel.edgeIds.length, 1);
+    expect(sel.nodeIds.length, 2);
+    expect(find.text('Select all on this floor'), findsNothing);
+  });
+
+  testWidgets(
+      'double-clicking a node un-collapses the inspector and expands its '
+      'sizing section', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    // Collapse the inspector; double-click must bring it back.
+    container.read(inspectorCollapsedProvider.notifier).set(true);
+    final ctrl = container.read(networkControllerProvider.notifier);
+    ctrl.setService(ServiceType.coldWater);
+    ctrl.setTool(DrawTool.drawRun);
+    ctrl.placeRunPoint('s1', 0, const Offset(360, 360));
+    ctrl.placeRunPoint('s1', 0, const Offset(1040, 360));
+    ctrl.setTool(DrawTool.select);
+    await tester.pump();
+
+    final nodeId = container
+        .read(networkControllerProvider)
+        .network
+        .nodes
+        .firstWhere((nd) => nd.x == 360)
+        .id;
+    final transform =
+        container.read(sheetsControllerProvider).viewportFor('s1')!;
+    final overlayBox = tester.renderObject<RenderBox>(
+        find.byType(NetworkSelectionOverlay).first);
+    final globalPos =
+        overlayBox.localToGlobal(transform.worldToScreen(const Offset(360, 360)));
+
+    // Two quick primary taps on the same node (the manual double-click path —
+    // the first selects instantly, the second opens).
+    await tester.tapAt(globalPos);
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(container.read(selectionProvider).nodeId, nodeId);
+    expect(container.read(inspectorCollapsedProvider), isTrue);
+
+    await tester.tapAt(globalPos);
+    await tester.pump();
+    expect(container.read(inspectorCollapsedProvider), isFalse);
+    // A cold-water node's relevant section is Sizing.
+    expect(
+        container.read(
+            sectionExpandedProvider(const SectionKey('Sizing', false))),
+        isTrue);
   });
 
   test('node edits preserve customFixtureId + roofAreaM2 (no data loss)', () {

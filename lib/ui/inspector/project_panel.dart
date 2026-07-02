@@ -69,6 +69,8 @@ import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_text_field.dart';
 import '../widgets/section_label.dart';
+import '../widgets/severity_glyph.dart';
+import '../widgets/stepped_value_field.dart';
 
 /// Gather the live mechanical/plumbing design results into a [CalcReportData].
 /// Shared by the standalone calc-report export and the unified MEP report so
@@ -1479,9 +1481,116 @@ class _DrawSection extends ConsumerWidget {
   }
 }
 
-/// Lists the tank areas designated on the CURRENT sheet, with a depth stepper +
-/// material picker + computed capacity + delete. Hidden when there are none, so
-/// the at-rest inspector (and the goldens) are unchanged.
+// Which tank / room row is expanded in the inspector's master-detail list. A
+// transient, file-local UI state (never persisted to `.mechx`); null ⇒ all rows
+// collapsed. Exactly one item is open at a time (H6), so eight tanks/rooms no
+// longer stack ~3000 px of always-expanded editors in a 272-px panel.
+final _expandedTankIdProvider = StateProvider<String?>((ref) => null);
+final _expandedRoomIdProvider = StateProvider<String?>((ref) => null);
+
+/// How many BOM lines the Network section lists inline before collapsing the
+/// rest into a '+N more' summary (the full breakdown is in the CSV export).
+const int _kBomInlineCap = 6;
+
+/// The tappable compact header of a master-detail list item: a rotating chevron,
+/// the item title, an optional warning glyph, and a right-aligned headline
+/// figure. Tapping toggles the item's editor open (via the owning section's
+/// expanded-id provider). Custom-painted chevron/glyph so nothing renders tofu.
+class _MasterRow extends StatelessWidget {
+  final String title;
+  final String headline;
+  final bool expanded;
+  final bool warning;
+  final VoidCallback onTap;
+
+  const _MasterRow({
+    required this.title,
+    required this.headline,
+    required this.expanded,
+    required this.onTap,
+    this.warning = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: MechXFocusRing(
+        onActivated: onTap,
+        borderRadius: MechXRadii.control,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Row(
+            children: [
+              AnimatedRotation(
+                turns: expanded ? 0.25 : 0.0,
+                duration: MechXMotion.appear,
+                curve: MechXMotion.standard,
+                child: CustomPaint(
+                  size: const Size(12, 12),
+                  painter: _MasterChevronPainter(color: colors.textMuted),
+                ),
+              ),
+              const SizedBox(width: MechXSpacing.xs),
+              Expanded(
+                child: Text(title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: type.body.copyWith(color: colors.textPrimary)),
+              ),
+              if (warning) ...[
+                const SizedBox(width: MechXSpacing.xs),
+                CustomPaint(
+                  size: const Size(13, 13),
+                  painter: SeverityGlyph(
+                      kind: SeverityGlyphKind.warn, color: colors.danger),
+                ),
+              ],
+              const SizedBox(width: MechXSpacing.sm),
+              Text(headline,
+                  style: type.caption.copyWith(color: colors.accent)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A single right-pointing chevron (no glyph font ⇒ never tofu); the caller's
+/// [AnimatedRotation] turns it down when the item is expanded.
+class _MasterChevronPainter extends CustomPainter {
+  final Color color;
+  _MasterChevronPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final w = size.width;
+    final h = size.height;
+    final path = Path()
+      ..moveTo(w * 0.40, h * 0.24)
+      ..lineTo(w * 0.66, h * 0.50)
+      ..lineTo(w * 0.40, h * 0.76);
+    canvas.drawPath(path, stroke);
+  }
+
+  @override
+  bool shouldRepaint(_MasterChevronPainter old) => old.color != color;
+}
+
+/// Lists the tank areas designated on the CURRENT sheet as compact master-detail
+/// rows — one expanded editor at a time (depth stepper + material + delete).
+/// Hidden when there are none, so the at-rest inspector (and goldens) are
+/// unchanged.
 class _TanksSection extends ConsumerWidget {
   const _TanksSection();
 
@@ -1514,6 +1623,7 @@ class _TanksSection extends ConsumerWidget {
           '${(t.heightPx * mpp).toStringAsFixed(1)} m';
     }
 
+    final expandedId = ref.watch(_expandedTankIdProvider);
     return DisclosureSection(
       name: 'Tanks',
       child: Column(
@@ -1530,56 +1640,66 @@ class _TanksSection extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text('${t.name} · ${dims(t)}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: type.body.copyWith(color: colors.textPrimary)),
-                    ),
-                    _GlyphButton(
-                        glyph: '×', onTap: () => ctrl.removeById(t.id)),
-                  ],
+                _MasterRow(
+                  title: '${t.name} · ${dims(t)}',
+                  headline: capacity(t),
+                  expanded: expandedId == t.id,
+                  onTap: () =>
+                      ref.read(_expandedTankIdProvider.notifier).state =
+                          expandedId == t.id ? null : t.id,
                 ),
-                const SizedBox(height: MechXSpacing.xxs),
-                Text(capacity(t),
-                    style: type.caption.copyWith(color: colors.accent)),
-                const SizedBox(height: MechXSpacing.xs),
-                Row(
-                  children: [
-                    Text('Depth',
-                        style:
-                            type.caption.copyWith(color: colors.textMuted)),
-                    const Spacer(),
-                    _GlyphButton(
-                        glyph: '−',
-                        onTap: () => ctrl.setDepth(t.id, t.depthM - 0.25)),
-                    SizedBox(
-                      width: 56,
-                      child: Text('${t.depthM.toStringAsFixed(2)} m',
-                          textAlign: TextAlign.center,
+                if (expandedId == t.id) ...[
+                  const SizedBox(height: MechXSpacing.sm),
+                  Row(
+                    children: [
+                      Text('Depth',
                           style:
-                              type.mono.copyWith(color: colors.textPrimary)),
-                    ),
-                    _GlyphButton(
-                        glyph: '+',
-                        onTap: () => ctrl.setDepth(t.id, t.depthM + 0.25)),
-                  ],
-                ),
-                const SizedBox(height: MechXSpacing.xs),
-                Wrap(
-                  spacing: MechXSpacing.xs,
-                  runSpacing: MechXSpacing.xs,
-                  children: [
-                    for (final m in TankMaterial.values)
-                      _Pill(
-                        label: m.label,
-                        selected: t.material == m,
-                        onTap: () => ctrl.setMaterial(t.id, m),
+                              type.caption.copyWith(color: colors.textMuted)),
+                      const Spacer(),
+                      SteppedValueField(
+                        display: '${t.depthM.toStringAsFixed(2)} m',
+                        editSeed: t.depthM.toStringAsFixed(2),
+                        gap: 0,
+                        valueWidth: 56,
+                        valueAlign: TextAlign.center,
+                        valueColor: colors.textPrimary,
+                        min: 0.1,
+                        max: 20,
+                        onDecrement: () =>
+                            ctrl.setDepth(t.id, t.depthM - 0.25),
+                        onIncrement: () =>
+                            ctrl.setDepth(t.id, t.depthM + 0.25),
+                        onSubmit: (v) {
+                          if (v != null) ctrl.setDepth(t.id, v);
+                        },
                       ),
-                  ],
-                ),
+                    ],
+                  ),
+                  const SizedBox(height: MechXSpacing.xs),
+                  Wrap(
+                    spacing: MechXSpacing.xs,
+                    runSpacing: MechXSpacing.xs,
+                    children: [
+                      for (final m in TankMaterial.values)
+                        _Pill(
+                          label: m.label,
+                          selected: t.material == m,
+                          onTap: () => ctrl.setMaterial(t.id, m),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: MechXSpacing.sm),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: MechXButton(
+                      label: 'Delete tank',
+                      onPressed: () {
+                        ctrl.removeById(t.id);
+                        ref.read(_expandedTankIdProvider.notifier).state = null;
+                      },
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1610,6 +1730,7 @@ class _RoomsSection extends ConsumerWidget {
     final ducts = ref.watch(ductSettingsProvider);
     final ctrl = ref.read(roomAreasProvider.notifier);
     final nodes = ref.watch(networkControllerProvider).network.nodes;
+    final expandedRoomId = ref.watch(_expandedRoomIdProvider);
 
     String pkStr(double pk) =>
         pk == pk.roundToDouble() ? pk.toStringAsFixed(0) : pk.toString();
@@ -1654,6 +1775,19 @@ class _RoomsSection extends ConsumerWidget {
               ductShape: ducts.shape,
               ductMethod: ducts.method,
             );
+            // AC cooling — computed once so the compact row can flag an
+            // over-range unit and the expanded editor can detail it.
+            final acs = [
+              for (final n in nodes)
+                if (RoomArea.isAcComponent(n.component) &&
+                    r.containsNode(n.sheetId, n.floorIndex, n.x, n.y))
+                  n,
+            ];
+            final load = r.coolingLoad(cal?.metersPerPixel);
+            final perUnit = (acs.isNotEmpty && load != null)
+                ? selectAc(load.btuPerHr / acs.length)
+                : null;
+            final expanded = expandedRoomId == r.id;
             return Container(
               padding: const EdgeInsets.all(MechXSpacing.sm),
               decoration: BoxDecoration(
@@ -1664,200 +1798,206 @@ class _RoomsSection extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                            '${roomTypeLabel(r.roomType)} · ${dims(r)}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: type.body
-                                .copyWith(color: colors.textPrimary)),
-                      ),
-                      _GlyphButton(
-                          glyph: '×', onTap: () => ctrl.removeById(r.id)),
-                    ],
+                  _MasterRow(
+                    title: '${roomTypeLabel(r.roomType)} · ${dims(r)}',
+                    headline:
+                        s == null ? 'set scale' : '${s.airflowCfm.round()} CFM',
+                    warning: perUnit?.exceedsRange ?? false,
+                    expanded: expanded,
+                    onTap: () =>
+                        ref.read(_expandedRoomIdProvider.notifier).state =
+                            expanded ? null : r.id,
                   ),
-                  const SizedBox(height: MechXSpacing.xxs),
-                  if (s == null)
-                    Text('set scale',
-                        style: type.caption.copyWith(color: colors.textMuted))
-                  else ...[
-                    Text(
-                        '${s.airflowCfm.round()} CFM · '
-                        '${s.airflow.inLitersPerSecond.round()} L/s · '
-                        '${s.airflow.inCubicMetersPerHour.round()} m3/h',
-                        style: type.caption.copyWith(color: colors.accent)),
-                    const SizedBox(height: MechXSpacing.xxs),
-                    Text(duct(s),
-                        style:
-                            type.caption.copyWith(color: colors.textMuted)),
-                    Text('Supply ${bank(s.supply)}',
-                        style:
-                            type.caption.copyWith(color: colors.textMuted)),
-                    Text('Return ${bank(s.return_)}',
-                        style:
-                            type.caption.copyWith(color: colors.textMuted)),
-                    Text(equip(s),
-                        style:
-                            type.caption.copyWith(color: colors.textMuted)),
-                  ],
-                  // Cooling (AC) — shown only when an AC indoor unit sits in
-                  // the room. Auto-computes the BTU/h + PK requirement and a
-                  // per-unit recommendation split across the placed units.
-                  ...() {
-                    final acs = [
-                      for (final n in nodes)
-                        if (RoomArea.isAcComponent(n.component) &&
-                            r.containsNode(n.sheetId, n.floorIndex, n.x, n.y))
-                          n,
-                    ];
-                    final load = r.coolingLoad(cal?.metersPerPixel);
-                    if (acs.isEmpty || load == null) return const <Widget>[];
-                    final perUnit = selectAc(load.btuPerHr / acs.length);
-                    final labels = {for (final n in acs) n.component!.label};
-                    final typeStr =
-                        labels.length == 1 ? labels.first : 'mixed';
-                    return <Widget>[
+                  if (expanded) ...[
+                    const SizedBox(height: MechXSpacing.sm),
+                    if (s == null)
+                      Text('set scale',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted))
+                    else ...[
+                      Text(
+                          '${s.airflowCfm.round()} CFM · '
+                          '${s.airflow.inLitersPerSecond.round()} L/s · '
+                          '${s.airflow.inCubicMetersPerHour.round()} m3/h',
+                          style:
+                              type.caption.copyWith(color: colors.accent)),
                       const SizedBox(height: MechXSpacing.xxs),
-                      Text(
-                        // The raw computed load PK (= BTU/h ÷ 9000); the unit
-                        // line below shows the recommended market-ladder PK, so
-                        // the two figures are labelled to read as distinct.
-                        'Cooling (AC): ${load.btuPerHr.round()} BTU/h · '
-                        '${load.pk.toStringAsFixed(1)} PK (load)',
-                        style: type.caption.copyWith(color: colors.accent),
-                      ),
-                      Text(
-                        '${acs.length} ${acs.length == 1 ? 'unit' : 'units'} '
-                        '($typeStr) -> ${pkStr(perUnit.pk)} PK each (recommended) '
-                        '(${perUnit.nominalBtuPerHr.round()} BTU/h, '
-                        '~${(acInputPowerW(coolingBtuPerHr: perUnit.nominalBtuPerHr) / 1000).toStringAsFixed(2)} kW)',
-                        style: type.caption.copyWith(
-                          color: perUnit.exceedsRange
-                              ? colors.danger
-                              : colors.textMuted,
-                        ),
-                      ),
-                      Text('Feeds the electrical panel at the kW above.',
+                      Text(duct(s),
                           style:
                               type.caption.copyWith(color: colors.textMuted)),
-                      if (perUnit.exceedsRange)
+                      Text('Supply ${bank(s.supply)}',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted)),
+                      Text('Return ${bank(s.return_)}',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted)),
+                      Text(equip(s),
+                          style:
+                              type.caption.copyWith(color: colors.textMuted)),
+                    ],
+                    // Cooling (AC) — shown only when an AC indoor unit sits in
+                    // the room. Auto-computes the BTU/h + PK requirement and a
+                    // per-unit recommendation split across the placed units.
+                    if (perUnit != null) ...() {
+                      final labels = {for (final n in acs) n.component!.label};
+                      final typeStr =
+                          labels.length == 1 ? labels.first : 'mixed';
+                      return <Widget>[
+                        const SizedBox(height: MechXSpacing.xxs),
                         Text(
-                          'Load exceeds the largest single unit — add more units.',
-                          style:
-                              type.caption.copyWith(color: colors.danger),
+                          // The raw computed load PK (= BTU/h ÷ 9000); the unit
+                          // line below shows the recommended market-ladder PK,
+                          // so the two figures are labelled to read as distinct.
+                          'Cooling (AC): ${load!.btuPerHr.round()} BTU/h · '
+                          '${load.pk.toStringAsFixed(1)} PK (load)',
+                          style: type.caption.copyWith(color: colors.accent),
                         ),
-                    ];
-                  }(),
-                  const SizedBox(height: MechXSpacing.xs),
-                  // Ceiling height stepper.
-                  Row(
-                    children: [
-                      Text('Ceiling',
-                          style:
-                              type.caption.copyWith(color: colors.textMuted)),
-                      const Spacer(),
-                      _GlyphButton(
-                          glyph: '−',
-                          onTap: () =>
-                              ctrl.setCeiling(r.id, r.ceilingHeightM - 0.25)),
-                      SizedBox(
-                        width: 56,
-                        child: Text('${r.ceilingHeightM.toStringAsFixed(2)} m',
-                            textAlign: TextAlign.center,
-                            style: type.mono
-                                .copyWith(color: colors.textPrimary)),
-                      ),
-                      _GlyphButton(
-                          glyph: '+',
-                          onTap: () =>
-                              ctrl.setCeiling(r.id, r.ceilingHeightM + 0.25)),
-                    ],
-                  ),
-                  const SizedBox(height: MechXSpacing.xxs),
-                  // ACH stepper (override; 'Auto' resets to the room-type value).
-                  Row(
-                    children: [
-                      Text('ACH',
-                          style:
-                              type.caption.copyWith(color: colors.textMuted)),
-                      const SizedBox(width: MechXSpacing.xs),
-                      _Pill(
-                        label: 'Auto',
-                        selected: r.achOverride == null,
-                        onTap: () => ctrl.setAch(r.id, null),
-                      ),
-                      const Spacer(),
-                      _GlyphButton(
-                          glyph: '−',
-                          onTap: () =>
-                              ctrl.setAch(r.id, r.effectiveAch() - 1)),
-                      SizedBox(
-                        width: 56,
-                        child: Text(
-                            '${r.effectiveAch().toStringAsFixed(0)}/h',
-                            textAlign: TextAlign.center,
-                            style: type.mono
-                                .copyWith(color: colors.textPrimary)),
-                      ),
-                      _GlyphButton(
-                          glyph: '+',
-                          onTap: () =>
-                              ctrl.setAch(r.id, r.effectiveAch() + 1)),
-                    ],
-                  ),
-                  const SizedBox(height: MechXSpacing.xs),
-                  Wrap(
-                    spacing: MechXSpacing.xs,
-                    runSpacing: MechXSpacing.xs,
-                    children: [
-                      for (final t in RoomType.values)
-                        _Pill(
-                          label: roomTypeLabel(t),
-                          selected: r.roomType == t,
-                          onTap: () => ctrl.setRoomType(r.id, t),
+                        Text(
+                          '${acs.length} ${acs.length == 1 ? 'unit' : 'units'} '
+                          '($typeStr) -> ${pkStr(perUnit.pk)} PK each (recommended) '
+                          '(${perUnit.nominalBtuPerHr.round()} BTU/h, '
+                          '~${(acInputPowerW(coolingBtuPerHr: perUnit.nominalBtuPerHr) / 1000).toStringAsFixed(2)} kW)',
+                          style: type.caption.copyWith(
+                            color: perUnit.exceedsRange
+                                ? colors.danger
+                                : colors.textMuted,
+                          ),
                         ),
-                    ],
-                  ),
-                  const SizedBox(height: MechXSpacing.xs),
-                  Wrap(
-                    spacing: MechXSpacing.xs,
-                    runSpacing: MechXSpacing.xs,
-                    children: [
-                      for (final k in AirEquipmentKind.values)
-                        _Pill(
-                          label: airEquipmentLabel(k),
-                          selected: r.equipmentKind == k,
-                          onTap: () => ctrl.setEquipment(r.id, k),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: MechXSpacing.xs),
-                  // Drop the sized supply diffusers + a return grille onto the
-                  // plan inside this room's footprint, in one undo step.
-                  Row(
-                    children: [
-                      MechXButton(
-                        label: 'Auto-place diffusers',
-                        onPressed: (s != null && cal != null)
-                            ? () => ref
-                                .read(networkControllerProvider.notifier)
-                                .autoPlaceRoomTerminals(
-                                  room: r,
-                                  metersPerPixel: cal.metersPerPixel,
-                                  ductShape: ducts.shape,
-                                  ductMethod: ducts.method,
-                                )
-                            : null,
-                      ),
-                      const Spacer(),
-                      if (s != null)
-                        Text('${s.supply.count} + 1',
+                        Text('Feeds the electrical panel at the kW above.',
                             style: type.caption
                                 .copyWith(color: colors.textMuted)),
-                    ],
-                  ),
+                        if (perUnit.exceedsRange)
+                          Text(
+                            'Load exceeds the largest single unit — add more units.',
+                            style:
+                                type.caption.copyWith(color: colors.danger),
+                          ),
+                      ];
+                    }(),
+                    const SizedBox(height: MechXSpacing.xs),
+                    // Ceiling height stepper.
+                    Row(
+                      children: [
+                        Text('Ceiling',
+                            style: type.caption
+                                .copyWith(color: colors.textMuted)),
+                        const Spacer(),
+                        SteppedValueField(
+                          display: '${r.ceilingHeightM.toStringAsFixed(2)} m',
+                          editSeed: r.ceilingHeightM.toStringAsFixed(2),
+                          gap: 0,
+                          valueWidth: 56,
+                          valueAlign: TextAlign.center,
+                          valueColor: colors.textPrimary,
+                          min: 1.5,
+                          max: 12,
+                          onDecrement: () =>
+                              ctrl.setCeiling(r.id, r.ceilingHeightM - 0.25),
+                          onIncrement: () =>
+                              ctrl.setCeiling(r.id, r.ceilingHeightM + 0.25),
+                          onSubmit: (v) {
+                            if (v != null) ctrl.setCeiling(r.id, v);
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: MechXSpacing.xxs),
+                    // ACH stepper (override; 'Auto' resets to the room-type value).
+                    Row(
+                      children: [
+                        Text('ACH',
+                            style: type.caption
+                                .copyWith(color: colors.textMuted)),
+                        const SizedBox(width: MechXSpacing.xs),
+                        _Pill(
+                          label: 'Auto',
+                          selected: r.achOverride == null,
+                          onTap: () => ctrl.setAch(r.id, null),
+                        ),
+                        const Spacer(),
+                        SteppedValueField(
+                          display: '${r.effectiveAch().toStringAsFixed(0)}/h',
+                          editSeed: r.effectiveAch().toStringAsFixed(0),
+                          gap: 0,
+                          valueWidth: 56,
+                          valueAlign: TextAlign.center,
+                          valueColor: colors.textPrimary,
+                          min: 0.5,
+                          max: 60,
+                          onDecrement: () =>
+                              ctrl.setAch(r.id, r.effectiveAch() - 1),
+                          onIncrement: () =>
+                              ctrl.setAch(r.id, r.effectiveAch() + 1),
+                          onSubmit: (v) {
+                            if (v != null) ctrl.setAch(r.id, v);
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: MechXSpacing.xs),
+                    Wrap(
+                      spacing: MechXSpacing.xs,
+                      runSpacing: MechXSpacing.xs,
+                      children: [
+                        for (final t in RoomType.values)
+                          _Pill(
+                            label: roomTypeLabel(t),
+                            selected: r.roomType == t,
+                            onTap: () => ctrl.setRoomType(r.id, t),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: MechXSpacing.xs),
+                    Wrap(
+                      spacing: MechXSpacing.xs,
+                      runSpacing: MechXSpacing.xs,
+                      children: [
+                        for (final k in AirEquipmentKind.values)
+                          _Pill(
+                            label: airEquipmentLabel(k),
+                            selected: r.equipmentKind == k,
+                            onTap: () => ctrl.setEquipment(r.id, k),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: MechXSpacing.xs),
+                    // Drop the sized supply diffusers + a return grille onto the
+                    // plan inside this room's footprint, in one undo step.
+                    Row(
+                      children: [
+                        MechXButton(
+                          label: 'Auto-place diffusers',
+                          onPressed: (s != null && cal != null)
+                              ? () => ref
+                                  .read(networkControllerProvider.notifier)
+                                  .autoPlaceRoomTerminals(
+                                    room: r,
+                                    metersPerPixel: cal.metersPerPixel,
+                                    ductShape: ducts.shape,
+                                    ductMethod: ducts.method,
+                                  )
+                              : null,
+                        ),
+                        const Spacer(),
+                        if (s != null)
+                          Text('${s.supply.count} + 1',
+                              style: type.caption
+                                  .copyWith(color: colors.textMuted)),
+                      ],
+                    ),
+                    const SizedBox(height: MechXSpacing.sm),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: MechXButton(
+                        label: 'Delete room',
+                        onPressed: () {
+                          ctrl.removeById(r.id);
+                          ref.read(_expandedRoomIdProvider.notifier).state =
+                              null;
+                        },
+                      ),
+                    ),
+                  ],
                 ],
               ),
             );
@@ -1923,19 +2063,21 @@ class _SizingSection extends ConsumerWidget {
               child: Text('Rainfall (storm)',
                   style: type.caption.copyWith(color: colors.textMuted)),
             ),
-            _GlyphButton(
-              glyph: '−',
-              onTap: () =>
+            SteppedValueField(
+              display: '${ref.watch(rainfallIntensityProvider).round()} mm/hr',
+              editSeed: '${ref.watch(rainfallIntensityProvider).round()}',
+              gap: MechXSpacing.xs,
+              min: 50,
+              max: 600,
+              onDecrement: () =>
                   ref.read(rainfallIntensityProvider.notifier).nudge(-25),
-            ),
-            const SizedBox(width: MechXSpacing.xs),
-            Text('${ref.watch(rainfallIntensityProvider).round()} mm/hr',
-                style: type.mono.copyWith(color: colors.textSecondary)),
-            const SizedBox(width: MechXSpacing.xs),
-            _GlyphButton(
-              glyph: '+',
-              onTap: () =>
+              onIncrement: () =>
                   ref.read(rainfallIntensityProvider.notifier).nudge(25),
+              onSubmit: (v) {
+                if (v != null) {
+                  ref.read(rainfallIntensityProvider.notifier).set(v);
+                }
+              },
             ),
           ],
         ),
@@ -1946,19 +2088,21 @@ class _SizingSection extends ConsumerWidget {
               child: Text('Runoff coefficient',
                   style: type.caption.copyWith(color: colors.textMuted)),
             ),
-            _GlyphButton(
-              glyph: '−',
-              onTap: () =>
+            SteppedValueField(
+              display: ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
+              editSeed: ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
+              gap: MechXSpacing.xs,
+              min: 0.5,
+              max: 1.0,
+              onDecrement: () =>
                   ref.read(runoffCoefficientProvider.notifier).nudge(-0.05),
-            ),
-            const SizedBox(width: MechXSpacing.xs),
-            Text(ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
-                style: type.mono.copyWith(color: colors.textSecondary)),
-            const SizedBox(width: MechXSpacing.xs),
-            _GlyphButton(
-              glyph: '+',
-              onTap: () =>
+              onIncrement: () =>
                   ref.read(runoffCoefficientProvider.notifier).nudge(0.05),
+              onSubmit: (v) {
+                if (v != null) {
+                  ref.read(runoffCoefficientProvider.notifier).set(v);
+                }
+              },
             ),
           ],
         ),
@@ -2076,10 +2220,10 @@ class _ResultsSection extends ConsumerWidget {
         ],
         const SizedBox(height: MechXSpacing.sm),
         if (strategy == FeedStrategy.upfeed) ...[
+          // 'Motor' kW is promoted to the ResultCard above; keep only the
+          // distinct supporting figure here (H8 — no headline/kv duplication).
           _kv(context, 'Pump head',
               solution == null ? '—' : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m'),
-          _kv(context, 'Motor',
-              pump == null ? '—' : '${pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
         ] else ...[
           _kv(context, 'Top residual',
               downfeed == null ? '—' : '${downfeed.minResidual.inKiloPascals.toStringAsFixed(0)} kPa'),
@@ -2109,13 +2253,23 @@ class _ResultsSection extends ConsumerWidget {
         _kv(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
         if (bom.isNotEmpty) ...[
           const SizedBox(height: MechXSpacing.xs),
-          for (final line in bom)
+          // Cap the per-line listing so a big BOM doesn't push the whole panel
+          // off-screen; the overflow is summarised, never silently dropped (the
+          // full breakdown is in the CSV export below). (H6/H8.)
+          for (final line in bom.take(_kBomInlineCap))
             _kv(
               context,
               '${line.diameterMm}${line.service.regime == FlowRegime.air ? ' Ø' : ' DN'}'
                   ' · ${serviceLabel(line.service)}'
                   ' ${line.kind == EdgeKind.riser ? 'riser' : 'run'}',
               '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
+            ),
+          if (bom.length > _kBomInlineCap)
+            _kv(
+              context,
+              '+${bom.length - _kBomInlineCap} more line'
+                  '${bom.length - _kBomInlineCap == 1 ? '' : 's'}',
+              'see CSV',
             ),
           if (fittings.isNotEmpty)
             _kv(context, 'Fittings (est.)',
@@ -2210,6 +2364,7 @@ class _FireSection extends ConsumerWidget {
     final type = context.type;
     final sprinkler = ref.watch(sprinklerDesignProvider);
     final standpipe = ref.watch(standpipeDesignProvider);
+    final rating = ref.watch(firePumpRatingProvider);
 
     Widget kv(String key, String value) => Padding(
           padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
@@ -2264,13 +2419,23 @@ class _FireSection extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: MechXSpacing.sm),
+        // Promoted headline: the standpipe fire-pump duty, with the NFPA 20
+        // rating-curve verdict — 'rated' when the curve sits inside the standard
+        // frame, 'oversized' when the largest standard motor is still below the
+        // overload shaft power. Demotes the pump figure from the kv rows (H8).
+        ResultCard(
+          headline:
+              '${standpipe.pumpHead.meters.toStringAsFixed(0)} m · ${standpipe.pumpShaftPower.inKiloWatts.toStringAsFixed(1)} kW',
+          label: 'Fire pump (standpipe)',
+          verdict: rating.oversized ? 'oversized' : 'rated',
+          verdictColor: rating.oversized ? colors.warning : colors.success,
+        ),
+        const SizedBox(height: MechXSpacing.xs),
         kv('Sprinkler flow',
             '${sprinkler.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),
         kv('Sprinkler heads', '${sprinkler.sprinklerCount}'),
         kv('Standpipe flow',
             '${standpipe.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),
-        kv('Fire pump',
-            '${standpipe.pumpHead.meters.toStringAsFixed(0)} m · ${standpipe.pumpShaftPower.inKiloWatts.toStringAsFixed(1)} kW'),
         const SizedBox(height: MechXSpacing.xs),
         Row(
           children: [
@@ -2576,31 +2741,23 @@ class _SelectionSection extends ConsumerWidget {
                 style: context.type.caption
                     .copyWith(color: context.colors.textMuted)),
             const SizedBox(height: MechXSpacing.xxs),
-            Row(
-              children: [
-                _GlyphButton(
-                  glyph: '−',
-                  onTap: () {
-                    final next = (node.tankCapacityLitres ?? 0) - 500;
-                    ctrl.setNodeTankCapacity(
-                        node.id, next <= 0 ? null : next);
-                  },
-                ),
-                const SizedBox(width: MechXSpacing.sm),
-                Text(
-                  node.tankCapacityLitres == null
-                      ? '—'
-                      : '${node.tankCapacityLitres!.round()} L',
-                  style: context.type.mono
-                      .copyWith(color: context.colors.textSecondary),
-                ),
-                const SizedBox(width: MechXSpacing.sm),
-                _GlyphButton(
-                  glyph: '+',
-                  onTap: () => ctrl.setNodeTankCapacity(
-                      node.id, (node.tankCapacityLitres ?? 0) + 500),
-                ),
-              ],
+            SteppedValueField(
+              display: node.tankCapacityLitres == null
+                  ? '—'
+                  : '${node.tankCapacityLitres!.round()} L',
+              editSeed: node.tankCapacityLitres == null
+                  ? ''
+                  : node.tankCapacityLitres!.round().toString(),
+              gap: MechXSpacing.sm,
+              min: 0,
+              onDecrement: () {
+                final next = (node.tankCapacityLitres ?? 0) - 500;
+                ctrl.setNodeTankCapacity(node.id, next <= 0 ? null : next);
+              },
+              onIncrement: () => ctrl.setNodeTankCapacity(
+                  node.id, (node.tankCapacityLitres ?? 0) + 500),
+              onSubmit: (v) => ctrl.setNodeTankCapacity(
+                  node.id, (v == null || v <= 0) ? null : v),
             ),
           ],
           // A motorised component (pump / fan / air unit) is INTER-RELATED with
@@ -2613,40 +2770,34 @@ class _SelectionSection extends ConsumerWidget {
                 style: context.type.caption
                     .copyWith(color: context.colors.textMuted)),
             const SizedBox(height: MechXSpacing.xxs),
-            Row(
-              children: [
-                _GlyphButton(
-                  glyph: '−',
-                  onTap: () {
-                    final base = node.electricalLoadW ??
-                        node.component!.defaultMotorKw * 1000;
-                    final next = base - 250;
-                    ctrl.setNodeElectricalLoad(
-                        node.id, next <= 0 ? null : next);
-                  },
-                ),
-                const SizedBox(width: MechXSpacing.sm),
-                Text(
-                  () {
-                    final w = node.electricalLoadW ??
-                        node.component!.defaultMotorKw * 1000;
-                    final suffix =
-                        node.electricalLoadW == null ? ' · default' : '';
-                    return '${(w / 1000).toStringAsFixed(2)} kW$suffix';
-                  }(),
-                  style: context.type.mono
-                      .copyWith(color: context.colors.textSecondary),
-                ),
-                const SizedBox(width: MechXSpacing.sm),
-                _GlyphButton(
-                  glyph: '+',
-                  onTap: () {
-                    final base = node.electricalLoadW ??
-                        node.component!.defaultMotorKw * 1000;
-                    ctrl.setNodeElectricalLoad(node.id, base + 250);
-                  },
-                ),
-              ],
+            SteppedValueField(
+              display: () {
+                final w = node.electricalLoadW ??
+                    node.component!.defaultMotorKw * 1000;
+                final suffix =
+                    node.electricalLoadW == null ? ' · default' : '';
+                return '${(w / 1000).toStringAsFixed(2)} kW$suffix';
+              }(),
+              editSeed: ((node.electricalLoadW ??
+                          node.component!.defaultMotorKw * 1000) /
+                      1000)
+                  .toStringAsFixed(2),
+              gap: MechXSpacing.sm,
+              min: 0,
+              onDecrement: () {
+                final base = node.electricalLoadW ??
+                    node.component!.defaultMotorKw * 1000;
+                final next = base - 250;
+                ctrl.setNodeElectricalLoad(node.id, next <= 0 ? null : next);
+              },
+              onIncrement: () {
+                final base = node.electricalLoadW ??
+                    node.component!.defaultMotorKw * 1000;
+                ctrl.setNodeElectricalLoad(node.id, base + 250);
+              },
+              // The typed value is in kW (the displayed unit); store it as W.
+              onSubmit: (v) => ctrl.setNodeElectricalLoad(
+                  node.id, (v == null || v <= 0) ? null : v * 1000),
             ),
           ],
         ],
@@ -2673,9 +2824,16 @@ class _SelectionSection extends ConsumerWidget {
         const SizedBox(height: MechXSpacing.xs),
         Row(
           children: [
-            _GlyphButton(
-              glyph: '−',
-              onTap: () {
+            SteppedValueField(
+              display: node.mountHeight == null
+                  ? 'default'
+                  : '${(node.mountHeight!.meters * 100).round()} cm',
+              editSeed: node.mountHeight == null
+                  ? ''
+                  : (node.mountHeight!.meters * 100).round().toString(),
+              gap: MechXSpacing.sm,
+              min: 0,
+              onDecrement: () {
                 final base = node.mountHeight?.meters ??
                     const MountingHeights().fixtureHeight.meters;
                 final next = base - 0.05;
@@ -2683,23 +2841,15 @@ class _SelectionSection extends ConsumerWidget {
                 ctrl.setNodeMountHeight(
                     node.id, next <= 0 ? null : Length(next));
               },
-            ),
-            const SizedBox(width: MechXSpacing.sm),
-            Text(
-              node.mountHeight == null
-                  ? 'default'
-                  : '${(node.mountHeight!.meters * 100).round()} cm',
-              style: context.type.mono
-                  .copyWith(color: context.colors.textSecondary),
-            ),
-            const SizedBox(width: MechXSpacing.sm),
-            _GlyphButton(
-              glyph: '+',
-              onTap: () {
+              onIncrement: () {
                 final base = node.mountHeight?.meters ??
                     const MountingHeights().fixtureHeight.meters;
                 ctrl.setNodeMountHeight(node.id, Length(base + 0.05));
               },
+              // The typed value is in cm (the displayed unit); store as metres.
+              // A non-positive / empty entry reverts to the role default.
+              onSubmit: (v) => ctrl.setNodeMountHeight(
+                  node.id, (v == null || v <= 0) ? null : Length(v / 100)),
             ),
             if (node.mountHeight != null) ...[
               const SizedBox(width: MechXSpacing.sm),
@@ -2764,33 +2914,26 @@ class _SelectionSection extends ConsumerWidget {
               style: context.type.caption
                   .copyWith(color: context.colors.textMuted)),
           const SizedBox(height: MechXSpacing.xs),
-          Row(
-            children: [
-              _GlyphButton(
-                glyph: '−',
-                onTap: () {
-                  final lps = (node.airflow?.inLitersPerSecond ?? 0) - 5;
-                  ctrl.setNodeAirflow(
-                      node.id, lps <= 0 ? null : FlowRate.litersPerSecond(lps));
-                },
-              ),
-              const SizedBox(width: MechXSpacing.sm),
-              Text(
-                node.airflow == null
-                    ? '—'
-                    : '${node.airflow!.inLitersPerSecond.toStringAsFixed(0)} L/s',
-                style: context.type.mono
-                    .copyWith(color: context.colors.textSecondary),
-              ),
-              const SizedBox(width: MechXSpacing.sm),
-              _GlyphButton(
-                glyph: '+',
-                onTap: () {
-                  final lps = (node.airflow?.inLitersPerSecond ?? 0) + 5;
-                  ctrl.setNodeAirflow(node.id, FlowRate.litersPerSecond(lps));
-                },
-              ),
-            ],
+          SteppedValueField(
+            display: node.airflow == null
+                ? '—'
+                : '${node.airflow!.inLitersPerSecond.toStringAsFixed(0)} L/s',
+            editSeed: node.airflow == null
+                ? ''
+                : node.airflow!.inLitersPerSecond.toStringAsFixed(0),
+            gap: MechXSpacing.sm,
+            min: 0,
+            onDecrement: () {
+              final lps = (node.airflow?.inLitersPerSecond ?? 0) - 5;
+              ctrl.setNodeAirflow(
+                  node.id, lps <= 0 ? null : FlowRate.litersPerSecond(lps));
+            },
+            onIncrement: () {
+              final lps = (node.airflow?.inLitersPerSecond ?? 0) + 5;
+              ctrl.setNodeAirflow(node.id, FlowRate.litersPerSecond(lps));
+            },
+            onSubmit: (v) => ctrl.setNodeAirflow(node.id,
+                (v == null || v <= 0) ? null : FlowRate.litersPerSecond(v)),
           ),
           // Manually chosen diffuser/grille FACE size + a face-velocity warning.
           // Lets the engineer pick a size for aesthetics and be told when the
@@ -2849,30 +2992,23 @@ class _SelectionSection extends ConsumerWidget {
               style: context.type.caption
                   .copyWith(color: context.colors.textMuted)),
           const SizedBox(height: MechXSpacing.xs),
-          Row(
-            children: [
-              _GlyphButton(
-                glyph: '−',
-                onTap: () {
-                  final a = (node.roofAreaM2 ?? 0) - 50;
-                  ctrl.setNodeRoofArea(node.id, a <= 0 ? null : a);
-                },
-              ),
-              const SizedBox(width: MechXSpacing.sm),
-              Text(
-                node.roofAreaM2 == null
-                    ? '—'
-                    : '${node.roofAreaM2!.toStringAsFixed(0)} m2',
-                style: context.type.mono
-                    .copyWith(color: context.colors.textSecondary),
-              ),
-              const SizedBox(width: MechXSpacing.sm),
-              _GlyphButton(
-                glyph: '+',
-                onTap: () => ctrl.setNodeRoofArea(
-                    node.id, (node.roofAreaM2 ?? 0) + 50),
-              ),
-            ],
+          SteppedValueField(
+            display: node.roofAreaM2 == null
+                ? '—'
+                : '${node.roofAreaM2!.toStringAsFixed(0)} m2',
+            editSeed: node.roofAreaM2 == null
+                ? ''
+                : node.roofAreaM2!.toStringAsFixed(0),
+            gap: MechXSpacing.sm,
+            min: 0,
+            onDecrement: () {
+              final a = (node.roofAreaM2 ?? 0) - 50;
+              ctrl.setNodeRoofArea(node.id, a <= 0 ? null : a);
+            },
+            onIncrement: () =>
+                ctrl.setNodeRoofArea(node.id, (node.roofAreaM2 ?? 0) + 50),
+            onSubmit: (v) =>
+                ctrl.setNodeRoofArea(node.id, (v == null || v <= 0) ? null : v),
           ),
           ],
         ],
@@ -3101,14 +3237,12 @@ class _HvacSection extends ConsumerWidget {
             verdictColor: colors.success,
           ),
           const SizedBox(height: MechXSpacing.xs),
+          // 'Fan static' + 'Fan motor' are the ResultCard headline/label above;
+          // keep only the distinct supporting figures (H8 — no duplication).
           kv('Trunk airflow',
               '${fan.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s'),
-          kv('Fan static',
-              '${fan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa'),
           kv('Fan power',
               '${fan.shaftPower.inKiloWatts.toStringAsFixed(2)} kW'),
-          kv('Fan motor',
-              '${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
         ],
         if (balance != null) ...[
           const SizedBox(height: MechXSpacing.xs),

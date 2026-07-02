@@ -71,6 +71,49 @@ class WorkspaceViewController extends Notifier<WorkspaceView> {
   void set(WorkspaceView view) => state = view;
 }
 
+/// A selected element on the unified Layout's electrical layer (I5) — a whole
+/// panel, or one circuit within a panel. Drives the marker selection ring, and
+/// Delete removes it via the existing [ElectricalProjectController] intents.
+@immutable
+class ElectricalSelection {
+  final String panelId;
+  final String? circuitId;
+  const ElectricalSelection.panel(this.panelId) : circuitId = null;
+  const ElectricalSelection.circuit(this.panelId, String this.circuitId);
+
+  bool get isCircuit => circuitId != null;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ElectricalSelection &&
+      other.panelId == panelId &&
+      other.circuitId == circuitId;
+
+  @override
+  int get hashCode => Object.hash(panelId, circuitId);
+}
+
+/// The selected element on the Layout electrical layer (null = nothing). Kept in
+/// a provider (not local widget state) because the layer widget is rebuilt as
+/// the active discipline / opacity changes; a marker tap sets it, a blank-canvas
+/// tap or a delete clears it.
+final electricalSelectionProvider =
+    NotifierProvider<ElectricalSelectionController, ElectricalSelection?>(
+  ElectricalSelectionController.new,
+);
+
+class ElectricalSelectionController extends Notifier<ElectricalSelection?> {
+  @override
+  ElectricalSelection? build() => null;
+
+  void selectPanel(String id) => state = ElectricalSelection.panel(id);
+  void selectCircuit(String panelId, String circuitId) =>
+      state = ElectricalSelection.circuit(panelId, circuitId);
+  void clear() {
+    if (state != null) state = null;
+  }
+}
+
 /// The canonical electrical project. The controller owns the single
 /// [ElectricalProject]; intent methods mutate it immutably (replace the project)
 /// so the derived [electricalResultProvider] recomputes.
@@ -651,6 +694,41 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           if (p.id != id) p,
       ],
     ));
+  }
+
+  /// Duplicate a panel (I5): a fresh-id copy of the board + every circuit, a
+  /// "(copy)" name, and the tag DROPPED (an issued drawing must not carry two
+  /// identical panel designations). A copied FEEDER way drops its target (a
+  /// feeder supplies exactly one panel), and the copy starts UTILITY-fed (the
+  /// original's incoming feeder still points at the original). Both position
+  /// spaces (the abstract single-line `x,y` and the geo `layoutPos`) are nudged
+  /// so the copy doesn't land exactly on top. Undoable in one step; no-op when
+  /// the id is unknown.
+  void duplicatePanel(String id) {
+    final src = state.panels.where((p) => p.id == id).firstOrNull;
+    if (src == null) return;
+    const off = 40.0;
+    final circuits = [
+      for (final c in src.circuits)
+        c.copyWith(
+          id: _freshId('c'),
+          // Drop a feeder's target (mirrors duplicateCircuit's sentinel).
+          feedsPanelId: c.feedsPanelId == null ? null : '',
+        ),
+    ];
+    final copy = src.copyWith(
+      id: _freshId('panel'),
+      name: '${src.name} (copy)',
+      clearTag: true,
+      sourceType: PanelSource.utility,
+      clearFedByCircuitId: true,
+      x: src.x == null ? null : src.x! + off,
+      y: src.y == null ? null : src.y! + off,
+      layoutPos: src.layoutPos
+          ?.copyWith(x: src.layoutPos!.x + off, y: src.layoutPos!.y + off),
+      circuits: circuits,
+    );
+    _commit(_withProject(panels: [...state.panels, copy]));
   }
 
   /// Rename a panel.

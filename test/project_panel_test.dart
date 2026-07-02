@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/design_issues_store.dart';
 import 'package:mechx/store/document_control_store.dart';
@@ -146,5 +147,55 @@ void main() {
     expect(revisions.single.description, 'Issued for review');
     // The row renders (date · description) with a remove glyph beside it.
     expect(find.text('2026-07-02 · Issued for review'), findsOneWidget);
+  });
+
+  testWidgets(
+      'Tanks master-detail expands exactly one editor at a time (H6)',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+
+    // Two tanks on the demo sheet, named so the compact rows are distinct.
+    final tanks = container.read(tankAreasProvider.notifier);
+    tanks.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 200);
+    tanks.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 200);
+    final ids =
+        container.read(tankAreasProvider).map((t) => t.id).toList();
+    tanks.setName(ids[0], 'Alpha');
+    tanks.setName(ids[1], 'Beta');
+    await tester.pump();
+
+    // The section renders two compact rows; NO editor is open yet, so the
+    // per-item 'Depth' stepper label is absent (collapsed master-detail).
+    expect(find.textContaining('Alpha'), findsOneWidget);
+    expect(find.textContaining('Beta'), findsOneWidget);
+    expect(find.text('Depth'), findsNothing);
+
+    // Expand Alpha → exactly one editor (one 'Depth' stepper) appears.
+    await tester.ensureVisible(find.textContaining('Alpha'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Alpha'));
+    await tester.pumpAndSettle();
+    expect(find.text('Depth'), findsOneWidget);
+
+    // Expand Beta → Alpha collapses; still exactly ONE editor open.
+    await tester.ensureVisible(find.textContaining('Beta'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Beta'), warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(find.text('Depth'), findsOneWidget);
+
+    // Tapping the open row again collapses it — back to none.
+    await tester.ensureVisible(find.textContaining('Beta'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Beta'), warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(find.text('Depth'), findsNothing);
   });
 }

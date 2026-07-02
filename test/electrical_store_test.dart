@@ -1240,6 +1240,109 @@ void main() {
     });
   });
 
+  group('duplicatePanel (I5)', () {
+    test('copies the board + circuits with fresh ids; drops tag + feeder target',
+        () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      final before = c.read(electricalProjectProvider).panels.length;
+      ctrl.duplicatePanel('mdp');
+      final panels = c.read(electricalProjectProvider).panels;
+      expect(panels.length, before + 1);
+
+      final copy = panels.last;
+      expect(copy.id, isNot('mdp'));
+      expect(copy.name, 'Main Distribution Panel (copy)');
+      // Tag dropped so the drawings never carry two identical designations.
+      expect(copy.tag, isNull);
+      // A duplicate starts utility-fed (the original's feeder still feeds it).
+      expect(copy.sourceType, PanelSource.utility);
+      expect(copy.fedByCircuitId, isNull);
+
+      // Every circuit got a fresh id.
+      final srcIds = panels
+          .firstWhere((p) => p.id == 'mdp')
+          .circuits
+          .map((c0) => c0.id)
+          .toSet();
+      for (final cc in copy.circuits) {
+        expect(srcIds.contains(cc.id), isFalse);
+      }
+      // The copied feeder dropped its target (a feeder supplies one panel).
+      final feeder =
+          copy.circuits.firstWhere((c0) => c0.loadKind == LoadKind.feeder);
+      expect(feeder.feedsPanelId == 'lp1', isFalse);
+
+      // The copy sizes (appears in the result with an incomer).
+      final r = c.read(electricalResultProvider).panels[copy.id];
+      expect(r, isNotNull);
+      expect(r!.incomer.breaker.ratingA.amperes, greaterThan(0));
+    });
+
+    test('offsets both position spaces so the copy does not overlap', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ctrl.setPanelPosition('mdp', 100, 200);
+      ctrl.setPanelLayoutPos(
+          'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 12, y: 34));
+      ctrl.duplicatePanel('mdp');
+      final copy = c.read(electricalProjectProvider).panels.last;
+      expect(copy.x, 140);
+      expect(copy.y, 240);
+      expect(copy.layoutPos!.x, 52);
+      expect(copy.layoutPos!.y, 74);
+    });
+
+    test('is undoable in one step', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      final hist = c.read(historyProvider.notifier);
+      final before = c.read(electricalProjectProvider).panels.length;
+      ctrl.duplicatePanel('mdp');
+      expect(c.read(electricalProjectProvider).panels.length, before + 1);
+      hist.undo();
+      expect(c.read(electricalProjectProvider).panels.length, before);
+    });
+
+    test('unknown id is a no-op', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      final before = c.read(electricalProjectProvider).panels.length;
+      ctrl.duplicatePanel('nope');
+      expect(c.read(electricalProjectProvider).panels.length, before);
+    });
+  });
+
+  group('electricalSelectionProvider (I5)', () {
+    test('select panel / circuit / clear', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final s = c.read(electricalSelectionProvider.notifier);
+
+      expect(c.read(electricalSelectionProvider), isNull);
+
+      s.selectPanel('mdp');
+      final panelSel = c.read(electricalSelectionProvider)!;
+      expect(panelSel.panelId, 'mdp');
+      expect(panelSel.isCircuit, isFalse);
+      expect(panelSel, const ElectricalSelection.panel('mdp'));
+
+      s.selectCircuit('mdp', 'mdp-c1');
+      final circuitSel = c.read(electricalSelectionProvider)!;
+      expect(circuitSel.isCircuit, isTrue);
+      expect(circuitSel.panelId, 'mdp');
+      expect(circuitSel.circuitId, 'mdp-c1');
+
+      s.clear();
+      expect(c.read(electricalSelectionProvider), isNull);
+    });
+  });
+
   group('panel-properties intents (I3)', () {
     test('renamePanel / setPanelTag are undoable through the new funnel', () {
       final c = ProviderContainer();

@@ -110,6 +110,11 @@ class ElectricalLayoutLayer extends ConsumerWidget {
     final project = ref.watch(electricalProjectProvider);
     final result = ref.watch(electricalResultProvider);
     final ctrl = ref.read(electricalProjectProvider.notifier);
+    // The selected element on this layer (I5) — drives the marker ring; a marker
+    // tap sets it, Delete removes it via the existing intents (wired in the host
+    // canvas's key handler).
+    final selection = ref.watch(electricalSelectionProvider);
+    final selectionCtrl = ref.read(electricalSelectionProvider.notifier);
     final vt = transform;
 
     bool onSheet(LayoutPos? pos) =>
@@ -122,12 +127,14 @@ class ElectricalLayoutLayer extends ConsumerWidget {
 
     final nodeWidgets = <Widget>[
       for (final p in placedPanels)
-        ..._panelNodes(context, ref, ctrl, p, result, vt, opacity),
+        ..._panelNodes(context, ref, ctrl, selectionCtrl, selection, p, result,
+            vt, opacity),
       // Floating loads — placed circuits whose stub board is NOT itself placed
       // on this sheet (drop-on-blank). Render the load icon on its own.
       for (final p in project.panels)
         if (!onSheet(p.layoutPos))
-          ..._loadNodes(context, ref, ctrl, p, result, vt, opacity),
+          ..._loadNodes(context, ref, ctrl, selectionCtrl, selection, p, result,
+              vt, opacity),
     ];
 
     return Stack(
@@ -197,6 +204,8 @@ class ElectricalLayoutLayer extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     ElectricalProjectController ctrl,
+    ElectricalSelectionController selectionCtrl,
+    ElectricalSelection? selection,
     ElectricalPanel panel,
     ElectricalSystemResult result,
     ViewportTransform vt,
@@ -230,7 +239,10 @@ class ElectricalLayoutLayer extends ConsumerWidget {
               panel: panel,
               result: pr,
               detail: detail,
-              onTap: () {},
+              selected: selection != null &&
+                  !selection.isCircuit &&
+                  selection.panelId == panel.id,
+              onTap: () => selectionCtrl.selectPanel(panel.id),
               onDoubleTap: () => onEditPanel(panel.id),
               onMenu: (gp) => onPanelMenu(panel.id, gp),
               onDropLoad: (load) => ctrl.addCircuit(
@@ -248,7 +260,8 @@ class ElectricalLayoutLayer extends ConsumerWidget {
       ),
     ));
 
-    widgets.addAll(_loadNodes(context, ref, ctrl, panel, result, vt, opacity));
+    widgets.addAll(_loadNodes(context, ref, ctrl, selectionCtrl, selection,
+        panel, result, vt, opacity));
     return widgets;
   }
 
@@ -260,6 +273,8 @@ class ElectricalLayoutLayer extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     ElectricalProjectController ctrl,
+    ElectricalSelectionController selectionCtrl,
+    ElectricalSelection? selection,
     ElectricalPanel panel,
     ElectricalSystemResult result,
     ViewportTransform vt,
@@ -306,7 +321,11 @@ class ElectricalLayoutLayer extends ConsumerWidget {
                 circuit: c,
                 result: cr,
                 detail: detail,
-                onTap: () {},
+                selected: selection != null &&
+                    selection.isCircuit &&
+                    selection.panelId == panel.id &&
+                    selection.circuitId == c.id,
+                onTap: () => selectionCtrl.selectCircuit(panel.id, c.id),
                 onDoubleTap: () => onEditCircuit(panel.id, c.id),
                 onMenu: (gp) => onCircuitMenu(panel.id, c.id, gp),
               ),
@@ -528,6 +547,7 @@ class _PanelMarker extends StatefulWidget {
   final ElectricalPanel panel;
   final ElectricalPanelResult? result;
   final bool detail;
+  final bool selected;
   final VoidCallback onTap;
   final VoidCallback onDoubleTap;
   final ValueChanged<Offset> onMenu;
@@ -537,6 +557,7 @@ class _PanelMarker extends StatefulWidget {
     required this.panel,
     required this.result,
     required this.detail,
+    required this.selected,
     required this.onTap,
     required this.onDoubleTap,
     required this.onMenu,
@@ -561,7 +582,7 @@ class _PanelMarkerState extends State<_PanelMarker> {
         r.warnings.any((w) => w.severity == WarningSeverity.error);
     final border = hasError
         ? colors.danger
-        : (_hover || _dropHover)
+        : (widget.selected || _hover || _dropHover)
             ? colors.accent
             : colors.border;
 
@@ -569,7 +590,7 @@ class _PanelMarkerState extends State<_PanelMarker> {
       decoration: BoxDecoration(
         color: colors.surface.withAlpha(245),
         borderRadius: MechXRadii.card,
-        border: Border.all(color: border, width: 1.5),
+        border: Border.all(color: border, width: widget.selected ? 2 : 1.5),
         boxShadow: MechXShadow.card,
       ),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -655,6 +676,7 @@ class _LoadMarker extends StatefulWidget {
   final ElectricalCircuit circuit;
   final ElectricalCircuitResult? result;
   final bool detail;
+  final bool selected;
   final VoidCallback onTap;
   final VoidCallback onDoubleTap;
   final ValueChanged<Offset> onMenu;
@@ -663,6 +685,7 @@ class _LoadMarker extends StatefulWidget {
     required this.circuit,
     required this.result,
     required this.detail,
+    required this.selected,
     required this.onTap,
     required this.onDoubleTap,
     required this.onMenu,
@@ -687,7 +710,8 @@ class _LoadMarkerState extends State<_LoadMarker> {
 
     // Icon-first: the load's industry-standard symbol in a small chip, with the
     // name (and amps) as a quiet caption below it only when zoomed in.
-    final symbolColor = _hover ? colors.accent : colors.textSecondary;
+    final active = _hover || widget.selected;
+    final symbolColor = active ? colors.accent : colors.textSecondary;
     final body = Column(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
@@ -699,7 +723,9 @@ class _LoadMarkerState extends State<_LoadMarker> {
           decoration: BoxDecoration(
             color: colors.surface.withAlpha(245),
             borderRadius: MechXRadii.control,
-            border: Border.all(color: _hover ? colors.accent : colors.border),
+            border: Border.all(
+                color: active ? colors.accent : colors.border,
+                width: widget.selected ? 2 : 1),
             boxShadow: MechXShadow.card,
           ),
           child: LoadSymbol(kind: c.loadKind, color: symbolColor, size: 20),

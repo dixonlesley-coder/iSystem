@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/selection_store.dart';
+import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -289,6 +290,142 @@ void main() {
       final before = c.read(networkControllerProvider).network;
       n.deleteMany({'nope'}, {'nope'});
       expect(c.read(networkControllerProvider).network, same(before));
+    });
+  });
+
+  group('addMulti (Shift+marquee unions)', () {
+    test('unions into the current selection instead of replacing', () {
+      final c = makeContainer();
+      final s = c.read(selectionProvider.notifier);
+      s.setMulti({'n1'}, {'e1'});
+      s.addMulti({'n2'}, {'e2'});
+      final sel = c.read(selectionProvider);
+      expect(sel.nodeIds, {'n1', 'n2'});
+      expect(sel.edgeIds, {'e1', 'e2'});
+    });
+
+    test('empty input is a no-op (an additive gesture never clears)', () {
+      final c = makeContainer();
+      final s = c.read(selectionProvider.notifier);
+      s.setMulti({'n1'}, const {});
+      s.addMulti(const {}, const {});
+      expect(c.read(selectionProvider).nodeIds, {'n1'});
+    });
+  });
+
+  group('selectAllOnFloor (Ctrl/Cmd+A)', () {
+    test('selects on-floor run edges + nodes filtered to the given services',
+        () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // A cold-water run + a duct run on floor 0, a free fitting, and a
+      // cold-water run on floor 1 (must be excluded).
+      n.addSegment('s1', 0, const Offset(100, 0),
+          service: ServiceType.coldWater);
+      n.addSegment('s1', 0, const Offset(100, 200), service: ServiceType.duct);
+      n.addFitting('s1', 0, const Offset(500, 500));
+      n.addSegment('s1', 1, const Offset(100, 400),
+          service: ServiceType.coldWater);
+      final net = c.read(networkControllerProvider).network;
+      final cwEdge =
+          net.edges.firstWhere((e) => e.service == ServiceType.coldWater &&
+              net.nodeById(e.fromId)!.floorIndex == 0);
+      final ductEdge =
+          net.edges.firstWhere((e) => e.service == ServiceType.duct);
+
+      c.read(selectionProvider.notifier).selectAllOnFloor('s1', 0,
+          services: {ServiceType.coldWater, ServiceType.hotWater});
+      final sel = c.read(selectionProvider);
+      // The plumbing run + its endpoints + the FREE fitting (no service ⇒
+      // always belongs); the duct run/nodes and floor-1 elements excluded.
+      expect(sel.edgeIds, {cwEdge.id});
+      expect(sel.nodeIds.length, 3);
+      expect(sel.nodeIds.contains(cwEdge.fromId), isTrue);
+      expect(sel.nodeIds.contains(cwEdge.toId), isTrue);
+      expect(sel.nodeIds.contains(ductEdge.fromId), isFalse);
+      expect(
+          sel.nodeIds.any((id) =>
+              c.read(networkControllerProvider).network.nodeById(id)!.floorIndex ==
+              1),
+          isFalse);
+    });
+
+    test('null services selects everything on the floor; empty floor no-ops',
+        () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(100, 0),
+          service: ServiceType.coldWater);
+      n.addSegment('s1', 0, const Offset(100, 200), service: ServiceType.duct);
+      final s = c.read(selectionProvider.notifier);
+      s.selectAllOnFloor('s1', 0);
+      expect(c.read(selectionProvider).edgeIds.length, 2);
+      expect(c.read(selectionProvider).nodeIds.length, 4);
+
+      // An empty floor leaves the selection untouched.
+      s.selectAllOnFloor('s1', 7);
+      expect(c.read(selectionProvider).edgeIds.length, 2);
+    });
+  });
+
+  group('pasteAt (canvas-menu Paste here)', () {
+    test('pastes the clipboard CENTRED on the given world point', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // A segment with nodes at ~(50,0) and ~(150,0) — centroid (100, 0).
+      n.addSegment('s1', 0, const Offset(100, 0), spanPx: 100);
+      final net = c.read(networkControllerProvider).network;
+      n.copySelection(net.nodes.map((nd) => nd.id).toSet(),
+          net.edges.map((e) => e.id).toSet());
+
+      final pasted = n.pasteAt(
+          sheetId: 's1', floorIndex: 0, world: const Offset(400, 300));
+      expect(pasted.nodeIds.length, 2);
+      expect(pasted.edgeIds.length, 1);
+      final after = c.read(networkControllerProvider).network;
+      final xs = pasted.nodeIds
+          .map((id) => after.nodeById(id)!.x)
+          .toList()
+        ..sort();
+      expect(xs, [closeTo(350, 1e-9), closeTo(450, 1e-9)]);
+      for (final id in pasted.nodeIds) {
+        expect(after.nodeById(id)!.y, closeTo(300, 1e-9));
+      }
+    });
+
+    test('empty clipboard pastes nothing', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      final pasted = n.pasteAt(
+          sheetId: 's1', floorIndex: 0, world: const Offset(10, 10));
+      expect(pasted.nodeIds, isEmpty);
+      expect(pasted.edgeIds, isEmpty);
+    });
+  });
+
+  group('hoverTargetProvider (hover pre-highlight detection)', () {
+    test('notifies only on CHANGE; clear resets to null', () {
+      final c = makeContainer();
+      var notifications = 0;
+      c.listen<HoverTarget?>(hoverTargetProvider, (_, _) => notifications++);
+      final h = c.read(hoverTargetProvider.notifier);
+
+      h.set((nodeId: 'n1', edgeId: null));
+      expect(c.read(hoverTargetProvider), (nodeId: 'n1', edgeId: null));
+      expect(notifications, 1);
+
+      // Same target again — per-frame hover churn must NOT notify.
+      h.set((nodeId: 'n1', edgeId: null));
+      expect(notifications, 1);
+
+      h.set((nodeId: null, edgeId: 'e1'));
+      expect(notifications, 2);
+
+      h.clear();
+      expect(c.read(hoverTargetProvider), isNull);
+      expect(notifications, 3);
+      h.clear(); // already null — no notify
+      expect(notifications, 3);
     });
   });
 }

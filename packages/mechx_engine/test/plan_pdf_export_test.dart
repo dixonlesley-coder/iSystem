@@ -167,6 +167,61 @@ void main() {
     expect(build(), equals(build()));
   });
 
+  group('paper size (A5 Wave-5 addition)', () {
+    Uint8List onPaper(PaperSize paper) => planToPdf(
+          net: net,
+          sizing: sizing,
+          edgeLengths: lengths,
+          sheetId: 's1',
+          floorIndex: 0,
+          projectName: 'Tower A',
+          sheetName: 'Ground Floor',
+          dateString: '2026-06-27',
+          chrome: const DrawingChrome(drawingNumber: 'M-101'),
+          metersPerPixel: 0.05,
+          paper: paper,
+        );
+
+    test('default A3 carries the 1190.55 x 841.89 MediaBox', () {
+      expect(latin1.decode(build()),
+          contains('/MediaBox [0 0 1190.55 841.89]'));
+    });
+
+    test('A2 carries the larger 1683.78 x 1190.55 MediaBox', () {
+      expect(latin1.decode(onPaper(PaperSize.a2Landscape)),
+          contains('/MediaBox [0 0 1683.78 1190.55]'));
+    });
+
+    test('A1 carries the largest 2383.94 x 1683.78 MediaBox', () {
+      expect(latin1.decode(onPaper(PaperSize.a1Landscape)),
+          contains('/MediaBox [0 0 2383.94 1683.78]'));
+    });
+
+    test('the snapped scale text names the ACTUAL paper (@ A1)', () {
+      // The much larger A1 sheet (availW = 2383.94 − 96 = 2287.94 pt →
+      // 7.63 pt/px → N = 0.05·1000 / (7.63·0.35278) = 18.6 → snapped to the
+      // next ladder rung 20) must read "@ A1", never a stale "@ A3".
+      final s = latin1.decode(onPaper(PaperSize.a1Landscape));
+      expect(s, contains('(1 : 20 @ A1) Tj'));
+      expect(s, isNot(contains('@ A3')));
+    });
+
+    test('default paper is byte-identical to the explicit A3', () {
+      expect(
+          build(),
+          equals(planToPdf(
+              net: net,
+              sizing: sizing,
+              edgeLengths: lengths,
+              sheetId: 's1',
+              floorIndex: 0,
+              projectName: 'Tower A',
+              sheetName: 'Ground Floor',
+              dateString: '2026-06-27',
+              paper: PaperSize.a3Landscape)));
+    });
+  });
+
   group('A1 floor-plan underlay', () {
     // Vector fixture: a plan spanning world (0,0)–(100,80) fitted into a
     // 500 × 400 sheet-pixel frame → k = 500/100 = 5 (the canvas fit).

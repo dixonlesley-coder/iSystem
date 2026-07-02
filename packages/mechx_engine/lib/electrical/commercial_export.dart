@@ -5,6 +5,7 @@
 /// Zero Flutter imports.
 library;
 
+import '../report/number_format.dart';
 import 'costing.dart';
 import 'quotation.dart';
 
@@ -41,9 +42,11 @@ String costEstimateToCsv(CostEstimate estimate) {
       ..write(',')
       ..write(_csv(l.line.sku ?? ''))
       ..write(',')
-      ..write(l.unitPrice == null ? '' : _num(l.unitPrice!))
+      // Money cells are UNGROUPED (spreadsheet-parseable) but fixed to 2 dp so
+      // a whole-rupiah price and a fractional one line up (D7).
+      ..write(l.unitPrice == null ? '' : l.unitPrice!.toStringAsFixed(2))
       ..write(',')
-      ..write(l.lineTotal == null ? '' : _num(l.lineTotal!))
+      ..write(l.lineTotal == null ? '' : l.lineTotal!.toStringAsFixed(2))
       ..write(',')
       ..write(l.matched ? 'yes' : 'no')
       ..write('\n');
@@ -51,7 +54,7 @@ String costEstimateToCsv(CostEstimate estimate) {
   b
     ..write(_csv('Material subtotal (${estimate.currency})'))
     ..write(',,,,,')
-    ..write(_num(estimate.grandTotal))
+    ..write(estimate.grandTotal.toStringAsFixed(2))
     ..write(',\n');
   return b.toString();
 }
@@ -65,6 +68,9 @@ String quotationToMarkdown(
   String projectName = 'Project',
 }) {
   final cur = quotation.currency;
+  // Client-facing money: thousands grouped + a fixed 2 dp (D7) — no more raw
+  // `toString` doubles (`1181250` beside `3703.68`) in the proposal tables.
+  String m(double v) => money(v, dp: 2);
   final b = StringBuffer()
     ..writeln('# Electrical proposal — $projectName')
     ..writeln()
@@ -75,8 +81,8 @@ String quotationToMarkdown(
   for (final l in estimate.lines) {
     b.writeln('| ${_num(l.line.qty)} | ${l.line.category.name} | '
         '${_md(l.line.description)} | ${_md(l.line.sku ?? '-')} | '
-        '${l.unitPrice == null ? '-' : _num(l.unitPrice!)} | '
-        '${l.lineTotal == null ? '(unpriced)' : _num(l.lineTotal!)} |');
+        '${l.unitPrice == null ? '-' : m(l.unitPrice!)} | '
+        '${l.lineTotal == null ? '(unpriced)' : m(l.lineTotal!)} |');
   }
   b
     ..writeln()
@@ -84,13 +90,13 @@ String quotationToMarkdown(
     ..writeln()
     ..writeln('| Item | Amount ($cur) |')
     ..writeln('| --- | ---: |')
-    ..writeln('| Material | ${_num(quotation.materialSubtotal)} |')
+    ..writeln('| Material | ${m(quotation.materialSubtotal)} |')
     ..writeln('| Labour (${_num(quotation.labourHours)} h) | '
-        '${_num(quotation.labourSubtotal)} |')
-    ..writeln('| Overhead | ${_num(quotation.overhead)} |')
-    ..writeln('| Contingency | ${_num(quotation.contingency)} |')
-    ..writeln('| Margin | ${_num(quotation.margin)} |')
-    ..writeln('| **Grand total** | **${_num(quotation.grandTotal)}** |');
+        '${m(quotation.labourSubtotal)} |')
+    ..writeln('| Overhead | ${m(quotation.overhead)} |')
+    ..writeln('| Contingency | ${m(quotation.contingency)} |')
+    ..writeln('| Margin | ${m(quotation.margin)} |')
+    ..writeln('| **Grand total** | **${m(quotation.grandTotal)}** |');
   if (estimate.unmatchedCount > 0) {
     b
       ..writeln()

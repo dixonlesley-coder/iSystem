@@ -24,18 +24,24 @@ import 'recovery.dart';
 /// autosave loop.
 typedef ProviderReader = T Function<T>(ProviderListenable<T> provider);
 
-/// A recovery document found on launch (previous session ended without a clean
-/// exit). Non-null ⇒ the shell offers to restore it.
+/// A recovery snapshot found on launch: the decoded document plus the
+/// snapshot file's mtime (null when the mtime couldn't be read). Carrying the
+/// timestamp alongside the doc lets the recovery banner say *when* the work
+/// was last autosaved, not just that some work exists.
+typedef RecoverySnapshot = ({ProjectDocument doc, DateTime? savedAt});
+
+/// A recovery snapshot found on launch (previous session ended without a
+/// clean exit). Non-null ⇒ the shell offers to restore it.
 final recoveryDocProvider =
-    NotifierProvider<RecoveryController, ProjectDocument?>(
+    NotifierProvider<RecoveryController, RecoverySnapshot?>(
   RecoveryController.new,
 );
 
-class RecoveryController extends Notifier<ProjectDocument?> {
+class RecoveryController extends Notifier<RecoverySnapshot?> {
   @override
-  ProjectDocument? build() => null;
+  RecoverySnapshot? build() => null;
 
-  void set(ProjectDocument? doc) => state = doc;
+  void set(RecoverySnapshot? snapshot) => state = snapshot;
   void clear() => state = null;
 }
 

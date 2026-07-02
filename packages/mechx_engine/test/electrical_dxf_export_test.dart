@@ -5,6 +5,7 @@ import 'package:mechx_engine/electrical/power_oneline.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
+import 'package:mechx_engine/report/sld_export.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -236,4 +237,155 @@ void main() {
       expect(dxf.startsWith('0\nSECTION\n2\nENTITIES\n'), isTrue);
     });
   });
+
+  // C7 — the fourth output rebuilt onto the shared SldSheet pipeline.
+  group('buildPowerOneLineSheet (C7)', () {
+    // A rich fixture exercising every node kind: utility + generator symbols,
+    // board boxes (bus / main / PV / PV-inverter / battery).
+    const rich = PowerOneLine(
+      nodes: [
+        PowerNode(
+            id: 'utility',
+            kind: PowerNodeKind.utility,
+            label: 'PLN utility',
+            sub: '400 V LV'),
+        PowerNode(
+            id: 'gen',
+            kind: PowerNodeKind.generator,
+            label: 'Generator',
+            sub: '250 kVA'),
+        PowerNode(
+            id: 'bus',
+            kind: PowerNodeKind.bus,
+            label: 'Main LV bus',
+            sub: '400 V'),
+        PowerNode(id: 'main', kind: PowerNodeKind.mainPanel, label: 'Main panel'),
+        PowerNode(
+            id: 'pv', kind: PowerNodeKind.pv, label: 'Solar array', sub: '50 kWp'),
+        PowerNode(
+            id: 'pvinv',
+            kind: PowerNodeKind.pvInverter,
+            label: 'PV inverter',
+            sub: '40 kW'),
+        PowerNode(
+            id: 'batt',
+            kind: PowerNodeKind.battery,
+            label: 'Battery',
+            sub: '100 kWh'),
+      ],
+      edges: [
+        PowerEdge(id: 'e0', from: 'utility', to: 'bus', label: 'mains'),
+        PowerEdge(id: 'e1', from: 'gen', to: 'bus', label: 'standby'),
+        PowerEdge(id: 'e2', from: 'bus', to: 'main'),
+        PowerEdge(id: 'e3', from: 'pv', to: 'pvinv'),
+        PowerEdge(id: 'e4', from: 'pvinv', to: 'bus', label: 'AC'),
+        PowerEdge(id: 'e5', from: 'batt', to: 'bus', label: 'AC'),
+      ],
+      interlocks: [],
+    );
+
+    test('reuses the IEC symbol emitters per node kind', () {
+      final sheet = buildPowerOneLineSheet(rich);
+      final labels = sheet.prims.whereType<SldLabel>().map((l) => l.text).toSet();
+      // Generator → circle + centred "G"; utility → bowtie (lines, no rect).
+      expect(sheet.prims.whereType<SldCircle>().length, greaterThanOrEqualTo(1));
+      expect(labels, contains('G'));
+      expect(labels, contains('PLN utility'));
+      expect(labels, contains('Generator'));
+      // Every non-symbol node is a labelled box: bus, main, pv, pvinv, batt = 5.
+      expect(sheet.prims.whereType<SldRect>().length, 5);
+      expect(labels, containsAll(<String>['Main LV bus', 'Solar array', 'Battery']));
+    });
+
+    test('supply note lists only the present sources (honest)', () {
+      final sheet = buildPowerOneLineSheet(rich);
+      expect(sheet.supplyNote, contains('PLN utility'));
+      expect(sheet.supplyNote, contains('genset'));
+      expect(sheet.supplyNote, contains('PV'));
+      expect(sheet.supplyNote, contains('battery'));
+    });
+
+    test('role: main panel is normal, all supply nodes are source', () {
+      final sheet = buildPowerOneLineSheet(rich);
+      final rects = sheet.prims.whereType<SldRect>().toList();
+      // The one normal rect is the main panel (load side); the rest are source.
+      expect(rects.where((r) => r.role == SldRole.normal).length, 1);
+      expect(rects.where((r) => r.role == SldRole.source).length, 4);
+    });
+
+    test('no edge segment crosses a node bounds box (hand-computed chain)', () {
+      // A clean single-column chain: utility (symbol, tier0) → bus (box, tier1)
+      // → main (box, tier2). With one node per tier the feeder is a straight
+      // vertical run in the GAP between footprints, so it must never pass
+      // through the bus / main rectangle interior.
+      const chain = PowerOneLine(
+        nodes: [
+          PowerNode(id: 'u', kind: PowerNodeKind.utility, label: 'PLN'),
+          PowerNode(id: 'b', kind: PowerNodeKind.bus, label: 'LV bus'),
+          PowerNode(id: 'm', kind: PowerNodeKind.mainPanel, label: 'MDP'),
+        ],
+        edges: [
+          PowerEdge(id: 'e0', from: 'u', to: 'b', label: 'mains'),
+          PowerEdge(id: 'e1', from: 'b', to: 'm'),
+        ],
+        interlocks: [],
+      );
+      final sheet = buildPowerOneLineSheet(chain);
+      final rects = sheet.prims.whereType<SldRect>().toList();
+      expect(rects.length, 2); // bus + main boxes
+      for (final line in sheet.prims.whereType<SldLine>()) {
+        for (final r in rects) {
+          expect(
+            _segCrossesRectInterior(
+                line.x1, line.y1, line.x2, line.y2, r.x, r.y, r.w, r.h),
+            isFalse,
+            reason: 'segment (${line.x1},${line.y1})-(${line.x2},${line.y2}) '
+                'crosses rect (${r.x},${r.y},${r.w},${r.h})',
+          );
+        }
+      }
+    });
+
+    test('renders non-empty PDF + DXF via the neutral wrapper', () {
+      final sheet = buildPowerOneLineSheet(rich);
+      final pdf = sldSheetToPdf(sheet: sheet, diagramTitle: 'POWER ONE-LINE');
+      final dxf = sldSheetToDxf(sheet: sheet, diagramTitle: 'POWER ONE-LINE');
+      expect(pdf, isNotEmpty);
+      expect(dxf, contains('SECTION'));
+      expect(dxf.trimRight(), endsWith('EOF'));
+      // The shared pipeline gives it real class layers + a title block.
+      expect(dxf, contains('POWER ONE-LINE'));
+      expect(dxf, contains('E-BUS'));
+    });
+  });
+}
+
+/// Liang–Barsky clip of the segment against the rectangle shrunk by [eps] on
+/// every side — returns true only when the segment enters the OPEN interior
+/// (so an endpoint lying on a rect edge does not count as a crossing).
+bool _segCrossesRectInterior(double x1, double y1, double x2, double y2,
+    double rx, double ry, double rw, double rh,
+    {double eps = 0.5}) {
+  final xmin = rx + eps, xmax = rx + rw - eps;
+  final ymin = ry + eps, ymax = ry + rh - eps;
+  if (xmin >= xmax || ymin >= ymax) return false;
+  final dx = x2 - x1, dy = y2 - y1;
+  var t0 = 0.0, t1 = 1.0;
+  final p = [-dx, dx, -dy, dy];
+  final q = [x1 - xmin, xmax - x1, y1 - ymin, ymax - y1];
+  for (var i = 0; i < 4; i++) {
+    if (p[i] == 0) {
+      if (q[i] < 0) return false; // parallel and outside this edge
+    } else {
+      final r = q[i] / p[i];
+      if (p[i] < 0) {
+        if (r > t1) return false;
+        if (r > t0) t0 = r;
+      } else {
+        if (r < t0) return false;
+        if (r < t1) t1 = r;
+      }
+    }
+  }
+  return t1 > t0;
 }

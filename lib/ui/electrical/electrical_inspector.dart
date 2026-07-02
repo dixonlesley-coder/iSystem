@@ -16,6 +16,7 @@ import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
@@ -54,12 +55,15 @@ class ElectricalCircuitMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     return ElectricalMenu(
       items: [
-        ElectricalMenuAction('Edit', onEdit),
-        ElectricalMenuAction('Duplicate', () {
+        ElectricalMenuAction(
+            context.strings(StringKey.electricalMenuEdit), onEdit),
+        ElectricalMenuAction(context.strings(StringKey.electricalMenuDuplicate),
+            () {
           controller.duplicateCircuit(target.panelId, target.circuitId);
           onDone();
         }),
-        ElectricalMenuAction('Delete', () {
+        ElectricalMenuAction(context.strings(StringKey.electricalMenuDelete),
+            () {
           controller.deleteCircuit(target.panelId, target.circuitId);
           onDone();
         }, danger: true),
@@ -89,33 +93,49 @@ class ElectricalPanelMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     return ElectricalMenu(
       items: [
-        ElectricalMenuAction('Panel properties', onProperties),
-        ElectricalMenuAction('Open panel', onOpen),
         ElectricalMenuAction(
-          panel.essential ? 'Unmark essential' : 'Mark essential',
+            context.strings(StringKey.electricalPanelProperties), onProperties),
+        ElectricalMenuAction(
+            context.strings(StringKey.electricalMenuOpenPanel), onOpen),
+        ElectricalMenuAction(
+          context.strings(panel.essential
+              ? StringKey.electricalMenuUnmarkEssential
+              : StringKey.electricalMenuMarkEssential),
           () {
             controller.setPanelEssential(panel.id, !panel.essential);
             onDone();
           },
         ),
         ElectricalMenuAction(
-          panel.upsBacked ? 'Unmark critical (UPS)' : 'Mark critical (UPS)',
+          context.strings(panel.upsBacked
+              ? StringKey.electricalMenuUnmarkCritical
+              : StringKey.electricalMenuMarkCritical),
           () {
             controller.setPanelUpsBacked(panel.id, !panel.upsBacked);
             onDone();
           },
         ),
         ElectricalMenuAction(
-            panel.submeter ? 'Remove submeter' : 'Add submeter', () {
+            context.strings(panel.submeter
+                ? StringKey.electricalMenuRemoveSubmeter
+                : StringKey.electricalMenuAddSubmeter), () {
           controller.setPanelSubmeter(panel.id, !panel.submeter);
           onDone();
         }),
+        // Duplicate the whole board (fresh ids, undoable — I5).
+        ElectricalMenuAction(
+            context.strings(StringKey.electricalMenuDuplicatePanel), () {
+          controller.duplicatePanel(panel.id);
+          onDone();
+        }),
         if (panel.fedByCircuitId != null)
-          ElectricalMenuAction('Disconnect feeder', () {
+          ElectricalMenuAction(
+              context.strings(StringKey.electricalMenuDisconnectFeeder), () {
             controller.disconnectFeeder(panel.id);
             onDone();
           }),
-        ElectricalMenuAction('Delete panel', () {
+        ElectricalMenuAction(
+            context.strings(StringKey.electricalMenuDeletePanel), () {
           controller.deletePanel(panel.id);
           onDone();
         }, danger: true),
@@ -191,12 +211,12 @@ class ElectricalCircuitInspector extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      'Edit circuit',
+                      context.strings(StringKey.electricalCircuitEditTitle),
                       style: type.title.copyWith(color: colors.textPrimary),
                     ),
                   ),
                   MechXButton(
-                    label: 'Close',
+                    label: context.strings(StringKey.electricalClose),
                     tertiary: true,
                     onPressed: onClose,
                   ),
@@ -211,7 +231,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     ElectricalField(
-                      label: 'Name',
+                      label: context.strings(StringKey.electricalFieldName),
                       child: ElectricalTextInput(
                         value: circuit.name,
                         onChanged: (v) => controller.setCircuit(
@@ -222,7 +242,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
                       ),
                     ),
                     ElectricalField(
-                      label: 'Load kind',
+                      label: context.strings(StringKey.electricalFieldLoadKind),
                       child: ElectricalEnumPicker<LoadKind>(
                         value: circuit.loadKind,
                         options: const [
@@ -248,7 +268,8 @@ class ElectricalCircuitInspector extends StatelessWidget {
                     ),
                     if (_isMotor)
                       ElectricalField(
-                        label: 'Motor power (kW)',
+                        label:
+                            context.strings(StringKey.electricalFieldMotorPower),
                         child: ElectricalNumInput(
                           value: circuit.motorKw ?? 0,
                           onChanged: (v) => controller.setCircuit(
@@ -260,7 +281,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
                       )
                     else
                       ElectricalField(
-                        label: 'Load (W)',
+                        label: context.strings(StringKey.electricalFieldLoadW),
                         child: ElectricalNumInput(
                           value: circuit.loadW,
                           onChanged: (v) => controller.setCircuit(
@@ -271,7 +292,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
                         ),
                       ),
                     ElectricalField(
-                      label: 'cos phi',
+                      label: context.strings(StringKey.electricalFieldCosPhi),
                       child: ElectricalNumInput(
                         value: circuit.cosPhi,
                         onChanged: (v) => controller.setCircuit(
@@ -282,7 +303,8 @@ class ElectricalCircuitInspector extends StatelessWidget {
                       ),
                     ),
                     ElectricalField(
-                      label: 'Demand factor',
+                      label:
+                          context.strings(StringKey.electricalFieldDemandFactor),
                       child: ElectricalNumInput(
                         value: circuit.demandFactor,
                         onChanged: (v) => controller.setCircuit(
@@ -293,7 +315,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
                       ),
                     ),
                     ElectricalField(
-                      label: 'Run length (m)',
+                      label: context.strings(StringKey.electricalFieldRunLength),
                       child: ElectricalNumInput(
                         value: circuit.length.meters,
                         onChanged: (v) => controller.setCircuit(
@@ -304,14 +326,15 @@ class ElectricalCircuitInspector extends StatelessWidget {
                       ),
                     ),
                     ElectricalField(
-                      label: 'Supply phase',
+                      label:
+                          context.strings(StringKey.electricalFieldSupplyPhase),
                       child: ElectricalEnumPicker<int>(
                         value: circuit.phases ?? 0,
                         options: const [0, 1, 3],
                         label: (p) => switch (p) {
-                          1 => '1-phase',
-                          3 => '3-phase',
-                          _ => 'Auto',
+                          1 => context.strings(StringKey.electricalPhase1),
+                          3 => context.strings(StringKey.electricalPhase3),
+                          _ => context.strings(StringKey.electricalPhaseAuto),
                         },
                         onChanged: (p) => p == 0
                             ? controller.setCircuit(
@@ -327,11 +350,12 @@ class ElectricalCircuitInspector extends StatelessWidget {
                       ),
                     ),
                     ElectricalField(
-                      label: 'Cable type',
+                      label: context.strings(StringKey.electricalFieldCableType),
                       child: ElectricalEnumPicker<String?>(
                         value: circuit.cableType,
                         options: _cableTypes,
-                        label: (t) => t ?? 'Panel default',
+                        label: (t) =>
+                            t ?? context.strings(StringKey.electricalCablePanelDefault),
                         onChanged: (t) => t == null
                             ? controller.setCircuit(
                                 panel.id,
@@ -346,7 +370,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
                       ),
                     ),
                     ElectricalToggleRow(
-                      label: 'Lighting circuit (3% Vd limit)',
+                      label: context.strings(StringKey.electricalToggleLighting),
                       value: circuit.isLighting,
                       onChanged: (v) => controller.setCircuit(
                         panel.id,
@@ -355,7 +379,8 @@ class ElectricalCircuitInspector extends StatelessWidget {
                       ),
                     ),
                     ElectricalToggleRow(
-                      label: 'Life-safety (no RCD)',
+                      label:
+                          context.strings(StringKey.electricalToggleLifeSafety),
                       value: circuit.lifeSafety,
                       onChanged: (v) => controller.setCircuit(
                         panel.id,
@@ -433,12 +458,12 @@ class ElectricalPanelInspector extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      'Panel properties',
+                      context.strings(StringKey.electricalPanelProperties),
                       style: type.title.copyWith(color: colors.textPrimary),
                     ),
                   ),
                   MechXButton(
-                    label: 'Close',
+                    label: context.strings(StringKey.electricalClose),
                     tertiary: true,
                     onPressed: onClose,
                   ),
@@ -453,21 +478,21 @@ class ElectricalPanelInspector extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     ElectricalField(
-                      label: 'Name',
+                      label: context.strings(StringKey.electricalFieldName),
                       child: ElectricalTextInput(
                         value: panel.name,
                         onChanged: (v) => controller.renamePanel(panel.id, v),
                       ),
                     ),
                     ElectricalField(
-                      label: 'Tag (e.g. LP-1)',
+                      label: context.strings(StringKey.electricalFieldTag),
                       child: ElectricalTextInput(
                         value: panel.tag ?? '',
                         onChanged: (v) => controller.setPanelTag(panel.id, v),
                       ),
                     ),
                     ElectricalField(
-                      label: 'Diversity factor',
+                      label: context.strings(StringKey.electricalFieldDiversity),
                       child: ElectricalNumInput(
                         value: panel.diversityFactor,
                         onChanged: (v) => controller.setPanelDiversity(
@@ -477,7 +502,8 @@ class ElectricalPanelInspector extends StatelessWidget {
                       ),
                     ),
                     ElectricalField(
-                      label: 'Headroom — spare demand (%)',
+                      label: context
+                          .strings(StringKey.electricalFieldHeadroomSpare),
                       child: ElectricalNumInput(
                         value: headroom.sparePercentage,
                         onChanged: (v) => controller.setPanelHeadroom(
@@ -490,7 +516,7 @@ class ElectricalPanelInspector extends StatelessWidget {
                       ),
                     ),
                     ElectricalField(
-                      label: 'Spare ways (CADANGAN)',
+                      label: context.strings(StringKey.electricalFieldSpareWays),
                       child: ElectricalNumInput(
                         value: headroom.spareWays.toDouble(),
                         onChanged: (v) => controller.setPanelHeadroom(
@@ -503,19 +529,20 @@ class ElectricalPanelInspector extends StatelessWidget {
                       ),
                     ),
                     ElectricalToggleRow(
-                      label: 'Essential (genset-backed)',
+                      label:
+                          context.strings(StringKey.electricalToggleEssential),
                       value: panel.essential,
                       onChanged: (v) =>
                           controller.setPanelEssential(panel.id, v),
                     ),
                     ElectricalToggleRow(
-                      label: 'Critical (UPS-backed)',
+                      label: context.strings(StringKey.electricalToggleCritical),
                       value: panel.upsBacked,
                       onChanged: (v) =>
                           controller.setPanelUpsBacked(panel.id, v),
                     ),
                     ElectricalToggleRow(
-                      label: 'Tenant submeter',
+                      label: context.strings(StringKey.electricalToggleSubmeter),
                       value: panel.submeter,
                       onChanged: (v) =>
                           controller.setPanelSubmeter(panel.id, v),

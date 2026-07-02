@@ -117,6 +117,35 @@ class DrawingChrome {
   }
 }
 
+/// A named LANDSCAPE sheet size for the plan PDF exporters — ISO A-series,
+/// carrying the page dimensions in PDF POINTS and the short label the snapped
+/// scale text names (`1 : N @ A2`). A3 is the historical default; A2/A1 give a
+/// larger sheet for a denser plan. The point figures are the mm sizes converted
+/// at 72/25.4 and rounded to 2 dp (so A3 stays the exact `1190.55 × 841.89` the
+/// exporters used before this enum existed — byte-identical). A drafting-office
+/// paper choice, not an engineering value, so no `// VERIFY`.
+enum PaperSize {
+  /// ISO A3 landscape — 420 x 297 mm.
+  a3Landscape(1190.55, 841.89, 'A3'),
+
+  /// ISO A2 landscape — 594 x 420 mm.
+  a2Landscape(1683.78, 1190.55, 'A2'),
+
+  /// ISO A1 landscape — 841 x 594 mm.
+  a1Landscape(2383.94, 1683.78, 'A1');
+
+  const PaperSize(this.widthPt, this.heightPt, this.label);
+
+  /// Page width in PDF points (landscape ⇒ width > height).
+  final double widthPt;
+
+  /// Page height in PDF points.
+  final double heightPt;
+
+  /// Short sheet label the snapped-scale text names (`A3` / `A2` / `A1`).
+  final String label;
+}
+
 /// Engine-side service display name (mirrors `calc_report` `_service`; the UI's
 /// `serviceLabel` lives in the Flutter layer and can't be imported here).
 String serviceChromeLabel(ServiceType s) => switch (s) {
@@ -731,6 +760,60 @@ String dxfTitleBlock(
 /// these, never at an arbitrary ratio an engineer could mis-scale from.
 const kPlanScaleLadder = <int>[20, 50, 100, 200, 250, 500, 1000];
 
+/// The outcome of snapping a raw auto-fit to a standard plotted scale — the
+/// shared A3 helper both plan PDF exporters use so they snap identically.
+class PlottedScale {
+  /// The (possibly re-fitted) sheet scale to draw at.
+  final double scale;
+
+  /// The title-block SCALE row text — `NTS` when uncalibrated or too large for
+  /// the ladder, else `1 : N @ <paper>` naming the ACTUAL paper.
+  final String scaleRow;
+
+  /// Points-per-metre at the snapped scale, or null when NTS (so the honest
+  /// divided scale bar is drawn only when a real ratio exists).
+  final double? pointsPerMeter;
+
+  const PlottedScale(this.scale, this.scaleRow, this.pointsPerMeter);
+}
+
+/// A3 true plotted scale: snap [rawScale] (the auto-fit) to the nearest
+/// standard rung of [kPlanScaleLadder] whose denominator is >= the raw fit's
+/// (so the drawing never draws larger than the honest snap), given the sheet
+/// calibration [metersPerPixel]. Returns the raw fit at `NTS` when
+/// uncalibrated, when there is no content, or when the plan is too large even
+/// for 1:1000. [paperLabel] names the ACTUAL paper in the snapped-scale text
+/// (`1 : N @ A2`). Pure — shared verbatim by `networkToPdf` / `planToPdf`.
+PlottedScale snapPlottedScale({
+  required double rawScale,
+  required double? metersPerPixel,
+  required bool hasContent,
+  required String paperLabel,
+}) {
+  var scale = rawScale;
+  if (metersPerPixel != null && metersPerPixel > 0 && hasContent) {
+    const mmPerPoint = 25.4 / 72; // PDF points → paper millimetres
+    // The raw fit's plotted-scale denominator: real-world mm per paper mm.
+    final rawN = metersPerPixel * 1000 / (scale * mmPerPoint);
+    int? snappedN;
+    for (final n in kPlanScaleLadder) {
+      if (n >= rawN - 1e-9) {
+        snappedN = n;
+        break;
+      }
+    }
+    if (snappedN != null) {
+      // Re-fit at the snapped scale — a denominator >= the raw fit's, so the
+      // drawing never draws larger than the honest snap.
+      scale = metersPerPixel * 1000 / (snappedN * mmPerPoint);
+      return PlottedScale(scale, '1 : $snappedN @ $paperLabel',
+          scale / metersPerPixel);
+    }
+    // else: too large even for 1:1000 — keep the honest auto-fit, stay NTS.
+  }
+  return PlottedScale(scale, 'NTS', null);
+}
+
 /// PDF stroke widths in points for the three A6 line-weight bands
 /// (index 0 small / 1 medium / 2 large). Unsized edges keep the legacy 1.4 w.
 const kPdfStrokeWidths = <double>[1.0, 1.6, 2.2];
@@ -1091,4 +1174,120 @@ String dxfUnderlayEntities(
     _g(b, 51, a.endDeg);
   }
   return b.toString();
+}
+
+// ── Shared plan-PDF plumbing (fit bounds + document assembly) ───────────────
+//
+// The two plan PDF exporters (`pdf_export` / `plan_pdf_export`) share an
+// identical fit-bounds accumulation and an identical single-page object /
+// cross-reference assembly. They live here as pure helpers so the two stay in
+// lockstep; extraction is byte-identical (no output change).
+
+/// The screen-pixel fit bounds for the [sheetId]/[floorIndex] slice of [net]
+/// plus any [underlay] frame — the exact accumulation both plan exporters use.
+/// Runs contribute both endpoints only when both are on the floor; risers
+/// contribute whichever endpoint is on the floor. An underlay joins the fit at
+/// `[0, sheetWidthPx] × [0, sheetHeightPx]`. [hasContent] is false when nothing
+/// was drawable; the returned min/max then carry the `(0,0)–(1,1)` fallback the
+/// exporters draw the (title-only) empty page into.
+({double minX, double minY, double maxX, double maxY, bool hasContent})
+    planFitBounds(
+  Network net,
+  String sheetId,
+  int floorIndex,
+  PlanUnderlay? underlay,
+) {
+  bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
+  var minX = double.infinity, minY = double.infinity;
+  var maxX = -double.infinity, maxY = -double.infinity;
+  void include(NetNode n) {
+    minX = math.min(minX, n.x);
+    minY = math.min(minY, n.y);
+    maxX = math.max(maxX, n.x);
+    maxY = math.max(maxY, n.y);
+  }
+
+  for (final e in net.edges) {
+    final a = net.nodeById(e.fromId);
+    final c = net.nodeById(e.toId);
+    if (a == null || c == null) continue;
+    if (e.kind == EdgeKind.run) {
+      if (onFloor(a) && onFloor(c)) {
+        include(a);
+        include(c);
+      }
+    } else {
+      if (onFloor(a)) include(a);
+      if (onFloor(c)) include(c);
+    }
+  }
+
+  if (underlay != null) {
+    minX = math.min(minX, 0);
+    minY = math.min(minY, 0);
+    maxX = math.max(maxX, underlay.sheetWidthPx);
+    maxY = math.max(maxY, underlay.sheetHeightPx);
+  }
+
+  final hasContent = minX.isFinite;
+  if (!hasContent) {
+    minX = 0;
+    minY = 0;
+    maxX = 1;
+    maxY = 1;
+  }
+  return (minX: minX, minY: minY, maxX: maxX, maxY: maxY, hasContent: hasContent);
+}
+
+/// Assemble the finished single-page plan PDF from its already-built content
+/// stream — the byte-accurate object list + cross-reference table both plan
+/// exporters share. [content] is the page content stream; [pageW]/[pageH] set
+/// the `/MediaBox`; a non-null [raster] adds the FlateDecode image XObject
+/// (object 6) referenced from the page resources. Byte-identical to the inline
+/// assembly it replaces.
+Uint8List assemblePlanPdfDocument({
+  required String content,
+  required double pageW,
+  required double pageH,
+  RasterPlanUnderlay? raster,
+}) {
+  final contentLen = latin1.encode(content).length;
+  final objects = <Object>[
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R '
+        '/MediaBox [0 0 ${_n(pageW)} ${_n(pageH)}] '
+        '/Resources << /Font << /F1 5 0 R >> '
+        '${raster != null ? '/XObject << /Im1 6 0 R >> ' : ''}'
+        '>> /Contents 4 0 R >>',
+    '<< /Length $contentLen >>\nstream\n$content\nendstream',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    if (raster != null) pdfRasterUnderlayObject(raster),
+  ];
+
+  final out = BytesBuilder();
+  void w(String s) => out.add(latin1.encode(s));
+  w('%PDF-1.4\n');
+  w('%âãÏÓ\n'); // binary marker
+  final offsets = <int>[];
+  for (var i = 0; i < objects.length; i++) {
+    offsets.add(out.length);
+    w('${i + 1} 0 obj\n');
+    final o = objects[i];
+    if (o is String) {
+      w(o);
+    } else {
+      out.add(o as List<int>); // the binary image object
+    }
+    w('\nendobj\n');
+  }
+  final xref = out.length;
+  w('xref\n0 ${objects.length + 1}\n');
+  w('0000000000 65535 f \n');
+  for (final off in offsets) {
+    w('${off.toString().padLeft(10, '0')} 00000 n \n');
+  }
+  w('trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n');
+  w('startxref\n$xref\n%%EOF\n');
+  return out.toBytes();
 }

@@ -27,6 +27,17 @@ class CanvasView extends StatefulWidget {
   /// share one substrate.
   final Color? gridColor;
 
+  /// World-space spacing (content px) of the drafting grid's minor lines. Null
+  /// keeps [paintCanvasGrid]'s default (the uncalibrated 32 px texture); a
+  /// calibrated sheet passes [calibratedGridWorldStep] so the minors land on a
+  /// round 1-2-5 metre ladder (majors on the 4× multiple).
+  final double? gridWorldStep;
+
+  /// Optional mouse-cursor override. Null keeps the default grab/grabbing pan
+  /// affordance; a host whose overlays repurpose left-drag (draw / marquee
+  /// modes) passes the honest cursor for the active tool instead.
+  final MouseCursor? cursor;
+
   const CanvasView({
     super.key,
     required this.contentSize,
@@ -35,6 +46,8 @@ class CanvasView extends StatefulWidget {
     required this.onTransformChanged,
     required this.background,
     this.gridColor,
+    this.gridWorldStep,
+    this.cursor,
   });
 
   @override
@@ -204,9 +217,12 @@ class CanvasViewState extends State<CanvasView> {
       autofocus: true,
       onKeyEvent: _onKey,
       child: MouseRegion(
-        cursor: _grabbing
-            ? SystemMouseCursors.grabbing
-            : SystemMouseCursors.grab,
+        // An explicit override (the host's honest tool cursor) wins; otherwise
+        // the default pan affordance (grab, grabbing while pressed).
+        cursor: widget.cursor ??
+            (_grabbing
+                ? SystemMouseCursors.grabbing
+                : SystemMouseCursors.grab),
         child: Listener(
           onPointerDown: _onPointerDown,
           onPointerUp: _onPointerUp,
@@ -231,6 +247,7 @@ class CanvasViewState extends State<CanvasView> {
                           transform: vt,
                           background: widget.background,
                           gridColor: widget.gridColor,
+                          gridWorldStep: widget.gridWorldStep,
                         ),
                       ),
                       Transform.translate(
@@ -273,23 +290,33 @@ class _BackdropPainter extends CustomPainter {
   final ViewportTransform transform;
   final Color background;
   final Color? gridColor;
+  final double? gridWorldStep;
 
   _BackdropPainter({
     required this.transform,
     required this.background,
     required this.gridColor,
+    this.gridWorldStep,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..color = background);
     final grid = gridColor;
-    if (grid != null) paintCanvasGrid(canvas, size, transform, grid);
+    if (grid != null) {
+      final step = gridWorldStep;
+      if (step != null) {
+        paintCanvasGrid(canvas, size, transform, grid, worldStep: step);
+      } else {
+        paintCanvasGrid(canvas, size, transform, grid);
+      }
+    }
   }
 
   @override
   bool shouldRepaint(_BackdropPainter old) =>
       old.transform != transform ||
       old.background != background ||
-      old.gridColor != gridColor;
+      old.gridColor != gridColor ||
+      old.gridWorldStep != gridWorldStep;
 }

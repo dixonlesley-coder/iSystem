@@ -155,6 +155,21 @@ double panelFootprint(ElectricalPanelResult panel, bool detail) => detail
     ? panelScheduleHeight(panel)
     : kPanelChrome + kPanelSummaryBodyH;
 
+/// Resolve each panel's world position: a saved `x,y` wins, else the
+/// deterministic tidy-tree [autoLayout]. The single shared resolver used by the
+/// interactive single-line canvas AND the minimap (I8) so the minimap tracks
+/// dragged panels instead of only the auto-layout.
+Map<String, Offset> resolvePanelPositions(
+    ElectricalProject project, ElectricalSystemResult result) {
+  final auto = autoLayout(project, result);
+  return {
+    for (final p in project.panels)
+      p.id: (p.x != null && p.y != null)
+          ? Offset(p.x!, p.y!)
+          : (auto[p.id] ?? Offset.zero),
+  };
+}
+
 /// The single service entrance — the utility-fed root with the most demand
 /// (PanelMaker `serviceRootId`): a utility panel that has feeder children,
 /// preferring the highest-demand one, else the first utility root, else the

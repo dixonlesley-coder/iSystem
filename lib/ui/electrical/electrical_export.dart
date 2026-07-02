@@ -222,14 +222,48 @@ Future<void> exportElectricalPanelSchedulesPdf(WidgetRef ref) async {
 
 /// Export the hybrid power one-line as a DXF drawing file. No-op (returns) when
 /// the project carries no energy sources, so there is no one-line to draw.
+///
+/// C7 — routed through the shared [buildPowerOneLineSheet] / [electricalSldToDxf]
+/// pipeline (IEC source symbols, orthogonal routing, class layers, title block +
+/// legend) rather than the legacy centre-to-centre wireframe grid.
 Future<void> exportPowerOneLineDxf(WidgetRef ref) async {
   final project = ref.read(electricalProjectProvider);
   final advanced = ref.read(electricalAdvancedProvider);
   final oneLine = advanced.powerOneLine;
   if (oneLine == null || oneLine.nodes.isEmpty) return;
-  final dxf = powerOneLineToDxf(oneLine);
+  final dxf = electricalSldToDxf(
+    sheet: buildPowerOneLineSheet(oneLine),
+    diagramTitle: 'POWER ONE-LINE DIAGRAM',
+    chrome: electricalExportChrome(ref),
+  );
   await _save(dxf, name: project.name, suffix: 'power-one-line', ext: 'dxf',
       title: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitlePowerOneLineDxf));
+}
+
+/// C7 — export the hybrid power one-line as a native (vector) PDF, via the same
+/// shared [buildPowerOneLineSheet] geometry the DXF renders. No-op when the
+/// project carries no energy sources.
+Future<void> exportPowerOneLinePdf(WidgetRef ref) async {
+  final project = ref.read(electricalProjectProvider);
+  final advanced = ref.read(electricalAdvancedProvider);
+  final oneLine = advanced.powerOneLine;
+  if (oneLine == null || oneLine.nodes.isEmpty) return;
+  final bytes = electricalSldToPdf(
+    sheet: buildPowerOneLineSheet(oneLine),
+    title: 'iSystem power one-line',
+    diagramTitle: 'POWER ONE-LINE DIAGRAM',
+    chrome: electricalExportChrome(ref),
+  );
+  final base = project.name.isEmpty ? 'electrical' : project.name;
+  final path = await FilePicker.saveFile(
+    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleSldPdf),
+    fileName: '$base-power-one-line.pdf',
+    type: FileType.custom,
+    allowedExtensions: const ['pdf'],
+  );
+  if (path == null) return;
+  final full = path.endsWith('.pdf') ? path : '$path.pdf';
+  await File(full).writeAsBytes(bytes);
 }
 
 /// Export the electrical calculation report as Markdown.

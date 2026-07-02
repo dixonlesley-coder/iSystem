@@ -1,10 +1,12 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart' show kDoubleTapTimeout;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 
+import '../../store/inspector_store.dart';
 import '../../store/network_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
@@ -30,10 +32,15 @@ class NetworkSelectionOverlay extends ConsumerStatefulWidget {
   final String sheetId;
   final int floorIndex;
 
+  /// Optional "Fit view" action for the empty-canvas context menu — the host
+  /// (which owns the live [CanvasView] handle) passes it; null hides the row.
+  final VoidCallback? onFitView;
+
   const NetworkSelectionOverlay({
     super.key,
     required this.sheetId,
     required this.floorIndex,
+    this.onFitView,
   });
 
   @override
@@ -79,6 +86,98 @@ class _NetworkSelectionOverlayState
     ref
         .read(networkControllerProvider.notifier)
         .drawRunFromNode(from, world, snapRadius: snapWorld);
+  }
+
+  // ── Double-click → open in the inspector ────────────────────────────────────
+
+  /// Manual double-click tracking (last primary-tap time/place/target), shared
+  /// by the gesture layer (edges / ring taps) AND the node drag handles (which
+  /// sit above it and own taps on nodes). A GestureDetector double-tap
+  /// recognizer would delay every single tap by the disambiguation timeout, so
+  /// the second click is detected by hand: the first click selects instantly,
+  /// and a second click on the SAME element within [kDoubleTapTimeout] opens
+  /// it in the inspector.
+  DateTime? _lastTapTime;
+  Offset? _lastTapPos;
+  String? _lastTapNodeId;
+  String? _lastTapEdgeId;
+
+  /// Register a primary tap on a node/edge at overlay-local [local]; a second
+  /// tap on the same element close in time + place opens the inspector.
+  void registerElementTap(Offset local, {String? nodeId, String? edgeId}) {
+    final now = DateTime.now();
+    final isDouble = _lastTapTime != null &&
+        now.difference(_lastTapTime!) <= kDoubleTapTimeout &&
+        _lastTapPos != null &&
+        (local - _lastTapPos!).distance <= 24 &&
+        _lastTapNodeId == nodeId &&
+        _lastTapEdgeId == edgeId;
+    if (isDouble) {
+      resetTapTracking();
+      _openInspectorFor(nodeId: nodeId, edgeId: edgeId);
+      return;
+    }
+    _lastTapTime = now;
+    _lastTapPos = local;
+    _lastTapNodeId = nodeId;
+    _lastTapEdgeId = edgeId;
+  }
+
+  /// Forget the last tap (an empty-space tap never opens anything).
+  void resetTapTracking() {
+    _lastTapTime = null;
+    _lastTapPos = null;
+    _lastTapNodeId = null;
+    _lastTapEdgeId = null;
+  }
+
+  /// Double-click "opens the thing": un-collapse the inspector column and
+  /// expand the discipline-relevant sizing section (the pinned Selection
+  /// editor at the top of the panel already shows the picked element).
+  void _openInspectorFor({String? nodeId, String? edgeId}) {
+    ref.read(inspectorCollapsedProvider.notifier).set(false);
+    final name = _relevantSectionFor(nodeId: nodeId, edgeId: edgeId);
+    if (name != null) {
+      ref.read(sectionVisibilityProvider.notifier).set(name, true);
+    }
+  }
+
+  /// The [DisclosureSection] name most relevant to the element (must match the
+  /// section names in `project_panel.dart`): air → 'HVAC · ducting', fire →
+  /// 'Fire', anything else piped → 'Sizing'; null (nothing to expand) for a
+  /// bare/free node with no service context.
+  String? _relevantSectionFor({String? nodeId, String? edgeId}) {
+    final net = ref.read(networkControllerProvider).network;
+    String? forService(ServiceType s) {
+      if (s.regime == FlowRegime.air) return 'HVAC · ducting';
+      if (s == ServiceType.fireSprinkler || s == ServiceType.fireHydrant) {
+        return 'Fire';
+      }
+      return 'Sizing';
+    }
+
+    if (edgeId != null) {
+      final e = net.edgeById(edgeId);
+      return e == null ? null : forService(e.service);
+    }
+    if (nodeId != null) {
+      final n = net.nodeById(nodeId);
+      if (n == null) return null;
+      // An air terminal is HVAC regardless of wiring.
+      if (n.airflow != null ||
+          n.component == NodeComponent.supplyDiffuser ||
+          n.component == NodeComponent.returnGrille ||
+          n.component == NodeComponent.exhaustGrille ||
+          n.component == NodeComponent.linearDiffuser) {
+        return 'HVAC · ducting';
+      }
+      for (final e in net.edges) {
+        if (e.fromId == nodeId || e.toId == nodeId) {
+          return forService(e.service);
+        }
+      }
+    }
+    return null;
   }
 
   @override
@@ -147,6 +246,8 @@ class _NetworkSelectionOverlayState
           child: _SelectionGestureLayer(
             sheetId: sheetId,
             floorIndex: floorIndex,
+            onFitView: widget.onFitView,
+            host: this,
           ),
         ),
         ...handles,
@@ -177,9 +278,27 @@ class _NetworkSelectionOverlayState
       height: r * 2,
       child: MouseRegion(
         cursor: SystemMouseCursors.move,
+        // The opaque handle owns the pointer over a node, so it publishes the
+        // hover pre-highlight (the gesture layer below never sees it).
+        onEnter: (_) => ref
+            .read(hoverTargetProvider.notifier)
+            .set((nodeId: id, edgeId: null)),
+        onExit: (_) => ref.read(hoverTargetProvider.notifier).clear(),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: () => ref.read(selectionProvider.notifier).selectNode(id),
+          onTap: () {
+            ref.read(selectionProvider.notifier).selectNode(id);
+            // Second click on the same node within the double-tap window opens
+            // the inspector (see [registerElementTap]).
+            registerElementTap(screen, nodeId: id);
+          },
+          // Right-click ANY node → its context menu (fitting rows for a bare
+          // junction, the face ladder for an air terminal, Select similar +
+          // Delete for all) — the handle owns the pointer over the node.
+          onSecondaryTapUp: (d) {
+            ref.read(selectionProvider.notifier).selectNode(id);
+            showNodeContextMenu(context, ref, id, d.globalPosition);
+          },
           onPanStart: (_) {
             ref.read(selectionProvider.notifier).selectNode(id);
             ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
@@ -459,10 +578,17 @@ String? _edgeAt(Network net, ViewportTransform transform, Offset world,
 class _SelectionGestureLayer extends ConsumerStatefulWidget {
   final String sheetId;
   final int floorIndex;
+  final VoidCallback? onFitView;
+
+  /// The owning overlay state — carries the shared double-click tracker (the
+  /// node drag handles above this layer feed the same tracker).
+  final _NetworkSelectionOverlayState host;
 
   const _SelectionGestureLayer({
     required this.sheetId,
     required this.floorIndex,
+    required this.host,
+    this.onFitView,
   });
 
   @override
@@ -476,6 +602,10 @@ class _SelectionGestureLayerState
   Offset? _bandStart;
   Offset? _bandNow;
 
+  /// Whether Shift was held when the marquee STARTED — a Shift-marquee UNIONS
+  /// its result into the current selection instead of replacing it.
+  bool _bandAdditive = false;
+
   String get _sheetId => widget.sheetId;
   int get _floor => widget.floorIndex;
 
@@ -484,7 +614,25 @@ class _SelectionGestureLayerState
     final transform = ref.watch(sheetsControllerProvider).viewportFor(_sheetId) ??
         const ViewportTransform();
 
-    return GestureDetector(
+    return MouseRegion(
+      opaque: false,
+      // Hover pre-highlight (detection half): publish the element under the
+      // cursor so the network painter can halo it. Notifies only on CHANGE and
+      // clears on exit, so an untouched canvas is byte-identical.
+      onHover: (e) {
+        final net = ref.read(networkControllerProvider).network;
+        final world = transform.screenToWorld(e.localPosition);
+        final node = _nodeAt(net, transform, world, _sheetId, _floor);
+        final edge = node == null
+            ? _edgeAt(net, transform, world, _sheetId, _floor)
+            : null;
+        ref.read(hoverTargetProvider.notifier).set(
+            node == null && edge == null
+                ? null
+                : (nodeId: node, edgeId: edge));
+      },
+      onExit: (_) => ref.read(hoverTargetProvider.notifier).clear(),
+      child: GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTapUp: (details) {
         final net = ref.read(networkControllerProvider).network;
@@ -493,39 +641,54 @@ class _SelectionGestureLayerState
         final world = transform.screenToWorld(details.localPosition);
         final node = _nodeAt(net, transform, world, _sheetId, _floor);
         if (node != null) {
-          shift ? sel.toggleNode(node) : sel.selectNode(node);
+          if (shift) {
+            sel.toggleNode(node);
+          } else {
+            sel.selectNode(node);
+            widget.host.registerElementTap(details.localPosition, nodeId: node);
+          }
           return;
         }
         final edge = _edgeAt(net, transform, world, _sheetId, _floor);
         if (edge != null) {
-          shift ? sel.toggleEdge(edge) : sel.selectEdge(edge);
+          if (shift) {
+            sel.toggleEdge(edge);
+          } else {
+            sel.selectEdge(edge);
+            widget.host.registerElementTap(details.localPosition, edgeId: edge);
+          }
         } else if (!shift) {
           sel.clear();
+          // An empty-space tap resets the double-click tracker (never opens).
+          widget.host.resetTapTracking();
         }
       },
-      // Right-click an edge → custom MechXTheme context menu (size / material /
-      // delete). A right-click on empty space just clears the selection.
+      // Right-click a node/edge → custom MechXTheme context menu; a right-click
+      // on empty space opens the canvas menu (Paste here / Select all / Fit).
       onSecondaryTapUp: (details) {
         final net = ref.read(networkControllerProvider).network;
         final sel = ref.read(selectionProvider.notifier);
         final world = transform.screenToWorld(details.localPosition);
         final nodeId = _nodeAt(net, transform, world, _sheetId, _floor);
         if (nodeId != null) {
-          // Right-clicking a plain junction (a fitting) opens the Fitting menu —
-          // pick Tee / Wye / Tee-wye / Cross / Coupling / Elbow / Cap / Auto.
-          // Equipment / fixture nodes have no fitting menu (fall through clears).
-          final node = net.nodeById(nodeId);
-          if (node != null &&
-              node.component == null &&
-              node.role == NodeRole.main) {
-            sel.selectNode(nodeId);
-            showNodeFittingMenu(context, ref, nodeId, details.globalPosition);
-          }
+          // ANY node gets a menu: fitting rows for a bare junction, the face
+          // ladder for an air terminal, Select similar + Delete for all.
+          sel.selectNode(nodeId);
+          showNodeContextMenu(context, ref, nodeId, details.globalPosition);
           return;
         }
         final edge = _edgeAt(net, transform, world, _sheetId, _floor);
         if (edge == null) {
           sel.clear();
+          showCanvasContextMenu(
+            context,
+            ref,
+            details.globalPosition,
+            world: world,
+            sheetId: _sheetId,
+            floorIndex: _floor,
+            onFitView: widget.onFitView,
+          );
           return;
         }
         sel.selectEdge(edge);
@@ -540,10 +703,12 @@ class _SelectionGestureLayerState
         final overEmpty =
             _nodeAt(net, transform, world, _sheetId, _floor) == null &&
                 _edgeAt(net, transform, world, _sheetId, _floor) == null;
-        if (overEmpty || HardwareKeyboard.instance.isShiftPressed) {
+        final shift = HardwareKeyboard.instance.isShiftPressed;
+        if (overEmpty || shift) {
           setState(() {
             _bandStart = details.localPosition;
             _bandNow = details.localPosition;
+            _bandAdditive = shift;
           });
         }
       },
@@ -554,9 +719,13 @@ class _SelectionGestureLayerState
       onPanEnd: (_) {
         final start = _bandStart;
         final now = _bandNow;
+        // Shift held at EITHER end of the drag makes the marquee additive.
+        final additive =
+            _bandAdditive || HardwareKeyboard.instance.isShiftPressed;
         setState(() {
           _bandStart = null;
           _bandNow = null;
+          _bandAdditive = false;
         });
         if (start == null || now == null) return;
         final net = ref.read(networkControllerProvider).network;
@@ -576,13 +745,15 @@ class _SelectionGestureLayerState
             edgeIds.add(e.id);
           }
         }
-        ref.read(selectionProvider.notifier).setMulti(nodeIds, edgeIds);
+        final sel = ref.read(selectionProvider.notifier);
+        additive ? sel.addMulti(nodeIds, edgeIds) : sel.setMulti(nodeIds, edgeIds);
       },
       child: CustomPaint(
         size: Size.infinite,
         painter: _MarqueePainter(
             start: _bandStart, now: _bandNow, accent: context.colors.accent),
         child: const SizedBox.expand(),
+      ),
       ),
     );
   }

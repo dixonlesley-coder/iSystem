@@ -1280,7 +1280,11 @@ Set<String>? _focusedNodeIds(Network network, ServiceType? focus) {
 }
 
 /// Screen position of each (visible) node: floors stacked by index (floor 0 at
-/// the bottom), nodes spread left→right across the band by their x order.
+/// the bottom), nodes placed left→right by the SHARED [riserLayoutPositions]
+/// column layout (B7) — a normalized x in [0,1] mapped into the drawing band —
+/// so a vertical riser stack reads as one column both here and in the exported
+/// sheet (the export consumes the same helper), instead of the two jogging
+/// apart. A single column (all nodes aligned, or one node) centres at 0.5.
 Map<String, Offset> _autoNodePositions(
     Network network, int levelCount, Size size,
     {ServiceType? focus}) {
@@ -1290,26 +1294,16 @@ Map<String, Offset> _autoNodePositions(
     return bandH * ((n - 1) - floorIndex) + bandH / 2;
   }
 
-  final visible = _focusedNodeIds(network, focus);
-  final byFloor = <int, List<NetNode>>{};
-  for (final node in network.nodes) {
-    if (visible != null && !visible.contains(node.id)) continue;
-    (byFloor[node.floorIndex] ??= []).add(node);
-  }
-  final positions = <String, Offset>{};
+  final norm = riserLayoutPositions(network, focus: focus);
   final drawWidth = size.width - 2 * _kAutoSidePad;
-  for (final entry in byFloor.entries) {
-    final nodes = List<NetNode>.from(entry.value)
-      ..sort((a, b) => a.x.compareTo(b.x));
-    final cy = bandCentreY(entry.key);
-    if (nodes.length == 1) {
-      positions[nodes.first.id] = Offset(size.width / 2, cy);
-    } else {
-      final step = drawWidth / (nodes.length - 1);
-      for (var i = 0; i < nodes.length; i++) {
-        positions[nodes[i].id] = Offset(_kAutoSidePad + i * step, cy);
-      }
-    }
+  final positions = <String, Offset>{};
+  for (final entry in norm.entries) {
+    final node = network.nodeById(entry.key);
+    if (node == null) continue;
+    positions[entry.key] = Offset(
+      _kAutoSidePad + entry.value * drawWidth,
+      bandCentreY(node.floorIndex),
+    );
   }
   return positions;
 }
@@ -2292,33 +2286,47 @@ class _EditSchematicPainter extends CustomPainter {
 
       final fromS = transform.worldToScreen(_worldOf(a));
       final toS = transform.worldToScreen(_worldOf(b));
+      final isRiser = edge.kind == EdgeKind.riser;
 
-      if (edge.id == selectedEdgeId) {
+      // A riser routes as the same orthogonal L-shape the Auto painter uses
+      // (horizontal at the from-y, vertical at the mid-x, horizontal to the
+      // to-x) so a riser joining two nodes at different x reads as a clean
+      // vertical, not a diagonal (B6). Runs stay straight.
+      final midX = (fromS.dx + toS.dx) / 2;
+      Path riserPath() => Path()
+        ..moveTo(fromS.dx, fromS.dy)
+        ..lineTo(midX, fromS.dy)
+        ..lineTo(midX, toS.dy)
+        ..lineTo(toS.dx, toS.dy);
+
+      if (selected) {
         // Selection halo behind the line — a soft, blurred glow so the
         // selection 'floats' (Apple-soft) rather than reading as a hard band.
-        canvas.drawLine(
-          fromS,
-          toS,
-          Paint()
-            ..color = colors.accent.withAlpha(64)
-            ..strokeWidth = 7
-            ..strokeCap = StrokeCap.round
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
-        );
+        final halo = Paint()
+          ..color = colors.accent.withAlpha(64)
+          ..strokeWidth = 7
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
+        if (isRiser) {
+          canvas.drawPath(riserPath(), halo);
+        } else {
+          canvas.drawLine(fromS, toS, halo);
+        }
       }
 
-      final stroke = (edge.kind == EdgeKind.riser ? 2.5 : 2.0) *
-          (selected ? 1.3 : 1.0);
+      final stroke = (isRiser ? 2.5 : 2.0) * (selected ? 1.3 : 1.0);
       final linePaint = Paint()
         ..color = color
         ..strokeWidth = stroke
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round;
-      canvas.drawLine(fromS, toS, linePaint);
 
-      if (edge.kind == EdgeKind.riser) {
+      if (isRiser) {
+        canvas.drawPath(riserPath(), linePaint);
         final goingUp = toS.dy < fromS.dy;
-        final mid = Offset((fromS.dx + toS.dx) / 2, (fromS.dy + toS.dy) / 2);
+        final arrowY = (fromS.dy + toS.dy) / 2;
+        final mid = Offset(midX, arrowY);
         _drawArrow(canvas, mid, goingUp, color);
 
         // Length (elevation delta) + sized diameter label.
@@ -2337,6 +2345,7 @@ class _EditSchematicPainter extends CustomPainter {
           fontWeight: FontWeight.w600,
         );
       } else {
+        canvas.drawLine(fromS, toS, linePaint);
         final s = sizing[edge.id];
         if (s != null) {
           final mid = Offset((fromS.dx + toS.dx) / 2, (fromS.dy + toS.dy) / 2);
@@ -2354,11 +2363,85 @@ class _EditSchematicPainter extends CustomPainter {
     }
   }
 
+  /// A representative colour for [node]: the service of any edge touching it
+  /// (Edit shows every service — no focus), else neutral. Mirrors the Auto
+  /// painter's combined-view `_nodeColor`.
+  Color _nodeColor(NetNode node) {
+    for (final e in network.edges) {
+      if (e.fromId == node.id || e.toId == node.id) {
+        return serviceColor(e.service);
+      }
+    }
+    return colors.textSecondary;
+  }
+
+  /// A human label for [node] — its equipment name or fixture type — or null for
+  /// a plain junction. Mirrors the Auto painter.
+  String? _nodeLabel(NetNode node) {
+    final c = node.component;
+    if (c != null) return c.label;
+    final f = node.fixture;
+    if (f != null) return _fixtureLabel(f);
+    return null;
+  }
+
+  String _fixtureLabel(PlumbingFixture f) => switch (f) {
+        PlumbingFixture.waterClosetFlushValve => 'WC',
+        PlumbingFixture.waterClosetFlushTank => 'WC',
+        PlumbingFixture.urinalFlushTank => 'Urinal',
+        PlumbingFixture.lavatory => 'Lavatory',
+        PlumbingFixture.shower => 'Shower',
+        PlumbingFixture.bathtub => 'Bathtub',
+        PlumbingFixture.kitchenSink => 'Sink',
+        PlumbingFixture.hoseBibb => 'Hose bibb',
+      };
+
+  /// Nodes carry their schematic symbol (equipment glyph / fixture drop-triangle
+  /// / plain junction) + a label — reusing the Auto painter's treatment (B6), so
+  /// the Edit surface reads like an engineered riser rather than anonymous dots.
   void _paintNodes(Canvas canvas) {
+    const box = 20.0;
     for (final node in network.nodes) {
       final pos = transform.worldToScreen(_worldOf(node));
-      canvas.drawCircle(pos, 5, Paint()..color = colors.canvas);
-      canvas.drawCircle(pos, 3.5, Paint()..color = colors.textSecondary);
+      final color = _nodeColor(node);
+
+      if (node.component != null) {
+        // A halo so the glyph reads over the run line, then the equipment glyph.
+        canvas.drawCircle(pos, box * 0.62, Paint()..color = colors.canvas);
+        canvas.save();
+        canvas.translate(pos.dx - box / 2, pos.dy - box / 2);
+        paintComponentSymbol(
+            canvas, const Size(box, box), node.component!, color);
+        canvas.restore();
+      } else if (node.role == NodeRole.fixture) {
+        // A fixture drop — a small filled down-triangle terminal.
+        const r = 6.0;
+        canvas.drawCircle(pos, r + 2.5, Paint()..color = colors.canvas);
+        final tri = Path()
+          ..moveTo(pos.dx - r, pos.dy - r * 0.7)
+          ..lineTo(pos.dx + r, pos.dy - r * 0.7)
+          ..lineTo(pos.dx, pos.dy + r)
+          ..close();
+        canvas.drawPath(tri, Paint()..color = color);
+      } else {
+        // A plain junction.
+        canvas.drawCircle(pos, 5.5, Paint()..color = colors.canvas);
+        canvas.drawCircle(pos, 4, Paint()..color = color);
+      }
+
+      final label = _nodeLabel(node);
+      if (label != null) {
+        _drawText(
+          canvas,
+          label,
+          Offset(pos.dx, pos.dy + 13),
+          fontSize: 9,
+          color: colors.textMuted,
+          fontWeight: FontWeight.w500,
+          centered: true,
+          maxWidth: 130,
+        );
+      }
     }
   }
 

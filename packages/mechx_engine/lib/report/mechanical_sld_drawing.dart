@@ -135,18 +135,16 @@ SldSheet buildMechanicalRiserSld({
       _topPad + (hiFloor - floorIndex) * _bandH;
   double bandCentreY(int floorIndex) => bandTop(floorIndex) + _bandH / 2;
 
-  // Map a node's x into the placement band [_gutterW+pad, _gutterW+drawW-pad].
-  final xs = nodes.map((n) => n.x).toList()..sort();
-  final minNodeX = xs.first;
-  final maxNodeX = xs.last;
-  final span = (maxNodeX - minNodeX).abs();
-  double placeX(double x) {
-    if (span < 1e-6) return _gutterW + _drawW / 2;
-    final t = (x - minNodeX) / span;
-    return _gutterW + _sidePad + t * (_drawW - 2 * _sidePad);
-  }
+  // Map a node's x into the placement band via the SHARED layout helper (B7):
+  // a normalized column position in [0,1] — the SAME geometry the on-canvas Auto
+  // painter uses — so a vertical riser stack reads as one column here and on the
+  // preview, instead of the two surfaces jogging apart. Absent (should not
+  // happen for a visible node) falls back to centred.
+  final normX = riserLayoutPositions(network, focus: focus);
+  double placeX(String nodeId) =>
+      _gutterW + _sidePad + (normX[nodeId] ?? 0.5) * (_drawW - 2 * _sidePad);
 
-  Offset posOf(NetNode n) => Offset(placeX(n.x), bandCentreY(n.floorIndex));
+  Offset posOf(NetNode n) => Offset(placeX(n.id), bandCentreY(n.floorIndex));
 
   final posById = <String, Offset>{
     for (final n in nodes) n.id: posOf(n),

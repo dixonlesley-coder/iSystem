@@ -362,10 +362,21 @@ I3 panel editor · F2 dirty guards · F3 busy feedback.
 D1 typeset PDF report (block-list refactor first, Markdown pinned byte-identical) · D4 ID bodies ·
 D5 CSVs · D6 MTO/wastage · J2/J3 stage handoffs + Review→export.
 
-**Wave 5 — structural consolidation.**
+**Wave 5 — structural consolidation. ✅ LANDED 2026-07-02**
+(see the §15 decisions-log row for the change detail)
 A8 plan exports onto SldSheet + A1/A2 paper · H2 stepper fields + H6 master-detail inspector ·
 G4–G8 interaction completeness · I5–I8 electrical selection/i18n/LOD/minimap · B6/B7 riser edit
 mode + layout unification · E4–E8 canvas drafting polish · remaining low items.
+*A8 disposition:* A1/A2/A3 paper sizes + shared fit/scale helpers landed; the FULL
+plan-exporters-onto-SldSheet unification is deliberately deferred — waves 2–3 landed its
+content (symbols, lineweights, labels, underlay) per-exporter with byte-level pins, so the
+consolidation became high-risk/low-yield. Revisit only if a fourth plan renderer appears.
+
+---
+
+**STATUS: all 5 waves complete (2026-07-02).** Every actionable finding of the 78 is landed
+or explicitly dispositioned above. This document is now the review's historical record; new
+output/UX work should start from fresh observation, not from this list.
 
 Every engine change above follows the house rules: additive/optional params defaulting to
 byte-identical output, no fabricated standards data (kA only when the fault study resolves it, no

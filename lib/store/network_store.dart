@@ -56,6 +56,15 @@ class NetworkController extends Notifier<DrawingState> {
   /// In-memory copy/paste clipboard (NOT persisted to the .mechx file).
   _Clipboard? _clipboard;
 
+  /// True between a [pushUndoSnapshot] (drag start) and the next commit: the
+  /// pre-drag network is ALREADY on the undo stack + global timeline, so the
+  /// commit that ENDS the drag ([_commitDragEnd] — the snap/merge or tap-in)
+  /// must replace the working state without pushing a second snapshot — one
+  /// drag = one undo step. Any ordinary [_commit] consumes the flag (its own
+  /// snapshot push stands alone), so a drag that ends without a merge never
+  /// bleeds into the next edit.
+  bool _dragSnapshotPending = false;
+
   @override
   DrawingState build() => const DrawingState();
 
@@ -68,6 +77,7 @@ class NetworkController extends Notifier<DrawingState> {
   String _id(String prefix) => '$prefix${_seq++}';
 
   void _commit(Network next, {Offset? pendingPoint}) {
+    _dragSnapshotPending = false; // a normal commit stands on its own snapshot
     _undo.add(state.network);
     if (_undo.length > 200) _undo.removeAt(0);
     _redo.clear();
@@ -77,6 +87,25 @@ class NetworkController extends Notifier<DrawingState> {
       service: state.service,
       tool: state.tool,
       pendingPoint: pendingPoint,
+    );
+  }
+
+  /// Commit [next] as the END of a drag. When [pushUndoSnapshot] began the
+  /// drag (the pre-drag network is already on the undo stack + timeline) the
+  /// state is replaced WITHOUT pushing a second snapshot or timeline entry —
+  /// so the whole drag-and-snap is ONE undo step back to the pre-drag network.
+  /// A caller that never snapshotted (programmatic use) falls back to a full
+  /// [_commit] so the change stays safely undoable.
+  void _commitDragEnd(Network next) {
+    if (!_dragSnapshotPending) {
+      _commit(next);
+      return;
+    }
+    _dragSnapshotPending = false;
+    state = DrawingState(
+      network: next,
+      service: state.service,
+      tool: state.tool,
     );
   }
 
@@ -301,6 +330,7 @@ class NetworkController extends Notifier<DrawingState> {
 
   void undo() {
     if (_undo.isEmpty) return;
+    _dragSnapshotPending = false;
     _redo.add(state.network);
     state = DrawingState(
       network: _undo.removeLast(),
@@ -311,6 +341,7 @@ class NetworkController extends Notifier<DrawingState> {
 
   void redo() {
     if (_redo.isEmpty) return;
+    _dragSnapshotPending = false;
     _undo.add(state.network);
     state = DrawingState(
       network: _redo.removeLast(),
@@ -1009,7 +1040,12 @@ class NetworkController extends Notifier<DrawingState> {
   /// Records one undo step (pair with [pushUndoSnapshot]/[moveNode] live drag).
   void endNodeDragWithSnap(String nodeId, double snapRadiusWorld) {
     final dragged = state.network.nodeById(nodeId);
-    if (dragged == null) return;
+    if (dragged == null) {
+      // A drag that ends with nothing to commit must not leave the pending
+      // flag armed for a later unrelated commit-path call.
+      _dragSnapshotPending = false;
+      return;
+    }
 
     // Nearest OTHER node on the same sheet/floor within the snap radius.
     final r2 = snapRadiusWorld * snapRadiusWorld;
@@ -1048,7 +1084,7 @@ class NetworkController extends Notifier<DrawingState> {
           (from == e.fromId && to == e.toId) ? e : e.copyWith(fromId: from, toId: to));
     }
     final nodes = state.network.nodes.where((n) => n.id != nodeId).toList();
-    _commit(Network(nodes: nodes, edges: edges));
+    _commitDragEnd(Network(nodes: nodes, edges: edges));
   }
 
   /// Closest point on segment a→b to p (all in world px).
@@ -1069,7 +1105,10 @@ class NetworkController extends Notifier<DrawingState> {
     final net = state.network;
     final connected =
         net.edges.any((e) => e.fromId == dragged.id || e.toId == dragged.id);
-    if (connected) return; // only auto-connect a free node
+    if (connected) {
+      _dragSnapshotPending = false; // no commit — disarm (see endNodeDragWithSnap)
+      return; // only auto-connect a free node
+    }
 
     NetEdge? bestEdge;
     var bestD2 = radiusWorld * radiusWorld;
@@ -1096,7 +1135,10 @@ class NetworkController extends Notifier<DrawingState> {
       }
     }
     final e = bestEdge;
-    if (e == null) return;
+    if (e == null) {
+      _dragSnapshotPending = false; // no commit — disarm (see endNodeDragWithSnap)
+      return;
+    }
     final a = net.nodeById(e.fromId)!;
     final b = net.nodeById(e.toId)!;
     final snap2 = radiusWorld * radiusWorld;
@@ -1144,7 +1186,7 @@ class NetworkController extends Notifier<DrawingState> {
       toId: junctionId,
       service: e.service,
     ));
-    _commit(Network(nodes: newNodes, edges: newEdges));
+    _commitDragEnd(Network(nodes: newNodes, edges: newEdges));
   }
 
   /// Copy every horizontal RUN (and the nodes it touches) on
@@ -1318,6 +1360,34 @@ class NetworkController extends Notifier<DrawingState> {
     return (nodeIds: newNodeIds, edgeIds: newEdgeIds);
   }
 
+  /// Paste the clipboard CENTRED at [world] (sheet px) on [sheetId]/
+  /// [floorIndex] — the "Paste here" of the canvas context menu. Computes the
+  /// offset from the clipboard nodes' centroid and delegates to [paste] (one
+  /// undo step, fresh ids, selection set to the pasted elements). Returns the
+  /// new ids; empty when the clipboard is empty.
+  ({Set<String> nodeIds, Set<String> edgeIds}) pasteAt({
+    required String sheetId,
+    required int floorIndex,
+    required Offset world,
+  }) {
+    final clip = _clipboard;
+    if (clip == null || clip.nodes.isEmpty) {
+      return (nodeIds: <String>{}, edgeIds: <String>{});
+    }
+    var cx = 0.0, cy = 0.0;
+    for (final n in clip.nodes) {
+      cx += n.x;
+      cy += n.y;
+    }
+    cx /= clip.nodes.length;
+    cy /= clip.nodes.length;
+    return paste(
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      offsetWorld: Offset(world.dx - cx, world.dy - cy),
+    );
+  }
+
   /// Remove every node in [nodeIds] (and all edges touching them) PLUS every
   /// edge in [edgeIds], in ONE undo step. No-op when nothing matches.
   void deleteMany(Set<String> nodeIds, Set<String> edgeIds) {
@@ -1345,11 +1415,14 @@ class NetworkController extends Notifier<DrawingState> {
   }
 
   /// Snapshot the current network onto the undo stack — call once at the start
-  /// of a drag so the whole move collapses into a single undo step.
+  /// of a drag so the whole move collapses into a single undo step. The
+  /// drag-end merge/tap-in ([endNodeDragWithSnap]) then commits WITHOUT a
+  /// second snapshot (see [_commitDragEnd]).
   void pushUndoSnapshot() {
     _undo.add(state.network);
     if (_undo.length > 200) _undo.removeAt(0);
     _redo.clear();
+    _dragSnapshotPending = true;
     ref.read(historyProvider.notifier).record(UndoDomain.network);
   }
 
@@ -1375,6 +1448,7 @@ class NetworkController extends Notifier<DrawingState> {
   void loadNetwork(Network net) {
     _undo.clear();
     _redo.clear();
+    _dragSnapshotPending = false;
     _seq = _maxLoadedSeq(net) + 1;
     state = DrawingState(network: net, service: state.service);
   }
