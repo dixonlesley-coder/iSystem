@@ -178,10 +178,13 @@ Timer startAutosave(
     if (network.nodes.isEmpty) return; // nothing worth recovering yet
     final doc = buildDocument(c.read);
     final encoded = doc.encode();
+    final clean = encoded == c.read(lastSavedSignatureProvider);
+    // Piggy-back the "edited" indicator on the signature comparison we're
+    // already doing (Save/Open clear it eagerly; this catches new edits).
+    c.read(projectDirtyProvider.notifier).set(!clean);
     // Skip when the work already matches the last clean Save (no phantom
     // recovery), or when we've already mirrored this exact content.
-    if (encoded == c.read(lastSavedSignatureProvider) ||
-        encoded == lastWritten) {
+    if (clean || encoded == lastWritten) {
       return;
     }
     lastWritten = encoded;

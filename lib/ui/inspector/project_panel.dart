@@ -4,6 +4,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show WarningSeverity;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
@@ -16,6 +18,7 @@ import 'package:mechx_engine/report/plan_pdf_export.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
+import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pipe_optimizer.dart';
@@ -33,6 +36,7 @@ import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/design_issues_store.dart';
 import '../../store/electrical_store.dart';
+import '../../store/command_store.dart';
 import '../../store/fire_store.dart';
 import '../../store/fixture_library_store.dart';
 import '../../store/history_store.dart';
@@ -125,6 +129,9 @@ Future<void> _runExport(
     final wrote = await write();
     if (wrote) {
       ref.read(statusMessageProvider.notifier).showStatus('Exported $name');
+      // The stepper's Report stage is DONE only once a deliverable actually
+      // exists — this one line covers every export routed through here.
+      ref.read(reportExportedProvider.notifier).markExported();
     }
   } catch (e) {
     ref
@@ -157,29 +164,57 @@ Future<void> exportCalcReport(WidgetRef ref) => _runExport(
     );
 
 /// Build the compliance pass/fail roll-up from the live aggregated design
-/// issues. Pure read of `designIssuesProvider` (no new checks): warnings drive
-/// fail/review verdicts, info-tier items (unverified standards, advisories) are
-/// summarised but kept as PASS-with-note categories.
+/// issues. Pure read of `designIssuesProvider` + the electrical solve (no new
+/// checks). COMPLETE by construction: the three named checks match their
+/// categories, every REMAINING aggregated issue title gets its own row (so a
+/// present — or future — issue kind can never be silently omitted and the
+/// table can't say PASS beside an unlisted finding), and the electrical
+/// system's own warnings feed a dedicated row (they are not part of
+/// `designIssuesProvider`).
 ComplianceSummary buildComplianceSummary(WidgetRef ref) {
   final issues = ref.read(designIssuesProvider);
 
-  int countWhere(bool Function(DesignIssue) test) =>
-      issues.where(test).length;
+  bool isFail(DesignIssue i) =>
+      i.severity == IssueSeverity.warning ||
+      i.severity == IssueSeverity.critical;
+
+  // The three named checks (kept as positive confirmations on a clean
+  // project). Track which issues they account for; everything else rolls up
+  // into per-title rows below.
+  final accounted = <DesignIssue>{};
+  List<DesignIssue> claim(bool Function(DesignIssue) test) {
+    final matched = issues.where(test).toList();
+    accounted.addAll(matched);
+    return matched;
+  }
 
   // Velocity: any out-of-band air-velocity warning fails the check.
-  final velocityWarnings = countWhere((i) =>
-      i.severity == IssueSeverity.warning &&
-      (i.title.contains('velocity')));
+  final velocityWarnings =
+      claim((i) => i.title.contains('velocity')).where(isFail).length;
   // Calibration: any uncalibrated-sheet issue fails the check — a blank sheet
   // is a warning, an edge-bearing one is escalated to critical, and BOTH must
   // fail the 'Sheet calibration' compliance item.
-  final calibrationWarnings = countWhere((i) =>
-      (i.severity == IssueSeverity.warning ||
-          i.severity == IssueSeverity.critical) &&
-      i.title.contains('calibrated'));
+  final calibrationWarnings =
+      claim((i) => i.title.contains('calibrated')).where(isFail).length;
   // Standards verification: unverified-standard info items.
-  final unverified =
-      countWhere((i) => i.title == 'Unverified standard');
+  final unverified = claim((i) => i.title == 'Unverified standard').length;
+
+  // Every other aggregated issue, grouped by title — duct over-capacity,
+  // network connectivity, unsized air elements, drainage/Legionella
+  // advisories, and whatever lands in the aggregator next.
+  final remainder = <String, List<DesignIssue>>{};
+  for (final i in issues) {
+    if (accounted.contains(i)) continue;
+    remainder.putIfAbsent(i.title, () => []).add(i);
+  }
+
+  // Electrical sizing: the solved system's own warning list (error severity —
+  // e.g. cable-ampacity-inadequate — must fail the sign-off).
+  final eWarnings = ref.read(electricalResultProvider).warnings;
+  final eErrors =
+      eWarnings.where((w) => w.severity == WarningSeverity.error).length;
+  final eWarns =
+      eWarnings.where((w) => w.severity == WarningSeverity.warning).length;
 
   return ComplianceSummary(
     date: DateTime.now().toIso8601String().split('T').first,
@@ -199,6 +234,19 @@ ComplianceSummary buildComplianceSummary(WidgetRef ref) {
           detail: unverified == 0
               ? 'all values verified'
               : '$unverified value(s) require verification before submission'),
+      for (final e in remainder.entries)
+        ComplianceItem(e.key,
+            pass: !e.value.any(isFail),
+            detail: e.value.any(isFail)
+                ? '${e.value.where(isFail).length} finding(s)'
+                : '${e.value.length} advisory note(s)'),
+      ComplianceItem('Electrical circuit sizing',
+          pass: eErrors == 0,
+          detail: eErrors == 0
+              ? (eWarns == 0
+                  ? 'no sizing errors'
+                  : '$eWarns warning(s), no errors')
+              : '$eErrors error(s), $eWarns warning(s)'),
     ],
   );
 }
@@ -517,13 +565,26 @@ const List<ServiceType> kDrawServices = [
 
 /// Right inspector: project details, per-floor heights (the vertical
 /// length source of truth, §10), and the per-sheet scale-calibration status.
-class ProjectPanel extends ConsumerWidget {
+class ProjectPanel extends ConsumerStatefulWidget {
   const ProjectPanel({super.key});
 
   static const double width = 272;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProjectPanel> createState() => _ProjectPanelState();
+}
+
+class _ProjectPanelState extends ConsumerState<ProjectPanel> {
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
     final project = ref.watch(projectControllerProvider);
@@ -532,15 +593,29 @@ class ProjectPanel extends ConsumerWidget {
     final calibration =
         currentSheet == null ? null : project.calibrationFor(currentSheet.id);
 
+    // Context before document (the Keynote inspector rule): the selection
+    // editor is pinned FIRST, and picking something on canvas snaps the panel
+    // to the top so the pick is immediately visible — the panel otherwise
+    // gives no cue that anything changed.
+    ref.listen(selectionProvider, (prev, next) {
+      if ((prev == null || prev.isEmpty) && !next.isEmpty && _scroll.hasClients) {
+        _scroll.jumpTo(0);
+      }
+    });
+
     return SizedBox(
-      width: width,
+      width: ProjectPanel.width,
       // Transparent: the inspector floats on a Liquid-Glass surface
       // (CollapsibleInspector) so the canvas refracts through behind it.
       child: SingleChildScrollView(
+          controller: _scroll,
           padding: const EdgeInsets.all(MechXSpacing.md),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // ── Selection (only shown when something is selected) ─────────
+              const _SelectionSection(),
+
               // ── Building (summary → its own page) ─────────────────────────
               // The full floor/level editor (+ per-floor fixture heights) now
               // lives on the dedicated Building page so the inspector stays
@@ -565,9 +640,6 @@ class ProjectPanel extends ConsumerWidget {
 
               // ── Rooms (only shown when the sheet has designated rooms) ─────
               const _RoomsSection(),
-
-              // ── Selection (only shown when something is selected) ─────────
-              const _SelectionSection(),
 
               // ── Sizing ────────────────────────────────────────────────────
               const _SizingSection(),
@@ -1719,11 +1791,37 @@ class _FireSection extends ConsumerWidget {
           ),
         );
 
+    // The one INPUT the whole fire design derives from — previously settable
+    // only through the New-from-template dialog (a results panel with an
+    // invisible input); mirrors the Sizing section's Occupancy pill row.
+    String hazardLabel(FireHazardClass h) => switch (h) {
+          FireHazardClass.lightHazard => 'Light',
+          FireHazardClass.ordinaryHazard1 => 'Ordinary 1',
+          FireHazardClass.ordinaryHazard2 => 'Ordinary 2',
+          FireHazardClass.extraHazard => 'Extra',
+        };
+
     return DisclosureSection(
       name: 'Fire',
       child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Text('Hazard class',
+            style: type.caption.copyWith(color: colors.textMuted)),
+        const SizedBox(height: MechXSpacing.xs),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            for (final h in FireHazardClass.values)
+              _Pill(
+                label: hazardLabel(h),
+                selected: ref.watch(fireHazardProvider) == h,
+                onTap: () => ref.read(fireHazardProvider.notifier).set(h),
+              ),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
         kv('Sprinkler flow',
             '${sprinkler.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),
         kv('Sprinkler heads', '${sprinkler.sprinklerCount}'),
@@ -1957,6 +2055,48 @@ class _SelectionSection extends ConsumerWidget {
     final project = ref.watch(projectControllerProvider);
     final elev = nodeElevation(node, project.building).meters;
 
+    // Scope the fixture field groups to the node's ACTUAL discipline, derived
+    // from its connected edges — a WC must not offer a diffuser-airflow
+    // stepper, nor a supply diffuser the WC/urinal pills. An unconnected node
+    // falls back to showing a group (nothing becomes unreachable before its
+    // pipes are drawn) unless its component already rules the group out; a
+    // group with a value set always shows so it stays editable/clearable.
+    final net = ref.watch(networkControllerProvider).network;
+    final touching = <ServiceType>{
+      for (final e in net.edges)
+        if (e.fromId == node.id || e.toId == node.id) e.service,
+    };
+    final airTerminal = switch (node.component) {
+      NodeComponent.supplyDiffuser ||
+      NodeComponent.returnGrille ||
+      NodeComponent.exhaustGrille ||
+      NodeComponent.linearDiffuser =>
+        true,
+      _ => false,
+    };
+    final plumbingTouch = touching.any((s) =>
+        s == ServiceType.coldWater ||
+        s == ServiceType.hotWater ||
+        s == ServiceType.drainage ||
+        s == ServiceType.vent);
+    final airTouch = touching.any((s) => s.isAir);
+    final rainTouch = touching.contains(ServiceType.rainwater);
+    final unconnected = touching.isEmpty;
+    final showFixtureType = plumbingTouch ||
+        node.fixture != null ||
+        node.customFixtureId != null ||
+        (unconnected && !airTerminal);
+    final showAirflow = airTouch ||
+        airTerminal ||
+        node.airflow != null ||
+        (unconnected &&
+            node.fixture == null &&
+            node.customFixtureId == null);
+    final showRoofArea = rainTouch ||
+        node.roofAreaM2 != null ||
+        node.component == NodeComponent.roofDrain ||
+        (unconnected && !airTerminal);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2130,6 +2270,7 @@ class _SelectionSection extends ConsumerWidget {
           ],
         ),
         if (node.role == NodeRole.fixture) ...[
+          if (showFixtureType) ...[
           const SizedBox(height: MechXSpacing.sm),
           Text('Fixture type',
               style: context.type.caption
@@ -2174,6 +2315,8 @@ class _SelectionSection extends ConsumerWidget {
               onPressed: () => showFixtureLibraryEditor(context, ref),
             ),
           ),
+          ],
+          if (showAirflow) ...[
           const SizedBox(height: MechXSpacing.sm),
           Text('Air terminal (diffuser) airflow',
               style: context.type.caption
@@ -2257,6 +2400,8 @@ class _SelectionSection extends ConsumerWidget {
               );
             }),
           ],
+          ],
+          if (showRoofArea) ...[
           const SizedBox(height: MechXSpacing.sm),
           Text('Rainwater outlet roof area',
               style: context.type.caption
@@ -2287,6 +2432,7 @@ class _SelectionSection extends ConsumerWidget {
               ),
             ],
           ),
+          ],
         ],
         const SizedBox(height: MechXSpacing.sm),
         Align(

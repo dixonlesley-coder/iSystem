@@ -316,6 +316,20 @@ SldSheet buildElectricalSld({
     // Underline under the column-header row.
     prims.add(SldLine(bx + 4, busTop + _rowH, blockX + _blockW - 8,
         busTop + _rowH));
+    // Ruled table verticals — the BRI `Diagram Panel` schedule is a fully
+    // ruled grid, not whitespace-aligned text. One thin separator a few px
+    // left of each column, spanning the header band + every body row.
+    for (final colX in const [
+      _colDevice,
+      _colPenghantar,
+      _colDaya,
+      _colKeterangan,
+      _colR,
+      _colS,
+      _colT,
+    ]) {
+      prims.add(SldLine(blockX + colX - 6, busTop, blockX + colX - 6, busBot));
+    }
 
     // One ROW per way, in ALIGNED columns: GRUP (way no) | DEVICE (breaker,
     // rating + phase first) | PENGHANTAR (cable family + cores x CSA + separate
@@ -389,6 +403,13 @@ SldSheet buildElectricalSld({
           SldLabel(blockX + _colGrup, rowY + 3, 'W${ways + s + 1}', size: rowSize));
       prims.add(SldLabel(
           blockX + _colKeterangan, rowY + 3, 'CADANGAN (spare)', size: rowSize));
+    }
+
+    // Ruled table horizontals — one thin rule under every way/spare row (the
+    // last coincides with the bus bottom, doubling as the TOTAL divider).
+    for (var slot = 1; slot <= bodyRows; slot++) {
+      final ruleY = busTop + 6 + (slot + 1) * _rowH;
+      prims.add(SldLine(bx + 4, ruleY, blockX + _blockW - 8, ruleY));
     }
 
     // TOTAL footer — the panel's diversified demand (W/kW + line current) + the

@@ -1,17 +1,11 @@
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/autosave.dart';
-import '../data/dwg_converter.dart';
-import '../data/dwg_import.dart';
-import '../data/dxf_import.dart';
-import '../data/pdf_import.dart';
 import '../data/project_assets.dart';
-import '../data/project_document.dart';
 import '../data/recovery.dart';
 import '../store/app_state.dart';
 import '../store/command_store.dart';
@@ -31,12 +25,12 @@ import 'inspector/project_panel.dart';
 import 'layout/layout_canvas.dart';
 import 'review/review_hub.dart';
 import 'schematic/schematic_view.dart';
-import 'sheets/pdf_page_picker.dart';
 import 'shell/building_screen.dart';
 import 'shell/command_palette.dart';
 import 'shell/nav_rail.dart';
 import 'shell/workflow_stepper.dart';
 import 'shell/preferences_screen.dart';
+import 'shell/project_io.dart';
 import 'shell/projects_screen.dart';
 import 'sheets/sheet_rail.dart';
 import 'strings/app_strings.dart';
@@ -65,6 +59,17 @@ class AppShell extends ConsumerWidget {
         HardwareKeyboard.instance.isMetaPressed;
     if (mod && key == LogicalKeyboardKey.keyK) {
       ref.read(commandPaletteOpenProvider.notifier).toggle();
+      return KeyEventResult.handled;
+    }
+    // Document-app save/open conventions: Ctrl/Cmd+S saves in place (Shift
+    // forces Save-As), Ctrl/Cmd+O opens — matching every desktop authoring
+    // tool a CAD engineer is trained on.
+    if (mod && key == LogicalKeyboardKey.keyS) {
+      saveProject(ref, saveAs: HardwareKeyboard.instance.isShiftPressed);
+      return KeyEventResult.handled;
+    }
+    if (mod && key == LogicalKeyboardKey.keyO) {
+      openProject(ref);
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.escape &&
@@ -232,120 +237,6 @@ class _ElectricalInspectorColumn extends StatelessWidget {
 class _TopBar extends ConsumerWidget {
   const _TopBar();
 
-  Future<void> _pickAndLoadPlan(BuildContext context, WidgetRef ref) async {
-    final result = await FilePicker.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['pdf', 'dxf', 'dwg'],
-      allowMultiple: false,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final path = result.files.single.path;
-    if (path == null || path.isEmpty) return;
-
-    final lower = path.toLowerCase();
-    final isDxf = lower.endsWith('.dxf');
-    final isDwg = lower.endsWith('.dwg');
-    final what = isDwg
-        ? 'DWG'
-        : isDxf
-            ? 'DXF'
-            : 'PDF';
-    try {
-      var sheets = isDwg
-          ? await importDwg(path,
-              converter: const OdaDwgConverter(), outDir: dwgCacheDir())
-          : isDxf
-              ? await importDxf(path)
-              : await importPdf(path);
-      if (sheets.isEmpty) {
-        ref
-            .read(loadErrorProvider.notifier)
-            .set('That $what had no importable geometry.');
-        return;
-      }
-      // Multi-page PDF: let the user pick which pages to bring in (single-page
-      // documents — and every DXF, which is one sheet — import straight through).
-      if (sheets.length > 1 && context.mounted) {
-        final chosen = await showPdfPagePicker(context, sheets);
-        if (chosen == null) return; // cancelled — keep the current project
-        if (chosen.isEmpty) return;
-        sheets = chosen;
-      }
-      ref.read(sheetsControllerProvider.notifier).loadSheets(sheets);
-      ref.read(loadErrorProvider.notifier).clear();
-      final n = sheets.length;
-      ref
-          .read(statusMessageProvider.notifier)
-          .showStatus('$n ${n == 1 ? 'sheet' : 'sheets'} imported');
-    } catch (e) {
-      // Surface the failure instead of silently keeping the old sheets.
-      ref.read(loadErrorProvider.notifier).set('Could not import $what: $e');
-    }
-  }
-
-  Future<void> _saveProject(WidgetRef ref) async {
-    final project = ref.read(projectControllerProvider);
-    final doc = buildDocument(ref.read);
-    final path = await FilePicker.saveFile(
-      dialogTitle: 'Save iSystem project',
-      fileName: '${project.name}.mechx',
-      type: FileType.custom,
-      allowedExtensions: const ['mechx'],
-    );
-    if (path == null) return;
-    final full = path.endsWith('.mechx') ? path : '$path.mechx';
-    // The path-only encoding is the "clean baseline" the autosave loop compares
-    // against (autosave never embeds) — so a just-saved project leaves no phantom
-    // recovery. The FILE on disk, however, embeds the source plans so it is
-    // portable across machines.
-    final baseline = doc.encode();
-    final portable = doc.withSheets(doc.sheets, assets: gatherSheetAssets(doc.sheets));
-    try {
-      await File(full).writeAsString(portable.encode());
-    } catch (e) {
-      ref.read(loadErrorProvider.notifier).set('Could not save project: $e');
-      return;
-    }
-    // The work is now safely on disk — record it as the clean baseline and
-    // drop any recovery snapshot/offer.
-    ref.read(lastSavedSignatureProvider.notifier).set(baseline);
-    await clearRecovery();
-    ref.read(recoveryDocProvider.notifier).clear();
-    ref
-        .read(statusMessageProvider.notifier)
-        .showStatus('Saved ${project.name}.mechx');
-  }
-
-  Future<void> _openProject(WidgetRef ref) async {
-    final result = await FilePicker.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['mechx', 'json'],
-      allowMultiple: false,
-    );
-    final path = result?.files.single.path;
-    if (path == null) return;
-    try {
-      final doc = ProjectDocument.decode(await File(path).readAsString());
-      // Extract any embedded source plans to local files + repoint the sheets,
-      // so a portable project renders even without the original plan files here.
-      applyDocument(ref.read, rehydrateAssets(doc));
-      // The just-loaded state is the clean baseline; capture its canonical
-      // encoding so autosave won't immediately mirror it to recovery.
-      ref
-          .read(lastSavedSignatureProvider.notifier)
-          .set(buildDocument(ref.read).encode());
-      await clearRecovery();
-      ref.read(recoveryDocProvider.notifier).clear();
-      ref.read(loadErrorProvider.notifier).clear();
-      ref.read(statusMessageProvider.notifier).showStatus('Project opened');
-    } on ProjectDocumentException catch (e) {
-      // Malformed/incompatible file — surface why, leave the project untouched.
-      ref.read(loadErrorProvider.notifier).set(e.message);
-    } catch (e) {
-      ref.read(loadErrorProvider.notifier).set('Could not open project: $e');
-    }
-  }
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
@@ -353,6 +244,10 @@ class _TopBar extends ConsumerWidget {
     final state = ref.watch(sheetsControllerProvider);
     final brightness = ref.watch(brightnessProvider);
     final projectName = ref.watch(projectControllerProvider).name;
+    final dirty = ref.watch(projectDirtyProvider);
+    final currentPath = ref.watch(currentProjectPathProvider);
+    final fileName =
+        currentPath?.split(Platform.pathSeparator).last;
 
     final current = state.current;
     final vt = current == null ? null : state.viewportFor(current.id);
@@ -381,6 +276,33 @@ class _TopBar extends ConsumerWidget {
                 style: type.body.copyWith(color: colors.textMuted),
               ),
             ),
+            // The document-app "edited" cue: a small accent dot while the work
+            // differs from the last clean save (cleared eagerly on Save/Open;
+            // false at rest so goldens are unchanged).
+            if (dirty)
+              Padding(
+                padding: const EdgeInsets.only(left: MechXSpacing.xs + 2),
+                child: Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: colors.accent,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            // Where Ctrl/Cmd+S will land — the remembered file (post Save/Open).
+            if (fileName != null) ...[
+              _titleDot(colors.textMuted),
+              Flexible(
+                child: Text(
+                  fileName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: type.caption.copyWith(color: colors.textMuted),
+                ),
+              ),
+            ],
             const Spacer(),
             // Actions sit flush-right. The zoom read-out is a quiet pill: a
             // soft tinted fill carries it, no hairline border — less visual
@@ -402,17 +324,17 @@ class _TopBar extends ConsumerWidget {
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
               label: context.strings(StringKey.shellOpen),
-              onPressed: () => _openProject(ref),
+              onPressed: () => openProject(ref),
             ),
             const SizedBox(width: MechXSpacing.xs),
             MechXButton(
               label: context.strings(StringKey.shellSave),
-              onPressed: () => _saveProject(ref),
+              onPressed: () => saveProject(ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
               label: context.strings(StringKey.shellImportPdf),
-              onPressed: () => _pickAndLoadPlan(context, ref),
+              onPressed: () => importPlan(context, ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(

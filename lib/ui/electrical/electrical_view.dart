@@ -570,7 +570,9 @@ class _Toolbar extends StatelessWidget {
           ),
           const SizedBox(width: MechXSpacing.xs),
           MechXSegment(
-            label: 'Riser',
+            // 'Building riser' — disambiguated from the nav rail's mechanical
+            // Riser view (one word must not name two destinations).
+            label: 'Building riser',
             selected: tab == _Tab.riser,
             onTap: () => onTab(_Tab.riser),
           ),

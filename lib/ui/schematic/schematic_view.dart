@@ -640,7 +640,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
           constraints.maxHeight.isFinite ? constraints.maxHeight : 600,
         );
         final feedStrategy = ref.watch(feedStrategyProvider);
-        // Resolve the equipment detail suffix per node (tank m³ / pump-fan kW)
+        // Resolve the equipment detail suffix per node (tank m3 / pump-fan kW)
         // here, provider-free in the painter — a datum is included only when it
         // genuinely exists (equipmentDetail returns null otherwise).
         final pump = ref.watch(pumpDutyProvider);
@@ -1160,12 +1160,14 @@ String _sizeLabel(EdgeSizing s) {
 }
 
 /// Industry single-line pipe tag — `SIZE-SERVICE-MATERIAL` (e.g. `100-CW-PPR`,
-/// matching Indonesian air-bersih riser drawings). Air keeps the duct Ø. When a
-/// [function] is confidently derived (riserFunctionFor), a `-GRAVITASI` /
-/// `-BOOSTER` / `-TRANSFER` suffix is appended (piped services only).
+/// matching Indonesian air-bersih riser drawings). Air uses the ASCII duct
+/// `O<mm>` form (the same stand-in the export/PDF path uses — one drawing must
+/// not mix two notations). When a [function] is confidently derived
+/// (riserFunctionFor), a `-GRAVITASI` / `-BOOSTER` / `-TRANSFER` suffix is
+/// appended (piped services only).
 String _pipeTag(EdgeSizing s, NetEdge edge, {RiserFunction? function}) {
   final mm = s.diameter.inMillimeters.round();
-  if (s.service.regime == FlowRegime.air) return 'Ø$mm';
+  if (s.service.regime == FlowRegime.air) return 'O$mm';
   final base = '$mm-${_serviceCode(edge.service)}-'
       '${_pipeMaterialCode(edge.pipeProduct, edge.service)}';
   return function != null ? '$base-${function.code}' : base;
@@ -1202,9 +1204,9 @@ StringKey drawingTitleKey(ServiceType? focus) {
 }
 
 /// The equipment detail SUFFIX drawn beside an equipment symbol on the
-/// single-line — a tank capacity (`237 m³`) or a duty (`5.5 kW`) — or null when
+/// single-line — a tank capacity (`237 m3`) or a duty (`5.5 kW`) — or null when
 /// no datum genuinely exists (the node then keeps its plain name, no fabricated
-/// value). HONEST: a tank's m³ is a direct conversion of the stored
+/// value). HONEST: a tank's m3 is a direct conversion of the stored
 /// [NetNode.tankCapacityLitres]; a duty is shown only when the matching system
 /// duty provider is non-null.
 ///
@@ -1224,10 +1226,12 @@ String? equipmentDetail(
       final litres = node.tankCapacityLitres;
       if (litres == null || litres <= 0) return null;
       final m3 = litres / 1000.0;
-      // Whole-m³ for big cisterns, one decimal for small tanks; strip a '.0'.
+      // Whole-m3 for big cisterns, one decimal for small tanks; strip a '.0'.
+      // ASCII 'm3' — matching the plant-detail callout, the notes card and the
+      // export (the PDF sanitizer would mangle a real superscript to '?').
       final s = m3 >= 100 ? m3.toStringAsFixed(0) : m3.toStringAsFixed(1);
       final clean = s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
-      return '$clean m³';
+      return '$clean m3';
     case NodeComponent.pump:
     case NodeComponent.boosterSet:
       // VERIFY: this is the SYSTEM supply-pump duty (one trunk pump), not a
@@ -1477,7 +1481,7 @@ class _AutoSchematicPainter extends CustomPainter {
   /// riser top. Computed once in the widget via [riserTags].
   final Map<String, String> riserTagsById;
 
-  /// Per-node equipment detail suffix (capacity `237 m³` / duty `5.5 kW`),
+  /// Per-node equipment detail suffix (capacity `237 m3` / duty `5.5 kW`),
   /// appended to the node's name. Resolved provider-free in the widget via
   /// [equipmentDetail]; absent nodes keep their plain name.
   final Map<String, String> detailByNode;
@@ -1772,7 +1776,7 @@ class _AutoSchematicPainter extends CustomPainter {
 
       // Fixture / equipment label, centred just below the symbol. When the node
       // carries an equipment detail (capacity / duty), append it after a '·'
-      // (e.g. 'Roof tank · 237 m³', 'Booster set · 5.5 kW').
+      // (e.g. 'Roof tank · 237 m3', 'Booster set · 5.5 kW').
       final label = node == null ? null : _nodeLabel(node);
       if (label != null) {
         final detail = node == null ? null : detailByNode[node.id];

@@ -191,6 +191,37 @@ class StatusMessageController extends Notifier<String?> {
   }
 }
 
+/// The file the open project lives in — set on a successful Open or Save, so
+/// Ctrl/Cmd+S saves IN PLACE instead of re-opening the OS dialog every time.
+/// Null until the project has a home (a brand-new project Save-As's first).
+/// Machine-local session state — deliberately NOT persisted into `.mechx`.
+final currentProjectPathProvider =
+    NotifierProvider<CurrentProjectPathController, String?>(
+  CurrentProjectPathController.new,
+);
+
+class CurrentProjectPathController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? path) => state = path;
+}
+
+/// Whether the live work differs from the last clean Save — drives the small
+/// "edited" dot beside the project name. Maintained by the autosave loop's
+/// existing signature comparison (no per-frame encode) and cleared eagerly on
+/// Save/Open. False at rest ⇒ the goldens (no autosave timer in tests) are
+/// unchanged.
+final projectDirtyProvider =
+    NotifierProvider<ProjectDirtyController, bool>(ProjectDirtyController.new);
+
+class ProjectDirtyController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void set(bool dirty) => state = dirty;
+}
+
 /// App-wide light/dark brightness. Defaults to dark (the restrained, low-glare
 /// default for a drawing tool). Persisted to the project file later.
 final brightnessProvider = NotifierProvider<BrightnessController, Brightness>(

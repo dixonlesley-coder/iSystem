@@ -339,7 +339,8 @@ report heads; **DXF TABLES (A2/C4)** precede linetype/layer work; **PDF paginati
 the riser drawing set (B3); the **plan SldSheet unification (A8)** is the carrier for symbols/
 lineweights/labels (A5–A7) if scheduled first — otherwise land those per-exporter and fold later.
 
-**Wave 1 — high-impact small fixes (1 short cycle, mostly app-side).**
+**Wave 1 — high-impact small fixes (1 short cycle, mostly app-side). ✅ LANDED 2026-07-02**
+(see the §15 decisions-log row for the change detail)
 C2 ruled schedule · D2 compliance roll-up · G1 Esc ladder + right-click-end · G2 mode pill ·
 G3 rubber-band feedback · F1 Ctrl+S/current-file · J1 empty-state actions · H1 selection-first ·
 H3 discipline-scoped fields · H5 fire input · J4 honest stepper · J5 naming · B8 ASCII notation.

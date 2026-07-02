@@ -47,14 +47,14 @@ FanDuty _fan(double motorKw) => FanDuty(
 
 void main() {
   group('equipmentDetail — tank capacity', () {
-    test('a roof tank with a capacity shows its m³', () {
+    test('a roof tank with a capacity shows its m3', () {
       final node = _node(NodeComponent.roofTank, tankCapacityLitres: 237000);
-      expect(equipmentDetail(node), '237 m³');
+      expect(equipmentDetail(node), '237 m3');
     });
 
     test('a ground tank with a small capacity keeps one decimal', () {
       final node = _node(NodeComponent.groundTank, tankCapacityLitres: 12500);
-      expect(equipmentDetail(node), '12.5 m³');
+      expect(equipmentDetail(node), '12.5 m3');
     });
 
     test('a tank with no capacity is omitted (null)', () {
@@ -100,7 +100,7 @@ void main() {
     test('a pump duty is NOT attached to an unrelated tank', () {
       // Even with a supply-pump duty in scope, a tank only shows its capacity.
       final tank = _node(NodeComponent.roofTank, tankCapacityLitres: 100000);
-      expect(equipmentDetail(tank, supplyPump: _pump(5.5)), '100 m³');
+      expect(equipmentDetail(tank, supplyPump: _pump(5.5)), '100 m3');
     });
   });
 }

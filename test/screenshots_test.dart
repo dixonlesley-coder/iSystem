@@ -181,7 +181,7 @@ void main() {
     // by true building elevation with vertical riser feeders + a floor/FFL
     // gutter, via `buildElectricalRiser` over the live mechanical
     // BuildingLevels.
-    await tester.tap(elecSegment('Riser'));
+    await tester.tap(elecSegment('Building riser'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     await expectLater(

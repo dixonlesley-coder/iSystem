@@ -86,6 +86,30 @@ void main() {
     expect(thick.length, greaterThanOrEqualTo(4));
   });
 
+  test('the board schedule is a RULED table — column verticals + row rules',
+      () {
+    // Single-panel detail re-origins the block to x=0, so the rule positions
+    // are exact: 7 column separators (6 px left of DEVICE / PENGHANTAR /
+    // DAYA / KETERANGAN / R / S / T) spanning header band → bus bottom, and
+    // one horizontal rule under each body row (MDP has 2 ways, 0 spares).
+    final detail = buildElectricalSld(
+        project: project, result: result, onlyPanelId: 'MDP');
+    final lines = detail.prims.whereType<SldLine>().toList();
+    const busTop = 46.0; // _headerH
+    const busBot = busTop + 3 * 20.0 + 6; // (1 header + 2 way rows) · _rowH + 6
+    for (final colX in const [116.0, 224.0, 446.0, 506.0, 726.0, 772.0, 818.0]) {
+      final vert = lines.where((l) =>
+          l.x1 == colX - 6 && l.x2 == colX - 6 && l.y1 == busTop && l.y2 == busBot);
+      expect(vert.length, 1, reason: 'column separator at ${colX - 6}');
+    }
+    // Row rules under way 1 (y 92) and way 2 (y 112 — the TOTAL divider).
+    for (final ruleY in const [92.0, 112.0]) {
+      final horiz = lines.where(
+          (l) => l.y1 == ruleY && l.y2 == ruleY && l.x2 - l.x1 > 500);
+      expect(horiz.length, 1, reason: 'row rule at y=$ruleY');
+    }
+  });
+
   test('labels carry the drafter way content (table columns + breaker/cable)',
       () {
     final texts =

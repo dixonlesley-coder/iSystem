@@ -43,6 +43,7 @@ import '../canvas/drawing_overlay.dart';
 import '../canvas/drop_overlay.dart';
 import '../canvas/heatmap_layer.dart';
 import '../canvas/measurement_overlay.dart';
+import '../canvas/mode_pill.dart';
 import '../canvas/smart_input_bar.dart';
 import '../canvas/tank_overlay.dart';
 import '../canvas/room_overlay.dart';
@@ -54,7 +55,10 @@ import '../canvas/zoom_controls.dart';
 import '../electrical/electrical_inspector.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../shell/project_io.dart';
+import '../shell/templates_dialog.dart';
 import '../widgets/canvas_guide_popover.dart';
+import '../widgets/mechx_button.dart';
 import '../widgets/mechx_empty_state_card.dart';
 import 'electrical_layer.dart';
 import 'layer_switcher.dart';
@@ -394,6 +398,25 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         ref.read(networkControllerProvider.notifier).cancelPending();
         return KeyEventResult.handled;
       }
+      // Step out of any active canvas MODE back to Select — Esc must always
+      // back out (the tool buttons live behind two collapsible layers, so a
+      // key path is the only reliable exit).
+      if (ref.read(measureModeProvider)) {
+        ref.read(measureModeProvider.notifier).set(false);
+        return KeyEventResult.handled;
+      }
+      if (ref.read(tankModeProvider)) {
+        ref.read(tankModeProvider.notifier).set(false);
+        return KeyEventResult.handled;
+      }
+      if (ref.read(roomModeProvider)) {
+        ref.read(roomModeProvider.notifier).set(false);
+        return KeyEventResult.handled;
+      }
+      if (ref.read(networkControllerProvider).tool != DrawTool.select) {
+        ref.read(networkControllerProvider.notifier).setTool(DrawTool.select);
+        return KeyEventResult.handled;
+      }
       if (!ref.read(selectionProvider).isEmpty) {
         ref.read(selectionProvider.notifier).clear();
         return KeyEventResult.handled;
@@ -474,15 +497,26 @@ class _SharedSheet extends ConsumerWidget {
 
     if (sheet == null) {
       // A branded empty-state card (the shared one, matching the electrical
-      // workspace's), not bare text — so an empty canvas reads as one app in
-      // both workspaces.
+      // workspace's), not bare text — and it CARRIES its actions (the Apple
+      // empty-state rule) instead of describing buttons that live elsewhere.
       return ColoredBox(
         color: colors.canvas,
-        child: const Center(
+        child: Center(
           child: MechXEmptyStateCard(
             title: 'No sheet loaded',
             body: 'Import a PDF floor plan to begin — then calibrate its '
                 'scale and draw on the Plumbing, HVAC and Electrical layers.',
+            actions: [
+              MechXButton(
+                label: 'Import plan...',
+                primary: true,
+                onPressed: () => importPlan(context, ref),
+              ),
+              MechXButton(
+                label: 'New from template...',
+                onPressed: () => showTemplatesDialog(context),
+              ),
+            ],
           ),
         ),
       );
@@ -646,6 +680,16 @@ class _SharedSheet extends ConsumerWidget {
             left: 0,
             right: 0,
             child: Center(child: _CalibrateHint()),
+          ),
+        // On-canvas mode pill — the active tool made visible on the canvas
+        // itself (renders nothing in Select mode). Drops below the calibrate
+        // nudge when both are up.
+        if (mechanicalActive && !calibrating)
+          Positioned(
+            top: (!calibrated) ? MechXSpacing.md + 40 : MechXSpacing.md,
+            left: 0,
+            right: 0,
+            child: const Center(child: ModePill()),
           ),
         // On-canvas zoom controls (bottom-left) — the same cluster the
         // electrical canvas shows, so both workspaces share the affordance.

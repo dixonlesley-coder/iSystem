@@ -258,7 +258,15 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `CAD-OUTPUT-UX-REVIEW.md` (root) holds 78 code-verified findings — professional-CAD
   gaps in the plan/riser/electrical exports + reports, and Apple-lens UI/workflow gaps —
   grouped into themes A–J and sequenced into 5 implementation waves. Work new
-  output/UX improvements from that document rather than re-reviewing.
+  output/UX improvements from that document rather than re-reviewing. **Wave 1
+  (the 13 high-impact small fixes) LANDED** (see the §15 row): ruled board-schedule
+  grid (C2), complete compliance roll-up incl. electrical errors (D2), Esc-exits-any-mode
+  + right-click-ends-run (G1), on-canvas mode pill (G2), rubber-band live length + snap
+  ring (G3), save-in-place + Ctrl+S/O + edited dot (F1, `ui/shell/project_io.dart`),
+  empty-state actions (J1), selection-first inspector w/ auto-scroll (H1),
+  discipline-scoped node fields (H3), fire hazard-class input (H5), honest Report stage
+  via `reportExportedProvider` (J4), 'Riser'/'Building riser' naming (J5), ASCII `m3`/`O`
+  notation on the riser canvas (B8). Waves 2–5 remain.
 - **Audit-fix wave (2026-06-28) — resolved** (`AUDIT-REPORT.md`, see the §15 row):
   the over-capacity air duct no longer THROWS (clamps + `EdgeSizing.overCapacity`
   flag → Review warning via `airOverCapacityProvider`); rectangular ducts honour
