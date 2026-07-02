@@ -254,6 +254,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
+- **UX & workflow review (2026-07-02) — the CURRENT plan of record for UX/workflow work**:
+  `UX-WORKFLOW-REVIEW.md` (root) holds 83 consolidated, adversarially code-verified findings
+  (from 115 raw across 12 review lenses; 32 high / 42 medium / 9 low, two proven with widget
+  tests) covering first-run honesty (demo sheets + the sample switchboard leak into real
+  deliverables), data safety (non-atomic saves, the %TEMP% recovery slot, annotation/settings
+  undo holes, text-field key bleed, 14 unguarded exports), drafting velocity (no tee-in, no
+  batch edit, no group move, no tool hotkeys), workspace parity (riser/electrical keyboard +
+  inspector gaps), and the last mile (compliance can never PASS, export scatter, electrical-only
+  Commercial, the dead solved-duty MEP→E bridge). Sequenced into 5 waves (trust → safety net →
+  velocity → parity → submittal/business); NONE implemented yet. It also corrects the record:
+  six items the CAD review's banner claims landed never shipped (H4, H7, I4, I2-half, J6, J8) —
+  they are folded into its findings. Work new UX/workflow improvements from that document.
 - **CAD-output + UX review (2026-07-02) — the plan of record for output/UX parity**:
   `CAD-OUTPUT-UX-REVIEW.md` (root) holds 78 code-verified findings — professional-CAD
   gaps in the plan/riser/electrical exports + reports, and Apple-lens UI/workflow gaps —
