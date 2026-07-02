@@ -49,7 +49,13 @@ class MechXEmptyStateCard extends StatelessWidget {
             ),
             if (actions.isNotEmpty) ...[
               const SizedBox(height: MechXSpacing.md),
-              Row(children: actions),
+              // Wrap (not Row) so multiple labelled buttons flow to a second
+              // line inside the 360-px card instead of overflowing it.
+              Wrap(
+                spacing: MechXSpacing.sm,
+                runSpacing: MechXSpacing.sm,
+                children: actions,
+              ),
             ],
           ],
         ),

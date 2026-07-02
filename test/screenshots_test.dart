@@ -12,6 +12,7 @@ import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
+import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx/ui/electrical/electrical_canvas.dart';
@@ -51,6 +52,15 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+
+    // Production launches with NO sheets and an EMPTY electrical project (A1/A2)
+    // so the first-run screens are honest; the golden suite seeds a
+    // deterministic multi-sheet project + the sample switchboard explicitly so
+    // the captured design states stay stable.
+    container.read(sheetsControllerProvider.notifier).loadDemoSheets();
+    container.read(electricalProjectProvider.notifier).resetToSample();
+    await tester.pump();
+
     final net = container.read(networkControllerProvider.notifier);
 
     // Draw a small cold-water network on the ground-floor sheet.
