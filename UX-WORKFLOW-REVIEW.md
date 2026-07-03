@@ -659,11 +659,16 @@ G8 SP-N ordinals · B5 update-exit guard · B9 eager dirty dot · H8 export nami
 (See the §15 decisions-log row for the change detail; adversarial review then fixed a
 phantom-recovery-on-update, a modal-unsafe hotkey, and an unused `.bak` fallback.)
 
-**Wave 2 — The safety net (undo + data model)**
+**Wave 2 — The safety net (undo + data model). ✅ LANDED 2026-07-03**
 B3 annotation undo domain + confirmable deletes · G2 MEP-panel upsert + auto badge · B6 floor
 remap/guards + honest template dialog · B7 sheet→floor remap + pile-up warning · A5 import
 add/replace + orphan pruning · B2 recovery slot + restore identity · G3 commit-on-blur fields ·
 B8 API key out of `.mechx` · A3 File→New · A4 settings file: MRU + locale/theme persistence.
+(See the §15 row. Adversarial review then fixed 5 defects — phantom-recovery on New/Open,
+import add-collision, the AI-key migration clobber, the updater's per-project slot, and the
+B6/B7 undo atomicity via a compound `UndoDomain.structural` coordinator. Residual noted: A4's
+`lastOpenPath` is persisted but reopen-last-on-launch is deliberately not wired — the MRU top
+entry already serves it, and auto-open would clobber crash recovery.)
 
 **Wave 3 — Drafting velocity (the 2× drafter)**
 C1 tee-in (reuse the existing split) · C2 drop-merge honesty · C3 single-key tools + I2 palette
