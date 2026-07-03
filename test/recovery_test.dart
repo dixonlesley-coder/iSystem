@@ -210,8 +210,12 @@ void main() {
       await File('$p.bak').writeAsString('y');
 
       final latest = await findLatestRecovery(dir: dir.path);
-      expect(latest, p); // the primary, not the .src/.tmp/.bak
-      expect(latest!.endsWith('.mechx'), isTrue);
+      expect(latest, isNotNull);
+      // Compare separator-insensitively: findLatestRecovery returns the OS-native
+      // path (backslashes on Windows) while `p` appends a forward slash, so an
+      // exact string match fails on windows-latest even though it's the same file.
+      expect(latest!.replaceAll('\\', '/'), p.replaceAll('\\', '/'));
+      expect(latest.endsWith('.mechx'), isTrue);
 
       // A non-existent directory ⇒ null (never throws).
       expect(await findLatestRecovery(dir: '${dir.path}/missing'), isNull);
