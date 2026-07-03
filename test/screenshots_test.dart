@@ -17,6 +17,7 @@ import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx/ui/electrical/electrical_canvas.dart';
 import 'package:mechx/ui/electrical/electrical_view.dart';
+import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -224,5 +225,35 @@ void main() {
     expect(schedCanvas.currentScale, greaterThanOrEqualTo(kBoardScheduleThreshold));
     await expectLater(
         app, matchesGoldenFile('goldens/11_electrical_schedule.png'));
+
+    // ── Hub screens (H9) — the non-canvas shell sections now carry real,
+    // Wave-4/5-changed content (the Review compliance + deliverables, the
+    // Commercial M+E+P BOM/quotation, the Projects landing) but had NO golden
+    // coverage. Capture them from the seeded project so a regression shows.
+    container.read(shellSectionProvider.notifier).set(ShellSection.review);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await expectLater(app, matchesGoldenFile('goldens/12_review_hub.png'));
+
+    container.read(shellSectionProvider.notifier).set(ShellSection.commercial);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await expectLater(app, matchesGoldenFile('goldens/13_commercial_hub.png'));
+
+    container.read(shellSectionProvider.notifier).set(ShellSection.projects);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await expectLater(app, matchesGoldenFile('goldens/14_projects_hub.png'));
+
+    // ── J6 — a LIGHT-theme hub capture (the app is otherwise golden-covered in
+    // light only on the plan canvas, golden 02). The Review hub in light exercises
+    // the compliance card + issue rows across the light palette.
+    container.read(brightnessProvider.notifier).toggle();
+    container.read(shellSectionProvider.notifier).set(ShellSection.review);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await expectLater(app, matchesGoldenFile('goldens/15_review_hub_light.png'));
+    container.read(brightnessProvider.notifier).toggle();
+    await tester.pump();
   });
 }
