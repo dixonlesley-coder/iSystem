@@ -226,11 +226,11 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   // Restore the user-defined fixture library (absent on an older file ⇒ empty).
   read(fixtureLibraryProvider.notifier).set(s.fixtureLibrary);
   // The AI copilot provider/key/model are MACHINE-LOCAL now (B8) — never reset
-  // them to a document's values. But a LEGACY `.mechx` that carried the key
-  // in-file is migrated once into the machine-local key (the launch persistence
-  // listener then saves it to `app_settings.dart`); a new file's empty key
-  // leaves the machine-local key untouched.
-  if (s.anthropicApiKey.isNotEmpty) {
+  // them to a document's values. A LEGACY `.mechx` that carried the key in-file
+  // is migrated ONLY into an EMPTY machine-local slot: opening a colleague's
+  // file must never overwrite (or import) the user's own key — that would both
+  // lose the user's key and pull a foreign secret onto their machine.
+  if (s.anthropicApiKey.isNotEmpty && read(aiApiKeyProvider).isEmpty) {
     read(aiApiKeyProvider.notifier).set(s.anthropicApiKey);
   }
   // Restore document control (absent on an older file ⇒ all unset / no

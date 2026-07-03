@@ -60,6 +60,10 @@ Future<bool> confirmDiscardIfDirty(BuildContext context, WidgetRef ref) async {
 /// keeps the engineer's app-level preference rather than resetting it).
 Future<void> newProject(BuildContext context, WidgetRef ref) async {
   if (!await confirmDiscardIfDirty(context, ref)) return;
+  // The project we're leaving — its recovery slot must be cleared, or a later
+  // launch would offer to restore work the user discarded/replaced here (the
+  // prior slot, or the shared untitled slot when it was never saved).
+  final priorPath = ref.read(currentProjectPathProvider);
   // The virgin floor stack mirrors ProjectController.build()'s default; the
   // presentation settings echo the CURRENT locale/theme so applyDocument
   // (which restores those from the document) leaves the user's preference put.
@@ -84,6 +88,7 @@ Future<void> newProject(BuildContext context, WidgetRef ref) async {
   ref.read(autosaveMirrorProvider.notifier).clear();
   ref.read(projectDirtyProvider.notifier).set(false);
   ref.read(loadErrorProvider.notifier).clear();
+  await clearRecoverySlots([priorPath, null]);
   ref.read(statusMessageProvider.notifier).showStatus('New project');
 }
 
@@ -159,10 +164,23 @@ Future<void> importPlan(BuildContext context, WidgetRef ref) async {
       if (choice == null) return; // cancelled — keep the current project
       if (choice == ImportChoice.add) {
         // ADD destroys nothing (current sheets, calibration and network stay),
-        // so no dirty-guard: append the new sheets and stop.
+        // so no dirty-guard: append the new sheets and stop. Sheet ids are
+        // filename-derived (`stem#i`), so a re-import of the same/basename-
+        // sharing file would collide with a live id (sharing its calibration +
+        // floor mapping and confusing node references). Remap incoming ids to
+        // fresh unique ones first — safe, since no node references them yet.
         final sheetsCtrl = ref.read(sheetsControllerProvider.notifier);
+        final used =
+            ref.read(sheetsControllerProvider).sheets.map((s) => s.id).toSet();
         for (final s in sheets) {
-          sheetsCtrl.addSheet(s);
+          var id = s.id;
+          var n = 1;
+          while (used.contains(id)) {
+            id = '${s.id}-$n';
+            n++;
+          }
+          used.add(id);
+          sheetsCtrl.addSheet(id == s.id ? s : s.copyWith(id: id));
         }
         ref.read(loadErrorProvider.notifier).clear();
         final n = sheets.length;
@@ -367,6 +385,9 @@ Future<void> openProjectPath(
 /// [openProjectPath]): rehydrate embedded plans, reset the clean baseline, drop
 /// this project's stale recovery slot, and record it in the machine-local MRU.
 Future<void> _applyOpenedFile(WidgetRef ref, String path) async {
+  // The project we're leaving — its recovery slot must be cleared too, or a
+  // later launch would offer to restore the work we just navigated away from.
+  final priorPath = ref.read(currentProjectPathProvider);
   ref.read(busyProvider.notifier).set(
       MechXStringsData(ref.read(localeProvider))(StringKey.busyOpeningProject));
   try {
@@ -383,8 +404,9 @@ Future<void> _applyOpenedFile(WidgetRef ref, String path) async {
     ref.read(autosaveMirrorProvider.notifier).clear();
     ref.read(currentProjectPathProvider.notifier).set(path);
     ref.read(projectDirtyProvider.notifier).set(false);
-    // Drop any stale crash snapshot for THIS file (and the untitled slot).
-    await clearRecoverySlots([path, null]);
+    // Drop any stale crash snapshot for THIS file, the project we left, and
+    // the untitled slot.
+    await clearRecoverySlots([priorPath, path, null]);
     ref.read(recoveryDocProvider.notifier).clear();
     ref.read(loadErrorProvider.notifier).clear();
     ref

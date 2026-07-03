@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/autosave.dart';
 import '../data/recovery.dart';
+import '../store/app_state.dart';
 import 'update_check.dart';
 import 'update_service.dart';
 
@@ -84,12 +85,21 @@ class UpdateController extends Notifier<UpdateStatus> {
   /// The backstop honours the no-phantom-recovery invariant: it snapshots ONLY
   /// when the project is genuinely dirty (a Save in the dialog already lowered
   /// that flag). A clean/saved/virgin project writes nothing, so the next
-  /// launch after the update never pops a spurious "recover?" banner.
+  /// launch after the update never pops a spurious "recover?" banner. The
+  /// snapshot lands in the CURRENT project's per-project slot with its source
+  /// path in the `.src` sidecar (B2), so after the update the restore re-links
+  /// the file identity instead of forking a Save-As. [recoveryPath] overrides
+  /// the slot for tests.
   Future<void> installUpdate({String? recoveryPath}) async {
     final s = state;
     if (s is! UpdateDownloaded) return;
     if (isProjectDirty(ref.read)) {
-      await writeRecovery(buildDocument(ref.read), path: recoveryPath);
+      final projectPath = ref.read(currentProjectPathProvider);
+      await writeRecovery(
+        buildDocument(ref.read),
+        path: recoveryPath ?? recoverySlotFor(projectPath),
+        sourcePath: recoveryPath == null ? projectPath : null,
+      );
     }
     await _resolvedRunner.backend.launchInstaller(s.path);
   }
