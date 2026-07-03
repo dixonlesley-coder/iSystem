@@ -5,10 +5,15 @@ import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 
+import 'test_util.dart';
+
 void main() {
   ProviderContainer makeContainer() {
     final c = ProviderContainer();
     addTearDown(c.dispose);
+    // Production launches with NO sheets (A1); this suite is about the
+    // calibrate-all-sheets batch action, so seed the demo sheets as its targets.
+    seedDemoSheets(c);
     return c;
   }
 

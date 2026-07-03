@@ -67,6 +67,15 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump(); // first-layout fit
 
+    // Production launches with NO sheets (A1); calibration needs a drawable
+    // sheet, so seed the demo sheets before starting the calibrate flow.
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    seedDemoSheets(container);
+    await tester.pump();
+
     await tester.ensureVisible(find.text('Calibrate scale'));
     await tester.tap(find.text('Calibrate scale'));
     await tester.pump();

@@ -8,6 +8,8 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'test_util.dart';
+
 void main() {
   group('fuzzyScore', () {
     test('empty query matches everything with a baseline score', () {
@@ -49,6 +51,10 @@ void main() {
     ProviderContainer makeContainer() {
       final c = ProviderContainer();
       addTearDown(c.dispose);
+      // Production launches with NO sheets (A1); the Calibrate stage keys off a
+      // calibrated sheet, so seed the demo sheets (s1/s2/s3) as the stepper's
+      // subjects (uncalibrated at seed — the tests calibrate as needed).
+      seedDemoSheets(c);
       return c;
     }
 

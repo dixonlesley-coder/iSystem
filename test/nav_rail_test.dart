@@ -64,6 +64,11 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    // Production launches with an EMPTY electrical project (A2); this test drives
+    // the workspace over to Electrical, so seed the sample switchboard to give
+    // that view content to render.
+    seedSampleElectrical(container);
+    await tester.pump();
 
     // Default: design section, Layout view (enum value still `plan`).
     expect(container.read(shellSectionProvider), ShellSection.design);

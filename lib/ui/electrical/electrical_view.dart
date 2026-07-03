@@ -1061,33 +1061,27 @@ class _EmptyState extends StatelessWidget {
     // The shared branded empty-state card (matching the mechanical Layout
     // canvas's), with the two service set-up actions plus the explicit
     // "Load sample project" secondary action (A2 — the sample switchboard is
-    // never auto-seeded; it lives one click away here). A Wrap so three
-    // buttons flow to a second line inside the 360-px card, never overflow.
+    // never auto-seeded; it lives one click away here). MechXEmptyStateCard
+    // hosts the actions in a Wrap itself, so the buttons are passed directly
+    // (no Expanded — which is invalid inside a Wrap) and flow to a second line
+    // inside the 360-px card rather than overflowing.
     return Padding(
       padding: const EdgeInsets.all(MechXSpacing.lg),
       child: MechXEmptyStateCard(
         title: context.strings(StringKey.electricalEmptyTitle),
         body: context.strings(StringKey.electricalEmptyBody),
         actions: [
-          Expanded(
-            child: Wrap(
-              spacing: MechXSpacing.sm,
-              runSpacing: MechXSpacing.sm,
-              children: [
-                MechXButton(
-                  label: context.strings(StringKey.electricalAddPanel),
-                  onPressed: onAddPanel,
-                ),
-                MechXButton(
-                  label: context.strings(StringKey.electricalServiceEarthing),
-                  onPressed: onSetUp,
-                ),
-                MechXButton(
-                  label: 'Load sample project',
-                  onPressed: onLoadSample,
-                ),
-              ],
-            ),
+          MechXButton(
+            label: context.strings(StringKey.electricalAddPanel),
+            onPressed: onAddPanel,
+          ),
+          MechXButton(
+            label: context.strings(StringKey.electricalServiceEarthing),
+            onPressed: onSetUp,
+          ),
+          MechXButton(
+            label: 'Load sample project',
+            onPressed: onLoadSample,
           ),
         ],
       ),

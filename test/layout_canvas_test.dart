@@ -57,6 +57,8 @@ void main() {
 
     // Default boot is the Layout design view.
     final c = _containerOf(tester);
+    seedDemoSheets(c);
+    await tester.pump();
     expect(c.read(workspaceViewProvider), WorkspaceView.plan);
     expect(find.byType(LayoutCanvas), findsOneWidget);
     expect(find.byType(LayerSwitcher), findsOneWidget);
@@ -132,6 +134,9 @@ void main() {
     await tester.pump();
 
     final c = _containerOf(tester);
+    seedDemoSheets(c);
+    seedSampleElectrical(c);
+    await tester.pump();
     // Place the sample MDP on the active sheet/floor.
     c.read(electricalProjectProvider.notifier).setPanelLayoutPos(
         'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 400, y: 300));
@@ -162,9 +167,12 @@ void main() {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
-    await tester.pump(); // post-frame fit emits the viewport
 
     final c = _containerOf(tester);
+    seedDemoSheets(c);
+    await tester.pump();
+    await tester.pump(); // post-frame fit emits the viewport
+
     final sheet = c.read(sheetsControllerProvider).current!;
     // The unified canvas drives the per-sheet viewport (so the electrical layer,
     // which reads the same provider, shares the pan/zoom).
@@ -261,6 +269,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     final c = _containerOf(tester);
+    seedDemoSheets(c);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
     final ctrl = c.read(networkControllerProvider.notifier);
     final sheet = c.read(sheetsControllerProvider).current!;
     // A plumbing run + an HVAC duct on the same floor.
@@ -293,6 +304,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     final c = _containerOf(tester);
+    seedDemoSheets(c);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
     final ctrl = c.read(networkControllerProvider.notifier);
     final sheet = c.read(sheetsControllerProvider).current!;
     ctrl.addSegment(sheet.id, 0, const Offset(400, 400),

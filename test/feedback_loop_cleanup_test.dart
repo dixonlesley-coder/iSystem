@@ -34,6 +34,10 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    // Production launches with an EMPTY electrical project (A2); seed the sample
+    // switchboard so the Electrical workspace renders its canvas + toolbar (the
+    // Export affordance we assert on) rather than the empty-state card.
+    seedSampleElectrical(container);
     container
         .read(workspaceViewProvider.notifier)
         .set(WorkspaceView.electrical);

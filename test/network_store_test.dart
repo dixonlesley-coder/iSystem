@@ -797,6 +797,9 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    seedDemoSheets(container);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50)); // first-frame fit
     final ctrl = container.read(networkControllerProvider.notifier);
     // A horizontal cold-water run across the ground-floor sheet.
     ctrl.setService(ServiceType.coldWater);
@@ -848,6 +851,9 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    seedDemoSheets(container);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50)); // first-frame fit
     // Calibrate (so length/area are real) and make HVAC the active layer.
     container
         .read(projectControllerProvider.notifier)
@@ -903,6 +909,9 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    seedDemoSheets(container);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50)); // first-frame fit
     final ctrl = container.read(networkControllerProvider.notifier);
     ctrl.addComponentNode(
         's1', 0, const Offset(700, 360), NodeComponent.gateValve);
@@ -953,6 +962,9 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    seedDemoSheets(container);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50)); // first-frame fit
     final ctrl = container.read(networkControllerProvider.notifier);
     ctrl.addComponentNode(
         's1', 0, const Offset(700, 360), NodeComponent.supplyDiffuser);
@@ -995,6 +1007,9 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    seedDemoSheets(container);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50)); // first-frame fit
     final ctrl = container.read(networkControllerProvider.notifier);
     ctrl.setService(ServiceType.coldWater);
     ctrl.setTool(DrawTool.drawRun);
@@ -1042,6 +1057,9 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    seedDemoSheets(container);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50)); // first-frame fit
     // Collapse the inspector; double-click must bring it back.
     container.read(inspectorCollapsedProvider.notifier).set(true);
     final ctrl = container.read(networkControllerProvider.notifier);
