@@ -8,12 +8,84 @@
 library;
 
 import 'package:flutter/widgets.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 import '../../store/models/sheet.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
+
+/// A small offscreen pdfrx-rendered THUMBNAIL of a PDF-backed [sheet]'s page —
+/// shown in the page picker rows and the sheet rail so the engineer recognises a
+/// plan VISUALLY instead of by "Page 17 · 1191 x 842" (A8). Rendering is async
+/// and OFF the UI thread (pdfrx/pdfium worker) at whatever small box the parent
+/// gives it; while it loads — and for any DXF/placeholder sheet, a missing file
+/// or a render failure — it shows [placeholder], and it NEVER throws. The page is
+/// fitted (aspect-preserved) inside the box.
+///
+/// Reused by both owned surfaces (the picker here + `sheet_rail.dart`), so the
+/// thumbnail logic lives in exactly one place. A DXF-backed or placeholder sheet
+/// has no pdfrx page to raster, so it returns [placeholder] synchronously — which
+/// keeps the sheet rail's numbered-tile look (and the golden screenshots, whose
+/// demo sheets are all placeholders) byte-identical.
+class SheetThumbnail extends StatelessWidget {
+  final Sheet sheet;
+  final Widget placeholder;
+  const SheetThumbnail({
+    super.key,
+    required this.sheet,
+    required this.placeholder,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final path = sheet.pdfPath;
+    if (path == null) return placeholder; // DXF / placeholder — no page to draw
+    return PdfDocumentViewBuilder.file(
+      path,
+      errorBuilder: (context, error, _) => placeholder,
+      builder: (context, document) {
+        if (document == null) return placeholder; // still opening
+        final pageNumber = sheet.pageIndex + 1; // pdfrx is 1-based
+        if (pageNumber < 1 || pageNumber > document.pages.length) {
+          return placeholder;
+        }
+        return PdfPageView(
+          document: document,
+          pageNumber: pageNumber,
+          decoration: const BoxDecoration(color: Color(0xFFFFFFFF)),
+        );
+      },
+    );
+  }
+}
+
+/// A framed thumbnail slot for a picker row — a hairline-bordered, clipped box
+/// holding the sheet's [SheetThumbnail], falling back to a neutral page tile.
+class _PickerThumbnail extends StatelessWidget {
+  final Sheet sheet;
+  const _PickerThumbnail({required this.sheet});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Container(
+      width: 52,
+      height: 40,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: colors.canvas,
+        borderRadius: const BorderRadius.all(Radius.circular(3)),
+        border: Border.all(color: colors.border),
+      ),
+      child: SheetThumbnail(
+        sheet: sheet,
+        placeholder: const SizedBox.shrink(),
+      ),
+    );
+  }
+}
 
 /// Open the page picker over [allSheets] (one per PDF page). Resolves to the
 /// chosen subset, or null when cancelled.
@@ -184,6 +256,8 @@ class _SheetRowState extends State<_SheetRow> {
             ),
             child: Row(
               children: [
+                _PickerThumbnail(sheet: s),
+                const SizedBox(width: MechXSpacing.sm),
                 Expanded(
                   child: Text(s.name,
                       maxLines: 1,
@@ -390,6 +464,8 @@ class _PageRowState extends State<_PageRow> {
                         : null,
                   ),
                 ),
+                const SizedBox(width: MechXSpacing.sm),
+                _PickerThumbnail(sheet: s),
                 const SizedBox(width: MechXSpacing.sm),
                 Expanded(
                   child: Text('Page ${s.pageIndex + 1}',

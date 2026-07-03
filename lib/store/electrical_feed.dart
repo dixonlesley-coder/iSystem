@@ -165,9 +165,9 @@ final placedEquipmentCircuitsProvider = Provider<List<ElectricalCircuit>>(
 /// `sourceEquipmentId` so a re-sync updates in place. Combines the sized DUTY
 /// providers (the auto-sized system pump/fan/fire-pump) with the placed
 /// equipment NODES (explicit pumps/fans/units on the plan) — distinct ids, so
-/// both coexist without collision. Exposed for a full manual sync; the
-/// AUTO-feed uses [placedEquipmentCircuitsProvider] (placed-only) so the
-/// always-on fire-pump duty doesn't force a panel into an untouched project.
+/// both coexist without collision. This is the FULL feed (duties + nodes); the
+/// reactive auto-sync consumes it only once the engineer opts in via
+/// [mepDutyFeedEnabledProvider] (see [mepAutoFeedCircuitsProvider]).
 final mepEquipmentCircuitsProvider = Provider<List<ElectricalCircuit>>(
   (ref) => buildEquipmentCircuits(
     [
@@ -176,4 +176,44 @@ final mepEquipmentCircuitsProvider = Provider<List<ElectricalCircuit>>(
     ],
     panelVoltage: mepPanelVoltage,
   ),
+);
+
+/// G1 — whether the SOLVED-DUTY MEP equipment (the auto-sized system pump / fan /
+/// fire-pump duties from `solve_store`/`fire_store`) is folded into the "MEP
+/// Equipment" panel IN ADDITION to the equipment NODES placed on the plan.
+///
+/// Default FALSE — the always-on fire-pump duty (a standpipe pump is derived
+/// from the building height for ANY project) must not silently conjure an
+/// electrical panel into a project the engineer never chose to electrify, so an
+/// untouched project stays placed-only and byte-identical. The electrical
+/// workspace's "Feed solved MEP duties" affordance (Service & Earthing inspector)
+/// flips it on; once on, the reactive auto-sync KEEPS the duty circuits synced
+/// (they no longer get dropped as "source removed" on the next placed sync).
+///
+/// Transient session state (not persisted to `.mechx`) — a project-file field
+/// would need `DesignSettings`, owned elsewhere; the opt-in is a per-session
+/// choice, re-asserted by clicking the affordance.
+final mepDutyFeedEnabledProvider =
+    NotifierProvider<MepDutyFeedController, bool>(MepDutyFeedController.new);
+
+class MepDutyFeedController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void enable() => state = true;
+  void disable() => state = false;
+  void set(bool value) => state = value;
+  void toggle() => state = !state;
+}
+
+/// The circuits the reactive auto-sync folds into the MEP panel: the placed
+/// equipment NODES always, PLUS the solved-duty circuits (pump / fan / fire pump)
+/// when the engineer has opted in ([mepDutyFeedEnabledProvider]). Default
+/// (opt-out) ⇒ placed-only, IDENTICAL to the prior wiring, so an untouched
+/// project is byte-identical. This is the provider the store's reactive listener
+/// watches — the seam that finally makes the solved-duty bridge reachable.
+final mepAutoFeedCircuitsProvider = Provider<List<ElectricalCircuit>>(
+  (ref) => ref.watch(mepDutyFeedEnabledProvider)
+      ? ref.watch(mepEquipmentCircuitsProvider)
+      : ref.watch(placedEquipmentCircuitsProvider),
 );

@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/network/network.dart';
 
 import '../ui/canvas/viewport.dart';
 import 'history_store.dart';
@@ -155,6 +156,49 @@ class SheetsController extends Notifier<SheetsState> {
   void addSheet(Sheet sheet) =>
       state = state.copyWith(sheets: [...state.sheets, sheet]);
 
+  /// Append every sheet in [incoming] to the current set in ONE action (A6
+  /// multi-file add), remapping any id that would collide with a live sheet — or
+  /// a sibling earlier in this same batch — to a fresh unique one (`<id>-1`,
+  /// `<id>-2`, …). Filename-derived ids (`stem#i`) can otherwise repeat across
+  /// files (two `denah.pdf`s) or against an existing sheet, silently sharing its
+  /// calibration + floor mapping; a fresh id is safe because no drawn node
+  /// references the new sheets yet. Returns how many were appended. Not undoable
+  /// — an additive load, like [addSheet] (the autosave signature picks up the
+  /// change on its next tick, as with every non-recording sheet mutation).
+  int addSheets(Iterable<Sheet> incoming) {
+    final list = incoming.toList();
+    if (list.isEmpty) return 0;
+    final used = state.sheets.map((s) => s.id).toSet();
+    final added = <Sheet>[];
+    for (final s in list) {
+      var id = s.id;
+      var n = 1;
+      while (used.contains(id)) {
+        id = '${s.id}-$n';
+        n++;
+      }
+      used.add(id);
+      added.add(id == s.id ? s : s.copyWith(id: id));
+    }
+    state = state.copyWith(sheets: [...state.sheets, ...added]);
+    return added.length;
+  }
+
+  /// Rename the sheet with [sheetId] to [name] (A6 rail context menu). The id is
+  /// untouched, so calibration and every drawn node stay married to the sheet —
+  /// only its display label changes. Trimmed; a no-op for an empty/unchanged
+  /// name or an unknown id. Not undoable (a label edit, like [addSheet] /
+  /// [replaceSheetSource]).
+  void renameSheet(String sheetId, String name) {
+    final idx = state.sheets.indexWhere((s) => s.id == sheetId);
+    if (idx < 0) return;
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || trimmed == state.sheets[idx].name) return;
+    final sheets = [...state.sheets];
+    sheets[idx] = sheets[idx].copyWith(name: trimmed);
+    state = state.copyWith(sheets: sheets);
+  }
+
   /// Swap the SOURCE of the sheet with [sheetId] — its pdf/dxf/dwg path, page
   /// index and natural size — for [source]'s, KEEPING the existing id and
   /// display name (the plan-revision workflow, A5). Calibration and drawn nodes
@@ -180,6 +224,65 @@ class SheetsController extends Notifier<SheetsState> {
     final sheets = [...state.sheets];
     sheets[idx] = replaced;
     state = state.copyWith(sheets: sheets);
+  }
+
+  /// Remove the sheet with [sheetId] from the project AND prune every drawn node
+  /// that lived on it (plus the edges touching them) — in ONE undo-safe step
+  /// (A6 rail context menu). The sheet removal + the node prune are captured as a
+  /// SINGLE [UndoDomain.structural] entry via [structuralHistoryProvider] (the
+  /// same coordinator [setSheetFloor] uses), so one Ctrl+Z restores the sheet,
+  /// its per-sheet viewport/floor entries AND the pruned network together — never
+  /// a torn state, and orphaned pipes on the gone sheet can't invisibly pad the
+  /// BOM / pressures / reports (the active analogue of the Replace-all prune on
+  /// [NetworkController.pruneNodesNotOnSheets]).
+  ///
+  /// The sheet's CALIBRATION is deliberately left in the project's map: it is
+  /// keyed by id, so it is never queried once the sheet is gone, and it comes
+  /// back intact on undo (no project-domain capture needed). The current index is
+  /// shifted so the selection stays put when an earlier sheet is removed, and
+  /// clamped into range. No-op when [sheetId] is unknown.
+  void removeSheet(String sheetId) {
+    final idx = state.sheets.indexWhere((s) => s.id == sheetId);
+    if (idx < 0) return;
+    // Capture sheets + network as ONE structural snapshot BEFORE mutating.
+    ref.read(structuralHistoryProvider.notifier).recordSheetMappingChange();
+    // Prune the removed sheet's nodes (+ their edges) WITHOUT a separate network
+    // entry — the structural snapshot already holds the pre-removal network, so
+    // undo/redo swap both halves atomically (mirrors [remapSheetFloor]'s
+    // record:false path used by [setSheetFloor]).
+    final net = ref.read(networkControllerProvider).network;
+    final orphans = <String>{
+      for (final n in net.nodes)
+        if (n.sheetId == sheetId) n.id,
+    };
+    if (orphans.isNotEmpty) {
+      final nodes = net.nodes.where((n) => !orphans.contains(n.id)).toList();
+      final edges = net.edges
+          .where((e) =>
+              !orphans.contains(e.fromId) && !orphans.contains(e.toId))
+          .toList();
+      ref
+          .read(networkControllerProvider.notifier)
+          .restoreNetwork(Network(nodes: nodes, edges: edges));
+    }
+    // Drop the sheet and its per-sheet viewport/floor entries.
+    final sheets = [...state.sheets]..removeAt(idx);
+    final viewports = Map<String, ViewportTransform>.from(state.viewports)
+      ..remove(sheetId);
+    final sheetFloors = Map<String, int>.from(state.sheetFloors)
+      ..remove(sheetId);
+    // Keep the selection on the same sheet when an earlier one is removed, then
+    // clamp into the shrunken range.
+    var current = state.currentIndex;
+    if (idx < current) current -= 1;
+    if (current >= sheets.length) current = sheets.length - 1;
+    if (current < 0) current = 0;
+    state = SheetsState(
+      sheets: sheets,
+      currentIndex: current,
+      viewports: viewports,
+      sheetFloors: sheetFloors,
+    );
   }
 }
 

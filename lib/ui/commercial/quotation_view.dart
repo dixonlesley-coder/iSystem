@@ -9,9 +9,10 @@ import '../widgets/mechx_text_field.dart';
 import 'commercial_table.dart';
 
 /// The priced quotation / proposal: the quote-settings inputs (labour rate +
-/// overhead / contingency / margin percentages) over a roll-up table (material
-/// subtotal, labour, overhead, contingency, margin, grand total). Recomputes
-/// live from the pricelist + settings via [electricalQuotationProvider].
+/// overhead / contingency / margin percentages) over the unified M+E+P roll-up
+/// table (per-discipline material subtotals, labour, overhead, contingency,
+/// margin, grand total). Recomputes live from the pricelist + settings via
+/// [mepQuotationProvider].
 class QuotationView extends ConsumerWidget {
   const QuotationView({super.key});
 
@@ -21,8 +22,7 @@ class QuotationView extends ConsumerWidget {
     final type = context.type;
     final settings = ref.watch(commercialSettingsProvider);
     final ctrl = ref.read(commercialSettingsProvider.notifier);
-    final cost = ref.watch(electricalCostProvider);
-    final q = ref.watch(electricalQuotationProvider);
+    final q = ref.watch(mepQuotationProvider);
     final cur = q.currency;
 
     return Column(
@@ -32,9 +32,9 @@ class QuotationView extends ConsumerWidget {
             style: type.title.copyWith(color: colors.textPrimary)),
         const SizedBox(height: MechXSpacing.xxs),
         Text(
-          cost.unmatchedCount > 0
+          q.unpricedCount > 0
               ? context.strings.format(StringKey.commercialUnpricedExcluded,
-                  {'n': cost.unmatchedCount})
+                  {'n': q.unpricedCount})
               : context.strings(StringKey.commercialAllPriced),
           style: type.caption.copyWith(color: colors.textMuted),
         ),
@@ -96,6 +96,8 @@ class QuotationView extends ConsumerWidget {
                 numeric: true),
           ],
           rows: [
+            _money('Mechanical material', q.mechanicalMaterial),
+            _money('Electrical material', q.electricalMaterial),
             _money(context.strings(StringKey.commercialItemMaterial),
                 q.materialSubtotal),
             _money(

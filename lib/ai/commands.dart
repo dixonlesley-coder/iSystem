@@ -141,6 +141,14 @@ List<Map<String, dynamic>> aiToolSchemas() {
       };
   const numProp = {'type': 'number'};
   const strProp = {'type': 'string'};
+  // The sheet a placement lands on MUST be one of the ids given in the context —
+  // an invented id creates a node that renders on no sheet (and the app rejects
+  // it at apply). Spell that out in the schema so the model doesn't guess.
+  const sheetIdProp = {
+    'type': 'string',
+    'description':
+        'A sheet id copied verbatim from the context — never invent one.',
+  };
   return [
     {
       'name': 'placeComponent',
@@ -148,7 +156,7 @@ List<Map<String, dynamic>> aiToolSchemas() {
           'gateValve, supplyDiffuser, ahu, fcu, acCassette, …) on a sheet. '
           'component is a NodeComponent name.',
       'input_schema': obj({
-        'sheetId': strProp,
+        'sheetId': sheetIdProp,
         'floor': {'type': 'integer'},
         'x': numProp,
         'y': numProp,
@@ -165,7 +173,7 @@ List<Map<String, dynamic>> aiToolSchemas() {
       'name': 'placeTerminal',
       'description': 'Place a fixture/terminal node at a point on a sheet.',
       'input_schema': obj({
-        'sheetId': strProp,
+        'sheetId': sheetIdProp,
         'floor': {'type': 'integer'},
         'x': numProp,
         'y': numProp,
@@ -180,7 +188,7 @@ List<Map<String, dynamic>> aiToolSchemas() {
       'name': 'placeFitting',
       'description': 'Place a bare junction/fitting node at a point on a sheet.',
       'input_schema': obj({
-        'sheetId': strProp,
+        'sheetId': sheetIdProp,
         'floor': {'type': 'integer'},
         'x': numProp,
         'y': numProp,
@@ -196,7 +204,7 @@ List<Map<String, dynamic>> aiToolSchemas() {
       'description': 'Drop a short horizontal run of the given service '
           '(coldWater, hotWater, drainage, supplyAir, …) centred at a point.',
       'input_schema': obj({
-        'sheetId': strProp,
+        'sheetId': sheetIdProp,
         'floor': {'type': 'integer'},
         'x': numProp,
         'y': numProp,

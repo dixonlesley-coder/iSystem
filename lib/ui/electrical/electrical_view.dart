@@ -33,6 +33,7 @@ import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/electrical_feed.dart';
 import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/project_store.dart';
@@ -1294,6 +1295,13 @@ class _ServiceInspector extends ConsumerWidget {
     final project = ref.watch(electricalProjectProvider);
     final ctrl = ref.read(electricalProjectProvider.notifier);
 
+    // G1 — the solved-duty MEP → electrical bridge. The equipment the mechanical
+    // engine has already sized (pump / fan / fire-pump duties) surfaced as
+    // electrical circuits the engineer would otherwise re-type. Off by default so
+    // an untouched project never grows a phantom MEP panel.
+    final duties = ref.watch(mepEquipmentLoadsProvider);
+    final dutyFeedOn = ref.watch(mepDutyFeedEnabledProvider);
+
     return _AnimatedDrawerShell(
       width: 340,
       onClose: onClose,
@@ -1382,6 +1390,33 @@ class _ServiceInspector extends ConsumerWidget {
                       context.strings(
                         StringKey.electricalBusbarClearingTimeNote,
                       ),
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                    const SizedBox(height: MechXSpacing.md),
+                    Container(height: 1, color: colors.border),
+                    const SizedBox(height: MechXSpacing.md),
+                    // ── MEP equipment feed (G1) ──────────────────────────────
+                    Text(
+                      'MEP equipment feed',
+                      style: type.label.copyWith(color: colors.textPrimary),
+                    ),
+                    const SizedBox(height: MechXSpacing.sm),
+                    ElectricalToggleRow(
+                      label: 'Add solved MEP duties to panel',
+                      value: dutyFeedOn,
+                      onChanged: (on) =>
+                          ref.read(mepDutyFeedEnabledProvider.notifier).set(on),
+                    ),
+                    Text(
+                      duties.isEmpty
+                          ? 'No auto-sized pump / fan / fire-pump duty yet — '
+                              'draw and size the mechanical systems first. '
+                              'Equipment placed on the plan always feeds the '
+                              'MEP Equipment panel.'
+                          : 'Folds the app-sized ${duties.map((d) => d.name).join(', ')} '
+                              'into the MEP Equipment panel as sized circuits — '
+                              'no re-entry of the kW. Fire pumps carry life-safety '
+                              'treatment. Placed equipment always feeds the panel.',
                       style: type.caption.copyWith(color: colors.textMuted),
                     ),
                   ],

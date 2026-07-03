@@ -9,6 +9,7 @@ import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/ai_copilot_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -610,6 +611,16 @@ class _EdgeMenuPanel extends ConsumerWidget {
       label: 'Select similar',
       onTap: () {
         ref.read(selectionProvider.notifier).selectSimilarEdges(edge.id);
+        close();
+      },
+    ));
+    // I6 — reach the copilot where the work is: pre-scope it to THIS run
+    // (select it so the copilot's context frame describes it) and open the panel.
+    children.add(MechXMenuRow(
+      label: 'Ask Claude…',
+      onTap: () {
+        ref.read(selectionProvider.notifier).selectEdge(edge.id);
+        ref.read(copilotOpenProvider.notifier).open();
         close();
       },
     ));

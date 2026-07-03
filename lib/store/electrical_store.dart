@@ -207,17 +207,19 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
 
   @override
   ElectricalProject build() {
-    // Keep the "MEP Equipment" panel in sync with the motorised equipment NODES
-    // placed on the plan (pumps/fans/AHUs/FCUs). This is the inter-discipline
-    // payoff: a pump drawn on the plumbing layer appears here as an electrical
-    // circuit. We sync the PLACED equipment only (not the always-on sized-duty
-    // feed), so an untouched project with nothing placed has no MEP panel and is
-    // unchanged. The listener fires on every change after build; a microtask
-    // does the initial sync (state can't be set during build()).
+    // Keep the "MEP Equipment" panel in sync with the MEP equipment the app has
+    // sized. This is the inter-discipline payoff: a pump drawn on the plumbing
+    // layer appears here as an electrical circuit. The feed is the placed
+    // equipment NODES always, PLUS the solved system DUTIES (pump/fan/fire-pump)
+    // once the engineer opts in (G1, [mepDutyFeedEnabledProvider]) — the
+    // [mepAutoFeedCircuitsProvider] gates that. Default is placed-only, so an
+    // untouched project with nothing placed has no MEP panel and is byte-
+    // identical to before. The listener fires on every change after build; a
+    // microtask does the initial sync (state can't be set during build()).
     ref.listen(
-        placedEquipmentCircuitsProvider, (_, next) => syncMepEquipment(next));
+        mepAutoFeedCircuitsProvider, (_, next) => syncMepEquipment(next));
     Future.microtask(
-        () => syncMepEquipment(ref.read(placedEquipmentCircuitsProvider)));
+        () => syncMepEquipment(ref.read(mepAutoFeedCircuitsProvider)));
     // A2 — a fresh project is EMPTY: the fictional sample switchboard must
     // never leak into a real `.mechx` / BOM / quotation. The sample stays one
     // explicit click away ([resetToSample], the empty-state action).

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'data/autosave.dart';
 import 'store/app_state.dart';
+import 'store/project_store.dart';
 import 'ui/app_shell.dart';
 import 'ui/shell/confirm_discard_dialog.dart';
 import 'ui/shell/project_io.dart';
@@ -38,10 +39,40 @@ class MechXApp extends ConsumerWidget {
           child: DefaultTextStyle(
             style:
                 theme.typography.body.copyWith(color: theme.colors.textPrimary),
-            child: const _ExitGuard(child: AppShell()),
+            child: const _WindowTitle(child: _ExitGuard(child: AppShell())),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A7: keeps the native OS window title in sync with the live project — e.g.
+/// `iSystem — Tower B`, with a trailing edited marker (`•`) while the work
+/// differs from the last clean Save. Uses the framework's own offline title
+/// mechanism (the [Title] widget → `SystemChrome.setApplicationSwitcherDescription`,
+/// which the Windows embedder maps to `SetWindowText`) — no plugin, no platform
+/// channel of our own. Isolated in its own [ConsumerWidget] so a name/dirty
+/// change rebuilds ONLY this node (the [child] instance is preserved, so the
+/// shell never rebuilds), and it paints nothing (Title just returns its child),
+/// so goldens are byte-identical.
+class _WindowTitle extends ConsumerWidget {
+  final Widget child;
+  const _WindowTitle({required this.child});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final name = ref.watch(projectControllerProvider.select((p) => p.name)).trim();
+    final dirty = ref.watch(projectDirtyProvider);
+    final base = name.isEmpty ? 'iSystem' : 'iSystem — $name';
+    // Mirror the top bar's document-app "edited" cue into the window title.
+    final title = dirty ? '$base •' : base;
+    return Title(
+      title: title,
+      // Window-manager identity colour (cosmetic; ignored on Windows). Forced
+      // opaque to satisfy Title's opaque-colour assert.
+      color: context.colors.accent.withAlpha(0xFF),
+      child: child,
     );
   }
 }

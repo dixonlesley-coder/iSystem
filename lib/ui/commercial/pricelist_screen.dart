@@ -9,12 +9,87 @@ import '../theme/mechx_theme.dart';
 import '../widgets/mechx_text_field.dart';
 import 'commercial_table.dart';
 
-/// The pricelist editor: every distinct catalogue SKU referenced by the live BOM
-/// gets an editable unit-price cell. Prices are persisted with the project (the
-/// committed catalogue stays price-free). Editing a cell recomputes the cost +
-/// quotation live.
+/// The pricelist editor: every distinct SKU / key referenced by the live BOM
+/// gets an editable unit-price cell — a MECHANICAL section (pipe/duct + fittings,
+/// H10) above the ELECTRICAL catalogue section. Prices are persisted with the
+/// project (the committed catalogue stays price-free). Editing a cell recomputes
+/// the cost + quotation live.
 class PricelistScreen extends ConsumerWidget {
   const PricelistScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return const Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _MechanicalPricelist(),
+        SizedBox(height: MechXSpacing.xl),
+        _ElectricalPricelist(),
+      ],
+    );
+  }
+}
+
+/// The mechanical price rows — one per sized pipe/duct line + fitting, keyed by
+/// the stable mechanical key. Hidden entirely until something mechanical is sized
+/// (so an electrical-only project's pricelist is unchanged).
+class _MechanicalPricelist extends ConsumerWidget {
+  const _MechanicalPricelist();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final est = ref.watch(mechanicalCostProvider);
+    final settings = ref.watch(commercialSettingsProvider);
+    final ctrl = ref.read(commercialSettingsProvider.notifier);
+
+    if (est.lines.isEmpty) return const SizedBox.shrink();
+
+    final priced =
+        est.lines.where((l) => settings.priceList.containsKey(l.key)).length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Mechanical pricelist',
+            style: type.title.copyWith(color: colors.textPrimary)),
+        const SizedBox(height: MechXSpacing.xxs),
+        Text(
+          '$priced of ${est.lines.length} priced',
+          style: type.caption.copyWith(color: colors.textMuted),
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        CommercialTable(
+          columns: const [
+            CommercialColumn('Item', flex: 10),
+            CommercialColumn('Unit', flex: 2),
+            CommercialColumn('Unit price', flex: 4, numeric: true),
+          ],
+          rows: [
+            for (final l in est.lines)
+              CommercialRow(cells: [
+                CommercialCell.text(l.description),
+                CommercialCell.text(l.unit),
+                CommercialCell.widget(
+                  _PriceField(
+                    key: ValueKey(l.key),
+                    value: settings.priceList[l.key],
+                    onChanged: (v) => ctrl.setPrice(l.key, v),
+                  ),
+                ),
+              ]),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// The electrical catalogue price rows — every distinct matched SKU referenced by
+/// the live electrical BOM.
+class _ElectricalPricelist extends ConsumerWidget {
+  const _ElectricalPricelist();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

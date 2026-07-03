@@ -270,4 +270,168 @@ void main() {
       expect(c.read(sheetsControllerProvider).sheets, same(before));
     });
   });
+
+  group('addSheets (A6 multi-file add)', () {
+    test('appends every incoming sheet, returning the count', () {
+      final c = makeContainer();
+      final ctrl = c.read(sheetsControllerProvider.notifier);
+      final added = ctrl.addSheets(const [
+        Sheet(id: 'a#0', name: 'A', pdfPath: '/a.pdf'),
+        Sheet(id: 'b#0', name: 'B', dxfPath: '/b.dxf'),
+      ]);
+      expect(added, 2);
+      expect(c.read(sheetsControllerProvider).sheets.map((s) => s.id),
+          ['a#0', 'b#0']);
+    });
+
+    test('remaps an incoming id that collides with a LIVE sheet', () {
+      final c = makeContainer();
+      final ctrl = c.read(sheetsControllerProvider.notifier);
+      ctrl.loadSheets(const [Sheet(id: 'a#0', name: 'A', pdfPath: '/a.pdf')]);
+      ctrl.addSheets(const [
+        Sheet(id: 'a#0', name: 'A again', pdfPath: '/dup.pdf'),
+        Sheet(id: 'b#0', name: 'B', pdfPath: '/b.pdf'),
+      ]);
+      final ids = c.read(sheetsControllerProvider).sheets.map((s) => s.id);
+      expect(ids, ['a#0', 'a#0-1', 'b#0']); // collision → fresh unique id
+      expect(ids.toSet().length, 3);
+    });
+
+    test('remaps collisions WITHIN the incoming batch too', () {
+      final c = makeContainer();
+      final ctrl = c.read(sheetsControllerProvider.notifier);
+      final added = ctrl.addSheets(const [
+        Sheet(id: 'x#0', name: 'X1'),
+        Sheet(id: 'x#0', name: 'X2'),
+        Sheet(id: 'x#0', name: 'X3'),
+      ]);
+      expect(added, 3);
+      expect(c.read(sheetsControllerProvider).sheets.map((s) => s.id),
+          ['x#0', 'x#0-1', 'x#0-2']);
+    });
+
+    test('an empty batch is a no-op returning 0', () {
+      final c = makeContainer();
+      final ctrl = c.read(sheetsControllerProvider.notifier);
+      expect(ctrl.addSheets(const []), 0);
+      expect(c.read(sheetsControllerProvider).sheets, isEmpty);
+    });
+  });
+
+  group('renameSheet (A6 rail context menu)', () {
+    test('renames + trims, keeping the id and source', () {
+      final c = makeContainer();
+      final ctrl = c.read(sheetsControllerProvider.notifier);
+      ctrl.loadSheets(const [Sheet(id: 's', name: 'Old', pdfPath: '/s.pdf')]);
+      ctrl.renameSheet('s', '  New name  ');
+      final s = c.read(sheetsControllerProvider).sheets.single;
+      expect(s.id, 's'); // id preserved: calibration + nodes still marry
+      expect(s.name, 'New name'); // trimmed
+      expect(s.pdfPath, '/s.pdf'); // source untouched
+    });
+
+    test('no-op for empty, unchanged, or unknown id', () {
+      final c = makeContainer();
+      final ctrl = c.read(sheetsControllerProvider.notifier);
+      ctrl.loadSheets(const [Sheet(id: 's', name: 'Keep')]);
+      final before = c.read(sheetsControllerProvider).sheets;
+      ctrl.renameSheet('s', '   '); // empty after trim
+      ctrl.renameSheet('s', 'Keep'); // unchanged
+      ctrl.renameSheet('missing', 'X'); // unknown id
+      expect(c.read(sheetsControllerProvider).sheets, same(before));
+    });
+  });
+
+  group('removeSheet (A6 undo-safe prune)', () {
+    test('drops the sheet + its per-sheet viewport/floor maps, clamps index',
+        () {
+      final c = makeSeededContainer();
+      final ctrl = c.read(sheetsControllerProvider.notifier);
+      ctrl.setViewport('s2', const ViewportTransform(scale: 2));
+      ctrl.setSheetFloor('s2', 0);
+      ctrl.selectSheet(2); // s3
+
+      ctrl.removeSheet('s3');
+      var s = c.read(sheetsControllerProvider);
+      expect(s.sheets.map((e) => e.id), ['s1', 's2']);
+      expect(s.currentIndex, 1); // clamped from 2
+
+      ctrl.removeSheet('s2');
+      s = c.read(sheetsControllerProvider);
+      expect(s.viewportFor('s2'), isNull);
+      expect(s.sheetFloors.containsKey('s2'), isFalse);
+    });
+
+    test('keeps the selection on the same sheet when an EARLIER one is removed',
+        () {
+      final c = makeSeededContainer();
+      final ctrl = c.read(sheetsControllerProvider.notifier);
+      ctrl.selectSheet(2); // s3
+      ctrl.removeSheet('s1'); // an earlier sheet
+      final s = c.read(sheetsControllerProvider);
+      expect(s.sheets.map((e) => e.id), ['s2', 's3']);
+      expect(s.current?.id, 's3'); // selection followed the same sheet
+    });
+
+    test('prunes the removed sheet\'s nodes + edges, and is ONE undo/redo step',
+        () {
+      final c = makeSeededContainer();
+      final sheets = c.read(sheetsControllerProvider.notifier);
+      final net = c.read(networkControllerProvider.notifier);
+      final history = c.read(historyProvider.notifier);
+      net.loadNetwork(const Network(
+        nodes: [
+          NetNode(id: 'a', sheetId: 's3', x: 0, y: 0, floorIndex: 2),
+          NetNode(id: 'b', sheetId: 's3', x: 10, y: 0, floorIndex: 2),
+          NetNode(id: 'k', sheetId: 's2', x: 0, y: 0, floorIndex: 1),
+        ],
+        edges: [
+          NetEdge(
+              id: 'e-ab',
+              fromId: 'a',
+              toId: 'b',
+              service: ServiceType.coldWater,
+              kind: EdgeKind.run),
+        ],
+      ));
+
+      Set<String> nodeIds() => c
+          .read(networkControllerProvider)
+          .network
+          .nodes
+          .map((n) => n.id)
+          .toSet();
+
+      sheets.removeSheet('s3');
+      // s3's nodes + the edge between them are gone; s2's node stays.
+      expect(nodeIds(), {'k'});
+      expect(c.read(networkControllerProvider).network.edges, isEmpty);
+      expect(c.read(sheetsControllerProvider).sheets.map((e) => e.id),
+          ['s1', 's2']);
+      expect(history.canUndo, isTrue);
+
+      // ONE undo restores BOTH the sheet AND its pruned nodes/edge together.
+      history.undo();
+      expect(nodeIds(), {'a', 'b', 'k'});
+      expect(c.read(networkControllerProvider).network.edges.length, 1);
+      expect(c.read(sheetsControllerProvider).sheets.map((e) => e.id),
+          ['s1', 's2', 's3']);
+      expect(history.canUndo, isFalse); // exactly one entry consumed
+
+      // Redo re-removes both halves in the same one step.
+      history.redo();
+      expect(nodeIds(), {'k'});
+      expect(c.read(sheetsControllerProvider).sheets.map((e) => e.id),
+          ['s1', 's2']);
+    });
+
+    test('is a no-op (no history entry) for an unknown sheet id', () {
+      final c = makeSeededContainer();
+      final sheets = c.read(sheetsControllerProvider.notifier);
+      final history = c.read(historyProvider.notifier);
+      sheets.removeSheet('nope');
+      expect(c.read(sheetsControllerProvider).sheets.length, 3);
+      expect(history.canUndo, isFalse);
+    });
+  });
 }

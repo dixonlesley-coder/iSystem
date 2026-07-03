@@ -1,16 +1,23 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../store/app_state.dart';
+import '../../store/calibration_store.dart';
+import '../../store/electrical_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../shell/duplicate_floor_dialog.dart';
+import '../shell/nav_rail.dart';
 import '../shell/project_io.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/context_menu.dart';
 import '../widgets/glass_surface.dart';
+import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_text_field.dart';
+import 'pdf_page_picker.dart';
 
 /// Left rail: multi-sheet navigation, slimmed to a compact tile strip so the
 /// canvas gets the real estate. Each sheet is a small page thumbnail stamped
@@ -30,6 +37,12 @@ class SheetRail extends ConsumerWidget {
     final state = ref.watch(sheetsControllerProvider);
     final colors = context.colors;
     final type = context.type;
+    // A6: an "Add sheets…" footer to append more plan files, shown only for a
+    // REAL project (any non-placeholder sheet). The golden/demo project seeds
+    // placeholder sheets only, so the footer stays hidden there and goldens are
+    // byte-identical; a production project (A1: always imported, never
+    // placeholder) always shows it.
+    final hasRealSheet = state.sheets.any((s) => !s.isPlaceholder);
 
     return SizedBox(
       width: width,
@@ -73,7 +86,76 @@ class SheetRail extends ConsumerWidget {
                 ),
               ),
             ),
+            if (hasRealSheet) ...[
+              Container(height: 1, color: colors.border),
+              Padding(
+                padding: const EdgeInsets.all(MechXSpacing.xs),
+                child: _AddSheetsButton(
+                  onTap: () => addSheetsFromFiles(context, ref),
+                ),
+              ),
+            ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The slim "+ Add" footer affordance (A6) — appends more plan files via
+/// [addSheetsFromFiles]. A compact custom control (no Material) sized to the
+/// narrow rail; a "+" glyph over a terse label.
+class _AddSheetsButton extends StatefulWidget {
+  final VoidCallback onTap;
+  const _AddSheetsButton({required this.onTap});
+
+  @override
+  State<_AddSheetsButton> createState() => _AddSheetsButtonState();
+}
+
+class _AddSheetsButtonState extends State<_AddSheetsButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MechXFocusRing(
+      borderRadius: MechXRadii.control,
+      onActivated: widget.onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          behavior: HitTestBehavior.opaque,
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xs),
+            decoration: BoxDecoration(
+              color: _hover ? colors.surfaceHover : const Color(0x00000000),
+              borderRadius: MechXRadii.control,
+              border: Border.all(color: colors.border),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '+',
+                  style: type.body.copyWith(
+                    color: colors.accent,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  'Add',
+                  style: type.micro.copyWith(color: colors.textSecondary),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -114,6 +196,18 @@ class _RailItemState extends ConsumerState<_RailItem> {
         data: theme,
         child: _SheetMenuLayer(
           anchor: globalPosition,
+          onRename: () {
+            entry.remove();
+            _rename();
+          },
+          onAssignFloor: () {
+            entry.remove();
+            _assignFloor();
+          },
+          onCalibrate: () {
+            entry.remove();
+            _calibrate();
+          },
           onReplacePlan: () {
             entry.remove();
             replaceSheetPlan(context, ref, sheetId);
@@ -122,11 +216,61 @@ class _RailItemState extends ConsumerState<_RailItem> {
             entry.remove();
             showDuplicateFloorDialog(context);
           },
+          onRemove: () {
+            entry.remove();
+            _remove();
+          },
           onDismiss: entry.remove,
         ),
       ),
     );
     overlay.insert(entry);
+  }
+
+  /// A6: rename the sheet — a themed prompt, keeping the id so calibration and
+  /// drawn work stay married to the plan.
+  Future<void> _rename() async {
+    final name = await showRenameSheetDialog(context, widget.sheet.name);
+    if (name == null || !mounted) return;
+    ref.read(sheetsControllerProvider.notifier).renameSheet(widget.sheet.id, name);
+  }
+
+  /// A6: map this sheet to a building floor (explicit override) — undo-safe via
+  /// [SheetsController.setSheetFloor] (the drawn work moves with the mapping).
+  Future<void> _assignFloor() async {
+    final project = ref.read(projectControllerProvider);
+    final levelCount = project.building.levelCount;
+    final labels = <String>[
+      for (var i = 0; i < levelCount; i++)
+        i < project.floors.length ? project.floors[i].name : 'Floor ${i + 1}',
+    ];
+    final current = ref
+        .read(sheetsControllerProvider)
+        .floorFor(widget.sheet.id, levelCount);
+    final chosen = await showAssignFloorDialog(
+      context,
+      floorLabels: labels,
+      current: current,
+    );
+    if (chosen == null || !mounted) return;
+    ref.read(sheetsControllerProvider.notifier).setSheetFloor(widget.sheet.id, chosen);
+  }
+
+  /// A6: jump to this sheet on the Layout canvas and start the mark-a-known-
+  /// distance calibration flow (mirrors the command palette's Start calibration).
+  void _calibrate() {
+    ref.read(sheetsControllerProvider.notifier).selectSheetById(widget.sheet.id);
+    ref.read(shellSectionProvider.notifier).set(ShellSection.design);
+    ref.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
+    ref.read(calibrationControllerProvider.notifier).start();
+  }
+
+  /// A6: remove this sheet — undo-safe, pruning its orphaned nodes in one step
+  /// (see [SheetsController.removeSheet]); a status pill confirms (undoable via
+  /// Ctrl+Z).
+  void _remove() {
+    ref.read(sheetsControllerProvider.notifier).removeSheet(widget.sheet.id);
+    ref.read(statusMessageProvider.notifier).showStatus('Sheet removed');
   }
 
   @override
@@ -177,25 +321,14 @@ class _RailItemState extends ConsumerState<_RailItem> {
             ),
             child: Column(
               children: [
-                // A mini page thumbnail with the sheet index centred on it.
-                Container(
-                  width: 34,
-                  height: 42,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: colors.canvas,
-                    borderRadius: const BorderRadius.all(Radius.circular(3)),
-                    border: Border.all(
-                      color: widget.selected ? colors.accent : colors.border,
-                      width: widget.selected ? 1.5 : 1,
-                    ),
-                  ),
-                  child: Text(
-                    '${widget.index + 1}',
-                    style: type.mono.copyWith(
-                      color: widget.selected ? colors.accent : colors.textMuted,
-                    ),
-                  ),
+                // A mini page thumbnail with the sheet index. For a PDF-backed
+                // sheet it renders the actual page (A8) with the index as a small
+                // corner badge; a DXF/placeholder sheet keeps the numbered tile
+                // — so the golden/demo (placeholder-only) state is byte-identical.
+                _MiniPage(
+                  index: widget.index,
+                  sheet: widget.sheet,
+                  selected: widget.selected,
                 ),
                 const SizedBox(height: MechXSpacing.xxs),
                 // Terse label, truncated to fit the slim rail.
@@ -235,6 +368,101 @@ class _RailItemState extends ConsumerState<_RailItem> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// The rail tile's mini page (A8). For a DXF/placeholder sheet it is the
+/// numbered tile, kept byte-identical (so the goldens — whose demo sheets are
+/// all placeholders — don't shift). For a PDF-backed sheet it renders the actual
+/// page as the tile fill with the index as a small corner badge.
+class _MiniPage extends StatelessWidget {
+  final int index;
+  final Sheet sheet;
+  final bool selected;
+
+  const _MiniPage({
+    required this.index,
+    required this.sheet,
+    required this.selected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final border = Border.all(
+      color: selected ? colors.accent : colors.border,
+      width: selected ? 1.5 : 1,
+    );
+
+    // The fallback numbered tile — the exact tile drawn before A8.
+    Widget numbered() => Container(
+          width: 34,
+          height: 42,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: colors.canvas,
+            borderRadius: const BorderRadius.all(Radius.circular(3)),
+            border: border,
+          ),
+          child: Text(
+            '${index + 1}',
+            style: type.mono.copyWith(
+              color: selected ? colors.accent : colors.textMuted,
+            ),
+          ),
+        );
+
+    if (sheet.pdfPath == null) return numbered();
+
+    return Container(
+      width: 34,
+      height: 42,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: colors.canvas,
+        borderRadius: const BorderRadius.all(Radius.circular(3)),
+        border: border,
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          SheetThumbnail(
+            sheet: sheet,
+            // While the page renders, show the index so the tile is never blank.
+            placeholder: Center(
+              child: Text(
+                '${index + 1}',
+                style: type.mono.copyWith(
+                  color: selected ? colors.accent : colors.textMuted,
+                ),
+              ),
+            ),
+          ),
+          // A small legible index badge, so the rendered thumbnail is still
+          // numbered for quick reference.
+          Positioned(
+            left: 0,
+            bottom: 0,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+              decoration: BoxDecoration(
+                color: colors.surface.withAlpha(210),
+                borderRadius: const BorderRadius.only(
+                  topRight: Radius.circular(3),
+                ),
+              ),
+              child: Text(
+                '${index + 1}',
+                style: type.micro.copyWith(
+                  color: selected ? colors.accent : colors.textSecondary,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -286,18 +514,27 @@ class _CalibrationGlyph extends CustomPainter {
 }
 
 /// The floating per-sheet context menu: a dismiss barrier + a positioned
-/// [MechXContextMenu] anchored at the click point (clamped on-screen). Holds
-/// the "Replace plan…" action (A5); more per-sheet actions can join the column.
+/// [MechXContextMenu] anchored at the click point (clamped on-screen). Holds the
+/// per-sheet actions — Rename / Assign floor / Calibrate (A6), Replace plan (A5),
+/// Duplicate to (E4), and the destructive Remove (A6).
 class _SheetMenuLayer extends StatelessWidget {
   final Offset anchor;
+  final VoidCallback onRename;
+  final VoidCallback onAssignFloor;
+  final VoidCallback onCalibrate;
   final VoidCallback onReplacePlan;
   final VoidCallback onDuplicateTo;
+  final VoidCallback onRemove;
   final VoidCallback onDismiss;
 
   const _SheetMenuLayer({
     required this.anchor,
+    required this.onRename,
+    required this.onAssignFloor,
+    required this.onCalibrate,
     required this.onReplacePlan,
     required this.onDuplicateTo,
+    required this.onRemove,
     required this.onDismiss,
   });
 
@@ -305,9 +542,13 @@ class _SheetMenuLayer extends StatelessWidget {
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     const menuWidth = 180.0;
+    // Tall enough for the seven rows + divider — clamp so it never hangs off the
+    // bottom of the window.
+    const menuHeight = 300.0;
     final left =
         anchor.dx.clamp(0.0, (size.width - menuWidth).clamp(0.0, size.width));
-    final top = anchor.dy.clamp(0.0, (size.height - 90).clamp(0.0, size.height));
+    final top = anchor.dy
+        .clamp(0.0, (size.height - menuHeight).clamp(0.0, size.height));
 
     return Stack(
       children: [
@@ -325,14 +566,287 @@ class _SheetMenuLayer extends StatelessWidget {
           width: menuWidth,
           child: MechXContextMenu(
             children: [
+              MechXMenuRow(label: 'Rename…', onTap: onRename),
+              MechXMenuRow(label: 'Assign floor…', onTap: onAssignFloor),
+              MechXMenuRow(label: 'Calibrate…', onTap: onCalibrate),
               MechXMenuRow(label: 'Replace plan…', onTap: onReplacePlan),
               // E4: copy this floor's runs onto a range of floors (the dialog
               // defaults its source to the current sheet's floor).
               MechXMenuRow(label: 'Duplicate to…', onTap: onDuplicateTo),
+              const MechXMenuDivider(),
+              MechXMenuRow(label: 'Remove sheet', danger: true, onTap: onRemove),
             ],
           ),
         ),
       ],
+    );
+  }
+}
+
+/// A6: prompt for a new sheet name. Resolves to the trimmed name, or null when
+/// cancelled/dismissed. A themed [showGeneralDialog] card (no Material), the same
+/// idiom as the page picker / import-choice dialogs.
+Future<String?> showRenameSheetDialog(BuildContext context, String current) {
+  final theme = MechXTheme.of(context);
+  return showGeneralDialog<String>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Rename sheet',
+    barrierColor: theme.colors.scrim,
+    transitionDuration: MechXMotion.appear,
+    pageBuilder: (ctx, _, _) => MechXTheme(
+      data: theme,
+      child: Center(child: _RenameSheetDialog(initial: current)),
+    ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(
+        parent: anim,
+        curve: MechXMotion.standard,
+        reverseCurve: MechXMotion.standard,
+      );
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
+class _RenameSheetDialog extends StatefulWidget {
+  final String initial;
+  const _RenameSheetDialog({required this.initial});
+
+  @override
+  State<_RenameSheetDialog> createState() => _RenameSheetDialogState();
+}
+
+class _RenameSheetDialogState extends State<_RenameSheetDialog> {
+  late String _name = widget.initial;
+
+  void _save() {
+    final trimmed = _name.trim();
+    Navigator.of(context).pop(trimmed.isEmpty ? null : trimmed);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Container(
+      width: 400,
+      padding: const EdgeInsets.all(MechXSpacing.lg),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        boxShadow: MechXShadow.popover,
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Rename sheet',
+              style: type.title.copyWith(color: colors.textPrimary)),
+          const SizedBox(height: MechXSpacing.md),
+          MechXTextField(
+            value: widget.initial,
+            hint: 'Sheet name',
+            onChanged: (v) => _name = v,
+            onSubmitted: _save,
+          ),
+          const SizedBox(height: MechXSpacing.md),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              MechXButton(
+                label: 'Cancel',
+                tertiary: true,
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              MechXButton(label: 'Rename', primary: true, onPressed: _save),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A6: pick a building floor to map this sheet to. Resolves to the chosen floor
+/// index, or null when cancelled. Rows are the project's floor names (index
+/// [current] pre-marked).
+Future<int?> showAssignFloorDialog(
+  BuildContext context, {
+  required List<String> floorLabels,
+  required int current,
+}) {
+  final theme = MechXTheme.of(context);
+  return showGeneralDialog<int>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Assign floor',
+    barrierColor: theme.colors.scrim,
+    transitionDuration: MechXMotion.appear,
+    pageBuilder: (ctx, _, _) => MechXTheme(
+      data: theme,
+      child: Center(
+        child: _AssignFloorDialog(floorLabels: floorLabels, current: current),
+      ),
+    ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(
+        parent: anim,
+        curve: MechXMotion.standard,
+        reverseCurve: MechXMotion.standard,
+      );
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
+class _AssignFloorDialog extends StatelessWidget {
+  final List<String> floorLabels;
+  final int current;
+  const _AssignFloorDialog({required this.floorLabels, required this.current});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Container(
+      width: 400,
+      constraints: const BoxConstraints(maxHeight: 560),
+      padding: const EdgeInsets.all(MechXSpacing.lg),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        boxShadow: MechXShadow.popover,
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text('Assign to floor',
+                    style: type.title.copyWith(color: colors.textPrimary)),
+              ),
+              MechXButton(
+                label: 'Cancel',
+                tertiary: true,
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.xs),
+          Text('Which building level does this plan show?',
+              style: type.caption.copyWith(color: colors.textMuted)),
+          const SizedBox(height: MechXSpacing.sm),
+          Flexible(
+            child: Container(
+              decoration: BoxDecoration(
+                color: colors.background,
+                borderRadius: MechXRadii.control,
+                border: Border.all(color: colors.border),
+              ),
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: const EdgeInsets.all(MechXSpacing.xxs),
+                itemCount: floorLabels.length,
+                itemBuilder: (ctx, i) => _FloorRow(
+                  label: floorLabels[i],
+                  selected: i == current,
+                  onTap: () => Navigator.of(context).pop(i),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One tappable floor row: the floor name, with a trailing accent dot on the
+/// currently-mapped floor.
+class _FloorRow extends StatefulWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _FloorRow({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  State<_FloorRow> createState() => _FloorRowState();
+}
+
+class _FloorRowState extends State<_FloorRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MechXFocusRing(
+      borderRadius: MechXRadii.control,
+      onActivated: widget.onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs),
+            margin: const EdgeInsets.all(MechXSpacing.xxs),
+            decoration: BoxDecoration(
+              color: widget.selected
+                  ? colors.accentMuted
+                  : (_hover ? colors.surfaceHover : const Color(0x00000000)),
+              borderRadius: MechXRadii.control,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(widget.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: type.body.copyWith(
+                        color: colors.textPrimary,
+                        fontWeight: widget.selected ? FontWeight.w600 : null,
+                      )),
+                ),
+                if (widget.selected)
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: colors.accent,
+                      borderRadius: MechXRadii.small,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

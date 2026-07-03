@@ -17,6 +17,7 @@ import '../../data/project_assets.dart';
 import '../../data/project_document.dart';
 import '../../data/recovery.dart';
 import '../../store/app_state.dart';
+import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
@@ -164,29 +165,15 @@ Future<void> importPlan(BuildContext context, WidgetRef ref) async {
       if (choice == null) return; // cancelled — keep the current project
       if (choice == ImportChoice.add) {
         // ADD destroys nothing (current sheets, calibration and network stay),
-        // so no dirty-guard: append the new sheets and stop. Sheet ids are
-        // filename-derived (`stem#i`), so a re-import of the same/basename-
-        // sharing file would collide with a live id (sharing its calibration +
-        // floor mapping and confusing node references). Remap incoming ids to
-        // fresh unique ones first — safe, since no node references them yet.
-        final sheetsCtrl = ref.read(sheetsControllerProvider.notifier);
-        final used =
-            ref.read(sheetsControllerProvider).sheets.map((s) => s.id).toSet();
-        for (final s in sheets) {
-          var id = s.id;
-          var n = 1;
-          while (used.contains(id)) {
-            id = '${s.id}-$n';
-            n++;
-          }
-          used.add(id);
-          sheetsCtrl.addSheet(id == s.id ? s : s.copyWith(id: id));
-        }
+        // so no dirty-guard: append the new sheets (fresh unique ids remapped by
+        // the store, since filename-derived `stem#i` ids can collide with a live
+        // sheet — safe, no node references them yet) and stop.
+        final added =
+            ref.read(sheetsControllerProvider.notifier).addSheets(sheets);
         ref.read(loadErrorProvider.notifier).clear();
-        final n = sheets.length;
         ref
             .read(statusMessageProvider.notifier)
-            .showStatus('$n ${n == 1 ? 'sheet' : 'sheets'} added');
+            .showStatus('$added ${added == 1 ? 'sheet' : 'sheets'} added');
         return;
       }
       // REPLACE destroys the current sheets + orphans drawn work — guard now.
@@ -213,6 +200,87 @@ Future<void> importPlan(BuildContext context, WidgetRef ref) async {
   } finally {
     ref.read(busyProvider.notifier).clear();
   }
+}
+
+/// The basename of a file path, tolerant of either separator (a FilePicker path
+/// may use `/` even on Windows, where [Platform.pathSeparator] is `\`).
+String _baseName(String path) => path.split(RegExp(r'[\\/]')).last;
+
+/// Import ONE plan file at [path] to its [Sheet]s (PDF → a sheet per page, DXF
+/// one sheet, DWG one sheet via the ODA converter). Shared by the batch add.
+Future<List<Sheet>> _importPlanFile(String path) {
+  final lower = path.toLowerCase();
+  if (lower.endsWith('.dwg')) {
+    return importDwg(path,
+        converter: const OdaDwgConverter(), outDir: dwgCacheDir());
+  }
+  if (lower.endsWith('.dxf')) return importDxf(path);
+  return importPdf(path);
+}
+
+/// A6: APPEND MULTIPLE plan files (PDF / DXF / DWG) to the current project in one
+/// action. Where [importPlan] is single-file with an Add-vs-Replace choice, this
+/// is purpose-built for the common Indonesian workflow of one plan file per floor
+/// — pick many files at once and append every resulting sheet (fresh unique id
+/// via [SheetsController.addSheets]). Destroys nothing (existing sheets,
+/// calibration and network stay untouched), so no dirty-guard.
+///
+/// A multi-page PDF contributes all its pages (Remove unwanted ones from the
+/// sheet rail); a file that fails to import is skipped and named, and a partial
+/// batch still appends whatever parsed rather than aborting the lot.
+Future<void> addSheetsFromFiles(BuildContext context, WidgetRef ref) async {
+  final result = await FilePicker.pickFiles(
+    type: FileType.custom,
+    allowedExtensions: const ['pdf', 'dxf', 'dwg'],
+    allowMultiple: true,
+  );
+  if (result == null || result.files.isEmpty) return;
+  final paths = <String>[
+    for (final f in result.files)
+      if (f.path != null && f.path!.isNotEmpty) f.path!,
+  ];
+  if (paths.isEmpty) return;
+
+  ref.read(busyProvider.notifier).set(
+      MechXStringsData(ref.read(localeProvider))(StringKey.busyImportingPlan));
+  final imported = <Sheet>[];
+  final failures = <String>[];
+  try {
+    for (final path in paths) {
+      try {
+        final sheets = await _importPlanFile(path);
+        if (sheets.isEmpty) {
+          failures.add(_baseName(path));
+        } else {
+          imported.addAll(sheets);
+        }
+      } catch (_) {
+        // One bad file must not abort the batch — skip it and carry on.
+        failures.add(_baseName(path));
+      }
+    }
+  } finally {
+    ref.read(busyProvider.notifier).clear();
+  }
+
+  if (imported.isEmpty) {
+    ref.read(loadErrorProvider.notifier).set(
+        'Could not add any sheets — no importable geometry in the selected '
+        'file${paths.length == 1 ? '' : 's'}.');
+    return;
+  }
+  final added = ref.read(sheetsControllerProvider.notifier).addSheets(imported);
+  if (failures.isEmpty) {
+    ref.read(loadErrorProvider.notifier).clear();
+  } else {
+    // Partial success: surface what was skipped, but keep what landed.
+    ref.read(loadErrorProvider.notifier).set(
+        'Added $added ${added == 1 ? 'sheet' : 'sheets'}; skipped '
+        '${failures.length} (${failures.join(', ')}).');
+  }
+  ref
+      .read(statusMessageProvider.notifier)
+      .showStatus('$added ${added == 1 ? 'sheet' : 'sheets'} added');
 }
 
 /// Revise a SINGLE sheet's plan IN PLACE (A5): pick a new PDF/DXF/DWG and swap
