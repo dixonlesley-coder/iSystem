@@ -33,6 +33,9 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    seedDemoSheets(container);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
     Network net() => container.read(networkControllerProvider).network;
     expect(net().nodes, isEmpty);
 
@@ -63,6 +66,14 @@ void main() {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    seedDemoSheets(container);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
 
     // The DropOverlay is mounted but, at rest, paints no preview CustomPaint
     // (it only renders the ghost/snap layer while a drag hovers).

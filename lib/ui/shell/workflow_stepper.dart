@@ -21,6 +21,7 @@ import '../../store/electrical_store.dart';
 import '../shell/nav_rail.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/mechx_focus_ring.dart';
 
 /// The status-bar workflow stepper. Lays the five stages out horizontally with
 /// hairline connectors; the done stages are accented, the active one is
@@ -153,15 +154,27 @@ class _StageChipState extends State<_StageChip> {
       ),
     );
 
-    // Each stage jumps to where that step is performed.
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        child: chip,
+    // Each stage jumps to where that step is performed. Wrapped in a
+    // MechXFocusRing so the chip is keyboard-focusable + Enter/Space-activatable
+    // and announced as a button (I7); [MergeSemantics] folds the ring's button
+    // role, focus state, and the inner Text into ONE labelled button node so a
+    // screen reader announces e.g. "Calibrate, button". At rest the ring paints
+    // nothing, and Semantics/MergeSemantics are layout/paint-transparent, so the
+    // goldens are byte-identical.
+    return MergeSemantics(
+      child: MechXFocusRing(
+        borderRadius: MechXRadii.small,
+        onActivated: widget.onTap,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onTap,
+            child: chip,
+          ),
+        ),
       ),
     );
   }

@@ -5,6 +5,7 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'history_store.dart';
+import 'network_store.dart';
 
 /// Editable project: name, the building's [floors] (the source of truth for
 /// riser/vertical length, §10), and per-sheet [calibrations] (px → real length,
@@ -24,6 +25,34 @@ class ProjectState {
   BuildingLevels get building => BuildingLevels(floors);
 
   ScaleCalibration? calibrationFor(String sheetId) => calibrations[sheetId];
+
+  /// Sheet ids in [candidates] that carry NO calibration yet (optionally
+  /// excluding the source sheet). The SAFE default target set for "apply scale
+  /// to all sheets" (D2) — stamping these overwrites nothing.
+  Set<String> uncalibratedAmong(Iterable<String> candidates, {String? exclude}) {
+    final out = <String>{};
+    for (final id in candidates) {
+      if (id == exclude) continue;
+      if (!calibrations.containsKey(id)) out.add(id);
+    }
+    return out;
+  }
+
+  /// Sheet ids in [candidates] that already carry a calibration DIFFERENT from
+  /// [fromSheetId]'s (so overwriting them with the source scale needs an
+  /// explicit confirm, D2). Empty when the source is uncalibrated.
+  Set<String> differentlyCalibratedFrom(
+      String fromSheetId, Iterable<String> candidates) {
+    final source = calibrationFor(fromSheetId);
+    if (source == null) return const {};
+    final out = <String>{};
+    for (final id in candidates) {
+      if (id == fromSheetId) continue;
+      final c = calibrations[id];
+      if (c != null && c != source) out.add(id);
+    }
+    return out;
+  }
 
   ProjectState copyWith({
     String? name,
@@ -79,6 +108,11 @@ class ProjectController extends Notifier<ProjectState> {
     state = _redo.removeLast();
   }
 
+  /// Restore a captured [ProjectState] WITHOUT recording undo or touching the
+  /// local snapshot stacks — the [StructuralHistoryController]'s restore path for
+  /// the compound floor-stack edits ([setFloors]/[removeFloor]). Not for widgets.
+  void restoreState(ProjectState snapshot) => state = snapshot;
+
   void setName(String name) {
     if (name == state.name) return;
     _snapshot();
@@ -107,22 +141,45 @@ class ProjectController extends Notifier<ProjectState> {
     state = state.copyWith(floors: [...state.floors, next]);
   }
 
-  /// Replace the whole floor stack in one undo step (used by project
-  /// templates / smart defaults to prefill a building's levels). A no-op for an
-  /// empty list — a building must always have at least one floor.
+  /// Replace the whole floor stack in ONE undo step (used by project templates /
+  /// smart defaults to prefill a building's levels). A no-op for an empty list —
+  /// a building must always have at least one floor.
+  ///
+  /// The floor swap AND the drawn-node floor-index remap are recorded as a
+  /// SINGLE [UndoDomain.structural] entry (via [structuralHistoryProvider]) so
+  /// one Ctrl+Z restores BOTH the stack and every node's floor together — never
+  /// the torn state where nodes are remapped against a still-changed stack. The
+  /// remap keeps drawn work in range (a template with fewer floors than the
+  /// drawing can't strand nodes above the new top); it is byte-identical for an
+  /// empty network or a stack that only grew.
   void setFloors(List<Floor> floors) {
     if (floors.isEmpty) return;
-    _snapshot();
+    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
     state = state.copyWith(floors: List<Floor>.from(floors));
+    ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
+          levelCount: state.floors.length,
+          record: false,
+        );
   }
 
+  /// Remove the floor at [index] in ONE undo step. The floor removal AND the
+  /// drawn-node remap are a SINGLE [UndoDomain.structural] entry (see
+  /// [setFloors]), so one Ctrl+Z restores the stack and every node's floor
+  /// together. Removing a MIDDLE floor shifts higher nodes down one index to
+  /// keep their own physical floor (no silent re-elevation); nodes on/above a
+  /// removed top clamp into range. Byte-identical remap for an empty network.
   void removeFloor(int index) {
     if (index < 0 || index >= state.floors.length || state.floors.length <= 1) {
       return;
     }
-    _snapshot();
+    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
     final floors = [...state.floors]..removeAt(index);
     state = state.copyWith(floors: floors);
+    ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
+          levelCount: state.floors.length,
+          removedIndex: index,
+          record: false,
+        );
   }
 
   void renameFloor(int index, String name) {
@@ -156,23 +213,35 @@ class ProjectController extends Notifier<ProjectState> {
     state = state.copyWith(calibrations: next);
   }
 
-  /// Copy [fromSheetId]'s calibration onto every other sheet, as ONE undo step
-  /// — a per-sheet calibration QoL shortcut (one sheet measured ⇒ apply that
-  /// scale to all). [toSheetIds] is the set of sheets to stamp (the caller
-  /// passes the live sheet ids, since the sheet list lives in `SheetsState`,
-  /// not here); when null it falls back to every sheet that already has a
-  /// calibration. No-op if the source sheet is uncalibrated.
-  void applyCalibrationToAllSheets(String fromSheetId, {Set<String>? toSheetIds}) {
+  /// Copy [fromSheetId]'s calibration onto the [toSheetIds] sheets, as ONE undo
+  /// step — a per-sheet calibration QoL shortcut (one sheet measured ⇒ apply
+  /// that scale to others). [toSheetIds] is the set of sheets to stamp (the
+  /// caller passes the live sheet ids, since the sheet list lives in
+  /// `SheetsState`, not here); when null it falls back to every sheet that
+  /// already has a calibration.
+  ///
+  /// Returns the number of OTHER sheets whose scale actually changed (so the UI
+  /// can report "Scale applied to N sheets", D2). No-op — returning 0, recording
+  /// nothing — when the source is uncalibrated or nothing would change (so the
+  /// caller can default to the safe uncalibrated-only target set and confirm
+  /// before overwriting a differing scale; see [uncalibratedAmong] /
+  /// [differentlyCalibratedFrom]).
+  int applyCalibrationToAllSheets(String fromSheetId, {Set<String>? toSheetIds}) {
     final source = state.calibrationFor(fromSheetId);
-    if (source == null) return;
+    if (source == null) return 0;
     final targets = toSheetIds ?? state.calibrations.keys.toSet();
-    _snapshot();
     final next = Map<String, ScaleCalibration>.from(state.calibrations);
+    var changed = 0;
     for (final id in targets) {
       if (id == fromSheetId) continue;
+      if (next[id] == source) continue; // already this scale — no change
       next[id] = source;
+      changed++;
     }
+    if (changed == 0) return 0;
+    _snapshot();
     state = state.copyWith(calibrations: next);
+    return changed;
   }
 }
 

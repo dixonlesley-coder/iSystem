@@ -65,10 +65,11 @@ class PreferencesScreen extends ConsumerWidget {
   }
 }
 
-/// The BYO Anthropic API key for the in-app Claude copilot. Stored in the
-/// project's `DesignSettings` (round-trips in `.mechx`). The field is masked and
-/// only ever shows whether a key is configured — never the key itself. English
-/// literals: Preferences isn't in the golden set.
+/// The BYO API key for the in-app AI copilot. Stored MACHINE-LOCAL in the
+/// offline app-settings file (`app_settings.dart`), never inside a shareable
+/// `.mechx` (B8) — the launch persistence listener saves it on change. The field
+/// is masked and only ever shows whether a key is configured — never the key
+/// itself. English literals: Preferences isn't in the golden set.
 class _ApiKeyCard extends ConsumerStatefulWidget {
   const _ApiKeyCard();
 
@@ -216,8 +217,8 @@ class _ApiKeyCardState extends ConsumerState<_ApiKeyCard> {
             ),
             const SizedBox(height: MechXSpacing.xs),
             Text(
-              'Stored in this project file. Do not share a .mechx that carries '
-              'your key.',
+              'Stored on this computer only — never inside a project file, so a '
+              'shared .mechx never carries your key.',
               style: type.caption.copyWith(color: colors.textMuted),
             ),
           ],

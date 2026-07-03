@@ -106,3 +106,80 @@ class _MatchBadge extends StatelessWidget {
 Map<String, Part> _partIndex() => {
       for (final p in fullCatalog()) p.sku: p,
     };
+
+/// The MECHANICAL bill of materials table (H10): one row per priced mechanical
+/// line (pipe/duct length priced per metre, fittings per piece), with qty, unit,
+/// item and a priced / unpriced flag. Read-only — derived from the sized
+/// mechanical network + fittings; prices live with the project.
+class MechanicalBomView extends ConsumerWidget {
+  const MechanicalBomView({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final est = ref.watch(mechanicalCostProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Mechanical bill of materials',
+            style: type.title.copyWith(color: colors.textPrimary)),
+        const SizedBox(height: MechXSpacing.xxs),
+        Text(
+          est.lines.isEmpty
+              ? 'Size a mechanical network to price its pipe, duct and fittings.'
+              : '${est.lines.length} line(s), ${est.unpricedCount} unpriced',
+          style: type.caption.copyWith(color: colors.textMuted),
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        CommercialTable(
+          columns: const [
+            CommercialColumn('Qty', flex: 2, numeric: true),
+            CommercialColumn('Unit', flex: 2),
+            CommercialColumn('Item', flex: 9),
+            CommercialColumn('Priced', flex: 3),
+          ],
+          rows: [
+            for (final l in est.lines)
+              CommercialRow(cells: [
+                CommercialCell.text(CommercialFormat.qty(l.qty)),
+                CommercialCell.text(l.unit),
+                CommercialCell.text(l.description),
+                CommercialCell.widget(_PricedBadge(priced: l.priced)),
+              ]),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// A small pill flagging whether a mechanical line carries a price (green) or is
+/// still unpriced (warning) — mirrors the electrical match badge.
+class _PricedBadge extends StatelessWidget {
+  final bool priced;
+  const _PricedBadge({required this.priced});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final color = priced ? colors.success : colors.warning;
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: MechXSpacing.sm,
+        vertical: MechXSpacing.xxs,
+      ),
+      decoration: BoxDecoration(
+        color: color.withAlpha(38),
+        borderRadius: const BorderRadius.all(MechXRadii.pill),
+        border: Border.all(color: color.withAlpha(122)),
+      ),
+      child: Text(
+        priced ? 'priced' : 'unpriced',
+        style: type.caption.copyWith(color: color, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+}

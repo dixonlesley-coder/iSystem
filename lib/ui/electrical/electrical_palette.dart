@@ -18,6 +18,7 @@ import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
+import '../widgets/mechx_scrollbar.dart';
 import '../widgets/palette_card.dart';
 import '../widgets/section_label.dart';
 import 'load_symbols.dart';
@@ -119,8 +120,22 @@ const List<_Group> _groups = [
 ];
 
 /// The scrollable palette column.
-class ElectricalPalette extends StatelessWidget {
+class ElectricalPalette extends StatefulWidget {
   const ElectricalPalette({super.key});
+
+  @override
+  State<ElectricalPalette> createState() => _ElectricalPaletteState();
+}
+
+class _ElectricalPaletteState extends State<ElectricalPalette> {
+  // Owned so the themed scroll indicator (J1) can be dragged, not just shown.
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -146,7 +161,10 @@ class ElectricalPalette extends StatelessWidget {
           ),
           const SizedBox(height: MechXSpacing.sm),
           Expanded(
-            child: SingleChildScrollView(
+            child: MechXScrollbar(
+              controller: _scrollController,
+              child: SingleChildScrollView(
+              controller: _scrollController,
               padding: const EdgeInsets.fromLTRB(
                 MechXSpacing.md,
                 0,
@@ -192,6 +210,7 @@ class ElectricalPalette extends StatelessWidget {
                   ],
                 ],
               ),
+            ),
             ),
           ),
         ],

@@ -11,7 +11,10 @@ library;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/selection_store.dart';
+import 'package:mechx/ui/canvas/viewport.dart';
 import 'package:mechx/ui/schematic/schematic_view.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -164,6 +167,178 @@ void main() {
       // Stack, so no legend service row renders.
       expect(find.text('No network drawn'), findsOneWidget);
       expect(find.text('Cold water'), findsNothing);
+    });
+  });
+
+  group('SchematicView — F9 honest feed note', () {
+    Network riserNetwork({required bool roofTank}) => Network(
+          nodes: [
+            const NetNode(id: 'lo', sheetId: 's1', x: 200, y: 0, floorIndex: 0),
+            NetNode(
+              id: 'hi',
+              sheetId: 's1',
+              x: 200,
+              y: 0,
+              floorIndex: 1,
+              component: roofTank ? NodeComponent.roofTank : null,
+            ),
+          ],
+          edges: const [
+            NetEdge(
+              id: 'r1',
+              fromId: 'lo',
+              toId: 'hi',
+              service: ServiceType.coldWater,
+              kind: EdgeKind.riser,
+            ),
+          ],
+        );
+
+    testWidgets(
+        "the Notes card claims '(roof tank)' only when a roofTank exists",
+        (tester) async {
+      // Tankless downfeed network (the default feed strategy is downfeed):
+      // the feed line must NOT assert a roof tank.
+      await tester.pumpWidget(_harness(const SchematicView(), overrides: [
+        networkControllerProvider.overrideWith(
+          () => _FixedNetworkController(riserNetwork(roofTank: false)),
+        ),
+      ]));
+      await tester.pump();
+      expect(find.text('Feed: gravity downfeed'), findsOneWidget);
+      expect(find.textContaining('(roof tank)'), findsNothing);
+    });
+
+    testWidgets("with a real roofTank node the '(roof tank)' suffix returns",
+        (tester) async {
+      await tester.pumpWidget(_harness(const SchematicView(), overrides: [
+        networkControllerProvider.overrideWith(
+          () => _FixedNetworkController(riserNetwork(roofTank: true)),
+        ),
+      ]));
+      await tester.pump();
+      expect(find.text('Feed: gravity downfeed (roof tank)'), findsOneWidget);
+    });
+  });
+
+  group('SchematicView — F3 Edit-mode undo contract', () {
+    // The two-floor riser the pointer tests grab: vertical leg at world
+    // x = 200 spanning floors 0-1.
+    const riserNet = Network(
+      nodes: [
+        NetNode(id: 'lo', sheetId: 's1', x: 200, y: 0, floorIndex: 0),
+        NetNode(id: 'hi', sheetId: 's1', x: 200, y: 0, floorIndex: 1),
+      ],
+      edges: [
+        NetEdge(
+          id: 'r1',
+          fromId: 'lo',
+          toId: 'hi',
+          service: ServiceType.coldWater,
+          kind: EdgeKind.riser,
+        ),
+      ],
+    );
+
+    /// Global screen point on the riser's vertical leg, derived from the Edit
+    /// canvas's own fit transform (contentSize = 1200 x 160·levels, padding 40
+    /// — `_EditElevation`'s documented geometry; default building = 3 levels).
+    Offset riserPoint(WidgetTester tester) {
+      final clipBox = tester.renderObject<RenderBox>(find.descendant(
+          of: find.byType(SchematicView), matching: find.byType(ClipRect)));
+      final vt =
+          ViewportTransform.fit(const Size(1200, 480), clipBox.size, padding: 40);
+      // Floor band centres (floor 0 at the bottom): floor 0 → y 400, floor 1 →
+      // y 240; the leg's midpoint is (200, 320) in world px.
+      return clipBox.localToGlobal(vt.worldToScreen(const Offset(200, 320)));
+    }
+
+    // Edit mode hosts Draggable palette cards, which need an Overlay ancestor
+    // (WidgetsApp provides one in the real shell); a roomier surface keeps the
+    // toolbar + palette from overflowing the test viewport.
+    Widget editHarness() => ProviderScope(
+          child: MechXTheme(
+            data: MechXThemeData.dark,
+            child: Directionality(
+              textDirection: TextDirection.ltr,
+              child: MediaQuery(
+                data: const MediaQueryData(size: Size(1200, 800)),
+                child: SizedBox(
+                  width: 1200,
+                  height: 800,
+                  child: Overlay(
+                    initialEntries: [
+                      OverlayEntry(
+                        builder: (_) => const SchematicView(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+    testWidgets(
+        'select-to-inspect pushes NO undo step and keeps redo; the first drag '
+        'movement records exactly one', (tester) async {
+      await tester.pumpWidget(editHarness());
+      await tester.pump();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(SchematicView)),
+        listen: false,
+      );
+      final net = container.read(networkControllerProvider.notifier);
+      final history = container.read(historyProvider.notifier);
+      net.loadNetwork(riserNet);
+
+      // Enter Edit mode and let the canvas fit itself.
+      await tester.tap(find.text('Edit'));
+      await tester.pump();
+      await tester.pump();
+
+      // Prime a redo entry: place a second riser, then undo it.
+      net.placeRiserAt('s1', 0, 500, 3, service: ServiceType.coldWater);
+      expect(history.canUndo, isTrue);
+      history.undo();
+      expect(history.canUndo, isFalse);
+      expect(history.canRedo, isTrue);
+
+      // CLICK (down + up, no movement) on the riser: selection follows, but
+      // no phantom undo step is pushed and the redo stack survives (F3).
+      final point = riserPoint(tester);
+      final click = await tester.startGesture(point);
+      await click.up();
+      await tester.pump();
+      expect(container.read(selectionProvider).edgeId, 'r1');
+      expect(history.canUndo, isFalse);
+      expect(history.canRedo, isTrue);
+
+      // DRAG: the first real movement records exactly ONE undo step for the
+      // whole move (and, as any new edit, clears redo).
+      final drag = await tester.startGesture(point);
+      await drag.moveBy(const Offset(40, 0));
+      await drag.moveBy(const Offset(40, 0));
+      await drag.up();
+      await tester.pump();
+
+      final movedX = container
+          .read(networkControllerProvider)
+          .network
+          .nodeById('lo')!
+          .x;
+      expect(movedX, isNot(200));
+      expect(history.canUndo, isTrue);
+      expect(history.canRedo, isFalse);
+
+      // One undo restores the pre-drag position (single step per drag).
+      history.undo();
+      expect(
+        container.read(networkControllerProvider).network.nodeById('lo')!.x,
+        200,
+      );
+      expect(history.canUndo, isFalse);
     });
   });
 }

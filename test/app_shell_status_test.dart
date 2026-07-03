@@ -34,14 +34,19 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
-    // The demo current sheet (s1) is uncalibrated at launch.
-    expect(find.text('Uncalibrated'), findsOneWidget);
-    expect(find.text('Calibrated'), findsNothing);
-
     final container = ProviderScope.containerOf(
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    // Production launches with NO sheets (A1); seed the demo sheets so there is
+    // a current sheet whose (missing) calibration the status bar reports.
+    seedDemoSheets(container);
+    await tester.pump();
+
+    // The demo current sheet (s1) is uncalibrated at launch.
+    expect(find.text('Uncalibrated'), findsOneWidget);
+    expect(find.text('Calibrated'), findsNothing);
+
     // Calibrate the current sheet → the status bar must flip to Calibrated.
     container
         .read(projectControllerProvider.notifier)

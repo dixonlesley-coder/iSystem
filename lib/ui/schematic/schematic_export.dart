@@ -100,9 +100,16 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
     return null;
   }
 
+  // F9: assert '(roof tank)' ONLY when a roofTank actually exists in the
+  // network (mirrors `_supplyNote`) — the KETERANGAN must never claim
+  // equipment the design doesn't contain.
+  final hasRoofTank =
+      net.nodes.any((n) => n.component == NodeComponent.roofTank);
   final lines = <String>[
     feed == FeedStrategy.downfeed
-        ? 'Feed: gravity downfeed (roof tank)'
+        ? (hasRoofTank
+            ? 'Feed: gravity downfeed (roof tank)'
+            : 'Feed: gravity downfeed')
         : 'Feed: upfeed / booster pump',
   ];
   final roofM3 = tankM3(NodeComponent.roofTank);
@@ -176,50 +183,66 @@ DrawingChrome _riserChrome(WidgetRef ref,
   );
 }
 
-/// Export the mechanical riser single-line as a native (vector) PDF.
-Future<void> exportMechanicalRiserPdf(WidgetRef ref, ServiceType? focus) async {
-  final sheet = buildLiveRiserSheet(ref, focus);
-  final bytes = sldSheetToPdf(
-    sheet: sheet,
-    title: 'iSystem mechanical single-line',
-    diagramTitle: _diagramTitle(focus),
-    chrome: _riserChrome(ref, index: 1, total: 1),
-  );
-  final project = ref.read(projectControllerProvider);
-  final base = project.name.isEmpty ? 'mechanical' : project.name;
-  final path = await FilePicker.saveFile(
-    dialogTitle: MechXStringsData(ref.read(localeProvider))(
-        StringKey.exportTitleSldPdf),
-    fileName: '$base-riser-sld.pdf',
-    type: FileType.custom,
-    allowedExtensions: const ['pdf'],
-  );
-  if (path == null) return;
-  final full = path.endsWith('.pdf') ? path : '$path.pdf';
-  await File(full).writeAsBytes(bytes);
-}
+/// Export the mechanical riser single-line as a native (vector) PDF. Routed
+/// through the shared export guard (H3) like its sibling set exports below:
+/// zero-length gate + try/catch + the "Exported ..." pill + Report-stage
+/// credit — never a silent bare write.
+Future<void> exportMechanicalRiserPdf(WidgetRef ref, ServiceType? focus) =>
+    runExportGuarded(
+      ref,
+      name: 'riser single-line (PDF)',
+      write: () async {
+        final sheet = buildLiveRiserSheet(ref, focus);
+        final bytes = sldSheetToPdf(
+          sheet: sheet,
+          title: 'iSystem mechanical single-line',
+          diagramTitle: _diagramTitle(focus),
+          chrome: _riserChrome(ref, index: 1, total: 1),
+        );
+        final project = ref.read(projectControllerProvider);
+        final base = project.name.isEmpty ? 'mechanical' : project.name;
+        final path = await FilePicker.saveFile(
+          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleSldPdf),
+          fileName: '$base-riser-sld.pdf',
+          type: FileType.custom,
+          allowedExtensions: const ['pdf'],
+        );
+        if (path == null) return false;
+        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+        await File(full).writeAsBytes(bytes);
+        return true;
+      },
+    );
 
-/// Export the mechanical riser single-line as a DXF (R12) drawing file.
-Future<void> exportMechanicalRiserDxf(WidgetRef ref, ServiceType? focus) async {
-  final sheet = buildLiveRiserSheet(ref, focus);
-  final dxf = sldSheetToDxf(
-    sheet: sheet,
-    diagramTitle: _diagramTitle(focus),
-    chrome: _riserChrome(ref, index: 1, total: 1),
-  );
-  final project = ref.read(projectControllerProvider);
-  final base = project.name.isEmpty ? 'mechanical' : project.name;
-  final path = await FilePicker.saveFile(
-    dialogTitle: MechXStringsData(ref.read(localeProvider))(
-        StringKey.exportTitleSldDxf),
-    fileName: '$base-riser-sld.dxf',
-    type: FileType.custom,
-    allowedExtensions: const ['dxf'],
-  );
-  if (path == null) return;
-  final full = path.endsWith('.dxf') ? path : '$path.dxf';
-  await File(full).writeAsString(dxf);
-}
+/// Export the mechanical riser single-line as a DXF (R12) drawing file. Routed
+/// through the shared export guard (H3) — see [exportMechanicalRiserPdf].
+Future<void> exportMechanicalRiserDxf(WidgetRef ref, ServiceType? focus) =>
+    runExportGuarded(
+      ref,
+      name: 'riser single-line (DXF)',
+      write: () async {
+        final sheet = buildLiveRiserSheet(ref, focus);
+        final dxf = sldSheetToDxf(
+          sheet: sheet,
+          diagramTitle: _diagramTitle(focus),
+          chrome: _riserChrome(ref, index: 1, total: 1),
+        );
+        final project = ref.read(projectControllerProvider);
+        final base = project.name.isEmpty ? 'mechanical' : project.name;
+        final path = await FilePicker.saveFile(
+          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleSldDxf),
+          fileName: '$base-riser-sld.dxf',
+          type: FileType.custom,
+          allowedExtensions: const ['dxf'],
+        );
+        if (path == null) return false;
+        final full = path.endsWith('.dxf') ? path : '$path.dxf';
+        await File(full).writeAsString(dxf);
+        return true;
+      },
+    );
 
 // ── B3: the numbered riser drawing SET (all systems) ─────────────────────────
 

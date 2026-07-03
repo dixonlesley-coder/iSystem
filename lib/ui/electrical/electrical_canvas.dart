@@ -43,6 +43,7 @@ import '../../store/app_state.dart';
 import '../../store/electrical_store.dart';
 import '../../store/history_store.dart';
 import '../canvas/canvas_grid.dart';
+import '../canvas/text_entry_guard.dart';
 import '../canvas/viewport.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -299,6 +300,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    // B4 — while the user is typing in a text field, every canvas shortcut
+    // (Delete/Backspace on the selection, Ctrl+Z/Y, Esc) belongs to the field:
+    // never let an editing keystroke mutate the drawing.
+    if (isTextEntryFocused()) return KeyEventResult.ignored;
     final key = event.logicalKey;
     // Undo / redo route through the GLOBAL timeline (history_store), matching
     // the Layout canvas — so Ctrl+Z reverts the genuinely most-recent edit
@@ -491,7 +496,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                     Positioned.fill(
                       child: _CanvasDropTarget(
                         transform: vt,
-                        panelCount: project.panels.length,
+                        nextPanelOrdinal: nextSubPanelOrdinal(project.panels),
                         controller: _ctrl,
                         onToast: (m) =>
                             ref.read(statusMessageProvider.notifier).showStatus(m),
@@ -666,27 +671,42 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               essential: _essential.contains(panel.panelId),
               upsBacked: modelPanel?.upsBacked ?? false,
               submeter: modelPanel?.submeter ?? false,
+              // The MEP Equipment board is machine-owned (auto-synced from the
+              // plan). Badge it + reject palette drops (a dropped way would be
+              // wiped on the next plan change) — G2.
+              autoOwned: panel.panelId == kMepEquipmentPanelId,
               onTap: () => _selectPanel(panel.panelId),
               onDoubleTap: () => widget.onEditPanel(panel.panelId),
               onMenu: (gp) => widget.onPanelMenu(panel.panelId, gp),
               // Summary card → expand chevron frames the board schedule (I7).
               onExpandSchedule: () => focusPanelSchedule(panel.panelId),
               // A way row → select it (ring / row highlight, Delete removes);
-              // a tap on empty schedule chrome zooms back out to the summary.
+              // the header band selects the whole board; nothing collapses on a
+              // stray tap (collapse is zoom-out only — G6).
               onSelectWay: (cid) => _selectCircuit(panel.panelId, cid),
-              onCollapse: () => collapseToSummary(panel.panelId),
               onWayDoubleTap: (cid) => widget.onEditCircuit(panel.panelId, cid),
               onWayMenu: (cid, gp) =>
                   widget.onCircuitMenu(panel.panelId, cid, gp),
-              onDropLoad: (load) => _ctrl.addCircuit(
-                panel.panelId,
-                kind: load.kind == LoadKind.feeder
-                    ? LoadKind.general
-                    : load.kind,
-                phases: load.phases,
-                loadW: load.loadW > 0 ? load.loadW : null,
-                motorKw: load.motorKw,
-              ),
+              onDropLoad: (load) {
+                // Reject a drop onto the machine-owned MEP board — it is rebuilt
+                // from the plan, so a hand-added way would silently vanish (G2).
+                if (panel.panelId == kMepEquipmentPanelId) {
+                  ref.read(statusMessageProvider.notifier).showStatus(
+                        'MEP Equipment is auto-generated from the plan — '
+                        'add ways to another panel.',
+                      );
+                  return;
+                }
+                _ctrl.addCircuit(
+                  panel.panelId,
+                  kind: load.kind == LoadKind.feeder
+                      ? LoadKind.general
+                      : load.kind,
+                  phases: load.phases,
+                  loadW: load.loadW > 0 ? load.loadW : null,
+                  motorKw: load.motorKw,
+                );
+              },
               onOutletDragStart: (gp) => _onFeederDragStart(panel.panelId, gp),
               onOutletDragUpdate: (gp) =>
                   _onFeederDragUpdate(gp, positions, panels),
@@ -776,6 +796,20 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       scale: s,
       offset: _viewportSize.center(Offset.zero) - worldCentre * s,
     ));
+  }
+
+  /// Frame [panelId]'s board schedule AND select the offending element — the G5
+  /// Issues-drawer "locate" action. A non-null [circuitId] rings that way's
+  /// schedule row (Delete then removes it); a null [circuitId] selects the whole
+  /// board. Framing no-ops when the panel / viewport isn't ready yet, but the
+  /// selection is still applied so a subsequent frame lands on it.
+  void focusIssue(String panelId, {String? circuitId}) {
+    focusPanelSchedule(panelId);
+    setState(() {
+      _selection = circuitId == null
+          ? _CanvasSelection.panel(panelId)
+          : _CanvasSelection.circuit(panelId, circuitId);
+    });
   }
 
   /// Zoom in just past the LOD threshold, anchored at [focalScreen], so a
@@ -1093,11 +1127,13 @@ class _PanelScheduleBody extends StatefulWidget {
   final ValueChanged<String> onWayDoubleTap;
   final void Function(String, Offset) onWayMenu;
 
-  /// A single tap on a way ROW selects that circuit (ring / row highlight,
-  /// Delete removes it — I5); a tap on empty schedule chrome zooms out to the
-  /// summary card ([onCollapse] — I7).
+  /// A single tap on a real way ROW selects that circuit (ring / row highlight,
+  /// Delete removes it — I5); a tap in the HEADER band selects the whole board
+  /// ([onSelectPanel] — G6, the only way to select a panel at the detail LOD,
+  /// whose card chrome is dropped); a tap on a reserved CADANGAN spare row / the
+  /// TOTAL footer / empty chrome is a NO-OP (no surprise camera collapse — G6).
   final ValueChanged<String> onSelectWay;
-  final VoidCallback onCollapse;
+  final VoidCallback onSelectPanel;
 
   /// The currently-selected circuit id (drives the row selection band).
   final String? selectedCircuitId;
@@ -1109,7 +1145,7 @@ class _PanelScheduleBody extends StatefulWidget {
     required this.onWayDoubleTap,
     required this.onWayMenu,
     required this.onSelectWay,
-    required this.onCollapse,
+    required this.onSelectPanel,
     required this.selectedCircuitId,
   });
 
@@ -1142,14 +1178,23 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
     );
   }
 
-  /// The way ROW index under the body-local point, or null. Shared row geometry
-  /// (`scheduleRowTop`) so the hit-test agrees with the painter's highlight.
-  int? _wayIndexAt(Offset local, SldSheet sheet, Size size) {
-    if (widget.panel.circuits.isEmpty) return null;
+  /// The RAW schedule row index under the body-local point — negative for the
+  /// HEADER band (name / tag / incomer line, above the first way row), 0 …
+  /// circuits.length-1 for the real ways, and >= circuits.length for the
+  /// reserved CADANGAN spare rows / the TOTAL footer. Shared row geometry
+  /// (`scheduleRowTop`) so it agrees with the painter's highlight.
+  int _rawRowAt(Offset local, SldSheet sheet, Size size) {
     final t = _fitTransform(sheet, size);
     final world = t.screenToWorld(local);
-    final i =
-        ((world.dy - scheduleRowTop(0)) / kScheduleRowH).floor();
+    return ((world.dy - scheduleRowTop(0)) / kScheduleRowH).floor();
+  }
+
+  /// The way ROW index under the body-local point, or null (header / spare /
+  /// footer / empty panel). Clamped to the REAL circuits so a tap on a reserved
+  /// spare row never resolves to a way.
+  int? _wayIndexAt(Offset local, SldSheet sheet, Size size) {
+    if (widget.panel.circuits.isEmpty) return null;
+    final i = _rawRowAt(local, sheet, size);
     if (i < 0 || i >= widget.panel.circuits.length) return null;
     return i;
   }
@@ -1195,14 +1240,19 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
             },
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              // A single tap over a way row selects it; a tap on empty schedule
-              // chrome (header / footer) zooms back out to the summary card.
+              // Predictable detail-LOD tap semantics (G6): a tap on a real way
+              // ROW selects that circuit; a tap in the HEADER band selects the
+              // whole board (the card's own header chrome is dropped at detail,
+              // so this is the only way to select a panel here); a tap on a
+              // reserved CADANGAN spare row / the TOTAL footer / empty chrome
+              // does NOTHING — it no longer yanks the camera out to the summary
+              // (collapse is via zoom-out only, never a stray tap).
               onTapUp: (d) {
-                final id = _wayAt(d.localPosition, sheet, size);
-                if (id != null) {
-                  widget.onSelectWay(id);
-                } else {
-                  widget.onCollapse();
+                final i = _rawRowAt(d.localPosition, sheet, size);
+                if (i < 0) {
+                  widget.onSelectPanel();
+                } else if (i < widget.panel.circuits.length) {
+                  widget.onSelectWay(widget.panel.circuits[i].circuitId);
                 }
               },
               onDoubleTapDown: (d) {
@@ -1314,6 +1364,10 @@ class _PanelCardNode extends StatefulWidget {
   final bool essential;
   final bool upsBacked;
   final bool submeter;
+
+  /// This board is machine-owned (the auto-synced MEP Equipment panel): it shows
+  /// an "auto — from plan" badge and rejects palette drops (G2).
+  final bool autoOwned;
   final VoidCallback onTap;
   final VoidCallback onDoubleTap;
   final ValueChanged<Offset> onMenu;
@@ -1323,9 +1377,6 @@ class _PanelCardNode extends StatefulWidget {
 
   /// A schedule way row → select it (I5).
   final ValueChanged<String> onSelectWay;
-
-  /// A tap on empty schedule chrome → zoom back out to the summary (I7).
-  final VoidCallback onCollapse;
   final ValueChanged<String> onWayDoubleTap;
   final void Function(String, Offset) onWayMenu;
   final ValueChanged<PaletteLoad> onDropLoad;
@@ -1344,12 +1395,12 @@ class _PanelCardNode extends StatefulWidget {
     required this.essential,
     required this.upsBacked,
     required this.submeter,
+    required this.autoOwned,
     required this.onTap,
     required this.onDoubleTap,
     required this.onMenu,
     required this.onExpandSchedule,
     required this.onSelectWay,
-    required this.onCollapse,
     required this.onWayDoubleTap,
     required this.onWayMenu,
     required this.onDropLoad,
@@ -1430,7 +1481,9 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
                         result: widget.result,
                         selectedCircuitId: widget.selectedCircuitId,
                         onSelectWay: widget.onSelectWay,
-                        onCollapse: widget.onCollapse,
+                        // Header-band tap selects the whole board — reuses the
+                        // card's select intent (G6).
+                        onSelectPanel: widget.onTap,
                         onWayDoubleTap: widget.onWayDoubleTap,
                         onWayMenu: widget.onWayMenu,
                       ),
@@ -1448,7 +1501,10 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
 
     return DragTarget<PaletteLoad>(
       onWillAcceptWithDetails: (_) {
-        setState(() => _dropHover = true);
+        // Still accept the drop so the reject-toast fires (see onDropLoad), but
+        // a machine-owned board shows NO will-accept highlight — the drop is a
+        // no-op there (G2).
+        if (!widget.autoOwned) setState(() => _dropHover = true);
         return true;
       },
       onLeave: (_) => setState(() => _dropHover = false),
@@ -1554,6 +1610,13 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
   List<Widget> _badges(BuildContext context) {
     final colors = context.colors;
     final badges = <Widget>[];
+    // The machine-owned MEP board leads with an explicit "auto — from plan" cue
+    // so the engineer knows it is regenerated (and never hand-edits it) — G2.
+    if (widget.autoOwned) {
+      badges.add(
+        _Badge(label: 'auto — from plan', color: colors.accent, subtle: true),
+      );
+    }
     if (widget.unfed) {
       badges.add(_Badge(label: 'not connected', color: colors.warning));
     } else {
@@ -2206,13 +2269,17 @@ class _ScaledTap extends StatelessWidget {
 
 class _CanvasDropTarget extends StatefulWidget {
   final ViewportTransform transform;
-  final int panelCount;
+
+  /// The first free 'Sub-panel N' / 'SP-N' ordinal (G8) — minted by the shared
+  /// [nextSubPanelOrdinal] at build time so a feeder drop never re-mints a
+  /// designation an existing (or previously issued) board already carries.
+  final int nextPanelOrdinal;
   final ElectricalProjectController controller;
   final ValueChanged<String> onToast;
 
   const _CanvasDropTarget({
     required this.transform,
-    required this.panelCount,
+    required this.nextPanelOrdinal,
     required this.controller,
     required this.onToast,
   });
@@ -2275,7 +2342,7 @@ class _CanvasDropTargetState extends State<_CanvasDropTarget> {
         final x = (world.dx / kGrid).round() * kGrid.toDouble();
         final y = (world.dy / kGrid).round() * kGrid.toDouble();
         if (load.kind == LoadKind.feeder) {
-          final n = widget.panelCount + 1;
+          final n = widget.nextPanelOrdinal;
           widget.controller.addPanelAt(
             name: 'Sub-panel $n',
             tag: 'SP-$n',

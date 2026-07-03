@@ -9,18 +9,30 @@ import 'package:mechx/store/document_control_store.dart';
 import 'package:mechx/store/inspector_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/sizing_store.dart';
+import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
 import 'package:mechx/ui/widgets/mechx_text_field.dart';
 import 'package:mechx_engine/network/network.dart';
 
 import 'test_util.dart';
 
+/// Pumps the app with the demo sheets seeded (production launches EMPTY per
+/// A1; these inspector tests exercise the sheet-bearing Layout state).
+Future<void> _pumpAppWithDemoSheets(WidgetTester tester) async {
+  setDesktopSurface(tester);
+  await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+  await tester.pump();
+  ProviderScope.containerOf(
+    tester.element(find.byType(MechXApp)),
+    listen: false,
+  ).read(sheetsControllerProvider.notifier).loadDemoSheets();
+  await tester.pump();
+}
+
 void main() {
   testWidgets('project panel shows its sections + a building summary',
       (tester) async {
-    setDesktopSurface(tester);
-    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
-    await tester.pump();
+    await _pumpAppWithDemoSheets(tester);
 
     // inspector sections. PROJECT (name + exports) moved to the Projects page;
     // the BUILDING section is now a compact summary that opens the dedicated
@@ -36,9 +48,7 @@ void main() {
   });
 
   testWidgets('uncalibrated sheet shows a calibration prompt', (tester) async {
-    setDesktopSurface(tester);
-    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
-    await tester.pump();
+    await _pumpAppWithDemoSheets(tester);
     expect(find.textContaining('Not calibrated'), findsOneWidget);
   });
 
@@ -100,9 +110,7 @@ void main() {
   testWidgets(
       'document control section is collapsed by default and commits edits '
       'to the store', (tester) async {
-    setDesktopSurface(tester);
-    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
-    await tester.pump();
+    await _pumpAppWithDemoSheets(tester);
 
     // Collapsed by default: the header shows, the fields do not — a blank
     // launch stays canvas-focused (only the small header row is new).
@@ -152,9 +160,7 @@ void main() {
   testWidgets(
       'Tanks master-detail expands exactly one editor at a time (H6)',
       (tester) async {
-    setDesktopSurface(tester);
-    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
-    await tester.pump();
+    await _pumpAppWithDemoSheets(tester);
 
     final container = ProviderScope.containerOf(
       tester.element(find.byType(MechXApp)),
@@ -173,28 +179,28 @@ void main() {
 
     // The section renders two compact rows; NO editor is open yet, so the
     // per-item 'Depth' stepper label is absent (collapsed master-detail).
-    expect(find.textContaining('Alpha'), findsOneWidget);
-    expect(find.textContaining('Beta'), findsOneWidget);
+    expect(find.textContaining('Alpha ·'), findsOneWidget);
+    expect(find.textContaining('Beta ·'), findsOneWidget);
     expect(find.text('Depth'), findsNothing);
 
     // Expand Alpha → exactly one editor (one 'Depth' stepper) appears.
-    await tester.ensureVisible(find.textContaining('Alpha'));
+    await tester.ensureVisible(find.textContaining('Alpha ·'));
     await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('Alpha'));
+    await tester.tap(find.textContaining('Alpha ·'));
     await tester.pumpAndSettle();
     expect(find.text('Depth'), findsOneWidget);
 
     // Expand Beta → Alpha collapses; still exactly ONE editor open.
-    await tester.ensureVisible(find.textContaining('Beta'));
+    await tester.ensureVisible(find.textContaining('Beta ·'));
     await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('Beta'), warnIfMissed: false);
+    await tester.tap(find.textContaining('Beta ·'), warnIfMissed: false);
     await tester.pumpAndSettle();
     expect(find.text('Depth'), findsOneWidget);
 
     // Tapping the open row again collapses it — back to none.
-    await tester.ensureVisible(find.textContaining('Beta'));
+    await tester.ensureVisible(find.textContaining('Beta ·'));
     await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('Beta'), warnIfMissed: false);
+    await tester.tap(find.textContaining('Beta ·'), warnIfMissed: false);
     await tester.pumpAndSettle();
     expect(find.text('Depth'), findsNothing);
   });

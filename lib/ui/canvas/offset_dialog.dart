@@ -125,10 +125,14 @@ class _OffsetDialogState extends ConsumerState<_OffsetDialog> {
           MechXTextField(
             value: _text,
             hint: '500',
+            keyboardType:
+                const TextInputType.numberWithOptions(decimal: true),
             onChanged: (v) => setState(() {
               _text = v;
               _error = null;
             }),
+            // Enter creates the offset without a mouse trip to the button (I3).
+            onSubmitted: _create,
           ),
           if (_error != null) ...[
             const SizedBox(height: MechXSpacing.xs),

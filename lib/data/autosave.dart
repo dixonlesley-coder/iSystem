@@ -3,13 +3,15 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/model.dart' show ElectricalProject;
 
-import '../ai/ai_client.dart';
 import '../store/annotation_store.dart';
 import '../store/app_state.dart';
 import '../store/commercial_store.dart';
+import '../store/design_issues_store.dart';
 import '../store/document_control_store.dart';
+import '../store/electrical_feed.dart';
 import '../store/electrical_store.dart';
 import '../store/fire_store.dart';
+import '../store/assemblies_store.dart';
 import '../store/fixture_library_store.dart';
 import '../store/history_store.dart';
 import '../store/network_store.dart';
@@ -27,8 +29,21 @@ typedef ProviderReader = T Function<T>(ProviderListenable<T> provider);
 /// A recovery snapshot found on launch: the decoded document plus the
 /// snapshot file's mtime (null when the mtime couldn't be read). Carrying the
 /// timestamp alongside the doc lets the recovery banner say *when* the work
-/// was last autosaved, not just that some work exists.
-typedef RecoverySnapshot = ({ProjectDocument doc, DateTime? savedAt});
+/// was last autosaved, not just that some work exists. A null [doc] means a
+/// snapshot file EXISTS but could not be decoded (torn by an interrupted
+/// write) — the banner surfaces that distinctly instead of restoring nothing
+/// silently, so a torn snapshot is never indistinguishable from a clean exit.
+///
+/// [sourcePath] is the `.mechx` file the snapshot belongs to (from its `.src`
+/// sidecar) — a Restore re-links the file identity to it so the next Ctrl+S
+/// saves back to the right file, not a Save-As fork. [recoveryPath] is the
+/// snapshot file itself, so a discard clears the correct per-project slot.
+typedef RecoverySnapshot = ({
+  ProjectDocument? doc,
+  DateTime? savedAt,
+  String? sourcePath,
+  String? recoveryPath,
+});
 
 /// A recovery snapshot found on launch (previous session ended without a
 /// clean exit). Non-null ⇒ the shell offers to restore it.
@@ -59,6 +74,25 @@ class LastSavedController extends Notifier<String?> {
   void set(String? signature) => state = signature;
 }
 
+/// The last encoded content the autosave tick mirrored to the recovery file —
+/// hoisted OUT of the timer closure so Save/Open can reset it. Without the
+/// reset, undoing back to a previously-mirrored state after a Save would skip
+/// the recovery rewrite (the stale mirror still matches), leaving dirty work
+/// with zero snapshot: dirty-after-Save must get a fresh snapshot on the next
+/// tick. Null means "nothing mirrored since the last clean Save/Open".
+final autosaveMirrorProvider =
+    NotifierProvider<AutosaveMirrorController, String?>(
+  AutosaveMirrorController.new,
+);
+
+class AutosaveMirrorController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? encoded) => state = encoded;
+  void clear() => state = null;
+}
+
 /// Build a [ProjectDocument] from the live state reachable via [read].
 ProjectDocument buildDocument(ProviderReader read) {
   final project = read(projectControllerProvider);
@@ -76,6 +110,8 @@ ProjectDocument buildDocument(ProviderReader read) {
     settings: DesignSettings(
       occupancy: read(occupancyProvider),
       upfeed: read(feedStrategyProvider) == FeedStrategy.upfeed,
+      // G1 solved-duty MEP feed opt-in round-trips (default off ⇒ omitted).
+      mepDutyFeedEnabled: read(mepDutyFeedEnabledProvider),
       ductShape: ducts.shape,
       ductMethod: ducts.method,
       rainfallMmPerHr: read(rainfallIntensityProvider),
@@ -91,10 +127,11 @@ ProjectDocument buildDocument(ProviderReader read) {
       marginPct: commercial.marginPct,
       // The user-defined fixture library round-trips with the project.
       fixtureLibrary: read(fixtureLibraryProvider),
-      // BYO Claude copilot key + model + provider round-trip with the project.
-      anthropicApiKey: read(aiApiKeyProvider),
-      aiModel: read(aiModelProvider),
-      aiProvider: read(aiProviderProvider).name,
+      // Saved drawing assemblies (E5) round-trip with the project.
+      savedAssemblies: read(assembliesProvider),
+      // The BYO AI copilot provider/key/model are MACHINE-LOCAL (kept out of the
+      // shareable `.mechx` — B8): they live in `app_settings.dart`, so the
+      // document carries the harmless defaults and never leaks the secret key.
       // Document control (drawing number/revision/client/DRAWN-CHECKED-APPROVED
       // + revision history) round-trips with the project.
       documentNumber: read(documentControlProvider).documentNumber,
@@ -104,6 +141,8 @@ ProjectDocument buildDocument(ProviderReader read) {
       checkedBy: read(documentControlProvider).checkedBy,
       approvedBy: read(documentControlProvider).approvedBy,
       revisions: read(documentControlProvider).revisions,
+      // Acknowledged advisory keys (H1) round-trip with the project.
+      acknowledgedIssueKeys: read(acknowledgedIssuesProvider).toList(),
     ),
     // The electrical sub-model (v2) round-trips alongside the plumbing project.
     electrical: read(electricalProjectProvider),
@@ -117,29 +156,40 @@ ProjectDocument buildDocument(ProviderReader read) {
 }
 
 /// The canonical encoding of a brand-new, untouched project — the default
-/// settings plus whatever the stores seed on a fresh launch (notably the
-/// built-in sample electrical board), with nothing drawn. Computed once from a
-/// throwaway [ProviderContainer] so the dirty guard and the autosave loop agree
-/// on exactly what "virgin" looks like, and memoized (the defaults are constant).
-/// The container is deliberately not disposed — a single tiny leak for the
-/// process, mirroring the root container the app never disposes — so the
-/// electrical controller's post-build sync microtask never reads a disposed ref.
-String? _virginSignature;
-String virginDocumentSignature() =>
-    _virginSignature ??= buildDocument(ProviderContainer().read).encode();
+/// project state (default floors, nothing drawn, empty electrical) at the CURRENT
+/// app-level language + theme. Those two presentation prefs are seeded from the
+/// machine-local settings at launch (A4), so an engineer who chose Bahasa/light
+/// gets a virgin baseline that ALSO reads Bahasa/light — otherwise a blank launch
+/// would spuriously look "dirty" (and write a phantom recovery snapshot). Keyed
+/// + memoized by `<locale>/<brightness>` (≤4 tiny throwaway containers over the
+/// process). The containers are deliberately not disposed — a tiny leak mirroring
+/// the root container the app never disposes — so the electrical controller's
+/// post-build sync microtask never reads a disposed ref.
+final Map<String, String> _virginSignatures = {};
+String virginDocumentSignature(ProviderReader read) {
+  final locale = read(localeProvider);
+  final brightness = read(brightnessProvider);
+  final key = '${locale.name}/${brightness.name}';
+  return _virginSignatures.putIfAbsent(key, () {
+    final c = ProviderContainer();
+    c.read(localeProvider.notifier).set(locale);
+    c.read(brightnessProvider.notifier).set(brightness);
+    return buildDocument(c.read).encode();
+  });
+}
 
 /// Whether the live work reachable via [read] genuinely differs from the last
 /// clean Save — the GUARD-time dirty check (computed FRESH, unlike the timer-fed
 /// [projectDirtyProvider] UI hint). A project that was saved/opened is dirty when
 /// it no longer matches that baseline; a never-saved project is dirty only once
-/// it diverges from the untouched virgin default (so a blank launch — or one that
-/// only seeded the sample board — is NOT dirty and is never destroyed silently).
+/// it diverges from the untouched virgin default (so a blank launch — at the
+/// user's chosen language/theme — is NOT dirty and is never destroyed silently).
 bool isProjectDirty(ProviderReader read) {
   final encoded = buildDocument(read).encode();
   final saved = read(lastSavedSignatureProvider);
   return saved != null
       ? encoded != saved
-      : encoded != virginDocumentSignature();
+      : encoded != virginDocumentSignature(read);
 }
 
 /// Load [doc] into every live store/provider reachable via [read] — the drawn
@@ -164,6 +214,8 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(occupancyProvider.notifier).set(s.occupancy);
   read(feedStrategyProvider.notifier)
       .set(s.upfeed ? FeedStrategy.upfeed : FeedStrategy.downfeed);
+  // Restore the G1 solved-duty MEP feed opt-in (absent on an older file ⇒ off).
+  read(mepDutyFeedEnabledProvider.notifier).set(s.mepDutyFeedEnabled);
   read(ductSettingsProvider.notifier)
     ..setShape(s.ductShape)
     ..setMethod(s.ductMethod);
@@ -184,11 +236,16 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   ));
   // Restore the user-defined fixture library (absent on an older file ⇒ empty).
   read(fixtureLibraryProvider.notifier).set(s.fixtureLibrary);
-  // Restore the BYO Claude copilot key + model + provider (absent ⇒ disabled /
-  // default / Anthropic).
-  read(aiApiKeyProvider.notifier).set(s.anthropicApiKey);
-  read(aiModelProvider.notifier).set(s.aiModel);
-  read(aiProviderProvider.notifier).set(aiProviderFromName(s.aiProvider));
+  // Restore saved drawing assemblies (E5; absent on an older file ⇒ empty).
+  read(assembliesProvider.notifier).set(s.savedAssemblies);
+  // The AI copilot provider/key/model are MACHINE-LOCAL now (B8) — never reset
+  // them to a document's values. A LEGACY `.mechx` that carried the key in-file
+  // is migrated ONLY into an EMPTY machine-local slot: opening a colleague's
+  // file must never overwrite (or import) the user's own key — that would both
+  // lose the user's key and pull a foreign secret onto their machine.
+  if (s.anthropicApiKey.isNotEmpty && read(aiApiKeyProvider).isEmpty) {
+    read(aiApiKeyProvider.notifier).set(s.anthropicApiKey);
+  }
   // Restore document control (absent on an older file ⇒ all unset / no
   // revisions, the controller's own defaults).
   read(documentControlProvider.notifier).set(DocumentControl(
@@ -200,6 +257,9 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
     approvedBy: s.approvedBy,
     revisions: s.revisions,
   ));
+  // Restore acknowledged advisory keys (H1; absent on an older file ⇒ empty ⇒
+  // compliance behaves exactly as before).
+  read(acknowledgedIssuesProvider.notifier).set(s.acknowledgedIssueKeys.toSet());
   // Restore the electrical project. A v2 file carries one; a plumbing-only / v1
   // document has NO electrical sub-model — fall back to an EMPTY project (no
   // fictitious sample switchboard), so its BOM / equipment schedule / unified
@@ -214,6 +274,10 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(tankAreasProvider.notifier).set(doc.tanks);
   // Restore designated room/zone areas (absent on an older file ⇒ empty).
   read(roomAreasProvider.notifier).set(doc.rooms);
+  // Clear any stale room/tank selection so a deterministic reused id (r0/t0)
+  // from the previous project doesn't surface as a phantom selection in the new
+  // one (mirrors clearing the network selection on load).
+  read(selectedAnnotationProvider.notifier).clear();
 }
 
 /// Start the periodic autosave loop: every [interval], snapshot the current
@@ -227,8 +291,12 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
 Timer startAutosave(
   ProviderContainer c, {
   Duration interval = const Duration(seconds: 15),
+  // The recovery snapshot path. When null (production), a PER-PROJECT slot is
+  // computed each tick from the live project path ([recoverySlotFor]) so every
+  // project has its own snapshot instead of clobbering one global file; tests
+  // inject a unique fixed temp path so concurrently-running isolates don't race.
+  String? recoveryPath,
 }) {
-  String? lastWritten; // last content we mirrored to the recovery file
   return Timer.periodic(interval, (_) {
     final doc = buildDocument(c.read);
     final encoded = doc.encode();
@@ -237,16 +305,23 @@ Timer startAutosave(
     // the untouched virgin default — either way there is nothing worth recovering.
     final clean = saved != null
         ? encoded == saved
-        : encoded == virginDocumentSignature();
+        : encoded == virginDocumentSignature(c.read);
     // Piggy-back the "edited" indicator on the signature comparison we're
     // already doing (Save/Open clear it eagerly; this catches new edits).
     c.read(projectDirtyProvider.notifier).set(!clean);
     // Skip when the work already matches the clean baseline (no phantom
-    // recovery), or when we've already mirrored this exact content.
-    if (clean || encoded == lastWritten) {
+    // recovery), or when we've already mirrored this exact content. The mirror
+    // lives in [autosaveMirrorProvider] (not a closure) so Save/Open reset it.
+    if (clean || encoded == c.read(autosaveMirrorProvider)) {
       return;
     }
-    lastWritten = encoded;
-    writeRecovery(doc);
+    c.read(autosaveMirrorProvider.notifier).set(encoded);
+    final projectPath = c.read(currentProjectPathProvider);
+    writeRecovery(
+      doc,
+      path: recoveryPath ?? recoverySlotFor(projectPath),
+      // Stash the source file so a Restore can re-link the file identity.
+      sourcePath: projectPath,
+    );
   });
 }

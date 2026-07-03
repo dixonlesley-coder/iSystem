@@ -173,6 +173,14 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
+    // Production launches with NO sheets (A1); seed the three demo sheets so the
+    // rail has tiles (1/2/3) to compact.
+    seedDemoSheets(ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    ));
+    await tester.pump();
+
     // The rewritten rail is much narrower than the old 232-px wide-card list.
     expect(SheetRail.width, lessThan(120));
     final railSize = tester.getSize(find.byType(SheetRail));
@@ -198,6 +206,10 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    // Production launches with NO sheets (A1); seed the demo sheets so the rail
+    // has a second tile to tap.
+    seedDemoSheets(container);
+    await tester.pump();
     // Tap the second tile (index "2") — selection follows.
     await tester.tap(
         find.descendant(of: find.byType(SheetRail), matching: find.text('2')));

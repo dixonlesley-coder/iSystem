@@ -18,15 +18,19 @@ import 'package:mechx_engine/units.dart';
 
 void main() {
   group('designIssuesProvider', () {
+    // Production launches EMPTY (A1); this group's tests exercise the
+    // uncalibrated-sheet fan-in, so the demo sheets are seeded explicitly —
+    // the exact state the pre-A1 default provided.
     ProviderContainer makeContainer() {
       final c = ProviderContainer();
       addTearDown(c.dispose);
+      c.read(sheetsControllerProvider.notifier).loadDemoSheets();
       return c;
     }
 
     test('uncalibrated demo sheets surface as warning issues with sheetId', () {
       final c = makeContainer();
-      // The default SheetsState has three demo sheets and no calibration set,
+      // The seeded SheetsState has three demo sheets and no calibration set,
       // so each should appear as a "Sheet not calibrated" warning.
       final issues = c.read(designIssuesProvider);
       final calibIssues =
@@ -424,6 +428,109 @@ void main() {
       expect(c.read(selectionProvider).edgeId, 'e1');
       expect(c.read(workspaceViewProvider), WorkspaceView.plan);
     });
+
+    // ── B6/B7: orphan-floor + sheet pile-up fan-in ────────────────────────────
+
+    test('a node on a non-existent floor surfaces a CRITICAL locatable issue',
+        () {
+      final c = makeContainer();
+      // Default building has 3 floors (max index 2); place a node on floor 5.
+      const stray =
+          NetNode(id: 'stray', sheetId: 's1', x: 0, y: 0, floorIndex: 5);
+      c
+          .read(networkControllerProvider.notifier)
+          .loadNetwork(const Network(nodes: [stray]));
+
+      final issue = c.read(designIssuesProvider).firstWhere(
+            (i) => i.title == 'Element references a missing floor or sheet',
+            orElse: () => fail('expected a missing-floor critical'),
+          );
+      expect(issue.severity, IssueSeverity.critical);
+      expect(issue.locate?.nodeId, 'stray');
+      expect(issue.locate?.sheetId, 's1');
+    });
+
+    test('an in-range network raises no missing-floor critical', () {
+      final c = makeContainer();
+      const ok = NetNode(id: 'ok', sheetId: 's1', x: 0, y: 0, floorIndex: 1);
+      c
+          .read(networkControllerProvider.notifier)
+          .loadNetwork(const Network(nodes: [ok]));
+      expect(
+        c
+            .read(designIssuesProvider)
+            .where(
+                (i) => i.title == 'Element references a missing floor or sheet'),
+        isEmpty,
+      );
+    });
+
+    test('a stranded air terminal (airflow, no duct) surfaces a warning (E8)',
+        () {
+      final c = makeContainer();
+      const sheetId = 's1';
+      // A supply diffuser carrying design airflow but with NO edge connected —
+      // e.g. straight out of "Auto-place diffusers" before the trunk is wired.
+      const stranded = NetNode(
+        id: 'sd',
+        sheetId: sheetId,
+        x: 10,
+        y: 10,
+        floorIndex: 0,
+        role: NodeRole.fixture,
+        component: NodeComponent.supplyDiffuser,
+        airflow: FlowRate(0.1),
+      );
+      c
+          .read(networkControllerProvider.notifier)
+          .loadNetwork(const Network(nodes: [stranded]));
+
+      final issue = c.read(designIssuesProvider).firstWhere(
+            (i) => i.title == 'Diffuser not connected to any duct',
+            orElse: () => fail('expected a stranded-terminal warning'),
+          );
+      expect(issue.severity, IssueSeverity.warning);
+      expect(issue.locate, isNotNull);
+      expect(issue.locate!.nodeId, 'sd');
+      expect(issue.locate!.sheetId, sheetId);
+    });
+
+    test('an air terminal WITH a duct raises no stranded-diffuser warning', () {
+      final c = makeContainer();
+      const a = NetNode(
+          id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0, airflow: FlowRate(0.1));
+      const b = NetNode(id: 'b', sheetId: 's1', x: 100, y: 0, floorIndex: 0);
+      const e =
+          NetEdge(id: 'e', fromId: 'a', toId: 'b', service: ServiceType.duct);
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [a, b], edges: [e]),
+          );
+      expect(
+        c
+            .read(designIssuesProvider)
+            .where((i) => i.title == 'Diffuser not connected to any duct'),
+        isEmpty,
+      );
+    });
+
+    test('two sheets mapped to one floor surface a pile-up warning', () {
+      final c = makeContainer();
+      // The default demo (3 sheets ↔ 3 floors, positional) has no pile-up.
+      expect(
+        c
+            .read(designIssuesProvider)
+            .where((i) => i.title == 'Multiple sheets mapped to one floor'),
+        isEmpty,
+      );
+      // Map s2 onto floor 0 as well → s1 + s2 both on floor 0.
+      c.read(sheetsControllerProvider.notifier).setSheetFloor('s2', 0);
+      final issue = c.read(designIssuesProvider).firstWhere(
+            (i) => i.title == 'Multiple sheets mapped to one floor',
+            orElse: () => fail('expected a sheet pile-up warning'),
+          );
+      expect(issue.severity, IssueSeverity.warning);
+      expect(issue.isLocatable, isTrue);
+    });
   });
 
   group('electrical warnings fan-in', () {
@@ -504,11 +611,20 @@ void main() {
       expect(c.read(designIssueCriticalCountProvider), 0);
     });
 
-    test('locate-request store round-trip: request then clear', () {
+    test('locate-request store round-trip: request (panel + circuit) then clear',
+        () {
       final c = makeContainer();
       expect(c.read(electricalFocusProvider), isNull);
+      // Panel-only request (no way pinpointed).
       c.read(electricalFocusProvider.notifier).request('MDP');
-      expect(c.read(electricalFocusProvider), 'MDP');
+      expect(c.read(electricalFocusProvider)?.panelId, 'MDP');
+      expect(c.read(electricalFocusProvider)?.circuitId, isNull);
+      // H7: circuit-level request carries the specific way id.
+      c
+          .read(electricalFocusProvider.notifier)
+          .request('LP-1', circuitId: 'w3');
+      expect(c.read(electricalFocusProvider)?.panelId, 'LP-1');
+      expect(c.read(electricalFocusProvider)?.circuitId, 'w3');
       c.read(electricalFocusProvider.notifier).clear();
       expect(c.read(electricalFocusProvider), isNull);
     });

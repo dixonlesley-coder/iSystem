@@ -17,6 +17,8 @@ import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'history_store.dart';
+
 /// A two-point dimension annotation on a sheet/floor, in sheet (world) pixels.
 @immutable
 class Measurement {
@@ -107,6 +109,7 @@ class MeasurementController extends Notifier<List<Measurement>> {
     required double by,
   }) {
     if (ax == bx && ay == by) return;
+    ref.read(annotationHistoryProvider.notifier).record();
     state = [
       ...state,
       Measurement(
@@ -121,8 +124,11 @@ class MeasurementController extends Notifier<List<Measurement>> {
     ];
   }
 
-  void removeById(String id) =>
-      state = [for (final m in state) if (m.id != id) m];
+  void removeById(String id) {
+    if (!state.any((m) => m.id == id)) return;
+    ref.read(annotationHistoryProvider.notifier).record();
+    state = [for (final m in state) if (m.id != id) m];
+  }
 
   void clear() => state = const [];
 
@@ -189,19 +195,38 @@ class TankArea {
   double get widthPx => (bx - ax).abs();
   double get heightPx => (by - ay).abs();
 
-  TankArea copyWith({double? depthM, TankMaterial? material, String? name}) =>
+  TankArea copyWith({
+    double? ax,
+    double? ay,
+    double? bx,
+    double? by,
+    double? depthM,
+    TankMaterial? material,
+    String? name,
+  }) =>
       TankArea(
         id: id,
         sheetId: sheetId,
         floorIndex: floorIndex,
-        ax: ax,
-        ay: ay,
-        bx: bx,
-        by: by,
+        ax: ax ?? this.ax,
+        ay: ay ?? this.ay,
+        bx: bx ?? this.bx,
+        by: by ?? this.by,
         depthM: depthM ?? this.depthM,
         material: material ?? this.material,
         name: name ?? this.name,
       );
+
+  /// Whether sheet-pixel ([px], [py]) on [pSheetId]/[pFloor] falls inside this
+  /// tank's footprint (E6 — canvas hit-test to select/move).
+  bool containsPoint(String pSheetId, int pFloor, double px, double py) {
+    if (pSheetId != sheetId || pFloor != floorIndex) return false;
+    final loX = ax < bx ? ax : bx;
+    final hiX = ax < bx ? bx : ax;
+    final loY = ay < by ? ay : by;
+    final hiY = ay < by ? by : ay;
+    return px >= loX && px <= hiX && py >= loY && py <= hiY;
+  }
 
   /// Plan area (m²) given the sheet's metres-per-pixel, then capacity in m³ / L.
   double areaM2(double metersPerPixel) =>
@@ -276,18 +301,23 @@ class TankAreaController extends Notifier<List<TankArea>> {
     required double by,
   }) {
     if ((ax - bx).abs() < 2 || (ay - by).abs() < 2) return;
+    ref.read(annotationHistoryProvider.notifier).record();
+    // E7: seed a distinct sequential name ('Tank 1', 'Tank 2', …) so a schedule
+    // never lists a wall of identical 'Tank' rows; still renamable in-place.
     state = [
       ...state,
       TankArea(
-        id: 't${_seq++}',
+        id: 't$_seq',
         sheetId: sheetId,
         floorIndex: floorIndex,
         ax: ax,
         ay: ay,
         bx: bx,
         by: by,
+        name: 'Tank ${_seq + 1}',
       ),
     ];
+    _seq++;
   }
 
   void setDepth(String id, double depthM) => _update(
@@ -296,11 +326,34 @@ class TankAreaController extends Notifier<List<TankArea>> {
       _update(id, (t) => t.copyWith(material: m));
   void setName(String id, String name) => _update(id, (t) => t.copyWith(name: name));
 
-  void _update(String id, TankArea Function(TankArea) f) =>
-      state = [for (final t in state) if (t.id == id) f(t) else t];
+  /// Begin a live geometry drag (move/resize): snapshot the current annotation
+  /// state onto the undo stack so the whole drag collapses into ONE undo step
+  /// (E6). Call ONCE, on the first movement — pair with [setBounds] (which does
+  /// NOT record) during the drag.
+  void beginGeometryEdit() =>
+      ref.read(annotationHistoryProvider.notifier).record();
 
-  void removeById(String id) =>
-      state = [for (final t in state) if (t.id != id) t];
+  /// Set the footprint corners of [id] WITHOUT recording undo (live drag) —
+  /// pair with [beginGeometryEdit] at the first movement. No-op if [id] is gone.
+  void setBounds(String id, double ax, double ay, double bx, double by) {
+    if (!state.any((t) => t.id == id)) return;
+    state = [
+      for (final t in state)
+        if (t.id == id) t.copyWith(ax: ax, ay: ay, bx: bx, by: by) else t,
+    ];
+  }
+
+  void _update(String id, TankArea Function(TankArea) f) {
+    if (!state.any((t) => t.id == id)) return;
+    ref.read(annotationHistoryProvider.notifier).record();
+    state = [for (final t in state) if (t.id == id) f(t) else t];
+  }
+
+  void removeById(String id) {
+    if (!state.any((t) => t.id == id)) return;
+    ref.read(annotationHistoryProvider.notifier).record();
+    state = [for (final t in state) if (t.id != id) t];
+  }
 
   void clear() => state = const [];
 
@@ -450,16 +503,25 @@ class RoomArea {
 
   /// Whether a node at sheet-pixel ([nx], [ny]) on [nodeSheetId]/[nodeFloor]
   /// falls inside this room's footprint (used to attach AC units to a room).
-  bool containsNode(String nodeSheetId, int nodeFloor, double nx, double ny) {
-    if (nodeSheetId != sheetId || nodeFloor != floorIndex) return false;
+  bool containsNode(String nodeSheetId, int nodeFloor, double nx, double ny) =>
+      containsPoint(nodeSheetId, nodeFloor, nx, ny);
+
+  /// Whether sheet-pixel ([px], [py]) on [pSheetId]/[pFloor] falls inside this
+  /// room's footprint (E6 — canvas hit-test to select/move).
+  bool containsPoint(String pSheetId, int pFloor, double px, double py) {
+    if (pSheetId != sheetId || pFloor != floorIndex) return false;
     final loX = ax < bx ? ax : bx;
     final hiX = ax < bx ? bx : ax;
     final loY = ay < by ? ay : by;
     final hiY = ay < by ? by : ay;
-    return nx >= loX && nx <= hiX && ny >= loY && ny <= hiY;
+    return px >= loX && px <= hiX && py >= loY && py <= hiY;
   }
 
   RoomArea copyWith({
+    double? ax,
+    double? ay,
+    double? bx,
+    double? by,
     RoomType? roomType,
     double? ceilingHeightM,
     Object? achOverride = _unset,
@@ -470,10 +532,10 @@ class RoomArea {
         id: id,
         sheetId: sheetId,
         floorIndex: floorIndex,
-        ax: ax,
-        ay: ay,
-        bx: bx,
-        by: by,
+        ax: ax ?? this.ax,
+        ay: ay ?? this.ay,
+        bx: bx ?? this.bx,
+        by: by ?? this.by,
         roomType: roomType ?? this.roomType,
         ceilingHeightM: ceilingHeightM ?? this.ceilingHeightM,
         achOverride:
@@ -562,18 +624,24 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
     required double by,
   }) {
     if ((ax - bx).abs() < 2 || (ay - by).abs() < 2) return;
+    ref.read(annotationHistoryProvider.notifier).record();
+    // E7: seed a distinct sequential name ('Room 1', 'Room 2', …) so an issued
+    // equipment schedule never lists a wall of identical 'Room' AHU rows; still
+    // renamable in-place in the Rooms inspector.
     state = [
       ...state,
       RoomArea(
-        id: 'r${_seq++}',
+        id: 'r$_seq',
         sheetId: sheetId,
         floorIndex: floorIndex,
         ax: ax,
         ay: ay,
         bx: bx,
         by: by,
+        name: 'Room ${_seq + 1}',
       ),
     ];
+    _seq++;
   }
 
   void setRoomType(String id, RoomType t) =>
@@ -587,11 +655,34 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
   void setName(String id, String name) =>
       _update(id, (r) => r.copyWith(name: name));
 
-  void _update(String id, RoomArea Function(RoomArea) f) =>
-      state = [for (final r in state) if (r.id == id) f(r) else r];
+  /// Begin a live geometry drag (move/resize): snapshot the current annotation
+  /// state onto the undo stack so the whole drag collapses into ONE undo step
+  /// (E6). Call ONCE, on the first movement — pair with [setBounds] (which does
+  /// NOT record) during the drag.
+  void beginGeometryEdit() =>
+      ref.read(annotationHistoryProvider.notifier).record();
 
-  void removeById(String id) =>
-      state = [for (final r in state) if (r.id != id) r];
+  /// Set the footprint corners of [id] WITHOUT recording undo (live drag) —
+  /// pair with [beginGeometryEdit] at the first movement. No-op if [id] is gone.
+  void setBounds(String id, double ax, double ay, double bx, double by) {
+    if (!state.any((r) => r.id == id)) return;
+    state = [
+      for (final r in state)
+        if (r.id == id) r.copyWith(ax: ax, ay: ay, bx: bx, by: by) else r,
+    ];
+  }
+
+  void _update(String id, RoomArea Function(RoomArea) f) {
+    if (!state.any((r) => r.id == id)) return;
+    ref.read(annotationHistoryProvider.notifier).record();
+    state = [for (final r in state) if (r.id == id) f(r) else r];
+  }
+
+  void removeById(String id) {
+    if (!state.any((r) => r.id == id)) return;
+    ref.read(annotationHistoryProvider.notifier).record();
+    state = [for (final r in state) if (r.id != id) r];
+  }
 
   void clear() => state = const [];
 
@@ -617,4 +708,149 @@ class RoomModeController extends Notifier<bool> {
 
   void set(bool value) => state = value;
   void toggle() => state = !state;
+}
+
+/// Which kind of annotation a [SelectedAnnotation] refers to.
+enum AnnotationKind { room, tank }
+
+/// The room/tank annotation currently SELECTED (E6) — the single source of
+/// truth shared by the canvas overlays (which set it on a click/drag and
+/// highlight the matching footprint) and the inspector (which opens + frames the
+/// matching master-detail row). `null` ⇒ nothing selected, so a blank project is
+/// byte-identical (no highlight, no auto-expanded row).
+@immutable
+class SelectedAnnotation {
+  final AnnotationKind kind;
+  final String id;
+  const SelectedAnnotation(this.kind, this.id);
+
+  @override
+  bool operator ==(Object other) =>
+      other is SelectedAnnotation && other.kind == kind && other.id == id;
+
+  @override
+  int get hashCode => Object.hash(kind, id);
+}
+
+final selectedAnnotationProvider =
+    NotifierProvider<SelectedAnnotationController, SelectedAnnotation?>(
+  SelectedAnnotationController.new,
+);
+
+class SelectedAnnotationController extends Notifier<SelectedAnnotation?> {
+  @override
+  SelectedAnnotation? build() => null;
+
+  void selectRoom(String id) =>
+      state = SelectedAnnotation(AnnotationKind.room, id);
+  void selectTank(String id) =>
+      state = SelectedAnnotation(AnnotationKind.tank, id);
+
+  /// Clear the selection, but only if [id] is currently selected (so deleting a
+  /// non-selected item never disturbs the active selection). Pass no [id] to
+  /// clear unconditionally.
+  void clear([String? id]) {
+    if (id == null || state?.id == id) state = null;
+  }
+}
+
+/// An immutable snapshot of ALL THREE annotation lists at one instant —
+/// measurements + tanks + rooms. One combined snapshot is the unit of the
+/// annotation undo domain (B3): a single stack covering the three lists keeps
+/// every annotation edit (a footprint add, a property change on a room/tank, a
+/// delete) on ONE `UndoDomain.annotation` timeline entry, so it is reverted as
+/// the genuinely most-recent edit across every domain.
+@immutable
+class AnnotationSnapshot {
+  final List<Measurement> measurements;
+  final List<TankArea> tanks;
+  final List<RoomArea> rooms;
+  const AnnotationSnapshot({
+    required this.measurements,
+    required this.tanks,
+    required this.rooms,
+  });
+}
+
+/// The shared undo coordinator for the three annotation lists. The measurement /
+/// tank / room controllers each hold their own state, but a SINGLE snapshot
+/// stack lives here: every forward mutation on any of them calls [record] (which
+/// snapshots all three lists and records [UndoDomain.annotation] on the global
+/// timeline), and the global `historyProvider` drives [undo]/[redo] here to
+/// restore all three at once. Mirrors the electrical controller's local
+/// snapshot-stack + record pattern — the difference is only that the state to
+/// snapshot lives across three sibling providers, read/written via [ref].
+///
+/// The document-load path (`MeasurementController.set` / `TankAreaController.set`
+/// / `RoomAreaController.set`) deliberately never records, so opening a project
+/// leaves the timeline empty (no phantom undo); its stacks are dropped by
+/// [HistoryController.reset] in the same breath the global timeline is reset.
+final annotationHistoryProvider =
+    NotifierProvider<AnnotationHistoryController, int>(
+  AnnotationHistoryController.new,
+);
+
+class AnnotationHistoryController extends Notifier<int> {
+  final List<AnnotationSnapshot> _undo = [];
+  final List<AnnotationSnapshot> _redo = [];
+
+  @override
+  int build() => 0;
+
+  bool get canUndo => _undo.isNotEmpty;
+  bool get canRedo => _redo.isNotEmpty;
+
+  AnnotationSnapshot _capture() => AnnotationSnapshot(
+        measurements: ref.read(measurementsProvider),
+        tanks: ref.read(tankAreasProvider),
+        rooms: ref.read(roomAreasProvider),
+      );
+
+  void _restore(AnnotationSnapshot s) {
+    // Restore through each controller's `set` (which replaces the list and
+    // advances its fresh-id counter, never lowering it). `set` does not touch
+    // this coordinator, so restoring never re-enters undo/redo.
+    ref.read(measurementsProvider.notifier).set(s.measurements);
+    ref.read(tankAreasProvider.notifier).set(s.tanks);
+    ref.read(roomAreasProvider.notifier).set(s.rooms);
+  }
+
+  /// Snapshot the CURRENT (pre-mutation) state of all three lists onto the undo
+  /// stack and record this domain on the global timeline (which clears the
+  /// global redo branch). Every forward annotation mutation calls this BEFORE
+  /// it changes state; the load path deliberately does not.
+  void record() {
+    _undo.add(_capture());
+    if (_undo.length > 200) _undo.removeAt(0);
+    _redo.clear();
+    ref.read(historyProvider.notifier).record(UndoDomain.annotation);
+    state++;
+  }
+
+  /// Revert the most recent annotation edit. Driven by the global
+  /// [historyProvider] (which owns cross-domain ordering) — not called directly
+  /// by widgets.
+  void undo() {
+    if (_undo.isEmpty) return;
+    _redo.add(_capture());
+    _restore(_undo.removeLast());
+    state++;
+  }
+
+  /// Replay the most recently undone annotation edit (see [undo]).
+  void redo() {
+    if (_redo.isEmpty) return;
+    _undo.add(_capture());
+    _restore(_redo.removeLast());
+    state++;
+  }
+
+  /// Drop both stacks — called from [HistoryController.reset] when a document is
+  /// opened/restored (a fresh baseline). The shared stack lives here rather than
+  /// in the three controllers, so it is cleared here rather than from `set`.
+  void reset() {
+    _undo.clear();
+    _redo.clear();
+    state++;
+  }
 }

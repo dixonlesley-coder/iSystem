@@ -7,7 +7,10 @@
 ///                             → estimateCost(bom, priceList) [electricalCostProvider]
 ///                             → buildQuotation(cost, …)      [electricalQuotationProvider]
 /// Prices NEVER live in the committed catalogue — this store owns the
-/// `sku → unit price` map (persisted in the `.mechx` `DesignSettings`).
+/// `sku → unit price` map (persisted in the `.mechx` `DesignSettings`). The same
+/// map ALSO carries the mechanical prices (mech-namespaced keys), which the H10
+/// `mechanicalCostProvider` / `mepQuotationProvider` fold into ONE M+E+P
+/// quotation (`report/mep_commercial.dart`).
 ///
 /// Riverpod: a [Notifier] for the mutable [CommercialSettings], `Provider`s for
 /// the derived pipeline (recomputed whenever the project, the pricelist or the
@@ -20,15 +23,21 @@ import 'package:mechx_engine/electrical/bom.dart';
 import 'package:mechx_engine/electrical/catalog.dart';
 import 'package:mechx_engine/electrical/costing.dart';
 import 'package:mechx_engine/electrical/quotation.dart';
+import 'package:mechx_engine/report/mep_commercial.dart';
 
 import 'electrical_store.dart';
+import 'solve_store.dart';
 
 /// The user-editable commercial inputs: the catalogue pricelist (`sku → unit
 /// price`) and the quotation markups. Immutable; the controller replaces it on
 /// every edit so the derived providers recompute.
 @immutable
 class CommercialSettings {
-  /// Catalogue order-code → unit price (project currency, see [currency]).
+  /// Unit price map (project currency). Holds BOTH the electrical catalogue
+  /// order-codes AND the mechanical price keys (`mech:pipe:…` / `mech:fitting:…`,
+  /// see `report/mep_commercial.dart` — they never collide with an electrical
+  /// SKU), so the mechanical prices ride the existing persisted `priceList` with
+  /// no new `.mechx` field. Prices NEVER live in the committed catalogue.
   final Map<String, double> priceList;
 
   /// Labour rate (currency per hour) used for the assembly-labour subtotal.
@@ -139,6 +148,41 @@ final electricalQuotationProvider = Provider<Quotation>((ref) {
   return buildQuotation(
     ref.watch(electricalCostProvider),
     bom: ref.watch(electricalBomProvider),
+    labourRate: settings.labourRatePerHour,
+    overheadPct: settings.overheadPct,
+    contingencyPct: settings.contingencyPct,
+    marginPct: settings.marginPct,
+  );
+});
+
+/// Derived (H10): the priced MECHANICAL material estimate — the sized mechanical
+/// pipe/duct BOM + fittings (from the solve store) costed against the live
+/// pricelist by mechanical key, enriched with the pipe cut-plan (stock bars /
+/// waste). Unpriced lines contribute nothing and are counted, so the pricelist
+/// can prompt the user. Empty when nothing mechanical is sized ⇒ zero subtotal.
+final mechanicalCostProvider = Provider<MechCostEstimate>((ref) {
+  return estimateMechanicalCost(
+    pipes: ref.watch(bomProvider),
+    fittings: ref.watch(fittingsProvider),
+    priceList: ref.watch(commercialSettingsProvider).priceList,
+    cutPlan: ref.watch(pipeCutPlanProvider),
+  );
+});
+
+/// Derived (H10): the unified M+E+P quotation — the mechanical + electrical
+/// material subtotals folded into ONE costed roll-up with per-discipline
+/// figures. Labour is the mechanical install hours + the electrical assembly
+/// hours; overhead / contingency / margin apply to the combined prime. An
+/// ELECTRICAL-only project (no mechanical BOM) reduces to the electrical-only
+/// quotation (byte-identical roll-up).
+final mepQuotationProvider = Provider<MepQuotation>((ref) {
+  final settings = ref.watch(commercialSettingsProvider);
+  return buildMepQuotation(
+    mechanical: ref.watch(mechanicalCostProvider),
+    electrical: ref.watch(electricalCostProvider),
+    electricalBom: ref.watch(electricalBomProvider),
+    mechanicalPipes: ref.watch(bomProvider),
+    mechanicalFittings: ref.watch(fittingsProvider),
     labourRate: settings.labourRatePerHour,
     overheadPct: settings.overheadPct,
     contingencyPct: settings.contingencyPct,

@@ -2,11 +2,11 @@
 /// for the [ElectricalProject] the A7 UI renders. The project is sized live by
 /// the pure A4 engine (`computeSystem`), exposed as a derived [Provider].
 ///
-/// For this first cut the controller seeds a small built-in SAMPLE project (one
-/// 3-phase MDP with mixed final circuits plus a single-phase lighting sub-panel)
-/// so the Electrical workspace has something meaningful to render. The parent
-/// will later wire the MechX pump/fan auto-feed (A5) and `.mechx` persistence
-/// (A6) into this store — keep it cleanly the single owner of the project.
+/// A fresh launch starts from an EMPTY project (A2 — a fictional demo
+/// switchboard must never ride into a real `.mechx` / BOM / quotation). The
+/// built-in SAMPLE project (one 3-phase MDP with mixed final circuits plus a
+/// single-phase lighting sub-panel) stays available behind the empty-state
+/// card's explicit "Load sample project" action ([resetToSample]).
 ///
 /// Riverpod: a [Notifier] for the mutable project, a [Provider] for the derived
 /// result (recomputed whenever the project changes), mirroring the app's other
@@ -43,6 +43,12 @@ class ConnectFeederResult {
         reason = null;
   const ConnectFeederResult.refused(String this.reason) : connected = false;
 }
+
+/// The fixed id of the machine-owned "MEP Equipment" panel — the board
+/// auto-synced from the motorised equipment placed on the plan
+/// (`syncMepEquipment`). Exposed so the canvas can badge it "auto — from plan"
+/// and guard palette drops onto it (a user-dropped way there would be wiped).
+const String kMepEquipmentPanelId = 'mep-equipment';
 
 /// Which whole-area workspace the center of the shell shows. Generalises the old
 /// binary plan/schematic toggle into a three-way selection (plan / schematic /
@@ -201,18 +207,23 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
 
   @override
   ElectricalProject build() {
-    // Keep the "MEP Equipment" panel in sync with the motorised equipment NODES
-    // placed on the plan (pumps/fans/AHUs/FCUs). This is the inter-discipline
-    // payoff: a pump drawn on the plumbing layer appears here as an electrical
-    // circuit. We sync the PLACED equipment only (not the always-on sized-duty
-    // feed), so an untouched project with nothing placed has no MEP panel and is
-    // unchanged. The listener fires on every change after build; a microtask
-    // does the initial sync (state can't be set during build()).
+    // Keep the "MEP Equipment" panel in sync with the MEP equipment the app has
+    // sized. This is the inter-discipline payoff: a pump drawn on the plumbing
+    // layer appears here as an electrical circuit. The feed is the placed
+    // equipment NODES always, PLUS the solved system DUTIES (pump/fan/fire-pump)
+    // once the engineer opts in (G1, [mepDutyFeedEnabledProvider]) — the
+    // [mepAutoFeedCircuitsProvider] gates that. Default is placed-only, so an
+    // untouched project with nothing placed has no MEP panel and is byte-
+    // identical to before. The listener fires on every change after build; a
+    // microtask does the initial sync (state can't be set during build()).
     ref.listen(
-        placedEquipmentCircuitsProvider, (_, next) => syncMepEquipment(next));
+        mepAutoFeedCircuitsProvider, (_, next) => syncMepEquipment(next));
     Future.microtask(
-        () => syncMepEquipment(ref.read(placedEquipmentCircuitsProvider)));
-    return sampleElectricalProject();
+        () => syncMepEquipment(ref.read(mepAutoFeedCircuitsProvider)));
+    // A2 — a fresh project is EMPTY: the fictional sample switchboard must
+    // never leak into a real `.mechx` / BOM / quotation. The sample stays one
+    // explicit click away ([resetToSample], the empty-state action).
+    return const ElectricalProject();
   }
 
   bool get canUndo => _undo.isNotEmpty;
@@ -437,7 +448,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
             : (transformerKva ?? state.transformerKva),
       );
 
-  /// Restore the built-in sample project (a user action — undoable).
+  /// Load the built-in sample project (a user action — undoable, so one
+  /// Ctrl+Z returns to the pre-sample project). Surfaced as the empty-state
+  /// card's "Load sample project" action.
   void resetToSample() => _commit(sampleElectricalProject());
 
   // ── Edit intents (the interactive editor) ──────────────────────────────────
@@ -452,10 +465,21 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void _replacePanel(String panelId, ElectricalPanel Function(ElectricalPanel) f,
       {bool record = true}) {
     var changed = false;
-    final panels = [
-      for (final p in state.panels)
-        if (p.id == panelId) (changed = true, f(p)).$2 else p,
-    ];
+    final panels = <ElectricalPanel>[];
+    for (final p in state.panels) {
+      if (p.id == panelId) {
+        // Commit only when [f] actually produced a DIFFERENT panel — a no-op
+        // transform (an intent whose guard returns the same instance, e.g.
+        // `setPanelSystem` when the system is unchanged) must not record a
+        // phantom undo step. copyWith always returns a fresh instance, so real
+        // edits are byte-identical to before.
+        final np = f(p);
+        if (!identical(np, p)) changed = true;
+        panels.add(np);
+      } else {
+        panels.add(p);
+      }
+    }
     if (!changed) return;
     final next = _withProject(panels: panels);
     if (record) {
@@ -770,6 +794,25 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void setPanelSubmeter(String id, bool value) =>
       _replacePanel(id, (p) => p.copyWith(submeter: value));
 
+  /// Set a panel's electrical system (1-phase / 3-phase), snapping its nominal
+  /// voltage to the conventional value for that system (220 V single / 400 V
+  /// three) — so a board created as a 1φ stub (the drop-a-floating-load flow)
+  /// can become the 3φ sub-board a design needs WITHOUT delete-and-recreate,
+  /// which would lose every way (G7). Undoable in one step; no-op when the id is
+  /// unknown or the system is unchanged. The paired 220/400 V convention mirrors
+  /// [addPanel] / [addFloatingLoad].
+  void setPanelSystem(String id, ElectricalSystem system) => _replacePanel(
+        id,
+        (p) => p.system == system
+            ? p
+            : p.copyWith(
+                system: system,
+                voltage: system == ElectricalSystem.singlePhase
+                    ? const Voltage(220)
+                    : const Voltage(400),
+              ),
+      );
+
   // ── Spatial-canvas intents (Wave 5) ────────────────────────────────────────
   // Layout positions + feeder topology edits for the single-line canvas. All
   // additive (only `x`/`y` + the existing feeder fields move) and funnelled
@@ -1057,40 +1100,125 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   static int _idSeq = 0;
   String _freshId(String prefix) => '$prefix-${DateTime.now().microsecondsSinceEpoch}-${_idSeq++}';
 
-  /// Fold the MechX-sized MEP equipment (A5) into a dedicated "MEP Equipment"
-  /// panel, upserted by a fixed id so re-syncing replaces it cleanly (the
-  /// circuits already carry `sourceEquipmentId`). Empty [circuits] removes the
-  /// panel. This is the unified payoff: a pump/fan/fire-pump the mechanical
-  /// engine sized appears here as a sized electrical circuit, no re-entry.
+  /// Fold the MechX-sized MEP equipment (A5) into the dedicated "MEP Equipment"
+  /// panel — an UPSERT keyed by `sourceEquipmentId`, NOT a wholesale rebuild
+  /// (G2). This is the unified payoff: a pump/fan/fire-pump the mechanical engine
+  /// sized appears here as a sized electrical circuit, no re-entry — WITHOUT
+  /// nuking the engineer's work every time the plan changes:
   ///
-  /// UNDO-EXEMPT: a DERIVED MEP-feed sync, not a user edit — it neither pushes
-  /// a snapshot nor records a timeline entry, and it leaves both stacks intact
-  /// (an undo to a pre-sync snapshot simply predates the synced panel; the
-  /// reactive listener re-asserts it on the next equipment change).
-  void syncMepEquipment(List<ElectricalCircuit> circuits) {
-    const mepPanelId = 'mep-equipment';
-    final others = state.panels.where((p) => p.id != mepPanelId).toList();
-    state = _withProject(
-      panels: circuits.isEmpty
-          ? others
-          : [
-              ...others,
-              ElectricalPanel(
-                id: mepPanelId,
-                name: 'MEP Equipment',
-                tag: 'MEP',
-                voltage: const Voltage(400),
-                circuits: circuits,
-              ),
-            ],
-    );
+  ///   * a derived way whose source equipment still exists is REFRESHED in place
+  ///     — only the machine-owned load fields (`flaOverrideA`, `loadW`, `motorKw`)
+  ///     are re-derived; the user-set name / cableType / length / starterType /
+  ///     phases / life-safety are PRESERVED;
+  ///   * a derived way whose source node is GONE is dropped;
+  ///   * a user-ADDED way on the panel (no `sourceEquipmentId`) is preserved;
+  ///   * a newly-placed piece of equipment is appended;
+  ///   * the panel's own name / tag / diversity / headroom / position / flags
+  ///     are preserved once the board exists.
+  ///
+  /// An empty result with no existing panel is a strict no-op; a merge that ends
+  /// with no ways removes the panel.
+  ///
+  /// UNDO-EXEMPT: a DERIVED MEP-feed sync, not a user edit — it neither pushes a
+  /// snapshot nor records a timeline entry, and it leaves both stacks intact (an
+  /// undo to a pre-sync snapshot simply predates the synced panel; the reactive
+  /// listener re-asserts it on the next equipment change).
+  void syncMepEquipment(List<ElectricalCircuit> derived) {
+    final existing =
+        state.panels.where((p) => p.id == kMepEquipmentPanelId).firstOrNull;
+    // Strict no-op when there is nothing to sync AND no MEP panel to touch — so
+    // the reactive listener can never resurrect a panel on an empty project: a
+    // fresh launch stays `const ElectricalProject()`.
+    if (derived.isEmpty && existing == null) return;
+
+    // Index the freshly-derived circuits by their source-equipment id.
+    final derivedBySource = <String, ElectricalCircuit>{
+      for (final c in derived)
+        if (c.sourceEquipmentId != null) c.sourceEquipmentId!: c,
+    };
+
+    final merged = <ElectricalCircuit>[];
+    final refreshed = <String>{};
+    if (existing != null) {
+      for (final c in existing.circuits) {
+        final src = c.sourceEquipmentId;
+        if (src == null) {
+          // A user-ADDED way (not machine-derived) — preserve verbatim.
+          merged.add(c);
+          continue;
+        }
+        final fresh = derivedBySource[src];
+        if (fresh == null) continue; // source equipment removed → drop the way.
+        // Source still present → refresh ONLY the derived load fields, keeping
+        // the user's name / cableType / length / starterType / phases / flags.
+        merged.add(c.copyWith(
+          loadW: fresh.loadW,
+          motorKw: fresh.motorKw,
+          flaOverrideA: fresh.flaOverrideA,
+        ));
+        refreshed.add(src);
+      }
+    }
+    // Append any newly-placed equipment not already on the board.
+    for (final c in derived) {
+      final src = c.sourceEquipmentId;
+      if (src == null || refreshed.contains(src)) continue;
+      merged.add(c);
+      refreshed.add(src);
+    }
+
+    final others =
+        state.panels.where((p) => p.id != kMepEquipmentPanelId).toList();
+    if (merged.isEmpty) {
+      // Nothing left to distribute — remove the (now-empty) panel.
+      if (existing == null) return;
+      state = _withProject(panels: others);
+      return;
+    }
+    final panel = existing == null
+        ? ElectricalPanel(
+            id: kMepEquipmentPanelId,
+            name: 'MEP Equipment',
+            tag: 'MEP',
+            voltage: const Voltage(400),
+            circuits: merged,
+          )
+        : existing.copyWith(circuits: merged);
+    state = _withProject(panels: [...others, panel]);
   }
+}
+
+/// The machine-minted new-board designations ('Sub-panel N' name / 'SP-N' tag).
+final RegExp _kSubPanelNamePattern =
+    RegExp(r'^sub-panel\s+(\d+)$', caseSensitive: false);
+final RegExp _kSpTagPattern = RegExp(r'^sp-(\d+)$', caseSensitive: false);
+
+/// The first FREE ordinal for a freshly minted 'Sub-panel N' / 'SP-N' board
+/// (G8): max+1 across BOTH the existing panel NAMES and TAGS, so deleting
+/// SP-2 of three then adding never re-mints a designation an issued schedule
+/// already carries (collision-proof by construction — simpler than hole
+/// filling, and a designation is never reused). Shared by both mint sites
+/// (the toolbar Add-panel and the blank-canvas feeder drop).
+int nextSubPanelOrdinal(List<ElectricalPanel> panels) {
+  var maxSeen = 0;
+  for (final p in panels) {
+    for (final match in [
+      _kSubPanelNamePattern.firstMatch(p.name.trim()),
+      if (p.tag != null) _kSpTagPattern.firstMatch(p.tag!.trim()),
+    ]) {
+      final n = match == null ? null : int.tryParse(match.group(1)!);
+      if (n != null && n > maxSeen) maxSeen = n;
+    }
+  }
+  return maxSeen + 1;
 }
 
 /// A small, representative built-in project: a 3-phase main distribution panel
 /// (MDP) fed from the utility, with a mix of lighting, socket, HVAC, motor and
 /// feeder ways, feeding a single-phase lighting panel (LP-1). Demonstrates the
 /// schedule, phase balancing, the feeder tree and the supply summary.
+/// NOT auto-seeded (A2) — loaded only by the explicit [ElectricalProjectController.resetToSample]
+/// user action (the empty-state "Load sample project" button) and by tests.
 ElectricalProject sampleElectricalProject() {
   const lp1 = ElectricalPanel(
     id: 'lp1',

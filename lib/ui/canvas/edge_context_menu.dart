@@ -9,6 +9,7 @@ import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/ai_copilot_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -400,7 +401,25 @@ class _EdgeMenuPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final ctrl = ref.read(networkControllerProvider.notifier);
+    final net = ref.watch(networkControllerProvider).network;
     final isAir = edge.service.regime == FlowRegime.air;
+
+    // E1: when the right-clicked edge is part of a MULTI-selection, every
+    // size/material action applies to the selection (one undo step via the
+    // setEdges* intents) and KEEPS the selection alive — so "select similar,
+    // right-click, set DN" batch-edits instead of collapsing to one edge.
+    final selection = ref.watch(selectionProvider);
+    final multi =
+        selection.containsEdge(edge.id) && selection.edgeIds.length > 1;
+    // Size/material batches are SCOPED to edges of the same regime as the
+    // right-clicked one — the ladder + material list shown are regime-specific
+    // (Ø/duct vs DN/pipe), so a mixed air+water selection never gets a duct Ø
+    // forced onto a water pipe as a sizeOverride (which the solve would honour
+    // and mis-size). Delete, by contrast, acts on the WHOLE selection.
+    final sizeIds = selection.edgeIds.where((id) {
+      final e = net.edgeById(id);
+      return e != null && (e.service.regime == FlowRegime.air) == isAir;
+    }).toSet();
 
     void close() => onDismiss();
     void afterEdit() {
@@ -408,7 +427,47 @@ class _EdgeMenuPanel extends ConsumerWidget {
       close();
     }
 
+    // Size/material appliers: batch (keep selection) in multi, else the single
+    // edge (re-select it, matching the prior behaviour).
+    // A regime batch is "multi" only when >1 same-regime edge would receive it;
+    // otherwise fall to the single-edge path (re-selecting the clicked edge).
+    final sizeMulti = multi && sizeIds.length > 1;
+    void applySize(Diameter? size) {
+      if (sizeMulti) {
+        ctrl.setEdgesSizeOverride(sizeIds, size);
+        close();
+      } else {
+        ctrl.setEdgeSizeOverride(edge.id, size);
+        afterEdit();
+      }
+    }
+
+    void applyDuctProduct(DuctProduct? p) {
+      if (sizeMulti) {
+        ctrl.setEdgesDuctProduct(sizeIds, p);
+        close();
+      } else {
+        ctrl.setEdgeDuctProduct(edge.id, p);
+        afterEdit();
+      }
+    }
+
+    void applyPipeProduct(PipeProduct? p) {
+      if (sizeMulti) {
+        ctrl.setEdgesPipeProduct(sizeIds, p);
+        close();
+      } else {
+        ctrl.setEdgePipeProduct(edge.id, p);
+        afterEdit();
+      }
+    }
+
     final children = <Widget>[];
+
+    if (sizeMulti) {
+      children.add(MechXMenuHeader('Apply to ${sizeIds.length} selected'));
+      children.add(const MechXMenuDivider());
+    }
 
     if (isAir) {
       // ── Duct: set size (manual routing) ──────────────────────────────────
@@ -420,20 +479,14 @@ class _EdgeMenuPanel extends ConsumerWidget {
           label: 'Ø${mm.round()}',
           mono: true,
           selected: selected,
-          onTap: () {
-            ctrl.setEdgeSizeOverride(edge.id, Diameter.mm(mm));
-            afterEdit();
-          },
+          onTap: () => applySize(Diameter.mm(mm)),
         ));
       }
       if (edge.sizeOverride != null) {
         children.add(MechXMenuRow(
           label: 'Clear size override',
           muted: true,
-          onTap: () {
-            ctrl.setEdgeSizeOverride(edge.id, null);
-            afterEdit();
-          },
+          onTap: () => applySize(null),
         ));
       }
       children.add(const MechXMenuDivider());
@@ -443,10 +496,7 @@ class _EdgeMenuPanel extends ConsumerWidget {
         children.add(MechXMenuRow(
           label: ductLabelFor(p),
           selected: edge.ductProduct == p,
-          onTap: () {
-            ctrl.setEdgeDuctProduct(edge.id, p);
-            afterEdit();
-          },
+          onTap: () => applyDuctProduct(p),
         ));
       }
       // Thickness note (derived from the sized W×H / diameter).
@@ -466,7 +516,6 @@ class _EdgeMenuPanel extends ConsumerWidget {
       // Sheet-material takeoff for this segment: developed area (perimeter ×
       // length) + the number of standard sheets/panels of the effective product.
       if (sizing != null) {
-        final net = ref.watch(networkControllerProvider).network;
         final project = ref.watch(projectControllerProvider);
         final len = edgeLength(edge, net,
                 calibrationBySheet: project.calibrations,
@@ -497,10 +546,7 @@ class _EdgeMenuPanel extends ConsumerWidget {
         children.add(MechXMenuRow(
           label: 'Clear material',
           muted: true,
-          onTap: () {
-            ctrl.setEdgeDuctProduct(edge.id, null);
-            afterEdit();
-          },
+          onTap: () => applyDuctProduct(null),
         ));
       }
     } else {
@@ -514,20 +560,14 @@ class _EdgeMenuPanel extends ConsumerWidget {
           label: '${npsLabel(inches)}   DN${mm.round()}',
           mono: true,
           selected: selected,
-          onTap: () {
-            ctrl.setEdgeSizeOverride(edge.id, Diameter.mm(mm));
-            afterEdit();
-          },
+          onTap: () => applySize(Diameter.mm(mm)),
         ));
       }
       if (edge.sizeOverride != null) {
         children.add(MechXMenuRow(
           label: 'Clear size override',
           muted: true,
-          onTap: () {
-            ctrl.setEdgeSizeOverride(edge.id, null);
-            afterEdit();
-          },
+          onTap: () => applySize(null),
         ));
       }
       children.add(const MechXMenuDivider());
@@ -536,33 +576,28 @@ class _EdgeMenuPanel extends ConsumerWidget {
         children.add(MechXMenuRow(
           label: labelFor(p),
           selected: edge.pipeProduct == p,
-          onTap: () {
-            ctrl.setEdgePipeProduct(edge.id, p);
-            afterEdit();
-          },
+          onTap: () => applyPipeProduct(p),
         ));
       }
       if (edge.pipeProduct != null) {
         children.add(MechXMenuRow(
           label: 'Clear material',
           muted: true,
-          onTap: () {
-            ctrl.setEdgePipeProduct(edge.id, null);
-            afterEdit();
-          },
+          onTap: () => applyPipeProduct(null),
         ));
       }
     }
 
     children.add(const MechXMenuDivider());
-    // Offset — a parallel run at a typed distance. Only meaningful for a
-    // horizontal run on a calibrated sheet (needs a real scale).
+    // Offset — a parallel run at a typed distance. Only meaningful for a SINGLE
+    // horizontal run on a calibrated sheet (needs a real scale); hidden while a
+    // multi-selection is the target (it's a one-edge geometric op).
     final sheetId = ref.watch(networkControllerProvider).network
         .nodeById(edge.fromId)
         ?.sheetId;
     final calibrated = sheetId != null &&
         ref.watch(projectControllerProvider).calibrationFor(sheetId) != null;
-    if (edge.kind == EdgeKind.run && calibrated) {
+    if (!multi && edge.kind == EdgeKind.run && calibrated) {
       children.add(MechXMenuRow(
         label: 'Offset…',
         onTap: () {
@@ -579,16 +614,40 @@ class _EdgeMenuPanel extends ConsumerWidget {
         close();
       },
     ));
-    children.add(const MechXMenuDivider());
+    // I6 — reach the copilot where the work is: pre-scope it to THIS run
+    // (select it so the copilot's context frame describes it) and open the panel.
     children.add(MechXMenuRow(
-      label: 'Delete ${edge.kind == EdgeKind.riser ? 'riser' : 'segment'}',
-      danger: true,
+      label: 'Ask Claude…',
       onTap: () {
-        ctrl.deleteEdge(edge.id);
-        ref.read(selectionProvider.notifier).clear();
+        ref.read(selectionProvider.notifier).selectEdge(edge.id);
+        ref.read(copilotOpenProvider.notifier).open();
         close();
       },
     ));
+    children.add(const MechXMenuDivider());
+    if (multi) {
+      // Delete the whole selection (edges + any selected nodes) in one step —
+      // NOT regime-scoped: deleting removes everything selected.
+      children.add(MechXMenuRow(
+        label: 'Delete ${selection.edgeIds.length} selected',
+        danger: true,
+        onTap: () {
+          ctrl.deleteMany(selection.nodeIds, selection.edgeIds);
+          ref.read(selectionProvider.notifier).clear();
+          close();
+        },
+      ));
+    } else {
+      children.add(MechXMenuRow(
+        label: 'Delete ${edge.kind == EdgeKind.riser ? 'riser' : 'segment'}',
+        danger: true,
+        onTap: () {
+          ctrl.deleteEdge(edge.id);
+          ref.read(selectionProvider.notifier).clear();
+          close();
+        },
+      ));
+    }
 
     // The menu can be tall (a full size ladder), so its body scrolls.
     return MechXContextMenu(scrollable: true, children: children);

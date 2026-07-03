@@ -4,24 +4,29 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
-import 'package:mechx_engine/electrical/panel_results.dart'
-    show WarningSeverity;
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
+import 'package:mechx_engine/report/electrical_pdf_export.dart'
+    show electricalSldToPdf;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/equipment_schedule.dart';
+import 'package:mechx_engine/report/mep_commercial.dart'
+    show mepBomToCsv, mepQuotationToMarkdown;
 import 'package:mechx_engine/report/mep_report.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
 import 'package:mechx_engine/report/report_blocks.dart';
 import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
+import 'package:mechx_engine/report/sld_export.dart' show sldSheetToPdf;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
+import 'package:mechx_engine/sizing/duct_sizing.dart' show standardDuctDiametersMm;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
@@ -30,6 +35,7 @@ import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
@@ -38,11 +44,15 @@ import '../../data/plan_underlay.dart';
 import '../../store/air_warnings_store.dart';
 import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
+import '../../store/assemblies_store.dart';
 import '../../store/calibration_store.dart';
+import '../../store/compliance_store.dart';
 import '../../store/design_issues_store.dart';
 import '../../store/document_control_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/command_store.dart';
+import '../../store/commercial_store.dart';
+import '../../store/export_prefs.dart';
 import '../../store/fire_store.dart';
 import '../../store/fixture_library_store.dart';
 import '../../store/history_store.dart';
@@ -53,10 +63,12 @@ import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
 import '../../store/solve_store.dart';
+import '../canvas/edge_context_menu.dart' show npsLabel;
 import '../canvas/segment_palette.dart';
 import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
 import '../electrical/electrical_export.dart' show breakerIcuKaByPanel;
+import '../format/scale_format.dart';
 import '../schematic/schematic_export.dart' show buildLiveRiserSheet;
 import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
@@ -67,6 +79,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_scrollbar.dart';
 import '../widgets/mechx_text_field.dart';
 import '../widgets/section_label.dart';
 import '../widgets/severity_glyph.dart';
@@ -150,8 +163,13 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
 /// after a successful write ⇒ a transient "Exported `name`" confirmation pill;
 /// any thrown error ⇒ a "Could not export `name`" warning. The success pill
 /// reuses the same self-clearing mechanism as Save / Open / Import. Public so
-/// the other export surfaces (e.g. `schematic_export.dart`'s riser drawing
-/// set) route through the SAME guard + feedback.
+/// every export surface (the riser drawing set in `schematic_export.dart`, the
+/// electrical + commercial exports) routes through the SAME guard + feedback.
+///
+/// The zero-length gate iterates only the MECHANICAL network, so a
+/// pure-electrical project is never blocked; a project that also carries
+/// uncalibrated mechanical runs is held back until the sheet is calibrated —
+/// conservative, and correct for any deliverable that could embed those runs.
 Future<void> runExportGuarded(
   WidgetRef ref, {
   required String name,
@@ -178,6 +196,32 @@ Future<void> runExportGuarded(
         .read(loadErrorProvider.notifier)
         .set('Could not export $name: $e');
   }
+}
+
+/// H4 — a save-dialog wrapper that REMEMBERS the last export directory: it opens
+/// the OS picker at the shared `lastExportDirProvider` folder (so a session's
+/// exports converge on one place), normalizes the chosen path to end in [ext],
+/// and records the folder so the next dialog re-opens there. Returns null when
+/// the user cancels. Every owned export routes through this so the dir-memory is
+/// uniform; the exporters in other files should adopt it too (see the H4 note in
+/// the review).
+Future<String?> pickExportSave(
+  WidgetRef ref, {
+  required String dialogTitle,
+  required String fileName,
+  required String ext,
+}) async {
+  final path = await FilePicker.saveFile(
+    dialogTitle: dialogTitle,
+    fileName: fileName,
+    type: FileType.custom,
+    allowedExtensions: [ext],
+    initialDirectory: ref.read(lastExportDirProvider),
+  );
+  if (path == null) return null;
+  final full = path.endsWith('.$ext') ? path : '$path.$ext';
+  ref.read(lastExportDirProvider.notifier).rememberFile(full);
+  return full;
 }
 
 /// Render the floor-grouped [bom] as CSV with the stock-bar cut-plan columns
@@ -242,15 +286,12 @@ Future<void> exportCalcReport(WidgetRef ref) => runExportGuarded(
         final project = ref.read(projectControllerProvider);
         final data = buildMechanicalReportData(ref);
 
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleCalcReport),
-          fileName: '${project.name}-report.md',
-          type: FileType.custom,
-          allowedExtensions: const ['md'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.md') ? path : '$path.md';
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleCalcReport),
+            fileName: '${project.name}-report.md',
+            ext: 'md');
+        if (full == null) return false;
         await File(full).writeAsString(
             buildCalcReportMarkdown(data, reportStringsFor(ref)));
         return true;
@@ -288,112 +329,23 @@ Future<void> exportCalcReportPdf(WidgetRef ref) => runExportGuarded(
           approvedBy: doc.approvedBy,
         );
         final base = project.name.isEmpty ? 'project' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleCalcReportPdf),
-          fileName: '$base-report.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleCalcReportPdf),
+            fileName: '$base-report.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
     );
 
-/// Build the compliance pass/fail roll-up from the live aggregated design
-/// issues. Pure read of `designIssuesProvider` + the electrical solve (no new
-/// checks). COMPLETE by construction: the three named checks match their
-/// categories, every REMAINING aggregated issue title gets its own row (so a
-/// present — or future — issue kind can never be silently omitted and the
-/// table can't say PASS beside an unlisted finding), and the electrical
-/// system's own warnings feed a dedicated row (they are not part of
-/// `designIssuesProvider`).
-ComplianceSummary buildComplianceSummary(WidgetRef ref) {
-  final issues = ref.read(designIssuesProvider);
-
-  bool isFail(DesignIssue i) =>
-      i.severity == IssueSeverity.warning ||
-      i.severity == IssueSeverity.critical;
-
-  // The three named checks (kept as positive confirmations on a clean
-  // project). Track which issues they account for; everything else rolls up
-  // into per-title rows below.
-  final accounted = <DesignIssue>{};
-  List<DesignIssue> claim(bool Function(DesignIssue) test) {
-    final matched = issues.where(test).toList();
-    accounted.addAll(matched);
-    return matched;
-  }
-
-  // Velocity: any out-of-band air-velocity warning fails the check.
-  final velocityWarnings =
-      claim((i) => i.title.contains('velocity')).where(isFail).length;
-  // Calibration: any uncalibrated-sheet issue fails the check — a blank sheet
-  // is a warning, an edge-bearing one is escalated to critical, and BOTH must
-  // fail the 'Sheet calibration' compliance item.
-  final calibrationWarnings =
-      claim((i) => i.title.contains('calibrated')).where(isFail).length;
-  // Standards verification: unverified-standard info items.
-  final unverified = claim((i) => i.title == 'Unverified standard').length;
-  // Electrical warnings are fanned into designIssuesProvider (Wave 3) with an
-  // 'Electrical: ' title prefix — claim them here so the dedicated
-  // 'Electrical circuit sizing' row below (counted from the solved system
-  // directly) stays the single source and nothing double-counts.
-  claim((i) => i.title.startsWith('Electrical:'));
-
-  // Every other aggregated issue, grouped by title — duct over-capacity,
-  // network connectivity, unsized air elements, drainage/Legionella
-  // advisories, and whatever lands in the aggregator next.
-  final remainder = <String, List<DesignIssue>>{};
-  for (final i in issues) {
-    if (accounted.contains(i)) continue;
-    remainder.putIfAbsent(i.title, () => []).add(i);
-  }
-
-  // Electrical sizing: the solved system's own warning list (error severity —
-  // e.g. cable-ampacity-inadequate — must fail the sign-off).
-  final eWarnings = ref.read(electricalResultProvider).warnings;
-  final eErrors =
-      eWarnings.where((w) => w.severity == WarningSeverity.error).length;
-  final eWarns =
-      eWarnings.where((w) => w.severity == WarningSeverity.warning).length;
-
-  return ComplianceSummary(
-    date: DateTime.now().toIso8601String().split('T').first,
-    items: [
-      ComplianceItem('Air velocities within band',
-          pass: velocityWarnings == 0,
-          detail: velocityWarnings == 0
-              ? 'all within band'
-              : '$velocityWarnings out of band'),
-      ComplianceItem('Sheet calibration',
-          pass: calibrationWarnings == 0,
-          detail: calibrationWarnings == 0
-              ? 'all sheets calibrated'
-              : '$calibrationWarnings uncalibrated'),
-      ComplianceItem('Standards verification',
-          pass: unverified == 0,
-          detail: unverified == 0
-              ? 'all values verified'
-              : '$unverified value(s) require verification before submission'),
-      for (final e in remainder.entries)
-        ComplianceItem(e.key,
-            pass: !e.value.any(isFail),
-            detail: e.value.any(isFail)
-                ? '${e.value.where(isFail).length} finding(s)'
-                : '${e.value.length} advisory note(s)'),
-      ComplianceItem('Electrical circuit sizing',
-          pass: eErrors == 0,
-          detail: eErrors == 0
-              ? (eWarns == 0
-                  ? 'no sizing errors'
-                  : '$eWarns warning(s), no errors')
-              : '$eErrors error(s), $eWarns warning(s)'),
-    ],
-  );
-}
+/// The compliance pass/fail roll-up. The fan-in moved to
+/// `store/compliance_store.dart` (H2) as a WATCHED provider so the Review
+/// hub's verdict re-computes live; this thin read keeps the export call sites
+/// (and their tests) on one entry point.
+ComplianceSummary buildComplianceSummary(WidgetRef ref) =>
+    ref.read(complianceSummaryProvider);
 
 /// Gather BOTH the mechanical and electrical designs into one unified MEP
 /// building-services report (with a compliance summary) and write it to a
@@ -414,15 +366,12 @@ Future<void> exportMepUnifiedReport(WidgetRef ref) => runExportGuarded(
         );
 
         final base = project.name.isEmpty ? 'project' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleMepReport),
-          fileName: '$base-mep-report.md',
-          type: FileType.custom,
-          allowedExtensions: const ['md'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.md') ? path : '$path.md';
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleMepReport),
+            fileName: '$base-mep-report.md',
+            ext: 'md');
+        if (full == null) return false;
         await File(full).writeAsString(md);
         return true;
       },
@@ -480,15 +429,12 @@ Future<void> exportMepUnifiedReportPdf(WidgetRef ref) => runExportGuarded(
         );
 
         final base = project.name.isEmpty ? 'project' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleMepReportPdf),
-          fileName: '$base-mep-report.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleMepReportPdf),
+            fileName: '$base-mep-report.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -585,18 +531,16 @@ Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
   final data = gatherEquipmentScheduleData(ref);
 
   final base = project.name.isEmpty ? 'project' : project.name;
-  final path = await FilePicker.saveFile(
-    dialogTitle: MechXStringsData(ref.read(localeProvider))(
-        StringKey.exportTitleEquipmentSchedule),
-    fileName: '$base-equipment-schedule.md',
-    type: FileType.custom,
-    allowedExtensions: const ['md'],
-  );
-  if (path == null) return false;
+  final full = await pickExportSave(ref,
+      dialogTitle: MechXStringsData(ref.read(localeProvider))(
+          StringKey.exportTitleEquipmentSchedule),
+      fileName: '$base-equipment-schedule.md',
+      ext: 'md');
+  if (full == null) return false;
   // Write the Markdown at the chosen path plus a spreadsheet CSV sibling
   // (D5: the row model was designed for a CSV emitter). The engineer picks
   // one name; both files land beside it (the BOM export's dual-file pattern).
-  final stem = path.endsWith('.md') ? path.substring(0, path.length - 3) : path;
+  final stem = full.substring(0, full.length - 3);
   await File('$stem.md')
       .writeAsString(buildEquipmentScheduleMarkdown(data, reportStringsFor(ref)));
   await File('$stem.csv')
@@ -627,15 +571,12 @@ Future<void> exportEquipmentSchedulePdf(WidgetRef ref) => runExportGuarded(
           approvedBy: doc.approvedBy,
         );
         final base = project.name.isEmpty ? 'project' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleEquipmentSchedulePdf),
-          fileName: '$base-equipment-schedule.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleEquipmentSchedulePdf),
+            fileName: '$base-equipment-schedule.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -719,14 +660,12 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
     metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
     underlay: planUnderlay is VectorPlanUnderlay ? planUnderlay : null,
   );
-  final path = await FilePicker.saveFile(
-    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingDxf),
-    fileName: '${sheet.name}.dxf',
-    type: FileType.custom,
-    allowedExtensions: const ['dxf'],
-  );
-  if (path == null) return false;
-  final full = path.endsWith('.dxf') ? path : '$path.dxf';
+  final full = await pickExportSave(ref,
+      dialogTitle: MechXStringsData(ref.read(localeProvider))(
+          StringKey.exportTitleDrawingDxf),
+      fileName: '${sheet.name}.dxf',
+      ext: 'dxf');
+  if (full == null) return false;
   await File(full).writeAsString(dxf);
   return true;
 }
@@ -760,14 +699,12 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
     // source) keeps the plain export.
     underlay: await buildPlanUnderlay(sheet),
   );
-  final path = await FilePicker.saveFile(
-    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingPdf),
-    fileName: '${sheet.name}.pdf',
-    type: FileType.custom,
-    allowedExtensions: const ['pdf'],
-  );
-  if (path == null) return false;
-  final full = path.endsWith('.pdf') ? path : '$path.pdf';
+  final full = await pickExportSave(ref,
+      dialogTitle: MechXStringsData(ref.read(localeProvider))(
+          StringKey.exportTitleDrawingPdf),
+      fileName: '${sheet.name}.pdf',
+      ext: 'pdf');
+  if (full == null) return false;
   await File(full).writeAsBytes(bytes);
   return true;
 }
@@ -822,17 +759,299 @@ Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     // source) keeps the plain export.
     underlay: await buildPlanUnderlay(sheet),
   );
-  final path = await FilePicker.saveFile(
-    dialogTitle: MechXStringsData(ref.read(localeProvider))(
-        StringKey.exportTitleAnnotatedPlanPdf),
-    fileName: '${sheet.name}-annotated.pdf',
-    type: FileType.custom,
-    allowedExtensions: const ['pdf'],
-  );
-  if (path == null) return false;
-  final full = path.endsWith('.pdf') ? path : '$path.pdf';
+  final full = await pickExportSave(ref,
+      dialogTitle: MechXStringsData(ref.read(localeProvider))(
+          StringKey.exportTitleAnnotatedPlanPdf),
+      fileName: '${sheet.name}-annotated.pdf',
+      ext: 'pdf');
+  if (full == null) return false;
   await File(full).writeAsBytes(bytes);
   return true;
+}
+
+/// H4 — the ONE-FOLDER SUBMITTAL PACKAGE. Pick a destination folder ONCE, then
+/// write the full deliverable set — the calc report + unified MEP report (MD +
+/// PDF), the equipment schedule (MD + CSV + PDF), the M+E+P BOM (CSV) + costed
+/// quotation (MD), the mechanical riser single-line (PDF), the current sheet's
+/// annotated plan (PDF + DXF), and the electrical single-line (PDF, when panels
+/// exist) — all consistently named `$project-*` into that one folder. Routed
+/// through the shared export guard (zero-length gate + success/error feedback);
+/// the chosen folder seeds `lastExportDirProvider` so subsequent single exports
+/// re-open there. Reuses the SAME pure engine builders the individual exports do
+/// (no new render path), so each file matches its standalone sibling.
+Future<void> exportSubmittalPackage(WidgetRef ref) => runExportGuarded(
+      ref,
+      name: 'submittal package',
+      write: () => _writeSubmittalPackage(ref),
+    );
+
+Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
+  final dir = await FilePicker.getDirectoryPath(
+    dialogTitle: 'Choose a folder for the submittal package',
+    initialDirectory: ref.read(lastExportDirProvider),
+  );
+  if (dir == null || dir.isEmpty) return false;
+  ref.read(lastExportDirProvider.notifier).set(dir);
+
+  final project = ref.read(projectControllerProvider);
+  final base = project.name.trim().isEmpty ? 'project' : project.name.trim();
+  final strings = reportStringsFor(ref);
+  final doc = ref.read(documentControlProvider);
+  final today = DateTime.now().toIso8601String().split('T').first;
+  final sep = Platform.pathSeparator;
+  String out(String suffix) => '$dir$sep$base-$suffix';
+
+  DrawingChrome sldChrome() => DrawingChrome(
+        sheetIndex: 1,
+        sheetTotal: 1,
+        drawingNumber: doc.documentNumber,
+        revisionNumber: doc.revisionTag,
+        clientName: doc.clientName,
+        drawnBy: doc.preparedBy,
+        checkedBy: doc.checkedBy,
+        approvedBy: doc.approvedBy,
+        dateString: today,
+      );
+
+  // ── Reports ───────────────────────────────────────────────────────────────
+  final mech = buildMechanicalReportData(ref);
+  final electrical = buildElectricalReportData(ref);
+  final compliance = buildComplianceSummary(ref);
+
+  await File(out('report.md'))
+      .writeAsString(buildCalcReportMarkdown(mech, strings));
+  await File(out('report.pdf')).writeAsBytes(reportBlocksToPdf(
+    [
+      ...buildCalcReportBlocks(mech, strings),
+      RptFigure(buildLiveRiserSheet(ref, null),
+          caption: 'Mechanical riser single-line diagram'),
+    ],
+    docTitle: 'MEP Calculation Report',
+    projectName: base,
+    documentNumber: doc.documentNumber,
+    revisionTag: doc.revisionTag,
+    dateString: mech.date,
+    standardsLine: '${mech.standardsName} (${mech.standardsRevision})',
+    preparedBy: doc.preparedBy,
+    checkedBy: doc.checkedBy,
+    approvedBy: doc.approvedBy,
+  ));
+
+  await File(out('mep-report.md')).writeAsString(buildMepUnifiedReport(
+    mechanical: mech,
+    electrical: electrical,
+    compliance: compliance,
+    strings: strings,
+  ));
+  await File(out('mep-report.pdf')).writeAsBytes(reportBlocksToPdf(
+    [
+      ...buildMepUnifiedReportBlocks(
+        mechanical: mech,
+        electrical: electrical,
+        compliance: compliance,
+        strings: strings,
+      ),
+      const RptHeading(1, 'Drawings'),
+      RptFigure(buildLiveRiserSheet(ref, null),
+          caption: 'Mechanical riser single-line diagram'),
+      RptFigure(
+        buildElectricalSld(
+          project: ref.read(electricalProjectProvider),
+          result: ref.read(electricalResultProvider),
+          breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+        ),
+        caption: 'Electrical single-line diagram',
+      ),
+    ],
+    docTitle: 'MEP Building-Services Report',
+    projectName: base,
+    documentNumber: doc.documentNumber,
+    revisionTag: doc.revisionTag,
+    dateString: mech.date,
+    standardsLine: '${mech.standardsName} (${mech.standardsRevision})'
+        ' / ${electrical.standardsName} ${electrical.standardsRevision}',
+    preparedBy: doc.preparedBy,
+    checkedBy: doc.checkedBy,
+    approvedBy: doc.approvedBy,
+  ));
+
+  // ── Equipment schedule (MD + CSV + PDF) ─────────────────────────────────────
+  final sched = gatherEquipmentScheduleData(ref);
+  await File(out('equipment-schedule.md'))
+      .writeAsString(buildEquipmentScheduleMarkdown(sched, strings));
+  await File(out('equipment-schedule.csv'))
+      .writeAsString(equipmentScheduleToCsv(buildEquipmentScheduleRows(sched)));
+  await File(out('equipment-schedule.pdf')).writeAsBytes(reportBlocksToPdf(
+    buildEquipmentScheduleBlocks(sched, strings),
+    docTitle: 'Equipment Schedule',
+    projectName: base,
+    documentNumber: doc.documentNumber,
+    revisionTag: doc.revisionTag,
+    dateString: sched.date,
+    preparedBy: doc.preparedBy,
+    checkedBy: doc.checkedBy,
+    approvedBy: doc.approvedBy,
+  ));
+
+  // ── BOM (CSV) + costed quotation (MD) — the unified M+E+P pipeline ───────────
+  final mechCost = ref.read(mechanicalCostProvider);
+  final elecCost = ref.read(electricalCostProvider);
+  await File(out('bom.csv')).writeAsString(mepBomToCsv(mechCost, elecCost));
+  await File(out('quotation.md')).writeAsString(mepQuotationToMarkdown(
+    ref.read(mepQuotationProvider),
+    mechanical: mechCost,
+    electrical: elecCost,
+    projectName: base,
+  ));
+
+  // ── Mechanical riser single-line (PDF) ──────────────────────────────────────
+  await File(out('riser-sld.pdf')).writeAsBytes(sldSheetToPdf(
+    sheet: buildLiveRiserSheet(ref, null),
+    title: 'iSystem mechanical single-line',
+    diagramTitle: 'MECHANICAL SINGLE-LINE DIAGRAM',
+    chrome: sldChrome(),
+  ));
+
+  // ── Current-sheet annotated plan (PDF + DXF), when a sheet is loaded ─────────
+  final sheets = ref.read(sheetsControllerProvider);
+  final sheet = sheets.current;
+  if (sheet != null) {
+    final levelCount = project.building.levelCount;
+    final floorIndex = sheets.floorFor(sheet.id, levelCount);
+    final net = ref.read(networkControllerProvider).network;
+    final sizing = ref.read(sizingProvider);
+    final planChrome =
+        issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex);
+    final metersPerPixel = project.calibrationFor(sheet.id)?.metersPerPixel;
+    final underlay = await buildPlanUnderlay(sheet);
+    final edgeLengths = <String, Length>{
+      for (final e in net.edges)
+        e.id: edgeLength(
+          e,
+          net,
+          calibrationBySheet: project.calibrations,
+          building: project.building,
+        ),
+    };
+    await File(out('plan.pdf')).writeAsBytes(planToPdf(
+      net: net,
+      sizing: sizing,
+      edgeLengths: edgeLengths,
+      sheetId: sheet.id,
+      floorIndex: floorIndex,
+      projectName: base,
+      sheetName: sheet.name,
+      dateString: today,
+      chrome: planChrome,
+      metersPerPixel: metersPerPixel,
+      underlay: underlay,
+    ));
+    await File(out('plan.dxf')).writeAsString(networkToDxf(
+      net: net,
+      sizing: sizing,
+      sheetId: sheet.id,
+      floorIndex: floorIndex,
+      chrome: planChrome,
+      metersPerPixel: metersPerPixel,
+      underlay: underlay is VectorPlanUnderlay ? underlay : null,
+    ));
+  }
+
+  // ── Electrical single-line (PDF), when the project has sized panels ──────────
+  final eResult = ref.read(electricalResultProvider);
+  if (eResult.order.isNotEmpty) {
+    final eProject = ref.read(electricalProjectProvider);
+    await File(out('electrical-sld.pdf')).writeAsBytes(electricalSldToPdf(
+      project: eProject,
+      sheet: buildElectricalSld(
+        project: eProject,
+        result: eResult,
+        breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+      ),
+      chrome: sldChrome(),
+    ));
+  }
+
+  return true;
+}
+
+/// H5 — the document-control identity surfaced AT the export moment. A compact
+/// inline card of the three title-block fields most reviewers bounce a drawing
+/// over (drawing/document number, revision, client), bound live to
+/// [documentControlProvider] so the engineer confirms/edits them right before
+/// exporting instead of hunting the Layout inspector's collapsed section. The
+/// full DRAWN/CHECKED/APPROVED + revision-history controls stay in that section;
+/// this is the pre-flight surface. Additive: an unset field prints no title-block
+/// chrome, so leaving it blank is byte-identical to before.
+class ExportIdentityBar extends ConsumerWidget {
+  const ExportIdentityBar({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final doc = ref.watch(documentControlProvider);
+    final ctrl = ref.read(documentControlProvider.notifier);
+
+    Widget field(
+      String label,
+      String? value,
+      ValueChanged<String> onSet,
+      String hint,
+    ) =>
+        SizedBox(
+          width: 176,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  style: type.caption.copyWith(color: colors.textMuted)),
+              const SizedBox(height: MechXSpacing.xxs),
+              MechXTextField(
+                value: value ?? '',
+                hint: hint,
+                onCommitted: onSet,
+              ),
+            ],
+          ),
+        );
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(MechXSpacing.md),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Document control',
+              style: type.subtitle.copyWith(color: colors.textPrimary)),
+          const SizedBox(height: MechXSpacing.xxs),
+          Text(
+            'Stamped on every exported drawing + report title block. Confirm it '
+            'before you export; the full DRAWN/CHECKED/APPROVED + revision block '
+            'lives in the Layout inspector.',
+            style: type.caption.copyWith(color: colors.textMuted),
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Wrap(
+            spacing: MechXSpacing.md,
+            runSpacing: MechXSpacing.sm,
+            children: [
+              field('Drawing no.', doc.documentNumber, ctrl.setDocumentNumber,
+                  'e.g. M-101'),
+              field('Revision', doc.revisionTag, ctrl.setRevisionTag, 'e.g. A'),
+              field('Client', doc.clientName, ctrl.setClientName,
+                  'Client name'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// All services offered in the draw palette / edge editor, in a sensible order.
@@ -871,13 +1090,7 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    final project = ref.watch(projectControllerProvider);
-    final building = project.building;
-    final currentSheet = ref.watch(sheetsControllerProvider).current;
-    final calibration =
-        currentSheet == null ? null : project.calibrationFor(currentSheet.id);
+    final building = ref.watch(projectControllerProvider).building;
 
     // Context before document (the Keynote inspector rule): the selection
     // editor is pinned FIRST, and picking something on canvas snaps the panel
@@ -893,7 +1106,9 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
       width: ProjectPanel.width,
       // Transparent: the inspector floats on a Liquid-Glass surface
       // (CollapsibleInspector) so the canvas refracts through behind it.
-      child: SingleChildScrollView(
+      child: MechXScrollbar(
+        controller: _scroll,
+        child: SingleChildScrollView(
           controller: _scroll,
           padding: const EdgeInsets.all(MechXSpacing.md),
           child: Column(
@@ -916,6 +1131,14 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
                     .set(ShellSection.building),
               ),
               const SizedBox(height: MechXSpacing.lg),
+
+              // ── Sheet + Scale (E10) ───────────────────────────────────────
+              // Setup lives under Building, above the draw→size→report flow —
+              // calibration is the gating step the banner demands, so it sits
+              // near the top (was buried dead-last, below Document control) and
+              // is collapsible with a calibration-aware default.
+              _sheetMappingSection(context),
+              _scaleSection(context),
 
               // ── Draw ──────────────────────────────────────────────────────
               const _DrawSection(),
@@ -946,122 +1169,369 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
               // ── Document control (issuable-sheet identity, D3) ────────────
               const _DocumentControlSection(),
               const SizedBox(height: MechXSpacing.lg),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-              // ── Sheet → floor mapping ─────────────────────────────────────
-              if (currentSheet != null) ...[
-                MechXSectionLabel(context.strings(StringKey.inspectorSheet)),
-                const SizedBox(height: MechXSpacing.sm),
-                Builder(builder: (context) {
-                  final sheetsState = ref.watch(sheetsControllerProvider);
-                  final floor =
-                      sheetsState.floorFor(currentSheet.id, building.levelCount);
-                  final floorName = building.floors[floor].name;
-                  return Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                            context.strings(StringKey.inspectorMapsToFloor),
-                            style:
-                                type.caption.copyWith(color: colors.textMuted)),
-                      ),
-                      _GlyphButton(
-                        glyph: '−',
-                        onTap: floor > 0
-                            ? () => ref
-                                .read(sheetsControllerProvider.notifier)
-                                .setSheetFloor(currentSheet.id, floor - 1)
-                            : null,
-                      ),
-                      const SizedBox(width: MechXSpacing.xs),
-                      Text(floorName,
-                          style:
-                              type.mono.copyWith(color: colors.textSecondary)),
-                      const SizedBox(width: MechXSpacing.xs),
-                      _GlyphButton(
-                        glyph: '+',
-                        onTap: floor < building.levelCount - 1
-                            ? () => ref
-                                .read(sheetsControllerProvider.notifier)
-                                .setSheetFloor(currentSheet.id, floor + 1)
-                            : null,
-                      ),
-                    ],
-                  );
-                }),
-                const SizedBox(height: MechXSpacing.lg),
-              ],
+  /// The Sheet → floor mapping section (E10). Moved up under Building and
+  /// wrapped in a collapsible [DisclosureSection]. Shrinks to nothing when no
+  /// sheet is loaded (no gap ⇒ byte-identical there).
+  Widget _sheetMappingSection(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final building = ref.watch(projectControllerProvider).building;
+    final currentSheet = ref.watch(sheetsControllerProvider).current;
+    if (currentSheet == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: MechXSpacing.lg),
+      child: DisclosureSection(
+        name: context.strings(StringKey.inspectorSheet),
+        child: Builder(builder: (context) {
+          final sheetsState = ref.watch(sheetsControllerProvider);
+          final floor =
+              sheetsState.floorFor(currentSheet.id, building.levelCount);
+          final floorName = building.floors[floor].name;
+          final last = building.levelCount - 1;
+          void mapTo(int f) => ref
+              .read(sheetsControllerProvider.notifier)
+              .setSheetFloor(currentSheet.id, f.clamp(0, last));
+          return Row(
+            children: [
+              Expanded(
+                child: Text(context.strings(StringKey.inspectorMapsToFloor),
+                    style: type.caption.copyWith(color: colors.textMuted)),
+              ),
+              // Type-in (or ±1) floor mapping (D5): the display keeps the level
+              // NAME; typing a 1-based level number remaps the sheet, clamped to
+              // 1..levelCount.
+              SteppedValueField(
+                display: floorName,
+                editSeed: '${floor + 1}',
+                gap: MechXSpacing.xs,
+                valueColor: colors.textSecondary,
+                min: 1,
+                max: building.levelCount.toDouble(),
+                onDecrement: floor > 0 ? () => mapTo(floor - 1) : null,
+                onIncrement: floor < last ? () => mapTo(floor + 1) : null,
+                onSubmit: (v) {
+                  if (v != null) mapTo(v.round() - 1);
+                },
+              ),
+            ],
+          );
+        }),
+      ),
+    );
+  }
 
-              // ── Scale calibration ─────────────────────────────────────────
-              MechXSectionLabel('Scale'),
+  /// The Scale calibration section (E10). Moved up under Building and wrapped in
+  /// a [DisclosureSection] whose default is calibration-aware: EXPANDED while the
+  /// sheet is uncalibrated (the gating step demands attention), collapsing once
+  /// a scale is set so it stops competing with the draw flow (a user's explicit
+  /// toggle still wins over the default).
+  Widget _scaleSection(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final currentSheet = ref.watch(sheetsControllerProvider).current;
+    final project = ref.watch(projectControllerProvider);
+    final calibration =
+        currentSheet == null ? null : project.calibrationFor(currentSheet.id);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: MechXSpacing.lg),
+      child: DisclosureSection(
+        name: 'Scale',
+        defaultExpanded: calibration == null,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(MechXSpacing.sm),
+              decoration: BoxDecoration(
+                color: colors.background,
+                borderRadius: MechXRadii.control,
+                border: Border.all(color: colors.border),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    margin: const EdgeInsets.only(right: MechXSpacing.sm),
+                    decoration: BoxDecoration(
+                      color:
+                          calibration == null ? colors.warning : colors.success,
+                      borderRadius: const BorderRadius.all(Radius.circular(4)),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      calibration == null
+                          ? 'Not calibrated'
+                          // One shared human readout (D1): PDF sheets lead with
+                          // the plotted `1 : N`, else `1 m = N px`.
+                          : formatScaleReadout(calibration.metersPerPixel,
+                              isPdf: currentSheet?.pdfPath != null),
+                      style:
+                          type.caption.copyWith(color: colors.textSecondary),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (currentSheet != null) ...[
               const SizedBox(height: MechXSpacing.sm),
-              Container(
-                padding: const EdgeInsets.all(MechXSpacing.sm),
-                decoration: BoxDecoration(
-                  color: colors.background,
-                  borderRadius: MechXRadii.control,
-                  border: Border.all(color: colors.border),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      margin: const EdgeInsets.only(right: MechXSpacing.sm),
-                      decoration: BoxDecoration(
-                        color: calibration == null
-                            ? colors.warning
-                            : colors.success,
-                        borderRadius: const BorderRadius.all(Radius.circular(4)),
-                      ),
-                    ),
-                    Expanded(
-                      child: Text(
-                        calibration == null
-                            ? 'Not calibrated'
-                            : '1 px = ${calibration.metersPerPixel.toStringAsExponential(2)} m',
-                        style: type.caption.copyWith(color: colors.textSecondary),
-                      ),
-                    ),
-                  ],
+              Align(
+                alignment: Alignment.centerLeft,
+                child: MechXButton(
+                  label:
+                      calibration == null ? 'Calibrate scale' : 'Re-calibrate',
+                  onPressed: () =>
+                      ref.read(calibrationControllerProvider.notifier).start(),
                 ),
               ),
-              if (currentSheet != null) ...[
+              // Second scale path (D1): type the drawing's STATED plot scale
+              // (1 : N). A plotted PDF's pixels are points at 72/inch, so
+              // `metersPerPixel = N × 0.0254 / 72` — exact, no measuring. Only
+              // meaningful for PDF sheets; a normalized DXF/DWG pixel has no
+              // paper-unit basis, so those keep the two-point measure only.
+              if (currentSheet.pdfPath != null) ...[
+                const SizedBox(height: MechXSpacing.sm),
+                _PdfScaleTypeIn(
+                  sheetId: currentSheet.id,
+                  calibration: calibration,
+                ),
+              ],
+              // QoL: once this sheet is calibrated, stamp its scale onto other
+              // sheets in one undo step (typical floors share a scale) —
+              // defaulting to UNCALIBRATED sheets only, confirming before it
+              // would overwrite a sheet's own DIFFERENT scale, and reporting the
+              // count (D2).
+              if (calibration != null) ...[
                 const SizedBox(height: MechXSpacing.sm),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: MechXButton(
-                    label: calibration == null
-                        ? 'Calibrate scale'
-                        : 'Re-calibrate',
+                    label: 'Apply scale to all sheets',
                     onPressed: () =>
-                        ref.read(calibrationControllerProvider.notifier).start(),
+                        _applyScaleToAllSheets(context, ref, currentSheet.id),
                   ),
                 ),
-                // QoL: once this sheet is calibrated, stamp its scale onto every
-                // other sheet in one undo step (typical floors share a scale).
-                if (calibration != null) ...[
-                  const SizedBox(height: MechXSpacing.sm),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: MechXButton(
-                      label: 'Apply scale to all sheets',
-                      onPressed: () => ref
-                          .read(projectControllerProvider.notifier)
-                          .applyCalibrationToAllSheets(
-                            currentSheet.id,
-                            toSheetIds: ref
-                                .read(sheetsControllerProvider)
-                                .sheets
-                                .map((s) => s.id)
-                                .toSet(),
-                          ),
-                    ),
-                  ),
-                ],
               ],
             ],
-          ),
+          ],
         ),
+      ),
+    );
+  }
+}
+
+/// The engineer's choice when "Apply scale to all sheets" would overwrite sheets
+/// that already carry their own DIFFERENT scale (D2).
+enum _ScaleApplyChoice { overwriteAll, keepSeparate, cancel }
+
+/// Apply [fromSheetId]'s scale to the other sheets (D2). Safe by default —
+/// stamps UNCALIBRATED sheets only; if some sheets carry their OWN different
+/// scale it asks before overwriting them; always finishes with a status pill
+/// reporting the count.
+Future<void> _applyScaleToAllSheets(
+    BuildContext context, WidgetRef ref, String fromSheetId) async {
+  final proj = ref.read(projectControllerProvider);
+  final allIds =
+      ref.read(sheetsControllerProvider).sheets.map((s) => s.id).toSet();
+  final uncalibrated = proj.uncalibratedAmong(allIds, exclude: fromSheetId);
+  final different = proj.differentlyCalibratedFrom(fromSheetId, allIds);
+
+  var targets = uncalibrated;
+  if (different.isNotEmpty) {
+    final choice = await _confirmScaleApply(context, different.length);
+    if (!context.mounted) return;
+    switch (choice) {
+      case null:
+      case _ScaleApplyChoice.cancel:
+        return; // abort — do nothing
+      case _ScaleApplyChoice.keepSeparate:
+        targets = uncalibrated; // safe subset only
+      case _ScaleApplyChoice.overwriteAll:
+        targets = {...uncalibrated, ...different};
+    }
+  }
+
+  void status(String m) =>
+      ref.read(statusMessageProvider.notifier).showStatus(m);
+  if (targets.isEmpty) {
+    status('All other sheets already use this scale');
+    return;
+  }
+  final n = ref.read(projectControllerProvider.notifier).applyCalibrationToAllSheets(
+        fromSheetId,
+        toSheetIds: {fromSheetId, ...targets},
+      );
+  status('Scale applied to $n ${n == 1 ? 'sheet' : 'sheets'}');
+}
+
+/// Ask before overwriting [count] sheets that carry their own different scale
+/// (D2). A themed [showGeneralDialog] card (no Material) — dismiss / Esc resolves
+/// to null (treated as cancel).
+Future<_ScaleApplyChoice?> _confirmScaleApply(BuildContext context, int count) {
+  final theme = MechXTheme.of(context);
+  final noun = count == 1 ? 'sheet has' : 'sheets have';
+  return showGeneralDialog<_ScaleApplyChoice>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Apply scale',
+    barrierColor: theme.colors.scrim,
+    transitionDuration: MechXMotion.appear,
+    pageBuilder: (ctx, _, _) => MechXTheme(
+      data: theme,
+      child: Center(
+        child: Builder(builder: (ctx) {
+          final colors = ctx.colors;
+          final type = ctx.type;
+          void pop(_ScaleApplyChoice c) => Navigator.of(ctx).pop(c);
+          return Container(
+            width: 420,
+            padding: const EdgeInsets.all(MechXSpacing.lg),
+            decoration: BoxDecoration(
+              color: colors.surface,
+              borderRadius: MechXRadii.card,
+              boxShadow: MechXShadow.popover,
+              border: Border.all(color: colors.border),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Overwrite different scales?',
+                    style: type.title.copyWith(color: colors.textPrimary)),
+                const SizedBox(height: MechXSpacing.xs),
+                Text(
+                  '$count $noun their own scale. Overwrite them with this '
+                  'sheet\'s scale, or apply only to the uncalibrated sheets?',
+                  style: type.caption.copyWith(color: colors.textMuted),
+                ),
+                const SizedBox(height: MechXSpacing.md),
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: MechXSpacing.sm,
+                  runSpacing: MechXSpacing.xs,
+                  children: [
+                    MechXButton(
+                      label: 'Cancel',
+                      tertiary: true,
+                      onPressed: () => pop(_ScaleApplyChoice.cancel),
+                    ),
+                    MechXButton(
+                      label: 'Uncalibrated only',
+                      onPressed: () => pop(_ScaleApplyChoice.keepSeparate),
+                    ),
+                    MechXButton(
+                      label: 'Overwrite all',
+                      primary: true,
+                      onPressed: () => pop(_ScaleApplyChoice.overwriteAll),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }),
+      ),
+    ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(parent: anim, curve: MechXMotion.standard);
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
+/// The `1 : N` drawing-scale type-in (D1) — the second calibration path beside
+/// the two-point measure, for PDF sheets (whose pixels are points at 72/inch).
+/// Type the drawing's stated plot scale, or tap a common preset; commits via
+/// [ProjectController.setCalibration] and reports the resolved scale.
+class _PdfScaleTypeIn extends ConsumerStatefulWidget {
+  final String sheetId;
+  final ScaleCalibration? calibration;
+  const _PdfScaleTypeIn({required this.sheetId, required this.calibration});
+
+  @override
+  ConsumerState<_PdfScaleTypeIn> createState() => _PdfScaleTypeInState();
+}
+
+class _PdfScaleTypeInState extends ConsumerState<_PdfScaleTypeIn> {
+  late String _text = _seed();
+
+  String _seed() {
+    final cal = widget.calibration;
+    if (cal == null) return '';
+    return pdfScaleDenominatorFor(cal.metersPerPixel).round().toString();
+  }
+
+  void _apply() {
+    final n = double.tryParse(_text.trim());
+    if (n == null || n <= 0) return;
+    final mpp = metersPerPixelForPdfScale(n);
+    ref
+        .read(projectControllerProvider.notifier)
+        .setCalibration(widget.sheetId, ScaleCalibration(mpp));
+    ref.read(statusMessageProvider.notifier).showStatus(
+        'Scale set: ${formatScaleReadout(mpp, isPdf: true)}');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Or type the drawing scale',
+            style: type.caption.copyWith(color: colors.textMuted)),
+        const SizedBox(height: MechXSpacing.xs),
+        Row(
+          children: [
+            Text('1 :', style: type.body.copyWith(color: colors.textSecondary)),
+            const SizedBox(width: MechXSpacing.xs),
+            SizedBox(
+              width: 88,
+              child: MechXTextField(
+                value: _text,
+                hint: '100',
+                textStyle: type.mono,
+                keyboardType: const TextInputType.numberWithOptions(),
+                onChanged: (v) => setState(() => _text = v),
+                onSubmitted: _apply,
+              ),
+            ),
+            const SizedBox(width: MechXSpacing.sm),
+            MechXButton(label: 'Set scale', onPressed: _apply),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.xs),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            for (final d in kCommonPdfScaleDenominators)
+              _Pill(
+                label: '1:$d',
+                selected: _text.trim() == '$d',
+                onTap: () {
+                  setState(() => _text = '$d');
+                  _apply();
+                },
+              ),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -1485,9 +1955,6 @@ class _DrawSection extends ConsumerWidget {
 // transient, file-local UI state (never persisted to `.mechx`); null ⇒ all rows
 // collapsed. Exactly one item is open at a time (H6), so eight tanks/rooms no
 // longer stack ~3000 px of always-expanded editors in a 272-px panel.
-final _expandedTankIdProvider = StateProvider<String?>((ref) => null);
-final _expandedRoomIdProvider = StateProvider<String?>((ref) => null);
-
 /// How many BOM lines the Network section lists inline before collapsing the
 /// rest into a '+N more' summary (the full breakdown is in the CSV export).
 const int _kBomInlineCap = 6;
@@ -1623,7 +2090,12 @@ class _TanksSection extends ConsumerWidget {
           '${(t.heightPx * mpp).toStringAsFixed(1)} m';
     }
 
-    final expandedId = ref.watch(_expandedTankIdProvider);
+    // E6: the open master-detail row is the shared canvas selection — tapping a
+    // tank on the plan opens it here (and framing it here highlights the plan).
+    final sel = ref.watch(selectedAnnotationProvider);
+    final expandedId =
+        (sel != null && sel.kind == AnnotationKind.tank) ? sel.id : null;
+    final selCtrl = ref.read(selectedAnnotationProvider.notifier);
     return DisclosureSection(
       name: 'Tanks',
       child: Column(
@@ -1644,11 +2116,32 @@ class _TanksSection extends ConsumerWidget {
                   title: '${t.name} · ${dims(t)}',
                   headline: capacity(t),
                   expanded: expandedId == t.id,
-                  onTap: () =>
-                      ref.read(_expandedTankIdProvider.notifier).state =
-                          expandedId == t.id ? null : t.id,
+                  onTap: () => expandedId == t.id
+                      ? selCtrl.clear(t.id)
+                      : selCtrl.selectTank(t.id),
                 ),
                 if (expandedId == t.id) ...[
+                  const SizedBox(height: MechXSpacing.sm),
+                  // E7: editable name (commit-on-blur/Enter = one undo step).
+                  Row(
+                    children: [
+                      Text('Name',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted)),
+                      const SizedBox(width: MechXSpacing.sm),
+                      Expanded(
+                        child: MechXTextField(
+                          key: ValueKey('tank-name-${t.id}'),
+                          value: t.name,
+                          hint: 'Tank name',
+                          onCommitted: (s) {
+                            final name = s.trim();
+                            if (name.isNotEmpty) ctrl.setName(t.id, name);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: MechXSpacing.sm),
                   Row(
                     children: [
@@ -1695,7 +2188,7 @@ class _TanksSection extends ConsumerWidget {
                       label: 'Delete tank',
                       onPressed: () {
                         ctrl.removeById(t.id);
-                        ref.read(_expandedTankIdProvider.notifier).state = null;
+                        selCtrl.clear(t.id);
                       },
                     ),
                   ),
@@ -1730,7 +2223,11 @@ class _RoomsSection extends ConsumerWidget {
     final ducts = ref.watch(ductSettingsProvider);
     final ctrl = ref.read(roomAreasProvider.notifier);
     final nodes = ref.watch(networkControllerProvider).network.nodes;
-    final expandedRoomId = ref.watch(_expandedRoomIdProvider);
+    // E6: the open master-detail row is the shared canvas selection.
+    final sel = ref.watch(selectedAnnotationProvider);
+    final expandedRoomId =
+        (sel != null && sel.kind == AnnotationKind.room) ? sel.id : null;
+    final selCtrl = ref.read(selectedAnnotationProvider.notifier);
 
     String pkStr(double pk) =>
         pk == pk.roundToDouble() ? pk.toStringAsFixed(0) : pk.toString();
@@ -1799,16 +2296,43 @@ class _RoomsSection extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _MasterRow(
-                    title: '${roomTypeLabel(r.roomType)} · ${dims(r)}',
+                    title: '${r.name} · ${roomTypeLabel(r.roomType)}',
                     headline:
                         s == null ? 'set scale' : '${s.airflowCfm.round()} CFM',
                     warning: perUnit?.exceedsRange ?? false,
                     expanded: expanded,
-                    onTap: () =>
-                        ref.read(_expandedRoomIdProvider.notifier).state =
-                            expanded ? null : r.id,
+                    onTap: () => expanded
+                        ? selCtrl.clear(r.id)
+                        : selCtrl.selectRoom(r.id),
                   ),
                   if (expanded) ...[
+                    const SizedBox(height: MechXSpacing.sm),
+                    // E7: editable name (commit-on-blur/Enter = one undo step) —
+                    // flows into the equipment schedule so AHU rows read
+                    // distinctly, not a wall of 'Room'.
+                    Row(
+                      children: [
+                        Text('Name',
+                            style: type.caption
+                                .copyWith(color: colors.textMuted)),
+                        const SizedBox(width: MechXSpacing.sm),
+                        Expanded(
+                          child: MechXTextField(
+                            key: ValueKey('room-name-${r.id}'),
+                            value: r.name,
+                            hint: 'Room name',
+                            onCommitted: (str) {
+                              final name = str.trim();
+                              if (name.isNotEmpty) ctrl.setName(r.id, name);
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: MechXSpacing.sm),
+                        Text(dims(r),
+                            style: type.caption
+                                .copyWith(color: colors.textMuted)),
+                      ],
+                    ),
                     const SizedBox(height: MechXSpacing.sm),
                     if (s == null)
                       Text('set scale',
@@ -1992,8 +2516,7 @@ class _RoomsSection extends ConsumerWidget {
                         label: 'Delete room',
                         onPressed: () {
                           ctrl.removeById(r.id);
-                          ref.read(_expandedRoomIdProvider.notifier).state =
-                              null;
+                          selCtrl.clear(r.id);
                         },
                       ),
                     ),
@@ -2219,71 +2742,79 @@ class _ResultsSection extends ConsumerWidget {
           headlineCard,
         ],
         const SizedBox(height: MechXSpacing.sm),
-        if (strategy == FeedStrategy.upfeed) ...[
-          // 'Motor' kW is promoted to the ResultCard above; keep only the
-          // distinct supporting figure here (H8 — no headline/kv duplication).
-          _kv(context, 'Pump head',
-              solution == null ? '—' : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m'),
-        ] else ...[
-          _kv(context, 'Top residual',
-              downfeed == null ? '—' : '${downfeed.minResidual.inKiloPascals.toStringAsFixed(0)} kPa'),
-          _kv(
-            context,
-            'Booster',
-            downfeed == null
-                ? '—'
-                : downfeed.gravitySufficient
-                    ? 'gravity OK'
-                    : '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m',
-          ),
-          _kv(
-            context,
-            'PRV zones',
-            zoneStatics.isEmpty
-                ? '${zones.length}'
-                : '${zones.length} · worst ${worstZone.toStringAsFixed(0)} kPa'
-                    ' ${zonesOk ? 'OK' : 'over'}',
-          ),
-        ],
-        if (strategy == FeedStrategy.upfeed)
-          _kv(context, 'Pressure zones', '${zones.length}'),
-        if (hwr != null)
-          _kv(context, 'HW recirc',
-              '${hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2)} L/s · ${hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
-        _kv(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
-        if (bom.isNotEmpty) ...[
-          const SizedBox(height: MechXSpacing.xs),
-          // Cap the per-line listing so a big BOM doesn't push the whole panel
-          // off-screen; the overflow is summarised, never silently dropped (the
-          // full breakdown is in the CSV export below). (H6/H8.)
-          for (final line in bom.take(_kBomInlineCap))
+        // E11: honest empty state — until a network is actually drawn and
+        // solved, show a muted prompt (the HVAC-section idiom) instead of
+        // dash rows and a misleading 'BOM total 0.0 m'.
+        if (bom.isEmpty && solution == null && downfeed == null && hwr == null)
+          Text('Draw a network to size runs and risers.',
+              style: context.type.caption.copyWith(color: colors.textMuted))
+        else ...[
+          if (strategy == FeedStrategy.upfeed) ...[
+            // 'Motor' kW is promoted to the ResultCard above; keep only the
+            // distinct supporting figure here (H8 — no headline/kv duplication).
+            _kv(context, 'Pump head',
+                solution == null ? '—' : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m'),
+          ] else ...[
+            _kv(context, 'Top residual',
+                downfeed == null ? '—' : '${downfeed.minResidual.inKiloPascals.toStringAsFixed(0)} kPa'),
             _kv(
               context,
-              '${line.diameterMm}${line.service.regime == FlowRegime.air ? ' Ø' : ' DN'}'
-                  ' · ${serviceLabel(line.service)}'
-                  ' ${line.kind == EdgeKind.riser ? 'riser' : 'run'}',
-              '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
+              'Booster',
+              downfeed == null
+                  ? '—'
+                  : downfeed.gravitySufficient
+                      ? 'gravity OK'
+                      : '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m',
             ),
-          if (bom.length > _kBomInlineCap)
             _kv(
               context,
-              '+${bom.length - _kBomInlineCap} more line'
-                  '${bom.length - _kBomInlineCap == 1 ? '' : 's'}',
-              'see CSV',
+              'PRV zones',
+              zoneStatics.isEmpty
+                  ? '${zones.length}'
+                  : '${zones.length} · worst ${worstZone.toStringAsFixed(0)} kPa'
+                      ' ${zonesOk ? 'OK' : 'over'}',
             ),
-          if (fittings.isNotEmpty)
-            _kv(context, 'Fittings (est.)',
-                '${fittings.fold<int>(0, (s, f) => s + f.count)}'),
-          const SizedBox(height: MechXSpacing.sm),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: MechXButton(
-              label: 'Export BOM (CSV)',
-              onPressed: () => _exportBom(ref, fittings,
-                  MechXStringsData(ref.read(localeProvider))(
-                      StringKey.exportTitleBom)),
+          ],
+          if (strategy == FeedStrategy.upfeed)
+            _kv(context, 'Pressure zones', '${zones.length}'),
+          if (hwr != null)
+            _kv(context, 'HW recirc',
+                '${hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2)} L/s · ${hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
+          _kv(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
+          if (bom.isNotEmpty) ...[
+            const SizedBox(height: MechXSpacing.xs),
+            // Cap the per-line listing so a big BOM doesn't push the whole panel
+            // off-screen; the overflow is summarised, never silently dropped (the
+            // full breakdown is in the CSV export below). (H6/H8.)
+            for (final line in bom.take(_kBomInlineCap))
+              _kv(
+                context,
+                '${line.diameterMm}${line.service.regime == FlowRegime.air ? ' Ø' : ' DN'}'
+                    ' · ${serviceLabel(line.service)}'
+                    ' ${line.kind == EdgeKind.riser ? 'riser' : 'run'}',
+                '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
+              ),
+            if (bom.length > _kBomInlineCap)
+              _kv(
+                context,
+                '+${bom.length - _kBomInlineCap} more line'
+                    '${bom.length - _kBomInlineCap == 1 ? '' : 's'}',
+                'see CSV',
+              ),
+            if (fittings.isNotEmpty)
+              _kv(context, 'Fittings (est.)',
+                  '${fittings.fold<int>(0, (s, f) => s + f.count)}'),
+            const SizedBox(height: MechXSpacing.sm),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: MechXButton(
+                label: 'Export BOM (CSV)',
+                onPressed: () => _exportBom(ref, fittings,
+                    MechXStringsData(ref.read(localeProvider))(
+                        StringKey.exportTitleBom)),
+              ),
             ),
-          ),
+          ],
         ],
       ],
     ),
@@ -2297,18 +2828,23 @@ class _ResultsSection extends ConsumerWidget {
         // Two clean single-schema files (Excel-aligned) instead of one mixed CSV.
         name: 'BOM (-bom.csv + -fittings.csv)',
         write: () async {
-          final path = await FilePicker.saveFile(
-            dialogTitle: dialogTitle,
-            fileName: 'mechx-bom.csv',
-            type: FileType.custom,
-            allowedExtensions: const ['csv'],
-          );
-          if (path == null) return false;
-          // Derive a base by stripping a trailing .csv, then write the two
-          // aligned files: <base>-bom.csv + <base>-fittings.csv.
-          final base = path.endsWith('.csv')
-              ? path.substring(0, path.length - 4)
-              : path;
+          // H8: the default name carries the PROJECT name like every other
+          // export — never the internal 'mechx' codename.
+          final projectName = ref.read(projectControllerProvider).name;
+          final defaultBase = projectName.isEmpty ? 'project' : projectName;
+          final full = await pickExportSave(ref,
+              dialogTitle: dialogTitle,
+              fileName: '$defaultBase-bom.csv',
+              ext: 'csv');
+          if (full == null) return false;
+          // Derive a base by stripping a trailing .csv (and a trailing '-bom',
+          // so accepting the suggested name yields '<name>-bom.csv', not
+          // '<name>-bom-bom.csv'), then write the two aligned files:
+          // <base>-bom.csv + <base>-fittings.csv.
+          var base = full.substring(0, full.length - 4);
+          if (base.endsWith('-bom')) {
+            base = base.substring(0, base.length - 4);
+          }
           // Rebuild the BOM grouped by floor (bomProvider is un-grouped) and
           // join the live stock-bar cut plan onto the CSV.
           final project = ref.read(projectControllerProvider);
@@ -2365,6 +2901,14 @@ class _FireSection extends ConsumerWidget {
     final sprinkler = ref.watch(sprinklerDesignProvider);
     final standpipe = ref.watch(standpipeDesignProvider);
     final rating = ref.watch(firePumpRatingProvider);
+    // E11: the whole fire design derives from occupancy/height/hazard alone, so
+    // it computes even with NO fire pipework drawn. Detect real sprinkler/
+    // hydrant edges so the verdict is honest — a preliminary 'draft' from
+    // building defaults, not a validated 'rated', until fire runs exist.
+    final hasFireEdges = ref.watch(networkControllerProvider).network.edges.any(
+        (e) =>
+            e.service == ServiceType.fireSprinkler ||
+            e.service == ServiceType.fireHydrant);
 
     Widget kv(String key, String value) => Padding(
           padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
@@ -2427,8 +2971,15 @@ class _FireSection extends ConsumerWidget {
           headline:
               '${standpipe.pumpHead.meters.toStringAsFixed(0)} m · ${standpipe.pumpShaftPower.inKiloWatts.toStringAsFixed(1)} kW',
           label: 'Fire pump (standpipe)',
-          verdict: rating.oversized ? 'oversized' : 'rated',
-          verdictColor: rating.oversized ? colors.warning : colors.success,
+          // Neutral 'draft' (not a green 'rated') until sprinkler/hydrant runs
+          // are drawn — the duty is a building-defaults preliminary, not a
+          // validated design.
+          verdict: !hasFireEdges
+              ? 'draft'
+              : (rating.oversized ? 'oversized' : 'rated'),
+          verdictColor: !hasFireEdges
+              ? colors.textMuted
+              : (rating.oversized ? colors.warning : colors.success),
         ),
         const SizedBox(height: MechXSpacing.xs),
         kv('Sprinkler flow',
@@ -2450,7 +3001,10 @@ class _FireSection extends ConsumerWidget {
             ),
             Expanded(
               child: Text(
-                'SNI 03-3989 / 1745 / 6570 · single-riser draft demand',
+                hasFireEdges
+                    ? 'SNI 03-3989 / 1745 / 6570 · single-riser draft demand'
+                    : 'Draft demand from building defaults — draw '
+                        'sprinkler/hydrant runs to validate.',
                 style: type.caption.copyWith(color: colors.textMuted),
               ),
             ),
@@ -2560,7 +3114,7 @@ class _SelectionSection extends ConsumerWidget {
     // Multi-selection: a count header + Copy / Paste / Delete actions (the
     // single-element editor is shown only for a single selection).
     if (selection.isMulti) {
-      return _multiSelectionSection(context, ref, selection, ctrl, selCtrl);
+      return _multiSelectionSection(context, ref, net, selection, ctrl, selCtrl);
     }
 
     Widget? body;
@@ -2599,12 +3153,53 @@ class _SelectionSection extends ConsumerWidget {
     );
   }
 
-  Widget _multiSelectionSection(BuildContext context, WidgetRef ref,
+  Widget _multiSelectionSection(BuildContext context, WidgetRef ref, Network net,
       Selection selection, NetworkController ctrl, SelectionController selCtrl) {
     final colors = context.colors;
     final type = context.type;
     final n = selection.nodeIds.length;
     final m = selection.edgeIds.length;
+    final edgeIds = selection.edgeIds;
+    final nodeIds = selection.nodeIds;
+
+    // Resolve the selected elements to drive the shared property editors (E1).
+    final selEdges = <NetEdge>[
+      for (final e in net.edges)
+        if (edgeIds.contains(e.id)) e,
+    ];
+    final selNodes = <NetNode>[
+      for (final nd in net.nodes)
+        if (nodeIds.contains(nd.id)) nd,
+    ];
+
+    // A HOMOGENEOUS selection (all edges, or all nodes of one role) unlocks the
+    // shared editors — the SAME pickers the single-element inspector uses, but
+    // each applies to EVERY id in ONE undo step via the plural setEdges*/
+    // setNodes* intents (which never touch the selection ⇒ the batch survives).
+    final allEdges = selEdges.isNotEmpty && selNodes.isEmpty;
+    final allNodes = selNodes.isNotEmpty && selEdges.isEmpty;
+    // Size/material pickers differ by regime, so they show only when every
+    // selected edge shares one (air vs pipe); a mixed batch keeps the service
+    // chips (re-servicing all is always coherent).
+    final allAir = allEdges && selEdges.every((e) => e.service.isAir);
+    final allPipe = allEdges && selEdges.every((e) => !e.service.isAir);
+    NodeRole? commonRole;
+    if (allNodes) {
+      commonRole = selNodes.first.role;
+      for (final nd in selNodes) {
+        if (nd.role != commonRole) {
+          commonRole = null;
+          break;
+        }
+      }
+    }
+    final showNodeEditors = allNodes && commonRole == NodeRole.fixture;
+    final showApply = allEdges || showNodeEditors;
+    final applyCount = allEdges ? m : n;
+
+    Widget label(String text) => Text(text,
+        style: type.caption.copyWith(color: colors.textMuted));
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2651,6 +3246,163 @@ class _SelectionSection extends ConsumerWidget {
               },
             ),
           ],
+        ),
+
+        // ── E1: batch property editors on a HOMOGENEOUS selection ─────────────
+        if (showApply) ...[
+          const SizedBox(height: MechXSpacing.lg),
+          MechXSectionLabel('Apply to $applyCount selected'),
+          if (allEdges) ...[
+            // Service (always coherent for an all-edge batch).
+            const SizedBox(height: MechXSpacing.sm),
+            label('Service'),
+            const SizedBox(height: MechXSpacing.xs),
+            Wrap(
+              spacing: MechXSpacing.xs,
+              runSpacing: MechXSpacing.xs,
+              children: [
+                for (final s in kDrawServices)
+                  _ServiceChip(
+                    service: s,
+                    selected: selEdges.every((e) => e.service == s),
+                    onTap: () => ctrl.setEdgesService(edgeIds, s),
+                  ),
+              ],
+            ),
+            // Size + material only when every selected edge shares a regime.
+            if (allAir || allPipe) ...[
+              const SizedBox(height: MechXSpacing.sm),
+              label('Size'),
+              const SizedBox(height: MechXSpacing.xs),
+              Wrap(
+                spacing: MechXSpacing.xs,
+                runSpacing: MechXSpacing.xs,
+                children: [
+                  _Pill(
+                    label: 'Auto',
+                    selected: selEdges.every((e) => e.sizeOverride == null),
+                    onTap: () => ctrl.setEdgesSizeOverride(edgeIds, null),
+                  ),
+                  if (allAir)
+                    for (final mm in standardDuctDiametersMm)
+                      _Pill(
+                        label: 'Ø${mm.round()}',
+                        selected: selEdges.every((e) =>
+                            e.sizeOverride != null &&
+                            (e.sizeOverride!.inMillimeters - mm).abs() < 0.5),
+                        onTap: () =>
+                            ctrl.setEdgesSizeOverride(edgeIds, Diameter.mm(mm)),
+                      )
+                  else
+                    for (final inches in npsInches)
+                      _Pill(
+                        label: npsLabel(inches),
+                        selected: selEdges.every((e) =>
+                            e.sizeOverride != null &&
+                            (e.sizeOverride!.inMillimeters - npsToMm(inches))
+                                    .abs() <
+                                0.5),
+                        onTap: () => ctrl.setEdgesSizeOverride(
+                            edgeIds, Diameter.mm(npsToMm(inches))),
+                      ),
+                ],
+              ),
+              const SizedBox(height: MechXSpacing.sm),
+              label('Material'),
+              const SizedBox(height: MechXSpacing.xs),
+              Wrap(
+                spacing: MechXSpacing.xs,
+                runSpacing: MechXSpacing.xs,
+                children: [
+                  if (allAir) ...[
+                    _Pill(
+                      label: 'Auto',
+                      selected: selEdges.every((e) => e.ductProduct == null),
+                      onTap: () => ctrl.setEdgesDuctProduct(edgeIds, null),
+                    ),
+                    for (final p in DuctProduct.values)
+                      _Pill(
+                        label: ductLabelFor(p),
+                        selected: selEdges.every((e) => e.ductProduct == p),
+                        onTap: () => ctrl.setEdgesDuctProduct(edgeIds, p),
+                      ),
+                  ] else ...[
+                    _Pill(
+                      label: 'Default',
+                      selected: selEdges.every((e) => e.pipeProduct == null),
+                      onTap: () => ctrl.setEdgesPipeProduct(edgeIds, null),
+                    ),
+                    for (final p in PipeProduct.values)
+                      _Pill(
+                        label: labelFor(p),
+                        selected: selEdges.every((e) => e.pipeProduct == p),
+                        onTap: () => ctrl.setEdgesPipeProduct(edgeIds, p),
+                      ),
+                  ],
+                ],
+              ),
+            ],
+          ],
+          if (showNodeEditors) ...[
+            // Fixture type (all nodes share the fixture role).
+            const SizedBox(height: MechXSpacing.sm),
+            label('Fixture type'),
+            const SizedBox(height: MechXSpacing.xs),
+            Wrap(
+              spacing: MechXSpacing.xs,
+              runSpacing: MechXSpacing.xs,
+              children: [
+                for (final f in PlumbingFixture.values)
+                  _Pill(
+                    label: fixtureLabel(f),
+                    selected: selNodes.every(
+                        (nd) => nd.customFixtureId == null && nd.fixture == f),
+                    onTap: () => ctrl.setNodesFixture(nodeIds, f),
+                  ),
+              ],
+            ),
+            const SizedBox(height: MechXSpacing.sm),
+            label('Diffuser / grille face size'),
+            const SizedBox(height: MechXSpacing.xs),
+            Wrap(
+              spacing: MechXSpacing.xs,
+              runSpacing: MechXSpacing.xs,
+              children: [
+                _Pill(
+                  label: 'Auto',
+                  selected: selNodes.every((nd) =>
+                      nd.faceWidthMm == null || nd.faceHeightMm == null),
+                  onTap: () => ctrl.setNodesFaceSize(nodeIds, null, null),
+                ),
+                for (final face in standardGrilleFacesMm)
+                  _Pill(
+                    label: '${face.$1.round()}x${face.$2.round()}',
+                    selected: selNodes.every((nd) =>
+                        nd.faceWidthMm == face.$1 &&
+                        nd.faceHeightMm == face.$2),
+                    onTap: () =>
+                        ctrl.setNodesFaceSize(nodeIds, face.$1, face.$2),
+                  ),
+              ],
+            ),
+          ],
+        ],
+
+        // ── E5: save this selection as a reusable, re-stampable block ─────────
+        const SizedBox(height: MechXSpacing.lg),
+        MechXSectionLabel('Assembly'),
+        const SizedBox(height: MechXSpacing.xs),
+        _SaveAssemblyField(
+          onSave: (name) {
+            final saved = ref
+                .read(assembliesProvider.notifier)
+                .saveSelection(name, net, nodeIds, edgeIds);
+            if (saved != null) {
+              ref
+                  .read(statusMessageProvider.notifier)
+                  .showStatus('Saved block "${saved.name}"');
+            }
+          },
         ),
         const SizedBox(height: MechXSpacing.lg),
       ],
@@ -3110,6 +3862,81 @@ class _SelectionSection extends ConsumerWidget {
                 .copyWith(color: context.colors.textSecondary),
           ),
         ],
+        // Size + material editors (E9) — the SAME setters the right-click menu
+        // uses, mirroring the node terminal's face-size pills. The "Auto" size
+        // pill clears the override; "Default"/"Auto" material falls back to the
+        // service default.
+        const SizedBox(height: MechXSpacing.sm),
+        Text('Size',
+            style:
+                context.type.caption.copyWith(color: context.colors.textMuted)),
+        const SizedBox(height: MechXSpacing.xs),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            _Pill(
+              label: 'Auto',
+              selected: edge.sizeOverride == null,
+              onTap: () => ctrl.setEdgeSizeOverride(edge.id, null),
+            ),
+            if (edge.service.isAir)
+              for (final mm in standardDuctDiametersMm)
+                _Pill(
+                  label: 'Ø${mm.round()}',
+                  selected: edge.sizeOverride != null &&
+                      (edge.sizeOverride!.inMillimeters - mm).abs() < 0.5,
+                  onTap: () =>
+                      ctrl.setEdgeSizeOverride(edge.id, Diameter.mm(mm)),
+                )
+            else
+              for (final inches in npsInches)
+                _Pill(
+                  label: npsLabel(inches),
+                  selected: edge.sizeOverride != null &&
+                      (edge.sizeOverride!.inMillimeters - npsToMm(inches)).abs() <
+                          0.5,
+                  onTap: () => ctrl.setEdgeSizeOverride(
+                      edge.id, Diameter.mm(npsToMm(inches))),
+                ),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        Text('Material',
+            style:
+                context.type.caption.copyWith(color: context.colors.textMuted)),
+        const SizedBox(height: MechXSpacing.xs),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            if (edge.service.isAir) ...[
+              _Pill(
+                label: 'Auto',
+                selected: edge.ductProduct == null,
+                onTap: () => ctrl.setEdgeDuctProduct(edge.id, null),
+              ),
+              for (final p in DuctProduct.values)
+                _Pill(
+                  label: ductLabelFor(p),
+                  selected: edge.ductProduct == p,
+                  onTap: () => ctrl.setEdgeDuctProduct(edge.id, p),
+                ),
+            ] else ...[
+              _Pill(
+                label: 'Default',
+                selected: edge.pipeProduct == null,
+                onTap: () => ctrl.setEdgePipeProduct(edge.id, null),
+              ),
+              for (final p in PipeProduct.values)
+                _Pill(
+                  label: labelFor(p),
+                  selected: edge.pipeProduct == p,
+                  onTap: () => ctrl.setEdgePipeProduct(edge.id, p),
+                ),
+            ],
+          ],
+        ),
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
@@ -3128,11 +3955,7 @@ class _SelectionSection extends ConsumerWidget {
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
           children: [
-            if (edge.sizeOverride != null)
-              MechXButton(
-                label: 'Clear size override',
-                onPressed: () => ctrl.setEdgeSizeOverride(edge.id, null),
-              ),
+            // (Size override is cleared by the "Auto" size pill above, E9.)
             MechXButton(
               label: 'Delete ${edge.kind == EdgeKind.riser ? 'riser' : 'run'}',
               onPressed: () {
@@ -3266,6 +4089,51 @@ String _balanceLabel(double supplyLps, double returnLps) {
 }
 
 /// A compact selectable pill used by the selection editor (role / fixture).
+/// Inline name field + Save button (E5): captures the current multi-selection
+/// into a named reusable assembly. Stateful so the typed name persists across
+/// rebuilds and clears after a save (a changing key re-seeds the field text).
+class _SaveAssemblyField extends StatefulWidget {
+  final void Function(String name) onSave;
+  const _SaveAssemblyField({required this.onSave});
+
+  @override
+  State<_SaveAssemblyField> createState() => _SaveAssemblyFieldState();
+}
+
+class _SaveAssemblyFieldState extends State<_SaveAssemblyField> {
+  String _name = '';
+  int _gen = 0; // bumped on save to reset the field text
+
+  void _save() {
+    final name = _name.trim();
+    if (name.isEmpty) return;
+    widget.onSave(name);
+    setState(() {
+      _name = '';
+      _gen++;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: MechXTextField(
+            key: ValueKey(_gen),
+            value: _name,
+            hint: 'Assembly name',
+            onChanged: (s) => _name = s,
+            onSubmitted: _save,
+          ),
+        ),
+        const SizedBox(width: MechXSpacing.xs),
+        MechXButton(label: 'Save block', onPressed: _save),
+      ],
+    );
+  }
+}
+
 class _Pill extends StatelessWidget {
   final String label;
   final bool selected;

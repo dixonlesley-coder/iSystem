@@ -12,6 +12,7 @@ library;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../store/network_store.dart';
 import '../../store/templates.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -23,7 +24,7 @@ Future<void> showTemplatesDialog(BuildContext context) {
   return showGeneralDialog<void>(
     context: context,
     barrierDismissible: true,
-    barrierLabel: 'New project from template',
+    barrierLabel: 'Apply a building template',
     barrierColor: theme.colors.scrim,
     transitionDuration: MechXMotion.appear,
     pageBuilder: (ctx, _, _) => MechXTheme(
@@ -72,7 +73,7 @@ class _TemplatesDialog extends ConsumerWidget {
           Row(
             children: [
               Expanded(
-                child: Text('New from template',
+                child: Text('Apply a building template',
                     style: type.title.copyWith(color: colors.textPrimary)),
               ),
               MechXButton(
@@ -86,10 +87,24 @@ class _TemplatesDialog extends ConsumerWidget {
           Text(
             'Prefill the floor stack, occupancy, fire hazard, and design '
             'rainfall for a common building type. These are smart starting '
-            'defaults you can refine; the drawn network and calibration are '
-            'left untouched.',
+            'defaults you can refine; your per-sheet calibration is left '
+            'untouched.',
             style: type.caption.copyWith(color: colors.textMuted),
           ),
+          // Honest warning (B6): applying a template REPLACES the floor stack.
+          // If it has fewer floors than the current building, any drawn work
+          // above the new top floor is moved down onto it (one undo step) — so
+          // "the drawn network is left untouched" is only true when nothing is
+          // drawn. Surface that only when there IS drawn work to move.
+          if (ref.watch(networkControllerProvider).network.nodes.isNotEmpty) ...[
+            const SizedBox(height: MechXSpacing.xs),
+            Text(
+              'You have drawn work: if the chosen template has fewer floors than '
+              'your building, any elements above its top floor will be moved '
+              'down onto the new top floor.',
+              style: type.caption.copyWith(color: colors.warning),
+            ),
+          ],
           const SizedBox(height: MechXSpacing.md),
           Flexible(
             child: ListView.separated(

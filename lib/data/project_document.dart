@@ -64,6 +64,12 @@ class DesignSettings {
   /// `true` ⇒ upfeed pump; `false` ⇒ roof-tank downfeed.
   final bool upfeed;
 
+  /// G1 — whether the solved MEP pump/fan/fire-pump duties are folded into the
+  /// auto "MEP Equipment" electrical panel (opt-in; default false). Persisted so
+  /// the choice survives a reload — otherwise reopening a project saved with the
+  /// feed ON would silently prune the duty circuits back to placed-only.
+  final bool mepDutyFeedEnabled;
+
   final DuctShape ductShape;
   final DuctSizingMethod ductMethod;
   final double rainfallMmPerHr;
@@ -149,9 +155,27 @@ class DesignSettings {
   /// project has no revision table.
   final List<Revision> revisions;
 
+  /// Reusable, re-stampable assemblies / blocks (E5): named groups of drawn
+  /// nodes + edges — the WC toilet group, the pump-room hookup, a shaft riser
+  /// set — saved once and re-stamped across projects. Each carries the SAME
+  /// network node/edge JSON the drawn network uses, so re-instantiation with
+  /// fresh ids (the clipboard clone path) is free. Defaults to empty — a project
+  /// that never saved a block is byte-identical to before.
+  final List<SavedAssembly> savedAssemblies;
+
+  /// H1 — the design-issue keys the engineer has ACKNOWLEDGED (see
+  /// `design_issues_store.dart` `DesignIssue.key`): advisory/`secondarySource`
+  /// items accepted so they no longer block a PASS compliance verdict. Errors
+  /// and warnings are never acknowledgeable, so this can only ever relax an
+  /// advisory. Defaults empty — a project that has acknowledged nothing loads
+  /// byte-identical to before, and compliance still can't PASS until something
+  /// is acknowledged.
+  final List<String> acknowledgedIssueKeys;
+
   const DesignSettings({
     this.occupancy = Occupancy.private,
     this.upfeed = false,
+    this.mepDutyFeedEnabled = false,
     this.ductShape = DuctShape.round,
     this.ductMethod = DuctSizingMethod.velocity,
     this.rainfallMmPerHr = 200.0,
@@ -178,11 +202,15 @@ class DesignSettings {
     this.checkedBy,
     this.approvedBy,
     this.revisions = const [],
+    this.savedAssemblies = const [],
+    this.acknowledgedIssueKeys = const [],
   });
 
   Map<String, dynamic> toJson() => {
         'occupancy': occupancy.name,
         'upfeed': upfeed,
+        // Written only when opted in, so a default project stays byte-identical.
+        if (mepDutyFeedEnabled) 'mepDutyFeed': true,
         'ductShape': ductShape.name,
         'ductMethod': ductMethod.name,
         'rainfall_mmhr': rainfallMmPerHr,
@@ -202,9 +230,10 @@ class DesignSettings {
         'coolingLoadMethod': coolingLoadMethod,
         'multiZoneDiversityFactor': multiZoneDiversityFactor,
         'multiZoneExhaustStrategy': multiZoneExhaustStrategy,
-        // BYO Claude copilot key + model (additive; absent on an older file →
-        // disabled copilot / default model).
-        'anthropicApiKey': anthropicApiKey,
+        // BYO AI copilot model + provider (non-secret) round-trip; the API KEY
+        // is a secret and is NO LONGER written here (B8) — it lives machine-local
+        // in `app_settings.dart`, kept out of the shareable `.mechx`. A legacy
+        // in-file key is still READ (see [fromJson]) for one-time migration.
         'aiModel': aiModel,
         'aiProvider': aiProvider,
         // Document control (additive; encoded only when set/non-empty so an
@@ -221,6 +250,14 @@ class DesignSettings {
           'revisions': [
             for (final r in revisions) {'date': r.date, 'description': r.description},
           ],
+        // Reusable assemblies (E5; additive — encoded only when non-empty so an
+        // untouched project stays byte-identical).
+        if (savedAssemblies.isNotEmpty)
+          'savedAssemblies': [for (final a in savedAssemblies) a.toJson()],
+        // Acknowledged advisory keys (H1; additive — encoded only when non-empty
+        // so an untouched project stays byte-identical).
+        if (acknowledgedIssueKeys.isNotEmpty)
+          'acknowledgedIssueKeys': acknowledgedIssueKeys,
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -229,6 +266,7 @@ class DesignSettings {
         occupancy:
             _enumOr(Occupancy.values, json['occupancy'], Occupancy.private),
         upfeed: json['upfeed'] == true,
+        mepDutyFeedEnabled: json['mepDutyFeed'] == true,
         ductShape:
             _enumOr(DuctShape.values, json['ductShape'], DuctShape.round),
         ductMethod: _enumOr(
@@ -285,7 +323,17 @@ class DesignSettings {
         approvedBy:
             json['approvedBy'] is String ? json['approvedBy'] as String : null,
         revisions: _revisionsFromJson(json['revisions']),
+        savedAssemblies: _savedAssembliesFromJson(json['savedAssemblies']),
+        acknowledgedIssueKeys:
+            _stringListFromJson(json['acknowledgedIssueKeys']),
       );
+
+  /// Tolerantly read a list of strings: a non-list (or absent) value yields an
+  /// empty list; non-string entries are dropped.
+  static List<String> _stringListFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    return [for (final e in raw) if (e is String) e];
+  }
 
   /// Clamp the multi-zone diversity factor into (0,1]; absent/invalid ⇒ 0.9.
   static double _clampDiversity(double? raw) {
@@ -324,6 +372,23 @@ class DesignSettings {
     return out;
   }
 
+  /// Tolerantly read saved assemblies (E5): a non-list (or absent) value yields
+  /// an empty list; each entry that fails to decode (missing id/name or a
+  /// malformed node/edge) is dropped rather than failing the whole load.
+  static List<SavedAssembly> _savedAssembliesFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <SavedAssembly>[];
+    for (final e in raw) {
+      try {
+        final a = SavedAssembly.fromJson(e);
+        if (a != null) out.add(a);
+      } catch (_) {
+        // Drop a malformed assembly rather than throwing.
+      }
+    }
+    return out;
+  }
+
   /// Tolerantly read a `sku → unit price` map: a non-map (or absent) value, a
   /// non-string key, or a non-numeric / non-positive price is dropped.
   static Map<String, double> _priceListFromJson(Object? raw) {
@@ -333,6 +398,141 @@ class DesignSettings {
       if (k is String && v is num && v > 0) out[k] = v.toDouble();
     });
     return out;
+  }
+}
+
+// ── Shared network node/edge JSON (the ONE serialization) ────────────────────
+// [ProjectDocument]'s network AND the re-stampable [SavedAssembly] (E5) both go
+// through these four functions, so a saved block serializes exactly like a drawn
+// node/edge and re-instantiation with fresh ids (the clipboard clone path) is
+// free. Optional fields are omitted when null ⇒ a plain node/edge stays compact
+// and byte-identical.
+
+Map<String, dynamic> _netNodeToJson(NetNode n) => {
+      'id': n.id,
+      'sheetId': n.sheetId,
+      'x': n.x,
+      'y': n.y,
+      'floor': n.floorIndex,
+      'role': n.role.name,
+      if (n.elevation != null) 'elev_m': n.elevation!.meters,
+      if (n.mountHeight != null) 'mount_h_m': n.mountHeight!.meters,
+      if (n.fixture != null) 'fixture': n.fixture!.name,
+      if (n.airflow != null) 'airflow_lps': n.airflow!.inLitersPerSecond,
+      if (n.customFixtureId != null) 'customFixtureId': n.customFixtureId,
+      if (n.roofAreaM2 != null) 'roof_area_m2': n.roofAreaM2,
+      if (n.component != null) 'component': n.component!.name,
+      if (n.tankCapacityLitres != null) 'tank_l': n.tankCapacityLitres,
+      if (n.electricalLoadW != null) 'elec_w': n.electricalLoadW,
+      if (n.faceWidthMm != null) 'face_w_mm': n.faceWidthMm,
+      if (n.faceHeightMm != null) 'face_h_mm': n.faceHeightMm,
+      if (n.fittingType != null && n.fittingType != JunctionFitting.auto)
+        'fitting': n.fittingType!.name,
+    };
+
+NetNode _netNodeFromJson(Map n) => NetNode(
+      id: n['id'] as String,
+      sheetId: n['sheetId'] as String,
+      x: (n['x'] as num).toDouble(),
+      y: (n['y'] as num).toDouble(),
+      floorIndex: (n['floor'] as num).toInt(),
+      role: _enumOr(NodeRole.values, n['role'], NodeRole.main),
+      elevation:
+          n['elev_m'] == null ? null : Length((n['elev_m'] as num).toDouble()),
+      // Per-node wall mounting height (above its floor). Tolerant: absent ⇒
+      // null ⇒ the role-derived elevation.
+      mountHeight: n['mount_h_m'] == null
+          ? null
+          : Length((n['mount_h_m'] as num).toDouble()),
+      fixture: n['fixture'] == null
+          ? null
+          : _enumOrNull(PlumbingFixture.values, n['fixture']),
+      airflow: n['airflow_lps'] == null
+          ? null
+          : FlowRate.litersPerSecond((n['airflow_lps'] as num).toDouble()),
+      customFixtureId: n['customFixtureId'] as String?,
+      roofAreaM2: (n['roof_area_m2'] as num?)?.toDouble(),
+      // Tolerant: absent / unknown ⇒ null ⇒ an ordinary node.
+      component: n['component'] == null
+          ? null
+          : _enumOrNull(NodeComponent.values, n['component']),
+      tankCapacityLitres: (n['tank_l'] as num?)?.toDouble(),
+      electricalLoadW: (n['elec_w'] as num?)?.toDouble(),
+      faceWidthMm: (n['face_w_mm'] as num?)?.toDouble(),
+      faceHeightMm: (n['face_h_mm'] as num?)?.toDouble(),
+      fittingType: n['fitting'] == null
+          ? null
+          : _enumOrNull(JunctionFitting.values, n['fitting']),
+    );
+
+Map<String, dynamic> _netEdgeToJson(NetEdge e) => {
+      'id': e.id,
+      'from': e.fromId,
+      'to': e.toId,
+      'service': e.service.name,
+      'kind': e.kind.name,
+      if (e.pipeProduct != null) 'pipe_product': e.pipeProduct!.name,
+      if (e.ductProduct != null) 'duct_product': e.ductProduct!.name,
+      if (e.sizeOverride != null)
+        'size_override_mm': e.sizeOverride!.inMillimeters,
+    };
+
+NetEdge _netEdgeFromJson(Map e) => NetEdge(
+      id: e['id'] as String,
+      fromId: e['from'] as String,
+      toId: e['to'] as String,
+      service: _enumOr(ServiceType.values, e['service'], ServiceType.coldWater),
+      kind: _enumOr(EdgeKind.values, e['kind'], EdgeKind.run),
+      pipeProduct: _enumOrNull(PipeProduct.values, e['pipe_product']),
+      ductProduct: _enumOrNull(DuctProduct.values, e['duct_product']),
+      sizeOverride: e['size_override_mm'] == null
+          ? null
+          : Diameter.mm((e['size_override_mm'] as num).toDouble()),
+    );
+
+/// A named, re-stampable group of drawn nodes + edges (E5) — a reusable "block":
+/// the WC toilet group, the pump-room hookup, a shaft riser set. Persisted in
+/// [DesignSettings.savedAssemblies]; the [nodes]/[edges] are captured value
+/// copies serialized with the SAME network encoding a drawn node/edge uses, so a
+/// stamp re-instantiates them with fresh ids via the existing clone path.
+/// Coordinates are stored as captured (sheet px); the stamp re-bases them to the
+/// drop point.
+class SavedAssembly {
+  final String id;
+  final String name;
+  final List<NetNode> nodes;
+  final List<NetEdge> edges;
+
+  const SavedAssembly({
+    required this.id,
+    required this.name,
+    this.nodes = const [],
+    this.edges = const [],
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'nodes': [for (final n in nodes) _netNodeToJson(n)],
+        'edges': [for (final e in edges) _netEdgeToJson(e)],
+      };
+
+  /// Tolerant decode: returns null when [raw] is not a map or is missing its
+  /// id/name. A missing/absent nodes/edges list yields an empty one.
+  static SavedAssembly? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final id = raw['id'];
+    final name = raw['name'];
+    if (id is! String || name is! String) return null;
+    final nodes = <NetNode>[
+      for (final n in (raw['nodes'] as List? ?? const []))
+        if (n is Map) _netNodeFromJson(n),
+    ];
+    final edges = <NetEdge>[
+      for (final e in (raw['edges'] as List? ?? const []))
+        if (e is Map) _netEdgeFromJson(e),
+    ];
+    return SavedAssembly(id: id, name: name, nodes: nodes, edges: edges);
   }
 }
 
@@ -469,47 +669,8 @@ class ProjectDocument {
         // stay byte-identical.
         if (assets.isNotEmpty) 'assets': assets,
         'network': {
-          'nodes': [
-            for (final n in network.nodes)
-              {
-                'id': n.id,
-                'sheetId': n.sheetId,
-                'x': n.x,
-                'y': n.y,
-                'floor': n.floorIndex,
-                'role': n.role.name,
-                if (n.elevation != null) 'elev_m': n.elevation!.meters,
-                if (n.mountHeight != null) 'mount_h_m': n.mountHeight!.meters,
-                if (n.fixture != null) 'fixture': n.fixture!.name,
-                if (n.airflow != null)
-                  'airflow_lps': n.airflow!.inLitersPerSecond,
-                if (n.customFixtureId != null)
-                  'customFixtureId': n.customFixtureId,
-                if (n.roofAreaM2 != null) 'roof_area_m2': n.roofAreaM2,
-                if (n.component != null) 'component': n.component!.name,
-                if (n.tankCapacityLitres != null)
-                  'tank_l': n.tankCapacityLitres,
-                if (n.electricalLoadW != null) 'elec_w': n.electricalLoadW,
-                if (n.faceWidthMm != null) 'face_w_mm': n.faceWidthMm,
-                if (n.faceHeightMm != null) 'face_h_mm': n.faceHeightMm,
-                if (n.fittingType != null && n.fittingType != JunctionFitting.auto)
-                  'fitting': n.fittingType!.name,
-              },
-          ],
-          'edges': [
-            for (final e in network.edges)
-              {
-                'id': e.id,
-                'from': e.fromId,
-                'to': e.toId,
-                'service': e.service.name,
-                'kind': e.kind.name,
-                if (e.pipeProduct != null) 'pipe_product': e.pipeProduct!.name,
-                if (e.ductProduct != null) 'duct_product': e.ductProduct!.name,
-                if (e.sizeOverride != null)
-                  'size_override_mm': e.sizeOverride!.inMillimeters,
-              },
-          ],
+          'nodes': [for (final n in network.nodes) _netNodeToJson(n)],
+          'edges': [for (final e in network.edges) _netEdgeToJson(e)],
         },
       };
 
@@ -555,57 +716,10 @@ class ProjectDocument {
     ];
     final net = json['network'] as Map<String, dynamic>;
     final nodes = [
-      for (final n in net['nodes'] as List)
-        NetNode(
-          id: (n as Map)['id'] as String,
-          sheetId: n['sheetId'] as String,
-          x: (n['x'] as num).toDouble(),
-          y: (n['y'] as num).toDouble(),
-          floorIndex: (n['floor'] as num).toInt(),
-          role: _enumOr(NodeRole.values, n['role'], NodeRole.main),
-          elevation:
-              n['elev_m'] == null ? null : Length((n['elev_m'] as num).toDouble()),
-          // Per-node wall mounting height (above its floor). Tolerant: absent ⇒
-          // null ⇒ the role-derived elevation.
-          mountHeight: n['mount_h_m'] == null
-              ? null
-              : Length((n['mount_h_m'] as num).toDouble()),
-          fixture: n['fixture'] == null
-              ? null
-              : _enumOrNull(PlumbingFixture.values, n['fixture']),
-          airflow: n['airflow_lps'] == null
-              ? null
-              : FlowRate.litersPerSecond((n['airflow_lps'] as num).toDouble()),
-          customFixtureId: n['customFixtureId'] as String?,
-          roofAreaM2: (n['roof_area_m2'] as num?)?.toDouble(),
-          // Tolerant: absent / unknown ⇒ null ⇒ an ordinary node.
-          component: n['component'] == null
-              ? null
-              : _enumOrNull(NodeComponent.values, n['component']),
-          tankCapacityLitres: (n['tank_l'] as num?)?.toDouble(),
-          electricalLoadW: (n['elec_w'] as num?)?.toDouble(),
-          faceWidthMm: (n['face_w_mm'] as num?)?.toDouble(),
-          faceHeightMm: (n['face_h_mm'] as num?)?.toDouble(),
-          fittingType: n['fitting'] == null
-              ? null
-              : _enumOrNull(JunctionFitting.values, n['fitting']),
-        ),
+      for (final n in net['nodes'] as List) _netNodeFromJson(n as Map),
     ];
     final edges = [
-      for (final e in net['edges'] as List)
-        NetEdge(
-          id: (e as Map)['id'] as String,
-          fromId: e['from'] as String,
-          toId: e['to'] as String,
-          service:
-              _enumOr(ServiceType.values, e['service'], ServiceType.coldWater),
-          kind: _enumOr(EdgeKind.values, e['kind'], EdgeKind.run),
-          pipeProduct: _enumOrNull(PipeProduct.values, e['pipe_product']),
-          ductProduct: _enumOrNull(DuctProduct.values, e['duct_product']),
-          sizeOverride: e['size_override_mm'] == null
-              ? null
-              : Diameter.mm((e['size_override_mm'] as num).toDouble()),
-        ),
+      for (final e in net['edges'] as List) _netEdgeFromJson(e as Map),
     ];
     final viewports = <String, ViewportTransform>{};
     final rawViewports = json['viewports'];

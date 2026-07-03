@@ -100,8 +100,10 @@ class _CopilotPanelState extends ConsumerState<_CopilotPanel> {
           ),
           const SizedBox(height: MechXSpacing.xs),
           Text(
-            'Select a room or element, then ask Claude to design or change it. '
-            'You review every step before it is applied.',
+            'Select a room or element, then ask Claude to add equipment, runs or '
+            'terminals — or to auto-place a room\'s air terminals. Claude adds and '
+            'advises; it does not edit or delete existing elements. You review '
+            'every step before it is applied.',
             style: type.caption.copyWith(color: colors.textMuted),
           ),
           const SizedBox(height: MechXSpacing.md),
@@ -149,6 +151,36 @@ class _Body extends ConsumerWidget {
       case CopilotPhase.thinking:
         return Text('Claude is planning…',
             style: type.caption.copyWith(color: colors.textMuted));
+      case CopilotPhase.applied:
+        // Honest partial-apply account: what was applied and — one line each —
+        // what was skipped (a hallucinated / invalid command), so nothing
+        // silently vanishes. A fully-clean apply returns to idle (no report).
+        final report = state.applyReport;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(state.message ?? 'Applied.',
+                style: type.body.copyWith(color: colors.textPrimary)),
+            if (report != null && report.skipped.isNotEmpty) ...[
+              const SizedBox(height: MechXSpacing.sm),
+              Text('Skipped',
+                  style: type.caption.copyWith(color: colors.textMuted)),
+              const SizedBox(height: MechXSpacing.xxs),
+              for (final s in report.skipped)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: MechXSpacing.xxs),
+                  child: Text('· $s',
+                      style: type.caption.copyWith(color: colors.textSecondary)),
+                ),
+            ],
+            const SizedBox(height: MechXSpacing.md),
+            MechXButton(
+              label: 'Done',
+              tertiary: true,
+              onPressed: () => ref.read(copilotProvider.notifier).reset(),
+            ),
+          ],
+        );
       case CopilotPhase.error:
         return Container(
           padding: const EdgeInsets.all(MechXSpacing.sm),

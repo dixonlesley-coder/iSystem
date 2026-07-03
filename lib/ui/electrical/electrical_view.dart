@@ -16,6 +16,7 @@
 /// result records and drives the store's edit intents.
 library;
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
@@ -32,6 +33,7 @@ import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/electrical_feed.dart';
 import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/project_store.dart';
@@ -159,6 +161,63 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     action(ref);
   }
 
+  /// G4 — the electrical-workspace Esc ladder. Bubbles up from the canvas's own
+  /// Focus (which clears any canvas selection first), then closes the topmost
+  /// open overlay: a context menu → the export popover → an open inspector /
+  /// drawer → the gesture-help popover. Every close path already exists as a
+  /// `setState`; this just gives them a keyboard exit (they previously closed
+  /// only by scrim / button). Non-Esc keys / an all-closed workspace bubble on.
+  KeyEventResult _onKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey != LogicalKeyboardKey.escape) {
+      return KeyEventResult.ignored;
+    }
+    if (_panelMenu != null || _circuitMenu != null) {
+      setState(() {
+        _panelMenu = null;
+        _circuitMenu = null;
+      });
+      return KeyEventResult.handled;
+    }
+    if (_showExportMenu) {
+      setState(() => _showExportMenu = false);
+      return KeyEventResult.handled;
+    }
+    if (_editing != null ||
+        _panelEditing != null ||
+        _showService ||
+        _showSources ||
+        _showAdvanced) {
+      setState(() {
+        _editing = null;
+        _panelEditing = null;
+        _showService = false;
+        _showSources = false;
+        _showAdvanced = false;
+      });
+      return KeyEventResult.handled;
+    }
+    if (_showHelp) {
+      setState(() => _showHelp = false);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  /// G5 — the Issues-drawer "locate" action: close the advanced drawer, switch
+  /// to the single-line canvas (the only tab hosting the interactive board
+  /// schedule), and frame + select the offending panel / way. Mirrors the
+  /// Review -> Electrical jump seam already wired in this file.
+  void _locateWarning(String panelId, String? circuitId) {
+    setState(() {
+      _showAdvanced = false;
+      if (_tab != _Tab.singleLine) _tab = _Tab.singleLine;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _canvasKey.currentState?.focusIssue(panelId, circuitId: circuitId);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -166,14 +225,25 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     final project = ref.watch(electricalProjectProvider);
     final advanced = ref.watch(electricalAdvancedProvider);
 
-    // The Review → Electrical jump seam: a located issue hands a panel id via
-    // electricalFocusProvider; consume it once — switch to the single-line
-    // tab, frame that panel's board schedule, and clear the request.
-    ref.listen(electricalFocusProvider, (prev, panelId) {
-      if (panelId == null) return;
+    // The Review → Electrical jump seam: a located issue hands a panel id (and,
+    // when the issue pinpoints one, a circuit/way id — H7) via
+    // electricalFocusProvider; consume it once — switch to the single-line tab,
+    // frame that panel's board schedule, SELECT the exact way when known, and
+    // clear the request.
+    ref.listen(electricalFocusProvider, (prev, req) {
+      if (req == null) return;
       if (_tab != _Tab.singleLine) setState(() => _tab = _Tab.singleLine);
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _canvasKey.currentState?.focusPanelSchedule(panelId);
+        final circuitId = req.circuitId;
+        if (circuitId != null) {
+          // Frame the board AND ring the exact way — focusIssue drives the
+          // single-line canvas's OWN selection (the same path G5's Issues drawer
+          // uses), unlike electricalSelectionProvider which only the Layout
+          // layer consumes (a no-op on the single-line tab this jump lands on).
+          _canvasKey.currentState?.focusIssue(req.panelId, circuitId: circuitId);
+        } else {
+          _canvasKey.currentState?.focusPanelSchedule(req.panelId);
+        }
         ref.read(electricalFocusProvider.notifier).clear();
       });
     });
@@ -206,7 +276,14 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       ],
     );
 
-    return Stack(
+    return Focus(
+      // A bubble-phase Esc listener that never steals focus from the canvas
+      // (which keeps its own key handling for selection / Delete / undo); Esc
+      // bubbles up here when the focused descendant ignores it — G4.
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: (_, event) => _onKeyEvent(event),
+      child: Stack(
       children: [
         Positioned.fill(
           child: ColoredBox(color: colors.canvas, child: body),
@@ -254,6 +331,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             advanced: advanced,
             result: result,
             onClose: () => setState(() => _showAdvanced = false),
+            onLocate: _locateWarning,
           ),
         if (_showService)
           _ServiceInspector(
@@ -264,6 +342,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             onClose: () => setState(() => _showSources = false),
           ),
       ],
+      ),
     );
   }
 
@@ -359,6 +438,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                     child: _EmptyState(
                       onSetUp: _openService,
                       onAddPanel: _addPanel,
+                      onLoadSample: _controller.resetToSample,
                     ),
                   ),
                 ),
@@ -389,6 +469,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       empty: project.panels.isEmpty,
       onSetUp: _openService,
       onAddPanel: _addPanel,
+      onLoadSample: _controller.resetToSample,
     );
   }
 
@@ -402,7 +483,10 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   // ── Edit-intent wiring ──────────────────────────────────────────────────────
 
   void _addPanel() {
-    final n = ref.read(electricalProjectProvider).panels.length + 1;
+    // G8 — mint the first FREE SP-N ordinal (max+1 across existing names AND
+    // tags), so deleting a board never lets a later add re-mint its
+    // designation onto an issued schedule.
+    final n = nextSubPanelOrdinal(ref.read(electricalProjectProvider).panels);
     _controller.addPanelAt(
       name: 'Sub-panel $n',
       tag: 'SP-$n',
@@ -703,8 +787,10 @@ class _Toolbar extends StatelessWidget {
                   ),
                   const SizedBox(width: MechXSpacing.xs),
                   MechXButton(
+                    // J4 — Export is the deliverable action; it reads in the
+                    // normal (primary-label) tone like the mechanical export
+                    // buttons, not the muted/disabled-looking grey it used to.
                     label: context.strings(StringKey.electricalExport),
-                    tone: MechXButtonTone.muted,
                     onPressed: onExport,
                   ),
                 ],
@@ -1044,12 +1130,22 @@ class _MiniMapPainter extends CustomPainter {
 class _EmptyState extends StatelessWidget {
   final VoidCallback onSetUp;
   final VoidCallback onAddPanel;
-  const _EmptyState({required this.onSetUp, required this.onAddPanel});
+  final VoidCallback onLoadSample;
+  const _EmptyState({
+    required this.onSetUp,
+    required this.onAddPanel,
+    required this.onLoadSample,
+  });
 
   @override
   Widget build(BuildContext context) {
     // The shared branded empty-state card (matching the mechanical Layout
-    // canvas's), with the two service set-up actions.
+    // canvas's), with the two service set-up actions plus the explicit
+    // "Load sample project" secondary action (A2 — the sample switchboard is
+    // never auto-seeded; it lives one click away here). MechXEmptyStateCard
+    // hosts the actions in a Wrap itself, so the buttons are passed directly
+    // (no Expanded — which is invalid inside a Wrap) and flow to a second line
+    // inside the 360-px card rather than overflowing.
     return Padding(
       padding: const EdgeInsets.all(MechXSpacing.lg),
       child: MechXEmptyStateCard(
@@ -1060,10 +1156,13 @@ class _EmptyState extends StatelessWidget {
             label: context.strings(StringKey.electricalAddPanel),
             onPressed: onAddPanel,
           ),
-          const SizedBox(width: MechXSpacing.sm),
           MechXButton(
             label: context.strings(StringKey.electricalServiceEarthing),
             onPressed: onSetUp,
+          ),
+          MechXButton(
+            label: 'Load sample project',
+            onPressed: onLoadSample,
           ),
         ],
       ),
@@ -1084,6 +1183,7 @@ class _SldProjectionArea extends StatelessWidget {
   final bool empty;
   final VoidCallback onSetUp;
   final VoidCallback onAddPanel;
+  final VoidCallback onLoadSample;
 
   const _SldProjectionArea({
     required this.sheetKey,
@@ -1091,6 +1191,7 @@ class _SldProjectionArea extends StatelessWidget {
     required this.empty,
     required this.onSetUp,
     required this.onAddPanel,
+    required this.onLoadSample,
   });
 
   @override
@@ -1110,7 +1211,11 @@ class _SldProjectionArea extends StatelessWidget {
         if (empty)
           Positioned.fill(
             child: Center(
-              child: _EmptyState(onSetUp: onSetUp, onAddPanel: onAddPanel),
+              child: _EmptyState(
+                onSetUp: onSetUp,
+                onAddPanel: onAddPanel,
+                onLoadSample: onLoadSample,
+              ),
             ),
           ),
       ],
@@ -1201,6 +1306,13 @@ class _ServiceInspector extends ConsumerWidget {
     final project = ref.watch(electricalProjectProvider);
     final ctrl = ref.read(electricalProjectProvider.notifier);
 
+    // G1 — the solved-duty MEP → electrical bridge. The equipment the mechanical
+    // engine has already sized (pump / fan / fire-pump duties) surfaced as
+    // electrical circuits the engineer would otherwise re-type. Off by default so
+    // an untouched project never grows a phantom MEP panel.
+    final duties = ref.watch(mepEquipmentLoadsProvider);
+    final dutyFeedOn = ref.watch(mepDutyFeedEnabledProvider);
+
     return _AnimatedDrawerShell(
       width: 340,
       onClose: onClose,
@@ -1289,6 +1401,33 @@ class _ServiceInspector extends ConsumerWidget {
                       context.strings(
                         StringKey.electricalBusbarClearingTimeNote,
                       ),
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                    const SizedBox(height: MechXSpacing.md),
+                    Container(height: 1, color: colors.border),
+                    const SizedBox(height: MechXSpacing.md),
+                    // ── MEP equipment feed (G1) ──────────────────────────────
+                    Text(
+                      'MEP equipment feed',
+                      style: type.label.copyWith(color: colors.textPrimary),
+                    ),
+                    const SizedBox(height: MechXSpacing.sm),
+                    ElectricalToggleRow(
+                      label: 'Add solved MEP duties to panel',
+                      value: dutyFeedOn,
+                      onChanged: (on) =>
+                          ref.read(mepDutyFeedEnabledProvider.notifier).set(on),
+                    ),
+                    Text(
+                      duties.isEmpty
+                          ? 'No auto-sized pump / fan / fire-pump duty yet — '
+                              'draw and size the mechanical systems first. '
+                              'Equipment placed on the plan always feeds the '
+                              'MEP Equipment panel.'
+                          : 'Folds the app-sized ${duties.map((d) => d.name).join(', ')} '
+                              'into the MEP Equipment panel as sized circuits — '
+                              'no re-entry of the kW. Fire pumps carry life-safety '
+                              'treatment. Placed equipment always feeds the panel.',
                       style: type.caption.copyWith(color: colors.textMuted),
                     ),
                   ],
@@ -1486,10 +1625,14 @@ class _AdvancedDrawer extends StatelessWidget {
   final AdvancedStudy advanced;
   final ElectricalSystemResult result;
   final VoidCallback onClose;
+
+  /// G5 — locate a warning's offending board / way on the single-line canvas.
+  final void Function(String panelId, String? circuitId) onLocate;
   const _AdvancedDrawer({
     required this.advanced,
     required this.result,
     required this.onClose,
+    required this.onLocate,
   });
 
   @override
@@ -1545,7 +1688,8 @@ class _AdvancedDrawer extends StatelessWidget {
                         style: type.label.copyWith(color: colors.textPrimary),
                       ),
                       const SizedBox(height: MechXSpacing.xs),
-                      for (final w in result.warnings) _WarningRow(warning: w),
+                      for (final w in result.warnings)
+                        _WarningRow(warning: w, onLocate: onLocate),
                       const SizedBox(height: MechXSpacing.md),
                     ],
                     _AdvancedBody(advanced: advanced, result: result),
@@ -1710,14 +1854,27 @@ class _Metric extends StatelessWidget {
   }
 }
 
-class _WarningRow extends StatelessWidget {
+/// One row in the Issues drawer. When the warning carries a [panelId] it is
+/// TAPPABLE (G5) — a hover-tinted, click-cursored row that locates the offending
+/// board / way on the single-line canvas via [onLocate]. A location-less warning
+/// (system-wide) renders as inert text, exactly as before.
+class _WarningRow extends StatefulWidget {
   final ElectricalWarning warning;
-  const _WarningRow({required this.warning});
+  final void Function(String panelId, String? circuitId) onLocate;
+  const _WarningRow({required this.warning, required this.onLocate});
+
+  @override
+  State<_WarningRow> createState() => _WarningRowState();
+}
+
+class _WarningRowState extends State<_WarningRow> {
+  bool _hover = false;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    final warning = widget.warning;
     final color = switch (warning.severity) {
       WarningSeverity.error => colors.danger,
       WarningSeverity.warning => colors.warning,
@@ -1732,26 +1889,94 @@ class _WarningRow extends StatelessWidget {
       WarningSeverity.warning => SeverityGlyphKind.warn,
       WarningSeverity.info => SeverityGlyphKind.info,
     };
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    final panelId = warning.panelId;
+    final locatable = panelId != null;
+
+    final row = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 3, right: MechXSpacing.sm),
+          child: CustomPaint(
+            size: const Size(11, 11),
+            painter: SeverityGlyph(kind: glyphKind, color: color),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            warning.message,
+            style: type.caption.copyWith(color: colors.textSecondary),
+          ),
+        ),
+        // A trailing "locate" affordance (a right-pointing caret) on the rows a
+        // tap can navigate — so the drawer reads as actionable, not inert text.
+        if (locatable)
           Padding(
-            padding: const EdgeInsets.only(top: 3, right: MechXSpacing.sm),
+            padding: const EdgeInsets.only(left: MechXSpacing.xs, top: 2),
             child: CustomPaint(
-              size: const Size(11, 11),
-              painter: SeverityGlyph(kind: glyphKind, color: color),
+              size: const Size(9, 11),
+              painter: _LocateCaret(colors.textMuted),
             ),
           ),
-          Expanded(
-            child: Text(
-              warning.message,
-              style: type.caption.copyWith(color: colors.textSecondary),
-            ),
+      ],
+    );
+
+    if (!locatable) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
+        child: row,
+      );
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => widget.onLocate(panelId, warning.circuitId),
+        child: AnimatedContainer(
+          duration: MechXMotion.hover,
+          curve: MechXMotion.standard,
+          padding: const EdgeInsets.symmetric(
+            horizontal: MechXSpacing.xs,
+            vertical: MechXSpacing.xxs + 1,
           ),
-        ],
+          decoration: BoxDecoration(
+            color: _hover ? colors.surfaceHover : const Color(0x00000000),
+            borderRadius: MechXRadii.control,
+          ),
+          child: row,
+        ),
       ),
     );
   }
+}
+
+/// A small right-pointing caret — the "locate" affordance on a tappable Issues
+/// row (ASCII-free glyph, so no tofu risk in any font).
+class _LocateCaret extends CustomPainter {
+  final Color color;
+  const _LocateCaret(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..strokeJoin = StrokeJoin.round
+      ..strokeCap = StrokeCap.round;
+    final w = size.width, h = size.height;
+    canvas.drawPath(
+      Path()
+        ..moveTo(w * 0.3, h * 0.24)
+        ..lineTo(w * 0.72, h * 0.5)
+        ..lineTo(w * 0.3, h * 0.76),
+      p,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_LocateCaret old) => old.color != color;
 }

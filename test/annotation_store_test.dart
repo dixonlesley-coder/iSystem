@@ -1,9 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/annotation_store.dart';
+import 'package:mechx/store/history_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx_engine/network/network.dart' show NodeComponent;
 import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
+import 'package:mechx_engine/units.dart';
 
 void main() {
   test('add ignores a zero-length span and stores real ones', () {
@@ -229,5 +232,343 @@ void main() {
     expect(ok!.floorIndex, 2);
     // Round-trip.
     expect(Measurement.fromJson(ok.toJson())!.toJson(), ok.toJson());
+  });
+
+  // ── B3: annotation undo domain ─────────────────────────────────────────────
+
+  test('measurement add records on the global timeline and undoes/redoes', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final m = c.read(measurementsProvider.notifier);
+    final hist = c.read(historyProvider.notifier);
+
+    expect(hist.canUndo, isFalse);
+    m.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 30, by: 40);
+    expect(c.read(measurementsProvider), hasLength(1));
+    expect(hist.canUndo, isTrue);
+
+    hist.undo();
+    expect(c.read(measurementsProvider), isEmpty);
+    hist.redo();
+    expect(c.read(measurementsProvider), hasLength(1));
+  });
+
+  test('a degenerate (ignored) add records nothing — no phantom undo step', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final m = c.read(measurementsProvider.notifier);
+    // Zero-length span is ignored by add() ⇒ it must not push an undo step.
+    m.add(sheetId: 's1', floorIndex: 0, ax: 5, ay: 5, bx: 5, by: 5);
+    expect(c.read(measurementsProvider), isEmpty);
+    expect(c.read(historyProvider.notifier).canUndo, isFalse);
+  });
+
+  test('room delete is undoable — Ctrl+Z restores the room with its edits', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final r = c.read(roomAreasProvider.notifier);
+    final hist = c.read(historyProvider.notifier);
+
+    r.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+    final id = c.read(roomAreasProvider).single.id;
+    // Minutes-of-input configuration — an edit is its own undo step.
+    r.setRoomType(id, RoomType.commercialKitchen);
+    r.setCeiling(id, 4.0);
+    final configured = c.read(roomAreasProvider).single;
+    expect(configured.roomType, RoomType.commercialKitchen);
+    expect(configured.ceilingHeightM, 4.0);
+
+    // The data-loss trap: delete it.
+    r.removeById(id);
+    expect(c.read(roomAreasProvider), isEmpty);
+
+    // One undo restores the deleted room, its configured properties intact.
+    hist.undo();
+    final restored = c.read(roomAreasProvider).single;
+    expect(restored.id, id);
+    expect(restored.roomType, RoomType.commercialKitchen);
+    expect(restored.ceilingHeightM, 4.0);
+
+    // The prior undo step (setCeiling) still reverts independently.
+    hist.undo();
+    expect(c.read(roomAreasProvider).single.ceilingHeightM, 3.0);
+  });
+
+  test('tank delete is undoable — restores the deleted tank + capacity', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final t = c.read(tankAreasProvider.notifier);
+    final hist = c.read(historyProvider.notifier);
+
+    t.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+    final id = c.read(tankAreasProvider).single.id;
+    t.setDepth(id, 3.0);
+    expect(c.read(tankAreasProvider).single.volumeM3(0.01), closeTo(6.0, 1e-9));
+
+    t.removeById(id);
+    expect(c.read(tankAreasProvider), isEmpty);
+
+    hist.undo();
+    final restored = c.read(tankAreasProvider).single;
+    expect(restored.id, id);
+    expect(restored.volumeM3(0.01), closeTo(6.0, 1e-9)); // depth edit intact
+  });
+
+  test('the three lists share ONE stack; newest-first undo across them', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final t = c.read(tankAreasProvider.notifier);
+    final r = c.read(roomAreasProvider.notifier);
+    final hist = c.read(historyProvider.notifier);
+
+    t.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+    r.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+
+    // Newest edit is the room add — one undo reverts IT, tank untouched.
+    hist.undo();
+    expect(c.read(roomAreasProvider), isEmpty);
+    expect(c.read(tankAreasProvider), hasLength(1));
+    // Next undo reverts the tank add.
+    hist.undo();
+    expect(c.read(tankAreasProvider), isEmpty);
+  });
+
+  test('annotation shares the global timeline with other domains', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final proj = c.read(projectControllerProvider.notifier);
+    final tanks = c.read(tankAreasProvider.notifier);
+    final hist = c.read(historyProvider.notifier);
+
+    proj.setFloorHeight(0, const Length(2.0));
+    tanks.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+
+    // Newest edit is the tank add — undo reverts it, leaving the floor height,
+    // and the FOLLOWING undo reverts the (older) project edit. This exercises
+    // history_store's `_revert(UndoDomain.annotation, …)` branch end-to-end.
+    hist.undo();
+    expect(c.read(tankAreasProvider), isEmpty);
+    expect(c.read(projectControllerProvider).floors.first.height.meters, 2.0);
+    hist.undo();
+    expect(c.read(projectControllerProvider).floors.first.height.meters, 4.0);
+  });
+
+  test('load path (set) never records — no phantom undo across a project load',
+      () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final hist = c.read(historyProvider.notifier);
+
+    // Mirror applyDocument: replace each list wholesale (the load path).
+    c.read(measurementsProvider.notifier).set(const [
+      Measurement(
+          id: 'm5', sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 1, by: 1),
+    ]);
+    c.read(tankAreasProvider.notifier).set(const [
+      TankArea(
+          id: 't2', sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100),
+    ]);
+    c.read(roomAreasProvider.notifier).set(const [
+      RoomArea(
+          id: 'r3', sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100),
+    ]);
+
+    expect(c.read(measurementsProvider), hasLength(1));
+    expect(c.read(tankAreasProvider), hasLength(1));
+    expect(c.read(roomAreasProvider), hasLength(1));
+    // The load populated state but recorded NOTHING on the timeline.
+    expect(hist.canUndo, isFalse);
+    expect(hist.canRedo, isFalse);
+    expect(c.read(annotationHistoryProvider.notifier).canUndo, isFalse);
+  });
+
+  test('history reset clears the annotation stack (fresh baseline on load)', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final r = c.read(roomAreasProvider.notifier);
+    final anno = c.read(annotationHistoryProvider.notifier);
+
+    r.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+    expect(anno.canUndo, isTrue);
+
+    // A document open/restore resets the global timeline; that also drops the
+    // annotation coordinator's shared stack.
+    c.read(historyProvider.notifier).reset();
+    expect(anno.canUndo, isFalse);
+    expect(anno.canRedo, isFalse);
+  });
+
+  // ── E6: first-class rooms/tanks (move/resize on the annotation undo domain) ──
+
+  test('E6: a room MOVE drag collapses to exactly ONE undo step', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final r = c.read(roomAreasProvider.notifier);
+    final hist = c.read(historyProvider.notifier);
+
+    r.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+    final id = c.read(roomAreasProvider).single.id;
+
+    // Simulate one drag: the overlay snapshots ONCE on first movement, then
+    // streams many live (non-recording) setBounds calls (onPanUpdate).
+    r.beginGeometryEdit();
+    r.setBounds(id, 10, 10, 210, 110);
+    r.setBounds(id, 20, 20, 220, 120);
+    r.setBounds(id, 50, 50, 250, 150);
+    var room = c.read(roomAreasProvider).single;
+    expect(room.ax, 50);
+    expect(room.ay, 50);
+    expect(room.bx, 250);
+    expect(room.by, 150);
+
+    // ONE undo reverts the WHOLE drag back to the pre-drag footprint (not just
+    // the last increment).
+    hist.undo();
+    room = c.read(roomAreasProvider).single;
+    expect(room.ax, 0);
+    expect(room.ay, 0);
+    expect(room.bx, 200);
+    expect(room.by, 100);
+
+    // The next undo reverts the add — proving the drag was exactly one step.
+    hist.undo();
+    expect(c.read(roomAreasProvider), isEmpty);
+
+    // Redo replays the drag as one step.
+    hist.redo(); // re-add
+    hist.redo(); // re-drag
+    expect(c.read(roomAreasProvider).single.ax, 50);
+  });
+
+  test('E6: a tank corner RESIZE drag collapses to exactly ONE undo step', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final t = c.read(tankAreasProvider.notifier);
+    final hist = c.read(historyProvider.notifier);
+
+    t.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+    final id = c.read(tankAreasProvider).single.id;
+
+    // Drag the bottom-right corner out (bx grows) across several frames.
+    t.beginGeometryEdit();
+    t.setBounds(id, 0, 0, 300, 150);
+    t.setBounds(id, 0, 0, 400, 200);
+    expect(c.read(tankAreasProvider).single.bx, 400);
+    expect(c.read(tankAreasProvider).single.by, 200);
+
+    hist.undo();
+    final back = c.read(tankAreasProvider).single;
+    expect(back.bx, 200); // original corner restored in one step
+    expect(back.by, 100);
+  });
+
+  test('E6: containsPoint hit-tests the footprint (sheet/floor scoped)', () {
+    const room = RoomArea(
+        id: 'r0', sheetId: 's1', floorIndex: 0, ax: 10, ay: 10, bx: 60, by: 40);
+    expect(room.containsPoint('s1', 0, 30, 20), isTrue);
+    expect(room.containsPoint('s1', 0, 5, 20), isFalse); // outside x
+    expect(room.containsPoint('s2', 0, 30, 20), isFalse); // other sheet
+    expect(room.containsPoint('s1', 1, 30, 20), isFalse); // other floor
+    // Unnormalized corners (bx < ax) still hit-test correctly.
+    const flipped = TankArea(
+        id: 't0', sheetId: 's1', floorIndex: 0, ax: 60, ay: 40, bx: 10, by: 10);
+    expect(flipped.containsPoint('s1', 0, 30, 20), isTrue);
+  });
+
+  test('E6: selectedAnnotation selects room/tank and clears conditionally', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final sel = c.read(selectedAnnotationProvider.notifier);
+    expect(c.read(selectedAnnotationProvider), isNull); // byte-identical default
+
+    sel.selectRoom('r0');
+    expect(c.read(selectedAnnotationProvider),
+        const SelectedAnnotation(AnnotationKind.room, 'r0'));
+    sel.selectTank('t0');
+    expect(c.read(selectedAnnotationProvider)!.kind, AnnotationKind.tank);
+
+    // clear(id) only clears when id matches the current selection.
+    sel.clear('nope');
+    expect(c.read(selectedAnnotationProvider), isNotNull);
+    sel.clear('t0');
+    expect(c.read(selectedAnnotationProvider), isNull);
+
+    // clear() with no id clears unconditionally.
+    sel.selectRoom('r9');
+    sel.clear();
+    expect(c.read(selectedAnnotationProvider), isNull);
+  });
+
+  // ── E7: room/tank names ─────────────────────────────────────────────────────
+
+  test('E7: rooms get sequential names; rename via setName; name round-trips',
+      () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final r = c.read(roomAreasProvider.notifier);
+
+    r.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+    r.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+    final rooms = c.read(roomAreasProvider);
+    // Distinct default names so a 20-AHU schedule never lists a wall of 'Room'.
+    expect(rooms[0].name, 'Room 1');
+    expect(rooms[1].name, 'Room 2');
+
+    // Rename is its own undo step (the dead setter is now wired to the field).
+    r.setName(rooms[0].id, 'Lobby AHU');
+    final renamed = c.read(roomAreasProvider).first;
+    expect(renamed.name, 'Lobby AHU');
+
+    // Persistence keeps the name (already threaded through project_document via
+    // RoomArea.toJson/fromJson).
+    final back = RoomArea.fromJson(renamed.toJson())!;
+    expect(back.name, 'Lobby AHU');
+    expect(back.toJson(), renamed.toJson());
+
+    // Undo reverts the rename back to the sequential default.
+    c.read(historyProvider.notifier).undo();
+    expect(c.read(roomAreasProvider).first.name, 'Room 1');
+  });
+
+  test('E7: tanks get sequential names + name round-trips', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final t = c.read(tankAreasProvider.notifier);
+
+    t.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+    t.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
+    final tanks = c.read(tankAreasProvider);
+    expect(tanks[0].name, 'Tank 1');
+    expect(tanks[1].name, 'Tank 2');
+
+    t.setName(tanks[0].id, 'Ground reservoir');
+    final back =
+        TankArea.fromJson(c.read(tankAreasProvider).first.toJson())!;
+    expect(back.name, 'Ground reservoir');
+  });
+
+  test('E7: an old file without a name decodes to the default (byte-identical)',
+      () {
+    // A pre-E7 `.mechx` (no `name` key) is tolerant → the default name applies.
+    final room = RoomArea.fromJson({
+      'id': 'r1',
+      'sheetId': 's1',
+      'floor': 0,
+      'ax': 0,
+      'ay': 0,
+      'bx': 10,
+      'by': 20,
+    })!;
+    expect(room.name, 'Room');
+    final tank = TankArea.fromJson({
+      'id': 't1',
+      'sheetId': 's1',
+      'floor': 0,
+      'ax': 0,
+      'ay': 0,
+      'bx': 10,
+      'by': 20,
+    })!;
+    expect(tank.name, 'Tank');
   });
 }

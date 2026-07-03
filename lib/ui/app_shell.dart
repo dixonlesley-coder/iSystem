@@ -47,35 +47,73 @@ import 'widgets/severity_glyph.dart';
 /// slim top bar · body · status-bar column. The rail picks the [ShellSection];
 /// the body is the workspace (Plan / Schematic / Electrical) or a hub/screen.
 /// No Material Scaffold — a restrained, custom shell (§4).
-class AppShell extends ConsumerWidget {
+class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key});
 
-  /// Global hotkey handler, mounted as a non-focus-stealing ancestor [Focus]
-  /// (see [build]). Key events bubble UP from the focused canvas/field to this
-  /// node, so Ctrl/Cmd+K opens the command palette without grabbing focus from
-  /// in-canvas editing. Esc closes the palette when it's open.
-  KeyEventResult _onKey(BuildContext context, WidgetRef ref, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+  @override
+  ConsumerState<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends ConsumerState<AppShell> {
+  @override
+  void initState() {
+    super.initState();
+    // Focus-independent shell hotkeys (I1): a raw [HardwareKeyboard] handler
+    // runs BEFORE focus dispatch, so Ctrl/Cmd+K / S / Shift+S / O work on
+    // every screen — Projects / Review / Commercial / Building / Preferences
+    // and the Riser view, where nothing holds focus and a bubble-phase Focus
+    // ancestor never sees the keys.
+    HardwareKeyboard.instance.addHandler(_onHardwareKey);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
+    super.dispose();
+  }
+
+  /// Handles ONLY the four global combos (Ctrl/Cmd+K, S, Shift+S, O).
+  /// Returns true when consumed so the focus system doesn't double-dispatch
+  /// the event to a focused canvas/field; everything else returns false and
+  /// flows through the normal focus chain untouched.
+  bool _onHardwareKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
     final key = event.logicalKey;
     final mod = HardwareKeyboard.instance.isControlPressed ||
         HardwareKeyboard.instance.isMetaPressed;
-    if (mod && key == LogicalKeyboardKey.keyK) {
+    if (!mod) return false;
+    // This handler is pre-focus and process-global, so it must stand down when
+    // a modal route (a dialog / file picker) is on top of the shell — otherwise
+    // Ctrl+O could stack a second confirm dialog over the first, or Ctrl+K
+    // would toggle the palette behind the barrier. Only act when the shell's
+    // own route is the current one.
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) return false;
+    if (key == LogicalKeyboardKey.keyK) {
       ref.read(commandPaletteOpenProvider.notifier).toggle();
-      return KeyEventResult.handled;
+      return true;
     }
     // Document-app save/open conventions: Ctrl/Cmd+S saves in place (Shift
     // forces Save-As), Ctrl/Cmd+O opens — matching every desktop authoring
     // tool a CAD engineer is trained on. Open guards unsaved work, so it needs
     // the shell context to host the confirm dialog.
-    if (mod && key == LogicalKeyboardKey.keyS) {
+    if (key == LogicalKeyboardKey.keyS) {
       saveProject(ref, saveAs: HardwareKeyboard.instance.isShiftPressed);
-      return KeyEventResult.handled;
+      return true;
     }
-    if (mod && key == LogicalKeyboardKey.keyO) {
+    if (key == LogicalKeyboardKey.keyO) {
       openProject(context, ref);
-      return KeyEventResult.handled;
+      return true;
     }
-    if (key == LogicalKeyboardKey.escape &&
+    return false;
+  }
+
+  /// Bubble-phase Esc handler (kept as a non-focus-stealing ancestor [Focus]):
+  /// closes the command palette when it's open. The global combos moved to
+  /// [_onHardwareKey] — they must not also be handled here, or one keypress
+  /// would dispatch twice.
+  KeyEventResult _onKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.escape &&
         ref.read(commandPaletteOpenProvider)) {
       ref.read(commandPaletteOpenProvider.notifier).close();
       return KeyEventResult.handled;
@@ -84,7 +122,7 @@ class AppShell extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final colors = context.colors;
     // First-auto-size nudge (J2): fires once per session, the moment the live
     // sizing solve goes from empty to non-empty. Note: OPENING a project whose
@@ -101,11 +139,11 @@ class AppShell extends ConsumerWidget {
     // overlays (each renders nothing when idle).
     return Focus(
       // A bubble-phase listener high in the tree: it never requests focus
-      // itself, so it doesn't disturb in-canvas editing — Ctrl/Cmd+K bubbles up
-      // here when the focused descendant ignores it.
+      // itself, so it doesn't disturb in-canvas editing — Esc bubbles up here
+      // when the focused descendant ignores it.
       canRequestFocus: false,
       skipTraversal: true,
-      onKeyEvent: (_, event) => _onKey(context, ref, event),
+      onKeyEvent: (_, event) => _onKey(event),
       child: Stack(
         children: [
           ColoredBox(
@@ -186,20 +224,26 @@ class _DesignWorkspace extends ConsumerWidget {
     final Widget canvas = view == WorkspaceView.schematic
         ? const SchematicView()
         : const LayoutCanvas();
-    // Layer-aware inspector (collapsible): the electrical Loads palette when
-    // Electrical is the active Layout layer, else the mechanical DRAW/project
-    // inspector. Schematic always shows the project inspector.
+    // Workspace-scoped inspector (collapsible), keyed on the active view (F1):
+    //  · RISER (schematic) → a lean riser-relevant column (Building + feed
+    //    strategy + a pointer to the on-canvas Auto/Edit riser tools), NOT the
+    //    plan's DRAW inspector whose tools mutate the Layout canvas you can't
+    //    see from here.
+    //  · Layout + Electrical layer active → the electrical Loads palette.
+    //  · Layout + a mechanical layer → the mechanical DRAW/project inspector.
     final active = ref.watch(activeDisciplineProvider);
-    final Widget inspector =
-        view != WorkspaceView.schematic && active == DisciplineLayer.electrical
-            ? const CollapsibleInspector(
-                expandedWidth: ProjectPanel.width,
-                child: _ElectricalInspectorColumn(),
-              )
-            : const CollapsibleInspector(
-                expandedWidth: ProjectPanel.width,
-                child: ProjectPanel(),
-              );
+    final Widget inspectorChild;
+    if (view == WorkspaceView.schematic) {
+      inspectorChild = const _RiserInspectorColumn();
+    } else if (active == DisciplineLayer.electrical) {
+      inspectorChild = const _ElectricalInspectorColumn();
+    } else {
+      inspectorChild = const ProjectPanel();
+    }
+    final Widget inspector = CollapsibleInspector(
+      expandedWidth: ProjectPanel.width,
+      child: inspectorChild,
+    );
     // Liquid Glass: the sheet rail + inspector are translucent glass that floats
     // over a full-bleed CANVAS-coloured backdrop (painted behind the whole
     // workspace), so the chrome frosts the canvas tone — distinct from the
@@ -248,6 +292,133 @@ class _ElectricalInspectorColumn extends StatelessWidget {
   }
 }
 
+/// The right inspector shown on the RISER (Schematic) workspace (F1). A lean,
+/// riser-relevant column — the building context, the feed strategy that drives
+/// the riser's function tags (gravity vs booster), and a pointer to the
+/// on-canvas Auto/Edit riser tools — instead of the plan's DRAW inspector
+/// (whose tools + palette mutate the Layout canvas, invisible from here).
+class _RiserInspectorColumn extends ConsumerWidget {
+  const _RiserInspectorColumn();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final building = ref.watch(projectControllerProvider).building;
+    final strategy = ref.watch(feedStrategyProvider);
+    return SizedBox(
+      width: ProjectPanel.width,
+      // Transparent: floats on the CollapsibleInspector's Liquid-Glass surface.
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(MechXSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Riser',
+                style: type.subtitle.copyWith(color: colors.textPrimary)),
+            const SizedBox(height: MechXSpacing.md),
+            // Building context (levels/height) → opens the Building page.
+            Text('Building',
+                style: type.caption.copyWith(color: colors.textMuted)),
+            const SizedBox(height: MechXSpacing.xs),
+            _RiserSummaryCard(
+              summary:
+                  '${building.totalHeight.meters.toStringAsFixed(1)} m · '
+                  '${building.levelCount} levels',
+              onOpen: () => ref
+                  .read(shellSectionProvider.notifier)
+                  .set(ShellSection.building),
+            ),
+            const SizedBox(height: MechXSpacing.lg),
+            // Feed strategy — the input that decides each riser's function tag
+            // (gravity downfeed vs upfeed/booster) on the diagram.
+            Text('Feed strategy',
+                style: type.caption.copyWith(color: colors.textMuted)),
+            const SizedBox(height: MechXSpacing.xs),
+            MechXButton(
+              label: 'Upfeed pump',
+              primary: strategy == FeedStrategy.upfeed,
+              onPressed: () =>
+                  ref.read(feedStrategyProvider.notifier).set(FeedStrategy.upfeed),
+            ),
+            const SizedBox(height: MechXSpacing.xs),
+            MechXButton(
+              label: 'Roof-tank downfeed',
+              primary: strategy == FeedStrategy.downfeed,
+              onPressed: () => ref
+                  .read(feedStrategyProvider.notifier)
+                  .set(FeedStrategy.downfeed),
+            ),
+            const SizedBox(height: MechXSpacing.lg),
+            Text(
+              'Place, move and size risers on the canvas — switch Auto '
+              '(read-only diagram) and Edit on the toolbar above.',
+              style: type.caption.copyWith(color: colors.textMuted),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A tappable summary card (levels/height) that opens the Building page — the
+/// riser inspector's own copy of the plan inspector's building summary.
+class _RiserSummaryCard extends StatefulWidget {
+  final String summary;
+  final VoidCallback onOpen;
+  const _RiserSummaryCard({required this.summary, required this.onOpen});
+
+  @override
+  State<_RiserSummaryCard> createState() => _RiserSummaryCardState();
+}
+
+class _RiserSummaryCardState extends State<_RiserSummaryCard> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MechXFocusRing(
+      borderRadius: MechXRadii.control,
+      onActivated: widget.onOpen,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onOpen,
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            padding: const EdgeInsets.all(MechXSpacing.sm),
+            decoration: BoxDecoration(
+              color: _hover ? colors.surfaceHover : colors.background,
+              borderRadius: MechXRadii.control,
+              border: Border.all(
+                  color: _hover ? colors.textMuted : colors.border),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(widget.summary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: type.body.copyWith(color: colors.textSecondary)),
+                ),
+                const SizedBox(width: MechXSpacing.xs),
+                Text('Edit',
+                    style: type.caption.copyWith(color: colors.accent)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _TopBar extends ConsumerWidget {
   const _TopBar();
 
@@ -263,8 +434,17 @@ class _TopBar extends ConsumerWidget {
     final fileName =
         currentPath?.split(Platform.pathSeparator).last;
 
+    // J3: the zoom pill reflects the Layout sheet's viewport — the only zoom
+    // this bar can read truthfully. On the Riser/Electrical workspaces (whose
+    // real zoom lives in their own canvases) and on non-design screens, show
+    // '—' rather than a stale, shared Layout number.
+    final section = ref.watch(shellSectionProvider);
+    final view = ref.watch(workspaceViewProvider);
+    final onLayout =
+        section == ShellSection.design && view == WorkspaceView.plan;
     final current = state.current;
-    final vt = current == null ? null : state.viewportFor(current.id);
+    final vt =
+        (onLayout && current != null) ? state.viewportFor(current.id) : null;
     final zoom = vt == null ? '—' : '${(vt.scale * 100).round()}%';
 
     return GlassSurface(
@@ -815,7 +995,9 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
 
   Future<void> _discard() async {
     _confirmTimer?.cancel();
-    await clearRecovery();
+    // Clear the snapshot's OWN per-project slot (not a stale global default);
+    // falls back to the untitled slot when the path is unknown.
+    await clearRecovery(path: ref.read(recoveryDocProvider)?.recoveryPath);
     ref.read(recoveryDocProvider.notifier).clear();
   }
 
@@ -824,6 +1006,10 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
     final snapshot = ref.watch(recoveryDocProvider);
     final colors = context.colors;
     final type = context.type;
+    // A snapshot record with a null doc = the file exists but could not be
+    // decoded (torn by an interrupted write). Surfaced distinctly — it can't
+    // be restored, but it must never masquerade as a clean exit.
+    final doc = snapshot?.doc;
 
     return _AnimatedBanner(
       child: snapshot == null
@@ -840,26 +1026,45 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
                 children: [
                   Expanded(
                     child: Text(
-                      context.strings.format(StringKey.shellRecoverPrompt, {
-                        'name': snapshot.doc.projectName,
-                        'when': _recoveryWhen(context, snapshot.savedAt),
-                      }),
+                      doc == null
+                          ? 'A recovery snapshot from the previous session '
+                              'exists but could not be read - it was likely '
+                              'torn by an interrupted write and cannot be '
+                              'restored.'
+                          : context.strings
+                              .format(StringKey.shellRecoverPrompt, {
+                              'name': doc.projectName,
+                              'when': _recoveryWhen(context, snapshot.savedAt),
+                            }),
                       style: type.caption.copyWith(color: colors.textPrimary),
                     ),
                   ),
-                  MechXButton(
-                    label: context.strings(StringKey.shellRestore),
-                    primary: true,
-                    onPressed: () {
-                      // Restore the full snapshot (drawing + settings). We
-                      // deliberately do NOT mark it as the clean baseline:
-                      // recovered work is still unsaved, so autosave should keep
-                      // mirroring it after dismiss. (Recovery snapshots embed no
-                      // assets, so rehydrate is a no-op here — kept for symmetry.)
-                      applyDocument(ref.read, rehydrateAssets(snapshot.doc));
-                      _discard();
-                    },
-                  ),
+                  if (doc != null)
+                    MechXButton(
+                      label: context.strings(StringKey.shellRestore),
+                      primary: true,
+                      onPressed: () {
+                        // Restore the full snapshot (drawing + settings). We
+                        // deliberately do NOT mark it as the clean baseline:
+                        // recovered work is still unsaved, so autosave should keep
+                        // mirroring it after dismiss. (Recovery snapshots embed no
+                        // assets, so rehydrate is a no-op here — kept for symmetry.)
+                        applyDocument(ref.read, rehydrateAssets(doc));
+                        // Re-link the file identity so the next Ctrl+S saves back
+                        // to the source `.mechx` (not a Save-As fork) — when the
+                        // file still exists. B2. (snapshot is promoted non-null
+                        // inside this branch.)
+                        final src = snapshot.sourcePath;
+                        if (src != null &&
+                            src.isNotEmpty &&
+                            File(src).existsSync()) {
+                          ref
+                              .read(currentProjectPathProvider.notifier)
+                              .set(src);
+                        }
+                        _discard();
+                      },
+                    ),
                   const SizedBox(width: MechXSpacing.sm),
                   MechXButton(
                     key: const ValueKey('recovery-discard'),

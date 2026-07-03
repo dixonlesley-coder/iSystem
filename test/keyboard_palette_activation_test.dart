@@ -54,6 +54,10 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    // Production launches with NO sheets (A1); a palette drop targets the
+    // current sheet's centre, so seed the demo sheets first.
+    seedDemoSheets(container);
+    await tester.pump();
     Network net() => container.read(networkControllerProvider).network;
     expect(net().nodes, isEmpty);
 
@@ -79,6 +83,10 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+    // Production launches with NO sheets (A1); seed the demo sheets so the
+    // keyboard-activated cards have a current sheet to drop their nodes onto.
+    seedDemoSheets(container);
+    await tester.pump();
     Network net() => container.read(networkControllerProvider).network;
 
     await _focusAndActivate(tester, 'Terminal');

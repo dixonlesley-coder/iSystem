@@ -59,6 +59,87 @@ void main() {
       n.cancel();
       expect(c.read(calibrationControllerProvider).phase, CalibrationPhase.idle);
     });
+
+    // ── D3: back-step, re-place, phase scoping ────────────────────────────────
+
+    test('isEnteringDistance is true ONLY in the distance-entry phase', () {
+      final c = makeContainer();
+      final n = c.read(calibrationControllerProvider.notifier);
+      expect(c.read(calibrationControllerProvider).isEnteringDistance, isFalse);
+      n.start();
+      expect(c.read(calibrationControllerProvider).isEnteringDistance, isFalse);
+      n.addWorldPoint(const Offset(0, 0));
+      expect(c.read(calibrationControllerProvider).isEnteringDistance, isFalse);
+      n.addWorldPoint(const Offset(0, 200));
+      expect(c.read(calibrationControllerProvider).isEnteringDistance, isTrue);
+    });
+
+    test('back() steps one point back without a full restart', () {
+      final c = makeContainer();
+      final n = c.read(calibrationControllerProvider.notifier);
+      n.start();
+      n.addWorldPoint(const Offset(0, 0));
+      n.addWorldPoint(const Offset(0, 200));
+      expect(c.read(calibrationControllerProvider).phase,
+          CalibrationPhase.awaitingDistance);
+
+      // Drop the second point → back to awaiting the second, first preserved.
+      n.back();
+      var s = c.read(calibrationControllerProvider);
+      expect(s.phase, CalibrationPhase.awaitingSecond);
+      expect(s.first, const Offset(0, 0));
+      expect(s.second, isNull);
+
+      // Drop the first point → back to awaiting the first (both cleared).
+      n.back();
+      s = c.read(calibrationControllerProvider);
+      expect(s.phase, CalibrationPhase.awaitingFirst);
+      expect(s.first, isNull);
+
+      // A further back() at the first phase is a no-op.
+      n.back();
+      expect(c.read(calibrationControllerProvider).phase,
+          CalibrationPhase.awaitingFirst);
+    });
+
+    test('a tap within snapRadius of a marker re-places it, not advances', () {
+      final c = makeContainer();
+      final n = c.read(calibrationControllerProvider.notifier);
+      n.start();
+      n.addWorldPoint(const Offset(0, 0));
+      // A near tap re-places the FIRST marker (stays in awaitingSecond).
+      n.addWorldPoint(const Offset(3, 0), snapRadius: 5);
+      var s = c.read(calibrationControllerProvider);
+      expect(s.phase, CalibrationPhase.awaitingSecond);
+      expect(s.first, const Offset(3, 0));
+
+      // A far tap places the second point and advances.
+      n.addWorldPoint(const Offset(0, 200), snapRadius: 5);
+      s = c.read(calibrationControllerProvider);
+      expect(s.phase, CalibrationPhase.awaitingDistance);
+      expect(s.second, const Offset(0, 200));
+
+      // In the distance phase, a near tap re-places the nearest marker (here
+      // the second), keeping the phase — a misclick fix, not a restart.
+      n.addWorldPoint(const Offset(2, 200), snapRadius: 5);
+      s = c.read(calibrationControllerProvider);
+      expect(s.phase, CalibrationPhase.awaitingDistance);
+      expect(s.second, const Offset(2, 200));
+      expect(s.first, const Offset(3, 0));
+    });
+
+    test('re-place picks the nearest marker when both are in range', () {
+      final c = makeContainer();
+      final n = c.read(calibrationControllerProvider.notifier);
+      n.start();
+      n.addWorldPoint(const Offset(0, 0));
+      n.addWorldPoint(const Offset(10, 0));
+      // A tap at x=7 is nearer the second (10) than the first (0).
+      n.addWorldPoint(const Offset(7, 0), snapRadius: 100);
+      final s = c.read(calibrationControllerProvider);
+      expect(s.first, const Offset(0, 0)); // untouched
+      expect(s.second, const Offset(7, 0)); // nearer marker moved
+    });
   });
 
   testWidgets('calibrate tool: button → overlay → two taps → distance card',
@@ -66,6 +147,15 @@ void main() {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump(); // first-layout fit
+
+    // Production launches with NO sheets (A1); calibration needs a drawable
+    // sheet, so seed the demo sheets before starting the calibrate flow.
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    seedDemoSheets(container);
+    await tester.pump();
 
     await tester.ensureVisible(find.text('Calibrate scale'));
     await tester.tap(find.text('Calibrate scale'));

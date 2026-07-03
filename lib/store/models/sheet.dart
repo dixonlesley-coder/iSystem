@@ -41,6 +41,7 @@ class Sheet {
   bool get isPlaceholder => pdfPath == null && dxfPath == null;
 
   Sheet copyWith({
+    String? id,
     String? name,
     String? pdfPath,
     String? dxfPath,
@@ -49,7 +50,7 @@ class Sheet {
     Size? sizePx,
   }) =>
       Sheet(
-        id: id,
+        id: id ?? this.id,
         name: name ?? this.name,
         pdfPath: pdfPath ?? this.pdfPath,
         dxfPath: dxfPath ?? this.dxfPath,

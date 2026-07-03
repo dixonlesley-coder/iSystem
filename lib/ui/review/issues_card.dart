@@ -80,6 +80,21 @@ class IssuesCard extends ConsumerWidget {
     final infos =
         issues.where((i) => i.severity == IssueSeverity.info).toList();
 
+    // H1 — advisory acknowledgement. An acknowledged advisory drops out of the
+    // OPEN "Advisory" group into an "Acknowledged" group (still visible, still
+    // in the report), and no longer blocks the PASS verdict. Only info-severity
+    // rows are acknowledgeable; warnings/criticals always block.
+    final acknowledged = ref.watch(acknowledgedIssuesProvider);
+    final ackCtrl = ref.read(acknowledgedIssuesProvider.notifier);
+    final openInfos =
+        infos.where((i) => !acknowledged.contains(i.key)).toList();
+    final ackInfos =
+        infos.where((i) => acknowledged.contains(i.key)).toList();
+    final openAckableKeys = [
+      for (final i in openInfos)
+        if (i.isAcknowledgeable) i.key,
+    ];
+
     void locate(DesignIssue issue) {
       final loc = issue.locate;
       if (loc == null) return;
@@ -90,7 +105,11 @@ class IssuesCard extends ConsumerWidget {
       if (loc.panelId != null) {
         ref.read(shellSectionProvider.notifier).set(ShellSection.design);
         ref.read(workspaceViewProvider.notifier).set(WorkspaceView.electrical);
-        ref.read(electricalFocusProvider.notifier).request(loc.panelId!);
+        // H7: forward the specific circuit (way) too, so the jump selects the
+        // exact way row — not just the board.
+        ref
+            .read(electricalFocusProvider.notifier)
+            .request(loc.panelId!, circuitId: loc.circuitId);
         return;
       }
       ref.read(sheetsControllerProvider.notifier).selectSheetById(loc.sheetId);
@@ -166,15 +185,67 @@ class IssuesCard extends ConsumerWidget {
             const SizedBox(height: MechXSpacing.sm),
             _GroupLabel('Warnings', warnings.length),
             for (final i in warnings)
-              _IssueRow(issue: i, onTap: i.isLocatable ? () => locate(i) : null),
+              _IssueRow(
+                  issue: i, onTap: i.isLocatable ? () => locate(i) : null),
           ],
-          if (infos.isNotEmpty) ...[
+          if (openInfos.isNotEmpty) ...[
             const SizedBox(height: MechXSpacing.sm),
-            _GroupLabel('Advisory', infos.length),
-            for (final i in infos)
-              _IssueRow(issue: i, onTap: i.isLocatable ? () => locate(i) : null),
+            Row(
+              children: [
+                Expanded(child: _GroupLabel('Advisory', openInfos.length)),
+                // Acknowledge every open advisory at once — the fast path to a
+                // reachable PASS once the engineer has reviewed the register.
+                if (openAckableKeys.isNotEmpty)
+                  _AckAction(
+                    label: 'Acknowledge all',
+                    onTap: () => ackCtrl.acknowledgeAll(openAckableKeys),
+                  ),
+              ],
+            ),
+            for (final i in openInfos)
+              _IssueRow(
+                issue: i,
+                onTap: i.isLocatable ? () => locate(i) : null,
+                ackLabel: i.isAcknowledgeable ? 'Acknowledge' : null,
+                onAck:
+                    i.isAcknowledgeable ? () => ackCtrl.acknowledge(i.key) : null,
+              ),
+          ],
+          if (ackInfos.isNotEmpty) ...[
+            const SizedBox(height: MechXSpacing.sm),
+            _GroupLabel('Acknowledged', ackInfos.length),
+            for (final i in ackInfos)
+              _IssueRow(
+                issue: i,
+                onTap: i.isLocatable ? () => locate(i) : null,
+                muted: true,
+                ackLabel: 'Undo',
+                onAck: () => ackCtrl.unacknowledge(i.key),
+              ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// A small tappable accent text action (Acknowledge / Undo / Acknowledge all).
+class _AckAction extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _AckAction({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Text(label,
+            style: type.caption.copyWith(color: colors.accent)),
       ),
     );
   }
@@ -237,7 +308,23 @@ class _GroupLabel extends StatelessWidget {
 class _IssueRow extends StatelessWidget {
   final DesignIssue issue;
   final VoidCallback? onTap;
-  const _IssueRow({required this.issue, this.onTap});
+
+  /// H1 — the acknowledge/undo affordance for an advisory row. Rendered as a
+  /// separate trailing tappable text ([ackLabel]) so it doesn't collide with the
+  /// whole-row locate tap.
+  final String? ackLabel;
+  final VoidCallback? onAck;
+
+  /// True for an already-acknowledged row: dimmed so it reads as resolved.
+  final bool muted;
+
+  const _IssueRow({
+    required this.issue,
+    this.onTap,
+    this.ackLabel,
+    this.onAck,
+    this.muted = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -245,9 +332,13 @@ class _IssueRow extends StatelessWidget {
     final type = context.type;
     final isCritical = issue.severity == IssueSeverity.critical;
     final isWarning = issue.severity == IssueSeverity.warning || isCritical;
-    final dotColor = isCritical
-        ? colors.danger
-        : (isWarning ? colors.warning : colors.accent);
+    final dotColor = muted
+        ? colors.textMuted
+        : (isCritical
+            ? colors.danger
+            : (isWarning ? colors.warning : colors.accent));
+    final titleColor = muted ? colors.textMuted : colors.textPrimary;
+    final bodyColor = muted ? colors.textMuted : colors.textSecondary;
 
     final row = Padding(
       padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
@@ -256,13 +347,18 @@ class _IssueRow extends StatelessWidget {
         children: [
           // Severity is carried by a glyph (a "!" ring for a warning, an "i"
           // dot-ring for advisory) as well as colour, so it stays legible
-          // without relying on hue alone (redundant cue).
+          // without relying on hue alone (redundant cue). An acknowledged row
+          // shows a check.
           Padding(
             padding: const EdgeInsets.only(top: 2, right: MechXSpacing.sm),
             child: CustomPaint(
               size: const Size(11, 11),
               painter: SeverityGlyph(
-                kind: isWarning ? SeverityGlyphKind.warn : SeverityGlyphKind.info,
+                kind: muted
+                    ? SeverityGlyphKind.check
+                    : (isWarning
+                        ? SeverityGlyphKind.warn
+                        : SeverityGlyphKind.info),
                 color: dotColor,
               ),
             ),
@@ -272,30 +368,35 @@ class _IssueRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(issue.title,
-                    style:
-                        type.caption.copyWith(color: colors.textPrimary)),
+                    style: type.caption.copyWith(color: titleColor)),
                 Text(issue.message,
-                    style:
-                        type.caption.copyWith(color: colors.textSecondary)),
+                    style: type.caption.copyWith(color: bodyColor)),
               ],
             ),
           ),
           if (onTap != null)
             Padding(
               padding: const EdgeInsets.only(left: MechXSpacing.sm, top: 1),
-              child: Text('Locate',
-                  style: type.caption.copyWith(color: colors.accent)),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onTap,
+                  child: Text('Locate',
+                      style: type.caption.copyWith(color: colors.accent)),
+                ),
+              ),
+            ),
+          if (ackLabel != null && onAck != null)
+            Padding(
+              padding: const EdgeInsets.only(left: MechXSpacing.sm, top: 1),
+              child: _AckAction(label: ackLabel!, onTap: onAck!),
             ),
         ],
       ),
     );
 
-    if (onTap == null) return row;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: row,
-    );
+    return row;
   }
 }
 

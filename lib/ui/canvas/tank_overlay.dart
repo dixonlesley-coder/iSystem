@@ -8,11 +8,17 @@ import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import 'viewport.dart';
 
+/// What a live pointer drag on the tank overlay is doing (E6): drawing a NEW
+/// footprint, MOVEing an existing one, or RESIZEing a corner.
+enum _TankDrag { draw, move, resize }
+
 /// Tank-area layer for one sheet/floor. Always renders the saved tank footprints
 /// (a filled rectangle + a capacity label from the sheet's calibration × depth);
-/// when [active] (the tank tool is on) it captures a DRAG to draw a new footprint
-/// and deletes a tank on secondary-click. Inactive ⇒ pointer-transparent, so
-/// taps reach the selection overlay.
+/// when [active] (the tank tool is on) it is a FIRST-CLASS editing surface (E6):
+/// tap a tank to select it (framed in the inspector), drag its interior to move
+/// it, drag a corner handle to resize — each a single annotation undo step — and
+/// drag empty canvas to draw a new footprint; secondary-click deletes the
+/// nearest. Inactive ⇒ pointer-transparent, so taps reach the selection overlay.
 class TankOverlay extends ConsumerStatefulWidget {
   final String sheetId;
   final int floorIndex;
@@ -30,8 +36,20 @@ class TankOverlay extends ConsumerStatefulWidget {
 }
 
 class _TankOverlayState extends ConsumerState<TankOverlay> {
-  Offset? _dragStart; // world
-  Offset? _dragNow; // world
+  // Draw-new state (world pixels).
+  Offset? _dragStart;
+  Offset? _dragNow;
+
+  // Move/resize state.
+  _TankDrag _mode = _TankDrag.draw;
+  String? _targetId;
+  Offset _grab = Offset.zero;
+  double _origAx = 0, _origAy = 0, _origBx = 0, _origBy = 0;
+  bool _cornerUsesAx = false, _cornerUsesAy = false;
+  bool _snapped = false; // whether the one-per-drag undo snapshot was taken
+
+  /// Handle hit radius in SCREEN pixels (a resize grip near a corner).
+  static const double _handleHitPx = 11;
 
   @override
   void didUpdateWidget(TankOverlay old) {
@@ -46,13 +64,17 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
       ref.read(sheetsControllerProvider).viewportFor(widget.sheetId) ??
       const ViewportTransform();
 
+  List<TankArea> get _mine => [
+        for (final a in ref.read(tankAreasProvider))
+          if (a.sheetId == widget.sheetId && a.floorIndex == widget.floorIndex)
+            a,
+      ];
+
   void _onSecondary(Offset localPos) {
     final t = _transform;
-    final mine = ref.read(tankAreasProvider).where((a) =>
-        a.sheetId == widget.sheetId && a.floorIndex == widget.floorIndex);
     String? best;
     var bestD = double.infinity;
-    for (final a in mine) {
+    for (final a in _mine) {
       final c = Offset((a.ax + a.bx) / 2, (a.ay + a.by) / 2);
       final d = (t.worldToScreen(c) - localPos).distance;
       if (d < bestD) {
@@ -62,7 +84,146 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
     }
     if (best != null && bestD <= 40) {
       ref.read(tankAreasProvider.notifier).removeById(best);
+      ref.read(selectedAnnotationProvider.notifier).clear(best);
     }
+  }
+
+  /// The tank currently selected on the canvas (this sheet/floor), or null.
+  TankArea? _selected() {
+    final sel = ref.read(selectedAnnotationProvider);
+    if (sel == null || sel.kind != AnnotationKind.tank) return null;
+    for (final t in _mine) {
+      if (t.id == sel.id) return t;
+    }
+    return null;
+  }
+
+  /// Which resize corner of [t] (if any) the SCREEN point [screen] grabs.
+  ({bool usesAx, bool usesAy})? _cornerAt(TankArea t, Offset screen) {
+    final tf = _transform;
+    final corners = <({bool usesAx, bool usesAy, Offset world})>[
+      (usesAx: true, usesAy: true, world: Offset(t.ax, t.ay)),
+      (usesAx: false, usesAy: true, world: Offset(t.bx, t.ay)),
+      (usesAx: true, usesAy: false, world: Offset(t.ax, t.by)),
+      (usesAx: false, usesAy: false, world: Offset(t.bx, t.by)),
+    ];
+    for (final c in corners) {
+      if ((tf.worldToScreen(c.world) - screen).distance <= _handleHitPx) {
+        return (usesAx: c.usesAx, usesAy: c.usesAy);
+      }
+    }
+    return null;
+  }
+
+  void _onPanStart(Offset localPos) {
+    final t = _transform;
+    final w = t.screenToWorld(localPos);
+    _snapped = false;
+
+    // 1) A resize handle of the currently-selected tank takes priority.
+    final sel = _selected();
+    if (sel != null) {
+      final corner = _cornerAt(sel, localPos);
+      if (corner != null) {
+        _mode = _TankDrag.resize;
+        _targetId = sel.id;
+        _cornerUsesAx = corner.usesAx;
+        _cornerUsesAy = corner.usesAy;
+        _origAx = sel.ax;
+        _origAy = sel.ay;
+        _origBx = sel.bx;
+        _origBy = sel.by;
+        return;
+      }
+    }
+
+    // 2) The interior of any tank (topmost wins) → move + select it.
+    for (final a in _mine.reversed) {
+      if (a.containsPoint(widget.sheetId, widget.floorIndex, w.dx, w.dy)) {
+        _mode = _TankDrag.move;
+        _targetId = a.id;
+        _grab = w;
+        _origAx = a.ax;
+        _origAy = a.ay;
+        _origBx = a.bx;
+        _origBy = a.by;
+        ref.read(selectedAnnotationProvider.notifier).selectTank(a.id);
+        return;
+      }
+    }
+
+    // 3) Empty canvas → draw a new footprint.
+    _mode = _TankDrag.draw;
+    _targetId = null;
+    setState(() {
+      _dragStart = w;
+      _dragNow = w;
+    });
+  }
+
+  void _onPanUpdate(Offset localPos) {
+    final w = _transform.screenToWorld(localPos);
+    final ctrl = ref.read(tankAreasProvider.notifier);
+    switch (_mode) {
+      case _TankDrag.draw:
+        setState(() => _dragNow = w);
+      case _TankDrag.move:
+        final id = _targetId;
+        if (id == null) return;
+        if (!_snapped) {
+          ctrl.beginGeometryEdit();
+          _snapped = true;
+        }
+        final dx = w.dx - _grab.dx;
+        final dy = w.dy - _grab.dy;
+        ctrl.setBounds(
+            id, _origAx + dx, _origAy + dy, _origBx + dx, _origBy + dy);
+      case _TankDrag.resize:
+        final id = _targetId;
+        if (id == null) return;
+        if (!_snapped) {
+          ctrl.beginGeometryEdit();
+          _snapped = true;
+        }
+        final ax = _cornerUsesAx ? w.dx : _origAx;
+        final bx = _cornerUsesAx ? _origBx : w.dx;
+        final ay = _cornerUsesAy ? w.dy : _origAy;
+        final by = _cornerUsesAy ? _origBy : w.dy;
+        ctrl.setBounds(id, ax, ay, bx, by);
+    }
+  }
+
+  void _onPanEnd() {
+    if (_mode == _TankDrag.draw) {
+      final a = _dragStart, b = _dragNow;
+      if (a != null && b != null) {
+        ref.read(tankAreasProvider.notifier).add(
+              sheetId: widget.sheetId,
+              floorIndex: widget.floorIndex,
+              ax: a.dx,
+              ay: a.dy,
+              bx: b.dx,
+              by: b.dy,
+            );
+      }
+    }
+    setState(() {
+      _dragStart = null;
+      _dragNow = null;
+    });
+    _mode = _TankDrag.draw;
+    _targetId = null;
+  }
+
+  void _onTapUp(Offset localPos) {
+    final w = _transform.screenToWorld(localPos);
+    for (final a in _mine.reversed) {
+      if (a.containsPoint(widget.sheetId, widget.floorIndex, w.dx, w.dy)) {
+        ref.read(selectedAnnotationProvider.notifier).selectTank(a.id);
+        return;
+      }
+    }
+    ref.read(selectedAnnotationProvider.notifier).clear();
   }
 
   @override
@@ -77,6 +238,9 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
     ];
     final calibration =
         ref.watch(projectControllerProvider).calibrationFor(widget.sheetId);
+    final sel = ref.watch(selectedAnnotationProvider);
+    final selectedId =
+        (sel != null && sel.kind == AnnotationKind.tank) ? sel.id : null;
 
     final painter = _TankPainter(
       tanks: mine,
@@ -84,6 +248,7 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
       calibration: calibration,
       dragStart: widget.active ? _dragStart : null,
       dragNow: widget.active ? _dragNow : null,
+      selectedId: widget.active ? selectedId : null,
     );
 
     if (!widget.active) {
@@ -100,29 +265,10 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
         },
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onPanStart: (d) => setState(() {
-            _dragStart = transform.screenToWorld(d.localPosition);
-            _dragNow = _dragStart;
-          }),
-          onPanUpdate: (d) => setState(
-              () => _dragNow = transform.screenToWorld(d.localPosition)),
-          onPanEnd: (_) {
-            final a = _dragStart, b = _dragNow;
-            if (a != null && b != null) {
-              ref.read(tankAreasProvider.notifier).add(
-                    sheetId: widget.sheetId,
-                    floorIndex: widget.floorIndex,
-                    ax: a.dx,
-                    ay: a.dy,
-                    bx: b.dx,
-                    by: b.dy,
-                  );
-            }
-            setState(() {
-              _dragStart = null;
-              _dragNow = null;
-            });
-          },
+          onTapUp: (d) => _onTapUp(d.localPosition),
+          onPanStart: (d) => _onPanStart(d.localPosition),
+          onPanUpdate: (d) => _onPanUpdate(d.localPosition),
+          onPanEnd: (_) => _onPanEnd(),
           child: CustomPaint(size: Size.infinite, painter: painter),
         ),
       ),
@@ -136,6 +282,7 @@ class _TankPainter extends CustomPainter {
   final ScaleCalibration? calibration;
   final Offset? dragStart;
   final Offset? dragNow;
+  final String? selectedId;
 
   static const Color _color = Color(0xFF3AA0E5); // water blue
 
@@ -145,6 +292,7 @@ class _TankPainter extends CustomPainter {
     required this.calibration,
     required this.dragStart,
     required this.dragNow,
+    required this.selectedId,
   });
 
   String _capacityLabel(TankArea t) {
@@ -158,18 +306,38 @@ class _TankPainter extends CustomPainter {
     return '${t.name} · $cap · ${t.material.label}';
   }
 
-  void _drawRect(Canvas canvas, Offset aw, Offset bw, {String? label}) {
+  void _drawRect(Canvas canvas, Offset aw, Offset bw,
+      {String? label, bool selected = false}) {
     final a = transform.worldToScreen(aw);
     final b = transform.worldToScreen(bw);
     final rect = Rect.fromPoints(a, b);
-    canvas.drawRect(rect, Paint()..color = _color.withAlpha(34));
+    canvas.drawRect(rect, Paint()..color = _color.withAlpha(selected ? 52 : 34));
     canvas.drawRect(
       rect,
       Paint()
         ..color = _color
-        ..strokeWidth = 1.5
+        ..strokeWidth = selected ? 2.5 : 1.5
         ..style = PaintingStyle.stroke,
     );
+    if (selected) {
+      // Resize grips at the four corners (E6).
+      final grip = Paint()..color = _color;
+      final gripFill = Paint()..color = const Color(0xFFFFFFFF);
+      for (final c in [
+        rect.topLeft,
+        rect.topRight,
+        rect.bottomLeft,
+        rect.bottomRight,
+      ]) {
+        final r = Rect.fromCenter(center: c, width: 8, height: 8);
+        canvas.drawRect(r, gripFill);
+        canvas.drawRect(
+            r,
+            grip
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.5);
+      }
+    }
     if (label == null) return;
     final tp = TextPainter(
       text: TextSpan(
@@ -196,7 +364,7 @@ class _TankPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     for (final t in tanks) {
       _drawRect(canvas, Offset(t.ax, t.ay), Offset(t.bx, t.by),
-          label: _capacityLabel(t));
+          label: _capacityLabel(t), selected: t.id == selectedId);
     }
     if (dragStart != null && dragNow != null) {
       _drawRect(canvas, dragStart!, dragNow!);
@@ -209,5 +377,6 @@ class _TankPainter extends CustomPainter {
       old.transform != transform ||
       old.calibration != calibration ||
       old.dragStart != dragStart ||
-      old.dragNow != dragNow;
+      old.dragNow != dragNow ||
+      old.selectedId != selectedId;
 }

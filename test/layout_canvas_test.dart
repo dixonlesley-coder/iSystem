@@ -1,16 +1,22 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart' show kSecondaryButton;
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show EditableText, Offset, ValueKey;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/store/calibration_store.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/ui/canvas/calibration_overlay.dart';
 import 'package:mechx/ui/canvas/canvas_grid.dart';
+import 'package:mechx/ui/canvas/canvas_view.dart';
 import 'package:mechx/ui/canvas/network_layer.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
 import 'package:mechx/ui/electrical/electrical_palette.dart';
@@ -54,6 +60,8 @@ void main() {
 
     // Default boot is the Layout design view.
     final c = _containerOf(tester);
+    seedDemoSheets(c);
+    await tester.pump();
     expect(c.read(workspaceViewProvider), WorkspaceView.plan);
     expect(find.byType(LayoutCanvas), findsOneWidget);
     expect(find.byType(LayerSwitcher), findsOneWidget);
@@ -129,6 +137,9 @@ void main() {
     await tester.pump();
 
     final c = _containerOf(tester);
+    seedDemoSheets(c);
+    seedSampleElectrical(c);
+    await tester.pump();
     // Place the sample MDP on the active sheet/floor.
     c.read(electricalProjectProvider.notifier).setPanelLayoutPos(
         'mdp', const LayoutPos(sheetId: 's1', floorIndex: 0, x: 400, y: 300));
@@ -159,9 +170,12 @@ void main() {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
-    await tester.pump(); // post-frame fit emits the viewport
 
     final c = _containerOf(tester);
+    seedDemoSheets(c);
+    await tester.pump();
+    await tester.pump(); // post-frame fit emits the viewport
+
     final sheet = c.read(sheetsControllerProvider).current!;
     // The unified canvas drives the per-sheet viewport (so the electrical layer,
     // which reads the same provider, shares the pan/zoom).
@@ -258,6 +272,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     final c = _containerOf(tester);
+    seedDemoSheets(c);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
     final ctrl = c.read(networkControllerProvider.notifier);
     final sheet = c.read(sheetsControllerProvider).current!;
     // A plumbing run + an HVAC duct on the same floor.
@@ -278,5 +295,261 @@ void main() {
     final net = c.read(networkControllerProvider).network;
     expect(net.edgeById(sel.edgeIds.single)!.service, ServiceType.coldWater);
     expect(sel.nodeIds.length, 2);
+  });
+
+  testWidgets(
+      'B4: Backspace / Ctrl+A typed into the calibration field edit the FIELD '
+      '- they never delete the selected node or grab the drawing selection',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final c = _containerOf(tester);
+    seedDemoSheets(c);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    final ctrl = c.read(networkControllerProvider.notifier);
+    final sheet = c.read(sheetsControllerProvider).current!;
+    ctrl.addSegment(sheet.id, 0, const Offset(400, 400),
+        service: ServiceType.coldWater);
+    final node = c.read(networkControllerProvider).network.nodes.first;
+    c.read(selectionProvider.notifier).selectNode(node.id);
+    await tester.pump();
+
+    // Drive calibration to the distance-entry phase — its "Known distance"
+    // field is a DESCENDANT of the Layout canvas's key-handling Focus.
+    final cal = c.read(calibrationControllerProvider.notifier);
+    cal.start();
+    cal.addWorldPoint(const Offset(0, 0));
+    cal.addWorldPoint(const Offset(0, 200));
+    await tester.pump();
+    expect(find.text('Known distance'), findsOneWidget);
+
+    // Type into the field (this focuses its EditableText), then press
+    // Backspace — the empirically-proven probe that used to DELETE the node.
+    final field = find.descendant(
+        of: find.byType(CalibrationOverlay),
+        matching: find.byType(EditableText));
+    await tester.enterText(field, '5.0');
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+    await tester.pump();
+
+    // The keystroke edited the FIELD (the root DefaultTextEditingShortcuts
+    // got it) — the drawing is untouched.
+    expect(tester.widget<EditableText>(field).controller.text, '5.');
+    expect(
+      c.read(networkControllerProvider).network.nodes.any((n) => n.id == node.id),
+      isTrue,
+      reason: 'Backspace in a text field must never delete the selected node',
+    );
+
+    // Ctrl+A while the field is focused selects the field text — it must NOT
+    // run the canvas select-all (which would grab the run's nodes + edge).
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    final sel = c.read(selectionProvider);
+    expect(sel.nodeId, node.id);
+    expect(sel.edgeIds, isEmpty,
+        reason: 'Ctrl+A in a text field must not select-all on the canvas');
+  });
+
+  testWidgets(
+      'C3: single-key shortcuts arm tools, pick the layer service, toggle '
+      'ortho, and Enter repeats the last tool', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final c = _containerOf(tester);
+    seedDemoSheets(c);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // R arms Run.
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyR);
+    await tester.pump();
+    expect(c.read(networkControllerProvider).tool, DrawTool.drawRun);
+
+    // Number key 2 picks the plumbing layer's 2nd service (hot water).
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit2);
+    await tester.pump();
+    expect(c.read(networkControllerProvider).service, ServiceType.hotWater);
+
+    // V returns to Select (and does NOT become the "last tool").
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+    await tester.pump();
+    expect(c.read(networkControllerProvider).tool, DrawTool.select);
+
+    // O toggles ortho (default on → off).
+    expect(c.read(orthoProvider), isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyO);
+    await tester.pump();
+    expect(c.read(orthoProvider), isFalse);
+
+    // Enter (idle) repeats the last real tool — Run, not Select.
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(c.read(networkControllerProvider).tool, DrawTool.drawRun);
+  });
+
+  testWidgets('E2: arrow keys nudge the selected nodes by the grid step',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final c = _containerOf(tester);
+    seedDemoSheets(c);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final ctrl = c.read(networkControllerProvider.notifier);
+    final sheet = c.read(sheetsControllerProvider).current!;
+    ctrl.addSegment(sheet.id, 0, const Offset(400, 400),
+        service: ServiceType.coldWater);
+    await tester.pump();
+
+    // Select all on the floor (the run's two nodes + its edge).
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(c.read(selectionProvider).nodeIds.length, 2);
+
+    final before = {
+      for (final n in c.read(networkControllerProvider).network.nodes)
+        n.id: Offset(n.x, n.y),
+    };
+    final cal =
+        c.read(projectControllerProvider).calibrationFor(sheet.id);
+    final step =
+        cal == null ? 32.0 : calibratedGridWorldStep(cal.metersPerPixel);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+
+    for (final n in c.read(networkControllerProvider).network.nodes) {
+      final b = before[n.id]!;
+      expect(n.x, closeTo(b.dx + step, 1e-6));
+      expect(n.y, closeTo(b.dy, 1e-6));
+    }
+    // The nudge is undoable in one step.
+    c.read(networkControllerProvider.notifier).undo();
+    for (final n in c.read(networkControllerProvider).network.nodes) {
+      final b = before[n.id]!;
+      expect(n.x, closeTo(b.dx, 1e-6));
+    }
+  });
+
+  test('canvasFitRequestProvider bumps its counter on request (W3-P5 fit seam)',
+      () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final before = c.read(canvasFitRequestProvider);
+    c.read(canvasFitRequestProvider.notifier).request();
+    expect(c.read(canvasFitRequestProvider), before + 1);
+  });
+
+  testWidgets('C7: an outlet nub renders only for the SELECTED non-fixture node',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final c = _containerOf(tester);
+    seedDemoSheets(c);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final ctrl = c.read(networkControllerProvider.notifier);
+    final sheet = c.read(sheetsControllerProvider).current!;
+    ctrl.addFitting(sheet.id, 0, const Offset(500, 500)); // a bare junction node
+    await tester.pump();
+    final id = c.read(networkControllerProvider).network.nodes.last.id;
+    final nub = find.byKey(ValueKey('outlet-$id'));
+
+    // At rest (nothing hovered/selected) the nub is NOT painted — no confetti.
+    expect(nub, findsNothing);
+
+    // Selecting the node reveals its outlet nub.
+    c.read(selectionProvider.notifier).selectNode(id);
+    await tester.pump();
+    expect(nub, findsOneWidget);
+
+    // Deselecting hides it again.
+    c.read(selectionProvider.notifier).clear();
+    await tester.pump();
+    expect(nub, findsNothing);
+  });
+
+  testWidgets(
+      'E1: right-clicking a multi-selected edge batch-applies size to the '
+      'whole selection and KEEPS it selected', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final c = _containerOf(tester);
+    seedDemoSheets(c);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final ctrl = c.read(networkControllerProvider.notifier);
+    final sheet = c.read(sheetsControllerProvider).current!;
+    // Two separated cold-water runs (pipe → the DN size ladder is offered).
+    ctrl.addSegment(sheet.id, 0, const Offset(360, 360),
+        service: ServiceType.coldWater);
+    ctrl.addSegment(sheet.id, 0, const Offset(360, 620),
+        service: ServiceType.coldWater);
+    await tester.pump();
+
+    final edges = c.read(networkControllerProvider).network.edges.toList();
+    expect(edges.length, 2);
+    final e1 = edges[0], e2 = edges[1];
+    c.read(selectionProvider.notifier).setMulti(const {}, {e1.id, e2.id});
+    await tester.pump();
+
+    // Right-click on the FIRST edge's midpoint (global coords).
+    final net = c.read(networkControllerProvider).network;
+    final a = net.nodeById(e1.fromId)!, b = net.nodeById(e1.toId)!;
+    final vt = c.read(sheetsControllerProvider).viewportFor(sheet.id) ??
+        const ViewportTransform();
+    final mid = vt.worldToScreen(Offset((a.x + b.x) / 2, (a.y + b.y) / 2));
+    final canvasRect = tester.getRect(find.byType(CanvasView));
+    // One explicit secondary-tap gesture (tapAt double-fires the recognizer).
+    final rc = await tester.startGesture(canvasRect.topLeft + mid,
+        buttons: kSecondaryButton);
+    await rc.up();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350)); // settle the entrance
+
+    // The batch header shows (proving the menu resolved multi=true against the
+    // preserved selection); MechXMenuHeader upper-cases it.
+    expect(find.text('APPLY TO 2 SELECTED'), findsWidgets);
+    // The right-click kept the multi-selection intact (E1, selection_overlay).
+    expect(c.read(selectionProvider).edgeIds.length, 2);
+
+    // Tap a DN size row → BOTH edges take that override in one undo step, and
+    // the multi-selection survives (batch edit, not a collapse).
+    await tester.tap(find.textContaining('DN').last, warnIfMissed: false);
+    await tester.pump();
+
+    final after = c.read(networkControllerProvider).network;
+    final s1 = after.edgeById(e1.id)!.sizeOverride;
+    final s2 = after.edgeById(e2.id)!.sizeOverride;
+    expect(s1, isNotNull, reason: 'batch size must apply to the first edge');
+    expect(s2, isNotNull, reason: 'batch size must apply to the second edge');
+    expect(s1!.meters, s2!.meters);
+    expect(c.read(selectionProvider).edgeIds.length, 2,
+        reason: 'a batch edit must keep the multi-selection alive');
   });
 }

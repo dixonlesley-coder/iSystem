@@ -832,6 +832,34 @@ void main() {
     expect(decoded.settings.fixtureLibrary.single.id, 'ok');
   });
 
+  test('B8: the AI key is machine-local — not written to the file, but still '
+      'read for one-time migration', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      settings: DesignSettings(
+        anthropicApiKey: 'sk-ant-SECRET',
+        aiModel: 'claude-sonnet-4-6',
+      ),
+    );
+    final json = doc.toJson();
+    // The secret key is NEVER persisted into the shareable project file...
+    expect((json['settings'] as Map).containsKey('anthropicApiKey'), isFalse);
+    // ...while the non-secret model + provider still round-trip.
+    expect((json['settings'] as Map)['aiModel'], 'claude-sonnet-4-6');
+    // An untouched encode/decode leaves the key empty (it lives machine-local).
+    expect(ProjectDocument.decode(doc.encode()).settings.anthropicApiKey, '');
+    // A LEGACY file that DOES carry the key still decodes it (migration read).
+    final legacy = doc.toJson();
+    (legacy['settings'] as Map)['anthropicApiKey'] = 'sk-ant-LEGACY';
+    expect(
+        ProjectDocument.fromJson(legacy).settings.anthropicApiKey,
+        'sk-ant-LEGACY');
+  });
+
   test('document control round-trips (identity fields + revision history)',
       () {
     const doc = ProjectDocument(
@@ -935,6 +963,129 @@ void main() {
       }),
       isEmpty,
     );
+  });
+
+  test('saved assemblies (E5) round-trip through encode/decode', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(100, 100))],
+      network: Network(),
+      settings: DesignSettings(
+        savedAssemblies: [
+          SavedAssembly(
+            id: 'asm-0',
+            name: 'WC group',
+            nodes: [
+              NetNode(
+                id: 'n0',
+                sheetId: 's1',
+                x: 10,
+                y: 20,
+                floorIndex: 0,
+                role: NodeRole.fixture,
+                fixture: PlumbingFixture.waterClosetFlushValve,
+              ),
+              NetNode(id: 'n1', sheetId: 's1', x: 40, y: 20, floorIndex: 0),
+            ],
+            edges: [
+              NetEdge(
+                id: 'e0',
+                fromId: 'n0',
+                toId: 'n1',
+                service: ServiceType.coldWater,
+                pipeProduct: PipeProduct.pprPn16,
+                sizeOverride: Diameter(0.025), // 25 mm
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    final decoded = ProjectDocument.decode(doc.encode());
+    final blocks = decoded.settings.savedAssemblies;
+    expect(blocks, hasLength(1));
+    final b = blocks.single;
+    expect(b.id, 'asm-0');
+    expect(b.name, 'WC group');
+    // Nodes/edges use the SAME network serialization as the drawn network, so
+    // every field round-trips (proving the shared helpers).
+    expect(b.nodes, hasLength(2));
+    expect(b.nodes[0].role, NodeRole.fixture);
+    expect(b.nodes[0].fixture, PlumbingFixture.waterClosetFlushValve);
+    expect(b.nodes[0].x, 10);
+    expect(b.edges, hasLength(1));
+    expect(b.edges[0].pipeProduct, PipeProduct.pprPn16);
+    expect(b.edges[0].sizeOverride?.inMillimeters, closeTo(25, 1e-9));
+  });
+
+  test('an untouched project carries no savedAssemblies key (byte-identical)',
+      () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    final settingsJson = doc.toJson()['settings'] as Map;
+    expect(settingsJson.containsKey('savedAssemblies'), isFalse);
+    // A file with no savedAssemblies key loads an empty list.
+    expect(ProjectDocument.fromJson(doc.toJson()).settings.savedAssemblies,
+        isEmpty);
+  });
+
+  test('mepDutyFeed (G1): default off is omitted; on round-trips', () {
+    const off = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    // Default off ⇒ the key is omitted (byte-identical) and decodes back to off.
+    expect((off.toJson()['settings'] as Map).containsKey('mepDutyFeed'), isFalse);
+    expect(ProjectDocument.fromJson(off.toJson()).settings.mepDutyFeedEnabled,
+        isFalse);
+    // Enabled ⇒ the key is written and survives the round-trip.
+    const on = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      settings: DesignSettings(mepDutyFeedEnabled: true),
+    );
+    expect((on.toJson()['settings'] as Map)['mepDutyFeed'], isTrue);
+    expect(ProjectDocument.fromJson(on.toJson()).settings.mepDutyFeedEnabled,
+        isTrue);
+  });
+
+  test('a corrupt saved-assembly entry is dropped, good ones kept', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      settings: DesignSettings(
+        savedAssemblies: [
+          SavedAssembly(id: 'asm-0', name: 'Good'),
+        ],
+      ),
+    );
+    final json = doc.toJson();
+    final good = (json['settings']['savedAssemblies'] as List).single;
+    json['settings']['savedAssemblies'] = <dynamic>[
+      good,
+      {'name': 'no id'}, // missing id ⇒ dropped
+      'garbage', // non-map ⇒ dropped
+    ];
+    final decoded = ProjectDocument.fromJson(json);
+    expect(decoded.settings.savedAssemblies, hasLength(1));
+    expect(decoded.settings.savedAssemblies.single.id, 'asm-0');
   });
 
   test('a v3 (newer) file is rejected with ProjectDocumentException', () {

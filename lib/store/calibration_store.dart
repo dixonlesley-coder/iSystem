@@ -28,6 +28,12 @@ class CalibrationState {
 
   bool get isActive => phase != CalibrationPhase.idle;
 
+  /// True only in the distance-entry phase — the ONE phase with a text field
+  /// (the "Known distance" input). The layout-canvas Space-pan guard scopes off
+  /// this so Space still pans while merely placing the two reference points
+  /// (D3): its rationale — "a field might want the space bar" — holds only here.
+  bool get isEnteringDistance => phase == CalibrationPhase.awaitingDistance;
+
   double? get pixelDistance => (first != null && second != null)
       ? (second! - first!).distance
       : null;
@@ -43,7 +49,16 @@ class CalibrationController extends Notifier<CalibrationState> {
   void cancel() => state = const CalibrationState();
 
   /// Place the next reference point (a tap converted to sheet/world coords).
-  void addWorldPoint(Offset point) {
+  ///
+  /// A misclick doesn't force a restart (D3): if [snapRadius] > 0 and the tap
+  /// lands within that many sheet-pixels of an ALREADY-placed marker, that
+  /// marker is re-placed at the tap instead of advancing the flow — so an
+  /// engineer can nudge either end (even after both are down, in the
+  /// distance-entry phase) without cancelling. Away from an existing marker the
+  /// tap advances the flow exactly as before; the default `snapRadius: 0`
+  /// disables re-placing so existing callers are unchanged.
+  void addWorldPoint(Offset point, {double snapRadius = 0}) {
+    if (snapRadius > 0 && _replaceNearestMarker(point, snapRadius)) return;
     switch (state.phase) {
       case CalibrationPhase.awaitingFirst:
         state = CalibrationState(
@@ -59,6 +74,47 @@ class CalibrationController extends Notifier<CalibrationState> {
       case CalibrationPhase.idle:
       case CalibrationPhase.awaitingDistance:
         break; // ignore stray points
+    }
+  }
+
+  /// If [point] is within [snapRadius] of an existing marker, move the NEAREST
+  /// such marker to [point] (keeping the current phase) and return true; else
+  /// return false. Lets a click near either reference dot re-place it (D3).
+  bool _replaceNearestMarker(Offset point, double snapRadius) {
+    final first = state.first;
+    final second = state.second;
+    final dFirst = first == null ? null : (point - first).distance;
+    final dSecond = second == null ? null : (point - second).distance;
+    // Pick the closer marker that is within range.
+    final firstInRange = dFirst != null && dFirst <= snapRadius;
+    final secondInRange = dSecond != null && dSecond <= snapRadius;
+    if (!firstInRange && !secondInRange) return false;
+    final replaceFirst =
+        firstInRange && (!secondInRange || dFirst <= dSecond);
+    state = CalibrationState(
+      phase: state.phase,
+      first: replaceFirst ? point : first,
+      second: replaceFirst ? second : point,
+    );
+    return true;
+  }
+
+  /// Undo the last placed point (D3) — a back-step, so a misclick that advanced
+  /// the flow doesn't force a full restart. `awaitingDistance` → drop the second
+  /// point back to `awaitingSecond`; `awaitingSecond` → drop the first back to
+  /// `awaitingFirst`. A no-op at `awaitingFirst` / `idle` (nothing to undo).
+  void back() {
+    switch (state.phase) {
+      case CalibrationPhase.awaitingDistance:
+        state = CalibrationState(
+          phase: CalibrationPhase.awaitingSecond,
+          first: state.first,
+        );
+      case CalibrationPhase.awaitingSecond:
+        state = const CalibrationState(phase: CalibrationPhase.awaitingFirst);
+      case CalibrationPhase.awaitingFirst:
+      case CalibrationPhase.idle:
+        break;
     }
   }
 

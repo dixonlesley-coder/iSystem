@@ -48,6 +48,7 @@ import '../electrical/electrical_palette.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
+import '../widgets/mechx_scrollbar.dart';
 
 /// Opacity applied when the electrical layer is a faded coordination layer.
 const double kElectricalFadedAlpha = 0.34;
@@ -186,10 +187,13 @@ class ElectricalLayoutLayer extends ConsumerWidget {
         else
           IgnorePointer(child: Stack(children: nodeWidgets)),
         if (interactive)
+          // J5: pin the tray to the TOP-RIGHT only (no `bottom`), so the glass
+          // slab sizes to its content instead of stretching to full canvas
+          // height and occluding the plan it exists to coordinate against.
+          // `_UnplacedTray` caps its own scroll region (see `_kTrayMaxHeight`).
           Positioned(
             right: MechXSpacing.md,
             top: MechXSpacing.md,
-            bottom: MechXSpacing.md,
             child: _UnplacedTray(
               project: project,
               result: result,
@@ -1157,6 +1161,11 @@ class _ElecDropPreviewPainter extends CustomPainter {
 
 // ── Unplaced tray ────────────────────────────────────────────────────────────
 
+/// J5: the tray sizes to its content but never taller than this — so a handful
+/// of chips shows a small card, while a long list caps here and scrolls (with a
+/// themed scroll indicator) rather than running the full height of the canvas.
+const double _kTrayMaxHeight = 360;
+
 class _UnplacedTray extends StatelessWidget {
   final ElectricalProject project;
   final ElectricalSystemResult result;
@@ -1210,32 +1219,38 @@ class _UnplacedTray extends StatelessWidget {
                     color: colors.textPrimary, fontWeight: FontWeight.w700)),
           ),
           const SizedBox(height: MechXSpacing.xs),
-          Flexible(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(MechXSpacing.sm, 0,
-                  MechXSpacing.sm, MechXSpacing.sm),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (final p in unplacedPanels)
-                    _TrayItem(
-                      label: p.tag ?? p.name,
-                      kind: _TrayKind.panel,
-                      // One-shot placement of a live-drag intent — snapshot
-                      // first so the placement is a single undo step.
-                      onPlaced: (pos, ctrl) => ctrl
-                        ..pushUndoSnapshot()
-                        ..setPanelLayoutPos(p.id, pos),
-                    ),
-                  for (final t in unplacedLoads)
-                    _TrayItem(
-                      label: t.circuit.name,
-                      kind: _TrayKind.load,
-                      onPlaced: (pos, ctrl) => ctrl
-                        ..pushUndoSnapshot()
-                        ..setLoadPos(t.panelId, t.circuit.id, pos),
-                    ),
-                ],
+          // Cap the scroll region: a `SingleChildScrollView` under a bounded
+          // `maxHeight` shrinks to its content when short and scrolls when tall
+          // (J5), with a themed scroll indicator (J1).
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: _kTrayMaxHeight),
+            child: MechXScrollbar(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(MechXSpacing.sm, 0,
+                    MechXSpacing.sm, MechXSpacing.sm),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final p in unplacedPanels)
+                      _TrayItem(
+                        label: p.tag ?? p.name,
+                        kind: _TrayKind.panel,
+                        // One-shot placement of a live-drag intent — snapshot
+                        // first so the placement is a single undo step.
+                        onPlaced: (pos, ctrl) => ctrl
+                          ..pushUndoSnapshot()
+                          ..setPanelLayoutPos(p.id, pos),
+                      ),
+                    for (final t in unplacedLoads)
+                      _TrayItem(
+                        label: t.circuit.name,
+                        kind: _TrayKind.load,
+                        onPlaced: (pos, ctrl) => ctrl
+                          ..pushUndoSnapshot()
+                          ..setLoadPos(t.panelId, t.circuit.id, pos),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),

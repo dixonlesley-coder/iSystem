@@ -3,34 +3,53 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mechx_engine/electrical/commercial_export.dart';
+import 'package:mechx_engine/report/mep_commercial.dart';
 
 import '../../store/app_state.dart';
 import '../../store/commercial_store.dart';
 import '../../store/project_store.dart';
+import '../inspector/project_panel.dart' show runExportGuarded;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
+import '../widgets/mechx_scrollbar.dart';
 import 'electrical_bom_view.dart';
 import 'pricelist_screen.dart';
 import 'quotation_view.dart';
 
-/// The Commercial workspace — the electrical BOM, the pricelist editor and the
-/// priced quotation, with CSV / Markdown export. Built over the pure engine
-/// commercial pipeline (BOM → cost → quotation); prices live with the project,
-/// never the catalogue.
-class CommercialHub extends ConsumerWidget {
+/// The Commercial workspace — the mechanical + electrical BOMs, the pricelist
+/// editor and the unified M+E+P priced quotation, with CSV / Markdown export.
+/// Built over the pure engine commercial pipeline (BOM → cost → quotation);
+/// prices live with the project, never the catalogue.
+class CommercialHub extends ConsumerStatefulWidget {
   const CommercialHub({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CommercialHub> createState() => _CommercialHubState();
+}
+
+class _CommercialHubState extends ConsumerState<CommercialHub> {
+  // Owned so the themed scroll indicator (J1) can be dragged, not just shown.
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
 
     return ColoredBox(
       color: colors.background,
-      child: SingleChildScrollView(
+      child: MechXScrollbar(
+        controller: _scrollController,
+        child: SingleChildScrollView(
+        controller: _scrollController,
         padding: const EdgeInsets.all(MechXSpacing.xl),
         child: Center(
           child: ConstrainedBox(
@@ -49,6 +68,8 @@ class CommercialHub extends ConsumerWidget {
                 const SizedBox(height: MechXSpacing.lg),
                 const _ExportBar(),
                 const SizedBox(height: MechXSpacing.lg),
+                const MechanicalBomView(),
+                const SizedBox(height: MechXSpacing.xl),
                 const ElectricalBomView(),
                 const SizedBox(height: MechXSpacing.xl),
                 const PricelistScreen(),
@@ -57,6 +78,7 @@ class CommercialHub extends ConsumerWidget {
               ],
             ),
           ),
+        ),
         ),
       ),
     );
@@ -86,35 +108,58 @@ class _ExportBar extends ConsumerWidget {
     );
   }
 
-  Future<void> _exportBomCsv(WidgetRef ref) async {
-    final name = ref.read(projectControllerProvider).name;
-    final csv = costEstimateToCsv(ref.read(electricalCostProvider));
-    final path = await FilePicker.saveFile(
-      dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleElectricalBom),
-      fileName: '$name-electrical-bom.csv',
-      type: FileType.custom,
-      allowedExtensions: const ['csv'],
-    );
-    if (path == null) return;
-    final full = path.endsWith('.csv') ? path : '$path.csv';
-    await File(full).writeAsString(csv);
-  }
+  // Both commercial exports route through the shared export guard (H3): the
+  // zero-length completeness gate, cancel ⇒ no pill, success ⇒ the "Exported
+  // ..." confirmation, and an IO failure surfaces instead of no-oping.
+  Future<void> _exportBomCsv(WidgetRef ref) => runExportGuarded(
+        ref,
+        name: 'electrical BOM',
+        write: () async {
+          final name = ref.read(projectControllerProvider).name;
+          // The unified M+E+P BOM (mechanical pipe/duct + fittings, then the
+          // electrical catalogue lines) in ONE CSV.
+          final csv = mepBomToCsv(
+            ref.read(mechanicalCostProvider),
+            ref.read(electricalCostProvider),
+          );
+          final path = await FilePicker.saveFile(
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleElectricalBom),
+            fileName: '$name-mep-bom.csv',
+            type: FileType.custom,
+            allowedExtensions: const ['csv'],
+          );
+          if (path == null) return false;
+          final full = path.endsWith('.csv') ? path : '$path.csv';
+          await File(full).writeAsString(csv);
+          return true;
+        },
+      );
 
-  Future<void> _exportProposalMarkdown(WidgetRef ref) async {
-    final name = ref.read(projectControllerProvider).name;
-    final md = quotationToMarkdown(
-      ref.read(electricalQuotationProvider),
-      ref.read(electricalCostProvider),
-      projectName: name,
-    );
-    final path = await FilePicker.saveFile(
-      dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleElectricalProposal),
-      fileName: '$name-electrical-proposal.md',
-      type: FileType.custom,
-      allowedExtensions: const ['md'],
-    );
-    if (path == null) return;
-    final full = path.endsWith('.md') ? path : '$path.md';
-    await File(full).writeAsString(md);
-  }
+  Future<void> _exportProposalMarkdown(WidgetRef ref) => runExportGuarded(
+        ref,
+        name: 'quotation proposal',
+        write: () async {
+          final name = ref.read(projectControllerProvider).name;
+          // The unified M+E+P proposal — per-discipline BOM tables + the combined
+          // costed roll-up.
+          final md = mepQuotationToMarkdown(
+            ref.read(mepQuotationProvider),
+            mechanical: ref.read(mechanicalCostProvider),
+            electrical: ref.read(electricalCostProvider),
+            projectName: name,
+          );
+          final path = await FilePicker.saveFile(
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleElectricalProposal),
+            fileName: '$name-mep-proposal.md',
+            type: FileType.custom,
+            allowedExtensions: const ['md'],
+          );
+          if (path == null) return false;
+          final full = path.endsWith('.md') ? path : '$path.md';
+          await File(full).writeAsString(md);
+          return true;
+        },
+      );
 }

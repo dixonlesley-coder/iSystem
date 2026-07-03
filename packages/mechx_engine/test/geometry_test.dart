@@ -78,5 +78,30 @@ void main() {
     test('roof elevation aliases total height', () {
       expect(levels.roofElevation.meters, closeTo(11.0, 1e-12));
     });
+
+    test('an out-of-range floor index CLAMPS instead of throwing (§10 safety)',
+        () {
+      // A node stranded above the top floor (or below the base) — e.g. left
+      // over after a floor was removed — must never crash the always-on solve
+      // with a RangeError. Every elevation accessor clamps to the nearest real
+      // floor (top for over-range, base for negative) and returns normally.
+      expect(() => levels.elevationOf(1000), returnsNormally);
+      expect(() => levels.floorHeightOf(1000), returnsNormally);
+      expect(() => levels.ceilingElevationOf(1000), returnsNormally);
+      expect(() => levels.fixtureElevationOf(1000), returnsNormally);
+      expect(() => levels.elevationOf(-5), returnsNormally);
+
+      // Over-range resolves to the TOP floor (index 2); under-range to the base.
+      expect(levels.elevationOf(99).meters,
+          closeTo(levels.elevationOf(2).meters, 1e-12));
+      expect(levels.elevationOf(-3).meters,
+          closeTo(levels.elevationOf(0).meters, 1e-12));
+      expect(levels.floorHeightOf(99).meters,
+          closeTo(levels.floorHeightOf(2).meters, 1e-12));
+      expect(levels.ceilingElevationOf(99).meters,
+          closeTo(levels.ceilingElevationOf(2).meters, 1e-12));
+      expect(levels.fixtureElevationOf(99).meters,
+          closeTo(levels.fixtureElevationOf(2).meters, 1e-12));
+    });
   });
 }

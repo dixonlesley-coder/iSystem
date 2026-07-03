@@ -12,6 +12,7 @@ library;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../ui/shell/project_io.dart';
 import '../ui/theme/design_tokens.dart';
 import '../ui/theme/mechx_theme.dart';
 import '../ui/widgets/mechx_button.dart';
@@ -148,6 +149,16 @@ class _UpdateBannerState extends ConsumerState<UpdateBanner> {
     );
   }
 
+  /// "Restart & update" ends the process (`exit(0)` after launching the
+  /// installer) — the one exit that used to bypass the unsaved-work guard.
+  /// Run the exact same dirty check + Save/Discard/Cancel dialog Open/Import
+  /// use; on Cancel the install is aborted. `installUpdate` then writes a
+  /// final recovery snapshot before exiting, regardless of the choice here.
+  Future<void> _restartAndUpdate(BuildContext context) async {
+    if (!await confirmDiscardIfDirty(context, ref)) return;
+    await ref.read(updateControllerProvider.notifier).installUpdate();
+  }
+
   List<Widget> _body(BuildContext context, UpdateStatus status) {
     final colors = context.colors;
     final type = context.type;
@@ -182,9 +193,7 @@ class _UpdateBannerState extends ConsumerState<UpdateBanner> {
               MechXButton(
                 label: 'Restart & update',
                 primary: true,
-                onPressed: () => ref
-                    .read(updateControllerProvider.notifier)
-                    .installUpdate(),
+                onPressed: () => _restartAndUpdate(context),
               ),
             ],
           ),

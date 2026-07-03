@@ -125,36 +125,49 @@ class _MechXButtonState extends State<MechXButton> {
       ),
     );
 
+    final Widget content;
     if (!_enabled) {
-      return Opacity(opacity: 0.4, child: visual);
+      content = Opacity(opacity: 0.4, child: visual);
+    } else {
+      content = FocusableActionDetector(
+        mouseCursor: SystemMouseCursors.click,
+        onShowHoverHighlight: (v) => setState(() {
+          _hover = v;
+          if (!v) _down = false;
+        }),
+        onShowFocusHighlight: (v) => setState(() => _focus = v),
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+        },
+        actions: {
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (_) {
+              widget.onPressed?.call();
+              return null;
+            },
+          ),
+        },
+        child: GestureDetector(
+          onTap: widget.onPressed,
+          onTapDown: (_) => setState(() => _down = true),
+          onTapUp: (_) => setState(() => _down = false),
+          onTapCancel: () => setState(() => _down = false),
+          child: visual,
+        ),
+      );
     }
 
-    return FocusableActionDetector(
-      mouseCursor: SystemMouseCursors.click,
-      onShowHoverHighlight: (v) => setState(() {
-        _hover = v;
-        if (!v) _down = false;
-      }),
-      onShowFocusHighlight: (v) => setState(() => _focus = v),
-      shortcuts: const {
-        SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
-        SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
-      },
-      actions: {
-        ActivateIntent: CallbackAction<ActivateIntent>(
-          onInvoke: (_) {
-            widget.onPressed?.call();
-            return null;
-          },
-        ),
-      },
-      child: GestureDetector(
-        onTap: widget.onPressed,
-        onTapDown: (_) => setState(() => _down = true),
-        onTapUp: (_) => setState(() => _down = false),
-        onTapCancel: () => setState(() => _down = false),
-        child: visual,
-      ),
+    // I7 (a11y): announce as a button with its label + enabled state, and expose
+    // a tap action so screen-reader users can activate it. The inner visual's
+    // own text semantics are excluded so the node reads once, cleanly. Semantics
+    // + ExcludeSemantics are layout/paint-transparent, so goldens are unchanged.
+    return Semantics(
+      button: true,
+      enabled: _enabled,
+      label: widget.label,
+      onTap: _enabled ? widget.onPressed : null,
+      child: ExcludeSemantics(child: content),
     );
   }
 }

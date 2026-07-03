@@ -2,18 +2,20 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 
+import '../../store/compliance_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/service_style.dart';
 import '../inspector/project_panel.dart'
     show
-        buildComplianceSummary,
+        ExportIdentityBar,
         exportCalcReport,
         exportCalcReportPdf,
         exportEquipmentSchedule,
         exportEquipmentSchedulePdf,
         exportMepUnifiedReport,
-        exportMepUnifiedReportPdf;
+        exportMepUnifiedReportPdf,
+        exportSubmittalPackage;
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
@@ -85,7 +87,8 @@ class ReviewHub extends ConsumerWidget {
           'Stock lengths: 4 m PVC/PPR, 6 m steel (sprinkler/hydrant), and duct '
           'sections 1.2 m BJLS / 4 m PU. The cut plan reuses offcuts to minimise '
           'waste; couplings and duct flanges on the canvas fall at these '
-          'boundaries. Export the Markdown calc report for the full breakdown.',
+          'boundaries. The calc report (PDF or MD, below) carries the full '
+          'breakdown.',
         ),
         const SizedBox(height: MechXSpacing.md),
         const _ExportDeliverablesCard(),
@@ -95,7 +98,7 @@ class ReviewHub extends ConsumerWidget {
 }
 
 /// The Review hub's final stop: the same PASS / REVIEW REQUIRED verdict as
-/// [_ComplianceCard] (reusing [buildComplianceSummary] so the two never
+/// [_ComplianceCard] (both watch [complianceSummaryProvider] so the two never
 /// disagree) leading straight into the deliverable exports — making the
 /// "check, then issue" pairing explicit. Exports stay enabled on REVIEW
 /// REQUIRED: the compliance summary is advisory, the engineer decides whether
@@ -112,7 +115,9 @@ class _ExportDeliverablesCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final summary = buildComplianceSummary(ref);
+    // WATCHED (H2): the verdict re-computes live as issues are fixed, moving
+    // together with the IssuesCard above.
+    final summary = ref.watch(complianceSummaryProvider);
     final allPass = summary.allPass;
     final verdictColor = allPass ? colors.success : colors.warning;
 
@@ -150,6 +155,21 @@ class _ExportDeliverablesCard extends ConsumerWidget {
               ),
             ],
           ),
+          const SizedBox(height: MechXSpacing.md),
+          // H5: the document-control identity right at the export surface.
+          const ExportIdentityBar(),
+          const SizedBox(height: MechXSpacing.md),
+          // H4: the one-folder submittal package — the whole deliverable set
+          // (reports + BOM/quotation + plan/riser/electrical drawings) into one
+          // chosen folder in one action.
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MechXButton(
+              label: 'Export submittal package...',
+              primary: true,
+              onPressed: () => exportSubmittalPackage(ref),
+            ),
+          ),
           const SizedBox(height: MechXSpacing.sm),
           Wrap(
             spacing: MechXSpacing.xs,
@@ -172,7 +192,9 @@ class _ExportDeliverablesCard extends ConsumerWidget {
                 onPressed: () => exportMepUnifiedReportPdf(ref),
               ),
               MechXButton(
-                label: 'Export equipment schedule (MD)',
+                // H8: the MD export writes a spreadsheet CSV sibling too —
+                // the label says so.
+                label: 'Export equipment schedule (MD + CSV)',
                 onPressed: () => exportEquipmentSchedule(ref),
               ),
               MechXButton(
@@ -183,8 +205,10 @@ class _ExportDeliverablesCard extends ConsumerWidget {
           ),
           const SizedBox(height: MechXSpacing.sm),
           Text(
-            "Drawing exports (DXF/PDF) are per-sheet — go to Layout to export "
-            "the current sheet's plan or riser.",
+            'The submittal package above bundles the drawings too (the current '
+            "sheet's annotated plan, the mechanical riser, and the electrical "
+            'single-line). For a single per-sheet drawing, use the Export '
+            'buttons on the Projects screen or the Riser view.',
             style: type.caption.copyWith(color: colors.textMuted),
           ),
         ],
@@ -196,7 +220,7 @@ class _ExportDeliverablesCard extends ConsumerWidget {
 /// The pre-issue compliance roll-up: an overall PASS / REVIEW REQUIRED verdict
 /// plus the three category rows (air velocities / sheet calibration / standards
 /// verification) the unified MEP report also prints. Read-only over the shared
-/// [buildComplianceSummary] (which derives from `designIssuesProvider`) — it
+/// [complianceSummaryProvider] (which derives from `designIssuesProvider`) — it
 /// invents no new checks, so the Review hub and the exported report always agree.
 class _ComplianceCard extends ConsumerWidget {
   const _ComplianceCard();
@@ -205,7 +229,9 @@ class _ComplianceCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final summary = buildComplianceSummary(ref);
+    // WATCHED (H2): fixing an issue updates this verdict immediately, in step
+    // with the live IssuesCard below.
+    final summary = ref.watch(complianceSummaryProvider);
     final allPass = summary.allPass;
     final headlineColor = allPass ? colors.success : colors.warning;
 

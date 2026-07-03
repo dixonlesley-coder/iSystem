@@ -657,7 +657,8 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorExportCalcReportPdfBtn: 'Export calc report (PDF)',
   StringKey.inspectorExportMepReportMd: 'Export unified MEP report (MD)',
   StringKey.inspectorExportMepReportPdfBtn: 'Export unified MEP report (PDF)',
-  StringKey.inspectorExportEquipmentScheduleMd: 'Export equipment schedule (MD)',
+  StringKey.inspectorExportEquipmentScheduleMd:
+      'Export equipment schedule (MD + CSV)',
   StringKey.inspectorExportEquipmentSchedulePdfBtn: 'Export equipment schedule (PDF)',
   StringKey.inspectorExportDrawingDxf: 'Export drawing (DXF)',
   StringKey.inspectorExportDrawingPdf: 'Export drawing (PDF)',
@@ -751,7 +752,8 @@ const Map<StringKey, String> _en = {
   StringKey.exportTitleSldDxf: 'Export single-line (DXF)',
   StringKey.exportTitleSldPdf: 'Export single-line (PDF)',
   StringKey.exportTitleRiserSetPdf: 'Export riser drawing set (PDF)',
-  StringKey.exportTitleRiserSetDxf: 'Export riser drawing set (DXF)',
+  StringKey.exportTitleRiserSetDxf:
+      'Export riser drawing set (DXF, one file per system)',
   StringKey.exportTitlePanelSchedulesPdf: 'Export panel schedules (PDF)',
   StringKey.exportTitlePowerOneLineDxf: 'Export power one-line (DXF)',
   StringKey.exportTitleElectricalReport: 'Export electrical report',
@@ -1113,7 +1115,8 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorExportCalcReportPdfBtn: 'Ekspor laporan hitung (PDF)',
   StringKey.inspectorExportMepReportMd: 'Ekspor laporan MEP terpadu (MD)',
   StringKey.inspectorExportMepReportPdfBtn: 'Ekspor laporan MEP terpadu (PDF)',
-  StringKey.inspectorExportEquipmentScheduleMd: 'Ekspor jadwal peralatan (MD)',
+  StringKey.inspectorExportEquipmentScheduleMd:
+      'Ekspor jadwal peralatan (MD + CSV)',
   StringKey.inspectorExportEquipmentSchedulePdfBtn: 'Ekspor jadwal peralatan (PDF)',
   StringKey.inspectorExportDrawingDxf: 'Ekspor gambar (DXF)',
   StringKey.inspectorExportDrawingPdf: 'Ekspor gambar (PDF)',
@@ -1208,7 +1211,8 @@ const Map<StringKey, String> _id = {
   StringKey.exportTitleSldDxf: 'Ekspor satu-garis (DXF)',
   StringKey.exportTitleSldPdf: 'Ekspor satu-garis (PDF)',
   StringKey.exportTitleRiserSetPdf: 'Ekspor set gambar riser (PDF)',
-  StringKey.exportTitleRiserSetDxf: 'Ekspor set gambar riser (DXF)',
+  StringKey.exportTitleRiserSetDxf:
+      'Ekspor set gambar riser (DXF, satu berkas per sistem)',
   StringKey.exportTitlePanelSchedulesPdf: 'Ekspor diagram panel (PDF)',
   StringKey.exportTitlePowerOneLineDxf: 'Ekspor daya satu-garis (DXF)',
   StringKey.exportTitleElectricalReport: 'Ekspor laporan kelistrikan',
