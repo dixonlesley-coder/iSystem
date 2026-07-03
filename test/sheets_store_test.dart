@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart' show Size;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/history_store.dart';
@@ -202,5 +203,61 @@ void main() {
     // cleared so an undo can't reach back into the previous document.
     sheets.loadSheets(const [Sheet(id: 'x', name: 'X')]);
     expect(sheets.canUndo, isFalse);
+  });
+
+  group('replaceSheetSource (A5 per-sheet plan revision, keeps the id)', () {
+    test('swaps the source PDF path + size but KEEPS the sheet id and name', () {
+      final c = makeContainer();
+      final sheets = c.read(sheetsControllerProvider.notifier);
+      sheets.loadSheets(const [
+        Sheet(id: 'denah#0', name: 'Ground', pdfPath: '/old/denah.pdf'),
+      ]);
+
+      sheets.replaceSheetSource(
+        'denah#0',
+        const Sheet(
+          id: 'revB#0', // the parsed sheet's id is IGNORED
+          name: 'revB p1', //   and its name too
+          pdfPath: '/new/denahRevB.pdf',
+          pageIndex: 0,
+          sizePx: Size(2000, 1400),
+        ),
+      );
+
+      final s = c.read(sheetsControllerProvider).sheets.single;
+      expect(s.id, 'denah#0'); // id preserved: calibration + nodes still marry
+      expect(s.name, 'Ground'); // display name preserved
+      expect(s.pdfPath, '/new/denahRevB.pdf'); // source swapped
+      expect(s.sizePx, const Size(2000, 1400));
+    });
+
+    test('a PDF→DXF swap clears the stale pdfPath (source taken wholesale)', () {
+      final c = makeContainer();
+      final sheets = c.read(sheetsControllerProvider.notifier);
+      sheets.loadSheets(const [
+        Sheet(id: 'p#0', name: 'Plan', pdfPath: '/old/plan.pdf'),
+      ]);
+
+      sheets.replaceSheetSource(
+        'p#0',
+        const Sheet(id: 'q#0', name: 'q', dxfPath: '/new/plan.dxf'),
+      );
+
+      final s = c.read(sheetsControllerProvider).sheets.single;
+      expect(s.pdfPath, isNull); // stale PDF path cleared
+      expect(s.dxfPath, '/new/plan.dxf');
+    });
+
+    test('is a no-op when the sheet id is gone', () {
+      final c = makeContainer();
+      final sheets = c.read(sheetsControllerProvider.notifier);
+      sheets.loadSheets(const [Sheet(id: 'a', name: 'A', pdfPath: '/a.pdf')]);
+      final before = c.read(sheetsControllerProvider).sheets;
+
+      sheets.replaceSheetSource(
+          'missing', const Sheet(id: 'x', name: 'X', pdfPath: '/x.pdf'));
+
+      expect(c.read(sheetsControllerProvider).sheets, same(before));
+    });
   });
 }

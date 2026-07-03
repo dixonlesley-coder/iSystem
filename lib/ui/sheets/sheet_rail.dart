@@ -4,8 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../store/models/sheet.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../shell/project_io.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/context_menu.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
 
@@ -97,6 +99,31 @@ class _RailItem extends ConsumerStatefulWidget {
 class _RailItemState extends ConsumerState<_RailItem> {
   bool _hover = false;
 
+  /// The per-sheet right-click menu — a positioned [MechXContextMenu] in the
+  /// root overlay behind a full-screen dismiss barrier (same idiom as the
+  /// canvas menus; no Material). The root overlay sits ABOVE the app's
+  /// [MechXTheme], so the captured theme is re-provided inside the entry.
+  void _showContextMenu(Offset globalPosition) {
+    final overlay = Overlay.of(context, rootOverlay: true);
+    final theme = MechXTheme.of(context);
+    final sheetId = widget.sheet.id;
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) => MechXTheme(
+        data: theme,
+        child: _SheetMenuLayer(
+          anchor: globalPosition,
+          onReplacePlan: () {
+            entry.remove();
+            replaceSheetPlan(context, ref, sheetId);
+          },
+          onDismiss: entry.remove,
+        ),
+      ),
+    );
+    overlay.insert(entry);
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -123,6 +150,10 @@ class _RailItemState extends ConsumerState<_RailItem> {
         onExit: (_) => setState(() => _hover = false),
         child: GestureDetector(
           onTap: widget.onTap,
+          // Right-click a tile for the per-sheet actions (currently "Replace
+          // plan…" — swap the source PDF/DXF/DWG while keeping the sheet id, so
+          // calibration + drawn work survive: the plan-revision workflow, A5).
+          onSecondaryTapDown: (d) => _showContextMenu(d.globalPosition),
           // Ease the hover / selection fill so switching sheets feels smooth.
           child: AnimatedContainer(
             duration: MechXMotion.hover,
@@ -247,4 +278,51 @@ class _CalibrationGlyph extends CustomPainter {
   @override
   bool shouldRepaint(_CalibrationGlyph old) =>
       old.calibrated != calibrated || old.color != color;
+}
+
+/// The floating per-sheet context menu: a dismiss barrier + a positioned
+/// [MechXContextMenu] anchored at the click point (clamped on-screen). Holds
+/// the "Replace plan…" action (A5); more per-sheet actions can join the column.
+class _SheetMenuLayer extends StatelessWidget {
+  final Offset anchor;
+  final VoidCallback onReplacePlan;
+  final VoidCallback onDismiss;
+
+  const _SheetMenuLayer({
+    required this.anchor,
+    required this.onReplacePlan,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    const menuWidth = 180.0;
+    final left =
+        anchor.dx.clamp(0.0, (size.width - menuWidth).clamp(0.0, size.width));
+    final top = anchor.dy.clamp(0.0, (size.height - 60).clamp(0.0, size.height));
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onDismiss,
+            onSecondaryTap: onDismiss,
+            child: const SizedBox.expand(),
+          ),
+        ),
+        Positioned(
+          left: left,
+          top: top,
+          width: menuWidth,
+          child: MechXContextMenu(
+            children: [
+              MechXMenuRow(label: 'Replace plan…', onTap: onReplacePlan),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 }

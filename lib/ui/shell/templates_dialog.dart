@@ -24,7 +24,7 @@ Future<void> showTemplatesDialog(BuildContext context) {
   return showGeneralDialog<void>(
     context: context,
     barrierDismissible: true,
-    barrierLabel: 'New project from template',
+    barrierLabel: 'Apply a building template',
     barrierColor: theme.colors.scrim,
     transitionDuration: MechXMotion.appear,
     pageBuilder: (ctx, _, _) => MechXTheme(
@@ -73,7 +73,7 @@ class _TemplatesDialog extends ConsumerWidget {
           Row(
             children: [
               Expanded(
-                child: Text('New from template',
+                child: Text('Apply a building template',
                     style: type.title.copyWith(color: colors.textPrimary)),
               ),
               MechXButton(

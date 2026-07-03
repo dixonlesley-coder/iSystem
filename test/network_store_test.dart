@@ -1307,4 +1307,70 @@ void main() {
       expect(n.canUndo, isFalse);
     });
   });
+
+  group('pruneNodesNotOnSheets (A5 orphan prune on Replace-all import)', () {
+    ProviderContainer makeContainer() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    test('drops nodes off the live sheets + their edges in ONE undo step', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      final history = c.read(historyProvider.notifier);
+      // A run on the (now-gone) old sheet s1, and a run on the surviving s2.
+      n.loadNetwork(const Network(
+        nodes: [
+          NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          NetNode(id: 'b', sheetId: 's1', x: 10, y: 0, floorIndex: 0),
+          NetNode(id: 'c', sheetId: 's2', x: 0, y: 0, floorIndex: 0),
+          NetNode(id: 'd', sheetId: 's2', x: 10, y: 0, floorIndex: 0),
+        ],
+        edges: [
+          NetEdge(id: 'e1', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
+          NetEdge(id: 'e2', fromId: 'c', toId: 'd', service: ServiceType.coldWater),
+        ],
+      ));
+
+      // The new sheet set after a Replace keeps only s2.
+      n.pruneNodesNotOnSheets({'s2'});
+
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.map((x) => x.id).toSet(), {'c', 'd'});
+      expect(net.edges.map((x) => x.id).toSet(), {'e2'});
+      // One undo step reverses the whole prune.
+      expect(history.canUndo, isTrue);
+      history.undo();
+      expect(
+          c.read(networkControllerProvider).network.nodes.length, 4);
+    });
+
+    test('no-op (byte-identical, no undo) when every node is on a live sheet',
+        () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'b', sheetId: 's2', x: 0, y: 0, floorIndex: 0),
+      ]));
+      final before = c.read(networkControllerProvider).network;
+
+      n.pruneNodesNotOnSheets({'s1', 's2'});
+
+      expect(c.read(networkControllerProvider).network, same(before));
+      expect(n.canUndo, isFalse);
+    });
+
+    test('an empty live set prunes every node', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+      ]));
+      n.pruneNodesNotOnSheets(const {});
+      expect(c.read(networkControllerProvider).network.nodes, isEmpty);
+      expect(n.canUndo, isTrue);
+    });
+  });
 }

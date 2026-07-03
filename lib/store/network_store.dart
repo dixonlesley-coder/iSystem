@@ -414,6 +414,32 @@ class NetworkController extends Notifier<DrawingState> {
     _commit(Network(nodes: nodes, edges: state.network.edges));
   }
 
+  /// Drop every drawn node whose [sheetId] is NOT in [liveSheetIds] (and every
+  /// edge touching a dropped node), in ONE undo step — the active fix on the
+  /// explicit Replace-all import path (A5). When Import REPLACES the sheet list,
+  /// nodes drawn on the now-gone sheets are ORPHANED: they no longer render, but
+  /// still pad the BOM / pressures / reports invisibly. (P3 SURFACES such
+  /// orphans as a critical Design Issue; this is the active prune on the replace
+  /// path.) [liveSheetIds] is the post-replace live sheet set — an empty set
+  /// therefore prunes every node (a replace with no sheets), which is correct.
+  ///
+  /// No-op — records nothing, byte-identical — when every node is already on a
+  /// live sheet (including an empty network).
+  void pruneNodesNotOnSheets(Set<String> liveSheetIds) {
+    final net = state.network;
+    final orphans = <String>{
+      for (final n in net.nodes)
+        if (!liveSheetIds.contains(n.sheetId)) n.id,
+    };
+    if (orphans.isEmpty) return;
+    final nodes = net.nodes.where((n) => !orphans.contains(n.id)).toList();
+    final edges = net.edges
+        .where((e) =>
+            !orphans.contains(e.fromId) && !orphans.contains(e.toId))
+        .toList();
+    _commit(Network(nodes: nodes, edges: edges));
+  }
+
   void undo() {
     if (_undo.isEmpty) return;
     _dragSnapshotPending = false;

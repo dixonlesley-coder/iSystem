@@ -177,6 +177,33 @@ class SheetsController extends Notifier<SheetsState> {
 
   void addSheet(Sheet sheet) =>
       state = state.copyWith(sheets: [...state.sheets, sheet]);
+
+  /// Swap the SOURCE of the sheet with [sheetId] — its pdf/dxf/dwg path, page
+  /// index and natural size — for [source]'s, KEEPING the existing id and
+  /// display name (the plan-revision workflow, A5). Calibration and drawn nodes
+  /// reference a sheet by its id, so revising the source in place preserves both
+  /// (they re-marry to the new plan). The source fields are taken WHOLESALE from
+  /// [source], so a PDF→DXF swap clears the stale pdfPath. No-op when [sheetId]
+  /// is gone or the source is already identical. Not undoable — a source swap,
+  /// like [loadSheets].
+  void replaceSheetSource(String sheetId, Sheet source) {
+    final idx = state.sheets.indexWhere((s) => s.id == sheetId);
+    if (idx < 0) return;
+    final old = state.sheets[idx];
+    final replaced = Sheet(
+      id: old.id,
+      name: old.name,
+      pdfPath: source.pdfPath,
+      dxfPath: source.dxfPath,
+      dwgPath: source.dwgPath,
+      pageIndex: source.pageIndex,
+      sizePx: source.sizePx,
+    );
+    if (replaced == old) return;
+    final sheets = [...state.sheets];
+    sheets[idx] = replaced;
+    state = state.copyWith(sheets: sheets);
+  }
 }
 
 final sheetsControllerProvider =

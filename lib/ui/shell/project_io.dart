@@ -17,11 +17,13 @@ import '../../data/project_assets.dart';
 import '../../data/project_document.dart';
 import '../../data/recovery.dart';
 import '../../store/app_state.dart';
+import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../sheets/pdf_page_picker.dart';
 import '../strings/app_strings.dart';
 import 'confirm_discard_dialog.dart';
+import 'import_choice_dialog.dart';
 
 /// Project file I/O shared by the top bar, the global Ctrl/Cmd+S/O hotkeys,
 /// the command palette, and the first-launch empty-state actions — lifted out
@@ -85,10 +87,22 @@ Future<void> newProject(BuildContext context, WidgetRef ref) async {
   ref.read(statusMessageProvider.notifier).showStatus('New project');
 }
 
-/// Pick and import a PDF / DXF / DWG floor plan into the sheet rail.
+/// Pick and import a PDF / DXF / DWG floor plan into the sheet rail. Into an
+/// EMPTY project the import just loads (today's behaviour). Into a NON-EMPTY
+/// project it offers Add-to-project vs Replace-all (A5): ADD appends the new
+/// sheets (nothing is destroyed, so no dirty-guard); REPLACE swaps every sheet
+/// (guarded like today) and then PRUNES the network of nodes left orphaned on
+/// the old sheets — so phantom pipes can't invisibly pad the BOM.
 Future<void> importPlan(BuildContext context, WidgetRef ref) async {
-  // Importing REPLACES the current sheets, orphaning drawn nodes — guard first.
-  if (!await confirmDiscardIfDirty(context, ref)) return;
+  final startedNonEmpty =
+      ref.read(sheetsControllerProvider).sheets.isNotEmpty;
+  // Into an EMPTY project, Import loads straight through — guard any unsaved
+  // work up front (today's behaviour). A NON-EMPTY project decides
+  // Add-vs-Replace AFTER the file is chosen; only the Replace branch destroys
+  // anything, so its guard runs there.
+  if (!startedNonEmpty) {
+    if (!await confirmDiscardIfDirty(context, ref)) return;
+  }
   if (!context.mounted) return;
   final result = await FilePicker.pickFiles(
     type: FileType.custom,
@@ -132,7 +146,44 @@ Future<void> importPlan(BuildContext context, WidgetRef ref) async {
       if (chosen.isEmpty) return;
       sheets = chosen;
     }
+
+    // Into a NON-EMPTY project, ask whether to ADD or REPLACE.
+    if (startedNonEmpty) {
+      if (!context.mounted) return;
+      final existing = ref.read(sheetsControllerProvider).sheets.length;
+      final choice = await showImportChoiceDialog(
+        context,
+        existingSheets: existing,
+        incomingSheets: sheets.length,
+      );
+      if (choice == null) return; // cancelled — keep the current project
+      if (choice == ImportChoice.add) {
+        // ADD destroys nothing (current sheets, calibration and network stay),
+        // so no dirty-guard: append the new sheets and stop.
+        final sheetsCtrl = ref.read(sheetsControllerProvider.notifier);
+        for (final s in sheets) {
+          sheetsCtrl.addSheet(s);
+        }
+        ref.read(loadErrorProvider.notifier).clear();
+        final n = sheets.length;
+        ref
+            .read(statusMessageProvider.notifier)
+            .showStatus('$n ${n == 1 ? 'sheet' : 'sheets'} added');
+        return;
+      }
+      // REPLACE destroys the current sheets + orphans drawn work — guard now.
+      if (!context.mounted) return;
+      if (!await confirmDiscardIfDirty(context, ref)) return;
+    }
+
+    // Replace-all: an empty project, or the explicit Replace choice.
     ref.read(sheetsControllerProvider.notifier).loadSheets(sheets);
+    // Prune nodes orphaned onto sheets that no longer exist (one undo step,
+    // byte-identical no-op when nothing is orphaned) so phantom pipes can't
+    // invisibly pad the BOM / pressures / reports.
+    ref
+        .read(networkControllerProvider.notifier)
+        .pruneNodesNotOnSheets({for (final s in sheets) s.id});
     ref.read(loadErrorProvider.notifier).clear();
     final n = sheets.length;
     ref
@@ -141,6 +192,58 @@ Future<void> importPlan(BuildContext context, WidgetRef ref) async {
   } catch (e) {
     // Surface the failure instead of silently keeping the old sheets.
     ref.read(loadErrorProvider.notifier).set('Could not import $what: $e');
+  } finally {
+    ref.read(busyProvider.notifier).clear();
+  }
+}
+
+/// Revise a SINGLE sheet's plan IN PLACE (A5): pick a new PDF/DXF/DWG and swap
+/// [sheetId]'s source for it, KEEPING the sheet id — so its calibration and the
+/// drawn nodes that reference the id survive (the real plan-revision workflow,
+/// surfaced from the sheet rail's context menu). A multi-page PDF contributes
+/// its first page. No dirty-guard: nothing is destroyed (the id, calibration and
+/// network are preserved); only the underlay changes.
+Future<void> replaceSheetPlan(
+    BuildContext context, WidgetRef ref, String sheetId) async {
+  final result = await FilePicker.pickFiles(
+    type: FileType.custom,
+    allowedExtensions: const ['pdf', 'dxf', 'dwg'],
+    allowMultiple: false,
+  );
+  if (result == null || result.files.isEmpty) return;
+  final path = result.files.single.path;
+  if (path == null || path.isEmpty) return;
+
+  final lower = path.toLowerCase();
+  final isDxf = lower.endsWith('.dxf');
+  final isDwg = lower.endsWith('.dwg');
+  final what = isDwg
+      ? 'DWG'
+      : isDxf
+          ? 'DXF'
+          : 'PDF';
+  ref.read(busyProvider.notifier).set(MechXStringsData(ref.read(localeProvider))(
+      isDwg ? StringKey.busyConvertingDwg : StringKey.busyImportingPlan));
+  try {
+    final sheets = isDwg
+        ? await importDwg(path,
+            converter: const OdaDwgConverter(), outDir: dwgCacheDir())
+        : isDxf
+            ? await importDxf(path)
+            : await importPdf(path);
+    if (sheets.isEmpty) {
+      ref
+          .read(loadErrorProvider.notifier)
+          .set('That $what had no importable geometry.');
+      return;
+    }
+    ref
+        .read(sheetsControllerProvider.notifier)
+        .replaceSheetSource(sheetId, sheets.first);
+    ref.read(loadErrorProvider.notifier).clear();
+    ref.read(statusMessageProvider.notifier).showStatus('Plan replaced');
+  } catch (e) {
+    ref.read(loadErrorProvider.notifier).set('Could not replace plan: $e');
   } finally {
     ref.read(busyProvider.notifier).clear();
   }
