@@ -695,13 +695,24 @@ room/tank selection carrying across a project load. Scope notes: F5 landed Expor
 [per-zoom LOD hiding deferred, the new F2 zoom is the "zoom to read" recourse]; E6 direct
 manipulation is active while the Room/Tank tool is selected.)
 
-**Wave 5 — The submittal & the business (completing M+E+P)**
+**Wave 5 — The submittal & the business (completing M+E+P). ✅ LANDED 2026-07-03**
 G1 wire the solved-duty bridge · H4 one-folder submittal package + consolidated export surface ·
 H5 document control at the export moment · H1 reachable PASS + acknowledgements · H6 nav badge ·
 H7 circuit-level locate · H10 mechanical pricing → one M+E+P quotation · A6 multi-file sheets ·
 A8 page-picker thumbnails · I5/I6 copilot context, batching, reach · J6 light goldens + H9
 Review/Commercial goldens · J7 the i18n batch (stable section ids first) · I7 semantics at the
 token layer · A7 window title.
+(See the two §15 rows — stage 1 [G1/I5/I6, H10, A6/A8, A7/I7] + stage 2 [H1/H4/H5/H6/H7]; adversarial
+review then fixed 5 defects — a `removeSheet` sibling-floor desync that hid drawn work, a copilot
+validation hole with no sheets loaded, the H7 way-row not being ringed, the MEP-feed toggle not
+persisting, and a documented H10 run/riser price-key nuance. **J7 disposition:** the i18n MECHANISM
++ the major workspaces are already localized [nav-rail, Preferences, Commercial, Export menu, the
+DESIGN chrome + inspector, the electrical workspace]; the remaining Wave-1..5 EN-literal tail
+[review_hub, issues_card, copilot_panel + scattered new strings] is a DELIBERATELY-DEFERRED,
+EN-byte-identical mechanical follow-up — zero user-visible change in EN, high churn/regression
+surface, and the `StringKey`/`MechXStrings` framework is complete, so it can be batched
+incrementally without re-review. **All 5 waves of the review are now landed** — every actionable
+finding is shipped or explicitly dispositioned [the J7 literal tail deferred with rationale].)
 
 ---
 

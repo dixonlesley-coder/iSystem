@@ -263,21 +263,29 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   batch edit, no group move, no tool hotkeys), workspace parity (riser/electrical keyboard +
   inspector gaps), and the last mile (compliance can never PASS, export scatter, electrical-only
   Commercial, the dead solved-duty MEP→E bridge). Sequenced into 5 waves (trust → safety net →
-  velocity → parity → submittal/business). **Waves 1, 2, 3 and 4 have LANDED** (see the four §15
-  rows): Wave 1 (trust & honesty — empty first launch, atomic saves, text-field key guard,
+  velocity → parity → submittal/business). **ALL 5 WAVES HAVE LANDED** (see the five §15 rows):
+  Wave 1 (trust & honesty — empty first launch, atomic saves, text-field key guard,
   focus-independent shell hotkeys, reactive compliance, export-guard routing), Wave 2 (the safety
   net — File→New, offline settings/MRU file, import add/replace + orphan prune, per-project
   recovery slots, annotation undo domain, structural undo atomicity, API key out of `.mechx`),
   Wave 3 (drafting velocity — Run-tool tee-in, drop-merge honesty, single-key tool/service
   shortcuts, batch property edit + group move + arrow nudge, paste cascade/array, duplicate-floor
   range, C7 nub gating, direct 1:N scale entry, idempotent auto-place, edge-editor parity, saved
-  assemblies), and Wave 4 (workspace parity — riser zoom/pan + keyboard + sticky state + label
+  assemblies), Wave 4 (workspace parity — riser zoom/pan + keyboard + sticky state + label
   dedup, electrical Esc/tappable-issues/LOD-taps/`setPanelSystem`, first-class rooms/tanks +
   names, inspector reorder + honest empty states, riser-scoped inspector, honest zoom pill,
-  `MechXScrollbar` everywhere, the fixed unplaced tray). Only Wave 5 (submittal & business)
-  remains. It also corrects the record: six items the CAD review's banner claims landed never
-  shipped (H4, H7, I4, I2-half, J6, J8) — they are folded into its findings. Work new UX/workflow
-  improvements from that document, next from Wave 5.
+  `MechXScrollbar` everywhere, the fixed unplaced tray), and Wave 5 (submittal & business — the
+  solved-duty MEP→E bridge wired + persisted, the copilot context/validation/reach, one M+E+P
+  quotation with mechanical costing [H10], multi-file sheets + rail context menu + pdfrx
+  thumbnails, window title + a11y semantics, reachable compliance PASS via advisory
+  acknowledgements [errors still block], the submittal-package + document-control export surface,
+  the Review nav badge, circuit-level electrical locate, and Review/Commercial/Projects hub
+  golden coverage). **Every actionable finding of the 83 is shipped or explicitly dispositioned**
+  — the one deferred item is **J7's Wave-1..5 EN-literal i18n tail** (the mechanism + major
+  workspaces are already localized; the tail is EN-byte-identical mechanical churn, batched
+  incrementally as a follow-up). It also corrected the record: six items the CAD review's banner
+  claimed landed never shipped (H4, H7, I4, I2-half, J6, J8) — folded into this review's findings
+  and now shipped.
 - **CAD-output + UX review (2026-07-02) — the plan of record for output/UX parity**:
   `CAD-OUTPUT-UX-REVIEW.md` (root) holds 78 code-verified findings — professional-CAD
   gaps in the plan/riser/electrical exports + reports, and Apple-lens UI/workflow gaps —
