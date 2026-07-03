@@ -3,11 +3,28 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/autosave.dart';
+import 'package:mechx/data/project_document.dart';
 import 'package:mechx/data/recovery.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/network_store.dart';
+
+/// Poll for the recovery snapshot to appear at [path]. The autosave tick writes
+/// the snapshot fire-and-forget (`Timer.periodic` callbacks cannot await), so a
+/// freshly-dirty tick may land the file a few event-loop turns after the tick
+/// interval elapses. Polling waits for that in-flight write to settle without
+/// masking a genuine "never written" bug (it still returns null on timeout).
+Future<ProjectDocument?> _awaitRecovery(String path,
+    {Duration timeout = const Duration(seconds: 5)}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    final r = await readRecovery(path: path);
+    if (r != null) return r;
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+  return null;
+}
 
 /// Finding F2 — the signature-based dirty check that guards Open / Import / quit
 /// against silently destroying unsaved work, plus the autosave loop's promotion
@@ -68,22 +85,24 @@ void main() {
   });
 
   group('startAutosave recovery (no phantom, but electrical-only recovered)', () {
+    // A unique temp path per test (not the global recovery file) so the full
+    // suite's concurrently-running isolates never race on one shared snapshot.
+    late Directory dir;
     late String path;
     setUp(() {
-      path = '${Directory.systemTemp.path}/mechx_recovery.mechx';
-      final f = File(path);
-      if (f.existsSync()) f.deleteSync();
+      dir = Directory.systemTemp.createTempSync('mechx_recovery_test');
+      path = '${dir.path}/recovery.mechx';
     });
     tearDown(() {
-      final f = File(path);
-      if (f.existsSync()) f.deleteSync();
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
 
     test('a virgin project writes no recovery (no phantom)', () async {
       final c = ProviderContainer();
       addTearDown(c.dispose);
       final timer =
-          startAutosave(c, interval: const Duration(milliseconds: 10));
+          startAutosave(c,
+          interval: const Duration(milliseconds: 10), recoveryPath: path);
       addTearDown(timer.cancel);
       await Future<void>.delayed(const Duration(milliseconds: 60));
       expect(await readRecovery(path: path), isNull);
@@ -96,10 +115,14 @@ void main() {
       c.read(electricalProjectProvider.notifier).addPanel(name: 'LP-1');
       expect(c.read(networkControllerProvider).network.nodes, isEmpty);
       final timer =
-          startAutosave(c, interval: const Duration(milliseconds: 10));
+          startAutosave(c,
+          interval: const Duration(milliseconds: 10), recoveryPath: path);
       addTearDown(timer.cancel);
-      await Future<void>.delayed(const Duration(milliseconds: 60));
-      final recovered = await readRecovery(path: path);
+      // The autosave tick's writeRecovery is fire-and-forget (a periodic Timer
+      // callback can't await), so a freshly-dirty tick may land the snapshot a
+      // few event-loop turns after the interval elapses — poll for it rather
+      // than reading once and racing the in-flight write.
+      final recovered = await _awaitRecovery(path);
       expect(recovered, isNotNull);
       expect(c.read(projectDirtyProvider), isTrue);
     });
@@ -111,7 +134,8 @@ void main() {
       addTearDown(c.dispose);
       final net = c.read(networkControllerProvider.notifier);
       final timer =
-          startAutosave(c, interval: const Duration(milliseconds: 10));
+          startAutosave(c,
+          interval: const Duration(milliseconds: 10), recoveryPath: path);
       addTearDown(timer.cancel);
 
       // State A: one run drawn; a tick mirrors it to recovery.
@@ -119,7 +143,7 @@ void main() {
       net.placeRunPoint('s1', 0, const Offset(0, 0));
       net.placeRunPoint('s1', 0, const Offset(100, 0));
       await Future<void>.delayed(const Duration(milliseconds: 60));
-      expect(await readRecovery(path: path), isNotNull);
+      expect(await _awaitRecovery(path), isNotNull);
       expect(c.read(autosaveMirrorProvider), isNotNull);
 
       // Draw on to state B, then "Save" at B — exactly what saveProject does:
@@ -142,7 +166,7 @@ void main() {
       c.read(historyProvider.notifier).undo();
       expect(isProjectDirty(c.read), isTrue);
       await Future<void>.delayed(const Duration(milliseconds: 60));
-      expect(await readRecovery(path: path), isNotNull);
+      expect(await _awaitRecovery(path), isNotNull);
     });
   });
 }

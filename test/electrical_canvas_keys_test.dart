@@ -57,7 +57,12 @@ void main() {
     await tester.pump();
     await tester.tap(serviceButton);
     await tester.pump();
-    await tester.tap(find.byType(EditableText).first);
+    // Focus the field programmatically — a hit-test tap can miss when the
+    // drawer field sits off the test viewport; what matters here is only that
+    // a text field HOLDS focus, which is exactly the guard's condition.
+    tester.widget<EditableText>(find.byType(EditableText).first)
+        .focusNode
+        .requestFocus();
     await tester.pump();
     expect(isTextEntryFocused(), isTrue);
 

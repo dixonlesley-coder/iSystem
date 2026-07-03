@@ -654,6 +654,9 @@ void main() {
       container
           .read(workspaceViewProvider.notifier)
           .set(WorkspaceView.electrical);
+      // A2: seed the sample so the canvas renders (not the empty-state card),
+      // exercising the '+ Panel' toolbar against a populated system.
+      seedSample(container);
       await tester.pump();
 
       final before = container.read(electricalProjectProvider).panels.length;
@@ -726,6 +729,9 @@ void main() {
       container
           .read(workspaceViewProvider.notifier)
           .set(WorkspaceView.electrical);
+      // A2: seed the sample so the single-line canvas renders (not the
+      // empty-state card) before switching to the Power one-line tab.
+      seedSample(container);
       await tester.pump();
 
       await tester.tap(find.text('Power one-line'));
@@ -949,7 +955,9 @@ void main() {
         listen: false,
       );
       // Stay on the Layout design view (the default), make Electrical the active
-      // layer, and place the sample MDP on demo sheet s1 (floor 0).
+      // layer, and place the sample MDP on demo sheet s1 (floor 0). A1: sheets
+      // are no longer auto-seeded, so seed the demo sheets to give s1 a canvas.
+      seedDemoSheets(container);
       seedSample(container);
       container
           .read(activeDisciplineProvider.notifier)
@@ -978,6 +986,8 @@ void main() {
         tester.element(find.byType(MechXApp)),
         listen: false,
       );
+      // A1: seed the demo sheets so the placed MDP has a canvas (s1) to draw on.
+      seedDemoSheets(container);
       seedSample(container);
       container
           .read(activeDisciplineProvider.notifier)

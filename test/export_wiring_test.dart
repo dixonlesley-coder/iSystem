@@ -122,6 +122,11 @@ void main() {
       'breakerIcuKaByPanel maps every solved panel to a positive Icu (kA) '
       'from the fault study', (tester) async {
     final (ref, container) = await harness(tester);
+    // A2: the sample switchboard is no longer auto-seeded — load it explicitly
+    // so the fault study has panels to map.
+    container
+        .read(electricalProjectProvider.notifier)
+        .setProject(sampleElectricalProject());
     final result = container.read(electricalResultProvider);
     expect(result.order, isNotEmpty,
         reason: 'the sample electrical project must carry panels');
@@ -360,6 +365,11 @@ void main() {
       'the unified-MEP PDF seam renders %PDF bytes with BOTH single-line '
       'figures appended', (tester) async {
     final (ref, container) = await harness(tester);
+    // A2: seed the sample switchboard so the unified report carries an
+    // electrical body + single-line figure.
+    container
+        .read(electricalProjectProvider.notifier)
+        .setProject(sampleElectricalProject());
     expect(container.read(electricalResultProvider).order, isNotEmpty,
         reason: 'the sample electrical project must carry panels');
 
@@ -410,6 +420,10 @@ void main() {
       'the equipment-schedule CSV seam emits the header row + one line per '
       'scheduled item', (tester) async {
     final (ref, container) = await harness(tester);
+    // A2: seed the sample switchboard so the schedule has electrical panels.
+    container
+        .read(electricalProjectProvider.notifier)
+        .setProject(sampleElectricalProject());
     expect(container.read(electricalResultProvider).order, isNotEmpty,
         reason: 'the sample electrical project must carry panels');
     final data = gatherEquipmentScheduleData(ref);

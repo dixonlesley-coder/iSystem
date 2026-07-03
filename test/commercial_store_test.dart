@@ -226,6 +226,10 @@ void main() {
       await tester.pump();
       expect(container.read(loadErrorProvider), isNull);
 
+      // Loading a network trips the one-shot "Auto-sized N runs" nudge (an
+      // unrelated status pill fired by the shell when sizing appears). Clear it
+      // so the assertion below precisely proves the BLOCKED export set no pill.
+      container.read(statusMessageProvider.notifier).clear();
       await tester.tap(find.text('Export BOM (CSV)'));
       await tester.pump();
       var err = container.read(loadErrorProvider);
@@ -236,6 +240,7 @@ void main() {
       expect(container.read(statusMessageProvider), isNull);
 
       container.read(loadErrorProvider.notifier).set(null);
+      container.read(statusMessageProvider.notifier).clear();
       await tester.tap(find.text('Export proposal (Markdown)'));
       await tester.pump();
       err = container.read(loadErrorProvider);

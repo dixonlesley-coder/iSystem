@@ -249,6 +249,10 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
 Timer startAutosave(
   ProviderContainer c, {
   Duration interval = const Duration(seconds: 15),
+  // The recovery snapshot path. Defaults to the global [recoveryFilePath] in
+  // production; tests inject a unique temp path so concurrently-running test
+  // isolates don't race on one shared file.
+  String? recoveryPath,
 }) {
   return Timer.periodic(interval, (_) {
     final doc = buildDocument(c.read);
@@ -269,6 +273,6 @@ Timer startAutosave(
       return;
     }
     c.read(autosaveMirrorProvider.notifier).set(encoded);
-    writeRecovery(doc);
+    writeRecovery(doc, path: recoveryPath);
   });
 }
