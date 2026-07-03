@@ -31,4 +31,16 @@ void main() {
     s.clear();
     expect(c.read(selectionProvider).isEmpty, isTrue);
   });
+
+  test('containsEdge / containsNode reflect the multi-selection (E1 support)',
+      () {
+    final c = makeContainer();
+    final s = c.read(selectionProvider.notifier);
+    s.setMulti({'n1', 'n2'}, {'e1'});
+    final sel = c.read(selectionProvider);
+    expect(sel.containsNode('n1'), isTrue);
+    expect(sel.containsNode('n9'), isFalse);
+    expect(sel.containsEdge('e1'), isTrue);
+    expect(sel.containsEdge('e9'), isFalse);
+  });
 }

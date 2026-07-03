@@ -92,11 +92,38 @@ void main() {
       expect(upper.floorIndex, 1);
     });
 
-    test('riser is a no-op on the top floor', () {
+    test('riser on the top floor places DOWNWARD (C6, not a silent no-op)', () {
       final c = makeContainer();
       final n = c.read(networkControllerProvider.notifier);
       n.setTool(DrawTool.drawRiser);
-      n.placeRiser('s1', 2, const Offset(0, 0), 3); // floors 0..2
+      // Top floor (index 2 of a 3-floor building): no floor above, so it spans
+      // DOWN to floor 1 and reports the direction for a UI status message.
+      final result = n.placeRiser('s1', 2, const Offset(0, 0), 3);
+      expect(result, RiserPlacement.down);
+      final net = c.read(networkControllerProvider).network;
+      final riser = net.edges.single;
+      expect(riser.kind, EdgeKind.riser);
+      final floors = {
+        net.nodeById(riser.fromId)!.floorIndex,
+        net.nodeById(riser.toId)!.floorIndex,
+      };
+      expect(floors, {1, 2}, reason: 'spans the top floor down to the one below');
+    });
+
+    test('riser on floor 0 spans UP and reports it', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setTool(DrawTool.drawRiser);
+      final result = n.placeRiser('s1', 0, const Offset(0, 0), 3);
+      expect(result, RiserPlacement.up);
+    });
+
+    test('riser in a single-floor building reports none (nothing to span)', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setTool(DrawTool.drawRiser);
+      final result = n.placeRiser('s1', 0, const Offset(0, 0), 1);
+      expect(result, RiserPlacement.none);
       expect(c.read(networkControllerProvider).network.edges, isEmpty);
     });
 
@@ -1371,6 +1398,530 @@ void main() {
       n.pruneNodesNotOnSheets(const {});
       expect(c.read(networkControllerProvider).network.nodes, isEmpty);
       expect(n.canUndo, isTrue);
+    });
+  });
+
+  group('C1: Run tool tees into an existing pipe', () {
+    ProviderContainer makeContainer() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    test('a run whose endpoint lands ON a main SPLITS it (tees in)', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setService(ServiceType.coldWater);
+      // Main run A(0,0)-B(200,0): 2 nodes, 1 edge.
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(200, 0));
+      n.setTool(DrawTool.drawRun); // clear pending
+      // A new run from (100,80) down to (100,2) — the far end lands on the main
+      // midpoint (closest point (100,0), 2 px away < snap radius), so it tees in.
+      n.placeRunPoint('s1', 0, const Offset(100, 80)); // fresh start node C
+      n.placeRunPoint('s1', 0, const Offset(100, 2)); // tees into the main at J
+
+      final net = c.read(networkControllerProvider).network;
+      // A, B, C + the split junction J = 4 nodes.
+      expect(net.nodes.length, 4);
+      // Main split into A-J + J-B, plus the new branch C-J = 3 edges.
+      expect(net.edges.length, 3);
+      // The junction sits on the main at (100,0) with degree 3.
+      final j = net.nodes.firstWhere(
+          (nd) => (nd.x - 100).abs() < 1e-6 && (nd.y).abs() < 1e-6);
+      expect(net.edgesAt(j.id).length, 3);
+      // Both split halves keep the main's cold-water service.
+      for (final e in net.edgesAt(j.id)) {
+        expect(e.service, ServiceType.coldWater);
+      }
+    });
+
+    test('teeing carries the split edge\'s size override to BOTH halves', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setService(ServiceType.coldWater);
+      n.addSegment('s1', 0, const Offset(100, 0),
+          spanPx: 200, service: ServiceType.coldWater); // ~(0,0)-(200,0)
+      final mainId = c.read(networkControllerProvider).network.edges.single.id;
+      n.setEdgeSizeOverride(mainId, Diameter.mm(50));
+
+      // Tee a run into the middle of the main.
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(100, 80));
+      n.placeRunPoint('s1', 0, const Offset(100, 2));
+
+      final net = c.read(networkControllerProvider).network;
+      final sized = net.edges
+          .where((e) => e.sizeOverride?.inMillimeters != null)
+          .toList();
+      // Exactly the two halves of the split main keep the 50 mm override; the
+      // new branch run carries none.
+      expect(sized.length, 2);
+      for (final e in sized) {
+        expect(e.sizeOverride!.inMillimeters, closeTo(50, 1e-6));
+      }
+    });
+
+    test('a run drawn away from any edge does NOT tee (byte-identical path)', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(200, 0)); // main
+      n.setTool(DrawTool.drawRun);
+      // A parallel run well clear of the main — no split.
+      n.placeRunPoint('s1', 0, const Offset(0, 300));
+      n.placeRunPoint('s1', 0, const Offset(200, 300));
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 4);
+      expect(net.edges.length, 2);
+    });
+
+    test('a CONNECTED node dragged onto another run tees in (not a plain move)',
+        () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // A main ~(50,0)-(150,0) and a second run ~(50,200)-(150,200).
+      n.addSegment('s1', 0, const Offset(100, 0),
+          spanPx: 100, service: ServiceType.coldWater);
+      n.addSegment('s1', 0, const Offset(100, 200),
+          spanPx: 100, service: ServiceType.coldWater);
+      var net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 4);
+      expect(net.edges.length, 2);
+      // Drag the second run's right endpoint (connected) onto the main midpoint.
+      final dragged =
+          net.nodes.firstWhere((nd) => (nd.x - 150).abs() < 1e-6 && nd.y == 200);
+      n.pushUndoSnapshot();
+      n.moveNode(dragged.id, 100, 6);
+      n.endNodeDragWithSnap(dragged.id, 14);
+
+      net = c.read(networkControllerProvider).network;
+      // Main split into 2 (+ junction) + second run (1) + new branch (1) = 4
+      // edges; nodes: main(2) + junction(1) + second run(2) = 5.
+      expect(net.nodes.length, 5);
+      expect(net.edges.length, 4);
+      // The dragged node survives and now carries its own run edge PLUS the tee
+      // branch (degree 2).
+      expect(net.nodeById(dragged.id), isNotNull);
+      expect(net.edgesAt(dragged.id).length, 2);
+
+      // One undo reverts the whole tee back to two separate runs.
+      n.undo();
+      net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 4);
+      expect(net.edges.length, 2);
+    });
+  });
+
+  group('C8: Ctrl+Z mid-chain preserves the run', () {
+    ProviderContainer makeContainer() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    test('undoing a chained segment keeps pendingPoint at the prior anchor', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(100, 0)); // n0-n1
+      n.placeRunPoint('s1', 0, const Offset(200, 0)); // n1-n2, pending (200,0)
+
+      n.undo();
+      final s = c.read(networkControllerProvider);
+      expect(s.network.edges.length, 1, reason: 'the last segment was removed');
+      expect(s.tool, DrawTool.drawRun);
+      expect(s.pendingPoint, const Offset(100, 0),
+          reason: 'the rubber band re-anchors at the previous chain point');
+
+      // Drawing continues from the preserved anchor, sharing the (100,0) node.
+      n.placeRunPoint('s1', 0, const Offset(100, 100));
+      final net = c.read(networkControllerProvider).network;
+      expect(net.edges.length, 2);
+      final anchor =
+          net.nodes.firstWhere((nd) => nd.x == 100 && nd.y == 0);
+      expect(net.edgesAt(anchor.id).length, 2,
+          reason: 'the continued segment shares the anchor node');
+    });
+
+    test('undoing the FIRST segment leaves the start point as the anchor', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(10, 20));
+      n.placeRunPoint('s1', 0, const Offset(110, 20)); // first + only segment
+      n.undo();
+      final s = c.read(networkControllerProvider);
+      expect(s.network.edges, isEmpty);
+      // The chain start (10,20) is kept so the engineer can re-draw from it.
+      expect(s.pendingPoint, const Offset(10, 20));
+    });
+
+    test('a non-draw undo (select tool) clears pending as before', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addFitting('s1', 0, const Offset(0, 0));
+      n.addFitting('s1', 0, const Offset(50, 50));
+      n.setTool(DrawTool.select);
+      n.undo();
+      expect(c.read(networkControllerProvider).pendingPoint, isNull);
+    });
+  });
+
+  group('C2: merge-on-drop (adopt a node / tee into an edge)', () {
+    ProviderContainer makeContainer() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    test('mergeOrAddTerminal adopts a node within radius (no coincident twin)',
+        () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addFitting('s1', 0, const Offset(100, 100));
+      final jId = c.read(networkControllerProvider).network.nodes.single.id;
+
+      final id = n.mergeOrAddTerminal('s1', 0, const Offset(102, 101),
+          fixture: PlumbingFixture.lavatory, snapRadius: 14);
+      expect(id, jId, reason: 'adopted the existing node');
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 1, reason: 'no twin created');
+      final node = net.nodeById(jId)!;
+      expect(node.role, NodeRole.fixture);
+      expect(node.fixture, PlumbingFixture.lavatory);
+    });
+
+    test('mergeOrAddComponent adopts a node (sets component + role)', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addFitting('s1', 0, const Offset(100, 100));
+      final jId = c.read(networkControllerProvider).network.nodes.single.id;
+      final id = n.mergeOrAddComponent(
+          's1', 0, const Offset(101, 100), NodeComponent.pump,
+          snapRadius: 14);
+      expect(id, jId);
+      final node = c.read(networkControllerProvider).network.nodeById(jId)!;
+      expect(node.component, NodeComponent.pump);
+      expect(node.role, NodeRole.plant); // the component's implied role
+      expect(c.read(networkControllerProvider).network.nodes.length, 1);
+    });
+
+    test('mergeOrAddFitting tees into a run when dropped on it', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(100, 0),
+          spanPx: 100, service: ServiceType.coldWater); // ~(50,0)-(150,0)
+      final id = n.mergeOrAddFitting('s1', 0, const Offset(100, 4),
+          snapRadius: 14);
+      final net = c.read(networkControllerProvider).network;
+      // The main split into two halves meeting at the inserted junction.
+      expect(net.nodes.length, 3);
+      expect(net.edges.length, 2);
+      final j = net.nodeById(id)!;
+      expect(j.x, closeTo(100, 1e-6));
+      expect(j.y, closeTo(0, 1e-6)); // snapped to the projection on the run
+      expect(net.edgesAt(id).length, 2);
+    });
+
+    test('mergeOrAddComponent tees an inline valve into a run', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(100, 0),
+          spanPx: 100, service: ServiceType.coldWater);
+      final id = n.mergeOrAddComponent(
+          's1', 0, const Offset(100, 3), NodeComponent.gateValve,
+          snapRadius: 14);
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 3);
+      expect(net.edges.length, 2);
+      final valve = net.nodeById(id)!;
+      expect(valve.component, NodeComponent.gateValve);
+      expect(net.edgesAt(id).length, 2);
+    });
+
+    test('nothing in range drops a FREE node (matches the plain add)', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      final id =
+          n.mergeOrAddFitting('s1', 0, const Offset(500, 500), snapRadius: 14);
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.single.id, id);
+      expect(net.nodes.single.x, 500);
+      expect(net.nodes.single.role, NodeRole.main);
+      expect(net.edges, isEmpty);
+    });
+  });
+
+  group('E1: batch property setters (one undo step)', () {
+    ProviderContainer makeContainer() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    Set<String> twoEdges(ProviderContainer c) {
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(0, 0), service: ServiceType.coldWater);
+      n.addSegment('s1', 0, const Offset(0, 200),
+          service: ServiceType.coldWater);
+      return c
+          .read(networkControllerProvider)
+          .network
+          .edges
+          .map((e) => e.id)
+          .toSet();
+    }
+
+    test('setEdgesSizeOverride sets both edges in ONE undo step', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      final h = c.read(historyProvider.notifier);
+      final ids = twoEdges(c);
+      n.setEdgesSizeOverride(ids, Diameter.mm(80));
+      for (final e in c.read(networkControllerProvider).network.edges) {
+        expect(e.sizeOverride?.inMillimeters, closeTo(80, 1e-6));
+      }
+      h.undo(); // one step clears BOTH
+      for (final e in c.read(networkControllerProvider).network.edges) {
+        expect(e.sizeOverride, isNull);
+      }
+    });
+
+    test('setEdgesPipeProduct / setEdgesDuctProduct / setEdgesService', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      final ids = twoEdges(c);
+      n.setEdgesPipeProduct(ids, PipeProduct.pprPn16);
+      for (final e in c.read(networkControllerProvider).network.edges) {
+        expect(e.pipeProduct, PipeProduct.pprPn16);
+      }
+      n.setEdgesService(ids, ServiceType.hotWater);
+      for (final e in c.read(networkControllerProvider).network.edges) {
+        expect(e.service, ServiceType.hotWater);
+      }
+      n.setEdgesDuctProduct(ids, DuctProduct.bjls);
+      for (final e in c.read(networkControllerProvider).network.edges) {
+        expect(e.ductProduct, DuctProduct.bjls);
+      }
+    });
+
+    test('setNodesFixture / setNodesFaceSize apply to all in one step', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addFitting('s1', 0, const Offset(10, 10));
+      n.addFitting('s1', 0, const Offset(50, 50));
+      final ids =
+          c.read(networkControllerProvider).network.nodes.map((x) => x.id).toSet();
+
+      n.setNodesFixture(ids, PlumbingFixture.waterClosetFlushValve);
+      for (final nd in c.read(networkControllerProvider).network.nodes) {
+        expect(nd.role, NodeRole.fixture);
+        expect(nd.fixture, PlumbingFixture.waterClosetFlushValve);
+      }
+
+      n.setNodesFaceSize(ids, 600, 600);
+      for (final nd in c.read(networkControllerProvider).network.nodes) {
+        expect(nd.faceWidthMm, 600);
+        expect(nd.faceHeightMm, 600);
+      }
+    });
+
+    test('a batch edit does NOT collapse the multi-selection', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      final ids = twoEdges(c);
+      c.read(selectionProvider.notifier).setMulti(const {}, ids);
+      n.setEdgesSizeOverride(ids, Diameter.mm(63));
+      // The setter never touches selection, so the batch survives the edit.
+      expect(c.read(selectionProvider).edgeIds, ids);
+    });
+
+    test('an empty id set / no change records nothing', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      twoEdges(c);
+      final before = c.read(networkControllerProvider).network;
+      n.setEdgesSizeOverride(const {}, Diameter.mm(80));
+      expect(c.read(networkControllerProvider).network, same(before));
+      // Re-applying the same (null) override is a no-op too.
+      n.setEdgesPipeProduct(const {'nope'}, null);
+      expect(c.read(networkControllerProvider).network, same(before));
+    });
+  });
+
+  group('E2: moveMany (group move, one undo step)', () {
+    ProviderContainer makeContainer() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    test('translates every selected node by one delta; one undo reverts', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addFitting('s1', 0, const Offset(10, 10));
+      n.addFitting('s1', 0, const Offset(50, 50));
+      final net0 = c.read(networkControllerProvider).network;
+      final a = net0.nodes.firstWhere((x) => x.x == 10);
+      final b = net0.nodes.firstWhere((x) => x.x == 50);
+
+      // The drag-merge pattern: one snapshot, then live group moves.
+      n.pushUndoSnapshot();
+      n.moveMany({a.id, b.id}, 5, 7);
+      n.moveMany({a.id, b.id}, 5, 7); // a second live frame
+      var net = c.read(networkControllerProvider).network;
+      expect(net.nodeById(a.id)!.x, 20);
+      expect(net.nodeById(a.id)!.y, 24);
+      expect(net.nodeById(b.id)!.x, 60);
+      expect(net.nodeById(b.id)!.y, 64);
+
+      n.undo(); // ONE step back to the pre-drag positions
+      net = c.read(networkControllerProvider).network;
+      expect(net.nodeById(a.id)!.x, 10);
+      expect(net.nodeById(a.id)!.y, 10);
+      expect(net.nodeById(b.id)!.x, 50);
+    });
+
+    test('a zero delta / empty set is a no-op', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addFitting('s1', 0, const Offset(10, 10));
+      final id = c.read(networkControllerProvider).network.nodes.single.id;
+      n.moveMany({id}, 0, 0);
+      n.moveMany(const {}, 5, 5);
+      final nd = c.read(networkControllerProvider).network.nodeById(id)!;
+      expect(nd.x, 10);
+      expect(nd.y, 10);
+    });
+  });
+
+  group('E3: paste cascade + pasteNCopies', () {
+    ProviderContainer makeContainer() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    void copyASegment(ProviderContainer c) {
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(100, 0), spanPx: 100); // ~(50,0)-(150,0)
+      final net = c.read(networkControllerProvider).network;
+      n.copySelection(net.nodes.map((nd) => nd.id).toSet(),
+          net.edges.map((e) => e.id).toSet());
+    }
+
+    test('repeated Ctrl+V CASCADES instead of stacking atop the first', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      copyASegment(c);
+      n.paste(sheetId: 's1', floorIndex: 0); // gen 1 (+24,+24)
+      n.paste(sheetId: 's1', floorIndex: 0); // gen 2 (from the re-based clip)
+      final net = c.read(networkControllerProvider).network;
+      // original 2 + two pasted generations of 2 = 6 nodes, 3 edges.
+      expect(net.nodes.length, 6);
+      expect(net.edges.length, 3);
+      // No two nodes are coincident — the second paste did not land atop the
+      // first (which the old constant-offset paste did).
+      final xs = net.nodes.map((nd) => nd.x).toSet();
+      expect(xs.length, 6, reason: 'six distinct x positions ⇒ no stacking');
+    });
+
+    test('pasteNCopies arrays N copies in ONE undo step', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      final h = c.read(historyProvider.notifier);
+      copyASegment(c);
+      final result = n.pasteNCopies(3, const Offset(30, 0),
+          sheetId: 's1', floorIndex: 0);
+      final net = c.read(networkControllerProvider).network;
+      // original (2n,1e) + 3 copies × (2n,1e) = 8 nodes, 4 edges.
+      expect(net.nodes.length, 8);
+      expect(net.edges.length, 4);
+      expect(result.nodeIds.length, 6);
+      expect(result.edgeIds.length, 3);
+      // The array is selected.
+      expect(c.read(selectionProvider).nodeIds, result.nodeIds);
+      // Each copy is stepped 30 px further — 8 distinct x positions.
+      expect(net.nodes.map((nd) => nd.x).toSet().length, 8);
+
+      h.undo(); // ONE step removes all three copies
+      expect(c.read(networkControllerProvider).network.nodes.length, 2);
+    });
+
+    test('pasteNCopies with count <= 0 or an empty clipboard is a no-op', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // Empty clipboard.
+      var r = n.pasteNCopies(3, const Offset(30, 0),
+          sheetId: 's1', floorIndex: 0);
+      expect(r.nodeIds, isEmpty);
+      copyASegment(c);
+      r = n.pasteNCopies(0, const Offset(30, 0), sheetId: 's1', floorIndex: 0);
+      expect(r.nodeIds, isEmpty);
+      // Only the copied original exists (nothing arrayed).
+      expect(c.read(networkControllerProvider).network.nodes.length, 2);
+    });
+  });
+
+  group('E8: idempotent autoPlaceRoomTerminals', () {
+    const room = RoomArea(
+      id: 'r0',
+      sheetId: 's1',
+      floorIndex: 0,
+      ax: 100,
+      ay: 100,
+      bx: 200,
+      by: 150,
+    );
+
+    test('re-running re-generates the terminals (no doubled airflow)', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(networkControllerProvider.notifier);
+
+      n.autoPlaceRoomTerminals(room: room, metersPerPixel: 0.1);
+      var net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 2); // 1 supply + 1 return
+
+      // Second run must NOT stack a second generation.
+      n.autoPlaceRoomTerminals(room: room, metersPerPixel: 0.1);
+      net = c.read(networkControllerProvider).network;
+      final supplies = net.nodes
+          .where((nd) => nd.component == NodeComponent.supplyDiffuser)
+          .toList();
+      final returns = net.nodes
+          .where((nd) => nd.component == NodeComponent.returnGrille)
+          .toList();
+      expect(supplies.length, 1, reason: 'idempotent — not doubled');
+      expect(returns.length, 1);
+      expect(net.nodes.length, 2);
+      // The per-terminal airflow is the single design value, not accumulated.
+      expect(supplies.single.airflow!.cubicMetersPerSecond, closeTo(0.25, 1e-9));
+
+      // One undo reverts the SECOND (re-place) commit.
+      n.undo();
+      expect(c.read(networkControllerProvider).network.nodes.length, 2);
+    });
+
+    test('terminals OUTSIDE the room footprint survive a re-place', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(networkControllerProvider.notifier);
+      // A supply diffuser well outside the room (500,500) — a different room's.
+      n.addComponentNode(
+          's1', 0, const Offset(500, 500), NodeComponent.supplyDiffuser);
+      n.autoPlaceRoomTerminals(room: room, metersPerPixel: 0.1);
+      n.autoPlaceRoomTerminals(room: room, metersPerPixel: 0.1);
+      final net = c.read(networkControllerProvider).network;
+      // The outside diffuser + this room's 1 supply + 1 return = 3.
+      expect(net.nodes.length, 3);
+      expect(
+          net.nodes.any((nd) => nd.x == 500 && nd.y == 500), isTrue,
+          reason: 'the outside terminal is not pruned');
     });
   });
 }

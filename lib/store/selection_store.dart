@@ -38,6 +38,13 @@ class Selection {
   /// Whether anything at all is selected (across the sets).
   bool get hasSelection => nodeIds.isNotEmpty || edgeIds.isNotEmpty;
 
+  /// Whether [id] is part of the current multi-selection. Lets a context-menu /
+  /// inspector edit decide to apply a BATCH setter to the whole selection (which
+  /// leaves the selection alive) rather than collapsing to the one target — the
+  /// store side of E1's "batch survives a property edit".
+  bool containsEdge(String id) => edgeIds.contains(id);
+  bool containsNode(String id) => nodeIds.contains(id);
+
   @override
   bool operator ==(Object other) =>
       other is Selection &&

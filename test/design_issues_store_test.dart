@@ -465,6 +465,54 @@ void main() {
       );
     });
 
+    test('a stranded air terminal (airflow, no duct) surfaces a warning (E8)',
+        () {
+      final c = makeContainer();
+      const sheetId = 's1';
+      // A supply diffuser carrying design airflow but with NO edge connected —
+      // e.g. straight out of "Auto-place diffusers" before the trunk is wired.
+      const stranded = NetNode(
+        id: 'sd',
+        sheetId: sheetId,
+        x: 10,
+        y: 10,
+        floorIndex: 0,
+        role: NodeRole.fixture,
+        component: NodeComponent.supplyDiffuser,
+        airflow: FlowRate(0.1),
+      );
+      c
+          .read(networkControllerProvider.notifier)
+          .loadNetwork(const Network(nodes: [stranded]));
+
+      final issue = c.read(designIssuesProvider).firstWhere(
+            (i) => i.title == 'Diffuser not connected to any duct',
+            orElse: () => fail('expected a stranded-terminal warning'),
+          );
+      expect(issue.severity, IssueSeverity.warning);
+      expect(issue.locate, isNotNull);
+      expect(issue.locate!.nodeId, 'sd');
+      expect(issue.locate!.sheetId, sheetId);
+    });
+
+    test('an air terminal WITH a duct raises no stranded-diffuser warning', () {
+      final c = makeContainer();
+      const a = NetNode(
+          id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0, airflow: FlowRate(0.1));
+      const b = NetNode(id: 'b', sheetId: 's1', x: 100, y: 0, floorIndex: 0);
+      const e =
+          NetEdge(id: 'e', fromId: 'a', toId: 'b', service: ServiceType.duct);
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [a, b], edges: [e]),
+          );
+      expect(
+        c
+            .read(designIssuesProvider)
+            .where((i) => i.title == 'Diffuser not connected to any duct'),
+        isEmpty,
+      );
+    });
+
     test('two sheets mapped to one floor surface a pile-up warning', () {
       final c = makeContainer();
       // The default demo (3 sheets ↔ 3 floors, positional) has no pile-up.
