@@ -44,6 +44,12 @@ class ConnectFeederResult {
   const ConnectFeederResult.refused(String this.reason) : connected = false;
 }
 
+/// The fixed id of the machine-owned "MEP Equipment" panel — the board
+/// auto-synced from the motorised equipment placed on the plan
+/// (`syncMepEquipment`). Exposed so the canvas can badge it "auto — from plan"
+/// and guard palette drops onto it (a user-dropped way there would be wiped).
+const String kMepEquipmentPanelId = 'mep-equipment';
+
 /// Which whole-area workspace the center of the shell shows. Generalises the old
 /// binary plan/schematic toggle into a three-way selection (plan / schematic /
 /// electrical).
@@ -1062,39 +1068,91 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   static int _idSeq = 0;
   String _freshId(String prefix) => '$prefix-${DateTime.now().microsecondsSinceEpoch}-${_idSeq++}';
 
-  /// Fold the MechX-sized MEP equipment (A5) into a dedicated "MEP Equipment"
-  /// panel, upserted by a fixed id so re-syncing replaces it cleanly (the
-  /// circuits already carry `sourceEquipmentId`). Empty [circuits] removes the
-  /// panel. This is the unified payoff: a pump/fan/fire-pump the mechanical
-  /// engine sized appears here as a sized electrical circuit, no re-entry.
+  /// Fold the MechX-sized MEP equipment (A5) into the dedicated "MEP Equipment"
+  /// panel — an UPSERT keyed by `sourceEquipmentId`, NOT a wholesale rebuild
+  /// (G2). This is the unified payoff: a pump/fan/fire-pump the mechanical engine
+  /// sized appears here as a sized electrical circuit, no re-entry — WITHOUT
+  /// nuking the engineer's work every time the plan changes:
   ///
-  /// UNDO-EXEMPT: a DERIVED MEP-feed sync, not a user edit — it neither pushes
-  /// a snapshot nor records a timeline entry, and it leaves both stacks intact
-  /// (an undo to a pre-sync snapshot simply predates the synced panel; the
-  /// reactive listener re-asserts it on the next equipment change).
-  void syncMepEquipment(List<ElectricalCircuit> circuits) {
-    const mepPanelId = 'mep-equipment';
-    // Strict no-op when there is nothing to sync AND no MEP panel to remove —
-    // so the reactive listener can never touch (let alone resurrect a panel
-    // on) an empty project: a fresh launch stays `const ElectricalProject()`.
-    if (circuits.isEmpty && !state.panels.any((p) => p.id == mepPanelId)) {
+  ///   * a derived way whose source equipment still exists is REFRESHED in place
+  ///     — only the machine-owned load fields (`flaOverrideA`, `loadW`, `motorKw`)
+  ///     are re-derived; the user-set name / cableType / length / starterType /
+  ///     phases / life-safety are PRESERVED;
+  ///   * a derived way whose source node is GONE is dropped;
+  ///   * a user-ADDED way on the panel (no `sourceEquipmentId`) is preserved;
+  ///   * a newly-placed piece of equipment is appended;
+  ///   * the panel's own name / tag / diversity / headroom / position / flags
+  ///     are preserved once the board exists.
+  ///
+  /// An empty result with no existing panel is a strict no-op; a merge that ends
+  /// with no ways removes the panel.
+  ///
+  /// UNDO-EXEMPT: a DERIVED MEP-feed sync, not a user edit — it neither pushes a
+  /// snapshot nor records a timeline entry, and it leaves both stacks intact (an
+  /// undo to a pre-sync snapshot simply predates the synced panel; the reactive
+  /// listener re-asserts it on the next equipment change).
+  void syncMepEquipment(List<ElectricalCircuit> derived) {
+    final existing =
+        state.panels.where((p) => p.id == kMepEquipmentPanelId).firstOrNull;
+    // Strict no-op when there is nothing to sync AND no MEP panel to touch — so
+    // the reactive listener can never resurrect a panel on an empty project: a
+    // fresh launch stays `const ElectricalProject()`.
+    if (derived.isEmpty && existing == null) return;
+
+    // Index the freshly-derived circuits by their source-equipment id.
+    final derivedBySource = <String, ElectricalCircuit>{
+      for (final c in derived)
+        if (c.sourceEquipmentId != null) c.sourceEquipmentId!: c,
+    };
+
+    final merged = <ElectricalCircuit>[];
+    final refreshed = <String>{};
+    if (existing != null) {
+      for (final c in existing.circuits) {
+        final src = c.sourceEquipmentId;
+        if (src == null) {
+          // A user-ADDED way (not machine-derived) — preserve verbatim.
+          merged.add(c);
+          continue;
+        }
+        final fresh = derivedBySource[src];
+        if (fresh == null) continue; // source equipment removed → drop the way.
+        // Source still present → refresh ONLY the derived load fields, keeping
+        // the user's name / cableType / length / starterType / phases / flags.
+        merged.add(c.copyWith(
+          loadW: fresh.loadW,
+          motorKw: fresh.motorKw,
+          flaOverrideA: fresh.flaOverrideA,
+        ));
+        refreshed.add(src);
+      }
+    }
+    // Append any newly-placed equipment not already on the board.
+    for (final c in derived) {
+      final src = c.sourceEquipmentId;
+      if (src == null || refreshed.contains(src)) continue;
+      merged.add(c);
+      refreshed.add(src);
+    }
+
+    final others =
+        state.panels.where((p) => p.id != kMepEquipmentPanelId).toList();
+    if (merged.isEmpty) {
+      // Nothing left to distribute — remove the (now-empty) panel.
+      if (existing == null) return;
+      state = _withProject(panels: others);
       return;
     }
-    final others = state.panels.where((p) => p.id != mepPanelId).toList();
-    state = _withProject(
-      panels: circuits.isEmpty
-          ? others
-          : [
-              ...others,
-              ElectricalPanel(
-                id: mepPanelId,
-                name: 'MEP Equipment',
-                tag: 'MEP',
-                voltage: const Voltage(400),
-                circuits: circuits,
-              ),
-            ],
-    );
+    final panel = existing == null
+        ? ElectricalPanel(
+            id: kMepEquipmentPanelId,
+            name: 'MEP Equipment',
+            tag: 'MEP',
+            voltage: const Voltage(400),
+            circuits: merged,
+          )
+        : existing.copyWith(circuits: merged);
+    state = _withProject(panels: [...others, panel]);
   }
 }
 

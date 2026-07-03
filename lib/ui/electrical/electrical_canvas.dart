@@ -671,6 +671,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               essential: _essential.contains(panel.panelId),
               upsBacked: modelPanel?.upsBacked ?? false,
               submeter: modelPanel?.submeter ?? false,
+              // The MEP Equipment board is machine-owned (auto-synced from the
+              // plan). Badge it + reject palette drops (a dropped way would be
+              // wiped on the next plan change) — G2.
+              autoOwned: panel.panelId == kMepEquipmentPanelId,
               onTap: () => _selectPanel(panel.panelId),
               onDoubleTap: () => widget.onEditPanel(panel.panelId),
               onMenu: (gp) => widget.onPanelMenu(panel.panelId, gp),
@@ -683,15 +687,26 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               onWayDoubleTap: (cid) => widget.onEditCircuit(panel.panelId, cid),
               onWayMenu: (cid, gp) =>
                   widget.onCircuitMenu(panel.panelId, cid, gp),
-              onDropLoad: (load) => _ctrl.addCircuit(
-                panel.panelId,
-                kind: load.kind == LoadKind.feeder
-                    ? LoadKind.general
-                    : load.kind,
-                phases: load.phases,
-                loadW: load.loadW > 0 ? load.loadW : null,
-                motorKw: load.motorKw,
-              ),
+              onDropLoad: (load) {
+                // Reject a drop onto the machine-owned MEP board — it is rebuilt
+                // from the plan, so a hand-added way would silently vanish (G2).
+                if (panel.panelId == kMepEquipmentPanelId) {
+                  ref.read(statusMessageProvider.notifier).showStatus(
+                        'MEP Equipment is auto-generated from the plan — '
+                        'add ways to another panel.',
+                      );
+                  return;
+                }
+                _ctrl.addCircuit(
+                  panel.panelId,
+                  kind: load.kind == LoadKind.feeder
+                      ? LoadKind.general
+                      : load.kind,
+                  phases: load.phases,
+                  loadW: load.loadW > 0 ? load.loadW : null,
+                  motorKw: load.motorKw,
+                );
+              },
               onOutletDragStart: (gp) => _onFeederDragStart(panel.panelId, gp),
               onOutletDragUpdate: (gp) =>
                   _onFeederDragUpdate(gp, positions, panels),
@@ -1319,6 +1334,10 @@ class _PanelCardNode extends StatefulWidget {
   final bool essential;
   final bool upsBacked;
   final bool submeter;
+
+  /// This board is machine-owned (the auto-synced MEP Equipment panel): it shows
+  /// an "auto — from plan" badge and rejects palette drops (G2).
+  final bool autoOwned;
   final VoidCallback onTap;
   final VoidCallback onDoubleTap;
   final ValueChanged<Offset> onMenu;
@@ -1349,6 +1368,7 @@ class _PanelCardNode extends StatefulWidget {
     required this.essential,
     required this.upsBacked,
     required this.submeter,
+    required this.autoOwned,
     required this.onTap,
     required this.onDoubleTap,
     required this.onMenu,
@@ -1453,7 +1473,10 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
 
     return DragTarget<PaletteLoad>(
       onWillAcceptWithDetails: (_) {
-        setState(() => _dropHover = true);
+        // Still accept the drop so the reject-toast fires (see onDropLoad), but
+        // a machine-owned board shows NO will-accept highlight — the drop is a
+        // no-op there (G2).
+        if (!widget.autoOwned) setState(() => _dropHover = true);
         return true;
       },
       onLeave: (_) => setState(() => _dropHover = false),
@@ -1559,6 +1582,13 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
   List<Widget> _badges(BuildContext context) {
     final colors = context.colors;
     final badges = <Widget>[];
+    // The machine-owned MEP board leads with an explicit "auto — from plan" cue
+    // so the engineer knows it is regenerated (and never hand-edits it) — G2.
+    if (widget.autoOwned) {
+      badges.add(
+        _Badge(label: 'auto — from plan', color: colors.accent, subtle: true),
+      );
+    }
     if (widget.unfed) {
       badges.add(_Badge(label: 'not connected', color: colors.warning));
     } else {

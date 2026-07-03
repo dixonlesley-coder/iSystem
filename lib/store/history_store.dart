@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/autosave.dart';
+import 'annotation_store.dart';
 import 'app_state.dart';
 import 'electrical_store.dart';
 import 'network_store.dart';
@@ -11,7 +12,13 @@ import 'sheets_store.dart';
 /// snapshot stack; this enum is the global timeline's record of *which* domain
 /// acted, so undo/redo can revert the genuinely most-recent edit regardless of
 /// domain (the previous "all network, then all project" ordering was wrong).
-enum UndoDomain { network, project, sheets, electrical }
+///
+/// [annotation] (B3) covers the three annotation lists — measurements, tanks and
+/// rooms — which share ONE snapshot stack in the [annotationHistoryProvider]
+/// coordinator, so a room/tank/measurement add, edit or delete is undoable as
+/// the genuinely most-recent cross-domain edit (mirrors the proven [electrical]
+/// wiring).
+enum UndoDomain { network, project, sheets, electrical, annotation }
 
 /// A single, global undo/redo timeline across every domain. Domain controllers
 /// call [HistoryController.record] from their forward mutations; undo/redo here
@@ -81,14 +88,21 @@ class HistoryController extends Notifier<int> {
       case UndoDomain.electrical:
         final c = ref.read(electricalProjectProvider.notifier);
         redo ? c.redo() : c.undo();
+      case UndoDomain.annotation:
+        final c = ref.read(annotationHistoryProvider.notifier);
+        redo ? c.redo() : c.undo();
     }
   }
 
   /// Drop the whole timeline — call when a document is opened/restored (a fresh
-  /// baseline, like each domain controller clears its own stacks on load).
+  /// baseline, like each domain controller clears its own stacks on load). Also
+  /// clears the annotation coordinator's shared stack (its stack lives outside
+  /// the three annotation controllers, so it can't clear itself from their
+  /// load-path `set(...)`); done here, once, BEFORE those loads run.
   void reset() {
     _past.clear();
     _future.clear();
+    ref.read(annotationHistoryProvider.notifier).reset();
     state++;
   }
 }

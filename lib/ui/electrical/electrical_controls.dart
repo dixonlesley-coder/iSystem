@@ -49,6 +49,11 @@ class ElectricalField extends StatelessWidget {
 /// A single-line text input — a thin wrapper over the canonical
 /// [MechXTextField] so the focus-border + spread-ring fill style lives in one
 /// place. Public API (`value`/`onChanged`) is unchanged.
+///
+/// COMMIT-ON-BLUR (G3): the edit is propagated to [onChanged] only when the
+/// field loses focus or Enter is pressed (Esc cancels) — never per keystroke —
+/// so a rename is ONE undo step rather than one per character. An unchanged edit
+/// is a no-op (no spurious undo entry).
 class ElectricalTextInput extends StatelessWidget {
   final String value;
   final ValueChanged<String> onChanged;
@@ -60,14 +65,22 @@ class ElectricalTextInput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MechXTextField(value: value, onChanged: onChanged);
+    return MechXTextField(
+      value: value,
+      onCommitted: (s) {
+        if (s != value) onChanged(s);
+      },
+    );
   }
 }
 
 /// A numeric input (mono, decimal keyboard) — the canonical [MechXTextField]
-/// with a mono text style, a decimal keyboard, and a parse guard wrapping
-/// `onChanged` (only well-formed numbers propagate). Public API
-/// (`value`/`onChanged(double)`) and parse behaviour are unchanged.
+/// with a mono text style, a decimal keyboard, and a parse guard.
+///
+/// COMMIT-ON-BLUR (G3): the parsed value is propagated only on blur / Enter
+/// (Esc cancels, restoring the displayed value), so typing `0.85` never
+/// momentarily commits `0` (which would re-size the whole system) and each edit
+/// is one undo step. Only a well-formed number that actually differs propagates.
 class ElectricalNumInput extends StatelessWidget {
   final double value;
   final ValueChanged<double> onChanged;
@@ -87,9 +100,9 @@ class ElectricalNumInput extends StatelessWidget {
       value: _fmt(value),
       textStyle: type.mono,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      onChanged: (s) {
+      onCommitted: (s) {
         final v = double.tryParse(s.trim());
-        if (v != null) onChanged(v);
+        if (v != null && v != value) onChanged(v);
       },
     );
   }
