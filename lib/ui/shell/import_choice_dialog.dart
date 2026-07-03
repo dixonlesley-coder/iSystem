@@ -103,25 +103,28 @@ class _ImportChoiceDialog extends StatelessWidget {
             style: type.caption.copyWith(color: colors.textMuted),
           ),
           const SizedBox(height: MechXSpacing.md),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          // The two choice labels are descriptive (and localize longer), so the
+          // actions stack vertically, right-aligned — the safe recommended ADD
+          // on top, the destructive REPLACE below it, Cancel last.
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               MechXButton(
-                label: 'Cancel',
-                tertiary: true,
-                onPressed: () => pop(null),
+                label: 'Add to project',
+                primary: true,
+                onPressed: () => pop(ImportChoice.add),
               ),
-              const SizedBox(width: MechXSpacing.sm),
+              const SizedBox(height: MechXSpacing.xs),
               MechXButton(
                 label: 'Replace all sheets',
                 tone: MechXButtonTone.danger,
                 onPressed: () => pop(ImportChoice.replace),
               ),
-              const SizedBox(width: MechXSpacing.sm),
+              const SizedBox(height: MechXSpacing.xs),
               MechXButton(
-                label: 'Add to project',
-                primary: true,
-                onPressed: () => pop(ImportChoice.add),
+                label: 'Cancel',
+                tertiary: true,
+                onPressed: () => pop(null),
               ),
             ],
           ),
