@@ -3260,6 +3260,81 @@ class _SelectionSection extends ConsumerWidget {
                 .copyWith(color: context.colors.textSecondary),
           ),
         ],
+        // Size + material editors (E9) — the SAME setters the right-click menu
+        // uses, mirroring the node terminal's face-size pills. The "Auto" size
+        // pill clears the override; "Default"/"Auto" material falls back to the
+        // service default.
+        const SizedBox(height: MechXSpacing.sm),
+        Text('Size',
+            style:
+                context.type.caption.copyWith(color: context.colors.textMuted)),
+        const SizedBox(height: MechXSpacing.xs),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            _Pill(
+              label: 'Auto',
+              selected: edge.sizeOverride == null,
+              onTap: () => ctrl.setEdgeSizeOverride(edge.id, null),
+            ),
+            if (edge.service.isAir)
+              for (final mm in standardDuctDiametersMm)
+                _Pill(
+                  label: 'Ø${mm.round()}',
+                  selected: edge.sizeOverride != null &&
+                      (edge.sizeOverride!.inMillimeters - mm).abs() < 0.5,
+                  onTap: () =>
+                      ctrl.setEdgeSizeOverride(edge.id, Diameter.mm(mm)),
+                )
+            else
+              for (final inches in npsInches)
+                _Pill(
+                  label: npsLabel(inches),
+                  selected: edge.sizeOverride != null &&
+                      (edge.sizeOverride!.inMillimeters - npsToMm(inches)).abs() <
+                          0.5,
+                  onTap: () => ctrl.setEdgeSizeOverride(
+                      edge.id, Diameter.mm(npsToMm(inches))),
+                ),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        Text('Material',
+            style:
+                context.type.caption.copyWith(color: context.colors.textMuted)),
+        const SizedBox(height: MechXSpacing.xs),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            if (edge.service.isAir) ...[
+              _Pill(
+                label: 'Auto',
+                selected: edge.ductProduct == null,
+                onTap: () => ctrl.setEdgeDuctProduct(edge.id, null),
+              ),
+              for (final p in DuctProduct.values)
+                _Pill(
+                  label: ductLabelFor(p),
+                  selected: edge.ductProduct == p,
+                  onTap: () => ctrl.setEdgeDuctProduct(edge.id, p),
+                ),
+            ] else ...[
+              _Pill(
+                label: 'Default',
+                selected: edge.pipeProduct == null,
+                onTap: () => ctrl.setEdgePipeProduct(edge.id, null),
+              ),
+              for (final p in PipeProduct.values)
+                _Pill(
+                  label: labelFor(p),
+                  selected: edge.pipeProduct == p,
+                  onTap: () => ctrl.setEdgePipeProduct(edge.id, p),
+                ),
+            ],
+          ],
+        ),
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
@@ -3278,11 +3353,7 @@ class _SelectionSection extends ConsumerWidget {
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
           children: [
-            if (edge.sizeOverride != null)
-              MechXButton(
-                label: 'Clear size override',
-                onPressed: () => ctrl.setEdgeSizeOverride(edge.id, null),
-              ),
+            // (Size override is cleared by the "Auto" size pill above, E9.)
             MechXButton(
               label: 'Delete ${edge.kind == EdgeKind.riser ? 'riser' : 'run'}',
               onPressed: () {

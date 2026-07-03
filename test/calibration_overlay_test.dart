@@ -102,15 +102,43 @@ void main() {
     calCtrl.addWorldPoint(const Offset(0, 200));
     await tester.pump();
 
-    // 5 m / 200 px = 0.025 m/px — plausible, no warning.
+    // 5 m / 200 px = 0.025 m/px = 40 px/m — plausible, no warning. The readout
+    // is the ONE shared human formatter now (D1): a non-PDF sheet (this host has
+    // no sheets loaded) reads `1 m = N px`.
     await tester.enterText(find.byType(MechXTextField), '5.0');
     await tester.pump();
-    expect(find.textContaining('Scale approx'), findsOneWidget);
+    expect(find.textContaining('1 m = 40 px'), findsOneWidget);
     expect(find.textContaining('order of magnitude'), findsNothing);
 
     // 5000 m / 200 px = 25 m/px — implausibly large, warns.
     await tester.enterText(find.byType(MechXTextField), '5000');
     await tester.pump();
     expect(find.textContaining('order of magnitude'), findsOneWidget);
+  });
+
+  testWidgets('Enter in the Known-distance field sets the scale (I3)',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(_host());
+    await tester.pump();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(CalibrationOverlay)),
+      listen: false,
+    );
+    final calCtrl = container.read(calibrationControllerProvider.notifier);
+    calCtrl.start();
+    calCtrl.addWorldPoint(const Offset(0, 0));
+    calCtrl.addWorldPoint(const Offset(0, 200));
+    await tester.pump();
+
+    // Type a length and press Enter — no mouse trip to "Set scale".
+    await tester.enterText(find.byType(MechXTextField), '5.0');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+
+    final cal = container.read(projectControllerProvider).calibrationFor('s1');
+    expect(cal, isNotNull);
+    expect(cal!.metersPerPixel, closeTo(0.025, 1e-12));
   });
 }

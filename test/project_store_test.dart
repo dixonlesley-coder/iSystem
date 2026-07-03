@@ -139,6 +139,48 @@ void main() {
     expect(redone.calibrationFor('s3')?.metersPerPixel, 0.02);
   });
 
+  // ── D2: apply-scale scope + count-returning apply ─────────────────────────
+
+  test('uncalibratedAmong / differentlyCalibratedFrom classify the targets', () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    n.setCalibration('s1', const ScaleCalibration(0.02));
+    n.setCalibration('s2', const ScaleCalibration(0.02)); // same as source
+    n.setCalibration('s3', const ScaleCalibration(0.05)); // its own scale
+    final s = c.read(projectControllerProvider);
+
+    // s4 is uncalibrated; s1 (the source) is excluded.
+    expect(s.uncalibratedAmong({'s1', 's2', 's3', 's4'}, exclude: 's1'),
+        {'s4'});
+    // Only s3 carries a DIFFERENT scale (s2 matches, s1 is the source).
+    expect(s.differentlyCalibratedFrom('s1', {'s1', 's2', 's3', 's4'}), {'s3'});
+    // An uncalibrated source ⇒ nothing counts as "different".
+    expect(s.differentlyCalibratedFrom('s9', {'s1', 's2'}), isEmpty);
+  });
+
+  test('applyCalibrationToAllSheets returns the number of sheets changed', () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    n.setCalibration('s1', const ScaleCalibration(0.02));
+    // s1 (source) is skipped; s2 + s3 change ⇒ 2.
+    expect(n.applyCalibrationToAllSheets('s1', toSheetIds: {'s1', 's2', 's3'}),
+        2);
+  });
+
+  test('applyCalibrationToAllSheets is a no-op (0, no undo) when nothing changes',
+      () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    n.setCalibration('s1', const ScaleCalibration(0.02));
+    n.setCalibration('s2', const ScaleCalibration(0.02)); // already the source
+    final timeline = c.read(historyProvider); // bumps on every record()
+
+    // Only s2 targeted, already matching ⇒ nothing to write.
+    expect(n.applyCalibrationToAllSheets('s1', toSheetIds: {'s1', 's2'}), 0);
+    // No snapshot recorded on the global timeline (the counter is unchanged).
+    expect(c.read(historyProvider), timeline);
+  });
+
   // ── B6: editing the floor stack under a drawn network stays safe ───────────
 
   test('setFloors that shrinks clamps drawn nodes above the new top (no crash)',

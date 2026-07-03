@@ -47,6 +47,36 @@ void main() {
     });
   });
 
+  group('MechXTextField live-mode onSubmitted (I3 — Enter fires an action)', () {
+    testWidgets('Enter fires onSubmitted while onChanged stays live; blur does '
+        'NOT fire it', (tester) async {
+      setDesktopSurface(tester);
+      final changes = <String>[];
+      var submits = 0;
+      await tester.pumpWidget(_host(MechXTextField(
+        value: '',
+        onChanged: changes.add,
+        onSubmitted: () => submits++,
+      )));
+
+      // onChanged still propagates per keystroke (live mode is preserved).
+      await tester.enterText(find.byType(EditableText), '3000');
+      await tester.pump();
+      expect(changes.last, '3000');
+      expect(submits, 0);
+
+      // Enter fires the action exactly once.
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+      expect(submits, 1);
+
+      // A blur (e.g. clicking Cancel) must NOT fire the action — only Enter does.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump();
+      expect(submits, 1);
+    });
+  });
+
   group('MechXTextField commit-on-blur mode', () {
     testWidgets('coalesces several edits into ONE commit on blur (a rename is '
         'not one undo step per character)', (tester) async {

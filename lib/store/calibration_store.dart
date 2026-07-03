@@ -90,7 +90,7 @@ class CalibrationController extends Notifier<CalibrationState> {
     final secondInRange = dSecond != null && dSecond <= snapRadius;
     if (!firstInRange && !secondInRange) return false;
     final replaceFirst =
-        firstInRange && (!secondInRange || dFirst! <= dSecond!);
+        firstInRange && (!secondInRange || dFirst <= dSecond);
     state = CalibrationState(
       phase: state.phase,
       first: replaceFirst ? point : first,

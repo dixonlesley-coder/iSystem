@@ -257,7 +257,6 @@ class _AddLevelsRowState extends State<_AddLevelsRow> {
         spacing: MechXSpacing.sm,
         runSpacing: MechXSpacing.xs,
         children: [
-          label('Add'),
           SteppedValueField(
             display: '$_count',
             editSeed: '$_count',
@@ -286,7 +285,7 @@ class _AddLevelsRowState extends State<_AddLevelsRow> {
                 () => _height = v == null ? _height : v.clamp(0.5, 20.0)),
           ),
           MechXButton(
-            label: 'Add',
+            label: 'Add levels',
             onPressed: () => widget.onAdd(_count, _height),
           ),
         ],
