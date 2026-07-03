@@ -42,6 +42,33 @@ void main() {
     expect(back.network.nodes.single.id, 'a');
   });
 
+  test('read falls back to the .bak when the primary is missing', () async {
+    // Simulate a crash in the atomic writer's displace→rename window: the good
+    // snapshot sits in `<path>.bak`, the primary `path` never got created.
+    await File('$path.bak').writeAsString(doc.encode());
+    expect(await File(path).exists(), isFalse);
+    final read = await readRecoveryStatus(path: path);
+    expect(read.status, RecoveryReadStatus.ok);
+    expect(read.doc, isNotNull);
+    expect(read.doc!.projectName, 'Recovered');
+  });
+
+  test('read prefers a good .bak over a torn primary', () async {
+    // Primary is present but corrupt (torn write); the backup is intact.
+    await File(path).writeAsString('{ not: valid json');
+    await File('$path.bak').writeAsString(doc.encode());
+    final read = await readRecoveryStatus(path: path);
+    expect(read.status, RecoveryReadStatus.ok);
+    expect(read.doc!.projectName, 'Recovered');
+  });
+
+  test('a torn primary with no backup is surfaced as unreadable', () async {
+    await File(path).writeAsString('{ not: valid json');
+    final read = await readRecoveryStatus(path: path);
+    expect(read.status, RecoveryReadStatus.unreadable);
+    expect(read.doc, isNull);
+  });
+
   test('read returns null when there is no recovery file', () async {
     expect(await readRecovery(path: path), isNull);
   });

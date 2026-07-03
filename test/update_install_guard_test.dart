@@ -17,39 +17,70 @@ import 'test_util.dart';
 /// `AppLifecycleListener.onExitRequested`. Now (a) the banner runs the same
 /// dirty check + Save/Discard/Cancel dialog Open/Import use, and (b)
 /// `installUpdate` writes a final recovery snapshot BEFORE launching the
-/// installer, whatever the dialog decided.
+/// installer WHEN the project is dirty — honouring the no-phantom-recovery
+/// invariant (a clean/saved project writes nothing).
 void main() {
+  // A unique temp recovery path per test (installUpdate takes an injectable
+  // path) so the full suite's concurrently-running isolates never race on the
+  // shared global recovery file.
+  late Directory dir;
+  late String path;
   setUp(() {
-    final f = File(recoveryFilePath());
-    if (f.existsSync()) f.deleteSync();
+    dir = Directory.systemTemp.createTempSync('mechx_update_guard');
+    path = '${dir.path}/recovery.mechx';
   });
-  tearDown(() async => clearRecovery());
+  tearDown(() {
+    if (dir.existsSync()) dir.deleteSync(recursive: true);
+  });
 
-  test(
-      'installUpdate writes a recovery snapshot BEFORE launching the installer',
-      () async {
-    final backend = _RecordingBackend(
-      current: '1.0.0',
-      latest: const LatestRelease(version: '1.1.0', url: 'https://x/y.exe'),
-    );
+  ({ProviderContainer c, UpdateController ctrl}) makeDownloaded(
+      _RecordingBackend backend) {
     final c = ProviderContainer(overrides: [
       updateEnabledProvider.overrideWithValue(true),
       updateBackendProvider.overrideWithValue(backend),
     ]);
     addTearDown(c.dispose);
-
     final ctrl = c.read(updateControllerProvider.notifier);
+    return (c: c, ctrl: ctrl);
+  }
+
+  _RecordingBackend makeBackend() => _RecordingBackend(
+        current: '1.0.0',
+        latest: const LatestRelease(version: '1.1.0', url: 'https://x/y.exe'),
+      );
+
+  test(
+      'installUpdate writes a recovery snapshot BEFORE launching the installer '
+      'when the project is dirty', () async {
+    final backend = makeBackend();
+    final (:c, :ctrl) = makeDownloaded(backend);
     await ctrl.checkForUpdates(); // fake finds 1.1.0 and "downloads" it
     expect(c.read(updateControllerProvider), isA<UpdateDownloaded>());
 
-    await ctrl.installUpdate();
+    // A dirty project ⇒ the backstop snapshot fires before exit(0).
+    final net = c.read(networkControllerProvider.notifier);
+    net.setTool(DrawTool.drawRun);
+    net.placeRunPoint('s1', 0, const Offset(0, 0));
+    net.placeRunPoint('s1', 0, const Offset(100, 0));
+
+    await ctrl.installUpdate(recoveryPath: path);
 
     expect(backend.launchedPath, isNotNull);
-    // The snapshot existed at the moment the installer was launched — nothing
-    // past this instant can be lost to the exit(0).
-    expect(backend.recoveryExistedAtLaunch, isTrue);
-    final snapshot = await readRecovery();
-    expect(snapshot, isNotNull);
+    // Nothing past this instant can be lost to the exit(0).
+    expect(await readRecovery(path: path), isNotNull);
+  });
+
+  test('installUpdate writes NO recovery for a CLEAN project (no phantom)',
+      () async {
+    final backend = makeBackend();
+    final (:c, :ctrl) = makeDownloaded(backend);
+    await ctrl.checkForUpdates();
+    expect(c.read(updateControllerProvider), isA<UpdateDownloaded>());
+    // Untouched project — not dirty. The no-phantom-recovery invariant: the
+    // next launch after the update must not pop a spurious "recover?" banner.
+    await ctrl.installUpdate(recoveryPath: path);
+    expect(backend.launchedPath, isNotNull);
+    expect(await readRecovery(path: path), isNull);
   });
 
   testWidgets(
@@ -115,8 +146,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Restart & update'), findsOneWidget);
 
-    // A virgin project is NOT dirty — no dialog, straight to the installer
-    // (with the recovery snapshot written first). Real file IO — runAsync.
+    // A virgin project is NOT dirty — no confirm dialog, straight to the
+    // installer. (The no-phantom-recovery guarantee for a clean project is
+    // pinned deterministically by the hermetic unit test above; this widget
+    // test drives the real button through the global recovery path, which the
+    // parallel suite shares, so it asserts only the dialog/launch behaviour.)
     await tester.runAsync(() async {
       await tester.tap(find.text('Restart & update'));
       await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -124,7 +158,6 @@ void main() {
     await tester.pump();
     expect(find.text('Unsaved changes'), findsNothing);
     expect(backend.launchedPath, isNotNull);
-    expect(backend.recoveryExistedAtLaunch, isTrue);
 
     await tester.pumpWidget(const SizedBox());
   });

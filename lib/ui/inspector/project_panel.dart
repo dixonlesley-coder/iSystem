@@ -149,20 +149,19 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
 /// after a successful write ⇒ a transient "Exported `name`" confirmation pill;
 /// any thrown error ⇒ a "Could not export `name`" warning. The success pill
 /// reuses the same self-clearing mechanism as Save / Open / Import. Public so
-/// the other export surfaces (e.g. `schematic_export.dart`'s riser drawing
-/// set) route through the SAME guard + feedback.
+/// every export surface (the riser drawing set in `schematic_export.dart`, the
+/// electrical + commercial exports) routes through the SAME guard + feedback.
 ///
-/// [requireSizedGeometry] opts an export out of the MECHANICAL zero-length
-/// gate (1) — electrical/commercial deliverables don't depend on the drawn
-/// mechanical geometry — while keeping the try/catch + success pill +
-/// Report-stage credit. Defaults to today's gated behaviour.
+/// The zero-length gate iterates only the MECHANICAL network, so a
+/// pure-electrical project is never blocked; a project that also carries
+/// uncalibrated mechanical runs is held back until the sheet is calibrated —
+/// conservative, and correct for any deliverable that could embed those runs.
 Future<void> runExportGuarded(
   WidgetRef ref, {
   required String name,
   required Future<bool> Function() write,
-  bool requireSizedGeometry = true,
 }) async {
-  if (requireSizedGeometry && ref.read(exportHasZeroLengthEdgesProvider)) {
+  if (ref.read(exportHasZeroLengthEdgesProvider)) {
     final n = ref.read(zeroLengthSizedEdgeCountProvider);
     ref.read(loadErrorProvider.notifier).set(
           '$n drawn element(s) have zero length — calibrate the sheet before '

@@ -80,10 +80,17 @@ class UpdateController extends Notifier<UpdateStatus> {
   /// unsaved-work dialog decided, nothing beyond this instant can be lost.
   /// (The UI-side dirty check + Save/Discard/Cancel dialog runs in the update
   /// banner, which owns a BuildContext; this is the context-free backstop.)
-  Future<void> installUpdate() async {
+  ///
+  /// The backstop honours the no-phantom-recovery invariant: it snapshots ONLY
+  /// when the project is genuinely dirty (a Save in the dialog already lowered
+  /// that flag). A clean/saved/virgin project writes nothing, so the next
+  /// launch after the update never pops a spurious "recover?" banner.
+  Future<void> installUpdate({String? recoveryPath}) async {
     final s = state;
     if (s is! UpdateDownloaded) return;
-    await writeRecovery(buildDocument(ref.read));
+    if (isProjectDirty(ref.read)) {
+      await writeRecovery(buildDocument(ref.read), path: recoveryPath);
+    }
     await _resolvedRunner.backend.launchInstaller(s.path);
   }
 

@@ -82,6 +82,12 @@ class _AppShellState extends ConsumerState<AppShell> {
     final mod = HardwareKeyboard.instance.isControlPressed ||
         HardwareKeyboard.instance.isMetaPressed;
     if (!mod) return false;
+    // This handler is pre-focus and process-global, so it must stand down when
+    // a modal route (a dialog / file picker) is on top of the shell — otherwise
+    // Ctrl+O could stack a second confirm dialog over the first, or Ctrl+K
+    // would toggle the palette behind the barrier. Only act when the shell's
+    // own route is the current one.
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) return false;
     if (key == LogicalKeyboardKey.keyK) {
       ref.read(commandPaletteOpenProvider.notifier).toggle();
       return true;

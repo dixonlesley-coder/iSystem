@@ -22,12 +22,25 @@ Future<void> atomicWriteString(String path, String contents) async {
   final tmp = File('$path.tmp');
   await tmp.writeAsString(contents, flush: true);
   final target = File(path);
-  if (await target.exists()) {
-    final bak = File('$path.bak');
+  final bak = File('$path.bak');
+  final displaced = await target.exists();
+  if (displaced) {
     if (await bak.exists()) await bak.delete();
     await target.rename('$path.bak');
   }
-  await tmp.rename(path);
+  try {
+    await tmp.rename(path);
+  } catch (e) {
+    // The rename-into-place failed (disk full / permission) AFTER the original
+    // was displaced to `.bak` — restore it so the file is never left missing,
+    // then rethrow so the caller surfaces the failure. If the process instead
+    // DIES in this window, the good copy still sits in `.bak`, which
+    // [readRecoveryStatus] and the open path fall back to.
+    if (displaced && !await target.exists() && await bak.exists()) {
+      await bak.rename(path);
+    }
+    rethrow;
+  }
 }
 
 /// Write [doc] to the recovery file (best effort; IO errors are swallowed so a
@@ -55,8 +68,25 @@ typedef RecoveryRead = ({RecoveryReadStatus status, ProjectDocument? doc});
 /// Read the recovery snapshot, distinguishing "no file" (clean previous exit)
 /// from "file present but unreadable" (torn snapshot — must be SURFACED, never
 /// silently swallowed as if the last session exited cleanly).
+///
+/// Falls back to `<path>.bak` when the primary is absent or torn: a crash in
+/// the atomic writer's narrow displace→rename window leaves the last good copy
+/// there, so the guarantee the writer advertises is actually delivered. A
+/// readable `.bak` beats reporting nothing / unreadable.
 Future<RecoveryRead> readRecoveryStatus({String? path}) async {
-  final file = File(path ?? recoveryFilePath());
+  final base = path ?? recoveryFilePath();
+  final primary = await _tryReadSnapshot(base);
+  if (primary.status == RecoveryReadStatus.ok) return primary;
+  final backup = await _tryReadSnapshot('$base.bak');
+  if (backup.status == RecoveryReadStatus.ok) return backup;
+  // No usable backup: report the primary's own status (unreadable outranks
+  // absent, so a torn primary is still surfaced rather than hidden).
+  return primary;
+}
+
+/// Read + decode ONE snapshot file into an [absent]/[ok]/[unreadable] result.
+Future<RecoveryRead> _tryReadSnapshot(String path) async {
+  final file = File(path);
   try {
     if (!await file.exists()) {
       return (status: RecoveryReadStatus.absent, doc: null);
