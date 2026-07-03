@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../data/app_settings.dart';
 import '../../store/ai_copilot_store.dart';
 import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
@@ -182,8 +183,8 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       },
     ),
     _Command(
-      title: 'New from template',
-      subtitle: 'Prefill floors / occupancy',
+      title: 'Apply building template',
+      subtitle: 'Prefill floors / occupancy on the current project',
       run: () => showTemplatesDialog(context),
     ),
     _Command(
@@ -199,6 +200,18 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       subtitle: 'Markdown',
       run: () => exportCalcReport(ref),
     ),
+    _Command(
+      title: 'New project',
+      subtitle: 'Start a blank project (guards unsaved work)',
+      run: () => newProject(context, ref),
+    ),
+    // Reopen a recent project without the OS file dialog (machine-local MRU).
+    for (final e in ref.read(appSettingsProvider).mru.take(6))
+      _Command(
+        title: 'Open recent: ${e.name}',
+        subtitle: 'Recent project',
+        run: () => openProjectPath(context, ref, e.path),
+      ),
     _Command(
       title: 'Save project',
       subtitle: 'Ctrl+S — saves to the open file',

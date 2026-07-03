@@ -853,7 +853,9 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
 
   Future<void> _discard() async {
     _confirmTimer?.cancel();
-    await clearRecovery();
+    // Clear the snapshot's OWN per-project slot (not a stale global default);
+    // falls back to the untitled slot when the path is unknown.
+    await clearRecovery(path: ref.read(recoveryDocProvider)?.recoveryPath);
     ref.read(recoveryDocProvider.notifier).clear();
   }
 
@@ -906,6 +908,18 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
                         // mirroring it after dismiss. (Recovery snapshots embed no
                         // assets, so rehydrate is a no-op here — kept for symmetry.)
                         applyDocument(ref.read, rehydrateAssets(doc));
+                        // Re-link the file identity so the next Ctrl+S saves back
+                        // to the source `.mechx` (not a Save-As fork) — when the
+                        // file still exists. B2. (snapshot is promoted non-null
+                        // inside this branch.)
+                        final src = snapshot.sourcePath;
+                        if (src != null &&
+                            src.isNotEmpty &&
+                            File(src).existsSync()) {
+                          ref
+                              .read(currentProjectPathProvider.notifier)
+                              .set(src);
+                        }
                         _discard();
                       },
                     ),

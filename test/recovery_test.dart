@@ -143,13 +143,78 @@ void main() {
     expect(read.doc!.projectName, 'Recovered');
   });
 
-  test('clearRecovery also removes the .bak/.tmp siblings', () async {
-    await writeRecovery(doc, path: path);
+  test('clearRecovery also removes the .bak/.tmp/.src siblings', () async {
+    await writeRecovery(doc, path: path, sourcePath: '/proj/tower.mechx');
     await writeRecovery(doc, path: path); // second write creates the .bak
     expect(await File('$path.bak').exists(), isTrue);
     await clearRecovery(path: path);
     expect(await File(path).exists(), isFalse);
     expect(await File('$path.bak').exists(), isFalse);
     expect(await File('$path.tmp').exists(), isFalse);
+    expect(await File('$path.src').exists(), isFalse);
+  });
+
+  group('B2 — per-project slots, source sidecar, latest lookup', () {
+    late Directory dir;
+    setUp(() => dir = Directory.systemTemp.createTempSync('mechx_recovery_b2'));
+    tearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+
+    test('appSupportDir / recoveryDir resolve under an "iSystem" folder', () {
+      expect(appSupportDir().endsWith('iSystem'), isTrue);
+      expect(recoveryDir().contains('iSystem'), isTrue);
+      expect(recoveryDir().endsWith('recovery'), isTrue);
+    });
+
+    test('recoverySlotFor: untitled is stable; a path hashes deterministically '
+        'to its own slot', () {
+      final untitled = recoverySlotFor(null);
+      expect(recoverySlotFor(''), untitled); // empty ⇒ untitled
+      expect(untitled.endsWith('untitled.mechx'), isTrue);
+      final a = recoverySlotFor('/x/tower.mechx');
+      expect(recoverySlotFor('/x/tower.mechx'), a); // deterministic across calls
+      expect(a, isNot(recoverySlotFor('/x/other.mechx')));
+      expect(a, isNot(untitled));
+      expect(a.endsWith('.mechx'), isTrue);
+    });
+
+    test('recoveryFilePath is the untitled slot (no longer %TEMP%)', () {
+      expect(recoveryFilePath(), recoverySlotFor(null));
+      expect(recoveryFilePath().contains('iSystem'), isTrue);
+    });
+
+    test('writeRecovery stores the source path in a .src sidecar; '
+        'readRecoverySource reads it back; a source-less write clears it',
+        () async {
+      final p = '${dir.path}/slot.mechx';
+      await writeRecovery(doc, path: p, sourcePath: '/projects/tower.mechx');
+      expect(await File('$p.src').exists(), isTrue);
+      expect(await readRecoverySource(p), '/projects/tower.mechx');
+
+      // A subsequent write with NO source clears the stale sidecar.
+      await writeRecovery(doc, path: p);
+      expect(await File('$p.src').exists(), isFalse);
+      expect(await readRecoverySource(p), isNull);
+    });
+
+    test('findLatestRecovery returns the primary .mechx (skipping siblings) and '
+        'null for an empty / missing dir', () async {
+      // Empty dir ⇒ null.
+      expect(await findLatestRecovery(dir: dir.path), isNull);
+
+      final p = '${dir.path}/only.mechx';
+      await writeRecovery(doc, path: p, sourcePath: '/a.mechx');
+      // Add sibling noise the lookup must ignore.
+      await File('$p.tmp').writeAsString('x');
+      await File('$p.bak').writeAsString('y');
+
+      final latest = await findLatestRecovery(dir: dir.path);
+      expect(latest, p); // the primary, not the .src/.tmp/.bak
+      expect(latest!.endsWith('.mechx'), isTrue);
+
+      // A non-existent directory ⇒ null (never throws).
+      expect(await findLatestRecovery(dir: '${dir.path}/missing'), isNull);
+    });
   });
 }

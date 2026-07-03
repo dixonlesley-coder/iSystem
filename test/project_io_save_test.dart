@@ -3,10 +3,12 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/data/app_settings.dart';
 import 'package:mechx/data/autosave.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx/ui/shell/project_io.dart';
 
 /// Finding B1 (atomic saves + the save in-flight lock) and B9 (Save resets the
@@ -97,5 +99,60 @@ void main() {
     // Had the second call also run, it would have displaced the first write
     // to `.bak`; the lock makes it a no-op instead.
     expect(File('$path.bak').existsSync(), isFalse);
+  });
+
+  testWidgets('Save records the file in the machine-local MRU / last-open list',
+      (tester) async {
+    final ref = await pumpRef(tester);
+    final path = tempTarget(tester);
+    ref.read(currentProjectPathProvider.notifier).set(path);
+
+    await tester.runAsync(() => saveProject(ref));
+
+    final mru = ref.read(appSettingsProvider).mru;
+    expect(mru, isNotEmpty);
+    expect(mru.first.path, path);
+    expect(ref.read(appSettingsProvider).lastOpenPath, path);
+  });
+
+  testWidgets(
+      'A3: New project resets to a virgin doc, forgets the file identity, and '
+      'preserves the app-level language (no spurious dirty)', (tester) async {
+    late BuildContext ctx;
+    late WidgetRef ref;
+    await tester.pumpWidget(ProviderScope(
+      child: Consumer(builder: (c, r, _) {
+        ctx = c;
+        ref = r;
+        return const SizedBox();
+      }),
+    ));
+
+    // The engineer chose Bahasa at the app level; New must keep it.
+    ref.read(localeProvider.notifier).set(AppLocale.id);
+    // A previously-open, edited project — but mark it clean so no discard dialog
+    // interposes (the guard is exercised elsewhere).
+    ref.read(currentProjectPathProvider.notifier).set('/old.mechx');
+    final net = ref.read(networkControllerProvider.notifier);
+    net.setTool(DrawTool.drawRun);
+    net.placeRunPoint('s1', 0, const Offset(0, 0));
+    net.placeRunPoint('s1', 0, const Offset(100, 0));
+    ref
+        .read(lastSavedSignatureProvider.notifier)
+        .set(buildDocument(ref.read).encode());
+    expect(isProjectDirty(ref.read), isFalse);
+
+    await newProject(ctx, ref);
+
+    expect(ref.read(networkControllerProvider).network.nodes, isEmpty); // virgin
+    expect(ref.read(currentProjectPathProvider), isNull); // file forgotten
+    expect(ref.read(lastSavedSignatureProvider), isNull); // baseline reset
+    expect(ref.read(projectControllerProvider).floors.length, 3); // defaults
+    expect(ref.read(localeProvider), AppLocale.id); // language preserved
+    // A brand-new project is NOT dirty (matches virgin at the current language).
+    expect(isProjectDirty(ref.read), isFalse);
+
+    // Unmount so the transient status-message timer is disposed in-body.
+    await tester.pumpWidget(const SizedBox());
   });
 }

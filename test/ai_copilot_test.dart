@@ -125,12 +125,18 @@ void main() {
   });
 
   group('DesignSettings persistence', () {
-    test('API key + model round-trip', () {
+    test('B8: the API key is machine-local — not written, but still read for '
+        'migration; the (non-secret) model still round-trips', () {
       const s = DesignSettings(
           anthropicApiKey: 'sk-ant-test', aiModel: 'claude-sonnet-4-6');
-      final back = DesignSettings.fromJson(s.toJson());
-      expect(back.anthropicApiKey, 'sk-ant-test');
-      expect(back.aiModel, 'claude-sonnet-4-6');
+      final json = s.toJson();
+      // The secret key is NO LONGER persisted into the shareable project file.
+      expect(json.containsKey('anthropicApiKey'), isFalse);
+      // The model (non-secret) still round-trips.
+      expect(DesignSettings.fromJson(json).aiModel, 'claude-sonnet-4-6');
+      // A LEGACY file that carries the key is still decoded (one-time migration).
+      final legacy = {...json, 'anthropicApiKey': 'sk-ant-legacy'};
+      expect(DesignSettings.fromJson(legacy).anthropicApiKey, 'sk-ant-legacy');
     });
 
     test('an older file (no AI keys) loads with safe defaults', () {

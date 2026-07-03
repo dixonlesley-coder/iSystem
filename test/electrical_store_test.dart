@@ -8,7 +8,6 @@ import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/project_store.dart';
-import 'package:mechx/ui/electrical/electrical_canvas.dart';
 import 'package:mechx/ui/electrical/electrical_palette.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
@@ -1797,9 +1796,22 @@ void main() {
       expect(mepWays(), 1);
       expect(panelCount(), 1);
 
-      // Drag a Loads-palette card onto the centred MEP board.
+      // Drag a Loads-palette card onto the MEP board's OWN drop target (the
+      // canvas fit frames the head + card, so canvas-centre isn't the card —
+      // pick the panel card's DragTarget, the smaller of the two PaletteLoad
+      // targets: the full-canvas fall-through target vs. this panel card).
       final source = find.byType(Draggable<PaletteLoad>).first;
-      final target = tester.getCenter(find.byType(ElectricalCanvas));
+      final dropTargets = find
+          .byType(DragTarget<PaletteLoad>)
+          .evaluate()
+          .toList()
+        ..sort((a, b) {
+          Size sz(Element e) => (e.renderObject as RenderBox).size;
+          final sa = sz(a);
+          final sb = sz(b);
+          return (sa.width * sa.height).compareTo(sb.width * sb.height);
+        });
+      final target = tester.getCenter(find.byWidget(dropTargets.first.widget));
       final gesture = await tester.startGesture(tester.getCenter(source));
       await tester.pump();
       await gesture.moveTo(target);

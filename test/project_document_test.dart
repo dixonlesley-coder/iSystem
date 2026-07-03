@@ -832,6 +832,34 @@ void main() {
     expect(decoded.settings.fixtureLibrary.single.id, 'ok');
   });
 
+  test('B8: the AI key is machine-local — not written to the file, but still '
+      'read for one-time migration', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      settings: DesignSettings(
+        anthropicApiKey: 'sk-ant-SECRET',
+        aiModel: 'claude-sonnet-4-6',
+      ),
+    );
+    final json = doc.toJson();
+    // The secret key is NEVER persisted into the shareable project file...
+    expect((json['settings'] as Map).containsKey('anthropicApiKey'), isFalse);
+    // ...while the non-secret model + provider still round-trip.
+    expect((json['settings'] as Map)['aiModel'], 'claude-sonnet-4-6');
+    // An untouched encode/decode leaves the key empty (it lives machine-local).
+    expect(ProjectDocument.decode(doc.encode()).settings.anthropicApiKey, '');
+    // A LEGACY file that DOES carry the key still decodes it (migration read).
+    final legacy = doc.toJson();
+    (legacy['settings'] as Map)['anthropicApiKey'] = 'sk-ant-LEGACY';
+    expect(
+        ProjectDocument.fromJson(legacy).settings.anthropicApiKey,
+        'sk-ant-LEGACY');
+  });
+
   test('document control round-trips (identity fields + revision history)',
       () {
     const doc = ProjectDocument(

@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/data/autosave.dart';
 import 'package:mechx/data/project_document.dart';
+import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
@@ -55,9 +56,8 @@ void main() {
     final container = containerFor(tester);
 
     final savedAt = DateTime.now().subtract(const Duration(minutes: 5));
-    container
-        .read(recoveryDocProvider.notifier)
-        .set((doc: _doc, savedAt: savedAt));
+    container.read(recoveryDocProvider.notifier).set(
+        (doc: _doc, savedAt: savedAt, sourcePath: null, recoveryPath: null));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('recovery-banner')), findsOneWidget);
@@ -73,9 +73,8 @@ void main() {
     await tester.pump();
     final container = containerFor(tester);
 
-    container
-        .read(recoveryDocProvider.notifier)
-        .set((doc: _doc, savedAt: null));
+    container.read(recoveryDocProvider.notifier).set(
+        (doc: _doc, savedAt: null, sourcePath: null, recoveryPath: null));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('earlier'), findsOneWidget);
@@ -89,9 +88,8 @@ void main() {
     await tester.pump();
     final container = containerFor(tester);
 
-    container
-        .read(recoveryDocProvider.notifier)
-        .set((doc: _doc, savedAt: null));
+    container.read(recoveryDocProvider.notifier).set(
+        (doc: _doc, savedAt: null, sourcePath: null, recoveryPath: null));
     await tester.pumpAndSettle();
 
     expect(find.text('Discard snapshot'), findsOneWidget);
@@ -115,9 +113,8 @@ void main() {
 
     // A null doc = the recovery FILE exists but could not be decoded (torn by
     // an interrupted write) — must never masquerade as a clean exit.
-    container
-        .read(recoveryDocProvider.notifier)
-        .set((doc: null, savedAt: null));
+    container.read(recoveryDocProvider.notifier).set(
+        (doc: null, savedAt: null, sourcePath: null, recoveryPath: null));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('recovery-banner')), findsOneWidget);
@@ -134,9 +131,8 @@ void main() {
     await tester.pump();
     final container = containerFor(tester);
 
-    container
-        .read(recoveryDocProvider.notifier)
-        .set((doc: _doc, savedAt: null));
+    container.read(recoveryDocProvider.notifier).set(
+        (doc: _doc, savedAt: null, sourcePath: null, recoveryPath: null));
     await tester.pumpAndSettle();
 
     // Arm, then confirm. The confirming tap runs real dart:io (clearRecovery),
@@ -150,6 +146,52 @@ void main() {
     });
     await tester.pump();
 
+    expect(container.read(recoveryDocProvider), isNull);
+  });
+
+  testWidgets(
+      'B2: Restore re-links currentProjectPath to the snapshot source file when '
+      'it still exists (next Ctrl+S saves in place, not a Save-As fork)',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    final container = containerFor(tester);
+
+    // A real source file on disk (the project the snapshot belonged to). Use a
+    // full-size sheet so the restored canvas renders without a placeholder-page
+    // overflow (unrelated to the re-link under test).
+    const restoreDoc = ProjectDocument(
+      projectName: 'Tower B',
+      floors: [Floor('G', Length(3.5))],
+      calibrations: {'s1': ScaleCalibration(0.02)},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(1200, 900))],
+      network: Network(
+        nodes: [NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0)],
+      ),
+    );
+    final dir = Directory.systemTemp.createTempSync('mechx_relink');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final src = '${dir.path}/tower.mechx';
+    File(src).writeAsStringSync(restoreDoc.encode());
+
+    expect(container.read(currentProjectPathProvider), isNull);
+    container.read(recoveryDocProvider.notifier).set((
+      doc: restoreDoc,
+      savedAt: null,
+      sourcePath: src,
+      recoveryPath: '${dir.path}/slot.mechx',
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Restore'));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await tester.pump();
+
+    // The project is re-linked to the source file, and the banner is dismissed.
+    expect(container.read(currentProjectPathProvider), src);
     expect(container.read(recoveryDocProvider), isNull);
   });
 }

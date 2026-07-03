@@ -256,9 +256,9 @@ void wireAppSettingsPersistence(ProviderContainer c) {
         ));
   }
 
-  c.listen(localeProvider, (_, __) => capture());
-  c.listen(brightnessProvider, (_, __) => capture());
-  c.listen(aiProviderProvider, (_, __) => capture());
-  c.listen(aiApiKeyProvider, (_, __) => capture());
-  c.listen(aiModelProvider, (_, __) => capture());
+  c.listen(localeProvider, (_, _) => capture());
+  c.listen(brightnessProvider, (_, _) => capture());
+  c.listen(aiProviderProvider, (_, _) => capture());
+  c.listen(aiApiKeyProvider, (_, _) => capture());
+  c.listen(aiModelProvider, (_, _) => capture());
 }

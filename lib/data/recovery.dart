@@ -2,6 +2,13 @@ import 'dart:io';
 
 import 'project_document.dart';
 
+/// Overrides the app-support base directory. Set by the test harness to a
+/// unique per-isolate temp dir so the full suite's concurrently-running
+/// widget tests (each pumping the app, which autosaves recovery) never share
+/// one on-disk app-support tree and race / leak snapshots into each other.
+/// Null in production ⇒ the real per-user dir below.
+String? appSupportDirOverride;
+
 /// The per-user app-support base directory for iSystem — the OFFLINE,
 /// plugin-free home for machine-local state (app settings + crash-recovery
 /// snapshots). On Windows this is `%APPDATA%\iSystem`; elsewhere (and in a
@@ -9,6 +16,7 @@ import 'project_document.dart';
 /// A pure path computation — the directory is created lazily by the writers
 /// ([atomicWriteString] makes the parent), never here.
 String appSupportDir() {
+  if (appSupportDirOverride != null) return appSupportDirOverride!;
   final appData = Platform.environment['APPDATA'];
   final base = (appData != null && appData.isNotEmpty)
       ? appData
