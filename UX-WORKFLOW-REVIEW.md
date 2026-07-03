@@ -651,11 +651,13 @@ Five waves, ordered so **trust lands before speed, speed before parity, parity b
 mile** — matching how a user's confidence actually builds. Every item is additive or
 byte-identical-by-default; goldens regenerate only where a change is deliberately visible.
 
-**Wave 1 — Ship honesty & stop the bleeding (small fixes, ~1 cycle)**
+**Wave 1 — Ship honesty & stop the bleeding (small fixes, ~1 cycle). ✅ LANDED 2026-07-03**
 A1 empty first launch · A2 empty electrical seed · H3 route all 14 exports through the guard ·
 B1 atomic writes · B4 text-field key guard · I1 focus-independent shell hotkeys · F3 riser
 phantom undo · H2 reactive compliance verdict · F9 roof-tank line · J2 heatmap legend ·
 G8 SP-N ordinals · B5 update-exit guard · B9 eager dirty dot · H8 export naming.
+(See the §15 decisions-log row for the change detail; adversarial review then fixed a
+phantom-recovery-on-update, a modal-unsafe hotkey, and an unused `.bak` fallback.)
 
 **Wave 2 — The safety net (undo + data model)**
 B3 annotation undo domain + confirmable deletes · G2 MEP-panel upsert + auto badge · B6 floor
