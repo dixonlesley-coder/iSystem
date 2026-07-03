@@ -225,14 +225,22 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     final project = ref.watch(electricalProjectProvider);
     final advanced = ref.watch(electricalAdvancedProvider);
 
-    // The Review → Electrical jump seam: a located issue hands a panel id via
-    // electricalFocusProvider; consume it once — switch to the single-line
-    // tab, frame that panel's board schedule, and clear the request.
-    ref.listen(electricalFocusProvider, (prev, panelId) {
-      if (panelId == null) return;
+    // The Review → Electrical jump seam: a located issue hands a panel id (and,
+    // when the issue pinpoints one, a circuit/way id — H7) via
+    // electricalFocusProvider; consume it once — switch to the single-line tab,
+    // frame that panel's board schedule, SELECT the exact way when known, and
+    // clear the request.
+    ref.listen(electricalFocusProvider, (prev, req) {
+      if (req == null) return;
       if (_tab != _Tab.singleLine) setState(() => _tab = _Tab.singleLine);
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _canvasKey.currentState?.focusPanelSchedule(panelId);
+        _canvasKey.currentState?.focusPanelSchedule(req.panelId);
+        final circuitId = req.circuitId;
+        if (circuitId != null) {
+          ref
+              .read(electricalSelectionProvider.notifier)
+              .selectCircuit(req.panelId, circuitId);
+        }
         ref.read(electricalFocusProvider.notifier).clear();
       });
     });

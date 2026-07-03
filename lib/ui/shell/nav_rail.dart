@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../store/design_issues_store.dart';
 import '../../store/electrical_store.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
@@ -78,6 +79,16 @@ class NavRail extends ConsumerWidget {
     final section = ref.watch(shellSectionProvider);
     final view = ref.watch(workspaceViewProvider);
     final collapsed = ref.watch(navRailCollapsedProvider);
+
+    // H6 — the Review nav badge: the count of OPEN (unacknowledged) design
+    // issues, danger-tinted when any is a blocker (critical). Zero ⇒ no badge
+    // (a fully-acknowledged, warning-free design carries no ambient count).
+    final openIssues = ref.watch(openDesignIssueCountProvider);
+    final criticalIssues = ref.watch(designIssueCriticalCountProvider);
+    final warningIssues = ref.watch(designIssueWarningCountProvider);
+    final reviewBadgeColor = criticalIssues > 0
+        ? colors.danger
+        : (warningIssues > 0 ? colors.warning : colors.accent);
 
     final sectionCtrl = ref.read(shellSectionProvider.notifier);
     final viewCtrl = ref.read(workspaceViewProvider.notifier);
@@ -162,6 +173,8 @@ class NavRail extends ConsumerWidget {
             active: section == ShellSection.review,
             collapsed: collapsed,
             onTap: () => sectionCtrl.set(ShellSection.review),
+            badgeCount: openIssues,
+            badgeColor: reviewBadgeColor,
           ),
           _NavItem(
             glyph: _Glyph.commercial,
@@ -317,12 +330,19 @@ class _NavItem extends StatefulWidget {
   final bool collapsed;
   final VoidCallback onTap;
 
+  /// H6 — an optional count badge on the glyph (0 ⇒ none). [badgeColor] tints it
+  /// (danger for blockers, warning otherwise).
+  final int badgeCount;
+  final Color? badgeColor;
+
   const _NavItem({
     required this.glyph,
     required this.label,
     required this.active,
     required this.collapsed,
     required this.onTap,
+    this.badgeCount = 0,
+    this.badgeColor,
   });
 
   @override
@@ -386,9 +406,25 @@ class _NavItemState extends State<_NavItem> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          CustomPaint(
-            size: const Size(22, 22),
-            painter: _GlyphPainter(widget.glyph, fg),
+          // The glyph, with an optional H6 count badge overlaid at its
+          // top-right corner (shown only when badgeCount > 0).
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              CustomPaint(
+                size: const Size(22, 22),
+                painter: _GlyphPainter(widget.glyph, fg),
+              ),
+              if (widget.badgeCount > 0)
+                Positioned(
+                  right: -6,
+                  top: -4,
+                  child: _CountBadge(
+                    count: widget.badgeCount,
+                    color: widget.badgeColor ?? context.colors.danger,
+                  ),
+                ),
+            ],
           ),
           AnimatedSize(
             duration: MechXMotion.appear,
@@ -451,6 +487,40 @@ class _NavItemState extends State<_NavItem> {
   }
 
   final LayerLink _link = LayerLink();
+}
+
+/// H6 — a compact count pill overlaid on a nav glyph. Caps the display at "9+"
+/// so a large advisory backlog never blows out the rail width. The number uses
+/// the bundled Roboto face (never tofu). White-on-colour for legibility.
+class _CountBadge extends StatelessWidget {
+  final int count;
+  final Color color;
+  const _CountBadge({required this.count, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = count > 9 ? '9+' : '$count';
+    return Container(
+      constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: const BorderRadius.all(Radius.circular(7)),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        label,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontFamily: 'Roboto',
+          fontSize: 9,
+          height: 1.0,
+          fontWeight: FontWeight.w700,
+          color: context.colors.onAccent,
+        ),
+      ),
+    );
+  }
 }
 
 /// The hover label shown beside a COLLAPSED nav item — a small MechXTheme card

@@ -30,10 +30,18 @@ ComplianceSummary buildComplianceSummaryFrom({
   required List<DesignIssue> issues,
   required List<ElectricalWarning> electricalWarnings,
   required String date,
+  Set<String> acknowledged = const {},
 }) {
   bool isFail(DesignIssue i) =>
       i.severity == IssueSeverity.warning ||
       i.severity == IssueSeverity.critical;
+
+  // H1 — an advisory the engineer has ACKNOWLEDGED no longer blocks the verdict.
+  // Only [info]-severity issues are acknowledgeable ([DesignIssue.isAcknowledgeable]);
+  // a warning/critical is never treated as acknowledged even if a stale key
+  // lingers, so an acknowledgement can never hide a real error.
+  bool isAck(DesignIssue i) =>
+      i.isAcknowledgeable && acknowledged.contains(i.key);
 
   // The three named checks (kept as positive confirmations on a clean
   // project). Track which issues they account for; everything else rolls up
@@ -53,8 +61,14 @@ ComplianceSummary buildComplianceSummaryFrom({
   // fail the 'Sheet calibration' compliance item.
   final calibrationWarnings =
       claim((i) => i.title.contains('calibrated')).where(isFail).length;
-  // Standards verification: unverified-standard info items.
-  final unverified = claim((i) => i.title == 'Unverified standard').length;
+  // Standards verification: unverified-standard info items. An ACKNOWLEDGED
+  // value no longer counts as OPEN (H1) — the mechanism that makes a PASS
+  // structurally reachable while the full tiered register still prints in the
+  // report (guardrail 6 intact). The acknowledged count is surfaced honestly in
+  // the row detail rather than silently dropped.
+  final unverifiedItems = claim((i) => i.title == 'Unverified standard');
+  final openUnverified = unverifiedItems.where((i) => !isAck(i)).length;
+  final ackUnverified = unverifiedItems.length - openUnverified;
   // Electrical warnings are fanned into designIssuesProvider (Wave 3) with an
   // 'Electrical: ' title prefix — claim them here so the dedicated
   // 'Electrical circuit sizing' row below (counted from the solved system
@@ -93,10 +107,15 @@ ComplianceSummary buildComplianceSummaryFrom({
               ? 'all sheets calibrated'
               : '$calibrationWarnings uncalibrated'),
       ComplianceItem('Standards verification',
-          pass: unverified == 0,
-          detail: unverified == 0
-              ? 'all values verified'
-              : '$unverified value(s) require verification before submission'),
+          pass: openUnverified == 0,
+          detail: openUnverified == 0
+              ? (ackUnverified == 0
+                  ? 'all values verified'
+                  : '$ackUnverified acknowledged, none open')
+              : (ackUnverified == 0
+                  ? '$openUnverified value(s) require verification or '
+                      'acknowledgement before submission'
+                  : '$openUnverified open, $ackUnverified acknowledged')),
       for (final e in remainder.entries)
         ComplianceItem(e.key,
             pass: !e.value.any(isFail),
@@ -121,6 +140,7 @@ final complianceSummaryProvider = Provider<ComplianceSummary>((ref) {
   return buildComplianceSummaryFrom(
     issues: ref.watch(designIssuesProvider),
     electricalWarnings: ref.watch(electricalResultProvider).warnings,
+    acknowledged: ref.watch(acknowledgedIssuesProvider),
     // The verdict date is formatted app-side (the engine never reads the
     // clock); it only rolls at midnight, which no open session cares about.
     date: DateTime.now().toIso8601String().split('T').first,

@@ -8,12 +8,14 @@ import '../../store/solve_store.dart';
 import '../canvas/service_style.dart';
 import '../inspector/project_panel.dart'
     show
+        ExportIdentityBar,
         exportCalcReport,
         exportCalcReportPdf,
         exportEquipmentSchedule,
         exportEquipmentSchedulePdf,
         exportMepUnifiedReport,
-        exportMepUnifiedReportPdf;
+        exportMepUnifiedReportPdf,
+        exportSubmittalPackage;
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
@@ -153,6 +155,21 @@ class _ExportDeliverablesCard extends ConsumerWidget {
               ),
             ],
           ),
+          const SizedBox(height: MechXSpacing.md),
+          // H5: the document-control identity right at the export surface.
+          const ExportIdentityBar(),
+          const SizedBox(height: MechXSpacing.md),
+          // H4: the one-folder submittal package — the whole deliverable set
+          // (reports + BOM/quotation + plan/riser/electrical drawings) into one
+          // chosen folder in one action.
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MechXButton(
+              label: 'Export submittal package...',
+              primary: true,
+              onPressed: () => exportSubmittalPackage(ref),
+            ),
+          ),
           const SizedBox(height: MechXSpacing.sm),
           Wrap(
             spacing: MechXSpacing.xs,
@@ -188,8 +205,10 @@ class _ExportDeliverablesCard extends ConsumerWidget {
           ),
           const SizedBox(height: MechXSpacing.sm),
           Text(
-            "Drawing exports (DXF/PDF) are per-sheet — go to Layout to export "
-            "the current sheet's plan or riser.",
+            'The submittal package above bundles the drawings too (the current '
+            "sheet's annotated plan, the mechanical riser, and the electrical "
+            'single-line). For a single per-sheet drawing, use the Export '
+            'buttons on the Projects screen or the Riser view.',
             style: type.caption.copyWith(color: colors.textMuted),
           ),
         ],

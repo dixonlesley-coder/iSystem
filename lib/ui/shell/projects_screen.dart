@@ -7,6 +7,7 @@ import '../../data/app_settings.dart';
 import '../../store/project_store.dart';
 import '../inspector/project_panel.dart'
     show
+        ExportIdentityBar,
         exportAnnotatedPlanPdf,
         exportCalcReport,
         exportCalcReportPdf,
@@ -15,7 +16,8 @@ import '../inspector/project_panel.dart'
         exportEquipmentSchedule,
         exportEquipmentSchedulePdf,
         exportMepUnifiedReport,
-        exportMepUnifiedReportPdf;
+        exportMepUnifiedReportPdf,
+        exportSubmittalPackage;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -74,8 +76,22 @@ class ProjectsScreen extends ConsumerWidget {
               const SizedBox(height: MechXSpacing.sm),
               MechXTextField(value: project.name, onChanged: ctrl.setName),
               const SizedBox(height: MechXSpacing.md),
+              // H5: the document-control identity right at the export surface.
+              const ExportIdentityBar(),
+              const SizedBox(height: MechXSpacing.md),
               Text('Export',
                   style: type.caption.copyWith(color: colors.textMuted)),
+              const SizedBox(height: MechXSpacing.xs),
+              // H4: the one-folder submittal package — pick a folder once, get
+              // the whole consistently-named deliverable set.
+              Align(
+                alignment: Alignment.centerLeft,
+                child: MechXButton(
+                  label: 'Export submittal package...',
+                  primary: true,
+                  onPressed: () => exportSubmittalPackage(ref),
+                ),
+              ),
               const SizedBox(height: MechXSpacing.xs),
               Wrap(
                 spacing: MechXSpacing.xs,

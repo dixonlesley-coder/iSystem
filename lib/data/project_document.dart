@@ -157,6 +157,15 @@ class DesignSettings {
   /// that never saved a block is byte-identical to before.
   final List<SavedAssembly> savedAssemblies;
 
+  /// H1 — the design-issue keys the engineer has ACKNOWLEDGED (see
+  /// `design_issues_store.dart` `DesignIssue.key`): advisory/`secondarySource`
+  /// items accepted so they no longer block a PASS compliance verdict. Errors
+  /// and warnings are never acknowledgeable, so this can only ever relax an
+  /// advisory. Defaults empty — a project that has acknowledged nothing loads
+  /// byte-identical to before, and compliance still can't PASS until something
+  /// is acknowledged.
+  final List<String> acknowledgedIssueKeys;
+
   const DesignSettings({
     this.occupancy = Occupancy.private,
     this.upfeed = false,
@@ -187,6 +196,7 @@ class DesignSettings {
     this.approvedBy,
     this.revisions = const [],
     this.savedAssemblies = const [],
+    this.acknowledgedIssueKeys = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -235,6 +245,10 @@ class DesignSettings {
         // untouched project stays byte-identical).
         if (savedAssemblies.isNotEmpty)
           'savedAssemblies': [for (final a in savedAssemblies) a.toJson()],
+        // Acknowledged advisory keys (H1; additive — encoded only when non-empty
+        // so an untouched project stays byte-identical).
+        if (acknowledgedIssueKeys.isNotEmpty)
+          'acknowledgedIssueKeys': acknowledgedIssueKeys,
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -300,7 +314,16 @@ class DesignSettings {
             json['approvedBy'] is String ? json['approvedBy'] as String : null,
         revisions: _revisionsFromJson(json['revisions']),
         savedAssemblies: _savedAssembliesFromJson(json['savedAssemblies']),
+        acknowledgedIssueKeys:
+            _stringListFromJson(json['acknowledgedIssueKeys']),
       );
+
+  /// Tolerantly read a list of strings: a non-list (or absent) value yields an
+  /// empty list; non-string entries are dropped.
+  static List<String> _stringListFromJson(Object? raw) {
+    if (raw is! List) return const [];
+    return [for (final e in raw) if (e is String) e];
+  }
 
   /// Clamp the multi-zone diversity factor into (0,1]; absent/invalid ⇒ 0.9.
   static double _clampDiversity(double? raw) {

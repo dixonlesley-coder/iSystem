@@ -88,6 +88,94 @@ void main() {
       expect(row.pass, isFalse);
       expect(row.detail, '1 error(s), 0 warning(s)');
     });
+
+    // ── H1: reachable PASS via advisory acknowledgement ──────────────────────
+    test('unverified-standard advisories block PASS until acknowledged', () {
+      const items = [
+        DesignIssue(
+          severity: IssueSeverity.info,
+          title: 'Unverified standard',
+          message: 'KHA table awaits the official PUIL clause.',
+        ),
+        DesignIssue(
+          severity: IssueSeverity.info,
+          title: 'Unverified standard',
+          message: 'Nominal voltage awaits confirmation.',
+        ),
+      ];
+      // Unacknowledged: the standards row REVIEWs and the whole verdict fails —
+      // this is the structurally-unreachable-PASS state H1 fixes.
+      final open = buildComplianceSummaryFrom(
+        issues: items,
+        electricalWarnings: const [],
+        date: 'd',
+      );
+      final openRow = _item(open, 'Standards verification');
+      expect(openRow.pass, isFalse);
+      expect(open.allPass, isFalse);
+
+      // Acknowledge BOTH advisories ⇒ the standards row passes and, with no
+      // warnings/criticals, the overall verdict reaches PASS.
+      final acked = buildComplianceSummaryFrom(
+        issues: items,
+        electricalWarnings: const [],
+        date: 'd',
+        acknowledged: {items[0].key, items[1].key},
+      );
+      final ackedRow = _item(acked, 'Standards verification');
+      expect(ackedRow.pass, isTrue);
+      expect(ackedRow.detail, '2 acknowledged, none open');
+      expect(acked.allPass, isTrue);
+    });
+
+    test('acknowledging an advisory NEVER unblocks a real error/warning', () {
+      const warn = DesignIssue(
+        severity: IssueSeverity.warning,
+        title: 'Duct velocity out of band',
+        message: 'A supply duct is over 7 m/s.',
+      );
+      // A warning is not acknowledgeable; even if its key is (spuriously) in the
+      // acknowledged set, it must still fail — acknowledgement can't hide it.
+      final s = buildComplianceSummaryFrom(
+        issues: const [warn],
+        electricalWarnings: const [
+          ElectricalWarning(
+            severity: WarningSeverity.error,
+            code: 'cable-ampacity-inadequate',
+            message: 'x',
+          ),
+        ],
+        date: 'd',
+        acknowledged: {warn.key},
+      );
+      expect(_item(s, 'Air velocities within band').pass, isFalse);
+      expect(_item(s, 'Electrical circuit sizing').pass, isFalse);
+      expect(s.allPass, isFalse);
+    });
+
+    test('a partially-acknowledged standards register reports open + ack', () {
+      const items = [
+        DesignIssue(
+          severity: IssueSeverity.info,
+          title: 'Unverified standard',
+          message: 'one',
+        ),
+        DesignIssue(
+          severity: IssueSeverity.info,
+          title: 'Unverified standard',
+          message: 'two',
+        ),
+      ];
+      final s = buildComplianceSummaryFrom(
+        issues: items,
+        electricalWarnings: const [],
+        date: 'd',
+        acknowledged: {items[0].key},
+      );
+      final row = _item(s, 'Standards verification');
+      expect(row.pass, isFalse);
+      expect(row.detail, '1 open, 1 acknowledged');
+    });
   });
 
   group('complianceSummaryProvider (watched)', () {

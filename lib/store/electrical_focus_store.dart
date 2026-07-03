@@ -13,23 +13,47 @@
 /// ElectricalView depending on the Review hub (or vice-versa).
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// The pending panel-id focus request from the Review → Electrical jump. Null
-/// when there is nothing to focus.
+/// A pending Review → Electrical focus request: the [panelId] to frame plus,
+/// when the issue pinpoints one, the specific [circuitId] (way) to select (H7).
+/// The circuit is optional — a panel-level issue (no way) leaves it null and the
+/// view just frames the board.
+@immutable
+class ElectricalFocusRequest {
+  final String panelId;
+  final String? circuitId;
+
+  const ElectricalFocusRequest(this.panelId, {this.circuitId});
+
+  @override
+  bool operator ==(Object other) =>
+      other is ElectricalFocusRequest &&
+      other.panelId == panelId &&
+      other.circuitId == circuitId;
+
+  @override
+  int get hashCode => Object.hash(panelId, circuitId);
+}
+
+/// The pending focus request from the Review → Electrical jump. Null when there
+/// is nothing to focus.
 final electricalFocusProvider =
-    NotifierProvider<ElectricalFocusController, String?>(
+    NotifierProvider<ElectricalFocusController, ElectricalFocusRequest?>(
   ElectricalFocusController.new,
 );
 
 /// Holds the single pending [request] until the electrical workspace consumes
 /// and [clear]s it. Mirrors the house Notifier controller style.
-class ElectricalFocusController extends Notifier<String?> {
+class ElectricalFocusController extends Notifier<ElectricalFocusRequest?> {
   @override
-  String? build() => null;
+  ElectricalFocusRequest? build() => null;
 
-  /// Request that the electrical workspace bring [panelId] into focus.
-  void request(String panelId) => state = panelId;
+  /// Request that the electrical workspace bring [panelId] into focus, and
+  /// (when known) select the specific [circuitId] way (H7).
+  void request(String panelId, {String? circuitId}) =>
+      state = ElectricalFocusRequest(panelId, circuitId: circuitId);
 
   /// Clear the pending focus request (called once the view has consumed it).
   void clear() => state = null;

@@ -6,6 +6,7 @@ import 'package:mechx_engine/electrical/model.dart' show ElectricalProject;
 import '../store/annotation_store.dart';
 import '../store/app_state.dart';
 import '../store/commercial_store.dart';
+import '../store/design_issues_store.dart';
 import '../store/document_control_store.dart';
 import '../store/electrical_store.dart';
 import '../store/fire_store.dart';
@@ -137,6 +138,8 @@ ProjectDocument buildDocument(ProviderReader read) {
       checkedBy: read(documentControlProvider).checkedBy,
       approvedBy: read(documentControlProvider).approvedBy,
       revisions: read(documentControlProvider).revisions,
+      // Acknowledged advisory keys (H1) round-trip with the project.
+      acknowledgedIssueKeys: read(acknowledgedIssuesProvider).toList(),
     ),
     // The electrical sub-model (v2) round-trips alongside the plumbing project.
     electrical: read(electricalProjectProvider),
@@ -249,6 +252,9 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
     approvedBy: s.approvedBy,
     revisions: s.revisions,
   ));
+  // Restore acknowledged advisory keys (H1; absent on an older file ⇒ empty ⇒
+  // compliance behaves exactly as before).
+  read(acknowledgedIssuesProvider.notifier).set(s.acknowledgedIssueKeys.toSet());
   // Restore the electrical project. A v2 file carries one; a plumbing-only / v1
   // document has NO electrical sub-model — fall back to an EMPTY project (no
   // fictitious sample switchboard), so its BOM / equipment schedule / unified

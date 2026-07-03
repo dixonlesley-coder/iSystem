@@ -10,14 +10,19 @@ import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
+import 'package:mechx_engine/report/electrical_pdf_export.dart'
+    show electricalSldToPdf;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/equipment_schedule.dart';
+import 'package:mechx_engine/report/mep_commercial.dart'
+    show mepBomToCsv, mepQuotationToMarkdown;
 import 'package:mechx_engine/report/mep_report.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
 import 'package:mechx_engine/report/report_blocks.dart';
 import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
+import 'package:mechx_engine/report/sld_export.dart' show sldSheetToPdf;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
@@ -46,6 +51,8 @@ import '../../store/design_issues_store.dart';
 import '../../store/document_control_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/command_store.dart';
+import '../../store/commercial_store.dart';
+import '../../store/export_prefs.dart';
 import '../../store/fire_store.dart';
 import '../../store/fixture_library_store.dart';
 import '../../store/history_store.dart';
@@ -191,6 +198,32 @@ Future<void> runExportGuarded(
   }
 }
 
+/// H4 — a save-dialog wrapper that REMEMBERS the last export directory: it opens
+/// the OS picker at the shared `lastExportDirProvider` folder (so a session's
+/// exports converge on one place), normalizes the chosen path to end in [ext],
+/// and records the folder so the next dialog re-opens there. Returns null when
+/// the user cancels. Every owned export routes through this so the dir-memory is
+/// uniform; the exporters in other files should adopt it too (see the H4 note in
+/// the review).
+Future<String?> pickExportSave(
+  WidgetRef ref, {
+  required String dialogTitle,
+  required String fileName,
+  required String ext,
+}) async {
+  final path = await FilePicker.saveFile(
+    dialogTitle: dialogTitle,
+    fileName: fileName,
+    type: FileType.custom,
+    allowedExtensions: [ext],
+    initialDirectory: ref.read(lastExportDirProvider),
+  );
+  if (path == null) return null;
+  final full = path.endsWith('.$ext') ? path : '$path.$ext';
+  ref.read(lastExportDirProvider.notifier).rememberFile(full);
+  return full;
+}
+
 /// Render the floor-grouped [bom] as CSV with the stock-bar cut-plan columns
 /// (`stock_length_m`, `bars_purchased`, `waste_pct`) joined per (service, DN)
 /// from [cutPlan] (the `pipeCutPlanProvider` output). [bom] must be built with
@@ -253,15 +286,12 @@ Future<void> exportCalcReport(WidgetRef ref) => runExportGuarded(
         final project = ref.read(projectControllerProvider);
         final data = buildMechanicalReportData(ref);
 
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleCalcReport),
-          fileName: '${project.name}-report.md',
-          type: FileType.custom,
-          allowedExtensions: const ['md'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.md') ? path : '$path.md';
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleCalcReport),
+            fileName: '${project.name}-report.md',
+            ext: 'md');
+        if (full == null) return false;
         await File(full).writeAsString(
             buildCalcReportMarkdown(data, reportStringsFor(ref)));
         return true;
@@ -299,15 +329,12 @@ Future<void> exportCalcReportPdf(WidgetRef ref) => runExportGuarded(
           approvedBy: doc.approvedBy,
         );
         final base = project.name.isEmpty ? 'project' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleCalcReportPdf),
-          fileName: '$base-report.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleCalcReportPdf),
+            fileName: '$base-report.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -339,15 +366,12 @@ Future<void> exportMepUnifiedReport(WidgetRef ref) => runExportGuarded(
         );
 
         final base = project.name.isEmpty ? 'project' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleMepReport),
-          fileName: '$base-mep-report.md',
-          type: FileType.custom,
-          allowedExtensions: const ['md'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.md') ? path : '$path.md';
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleMepReport),
+            fileName: '$base-mep-report.md',
+            ext: 'md');
+        if (full == null) return false;
         await File(full).writeAsString(md);
         return true;
       },
@@ -405,15 +429,12 @@ Future<void> exportMepUnifiedReportPdf(WidgetRef ref) => runExportGuarded(
         );
 
         final base = project.name.isEmpty ? 'project' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleMepReportPdf),
-          fileName: '$base-mep-report.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleMepReportPdf),
+            fileName: '$base-mep-report.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -510,18 +531,16 @@ Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
   final data = gatherEquipmentScheduleData(ref);
 
   final base = project.name.isEmpty ? 'project' : project.name;
-  final path = await FilePicker.saveFile(
-    dialogTitle: MechXStringsData(ref.read(localeProvider))(
-        StringKey.exportTitleEquipmentSchedule),
-    fileName: '$base-equipment-schedule.md',
-    type: FileType.custom,
-    allowedExtensions: const ['md'],
-  );
-  if (path == null) return false;
+  final full = await pickExportSave(ref,
+      dialogTitle: MechXStringsData(ref.read(localeProvider))(
+          StringKey.exportTitleEquipmentSchedule),
+      fileName: '$base-equipment-schedule.md',
+      ext: 'md');
+  if (full == null) return false;
   // Write the Markdown at the chosen path plus a spreadsheet CSV sibling
   // (D5: the row model was designed for a CSV emitter). The engineer picks
   // one name; both files land beside it (the BOM export's dual-file pattern).
-  final stem = path.endsWith('.md') ? path.substring(0, path.length - 3) : path;
+  final stem = full.substring(0, full.length - 3);
   await File('$stem.md')
       .writeAsString(buildEquipmentScheduleMarkdown(data, reportStringsFor(ref)));
   await File('$stem.csv')
@@ -552,15 +571,12 @@ Future<void> exportEquipmentSchedulePdf(WidgetRef ref) => runExportGuarded(
           approvedBy: doc.approvedBy,
         );
         final base = project.name.isEmpty ? 'project' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleEquipmentSchedulePdf),
-          fileName: '$base-equipment-schedule.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleEquipmentSchedulePdf),
+            fileName: '$base-equipment-schedule.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -644,14 +660,12 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
     metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
     underlay: planUnderlay is VectorPlanUnderlay ? planUnderlay : null,
   );
-  final path = await FilePicker.saveFile(
-    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingDxf),
-    fileName: '${sheet.name}.dxf',
-    type: FileType.custom,
-    allowedExtensions: const ['dxf'],
-  );
-  if (path == null) return false;
-  final full = path.endsWith('.dxf') ? path : '$path.dxf';
+  final full = await pickExportSave(ref,
+      dialogTitle: MechXStringsData(ref.read(localeProvider))(
+          StringKey.exportTitleDrawingDxf),
+      fileName: '${sheet.name}.dxf',
+      ext: 'dxf');
+  if (full == null) return false;
   await File(full).writeAsString(dxf);
   return true;
 }
@@ -685,14 +699,12 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
     // source) keeps the plain export.
     underlay: await buildPlanUnderlay(sheet),
   );
-  final path = await FilePicker.saveFile(
-    dialogTitle: MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleDrawingPdf),
-    fileName: '${sheet.name}.pdf',
-    type: FileType.custom,
-    allowedExtensions: const ['pdf'],
-  );
-  if (path == null) return false;
-  final full = path.endsWith('.pdf') ? path : '$path.pdf';
+  final full = await pickExportSave(ref,
+      dialogTitle: MechXStringsData(ref.read(localeProvider))(
+          StringKey.exportTitleDrawingPdf),
+      fileName: '${sheet.name}.pdf',
+      ext: 'pdf');
+  if (full == null) return false;
   await File(full).writeAsBytes(bytes);
   return true;
 }
@@ -747,17 +759,299 @@ Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     // source) keeps the plain export.
     underlay: await buildPlanUnderlay(sheet),
   );
-  final path = await FilePicker.saveFile(
-    dialogTitle: MechXStringsData(ref.read(localeProvider))(
-        StringKey.exportTitleAnnotatedPlanPdf),
-    fileName: '${sheet.name}-annotated.pdf',
-    type: FileType.custom,
-    allowedExtensions: const ['pdf'],
-  );
-  if (path == null) return false;
-  final full = path.endsWith('.pdf') ? path : '$path.pdf';
+  final full = await pickExportSave(ref,
+      dialogTitle: MechXStringsData(ref.read(localeProvider))(
+          StringKey.exportTitleAnnotatedPlanPdf),
+      fileName: '${sheet.name}-annotated.pdf',
+      ext: 'pdf');
+  if (full == null) return false;
   await File(full).writeAsBytes(bytes);
   return true;
+}
+
+/// H4 — the ONE-FOLDER SUBMITTAL PACKAGE. Pick a destination folder ONCE, then
+/// write the full deliverable set — the calc report + unified MEP report (MD +
+/// PDF), the equipment schedule (MD + CSV + PDF), the M+E+P BOM (CSV) + costed
+/// quotation (MD), the mechanical riser single-line (PDF), the current sheet's
+/// annotated plan (PDF + DXF), and the electrical single-line (PDF, when panels
+/// exist) — all consistently named `$project-*` into that one folder. Routed
+/// through the shared export guard (zero-length gate + success/error feedback);
+/// the chosen folder seeds `lastExportDirProvider` so subsequent single exports
+/// re-open there. Reuses the SAME pure engine builders the individual exports do
+/// (no new render path), so each file matches its standalone sibling.
+Future<void> exportSubmittalPackage(WidgetRef ref) => runExportGuarded(
+      ref,
+      name: 'submittal package',
+      write: () => _writeSubmittalPackage(ref),
+    );
+
+Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
+  final dir = await FilePicker.getDirectoryPath(
+    dialogTitle: 'Choose a folder for the submittal package',
+    initialDirectory: ref.read(lastExportDirProvider),
+  );
+  if (dir == null || dir.isEmpty) return false;
+  ref.read(lastExportDirProvider.notifier).set(dir);
+
+  final project = ref.read(projectControllerProvider);
+  final base = project.name.trim().isEmpty ? 'project' : project.name.trim();
+  final strings = reportStringsFor(ref);
+  final doc = ref.read(documentControlProvider);
+  final today = DateTime.now().toIso8601String().split('T').first;
+  final sep = Platform.pathSeparator;
+  String out(String suffix) => '$dir$sep$base-$suffix';
+
+  DrawingChrome sldChrome() => DrawingChrome(
+        sheetIndex: 1,
+        sheetTotal: 1,
+        drawingNumber: doc.documentNumber,
+        revisionNumber: doc.revisionTag,
+        clientName: doc.clientName,
+        drawnBy: doc.preparedBy,
+        checkedBy: doc.checkedBy,
+        approvedBy: doc.approvedBy,
+        dateString: today,
+      );
+
+  // ── Reports ───────────────────────────────────────────────────────────────
+  final mech = buildMechanicalReportData(ref);
+  final electrical = buildElectricalReportData(ref);
+  final compliance = buildComplianceSummary(ref);
+
+  await File(out('report.md'))
+      .writeAsString(buildCalcReportMarkdown(mech, strings));
+  await File(out('report.pdf')).writeAsBytes(reportBlocksToPdf(
+    [
+      ...buildCalcReportBlocks(mech, strings),
+      RptFigure(buildLiveRiserSheet(ref, null),
+          caption: 'Mechanical riser single-line diagram'),
+    ],
+    docTitle: 'MEP Calculation Report',
+    projectName: base,
+    documentNumber: doc.documentNumber,
+    revisionTag: doc.revisionTag,
+    dateString: mech.date,
+    standardsLine: '${mech.standardsName} (${mech.standardsRevision})',
+    preparedBy: doc.preparedBy,
+    checkedBy: doc.checkedBy,
+    approvedBy: doc.approvedBy,
+  ));
+
+  await File(out('mep-report.md')).writeAsString(buildMepUnifiedReport(
+    mechanical: mech,
+    electrical: electrical,
+    compliance: compliance,
+    strings: strings,
+  ));
+  await File(out('mep-report.pdf')).writeAsBytes(reportBlocksToPdf(
+    [
+      ...buildMepUnifiedReportBlocks(
+        mechanical: mech,
+        electrical: electrical,
+        compliance: compliance,
+        strings: strings,
+      ),
+      const RptHeading(1, 'Drawings'),
+      RptFigure(buildLiveRiserSheet(ref, null),
+          caption: 'Mechanical riser single-line diagram'),
+      RptFigure(
+        buildElectricalSld(
+          project: ref.read(electricalProjectProvider),
+          result: ref.read(electricalResultProvider),
+          breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+        ),
+        caption: 'Electrical single-line diagram',
+      ),
+    ],
+    docTitle: 'MEP Building-Services Report',
+    projectName: base,
+    documentNumber: doc.documentNumber,
+    revisionTag: doc.revisionTag,
+    dateString: mech.date,
+    standardsLine: '${mech.standardsName} (${mech.standardsRevision})'
+        ' / ${electrical.standardsName} ${electrical.standardsRevision}',
+    preparedBy: doc.preparedBy,
+    checkedBy: doc.checkedBy,
+    approvedBy: doc.approvedBy,
+  ));
+
+  // ── Equipment schedule (MD + CSV + PDF) ─────────────────────────────────────
+  final sched = gatherEquipmentScheduleData(ref);
+  await File(out('equipment-schedule.md'))
+      .writeAsString(buildEquipmentScheduleMarkdown(sched, strings));
+  await File(out('equipment-schedule.csv'))
+      .writeAsString(equipmentScheduleToCsv(buildEquipmentScheduleRows(sched)));
+  await File(out('equipment-schedule.pdf')).writeAsBytes(reportBlocksToPdf(
+    buildEquipmentScheduleBlocks(sched, strings),
+    docTitle: 'Equipment Schedule',
+    projectName: base,
+    documentNumber: doc.documentNumber,
+    revisionTag: doc.revisionTag,
+    dateString: sched.date,
+    preparedBy: doc.preparedBy,
+    checkedBy: doc.checkedBy,
+    approvedBy: doc.approvedBy,
+  ));
+
+  // ── BOM (CSV) + costed quotation (MD) — the unified M+E+P pipeline ───────────
+  final mechCost = ref.read(mechanicalCostProvider);
+  final elecCost = ref.read(electricalCostProvider);
+  await File(out('bom.csv')).writeAsString(mepBomToCsv(mechCost, elecCost));
+  await File(out('quotation.md')).writeAsString(mepQuotationToMarkdown(
+    ref.read(mepQuotationProvider),
+    mechanical: mechCost,
+    electrical: elecCost,
+    projectName: base,
+  ));
+
+  // ── Mechanical riser single-line (PDF) ──────────────────────────────────────
+  await File(out('riser-sld.pdf')).writeAsBytes(sldSheetToPdf(
+    sheet: buildLiveRiserSheet(ref, null),
+    title: 'iSystem mechanical single-line',
+    diagramTitle: 'MECHANICAL SINGLE-LINE DIAGRAM',
+    chrome: sldChrome(),
+  ));
+
+  // ── Current-sheet annotated plan (PDF + DXF), when a sheet is loaded ─────────
+  final sheets = ref.read(sheetsControllerProvider);
+  final sheet = sheets.current;
+  if (sheet != null) {
+    final levelCount = project.building.levelCount;
+    final floorIndex = sheets.floorFor(sheet.id, levelCount);
+    final net = ref.read(networkControllerProvider).network;
+    final sizing = ref.read(sizingProvider);
+    final planChrome =
+        issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex);
+    final metersPerPixel = project.calibrationFor(sheet.id)?.metersPerPixel;
+    final underlay = await buildPlanUnderlay(sheet);
+    final edgeLengths = <String, Length>{
+      for (final e in net.edges)
+        e.id: edgeLength(
+          e,
+          net,
+          calibrationBySheet: project.calibrations,
+          building: project.building,
+        ),
+    };
+    await File(out('plan.pdf')).writeAsBytes(planToPdf(
+      net: net,
+      sizing: sizing,
+      edgeLengths: edgeLengths,
+      sheetId: sheet.id,
+      floorIndex: floorIndex,
+      projectName: base,
+      sheetName: sheet.name,
+      dateString: today,
+      chrome: planChrome,
+      metersPerPixel: metersPerPixel,
+      underlay: underlay,
+    ));
+    await File(out('plan.dxf')).writeAsString(networkToDxf(
+      net: net,
+      sizing: sizing,
+      sheetId: sheet.id,
+      floorIndex: floorIndex,
+      chrome: planChrome,
+      metersPerPixel: metersPerPixel,
+      underlay: underlay is VectorPlanUnderlay ? underlay : null,
+    ));
+  }
+
+  // ── Electrical single-line (PDF), when the project has sized panels ──────────
+  final eResult = ref.read(electricalResultProvider);
+  if (eResult.order.isNotEmpty) {
+    final eProject = ref.read(electricalProjectProvider);
+    await File(out('electrical-sld.pdf')).writeAsBytes(electricalSldToPdf(
+      project: eProject,
+      sheet: buildElectricalSld(
+        project: eProject,
+        result: eResult,
+        breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+      ),
+      chrome: sldChrome(),
+    ));
+  }
+
+  return true;
+}
+
+/// H5 — the document-control identity surfaced AT the export moment. A compact
+/// inline card of the three title-block fields most reviewers bounce a drawing
+/// over (drawing/document number, revision, client), bound live to
+/// [documentControlProvider] so the engineer confirms/edits them right before
+/// exporting instead of hunting the Layout inspector's collapsed section. The
+/// full DRAWN/CHECKED/APPROVED + revision-history controls stay in that section;
+/// this is the pre-flight surface. Additive: an unset field prints no title-block
+/// chrome, so leaving it blank is byte-identical to before.
+class ExportIdentityBar extends ConsumerWidget {
+  const ExportIdentityBar({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final doc = ref.watch(documentControlProvider);
+    final ctrl = ref.read(documentControlProvider.notifier);
+
+    Widget field(
+      String label,
+      String? value,
+      ValueChanged<String> onSet,
+      String hint,
+    ) =>
+        SizedBox(
+          width: 176,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  style: type.caption.copyWith(color: colors.textMuted)),
+              const SizedBox(height: MechXSpacing.xxs),
+              MechXTextField(
+                value: value ?? '',
+                hint: hint,
+                onCommitted: onSet,
+              ),
+            ],
+          ),
+        );
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(MechXSpacing.md),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Document control',
+              style: type.subtitle.copyWith(color: colors.textPrimary)),
+          const SizedBox(height: MechXSpacing.xxs),
+          Text(
+            'Stamped on every exported drawing + report title block. Confirm it '
+            'before you export; the full DRAWN/CHECKED/APPROVED + revision block '
+            'lives in the Layout inspector.',
+            style: type.caption.copyWith(color: colors.textMuted),
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Wrap(
+            spacing: MechXSpacing.md,
+            runSpacing: MechXSpacing.sm,
+            children: [
+              field('Drawing no.', doc.documentNumber, ctrl.setDocumentNumber,
+                  'e.g. M-101'),
+              field('Revision', doc.revisionTag, ctrl.setRevisionTag, 'e.g. A'),
+              field('Client', doc.clientName, ctrl.setClientName,
+                  'Client name'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// All services offered in the draw palette / edge editor, in a sensible order.
@@ -2538,20 +2832,16 @@ class _ResultsSection extends ConsumerWidget {
           // export — never the internal 'mechx' codename.
           final projectName = ref.read(projectControllerProvider).name;
           final defaultBase = projectName.isEmpty ? 'project' : projectName;
-          final path = await FilePicker.saveFile(
-            dialogTitle: dialogTitle,
-            fileName: '$defaultBase-bom.csv',
-            type: FileType.custom,
-            allowedExtensions: const ['csv'],
-          );
-          if (path == null) return false;
+          final full = await pickExportSave(ref,
+              dialogTitle: dialogTitle,
+              fileName: '$defaultBase-bom.csv',
+              ext: 'csv');
+          if (full == null) return false;
           // Derive a base by stripping a trailing .csv (and a trailing '-bom',
           // so accepting the suggested name yields '<name>-bom.csv', not
           // '<name>-bom-bom.csv'), then write the two aligned files:
           // <base>-bom.csv + <base>-fittings.csv.
-          var base = path.endsWith('.csv')
-              ? path.substring(0, path.length - 4)
-              : path;
+          var base = full.substring(0, full.length - 4);
           if (base.endsWith('-bom')) {
             base = base.substring(0, base.length - 4);
           }

@@ -611,11 +611,20 @@ void main() {
       expect(c.read(designIssueCriticalCountProvider), 0);
     });
 
-    test('locate-request store round-trip: request then clear', () {
+    test('locate-request store round-trip: request (panel + circuit) then clear',
+        () {
       final c = makeContainer();
       expect(c.read(electricalFocusProvider), isNull);
+      // Panel-only request (no way pinpointed).
       c.read(electricalFocusProvider.notifier).request('MDP');
-      expect(c.read(electricalFocusProvider), 'MDP');
+      expect(c.read(electricalFocusProvider)?.panelId, 'MDP');
+      expect(c.read(electricalFocusProvider)?.circuitId, isNull);
+      // H7: circuit-level request carries the specific way id.
+      c
+          .read(electricalFocusProvider.notifier)
+          .request('LP-1', circuitId: 'w3');
+      expect(c.read(electricalFocusProvider)?.panelId, 'LP-1');
+      expect(c.read(electricalFocusProvider)?.circuitId, 'w3');
       c.read(electricalFocusProvider.notifier).clear();
       expect(c.read(electricalFocusProvider), isNull);
     });
