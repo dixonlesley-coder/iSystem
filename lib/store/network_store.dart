@@ -344,9 +344,20 @@ class NetworkController extends Notifier<DrawingState> {
   /// new top drops to the new top floor; a stack that only grew leaves
   /// everything unchanged.
   ///
-  /// No-op — records nothing, byte-identical — when no node's `floorIndex`
+  /// No-op — changes nothing, byte-identical — when no node's `floorIndex`
   /// actually changes (an empty network, or a stack that only grew).
-  void remapNodesForFloorChange({required int levelCount, int? removedIndex}) {
+  ///
+  /// When [record] is true (the default, for a direct/programmatic call) the
+  /// change is committed as its own [UndoDomain.network] undo step. When false —
+  /// as [ProjectController.setFloors]/[removeFloor] call it — the network is
+  /// changed WITHOUT recording, because the compound floor-stack edit already
+  /// captured the pre-change network in ONE [UndoDomain.structural] entry that
+  /// reverts the floors AND the nodes together.
+  void remapNodesForFloorChange({
+    required int levelCount,
+    int? removedIndex,
+    bool record = true,
+  }) {
     if (levelCount < 1) return;
     final maxIndex = levelCount - 1;
     var changed = false;
@@ -368,7 +379,8 @@ class NetworkController extends Notifier<DrawingState> {
       }
     }
     if (!changed) return;
-    _commit(Network(nodes: nodes, edges: state.network.edges));
+    final next = Network(nodes: nodes, edges: state.network.edges);
+    record ? _commit(next) : _setNetworkNoRecord(next);
   }
 
   /// Shift every node on [sheetId] by [floorDelta] floors, in ONE undo step —
@@ -387,10 +399,20 @@ class NetworkController extends Notifier<DrawingState> {
   /// referencing a missing floor; remapping a floor-spanning riser ONTO the top
   /// floor collapses it (its upper endpoint has nowhere above to go).
   ///
-  /// No-op — records nothing, byte-identical — when [floorDelta] is 0 or no
+  /// No-op — changes nothing, byte-identical — when [floorDelta] is 0 or no
   /// node lives on [sheetId].
-  void remapSheetFloor(String sheetId, int floorDelta,
-      {required int levelCount}) {
+  ///
+  /// When [record] is true (the default) the change is committed as its own
+  /// [UndoDomain.network] step; when false — as [SheetsController.setSheetFloor]
+  /// calls it — the network is changed WITHOUT recording, because the compound
+  /// mapping edit already captured the pre-change network in ONE
+  /// [UndoDomain.structural] entry reverting the mapping AND the nodes together.
+  void remapSheetFloor(
+    String sheetId,
+    int floorDelta, {
+    required int levelCount,
+    bool record = true,
+  }) {
     if (floorDelta == 0 || levelCount < 1) return;
     final maxIndex = levelCount - 1;
     var changed = false;
@@ -411,7 +433,8 @@ class NetworkController extends Notifier<DrawingState> {
       }
     }
     if (!changed) return;
-    _commit(Network(nodes: nodes, edges: state.network.edges));
+    final next = Network(nodes: nodes, edges: state.network.edges);
+    record ? _commit(next) : _setNetworkNoRecord(next);
   }
 
   /// Drop every drawn node whose [sheetId] is NOT in [liveSheetIds] (and every
@@ -1554,6 +1577,25 @@ class NetworkController extends Notifier<DrawingState> {
       pendingPoint: state.pendingPoint,
     );
   }
+
+  /// Set the network WITHOUT recording an undo step, preserving the active
+  /// service/tool (pendingPoint is cleared, matching [_commit]). Used by the
+  /// non-recording floor/sheet remaps and by [restoreNetwork]. The id counter
+  /// (`_seq`) is untouched — these paths only re-index / restore existing nodes,
+  /// never mint new ids.
+  void _setNetworkNoRecord(Network net) {
+    state = DrawingState(
+      network: net,
+      service: state.service,
+      tool: state.tool,
+    );
+  }
+
+  /// Restore a captured [Network] WITHOUT recording undo — the
+  /// [StructuralHistoryController]'s restore path for the compound floor/sheet
+  /// edits. Preserves the current service/tool (unlike [loadNetwork], it does
+  /// NOT reset the local undo stacks or the id counter). Not for widgets.
+  void restoreNetwork(Network net) => _setNetworkNoRecord(net);
 
   /// Replace the network (used when opening a saved document). Resets history
   /// and advances the id counter past any loaded ids to avoid collisions.

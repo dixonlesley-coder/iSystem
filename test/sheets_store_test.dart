@@ -162,47 +162,57 @@ void main() {
     expect(floors['hi'], 2);
   });
 
-  test('setSheetFloor node remap is a separate network undo step (B7)', () {
+  test('setSheetFloor restores the mapping AND node indices in ONE undo (B7)',
+      () {
     final c = makeSeededContainer();
     final sheets = c.read(sheetsControllerProvider.notifier);
     final net = c.read(networkControllerProvider.notifier);
     final history = c.read(historyProvider.notifier);
+    // Two nodes drawn on s3 (floor 2) plus one on s2 (floor 1, must not move).
     net.loadNetwork(const Network(nodes: [
       NetNode(id: 'a', sheetId: 's3', x: 0, y: 0, floorIndex: 2),
+      NetNode(id: 'b', sheetId: 's3', x: 10, y: 0, floorIndex: 2),
+      NetNode(id: 'd', sheetId: 's2', x: 0, y: 0, floorIndex: 1),
     ]));
 
     sheets.setSheetFloor('s3', 0);
-    expect(c.read(networkControllerProvider).network.nodes.single.floorIndex, 0);
+    Map<String, int> floorsNow() => {
+          for (final n in c.read(networkControllerProvider).network.nodes)
+            n.id: n.floorIndex
+        };
+    expect(floorsNow(), {'a': 0, 'b': 0, 'd': 1});
+    expect(c.read(sheetsControllerProvider).floorFor('s3', 3), 0);
 
-    // Undo the node remap (the most recent step), then the mapping change.
+    // The mapping change + the node remap are ONE structural entry: a SINGLE
+    // undo restores BOTH the mapping and the node floors together (the old torn
+    // behaviour needed two undos and left a stranded intermediate).
     history.undo();
-    expect(c.read(networkControllerProvider).network.nodes.single.floorIndex, 2);
-    history.undo();
+    expect(floorsNow(), {'a': 2, 'b': 2, 'd': 1});
     expect(c.read(sheetsControllerProvider).floorFor('s3', 3), 2);
+    expect(history.canUndo, isFalse); // exactly one entry consumed
+
+    // Redo re-applies BOTH halves in the same one step.
+    history.redo();
+    expect(floorsNow(), {'a': 0, 'b': 0, 'd': 1});
+    expect(c.read(sheetsControllerProvider).floorFor('s3', 3), 0);
   });
 
-  test('setSheetFloor with no drawn nodes records only the mapping step', () {
+  test('setSheetFloor with no drawn nodes is one-step-undoable (no network step)',
+      () {
     final c = makeSeededContainer();
     final sheets = c.read(sheetsControllerProvider.notifier);
     final net = c.read(networkControllerProvider.notifier);
+    final history = c.read(historyProvider.notifier);
 
     sheets.setSheetFloor('s3', 0);
-    // Empty network ⇒ the remap is a no-op (no network undo entry).
+    // Empty network ⇒ the remap is a byte-identical no-op (no network entry);
+    // the mapping change is a single structural step on the global timeline.
     expect(net.canUndo, isFalse);
-    expect(sheets.canUndo, isTrue);
-  });
+    expect(history.canUndo, isTrue);
 
-  test('loadSheets clears the sheet-floor undo stack', () {
-    final c = makeSeededContainer();
-    final sheets = c.read(sheetsControllerProvider.notifier);
-
-    sheets.setSheetFloor('s3', 0);
-    expect(sheets.canUndo, isTrue);
-
-    // A loaded document is a fresh baseline — the local mapping history is
-    // cleared so an undo can't reach back into the previous document.
-    sheets.loadSheets(const [Sheet(id: 'x', name: 'X')]);
-    expect(sheets.canUndo, isFalse);
+    history.undo();
+    expect(c.read(sheetsControllerProvider).floorFor('s3', 3), 2);
+    expect(history.canUndo, isFalse);
   });
 
   group('replaceSheetSource (A5 per-sheet plan revision, keeps the id)', () {

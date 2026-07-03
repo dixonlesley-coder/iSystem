@@ -80,6 +80,11 @@ class ProjectController extends Notifier<ProjectState> {
     state = _redo.removeLast();
   }
 
+  /// Restore a captured [ProjectState] WITHOUT recording undo or touching the
+  /// local snapshot stacks — the [StructuralHistoryController]'s restore path for
+  /// the compound floor-stack edits ([setFloors]/[removeFloor]). Not for widgets.
+  void restoreState(ProjectState snapshot) => state = snapshot;
+
   void setName(String name) {
     if (name == state.name) return;
     _snapshot();
@@ -108,36 +113,44 @@ class ProjectController extends Notifier<ProjectState> {
     state = state.copyWith(floors: [...state.floors, next]);
   }
 
-  /// Replace the whole floor stack in one undo step (used by project
-  /// templates / smart defaults to prefill a building's levels). A no-op for an
-  /// empty list — a building must always have at least one floor.
+  /// Replace the whole floor stack in ONE undo step (used by project templates /
+  /// smart defaults to prefill a building's levels). A no-op for an empty list —
+  /// a building must always have at least one floor.
+  ///
+  /// The floor swap AND the drawn-node floor-index remap are recorded as a
+  /// SINGLE [UndoDomain.structural] entry (via [structuralHistoryProvider]) so
+  /// one Ctrl+Z restores BOTH the stack and every node's floor together — never
+  /// the torn state where nodes are remapped against a still-changed stack. The
+  /// remap keeps drawn work in range (a template with fewer floors than the
+  /// drawing can't strand nodes above the new top); it is byte-identical for an
+  /// empty network or a stack that only grew.
   void setFloors(List<Floor> floors) {
     if (floors.isEmpty) return;
-    _snapshot();
+    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
     state = state.copyWith(floors: List<Floor>.from(floors));
-    // Keep drawn work in range so a template with fewer floors than the drawing
-    // can't strand nodes above the new top (which the always-on solve would
-    // otherwise size at a clamped elevation). One network undo step; a no-op —
-    // byte-identical — for an empty network or a stack that only grew.
-    ref
-        .read(networkControllerProvider.notifier)
-        .remapNodesForFloorChange(levelCount: state.floors.length);
+    ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
+          levelCount: state.floors.length,
+          record: false,
+        );
   }
 
+  /// Remove the floor at [index] in ONE undo step. The floor removal AND the
+  /// drawn-node remap are a SINGLE [UndoDomain.structural] entry (see
+  /// [setFloors]), so one Ctrl+Z restores the stack and every node's floor
+  /// together. Removing a MIDDLE floor shifts higher nodes down one index to
+  /// keep their own physical floor (no silent re-elevation); nodes on/above a
+  /// removed top clamp into range. Byte-identical remap for an empty network.
   void removeFloor(int index) {
     if (index < 0 || index >= state.floors.length || state.floors.length <= 1) {
       return;
     }
-    _snapshot();
+    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
     final floors = [...state.floors]..removeAt(index);
     state = state.copyWith(floors: floors);
-    // Shift drawn nodes with the stack so removing a MIDDLE floor doesn't
-    // silently re-elevate the floors above it (their nodes drop one index to
-    // stay on their own physical floor); nodes on/above a removed top clamp
-    // into range. One network undo step; no-op for an empty network.
     ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
           levelCount: state.floors.length,
           removedIndex: index,
+          record: false,
         );
   }
 

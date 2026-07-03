@@ -72,12 +72,6 @@ const List<Sheet> kDemoSheets = [
 ];
 
 class SheetsController extends Notifier<SheetsState> {
-  // Local snapshot stacks for the sheet→floor mapping edits, mirroring
-  // ProjectController. Only the undoable mutation (setSheetFloor) pushes here;
-  // navigation / viewport / load do not record undo.
-  final List<SheetsState> _undo = [];
-  final List<SheetsState> _redo = [];
-
   @override
   SheetsState build() => const SheetsState();
 
@@ -85,19 +79,11 @@ class SheetsController extends Notifier<SheetsState> {
   /// real project starts empty and gets its sheets from Import / Open).
   void loadDemoSheets() => loadSheets(kDemoSheets);
 
-  bool get canUndo => _undo.isNotEmpty;
-  bool get canRedo => _redo.isNotEmpty;
-
   void loadSheets(
     List<Sheet> sheets, {
     Map<String, ViewportTransform> viewports = const {},
     Map<String, int> sheetFloors = const {},
   }) {
-    // A loaded document is a fresh baseline — drop the local mapping history so
-    // an undo can't reach back into a previous document (mirrors
-    // ProjectController.load()).
-    _undo.clear();
-    _redo.clear();
     state = SheetsState(
       sheets: sheets,
       currentIndex: 0,
@@ -106,36 +92,23 @@ class SheetsController extends Notifier<SheetsState> {
     );
   }
 
-  /// Snapshot before an undoable mapping mutation and record it on the global
-  /// timeline so a unified undo reverts the genuinely most-recent edit across
-  /// domains (the sheet→floor mapping was previously silently outside undo).
-  void _snapshot() {
-    _undo.add(state);
-    if (_undo.length > 200) _undo.removeAt(0);
-    _redo.clear();
-    ref.read(historyProvider.notifier).record(UndoDomain.sheets);
-  }
+  /// Restore a captured [SheetsState] WITHOUT recording undo — the
+  /// [StructuralHistoryController]'s restore path for the compound sheet→floor
+  /// re-mapping ([setSheetFloor]). Not for widgets.
+  void restoreState(SheetsState snapshot) => state = snapshot;
 
-  void undo() {
-    if (_undo.isEmpty) return;
-    _redo.add(state);
-    state = _undo.removeLast();
-  }
-
-  void redo() {
-    if (_redo.isEmpty) return;
-    _undo.add(state);
-    state = _redo.removeLast();
-  }
-
-  /// Map [sheetId] to building floor [floorIndex] (explicit override). Recorded
-  /// on the undo timeline so the mapping change is undoable like any other edit.
+  /// Map [sheetId] to building floor [floorIndex] (explicit override), in ONE
+  /// undo step. The mapping change AND the drawn-node remap are recorded as a
+  /// SINGLE [UndoDomain.structural] entry (via [structuralHistoryProvider]) so
+  /// one Ctrl+Z restores BOTH the mapping and every affected node's floor
+  /// together — never the torn state where the nodes moved but the mapping
+  /// didn't (or vice-versa).
   ///
   /// B7: the work drawn on the sheet MOVES WITH the mapping — its nodes'
   /// (frozen-at-creation) `floorIndex` shifts by the same amount the effective
-  /// floor moved (a separate network undo step). Without this the canvas —
-  /// which filters on BOTH sheetId AND floorIndex — would hide everything drawn
-  /// on the sheet while it kept feeding sizing at the old elevation.
+  /// floor moved. Without this the canvas — which filters on BOTH sheetId AND
+  /// floorIndex — would hide everything drawn on the sheet while it kept feeding
+  /// sizing at the old elevation.
   void setSheetFloor(String sheetId, int floorIndex) {
     if (state.sheetFloors[sheetId] == floorIndex) return;
     // Effective floor BEFORE the change (positional default or a prior
@@ -143,16 +116,20 @@ class SheetsController extends Notifier<SheetsState> {
     // drawn nodes currently carry.
     final levelCount = ref.read(projectControllerProvider).building.levelCount;
     final oldFloor = state.floorFor(sheetId, levelCount);
-    _snapshot();
+    ref.read(structuralHistoryProvider.notifier).recordSheetMappingChange();
     final next = Map<String, int>.from(state.sheetFloors)
       ..[sheetId] = floorIndex;
     state = state.copyWith(sheetFloors: next);
-    // Shift the sheet's nodes by the effective-floor delta (no-op when the
-    // effective floor is unchanged or the sheet has no drawn nodes).
+    // Shift the sheet's nodes by the effective-floor delta WITHOUT a separate
+    // network entry (the structural snapshot already captured the network) —
+    // no-op when the effective floor is unchanged or the sheet has no nodes.
     final newFloor = state.floorFor(sheetId, levelCount);
-    ref
-        .read(networkControllerProvider.notifier)
-        .remapSheetFloor(sheetId, newFloor - oldFloor, levelCount: levelCount);
+    ref.read(networkControllerProvider.notifier).remapSheetFloor(
+          sheetId,
+          newFloor - oldFloor,
+          levelCount: levelCount,
+          record: false,
+        );
   }
 
   void selectSheet(int index) {

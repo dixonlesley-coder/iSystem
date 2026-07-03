@@ -5,6 +5,9 @@ import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
+import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/units.dart';
 
 void main() {
@@ -103,5 +106,75 @@ void main() {
     hist.redo();
     expect(isProjectDirty(c.read), isTrue);
     expect(c.read(projectDirtyProvider), isTrue);
+  });
+
+  test(
+      'the load path records nothing: reset drops the structural stack and the '
+      'load setters never record a structural step (no phantom step)', () {
+    final c = makeContainer();
+    final proj = c.read(projectControllerProvider.notifier);
+    final hist = c.read(historyProvider.notifier);
+    final structural = c.read(structuralHistoryProvider.notifier);
+
+    // A compound floor edit records exactly one structural step.
+    proj.removeFloor(1);
+    expect(structural.canUndo, isTrue);
+    expect(hist.canUndo, isTrue);
+
+    // Opening/restoring a document resets the global timeline (applyDocument
+    // calls historyProvider.reset()), which drops the structural coordinator's
+    // stack too — so no phantom structural undo survives into the fresh doc.
+    hist.reset();
+    expect(structural.canUndo, isFalse);
+    expect(structural.canRedo, isFalse);
+    expect(hist.canUndo, isFalse);
+
+    // The controllers' own load setters (the applyDocument path) never record a
+    // structural step of their own.
+    proj.load(
+      name: 'Opened',
+      floors: const [Floor('G', Length(3)), Floor('L1', Length(3))],
+      calibrations: const {},
+    );
+    c.read(sheetsControllerProvider.notifier).loadSheets(const []);
+    c.read(networkControllerProvider.notifier).loadNetwork(const Network());
+    expect(structural.canUndo, isFalse);
+    expect(hist.canUndo, isFalse);
+  });
+
+  test(
+      'a compound floor edit interleaves correctly with an unrelated network '
+      'draw on the global timeline', () {
+    final c = makeContainer();
+    final net = c.read(networkControllerProvider.notifier);
+    final proj = c.read(projectControllerProvider.notifier);
+    final hist = c.read(historyProvider.notifier);
+
+    // 1) draw a run (network domain).
+    net.setTool(DrawTool.drawRun);
+    net.placeRunPoint('s1', 0, const Offset(0, 0));
+    net.placeRunPoint('s1', 0, const Offset(100, 0));
+    expect(c.read(networkControllerProvider).network.edges.length, 1);
+
+    // 2) remove a floor (structural domain — the genuinely most-recent edit).
+    proj.removeFloor(1);
+    expect(c.read(projectControllerProvider).floors.length, 2);
+
+    // The first undo reverts the FLOOR removal FULLY (stack restored), leaving
+    // the drawn run intact — the compound edit is one atomic step, so it never
+    // half-reverts to a stranded intermediate before the draw is reached.
+    hist.undo();
+    expect(c.read(projectControllerProvider).floors.length, 3);
+    expect(c.read(networkControllerProvider).network.edges.length, 1);
+
+    // The second undo reverts the network draw.
+    hist.undo();
+    expect(c.read(networkControllerProvider).network.edges, isEmpty);
+
+    // Redo replays them forward: the draw first, then the floor removal.
+    hist.redo();
+    expect(c.read(networkControllerProvider).network.edges.length, 1);
+    hist.redo();
+    expect(c.read(projectControllerProvider).floors.length, 2);
   });
 }

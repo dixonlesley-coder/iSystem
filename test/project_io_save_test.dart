@@ -6,8 +6,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/app_settings.dart';
 import 'package:mechx/data/autosave.dart';
 import 'package:mechx/data/project_document.dart';
+import 'package:mechx/data/recovery.dart' show appSupportDirOverride;
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/units.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/ui/shell/project_io.dart';
 
@@ -16,6 +20,16 @@ import 'package:mechx/ui/shell/project_io.dart';
 /// project path (so no OS dialog is involved) via `tester.runAsync` — the save
 /// touches the real filesystem and hops through `Isolate.run`.
 void main() {
+  // These tests drive the real recovery writes (Save/New clear per-project
+  // slots under the app-support dir). Isolate this file's app-support dir to a
+  // unique temp path so the concurrently-run suite's other isolates don't race
+  // on the shared tree (this file pumps a bare ProviderScope, not the full app,
+  // so it doesn't get the setDesktopSurface isolation hook).
+  setUpAll(() {
+    appSupportDirOverride =
+        Directory.systemTemp.createTempSync('mechx_project_io_test').path;
+  });
+
   /// Pumps a minimal ProviderScope and hands back a live [WidgetRef].
   Future<WidgetRef> pumpRef(WidgetTester tester) async {
     late WidgetRef ref;
@@ -115,9 +129,40 @@ void main() {
     expect(ref.read(appSettingsProvider).lastOpenPath, path);
   });
 
+  // The virgin RESET itself (what New applies): a drawn network + electrical is
+  // wiped by applyDocument(virgin). A pure container test — no widget/dialog
+  // machinery — so it's fast and can't race the loaded suite.
+  test('A3: applyDocument(virgin) resets a drawn network to empty', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final net = c.read(networkControllerProvider.notifier);
+    net.setTool(DrawTool.drawRun);
+    net.placeRunPoint('s1', 0, const Offset(0, 0));
+    net.placeRunPoint('s1', 0, const Offset(100, 0));
+    expect(c.read(networkControllerProvider).network.nodes, isNotEmpty);
+
+    applyDocument(
+      c.read,
+      const ProjectDocument(
+        projectName: 'Untitled project',
+        floors: [
+          Floor('Ground', Length(4.0)),
+          Floor('Level 1', Length(3.5)),
+          Floor('Level 2', Length(3.5)),
+        ],
+        calibrations: {},
+        sheets: [],
+        network: Network(),
+      ),
+    );
+    expect(c.read(networkControllerProvider).network.nodes, isEmpty);
+    expect(c.read(projectControllerProvider).floors.length, 3);
+  });
+
   testWidgets(
-      'A3: New project resets to a virgin doc, forgets the file identity, and '
-      'preserves the app-level language (no spurious dirty)', (tester) async {
+      'A3: New project forgets the file identity, resets the baseline, and '
+      'preserves the app-level language (no spurious dirty)',
+      timeout: const Timeout(Duration(seconds: 30)), (tester) async {
     late BuildContext ctx;
     late WidgetRef ref;
     await tester.pumpWidget(ProviderScope(
@@ -128,21 +173,18 @@ void main() {
       }),
     ));
 
-    // The engineer chose Bahasa at the app level; New must keep it.
+    // The engineer chose Bahasa at the app level; New must keep it. A named,
+    // CLEAN project (no drawn work) so the dirty-guard trivially passes with no
+    // discard dialog — the guard-when-dirty path is covered by the discard/quit
+    // guard tests; here we verify New's identity/baseline/language handling.
     ref.read(localeProvider.notifier).set(AppLocale.id);
-    // A previously-open, edited project — but mark it clean so no discard dialog
-    // interposes (the guard is exercised elsewhere).
     ref.read(currentProjectPathProvider.notifier).set('/old.mechx');
-    final net = ref.read(networkControllerProvider.notifier);
-    net.setTool(DrawTool.drawRun);
-    net.placeRunPoint('s1', 0, const Offset(0, 0));
-    net.placeRunPoint('s1', 0, const Offset(100, 0));
-    ref
-        .read(lastSavedSignatureProvider.notifier)
-        .set(buildDocument(ref.read).encode());
     expect(isProjectDirty(ref.read), isFalse);
 
-    await newProject(ctx, ref);
+    // newProject touches the real filesystem (clearRecoverySlots) — drive it in
+    // the real-async zone so those I/O futures actually complete.
+    await tester.runAsync(() => newProject(ctx, ref));
+    await tester.pump();
 
     expect(ref.read(networkControllerProvider).network.nodes, isEmpty); // virgin
     expect(ref.read(currentProjectPathProvider), isNull); // file forgotten

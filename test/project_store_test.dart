@@ -223,7 +223,7 @@ void main() {
     expect(net.canUndo, isFalse);
   });
 
-  test('a shrinking setFloors remaps nodes as one network undo step', () {
+  test('a shrinking setFloors restores floors AND node indices in ONE undo', () {
     final c = makeContainer();
     final net = c.read(networkControllerProvider.notifier);
     net.loadNetwork(const Network(nodes: [
@@ -236,15 +236,85 @@ void main() {
         .setFloors(const [Floor('Only', Length(3.0))]);
     expect(
         c.read(networkControllerProvider).network.nodes.single.floorIndex, 0);
+    expect(c.read(projectControllerProvider).floors.length, 1);
 
-    // The floor swap recorded a project step; the node remap a network step.
-    // Undo the network step first: the node returns to floor 2.
+    // The floor swap + the node remap are ONE structural timeline entry: a
+    // SINGLE undo restores BOTH the stack and the node's floor together (the
+    // old torn behaviour needed two undos, leaving a stranded intermediate).
     hist.undo();
     expect(
         c.read(networkControllerProvider).network.nodes.single.floorIndex, 2);
-    // Undo again: the floor stack is restored.
-    hist.undo();
     expect(c.read(projectControllerProvider).floors.length, 3);
+    expect(hist.canUndo, isFalse); // exactly one entry consumed
+
+    // Redo re-applies BOTH halves in the same one step.
+    hist.redo();
+    expect(
+        c.read(networkControllerProvider).network.nodes.single.floorIndex, 0);
+    expect(c.read(projectControllerProvider).floors.length, 1);
+  });
+
+  test(
+      'removeFloor(middle) with nodes on several floors: ONE undo restores the '
+      'stack AND every node floorIndex; redo re-applies both', () {
+    final c = makeContainer();
+    final proj = c.read(projectControllerProvider.notifier);
+    final net = c.read(networkControllerProvider.notifier);
+    final hist = c.read(historyProvider.notifier);
+
+    // A 5-floor building with a node on floors 0, 2 and 4.
+    proj.setFloors(const [
+      Floor('F0', Length(4.0)),
+      Floor('F1', Length(3.0)),
+      Floor('F2', Length(3.0)),
+      Floor('F3', Length(3.0)),
+      Floor('F4', Length(3.0)),
+    ]);
+    net.loadNetwork(const Network(nodes: [
+      NetNode(id: 'lo', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+      NetNode(id: 'mid', sheetId: 's1', x: 0, y: 0, floorIndex: 2),
+      NetNode(id: 'hi', sheetId: 's1', x: 0, y: 0, floorIndex: 4),
+    ]));
+
+    // Remove the MIDDLE floor F1 (index 1). Nodes above it drop one index to
+    // keep their own physical floor; the one below is untouched.
+    proj.removeFloor(1);
+    Map<String, int> floorsNow() => {
+          for (final n in c.read(networkControllerProvider).network.nodes)
+            n.id: n.floorIndex
+        };
+    expect(c.read(projectControllerProvider).floors.length, 4);
+    expect(floorsNow(), {'lo': 0, 'mid': 1, 'hi': 3});
+
+    // ONE undo puts back the 5-floor stack AND every node's original floor,
+    // atomically — never a state where the nodes moved but the stack didn't.
+    hist.undo();
+    expect(c.read(projectControllerProvider).floors.length, 5);
+    expect(floorsNow(), {'lo': 0, 'mid': 2, 'hi': 4});
+
+    // Redo re-applies the removal AND the remap together.
+    hist.redo();
+    expect(c.read(projectControllerProvider).floors.length, 4);
+    expect(floorsNow(), {'lo': 0, 'mid': 1, 'hi': 3});
+  });
+
+  test('a floor edit on an EMPTY network is one-step-undoable and never crashes',
+      () {
+    final c = makeContainer();
+    final proj = c.read(projectControllerProvider.notifier);
+    final net = c.read(networkControllerProvider.notifier);
+    final hist = c.read(historyProvider.notifier);
+
+    // No nodes drawn: the compound edit still records exactly ONE step and its
+    // node remap is a byte-identical no-op (the network stack is untouched).
+    expect(() => proj.removeFloor(1), returnsNormally);
+    expect(c.read(projectControllerProvider).floors.length, 2);
+    expect(net.canUndo, isFalse); // no separate network entry
+
+    hist.undo(); // the single structural step restores the 3-floor stack
+    expect(c.read(projectControllerProvider).floors.length, 3);
+    expect(hist.canUndo, isFalse);
+    expect(c.read(networkControllerProvider).network.nodes, isEmpty);
   });
 
   test('load() clears undo history (opened doc is a fresh baseline)', () {
