@@ -413,6 +413,23 @@ void main() {
       expect(p.voltage.volts, 220);
     });
 
+    test('setPanelSystem to the SAME system records no phantom undo step', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      ctrl.addFloatingLoad(kind: LoadKind.socket, x: 0, y: 0, phases: 1);
+      final id = c.read(electricalProjectProvider).panels.single.id;
+      expect(c.read(electricalProjectProvider).panels.single.system,
+          ElectricalSystem.singlePhase);
+      final before = c.read(electricalProjectProvider);
+
+      // Re-selecting the current system is a genuine no-op — the project state
+      // instance is unchanged, so a later Ctrl+Z can't revert a dead entry.
+      ctrl.setPanelSystem(id, ElectricalSystem.singlePhase);
+      expect(c.read(electricalProjectProvider), same(before));
+    });
+
     test('REGRESSION: an edit preserves the additive A8 project fields', () {
       final c = ProviderContainer();
       addTearDown(c.dispose);

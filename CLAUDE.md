@@ -263,18 +263,21 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   batch edit, no group move, no tool hotkeys), workspace parity (riser/electrical keyboard +
   inspector gaps), and the last mile (compliance can never PASS, export scatter, electrical-only
   Commercial, the dead solved-duty MEP→E bridge). Sequenced into 5 waves (trust → safety net →
-  velocity → parity → submittal/business). **Waves 1, 2 and 3 have LANDED** (see the three §15
+  velocity → parity → submittal/business). **Waves 1, 2, 3 and 4 have LANDED** (see the four §15
   rows): Wave 1 (trust & honesty — empty first launch, atomic saves, text-field key guard,
   focus-independent shell hotkeys, reactive compliance, export-guard routing), Wave 2 (the safety
   net — File→New, offline settings/MRU file, import add/replace + orphan prune, per-project
   recovery slots, annotation undo domain, structural undo atomicity, API key out of `.mechx`),
-  and Wave 3 (drafting velocity — Run-tool tee-in, drop-merge honesty, single-key tool/service
+  Wave 3 (drafting velocity — Run-tool tee-in, drop-merge honesty, single-key tool/service
   shortcuts, batch property edit + group move + arrow nudge, paste cascade/array, duplicate-floor
   range, C7 nub gating, direct 1:N scale entry, idempotent auto-place, edge-editor parity, saved
-  assemblies). Waves 4 (workspace parity) and 5 (submittal & business) remain. It also corrects
-  the record: six items the CAD review's banner claims landed never shipped (H4, H7, I4, I2-half,
-  J6, J8) — they are folded into its findings. Work new UX/workflow improvements from that
-  document, next from Wave 4.
+  assemblies), and Wave 4 (workspace parity — riser zoom/pan + keyboard + sticky state + label
+  dedup, electrical Esc/tappable-issues/LOD-taps/`setPanelSystem`, first-class rooms/tanks +
+  names, inspector reorder + honest empty states, riser-scoped inspector, honest zoom pill,
+  `MechXScrollbar` everywhere, the fixed unplaced tray). Only Wave 5 (submittal & business)
+  remains. It also corrects the record: six items the CAD review's banner claims landed never
+  shipped (H4, H7, I4, I2-half, J6, J8) — they are folded into its findings. Work new UX/workflow
+  improvements from that document, next from Wave 5.
 - **CAD-output + UX review (2026-07-02) — the plan of record for output/UX parity**:
   `CAD-OUTPUT-UX-REVIEW.md` (root) holds 78 code-verified findings — professional-CAD
   gaps in the plan/riser/electrical exports + reports, and Apple-lens UI/workflow gaps —

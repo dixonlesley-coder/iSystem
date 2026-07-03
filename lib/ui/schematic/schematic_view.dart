@@ -696,8 +696,11 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
   void _onScaleUpdate(ScaleUpdateDetails details) {
     var vt = _current;
     // Single-pointer drag pans (there is no drag action on the read-only Auto
-    // diagram to conflict with); trackpad pinch zooms.
-    if (details.focalPointDelta != Offset.zero) {
+    // diagram to conflict with); trackpad pinch zooms. Skip when [_panning] —
+    // a MIDDLE-button drag is already panned by the Listener (`_onPointerMove`),
+    // and the scale recognizer also accepts the middle button, so without this
+    // guard a middle-drag would pan TWICE (at 2× the cursor speed).
+    if (!_panning && details.focalPointDelta != Offset.zero) {
       vt = vt.panned(details.focalPointDelta);
     }
     final incremental = details.scale / _lastScale;

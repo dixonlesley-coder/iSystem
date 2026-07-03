@@ -263,6 +263,10 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(tankAreasProvider.notifier).set(doc.tanks);
   // Restore designated room/zone areas (absent on an older file ⇒ empty).
   read(roomAreasProvider.notifier).set(doc.rooms);
+  // Clear any stale room/tank selection so a deterministic reused id (r0/t0)
+  // from the previous project doesn't surface as a phantom selection in the new
+  // one (mirrors clearing the network selection on load).
+  read(selectedAnnotationProvider.notifier).clear();
 }
 
 /// Start the periodic autosave loop: every [interval], snapshot the current

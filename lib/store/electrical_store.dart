@@ -463,10 +463,21 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void _replacePanel(String panelId, ElectricalPanel Function(ElectricalPanel) f,
       {bool record = true}) {
     var changed = false;
-    final panels = [
-      for (final p in state.panels)
-        if (p.id == panelId) (changed = true, f(p)).$2 else p,
-    ];
+    final panels = <ElectricalPanel>[];
+    for (final p in state.panels) {
+      if (p.id == panelId) {
+        // Commit only when [f] actually produced a DIFFERENT panel — a no-op
+        // transform (an intent whose guard returns the same instance, e.g.
+        // `setPanelSystem` when the system is unchanged) must not record a
+        // phantom undo step. copyWith always returns a fresh instance, so real
+        // edits are byte-identical to before.
+        final np = f(p);
+        if (!identical(np, p)) changed = true;
+        panels.add(np);
+      } else {
+        panels.add(p);
+      }
+    }
     if (!changed) return;
     final next = _withProject(panels: panels);
     if (record) {

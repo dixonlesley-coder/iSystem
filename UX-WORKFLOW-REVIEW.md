@@ -682,12 +682,18 @@ flattening to a zero-length riser, the C1 tee-in splitting an unrelated-service 
 context-menu batch cross-applying a duct size onto water pipes, the drop-ring/snap nearest-vs-first
 mismatch, a phantom fixture-undo, and the held-arrow undo flood.)
 
-**Wave 4 — Workspace parity**
+**Wave 4 — Workspace parity. ✅ LANDED 2026-07-03**
 F1 riser-scoped inspector · F2 Auto zoom/pan · F4 riser keyboard · F5 toolbar grammar ·
 F6 canvas label discipline · F7 sticky view state · F8 riser empty-state actions · G4 electrical
 Esc · G5 tappable Issues drawer · G6 LOD tap semantics · G7 panel system/voltage ·
 J1 scrollbars everywhere · J3 honest zoom pill · J4 export button tone · J5 tray height ·
 E6 first-class rooms/tanks · E7 room names · E10 section order · E11 empty-state honesty.
+(See the §15 decisions-log row; adversarial review then fixed 3 defects — the Auto riser
+middle-button 2× pan, a phantom `setPanelSystem` undo on unchanged re-selection, and a stale
+room/tank selection carrying across a project load. Scope notes: F5 landed Export-as-a-button
+[the full "View" toolbar grouping deferred — a test-width constraint]; F6 is dedup + collision
+[per-zoom LOD hiding deferred, the new F2 zoom is the "zoom to read" recourse]; E6 direct
+manipulation is active while the Room/Tank tool is selected.)
 
 **Wave 5 — The submittal & the business (completing M+E+P)**
 G1 wire the solved-duty bridge · H4 one-folder submittal package + consolidated export surface ·
