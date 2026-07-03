@@ -1478,6 +1478,59 @@ void main() {
       expect(net.edges.length, 2);
     });
 
+    test('a run does NOT tee into a DIFFERENT-service pipe it crosses', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // A drainage main D: A(0,0)-B(200,0).
+      n.setService(ServiceType.drainage);
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(200, 0));
+      n.setTool(DrawTool.drawRun);
+      // Now draw a COLD-WATER run whose endpoint lands ON the drainage main.
+      n.setService(ServiceType.coldWater);
+      n.placeRunPoint('s1', 0, const Offset(100, 80));
+      n.placeRunPoint('s1', 0, const Offset(100, 2)); // sits on D, wrong service
+      final net = c.read(networkControllerProvider).network;
+      // The drainage main is NOT split (still one drainage edge, 2 nodes); the
+      // cold-water run is its own disconnected pair — 4 nodes, 2 edges total.
+      expect(net.nodes.length, 4);
+      expect(net.edges.length, 2);
+      expect(
+          net.edges.where((e) => e.service == ServiceType.drainage).length, 1);
+      // The drainage main's endpoints are untouched (no junction inserted on it).
+      final drain = net.edges.firstWhere((e) => e.service == ServiceType.drainage);
+      expect(net.edgesAt(drain.fromId).length, 1);
+      expect(net.edgesAt(drain.toId).length, 1);
+    });
+
+    test('a typed-length run (endSnapRadius 0) still tees at its START', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setService(ServiceType.coldWater);
+      // A cold-water main A(0,0)-B(200,0).
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(200, 0));
+      n.setTool(DrawTool.drawRun);
+      // First click STARTS on the main midpoint (100,1) — should tee in; then a
+      // TYPED length lands the end exactly (endSnapRadius 0). Before the fix,
+      // passing 0 for both radii disconnected the start.
+      n.placeRunPoint('s1', 0, const Offset(100, 1)); // start on the main
+      n.placeRunPoint('s1', 0, const Offset(100, 120), endSnapRadius: 0);
+      final net = c.read(networkControllerProvider).network;
+      // The start teed in: the main split at (100,0) → junction degree 3.
+      final j = net.nodes.firstWhere(
+          (nd) => (nd.x - 100).abs() < 1e-6 && nd.y.abs() < 1e-6);
+      expect(net.edgesAt(j.id).length, 3,
+          reason: 'the typed run must connect to the main at its start');
+      // The end landed EXACTLY at the typed point (no snap-merge): a node at
+      // (100,120) exists.
+      expect(
+          net.nodes.any((nd) => (nd.x - 100).abs() < 1e-6 && (nd.y - 120).abs() < 1e-6),
+          isTrue);
+    });
+
     test('a CONNECTED node dragged onto another run tees in (not a plain move)',
         () {
       final c = makeContainer();
@@ -1730,6 +1783,21 @@ void main() {
       }
     });
 
+    test('setNodesFixture re-picking the SAME fixture records no undo step', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addFitting('s1', 0, const Offset(10, 10));
+      n.addFitting('s1', 0, const Offset(50, 50));
+      final ids =
+          c.read(networkControllerProvider).network.nodes.map((x) => x.id).toSet();
+      n.setNodesFixture(ids, PlumbingFixture.lavatory);
+      final after = c.read(networkControllerProvider).network;
+      // Re-applying the value the nodes already carry is a no-op — the value
+      // guard means no phantom `Network` commit (identical state instance).
+      n.setNodesFixture(ids, PlumbingFixture.lavatory);
+      expect(c.read(networkControllerProvider).network, same(after));
+    });
+
     test('a batch edit does NOT collapse the multi-selection', () {
       final c = makeContainer();
       final n = c.read(networkControllerProvider.notifier);
@@ -1967,6 +2035,42 @@ void main() {
       expect(r.nodeIds, isEmpty);
       expect(r.edgeIds, isEmpty);
       expect(c.read(networkControllerProvider).network.nodes, isEmpty);
+    });
+
+    test('a multi-floor riser assembly keeps its vertical span when stamped', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // A saved "shaft riser set": a node on floor 0 and one on floor 1 joined
+      // by a riser edge (the classic cross-floor block).
+      const src = (
+        nodes: [
+          NetNode(id: 'lo', sheetId: 's1', x: 100, y: 100, floorIndex: 0),
+          NetNode(id: 'hi', sheetId: 's1', x: 100, y: 100, floorIndex: 1),
+        ],
+        edges: [
+          NetEdge(
+              id: 'r',
+              fromId: 'lo',
+              toId: 'hi',
+              service: ServiceType.coldWater,
+              kind: EdgeKind.riser),
+        ],
+      );
+      // Stamp it starting at floor 2.
+      n.stampAssembly(src.nodes, src.edges,
+          sheetId: 's1', floorIndex: 2, world: const Offset(400, 400));
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodes.length, 2);
+      // The two floors are PRESERVED relative to the drop floor (2 and 3), not
+      // flattened onto floor 2 — else the riser would span one floor (length 0).
+      final floors = net.nodes.map((nd) => nd.floorIndex).toSet();
+      expect(floors, {2, 3});
+      // The cloned edge is still a riser spanning two DIFFERENT floors.
+      final e = net.edges.single;
+      expect(e.kind, EdgeKind.riser);
+      final a = net.nodeById(e.fromId)!;
+      final b = net.nodeById(e.toId)!;
+      expect(a.floorIndex, isNot(b.floorIndex));
     });
   });
 

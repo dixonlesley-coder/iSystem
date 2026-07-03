@@ -66,15 +66,17 @@ class _SmartInputBarState extends ConsumerState<SmartInputBar> {
       angleDeg: parse.angleDeg,
       hover: hover,
     );
-    // C4: a TYPED exact length must land at exactly that distance — snapRadius 0
-    // so it can't silently merge onto a node near the computed point (the
-    // default 12 world-px snap is zoom-inconsistent and would corrupt the
-    // typed measurement). Ending on an existing node is done by clicking it.
+    // C4: a TYPED exact length must land at exactly that distance — endSnapRadius
+    // 0 so the END can't silently merge onto a node near the computed point (the
+    // default 12 world-px snap is zoom-inconsistent and would corrupt the typed
+    // measurement). The START keeps the normal snap so the run still tees/adopts
+    // its source — passing 0 for BOTH would disconnect the run at its start.
+    // Ending on an existing node is done by clicking it.
     ref.read(networkControllerProvider.notifier).placeRunPoint(
           widget.sheetId,
           widget.floorIndex,
           target,
-          snapRadius: 0,
+          endSnapRadius: 0,
         );
     _controller.clear();
     setState(() => _error = null);

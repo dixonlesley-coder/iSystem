@@ -227,8 +227,17 @@ class CanvasViewState extends ConsumerState<CanvasView> {
       case LogicalKeyboardKey.arrowUp:
       case LogicalKeyboardKey.arrowDown:
         // A host that owns a selection nudges it (E2) and consumes the key; a
-        // null hook (or "nothing selected") falls through to arrow-pan.
-        if (widget.onDirectionalKey?.call(key) ?? false) {
+        // null hook (or "nothing selected") falls through to arrow-pan. The
+        // nudge fires ONLY on a fresh, unmodified key-DOWN: a held arrow
+        // (KeyRepeatEvent) or any modifier+arrow falls through to pan, so a held
+        // nudge can't flood the undo stack (one snapshot per repeat) and
+        // Ctrl/Shift/Alt+Arrow pans rather than moving the selection.
+        final anyMod = mod ||
+            HardwareKeyboard.instance.isShiftPressed ||
+            HardwareKeyboard.instance.isAltPressed;
+        if (event is KeyDownEvent &&
+            !anyMod &&
+            (widget.onDirectionalKey?.call(key) ?? false)) {
           return KeyEventResult.handled;
         }
         switch (key) {

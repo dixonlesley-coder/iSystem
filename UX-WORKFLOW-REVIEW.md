@@ -670,12 +670,17 @@ B6/B7 undo atomicity via a compound `UndoDomain.structural` coordinator. Residua
 `lastOpenPath` is persisted but reopen-last-on-launch is deliberately not wired — the MRU top
 entry already serves it, and auto-open would clobber crash recovery.)
 
-**Wave 3 — Drafting velocity (the 2× drafter)**
+**Wave 3 — Drafting velocity (the 2× drafter). ✅ LANDED 2026-07-03**
 C1 tee-in (reuse the existing split) · C2 drop-merge honesty · C3 single-key tools + I2 palette
 completeness · E1 batch property edit + E2 group move · E3 paste cascade + array ·
 E4 duplicate-floor range · C4-C9 drawing-loop polish · D1 direct 1:N scale entry + one formatter ·
 D2 apply-scale scope · D3 calibration back-step · D4/D5 stepper fields · I3 Enter commits ·
 E8 idempotent auto-place + stranded-terminal issue · E9 edge editor parity · E5 assemblies.
+(See the §15 decisions-log row for the change detail; adversarial review then fixed 7 defects —
+the smart-input typed-length run disconnecting at its start, a stamped multi-floor assembly
+flattening to a zero-length riser, the C1 tee-in splitting an unrelated-service pipe, the edge
+context-menu batch cross-applying a duct size onto water pipes, the drop-ring/snap nearest-vs-first
+mismatch, a phantom fixture-undo, and the held-arrow undo flood.)
 
 **Wave 4 — Workspace parity**
 F1 riser-scoped inspector · F2 Auto zoom/pan · F4 riser keyboard · F5 toolbar grammar ·

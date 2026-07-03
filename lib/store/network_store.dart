@@ -134,8 +134,11 @@ class NetworkController extends Notifier<DrawingState> {
         tool: state.tool,
       );
 
-  /// Snap to an existing node on [sheetId]/[floorIndex] within [snapRadius]
-  /// (world px), or return null if none. Adds nothing.
+  /// Snap to the NEAREST existing node on [sheetId]/[floorIndex] within
+  /// [snapRadius] (world px), or return null if none. Adds nothing. Nearest (not
+  /// first-in-list) so a drop/draw adopts the node the on-canvas snap ring
+  /// highlights — the ring's promise stays honest when two nodes sit inside the
+  /// radius (the ring paints the nearest).
   String? _snap(
     List<NetNode> nodes,
     String sheetId,
@@ -144,13 +147,19 @@ class NetworkController extends Notifier<DrawingState> {
     double snapRadius,
   ) {
     final r2 = snapRadius * snapRadius;
+    String? best;
+    var bestD2 = r2;
     for (final n in nodes) {
       if (n.sheetId != sheetId || n.floorIndex != floorIndex) continue;
       final dx = n.x - p.dx;
       final dy = n.y - p.dy;
-      if (dx * dx + dy * dy <= r2) return n.id;
+      final d2 = dx * dx + dy * dy;
+      if (d2 <= bestD2) {
+        bestD2 = d2;
+        best = n.id;
+      }
     }
-    return null;
+    return best;
   }
 
   /// Place the next point of a run. First call sets the pending start; the
@@ -167,6 +176,7 @@ class NetworkController extends Notifier<DrawingState> {
     int floorIndex,
     Offset world, {
     double snapRadius = 12,
+    double? endSnapRadius,
   }) {
     if (state.tool != DrawTool.drawRun) return;
     if (state.pendingPoint == null) {
@@ -181,10 +191,14 @@ class NetworkController extends Notifier<DrawingState> {
 
     final nodes = [...state.network.nodes];
     final edges = [...state.network.edges];
-    final aId = _resolveDrawEndpoint(
-        nodes, edges, sheetId, floorIndex, state.pendingPoint!, snapRadius);
-    final bId =
-        _resolveDrawEndpoint(nodes, edges, sheetId, floorIndex, world, snapRadius);
+    // The START always resolves at the normal [snapRadius] so it connects to the
+    // network; only the END honours [endSnapRadius] (the smart-input typed-length
+    // path passes 0 so an EXACT length lands precisely, but the start must still
+    // tee/adopt — else the run silently disconnects at its source).
+    final aId = _resolveDrawEndpoint(nodes, edges, sheetId, floorIndex,
+        state.pendingPoint!, snapRadius, state.service);
+    final bId = _resolveDrawEndpoint(nodes, edges, sheetId, floorIndex, world,
+        endSnapRadius ?? snapRadius, state.service);
     if (aId == bId) {
       // zero-length / same node — just advance the pending point. Any split the
       // resolve did was on a LOCAL copy; discarding it leaves state untouched.
@@ -970,7 +984,15 @@ class NetworkController extends Notifier<DrawingState> {
     var changed = false;
     final nodes = <NetNode>[];
     for (final n in state.network.nodes) {
-      if (ids.contains(n.id)) {
+      // Value-guard (like the sibling batch setters) so re-picking the fixture a
+      // node already carries records no phantom undo step. A node is unchanged
+      // when its fixture matches, it holds no custom-fixture id to clear, and
+      // (for a real fixture) its role is already `fixture`.
+      final already = ids.contains(n.id) &&
+          n.fixture == fixture &&
+          n.customFixtureId == null &&
+          (fixture == null || n.role == NodeRole.fixture);
+      if (ids.contains(n.id) && !already) {
         changed = true;
         nodes.add(_applyFixture(n, fixture));
       } else {
@@ -1481,7 +1503,7 @@ class NetworkController extends Notifier<DrawingState> {
     final nodes = [...state.network.nodes];
     final edges = [...state.network.edges];
     final farId = _resolveDrawEndpoint(
-        nodes, edges, sheetId, floorIndex, world, snapRadius);
+        nodes, edges, sheetId, floorIndex, world, snapRadius, svc);
     if (farId == fromId) return null; // collapsed onto the source — nothing laid
 
     final edgeId = _id('e');
@@ -1492,7 +1514,10 @@ class NetworkController extends Notifier<DrawingState> {
 
   /// Resolve a drawn run's far endpoint to a node id, MUTATING [nodes]/[edges]:
   /// snap to an existing node, else split the nearest run at the projection (the
-  /// new junction), else append a fresh junction node at [world].
+  /// new junction), else append a fresh junction node at [world]. The tee-in
+  /// (step 2) is scoped to runs of the SAME [service] — a cold-water run never
+  /// silently splits a drainage pipe it happens to cross; each service is its
+  /// own network.
   String _resolveDrawEndpoint(
     List<NetNode> nodes,
     List<NetEdge> edges,
@@ -1500,18 +1525,21 @@ class NetworkController extends Notifier<DrawingState> {
     int floorIndex,
     Offset world,
     double snapRadius,
+    ServiceType service,
   ) {
     // 1) snap to an existing node on this floor.
     final snapped = _snap(nodes, sheetId, floorIndex, world, snapRadius);
     if (snapped != null) return snapped;
 
-    // 2) tap into the nearest run on this floor (split it at the projection).
+    // 2) tap into the nearest SAME-SERVICE run on this floor (split at the
+    // projection). A cross-service run is skipped — never teed into.
     final r2 = snapRadius * snapRadius;
     NetEdge? bestEdge;
     var bestD2 = r2;
     var bestP = world;
     for (final e in edges) {
       if (e.kind == EdgeKind.riser) continue;
+      if (e.service != service) continue;
       final a = nodes.where((n) => n.id == e.fromId).firstOrNull;
       final b = nodes.where((n) => n.id == e.toId).firstOrNull;
       if (a == null || b == null) continue;
@@ -1874,13 +1902,26 @@ class NetworkController extends Notifier<DrawingState> {
   /// with fresh ids (mirrors [duplicateFloor]'s clone-map pattern). Returns the
   /// new nodes/edges + their ids; the caller commits (so N copies can land in
   /// one undo step).
+  ///
+  /// [preserveRelativeFloor] keeps each node's floor RELATIVE to the block's
+  /// lowest floor (dropped-floor + delta) instead of flattening onto
+  /// [floorIndex] — so a stamped multi-floor ASSEMBLY (a shaft riser set) keeps
+  /// its vertical span, and its riser edges keep a real §10 elevation-delta
+  /// length. Paste keeps the default (false ⇒ flatten to the paste floor,
+  /// byte-identical); a single-floor block is identical either way.
   ({
     List<NetNode> nodes,
     List<NetEdge> edges,
     Set<String> nodeIds,
     Set<String> edgeIds,
   }) _cloneClipboard(
-      _Clipboard clip, String sheetId, int floorIndex, Offset offset) {
+      _Clipboard clip, String sheetId, int floorIndex, Offset offset,
+      {bool preserveRelativeFloor = false}) {
+    final baseFloor = preserveRelativeFloor
+        ? clip.nodes
+            .map((n) => n.floorIndex)
+            .reduce((a, b) => a < b ? a : b)
+        : 0;
     final clones = <String, String>{}; // old node id → new node id
     final nodes = <NetNode>[];
     final nodeIds = <String>{};
@@ -1888,8 +1929,11 @@ class NetworkController extends Notifier<DrawingState> {
       final id = _id('n');
       clones[n.id] = id;
       nodeIds.add(id);
+      final f = preserveRelativeFloor
+          ? floorIndex + (n.floorIndex - baseFloor)
+          : floorIndex;
       nodes.add(_cloneNodeAt(
-          n, id, sheetId, floorIndex, n.x + offset.dx, n.y + offset.dy));
+          n, id, sheetId, f, n.x + offset.dx, n.y + offset.dy));
     }
     final edges = <NetEdge>[];
     final edgeIds = <String>{};
@@ -2022,8 +2066,11 @@ class NetworkController extends Notifier<DrawingState> {
     cx /= nodes.length;
     cy /= nodes.length;
     final source = _Clipboard(nodes, edges);
+    // Preserve the block's vertical span so a saved multi-floor riser set keeps
+    // real elevation-delta riser lengths (a single-floor block is unaffected).
     final gen = _cloneClipboard(
-        source, sheetId, floorIndex, Offset(world.dx - cx, world.dy - cy));
+        source, sheetId, floorIndex, Offset(world.dx - cx, world.dy - cy),
+        preserveRelativeFloor: true);
     _commit(Network(
       nodes: [...state.network.nodes, ...gen.nodes],
       edges: [...state.network.edges, ...gen.edges],

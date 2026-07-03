@@ -400,16 +400,25 @@ class _EdgeMenuPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final ctrl = ref.read(networkControllerProvider.notifier);
+    final net = ref.watch(networkControllerProvider).network;
     final isAir = edge.service.regime == FlowRegime.air;
 
     // E1: when the right-clicked edge is part of a MULTI-selection, every
-    // size/material action applies to the WHOLE selection (one undo step via the
+    // size/material action applies to the selection (one undo step via the
     // setEdges* intents) and KEEPS the selection alive — so "select similar,
     // right-click, set DN" batch-edits instead of collapsing to one edge.
     final selection = ref.watch(selectionProvider);
     final multi =
         selection.containsEdge(edge.id) && selection.edgeIds.length > 1;
-    final ids = selection.edgeIds;
+    // Size/material batches are SCOPED to edges of the same regime as the
+    // right-clicked one — the ladder + material list shown are regime-specific
+    // (Ø/duct vs DN/pipe), so a mixed air+water selection never gets a duct Ø
+    // forced onto a water pipe as a sizeOverride (which the solve would honour
+    // and mis-size). Delete, by contrast, acts on the WHOLE selection.
+    final sizeIds = selection.edgeIds.where((id) {
+      final e = net.edgeById(id);
+      return e != null && (e.service.regime == FlowRegime.air) == isAir;
+    }).toSet();
 
     void close() => onDismiss();
     void afterEdit() {
@@ -419,9 +428,12 @@ class _EdgeMenuPanel extends ConsumerWidget {
 
     // Size/material appliers: batch (keep selection) in multi, else the single
     // edge (re-select it, matching the prior behaviour).
+    // A regime batch is "multi" only when >1 same-regime edge would receive it;
+    // otherwise fall to the single-edge path (re-selecting the clicked edge).
+    final sizeMulti = multi && sizeIds.length > 1;
     void applySize(Diameter? size) {
-      if (multi) {
-        ctrl.setEdgesSizeOverride(ids, size);
+      if (sizeMulti) {
+        ctrl.setEdgesSizeOverride(sizeIds, size);
         close();
       } else {
         ctrl.setEdgeSizeOverride(edge.id, size);
@@ -430,8 +442,8 @@ class _EdgeMenuPanel extends ConsumerWidget {
     }
 
     void applyDuctProduct(DuctProduct? p) {
-      if (multi) {
-        ctrl.setEdgesDuctProduct(ids, p);
+      if (sizeMulti) {
+        ctrl.setEdgesDuctProduct(sizeIds, p);
         close();
       } else {
         ctrl.setEdgeDuctProduct(edge.id, p);
@@ -440,8 +452,8 @@ class _EdgeMenuPanel extends ConsumerWidget {
     }
 
     void applyPipeProduct(PipeProduct? p) {
-      if (multi) {
-        ctrl.setEdgesPipeProduct(ids, p);
+      if (sizeMulti) {
+        ctrl.setEdgesPipeProduct(sizeIds, p);
         close();
       } else {
         ctrl.setEdgePipeProduct(edge.id, p);
@@ -451,8 +463,8 @@ class _EdgeMenuPanel extends ConsumerWidget {
 
     final children = <Widget>[];
 
-    if (multi) {
-      children.add(MechXMenuHeader('Apply to ${ids.length} selected'));
+    if (sizeMulti) {
+      children.add(MechXMenuHeader('Apply to ${sizeIds.length} selected'));
       children.add(const MechXMenuDivider());
     }
 
@@ -503,7 +515,6 @@ class _EdgeMenuPanel extends ConsumerWidget {
       // Sheet-material takeoff for this segment: developed area (perimeter ×
       // length) + the number of standard sheets/panels of the effective product.
       if (sizing != null) {
-        final net = ref.watch(networkControllerProvider).network;
         final project = ref.watch(projectControllerProvider);
         final len = edgeLength(edge, net,
                 calibrationBySheet: project.calibrations,
@@ -604,9 +615,10 @@ class _EdgeMenuPanel extends ConsumerWidget {
     ));
     children.add(const MechXMenuDivider());
     if (multi) {
-      // Delete the whole selection (edges + any selected nodes) in one step.
+      // Delete the whole selection (edges + any selected nodes) in one step —
+      // NOT regime-scoped: deleting removes everything selected.
       children.add(MechXMenuRow(
-        label: 'Delete ${ids.length} selected',
+        label: 'Delete ${selection.edgeIds.length} selected',
         danger: true,
         onTap: () {
           ctrl.deleteMany(selection.nodeIds, selection.edgeIds);
