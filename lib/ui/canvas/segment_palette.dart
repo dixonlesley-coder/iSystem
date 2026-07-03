@@ -2,6 +2,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 
+import '../../data/project_document.dart' show SavedAssembly;
+import '../../store/assemblies_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
@@ -51,6 +53,11 @@ class SegmentPalette extends ConsumerWidget {
     // On the Schematic view (no layer concept) everything is offered.
     final onLayout = ref.watch(workspaceViewProvider) == WorkspaceView.plan;
     final active = ref.watch(activeDisciplineProvider);
+
+    // Saved assemblies / blocks (E5). Rendered ONLY when the user has saved at
+    // least one, so a fresh project's palette is byte-identical (goldens carry
+    // no saved assembly).
+    final assemblies = ref.watch(assembliesProvider);
 
     // Equipment groups scope to the SYSTEM layer they belong to (and the
     // Schematic view, which has no layer concept, shows everything).
@@ -235,7 +242,65 @@ class SegmentPalette extends ConsumerWidget {
             NodeComponent.acDucted,
           ]),
         ],
+
+        // ── Saved assemblies / blocks (E5) — re-stampable groups ─────────────
+        // A drag re-instantiates the block's nodes/edges with fresh ids at the
+        // drop point. NOTE: the drop CONSUMPTION is a cross-package seam —
+        // `drop_overlay.dart` currently only accepts `DragTarget<PaletteItem>`,
+        // and stamping needs `NetworkController.stampAssembly` (both FLAGGED, not
+        // owned here). Until those land these cards drag but the drop is a no-op.
+        if (assemblies.isNotEmpty) ...[
+          const SizedBox(height: MechXSpacing.xs),
+          const MechXSectionLabel('Assemblies'),
+          const SizedBox(height: MechXSpacing.xs),
+          for (final a in assemblies)
+            Padding(
+              padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: PaletteCard<SavedAssembly>(
+                      label: a.name,
+                      swatch: colors.accent,
+                      data: a,
+                      fillWidth: true,
+                    ),
+                  ),
+                  const SizedBox(width: MechXSpacing.xs),
+                  _AssemblyDeleteButton(
+                    onTap: () =>
+                        ref.read(assembliesProvider.notifier).remove(a.id),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ],
+    );
+  }
+}
+
+/// A tiny "remove this saved block" affordance beside an assembly card. Custom
+/// (no Material) to match the palette's MechXTheme idiom.
+class _AssemblyDeleteButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _AssemblyDeleteButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(MechXSpacing.xxs),
+          child: Text(
+            '×',
+            style: context.type.body.copyWith(color: colors.textMuted),
+          ),
+        ),
+      ),
     );
   }
 }

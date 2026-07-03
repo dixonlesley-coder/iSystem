@@ -75,7 +75,14 @@ class LayoutCanvas extends ConsumerStatefulWidget {
   ConsumerState<LayoutCanvas> createState() => _LayoutCanvasState();
 }
 
+/// The canvas tools/modes a single-key shortcut can arm (C3), so Enter can
+/// repeat the last one after a run finishes (the CAD "repeat last command").
+enum _CanvasTool { run, riser, measure, tank, room }
+
 class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
+  /// The last tool/mode armed via a shortcut, re-armed by Enter when idle (C3).
+  _CanvasTool? _lastTool;
+
   /// Whether the persistent "(?) Canvas guide" popover is open. Transient UI
   /// chrome — never persisted; the (?) button is a small edge affordance, so the
   /// idle canvas stays byte-identical.
@@ -376,9 +383,12 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         setState(() => _spaceHeld = false);
         return KeyEventResult.handled;
       }
+      // D3: Space still PANS while placing the two calibration points; it is
+      // blocked ONLY in the distance-entry phase, where the "Known distance"
+      // text field is focused and could legitimately want the space bar.
       final textEntryPossible = _editing != null ||
           _panelEditing != null ||
-          ref.read(calibrationControllerProvider).isActive ||
+          ref.read(calibrationControllerProvider).isEnteringDistance ||
           ref.read(networkControllerProvider).isDrawing;
       if (textEntryPossible) return KeyEventResult.ignored;
       if (!_spaceHeld) setState(() => _spaceHeld = true);
@@ -499,6 +509,68 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       return KeyEventResult.handled;
     }
 
+    // C3: single-key tool + service shortcuts — bare keys (no Ctrl/Meta),
+    // guarded so a focused text field (calibration / smart input / inspector)
+    // types normally. F fits the canvas; the rest are mechanical.
+    if (!mod && !isTextEntryFocused()) {
+      // F fits via the shared fit-request seam so it works even when the
+      // CanvasView itself doesn't hold focus (W3-P5; the command palette's Fit
+      // action bumps the same provider).
+      if (key == LogicalKeyboardKey.keyF) {
+        ref.read(canvasFitRequestProvider.notifier).request();
+        return KeyEventResult.handled;
+      }
+      if (activeMechanical) {
+        if (key == LogicalKeyboardKey.keyO) {
+          ref.read(orthoProvider.notifier).toggle();
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyV) {
+          _armTool(null);
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyR) {
+          _armTool(_CanvasTool.run);
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyE) {
+          _armTool(_CanvasTool.riser);
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyM) {
+          _armTool(_CanvasTool.measure);
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyK) {
+          _armTool(_CanvasTool.tank);
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.keyB) {
+          _armTool(_CanvasTool.room);
+          return KeyEventResult.handled;
+        }
+        // Enter repeats the last tool when idle (Select, no mode, not drawing).
+        if (key == LogicalKeyboardKey.enter ||
+            key == LogicalKeyboardKey.numpadEnter) {
+          if (_isIdle() && _lastTool != null) {
+            _armTool(_lastTool);
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        }
+        // Number keys 1..N pick the active layer's Nth scoped service.
+        final digit = _serviceDigit(key);
+        if (digit != null) {
+          final services = servicesFor(ref.read(activeDisciplineProvider));
+          if (digit < services.length) {
+            ref.read(networkControllerProvider.notifier)
+                .setService(services[digit]);
+            return KeyEventResult.handled;
+          }
+        }
+      }
+    }
+
     if (key == LogicalKeyboardKey.escape) {
       if (_editing != null ||
           _panelEditing != null ||
@@ -544,6 +616,121 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       }
     }
     return KeyEventResult.ignored;
+  }
+
+  /// Arm a canvas tool/mode via its shortcut (C3), enforcing the toolbar's
+  /// mutual exclusion (a draw tool clears the measure/tank/room modes and vice
+  /// versa). [tool] null = Select. Remembers the last non-Select tool so Enter
+  /// can repeat it.
+  void _armTool(_CanvasTool? tool) {
+    final net = ref.read(networkControllerProvider.notifier);
+    final measure = ref.read(measureModeProvider.notifier);
+    final tank = ref.read(tankModeProvider.notifier);
+    final room = ref.read(roomModeProvider.notifier);
+    switch (tool) {
+      case null:
+        measure.set(false);
+        tank.set(false);
+        room.set(false);
+        net.setTool(DrawTool.select);
+      case _CanvasTool.run:
+        measure.set(false);
+        tank.set(false);
+        room.set(false);
+        net.setTool(DrawTool.drawRun);
+        _lastTool = tool;
+      case _CanvasTool.riser:
+        measure.set(false);
+        tank.set(false);
+        room.set(false);
+        net.setTool(DrawTool.drawRiser);
+        _lastTool = tool;
+      case _CanvasTool.measure:
+        net.setTool(DrawTool.select);
+        tank.set(false);
+        room.set(false);
+        measure.set(true);
+        _lastTool = tool;
+      case _CanvasTool.tank:
+        net.setTool(DrawTool.select);
+        measure.set(false);
+        room.set(false);
+        tank.set(true);
+        _lastTool = tool;
+      case _CanvasTool.room:
+        net.setTool(DrawTool.select);
+        measure.set(false);
+        tank.set(false);
+        room.set(true);
+        _lastTool = tool;
+    }
+  }
+
+  /// True when no tool/mode is active (Select, not drawing, no annotation mode)
+  /// — the state in which Enter repeats the last tool.
+  bool _isIdle() =>
+      ref.read(networkControllerProvider).tool == DrawTool.select &&
+      !ref.read(measureModeProvider) &&
+      !ref.read(tankModeProvider) &&
+      !ref.read(roomModeProvider);
+
+  /// The 0-based service index for a number key (`1`..`9`, top-row or numpad),
+  /// or null for any other key. (A switch, not a const map — [LogicalKeyboardKey]
+  /// overrides `==`, so it can't be a const map key.)
+  int? _serviceDigit(LogicalKeyboardKey key) => switch (key) {
+        LogicalKeyboardKey.digit1 || LogicalKeyboardKey.numpad1 => 0,
+        LogicalKeyboardKey.digit2 || LogicalKeyboardKey.numpad2 => 1,
+        LogicalKeyboardKey.digit3 || LogicalKeyboardKey.numpad3 => 2,
+        LogicalKeyboardKey.digit4 || LogicalKeyboardKey.numpad4 => 3,
+        LogicalKeyboardKey.digit5 || LogicalKeyboardKey.numpad5 => 4,
+        LogicalKeyboardKey.digit6 || LogicalKeyboardKey.numpad6 => 5,
+        LogicalKeyboardKey.digit7 || LogicalKeyboardKey.numpad7 => 6,
+        LogicalKeyboardKey.digit8 || LogicalKeyboardKey.numpad8 => 7,
+        LogicalKeyboardKey.digit9 || LogicalKeyboardKey.numpad9 => 8,
+        _ => null,
+      };
+
+  /// The [CanvasView] arrow-key hook (E2): nudge the mechanical selection by the
+  /// grid step and consume the key; return false (so the canvas pans) when a
+  /// text field owns the keyboard, the active layer isn't mechanical, or nothing
+  /// is selected.
+  bool handleDirectionalKey(LogicalKeyboardKey key) {
+    if (isTextEntryFocused()) return false;
+    if (!ref.read(activeDisciplineProvider).isMechanical) return false;
+    final sel = ref.read(selectionProvider);
+    if (!sel.hasSelection) return false;
+    final sheet = ref.read(sheetsControllerProvider).current;
+    if (sheet == null) return false;
+    final cal = ref.read(projectControllerProvider).calibrationFor(sheet.id);
+    final step =
+        cal == null ? 32.0 : calibratedGridWorldStep(cal.metersPerPixel);
+    double dx = 0, dy = 0;
+    switch (key) {
+      case LogicalKeyboardKey.arrowLeft:
+        dx = -step;
+      case LogicalKeyboardKey.arrowRight:
+        dx = step;
+      case LogicalKeyboardKey.arrowUp:
+        dy = -step;
+      case LogicalKeyboardKey.arrowDown:
+        dy = step;
+      default:
+        return false;
+    }
+    final net = ref.read(networkControllerProvider).network;
+    final ids = <String>{...sel.nodeIds};
+    for (final eid in sel.edgeIds) {
+      final e = net.edgeById(eid);
+      if (e != null) {
+        ids.add(e.fromId);
+        ids.add(e.toId);
+      }
+    }
+    if (ids.isEmpty) return false;
+    final ctrl = ref.read(networkControllerProvider.notifier);
+    ctrl.pushUndoSnapshot();
+    ctrl.moveMany(ids, dx, dy);
+    return true;
   }
 }
 
@@ -709,6 +896,9 @@ class _SharedSheet extends ConsumerWidget {
                 ? null
                 : calibratedGridWorldStep(calibration.metersPerPixel),
             cursor: canvasCursor,
+            // E2: arrows nudge the mechanical selection by the grid step; with
+            // nothing selected the host returns false and the canvas pans.
+            onDirectionalKey: host.handleDirectionalKey,
             onTransformChanged: (t) => ref
                 .read(sheetsControllerProvider.notifier)
                 .setViewport(sheet.id, t),
@@ -912,13 +1102,16 @@ class _SharedSheet extends ConsumerWidget {
 
 /// Gesture-help for the mechanical (Plumbing / HVAC) layer of the Layout canvas.
 const _mechanicalLayerGuideItems = <String>[
-  'Drag a Riser card onto the canvas to start a mainline',
-  'Drag the blue outlet out of a node to lay a run',
-  'Drag a Terminal onto a main to branch it',
+  'Tool keys: V select · R run · E riser · M measure · K tank · B room',
+  'Number keys 1-N pick the active layer service; Enter repeats the last tool',
+  'O toggles ortho; hold Shift while drawing for a free angle',
+  'Drag the blue outlet out of a hovered/selected node to lay a run',
+  'Drag a Terminal onto a main to branch it (it tees into the run)',
   'Right-click a segment to set its size (inches) or material',
   'Drag a segment endpoint to resize it — it snaps to nearby fittings',
   'Left-click to select; Shift+click or rubber-band for multi-select',
-  'Middle-drag or hold Space to pan; scroll to zoom',
+  'Arrow keys nudge the selection; drag a selected node to move the group',
+  'Middle-drag or hold Space to pan; scroll to zoom; F fits the view',
   'Risers drawn here stack vertically in the Riser view (left nav)',
 ];
 

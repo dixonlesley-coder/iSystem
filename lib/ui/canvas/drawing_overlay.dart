@@ -1,10 +1,12 @@
 import 'dart:math' as math;
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 
+import '../../store/app_state.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
@@ -40,27 +42,6 @@ class DrawingOverlay extends ConsumerStatefulWidget {
 class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
   Offset? _hoverWorld;
 
-  /// The nearest node (same sheet/floor) within the snap radius of [worldP], or
-  /// null — mirrors the store's `_snap` so the ring marks the genuine target.
-  NetNode? _snapTarget(Offset worldP, double snapWorld) {
-    final nodes = ref.read(networkControllerProvider).network.nodes;
-    NetNode? best;
-    var bestD2 = snapWorld * snapWorld;
-    for (final n in nodes) {
-      if (n.sheetId != widget.sheetId || n.floorIndex != widget.floorIndex) {
-        continue;
-      }
-      final dx = n.x - worldP.dx;
-      final dy = n.y - worldP.dy;
-      final d2 = dx * dx + dy * dy;
-      if (d2 <= bestD2) {
-        bestD2 = d2;
-        best = n;
-      }
-    }
-    return best;
-  }
-
   @override
   Widget build(BuildContext context) {
     final drawing = ref.watch(networkControllerProvider);
@@ -72,15 +53,20 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
         ref.watch(projectControllerProvider).calibrationFor(widget.sheetId);
     final snapWorld = 12 / transform.scale; // keep snap ≈12 screen px
 
-    // Ortho-snapped cursor for the rubber-band preview.
+    // C9: hold-Shift toggles the ortho constraint for THIS gesture (a one-off
+    // free-angle run without four inspector trips) — effective ortho = the
+    // setting XOR Shift, applied to BOTH the preview and the tap commit.
+    final effectiveOrtho = ortho ^ HardwareKeyboard.instance.isShiftPressed;
     final pending = drawing.pendingPoint;
-    final previewHover = (ortho && pending != null && _hoverWorld != null)
+    final previewHover = (effectiveOrtho && pending != null && _hoverWorld != null)
         ? orthoSnap(pending, _hoverWorld!)
         : _hoverWorld;
-    // Where the NEXT click would snap — the ortho-adjusted cursor is what
-    // placeRunPoint/placeRiser receive, so search from it.
-    final snapNode = previewHover != null
-        ? _snapTarget(previewHover, snapWorld)
+    // Where the NEXT click would attach — a node hit OR the tee-in projection
+    // onto a nearby run (mirrors the store's `_resolveDrawEndpoint`, C1), so the
+    // ring marks the genuine connect point rather than nodes only.
+    final snapPt = previewHover != null
+        ? snapOrTeePoint(drawing.network, widget.sheetId, widget.floorIndex,
+            previewHover, snapWorld)
         : null;
 
     return MouseRegion(
@@ -97,9 +83,12 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
         behavior: HitTestBehavior.opaque,
         onTapUp: (details) {
           var world = transform.screenToWorld(details.localPosition);
+          // Re-read Shift at commit time so the constraint matches what the
+          // preview just showed (C9).
+          final effOrtho = ortho ^ HardwareKeyboard.instance.isShiftPressed;
           switch (drawing.tool) {
             case DrawTool.drawRun:
-              if (ortho && pending != null) world = orthoSnap(pending, world);
+              if (effOrtho && pending != null) world = orthoSnap(pending, world);
               notifier.placeRunPoint(
                 widget.sheetId,
                 widget.floorIndex,
@@ -107,13 +96,20 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
                 snapRadius: snapWorld,
               );
             case DrawTool.drawRiser:
-              notifier.placeRiser(
+              // C6: consume the placement result — a single-floor building has
+              // no adjacent floor, so tell the user instead of a silent no-op.
+              final placement = notifier.placeRiser(
                 widget.sheetId,
                 widget.floorIndex,
                 world,
                 widget.levelCount,
                 snapRadius: snapWorld,
               );
+              if (placement == RiserPlacement.none) {
+                ref
+                    .read(statusMessageProvider.notifier)
+                    .showStatus('Add a floor above to draw a riser');
+              }
             case DrawTool.select:
               break;
           }
@@ -129,12 +125,11 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
         },
         child: CustomPaint(
           size: Size.infinite,
-          painter: _RubberBandPainter(
+          painter: RubberBandPainter(
             pending: drawing.pendingPoint,
             hover: previewHover,
-            snapScreen: snapNode != null
-                ? transform.worldToScreen(Offset(snapNode.x, snapNode.y))
-                : null,
+            snapScreen:
+                snapPt != null ? transform.worldToScreen(snapPt) : null,
             transform: transform,
             calibration: calibration,
             color: serviceColor(drawing.service),
@@ -146,7 +141,67 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
   }
 }
 
-class _RubberBandPainter extends CustomPainter {
+/// The world point a drawn/pulled endpoint at [world] would attach to on
+/// [sheetId]/[floorIndex] within [radiusWorld]: an existing NODE (node hit
+/// wins), else the projection onto the nearest run EDGE (a tee-in), else null.
+/// Mirrors the store's `_resolveDrawEndpoint` precedence so the on-canvas snap
+/// ring marks the genuine attach point (a node OR the tee projection, C1/C5).
+/// Shared by the [DrawingOverlay] rubber-band and the outlet-nub pull.
+Offset? snapOrTeePoint(
+  Network net,
+  String sheetId,
+  int floorIndex,
+  Offset world,
+  double radiusWorld,
+) {
+  final r2 = radiusWorld * radiusWorld;
+  NetNode? bestNode;
+  var bestNodeD2 = r2;
+  for (final n in net.nodes) {
+    if (n.sheetId != sheetId || n.floorIndex != floorIndex) continue;
+    final dx = n.x - world.dx;
+    final dy = n.y - world.dy;
+    final d2 = dx * dx + dy * dy;
+    if (d2 <= bestNodeD2) {
+      bestNodeD2 = d2;
+      bestNode = n;
+    }
+  }
+  if (bestNode != null) return Offset(bestNode.x, bestNode.y);
+  Offset? bestP;
+  var bestD2 = r2;
+  for (final e in net.edges) {
+    if (e.kind == EdgeKind.riser) continue;
+    final a = net.nodeById(e.fromId);
+    final b = net.nodeById(e.toId);
+    if (a == null || b == null) continue;
+    if (a.sheetId != sheetId || a.floorIndex != floorIndex) continue;
+    if (b.sheetId != sheetId || b.floorIndex != floorIndex) continue;
+    final p = _closestPointOnSegment(world, Offset(a.x, a.y), Offset(b.x, b.y));
+    final d2 = (p - world).distanceSquared;
+    if (d2 <= bestD2) {
+      bestD2 = d2;
+      bestP = p;
+    }
+  }
+  return bestP;
+}
+
+/// Closest point on segment a→b to p (all world px).
+Offset _closestPointOnSegment(Offset p, Offset a, Offset b) {
+  final ab = b - a;
+  final len2 = ab.distanceSquared;
+  if (len2 == 0) return a;
+  final t = (((p.dx - a.dx) * ab.dx + (p.dy - a.dy) * ab.dy) / len2)
+      .clamp(0.0, 1.0);
+  return a + ab * t;
+}
+
+/// Rubber-band preview painter for a run being drawn (or a mainline being pulled
+/// out of a node, C5): the pending→cursor line with a LIVE calibrated length
+/// chip, plus a snap/tee ring over the point the next endpoint would attach to.
+/// Public so the outlet-nub pull reuses the exact same feedback.
+class RubberBandPainter extends CustomPainter {
   final Offset? pending;
   final Offset? hover;
   final Offset? snapScreen;
@@ -155,7 +210,7 @@ class _RubberBandPainter extends CustomPainter {
   final Color color;
   final bool active;
 
-  _RubberBandPainter({
+  RubberBandPainter({
     required this.pending,
     required this.hover,
     required this.snapScreen,
@@ -241,7 +296,7 @@ class _RubberBandPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_RubberBandPainter old) =>
+  bool shouldRepaint(RubberBandPainter old) =>
       old.pending != pending ||
       old.hover != hover ||
       old.snapScreen != snapScreen ||

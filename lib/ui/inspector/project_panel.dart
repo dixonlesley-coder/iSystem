@@ -39,6 +39,7 @@ import '../../data/plan_underlay.dart';
 import '../../store/air_warnings_store.dart';
 import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
+import '../../store/assemblies_store.dart';
 import '../../store/calibration_store.dart';
 import '../../store/compliance_store.dart';
 import '../../store/design_issues_store.dart';
@@ -2710,7 +2711,7 @@ class _SelectionSection extends ConsumerWidget {
     // Multi-selection: a count header + Copy / Paste / Delete actions (the
     // single-element editor is shown only for a single selection).
     if (selection.isMulti) {
-      return _multiSelectionSection(context, ref, selection, ctrl, selCtrl);
+      return _multiSelectionSection(context, ref, net, selection, ctrl, selCtrl);
     }
 
     Widget? body;
@@ -2749,12 +2750,53 @@ class _SelectionSection extends ConsumerWidget {
     );
   }
 
-  Widget _multiSelectionSection(BuildContext context, WidgetRef ref,
+  Widget _multiSelectionSection(BuildContext context, WidgetRef ref, Network net,
       Selection selection, NetworkController ctrl, SelectionController selCtrl) {
     final colors = context.colors;
     final type = context.type;
     final n = selection.nodeIds.length;
     final m = selection.edgeIds.length;
+    final edgeIds = selection.edgeIds;
+    final nodeIds = selection.nodeIds;
+
+    // Resolve the selected elements to drive the shared property editors (E1).
+    final selEdges = <NetEdge>[
+      for (final e in net.edges)
+        if (edgeIds.contains(e.id)) e,
+    ];
+    final selNodes = <NetNode>[
+      for (final nd in net.nodes)
+        if (nodeIds.contains(nd.id)) nd,
+    ];
+
+    // A HOMOGENEOUS selection (all edges, or all nodes of one role) unlocks the
+    // shared editors — the SAME pickers the single-element inspector uses, but
+    // each applies to EVERY id in ONE undo step via the plural setEdges*/
+    // setNodes* intents (which never touch the selection ⇒ the batch survives).
+    final allEdges = selEdges.isNotEmpty && selNodes.isEmpty;
+    final allNodes = selNodes.isNotEmpty && selEdges.isEmpty;
+    // Size/material pickers differ by regime, so they show only when every
+    // selected edge shares one (air vs pipe); a mixed batch keeps the service
+    // chips (re-servicing all is always coherent).
+    final allAir = allEdges && selEdges.every((e) => e.service.isAir);
+    final allPipe = allEdges && selEdges.every((e) => !e.service.isAir);
+    NodeRole? commonRole;
+    if (allNodes) {
+      commonRole = selNodes.first.role;
+      for (final nd in selNodes) {
+        if (nd.role != commonRole) {
+          commonRole = null;
+          break;
+        }
+      }
+    }
+    final showNodeEditors = allNodes && commonRole == NodeRole.fixture;
+    final showApply = allEdges || showNodeEditors;
+    final applyCount = allEdges ? m : n;
+
+    Widget label(String text) => Text(text,
+        style: type.caption.copyWith(color: colors.textMuted));
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2801,6 +2843,163 @@ class _SelectionSection extends ConsumerWidget {
               },
             ),
           ],
+        ),
+
+        // ── E1: batch property editors on a HOMOGENEOUS selection ─────────────
+        if (showApply) ...[
+          const SizedBox(height: MechXSpacing.lg),
+          MechXSectionLabel('Apply to $applyCount selected'),
+          if (allEdges) ...[
+            // Service (always coherent for an all-edge batch).
+            const SizedBox(height: MechXSpacing.sm),
+            label('Service'),
+            const SizedBox(height: MechXSpacing.xs),
+            Wrap(
+              spacing: MechXSpacing.xs,
+              runSpacing: MechXSpacing.xs,
+              children: [
+                for (final s in kDrawServices)
+                  _ServiceChip(
+                    service: s,
+                    selected: selEdges.every((e) => e.service == s),
+                    onTap: () => ctrl.setEdgesService(edgeIds, s),
+                  ),
+              ],
+            ),
+            // Size + material only when every selected edge shares a regime.
+            if (allAir || allPipe) ...[
+              const SizedBox(height: MechXSpacing.sm),
+              label('Size'),
+              const SizedBox(height: MechXSpacing.xs),
+              Wrap(
+                spacing: MechXSpacing.xs,
+                runSpacing: MechXSpacing.xs,
+                children: [
+                  _Pill(
+                    label: 'Auto',
+                    selected: selEdges.every((e) => e.sizeOverride == null),
+                    onTap: () => ctrl.setEdgesSizeOverride(edgeIds, null),
+                  ),
+                  if (allAir)
+                    for (final mm in standardDuctDiametersMm)
+                      _Pill(
+                        label: 'Ø${mm.round()}',
+                        selected: selEdges.every((e) =>
+                            e.sizeOverride != null &&
+                            (e.sizeOverride!.inMillimeters - mm).abs() < 0.5),
+                        onTap: () =>
+                            ctrl.setEdgesSizeOverride(edgeIds, Diameter.mm(mm)),
+                      )
+                  else
+                    for (final inches in npsInches)
+                      _Pill(
+                        label: npsLabel(inches),
+                        selected: selEdges.every((e) =>
+                            e.sizeOverride != null &&
+                            (e.sizeOverride!.inMillimeters - npsToMm(inches))
+                                    .abs() <
+                                0.5),
+                        onTap: () => ctrl.setEdgesSizeOverride(
+                            edgeIds, Diameter.mm(npsToMm(inches))),
+                      ),
+                ],
+              ),
+              const SizedBox(height: MechXSpacing.sm),
+              label('Material'),
+              const SizedBox(height: MechXSpacing.xs),
+              Wrap(
+                spacing: MechXSpacing.xs,
+                runSpacing: MechXSpacing.xs,
+                children: [
+                  if (allAir) ...[
+                    _Pill(
+                      label: 'Auto',
+                      selected: selEdges.every((e) => e.ductProduct == null),
+                      onTap: () => ctrl.setEdgesDuctProduct(edgeIds, null),
+                    ),
+                    for (final p in DuctProduct.values)
+                      _Pill(
+                        label: ductLabelFor(p),
+                        selected: selEdges.every((e) => e.ductProduct == p),
+                        onTap: () => ctrl.setEdgesDuctProduct(edgeIds, p),
+                      ),
+                  ] else ...[
+                    _Pill(
+                      label: 'Default',
+                      selected: selEdges.every((e) => e.pipeProduct == null),
+                      onTap: () => ctrl.setEdgesPipeProduct(edgeIds, null),
+                    ),
+                    for (final p in PipeProduct.values)
+                      _Pill(
+                        label: labelFor(p),
+                        selected: selEdges.every((e) => e.pipeProduct == p),
+                        onTap: () => ctrl.setEdgesPipeProduct(edgeIds, p),
+                      ),
+                  ],
+                ],
+              ),
+            ],
+          ],
+          if (showNodeEditors) ...[
+            // Fixture type (all nodes share the fixture role).
+            const SizedBox(height: MechXSpacing.sm),
+            label('Fixture type'),
+            const SizedBox(height: MechXSpacing.xs),
+            Wrap(
+              spacing: MechXSpacing.xs,
+              runSpacing: MechXSpacing.xs,
+              children: [
+                for (final f in PlumbingFixture.values)
+                  _Pill(
+                    label: fixtureLabel(f),
+                    selected: selNodes.every(
+                        (nd) => nd.customFixtureId == null && nd.fixture == f),
+                    onTap: () => ctrl.setNodesFixture(nodeIds, f),
+                  ),
+              ],
+            ),
+            const SizedBox(height: MechXSpacing.sm),
+            label('Diffuser / grille face size'),
+            const SizedBox(height: MechXSpacing.xs),
+            Wrap(
+              spacing: MechXSpacing.xs,
+              runSpacing: MechXSpacing.xs,
+              children: [
+                _Pill(
+                  label: 'Auto',
+                  selected: selNodes.every((nd) =>
+                      nd.faceWidthMm == null || nd.faceHeightMm == null),
+                  onTap: () => ctrl.setNodesFaceSize(nodeIds, null, null),
+                ),
+                for (final face in standardGrilleFacesMm)
+                  _Pill(
+                    label: '${face.$1.round()}x${face.$2.round()}',
+                    selected: selNodes.every((nd) =>
+                        nd.faceWidthMm == face.$1 &&
+                        nd.faceHeightMm == face.$2),
+                    onTap: () =>
+                        ctrl.setNodesFaceSize(nodeIds, face.$1, face.$2),
+                  ),
+              ],
+            ),
+          ],
+        ],
+
+        // ── E5: save this selection as a reusable, re-stampable block ─────────
+        const SizedBox(height: MechXSpacing.lg),
+        MechXSectionLabel('Assembly'),
+        const SizedBox(height: MechXSpacing.xs),
+        _SaveAssemblyField(
+          onSave: (name) {
+            final saved = ref
+                .read(assembliesProvider.notifier)
+                .saveSelection(name, net, nodeIds, edgeIds);
+            if (saved != null) {
+              ref
+                  .read(statusMessageProvider.notifier)
+                  .showStatus('Saved block "${saved.name}"');
+            }
+          },
         ),
         const SizedBox(height: MechXSpacing.lg),
       ],
@@ -3487,6 +3686,51 @@ String _balanceLabel(double supplyLps, double returnLps) {
 }
 
 /// A compact selectable pill used by the selection editor (role / fixture).
+/// Inline name field + Save button (E5): captures the current multi-selection
+/// into a named reusable assembly. Stateful so the typed name persists across
+/// rebuilds and clears after a save (a changing key re-seeds the field text).
+class _SaveAssemblyField extends StatefulWidget {
+  final void Function(String name) onSave;
+  const _SaveAssemblyField({required this.onSave});
+
+  @override
+  State<_SaveAssemblyField> createState() => _SaveAssemblyFieldState();
+}
+
+class _SaveAssemblyFieldState extends State<_SaveAssemblyField> {
+  String _name = '';
+  int _gen = 0; // bumped on save to reset the field text
+
+  void _save() {
+    final name = _name.trim();
+    if (name.isEmpty) return;
+    widget.onSave(name);
+    setState(() {
+      _name = '';
+      _gen++;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: MechXTextField(
+            key: ValueKey(_gen),
+            value: _name,
+            hint: 'Assembly name',
+            onChanged: (s) => _name = s,
+            onSubmitted: _save,
+          ),
+        ),
+        const SizedBox(width: MechXSpacing.xs),
+        MechXButton(label: 'Save block', onPressed: _save),
+      ],
+    );
+  }
+}
+
 class _Pill extends StatelessWidget {
   final String label;
   final bool selected;

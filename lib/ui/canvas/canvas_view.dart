@@ -2,9 +2,30 @@ import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'canvas_grid.dart';
 import 'viewport.dart';
+
+/// A bump signal asking the live [CanvasView] to fit its content to the
+/// viewport. A mounted [CanvasViewState] listens and calls [CanvasViewState.fitView]
+/// on every bump, so a host that doesn't hold the canvas's [GlobalKey] (the
+/// command palette's "Fit view" action, W3-P5; the Layout canvas's F key) can
+/// still trigger a fit. The int is a monotonic counter — only the CHANGE
+/// matters, never the value.
+final canvasFitRequestProvider =
+    NotifierProvider<CanvasFitRequestController, int>(
+  CanvasFitRequestController.new,
+);
+
+class CanvasFitRequestController extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  /// Ask every mounted [CanvasView] to fit its content (bumps the counter so
+  /// listeners fire). Idempotent-safe — fitting an already-fit canvas is a no-op.
+  void request() => state = state + 1;
+}
 
 /// A pannable / zoomable canvas hosting a fixed-size [child] (a sheet page).
 ///
@@ -14,7 +35,7 @@ import 'viewport.dart';
 /// [ValueKey] of the sheet id and an [initialTransform] (the restored viewport,
 /// or null to fit-on-first-layout); it reports every change via
 /// [onTransformChanged] for the store to persist.
-class CanvasView extends StatefulWidget {
+class CanvasView extends ConsumerStatefulWidget {
   final Size contentSize;
   final Widget child;
   final ViewportTransform? initialTransform;
@@ -38,6 +59,12 @@ class CanvasView extends StatefulWidget {
   /// modes) passes the honest cursor for the active tool instead.
   final MouseCursor? cursor;
 
+  /// Optional host hook for the directional (arrow) keys. Called BEFORE the
+  /// built-in arrow-pan; if it returns true the key is consumed by the host
+  /// (e.g. nudging a selection, E2) and the canvas does NOT pan. Null ⇒ arrows
+  /// always pan (the default for callers that don't own a selection).
+  final bool Function(LogicalKeyboardKey key)? onDirectionalKey;
+
   const CanvasView({
     super.key,
     required this.contentSize,
@@ -48,16 +75,17 @@ class CanvasView extends StatefulWidget {
     this.gridColor,
     this.gridWorldStep,
     this.cursor,
+    this.onDirectionalKey,
   });
 
   @override
-  State<CanvasView> createState() => CanvasViewState();
+  ConsumerState<CanvasView> createState() => CanvasViewState();
 }
 
 /// Public so a host can drive zoom imperatively via a [GlobalKey] (the shared
 /// on-canvas [ZoomControls]). The canvas owns its live transform, so the
 /// buttons go through these methods rather than the persisted store.
-class CanvasViewState extends State<CanvasView> {
+class CanvasViewState extends ConsumerState<CanvasView> {
   ViewportTransform? _transform;
   Size _viewportSize = Size.zero;
   final FocusNode _focus = FocusNode(debugLabel: 'canvas');
@@ -195,16 +223,24 @@ class CanvasViewState extends State<CanvasView> {
     }
     switch (key) {
       case LogicalKeyboardKey.arrowLeft:
-        _emit(vt.panned(const Offset(panStep, 0)));
-        return KeyEventResult.handled;
       case LogicalKeyboardKey.arrowRight:
-        _emit(vt.panned(const Offset(-panStep, 0)));
-        return KeyEventResult.handled;
       case LogicalKeyboardKey.arrowUp:
-        _emit(vt.panned(const Offset(0, panStep)));
-        return KeyEventResult.handled;
       case LogicalKeyboardKey.arrowDown:
-        _emit(vt.panned(const Offset(0, -panStep)));
+        // A host that owns a selection nudges it (E2) and consumes the key; a
+        // null hook (or "nothing selected") falls through to arrow-pan.
+        if (widget.onDirectionalKey?.call(key) ?? false) {
+          return KeyEventResult.handled;
+        }
+        switch (key) {
+          case LogicalKeyboardKey.arrowLeft:
+            _emit(vt.panned(const Offset(panStep, 0)));
+          case LogicalKeyboardKey.arrowRight:
+            _emit(vt.panned(const Offset(-panStep, 0)));
+          case LogicalKeyboardKey.arrowUp:
+            _emit(vt.panned(const Offset(0, panStep)));
+          default:
+            _emit(vt.panned(const Offset(0, -panStep)));
+        }
         return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -212,6 +248,10 @@ class CanvasViewState extends State<CanvasView> {
 
   @override
   Widget build(BuildContext context) {
+    // A host without the canvas's GlobalKey can request a fit through the
+    // shared bump provider (the command palette's Fit action, the Layout F key);
+    // fire on every bump. fitView() self-guards an empty viewport.
+    ref.listen(canvasFitRequestProvider, (_, _) => fitView());
     return Focus(
       focusNode: _focus,
       autofocus: true,

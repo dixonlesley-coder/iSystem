@@ -8,11 +8,15 @@ import 'package:mechx_engine/network/network.dart';
 
 import '../../store/inspector_store.dart';
 import '../../store/network_store.dart';
+import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import 'drawing_overlay.dart' show RubberBandPainter, snapOrTeePoint;
 import 'edge_context_menu.dart';
+import 'service_style.dart';
+import 'snapping.dart';
 import 'viewport.dart';
 
 /// Interaction layer active while the Select tool is chosen: a tap picks the
@@ -81,7 +85,16 @@ class _NetworkSelectionOverlayState
       _pullNow = null;
     });
     if (from == null || now == null) return;
-    final world = transform.screenToWorld(now);
+    final net = ref.read(networkControllerProvider).network;
+    final fromNode = net.nodeById(from);
+    var world = transform.screenToWorld(now);
+    // C5: apply the ortho constraint the preview showed (Shift overrides), so a
+    // nub-drawn main lands straight rather than slightly askew.
+    final effectiveOrtho =
+        ref.read(orthoProvider) ^ HardwareKeyboard.instance.isShiftPressed;
+    if (effectiveOrtho && fromNode != null) {
+      world = orthoSnap(Offset(fromNode.x, fromNode.y), world);
+    }
     final snapWorld = 14 / transform.scale;
     ref
         .read(networkControllerProvider.notifier)
@@ -182,11 +195,15 @@ class _NetworkSelectionOverlayState
 
   @override
   Widget build(BuildContext context) {
-    final net = ref.watch(networkControllerProvider).network;
+    final drawing = ref.watch(networkControllerProvider);
+    final net = drawing.network;
     final transform =
         ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
             const ViewportTransform();
     final selection = ref.watch(selectionProvider);
+    final hover = ref.watch(hoverTargetProvider);
+    final calibration =
+        ref.watch(projectControllerProvider).calibrationFor(sheetId);
 
     // On-floor node drag handles (opaque, small) sit above the translucent tap
     // layer: dragging a handle moves the node; tapping it selects it; anywhere
@@ -201,12 +218,18 @@ class _NetworkSelectionOverlayState
               transform.scale, snapWorld),
     ];
 
-    // Outlet nubs — one per non-fixture node (mains/plant/risers, the sources a
-    // mainline is pulled out of). Sit above the move handle so a drag from the
-    // nub lays a run rather than moving the node.
+    // Outlet nubs — the accent handle a mainline is pulled out of. C7: gated to
+    // the HOVERED and SELECTED non-fixture nodes only (not every node always),
+    // so a dense plan isn't peppered with blue confetti competing with the
+    // selection language.
+    final hoveredNodeId = hover?.nodeId;
     final outlets = <Widget>[
       for (final n in net.nodes)
-        if (_onFloor(n) && n.role != NodeRole.fixture)
+        if (_onFloor(n) &&
+            n.role != NodeRole.fixture &&
+            (n.id == hoveredNodeId ||
+                selection.containsNode(n.id) ||
+                selection.nodeId == n.id))
           _outletNub(n.id, transform.worldToScreen(Offset(n.x, n.y)), transform),
     ];
 
@@ -231,12 +254,35 @@ class _NetworkSelectionOverlayState
       }
     }
 
-    // The live "pull a main out of here" preview line, node → cursor.
+    // The live "pull a main out of here" preview — C5: reuse the shared
+    // rubber-band painter so it carries the LIVE calibrated length chip + the
+    // snap/tee ring (parity with the Run tool), instead of a bare dashed line.
     final pullNode =
         _pullFrom == null ? null : net.nodeById(_pullFrom!);
-    final pullFromScreen = pullNode == null
-        ? null
-        : transform.worldToScreen(Offset(pullNode.x, pullNode.y));
+    Offset? pullPendingWorld;
+    Offset? pullHoverWorld;
+    Offset? pullSnapScreen;
+    var pullColor = context.colors.accent;
+    if (pullNode != null && _pullNow != null) {
+      pullPendingWorld = Offset(pullNode.x, pullNode.y);
+      var w = transform.screenToWorld(_pullNow!);
+      final effectiveOrtho =
+          ref.watch(orthoProvider) ^ HardwareKeyboard.instance.isShiftPressed;
+      if (effectiveOrtho) w = orthoSnap(pullPendingWorld, w);
+      pullHoverWorld = w;
+      // The run inherits the source node's existing service (else the active
+      // draw service) — colour the preview to match, like drawRunFromNode.
+      ServiceType? incident;
+      for (final e in net.edges) {
+        if (e.fromId == pullNode.id || e.toId == pullNode.id) {
+          incident = e.service;
+          break;
+        }
+      }
+      pullColor = serviceColor(incident ?? drawing.service);
+      final pt = snapOrTeePoint(net, sheetId, floorIndex, w, snapWorld);
+      pullSnapScreen = pt == null ? null : transform.worldToScreen(pt);
+    }
 
     // Translucent (not opaque) so a tap selects, but drag-pan and scroll-zoom
     // still reach the CanvasView underneath.
@@ -253,14 +299,19 @@ class _NetworkSelectionOverlayState
         ...handles,
         ...outlets,
         ...resizeHandles,
-        if (pullFromScreen != null && _pullNow != null)
+        if (pullPendingWorld != null && pullHoverWorld != null)
           Positioned.fill(
             child: IgnorePointer(
               child: CustomPaint(
-                painter: _PullPainter(
-                    from: pullFromScreen,
-                    to: _pullNow!,
-                    accent: context.colors.accent),
+                painter: RubberBandPainter(
+                  pending: pullPendingWorld,
+                  hover: pullHoverWorld,
+                  snapScreen: pullSnapScreen,
+                  transform: transform,
+                  calibration: calibration,
+                  color: pullColor,
+                  active: true,
+                ),
               ),
             ),
           ),
@@ -299,23 +350,41 @@ class _NetworkSelectionOverlayState
             ref.read(selectionProvider.notifier).selectNode(id);
             showNodeContextMenu(context, ref, id, d.globalPosition);
           },
+          // E2: when the dragged node is part of a MULTI-selection, KEEP the
+          // selection and move the whole group by one delta (moveMany) instead
+          // of collapsing to this node and moving it alone. One drag = one undo
+          // step, paired with pushUndoSnapshot exactly like the single-node drag.
           onPanStart: (_) {
-            ref.read(selectionProvider.notifier).selectNode(id);
+            final sel = ref.read(selectionProvider);
+            if (!(sel.containsNode(id) && sel.nodeIds.length > 1)) {
+              ref.read(selectionProvider.notifier).selectNode(id);
+            }
             ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
           },
           onPanUpdate: (d) {
+            final sel = ref.read(selectionProvider);
+            final ctrl = ref.read(networkControllerProvider.notifier);
+            final dx = d.delta.dx / scale;
+            final dy = d.delta.dy / scale;
+            if (sel.containsNode(id) && sel.nodeIds.length > 1) {
+              ctrl.moveMany(sel.nodeIds, dx, dy);
+              return;
+            }
             final node =
                 ref.read(networkControllerProvider).network.nodeById(id);
             if (node == null) return;
-            ref.read(networkControllerProvider.notifier).moveNode(
-                  id,
-                  node.x + d.delta.dx / scale,
-                  node.y + d.delta.dy / scale,
-                );
+            ctrl.moveNode(id, node.x + dx, node.y + dy);
           },
-          onPanEnd: (_) => ref
-              .read(networkControllerProvider.notifier)
-              .endNodeDragWithSnap(id, snapWorld),
+          onPanEnd: (_) {
+            final sel = ref.read(selectionProvider);
+            // A group move is already committed live over the pushUndoSnapshot
+            // baseline (one undo step); only a single-node drag snaps/merges its
+            // endpoint onto a nearby fitting.
+            if (sel.containsNode(id) && sel.nodeIds.length > 1) return;
+            ref
+                .read(networkControllerProvider.notifier)
+                .endNodeDragWithSnap(id, snapWorld);
+          },
           child: const SizedBox.expand(),
         ),
       ),
@@ -336,6 +405,13 @@ class _NetworkSelectionOverlayState
       height: r * 2,
       child: MouseRegion(
         cursor: SystemMouseCursors.precise,
+        // Keep this node's hover latched while the pointer is over the nub, so
+        // the gated nub (C7) doesn't vanish as you move OFF the node's drag
+        // handle to reach for it (the nub sits up-right of the node).
+        onEnter: (_) => ref
+            .read(hoverTargetProvider.notifier)
+            .set((nodeId: nodeId, edgeId: null)),
+        onExit: (_) => ref.read(hoverTargetProvider.notifier).clear(),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onPanStart: (d) {
@@ -385,44 +461,6 @@ class _NetworkSelectionOverlayState
       ),
     );
   }
-}
-
-/// Paints the live preview line while a mainline run is being pulled out of a
-/// node — a dashed accent line from the source node to the cursor, with a small
-/// target ring at the release end.
-class _PullPainter extends CustomPainter {
-  final Offset from;
-  final Offset to;
-  final Color accent;
-
-  _PullPainter({required this.from, required this.to, required this.accent});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = accent
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke;
-    // A dashed line so the in-progress run reads as a preview, not committed.
-    const dash = 7.0, gap = 5.0;
-    final dir = to - from;
-    final len = dir.distance;
-    if (len > 0.0) {
-      final unit = dir / len;
-      var d = 0.0;
-      while (d < len) {
-        final a = from + unit * d;
-        final b = from + unit * math.min(d + dash, len);
-        canvas.drawLine(a, b, paint);
-        d += dash + gap;
-      }
-    }
-    canvas.drawCircle(to, 4, paint);
-  }
-
-  @override
-  bool shouldRepaint(_PullPainter old) =>
-      old.from != from || old.to != to || old.accent != accent;
 }
 
 /// The draggable endpoint dot for a selected run. Tracks its own press state so

@@ -14,6 +14,12 @@ import 'viewport.dart';
 /// the preview ring highlights exactly the node a drop will attach to.
 const double _kSnapScreenPx = 14;
 
+/// Half the default dropped-segment span (world px) — mirrors the store's
+/// `NetworkController._defaultSegmentSpanPx` (120) so the SEGMENT preview rings
+/// the endpoint that `addSegment` will actually snap. Preview-only; a small
+/// drift here never affects the committed geometry.
+const double _kSegmentHalfSpanPx = 60;
+
 /// A [DragTarget] spanning the canvas: a [PaletteItem] dropped here is mapped
 /// from the local drop offset to sheet/world coordinates (via the live
 /// [ViewportTransform]) and routed to the matching add-action on the network
@@ -55,7 +61,8 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
       const ViewportTransform();
 
   /// The nearest node (same sheet/floor) within the snap radius of [worldP], or
-  /// null — mirrors the store's `_snap` so the ring marks the genuine target.
+  /// null — mirrors the store's `_snap`. Used for a SEGMENT drop, whose two
+  /// endpoints snap to nodes (there is no tee for a segment).
   NetNode? _snapTarget(Offset worldP, double snapWorld) {
     final nodes = ref.read(networkControllerProvider).network.nodes;
     final r2 = snapWorld * snapWorld;
@@ -74,6 +81,54 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
       }
     }
     return best;
+  }
+
+  /// Where a POINT drop at [world] will MERGE within [radius] (mirrors the
+  /// store's `_dropTarget` that `mergeOrAdd*` uses): a NODE (adopt) takes
+  /// precedence over a run EDGE (tee at the projection). Both null ⇒ a free
+  /// drop, so the ring is suppressed and its promise stays honest (C2).
+  ({Offset? point, bool isTee}) _mergeTarget(Offset world, double radius) {
+    final net = ref.read(networkControllerProvider).network;
+    final r2 = radius * radius;
+    NetNode? bestNode;
+    var bestNodeD2 = r2;
+    for (final n in net.nodes) {
+      if (n.sheetId != widget.sheetId || n.floorIndex != widget.floorIndex) {
+        continue;
+      }
+      final dx = n.x - world.dx;
+      final dy = n.y - world.dy;
+      final d2 = dx * dx + dy * dy;
+      if (d2 <= bestNodeD2) {
+        bestNodeD2 = d2;
+        bestNode = n;
+      }
+    }
+    if (bestNode != null) {
+      return (point: Offset(bestNode.x, bestNode.y), isTee: false);
+    }
+    Offset? bestP;
+    var bestED2 = r2;
+    for (final e in net.edges) {
+      if (e.kind == EdgeKind.riser) continue; // risers are not teed into
+      final a = net.nodeById(e.fromId);
+      final b = net.nodeById(e.toId);
+      if (a == null || b == null) continue;
+      if (a.sheetId != widget.sheetId || a.floorIndex != widget.floorIndex) {
+        continue;
+      }
+      if (b.sheetId != widget.sheetId || b.floorIndex != widget.floorIndex) {
+        continue;
+      }
+      final p = _closestPointOnSegment(
+          world, Offset(a.x, a.y), Offset(b.x, b.y));
+      final d2 = (p - world).distanceSquared;
+      if (d2 <= bestED2) {
+        bestED2 = d2;
+        bestP = p;
+      }
+    }
+    return (point: bestP, isTee: bestP != null);
   }
 
   void _clearDrag() {
@@ -109,6 +164,7 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
         switch (details.data.kind) {
           case PaletteItemKind.pipeSegment:
           case PaletteItemKind.ductSegment:
+            // A segment snaps its two endpoints to nearby nodes (addSegment).
             ctrl.addSegment(
               widget.sheetId,
               widget.floorIndex,
@@ -116,29 +172,60 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
               service: details.data.service,
               snapRadius: snapWorld,
             );
+          // C2: point drops now go through the MERGE intents so the snap ring's
+          // promise is TRUE — adopt the ringed node / tee into the ringed run,
+          // never a coincident free twin that carries demand the solve misses.
           case PaletteItemKind.fitting:
-            ctrl.addFitting(widget.sheetId, widget.floorIndex, world);
+            ctrl.mergeOrAddFitting(widget.sheetId, widget.floorIndex, world,
+                snapRadius: snapWorld);
           case PaletteItemKind.terminal:
-            ctrl.addTerminal(widget.sheetId, widget.floorIndex, world);
+            ctrl.mergeOrAddTerminal(widget.sheetId, widget.floorIndex, world,
+                snapRadius: snapWorld);
           case PaletteItemKind.component:
             final c = details.data.component;
             if (c != null) {
-              ctrl.addComponentNode(widget.sheetId, widget.floorIndex, world, c);
+              ctrl.mergeOrAddComponent(
+                  widget.sheetId, widget.floorIndex, world, c,
+                  snapRadius: snapWorld);
             }
         }
         _clearDrag();
       },
       builder: (context, candidate, rejected) {
         final active = candidate.isNotEmpty;
-        // Resolve the live snap target (in screen space) for the preview paint.
+        // Resolve the live merge/tee target (in screen space) for the preview
+        // paint — kind-aware so the ring only shows when the drop WILL attach
+        // (C2). A point drop adopts a node or tees an edge; a segment drop snaps
+        // its two endpoints to nodes.
         final transform = _transform;
         final snapWorld = _kSnapScreenPx / transform.scale;
-        NetNode? snap;
-        if (active && _dragLocal != null) {
+        Offset? ringScreen;
+        var ringIsTee = false;
+        if (active && _dragLocal != null && _dragItem != null) {
           final world = transform.screenToWorld(_dragLocal!);
-          snap = _snapTarget(world, snapWorld);
+          switch (_dragItem!.kind) {
+            case PaletteItemKind.pipeSegment:
+            case PaletteItemKind.ductSegment:
+              final hit = _snapTarget(
+                      Offset(world.dx - _kSegmentHalfSpanPx, world.dy),
+                      snapWorld) ??
+                  _snapTarget(
+                      Offset(world.dx + _kSegmentHalfSpanPx, world.dy),
+                      snapWorld);
+              if (hit != null) {
+                ringScreen = transform.worldToScreen(Offset(hit.x, hit.y));
+              }
+            case PaletteItemKind.fitting:
+            case PaletteItemKind.terminal:
+            case PaletteItemKind.component:
+              final t = _mergeTarget(world, snapWorld);
+              if (t.point != null) {
+                ringScreen = transform.worldToScreen(t.point!);
+                ringIsTee = t.isTee;
+              }
+          }
         }
-        final willSnap = snap != null;
+        final willSnap = ringScreen != null;
 
         // Translucent fill while a card hovers, so the user sees the canvas is a
         // valid drop zone; cross-fades in/out (rather than popping) and is
@@ -167,17 +254,16 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
                   ),
                 ),
               ),
-              // The drag preview: a faint ghost node at the cursor + a snap ring
-              // on the nearest fitting. Paints ONLY during a drag.
+              // The drag preview: a faint ghost node at the cursor + a snap/tee
+              // ring on the genuine attach point. Paints ONLY during a drag.
               if (active && _dragLocal != null && _dragItem != null)
                 Positioned.fill(
                   child: CustomPaint(
                     painter: _DropPreviewPainter(
                       item: _dragItem!,
                       cursorLocal: _dragLocal!,
-                      snapScreen: snap == null
-                          ? null
-                          : transform.worldToScreen(Offset(snap.x, snap.y)),
+                      snapScreen: ringScreen,
+                      isTee: ringIsTee,
                       color: context.colors.accent,
                     ),
                   ),
@@ -197,12 +283,18 @@ class _DropPreviewPainter extends CustomPainter {
   final PaletteItem item;
   final Offset cursorLocal;
   final Offset? snapScreen;
+
+  /// True when [snapScreen] is a TEE projection onto a run edge (not a node) —
+  /// drawn with an extra filled dot so a tee-in reads distinctly from a node
+  /// adopt (C2: "show the edge-projection point when a tee will land").
+  final bool isTee;
   final Color color;
 
   _DropPreviewPainter({
     required this.item,
     required this.cursorLocal,
     required this.snapScreen,
+    required this.isTee,
     required this.color,
   });
 
@@ -223,7 +315,7 @@ class _DropPreviewPainter extends CustomPainter {
     }
     canvas.restore();
 
-    // ── Snap indicator: a ring + crosshair over the target fitting ───────────
+    // ── Snap/tee indicator: a ring over the genuine attach point ─────────────
     final snap = snapScreen;
     if (snap != null) {
       final ring = Paint()
@@ -231,15 +323,21 @@ class _DropPreviewPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.0;
       canvas.drawCircle(snap, _kSnapScreenPx, ring);
-      final cross = Paint()
-        ..color = color
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5;
-      const arm = 5.0;
-      canvas.drawLine(
-          snap + const Offset(-arm, 0), snap + const Offset(arm, 0), cross);
-      canvas.drawLine(
-          snap + const Offset(0, -arm), snap + const Offset(0, arm), cross);
+      if (isTee) {
+        // A tee lands ON a run edge (not at a node): mark the projection point
+        // with a filled dot so it reads as "connect here on this pipe".
+        canvas.drawCircle(snap, 3.0, Paint()..color = color);
+      } else {
+        final cross = Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5;
+        const arm = 5.0;
+        canvas.drawLine(
+            snap + const Offset(-arm, 0), snap + const Offset(arm, 0), cross);
+        canvas.drawLine(
+            snap + const Offset(0, -arm), snap + const Offset(0, arm), cross);
+      }
     }
   }
 
@@ -248,5 +346,16 @@ class _DropPreviewPainter extends CustomPainter {
       old.item != item ||
       old.cursorLocal != cursorLocal ||
       old.snapScreen != snapScreen ||
+      old.isTee != isTee ||
       old.color != color;
+}
+
+/// Closest point on segment a→b to p (all world px).
+Offset _closestPointOnSegment(Offset p, Offset a, Offset b) {
+  final ab = b - a;
+  final len2 = ab.distanceSquared;
+  if (len2 == 0) return a;
+  final t = (((p.dx - a.dx) * ab.dx + (p.dy - a.dy) * ab.dy) / len2)
+      .clamp(0.0, 1.0);
+  return a + ab * t;
 }

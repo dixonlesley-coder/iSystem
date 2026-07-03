@@ -66,10 +66,15 @@ class _SmartInputBarState extends ConsumerState<SmartInputBar> {
       angleDeg: parse.angleDeg,
       hover: hover,
     );
+    // C4: a TYPED exact length must land at exactly that distance — snapRadius 0
+    // so it can't silently merge onto a node near the computed point (the
+    // default 12 world-px snap is zoom-inconsistent and would corrupt the
+    // typed measurement). Ending on an existing node is done by clicking it.
     ref.read(networkControllerProvider.notifier).placeRunPoint(
           widget.sheetId,
           widget.floorIndex,
           target,
+          snapRadius: 0,
         );
     _controller.clear();
     setState(() => _error = null);
@@ -142,6 +147,12 @@ class _SmartInputBarState extends ConsumerState<SmartInputBar> {
               child: EditableText(
                 controller: _controller,
                 focusNode: _focusNode,
+                // C4: grab focus the moment the bar appears (a run chain is
+                // live), so "click a point, type 3000, Enter" works without
+                // first mousing into the 96-px field. The field only enters the
+                // tree while drawing, so idle focus is untouched; canvas clicks
+                // (pointer) keep working regardless of who holds key focus.
+                autofocus: true,
                 onChanged: (_) {
                   if (_error != null) setState(() => _error = null);
                   setState(() {}); // refresh the live preview
