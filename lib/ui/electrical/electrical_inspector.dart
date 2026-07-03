@@ -491,6 +491,23 @@ class ElectricalPanelInspector extends StatelessWidget {
                         onChanged: (v) => controller.setPanelTag(panel.id, v),
                       ),
                     ),
+                    // G7 — the board's electrical system (and its paired nominal
+                    // voltage) is now editable, so a 1-phase stub board (the
+                    // drop-a-floating-load flow) can become the 3-phase sub-board
+                    // a design needs without delete-and-recreate (which would
+                    // lose every way). EN literal — Wave 5 owns i18n.
+                    ElectricalField(
+                      label: 'Electrical system',
+                      child: ElectricalEnumPicker<ElectricalSystem>(
+                        value: panel.system,
+                        options: ElectricalSystem.values,
+                        label: (s) => s == ElectricalSystem.singlePhase
+                            ? '1-phase (220 V)'
+                            : '3-phase (400 V)',
+                        onChanged: (s) =>
+                            controller.setPanelSystem(panel.id, s),
+                      ),
+                    ),
                     ElectricalField(
                       label: context.strings(StringKey.electricalFieldDiversity),
                       child: ElectricalNumInput(

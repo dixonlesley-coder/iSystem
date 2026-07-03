@@ -13,6 +13,7 @@ import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
+import '../widgets/mechx_scrollbar.dart';
 import 'electrical_bom_view.dart';
 import 'pricelist_screen.dart';
 import 'quotation_view.dart';
@@ -21,17 +22,34 @@ import 'quotation_view.dart';
 /// priced quotation, with CSV / Markdown export. Built over the pure engine
 /// commercial pipeline (BOM → cost → quotation); prices live with the project,
 /// never the catalogue.
-class CommercialHub extends ConsumerWidget {
+class CommercialHub extends ConsumerStatefulWidget {
   const CommercialHub({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CommercialHub> createState() => _CommercialHubState();
+}
+
+class _CommercialHubState extends ConsumerState<CommercialHub> {
+  // Owned so the themed scroll indicator (J1) can be dragged, not just shown.
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
 
     return ColoredBox(
       color: colors.background,
-      child: SingleChildScrollView(
+      child: MechXScrollbar(
+        controller: _scrollController,
+        child: SingleChildScrollView(
+        controller: _scrollController,
         padding: const EdgeInsets.all(MechXSpacing.xl),
         child: Center(
           child: ConstrainedBox(
@@ -58,6 +76,7 @@ class CommercialHub extends ConsumerWidget {
               ],
             ),
           ),
+        ),
         ),
       ),
     );

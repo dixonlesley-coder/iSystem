@@ -224,20 +224,26 @@ class _DesignWorkspace extends ConsumerWidget {
     final Widget canvas = view == WorkspaceView.schematic
         ? const SchematicView()
         : const LayoutCanvas();
-    // Layer-aware inspector (collapsible): the electrical Loads palette when
-    // Electrical is the active Layout layer, else the mechanical DRAW/project
-    // inspector. Schematic always shows the project inspector.
+    // Workspace-scoped inspector (collapsible), keyed on the active view (F1):
+    //  · RISER (schematic) → a lean riser-relevant column (Building + feed
+    //    strategy + a pointer to the on-canvas Auto/Edit riser tools), NOT the
+    //    plan's DRAW inspector whose tools mutate the Layout canvas you can't
+    //    see from here.
+    //  · Layout + Electrical layer active → the electrical Loads palette.
+    //  · Layout + a mechanical layer → the mechanical DRAW/project inspector.
     final active = ref.watch(activeDisciplineProvider);
-    final Widget inspector =
-        view != WorkspaceView.schematic && active == DisciplineLayer.electrical
-            ? const CollapsibleInspector(
-                expandedWidth: ProjectPanel.width,
-                child: _ElectricalInspectorColumn(),
-              )
-            : const CollapsibleInspector(
-                expandedWidth: ProjectPanel.width,
-                child: ProjectPanel(),
-              );
+    final Widget inspectorChild;
+    if (view == WorkspaceView.schematic) {
+      inspectorChild = const _RiserInspectorColumn();
+    } else if (active == DisciplineLayer.electrical) {
+      inspectorChild = const _ElectricalInspectorColumn();
+    } else {
+      inspectorChild = const ProjectPanel();
+    }
+    final Widget inspector = CollapsibleInspector(
+      expandedWidth: ProjectPanel.width,
+      child: inspectorChild,
+    );
     // Liquid Glass: the sheet rail + inspector are translucent glass that floats
     // over a full-bleed CANVAS-coloured backdrop (painted behind the whole
     // workspace), so the chrome frosts the canvas tone — distinct from the
@@ -286,6 +292,133 @@ class _ElectricalInspectorColumn extends StatelessWidget {
   }
 }
 
+/// The right inspector shown on the RISER (Schematic) workspace (F1). A lean,
+/// riser-relevant column — the building context, the feed strategy that drives
+/// the riser's function tags (gravity vs booster), and a pointer to the
+/// on-canvas Auto/Edit riser tools — instead of the plan's DRAW inspector
+/// (whose tools + palette mutate the Layout canvas, invisible from here).
+class _RiserInspectorColumn extends ConsumerWidget {
+  const _RiserInspectorColumn();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final building = ref.watch(projectControllerProvider).building;
+    final strategy = ref.watch(feedStrategyProvider);
+    return SizedBox(
+      width: ProjectPanel.width,
+      // Transparent: floats on the CollapsibleInspector's Liquid-Glass surface.
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(MechXSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Riser',
+                style: type.subtitle.copyWith(color: colors.textPrimary)),
+            const SizedBox(height: MechXSpacing.md),
+            // Building context (levels/height) → opens the Building page.
+            Text('Building',
+                style: type.caption.copyWith(color: colors.textMuted)),
+            const SizedBox(height: MechXSpacing.xs),
+            _RiserSummaryCard(
+              summary:
+                  '${building.totalHeight.meters.toStringAsFixed(1)} m · '
+                  '${building.levelCount} levels',
+              onOpen: () => ref
+                  .read(shellSectionProvider.notifier)
+                  .set(ShellSection.building),
+            ),
+            const SizedBox(height: MechXSpacing.lg),
+            // Feed strategy — the input that decides each riser's function tag
+            // (gravity downfeed vs upfeed/booster) on the diagram.
+            Text('Feed strategy',
+                style: type.caption.copyWith(color: colors.textMuted)),
+            const SizedBox(height: MechXSpacing.xs),
+            MechXButton(
+              label: 'Upfeed pump',
+              primary: strategy == FeedStrategy.upfeed,
+              onPressed: () =>
+                  ref.read(feedStrategyProvider.notifier).set(FeedStrategy.upfeed),
+            ),
+            const SizedBox(height: MechXSpacing.xs),
+            MechXButton(
+              label: 'Roof-tank downfeed',
+              primary: strategy == FeedStrategy.downfeed,
+              onPressed: () => ref
+                  .read(feedStrategyProvider.notifier)
+                  .set(FeedStrategy.downfeed),
+            ),
+            const SizedBox(height: MechXSpacing.lg),
+            Text(
+              'Place, move and size risers on the canvas — switch Auto '
+              '(read-only diagram) and Edit on the toolbar above.',
+              style: type.caption.copyWith(color: colors.textMuted),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A tappable summary card (levels/height) that opens the Building page — the
+/// riser inspector's own copy of the plan inspector's building summary.
+class _RiserSummaryCard extends StatefulWidget {
+  final String summary;
+  final VoidCallback onOpen;
+  const _RiserSummaryCard({required this.summary, required this.onOpen});
+
+  @override
+  State<_RiserSummaryCard> createState() => _RiserSummaryCardState();
+}
+
+class _RiserSummaryCardState extends State<_RiserSummaryCard> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MechXFocusRing(
+      borderRadius: MechXRadii.control,
+      onActivated: widget.onOpen,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onOpen,
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            padding: const EdgeInsets.all(MechXSpacing.sm),
+            decoration: BoxDecoration(
+              color: _hover ? colors.surfaceHover : colors.background,
+              borderRadius: MechXRadii.control,
+              border: Border.all(
+                  color: _hover ? colors.textMuted : colors.border),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(widget.summary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: type.body.copyWith(color: colors.textSecondary)),
+                ),
+                const SizedBox(width: MechXSpacing.xs),
+                Text('Edit',
+                    style: type.caption.copyWith(color: colors.accent)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _TopBar extends ConsumerWidget {
   const _TopBar();
 
@@ -301,8 +434,17 @@ class _TopBar extends ConsumerWidget {
     final fileName =
         currentPath?.split(Platform.pathSeparator).last;
 
+    // J3: the zoom pill reflects the Layout sheet's viewport — the only zoom
+    // this bar can read truthfully. On the Riser/Electrical workspaces (whose
+    // real zoom lives in their own canvases) and on non-design screens, show
+    // '—' rather than a stale, shared Layout number.
+    final section = ref.watch(shellSectionProvider);
+    final view = ref.watch(workspaceViewProvider);
+    final onLayout =
+        section == ShellSection.design && view == WorkspaceView.plan;
     final current = state.current;
-    final vt = current == null ? null : state.viewportFor(current.id);
+    final vt =
+        (onLayout && current != null) ? state.viewportFor(current.id) : null;
     final zoom = vt == null ? '—' : '${(vt.scale * 100).round()}%';
 
     return GlassSurface(

@@ -681,9 +681,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               // Summary card → expand chevron frames the board schedule (I7).
               onExpandSchedule: () => focusPanelSchedule(panel.panelId),
               // A way row → select it (ring / row highlight, Delete removes);
-              // a tap on empty schedule chrome zooms back out to the summary.
+              // the header band selects the whole board; nothing collapses on a
+              // stray tap (collapse is zoom-out only — G6).
               onSelectWay: (cid) => _selectCircuit(panel.panelId, cid),
-              onCollapse: () => collapseToSummary(panel.panelId),
               onWayDoubleTap: (cid) => widget.onEditCircuit(panel.panelId, cid),
               onWayMenu: (cid, gp) =>
                   widget.onCircuitMenu(panel.panelId, cid, gp),
@@ -796,6 +796,20 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       scale: s,
       offset: _viewportSize.center(Offset.zero) - worldCentre * s,
     ));
+  }
+
+  /// Frame [panelId]'s board schedule AND select the offending element — the G5
+  /// Issues-drawer "locate" action. A non-null [circuitId] rings that way's
+  /// schedule row (Delete then removes it); a null [circuitId] selects the whole
+  /// board. Framing no-ops when the panel / viewport isn't ready yet, but the
+  /// selection is still applied so a subsequent frame lands on it.
+  void focusIssue(String panelId, {String? circuitId}) {
+    focusPanelSchedule(panelId);
+    setState(() {
+      _selection = circuitId == null
+          ? _CanvasSelection.panel(panelId)
+          : _CanvasSelection.circuit(panelId, circuitId);
+    });
   }
 
   /// Zoom in just past the LOD threshold, anchored at [focalScreen], so a
@@ -1113,11 +1127,13 @@ class _PanelScheduleBody extends StatefulWidget {
   final ValueChanged<String> onWayDoubleTap;
   final void Function(String, Offset) onWayMenu;
 
-  /// A single tap on a way ROW selects that circuit (ring / row highlight,
-  /// Delete removes it — I5); a tap on empty schedule chrome zooms out to the
-  /// summary card ([onCollapse] — I7).
+  /// A single tap on a real way ROW selects that circuit (ring / row highlight,
+  /// Delete removes it — I5); a tap in the HEADER band selects the whole board
+  /// ([onSelectPanel] — G6, the only way to select a panel at the detail LOD,
+  /// whose card chrome is dropped); a tap on a reserved CADANGAN spare row / the
+  /// TOTAL footer / empty chrome is a NO-OP (no surprise camera collapse — G6).
   final ValueChanged<String> onSelectWay;
-  final VoidCallback onCollapse;
+  final VoidCallback onSelectPanel;
 
   /// The currently-selected circuit id (drives the row selection band).
   final String? selectedCircuitId;
@@ -1129,7 +1145,7 @@ class _PanelScheduleBody extends StatefulWidget {
     required this.onWayDoubleTap,
     required this.onWayMenu,
     required this.onSelectWay,
-    required this.onCollapse,
+    required this.onSelectPanel,
     required this.selectedCircuitId,
   });
 
@@ -1162,14 +1178,23 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
     );
   }
 
-  /// The way ROW index under the body-local point, or null. Shared row geometry
-  /// (`scheduleRowTop`) so the hit-test agrees with the painter's highlight.
-  int? _wayIndexAt(Offset local, SldSheet sheet, Size size) {
-    if (widget.panel.circuits.isEmpty) return null;
+  /// The RAW schedule row index under the body-local point — negative for the
+  /// HEADER band (name / tag / incomer line, above the first way row), 0 …
+  /// circuits.length-1 for the real ways, and >= circuits.length for the
+  /// reserved CADANGAN spare rows / the TOTAL footer. Shared row geometry
+  /// (`scheduleRowTop`) so it agrees with the painter's highlight.
+  int _rawRowAt(Offset local, SldSheet sheet, Size size) {
     final t = _fitTransform(sheet, size);
     final world = t.screenToWorld(local);
-    final i =
-        ((world.dy - scheduleRowTop(0)) / kScheduleRowH).floor();
+    return ((world.dy - scheduleRowTop(0)) / kScheduleRowH).floor();
+  }
+
+  /// The way ROW index under the body-local point, or null (header / spare /
+  /// footer / empty panel). Clamped to the REAL circuits so a tap on a reserved
+  /// spare row never resolves to a way.
+  int? _wayIndexAt(Offset local, SldSheet sheet, Size size) {
+    if (widget.panel.circuits.isEmpty) return null;
+    final i = _rawRowAt(local, sheet, size);
     if (i < 0 || i >= widget.panel.circuits.length) return null;
     return i;
   }
@@ -1215,14 +1240,19 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
             },
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              // A single tap over a way row selects it; a tap on empty schedule
-              // chrome (header / footer) zooms back out to the summary card.
+              // Predictable detail-LOD tap semantics (G6): a tap on a real way
+              // ROW selects that circuit; a tap in the HEADER band selects the
+              // whole board (the card's own header chrome is dropped at detail,
+              // so this is the only way to select a panel here); a tap on a
+              // reserved CADANGAN spare row / the TOTAL footer / empty chrome
+              // does NOTHING — it no longer yanks the camera out to the summary
+              // (collapse is via zoom-out only, never a stray tap).
               onTapUp: (d) {
-                final id = _wayAt(d.localPosition, sheet, size);
-                if (id != null) {
-                  widget.onSelectWay(id);
-                } else {
-                  widget.onCollapse();
+                final i = _rawRowAt(d.localPosition, sheet, size);
+                if (i < 0) {
+                  widget.onSelectPanel();
+                } else if (i < widget.panel.circuits.length) {
+                  widget.onSelectWay(widget.panel.circuits[i].circuitId);
                 }
               },
               onDoubleTapDown: (d) {
@@ -1347,9 +1377,6 @@ class _PanelCardNode extends StatefulWidget {
 
   /// A schedule way row → select it (I5).
   final ValueChanged<String> onSelectWay;
-
-  /// A tap on empty schedule chrome → zoom back out to the summary (I7).
-  final VoidCallback onCollapse;
   final ValueChanged<String> onWayDoubleTap;
   final void Function(String, Offset) onWayMenu;
   final ValueChanged<PaletteLoad> onDropLoad;
@@ -1374,7 +1401,6 @@ class _PanelCardNode extends StatefulWidget {
     required this.onMenu,
     required this.onExpandSchedule,
     required this.onSelectWay,
-    required this.onCollapse,
     required this.onWayDoubleTap,
     required this.onWayMenu,
     required this.onDropLoad,
@@ -1455,7 +1481,9 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
                         result: widget.result,
                         selectedCircuitId: widget.selectedCircuitId,
                         onSelectWay: widget.onSelectWay,
-                        onCollapse: widget.onCollapse,
+                        // Header-band tap selects the whole board — reuses the
+                        // card's select intent (G6).
+                        onSelectPanel: widget.onTap,
                         onWayDoubleTap: widget.onWayDoubleTap,
                         onWayMenu: widget.onWayMenu,
                       ),

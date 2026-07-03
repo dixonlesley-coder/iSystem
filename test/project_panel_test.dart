@@ -179,28 +179,28 @@ void main() {
 
     // The section renders two compact rows; NO editor is open yet, so the
     // per-item 'Depth' stepper label is absent (collapsed master-detail).
-    expect(find.textContaining('Alpha'), findsOneWidget);
-    expect(find.textContaining('Beta'), findsOneWidget);
+    expect(find.textContaining('Alpha ·'), findsOneWidget);
+    expect(find.textContaining('Beta ·'), findsOneWidget);
     expect(find.text('Depth'), findsNothing);
 
     // Expand Alpha → exactly one editor (one 'Depth' stepper) appears.
-    await tester.ensureVisible(find.textContaining('Alpha'));
+    await tester.ensureVisible(find.textContaining('Alpha ·'));
     await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('Alpha'));
+    await tester.tap(find.textContaining('Alpha ·'));
     await tester.pumpAndSettle();
     expect(find.text('Depth'), findsOneWidget);
 
     // Expand Beta → Alpha collapses; still exactly ONE editor open.
-    await tester.ensureVisible(find.textContaining('Beta'));
+    await tester.ensureVisible(find.textContaining('Beta ·'));
     await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('Beta'), warnIfMissed: false);
+    await tester.tap(find.textContaining('Beta ·'), warnIfMissed: false);
     await tester.pumpAndSettle();
     expect(find.text('Depth'), findsOneWidget);
 
     // Tapping the open row again collapses it — back to none.
-    await tester.ensureVisible(find.textContaining('Beta'));
+    await tester.ensureVisible(find.textContaining('Beta ·'));
     await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('Beta'), warnIfMissed: false);
+    await tester.tap(find.textContaining('Beta ·'), warnIfMissed: false);
     await tester.pumpAndSettle();
     expect(find.text('Depth'), findsNothing);
   });

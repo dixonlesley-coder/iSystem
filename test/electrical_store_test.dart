@@ -381,6 +381,38 @@ void main() {
       expect(p.diversityFactor, 0.6);
     });
 
+    test('setPanelSystem flips system + paired voltage, undoable in one step '
+        '(G7)', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      final hist = c.read(historyProvider.notifier);
+
+      // A 1-phase stub board (the drop-a-floating-load flow default).
+      ctrl.addFloatingLoad(kind: LoadKind.socket, x: 0, y: 0, phases: 1);
+      final id = c.read(electricalProjectProvider).panels.single.id;
+      var p = c.read(electricalProjectProvider).panels.single;
+      expect(p.system, ElectricalSystem.singlePhase);
+      expect(p.voltage.volts, 220);
+
+      // Flip to 3-phase → the nominal voltage snaps to 400 V and the engine
+      // re-sizes it as a 3-phase board (no delete-and-recreate).
+      ctrl.setPanelSystem(id, ElectricalSystem.threePhase);
+      p = c.read(electricalProjectProvider).panels.single;
+      expect(p.system, ElectricalSystem.threePhase);
+      expect(p.voltage.volts, 400);
+      expect(c.read(electricalResultProvider).panels[id]!.system,
+          ElectricalSystem.threePhase);
+      // The circuit (way) is preserved across the system change.
+      expect(p.circuits, hasLength(1));
+
+      // ONE global undo restores the 1-phase 220 V board (a single step).
+      hist.undo();
+      p = c.read(electricalProjectProvider).panels.single;
+      expect(p.system, ElectricalSystem.singlePhase);
+      expect(p.voltage.volts, 220);
+    });
+
     test('REGRESSION: an edit preserves the additive A8 project fields', () {
       final c = ProviderContainer();
       addTearDown(c.dispose);

@@ -781,6 +781,25 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void setPanelSubmeter(String id, bool value) =>
       _replacePanel(id, (p) => p.copyWith(submeter: value));
 
+  /// Set a panel's electrical system (1-phase / 3-phase), snapping its nominal
+  /// voltage to the conventional value for that system (220 V single / 400 V
+  /// three) — so a board created as a 1φ stub (the drop-a-floating-load flow)
+  /// can become the 3φ sub-board a design needs WITHOUT delete-and-recreate,
+  /// which would lose every way (G7). Undoable in one step; no-op when the id is
+  /// unknown or the system is unchanged. The paired 220/400 V convention mirrors
+  /// [addPanel] / [addFloatingLoad].
+  void setPanelSystem(String id, ElectricalSystem system) => _replacePanel(
+        id,
+        (p) => p.system == system
+            ? p
+            : p.copyWith(
+                system: system,
+                voltage: system == ElectricalSystem.singlePhase
+                    ? const Voltage(220)
+                    : const Voltage(400),
+              ),
+      );
+
   // ── Spatial-canvas intents (Wave 5) ────────────────────────────────────────
   // Layout positions + feeder topology edits for the single-line canvas. All
   // additive (only `x`/`y` + the existing feeder fields move) and funnelled

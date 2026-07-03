@@ -72,6 +72,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_scrollbar.dart';
 import '../widgets/mechx_text_field.dart';
 import '../widgets/section_label.dart';
 import '../widgets/severity_glyph.dart';
@@ -795,13 +796,7 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    final project = ref.watch(projectControllerProvider);
-    final building = project.building;
-    final currentSheet = ref.watch(sheetsControllerProvider).current;
-    final calibration =
-        currentSheet == null ? null : project.calibrationFor(currentSheet.id);
+    final building = ref.watch(projectControllerProvider).building;
 
     // Context before document (the Keynote inspector rule): the selection
     // editor is pinned FIRST, and picking something on canvas snaps the panel
@@ -817,7 +812,9 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
       width: ProjectPanel.width,
       // Transparent: the inspector floats on a Liquid-Glass surface
       // (CollapsibleInspector) so the canvas refracts through behind it.
-      child: SingleChildScrollView(
+      child: MechXScrollbar(
+        controller: _scroll,
+        child: SingleChildScrollView(
           controller: _scroll,
           padding: const EdgeInsets.all(MechXSpacing.md),
           child: Column(
@@ -840,6 +837,14 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
                     .set(ShellSection.building),
               ),
               const SizedBox(height: MechXSpacing.lg),
+
+              // ── Sheet + Scale (E10) ───────────────────────────────────────
+              // Setup lives under Building, above the draw→size→report flow —
+              // calibration is the gating step the banner demands, so it sits
+              // near the top (was buried dead-last, below Document control) and
+              // is collapsible with a calibration-aware default.
+              _sheetMappingSection(context),
+              _scaleSection(context),
 
               // ── Draw ──────────────────────────────────────────────────────
               const _DrawSection(),
@@ -870,132 +875,161 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
               // ── Document control (issuable-sheet identity, D3) ────────────
               const _DocumentControlSection(),
               const SizedBox(height: MechXSpacing.lg),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-              // ── Sheet → floor mapping ─────────────────────────────────────
-              if (currentSheet != null) ...[
-                MechXSectionLabel(context.strings(StringKey.inspectorSheet)),
-                const SizedBox(height: MechXSpacing.sm),
-                Builder(builder: (context) {
-                  final sheetsState = ref.watch(sheetsControllerProvider);
-                  final floor =
-                      sheetsState.floorFor(currentSheet.id, building.levelCount);
-                  final floorName = building.floors[floor].name;
-                  final last = building.levelCount - 1;
-                  void mapTo(int f) => ref
-                      .read(sheetsControllerProvider.notifier)
-                      .setSheetFloor(
-                          currentSheet.id, f.clamp(0, last));
-                  return Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                            context.strings(StringKey.inspectorMapsToFloor),
-                            style:
-                                type.caption.copyWith(color: colors.textMuted)),
-                      ),
-                      // Type-in (or ±1) floor mapping (D5): the display keeps the
-                      // level NAME; typing a 1-based level number remaps the
-                      // sheet, clamped to 1..levelCount.
-                      SteppedValueField(
-                        display: floorName,
-                        editSeed: '${floor + 1}',
-                        gap: MechXSpacing.xs,
-                        valueColor: colors.textSecondary,
-                        min: 1,
-                        max: building.levelCount.toDouble(),
-                        onDecrement: floor > 0 ? () => mapTo(floor - 1) : null,
-                        onIncrement: floor < last ? () => mapTo(floor + 1) : null,
-                        onSubmit: (v) {
-                          if (v != null) mapTo(v.round() - 1);
-                        },
-                      ),
-                    ],
-                  );
-                }),
-                const SizedBox(height: MechXSpacing.lg),
-              ],
+  /// The Sheet → floor mapping section (E10). Moved up under Building and
+  /// wrapped in a collapsible [DisclosureSection]. Shrinks to nothing when no
+  /// sheet is loaded (no gap ⇒ byte-identical there).
+  Widget _sheetMappingSection(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final building = ref.watch(projectControllerProvider).building;
+    final currentSheet = ref.watch(sheetsControllerProvider).current;
+    if (currentSheet == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: MechXSpacing.lg),
+      child: DisclosureSection(
+        name: context.strings(StringKey.inspectorSheet),
+        child: Builder(builder: (context) {
+          final sheetsState = ref.watch(sheetsControllerProvider);
+          final floor =
+              sheetsState.floorFor(currentSheet.id, building.levelCount);
+          final floorName = building.floors[floor].name;
+          final last = building.levelCount - 1;
+          void mapTo(int f) => ref
+              .read(sheetsControllerProvider.notifier)
+              .setSheetFloor(currentSheet.id, f.clamp(0, last));
+          return Row(
+            children: [
+              Expanded(
+                child: Text(context.strings(StringKey.inspectorMapsToFloor),
+                    style: type.caption.copyWith(color: colors.textMuted)),
+              ),
+              // Type-in (or ±1) floor mapping (D5): the display keeps the level
+              // NAME; typing a 1-based level number remaps the sheet, clamped to
+              // 1..levelCount.
+              SteppedValueField(
+                display: floorName,
+                editSeed: '${floor + 1}',
+                gap: MechXSpacing.xs,
+                valueColor: colors.textSecondary,
+                min: 1,
+                max: building.levelCount.toDouble(),
+                onDecrement: floor > 0 ? () => mapTo(floor - 1) : null,
+                onIncrement: floor < last ? () => mapTo(floor + 1) : null,
+                onSubmit: (v) {
+                  if (v != null) mapTo(v.round() - 1);
+                },
+              ),
+            ],
+          );
+        }),
+      ),
+    );
+  }
 
-              // ── Scale calibration ─────────────────────────────────────────
-              MechXSectionLabel('Scale'),
+  /// The Scale calibration section (E10). Moved up under Building and wrapped in
+  /// a [DisclosureSection] whose default is calibration-aware: EXPANDED while the
+  /// sheet is uncalibrated (the gating step demands attention), collapsing once
+  /// a scale is set so it stops competing with the draw flow (a user's explicit
+  /// toggle still wins over the default).
+  Widget _scaleSection(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final currentSheet = ref.watch(sheetsControllerProvider).current;
+    final project = ref.watch(projectControllerProvider);
+    final calibration =
+        currentSheet == null ? null : project.calibrationFor(currentSheet.id);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: MechXSpacing.lg),
+      child: DisclosureSection(
+        name: 'Scale',
+        defaultExpanded: calibration == null,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(MechXSpacing.sm),
+              decoration: BoxDecoration(
+                color: colors.background,
+                borderRadius: MechXRadii.control,
+                border: Border.all(color: colors.border),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    margin: const EdgeInsets.only(right: MechXSpacing.sm),
+                    decoration: BoxDecoration(
+                      color:
+                          calibration == null ? colors.warning : colors.success,
+                      borderRadius: const BorderRadius.all(Radius.circular(4)),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      calibration == null
+                          ? 'Not calibrated'
+                          // One shared human readout (D1): PDF sheets lead with
+                          // the plotted `1 : N`, else `1 m = N px`.
+                          : formatScaleReadout(calibration.metersPerPixel,
+                              isPdf: currentSheet?.pdfPath != null),
+                      style:
+                          type.caption.copyWith(color: colors.textSecondary),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (currentSheet != null) ...[
               const SizedBox(height: MechXSpacing.sm),
-              Container(
-                padding: const EdgeInsets.all(MechXSpacing.sm),
-                decoration: BoxDecoration(
-                  color: colors.background,
-                  borderRadius: MechXRadii.control,
-                  border: Border.all(color: colors.border),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      margin: const EdgeInsets.only(right: MechXSpacing.sm),
-                      decoration: BoxDecoration(
-                        color: calibration == null
-                            ? colors.warning
-                            : colors.success,
-                        borderRadius: const BorderRadius.all(Radius.circular(4)),
-                      ),
-                    ),
-                    Expanded(
-                      child: Text(
-                        calibration == null
-                            ? 'Not calibrated'
-                            // One shared human readout (D1): PDF sheets lead with
-                            // the plotted `1 : N`, else `1 m = N px`.
-                            : formatScaleReadout(calibration.metersPerPixel,
-                                isPdf: currentSheet?.pdfPath != null),
-                        style: type.caption.copyWith(color: colors.textSecondary),
-                      ),
-                    ),
-                  ],
+              Align(
+                alignment: Alignment.centerLeft,
+                child: MechXButton(
+                  label:
+                      calibration == null ? 'Calibrate scale' : 'Re-calibrate',
+                  onPressed: () =>
+                      ref.read(calibrationControllerProvider.notifier).start(),
                 ),
               ),
-              if (currentSheet != null) ...[
+              // Second scale path (D1): type the drawing's STATED plot scale
+              // (1 : N). A plotted PDF's pixels are points at 72/inch, so
+              // `metersPerPixel = N × 0.0254 / 72` — exact, no measuring. Only
+              // meaningful for PDF sheets; a normalized DXF/DWG pixel has no
+              // paper-unit basis, so those keep the two-point measure only.
+              if (currentSheet.pdfPath != null) ...[
+                const SizedBox(height: MechXSpacing.sm),
+                _PdfScaleTypeIn(
+                  sheetId: currentSheet.id,
+                  calibration: calibration,
+                ),
+              ],
+              // QoL: once this sheet is calibrated, stamp its scale onto other
+              // sheets in one undo step (typical floors share a scale) —
+              // defaulting to UNCALIBRATED sheets only, confirming before it
+              // would overwrite a sheet's own DIFFERENT scale, and reporting the
+              // count (D2).
+              if (calibration != null) ...[
                 const SizedBox(height: MechXSpacing.sm),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: MechXButton(
-                    label: calibration == null
-                        ? 'Calibrate scale'
-                        : 'Re-calibrate',
+                    label: 'Apply scale to all sheets',
                     onPressed: () =>
-                        ref.read(calibrationControllerProvider.notifier).start(),
+                        _applyScaleToAllSheets(context, ref, currentSheet.id),
                   ),
                 ),
-                // Second scale path (D1): type the drawing's STATED plot scale
-                // (1 : N). A plotted PDF's pixels are points at 72/inch, so
-                // `metersPerPixel = N × 0.0254 / 72` — exact, no measuring. Only
-                // meaningful for PDF sheets; a normalized DXF/DWG pixel has no
-                // paper-unit basis, so those keep the two-point measure only.
-                if (currentSheet.pdfPath != null) ...[
-                  const SizedBox(height: MechXSpacing.sm),
-                  _PdfScaleTypeIn(
-                    sheetId: currentSheet.id,
-                    calibration: calibration,
-                  ),
-                ],
-                // QoL: once this sheet is calibrated, stamp its scale onto other
-                // sheets in one undo step (typical floors share a scale) —
-                // defaulting to UNCALIBRATED sheets only, confirming before it
-                // would overwrite a sheet's own DIFFERENT scale, and reporting
-                // the count (D2).
-                if (calibration != null) ...[
-                  const SizedBox(height: MechXSpacing.sm),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: MechXButton(
-                      label: 'Apply scale to all sheets',
-                      onPressed: () =>
-                          _applyScaleToAllSheets(context, ref, currentSheet.id),
-                    ),
-                  ),
-                ],
               ],
             ],
-          ),
+          ],
         ),
+      ),
     );
   }
 }
@@ -1627,9 +1661,6 @@ class _DrawSection extends ConsumerWidget {
 // transient, file-local UI state (never persisted to `.mechx`); null ⇒ all rows
 // collapsed. Exactly one item is open at a time (H6), so eight tanks/rooms no
 // longer stack ~3000 px of always-expanded editors in a 272-px panel.
-final _expandedTankIdProvider = StateProvider<String?>((ref) => null);
-final _expandedRoomIdProvider = StateProvider<String?>((ref) => null);
-
 /// How many BOM lines the Network section lists inline before collapsing the
 /// rest into a '+N more' summary (the full breakdown is in the CSV export).
 const int _kBomInlineCap = 6;
@@ -1765,7 +1796,12 @@ class _TanksSection extends ConsumerWidget {
           '${(t.heightPx * mpp).toStringAsFixed(1)} m';
     }
 
-    final expandedId = ref.watch(_expandedTankIdProvider);
+    // E6: the open master-detail row is the shared canvas selection — tapping a
+    // tank on the plan opens it here (and framing it here highlights the plan).
+    final sel = ref.watch(selectedAnnotationProvider);
+    final expandedId =
+        (sel != null && sel.kind == AnnotationKind.tank) ? sel.id : null;
+    final selCtrl = ref.read(selectedAnnotationProvider.notifier);
     return DisclosureSection(
       name: 'Tanks',
       child: Column(
@@ -1786,11 +1822,32 @@ class _TanksSection extends ConsumerWidget {
                   title: '${t.name} · ${dims(t)}',
                   headline: capacity(t),
                   expanded: expandedId == t.id,
-                  onTap: () =>
-                      ref.read(_expandedTankIdProvider.notifier).state =
-                          expandedId == t.id ? null : t.id,
+                  onTap: () => expandedId == t.id
+                      ? selCtrl.clear(t.id)
+                      : selCtrl.selectTank(t.id),
                 ),
                 if (expandedId == t.id) ...[
+                  const SizedBox(height: MechXSpacing.sm),
+                  // E7: editable name (commit-on-blur/Enter = one undo step).
+                  Row(
+                    children: [
+                      Text('Name',
+                          style:
+                              type.caption.copyWith(color: colors.textMuted)),
+                      const SizedBox(width: MechXSpacing.sm),
+                      Expanded(
+                        child: MechXTextField(
+                          key: ValueKey('tank-name-${t.id}'),
+                          value: t.name,
+                          hint: 'Tank name',
+                          onCommitted: (s) {
+                            final name = s.trim();
+                            if (name.isNotEmpty) ctrl.setName(t.id, name);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: MechXSpacing.sm),
                   Row(
                     children: [
@@ -1837,7 +1894,7 @@ class _TanksSection extends ConsumerWidget {
                       label: 'Delete tank',
                       onPressed: () {
                         ctrl.removeById(t.id);
-                        ref.read(_expandedTankIdProvider.notifier).state = null;
+                        selCtrl.clear(t.id);
                       },
                     ),
                   ),
@@ -1872,7 +1929,11 @@ class _RoomsSection extends ConsumerWidget {
     final ducts = ref.watch(ductSettingsProvider);
     final ctrl = ref.read(roomAreasProvider.notifier);
     final nodes = ref.watch(networkControllerProvider).network.nodes;
-    final expandedRoomId = ref.watch(_expandedRoomIdProvider);
+    // E6: the open master-detail row is the shared canvas selection.
+    final sel = ref.watch(selectedAnnotationProvider);
+    final expandedRoomId =
+        (sel != null && sel.kind == AnnotationKind.room) ? sel.id : null;
+    final selCtrl = ref.read(selectedAnnotationProvider.notifier);
 
     String pkStr(double pk) =>
         pk == pk.roundToDouble() ? pk.toStringAsFixed(0) : pk.toString();
@@ -1941,16 +2002,43 @@ class _RoomsSection extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _MasterRow(
-                    title: '${roomTypeLabel(r.roomType)} · ${dims(r)}',
+                    title: '${r.name} · ${roomTypeLabel(r.roomType)}',
                     headline:
                         s == null ? 'set scale' : '${s.airflowCfm.round()} CFM',
                     warning: perUnit?.exceedsRange ?? false,
                     expanded: expanded,
-                    onTap: () =>
-                        ref.read(_expandedRoomIdProvider.notifier).state =
-                            expanded ? null : r.id,
+                    onTap: () => expanded
+                        ? selCtrl.clear(r.id)
+                        : selCtrl.selectRoom(r.id),
                   ),
                   if (expanded) ...[
+                    const SizedBox(height: MechXSpacing.sm),
+                    // E7: editable name (commit-on-blur/Enter = one undo step) —
+                    // flows into the equipment schedule so AHU rows read
+                    // distinctly, not a wall of 'Room'.
+                    Row(
+                      children: [
+                        Text('Name',
+                            style: type.caption
+                                .copyWith(color: colors.textMuted)),
+                        const SizedBox(width: MechXSpacing.sm),
+                        Expanded(
+                          child: MechXTextField(
+                            key: ValueKey('room-name-${r.id}'),
+                            value: r.name,
+                            hint: 'Room name',
+                            onCommitted: (str) {
+                              final name = str.trim();
+                              if (name.isNotEmpty) ctrl.setName(r.id, name);
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: MechXSpacing.sm),
+                        Text(dims(r),
+                            style: type.caption
+                                .copyWith(color: colors.textMuted)),
+                      ],
+                    ),
                     const SizedBox(height: MechXSpacing.sm),
                     if (s == null)
                       Text('set scale',
@@ -2134,8 +2222,7 @@ class _RoomsSection extends ConsumerWidget {
                         label: 'Delete room',
                         onPressed: () {
                           ctrl.removeById(r.id);
-                          ref.read(_expandedRoomIdProvider.notifier).state =
-                              null;
+                          selCtrl.clear(r.id);
                         },
                       ),
                     ),
@@ -2361,71 +2448,79 @@ class _ResultsSection extends ConsumerWidget {
           headlineCard,
         ],
         const SizedBox(height: MechXSpacing.sm),
-        if (strategy == FeedStrategy.upfeed) ...[
-          // 'Motor' kW is promoted to the ResultCard above; keep only the
-          // distinct supporting figure here (H8 — no headline/kv duplication).
-          _kv(context, 'Pump head',
-              solution == null ? '—' : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m'),
-        ] else ...[
-          _kv(context, 'Top residual',
-              downfeed == null ? '—' : '${downfeed.minResidual.inKiloPascals.toStringAsFixed(0)} kPa'),
-          _kv(
-            context,
-            'Booster',
-            downfeed == null
-                ? '—'
-                : downfeed.gravitySufficient
-                    ? 'gravity OK'
-                    : '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m',
-          ),
-          _kv(
-            context,
-            'PRV zones',
-            zoneStatics.isEmpty
-                ? '${zones.length}'
-                : '${zones.length} · worst ${worstZone.toStringAsFixed(0)} kPa'
-                    ' ${zonesOk ? 'OK' : 'over'}',
-          ),
-        ],
-        if (strategy == FeedStrategy.upfeed)
-          _kv(context, 'Pressure zones', '${zones.length}'),
-        if (hwr != null)
-          _kv(context, 'HW recirc',
-              '${hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2)} L/s · ${hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
-        _kv(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
-        if (bom.isNotEmpty) ...[
-          const SizedBox(height: MechXSpacing.xs),
-          // Cap the per-line listing so a big BOM doesn't push the whole panel
-          // off-screen; the overflow is summarised, never silently dropped (the
-          // full breakdown is in the CSV export below). (H6/H8.)
-          for (final line in bom.take(_kBomInlineCap))
+        // E11: honest empty state — until a network is actually drawn and
+        // solved, show a muted prompt (the HVAC-section idiom) instead of
+        // dash rows and a misleading 'BOM total 0.0 m'.
+        if (bom.isEmpty && solution == null && downfeed == null && hwr == null)
+          Text('Draw a network to size runs and risers.',
+              style: context.type.caption.copyWith(color: colors.textMuted))
+        else ...[
+          if (strategy == FeedStrategy.upfeed) ...[
+            // 'Motor' kW is promoted to the ResultCard above; keep only the
+            // distinct supporting figure here (H8 — no headline/kv duplication).
+            _kv(context, 'Pump head',
+                solution == null ? '—' : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m'),
+          ] else ...[
+            _kv(context, 'Top residual',
+                downfeed == null ? '—' : '${downfeed.minResidual.inKiloPascals.toStringAsFixed(0)} kPa'),
             _kv(
               context,
-              '${line.diameterMm}${line.service.regime == FlowRegime.air ? ' Ø' : ' DN'}'
-                  ' · ${serviceLabel(line.service)}'
-                  ' ${line.kind == EdgeKind.riser ? 'riser' : 'run'}',
-              '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
+              'Booster',
+              downfeed == null
+                  ? '—'
+                  : downfeed.gravitySufficient
+                      ? 'gravity OK'
+                      : '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m',
             ),
-          if (bom.length > _kBomInlineCap)
             _kv(
               context,
-              '+${bom.length - _kBomInlineCap} more line'
-                  '${bom.length - _kBomInlineCap == 1 ? '' : 's'}',
-              'see CSV',
+              'PRV zones',
+              zoneStatics.isEmpty
+                  ? '${zones.length}'
+                  : '${zones.length} · worst ${worstZone.toStringAsFixed(0)} kPa'
+                      ' ${zonesOk ? 'OK' : 'over'}',
             ),
-          if (fittings.isNotEmpty)
-            _kv(context, 'Fittings (est.)',
-                '${fittings.fold<int>(0, (s, f) => s + f.count)}'),
-          const SizedBox(height: MechXSpacing.sm),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: MechXButton(
-              label: 'Export BOM (CSV)',
-              onPressed: () => _exportBom(ref, fittings,
-                  MechXStringsData(ref.read(localeProvider))(
-                      StringKey.exportTitleBom)),
+          ],
+          if (strategy == FeedStrategy.upfeed)
+            _kv(context, 'Pressure zones', '${zones.length}'),
+          if (hwr != null)
+            _kv(context, 'HW recirc',
+                '${hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2)} L/s · ${hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
+          _kv(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
+          if (bom.isNotEmpty) ...[
+            const SizedBox(height: MechXSpacing.xs),
+            // Cap the per-line listing so a big BOM doesn't push the whole panel
+            // off-screen; the overflow is summarised, never silently dropped (the
+            // full breakdown is in the CSV export below). (H6/H8.)
+            for (final line in bom.take(_kBomInlineCap))
+              _kv(
+                context,
+                '${line.diameterMm}${line.service.regime == FlowRegime.air ? ' Ø' : ' DN'}'
+                    ' · ${serviceLabel(line.service)}'
+                    ' ${line.kind == EdgeKind.riser ? 'riser' : 'run'}',
+                '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
+              ),
+            if (bom.length > _kBomInlineCap)
+              _kv(
+                context,
+                '+${bom.length - _kBomInlineCap} more line'
+                    '${bom.length - _kBomInlineCap == 1 ? '' : 's'}',
+                'see CSV',
+              ),
+            if (fittings.isNotEmpty)
+              _kv(context, 'Fittings (est.)',
+                  '${fittings.fold<int>(0, (s, f) => s + f.count)}'),
+            const SizedBox(height: MechXSpacing.sm),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: MechXButton(
+                label: 'Export BOM (CSV)',
+                onPressed: () => _exportBom(ref, fittings,
+                    MechXStringsData(ref.read(localeProvider))(
+                        StringKey.exportTitleBom)),
+              ),
             ),
-          ),
+          ],
         ],
       ],
     ),
@@ -2516,6 +2611,14 @@ class _FireSection extends ConsumerWidget {
     final sprinkler = ref.watch(sprinklerDesignProvider);
     final standpipe = ref.watch(standpipeDesignProvider);
     final rating = ref.watch(firePumpRatingProvider);
+    // E11: the whole fire design derives from occupancy/height/hazard alone, so
+    // it computes even with NO fire pipework drawn. Detect real sprinkler/
+    // hydrant edges so the verdict is honest — a preliminary 'draft' from
+    // building defaults, not a validated 'rated', until fire runs exist.
+    final hasFireEdges = ref.watch(networkControllerProvider).network.edges.any(
+        (e) =>
+            e.service == ServiceType.fireSprinkler ||
+            e.service == ServiceType.fireHydrant);
 
     Widget kv(String key, String value) => Padding(
           padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
@@ -2578,8 +2681,15 @@ class _FireSection extends ConsumerWidget {
           headline:
               '${standpipe.pumpHead.meters.toStringAsFixed(0)} m · ${standpipe.pumpShaftPower.inKiloWatts.toStringAsFixed(1)} kW',
           label: 'Fire pump (standpipe)',
-          verdict: rating.oversized ? 'oversized' : 'rated',
-          verdictColor: rating.oversized ? colors.warning : colors.success,
+          // Neutral 'draft' (not a green 'rated') until sprinkler/hydrant runs
+          // are drawn — the duty is a building-defaults preliminary, not a
+          // validated design.
+          verdict: !hasFireEdges
+              ? 'draft'
+              : (rating.oversized ? 'oversized' : 'rated'),
+          verdictColor: !hasFireEdges
+              ? colors.textMuted
+              : (rating.oversized ? colors.warning : colors.success),
         ),
         const SizedBox(height: MechXSpacing.xs),
         kv('Sprinkler flow',
@@ -2601,7 +2711,10 @@ class _FireSection extends ConsumerWidget {
             ),
             Expanded(
               child: Text(
-                'SNI 03-3989 / 1745 / 6570 · single-riser draft demand',
+                hasFireEdges
+                    ? 'SNI 03-3989 / 1745 / 6570 · single-riser draft demand'
+                    : 'Draft demand from building defaults — draw '
+                        'sprinkler/hydrant runs to validate.',
                 style: type.caption.copyWith(color: colors.textMuted),
               ),
             ),

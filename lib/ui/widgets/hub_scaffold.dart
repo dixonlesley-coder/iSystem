@@ -2,11 +2,16 @@ import 'package:flutter/widgets.dart';
 
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import 'mechx_scrollbar.dart';
 
 /// A calm, centred page used by the non-canvas shell sections (Review,
 /// Commercial, Projects, Preferences). A titled column on the app background,
 /// width-capped for readability. Custom MechXTheme styling — no Material.
-class HubScaffold extends StatelessWidget {
+///
+/// Stateful only to own the [ScrollController] shared with [MechXScrollbar] so
+/// the scroll thumb is draggable (J1); the thumb is idle-invisible so a static
+/// frame is byte-identical.
+class HubScaffold extends StatefulWidget {
   final String title;
   final String lead;
   final List<Widget> children;
@@ -19,28 +24,45 @@ class HubScaffold extends StatelessWidget {
   });
 
   @override
+  State<HubScaffold> createState() => _HubScaffoldState();
+}
+
+class _HubScaffoldState extends State<HubScaffold> {
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
     return ColoredBox(
       color: colors.background,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(MechXSpacing.xl),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 720),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(title,
-                    style: type.display.copyWith(color: colors.textPrimary)),
-                const SizedBox(height: MechXSpacing.sm),
-                Text(lead,
-                    style: type.body.copyWith(color: colors.textSecondary)),
-                const SizedBox(height: MechXSpacing.lg),
-                ...children,
-              ],
+      child: MechXScrollbar(
+        controller: _scroll,
+        child: SingleChildScrollView(
+          controller: _scroll,
+          padding: const EdgeInsets.all(MechXSpacing.xl),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(widget.title,
+                      style: type.display.copyWith(color: colors.textPrimary)),
+                  const SizedBox(height: MechXSpacing.sm),
+                  Text(widget.lead,
+                      style: type.body.copyWith(color: colors.textSecondary)),
+                  const SizedBox(height: MechXSpacing.lg),
+                  ...widget.children,
+                ],
+              ),
             ),
           ),
         ),
