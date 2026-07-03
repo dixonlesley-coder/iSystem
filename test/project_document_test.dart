@@ -1037,6 +1037,32 @@ void main() {
         isEmpty);
   });
 
+  test('mepDutyFeed (G1): default off is omitted; on round-trips', () {
+    const off = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    // Default off ⇒ the key is omitted (byte-identical) and decodes back to off.
+    expect((off.toJson()['settings'] as Map).containsKey('mepDutyFeed'), isFalse);
+    expect(ProjectDocument.fromJson(off.toJson()).settings.mepDutyFeedEnabled,
+        isFalse);
+    // Enabled ⇒ the key is written and survives the round-trip.
+    const on = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      settings: DesignSettings(mepDutyFeedEnabled: true),
+    );
+    expect((on.toJson()['settings'] as Map)['mepDutyFeed'], isTrue);
+    expect(ProjectDocument.fromJson(on.toJson()).settings.mepDutyFeedEnabled,
+        isTrue);
+  });
+
   test('a corrupt saved-assembly entry is dropped, good ones kept', () {
     const doc = ProjectDocument(
       projectName: 'X',

@@ -64,6 +64,12 @@ class DesignSettings {
   /// `true` ⇒ upfeed pump; `false` ⇒ roof-tank downfeed.
   final bool upfeed;
 
+  /// G1 — whether the solved MEP pump/fan/fire-pump duties are folded into the
+  /// auto "MEP Equipment" electrical panel (opt-in; default false). Persisted so
+  /// the choice survives a reload — otherwise reopening a project saved with the
+  /// feed ON would silently prune the duty circuits back to placed-only.
+  final bool mepDutyFeedEnabled;
+
   final DuctShape ductShape;
   final DuctSizingMethod ductMethod;
   final double rainfallMmPerHr;
@@ -169,6 +175,7 @@ class DesignSettings {
   const DesignSettings({
     this.occupancy = Occupancy.private,
     this.upfeed = false,
+    this.mepDutyFeedEnabled = false,
     this.ductShape = DuctShape.round,
     this.ductMethod = DuctSizingMethod.velocity,
     this.rainfallMmPerHr = 200.0,
@@ -202,6 +209,8 @@ class DesignSettings {
   Map<String, dynamic> toJson() => {
         'occupancy': occupancy.name,
         'upfeed': upfeed,
+        // Written only when opted in, so a default project stays byte-identical.
+        if (mepDutyFeedEnabled) 'mepDutyFeed': true,
         'ductShape': ductShape.name,
         'ductMethod': ductMethod.name,
         'rainfall_mmhr': rainfallMmPerHr,
@@ -257,6 +266,7 @@ class DesignSettings {
         occupancy:
             _enumOr(Occupancy.values, json['occupancy'], Occupancy.private),
         upfeed: json['upfeed'] == true,
+        mepDutyFeedEnabled: json['mepDutyFeed'] == true,
         ductShape:
             _enumOr(DuctShape.values, json['ductShape'], DuctShape.round),
         ductMethod: _enumOr(

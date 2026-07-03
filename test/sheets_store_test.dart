@@ -433,5 +433,43 @@ void main() {
       expect(c.read(sheetsControllerProvider).sheets.length, 3);
       expect(history.canUndo, isFalse);
     });
+
+    test(
+        'removing a NON-LAST sheet remaps siblings\' drawn work down a floor '
+        '(no silent hiding)', () {
+      final c = makeSeededContainer();
+      final sheets = c.read(sheetsControllerProvider.notifier);
+      final net = c.read(networkControllerProvider.notifier);
+      final history = c.read(historyProvider.notifier);
+      // Positional defaults: s1->f0, s2->f1, s3->f2. Work drawn on s2 (floor 1)
+      // and s3 (floor 2), frozen at those floor indices.
+      net.loadNetwork(const Network(
+        nodes: [
+          NetNode(id: 'p', sheetId: 's2', x: 0, y: 0, floorIndex: 1),
+          NetNode(id: 'q', sheetId: 's3', x: 0, y: 0, floorIndex: 2),
+        ],
+        edges: [],
+      ));
+      int floorOf(String id) => c
+          .read(networkControllerProvider)
+          .network
+          .nodes
+          .firstWhere((n) => n.id == id)
+          .floorIndex;
+
+      // Remove the FIRST sheet — s2 becomes positional floor 0, s3 floor 1.
+      sheets.removeSheet('s1');
+      // The drawn work followed the mapping instead of vanishing (canvas filters
+      // on sheetId AND floorIndex, so a stale index would hide it).
+      expect(floorOf('p'), 0, reason: 's2 work shifted 1 -> 0');
+      expect(floorOf('q'), 1, reason: 's3 work shifted 2 -> 1');
+
+      // ONE undo restores the sheet AND both node floor indices together.
+      history.undo();
+      expect(c.read(sheetsControllerProvider).sheets.map((e) => e.id),
+          ['s1', 's2', 's3']);
+      expect(floorOf('p'), 1);
+      expect(floorOf('q'), 2);
+    });
   });
 }

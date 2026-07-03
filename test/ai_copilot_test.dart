@@ -8,6 +8,7 @@ import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/ai_copilot_store.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/sheets_store.dart';
 
 void main() {
   group('AiCommand JSON', () {
@@ -76,6 +77,9 @@ void main() {
               component: 'pump',
             ),
           ], rationale: 'Add a supply pump.'))));
+      // Seed sheets so the placement targets a REAL sheet ('s1') — a placement
+      // is validated against the loaded sheet set (no sheets ⇒ rejected).
+      c.read(sheetsControllerProvider.notifier).loadDemoSheets();
 
       await c.read(copilotProvider.notifier).ask('add a pump');
       // Proposed, but the network is still empty.

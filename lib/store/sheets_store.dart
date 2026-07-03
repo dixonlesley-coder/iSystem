@@ -244,6 +244,18 @@ class SheetsController extends Notifier<SheetsState> {
   void removeSheet(String sheetId) {
     final idx = state.sheets.indexWhere((s) => s.id == sheetId);
     if (idx < 0) return;
+    final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    // Snapshot the effective floor of every OTHER sheet BEFORE removal — their
+    // drawn nodes carry this as their frozen floorIndex. Removing a non-last
+    // sheet shifts every later sheet's POSITIONAL-default floor down by one, so
+    // their work must be remapped (B7 hazard) or the canvas — which filters on
+    // BOTH sheetId AND floorIndex — would silently hide it while it kept feeding
+    // sizing at the old elevation. Sheets with an explicit floor override are
+    // position-independent (delta 0).
+    final oldFloors = <String, int>{
+      for (final s in state.sheets)
+        if (s.id != sheetId) s.id: state.floorFor(s.id, levelCount),
+    };
     // Capture sheets + network as ONE structural snapshot BEFORE mutating.
     ref.read(structuralHistoryProvider.notifier).recordSheetMappingChange();
     // Prune the removed sheet's nodes (+ their edges) WITHOUT a separate network
@@ -283,6 +295,18 @@ class SheetsController extends Notifier<SheetsState> {
       viewports: viewports,
       sheetFloors: sheetFloors,
     );
+    // Now that the list has shrunk, remap each sibling whose effective floor
+    // moved by the delta — no separate network entry (the structural snapshot
+    // above already holds the pre-removal network, so one Ctrl+Z reverts the
+    // sheet removal, the node prune AND every sibling shift together).
+    final netCtrl = ref.read(networkControllerProvider.notifier);
+    oldFloors.forEach((id, oldFloor) {
+      final newFloor = state.floorFor(id, levelCount);
+      if (newFloor != oldFloor) {
+        netCtrl.remapSheetFloor(id, newFloor - oldFloor,
+            levelCount: levelCount, record: false);
+      }
+    });
   }
 }
 

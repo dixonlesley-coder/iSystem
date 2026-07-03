@@ -157,6 +157,26 @@ void main() {
       expect(c.read(copilotProvider).message, contains('Applied 1 of 3'));
     });
 
+    test('a placement is REJECTED when no sheets are loaded (no orphan node)',
+        () async {
+      final c = withPlan(const AiPlan(commands: [
+        AiCommand(
+            kind: AiCommandKind.placeTerminal,
+            sheetId: 's1',
+            floor: 0,
+            x: 100,
+            y: 100),
+      ], rationale: 'place on a sheet that does not exist yet'));
+      // Deliberately DO NOT load any sheets — there is nowhere to place, so the
+      // command must be skipped rather than fabricated onto an invented sheet id
+      // (an orphan the canvas can't show yet the BOM/solve would count).
+      await c.read(copilotProvider.notifier).ask('do stuff');
+      final outcome = c.read(copilotProvider.notifier).applyPlan();
+      expect(outcome.applied, 0);
+      expect(outcome.skippedCount, 1);
+      expect(c.read(networkControllerProvider).network.nodes, isEmpty);
+    });
+
     test('a fully-valid multi-command plan applies all and each is undoable',
         () async {
       final c = withPlan(const AiPlan(commands: [

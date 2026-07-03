@@ -190,9 +190,10 @@ final mepEquipmentCircuitsProvider = Provider<List<ElectricalCircuit>>(
 /// flips it on; once on, the reactive auto-sync KEEPS the duty circuits synced
 /// (they no longer get dropped as "source removed" on the next placed sync).
 ///
-/// Transient session state (not persisted to `.mechx`) — a project-file field
-/// would need `DesignSettings`, owned elsewhere; the opt-in is a per-session
-/// choice, re-asserted by clicking the affordance.
+/// Persisted with the project (`DesignSettings.mepDutyFeedEnabled`, default off
+/// ⇒ omitted from the JSON so an untouched project is byte-identical) — a project
+/// saved with the feed ON reopens with it ON and its duty circuits stay synced,
+/// rather than silently reverting to placed-only on the next load-time sync.
 final mepDutyFeedEnabledProvider =
     NotifierProvider<MepDutyFeedController, bool>(MepDutyFeedController.new);
 

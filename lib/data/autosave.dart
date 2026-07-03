@@ -8,6 +8,7 @@ import '../store/app_state.dart';
 import '../store/commercial_store.dart';
 import '../store/design_issues_store.dart';
 import '../store/document_control_store.dart';
+import '../store/electrical_feed.dart';
 import '../store/electrical_store.dart';
 import '../store/fire_store.dart';
 import '../store/assemblies_store.dart';
@@ -109,6 +110,8 @@ ProjectDocument buildDocument(ProviderReader read) {
     settings: DesignSettings(
       occupancy: read(occupancyProvider),
       upfeed: read(feedStrategyProvider) == FeedStrategy.upfeed,
+      // G1 solved-duty MEP feed opt-in round-trips (default off ⇒ omitted).
+      mepDutyFeedEnabled: read(mepDutyFeedEnabledProvider),
       ductShape: ducts.shape,
       ductMethod: ducts.method,
       rainfallMmPerHr: read(rainfallIntensityProvider),
@@ -211,6 +214,8 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(occupancyProvider.notifier).set(s.occupancy);
   read(feedStrategyProvider.notifier)
       .set(s.upfeed ? FeedStrategy.upfeed : FeedStrategy.downfeed);
+  // Restore the G1 solved-duty MEP feed opt-in (absent on an older file ⇒ off).
+  read(mepDutyFeedEnabledProvider.notifier).set(s.mepDutyFeedEnabled);
   read(ductSettingsProvider.notifier)
     ..setShape(s.ductShape)
     ..setMethod(s.ductMethod);

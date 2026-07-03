@@ -178,14 +178,13 @@ class CopilotController extends Notifier<CopilotState> {
   /// Validate ONE command against live state — returns null when acceptable, else
   /// a short reason it should be skipped. The closed registry already rejects
   /// unknown KINDS at decode ([AiCommand.fromJson]); this guards the DATA a model
-  /// (or a persisted plan) can still get wrong. When sheets ARE loaded a place
-  /// command must target a real one; with none loaded there is nothing to
-  /// validate against, so membership isn't blocked (the copilot is only useful
-  /// once sheets exist).
+  /// (or a persisted plan) can still get wrong. A place command ALWAYS needs a
+  /// real target sheet: with NO sheets loaded there is nowhere to place, so every
+  /// placement is rejected (never fabricated onto an invented sheet id — that
+  /// would create an orphan node the canvas can't show yet the BOM/solve counts).
   String? _validate(AiCommand cmd) {
     final sheets = ref.read(sheetsControllerProvider).sheets;
-    bool sheetKnown(String id) =>
-        id.isNotEmpty && (sheets.isEmpty || sheets.any((s) => s.id == id));
+    bool sheetKnown(String id) => sheets.any((s) => s.id == id);
     final levelCount = ref.read(projectControllerProvider).building.levelCount;
     bool floorOk(int f) => f >= 0 && f < levelCount;
 

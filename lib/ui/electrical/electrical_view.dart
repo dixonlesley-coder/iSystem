@@ -234,12 +234,15 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       if (req == null) return;
       if (_tab != _Tab.singleLine) setState(() => _tab = _Tab.singleLine);
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _canvasKey.currentState?.focusPanelSchedule(req.panelId);
         final circuitId = req.circuitId;
         if (circuitId != null) {
-          ref
-              .read(electricalSelectionProvider.notifier)
-              .selectCircuit(req.panelId, circuitId);
+          // Frame the board AND ring the exact way — focusIssue drives the
+          // single-line canvas's OWN selection (the same path G5's Issues drawer
+          // uses), unlike electricalSelectionProvider which only the Layout
+          // layer consumes (a no-op on the single-line tab this jump lands on).
+          _canvasKey.currentState?.focusIssue(req.panelId, circuitId: circuitId);
+        } else {
+          _canvasKey.currentState?.focusPanelSchedule(req.panelId);
         }
         ref.read(electricalFocusProvider.notifier).clear();
       });
