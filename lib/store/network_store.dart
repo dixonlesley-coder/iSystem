@@ -19,6 +19,13 @@ import 'selection_store.dart';
 /// Active canvas tool.
 enum DrawTool { select, drawRun, drawRiser }
 
+/// The outcome of a [NetworkController.placeRiser] attempt, so the UI can
+/// confirm or explain rather than silently no-op (C6). [up] connected to the
+/// floor ABOVE (the normal case); [down] connected DOWNWARD from the top floor
+/// (roof-plan downfeed work, where there is no floor above); [none] means the
+/// building has a single floor, so a riser has no adjacent floor to span.
+enum RiserPlacement { up, down, none }
+
 /// A value-copy of a slice of the network held on the in-memory clipboard for
 /// copy/paste. Holds deep copies of the chosen nodes and the edges among them.
 @immutable
@@ -147,7 +154,14 @@ class NetworkController extends Notifier<DrawingState> {
   }
 
   /// Place the next point of a run. First call sets the pending start; the
-  /// second creates the segment (snapping to existing nodes) and chains.
+  /// second creates the segment and chains. Each endpoint resolves through the
+  /// SHARED [_resolveDrawEndpoint] (C1): it snaps to a nearby existing node
+  /// (node hit wins), else TEES into a nearby run EDGE (splitting it at the
+  /// projection so the branch's demand actually joins the network), else drops
+  /// a fresh junction — so ending a run on an existing main connects instead of
+  /// silently building a disconnected crossing. Byte-identical when both clicks
+  /// land away from any edge (the split path never fires ⇒ fresh nodes as
+  /// before).
   void placeRunPoint(
     String sheetId,
     int floorIndex,
@@ -166,18 +180,14 @@ class NetworkController extends Notifier<DrawingState> {
     }
 
     final nodes = [...state.network.nodes];
-    String resolve(Offset p) {
-      final snapped = _snap(nodes, sheetId, floorIndex, p, snapRadius);
-      if (snapped != null) return snapped;
-      final id = _id('n');
-      nodes.add(NetNode(id: id, sheetId: sheetId, x: p.dx, y: p.dy, floorIndex: floorIndex));
-      return id;
-    }
-
-    final aId = resolve(state.pendingPoint!);
-    final bId = resolve(world);
+    final edges = [...state.network.edges];
+    final aId = _resolveDrawEndpoint(
+        nodes, edges, sheetId, floorIndex, state.pendingPoint!, snapRadius);
+    final bId =
+        _resolveDrawEndpoint(nodes, edges, sheetId, floorIndex, world, snapRadius);
     if (aId == bId) {
-      // zero-length / same node — just advance the pending point
+      // zero-length / same node — just advance the pending point. Any split the
+      // resolve did was on a LOCAL copy; discarding it leaves state untouched.
       state = DrawingState(
         network: state.network,
         service: state.service,
@@ -186,44 +196,66 @@ class NetworkController extends Notifier<DrawingState> {
       );
       return;
     }
-    final edge = NetEdge(id: _id('e'), fromId: aId, toId: bId, service: state.service);
+    edges.add(NetEdge(id: _id('e'), fromId: aId, toId: bId, service: state.service));
     _commit(
-      Network(nodes: nodes, edges: [...state.network.edges, edge]),
+      Network(nodes: nodes, edges: edges),
       pendingPoint: world, // chain from here
     );
   }
 
-  /// Drop a riser at [world] connecting this floor to the one above. No-op if
-  /// there is no floor above ([levelCount]).
-  void placeRiser(
+  /// Drop a riser at [world] spanning to an ADJACENT floor. Normally connects to
+  /// the floor ABOVE ([RiserPlacement.up]); on the TOP floor (no floor above)
+  /// it connects DOWNWARD to the floor below instead ([RiserPlacement.down]) —
+  /// so an engineer on the roof plan, where downfeed work happens, can still
+  /// draw a riser rather than getting a silent no-op (C6). Returns which way it
+  /// went, or [RiserPlacement.none] when the building has a single floor (no
+  /// adjacent floor to span) so the UI can fire a status message. The riser's
+  /// length is the §10 elevation delta, never a pixel distance.
+  RiserPlacement placeRiser(
     String sheetId,
     int floorIndex,
     Offset world,
     int levelCount, {
     double snapRadius = 12,
   }) {
-    if (state.tool != DrawTool.drawRiser) return;
-    if (floorIndex + 1 >= levelCount) return;
+    if (state.tool != DrawTool.drawRiser) return RiserPlacement.none;
+
+    // Prefer spanning up; fall back to down on the top floor. A single-floor
+    // building has neither, so there is nothing to draw.
+    final RiserPlacement result;
+    final int otherFloor;
+    if (floorIndex + 1 < levelCount) {
+      result = RiserPlacement.up;
+      otherFloor = floorIndex + 1;
+    } else if (floorIndex - 1 >= 0) {
+      result = RiserPlacement.down;
+      otherFloor = floorIndex - 1;
+    } else {
+      return RiserPlacement.none;
+    }
 
     final nodes = [...state.network.nodes];
-    final lowerSnap = _snap(nodes, sheetId, floorIndex, world, snapRadius);
-    final String lowerId;
-    if (lowerSnap != null) {
-      lowerId = lowerSnap;
+    final thisSnap = _snap(nodes, sheetId, floorIndex, world, snapRadius);
+    final String thisId;
+    if (thisSnap != null) {
+      thisId = thisSnap;
     } else {
-      lowerId = _id('n');
-      nodes.add(NetNode(id: lowerId, sheetId: sheetId, x: world.dx, y: world.dy, floorIndex: floorIndex));
+      thisId = _id('n');
+      nodes.add(NetNode(
+          id: thisId, sheetId: sheetId, x: world.dx, y: world.dy, floorIndex: floorIndex));
     }
-    final upperId = _id('n');
-    nodes.add(NetNode(id: upperId, sheetId: sheetId, x: world.dx, y: world.dy, floorIndex: floorIndex + 1));
+    final otherId = _id('n');
+    nodes.add(NetNode(
+        id: otherId, sheetId: sheetId, x: world.dx, y: world.dy, floorIndex: otherFloor));
     final edge = NetEdge(
       id: _id('e'),
-      fromId: lowerId,
-      toId: upperId,
+      fromId: thisId,
+      toId: otherId,
       service: state.service,
       kind: EdgeKind.riser,
     );
     _commit(Network(nodes: nodes, edges: [...state.network.edges, edge]));
+    return result;
   }
 
   /// Place a riser of [service] at horizontal position [worldX] on [floorIndex]
@@ -466,12 +498,54 @@ class NetworkController extends Notifier<DrawingState> {
   void undo() {
     if (_undo.isEmpty) return;
     _dragSnapshotPending = false;
-    _redo.add(state.network);
+    final current = state.network;
+    final previous = _undo.removeLast();
+    _redo.add(current);
+    // C8: while chaining a run, undoing the last segment must KEEP the rubber
+    // band so drawing continues — re-anchor the pending point at the segment's
+    // OTHER endpoint (the prior chain anchor) instead of dropping the chain.
+    final pending = (state.tool == DrawTool.drawRun && state.pendingPoint != null)
+        ? _chainAnchorAfterUndo(current, previous, state.pendingPoint!)
+        : null;
     state = DrawingState(
-      network: _undo.removeLast(),
+      network: previous,
       service: state.service,
       tool: state.tool,
+      pendingPoint: pending,
     );
+  }
+
+  /// The chain anchor to re-pend after undoing a drawn segment: find the tip
+  /// node nearest the live [pending] point in [current], then the just-undone
+  /// run edge (present in [current] but not [previous]) touching it, and return
+  /// its OTHER endpoint's position (read from [current], where it still exists).
+  /// Null when no such segment is found — undoing the only/first segment ends
+  /// the chain (nothing to anchor to).
+  Offset? _chainAnchorAfterUndo(
+      Network current, Network previous, Offset pending) {
+    NetNode? tip;
+    var best = double.infinity;
+    for (final n in current.nodes) {
+      final dx = n.x - pending.dx;
+      final dy = n.y - pending.dy;
+      final d2 = dx * dx + dy * dy;
+      if (d2 < best) {
+        best = d2;
+        tip = n;
+      }
+    }
+    if (tip == null) return null;
+    final prevEdgeIds = {for (final e in previous.edges) e.id};
+    for (final e in current.edges) {
+      if (e.kind != EdgeKind.run || prevEdgeIds.contains(e.id)) continue;
+      final String? otherId = e.fromId == tip.id
+          ? e.toId
+          : (e.toId == tip.id ? e.fromId : null);
+      if (otherId == null) continue;
+      final anchor = current.nodeById(otherId);
+      if (anchor != null) return Offset(anchor.x, anchor.y);
+    }
+    return null;
   }
 
   void redo() {
@@ -549,10 +623,18 @@ class NetworkController extends Notifier<DrawingState> {
   void setNodeFixture(String id, PlumbingFixture? fixture) {
     final node = state.network.nodeById(id);
     if (node == null) return;
+    _replaceNode(_applyFixture(node, fixture));
+  }
+
+  /// A copy of [node] with the built-in plumbing [fixture] set (marking it a
+  /// fixture terminal, clearing any custom fixture — the two are mutually
+  /// exclusive), or — when [fixture] is null — a copy with BOTH the built-in and
+  /// the custom fixture cleared (the fresh construction is how we null `fixture`
+  /// / `customFixtureId`; every other field is preserved). Shared by the single
+  /// [setNodeFixture], the batch [setNodesFixture] and the merge-on-drop path.
+  NetNode _applyFixture(NetNode node, PlumbingFixture? fixture) {
     if (fixture == null) {
-      // Clear the built-in fixture (and any custom fixture): the constructor
-      // default for `fixture` is null. Preserve roofAreaM2.
-      _replaceNode(NetNode(
+      return NetNode(
         id: node.id,
         sheetId: node.sheetId,
         x: node.x,
@@ -561,22 +643,21 @@ class NetworkController extends Notifier<DrawingState> {
         role: node.role,
         elevation: node.elevation,
         mountHeight: node.mountHeight,
-      component: node.component,
-      tankCapacityLitres: node.tankCapacityLitres,
-      electricalLoadW: node.electricalLoadW,
-      faceWidthMm: node.faceWidthMm,
-      faceHeightMm: node.faceHeightMm,
-      fittingType: node.fittingType,
+        component: node.component,
+        tankCapacityLitres: node.tankCapacityLitres,
+        electricalLoadW: node.electricalLoadW,
+        faceWidthMm: node.faceWidthMm,
+        faceHeightMm: node.faceHeightMm,
+        fittingType: node.fittingType,
         airflow: node.airflow,
         roofAreaM2: node.roofAreaM2,
-      ));
-      return;
+      );
     }
-    _replaceNode(node.copyWith(
+    return node.copyWith(
       role: NodeRole.fixture,
       fixture: fixture,
       clearCustomFixtureId: true,
-    ));
+    );
   }
 
   /// Assign the design [airflow] at a node, marking it an air terminal
@@ -612,12 +693,16 @@ class NetworkController extends Notifier<DrawingState> {
   void setNodeFace(String id, double? widthMm, double? heightMm) {
     final node = state.network.nodeById(id);
     if (node == null) return;
-    final clear = widthMm == null || heightMm == null;
     if (node.faceWidthMm == widthMm && node.faceHeightMm == heightMm) return;
-    _replaceNode(clear
-        ? node.copyWith(clearFace: true)
-        : node.copyWith(faceWidthMm: widthMm, faceHeightMm: heightMm));
+    _replaceNode(_applyFace(node, widthMm, heightMm));
   }
+
+  /// A copy of [node] with the grille/diffuser FACE size set, or cleared when
+  /// either dimension is null. Shared by [setNodeFace] and [setNodesFaceSize].
+  NetNode _applyFace(NetNode node, double? widthMm, double? heightMm) =>
+      (widthMm == null || heightMm == null)
+          ? node.copyWith(clearFace: true)
+          : node.copyWith(faceWidthMm: widthMm, faceHeightMm: heightMm);
 
   /// Set an explicit absolute [elevation] override on a node (e.g. a roof tank
   /// on a stand, or a basement plant). Pass null to revert to the role default.
@@ -799,6 +884,121 @@ class NetworkController extends Notifier<DrawingState> {
     );
   }
 
+  // ── E1: batch property setters (one undo step, mirroring deleteMany) ────────
+  // Each plural setter mirrors its single-id sibling but applies to EVERY id in
+  // one commit, so a multi-selection edited from the inspector / context menu is
+  // ONE undo step — and the selection is left untouched (the setter never
+  // touches it), so a batch edit doesn't collapse the selection back to one.
+
+  /// Set (or clear, with null) the manual nominal-size override on every edge in
+  /// [ids] in ONE undo step. No-op when nothing actually changes.
+  void setEdgesSizeOverride(Set<String> ids, Diameter? size) {
+    if (ids.isEmpty) return;
+    var changed = false;
+    final edges = <NetEdge>[];
+    for (final e in state.network.edges) {
+      if (ids.contains(e.id) && e.sizeOverride?.meters != size?.meters) {
+        changed = true;
+        edges.add(size == null
+            ? e.copyWith(clearSizeOverride: true)
+            : e.copyWith(sizeOverride: size));
+      } else {
+        edges.add(e);
+      }
+    }
+    if (changed) _commit(Network(nodes: state.network.nodes, edges: edges));
+  }
+
+  /// Set (or clear, with null) the pipe product on every edge in [ids], one
+  /// undo step. No-op when nothing changes.
+  void setEdgesPipeProduct(Set<String> ids, PipeProduct? product) {
+    if (ids.isEmpty) return;
+    var changed = false;
+    final edges = <NetEdge>[];
+    for (final e in state.network.edges) {
+      if (ids.contains(e.id) && e.pipeProduct != product) {
+        changed = true;
+        edges.add(product == null
+            ? e.copyWith(clearPipeProduct: true)
+            : e.copyWith(pipeProduct: product));
+      } else {
+        edges.add(e);
+      }
+    }
+    if (changed) _commit(Network(nodes: state.network.nodes, edges: edges));
+  }
+
+  /// Set (or clear, with null) the duct product on every edge in [ids], one undo
+  /// step. No-op when nothing changes.
+  void setEdgesDuctProduct(Set<String> ids, DuctProduct? product) {
+    if (ids.isEmpty) return;
+    var changed = false;
+    final edges = <NetEdge>[];
+    for (final e in state.network.edges) {
+      if (ids.contains(e.id) && e.ductProduct != product) {
+        changed = true;
+        edges.add(product == null
+            ? e.copyWith(clearDuctProduct: true)
+            : e.copyWith(ductProduct: product));
+      } else {
+        edges.add(e);
+      }
+    }
+    if (changed) _commit(Network(nodes: state.network.nodes, edges: edges));
+  }
+
+  /// Re-service every edge in [ids] in ONE undo step. No-op when nothing changes.
+  void setEdgesService(Set<String> ids, ServiceType service) {
+    if (ids.isEmpty) return;
+    var changed = false;
+    final edges = <NetEdge>[];
+    for (final e in state.network.edges) {
+      if (ids.contains(e.id) && e.service != service) {
+        changed = true;
+        edges.add(e.copyWith(service: service));
+      } else {
+        edges.add(e);
+      }
+    }
+    if (changed) _commit(Network(nodes: state.network.nodes, edges: edges));
+  }
+
+  /// Assign (or clear, with null) the built-in plumbing fixture on every node in
+  /// [ids] in ONE undo step (mirrors [setNodeFixture]). No-op when no id matches.
+  void setNodesFixture(Set<String> ids, PlumbingFixture? fixture) {
+    if (ids.isEmpty) return;
+    var changed = false;
+    final nodes = <NetNode>[];
+    for (final n in state.network.nodes) {
+      if (ids.contains(n.id)) {
+        changed = true;
+        nodes.add(_applyFixture(n, fixture));
+      } else {
+        nodes.add(n);
+      }
+    }
+    if (changed) _commit(Network(nodes: nodes, edges: state.network.edges));
+  }
+
+  /// Set (or clear, with a null dimension) the grille/diffuser FACE size on every
+  /// node in [ids] in ONE undo step (mirrors [setNodeFace]). No-op when nothing
+  /// changes.
+  void setNodesFaceSize(Set<String> ids, double? widthMm, double? heightMm) {
+    if (ids.isEmpty) return;
+    var changed = false;
+    final nodes = <NetNode>[];
+    for (final n in state.network.nodes) {
+      if (ids.contains(n.id) &&
+          (n.faceWidthMm != widthMm || n.faceHeightMm != heightMm)) {
+        changed = true;
+        nodes.add(_applyFace(n, widthMm, heightMm));
+      } else {
+        nodes.add(n);
+      }
+    }
+    if (changed) _commit(Network(nodes: nodes, edges: state.network.edges));
+  }
+
   /// Create a PARALLEL run offset from edge [id] by [distancePixels], on the
   /// [leftSide] of the edge's `from`→`to` heading (left = the heading rotated a
   /// quarter-turn anticlockwise on screen). Adds two nodes + one run edge of the
@@ -959,6 +1159,179 @@ class NetworkController extends Notifier<DrawingState> {
     ));
   }
 
+  // ── C2: merge-on-drop (adopt a node / tee into an edge, never a twin) ───────
+
+  /// The element a palette drop at [world] on [sheetId]/[floorIndex] should
+  /// merge with, within [radius] world px: a NODE (id) takes precedence over an
+  /// EDGE (id + the split point on it). Both null ⇒ nothing in range (drop
+  /// free). Runs only — risers are not teed into (a riser is a vertical span).
+  ({String? nodeId, String? edgeId, Offset? split}) _dropTarget(
+      String sheetId, int floorIndex, Offset world, double radius) {
+    final nodeId = _snap(state.network.nodes, sheetId, floorIndex, world, radius);
+    if (nodeId != null) {
+      return (nodeId: nodeId, edgeId: null, split: null);
+    }
+    final r2 = radius * radius;
+    NetEdge? bestEdge;
+    var bestD2 = r2;
+    var bestP = world;
+    for (final e in state.network.edges) {
+      if (e.kind == EdgeKind.riser) continue;
+      final a = state.network.nodeById(e.fromId);
+      final b = state.network.nodeById(e.toId);
+      if (a == null || b == null) continue;
+      if (a.sheetId != sheetId || a.floorIndex != floorIndex) continue;
+      if (b.sheetId != sheetId || b.floorIndex != floorIndex) continue;
+      final p = _closestPointOnSegment(world, Offset(a.x, a.y), Offset(b.x, b.y));
+      final d2 = (p - world).distanceSquared;
+      if (d2 <= bestD2) {
+        bestD2 = d2;
+        bestEdge = e;
+        bestP = p;
+      }
+    }
+    if (bestEdge != null) {
+      return (nodeId: null, edgeId: bestEdge.id, split: bestP);
+    }
+    return (nodeId: null, edgeId: null, split: null);
+  }
+
+  /// Split run [edgeId] at the point [insert] sits on, replacing the edge with
+  /// two halves (a→insert, insert→b) that BOTH inherit its service / kind /
+  /// pipeProduct / ductProduct / sizeOverride, and returns fresh (nodes, edges)
+  /// lists with [insert] added. The caller commits.
+  (List<NetNode>, List<NetEdge>) _splitEdgeInserting(
+      String edgeId, NetNode insert) {
+    final nodes = [...state.network.nodes, insert];
+    final edges = <NetEdge>[];
+    for (final e in state.network.edges) {
+      if (e.id != edgeId) {
+        edges.add(e);
+        continue;
+      }
+      edges.add(e.copyWith(toId: insert.id));
+      edges.add(NetEdge(
+        id: _id('e'),
+        fromId: insert.id,
+        toId: e.toId,
+        service: e.service,
+        kind: e.kind,
+        pipeProduct: e.pipeProduct,
+        ductProduct: e.ductProduct,
+        sizeOverride: e.sizeOverride,
+      ));
+    }
+    return (nodes, edges);
+  }
+
+  /// Drop a FITTING (a bare junction) at [world], but MERGE within [snapRadius]:
+  /// if a node is already there ADOPT it (no coincident twin — a bare fitting
+  /// carries no payload, so the node is returned unchanged), else if it lands on
+  /// a run TEE in (split it, inserting the junction), else drop a free junction.
+  /// Returns the resulting node id. Records one undo step (none when adopting an
+  /// existing node — there is nothing to change).
+  String mergeOrAddFitting(
+    String sheetId,
+    int floorIndex,
+    Offset world, {
+    double snapRadius = 12,
+  }) {
+    final t = _dropTarget(sheetId, floorIndex, world, snapRadius);
+    if (t.nodeId != null) return t.nodeId!; // adopt: already a node here
+    if (t.edgeId != null) {
+      final node = NetNode(
+          id: _id('n'),
+          sheetId: sheetId,
+          x: t.split!.dx,
+          y: t.split!.dy,
+          floorIndex: floorIndex);
+      final (nodes, edges) = _splitEdgeInserting(t.edgeId!, node);
+      _commit(Network(nodes: nodes, edges: edges));
+      return node.id;
+    }
+    final node = NetNode(
+        id: _id('n'), sheetId: sheetId, x: world.dx, y: world.dy, floorIndex: floorIndex);
+    _commit(Network(nodes: [...state.network.nodes, node], edges: state.network.edges));
+    return node.id;
+  }
+
+  /// Drop a TERMINAL (a fixture node, optionally carrying [fixture]) at [world],
+  /// merging within [snapRadius]: ADOPT a node already there (making it a
+  /// fixture terminal — no twin), else TEE into a run (inserting the terminal
+  /// inline on it), else drop a free terminal. Returns the resulting node id;
+  /// records one undo step.
+  String mergeOrAddTerminal(
+    String sheetId,
+    int floorIndex,
+    Offset world, {
+    PlumbingFixture? fixture,
+    double snapRadius = 12,
+  }) {
+    final t = _dropTarget(sheetId, floorIndex, world, snapRadius);
+    if (t.nodeId != null) {
+      final existing = state.network.nodeById(t.nodeId!)!;
+      _replaceNode(fixture != null
+          ? _applyFixture(existing, fixture)
+          : existing.copyWith(role: NodeRole.fixture));
+      return existing.id;
+    }
+    NetNode terminalAt(double x, double y) => NetNode(
+          id: _id('n'),
+          sheetId: sheetId,
+          x: x,
+          y: y,
+          floorIndex: floorIndex,
+          role: NodeRole.fixture,
+          fixture: fixture,
+        );
+    if (t.edgeId != null) {
+      final node = terminalAt(t.split!.dx, t.split!.dy);
+      final (nodes, edges) = _splitEdgeInserting(t.edgeId!, node);
+      _commit(Network(nodes: nodes, edges: edges));
+      return node.id;
+    }
+    final node = terminalAt(world.dx, world.dy);
+    _commit(Network(nodes: [...state.network.nodes, node], edges: state.network.edges));
+    return node.id;
+  }
+
+  /// Drop an EQUIPMENT / COMPONENT node at [world], merging within [snapRadius]:
+  /// ADOPT a node already there (setting its [component] + implied role — no
+  /// twin), else TEE into a run (inserting the component inline), else drop it
+  /// free. Returns the resulting node id; records one undo step.
+  String mergeOrAddComponent(
+    String sheetId,
+    int floorIndex,
+    Offset world,
+    NodeComponent component, {
+    double snapRadius = 12,
+  }) {
+    final t = _dropTarget(sheetId, floorIndex, world, snapRadius);
+    if (t.nodeId != null) {
+      final existing = state.network.nodeById(t.nodeId!)!;
+      _replaceNode(existing.copyWith(component: component, role: component.role));
+      return existing.id;
+    }
+    NetNode componentAt(double x, double y) => NetNode(
+          id: _id('n'),
+          sheetId: sheetId,
+          x: x,
+          y: y,
+          floorIndex: floorIndex,
+          role: component.role,
+          component: component,
+        );
+    if (t.edgeId != null) {
+      final node = componentAt(t.split!.dx, t.split!.dy);
+      final (nodes, edges) = _splitEdgeInserting(t.edgeId!, node);
+      _commit(Network(nodes: nodes, edges: edges));
+      return node.id;
+    }
+    final node = componentAt(world.dx, world.dy);
+    _commit(Network(nodes: [...state.network.nodes, node], edges: state.network.edges));
+    return node.id;
+  }
+
   /// Auto-place the air terminals a [room] needs — closing the room→network
   /// loop. Runs the room's ACH air-side sizing ([RoomArea.sizing]) to get the
   /// supply-diffuser COUNT + per-terminal airflow + chosen face, then drops that
@@ -996,7 +1369,27 @@ class NetworkController extends Notifier<DrawingState> {
     final supplyFace = _faceMm(s.supply);
     final returnFace = _faceMm(s.return_);
 
-    final nodes = [...state.network.nodes];
+    // Idempotence (E8): drop THIS room's previously-placed supply diffusers /
+    // return grilles (those inside its footprint) — and any edges touching them
+    // — before re-placing, so re-running the button re-generates the terminals
+    // instead of stacking a second generation atop the first (which silently
+    // doubled the carried airflow). All in the SAME undo step as the placement.
+    final priorIds = <String>{
+      for (final node in state.network.nodes)
+        if ((node.component == NodeComponent.supplyDiffuser ||
+                node.component == NodeComponent.returnGrille) &&
+            room.containsNode(
+                node.sheetId, node.floorIndex, node.x, node.y))
+          node.id,
+    };
+    final nodes = [
+      for (final node in state.network.nodes)
+        if (!priorIds.contains(node.id)) node,
+    ];
+    final priorEdges = [
+      for (final e in state.network.edges)
+        if (!priorIds.contains(e.fromId) && !priorIds.contains(e.toId)) e,
+    ];
     final ids = <String>[];
     var placed = 0;
     for (var ry = 0; ry < rows && placed < n; ry++) {
@@ -1035,7 +1428,7 @@ class NetworkController extends Notifier<DrawingState> {
       faceHeightMm: returnFace.$2,
     ));
 
-    _commit(Network(nodes: nodes, edges: state.network.edges));
+    _commit(Network(nodes: nodes, edges: priorEdges));
     return ids;
   }
 
@@ -1156,6 +1549,7 @@ class NetworkController extends Notifier<DrawingState> {
         kind: e.kind,
         pipeProduct: e.pipeProduct,
         ductProduct: e.ductProduct,
+        sizeOverride: e.sizeOverride,
       ));
       return jId;
     }
@@ -1200,11 +1594,13 @@ class NetworkController extends Notifier<DrawingState> {
       }
     }
     if (targetId == null) {
-      // No node to merge onto. If the dragged node is FREE (no edges) — e.g. a
-      // fixture just dropped from the palette — and it landed near a mainline
-      // pipe, TAP it in: draw a new branch pipe from the fixture to the main
-      // (splitting the main at the nearest point). The fixture itself stays put.
-      _tapFreeNodeIntoNearestEdge(dragged, snapRadiusWorld);
+      // No node to merge onto. If the dragged node landed near a mainline pipe,
+      // TAP it in: split the main at the nearest point and draw a new branch
+      // pipe from the dragged node to that junction (the node itself stays put).
+      // This teed-in connect works for a FREE node just dropped from the palette
+      // AND for an already-CONNECTED node whose endpoint is dragged onto another
+      // run (C1) — the tap never targets the dragged node's own edges.
+      _tapNodeIntoNearestEdge(dragged, snapRadiusWorld);
       return;
     }
 
@@ -1232,18 +1628,15 @@ class NetworkController extends Notifier<DrawingState> {
     return a + ab * t;
   }
 
-  /// If [dragged] has NO edges and lies within [radiusWorld] of a horizontal RUN
-  /// on the same sheet/floor, connect it: split that run at the nearest point
-  /// (or reuse an endpoint if very close) and add a new branch pipe from the
-  /// dragged node to that junction, carrying the main's service. One undo step.
-  void _tapFreeNodeIntoNearestEdge(NetNode dragged, double radiusWorld) {
+  /// If [dragged] lies within [radiusWorld] of a horizontal RUN on the same
+  /// sheet/floor, connect it: split that run at the nearest point (or reuse an
+  /// endpoint if very close) and add a new branch pipe from the dragged node to
+  /// that junction, carrying the main's service. One undo step. Works for a FREE
+  /// node (a just-dropped fixture) AND a CONNECTED node dragged onto another run
+  /// (C1); the search SKIPS the dragged node's own edges so a node is never teed
+  /// into a pipe it already belongs to.
+  void _tapNodeIntoNearestEdge(NetNode dragged, double radiusWorld) {
     final net = state.network;
-    final connected =
-        net.edges.any((e) => e.fromId == dragged.id || e.toId == dragged.id);
-    if (connected) {
-      _dragSnapshotPending = false; // no commit — disarm (see endNodeDragWithSnap)
-      return; // only auto-connect a free node
-    }
 
     NetEdge? bestEdge;
     var bestD2 = radiusWorld * radiusWorld;
@@ -1251,6 +1644,9 @@ class NetworkController extends Notifier<DrawingState> {
     final dp = Offset(dragged.x, dragged.y);
     for (final e in net.edges) {
       if (e.kind == EdgeKind.riser) continue; // tap onto horizontal runs only
+      if (e.fromId == dragged.id || e.toId == dragged.id) {
+        continue; // never split the dragged node's own edge
+      }
       final a = net.nodeById(e.fromId);
       final b = net.nodeById(e.toId);
       if (a == null || b == null) continue;
@@ -1308,6 +1704,7 @@ class NetworkController extends Notifier<DrawingState> {
             kind: e.kind,
             pipeProduct: e.pipeProduct,
             ductProduct: e.ductProduct,
+            sizeOverride: e.sizeOverride,
           ));
         } else {
           newEdges.add(edge);
@@ -1426,31 +1823,23 @@ class NetworkController extends Notifier<DrawingState> {
     _clipboard = _Clipboard(keptNodes, keptEdges);
   }
 
-  /// Paste the clipboard onto [sheetId]/[floorIndex], offset by [offsetWorld],
-  /// with fresh ids (mirrors [duplicateFloor]'s clone-map pattern). Every
-  /// NetNode field is carried via copyWith. Records ONE undo step. Sets the new
-  /// ids as the multi-selection and returns them (empty when nothing pasted).
-  ({Set<String> nodeIds, Set<String> edgeIds}) paste({
-    required String sheetId,
-    required int floorIndex,
-    Offset offsetWorld = const Offset(24, 24),
-  }) {
-    final clip = _clipboard;
-    if (clip == null || clip.nodes.isEmpty) {
-      return (nodeIds: <String>{}, edgeIds: <String>{});
-    }
-    final clones = <String, String>{}; // old node id → new node id
-    final addedNodes = <NetNode>[];
-    for (final n in clip.nodes) {
-      final id = _id('n');
-      clones[n.id] = id;
-      // Build a fresh node with the new id, carrying EVERY NetNode field
-      // (copyWith can't change the id, so construct directly).
-      addedNodes.add(NetNode(
+  /// A fresh node with a new [id] carrying EVERY [n] field, at ([x], [y]) on
+  /// [sheetId]/[floorIndex] (copyWith can't change the id, so we construct
+  /// directly). Shared by [paste] / [pasteNCopies] / [duplicateFloor]-style
+  /// clones so the field set can never drift between them.
+  NetNode _cloneNodeAt(
+    NetNode n,
+    String id,
+    String sheetId,
+    int floorIndex,
+    double x,
+    double y,
+  ) =>
+      NetNode(
         id: id,
         sheetId: sheetId,
-        x: n.x + offsetWorld.dx,
-        y: n.y + offsetWorld.dy,
+        x: x,
+        y: y,
         floorIndex: floorIndex,
         role: n.role,
         elevation: n.elevation,
@@ -1465,34 +1854,120 @@ class NetworkController extends Notifier<DrawingState> {
         airflow: n.airflow,
         customFixtureId: n.customFixtureId,
         roofAreaM2: n.roofAreaM2,
-      ));
-    }
-    final addedEdges = <NetEdge>[];
-    final newEdgeIds = <String>{};
-    for (final e in clip.edges) {
-      final from = clones[e.fromId];
-      final to = clones[e.toId];
-      if (from == null || to == null) continue;
-      final eid = _id('e');
-      newEdgeIds.add(eid);
-      addedEdges.add(NetEdge(
-        id: eid,
-        fromId: from,
-        toId: to,
+      );
+
+  /// A fresh edge with a new [id] and remapped [fromId]/[toId], carrying [e]'s
+  /// service/kind/products/sizeOverride. Shared by the clipboard clones.
+  NetEdge _cloneEdge(NetEdge e, String id, String fromId, String toId) =>
+      NetEdge(
+        id: id,
+        fromId: fromId,
+        toId: toId,
         service: e.service,
         kind: e.kind,
         pipeProduct: e.pipeProduct,
         ductProduct: e.ductProduct,
         sizeOverride: e.sizeOverride,
-      ));
+      );
+
+  /// Clone ONE generation of [clip] onto [sheetId]/[floorIndex] at [offset],
+  /// with fresh ids (mirrors [duplicateFloor]'s clone-map pattern). Returns the
+  /// new nodes/edges + their ids; the caller commits (so N copies can land in
+  /// one undo step).
+  ({
+    List<NetNode> nodes,
+    List<NetEdge> edges,
+    Set<String> nodeIds,
+    Set<String> edgeIds,
+  }) _cloneClipboard(
+      _Clipboard clip, String sheetId, int floorIndex, Offset offset) {
+    final clones = <String, String>{}; // old node id → new node id
+    final nodes = <NetNode>[];
+    final nodeIds = <String>{};
+    for (final n in clip.nodes) {
+      final id = _id('n');
+      clones[n.id] = id;
+      nodeIds.add(id);
+      nodes.add(_cloneNodeAt(
+          n, id, sheetId, floorIndex, n.x + offset.dx, n.y + offset.dy));
+    }
+    final edges = <NetEdge>[];
+    final edgeIds = <String>{};
+    for (final e in clip.edges) {
+      final from = clones[e.fromId];
+      final to = clones[e.toId];
+      if (from == null || to == null) continue;
+      final eid = _id('e');
+      edgeIds.add(eid);
+      edges.add(_cloneEdge(e, eid, from, to));
+    }
+    return (nodes: nodes, edges: edges, nodeIds: nodeIds, edgeIds: edgeIds);
+  }
+
+  /// Paste the clipboard onto [sheetId]/[floorIndex], offset by [offsetWorld],
+  /// with fresh ids. Records ONE undo step, sets the new ids as the multi-
+  /// selection and returns them (empty when nothing pasted). After pasting, the
+  /// clipboard is RE-BASED to the pasted generation, so a repeated Ctrl+V
+  /// CASCADES (each paste steps one offset further) instead of stacking
+  /// byte-identical copies invisibly atop the first (E3).
+  ({Set<String> nodeIds, Set<String> edgeIds}) paste({
+    required String sheetId,
+    required int floorIndex,
+    Offset offsetWorld = const Offset(24, 24),
+  }) {
+    final clip = _clipboard;
+    if (clip == null || clip.nodes.isEmpty) {
+      return (nodeIds: <String>{}, edgeIds: <String>{});
+    }
+    final gen = _cloneClipboard(clip, sheetId, floorIndex, offsetWorld);
+    _commit(Network(
+      nodes: [...state.network.nodes, ...gen.nodes],
+      edges: [...state.network.edges, ...gen.edges],
+    ));
+    // Re-base: the next default paste offsets from this generation, not the
+    // original — so Ctrl+V, Ctrl+V, Ctrl+V walks diagonally.
+    _clipboard = _Clipboard(
+      [for (final n in gen.nodes) n.copyWith()],
+      [for (final e in gen.edges) e.copyWith()],
+    );
+    ref.read(selectionProvider.notifier).setMulti(gen.nodeIds, gen.edgeIds);
+    return (nodeIds: gen.nodeIds, edgeIds: gen.edgeIds);
+  }
+
+  /// Paste [count] copies of the clipboard in ONE undo step — the "Paste N
+  /// copies…" array for the 20-identical-toilets job — each copy stepped a
+  /// further [spacing] from the clipboard originals (generation g at g·spacing).
+  /// Sets the whole array as the multi-selection and returns every new id. No-op
+  /// (empty result) when the clipboard is empty or [count] <= 0. Does NOT re-base
+  /// the clipboard (the array is a one-shot from the originals).
+  ({Set<String> nodeIds, Set<String> edgeIds}) pasteNCopies(
+    int count,
+    Offset spacing, {
+    required String sheetId,
+    required int floorIndex,
+  }) {
+    final clip = _clipboard;
+    if (clip == null || clip.nodes.isEmpty || count <= 0) {
+      return (nodeIds: <String>{}, edgeIds: <String>{});
+    }
+    final addedNodes = <NetNode>[];
+    final addedEdges = <NetEdge>[];
+    final allNodeIds = <String>{};
+    final allEdgeIds = <String>{};
+    for (var g = 1; g <= count; g++) {
+      final gen = _cloneClipboard(
+          clip, sheetId, floorIndex, Offset(spacing.dx * g, spacing.dy * g));
+      addedNodes.addAll(gen.nodes);
+      addedEdges.addAll(gen.edges);
+      allNodeIds.addAll(gen.nodeIds);
+      allEdgeIds.addAll(gen.edgeIds);
     }
     _commit(Network(
       nodes: [...state.network.nodes, ...addedNodes],
       edges: [...state.network.edges, ...addedEdges],
     ));
-    final newNodeIds = clones.values.toSet();
-    ref.read(selectionProvider.notifier).setMulti(newNodeIds, newEdgeIds);
-    return (nodeIds: newNodeIds, edgeIds: newEdgeIds);
+    ref.read(selectionProvider.notifier).setMulti(allNodeIds, allEdgeIds);
+    return (nodeIds: allNodeIds, edgeIds: allEdgeIds);
   }
 
   /// Paste the clipboard CENTRED at [world] (sheet px) on [sheetId]/
@@ -1570,6 +2045,31 @@ class NetworkController extends Notifier<DrawingState> {
       for (final n in state.network.nodes)
         if (n.id == id) n.copyWith(x: x, y: y) else n,
     ];
+    state = DrawingState(
+      network: Network(nodes: nodes, edges: state.network.edges),
+      service: state.service,
+      tool: state.tool,
+      pendingPoint: state.pendingPoint,
+    );
+  }
+
+  /// Translate EVERY node in [nodeIds] by ([dx], [dy]) sheet/world px WITHOUT
+  /// recording undo (a live GROUP drag) — pair with [pushUndoSnapshot] at drag
+  /// start exactly like [moveNode], so the whole group move is ONE undo step
+  /// (E2). No-op when the set is empty, the delta is zero, or nothing matches.
+  void moveMany(Set<String> nodeIds, double dx, double dy) {
+    if (nodeIds.isEmpty || (dx == 0 && dy == 0)) return;
+    var changed = false;
+    final nodes = <NetNode>[];
+    for (final n in state.network.nodes) {
+      if (nodeIds.contains(n.id)) {
+        changed = true;
+        nodes.add(n.copyWith(x: n.x + dx, y: n.y + dy));
+      } else {
+        nodes.add(n);
+      }
+    }
+    if (!changed) return;
     state = DrawingState(
       network: Network(nodes: nodes, edges: state.network.edges),
       service: state.service,

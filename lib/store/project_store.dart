@@ -26,6 +26,34 @@ class ProjectState {
 
   ScaleCalibration? calibrationFor(String sheetId) => calibrations[sheetId];
 
+  /// Sheet ids in [candidates] that carry NO calibration yet (optionally
+  /// excluding the source sheet). The SAFE default target set for "apply scale
+  /// to all sheets" (D2) — stamping these overwrites nothing.
+  Set<String> uncalibratedAmong(Iterable<String> candidates, {String? exclude}) {
+    final out = <String>{};
+    for (final id in candidates) {
+      if (id == exclude) continue;
+      if (!calibrations.containsKey(id)) out.add(id);
+    }
+    return out;
+  }
+
+  /// Sheet ids in [candidates] that already carry a calibration DIFFERENT from
+  /// [fromSheetId]'s (so overwriting them with the source scale needs an
+  /// explicit confirm, D2). Empty when the source is uncalibrated.
+  Set<String> differentlyCalibratedFrom(
+      String fromSheetId, Iterable<String> candidates) {
+    final source = calibrationFor(fromSheetId);
+    if (source == null) return const {};
+    final out = <String>{};
+    for (final id in candidates) {
+      if (id == fromSheetId) continue;
+      final c = calibrations[id];
+      if (c != null && c != source) out.add(id);
+    }
+    return out;
+  }
+
   ProjectState copyWith({
     String? name,
     List<Floor>? floors,
@@ -185,23 +213,35 @@ class ProjectController extends Notifier<ProjectState> {
     state = state.copyWith(calibrations: next);
   }
 
-  /// Copy [fromSheetId]'s calibration onto every other sheet, as ONE undo step
-  /// — a per-sheet calibration QoL shortcut (one sheet measured ⇒ apply that
-  /// scale to all). [toSheetIds] is the set of sheets to stamp (the caller
-  /// passes the live sheet ids, since the sheet list lives in `SheetsState`,
-  /// not here); when null it falls back to every sheet that already has a
-  /// calibration. No-op if the source sheet is uncalibrated.
-  void applyCalibrationToAllSheets(String fromSheetId, {Set<String>? toSheetIds}) {
+  /// Copy [fromSheetId]'s calibration onto the [toSheetIds] sheets, as ONE undo
+  /// step — a per-sheet calibration QoL shortcut (one sheet measured ⇒ apply
+  /// that scale to others). [toSheetIds] is the set of sheets to stamp (the
+  /// caller passes the live sheet ids, since the sheet list lives in
+  /// `SheetsState`, not here); when null it falls back to every sheet that
+  /// already has a calibration.
+  ///
+  /// Returns the number of OTHER sheets whose scale actually changed (so the UI
+  /// can report "Scale applied to N sheets", D2). No-op — returning 0, recording
+  /// nothing — when the source is uncalibrated or nothing would change (so the
+  /// caller can default to the safe uncalibrated-only target set and confirm
+  /// before overwriting a differing scale; see [uncalibratedAmong] /
+  /// [differentlyCalibratedFrom]).
+  int applyCalibrationToAllSheets(String fromSheetId, {Set<String>? toSheetIds}) {
     final source = state.calibrationFor(fromSheetId);
-    if (source == null) return;
+    if (source == null) return 0;
     final targets = toSheetIds ?? state.calibrations.keys.toSet();
-    _snapshot();
     final next = Map<String, ScaleCalibration>.from(state.calibrations);
+    var changed = 0;
     for (final id in targets) {
       if (id == fromSheetId) continue;
+      if (next[id] == source) continue; // already this scale — no change
       next[id] = source;
+      changed++;
     }
+    if (changed == 0) return 0;
+    _snapshot();
     state = state.copyWith(calibrations: next);
+    return changed;
   }
 }
 

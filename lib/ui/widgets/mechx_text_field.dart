@@ -21,6 +21,14 @@ class MechXTextField extends StatefulWidget {
   /// so every existing caller is byte-identical.
   final ValueChanged<String>? onCommitted;
 
+  /// Fired when Enter is pressed (additive, I3). Distinct from [onCommitted]:
+  /// this is an explicit ACTION trigger for a live per-keystroke field (which
+  /// keeps [onChanged]) — e.g. the calibration card's "Set scale" or the offset
+  /// dialog's "Create offset" — so typing a number + Enter works without a mouse
+  /// trip to the primary button. It does NOT commit on blur (a Cancel/blur must
+  /// not fire the action). Null ⇒ Enter has no effect (byte-identical).
+  final VoidCallback? onSubmitted;
+
   /// Optional placeholder shown (in the muted tier) when the field is empty and
   /// unfocused — an Apple-style affordance for what belongs here.
   final String? hint;
@@ -39,6 +47,7 @@ class MechXTextField extends StatefulWidget {
     required this.value,
     this.onChanged,
     this.onCommitted,
+    this.onSubmitted,
     this.hint,
     this.textStyle,
     this.keyboardType,
@@ -91,6 +100,7 @@ class _MechXTextFieldState extends State<MechXTextField> {
 
   void _onSubmitted(String _) {
     _commitIfDirty();
+    widget.onSubmitted?.call();
     _focusNode.unfocus();
   }
 
@@ -170,7 +180,10 @@ class _MechXTextFieldState extends State<MechXTextField> {
                 if (widget.onCommitted != null) _dirty = true;
                 widget.onChanged?.call(s);
               },
-              onSubmitted: widget.onCommitted != null ? _onSubmitted : null,
+              onSubmitted:
+                  (widget.onCommitted != null || widget.onSubmitted != null)
+                      ? _onSubmitted
+                      : null,
               keyboardType: widget.keyboardType,
               maxLines: 1,
               style: baseStyle.copyWith(color: colors.textPrimary),

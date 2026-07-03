@@ -6,6 +6,7 @@ import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../format/scale_format.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
@@ -29,6 +30,16 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
   // user clicked Set scale without typing) — the user must enter a real length.
   String _distance = '';
 
+  /// Whether the sheet being calibrated is a PDF (its pixels are physical PDF
+  /// points) — so the shared readout can lead with the plotted `1 : N` ratio;
+  /// a normalized DXF/DWG sheet only gets the paper-unit-free `1 m = N px`.
+  bool _isPdfSheet() {
+    for (final s in ref.read(sheetsControllerProvider).sheets) {
+      if (s.id == widget.sheetId) return s.pdfPath != null;
+    }
+    return false;
+  }
+
   void _commit() {
     final meters = double.tryParse(_distance.trim());
     if (meters == null || meters <= 0) return;
@@ -42,10 +53,10 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
     ref.read(calibrationControllerProvider.notifier).cancel();
     // Confirm the resolved scale and point at the next workflow step (Floors)
     // — the completed-stage speaks instead of leaving the engineer to notice
-    // the sheet-rail dot change on their own.
-    final pxPerMetre = (1 / cal.metersPerPixel).round();
+    // the sheet-rail dot change on their own. One shared human formatter (D1).
     ref.read(statusMessageProvider.notifier).showStatus(
-        'Scale set: 1 m = $pxPerMetre px - next: set floor heights (Floors)');
+        'Scale set: ${formatScaleReadout(cal.metersPerPixel, isPdf: _isPdfSheet())}'
+        ' - next: set floor heights (Floors)');
   }
 
   /// The live implied-scale read-out beneath the entry field. Renders nothing
@@ -63,7 +74,7 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
     return [
       const SizedBox(height: MechXSpacing.xs),
       Text(
-        'Scale approx ${mpp.toStringAsExponential(2)} m/px',
+        'Scale ${formatScaleReadout(mpp, isPdf: _isPdfSheet())}',
         style: type.caption.copyWith(color: colors.textMuted),
       ),
       if (implausible)
@@ -94,8 +105,13 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
             cursor: SystemMouseCursors.precise,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTapUp: (details) =>
-                  notifier.addWorldPoint(transform.screenToWorld(details.localPosition)),
+              onTapUp: (details) => notifier.addWorldPoint(
+                transform.screenToWorld(details.localPosition),
+                // A click near an already-placed marker re-places it (a misclick
+                // fix, D3) rather than restarting — a screen-constant ~12px hit
+                // radius, converted to sheet pixels by the live zoom.
+                snapRadius: 12 / transform.scale,
+              ),
               child: CustomPaint(
                 painter: _CalibrationPainter(
                   state: cal,
@@ -120,6 +136,9 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
                 CalibrationPhase.awaitingSecond => 'Click the second point',
                 _ => 'Enter the real-world length',
               },
+              // Step back one point once anything is placed (D3) — a misclick no
+              // longer forces a full restart.
+              onBack: cal.first != null ? notifier.back : null,
               onCancel: notifier.cancel,
             ),
           ),
@@ -162,6 +181,8 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
                           // Rebuild on every keystroke so the implied-scale
                           // preview below tracks the input live.
                           onChanged: (v) => setState(() => _distance = v),
+                          // Enter sets the scale without a mouse trip (I3).
+                          onSubmitted: _commit,
                         ),
                       ),
                       const SizedBox(width: MechXSpacing.sm),
@@ -197,8 +218,9 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
 
 class _Banner extends StatelessWidget {
   final String text;
+  final VoidCallback? onBack;
   final VoidCallback onCancel;
-  const _Banner({required this.text, required this.onCancel});
+  const _Banner({required this.text, this.onBack, required this.onCancel});
 
   @override
   Widget build(BuildContext context) {
@@ -227,6 +249,10 @@ class _Banner extends StatelessWidget {
             ),
           ),
           const SizedBox(width: MechXSpacing.md),
+          if (onBack != null) ...[
+            MechXButton(label: 'Back', onPressed: onBack),
+            const SizedBox(width: MechXSpacing.sm),
+          ],
           MechXButton(label: 'Esc', onPressed: onCancel),
         ],
       ),

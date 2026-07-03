@@ -47,6 +47,72 @@ void main() {
     });
   });
 
+  group('commandMatchScore', () {
+    test('matches on the title', () {
+      expect(commandMatchScore('layout', 'Go to Layout', 'Design view'),
+          isNotNull);
+    });
+
+    test('matches on the subtitle when the title does not', () {
+      // "design" is absent from the title but present in the subtitle — the
+      // palette must still surface the row (I2: subtitles are searched too).
+      expect(fuzzyScore('design', 'Go to Layout'), isNull); // sanity
+      expect(commandMatchScore('design', 'Go to Layout', 'Design view'),
+          isNotNull);
+    });
+
+    test('returns null when neither field matches', () {
+      expect(commandMatchScore('zzz', 'Go to Layout', 'Design view'), isNull);
+    });
+
+    test('a title hit outranks a subtitle-only hit for the same query', () {
+      final inTitle = commandMatchScore('design', 'Design tools', 'other')!;
+      final inSubtitle =
+          commandMatchScore('design', 'Go to Layout', 'Design view')!;
+      expect(inTitle, greaterThan(inSubtitle));
+    });
+
+    test('an empty subtitle is simply skipped', () {
+      expect(commandMatchScore('undo', 'Undo'), isNotNull);
+      expect(commandMatchScore('zzz', 'Undo'), isNull);
+    });
+  });
+
+  group('recentCommandsProvider', () {
+    test('records most-recent-first and de-dupes', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(recentCommandsProvider.notifier);
+      ctrl.record('a');
+      ctrl.record('b');
+      ctrl.record('a'); // re-run 'a' → hoists it back to the front
+      expect(c.read(recentCommandsProvider), ['a', 'b']);
+    });
+
+    test('caps at max, dropping the oldest', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(recentCommandsProvider.notifier);
+      final n = RecentCommandsController.max + 4;
+      for (var i = 0; i < n; i++) {
+        ctrl.record('cmd$i');
+      }
+      final recent = c.read(recentCommandsProvider);
+      expect(recent.length, RecentCommandsController.max);
+      // The most-recently recorded id is at the front.
+      expect(recent.first, 'cmd${n - 1}');
+      // The oldest ids fell off.
+      expect(recent.contains('cmd0'), isFalse);
+    });
+
+    test('ignores empty ids', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      c.read(recentCommandsProvider.notifier).record('');
+      expect(c.read(recentCommandsProvider), isEmpty);
+    });
+  });
+
   group('workflowStageStateProvider', () {
     ProviderContainer makeContainer() {
       final c = ProviderContainer();

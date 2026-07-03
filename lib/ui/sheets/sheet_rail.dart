@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../store/models/sheet.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../shell/duplicate_floor_dialog.dart';
 import '../shell/project_io.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -116,6 +117,10 @@ class _RailItemState extends ConsumerState<_RailItem> {
           onReplacePlan: () {
             entry.remove();
             replaceSheetPlan(context, ref, sheetId);
+          },
+          onDuplicateTo: () {
+            entry.remove();
+            showDuplicateFloorDialog(context);
           },
           onDismiss: entry.remove,
         ),
@@ -286,11 +291,13 @@ class _CalibrationGlyph extends CustomPainter {
 class _SheetMenuLayer extends StatelessWidget {
   final Offset anchor;
   final VoidCallback onReplacePlan;
+  final VoidCallback onDuplicateTo;
   final VoidCallback onDismiss;
 
   const _SheetMenuLayer({
     required this.anchor,
     required this.onReplacePlan,
+    required this.onDuplicateTo,
     required this.onDismiss,
   });
 
@@ -300,7 +307,7 @@ class _SheetMenuLayer extends StatelessWidget {
     const menuWidth = 180.0;
     final left =
         anchor.dx.clamp(0.0, (size.width - menuWidth).clamp(0.0, size.width));
-    final top = anchor.dy.clamp(0.0, (size.height - 60).clamp(0.0, size.height));
+    final top = anchor.dy.clamp(0.0, (size.height - 90).clamp(0.0, size.height));
 
     return Stack(
       children: [
@@ -319,6 +326,9 @@ class _SheetMenuLayer extends StatelessWidget {
           child: MechXContextMenu(
             children: [
               MechXMenuRow(label: 'Replace plan…', onTap: onReplacePlan),
+              // E4: copy this floor's runs onto a range of floors (the dialog
+              // defaults its source to the current sheet's floor).
+              MechXMenuRow(label: 'Duplicate to…', onTap: onDuplicateTo),
             ],
           ),
         ),

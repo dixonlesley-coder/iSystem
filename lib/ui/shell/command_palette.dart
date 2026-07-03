@@ -18,15 +18,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/app_settings.dart';
 import '../../store/ai_copilot_store.dart';
+import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/command_store.dart';
 import '../../store/electrical_store.dart';
+import '../../store/history_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
-import '../inspector/project_panel.dart' show exportCalcReport;
+import '../inspector/project_panel.dart'
+    show
+        exportAnnotatedPlanPdf,
+        exportCalcReport,
+        exportCalcReportPdf,
+        exportDrawingDxf,
+        exportDrawingPdf,
+        exportEquipmentSchedule,
+        exportEquipmentSchedulePdf,
+        exportMepUnifiedReport,
+        exportMepUnifiedReportPdf;
+import '../shell/duplicate_floor_dialog.dart';
 import '../shell/nav_rail.dart';
 import '../shell/project_io.dart';
 import '../shell/templates_dialog.dart';
@@ -34,15 +47,25 @@ import '../theme/design_tokens.dart';
 import '../widgets/glass_surface.dart';
 import '../theme/mechx_theme.dart';
 
-/// One runnable palette command: a [title] (matched + shown), an optional
-/// [subtitle] hint, and the [run] action wired to live controllers.
+/// One runnable palette command: a stable [id] (recency key, never shown), a
+/// [title] (matched + shown), an optional [subtitle] hint (also matched), an
+/// optional right-aligned [shortcut] keycap hint, and the [run] action wired to
+/// live controllers.
 @immutable
 class _Command {
+  final String id;
   final String title;
   final String subtitle;
+  final String shortcut;
   final VoidCallback run;
 
-  const _Command({required this.title, this.subtitle = '', required this.run});
+  const _Command({
+    required this.id,
+    required this.title,
+    this.subtitle = '',
+    this.shortcut = '',
+    required this.run,
+  });
 }
 
 /// Assemble the command list against the live [ref] + [context]. Built fresh
@@ -59,50 +82,70 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
     shell.set(ShellSection.design);
   }
 
+  // Enable one annotation mode on the Layout canvas, mirroring the draw
+  // toolbar's exclusive toggle exactly: the three modes are mutually exclusive
+  // and turning one on collapses the draw tool to Select.
+  void enableMode({bool measure = false, bool tank = false, bool room = false}) {
+    openDesign(WorkspaceView.plan);
+    ref.read(measureModeProvider.notifier).set(measure);
+    ref.read(tankModeProvider.notifier).set(tank);
+    ref.read(roomModeProvider.notifier).set(room);
+    net.setTool(DrawTool.select);
+  }
+
   return [
     // — Switch the DESIGN workspace view —
     _Command(
+      id: 'view.layout',
       title: 'Go to Layout',
       subtitle: 'Design view',
       run: () => openDesign(WorkspaceView.plan),
     ),
     _Command(
+      id: 'view.riser',
       title: 'Go to Riser',
       subtitle: 'Vertical riser / elevation editor',
       run: () => openDesign(WorkspaceView.schematic),
     ),
     _Command(
+      id: 'view.electrical',
       title: 'Go to Electrical',
       subtitle: 'Design view',
       run: () => openDesign(WorkspaceView.electrical),
     ),
     _Command(
+      id: 'view.review',
       title: 'Go to Review',
       subtitle: 'Show issues + summaries',
       run: () => shell.set(ShellSection.review),
     ),
     _Command(
+      id: 'view.issues',
       title: 'Show issues',
       subtitle: 'Open the Review hub',
       run: () => shell.set(ShellSection.review),
     ),
     _Command(
+      id: 'view.commercial',
       title: 'Go to Commercial',
       subtitle: 'BOM + quotation',
       run: () => shell.set(ShellSection.commercial),
     ),
     _Command(
+      id: 'view.building',
       title: 'Go to Building',
       subtitle: 'Floors + occupancy',
       run: () => shell.set(ShellSection.building),
     ),
     _Command(
+      id: 'view.preferences',
       title: 'Go to Preferences',
       run: () => shell.set(ShellSection.preferences),
     ),
     // — Toggle a discipline layer on the Layout canvas —
     for (final layer in DisciplineLayer.values)
       _Command(
+        id: 'layer.toggle.${layer.name}',
         title: 'Toggle ${layer.label} layer',
         subtitle: 'Layout visibility',
         run: () {
@@ -112,6 +155,7 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       ),
     for (final layer in DisciplineLayer.values)
       _Command(
+        id: 'layer.edit.${layer.name}',
         title: 'Edit ${layer.label} layer',
         subtitle: 'Make it the active layer',
         run: () {
@@ -119,13 +163,15 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
           active.set(layer);
         },
       ),
-    // — Pick a draw tool —
+    // — Pick a draw / annotation tool —
     _Command(
+      id: 'tool.select',
       title: 'Tool: Select',
       subtitle: 'Draw tool',
       run: () => net.setTool(DrawTool.select),
     ),
     _Command(
+      id: 'tool.run',
       title: 'Tool: Draw run',
       subtitle: 'Draw tool',
       run: () {
@@ -134,6 +180,7 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       },
     ),
     _Command(
+      id: 'tool.riser',
       title: 'Tool: Draw riser',
       subtitle: 'Draw tool',
       run: () {
@@ -141,18 +188,54 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
         net.setTool(DrawTool.drawRiser);
       },
     ),
+    _Command(
+      id: 'tool.measure',
+      title: 'Tool: Measure',
+      subtitle: 'Dimension a distance on the plan',
+      run: () => enableMode(measure: true),
+    ),
+    _Command(
+      id: 'tool.tank',
+      title: 'Tool: Tank area',
+      subtitle: 'Draw a tank / reservoir footprint',
+      run: () => enableMode(tank: true),
+    ),
+    _Command(
+      id: 'tool.room',
+      title: 'Tool: Room area',
+      subtitle: 'Draw a room footprint for air sizing',
+      run: () => enableMode(room: true),
+    ),
+    // — Edit —
+    _Command(
+      id: 'edit.undo',
+      title: 'Undo',
+      subtitle: 'Revert the most recent edit',
+      shortcut: 'Ctrl+Z',
+      run: () => ref.read(historyProvider.notifier).undo(),
+    ),
+    _Command(
+      id: 'edit.redo',
+      title: 'Redo',
+      subtitle: 'Reapply the undone edit',
+      shortcut: 'Ctrl+Y',
+      run: () => ref.read(historyProvider.notifier).redo(),
+    ),
     // — Actions —
     _Command(
+      id: 'ai.ask',
       title: 'Ask Claude',
       subtitle: 'Design or change the selection with AI',
       run: () => ref.read(copilotOpenProvider.notifier).open(),
     ),
     _Command(
+      id: 'net.clear',
       title: 'Clear drawing',
       subtitle: 'Remove all drawn elements (undoable)',
       run: net.clear,
     ),
     _Command(
+      id: 'floor.dupUp',
       title: 'Duplicate floor up',
       subtitle: "Copy this floor's runs to the floor above",
       run: () {
@@ -183,11 +266,19 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       },
     ),
     _Command(
+      id: 'floor.dupRange',
+      title: 'Duplicate floor to…',
+      subtitle: "Copy a floor's runs onto a range of floors",
+      run: () => showDuplicateFloorDialog(context),
+    ),
+    _Command(
+      id: 'project.template',
       title: 'Apply building template',
       subtitle: 'Prefill floors / occupancy on the current project',
       run: () => showTemplatesDialog(context),
     ),
     _Command(
+      id: 'calibrate.start',
       title: 'Start calibration',
       subtitle: 'Mark a known distance on the sheet',
       run: () {
@@ -195,34 +286,105 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
         ref.read(calibrationControllerProvider.notifier).start();
       },
     ),
+    // — Deliverable exports —
     _Command(
+      id: 'export.calc',
       title: 'Export calculation report',
       subtitle: 'Markdown',
       run: () => exportCalcReport(ref),
     ),
     _Command(
+      id: 'export.calcPdf',
+      title: 'Export calculation report (PDF)',
+      subtitle: 'Typeset A4 PDF',
+      run: () => exportCalcReportPdf(ref),
+    ),
+    _Command(
+      id: 'export.mep',
+      title: 'Export unified MEP report',
+      subtitle: 'Markdown — mechanical + electrical',
+      run: () => exportMepUnifiedReport(ref),
+    ),
+    _Command(
+      id: 'export.mepPdf',
+      title: 'Export unified MEP report (PDF)',
+      subtitle: 'Typeset A4 PDF — mechanical + electrical',
+      run: () => exportMepUnifiedReportPdf(ref),
+    ),
+    _Command(
+      id: 'export.equip',
+      title: 'Export equipment schedule',
+      subtitle: 'Markdown + CSV',
+      run: () => exportEquipmentSchedule(ref),
+    ),
+    _Command(
+      id: 'export.equipPdf',
+      title: 'Export equipment schedule (PDF)',
+      subtitle: 'Typeset A4 PDF',
+      run: () => exportEquipmentSchedulePdf(ref),
+    ),
+    _Command(
+      id: 'export.dxf',
+      title: 'Export drawing (DXF)',
+      subtitle: 'Current sheet — vector CAD',
+      run: () => exportDrawingDxf(ref),
+    ),
+    _Command(
+      id: 'export.pdf',
+      title: 'Export drawing (PDF)',
+      subtitle: 'Current sheet — vector',
+      run: () => exportDrawingPdf(ref),
+    ),
+    _Command(
+      id: 'export.planPdf',
+      title: 'Export annotated plan (PDF)',
+      subtitle: 'Current sheet — with lengths + title block',
+      run: () => exportAnnotatedPlanPdf(ref),
+    ),
+    // — Project file —
+    _Command(
+      id: 'project.new',
       title: 'New project',
       subtitle: 'Start a blank project (guards unsaved work)',
       run: () => newProject(context, ref),
     ),
+    _Command(
+      id: 'project.import',
+      title: 'Import plan',
+      subtitle: 'Add a PDF / DXF / DWG floor plan',
+      run: () => importPlan(context, ref),
+    ),
+    _Command(
+      id: 'project.open',
+      title: 'Open project',
+      subtitle: 'Open a .mechx project',
+      shortcut: 'Ctrl+O',
+      run: () => openProject(context, ref),
+    ),
     // Reopen a recent project without the OS file dialog (machine-local MRU).
     for (final e in ref.read(appSettingsProvider).mru.take(6))
       _Command(
+        id: 'project.recent.${e.path}',
         title: 'Open recent: ${e.name}',
         subtitle: 'Recent project',
         run: () => openProjectPath(context, ref, e.path),
       ),
     _Command(
+      id: 'project.save',
       title: 'Save project',
-      subtitle: 'Ctrl+S — saves to the open file',
+      subtitle: 'Saves to the open file',
+      shortcut: 'Ctrl+S',
       run: () => saveProject(ref),
     ),
     _Command(
+      id: 'project.saveAs',
       title: 'Save project as...',
-      subtitle: 'Ctrl+Shift+S — pick a new file',
+      subtitle: 'Pick a new file',
+      shortcut: 'Ctrl+Shift+S',
       run: () => saveProject(ref, saveAs: true),
     ),
     _Command(
+      id: 'theme.toggle',
       title: 'Toggle light / dark',
       run: () => ref.read(brightnessProvider.notifier).toggle(),
     ),
@@ -292,19 +454,48 @@ class _PaletteCardState extends ConsumerState<_PaletteCard> {
 
   List<_Command> _filtered() {
     final all = _buildCommands(ref, context);
-    if (_query.trim().isEmpty) return all;
-    final scored = <(int, _Command)>[];
-    for (final c in all) {
-      final s = fuzzyScore(_query, c.title);
-      if (s != null) scored.add((s, c));
+    final recent = ref.read(recentCommandsProvider);
+    // Recency rank: 0 = most-recently-run, larger = older, huge = never run.
+    int recencyRank(_Command c) {
+      final i = recent.indexOf(c.id);
+      return i < 0 ? 1 << 30 : i;
     }
-    scored.sort((a, b) => b.$1.compareTo(a.$1));
-    return scored.map((e) => e.$2).toList(growable: false);
+
+    if (_query.trim().isEmpty) {
+      // No query: keep registration order but hoist recently-run commands to
+      // the top. Carry the original index so the sort is deterministic (Dart's
+      // List.sort isn't guaranteed stable).
+      final indexed = <(int, _Command)>[
+        for (var i = 0; i < all.length; i++) (i, all[i]),
+      ];
+      indexed.sort((a, b) {
+        final ra = recencyRank(a.$2);
+        final rb = recencyRank(b.$2);
+        if (ra != rb) return ra.compareTo(rb);
+        return a.$1.compareTo(b.$1);
+      });
+      return indexed.map((e) => e.$2).toList(growable: false);
+    }
+    // With a query: rank by fuzzy score over title AND subtitle, breaking ties
+    // by recency (a recently-run command wins an equal-score tie).
+    final scored = <(int, int, _Command)>[];
+    for (final c in all) {
+      final s = commandMatchScore(_query, c.title, c.subtitle);
+      if (s != null) scored.add((s, recencyRank(c), c));
+    }
+    scored.sort((a, b) {
+      if (a.$1 != b.$1) return b.$1.compareTo(a.$1);
+      return a.$2.compareTo(b.$2);
+    });
+    return scored.map((e) => e.$3).toList(growable: false);
   }
 
   void _runAt(List<_Command> list, int index) {
     if (list.isEmpty) return;
     final i = index.clamp(0, list.length - 1);
+    // Record the run BEFORE closing (which disposes this state) so the next
+    // open hoists it to the top.
+    ref.read(recentCommandsProvider.notifier).record(list[i].id);
     _close();
     list[i].run();
   }
@@ -477,6 +668,24 @@ class _CommandRow extends StatelessWidget {
                 Text(
                   command.subtitle,
                   style: type.caption.copyWith(color: colors.textMuted),
+                ),
+              ],
+              // Right-aligned keyboard-shortcut hint (a keycap), for the rows
+              // that have a global accelerator.
+              if (command.shortcut.isNotEmpty) ...[
+                const SizedBox(width: MechXSpacing.sm),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: MechXSpacing.xs, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: colors.surfaceHover,
+                    borderRadius: MechXRadii.small,
+                    border: Border.all(color: colors.border),
+                  ),
+                  child: Text(
+                    command.shortcut,
+                    style: type.micro.copyWith(color: colors.textSecondary),
+                  ),
                 ),
               ],
             ],

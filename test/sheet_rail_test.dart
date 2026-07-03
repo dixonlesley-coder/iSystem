@@ -47,10 +47,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Replace plan…'), findsOneWidget);
+    // E4: the per-sheet menu also offers duplicating the floor's runs.
+    expect(find.text('Duplicate to…'), findsOneWidget);
 
     // Tapping the dismiss barrier closes it again.
     await tester.tapAt(const Offset(600, 400));
     await tester.pumpAndSettle();
     expect(find.text('Replace plan…'), findsNothing);
+    expect(find.text('Duplicate to…'), findsNothing);
   });
 }

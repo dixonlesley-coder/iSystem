@@ -13,6 +13,7 @@ import '../widgets/hub_scaffold.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_text_field.dart';
+import '../widgets/stepped_value_field.dart';
 
 /// The dedicated **Building** page — the floor/level model on its own screen
 /// (lifted out of the right inspector so the canvas isn't crowded). Each level
@@ -61,6 +62,7 @@ class BuildingScreen extends ConsumerWidget {
             onRename: (name) => ctrl.renameFloor(i, name),
             onHeightMinus: () => ctrl.nudgeFloorHeight(i, -0.1),
             onHeightPlus: () => ctrl.nudgeFloorHeight(i, 0.1),
+            onHeightSet: (m) => ctrl.setFloorHeight(i, Length(m)),
             onPickSheet: sheetsState.sheets.isEmpty
                 ? null
                 : () => _pickSheetForFloor(context, ref, i),
@@ -71,9 +73,25 @@ class BuildingScreen extends ConsumerWidget {
           const SizedBox(height: MechXSpacing.sm),
         ],
         const SizedBox(height: MechXSpacing.xs),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: MechXButton(label: '+  Add level', onPressed: ctrl.addFloor),
+        Row(
+          children: [
+            MechXButton(label: '+  Add level', onPressed: ctrl.addFloor),
+            const SizedBox(width: MechXSpacing.sm),
+            // Bulk add — a whole tower of identical typical floors in one undo
+            // step (D4) via a single setFloors call.
+            Expanded(
+              child: _AddLevelsRow(
+                onAdd: (count, heightM) {
+                  final base = project.floors.length;
+                  ctrl.setFloors([
+                    ...project.floors,
+                    for (var k = 0; k < count; k++)
+                      Floor('Level ${base + k}', Length(heightM)),
+                  ]);
+                },
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -98,6 +116,7 @@ class _LevelCard extends StatelessWidget {
   final ValueChanged<String> onRename;
   final VoidCallback onHeightMinus;
   final VoidCallback onHeightPlus;
+  final ValueChanged<double> onHeightSet;
   final VoidCallback? onPickSheet;
   final VoidCallback? onRemove;
 
@@ -108,6 +127,7 @@ class _LevelCard extends StatelessWidget {
     required this.onRename,
     required this.onHeightMinus,
     required this.onHeightPlus,
+    required this.onHeightSet,
     required this.onPickSheet,
     required this.onRemove,
   });
@@ -144,11 +164,31 @@ class _LevelCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: MechXSpacing.sm),
-          _StepperRow(
-            label: 'Floor-to-floor height',
-            value: '${floor.height.meters.toStringAsFixed(1)} m',
-            onMinus: onHeightMinus,
-            onPlus: onHeightPlus,
+          // Floor-to-floor height — the §10 source of truth for riser length.
+          // A shared type-in stepper (D4): click the value to type, or ±0.1 m
+          // with hold-repeat; commit via setFloorHeight.
+          Row(
+            children: [
+              Expanded(
+                child: Text('Floor-to-floor height',
+                    style: type.body.copyWith(color: colors.textSecondary)),
+              ),
+              SteppedValueField(
+                display: '${floor.height.meters.toStringAsFixed(1)} m',
+                editSeed: floor.height.meters.toStringAsFixed(1),
+                gap: MechXSpacing.sm,
+                valueWidth: 84,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0.5,
+                max: 20.0,
+                onDecrement: onHeightMinus,
+                onIncrement: onHeightPlus,
+                onSubmit: (v) {
+                  if (v != null) onHeightSet(v);
+                },
+              ),
+            ],
           ),
           const SizedBox(height: MechXSpacing.xs),
           // The PDF page assigned to this level.
@@ -183,41 +223,74 @@ class _LevelCard extends StatelessWidget {
   }
 }
 
-/// A labelled −/value/+ stepper row.
-class _StepperRow extends StatelessWidget {
-  final String label;
-  final String value;
-  final VoidCallback onMinus;
-  final VoidCallback onPlus;
+/// Bulk-add row (D4): "Add N levels @ H m" — a whole tower of identical typical
+/// floors added on top in ONE undo step (a single `setFloors` call). N and H are
+/// shared type-in steppers; the button appends N floors at height H.
+class _AddLevelsRow extends StatefulWidget {
+  final void Function(int count, double heightM) onAdd;
+  const _AddLevelsRow({required this.onAdd});
 
-  const _StepperRow({
-    required this.label,
-    required this.value,
-    required this.onMinus,
-    required this.onPlus,
-  });
+  @override
+  State<_AddLevelsRow> createState() => _AddLevelsRowState();
+}
+
+class _AddLevelsRowState extends State<_AddLevelsRow> {
+  int _count = 1;
+  double _height = 3.5;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return Row(
-      children: [
-        Expanded(
-          child: Text(label,
-              style: type.body.copyWith(color: colors.textSecondary)),
-        ),
-        _GlyphButton(glyph: '−', onTap: onMinus),
-        SizedBox(
-          width: 84,
-          child: Text(
-            value,
-            textAlign: TextAlign.center,
-            style: type.mono.copyWith(color: colors.textPrimary),
+    Text label(String s) =>
+        Text(s, style: type.body.copyWith(color: colors.textSecondary));
+    return Container(
+      padding: const EdgeInsets.symmetric(
+          horizontal: MechXSpacing.md, vertical: MechXSpacing.sm),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        border: Border.all(color: colors.border),
+      ),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: MechXSpacing.sm,
+        runSpacing: MechXSpacing.xs,
+        children: [
+          label('Add'),
+          SteppedValueField(
+            display: '$_count',
+            editSeed: '$_count',
+            gap: MechXSpacing.xs,
+            min: 1,
+            max: 50,
+            onDecrement: () =>
+                setState(() => _count = (_count - 1).clamp(1, 50)),
+            onIncrement: () =>
+                setState(() => _count = (_count + 1).clamp(1, 50)),
+            onSubmit: (v) => setState(
+                () => _count = v == null ? _count : v.round().clamp(1, 50)),
           ),
-        ),
-        _GlyphButton(glyph: '+', onTap: onPlus),
-      ],
+          label('levels @'),
+          SteppedValueField(
+            display: '${_height.toStringAsFixed(1)} m',
+            editSeed: _height.toStringAsFixed(1),
+            gap: MechXSpacing.xs,
+            min: 0.5,
+            max: 20.0,
+            onDecrement: () => setState(
+                () => _height = (_height - 0.5).clamp(0.5, 20.0)),
+            onIncrement: () => setState(
+                () => _height = (_height + 0.5).clamp(0.5, 20.0)),
+            onSubmit: (v) => setState(
+                () => _height = v == null ? _height : v.clamp(0.5, 20.0)),
+          ),
+          MechXButton(
+            label: 'Add',
+            onPressed: () => widget.onAdd(_count, _height),
+          ),
+        ],
+      ),
     );
   }
 }

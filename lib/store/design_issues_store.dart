@@ -231,6 +231,25 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
+  // ── 2c. Stranded air terminals: carry airflow but no duct (warning) ─────────
+  // A node carrying a design airflow with ZERO incident edges is invisible to
+  // duct sizing, to connectivity (its node set is built from edges) and to the
+  // BOM — its air is silently stranded. 'Auto-place diffusers' drops exactly
+  // such terminals (unwired until a supply trunk is routed), so surfacing them
+  // closes that trap. Locatable to the terminal's own sheet.
+  for (final n in net.nodes) {
+    if (n.airflow == null || net.edgesAt(n.id).isNotEmpty) continue;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      title: 'Diffuser not connected to any duct',
+      message: 'This air terminal carries a design airflow but has no duct '
+          'connected — its demand is invisible to duct sizing and the BOM. '
+          'Route a duct to it (or wire the supply trunk after auto-placing '
+          'diffusers).',
+      locate: IssueLocation(n.sheetId, nodeId: n.id),
+    ));
+  }
+
   // ── 3. Uncalibrated sheets (warning, or CRITICAL when edges are drawn) ───────
   // An uncalibrated sheet that already carries drawn runs is a BLOCKER: every
   // run on it sizes to ZERO length (edgeLength returns Length(0) for an

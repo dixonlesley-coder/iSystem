@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
@@ -20,6 +21,7 @@ import 'package:mechx_engine/report/report_strings.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
+import 'package:mechx_engine/sizing/duct_sizing.dart' show standardDuctDiametersMm;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
@@ -28,6 +30,7 @@ import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
+import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
@@ -52,10 +55,12 @@ import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
 import '../../store/solve_store.dart';
+import '../canvas/edge_context_menu.dart' show npsLabel;
 import '../canvas/segment_palette.dart';
 import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
 import '../electrical/electrical_export.dart' show breakerIcuKaByPanel;
+import '../format/scale_format.dart';
 import '../schematic/schematic_export.dart' show buildLiveRiserSheet;
 import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
@@ -874,6 +879,11 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
                   final floor =
                       sheetsState.floorFor(currentSheet.id, building.levelCount);
                   final floorName = building.floors[floor].name;
+                  final last = building.levelCount - 1;
+                  void mapTo(int f) => ref
+                      .read(sheetsControllerProvider.notifier)
+                      .setSheetFloor(
+                          currentSheet.id, f.clamp(0, last));
                   return Row(
                     children: [
                       Expanded(
@@ -882,26 +892,21 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
                             style:
                                 type.caption.copyWith(color: colors.textMuted)),
                       ),
-                      _GlyphButton(
-                        glyph: '−',
-                        onTap: floor > 0
-                            ? () => ref
-                                .read(sheetsControllerProvider.notifier)
-                                .setSheetFloor(currentSheet.id, floor - 1)
-                            : null,
-                      ),
-                      const SizedBox(width: MechXSpacing.xs),
-                      Text(floorName,
-                          style:
-                              type.mono.copyWith(color: colors.textSecondary)),
-                      const SizedBox(width: MechXSpacing.xs),
-                      _GlyphButton(
-                        glyph: '+',
-                        onTap: floor < building.levelCount - 1
-                            ? () => ref
-                                .read(sheetsControllerProvider.notifier)
-                                .setSheetFloor(currentSheet.id, floor + 1)
-                            : null,
+                      // Type-in (or ±1) floor mapping (D5): the display keeps the
+                      // level NAME; typing a 1-based level number remaps the
+                      // sheet, clamped to 1..levelCount.
+                      SteppedValueField(
+                        display: floorName,
+                        editSeed: '${floor + 1}',
+                        gap: MechXSpacing.xs,
+                        valueColor: colors.textSecondary,
+                        min: 1,
+                        max: building.levelCount.toDouble(),
+                        onDecrement: floor > 0 ? () => mapTo(floor - 1) : null,
+                        onIncrement: floor < last ? () => mapTo(floor + 1) : null,
+                        onSubmit: (v) {
+                          if (v != null) mapTo(v.round() - 1);
+                        },
                       ),
                     ],
                   );
@@ -936,7 +941,10 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
                       child: Text(
                         calibration == null
                             ? 'Not calibrated'
-                            : '1 px = ${calibration.metersPerPixel.toStringAsExponential(2)} m',
+                            // One shared human readout (D1): PDF sheets lead with
+                            // the plotted `1 : N`, else `1 m = N px`.
+                            : formatScaleReadout(calibration.metersPerPixel,
+                                isPdf: currentSheet?.pdfPath != null),
                         style: type.caption.copyWith(color: colors.textSecondary),
                       ),
                     ),
@@ -955,24 +963,31 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
                         ref.read(calibrationControllerProvider.notifier).start(),
                   ),
                 ),
-                // QoL: once this sheet is calibrated, stamp its scale onto every
-                // other sheet in one undo step (typical floors share a scale).
+                // Second scale path (D1): type the drawing's STATED plot scale
+                // (1 : N). A plotted PDF's pixels are points at 72/inch, so
+                // `metersPerPixel = N × 0.0254 / 72` — exact, no measuring. Only
+                // meaningful for PDF sheets; a normalized DXF/DWG pixel has no
+                // paper-unit basis, so those keep the two-point measure only.
+                if (currentSheet.pdfPath != null) ...[
+                  const SizedBox(height: MechXSpacing.sm),
+                  _PdfScaleTypeIn(
+                    sheetId: currentSheet.id,
+                    calibration: calibration,
+                  ),
+                ],
+                // QoL: once this sheet is calibrated, stamp its scale onto other
+                // sheets in one undo step (typical floors share a scale) —
+                // defaulting to UNCALIBRATED sheets only, confirming before it
+                // would overwrite a sheet's own DIFFERENT scale, and reporting
+                // the count (D2).
                 if (calibration != null) ...[
                   const SizedBox(height: MechXSpacing.sm),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: MechXButton(
                       label: 'Apply scale to all sheets',
-                      onPressed: () => ref
-                          .read(projectControllerProvider.notifier)
-                          .applyCalibrationToAllSheets(
-                            currentSheet.id,
-                            toSheetIds: ref
-                                .read(sheetsControllerProvider)
-                                .sheets
-                                .map((s) => s.id)
-                                .toSet(),
-                          ),
+                      onPressed: () =>
+                          _applyScaleToAllSheets(context, ref, currentSheet.id),
                     ),
                   ),
                 ],
@@ -980,6 +995,214 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
             ],
           ),
         ),
+    );
+  }
+}
+
+/// The engineer's choice when "Apply scale to all sheets" would overwrite sheets
+/// that already carry their own DIFFERENT scale (D2).
+enum _ScaleApplyChoice { overwriteAll, keepSeparate, cancel }
+
+/// Apply [fromSheetId]'s scale to the other sheets (D2). Safe by default —
+/// stamps UNCALIBRATED sheets only; if some sheets carry their OWN different
+/// scale it asks before overwriting them; always finishes with a status pill
+/// reporting the count.
+Future<void> _applyScaleToAllSheets(
+    BuildContext context, WidgetRef ref, String fromSheetId) async {
+  final proj = ref.read(projectControllerProvider);
+  final allIds =
+      ref.read(sheetsControllerProvider).sheets.map((s) => s.id).toSet();
+  final uncalibrated = proj.uncalibratedAmong(allIds, exclude: fromSheetId);
+  final different = proj.differentlyCalibratedFrom(fromSheetId, allIds);
+
+  var targets = uncalibrated;
+  if (different.isNotEmpty) {
+    final choice = await _confirmScaleApply(context, different.length);
+    if (!context.mounted) return;
+    switch (choice) {
+      case null:
+      case _ScaleApplyChoice.cancel:
+        return; // abort — do nothing
+      case _ScaleApplyChoice.keepSeparate:
+        targets = uncalibrated; // safe subset only
+      case _ScaleApplyChoice.overwriteAll:
+        targets = {...uncalibrated, ...different};
+    }
+  }
+
+  void status(String m) =>
+      ref.read(statusMessageProvider.notifier).showStatus(m);
+  if (targets.isEmpty) {
+    status('All other sheets already use this scale');
+    return;
+  }
+  final n = ref.read(projectControllerProvider.notifier).applyCalibrationToAllSheets(
+        fromSheetId,
+        toSheetIds: {fromSheetId, ...targets},
+      );
+  status('Scale applied to $n ${n == 1 ? 'sheet' : 'sheets'}');
+}
+
+/// Ask before overwriting [count] sheets that carry their own different scale
+/// (D2). A themed [showGeneralDialog] card (no Material) — dismiss / Esc resolves
+/// to null (treated as cancel).
+Future<_ScaleApplyChoice?> _confirmScaleApply(BuildContext context, int count) {
+  final theme = MechXTheme.of(context);
+  final noun = count == 1 ? 'sheet has' : 'sheets have';
+  return showGeneralDialog<_ScaleApplyChoice>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Apply scale',
+    barrierColor: theme.colors.scrim,
+    transitionDuration: MechXMotion.appear,
+    pageBuilder: (ctx, _, _) => MechXTheme(
+      data: theme,
+      child: Center(
+        child: Builder(builder: (ctx) {
+          final colors = ctx.colors;
+          final type = ctx.type;
+          void pop(_ScaleApplyChoice c) => Navigator.of(ctx).pop(c);
+          return Container(
+            width: 420,
+            padding: const EdgeInsets.all(MechXSpacing.lg),
+            decoration: BoxDecoration(
+              color: colors.surface,
+              borderRadius: MechXRadii.card,
+              boxShadow: MechXShadow.popover,
+              border: Border.all(color: colors.border),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Overwrite different scales?',
+                    style: type.title.copyWith(color: colors.textPrimary)),
+                const SizedBox(height: MechXSpacing.xs),
+                Text(
+                  '$count $noun their own scale. Overwrite them with this '
+                  'sheet\'s scale, or apply only to the uncalibrated sheets?',
+                  style: type.caption.copyWith(color: colors.textMuted),
+                ),
+                const SizedBox(height: MechXSpacing.md),
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: MechXSpacing.sm,
+                  runSpacing: MechXSpacing.xs,
+                  children: [
+                    MechXButton(
+                      label: 'Cancel',
+                      tertiary: true,
+                      onPressed: () => pop(_ScaleApplyChoice.cancel),
+                    ),
+                    MechXButton(
+                      label: 'Uncalibrated only',
+                      onPressed: () => pop(_ScaleApplyChoice.keepSeparate),
+                    ),
+                    MechXButton(
+                      label: 'Overwrite all',
+                      primary: true,
+                      onPressed: () => pop(_ScaleApplyChoice.overwriteAll),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }),
+      ),
+    ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(parent: anim, curve: MechXMotion.standard);
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
+/// The `1 : N` drawing-scale type-in (D1) — the second calibration path beside
+/// the two-point measure, for PDF sheets (whose pixels are points at 72/inch).
+/// Type the drawing's stated plot scale, or tap a common preset; commits via
+/// [ProjectController.setCalibration] and reports the resolved scale.
+class _PdfScaleTypeIn extends ConsumerStatefulWidget {
+  final String sheetId;
+  final ScaleCalibration? calibration;
+  const _PdfScaleTypeIn({required this.sheetId, required this.calibration});
+
+  @override
+  ConsumerState<_PdfScaleTypeIn> createState() => _PdfScaleTypeInState();
+}
+
+class _PdfScaleTypeInState extends ConsumerState<_PdfScaleTypeIn> {
+  late String _text = _seed();
+
+  String _seed() {
+    final cal = widget.calibration;
+    if (cal == null) return '';
+    return pdfScaleDenominatorFor(cal.metersPerPixel).round().toString();
+  }
+
+  void _apply() {
+    final n = double.tryParse(_text.trim());
+    if (n == null || n <= 0) return;
+    final mpp = metersPerPixelForPdfScale(n);
+    ref
+        .read(projectControllerProvider.notifier)
+        .setCalibration(widget.sheetId, ScaleCalibration(mpp));
+    ref.read(statusMessageProvider.notifier).showStatus(
+        'Scale set: ${formatScaleReadout(mpp, isPdf: true)}');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Or type the drawing scale',
+            style: type.caption.copyWith(color: colors.textMuted)),
+        const SizedBox(height: MechXSpacing.xs),
+        Row(
+          children: [
+            Text('1 :', style: type.body.copyWith(color: colors.textSecondary)),
+            const SizedBox(width: MechXSpacing.xs),
+            SizedBox(
+              width: 88,
+              child: MechXTextField(
+                value: _text,
+                hint: '100',
+                textStyle: type.mono,
+                keyboardType: const TextInputType.numberWithOptions(),
+                onChanged: (v) => setState(() => _text = v),
+                onSubmitted: _apply,
+              ),
+            ),
+            const SizedBox(width: MechXSpacing.sm),
+            MechXButton(label: 'Set scale', onPressed: _apply),
+          ],
+        ),
+        const SizedBox(height: MechXSpacing.xs),
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            for (final d in kCommonPdfScaleDenominators)
+              _Pill(
+                label: '1:$d',
+                selected: _text.trim() == '$d',
+                onTap: () {
+                  setState(() => _text = '$d');
+                  _apply();
+                },
+              ),
+          ],
+        ),
+      ],
     );
   }
 }

@@ -38,6 +38,32 @@ class CommandPaletteController extends Notifier<bool> {
   void toggle() => state = !state;
 }
 
+/// The stable ids of recently-run palette commands, most-recent first, capped
+/// at [RecentCommandsController.max]. Session-transient by design (a fresh
+/// launch starts empty), so the palette-closed goldens are unaffected — this
+/// only hoists frequently used actions toward the top of the list and breaks
+/// score ties, never adds or removes a command.
+final recentCommandsProvider =
+    NotifierProvider<RecentCommandsController, List<String>>(
+  RecentCommandsController.new,
+);
+
+class RecentCommandsController extends Notifier<List<String>> {
+  /// How many recent-command ids to remember.
+  static const int max = 8;
+
+  @override
+  List<String> build() => const [];
+
+  /// Push [id] to the front of the recency list (dropping any earlier
+  /// occurrence), capped at [max]. Empty ids are ignored.
+  void record(String id) {
+    if (id.isEmpty) return;
+    final next = <String>[id, ...state.where((e) => e != id)];
+    state = next.length > max ? next.sublist(0, max) : next;
+  }
+}
+
 /// One stage of the linear MEP workflow shown in the status-bar stepper.
 enum WorkflowStage { calibrate, floors, draw, size, report }
 
@@ -163,3 +189,20 @@ int? fuzzyScore(String query, String candidate) {
 /// Whether [candidate] matches [query] under the fuzzy subsequence rule.
 bool fuzzyMatches(String query, String candidate) =>
     fuzzyScore(query, candidate) != null;
+
+/// Best fuzzy score of [query] against a command's [title] OR its [subtitle],
+/// so the palette filters/ranks on both fields (a query that only appears in
+/// the subtitle still surfaces its row). A subtitle-only hit is discounted by
+/// [_subtitlePenalty] so a genuine title match always outranks it. Returns null
+/// when neither field matches. Pure — unit-testable without a widget tree.
+int? commandMatchScore(String query, String title, [String subtitle = '']) {
+  final t = fuzzyScore(query, title);
+  final s = subtitle.isEmpty ? null : fuzzyScore(query, subtitle);
+  if (t == null && s == null) return null;
+  final ts = t ?? _noMatch;
+  final ss = s == null ? _noMatch : s - _subtitlePenalty;
+  return ts >= ss ? ts : ss;
+}
+
+const int _noMatch = -1 << 20;
+const int _subtitlePenalty = 50;
