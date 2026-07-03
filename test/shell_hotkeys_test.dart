@@ -128,10 +128,12 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
       // Generous poll: the save runs on a real Isolate + filesystem, which can
-      // take several seconds when the full suite saturates the CPU with many
-      // concurrent test isolates. A longer window never slows the pass path
-      // (it exits the moment the file lands) and avoids a load-dependent flake.
-      for (var i = 0; i < 120 && !File(path).existsSync(); i++) {
+      // take many seconds when the full suite saturates the CPU with a dozen
+      // concurrent test isolates each spawning their own save isolate. The
+      // window is deliberately wide (up to ~20 s) because it never slows the
+      // pass path — the loop exits the instant the file lands — and a too-tight
+      // ceiling was the one observed load-dependent flake in the whole suite.
+      for (var i = 0; i < 400 && !File(path).existsSync(); i++) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
       }
     });

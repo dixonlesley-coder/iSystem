@@ -1998,6 +1998,40 @@ class NetworkController extends Notifier<DrawingState> {
     );
   }
 
+  /// Stamp a SAVED ASSEMBLY ([nodes]/[edges]) centred at [world] (sheet px) on
+  /// [sheetId]/[floorIndex] — the drop of an assembly card from the palette.
+  /// Mirrors [pasteAt] but seeds the clone from the passed lists instead of the
+  /// clipboard (so dropping an assembly never disturbs the real copy/paste
+  /// clipboard). Fresh ids, ONE undo step, sets the new elements as the multi-
+  /// selection, returns their ids. No-op (empty result) when [nodes] is empty.
+  ({Set<String> nodeIds, Set<String> edgeIds}) stampAssembly(
+    List<NetNode> nodes,
+    List<NetEdge> edges, {
+    required String sheetId,
+    required int floorIndex,
+    required Offset world,
+  }) {
+    if (nodes.isEmpty) {
+      return (nodeIds: <String>{}, edgeIds: <String>{});
+    }
+    var cx = 0.0, cy = 0.0;
+    for (final n in nodes) {
+      cx += n.x;
+      cy += n.y;
+    }
+    cx /= nodes.length;
+    cy /= nodes.length;
+    final source = _Clipboard(nodes, edges);
+    final gen = _cloneClipboard(
+        source, sheetId, floorIndex, Offset(world.dx - cx, world.dy - cy));
+    _commit(Network(
+      nodes: [...state.network.nodes, ...gen.nodes],
+      edges: [...state.network.edges, ...gen.edges],
+    ));
+    ref.read(selectionProvider.notifier).setMulti(gen.nodeIds, gen.edgeIds);
+    return (nodeIds: gen.nodeIds, edgeIds: gen.edgeIds);
+  }
+
   /// Remove every node in [nodeIds] (and all edges touching them) PLUS every
   /// edge in [edgeIds], in ONE undo step. No-op when nothing matches.
   void deleteMany(Set<String> nodeIds, Set<String> edgeIds) {

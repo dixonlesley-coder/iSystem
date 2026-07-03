@@ -399,6 +399,7 @@ class _NetworkSelectionOverlayState
     const off = 15.0; // up-right of the node, clear of the move handle
     const r = 9.0;
     return Positioned(
+      key: ValueKey('outlet-$nodeId'),
       left: screen.dx + off - r,
       top: screen.dy - off - r,
       width: r * 2,
@@ -729,7 +730,13 @@ class _SelectionGestureLayerState
           );
           return;
         }
-        sel.selectEdge(edge);
+        // E1: right-clicking an edge that's part of a MULTI-selection keeps the
+        // selection intact, so the menu can batch-apply to the whole set; a
+        // right-click on an unselected edge selects just that one as before.
+        final current = ref.read(selectionProvider);
+        if (!(current.containsEdge(edge) && current.edgeIds.length > 1)) {
+          sel.selectEdge(edge);
+        }
         showEdgeContextMenu(context, ref, edge, details.globalPosition);
       },
       // Rubber-band marquee — only starts over EMPTY space (or with Shift), so a

@@ -9,6 +9,7 @@ import '../store/commercial_store.dart';
 import '../store/document_control_store.dart';
 import '../store/electrical_store.dart';
 import '../store/fire_store.dart';
+import '../store/assemblies_store.dart';
 import '../store/fixture_library_store.dart';
 import '../store/history_store.dart';
 import '../store/network_store.dart';
@@ -122,6 +123,8 @@ ProjectDocument buildDocument(ProviderReader read) {
       marginPct: commercial.marginPct,
       // The user-defined fixture library round-trips with the project.
       fixtureLibrary: read(fixtureLibraryProvider),
+      // Saved drawing assemblies (E5) round-trip with the project.
+      savedAssemblies: read(assembliesProvider),
       // The BYO AI copilot provider/key/model are MACHINE-LOCAL (kept out of the
       // shareable `.mechx` — B8): they live in `app_settings.dart`, so the
       // document carries the harmless defaults and never leaks the secret key.
@@ -225,6 +228,8 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   ));
   // Restore the user-defined fixture library (absent on an older file ⇒ empty).
   read(fixtureLibraryProvider.notifier).set(s.fixtureLibrary);
+  // Restore saved drawing assemblies (E5; absent on an older file ⇒ empty).
+  read(assembliesProvider.notifier).set(s.savedAssemblies);
   // The AI copilot provider/key/model are MACHINE-LOCAL now (B8) — never reset
   // them to a document's values. A LEGACY `.mechx` that carried the key in-file
   // is migrated ONLY into an EMPTY machine-local slot: opening a colleague's

@@ -1867,6 +1867,109 @@ void main() {
     });
   });
 
+  group('E5: stampAssembly (drop a saved block)', () {
+    ProviderContainer makeContainer() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    /// Draw a two-node run and return its nodes/edges as an assembly SOURCE
+    /// (value copies), then clear the network so the stamp lands on a blank
+    /// floor — mirrors how a SavedAssembly's stored lists arrive.
+    ({List<NetNode> nodes, List<NetEdge> edges}) captureSource(
+        ProviderContainer c) {
+      final n = c.read(networkControllerProvider.notifier);
+      n.addSegment('s1', 0, const Offset(100, 0), spanPx: 100); // ~(50,0)-(150,0)
+      final net = c.read(networkControllerProvider).network;
+      final src = (
+        nodes: [for (final nd in net.nodes) nd.copyWith()],
+        edges: [for (final e in net.edges) e.copyWith()],
+      );
+      // Wipe the network so the stamp is measured against an empty floor.
+      n.deleteMany(net.nodes.map((nd) => nd.id).toSet(), {});
+      expect(c.read(networkControllerProvider).network.nodes, isEmpty);
+      return src;
+    }
+
+    test('stamps fresh ids centred at the drop point, one undo step, selected',
+        () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      final h = c.read(historyProvider.notifier);
+      final src = captureSource(c);
+      final srcIds = src.nodes.map((nd) => nd.id).toSet();
+
+      final r = n.stampAssembly(src.nodes, src.edges,
+          sheetId: 's1', floorIndex: 0, world: const Offset(400, 300));
+      final net = c.read(networkControllerProvider).network;
+
+      expect(net.nodes.length, 2);
+      expect(net.edges.length, 1);
+      // Fresh ids — none of the source ids reused.
+      expect(net.nodes.every((nd) => !srcIds.contains(nd.id)), isTrue);
+      // Centroid lands on the drop point (source centroid was (100,0)).
+      final cx = net.nodes.map((nd) => nd.x).reduce((a, b) => a + b) / 2;
+      final cy = net.nodes.map((nd) => nd.y).reduce((a, b) => a + b) / 2;
+      expect(cx, closeTo(400, 1e-6));
+      expect(cy, closeTo(300, 1e-6));
+      // The stamped elements are the multi-selection.
+      expect(c.read(selectionProvider).nodeIds, r.nodeIds);
+      expect(r.edgeIds.length, 1);
+      // ONE undo step removes the whole stamp.
+      h.undo();
+      expect(c.read(networkControllerProvider).network.nodes, isEmpty);
+    });
+
+    test('does NOT disturb the copy/paste clipboard', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // Seed a clipboard from a drawn segment.
+      n.addSegment('s1', 0, const Offset(700, 700), spanPx: 80);
+      final seeded = c.read(networkControllerProvider).network;
+      n.copySelection(seeded.nodes.map((nd) => nd.id).toSet(),
+          seeded.edges.map((e) => e.id).toSet());
+      expect(n.hasClipboard, isTrue);
+
+      // Stamp an unrelated assembly.
+      n.stampAssembly(
+        [
+          const NetNode(
+              id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          const NetNode(
+              id: 'b', sheetId: 's1', x: 40, y: 0, floorIndex: 0),
+        ],
+        [
+          const NetEdge(
+              id: 'e',
+              fromId: 'a',
+              toId: 'b',
+              service: ServiceType.coldWater),
+        ],
+        sheetId: 's1',
+        floorIndex: 0,
+        world: const Offset(200, 200),
+      );
+
+      // A subsequent paste still reproduces the ORIGINAL clipboard segment,
+      // proving stampAssembly left the clipboard alone.
+      final before = c.read(networkControllerProvider).network.nodes.length;
+      final pasted = n.paste(sheetId: 's1', floorIndex: 0);
+      expect(pasted.nodeIds.length, 2);
+      expect(c.read(networkControllerProvider).network.nodes.length, before + 2);
+    });
+
+    test('empty node list is a no-op', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      final r = n.stampAssembly(const [], const [],
+          sheetId: 's1', floorIndex: 0, world: const Offset(0, 0));
+      expect(r.nodeIds, isEmpty);
+      expect(r.edgeIds, isEmpty);
+      expect(c.read(networkControllerProvider).network.nodes, isEmpty);
+    });
+  });
+
   group('E8: idempotent autoPlaceRoomTerminals', () {
     const room = RoomArea(
       id: 'r0',

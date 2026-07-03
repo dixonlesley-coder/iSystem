@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 
+import '../../data/project_document.dart' show SavedAssembly;
 import '../../store/network_store.dart';
 import '../../store/sheets_store.dart';
 import '../theme/design_tokens.dart';
@@ -140,8 +141,77 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
     }
   }
 
+  /// The live drag position (LOCAL px) of a hovering ASSEMBLY card — a separate
+  /// slot from [_dragLocal] because assemblies are a distinct payload type
+  /// (`SavedAssembly`), routed through their own [DragTarget] below.
+  Offset? _assemblyLocal;
+
+  void _clearAssemblyDrag() {
+    if (_assemblyLocal != null) setState(() => _assemblyLocal = null);
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Outer target: a SAVED ASSEMBLY card. It stamps the block CENTRED at the
+    // cursor (fresh ids, one undo step, no merge — an assembly is placed whole,
+    // it does not tee/adopt), so the preview is a simple drop-zone tint + a
+    // centroid crosshair, not a snap ring. A `PaletteItem` drag is the wrong
+    // type here, so it falls through to the inner palette target unchanged.
+    return DragTarget<SavedAssembly>(
+      hitTestBehavior: HitTestBehavior.translucent,
+      onMove: (details) {
+        final local = _toLocal(details.offset);
+        if (local == null) return;
+        setState(() => _assemblyLocal = local);
+      },
+      onLeave: (_) => _clearAssemblyDrag(),
+      onAcceptWithDetails: (details) {
+        final box = context.findRenderObject() as RenderBox?;
+        if (box == null) return;
+        final world = _transform.screenToWorld(box.globalToLocal(details.offset));
+        ref.read(networkControllerProvider.notifier).stampAssembly(
+              details.data.nodes,
+              details.data.edges,
+              sheetId: widget.sheetId,
+              floorIndex: widget.floorIndex,
+              world: world,
+            );
+        _clearAssemblyDrag();
+      },
+      builder: (context, candidate, rejected) {
+        final active = candidate.isNotEmpty;
+        return Stack(
+          children: [
+            _buildPaletteTarget(context),
+            if (active)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: context.colors.accent.withAlpha(18),
+                      border: Border.all(
+                          color: context.colors.accent.withAlpha(120),
+                          width: 1.5),
+                      borderRadius: MechXRadii.card,
+                    ),
+                    child: _assemblyLocal == null
+                        ? const SizedBox.expand()
+                        : CustomPaint(
+                            painter: _AssemblyPreviewPainter(
+                              cursorLocal: _assemblyLocal!,
+                              color: context.colors.accent,
+                            ),
+                          ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildPaletteTarget(BuildContext context) {
     return DragTarget<PaletteItem>(
       hitTestBehavior: HitTestBehavior.translucent,
       onMove: (details) {
@@ -348,6 +418,34 @@ class _DropPreviewPainter extends CustomPainter {
       old.snapScreen != snapScreen ||
       old.isTee != isTee ||
       old.color != color;
+}
+
+/// Paints the ASSEMBLY drop preview: a crosshair at the cursor marking where
+/// the block's centroid will land. Deliberately lighter than the segment/point
+/// preview — an assembly stamps whole (no snap/merge), so there is no ring.
+class _AssemblyPreviewPainter extends CustomPainter {
+  final Offset cursorLocal;
+  final Color color;
+
+  _AssemblyPreviewPainter({required this.cursorLocal, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cross = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    const arm = 8.0;
+    canvas.drawLine(cursorLocal + const Offset(-arm, 0),
+        cursorLocal + const Offset(arm, 0), cross);
+    canvas.drawLine(cursorLocal + const Offset(0, -arm),
+        cursorLocal + const Offset(0, arm), cross);
+    canvas.drawCircle(cursorLocal, 4.0, cross);
+  }
+
+  @override
+  bool shouldRepaint(_AssemblyPreviewPainter old) =>
+      old.cursorLocal != cursorLocal || old.color != color;
 }
 
 /// Closest point on segment a→b to p (all world px).

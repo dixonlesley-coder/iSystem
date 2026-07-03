@@ -245,10 +245,9 @@ class SegmentPalette extends ConsumerWidget {
 
         // ── Saved assemblies / blocks (E5) — re-stampable groups ─────────────
         // A drag re-instantiates the block's nodes/edges with fresh ids at the
-        // drop point. NOTE: the drop CONSUMPTION is a cross-package seam —
-        // `drop_overlay.dart` currently only accepts `DragTarget<PaletteItem>`,
-        // and stamping needs `NetworkController.stampAssembly` (both FLAGGED, not
-        // owned here). Until those land these cards drag but the drop is a no-op.
+        // drop point: `drop_overlay.dart` accepts the `DragTarget<SavedAssembly>`
+        // and routes it to `NetworkController.stampAssembly` (centroid→cursor,
+        // fresh ids, one undo step, the stamped elements left selected).
         if (assemblies.isNotEmpty) ...[
           const SizedBox(height: MechXSpacing.xs),
           const MechXSectionLabel('Assemblies'),
