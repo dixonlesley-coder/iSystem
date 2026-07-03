@@ -3,7 +3,11 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/units.dart';
 
+import '../../data/app_settings.dart';
 import '../../data/autosave.dart';
 import '../../data/dwg_converter.dart';
 import '../../data/dwg_import.dart';
@@ -45,6 +49,40 @@ Future<bool> confirmDiscardIfDirty(BuildContext context, WidgetRef ref) async {
     case null:
       return false;
   }
+}
+
+/// File → New: after a dirty-guard, replace the live state with a virgin
+/// project — [applyDocument] resets every store (including electrical + the undo
+/// timeline). The file identity is forgotten so the next Save prompts for a
+/// location, and the machine-level language/theme are preserved (a New project
+/// keeps the engineer's app-level preference rather than resetting it).
+Future<void> newProject(BuildContext context, WidgetRef ref) async {
+  if (!await confirmDiscardIfDirty(context, ref)) return;
+  // The virgin floor stack mirrors ProjectController.build()'s default; the
+  // presentation settings echo the CURRENT locale/theme so applyDocument
+  // (which restores those from the document) leaves the user's preference put.
+  final doc = ProjectDocument(
+    projectName: 'Untitled project',
+    floors: const [
+      Floor('Ground', Length(4.0)),
+      Floor('Level 1', Length(3.5)),
+      Floor('Level 2', Length(3.5)),
+    ],
+    calibrations: const {},
+    sheets: const [],
+    network: const Network(),
+    settings: DesignSettings(
+      brightness: ref.read(brightnessProvider),
+      localeCode: ref.read(localeProvider).name,
+    ),
+  );
+  applyDocument(ref.read, doc);
+  ref.read(currentProjectPathProvider.notifier).set(null);
+  ref.read(lastSavedSignatureProvider.notifier).set(null);
+  ref.read(autosaveMirrorProvider.notifier).clear();
+  ref.read(projectDirtyProvider.notifier).set(false);
+  ref.read(loadErrorProvider.notifier).clear();
+  ref.read(statusMessageProvider.notifier).showStatus('New project');
 }
 
 /// Pick and import a PDF / DXF / DWG floor plan into the sheet rail.
@@ -132,6 +170,9 @@ Future<void> saveProject(WidgetRef ref, {bool saveAs = false}) async {
 Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   final project = ref.read(projectControllerProvider);
   final doc = buildDocument(ref.read);
+  // The project's identity BEFORE this save — its recovery slot is cleared too
+  // (a Save-As changes the slot; the pre-save snapshot lived under the old one).
+  final priorPath = ref.read(currentProjectPathProvider);
   var full = saveAs ? null : ref.read(currentProjectPathProvider);
   if (full == null) {
     final path = await FilePicker.saveFile(
@@ -176,8 +217,12 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   ref.read(autosaveMirrorProvider.notifier).clear();
   ref.read(currentProjectPathProvider.notifier).set(full);
   ref.read(projectDirtyProvider.notifier).set(false);
-  await clearRecovery();
+  // Drop the recovery snapshot for the prior identity, the saved file, and the
+  // shared untitled slot (a first save promotes from untitled to a named file).
+  await clearRecoverySlots([priorPath, full, null]);
   ref.read(recoveryDocProvider.notifier).clear();
+  // Remember this file in the machine-local MRU / last-open list.
+  ref.read(appSettingsProvider.notifier).recordRecent(full, project.name);
   ref
       .read(statusMessageProvider.notifier)
       .showStatus('Saved ${full.split(Platform.pathSeparator).last}');
@@ -196,6 +241,29 @@ Future<void> openProject(BuildContext context, WidgetRef ref) async {
   );
   final path = result?.files.single.path;
   if (path == null) return;
+  await _applyOpenedFile(ref, path);
+}
+
+/// Open a KNOWN `.mechx` path — a recent-projects (MRU) / reopen-last entry, no
+/// OS picker. Guards unsaved work first; a moved/deleted file surfaces an error
+/// and is pruned from the recent list rather than opening onto nothing.
+Future<void> openProjectPath(
+    BuildContext context, WidgetRef ref, String path) async {
+  if (!await confirmDiscardIfDirty(context, ref)) return;
+  if (!await File(path).exists()) {
+    ref
+        .read(loadErrorProvider.notifier)
+        .set('That project is no longer there:\n$path');
+    ref.read(appSettingsProvider.notifier).removeRecent(path);
+    return;
+  }
+  await _applyOpenedFile(ref, path);
+}
+
+/// Load the `.mechx` at [path] into the live state (shared by [openProject] and
+/// [openProjectPath]): rehydrate embedded plans, reset the clean baseline, drop
+/// this project's stale recovery slot, and record it in the machine-local MRU.
+Future<void> _applyOpenedFile(WidgetRef ref, String path) async {
   ref.read(busyProvider.notifier).set(
       MechXStringsData(ref.read(localeProvider))(StringKey.busyOpeningProject));
   try {
@@ -212,9 +280,13 @@ Future<void> openProject(BuildContext context, WidgetRef ref) async {
     ref.read(autosaveMirrorProvider.notifier).clear();
     ref.read(currentProjectPathProvider.notifier).set(path);
     ref.read(projectDirtyProvider.notifier).set(false);
-    await clearRecovery();
+    // Drop any stale crash snapshot for THIS file (and the untitled slot).
+    await clearRecoverySlots([path, null]);
     ref.read(recoveryDocProvider.notifier).clear();
     ref.read(loadErrorProvider.notifier).clear();
+    ref
+        .read(appSettingsProvider.notifier)
+        .recordRecent(path, ref.read(projectControllerProvider).name);
     ref.read(statusMessageProvider.notifier).showStatus('Project opened');
   } on ProjectDocumentException catch (e) {
     // Malformed/incompatible file — surface why, leave the project untouched.

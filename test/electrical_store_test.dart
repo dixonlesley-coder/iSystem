@@ -8,6 +8,8 @@ import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/project_store.dart';
+import 'package:mechx/ui/electrical/electrical_canvas.dart';
+import 'package:mechx/ui/electrical/electrical_palette.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/headroom.dart';
@@ -1335,10 +1337,13 @@ void main() {
 
       ctrl.syncMepEquipment(const [
         ElectricalCircuit(
-          id: 'eq-1',
+          id: 'mep-eq-1',
           name: 'Booster pump',
           loadKind: LoadKind.pump,
           motorKw: 5.5,
+          // A real derived circuit (via buildEquipmentCircuits) always carries
+          // its source-equipment id — the key the G2 UPSERT syncs by.
+          sourceEquipmentId: 'eq-1',
         ),
       ]);
       // The MEP panel appeared, but no snapshot / timeline entry was pushed.
@@ -1621,6 +1626,196 @@ void main() {
           p('c', 'Workshop board', 'WB-9'),
         ]),
         1,
+      );
+    });
+  });
+
+  group('syncMepEquipment UPSERT (G2 — stop wiping user edits)', () {
+    // A derived circuit exactly as `buildEquipmentCircuits` produces one: it
+    // always carries a `sourceEquipmentId` (the upsert key) + `flaOverrideA`.
+    ElectricalCircuit derived(String src,
+            {required String name,
+            double loadW = 6000,
+            double motorKw = 5.5,
+            double fla = 10}) =>
+        ElectricalCircuit(
+          id: 'mep-$src',
+          name: name,
+          loadKind: LoadKind.pump,
+          loadW: loadW,
+          motorKw: motorKw,
+          sourceEquipmentId: src,
+          flaOverrideA: Current(fla),
+        );
+
+    ElectricalPanel mep(ProviderContainer c) => c
+        .read(electricalProjectProvider)
+        .panels
+        .firstWhere((p) => p.id == kMepEquipmentPanelId);
+
+    test('preserves user name/cableType + a user-added way, refreshes derived '
+        'loads, and drops a circuit whose source node was deleted', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      // First sync: two placed pieces of equipment.
+      ctrl.syncMepEquipment([
+        derived('node-1', name: 'Pump A'),
+        derived('node-2', name: 'Fan B', loadW: 3500, motorKw: 3.0, fla: 6),
+      ]);
+      expect(mep(c).circuits, hasLength(2));
+      final node1Id =
+          mep(c).circuits.firstWhere((x) => x.sourceEquipmentId == 'node-1').id;
+
+      // The engineer renames the derived way, sets a cable type, and adds their
+      // OWN way onto the board — all real user edits (each an undo step).
+      ctrl.setCircuit(kMepEquipmentPanelId, node1Id,
+          name: 'Domestic booster', cableType: 'FRC');
+      ctrl.addCircuit(kMepEquipmentPanelId,
+          kind: LoadKind.socket, name: 'Local socket');
+      expect(mep(c).circuits, hasLength(3));
+
+      // A plan edit: node-2's equipment is removed, node-1's derived load grows.
+      ctrl.syncMepEquipment([
+        derived('node-1', name: 'Pump A', loadW: 8200, motorKw: 7.5, fla: 14),
+      ]);
+
+      final circuits = mep(c).circuits;
+      // node-2 (removed equipment) is dropped.
+      expect(circuits.where((x) => x.sourceEquipmentId == 'node-2'), isEmpty);
+      final node1 = circuits.firstWhere((x) => x.sourceEquipmentId == 'node-1');
+      // User-set fields SURVIVE the sync.
+      expect(node1.name, 'Domestic booster');
+      expect(node1.cableType, 'FRC');
+      // Derived load fields are REFRESHED from the new sync.
+      expect(node1.loadW, 8200);
+      expect(node1.motorKw, 7.5);
+      expect(node1.flaOverrideA!.amperes, 14);
+      // The user-added way (no sourceEquipmentId) is preserved.
+      expect(
+        circuits.where(
+            (x) => x.name == 'Local socket' && x.sourceEquipmentId == null),
+        hasLength(1),
+      );
+    });
+
+    test('a newly-placed piece of equipment is appended without touching the '
+        'others', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      ctrl.syncMepEquipment([derived('node-1', name: 'Pump A')]);
+      expect(mep(c).circuits, hasLength(1));
+
+      ctrl.syncMepEquipment([
+        derived('node-1', name: 'Pump A'),
+        derived('node-9', name: 'Pump B'),
+      ]);
+      final sources =
+          mep(c).circuits.map((x) => x.sourceEquipmentId).toSet();
+      expect(sources, containsAll(<String>{'node-1', 'node-9'}));
+      expect(mep(c).circuits, hasLength(2));
+    });
+
+    test('preserves the board panel-level fields (tag/diversity) across a sync',
+        () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      ctrl.syncMepEquipment([derived('node-1', name: 'Pump A')]);
+      // The engineer re-tags the board + sets a diversity factor.
+      ctrl.setPanelTag(kMepEquipmentPanelId, 'MEQ');
+      ctrl.setPanelDiversity(kMepEquipmentPanelId, 0.7);
+
+      ctrl.syncMepEquipment([
+        derived('node-1', name: 'Pump A', loadW: 9000),
+      ]);
+      expect(mep(c).tag, 'MEQ');
+      expect(mep(c).diversityFactor, 0.7);
+    });
+
+    test('a sync that removes the last derived way drops the panel entirely', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      ctrl.syncMepEquipment([derived('node-1', name: 'Pump A')]);
+      expect(
+        c.read(electricalProjectProvider).panels
+            .any((p) => p.id == kMepEquipmentPanelId),
+        isTrue,
+      );
+      ctrl.syncMepEquipment(const []);
+      expect(
+        c.read(electricalProjectProvider).panels
+            .any((p) => p.id == kMepEquipmentPanelId),
+        isFalse,
+      );
+    });
+  });
+
+  group('MEP Equipment board is machine-owned on the canvas (G2)', () {
+    testWidgets('a palette drop on the MEP board is rejected — no way is added '
+        'and the status pill explains why', (tester) async {
+      setDesktopSurface(tester);
+      await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+      await tester.pump();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(MechXApp)),
+        listen: false,
+      );
+      container
+          .read(workspaceViewProvider.notifier)
+          .set(WorkspaceView.electrical);
+      // The sole board is the machine-owned MEP panel (as if a pump were placed
+      // on the plan). It is the service root → centred by the initial fit.
+      container.read(electricalProjectProvider.notifier).syncMepEquipment(const [
+        ElectricalCircuit(
+          id: 'mep-node-1',
+          name: 'Booster pump',
+          loadKind: LoadKind.pump,
+          motorKw: 5.5,
+          loadW: 6000,
+          sourceEquipmentId: 'node-1',
+          flaOverrideA: Current(10),
+        ),
+      ]);
+      await tester.pump();
+
+      int mepWays() => container
+          .read(electricalProjectProvider)
+          .panels
+          .firstWhere((p) => p.id == kMepEquipmentPanelId)
+          .circuits
+          .length;
+      int panelCount() =>
+          container.read(electricalProjectProvider).panels.length;
+      expect(mepWays(), 1);
+      expect(panelCount(), 1);
+
+      // Drag a Loads-palette card onto the centred MEP board.
+      final source = find.byType(Draggable<PaletteLoad>).first;
+      final target = tester.getCenter(find.byType(ElectricalCanvas));
+      final gesture = await tester.startGesture(tester.getCenter(source));
+      await tester.pump();
+      await gesture.moveTo(target);
+      await tester.pump();
+      await gesture.up();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // The drop was REJECTED: no way was added, no floating panel fell through.
+      expect(mepWays(), 1);
+      expect(panelCount(), 1);
+      // The shared status pill explains why (machine-owned).
+      expect(
+        find.text('MEP Equipment is auto-generated from the plan — '
+            'add ways to another panel.'),
+        findsOneWidget,
       );
     });
   });

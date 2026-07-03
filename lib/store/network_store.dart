@@ -328,6 +328,92 @@ class NetworkController extends Notifier<DrawingState> {
     );
   }
 
+  /// Remap node `floorIndex` after the building floor STACK changed, in ONE
+  /// undo step, so drawn work is never left referencing a floor that no longer
+  /// exists — which would either crash the always-on solve (pre-clamp) or
+  /// silently re-elevate a node (§10 lengths rewritten under the engineer's
+  /// feet). Called by [ProjectController.setFloors]/[removeFloor].
+  ///
+  /// [levelCount] is the NEW floor count. When [removedIndex] is non-null a
+  /// floor at that index was DELETED: nodes ABOVE it drop one index (so they
+  /// stay on their own physical floor — their §10 elevation is preserved),
+  /// nodes ON the removed floor rehome to the floor now occupying that slot
+  /// (clamped to the top), nodes below are untouched. When [removedIndex] is
+  /// null the stack was REPLACED wholesale (e.g. a template): every node's
+  /// `floorIndex` is simply CLAMPED into `[0, levelCount)` — a node above the
+  /// new top drops to the new top floor; a stack that only grew leaves
+  /// everything unchanged.
+  ///
+  /// No-op — records nothing, byte-identical — when no node's `floorIndex`
+  /// actually changes (an empty network, or a stack that only grew).
+  void remapNodesForFloorChange({required int levelCount, int? removedIndex}) {
+    if (levelCount < 1) return;
+    final maxIndex = levelCount - 1;
+    var changed = false;
+    final nodes = <NetNode>[];
+    for (final n in state.network.nodes) {
+      var fi = n.floorIndex;
+      // A node above a removed floor shifts down one index to keep its own
+      // physical floor; a node on/below the removed floor keeps its index.
+      if (removedIndex != null && fi > removedIndex) fi -= 1;
+      // Clamp into the new range (nodes on/above a removed top, or a wholesale
+      // shrink).
+      if (fi < 0) fi = 0;
+      if (fi > maxIndex) fi = maxIndex;
+      if (fi != n.floorIndex) {
+        changed = true;
+        nodes.add(n.copyWith(floorIndex: fi));
+      } else {
+        nodes.add(n);
+      }
+    }
+    if (!changed) return;
+    _commit(Network(nodes: nodes, edges: state.network.edges));
+  }
+
+  /// Shift every node on [sheetId] by [floorDelta] floors, in ONE undo step —
+  /// called when that sheet is re-mapped to a different building floor
+  /// ([SheetsController.setSheetFloor]) so the work drawn on it MOVES WITH the
+  /// mapping instead of silently vanishing (the canvas overlays filter on BOTH
+  /// sheetId AND floorIndex, so a frozen floorIndex left behind hides
+  /// everything drawn there while it keeps feeding sizing at the old elevation).
+  ///
+  /// A riser drawn on the plan has BOTH endpoints on this sheet, so the whole
+  /// vertical shifts together and its §10 elevation-delta length is preserved.
+  /// (A riser whose two endpoints live on DIFFERENT sheets — rare — has only
+  /// this sheet's endpoint shifted, which changes its span: the honest
+  /// consequence of moving one of its floors.) Results are clamped into
+  /// `[0, levelCount)`, so a remap toward the top never leaves a node
+  /// referencing a missing floor; remapping a floor-spanning riser ONTO the top
+  /// floor collapses it (its upper endpoint has nowhere above to go).
+  ///
+  /// No-op — records nothing, byte-identical — when [floorDelta] is 0 or no
+  /// node lives on [sheetId].
+  void remapSheetFloor(String sheetId, int floorDelta,
+      {required int levelCount}) {
+    if (floorDelta == 0 || levelCount < 1) return;
+    final maxIndex = levelCount - 1;
+    var changed = false;
+    final nodes = <NetNode>[];
+    for (final n in state.network.nodes) {
+      if (n.sheetId != sheetId) {
+        nodes.add(n);
+        continue;
+      }
+      var fi = n.floorIndex + floorDelta;
+      if (fi < 0) fi = 0;
+      if (fi > maxIndex) fi = maxIndex;
+      if (fi != n.floorIndex) {
+        changed = true;
+        nodes.add(n.copyWith(floorIndex: fi));
+      } else {
+        nodes.add(n);
+      }
+    }
+    if (!changed) return;
+    _commit(Network(nodes: nodes, edges: state.network.edges));
+  }
+
   void undo() {
     if (_undo.isEmpty) return;
     _dragSnapshotPending = false;

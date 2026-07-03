@@ -311,6 +311,93 @@ void main() {
       expect(reverted.x, 0);
       expect(reverted.y, 0);
     });
+
+    // ── B6/B7: floor-stack + sheet remap keep drawn work in range ────────────
+
+    test('remapNodesForFloorChange (wholesale) clamps nodes above the new top',
+        () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'b', sheetId: 's1', x: 0, y: 0, floorIndex: 3),
+        NetNode(id: 'c', sheetId: 's1', x: 0, y: 0, floorIndex: 5),
+      ]));
+      // New stack has 2 floors (max index 1): everything above clamps to 1.
+      n.remapNodesForFloorChange(levelCount: 2);
+      final f = {
+        for (final x in c.read(networkControllerProvider).network.nodes)
+          x.id: x.floorIndex
+      };
+      expect(f['a'], 0);
+      expect(f['b'], 1);
+      expect(f['c'], 1);
+      // One undo step reverts the whole remap.
+      n.undo();
+      expect(
+          c.read(networkControllerProvider).network.nodeById('c')!.floorIndex, 5);
+    });
+
+    test('remapNodesForFloorChange (removed middle) shifts higher nodes down',
+        () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 'lo', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'mid', sheetId: 's1', x: 0, y: 0, floorIndex: 2),
+        NetNode(id: 'hi', sheetId: 's1', x: 0, y: 0, floorIndex: 4),
+      ]));
+      // Floor index 1 removed; new stack has 4 floors (max index 3).
+      n.remapNodesForFloorChange(levelCount: 4, removedIndex: 1);
+      final f = {
+        for (final x in c.read(networkControllerProvider).network.nodes)
+          x.id: x.floorIndex
+      };
+      expect(f['lo'], 0); // below the removal — untouched
+      expect(f['mid'], 1); // above — shifted down one to keep its own floor
+      expect(f['hi'], 3);
+    });
+
+    test('remapNodesForFloorChange is a no-op when nothing is out of range', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'b', sheetId: 's1', x: 0, y: 0, floorIndex: 2),
+      ]));
+      n.remapNodesForFloorChange(levelCount: 6); // only grew — no change
+      expect(n.canUndo, isFalse);
+    });
+
+    test('remapSheetFloor shifts only the named sheet\'s nodes, clamped', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'b', sheetId: 's1', x: 0, y: 0, floorIndex: 1),
+        NetNode(id: 'z', sheetId: 's2', x: 0, y: 0, floorIndex: 0),
+      ]));
+      // Move s1 up 2 floors in a 3-floor building (max index 2): the riser pair
+      // shifts together, clamping at the top.
+      n.remapSheetFloor('s1', 2, levelCount: 3);
+      final f = {
+        for (final x in c.read(networkControllerProvider).network.nodes)
+          x.id: x.floorIndex
+      };
+      expect(f['a'], 2);
+      expect(f['b'], 2); // 1+2=3 → clamped to the top floor (index 2)
+      expect(f['z'], 0); // other sheet — untouched
+    });
+
+    test('remapSheetFloor with a zero delta records nothing', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 1),
+      ]));
+      n.remapSheetFloor('s1', 0, levelCount: 3);
+      expect(n.canUndo, isFalse);
+    });
   });
 
   group('drag-drop palette + per-segment material/size', () {

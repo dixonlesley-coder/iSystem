@@ -202,9 +202,10 @@ class DesignSettings {
         'coolingLoadMethod': coolingLoadMethod,
         'multiZoneDiversityFactor': multiZoneDiversityFactor,
         'multiZoneExhaustStrategy': multiZoneExhaustStrategy,
-        // BYO Claude copilot key + model (additive; absent on an older file →
-        // disabled copilot / default model).
-        'anthropicApiKey': anthropicApiKey,
+        // BYO AI copilot model + provider (non-secret) round-trip; the API KEY
+        // is a secret and is NO LONGER written here (B8) — it lives machine-local
+        // in `app_settings.dart`, kept out of the shareable `.mechx`. A legacy
+        // in-file key is still READ (see [fromJson]) for one-time migration.
         'aiModel': aiModel,
         'aiProvider': aiProvider,
         // Document control (additive; encoded only when set/non-empty so an

@@ -49,36 +49,56 @@ class BuildingLevels {
 
   int get levelCount => floors.length;
 
+  /// Clamp a possibly-out-of-range floor [index] into `[0, levelCount)`.
+  ///
+  /// Defense in depth (§10): the app keeps every node's `floorIndex` within the
+  /// live floor stack (project floor-stack + sheet-remap edits remap/clamp the
+  /// affected nodes when the stack changes), but a stray out-of-range index
+  /// must NEVER crash the always-on sizing/solve with a `RangeError` — it
+  /// resolves to the nearest real floor instead (a node above the top sits at
+  /// the top; a negative index at the base). The retained assert is a dev aid
+  /// on the genuine invariant (a building always has at least one floor); the
+  /// out-of-range case is CLAMPED rather than thrown so release builds (asserts
+  /// stripped) and asserts-enabled tests alike stay crash-free.
+  int _safeFloorIndex(int index) {
+    assert(floors.isNotEmpty, 'BuildingLevels must have at least one floor');
+    if (floors.isEmpty) return 0;
+    final maxIndex = floors.length - 1;
+    return index < 0 ? 0 : (index > maxIndex ? maxIndex : index);
+  }
+
   /// Elevation of the floor surface at [index] above the base (floor 0 = 0).
+  /// [index] is clamped into range ([_safeFloorIndex]) so an out-of-range node
+  /// can never crash the solve.
   Length elevationOf(int index) {
-    assert(index >= 0 && index < floors.length, 'floor index out of range');
+    final top = _safeFloorIndex(index);
     var sum = 0.0;
-    for (var i = 0; i < index; i++) {
+    for (var i = 0; i < top; i++) {
       sum += floors[i].height.meters;
     }
     return Length(sum);
   }
 
-  /// Floor-to-floor height of the level at [index].
-  Length floorHeightOf(int index) {
-    assert(index >= 0 && index < floors.length, 'floor index out of range');
-    return floors[index].height;
-  }
+  /// Floor-to-floor height of the level at [index] (clamped into range).
+  Length floorHeightOf(int index) => floors[_safeFloorIndex(index)].height;
 
   /// Elevation of the horizontal distribution main on [index] — the ceiling of
-  /// that floor: `floor surface + floor height − ceilingDrop`.
+  /// that floor: `floor surface + floor height − ceilingDrop`. [index] is
+  /// clamped into range.
   Length ceilingElevationOf(int index,
       [MountingHeights mounting = const MountingHeights()]) {
-    return Length(elevationOf(index).meters +
-        floors[index].height.meters -
+    final i = _safeFloorIndex(index);
+    return Length(elevationOf(i).meters +
+        floors[i].height.meters -
         mounting.ceilingDrop.meters);
   }
 
   /// Elevation of a fixture connection on [index]:
-  /// `floor surface + fixtureHeight`.
+  /// `floor surface + fixtureHeight`. [index] is clamped into range.
   Length fixtureElevationOf(int index,
       [MountingHeights mounting = const MountingHeights()]) {
-    return Length(elevationOf(index).meters + mounting.fixtureHeight.meters);
+    return Length(
+        elevationOf(_safeFloorIndex(index)).meters + mounting.fixtureHeight.meters);
   }
 
   /// Vertical run between two floor surfaces (always ≥ 0). Floor-surface delta;

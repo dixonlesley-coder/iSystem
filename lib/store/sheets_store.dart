@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../ui/canvas/viewport.dart';
 import 'history_store.dart';
 import 'models/sheet.dart';
+import 'network_store.dart';
+import 'project_store.dart';
 
 /// Immutable sheet-navigation state: the loaded [sheets], the [currentIndex],
 /// and a per-sheet [viewports] map so each sheet's pan/zoom is restored when
@@ -128,12 +130,29 @@ class SheetsController extends Notifier<SheetsState> {
 
   /// Map [sheetId] to building floor [floorIndex] (explicit override). Recorded
   /// on the undo timeline so the mapping change is undoable like any other edit.
+  ///
+  /// B7: the work drawn on the sheet MOVES WITH the mapping — its nodes'
+  /// (frozen-at-creation) `floorIndex` shifts by the same amount the effective
+  /// floor moved (a separate network undo step). Without this the canvas —
+  /// which filters on BOTH sheetId AND floorIndex — would hide everything drawn
+  /// on the sheet while it kept feeding sizing at the old elevation.
   void setSheetFloor(String sheetId, int floorIndex) {
     if (state.sheetFloors[sheetId] == floorIndex) return;
+    // Effective floor BEFORE the change (positional default or a prior
+    // override, clamped to the live building) — the floorIndex the sheet's
+    // drawn nodes currently carry.
+    final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    final oldFloor = state.floorFor(sheetId, levelCount);
     _snapshot();
     final next = Map<String, int>.from(state.sheetFloors)
       ..[sheetId] = floorIndex;
     state = state.copyWith(sheetFloors: next);
+    // Shift the sheet's nodes by the effective-floor delta (no-op when the
+    // effective floor is unchanged or the sheet has no drawn nodes).
+    final newFloor = state.floorFor(sheetId, levelCount);
+    ref
+        .read(networkControllerProvider.notifier)
+        .remapSheetFloor(sheetId, newFloor - oldFloor, levelCount: levelCount);
   }
 
   void selectSheet(int index) {

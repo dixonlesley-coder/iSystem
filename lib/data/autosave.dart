@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/model.dart' show ElectricalProject;
 
-import '../ai/ai_client.dart';
 import '../store/annotation_store.dart';
 import '../store/app_state.dart';
 import '../store/commercial_store.dart';
@@ -31,7 +30,17 @@ typedef ProviderReader = T Function<T>(ProviderListenable<T> provider);
 /// snapshot file EXISTS but could not be decoded (torn by an interrupted
 /// write) — the banner surfaces that distinctly instead of restoring nothing
 /// silently, so a torn snapshot is never indistinguishable from a clean exit.
-typedef RecoverySnapshot = ({ProjectDocument? doc, DateTime? savedAt});
+///
+/// [sourcePath] is the `.mechx` file the snapshot belongs to (from its `.src`
+/// sidecar) — a Restore re-links the file identity to it so the next Ctrl+S
+/// saves back to the right file, not a Save-As fork. [recoveryPath] is the
+/// snapshot file itself, so a discard clears the correct per-project slot.
+typedef RecoverySnapshot = ({
+  ProjectDocument? doc,
+  DateTime? savedAt,
+  String? sourcePath,
+  String? recoveryPath,
+});
 
 /// A recovery snapshot found on launch (previous session ended without a
 /// clean exit). Non-null ⇒ the shell offers to restore it.
@@ -113,10 +122,9 @@ ProjectDocument buildDocument(ProviderReader read) {
       marginPct: commercial.marginPct,
       // The user-defined fixture library round-trips with the project.
       fixtureLibrary: read(fixtureLibraryProvider),
-      // BYO Claude copilot key + model + provider round-trip with the project.
-      anthropicApiKey: read(aiApiKeyProvider),
-      aiModel: read(aiModelProvider),
-      aiProvider: read(aiProviderProvider).name,
+      // The BYO AI copilot provider/key/model are MACHINE-LOCAL (kept out of the
+      // shareable `.mechx` — B8): they live in `app_settings.dart`, so the
+      // document carries the harmless defaults and never leaks the secret key.
       // Document control (drawing number/revision/client/DRAWN-CHECKED-APPROVED
       // + revision history) round-trips with the project.
       documentNumber: read(documentControlProvider).documentNumber,
@@ -139,29 +147,40 @@ ProjectDocument buildDocument(ProviderReader read) {
 }
 
 /// The canonical encoding of a brand-new, untouched project — the default
-/// settings plus whatever the stores seed on a fresh launch (notably the
-/// built-in sample electrical board), with nothing drawn. Computed once from a
-/// throwaway [ProviderContainer] so the dirty guard and the autosave loop agree
-/// on exactly what "virgin" looks like, and memoized (the defaults are constant).
-/// The container is deliberately not disposed — a single tiny leak for the
-/// process, mirroring the root container the app never disposes — so the
-/// electrical controller's post-build sync microtask never reads a disposed ref.
-String? _virginSignature;
-String virginDocumentSignature() =>
-    _virginSignature ??= buildDocument(ProviderContainer().read).encode();
+/// project state (default floors, nothing drawn, empty electrical) at the CURRENT
+/// app-level language + theme. Those two presentation prefs are seeded from the
+/// machine-local settings at launch (A4), so an engineer who chose Bahasa/light
+/// gets a virgin baseline that ALSO reads Bahasa/light — otherwise a blank launch
+/// would spuriously look "dirty" (and write a phantom recovery snapshot). Keyed
+/// + memoized by `<locale>/<brightness>` (≤4 tiny throwaway containers over the
+/// process). The containers are deliberately not disposed — a tiny leak mirroring
+/// the root container the app never disposes — so the electrical controller's
+/// post-build sync microtask never reads a disposed ref.
+final Map<String, String> _virginSignatures = {};
+String virginDocumentSignature(ProviderReader read) {
+  final locale = read(localeProvider);
+  final brightness = read(brightnessProvider);
+  final key = '${locale.name}/${brightness.name}';
+  return _virginSignatures.putIfAbsent(key, () {
+    final c = ProviderContainer();
+    c.read(localeProvider.notifier).set(locale);
+    c.read(brightnessProvider.notifier).set(brightness);
+    return buildDocument(c.read).encode();
+  });
+}
 
 /// Whether the live work reachable via [read] genuinely differs from the last
 /// clean Save — the GUARD-time dirty check (computed FRESH, unlike the timer-fed
 /// [projectDirtyProvider] UI hint). A project that was saved/opened is dirty when
 /// it no longer matches that baseline; a never-saved project is dirty only once
-/// it diverges from the untouched virgin default (so a blank launch — or one that
-/// only seeded the sample board — is NOT dirty and is never destroyed silently).
+/// it diverges from the untouched virgin default (so a blank launch — at the
+/// user's chosen language/theme — is NOT dirty and is never destroyed silently).
 bool isProjectDirty(ProviderReader read) {
   final encoded = buildDocument(read).encode();
   final saved = read(lastSavedSignatureProvider);
   return saved != null
       ? encoded != saved
-      : encoded != virginDocumentSignature();
+      : encoded != virginDocumentSignature(read);
 }
 
 /// Load [doc] into every live store/provider reachable via [read] — the drawn
@@ -206,11 +225,14 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   ));
   // Restore the user-defined fixture library (absent on an older file ⇒ empty).
   read(fixtureLibraryProvider.notifier).set(s.fixtureLibrary);
-  // Restore the BYO Claude copilot key + model + provider (absent ⇒ disabled /
-  // default / Anthropic).
-  read(aiApiKeyProvider.notifier).set(s.anthropicApiKey);
-  read(aiModelProvider.notifier).set(s.aiModel);
-  read(aiProviderProvider.notifier).set(aiProviderFromName(s.aiProvider));
+  // The AI copilot provider/key/model are MACHINE-LOCAL now (B8) — never reset
+  // them to a document's values. But a LEGACY `.mechx` that carried the key
+  // in-file is migrated once into the machine-local key (the launch persistence
+  // listener then saves it to `app_settings.dart`); a new file's empty key
+  // leaves the machine-local key untouched.
+  if (s.anthropicApiKey.isNotEmpty) {
+    read(aiApiKeyProvider.notifier).set(s.anthropicApiKey);
+  }
   // Restore document control (absent on an older file ⇒ all unset / no
   // revisions, the controller's own defaults).
   read(documentControlProvider.notifier).set(DocumentControl(
@@ -249,9 +271,10 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
 Timer startAutosave(
   ProviderContainer c, {
   Duration interval = const Duration(seconds: 15),
-  // The recovery snapshot path. Defaults to the global [recoveryFilePath] in
-  // production; tests inject a unique temp path so concurrently-running test
-  // isolates don't race on one shared file.
+  // The recovery snapshot path. When null (production), a PER-PROJECT slot is
+  // computed each tick from the live project path ([recoverySlotFor]) so every
+  // project has its own snapshot instead of clobbering one global file; tests
+  // inject a unique fixed temp path so concurrently-running isolates don't race.
   String? recoveryPath,
 }) {
   return Timer.periodic(interval, (_) {
@@ -262,7 +285,7 @@ Timer startAutosave(
     // the untouched virgin default — either way there is nothing worth recovering.
     final clean = saved != null
         ? encoded == saved
-        : encoded == virginDocumentSignature();
+        : encoded == virginDocumentSignature(c.read);
     // Piggy-back the "edited" indicator on the signature comparison we're
     // already doing (Save/Open clear it eagerly; this catches new edits).
     c.read(projectDirtyProvider.notifier).set(!clean);
@@ -273,6 +296,12 @@ Timer startAutosave(
       return;
     }
     c.read(autosaveMirrorProvider.notifier).set(encoded);
-    writeRecovery(doc, path: recoveryPath);
+    final projectPath = c.read(currentProjectPathProvider);
+    writeRecovery(
+      doc,
+      path: recoveryPath ?? recoverySlotFor(projectPath),
+      // Stash the source file so a Restore can re-link the file identity.
+      sourcePath: projectPath,
+    );
   });
 }

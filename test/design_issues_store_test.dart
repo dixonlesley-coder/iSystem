@@ -428,6 +428,61 @@ void main() {
       expect(c.read(selectionProvider).edgeId, 'e1');
       expect(c.read(workspaceViewProvider), WorkspaceView.plan);
     });
+
+    // ── B6/B7: orphan-floor + sheet pile-up fan-in ────────────────────────────
+
+    test('a node on a non-existent floor surfaces a CRITICAL locatable issue',
+        () {
+      final c = makeContainer();
+      // Default building has 3 floors (max index 2); place a node on floor 5.
+      const stray =
+          NetNode(id: 'stray', sheetId: 's1', x: 0, y: 0, floorIndex: 5);
+      c
+          .read(networkControllerProvider.notifier)
+          .loadNetwork(const Network(nodes: [stray]));
+
+      final issue = c.read(designIssuesProvider).firstWhere(
+            (i) => i.title == 'Element references a missing floor or sheet',
+            orElse: () => fail('expected a missing-floor critical'),
+          );
+      expect(issue.severity, IssueSeverity.critical);
+      expect(issue.locate?.nodeId, 'stray');
+      expect(issue.locate?.sheetId, 's1');
+    });
+
+    test('an in-range network raises no missing-floor critical', () {
+      final c = makeContainer();
+      const ok = NetNode(id: 'ok', sheetId: 's1', x: 0, y: 0, floorIndex: 1);
+      c
+          .read(networkControllerProvider.notifier)
+          .loadNetwork(const Network(nodes: [ok]));
+      expect(
+        c
+            .read(designIssuesProvider)
+            .where(
+                (i) => i.title == 'Element references a missing floor or sheet'),
+        isEmpty,
+      );
+    });
+
+    test('two sheets mapped to one floor surface a pile-up warning', () {
+      final c = makeContainer();
+      // The default demo (3 sheets ↔ 3 floors, positional) has no pile-up.
+      expect(
+        c
+            .read(designIssuesProvider)
+            .where((i) => i.title == 'Multiple sheets mapped to one floor'),
+        isEmpty,
+      );
+      // Map s2 onto floor 0 as well → s1 + s2 both on floor 0.
+      c.read(sheetsControllerProvider.notifier).setSheetFloor('s2', 0);
+      final issue = c.read(designIssuesProvider).firstWhere(
+            (i) => i.title == 'Multiple sheets mapped to one floor',
+            orElse: () => fail('expected a sheet pile-up warning'),
+          );
+      expect(issue.severity, IssueSeverity.warning);
+      expect(issue.isLocatable, isTrue);
+    });
   });
 
   group('electrical warnings fan-in', () {

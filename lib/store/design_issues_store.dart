@@ -24,6 +24,7 @@ import 'package:mechx_engine/standards/ventilation.dart';
 
 import 'air_warnings_store.dart';
 import 'electrical_store.dart';
+import 'models/sheet.dart';
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sheets_store.dart';
@@ -130,6 +131,37 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final nodeById = <String, NetNode>{for (final n in net.nodes) n.id: n};
   String? sheetForEdge(NetEdge e) => nodeById[e.fromId]?.sheetId;
 
+  final levelCount = project.building.levelCount;
+  final liveSheetIds = <String>{for (final s in sheets.sheets) s.id};
+
+  // ── 0. Elements referencing a missing floor / sheet (CRITICAL, locatable) ───
+  // A node whose floorIndex falls outside the live floor stack, or whose
+  // sheetId is no longer among the loaded sheets, is an ORPHAN. The engine now
+  // CLAMPS an out-of-range floorIndex so the solve can't crash, but that means
+  // the node is silently sizing at the wrong (clamped) elevation — or is on a
+  // sheet the engineer can no longer see. Floor-stack and sheet-remap edits
+  // remap/clamp nodes to keep this from happening, so when it does it is a hard
+  // blocker: surface it first, locatable to the offending element.
+  for (final n in net.nodes) {
+    final badFloor = n.floorIndex < 0 || n.floorIndex >= levelCount;
+    // Only flag a missing sheet once sheets exist — an empty project hasn't
+    // loaded its sheets yet, so every node would spuriously flag.
+    final badSheet = liveSheetIds.isNotEmpty && !liveSheetIds.contains(n.sheetId);
+    if (!badFloor && !badSheet) continue;
+    criticals.add(DesignIssue(
+      severity: IssueSeverity.critical,
+      title: 'Element references a missing floor or sheet',
+      message: badFloor
+          ? 'A drawn element sits on floor ${n.floorIndex + 1}, which no longer '
+              'exists (the building has $levelCount floor(s)) — it is being '
+              'sized at a clamped elevation. Delete it or move it onto a real '
+              'floor.'
+          : 'A drawn element belongs to a sheet that is no longer loaded — '
+              're-import that sheet or delete the orphaned element.',
+      locate: IssueLocation(n.sheetId, nodeId: n.id),
+    ));
+  }
+
   // ── 1. Out-of-band air velocities (warning, locatable) ──────────────────────
   final edgeById = <String, NetEdge>{for (final e in net.edges) e.id: e};
   for (final entry in velocity.entries) {
@@ -230,6 +262,32 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         locate: IssueLocation(s.id),
       ));
     }
+  }
+
+  // ── 3c. Sheet→floor pile-up (warning, locatable) ────────────────────────────
+  // More sheets than floors — or an explicit double-mapping — pile multiple
+  // plans onto ONE building floor: `floorFor` silently clamps the overflow to
+  // the top floor (import 8 pages into a 3-floor default and pages 4-8 all land
+  // on the top). Only one plan per floor feeds the riser/sizing at that
+  // elevation, so the stacked extras are invisible work. Warn per
+  // over-subscribed floor, locatable to one of the piled sheets.
+  final sheetsByFloor = <int, List<Sheet>>{};
+  for (final s in sheets.sheets) {
+    (sheetsByFloor[sheets.floorFor(s.id, levelCount)] ??= []).add(s);
+  }
+  for (final entry in sheetsByFloor.entries) {
+    if (entry.value.length < 2) continue;
+    final floorName = project.building.floors[entry.key].name;
+    final names = entry.value.map((s) => '"${s.name}"').join(', ');
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      title: 'Multiple sheets mapped to one floor',
+      message: '${entry.value.length} sheets map to floor "$floorName" '
+          '($names) — only one plan per floor feeds sizing at that elevation, '
+          'so the extras are stacked there (often an import that ran past the '
+          'floor count). Re-map the extra sheets or add floors.',
+      locate: IssueLocation(entry.value.last.id),
+    ));
   }
 
   // ── 3b. Network connectivity / supply integrity (warning, locatable) ────────

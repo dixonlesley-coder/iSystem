@@ -101,9 +101,14 @@ class _RailItemState extends ConsumerState<_RailItem> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    final calibrated = ref.watch(projectControllerProvider)
-            .calibrationFor(widget.sheet.id) !=
-        null;
+    final project = ref.watch(projectControllerProvider);
+    final calibrated = project.calibrationFor(widget.sheet.id) != null;
+    // Which building floor this sheet maps to (B7): stamped on the tile so a
+    // remap — or a silent pile-up when more sheets than floors default onto the
+    // top — is visible at a glance, not invisible. 1-based, ASCII ("F3").
+    final mappedFloor = ref
+        .watch(sheetsControllerProvider)
+        .floorFor(widget.sheet.id, project.building.levelCount);
     final bg = widget.selected
         ? colors.accentMuted
         : (_hover ? colors.surfaceHover : const Color(0x00000000));
@@ -166,16 +171,29 @@ class _RailItemState extends ConsumerState<_RailItem> {
                   style: type.caption.copyWith(color: labelColor),
                 ),
                 const SizedBox(height: MechXSpacing.xxs),
-                // Per-sheet calibration status: a small glyph pairing colour
-                // with shape (a check ring = calibrated/green, a "!" ring =
-                // uncalibrated/warning) so the rail reads at a glance which
-                // sheets still need a scale, without relying on hue alone.
-                CustomPaint(
-                  size: const Size(9, 9),
-                  painter: _CalibrationGlyph(
-                    calibrated: calibrated,
-                    color: calibrated ? colors.success : colors.warning,
-                  ),
+                // Per-sheet calibration status + mapped-floor stamp, on one
+                // row: a small glyph pairing colour with shape (a check ring =
+                // calibrated/green, a "!" ring = uncalibrated/warning) so the
+                // rail reads at a glance which sheets still need a scale,
+                // without relying on hue alone; and the building floor this
+                // sheet maps to ("F3") so a remap / pile-up is visible.
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CustomPaint(
+                      size: const Size(9, 9),
+                      painter: _CalibrationGlyph(
+                        calibrated: calibrated,
+                        color: calibrated ? colors.success : colors.warning,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      'F${mappedFloor + 1}',
+                      style: type.micro.copyWith(color: colors.textMuted),
+                    ),
+                  ],
                 ),
               ],
             ),

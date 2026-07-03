@@ -2,8 +2,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/models/sheet.dart';
+import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
+import 'package:mechx_engine/network/network.dart';
 
 void main() {
   ProviderContainer makeContainer() {
@@ -102,6 +104,91 @@ void main() {
     // Redo restores the override.
     history.redo();
     expect(c.read(sheetsControllerProvider).floorFor('s3', 3), 0);
+  });
+
+  test('setSheetFloor remaps the sheet\'s drawn nodes with the mapping (B7)', () {
+    final c = makeSeededContainer();
+    final sheets = c.read(sheetsControllerProvider.notifier);
+    final net = c.read(networkControllerProvider.notifier);
+    // s3's positional default is floor 2. Draw work on s3 (floor 2) and on s2
+    // (floor 1); the s2 work must NOT move when only s3 is re-mapped.
+    net.loadNetwork(const Network(nodes: [
+      NetNode(id: 'a', sheetId: 's3', x: 0, y: 0, floorIndex: 2),
+      NetNode(id: 'b', sheetId: 's3', x: 10, y: 0, floorIndex: 2),
+      NetNode(id: 'd', sheetId: 's2', x: 0, y: 0, floorIndex: 1),
+    ]));
+
+    // Re-map s3 down to floor 0 — its nodes drop by 2 floors WITH it.
+    sheets.setSheetFloor('s3', 0);
+    final floors = {
+      for (final n in c.read(networkControllerProvider).network.nodes)
+        n.id: n.floorIndex
+    };
+    expect(floors['a'], 0);
+    expect(floors['b'], 0);
+    expect(floors['d'], 1); // other sheet — untouched
+    expect(c.read(sheetsControllerProvider).floorFor('s3', 3), 0);
+  });
+
+  test('setSheetFloor shifts a floor-spanning riser as a pair (B7)', () {
+    final c = makeSeededContainer();
+    final sheets = c.read(sheetsControllerProvider.notifier);
+    final net = c.read(networkControllerProvider.notifier);
+    // A riser on s1: lower on floor 0, upper on floor 1, both on s1.
+    net.loadNetwork(const Network(
+      nodes: [
+        NetNode(id: 'lo', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'hi', sheetId: 's1', x: 0, y: 0, floorIndex: 1),
+      ],
+      edges: [
+        NetEdge(
+            id: 'r',
+            fromId: 'lo',
+            toId: 'hi',
+            service: ServiceType.coldWater,
+            kind: EdgeKind.riser),
+      ],
+    ));
+
+    // Move s1 up to floor 1 (+1): both endpoints shift, so the 1-floor span is
+    // preserved (0→1 becomes 1→2).
+    sheets.setSheetFloor('s1', 1);
+    final floors = {
+      for (final n in c.read(networkControllerProvider).network.nodes)
+        n.id: n.floorIndex
+    };
+    expect(floors['lo'], 1);
+    expect(floors['hi'], 2);
+  });
+
+  test('setSheetFloor node remap is a separate network undo step (B7)', () {
+    final c = makeSeededContainer();
+    final sheets = c.read(sheetsControllerProvider.notifier);
+    final net = c.read(networkControllerProvider.notifier);
+    final history = c.read(historyProvider.notifier);
+    net.loadNetwork(const Network(nodes: [
+      NetNode(id: 'a', sheetId: 's3', x: 0, y: 0, floorIndex: 2),
+    ]));
+
+    sheets.setSheetFloor('s3', 0);
+    expect(c.read(networkControllerProvider).network.nodes.single.floorIndex, 0);
+
+    // Undo the node remap (the most recent step), then the mapping change.
+    history.undo();
+    expect(c.read(networkControllerProvider).network.nodes.single.floorIndex, 2);
+    history.undo();
+    expect(c.read(sheetsControllerProvider).floorFor('s3', 3), 2);
+  });
+
+  test('setSheetFloor with no drawn nodes records only the mapping step', () {
+    final c = makeSeededContainer();
+    final sheets = c.read(sheetsControllerProvider.notifier);
+    final net = c.read(networkControllerProvider.notifier);
+
+    sheets.setSheetFloor('s3', 0);
+    // Empty network ⇒ the remap is a no-op (no network undo entry).
+    expect(net.canUndo, isFalse);
+    expect(sheets.canUndo, isTrue);
   });
 
   test('loadSheets clears the sheet-floor undo stack', () {

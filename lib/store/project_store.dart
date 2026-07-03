@@ -5,6 +5,7 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'history_store.dart';
+import 'network_store.dart';
 
 /// Editable project: name, the building's [floors] (the source of truth for
 /// riser/vertical length, §10), and per-sheet [calibrations] (px → real length,
@@ -114,6 +115,13 @@ class ProjectController extends Notifier<ProjectState> {
     if (floors.isEmpty) return;
     _snapshot();
     state = state.copyWith(floors: List<Floor>.from(floors));
+    // Keep drawn work in range so a template with fewer floors than the drawing
+    // can't strand nodes above the new top (which the always-on solve would
+    // otherwise size at a clamped elevation). One network undo step; a no-op —
+    // byte-identical — for an empty network or a stack that only grew.
+    ref
+        .read(networkControllerProvider.notifier)
+        .remapNodesForFloorChange(levelCount: state.floors.length);
   }
 
   void removeFloor(int index) {
@@ -123,6 +131,14 @@ class ProjectController extends Notifier<ProjectState> {
     _snapshot();
     final floors = [...state.floors]..removeAt(index);
     state = state.copyWith(floors: floors);
+    // Shift drawn nodes with the stack so removing a MIDDLE floor doesn't
+    // silently re-elevate the floors above it (their nodes drop one index to
+    // stay on their own physical floor); nodes on/above a removed top clamp
+    // into range. One network undo step; no-op for an empty network.
+    ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
+          levelCount: state.floors.length,
+          removedIndex: index,
+        );
   }
 
   void renameFloor(int index, String name) {

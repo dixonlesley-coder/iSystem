@@ -1,9 +1,11 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/history_store.dart';
+import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/units.dart';
 
 void main() {
@@ -135,6 +137,114 @@ void main() {
     final redone = c.read(projectControllerProvider);
     expect(redone.calibrationFor('s2')?.metersPerPixel, 0.02);
     expect(redone.calibrationFor('s3')?.metersPerPixel, 0.02);
+  });
+
+  // ── B6: editing the floor stack under a drawn network stays safe ───────────
+
+  test('setFloors that shrinks clamps drawn nodes above the new top (no crash)',
+      () {
+    final c = makeContainer();
+    final net = c.read(networkControllerProvider.notifier);
+    // 3-floor default; draw one node on each floor 0..2.
+    net.loadNetwork(const Network(nodes: [
+      NetNode(id: 'n0', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+      NetNode(id: 'n1', sheetId: 's1', x: 0, y: 0, floorIndex: 1),
+      NetNode(id: 'n2', sheetId: 's1', x: 0, y: 0, floorIndex: 2),
+    ]));
+    // Reduce to a single floor (a template with fewer floors, say).
+    c
+        .read(projectControllerProvider.notifier)
+        .setFloors(const [Floor('Only', Length(3.0))]);
+
+    final floors = {
+      for (final n in c.read(networkControllerProvider).network.nodes)
+        n.id: n.floorIndex
+    };
+    expect(floors['n0'], 0);
+    expect(floors['n1'], 0); // clamped down onto the single surviving floor
+    expect(floors['n2'], 0);
+    // No node can reference a floor the solve would index out of range.
+    final building = c.read(projectControllerProvider).building;
+    for (final fi in floors.values) {
+      expect(() => building.elevationOf(fi), returnsNormally);
+    }
+  });
+
+  test(
+      'removeFloor(middle) shifts higher nodes to KEEP their physical floor '
+      '(no silent re-elevation)', () {
+    final c = makeContainer();
+    final proj = c.read(projectControllerProvider.notifier);
+    final net = c.read(networkControllerProvider.notifier);
+    // A 5-floor building (setFloors on the still-empty network is a no-op remap).
+    proj.setFloors(const [
+      Floor('F0', Length(4.0)),
+      Floor('F1', Length(3.0)),
+      Floor('F2', Length(3.0)),
+      Floor('F3', Length(3.0)),
+      Floor('F4', Length(3.0)),
+    ]);
+    // Draw a node on F2 (index 2, elevation 4+3 = 7.0).
+    net.loadNetwork(const Network(nodes: [
+      NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 2),
+    ]));
+    expect(c.read(projectControllerProvider).building.elevationOf(2).meters,
+        closeTo(7.0, 1e-9));
+
+    // Remove F1 (index 1). F2 moves to index 1; the node must move WITH it —
+    // NOT stay at index 2 (which is now F3, a different physical floor).
+    proj.removeFloor(1);
+    final a = c.read(networkControllerProvider).network.nodes.single;
+    expect(a.floorIndex, 1);
+    final building = c.read(projectControllerProvider).building;
+    expect(building.levelCount, 4);
+    expect(building.floors[a.floorIndex].name, 'F2'); // still on its own slab
+  });
+
+  test('setFloors that only grows leaves drawn nodes untouched (byte-identical)',
+      () {
+    final c = makeContainer();
+    final net = c.read(networkControllerProvider.notifier);
+    net.loadNetwork(const Network(nodes: [
+      NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 2),
+    ]));
+    expect(net.canUndo, isFalse); // loadNetwork clears the network history
+
+    c.read(projectControllerProvider.notifier).setFloors(const [
+      Floor('F0', Length(4)),
+      Floor('F1', Length(3)),
+      Floor('F2', Length(3)),
+      Floor('F3', Length(3)),
+      Floor('F4', Length(3)),
+      Floor('F5', Length(3)),
+    ]);
+    // The node keeps its floor and the network recorded NO undo step.
+    expect(c.read(networkControllerProvider).network.nodes.single.floorIndex, 2);
+    expect(net.canUndo, isFalse);
+  });
+
+  test('a shrinking setFloors remaps nodes as one network undo step', () {
+    final c = makeContainer();
+    final net = c.read(networkControllerProvider.notifier);
+    net.loadNetwork(const Network(nodes: [
+      NetNode(id: 'top', sheetId: 's1', x: 0, y: 0, floorIndex: 2),
+    ]));
+    final hist = c.read(historyProvider.notifier);
+
+    c
+        .read(projectControllerProvider.notifier)
+        .setFloors(const [Floor('Only', Length(3.0))]);
+    expect(
+        c.read(networkControllerProvider).network.nodes.single.floorIndex, 0);
+
+    // The floor swap recorded a project step; the node remap a network step.
+    // Undo the network step first: the node returns to floor 2.
+    hist.undo();
+    expect(
+        c.read(networkControllerProvider).network.nodes.single.floorIndex, 2);
+    // Undo again: the floor stack is restored.
+    hist.undo();
+    expect(c.read(projectControllerProvider).floors.length, 3);
   });
 
   test('load() clears undo history (opened doc is a fresh baseline)', () {
