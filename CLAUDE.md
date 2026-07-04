@@ -277,8 +277,12 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   the size ladder collapsed to a `SteppedValueField`; one tinted selected-segment idiom across the
   draw tools, content cards that RAISE (`surface`), AA-legible headings (`textSecondary`), a top-bar
   primary anchor (Save accent when dirty + a demoted theme icon), and motion literals routed through
-  `MechXMotion`. Work the remaining waves (4 canvas-frame [Theme G] · 5 one-app+localize-trust
-  [Theme C + H1/H6]) from this document.
+  `MechXMotion`. **Wave 4 (Theme G — the canvas frame) HAS ALSO LANDED** (see the §15 row): a reusable
+  minimap on the Layout canvas (top-right; the Riser minimap deferred — its viewport model differs), a
+  MAGNETIC calibrated grid (grid-intersection snapping as the lowest-precedence snap, ortho-gated,
+  wired at the draw/nub-pull/drag sites, the typed-exact-length path excluded), an inspector-collapsed
+  on-canvas tool cluster, eased programmatic viewport changes, and left-drag-a-run-to-move-it. Work the
+  remaining wave (5 one-app+localize-trust [Theme C + H1/H6]) from this document.
 - **UX & workflow review (2026-07-02) — the plan of record for the prior UX/workflow work**:
   `UX-WORKFLOW-REVIEW.md` (root) holds 83 consolidated, adversarially code-verified findings
   (from 115 raw across 12 review lenses; 32 high / 42 medium / 9 low, two proven with widget

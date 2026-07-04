@@ -94,6 +94,11 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
                 widget.floorIndex,
                 world,
                 snapRadius: snapWorld,
+                // G2 — activate grid-intersection snapping when ortho/grid is
+                // on (the lowest-precedence snap; nodes/edges still win). Off
+                // when Shift frees the angle, so freeform placement is intact.
+                gridSnap: effOrtho,
+                gridMetersPerPixel: calibration?.metersPerPixel,
               );
             case DrawTool.drawRiser:
               // C6: consume the placement result — a single-floor building has

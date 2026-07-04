@@ -86,3 +86,28 @@ double calibratedGridWorldStep(double metersPerPixel,
   }
   return best;
 }
+
+/// The nearest grid INTERSECTION (world/sheet px) to [worldPoint] — the crossing
+/// of the two minor gridlines that [paintCanvasGrid] draws. It uses the SAME
+/// 1-2-5 m ladder step ([calibratedGridWorldStep]) and the SAME world-origin
+/// anchoring (line k sits at world k·step on each axis), so a cursor snapped onto
+/// the result lands EXACTLY on a painted line crossing — the "magnetic" grid and
+/// the visible grid can never drift apart (they read the one metric here).
+///
+/// [metersPerPixel] is the sheet's calibration; a non-positive/non-finite value
+/// falls back to the uncalibrated [defaultStep] texture (matching the painter's
+/// own fallback). This is PURE geometry with NO snap-radius gate — the caller
+/// decides whether the returned intersection is close enough to adopt (so the
+/// grid stays a last-resort attractor, never a hard lattice).
+Offset nearestGridIntersection(
+  Offset worldPoint,
+  double metersPerPixel, {
+  double defaultStep = 32.0,
+}) {
+  final step = calibratedGridWorldStep(metersPerPixel, defaultStep: defaultStep);
+  if (!(step > 0) || !step.isFinite) return worldPoint;
+  return Offset(
+    (worldPoint.dx / step).roundToDouble() * step,
+    (worldPoint.dy / step).roundToDouble() * step,
+  );
+}

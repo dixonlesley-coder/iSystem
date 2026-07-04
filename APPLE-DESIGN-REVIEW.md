@@ -53,7 +53,20 @@ per-package adversarial review, integrated centrally: full gate + golden regen +
   F2 companion. Goldens 01–08/10–15 regenerated + eyeballed (dark/light/hub). Deferred (documented):
   the electrical "Advanced" edit-loss-on-collapse (consistent with the existing commit-on-blur Close
   behavior) + its EN literal (Wave 5 electrical i18n); the lone nav-item 10.5 size (no scale token).
-- **Wave 4 — Theme G — pending.**
+- **Wave 4 — Theme G (the canvas frame) — LANDED (Riser minimap deferred).** G1 a reusable minimap
+  on the LAYOUT canvas (top-right, node markers + a live viewport rect, tap/drag to recenter, modelled
+  on the electrical canvas's minimap) — the Riser minimap is deferred (its viewport model differs from
+  the shared `CanvasView`); G2 the calibrated grid is now MAGNETIC — grid-intersection snapping added
+  as the LOWEST-precedence snap (nodes/edges/fittings still win), gated on ortho + calibration, wired
+  live at the draw / nub-pull / node-drag / endpoint-resize sites (the typed-exact-length path is
+  deliberately excluded so a typed measurement lands exactly); G3 an on-canvas tool cluster (Select/
+  Run/Riser + the active service) that appears ONLY when the inspector is collapsed, so drawing never
+  requires the inspector open; G4 the programmatic viewport changes (zoom/fit/minimap-recenter) EASE
+  instead of teleporting, while live wheel/drag stays immediate; G5 a left-drag on a run's BODY now
+  MOVES the run (one undo step via `moveMany`), preserving empty→marquee / node→move / endpoint→resize.
+  Goldens 01/02/03/06 (the Layout minimap) regenerated + eyeballed (no collision with the heatmap
+  legend or the collapse chevron); G3/G4/G5 golden-neutral. Additive: the minimap `ValueNotifier` +
+  the eased `AnimationController` are disposed; grid-snap is default-off/byte-identical.
 - **Wave 5 — Theme C + H1/H6 — pending.**
 
 ## The premise — how iSystem is *supposed* to function
@@ -261,7 +274,7 @@ The token system is mature; the gaps are about *restraint of application*.
 
 ---
 
-## Theme G — The canvas frame: navigation and physicality around the (excellent) drawing core
+## Theme G — The canvas frame: navigation and physicality around the (excellent) drawing core  ✅ LANDED (Wave 4; Riser minimap deferred)
 
 The *drawing* is Apple-grade; the *frame* around it — navigation, an honest grid, always-visible
 tool entry — lags.

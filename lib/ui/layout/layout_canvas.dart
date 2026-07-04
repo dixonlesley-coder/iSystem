@@ -31,6 +31,7 @@ import '../../store/annotation_store.dart';
 import '../../store/calibration_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/history_store.dart';
+import '../../store/inspector_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -40,6 +41,8 @@ import '../../store/sheets_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/calibration_overlay.dart';
 import '../canvas/canvas_grid.dart' show calibratedGridWorldStep;
+import '../canvas/canvas_minimap.dart';
+import '../canvas/canvas_tool_cluster.dart';
 import '../canvas/canvas_view.dart';
 import '../canvas/text_entry_guard.dart';
 import '../canvas/drawing_overlay.dart';
@@ -107,6 +110,18 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   final Map<String, GlobalKey<CanvasViewState>> _canvasKeys = {};
   GlobalKey<CanvasViewState> canvasKeyFor(String id) =>
       _canvasKeys.putIfAbsent(id, () => GlobalKey<CanvasViewState>());
+
+  /// The live canvas viewport (transform + size) the [CanvasView] publishes,
+  /// listened to by the on-canvas minimap (G1). A single sink for the current
+  /// sheet — the minimap only ever shows the active sheet, and switching sheets
+  /// re-publishes on the next frame.
+  final ValueNotifier<MinimapViewport?> _minimapViewport = ValueNotifier(null);
+
+  @override
+  void dispose() {
+    _minimapViewport.dispose();
+    super.dispose();
+  }
 
   // Middle-button PAN, handled here (an ancestor of the sheet's overlays) so it
   // works even though the overlays are opaque and would swallow the drag at the
@@ -908,6 +923,17 @@ class _SharedSheet extends ConsumerWidget {
     final tankMode = ref.watch(tankModeProvider);
     final roomMode = ref.watch(roomModeProvider);
 
+    // G3: the on-canvas tool cluster only appears when the inspector is
+    // collapsed (the canvas-focus state), so an inspector-open workspace stays
+    // byte-identical. G1: the network nodes on THIS sheet/floor are the minimap's
+    // content landmarks (content-pixel space, mapped like the sheet substrate).
+    final inspectorCollapsed = ref.watch(inspectorCollapsedProvider);
+    final minimapMarkers = <Offset>[
+      for (final n in ref.watch(networkControllerProvider).network.nodes)
+        if (n.sheetId == sheet.id && n.floorIndex == floorIndex)
+          Offset(n.x, n.y),
+    ];
+
     // The shared viewport transform (persisted per-sheet) is what the electrical
     // layer reads, so both disciplines ride the SAME pan/zoom.
     final vt = sheetsState.viewportFor(sheet.id) ?? const ViewportTransform();
@@ -955,6 +981,8 @@ class _SharedSheet extends ConsumerWidget {
             // E2: arrows nudge the mechanical selection by the grid step; with
             // nothing selected the host returns false and the canvas pans.
             onDirectionalKey: host.handleDirectionalKey,
+            // G1: publish the live viewport for the on-canvas minimap.
+            viewportSink: host._minimapViewport,
             onTransformChanged: (t) => ref
                 .read(sheetsControllerProvider.notifier)
                 .setViewport(sheet.id, t),
@@ -1153,6 +1181,49 @@ class _SharedSheet extends ConsumerWidget {
                   ? _electricalLayerGuideItems
                   : _mechanicalLayerGuideItems,
               onClose: host.closeGuide,
+            ),
+          ),
+        // On-canvas minimap (top-right) — a scaled overview of the sheet + drawn
+        // content + the live viewport rectangle; tap/drag to recenter (G1).
+        // Placed top-right, clear of every other overlay: the zoom cluster
+        // (bottom-left), the (?) guide (top-left), the mode pill (top-centre),
+        // the inspector-collapse chevron (which sits OUTSIDE the canvas, to its
+        // right) and the heatmap legend (bottom-right, on golden 03).
+        Positioned(
+          right: MechXSpacing.md,
+          top: MechXSpacing.sm,
+          child: ValueListenableBuilder<MinimapViewport?>(
+            valueListenable: host._minimapViewport,
+            builder: (context, vp, _) => CanvasMinimap(
+              contentSize: sheet.sizePx,
+              markers: minimapMarkers,
+              viewport: vp,
+              onRecenter: (world) => host
+                  .canvasKeyFor(sheet.id)
+                  .currentState
+                  ?.centreOnWorld(world),
+            ),
+          ),
+        ),
+        // On-canvas tool cluster (left edge, vertically centred) — SWITCH the
+        // primary draw tools (Select / Run / Riser) + the active-layer service
+        // without the inspector (G3). Shown ONLY when the inspector is collapsed
+        // and a mechanical layer is active, so an inspector-open workspace — and
+        // every seeded golden — is byte-identical. Its tool taps route through
+        // the same `_armTool` the single-key shortcuts use (shared mutual
+        // exclusion).
+        if (mechanicalActive && !calibrating && inspectorCollapsed)
+          Positioned(
+            left: MechXSpacing.md,
+            top: 0,
+            bottom: 0,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: CanvasToolCluster(
+                onSelect: () => host._armTool(null),
+                onRun: () => host._armTool(_CanvasTool.run),
+                onRiser: () => host._armTool(_CanvasTool.riser),
+              ),
             ),
           ),
         // Smart input bar (bottom-centre) — precise length entry while drawing a
