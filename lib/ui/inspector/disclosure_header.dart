@@ -77,7 +77,10 @@ class _DisclosureHeaderBarState extends State<_DisclosureHeaderBar> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final fg = _hover ? colors.accent : colors.textMuted;
+    // F3: the chevron pairs with the (now AA-legible) structural section label,
+    // so its rest tint tracks the label at `textSecondary` rather than the
+    // sub-AA `textMuted`; hover still lifts to the accent.
+    final fg = _hover ? colors.accent : colors.textSecondary;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),

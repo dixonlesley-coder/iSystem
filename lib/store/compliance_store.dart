@@ -15,6 +15,9 @@ import 'package:mechx_engine/electrical/panel_results.dart'
     show ElectricalWarning, WarningSeverity;
 import 'package:mechx_engine/report/mep_report.dart';
 
+import '../ui/strings/app_strings.dart';
+import '../ui/strings/plural.dart';
+import 'app_state.dart';
 import 'design_issues_store.dart';
 import 'electrical_store.dart';
 
@@ -31,6 +34,10 @@ ComplianceSummary buildComplianceSummaryFrom({
   required List<ElectricalWarning> electricalWarnings,
   required String date,
   Set<String> acknowledged = const {},
+  // Wave 5a (H1): category + detail strings resolve through the active locale.
+  // Defaults to English so the report-export path and pure tests that omit it
+  // stay byte-identical.
+  MechXStringsData strings = const MechXStringsData(AppLocale.en),
 }) {
   bool isFail(DesignIssue i) =>
       i.severity == IssueSeverity.warning ||
@@ -53,27 +60,34 @@ ComplianceSummary buildComplianceSummaryFrom({
     return matched;
   }
 
-  // Velocity: any out-of-band air-velocity warning fails the check.
+  // Velocity: any out-of-band air-velocity warning fails the check. Matched on
+  // the stable [DesignIssue.kind] (`duct-velocity` / `terminal-velocity`), NOT
+  // the now-localized title (which would fall out of the bucket in Bahasa).
   final velocityWarnings =
-      claim((i) => i.title.contains('velocity')).where(isFail).length;
+      claim((i) => i.kind.contains('velocity')).where(isFail).length;
   // Calibration: any uncalibrated-sheet issue fails the check — a blank sheet
   // is a warning, an edge-bearing one is escalated to critical, and BOTH must
-  // fail the 'Sheet calibration' compliance item.
+  // fail the 'Sheet calibration' compliance item. Both carry the stable
+  // `sheet-uncalibrated:<sheetId>` kind, so the prefix catches either.
   final calibrationWarnings =
-      claim((i) => i.title.contains('calibrated')).where(isFail).length;
+      claim((i) => i.kind.startsWith('sheet-uncalibrated')).where(isFail).length;
   // Standards verification: unverified-standard info items. An ACKNOWLEDGED
   // value no longer counts as OPEN (H1) — the mechanism that makes a PASS
   // structurally reachable while the full tiered register still prints in the
   // report (guardrail 6 intact). The acknowledged count is surfaced honestly in
   // the row detail rather than silently dropped.
-  final unverifiedItems = claim((i) => i.title == 'Unverified standard');
+  // H7a — verify rows now NAME their specific value in the title, so the generic
+  // 'Unverified standard' literal is gone; discriminate on the stable
+  // [DesignIssue.isVerify] flag instead.
+  final unverifiedItems = claim((i) => i.isVerify);
   final openUnverified = unverifiedItems.where((i) => !isAck(i)).length;
   final ackUnverified = unverifiedItems.length - openUnverified;
   // Electrical warnings are fanned into designIssuesProvider (Wave 3) with an
-  // 'Electrical: ' title prefix — claim them here so the dedicated
-  // 'Electrical circuit sizing' row below (counted from the solved system
-  // directly) stays the single source and nothing double-counts.
-  claim((i) => i.title.startsWith('Electrical:'));
+  // `electrical:<code>` kind — claim them here (on the stable kind, not the
+  // localized 'Electrical: …' title) so the dedicated 'Electrical circuit
+  // sizing' row below (counted from the solved system directly) stays the
+  // single source and nothing double-counts.
+  claim((i) => i.kind.startsWith('electrical:'));
 
   // Every other aggregated issue, grouped by title — duct over-capacity,
   // network connectivity, unsized air elements, drainage/Legionella
@@ -96,39 +110,68 @@ ComplianceSummary buildComplianceSummaryFrom({
   return ComplianceSummary(
     date: date,
     items: [
-      ComplianceItem('Air velocities within band',
+      ComplianceItem(strings(StringKey.complianceCategoryAirVelocity),
           pass: velocityWarnings == 0,
           detail: velocityWarnings == 0
-              ? 'all within band'
-              : '$velocityWarnings out of band'),
-      ComplianceItem('Sheet calibration',
+              ? strings(StringKey.complianceDetailAllWithinBand)
+              : strings.format(StringKey.complianceDetailOutOfBand,
+                  {'n': '$velocityWarnings'})),
+      ComplianceItem(strings(StringKey.complianceCategorySheetCalibration),
           pass: calibrationWarnings == 0,
           detail: calibrationWarnings == 0
-              ? 'all sheets calibrated'
-              : '$calibrationWarnings uncalibrated'),
-      ComplianceItem('Standards verification',
+              ? strings(StringKey.complianceDetailAllCalibrated)
+              : strings.format(StringKey.complianceDetailUncalibrated,
+                  {'n': '$calibrationWarnings'})),
+      ComplianceItem(strings(StringKey.complianceCategoryStandardsVerification),
           pass: openUnverified == 0,
           detail: openUnverified == 0
               ? (ackUnverified == 0
-                  ? 'all values verified'
-                  : '$ackUnverified acknowledged, none open')
+                  ? strings(StringKey.complianceDetailAllVerified)
+                  : strings.format(StringKey.complianceDetailAckNoneOpen,
+                      {'n': '$ackUnverified'}))
               : (ackUnverified == 0
-                  ? '$openUnverified value(s) require verification or '
-                      'acknowledgement before submission'
-                  : '$openUnverified open, $ackUnverified acknowledged')),
+                  ? strings.format(
+                      StringKey.complianceDetailRequireVerification, {
+                      'values': pluralCount(
+                          openUnverified,
+                          strings(StringKey.complianceNounValueOne),
+                          strings(StringKey.complianceNounValueMany)),
+                    })
+                  : strings.format(StringKey.complianceDetailOpenAck,
+                      {'open': '$openUnverified', 'ack': '$ackUnverified'}))),
       for (final e in remainder.entries)
         ComplianceItem(e.key,
             pass: !e.value.any(isFail),
             detail: e.value.any(isFail)
-                ? '${e.value.where(isFail).length} finding(s)'
-                : '${e.value.length} advisory note(s)'),
-      ComplianceItem('Electrical circuit sizing',
+                ? pluralCount(
+                    e.value.where(isFail).length,
+                    strings(StringKey.complianceNounFindingOne),
+                    strings(StringKey.complianceNounFindingMany))
+                : pluralCount(
+                    e.value.length,
+                    strings(StringKey.complianceNounAdvisoryNoteOne),
+                    strings(StringKey.complianceNounAdvisoryNoteMany))),
+      ComplianceItem(strings(StringKey.complianceCategoryElectricalSizing),
           pass: eErrors == 0,
           detail: eErrors == 0
               ? (eWarns == 0
-                  ? 'no sizing errors'
-                  : '$eWarns warning(s), no errors')
-              : '$eErrors error(s), $eWarns warning(s)'),
+                  ? strings(StringKey.complianceDetailNoSizingErrors)
+                  : strings.format(StringKey.complianceDetailWarningsNoErrors, {
+                      'warnings': pluralCount(
+                          eWarns,
+                          strings(StringKey.complianceNounWarningOne),
+                          strings(StringKey.complianceNounWarningMany)),
+                    }))
+              : strings.format(StringKey.complianceDetailErrorsWarnings, {
+                  'errors': pluralCount(
+                      eErrors,
+                      strings(StringKey.complianceNounErrorOne),
+                      strings(StringKey.complianceNounErrorMany)),
+                  'warnings': pluralCount(
+                      eWarns,
+                      strings(StringKey.complianceNounWarningOne),
+                      strings(StringKey.complianceNounWarningMany)),
+                })),
     ],
   );
 }
@@ -141,6 +184,7 @@ final complianceSummaryProvider = Provider<ComplianceSummary>((ref) {
     issues: ref.watch(designIssuesProvider),
     electricalWarnings: ref.watch(electricalResultProvider).warnings,
     acknowledged: ref.watch(acknowledgedIssuesProvider),
+    strings: MechXStringsData(ref.watch(localeProvider)),
     // The verdict date is formatted app-side (the engine never reads the
     // clock); it only rolls at midnight, which no open session cares about.
     date: DateTime.now().toIso8601String().split('T').first,

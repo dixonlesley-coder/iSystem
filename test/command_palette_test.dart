@@ -124,12 +124,13 @@ void main() {
       return c;
     }
 
-    test('fresh project: only Floors done (3 default floors), active=Calibrate',
-        () {
+    test('fresh project: nothing done (default seed no longer lies), '
+        'active=Calibrate', () {
       final c = makeContainer();
       final s = c.read(workflowStageStateProvider);
-      // The default project ships with 3 floors → Floors is done.
-      expect(s.isDone(WorkflowStage.floors), isTrue);
+      // A2: the untouched 3-floor seed no longer pre-ticks Floors — Building
+      // unvisited, stack == seed, nothing drawn ⇒ Floors NOT done.
+      expect(s.isDone(WorkflowStage.floors), isFalse);
       // Demo sheets are uncalibrated; nothing drawn or sized.
       expect(s.isDone(WorkflowStage.calibrate), isFalse);
       expect(s.isDone(WorkflowStage.draw), isFalse);
@@ -147,8 +148,8 @@ void main() {
           .setCalibration('s1', const ScaleCalibration(0.01));
       final s = c.read(workflowStageStateProvider);
       expect(s.isDone(WorkflowStage.calibrate), isTrue);
-      // Floors already done, calibrate now done → active is Draw.
-      expect(s.active, WorkflowStage.draw);
+      // Nothing drawn and Building unvisited ⇒ Floors is the next honest gap.
+      expect(s.active, WorkflowStage.floors);
     });
 
     test('drawing an edge marks Draw + Size done; Report needs a real export',
@@ -175,13 +176,15 @@ void main() {
           isTrue);
     });
 
-    test('single-floor building: Floors NOT done', () {
+    test('a custom floor stack (diverged from the seed) marks Floors done', () {
       final c = makeContainer();
       c
           .read(projectControllerProvider.notifier)
           .setFloors(const [Floor('Only', Length(3.0))]);
       final s = c.read(workflowStageStateProvider);
-      expect(s.isDone(WorkflowStage.floors), isFalse);
+      // A2: changing the stack away from the default seed IS genuine floors
+      // engagement, so Floors is done even before the Building screen is opened.
+      expect(s.isDone(WorkflowStage.floors), isTrue);
       // With nothing else done, the first not-done stage is Calibrate.
       expect(s.active, WorkflowStage.calibrate);
     });

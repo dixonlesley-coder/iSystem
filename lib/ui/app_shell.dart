@@ -41,6 +41,7 @@ import 'theme/mechx_theme.dart';
 import 'widgets/glass_surface.dart';
 import 'widgets/mechx_button.dart';
 import 'widgets/mechx_focus_ring.dart';
+import 'widgets/section_label.dart';
 import 'widgets/severity_glyph.dart';
 
 /// Top-level layout (PanelMaker-style chrome): a left navigation rail beside a
@@ -133,6 +134,17 @@ class _AppShellState extends ConsumerState<AppShell> {
     ref.listen(sizingProvider, (previous, next) {
       if ((previous == null || previous.isEmpty) && next.isNotEmpty) {
         ref.read(firstAutoSizeNudgeProvider.notifier).maybeFire(next.length);
+      }
+    });
+    // A2: latch "Building visited" the first time the engineer opens the
+    // Building (floors) section, so the workflow stepper's Floors stage
+    // reflects a real interaction rather than the default 3-floor seed. This is
+    // the always-mounted host; the latch itself is session-transient
+    // (`buildingVisitedProvider`) and never fires in the seeded golden suite
+    // (which drives Review/Commercial/Projects but never opens Building).
+    ref.listen(shellSectionProvider, (previous, next) {
+      if (next == ShellSection.building) {
+        ref.read(buildingVisitedProvider.notifier).markVisited();
       }
     });
     // The auto-update banner + command palette are stacked on top as non-layout
@@ -314,12 +326,13 @@ class _RiserInspectorColumn extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Riser',
-                style: type.subtitle.copyWith(color: colors.textPrimary)),
+            // C5: converge on the shared section-heading idiom
+            // (`MechXSectionLabel`) the main + electrical inspectors use, rather
+            // than a raw ad-hoc `Text` title with a bespoke type/colour.
+            const MechXSectionLabel('Riser'),
             const SizedBox(height: MechXSpacing.md),
             // Building context (levels/height) → opens the Building page.
-            Text('Building',
-                style: type.caption.copyWith(color: colors.textMuted)),
+            const MechXSectionLabel('Building'),
             const SizedBox(height: MechXSpacing.xs),
             _RiserSummaryCard(
               summary:
@@ -332,20 +345,24 @@ class _RiserInspectorColumn extends ConsumerWidget {
             const SizedBox(height: MechXSpacing.lg),
             // Feed strategy — the input that decides each riser's function tag
             // (gravity downfeed vs upfeed/booster) on the diagram.
-            Text('Feed strategy',
-                style: type.caption.copyWith(color: colors.textMuted)),
+            const MechXSectionLabel('Feed strategy'),
             const SizedBox(height: MechXSpacing.xs),
-            MechXButton(
+            // C5: the two feed-strategy choices are a mutually-exclusive segment,
+            // so they wear the shared TINTED selected-segment idiom (accentMuted
+            // fill + accent border) used by the draw tools / service chips — not a
+            // solid-accent fill, so a single solid accent stays reserved for the
+            // primary action.
+            _TintedToggle(
               label: 'Upfeed pump',
-              primary: strategy == FeedStrategy.upfeed,
-              onPressed: () =>
+              selected: strategy == FeedStrategy.upfeed,
+              onTap: () =>
                   ref.read(feedStrategyProvider.notifier).set(FeedStrategy.upfeed),
             ),
             const SizedBox(height: MechXSpacing.xs),
-            MechXButton(
+            _TintedToggle(
               label: 'Roof-tank downfeed',
-              primary: strategy == FeedStrategy.downfeed,
-              onPressed: () => ref
+              selected: strategy == FeedStrategy.downfeed,
+              onTap: () => ref
                   .read(feedStrategyProvider.notifier)
                   .set(FeedStrategy.downfeed),
             ),
@@ -356,6 +373,63 @@ class _RiserInspectorColumn extends ConsumerWidget {
               style: type.caption.copyWith(color: colors.textMuted),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A tinted selected-segment toggle (C5) — the shared idiom used by the draw
+/// tools / service chips: a soft `accentMuted` fill + accent border when
+/// selected, so a single SOLID accent stays reserved for the primary action.
+/// A local mirror of the (file-private) `_TintedToggle` in `project_panel.dart`
+/// — same styling, kept in step so the riser inspector reads as one app.
+class _TintedToggle extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _TintedToggle({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: MechXFocusRing(
+        onActivated: onTap,
+        borderRadius: MechXRadii.control,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              // Match the default MechXButton padding, compensating the heavier
+              // selected border so the toggle never resizes between states.
+              horizontal: MechXSpacing.sm + 4 - (selected ? 1 : 0),
+              vertical: MechXSpacing.xs + 2 - (selected ? 1 : 0),
+            ),
+            decoration: BoxDecoration(
+              color: selected ? colors.accentMuted : colors.surfaceHover,
+              borderRadius: MechXRadii.control,
+              border: Border.all(
+                color: selected ? colors.accent : const Color(0x00000000),
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: Text(
+              label,
+              style: type.label.copyWith(
+                color: selected ? colors.accent : colors.textPrimary,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -498,6 +572,15 @@ class _TopBar extends ConsumerWidget {
               ),
             ],
             const Spacer(),
+            // D1: a small, permanent entry point for the command palette, which
+            // is otherwise reachable only via the invisible Ctrl/Cmd+K
+            // accelerator. A quiet keycap pill (a hint, not a primary action)
+            // that both advertises the shortcut and opens the palette on click.
+            _PaletteHintButton(
+              onTap: () =>
+                  ref.read(commandPaletteOpenProvider.notifier).open(),
+            ),
+            const SizedBox(width: MechXSpacing.sm),
             // Actions sit flush-right. The zoom read-out is a quiet pill: a
             // soft tinted fill carries it, no hairline border — less visual
             // mass than a fully-outlined chip (HIG).
@@ -523,6 +606,11 @@ class _TopBar extends ConsumerWidget {
             const SizedBox(width: MechXSpacing.xs),
             MechXButton(
               label: context.strings(StringKey.shellSave),
+              // F6: Save is the top bar's primary anchor — it wears the solid
+              // accent while the work is dirty (the same `projectDirtyProvider`
+              // signal that drives the "edited" dot), and falls back to the
+              // quiet gray button once the work matches the last clean save.
+              primary: dirty,
               onPressed: () => saveProject(ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
@@ -531,14 +619,15 @@ class _TopBar extends ConsumerWidget {
               onPressed: () => importPlan(context, ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
-            MechXButton(
-              // Name the ACTION, not the current mode: in light mode the button
-              // acts toward dark, and vice-versa.
-              label: brightness == Brightness.dark
+            // F6: the theme toggle is DEMOTED from a full gray button (a visual
+            // peer of Save) to a compact, muted icon control so it stops
+            // competing with the primary action. Names the ACTION for a screen
+            // reader (act toward the opposite mode).
+            _ThemeToggleButton(
+              semanticLabel: brightness == Brightness.dark
                   ? context.strings(StringKey.shellSwitchToLight)
                   : context.strings(StringKey.shellSwitchToDark),
-              onPressed: () =>
-                  ref.read(brightnessProvider.notifier).toggle(),
+              onTap: () => ref.read(brightnessProvider.notifier).toggle(),
             ),
           ],
         ),
@@ -550,6 +639,164 @@ class _TopBar extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.sm),
         child: Text('·', style: TextStyle(fontFamily: 'Roboto', color: color)),
       );
+}
+
+/// The top-bar command-palette affordance (D1): a quiet keycap pill mirroring
+/// the zoom read-out's soft-tint idiom — a permanent, unobtrusive entry point
+/// for the palette (which otherwise has no visible entry at all, only the
+/// invisible Ctrl/Cmd+K accelerator). A hint, not a primary action: it never
+/// wears the solid accent; it brightens on hover and opens the palette on
+/// click. The keycap is plain ASCII ("Ctrl K", Windows-first) so it can never
+/// render as tofu, and it is keyboard-focusable + Enter/Space-activatable via
+/// the shared focus ring, announced as an "Open command palette" button.
+class _PaletteHintButton extends StatefulWidget {
+  final VoidCallback onTap;
+  const _PaletteHintButton({required this.onTap});
+
+  @override
+  State<_PaletteHintButton> createState() => _PaletteHintButtonState();
+}
+
+class _PaletteHintButtonState extends State<_PaletteHintButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Semantics(
+      button: true,
+      label: 'Open command palette',
+      child: MechXFocusRing(
+        borderRadius: MechXRadii.control,
+        onActivated: widget.onTap,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: AnimatedContainer(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
+              padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm,
+                vertical: MechXSpacing.xxs,
+              ),
+              decoration: BoxDecoration(
+                color: _hover ? colors.surfaceHover : colors.background,
+                borderRadius: MechXRadii.control,
+              ),
+              child: Text(
+                'Ctrl K',
+                style: type.mono.copyWith(
+                  color: _hover ? colors.textSecondary : colors.textMuted,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The demoted theme toggle (F6): a compact, muted icon control — the sibling
+/// of [_PaletteHintButton]'s quiet idiom — so the "switch appearance" action no
+/// longer reads as a gray-button peer of the primary Save. Transparent at rest
+/// (an iconic glyph, not a filled chip), it brightens on hover, is
+/// keyboard-focusable + Enter/Space-activatable via the shared focus ring, and
+/// announces its ACTION (switch to light / dark) to a screen reader. The glyph
+/// is custom-painted (no icon font) so it can never render as tofu.
+class _ThemeToggleButton extends StatefulWidget {
+  final String semanticLabel;
+  final VoidCallback onTap;
+  const _ThemeToggleButton({required this.semanticLabel, required this.onTap});
+
+  @override
+  State<_ThemeToggleButton> createState() => _ThemeToggleButtonState();
+}
+
+class _ThemeToggleButtonState extends State<_ThemeToggleButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Semantics(
+      button: true,
+      label: widget.semanticLabel,
+      child: MechXFocusRing(
+        borderRadius: MechXRadii.control,
+        onActivated: widget.onTap,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: AnimatedContainer(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
+              padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm,
+                vertical: MechXSpacing.xs,
+              ),
+              decoration: BoxDecoration(
+                color: _hover ? colors.surfaceHover : const Color(0x00000000),
+                borderRadius: MechXRadii.control,
+              ),
+              child: CustomPaint(
+                size: const Size(16, 16),
+                painter: _ThemeGlyphPainter(
+                  color: _hover ? colors.textSecondary : colors.textMuted,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The "appearance" (light/dark) mark: a ring with its left half filled — the
+/// conventional half-moon-in-a-circle theme glyph. Custom-painted from
+/// primitives (no icon font, no trig), so it never renders as tofu.
+class _ThemeGlyphPainter extends CustomPainter {
+  final Color color;
+  const _ThemeGlyphPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final c = Offset(w * 0.5, h * 0.5);
+    final r = w * 0.30;
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..strokeCap = StrokeCap.round;
+    final fill = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(c, r, stroke);
+    // The left half: a semicircle (chord = 2·r, radius = r ⇒ exact half circle)
+    // closed back along the vertical diameter.
+    final leftHalf = Path()
+      ..moveTo(c.dx, c.dy - r)
+      ..arcToPoint(
+        Offset(c.dx, c.dy + r),
+        radius: Radius.circular(r),
+        clockwise: false,
+      )
+      ..close();
+    canvas.drawPath(leftHalf, fill);
+  }
+
+  @override
+  bool shouldRepaint(_ThemeGlyphPainter old) => old.color != color;
 }
 
 class _StatusBar extends ConsumerWidget {
@@ -564,10 +811,12 @@ class _StatusBar extends ConsumerWidget {
     final calibrated =
         sheet != null && project.calibrationFor(sheet.id) != null;
     // The standards-provenance dot lights only when there are genuinely
-    // unverified values to flag — a quiet caption otherwise.
+    // unverified values to flag — a quiet caption otherwise. H7a — verify rows
+    // now name their specific value in the title, so match on the stable
+    // [DesignIssue.isVerify] flag rather than the old generic literal.
     final hasUnverified = ref
         .watch(designIssuesProvider)
-        .any((i) => i.title == 'Unverified standard');
+        .any((i) => i.isVerify);
 
     final caption = type.caption;
 
@@ -1027,10 +1276,8 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
                   Expanded(
                     child: Text(
                       doc == null
-                          ? 'A recovery snapshot from the previous session '
-                              'exists but could not be read - it was likely '
-                              'torn by an interrupted write and cannot be '
-                              'restored.'
+                          // H5 — say what to DO, not what broke internally.
+                          ? context.strings(StringKey.recoveryTornUnreadable)
                           : context.strings
                               .format(StringKey.shellRecoverPrompt, {
                               'name': doc.projectName,

@@ -147,7 +147,7 @@ void main() {
       final c = makeContainer();
       final infos = c
           .read(designIssuesProvider)
-          .where((i) => i.title == 'Unverified standard')
+          .where((i) => i.isVerify)
           .toList();
       expect(infos, isNotEmpty);
       expect(infos.every((i) => i.severity == IssueSeverity.info), isTrue);

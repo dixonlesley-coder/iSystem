@@ -19,7 +19,7 @@ class InspectorCollapsedController extends Notifier<bool> {
 }
 
 /// Per-section EXPANDED/collapsed state for the dense [ProjectPanel] inspector,
-/// keyed by section name ('Draw', 'Network', 'HVAC', …). A section absent from
+/// keyed by section name ('Draw', 'Results', 'HVAC', …). A section absent from
 /// the map has never been toggled, so its caller-supplied default applies; a
 /// present entry is the user's explicit choice. This is transient UI state — it
 /// is intentionally NOT persisted to `.mechx`, so reopening a project starts

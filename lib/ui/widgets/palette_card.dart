@@ -71,7 +71,8 @@ class _PaletteCardState<T extends Object> extends State<PaletteCard<T>> {
           onEnter: (_) => setState(() => _hover = true),
           onExit: (_) => setState(() => _hover = false),
           child: AnimatedScale(
-            scale: _hover ? 1.03 : 1.0,
+            // F7: the hover LIFT is the shared motion token, not a literal.
+            scale: _hover ? MechXMotion.hoverLift : 1.0,
             duration: MechXMotion.hover,
             curve: MechXMotion.standard,
             child: chip,
@@ -100,7 +101,10 @@ class _PaletteCardState<T extends Object> extends State<PaletteCard<T>> {
         vertical: MechXSpacing.xs,
       ),
       decoration: BoxDecoration(
-        color: dragging ? colors.surfaceHover : colors.background,
+        // F2: a content cell RAISES (iOS elevation) — `surface` is the elevated
+        // tone above the grouped `background`, so a palette chip reads lifted,
+        // not recessed. Dragging still deepens to `surfaceHover`.
+        color: dragging ? colors.surfaceHover : colors.surface,
         borderRadius: MechXRadii.control,
         border: Border.all(color: dragging ? colors.accent : colors.border),
         boxShadow: dragging

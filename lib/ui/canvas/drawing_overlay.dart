@@ -11,6 +11,7 @@ import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/smart_input_store.dart';
+import 'canvas_grid.dart' show calibratedGridWorldStep, nearestGridIntersection;
 import 'service_style.dart';
 import 'snapping.dart';
 import 'viewport.dart';
@@ -68,6 +69,26 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
         ? snapOrTeePoint(drawing.network, widget.sheetId, widget.floorIndex,
             previewHover, snapWorld)
         : null;
+    // G2 — the calibrated grid is MAGNETIC, but only when its minor lines are
+    // actually visible at this zoom (the painter hides them below 6 screen-px),
+    // so the snap can never target an invisible crossing. Lowest precedence: a
+    // node/tee snap always wins. When it applies, the ring + rubber-band land on
+    // the grid point so the commit is WYSIWYG (the store snaps to the same point).
+    final gridMpp = calibration?.metersPerPixel;
+    final gridEligible = gridMpp != null &&
+        calibratedGridWorldStep(gridMpp) * transform.scale >= 6.0;
+    var endHover = previewHover;
+    var ringPt = snapPt;
+    if (effectiveOrtho &&
+        gridEligible &&
+        snapPt == null &&
+        previewHover != null) {
+      final g = nearestGridIntersection(previewHover, gridMpp);
+      if ((g - previewHover).distance <= snapWorld) {
+        endHover = g;
+        ringPt = g;
+      }
+    }
 
     return MouseRegion(
       cursor: SystemMouseCursors.precise,
@@ -94,6 +115,12 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
                 widget.floorIndex,
                 world,
                 snapRadius: snapWorld,
+                // G2 — grid-intersection snapping (lowest precedence; nodes/edges
+                // still win), on only when ortho is on AND the minor grid is
+                // visible at this zoom, so the commit matches the WYSIWYG ring
+                // preview above. Off when Shift frees the angle.
+                gridSnap: effOrtho && gridEligible,
+                gridMetersPerPixel: gridMpp,
               );
             case DrawTool.drawRiser:
               // C6: consume the placement result — a single-floor building has
@@ -127,9 +154,9 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
           size: Size.infinite,
           painter: RubberBandPainter(
             pending: drawing.pendingPoint,
-            hover: previewHover,
+            hover: endHover,
             snapScreen:
-                snapPt != null ? transform.worldToScreen(snapPt) : null,
+                ringPt != null ? transform.worldToScreen(ringPt) : null,
             transform: transform,
             calibration: calibration,
             color: serviceColor(drawing.service),

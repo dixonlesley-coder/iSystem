@@ -10,6 +10,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/ai_copilot_store.dart';
+import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
@@ -88,11 +90,11 @@ class _CopilotPanelState extends ConsumerState<_CopilotPanel> {
           Row(
             children: [
               Expanded(
-                child: Text('Ask Claude',
+                child: Text(context.strings(StringKey.copilotTitle),
                     style: type.title.copyWith(color: colors.textPrimary)),
               ),
               MechXButton(
-                label: 'Close',
+                label: context.strings(StringKey.copilotClose),
                 tertiary: true,
                 onPressed: () => ref.read(copilotOpenProvider.notifier).close(),
               ),
@@ -100,10 +102,7 @@ class _CopilotPanelState extends ConsumerState<_CopilotPanel> {
           ),
           const SizedBox(height: MechXSpacing.xs),
           Text(
-            'Select a room or element, then ask Claude to add equipment, runs or '
-            'terminals — or to auto-place a room\'s air terminals. Claude adds and '
-            'advises; it does not edit or delete existing elements. You review '
-            'every step before it is applied.',
+            context.strings(StringKey.copilotDescription),
             style: type.caption.copyWith(color: colors.textMuted),
           ),
           const SizedBox(height: MechXSpacing.md),
@@ -115,12 +114,14 @@ class _CopilotPanelState extends ConsumerState<_CopilotPanel> {
             enabled: enabled && state.phase != CopilotPhase.thinking,
             onSubmit: _send,
             hint: enabled
-                ? 'e.g. design supply air for this room'
-                : 'Add an API key in Preferences to enable',
+                ? context.strings(StringKey.copilotHintEnabled)
+                : context.strings(StringKey.copilotHintDisabled),
           ),
           const SizedBox(height: MechXSpacing.sm),
           MechXButton(
-            label: state.phase == CopilotPhase.thinking ? 'Thinking…' : 'Ask',
+            label: state.phase == CopilotPhase.thinking
+                ? context.strings(StringKey.copilotThinkingButton)
+                : context.strings(StringKey.copilotAsk),
             primary: true,
             onPressed: enabled && state.phase != CopilotPhase.thinking
                 ? _send
@@ -149,7 +150,7 @@ class _Body extends ConsumerWidget {
       case CopilotPhase.idle:
         return const SizedBox.shrink();
       case CopilotPhase.thinking:
-        return Text('Claude is planning…',
+        return Text(context.strings(StringKey.copilotPlanning),
             style: type.caption.copyWith(color: colors.textMuted));
       case CopilotPhase.applied:
         // Honest partial-apply account: what was applied and — one line each —
@@ -159,11 +160,11 @@ class _Body extends ConsumerWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(state.message ?? 'Applied.',
+            Text(state.message ?? context.strings(StringKey.copilotApplied),
                 style: type.body.copyWith(color: colors.textPrimary)),
             if (report != null && report.skipped.isNotEmpty) ...[
               const SizedBox(height: MechXSpacing.sm),
-              Text('Skipped',
+              Text(context.strings(StringKey.copilotSkipped),
                   style: type.caption.copyWith(color: colors.textMuted)),
               const SizedBox(height: MechXSpacing.xxs),
               for (final s in report.skipped)
@@ -175,7 +176,7 @@ class _Body extends ConsumerWidget {
             ],
             const SizedBox(height: MechXSpacing.md),
             MechXButton(
-              label: 'Done',
+              label: context.strings(StringKey.copilotDone),
               tertiary: true,
               onPressed: () => ref.read(copilotProvider.notifier).reset(),
             ),
@@ -189,7 +190,7 @@ class _Body extends ConsumerWidget {
             borderRadius: MechXRadii.control,
             border: Border.all(color: colors.border),
           ),
-          child: Text(state.message ?? 'No suggestion.',
+          child: Text(state.message ?? context.strings(StringKey.copilotNoSuggestion),
               style: type.body.copyWith(color: colors.textSecondary)),
         );
       case CopilotPhase.proposed:
@@ -202,8 +203,13 @@ class _Body extends ConsumerWidget {
                   style: type.body.copyWith(color: colors.textSecondary)),
               const SizedBox(height: MechXSpacing.sm),
             ],
-            Text('Proposed plan · ${plan.mutatingCount} change'
-                '${plan.mutatingCount == 1 ? '' : 's'}',
+            Text(
+                context.strings.format(StringKey.copilotProposedPlan, {
+                  'changes': pluralCount(
+                      plan.mutatingCount,
+                      context.strings(StringKey.copilotChangeNounOne),
+                      context.strings(StringKey.copilotChangeNounMany)),
+                }),
                 style: type.caption.copyWith(color: colors.textMuted)),
             const SizedBox(height: MechXSpacing.xs),
             for (final c in plan.commands)
@@ -217,7 +223,7 @@ class _Body extends ConsumerWidget {
               children: [
                 Expanded(
                   child: MechXButton(
-                    label: 'Apply',
+                    label: context.strings(StringKey.copilotApply),
                     primary: true,
                     onPressed: () =>
                         ref.read(copilotProvider.notifier).applyPlan(),
@@ -226,7 +232,7 @@ class _Body extends ConsumerWidget {
                 const SizedBox(width: MechXSpacing.xs),
                 Expanded(
                   child: MechXButton(
-                    label: 'Discard',
+                    label: context.strings(StringKey.copilotDiscard),
                     tertiary: true,
                     onPressed: () =>
                         ref.read(copilotProvider.notifier).discard(),

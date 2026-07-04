@@ -254,7 +254,52 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
-- **UX & workflow review (2026-07-02) — the CURRENT plan of record for UX/workflow work**:
+- **Apple-design review (2026-07-04) — the CURRENT plan of record for ease-of-use/UX polish**:
+  `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
+  UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the
+  remaining gap is *consistency + restraint of application* and *orientation between steps*. 8 themes
+  (A orientation · B one-vocabulary · C one-app · D findable-power · E calmer-inspector · F visual-
+  restraint · G canvas-frame · H speak-clearly), every finding file:line-grounded, sequenced into 5
+  implementation waves. **Waves 1 + 2 HAVE LANDED** (see the two §15 rows). **Wave 1 (Themes A + D —
+  orientation & discoverability):** a one-time first-run orientation card, an honest workflow stepper
+  (Floors no longer pre-ticks the default seed), the template card routes into Import, a first-draw
+  hint, import navigates to the plan, one "Building" name, honest "Floor N of M", a "Ctrl K" palette
+  affordance + palette keycaps. **Wave 2 (Theme B one-vocabulary + Theme H copy H2–H5/H7):** one noun
+  for a drawn edge ("run"), "sheet" vs "plan", matched abbreviations (BOM/calc), scoped "Issues"
+  counts; a pure `plural`/`pluralCount` helper (`ui/strings/plural.dart`) kills the "(s)" dev-speak,
+  "Tap again to discard", a localized auto-sized toast + torn-recovery message, and specific
+  "Unverified: <value>" titles behind a stable `DesignIssue.isVerify` discriminator. Every fix is
+  additive / guardrail-safe (custom design system, offline, byte-identical-when-idle, opaque content,
+  ASCII+Roboto on canvas) and touches UI/app-shell/strings only. **Wave 3 (Themes E + F — calmer
+  inspector + visual restraint) HAS ALSO LANDED** (see the §15 row): data-gated result sections
+  (Fire no longer shows a phantom fire-pump duty), identity-first node/edge/electrical editors with
+  expert params under disclosures, honest section names (Sizing→"Design inputs", Network→"Results"),
+  the size ladder collapsed to a `SteppedValueField`; one tinted selected-segment idiom across the
+  draw tools, content cards that RAISE (`surface`), AA-legible headings (`textSecondary`), a top-bar
+  primary anchor (Save accent when dirty + a demoted theme icon), and motion literals routed through
+  `MechXMotion`. **Wave 4 (Theme G — the canvas frame) HAS ALSO LANDED** (see the §15 row): a reusable
+  minimap on the Layout canvas (top-right; the Riser minimap deferred — its viewport model differs), a
+  MAGNETIC calibrated grid (grid-intersection snapping as the lowest-precedence snap, ortho-gated,
+  wired at the draw/nub-pull/drag sites, the typed-exact-length path excluded), an inspector-collapsed
+  on-canvas tool cluster, eased programmatic viewport changes, and left-drag-a-run-to-move-it.
+  **Wave 5a (H1 + H6 — localize the TRUST surface) HAS ALSO LANDED** (see the §15 row): the compliance
+  verdict + category rows + detail messages, the whole Review hub + issues card, and every
+  `DesignIssue` title/message now resolve through the i18n mechanism (123 new EN+ID keys), so the
+  Bahasa sign-off surface renders in Indonesian; to keep acknowledgements + the compliance fan-in
+  working across locales, `DesignIssue` gained a stable locale-independent `kind` discriminator (its
+  ack `key` is `kind`-based, not the localized title, and the compliance store matches on `kind`, not
+  English title substrings); H6 localized the Ask-Claude copilot + the half-localized "Load sample
+  project" / "Apply a building template" (EN byte-identical ⇒ goldens hold). **Wave 5b (Theme-C
+  consistency C2/C3/C5) HAS ALSO LANDED** (see the §15 row): one segment idiom (the forked
+  `_LayerSegment` + Riser `_TabButton` → the canonical `MechXSegment` for radios, with independent
+  toggles split to a distinct checkbox/eye idiom — the Riser toolbar no longer shows Auto+Details+Notes
+  as identical "selected" pills), the shared `CanvasGuideButton` help everywhere incl. Riser Auto, and
+  the Riser inspector converged onto `MechXSectionLabel` + the tinted selected-segment idiom. **This
+  completes the implementable scope of `APPLE-DESIGN-REVIEW.md` — all 8 themes (A–H) are landed or (the
+  one tier-5 item) explicitly dispositioned; the DELIBERATELY-DEFERRED item is C1/C4, the electrical-
+  shell restructure (bring `ElectricalView` under the shared shell scaffold + inline inspector — a
+  large architectural refactor of a functional workspace, lowest priority, a dedicated follow-up).**
+- **UX & workflow review (2026-07-02) — the plan of record for the prior UX/workflow work**:
   `UX-WORKFLOW-REVIEW.md` (root) holds 83 consolidated, adversarially code-verified findings
   (from 115 raw across 12 review lenses; 32 high / 42 medium / 9 low, two proven with widget
   tests) covering first-run honesty (demo sheets + the sample switchboard leak into real

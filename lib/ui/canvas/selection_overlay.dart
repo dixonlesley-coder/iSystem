@@ -13,6 +13,7 @@ import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import 'canvas_grid.dart' show calibratedGridWorldStep;
 import 'drawing_overlay.dart' show RubberBandPainter, snapOrTeePoint;
 import 'edge_context_menu.dart';
 import 'service_style.dart';
@@ -96,9 +97,20 @@ class _NetworkSelectionOverlayState
       world = orthoSnap(Offset(fromNode.x, fromNode.y), world);
     }
     final snapWorld = 14 / transform.scale;
+    // G2 — a nub-pulled main also honours the magnetic grid (lowest precedence)
+    // when ortho is on, the sheet is calibrated, AND the minor grid is visible
+    // at this zoom (so it never snaps to an invisible crossing).
+    final gridMpp =
+        ref.read(projectControllerProvider).calibrationFor(sheetId)?.metersPerPixel;
+    final gridSnap = effectiveOrtho &&
+        gridMpp != null &&
+        calibratedGridWorldStep(gridMpp) * transform.scale >= 6.0;
     ref
         .read(networkControllerProvider.notifier)
-        .drawRunFromNode(from, world, snapRadius: snapWorld);
+        .drawRunFromNode(from, world,
+            snapRadius: snapWorld,
+            gridSnap: gridSnap,
+            gridMetersPerPixel: gridMpp);
   }
 
   // ── Double-click → open in the inspector ────────────────────────────────────
@@ -157,8 +169,8 @@ class _NetworkSelectionOverlayState
 
   /// The [DisclosureSection] name most relevant to the element (must match the
   /// section names in `project_panel.dart`): air → 'HVAC · ducting', fire →
-  /// 'Fire', anything else piped → 'Sizing'; null (nothing to expand) for a
-  /// bare/free node with no service context.
+  /// 'Fire', anything else piped → 'Design inputs'; null (nothing to expand)
+  /// for a bare/free node with no service context.
   String? _relevantSectionFor({String? nodeId, String? edgeId}) {
     final net = ref.read(networkControllerProvider).network;
     String? forService(ServiceType s) {
@@ -166,7 +178,7 @@ class _NetworkSelectionOverlayState
       if (s == ServiceType.fireSprinkler || s == ServiceType.fireHydrant) {
         return 'Fire';
       }
-      return 'Sizing';
+      return 'Design inputs';
     }
 
     if (edgeId != null) {
@@ -381,9 +393,21 @@ class _NetworkSelectionOverlayState
             // baseline (one undo step); only a single-node drag snaps/merges its
             // endpoint onto a nearby fitting.
             if (sel.containsNode(id) && sel.nodeIds.length > 1) return;
-            ref
-                .read(networkControllerProvider.notifier)
-                .endNodeDragWithSnap(id, snapWorld);
+            // G2 — a dragged node settles onto the magnetic grid (lowest
+            // precedence, after fittings) when ortho is on, the sheet is
+            // calibrated, AND the minor grid is visible at this zoom.
+            final gridOrtho =
+                ref.read(orthoProvider) ^ HardwareKeyboard.instance.isShiftPressed;
+            final gridMpp = ref
+                .read(projectControllerProvider)
+                .calibrationFor(sheetId)
+                ?.metersPerPixel;
+            final gridSnap = gridOrtho &&
+                gridMpp != null &&
+                calibratedGridWorldStep(gridMpp) * scale >= 6.0;
+            ref.read(networkControllerProvider.notifier).endNodeDragWithSnap(
+                id, snapWorld,
+                gridSnap: gridSnap, gridMetersPerPixel: gridMpp);
           },
           child: const SizedBox.expand(),
         ),
@@ -513,9 +537,25 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
         },
         onPanEnd: (_) {
           setState(() => _pressing = false);
-          ref
-              .read(networkControllerProvider.notifier)
-              .endNodeDragWithSnap(widget.nodeId, widget.snapWorld);
+          // G2 — the resized endpoint also honours the magnetic grid (lowest
+          // precedence) when ortho is on, the node's sheet is calibrated, AND
+          // the minor grid is visible at this zoom.
+          final gridOrtho =
+              ref.read(orthoProvider) ^ HardwareKeyboard.instance.isShiftPressed;
+          final node =
+              ref.read(networkControllerProvider).network.nodeById(widget.nodeId);
+          final gridMpp = node == null
+              ? null
+              : ref
+                  .read(projectControllerProvider)
+                  .calibrationFor(node.sheetId)
+                  ?.metersPerPixel;
+          final gridSnap = gridOrtho &&
+              gridMpp != null &&
+              calibratedGridWorldStep(gridMpp) * widget.scale >= 6.0;
+          ref.read(networkControllerProvider.notifier).endNodeDragWithSnap(
+              widget.nodeId, widget.snapWorld,
+              gridSnap: gridSnap, gridMetersPerPixel: gridMpp);
           // Keep the (still-present) edge selected after a snap/merge.
           if (ref
               .read(networkControllerProvider)
@@ -645,6 +685,13 @@ class _SelectionGestureLayerState
   /// its result into the current selection instead of replacing it.
   bool _bandAdditive = false;
 
+  /// G5: while dragging a RUN by its BODY, the set of node ids being translated
+  /// (the run's two endpoints, or — when the run is part of a multi-selection —
+  /// every selected node plus every selected run's endpoints). Non-null means
+  /// this left-drag is a run move, not a marquee. Null at rest, so an idle
+  /// canvas is byte-identical.
+  Set<String>? _runMoveNodes;
+
   String get _sheetId => widget.sheetId;
   int get _floor => widget.floorIndex;
 
@@ -739,16 +786,59 @@ class _SelectionGestureLayerState
         }
         showEdgeContextMenu(context, ref, edge, details.globalPosition);
       },
-      // Rubber-band marquee — only starts over EMPTY space (or with Shift), so a
-      // left-drag on a populated area doesn't accidentally marquee. Canvas pan is
-      // still available via middle-drag.
+      // Left-drag routing:
+      //  • on a RUN's BODY (no-Shift)  → MOVE that run (G5, below);
+      //  • over EMPTY space, or with Shift → rubber-band marquee;
+      //  • on a node / a run's ENDPOINT → owned by the opaque handle above, so
+      //    this layer never sees the drag (node-move / endpoint resize-snap).
+      // Canvas pan is still available via middle-drag.
       onPanStart: (details) {
         final net = ref.read(networkControllerProvider).network;
         final world = transform.screenToWorld(details.localPosition);
-        final overEmpty =
-            _nodeAt(net, transform, world, _sheetId, _floor) == null &&
-                _edgeAt(net, transform, world, _sheetId, _floor) == null;
+        final nodeHit = _nodeAt(net, transform, world, _sheetId, _floor);
+        final edgeHit = nodeHit == null
+            ? _edgeAt(net, transform, world, _sheetId, _floor)
+            : null;
         final shift = HardwareKeyboard.instance.isShiftPressed;
+        // G5: a plain (no-Shift) left-drag starting on a RUN's BODY moves that
+        // run — translate its two endpoint nodes (mirroring the node-move
+        // gesture: pushUndoSnapshot at start, live moveMany, one undo step). A
+        // drag on a run's ENDPOINT is a node/resize drag owned by the handle
+        // above; a Shift-drag always marquees; both bypass this branch.
+        if (!shift && nodeHit == null && edgeHit != null) {
+          final e = net.edgeById(edgeHit);
+          if (e != null && e.kind == EdgeKind.run) {
+            final sel = ref.read(selectionProvider);
+            final partOfMulti = sel.containsEdge(edgeHit) &&
+                (sel.nodeIds.length + sel.edgeIds.length) > 1;
+            if (!partOfMulti) {
+              // Not part of a multi-selection → collapse to just this run
+              // (mirrors the node handle's E2 group-vs-single decision).
+              ref.read(selectionProvider.notifier).selectEdge(edgeHit);
+            }
+            // The nodes to translate: the whole selection when this run is part
+            // of a multi-selection (every picked node + every selected run's
+            // endpoints), else just this run's two endpoints.
+            final movers = <String>{};
+            if (partOfMulti) {
+              movers.addAll(sel.nodeIds);
+              for (final eid in sel.edgeIds) {
+                final se = net.edgeById(eid);
+                if (se != null) {
+                  movers.add(se.fromId);
+                  movers.add(se.toId);
+                }
+              }
+            } else {
+              movers.add(e.fromId);
+              movers.add(e.toId);
+            }
+            ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+            setState(() => _runMoveNodes = movers);
+            return;
+          }
+        }
+        final overEmpty = nodeHit == null && edgeHit == null;
         if (overEmpty || shift) {
           setState(() {
             _bandStart = details.localPosition;
@@ -758,10 +848,42 @@ class _SelectionGestureLayerState
         }
       },
       onPanUpdate: (details) {
+        // G5: a run move translates its node set live over the drag-start
+        // snapshot (no marquee, no per-frame setState — moveMany drives the
+        // repaint through the network provider).
+        final movers = _runMoveNodes;
+        if (movers != null) {
+          ref.read(networkControllerProvider.notifier).moveMany(
+                movers,
+                details.delta.dx / transform.scale,
+                details.delta.dy / transform.scale,
+              );
+          return;
+        }
         if (_bandStart == null) return;
         setState(() => _bandNow = details.localPosition);
       },
+      onPanCancel: () {
+        // Clear any in-flight drag state (a cancelled run move keeps its live
+        // translation + the recorded undo step, exactly like a cancelled
+        // node/group drag — Ctrl+Z reverts it).
+        if (_runMoveNodes != null || _bandStart != null) {
+          setState(() {
+            _runMoveNodes = null;
+            _bandStart = null;
+            _bandNow = null;
+            _bandAdditive = false;
+          });
+        }
+      },
       onPanEnd: (_) {
+        // G5: a run/group move is already committed live over the
+        // pushUndoSnapshot baseline (one undo step); nothing to snap on release
+        // (mirrors the node handle's group-move path).
+        if (_runMoveNodes != null) {
+          setState(() => _runMoveNodes = null);
+          return;
+        }
         final start = _bandStart;
         final now = _bandNow;
         // Shift held at EITHER end of the drag makes the marquee additive.

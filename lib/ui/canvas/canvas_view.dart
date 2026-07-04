@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../theme/design_tokens.dart';
 import 'canvas_grid.dart';
+import 'canvas_minimap.dart';
 import 'viewport.dart';
 
 /// A bump signal asking the live [CanvasView] to fit its content to the
@@ -65,6 +67,13 @@ class CanvasView extends ConsumerStatefulWidget {
   /// always pan (the default for callers that don't own a selection).
   final bool Function(LogicalKeyboardKey key)? onDirectionalKey;
 
+  /// Optional sink the canvas publishes its live viewport into (the affine
+  /// transform + the widget size) each frame the view changes, so a sibling
+  /// minimap ([CanvasMinimap], G1) can draw a truthful viewport rectangle and
+  /// pan-to-tap without rebuilding the canvas subtree. Null ⇒ nothing published
+  /// ⇒ byte-identical.
+  final ValueNotifier<MinimapViewport?>? viewportSink;
+
   const CanvasView({
     super.key,
     required this.contentSize,
@@ -76,6 +85,7 @@ class CanvasView extends ConsumerStatefulWidget {
     this.gridWorldStep,
     this.cursor,
     this.onDirectionalKey,
+    this.viewportSink,
   });
 
   @override
@@ -85,7 +95,8 @@ class CanvasView extends ConsumerStatefulWidget {
 /// Public so a host can drive zoom imperatively via a [GlobalKey] (the shared
 /// on-canvas [ZoomControls]). The canvas owns its live transform, so the
 /// buttons go through these methods rather than the persisted store.
-class CanvasViewState extends ConsumerState<CanvasView> {
+class CanvasViewState extends ConsumerState<CanvasView>
+    with SingleTickerProviderStateMixin {
   ViewportTransform? _transform;
   Size _viewportSize = Size.zero;
   final FocusNode _focus = FocusNode(debugLabel: 'canvas');
@@ -96,14 +107,24 @@ class CanvasViewState extends ConsumerState<CanvasView> {
   // Grab-cursor affordance (left/middle click pans).
   bool _grabbing = false;
 
+  // G4 — programmatic viewport changes (zoom / fit / minimap recenter) EASE
+  // from the current transform to the target rather than teleporting. Live
+  // manipulation (wheel / drag / trackpad pinch, arrow pan) stays immediate.
+  late final AnimationController _animCtrl;
+  ViewportTransform? _animFrom;
+  ViewportTransform? _animTo;
+
   @override
   void initState() {
     super.initState();
     _transform = widget.initialTransform;
+    _animCtrl = AnimationController(vsync: this, duration: MechXMotion.medium)
+      ..addListener(_onAnimTick);
   }
 
   @override
   void dispose() {
+    _animCtrl.dispose();
     _focus.dispose();
     super.dispose();
   }
@@ -112,6 +133,40 @@ class CanvasViewState extends ConsumerState<CanvasView> {
     if (next == _transform) return;
     setState(() => _transform = next);
     widget.onTransformChanged(next);
+  }
+
+  // ── Programmatic (eased) viewport changes (G4) ───────────────────────────────
+
+  /// Ease the view from the current transform to [target] over [MechXMotion]
+  /// timing (lerping scale + offset). A no-op if the target equals the current
+  /// view or the viewport isn't laid out yet.
+  void _animateTo(ViewportTransform target) {
+    if (_viewportSize.isEmpty) return;
+    final from = _current;
+    if (from == target) return;
+    _animFrom = from;
+    _animTo = target;
+    _animCtrl
+      ..stop()
+      ..reset()
+      ..forward();
+  }
+
+  void _onAnimTick() {
+    final from = _animFrom, to = _animTo;
+    if (from == null || to == null) return;
+    final t = MechXMotion.standard.transform(_animCtrl.value);
+    final scale = from.scale + (to.scale - from.scale) * t;
+    final offset = Offset.lerp(from.offset, to.offset, t)!;
+    _emit(ViewportTransform(scale: scale, offset: offset));
+  }
+
+  /// Cancel any in-flight eased change so a live gesture (wheel / drag / pinch /
+  /// arrow pan) takes over cleanly rather than fighting the tween.
+  void _stopAnim() {
+    if (_animCtrl.isAnimating) _animCtrl.stop();
+    _animFrom = null;
+    _animTo = null;
   }
 
   ViewportTransform get _current =>
@@ -129,28 +184,49 @@ class CanvasViewState extends ConsumerState<CanvasView> {
 
   void zoomIn() {
     if (_viewportSize.isEmpty) return;
-    _emit(_current.zoomedBy(1.2, _viewportSize.center(Offset.zero)));
+    _animateTo(_current.zoomedBy(1.2, _viewportSize.center(Offset.zero)));
   }
 
   void zoomOut() {
     if (_viewportSize.isEmpty) return;
-    _emit(_current.zoomedBy(1 / 1.2, _viewportSize.center(Offset.zero)));
+    _animateTo(_current.zoomedBy(1 / 1.2, _viewportSize.center(Offset.zero)));
   }
 
   void fitView() {
     if (_viewportSize.isEmpty) return;
-    _emit(ViewportTransform.fit(widget.contentSize, _viewportSize));
+    _animateTo(ViewportTransform.fit(widget.contentSize, _viewportSize));
+  }
+
+  /// Pan (keeping the current scale) so [world] (content px) lands at the
+  /// viewport centre — the minimap tap / drag-to-navigate target (G1).
+  /// IMMEDIATE (not eased): a minimap click/drag is DIRECT MANIPULATION (like a
+  /// scrollbar), so it must track 1:1 rather than trail behind a per-frame tween
+  /// (a drag that re-eased every frame would rubber-band). The discrete zoom /
+  /// fit buttons keep the G4 ease; `_stopAnim` cancels any in-flight zoom so the
+  /// direct pan takes over cleanly. No-op before the first layout.
+  void centreOnWorld(Offset world) {
+    if (_viewportSize.isEmpty) return;
+    _stopAnim();
+    final s = _current.scale;
+    _emit(ViewportTransform(
+      scale: s,
+      offset: _viewportSize.center(Offset.zero) - world * s,
+    ));
   }
 
   /// Pan the viewport by a screen-space [delta]. Public so a parent (above the
   /// canvas overlays, which are opaque and would otherwise swallow the
   /// middle-button drag) can drive middle-click panning.
-  void panByScreen(Offset delta) => _emit(_current.panned(delta));
+  void panByScreen(Offset delta) {
+    _stopAnim();
+    _emit(_current.panned(delta));
+  }
 
   /// Zoom toward [localPos] (canvas-local px) by a mouse-wheel [scrollDeltaY].
   /// Public for the same reason as [panByScreen]: the overlays above this widget
   /// swallow the wheel signal, so a parent drives zoom from above them.
   void zoomByScroll(Offset localPos, double scrollDeltaY) {
+    _stopAnim();
     final factor = math.pow(1.0015, -scrollDeltaY).toDouble();
     _emit(_current.zoomedBy(factor, localPos));
   }
@@ -171,7 +247,10 @@ class CanvasViewState extends ConsumerState<CanvasView> {
 
   // ── Scale gesture (trackpad / touch / left-drag pan) ────────────────────────
 
-  void _onScaleStart(ScaleStartDetails details) => _lastScale = 1.0;
+  void _onScaleStart(ScaleStartDetails details) {
+    _stopAnim();
+    _lastScale = 1.0;
+  }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
     var vt = _current;
@@ -200,25 +279,27 @@ class CanvasViewState extends ConsumerState<CanvasView> {
     final key = event.logicalKey;
     const panStep = 64.0;
 
+    // Discrete keyboard zoom / fit / actual-size ease like the on-canvas zoom
+    // cluster (G4); arrow pan below stays immediate.
     if (mod &&
         (key == LogicalKeyboardKey.equal ||
             key == LogicalKeyboardKey.add ||
             key == LogicalKeyboardKey.numpadAdd)) {
-      _emit(vt.zoomedBy(1.2, center));
+      _animateTo(vt.zoomedBy(1.2, center));
       return KeyEventResult.handled;
     }
     if (mod &&
         (key == LogicalKeyboardKey.minus ||
             key == LogicalKeyboardKey.numpadSubtract)) {
-      _emit(vt.zoomedBy(1 / 1.2, center));
+      _animateTo(vt.zoomedBy(1 / 1.2, center));
       return KeyEventResult.handled;
     }
     if (mod && key == LogicalKeyboardKey.digit0) {
-      _emit(ViewportTransform.actualSize(widget.contentSize, _viewportSize));
+      _animateTo(ViewportTransform.actualSize(widget.contentSize, _viewportSize));
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.keyF) {
-      _emit(ViewportTransform.fit(widget.contentSize, _viewportSize));
+      _animateTo(ViewportTransform.fit(widget.contentSize, _viewportSize));
       return KeyEventResult.handled;
     }
     switch (key) {
@@ -240,6 +321,9 @@ class CanvasViewState extends ConsumerState<CanvasView> {
             (widget.onDirectionalKey?.call(key) ?? false)) {
           return KeyEventResult.handled;
         }
+        // Live arrow pan is immediate (a running eased change would otherwise
+        // keep overriding it).
+        _stopAnim();
         switch (key) {
           case LogicalKeyboardKey.arrowLeft:
             _emit(vt.panned(const Offset(panStep, 0)));
@@ -284,6 +368,20 @@ class CanvasViewState extends ConsumerState<CanvasView> {
               _viewportSize = constraints.biggest;
               _maybeFitOnFirstLayout();
               final vt = _current;
+              // Publish the live viewport for a sibling minimap (G1). Deferred to
+              // after the frame — the minimap's ValueListenableBuilder is a
+              // SIBLING (not a descendant of this LayoutBuilder), so notifying it
+              // mid-build would markNeedsBuild during build; a post-frame set is
+              // safe, and record equality means an unchanged view never notifies.
+              final sink = widget.viewportSink;
+              if (sink != null) {
+                final next = (transform: vt, size: _viewportSize);
+                if (sink.value != next) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) sink.value = next;
+                  });
+                }
+              }
               return SizedBox.expand(
                 child: ClipRect(
                   child: Stack(

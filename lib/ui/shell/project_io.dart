@@ -17,6 +17,7 @@ import '../../data/project_assets.dart';
 import '../../data/project_document.dart';
 import '../../data/recovery.dart';
 import '../../store/app_state.dart';
+import '../../store/electrical_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -25,6 +26,7 @@ import '../sheets/pdf_page_picker.dart';
 import '../strings/app_strings.dart';
 import 'confirm_discard_dialog.dart';
 import 'import_choice_dialog.dart';
+import 'nav_rail.dart';
 
 /// Project file I/O shared by the top bar, the global Ctrl/Cmd+S/O hotkeys,
 /// the command palette, and the first-launch empty-state actions — lifted out
@@ -93,20 +95,39 @@ Future<void> newProject(BuildContext context, WidgetRef ref) async {
   ref.read(statusMessageProvider.notifier).showStatus('New project');
 }
 
+/// A5: after a successful import, take the engineer to where the plan now lives
+/// — DESIGN → Layout, with the freshly-added sheet at [sheetIndex] selected — so
+/// importing from Projects or Review never leaves a "where did it go?" gap.
+/// Idempotent: setting the section / view / selection to a value it already
+/// holds is a no-op (importing from the empty Layout card just re-selects the
+/// same spot).
+void _revealImportedSheet(WidgetRef ref, int sheetIndex) {
+  ref.read(shellSectionProvider.notifier).set(ShellSection.design);
+  ref.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
+  ref.read(sheetsControllerProvider.notifier).selectSheet(sheetIndex);
+}
+
 /// Pick and import a PDF / DXF / DWG floor plan into the sheet rail. Into an
 /// EMPTY project the import just loads (today's behaviour). Into a NON-EMPTY
 /// project it offers Add-to-project vs Replace-all (A5): ADD appends the new
 /// sheets (nothing is destroyed, so no dirty-guard); REPLACE swaps every sheet
 /// (guarded like today) and then PRUNES the network of nodes left orphaned on
-/// the old sheets — so phantom pipes can't invisibly pad the BOM.
-Future<void> importPlan(BuildContext context, WidgetRef ref) async {
+/// the old sheets — so phantom pipes can't invisibly pad the BOM. On success it
+/// REVEALS the plan — DESIGN → Layout with the new sheet selected (A5) — so an
+/// import triggered from Projects / Review never lands the engineer nowhere.
+///
+/// [skipDiscardGuard] bypasses the empty-project unsaved-work guard for the A3
+/// template flow, where the only "unsaved work" is the just-applied template the
+/// engineer wants to keep; every other caller leaves it false (unchanged).
+Future<void> importPlan(BuildContext context, WidgetRef ref,
+    {bool skipDiscardGuard = false}) async {
   final startedNonEmpty =
       ref.read(sheetsControllerProvider).sheets.isNotEmpty;
   // Into an EMPTY project, Import loads straight through — guard any unsaved
   // work up front (today's behaviour). A NON-EMPTY project decides
   // Add-vs-Replace AFTER the file is chosen; only the Replace branch destroys
   // anything, so its guard runs there.
-  if (!startedNonEmpty) {
+  if (!startedNonEmpty && !skipDiscardGuard) {
     if (!await confirmDiscardIfDirty(context, ref)) return;
   }
   if (!context.mounted) return;
@@ -171,6 +192,9 @@ Future<void> importPlan(BuildContext context, WidgetRef ref) async {
         final added =
             ref.read(sheetsControllerProvider.notifier).addSheets(sheets);
         ref.read(loadErrorProvider.notifier).clear();
+        // A5: jump to the first freshly-added sheet — the appended block starts
+        // at index `existing` (the sheet count captured before the add).
+        _revealImportedSheet(ref, existing);
         ref
             .read(statusMessageProvider.notifier)
             .showStatus('$added ${added == 1 ? 'sheet' : 'sheets'} added');
@@ -190,6 +214,8 @@ Future<void> importPlan(BuildContext context, WidgetRef ref) async {
         .read(networkControllerProvider.notifier)
         .pruneNodesNotOnSheets({for (final s in sheets) s.id});
     ref.read(loadErrorProvider.notifier).clear();
+    // A5: reveal the imported plan on DESIGN → Layout at the first sheet.
+    _revealImportedSheet(ref, 0);
     final n = sheets.length;
     ref
         .read(statusMessageProvider.notifier)

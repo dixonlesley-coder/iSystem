@@ -38,7 +38,8 @@ import '../inspector/project_panel.dart'
         exportEquipmentSchedule,
         exportEquipmentSchedulePdf,
         exportMepUnifiedReport,
-        exportMepUnifiedReportPdf;
+        exportMepUnifiedReportPdf,
+        exportSubmittalPackage;
 import '../shell/duplicate_floor_dialog.dart';
 import '../shell/nav_rail.dart';
 import '../shell/project_io.dart';
@@ -164,16 +165,21 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
         },
       ),
     // — Pick a draw / annotation tool —
+    // The single-key accelerators (V/R/E/M/K/B) fire on the mechanical Layout
+    // canvas (see `layout_canvas.dart`); shown here as keycaps so the palette
+    // advertises them (D2).
     _Command(
       id: 'tool.select',
       title: 'Tool: Select',
       subtitle: 'Draw tool',
+      shortcut: 'V',
       run: () => net.setTool(DrawTool.select),
     ),
     _Command(
       id: 'tool.run',
       title: 'Tool: Draw run',
       subtitle: 'Draw tool',
+      shortcut: 'R',
       run: () {
         openDesign(WorkspaceView.plan);
         net.setTool(DrawTool.drawRun);
@@ -183,6 +189,7 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       id: 'tool.riser',
       title: 'Tool: Draw riser',
       subtitle: 'Draw tool',
+      shortcut: 'E',
       run: () {
         openDesign(WorkspaceView.plan);
         net.setTool(DrawTool.drawRiser);
@@ -192,18 +199,21 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       id: 'tool.measure',
       title: 'Tool: Measure',
       subtitle: 'Dimension a distance on the plan',
+      shortcut: 'M',
       run: () => enableMode(measure: true),
     ),
     _Command(
       id: 'tool.tank',
       title: 'Tool: Tank area',
       subtitle: 'Draw a tank / reservoir footprint',
+      shortcut: 'K',
       run: () => enableMode(tank: true),
     ),
     _Command(
       id: 'tool.room',
       title: 'Tool: Room area',
       subtitle: 'Draw a room footprint for air sizing',
+      shortcut: 'B',
       run: () => enableMode(room: true),
     ),
     // — Edit —
@@ -289,13 +299,13 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
     // — Deliverable exports —
     _Command(
       id: 'export.calc',
-      title: 'Export calculation report',
+      title: 'Export calc report',
       subtitle: 'Markdown',
       run: () => exportCalcReport(ref),
     ),
     _Command(
       id: 'export.calcPdf',
-      title: 'Export calculation report (PDF)',
+      title: 'Export calc report (PDF)',
       subtitle: 'Typeset A4 PDF',
       run: () => exportCalcReportPdf(ref),
     ),
@@ -340,6 +350,12 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       title: 'Export annotated plan (PDF)',
       subtitle: 'Current sheet — with lengths + title block',
       run: () => exportAnnotatedPlanPdf(ref),
+    ),
+    _Command(
+      id: 'export.submittal',
+      title: 'Export submittal package',
+      subtitle: 'Reports + drawings + BOM to a folder',
+      run: () => exportSubmittalPackage(ref),
     ),
     // — Project file —
     _Command(
@@ -684,7 +700,12 @@ class _CommandRow extends StatelessWidget {
                   ),
                   child: Text(
                     command.shortcut,
-                    style: type.micro.copyWith(color: colors.textSecondary),
+                    // Monospace so keycaps line up cleanly down the right edge
+                    // (D2), muted so they read as a hint not a label.
+                    style: type.micro.copyWith(
+                      fontFamily: MechXTypography.monoFamily,
+                      color: colors.textSecondary,
+                    ),
                   ),
                 ),
               ],

@@ -54,10 +54,12 @@ import '../shell/nav_rail.dart' show ShellSection, shellSectionProvider;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/canvas_guide_popover.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_empty_state_card.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_segment.dart';
 import 'riser_tags.dart';
 import 'schematic_export.dart';
 
@@ -151,6 +153,8 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
                   showTitleBlock: vs.showTitleBlock,
                   showDetails: vs.showDetails,
                   showNotes: vs.showNotes,
+                  showHelp: vs.showHelp,
+                  onToggleHelp: ctrl.toggleHelp,
                 ),
         ),
       ],
@@ -355,13 +359,16 @@ class _Toolbar extends StatelessWidget {
           horizontal: MechXSpacing.md, vertical: MechXSpacing.sm),
       child: Row(
         children: [
-          _TabButton(
+          // C2: Auto/Edit is a RADIO group (one selected of N) — the shared
+          // tinted selected-segment idiom (MechXSegment), the same widget the
+          // draw-tool pills and the Layout layer switcher use.
+          MechXSegment(
             label: context.strings(StringKey.schematicAuto),
             selected: mode == SchematicMode.auto,
             onTap: () => onMode(SchematicMode.auto),
           ),
           const SizedBox(width: MechXSpacing.xs),
-          _TabButton(
+          MechXSegment(
             label: context.strings(StringKey.schematicEdit),
             selected: mode == SchematicMode.edit,
             onTap: () => onMode(SchematicMode.edit),
@@ -379,7 +386,9 @@ class _Toolbar extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _TabButton(
+                    // The system filter (All + per-service chips) is ALSO a
+                    // radio group — "All" wears the shared tinted segment.
+                    MechXSegment(
                       label: context.strings(StringKey.schematicSystemAll),
                       selected: autoFocus == null,
                       onTap: () => onAutoFocus(null),
@@ -396,33 +405,36 @@ class _Toolbar extends StatelessWidget {
                       ],
                     Container(width: 1, height: 22, color: colors.border),
                     const SizedBox(width: MechXSpacing.xs),
-                    _TabButton(
+                    // C2: these are INDEPENDENT on/off toggles (each flips
+                    // alone) — a distinct checkbox idiom (never the accent
+                    // pill) so they can't be mistaken for the radio groups.
+                    _ToggleChip(
                       label: context.strings(StringKey.schematicInferRisers),
-                      selected: inferRisers,
+                      value: inferRisers,
                       onTap: () => onInferRisers(!inferRisers),
                     ),
                     const SizedBox(width: MechXSpacing.xs),
-                    _TabButton(
+                    _ToggleChip(
                       label: context.strings(StringKey.schematicLegend),
-                      selected: showLegend,
+                      value: showLegend,
                       onTap: () => onShowLegend(!showLegend),
                     ),
                     const SizedBox(width: MechXSpacing.xs),
-                    _TabButton(
+                    _ToggleChip(
                       label: context.strings(StringKey.schematicTitleBlock),
-                      selected: showTitleBlock,
+                      value: showTitleBlock,
                       onTap: () => onTitleBlock(!showTitleBlock),
                     ),
                     const SizedBox(width: MechXSpacing.xs),
-                    _TabButton(
+                    _ToggleChip(
                       label: context.strings(StringKey.schematicDetails),
-                      selected: showDetails,
+                      value: showDetails,
                       onTap: () => onShowDetails(!showDetails),
                     ),
                     const SizedBox(width: MechXSpacing.xs),
-                    _TabButton(
+                    _ToggleChip(
                       label: context.strings(StringKey.schematicNotes),
-                      selected: showNotes,
+                      value: showNotes,
                       onTap: () => onShowNotes(!showNotes),
                     ),
                     // F5: Export is an ACTION, not a toggle — a MechXButton
@@ -479,46 +491,141 @@ class _Toolbar extends StatelessWidget {
   }
 }
 
-class _TabButton extends StatelessWidget {
+/// C2: an INDEPENDENT on/off toggle in the Riser toolbar (Infer risers / Legend
+/// / Title block / Details / Notes). Deliberately DISTINCT from the radio
+/// segments (Auto/Edit, All/service) — it never wears the accent-tinted pill;
+/// instead a custom-painted checkbox glyph fills when on — so a viewer can tell
+/// "flip each" apart from "pick one". Roboto-safe (no icon font), no Material.
+class _ToggleChip extends StatefulWidget {
   final String label;
-  final bool selected;
+  final bool value;
   final VoidCallback onTap;
-  const _TabButton(
-      {required this.label, required this.selected, required this.onTap});
+  const _ToggleChip(
+      {required this.label, required this.value, required this.onTap});
+
+  @override
+  State<_ToggleChip> createState() => _ToggleChipState();
+}
+
+class _ToggleChipState extends State<_ToggleChip> {
+  bool _hover = false;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    final on = widget.value;
     return MechXFocusRing(
-      onActivated: onTap,
+      onActivated: widget.onTap,
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
         child: GestureDetector(
-          onTap: onTap,
+          onTap: widget.onTap,
           child: AnimatedContainer(
             duration: MechXMotion.hover,
             curve: MechXMotion.standard,
             padding: const EdgeInsets.symmetric(
-                horizontal: MechXSpacing.sm + 2, vertical: MechXSpacing.xs + 2),
+                horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 2),
             decoration: BoxDecoration(
-              color: selected ? colors.accentMuted : const Color(0x00000000),
+              // No accent tint ever — only a soft hover lift, so the checkbox
+              // glyph is the sole on/off signal.
+              color: _hover ? colors.surfaceHover : const Color(0x00000000),
               borderRadius: MechXRadii.control,
-              border: Border.all(
-                  color: selected ? colors.accent : const Color(0x00000000)),
             ),
-            child: AnimatedDefaultTextStyle(
-              duration: MechXMotion.hover,
-              curve: MechXMotion.standard,
-              style: type.label.copyWith(
-                  color: selected ? colors.textPrimary : colors.textSecondary),
-              child: Text(label),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _CheckGlyph(
+                  checked: on,
+                  fill: colors.accent,
+                  check: colors.onAccent,
+                  border: colors.textMuted,
+                ),
+                const SizedBox(width: MechXSpacing.xs + 2),
+                Text(
+                  widget.label,
+                  style: type.label.copyWith(
+                    color: on ? colors.textPrimary : colors.textSecondary,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
       ),
     );
   }
+}
+
+/// A small custom-painted checkbox — a hollow rounded square when off, an
+/// accent-filled square with a check when on. ASCII/no icon font, so it never
+/// tofus in the golden pipeline.
+class _CheckGlyph extends StatelessWidget {
+  final bool checked;
+  final Color fill;
+  final Color check;
+  final Color border;
+  const _CheckGlyph(
+      {required this.checked,
+      required this.fill,
+      required this.check,
+      required this.border});
+
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+        size: const Size(14, 14),
+        painter: _CheckPainter(checked, fill, check, border),
+      );
+}
+
+class _CheckPainter extends CustomPainter {
+  final bool checked;
+  final Color fill;
+  final Color check;
+  final Color border;
+  _CheckPainter(this.checked, this.fill, this.check, this.border);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rrect = RRect.fromRectAndRadius(
+      (Offset.zero & size).deflate(0.75),
+      const Radius.circular(3),
+    );
+    if (checked) {
+      canvas.drawRRect(rrect, Paint()..color = fill);
+      final w = size.width;
+      final h = size.height;
+      canvas.drawPath(
+        Path()
+          ..moveTo(w * 0.26, h * 0.52)
+          ..lineTo(w * 0.44, h * 0.70)
+          ..lineTo(w * 0.76, h * 0.30),
+        Paint()
+          ..color = check
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round,
+      );
+    } else {
+      canvas.drawRRect(
+        rrect,
+        Paint()
+          ..color = border
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.4,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_CheckPainter old) =>
+      old.checked != checked ||
+      old.fill != fill ||
+      old.check != check ||
+      old.border != border;
 }
 
 class _ServiceChip extends StatelessWidget {
@@ -589,6 +696,12 @@ class _AutoElevation extends ConsumerStatefulWidget {
   final bool showTitleBlock;
   final bool showDetails;
   final bool showNotes;
+
+  /// C3: the shared on-demand (?) guide, now on Auto too (was Edit-only). Both
+  /// modes read the one [schematicViewProvider.showHelp] flag.
+  final bool showHelp;
+  final VoidCallback onToggleHelp;
+
   const _AutoElevation({
     this.focus,
     this.inferRisers = false,
@@ -596,6 +709,8 @@ class _AutoElevation extends ConsumerStatefulWidget {
     this.showTitleBlock = true,
     this.showDetails = true,
     this.showNotes = true,
+    required this.showHelp,
+    required this.onToggleHelp,
   });
 
   @override
@@ -854,10 +969,12 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
             // The KETERANGAN / legend overlay now sits TOP-left (the bottom-left
             // corner is taken by the F2 zoom cluster); a floating-chrome card
             // that lists the services actually drawn. Default OFF (export chrome).
+            // Offset down to clear the shared (?) guide button (C3) that now sits
+            // in the top-left corner.
             if (widget.showLegend)
               Positioned(
                 left: MechXSpacing.md,
-                top: MechXSpacing.md,
+                top: MechXSpacing.md + 30,
                 child: _AutoLegend(network: network, focus: widget.focus),
               ),
             // The system-NOTES (KETERANGAN) card + the title block both sit
@@ -876,6 +993,34 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
                     if (widget.showNotes && widget.showTitleBlock)
                       const SizedBox(height: MechXSpacing.sm),
                     if (widget.showTitleBlock) _TitleBlock(focus: widget.focus),
+                  ],
+                ),
+              ),
+            // C3: the shared on-demand (?) guide (top-left) — the SAME affordance
+            // the Layout / electrical / Riser-Edit canvases use, now on Auto too.
+            // The button is a small edge affordance; the popover is hidden by
+            // default so the idle Auto canvas is byte-identical bar the button.
+            Positioned(
+              left: MechXSpacing.md,
+              top: MechXSpacing.sm,
+              child: CanvasGuideButton(
+                open: widget.showHelp,
+                onToggle: widget.onToggleHelp,
+              ),
+            ),
+            if (widget.showHelp)
+              Positioned(
+                left: MechXSpacing.md,
+                top: 48,
+                child: CanvasGuideLegend(
+                  onClose: widget.onToggleHelp,
+                  // C3 follow-up: keep the Riser's own localized heading
+                  // ("Elevation guide" / "Panduan elevasi") the bespoke popover had.
+                  title: context.strings(StringKey.schematicElevationGuide),
+                  items: [
+                    context.strings(StringKey.schematicHelpModes),
+                    context.strings(StringKey.schematicHelp2),
+                    context.strings(StringKey.schematicHelp6),
                   ],
                 ),
               ),
@@ -1305,18 +1450,34 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                       padding: 40)),
                 ),
               ),
-              // Help (?) (top-left).
+              // C3: the shared on-demand (?) guide (top-left) — the SAME
+              // CanvasGuideButton the Layout / electrical / Auto canvases use,
+              // replacing the bespoke _HelpButton / _ElevationHelp.
               Positioned(
                 left: MechXSpacing.md,
                 top: MechXSpacing.sm,
-                child: _HelpButton(
+                child: CanvasGuideButton(
                     open: widget.showHelp, onToggle: widget.onToggleHelp),
               ),
               if (widget.showHelp)
                 Positioned(
                   left: MechXSpacing.md,
                   top: 48,
-                  child: _ElevationHelp(onClose: widget.onToggleHelp),
+                  child: CanvasGuideLegend(
+                    onClose: widget.onToggleHelp,
+                    width: 320,
+                    // C3 follow-up: keep the Riser's own localized heading.
+                    title: context.strings(StringKey.schematicElevationGuide),
+                    items: [
+                      context.strings(StringKey.schematicHelpModes),
+                      context.strings(StringKey.schematicHelp1),
+                      context.strings(StringKey.schematicHelp2),
+                      context.strings(StringKey.schematicHelp3),
+                      context.strings(StringKey.schematicHelp4),
+                      context.strings(StringKey.schematicHelp5),
+                      context.strings(StringKey.schematicHelp6),
+                    ],
+                  ),
                 ),
             ],
           ),
@@ -3194,121 +3355,6 @@ class _SystemNotes extends ConsumerWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _HelpButton extends StatelessWidget {
-  final bool open;
-  final VoidCallback onToggle;
-  const _HelpButton({required this.open, required this.onToggle});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return MechXFocusRing(
-      onActivated: onToggle,
-      borderRadius: MechXRadii.rounded,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: onToggle,
-          child: AnimatedContainer(
-            duration: MechXMotion.hover,
-            curve: MechXMotion.standard,
-            width: 26,
-            height: 26,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: open ? colors.accent : colors.surface,
-              shape: BoxShape.circle,
-              border: Border.all(color: colors.border),
-            ),
-            child: Text('?',
-                style: context.type.label.copyWith(
-                    color:
-                        open ? const Color(0xFFFFFFFF) : colors.textSecondary)),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ElevationHelp extends StatelessWidget {
-  final VoidCallback onClose;
-  const _ElevationHelp({required this.onClose});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    final strings = context.strings;
-    final items = <String>[
-      strings(StringKey.schematicHelpModes),
-      strings(StringKey.schematicHelp1),
-      strings(StringKey.schematicHelp2),
-      strings(StringKey.schematicHelp3),
-      strings(StringKey.schematicHelp4),
-      strings(StringKey.schematicHelp5),
-      strings(StringKey.schematicHelp6),
-    ];
-    return Container(
-      width: 320,
-      padding: const EdgeInsets.all(MechXSpacing.md),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: MechXRadii.card,
-        border: Border.all(color: colors.border),
-        boxShadow: MechXShadow.popover,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(strings(StringKey.schematicElevationGuide),
-                    style: type.subtitle.copyWith(color: colors.textPrimary)),
-              ),
-              MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: GestureDetector(
-                  onTap: onClose,
-                  child: Text(strings(StringKey.schematicClose),
-                      style: type.label.copyWith(color: colors.textMuted)),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: MechXSpacing.sm),
-          for (final item in items)
-            Padding(
-              padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 5,
-                    height: 5,
-                    margin:
-                        const EdgeInsets.only(top: 6, right: MechXSpacing.sm),
-                    decoration: BoxDecoration(
-                      color: colors.accent,
-                      borderRadius: const BorderRadius.all(Radius.circular(3)),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(item,
-                        style: type.caption
-                            .copyWith(color: colors.textSecondary)),
-                  ),
-                ],
-              ),
-            ),
-        ],
       ),
     );
   }

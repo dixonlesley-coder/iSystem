@@ -16,6 +16,7 @@ import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
+import '../inspector/disclosure_header.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -292,29 +293,6 @@ class ElectricalCircuitInspector extends StatelessWidget {
                         ),
                       ),
                     ElectricalField(
-                      label: context.strings(StringKey.electricalFieldCosPhi),
-                      child: ElectricalNumInput(
-                        value: circuit.cosPhi,
-                        onChanged: (v) => controller.setCircuit(
-                          panel.id,
-                          circuit.id,
-                          cosPhi: v.clamp(0.0, 1.0),
-                        ),
-                      ),
-                    ),
-                    ElectricalField(
-                      label:
-                          context.strings(StringKey.electricalFieldDemandFactor),
-                      child: ElectricalNumInput(
-                        value: circuit.demandFactor,
-                        onChanged: (v) => controller.setCircuit(
-                          panel.id,
-                          circuit.id,
-                          demandFactor: v.clamp(0.0, 1.0),
-                        ),
-                      ),
-                    ),
-                    ElectricalField(
                       label: context.strings(StringKey.electricalFieldRunLength),
                       child: ElectricalNumInput(
                         value: circuit.length.meters,
@@ -349,26 +327,6 @@ class ElectricalCircuitInspector extends StatelessWidget {
                               ),
                       ),
                     ),
-                    ElectricalField(
-                      label: context.strings(StringKey.electricalFieldCableType),
-                      child: ElectricalEnumPicker<String?>(
-                        value: circuit.cableType,
-                        options: _cableTypes,
-                        label: (t) =>
-                            t ?? context.strings(StringKey.electricalCablePanelDefault),
-                        onChanged: (t) => t == null
-                            ? controller.setCircuit(
-                                panel.id,
-                                circuit.id,
-                                clearCableType: true,
-                              )
-                            : controller.setCircuit(
-                                panel.id,
-                                circuit.id,
-                                cableType: t,
-                              ),
-                      ),
-                    ),
                     ElectricalToggleRow(
                       label: context.strings(StringKey.electricalToggleLighting),
                       value: circuit.isLighting,
@@ -386,6 +344,68 @@ class ElectricalCircuitInspector extends StatelessWidget {
                         panel.id,
                         circuit.id,
                         lifeSafety: v,
+                      ),
+                    ),
+                    // E4 — expert electrical parameters (power factor, demand
+                    // factor, cable class) are demoted under a collapsed
+                    // "Advanced" disclosure so the circuit's IDENTITY (name +
+                    // load kind + magnitude) and its routine placement lead.
+                    // Transient expansion state lives in
+                    // sectionVisibilityProvider (not persisted to `.mechx`).
+                    DisclosureSection(
+                      name: 'Advanced',
+                      defaultExpanded: false,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ElectricalField(
+                            label:
+                                context.strings(StringKey.electricalFieldCosPhi),
+                            child: ElectricalNumInput(
+                              value: circuit.cosPhi,
+                              onChanged: (v) => controller.setCircuit(
+                                panel.id,
+                                circuit.id,
+                                cosPhi: v.clamp(0.0, 1.0),
+                              ),
+                            ),
+                          ),
+                          ElectricalField(
+                            label: context
+                                .strings(StringKey.electricalFieldDemandFactor),
+                            child: ElectricalNumInput(
+                              value: circuit.demandFactor,
+                              onChanged: (v) => controller.setCircuit(
+                                panel.id,
+                                circuit.id,
+                                demandFactor: v.clamp(0.0, 1.0),
+                              ),
+                            ),
+                          ),
+                          ElectricalField(
+                            label: context
+                                .strings(StringKey.electricalFieldCableType),
+                            child: ElectricalEnumPicker<String?>(
+                              value: circuit.cableType,
+                              options: _cableTypes,
+                              label: (t) =>
+                                  t ??
+                                  context.strings(
+                                      StringKey.electricalCablePanelDefault),
+                              onChanged: (t) => t == null
+                                  ? controller.setCircuit(
+                                      panel.id,
+                                      circuit.id,
+                                      clearCableType: true,
+                                    )
+                                  : controller.setCircuit(
+                                      panel.id,
+                                      circuit.id,
+                                      cableType: t,
+                                    ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -508,43 +528,6 @@ class ElectricalPanelInspector extends StatelessWidget {
                             controller.setPanelSystem(panel.id, s),
                       ),
                     ),
-                    ElectricalField(
-                      label: context.strings(StringKey.electricalFieldDiversity),
-                      child: ElectricalNumInput(
-                        value: panel.diversityFactor,
-                        onChanged: (v) => controller.setPanelDiversity(
-                          panel.id,
-                          v.clamp(0.0, 1.0),
-                        ),
-                      ),
-                    ),
-                    ElectricalField(
-                      label: context
-                          .strings(StringKey.electricalFieldHeadroomSpare),
-                      child: ElectricalNumInput(
-                        value: headroom.sparePercentage,
-                        onChanged: (v) => controller.setPanelHeadroom(
-                          panel.id,
-                          HeadroomSpec(
-                            sparePercentage: v.clamp(0.0, 100.0),
-                            spareWays: headroom.spareWays,
-                          ),
-                        ),
-                      ),
-                    ),
-                    ElectricalField(
-                      label: context.strings(StringKey.electricalFieldSpareWays),
-                      child: ElectricalNumInput(
-                        value: headroom.spareWays.toDouble(),
-                        onChanged: (v) => controller.setPanelHeadroom(
-                          panel.id,
-                          HeadroomSpec(
-                            sparePercentage: headroom.sparePercentage,
-                            spareWays: v.round().clamp(0, 60),
-                          ),
-                        ),
-                      ),
-                    ),
                     ElectricalToggleRow(
                       label:
                           context.strings(StringKey.electricalToggleEssential),
@@ -563,6 +546,59 @@ class ElectricalPanelInspector extends StatelessWidget {
                       value: panel.submeter,
                       onChanged: (v) =>
                           controller.setPanelSubmeter(panel.id, v),
+                    ),
+                    // E4 — expert board parameters (diversity factor, spare
+                    // headroom % + CADANGAN spare ways) are demoted under a
+                    // collapsed "Advanced" disclosure so the board's IDENTITY
+                    // (name + tag + system) and its supply classification lead.
+                    // Transient expansion state (not persisted to `.mechx`).
+                    DisclosureSection(
+                      name: 'Advanced',
+                      defaultExpanded: false,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ElectricalField(
+                            label: context
+                                .strings(StringKey.electricalFieldDiversity),
+                            child: ElectricalNumInput(
+                              value: panel.diversityFactor,
+                              onChanged: (v) => controller.setPanelDiversity(
+                                panel.id,
+                                v.clamp(0.0, 1.0),
+                              ),
+                            ),
+                          ),
+                          ElectricalField(
+                            label: context.strings(
+                                StringKey.electricalFieldHeadroomSpare),
+                            child: ElectricalNumInput(
+                              value: headroom.sparePercentage,
+                              onChanged: (v) => controller.setPanelHeadroom(
+                                panel.id,
+                                HeadroomSpec(
+                                  sparePercentage: v.clamp(0.0, 100.0),
+                                  spareWays: headroom.spareWays,
+                                ),
+                              ),
+                            ),
+                          ),
+                          ElectricalField(
+                            label: context
+                                .strings(StringKey.electricalFieldSpareWays),
+                            child: ElectricalNumInput(
+                              value: headroom.spareWays.toDouble(),
+                              onChanged: (v) => controller.setPanelHeadroom(
+                                panel.id,
+                                HeadroomSpec(
+                                  sparePercentage: headroom.sparePercentage,
+                                  spareWays: v.round().clamp(0, 60),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),

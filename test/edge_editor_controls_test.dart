@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
@@ -31,8 +32,8 @@ Future<void> _loadFonts() async {
 void main() {
   setUpAll(_loadFonts);
 
-  testWidgets('selected pipe edge: a size pill + a material pill edit the edge',
-      (tester) async {
+  testWidgets('selected pipe edge: the size stepper + a material pill edit the '
+      'edge', (tester) async {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
@@ -60,15 +61,24 @@ void main() {
     NetEdge edge() =>
         container.read(networkControllerProvider).network.edges.first;
 
-    // Size pill: 2" → DN50 (npsLabel(2.0) == '2"').
+    // E6 replaced the inline ~11-pill size ladder with a shared stepper. Scope
+    // the +/- glyphs to the edge's own size stepper by its key (the Design-inputs
+    // rainfall/runoff steppers carry the same glyphs).
+    final sizeField = find.byKey(const ValueKey('edge-size-stepper'));
+    expect(sizeField, findsOneWidget);
+    final sizeInc = find.descendant(of: sizeField, matching: find.text('+'));
+    // The decrement glyph is U+2212 MINUS SIGN (matches SteppedValueField).
+    final sizeDec = find.descendant(of: sizeField, matching: find.text('−'));
+
+    // From Auto, '+' enters the ladder at the smallest standard size — the
+    // stepper edits the override through the same setEdgeSizeOverride intent.
     expect(edge().sizeOverride, isNull);
-    await tester.ensureVisible(find.text('2"'));
-    await tester.tap(find.text('2"'));
+    await tester.ensureVisible(sizeField);
+    await tester.tap(sizeInc);
     await tester.pump();
     expect(edge().sizeOverride, isNotNull);
-    expect(edge().sizeOverride!.inMillimeters, closeTo(50, 0.5));
 
-    // Material pill: pick the first catalogued pipe product by its label.
+    // Material pill (E3 kept these): pick the first catalogued pipe product.
     final product = PipeProduct.values.first;
     expect(edge().pipeProduct, isNull);
     await tester.ensureVisible(find.text(labelFor(product)));
@@ -76,9 +86,10 @@ void main() {
     await tester.pump();
     expect(edge().pipeProduct, product);
 
-    // The "Auto" size pill clears the override (E9 dropped the separate button).
-    await tester.ensureVisible(find.text('Auto'));
-    await tester.tap(find.text('Auto').first);
+    // Stepping '-' back off the smallest ladder size returns to Auto, clearing
+    // the override (the stepper's Auto sits below the smallest size).
+    await tester.ensureVisible(sizeField);
+    await tester.tap(sizeDec);
     await tester.pump();
     expect(edge().sizeOverride, isNull);
   });

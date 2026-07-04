@@ -42,13 +42,15 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
-    // The major sizing sections are now DisclosureSections (Draw, Sizing,
-    // Network, Fire, HVAC always render; Tanks/Rooms only with content).
+    // The major sections are now DisclosureSections (Draw, Design inputs,
+    // Results, Fire, HVAC always render as headers; Tanks/Rooms only with
+    // content). Their uppercase labels survive whether the section is expanded
+    // (content-bearing) or collapsed (data-gated empty) — the header replaces
+    // the old MechXSectionLabel but keeps the same text.
     expect(find.byType(DisclosureSection), findsWidgets);
-    // Their uppercase labels are still present (the header replaces the old
-    // MechXSectionLabel but keeps the same text).
     expect(find.text('DRAW'), findsOneWidget);
-    expect(find.text('NETWORK'), findsOneWidget);
+    // E5: the plumbing-results section is 'Results' (was 'Network').
+    expect(find.text('RESULTS'), findsOneWidget);
     expect(find.text('FIRE'), findsOneWidget);
   });
 
@@ -63,32 +65,32 @@ void main() {
       listen: false,
     );
 
-    // The Fire section always renders and defaults expanded, so its detail
-    // rows (e.g. "Sprinkler flow") are visible at rest.
-    expect(find.text('Sprinkler flow'), findsOneWidget);
-    expect(container.read(sectionVisibilityProvider)['Fire'], isNull);
+    // The Draw section always renders and defaults expanded (it is not
+    // data-gated the way Fire/HVAC now are), so its detail (e.g. the "Ortho"
+    // toggle) is visible at rest.
+    expect(find.text('Ortho'), findsOneWidget);
+    expect(container.read(sectionVisibilityProvider)['Draw'], isNull);
 
-    // The Fire header sits below the fold in the scrolling inspector; bring it
-    // into view before tapping. Tapping it collapses the section: the detail
-    // rows disappear, the label remains, and the toggle is recorded.
-    final collapse = find.bySemanticsLabel('Collapse Fire section');
+    // Tapping the Draw header collapses the section: the detail disappears, the
+    // label remains, and the toggle is recorded.
+    final collapse = find.bySemanticsLabel('Collapse Draw section');
     await tester.ensureVisible(collapse);
     await tester.pump();
     await tester.tap(collapse);
     await _settle(tester);
-    expect(container.read(sectionVisibilityProvider)['Fire'], isFalse);
-    expect(find.text('Sprinkler flow'), findsNothing);
+    expect(container.read(sectionVisibilityProvider)['Draw'], isFalse);
+    expect(find.text('Ortho'), findsNothing);
     // The header (label) survives the collapse.
-    expect(find.text('FIRE'), findsOneWidget);
+    expect(find.text('DRAW'), findsOneWidget);
 
-    // Tapping again re-expands and the detail rows return.
-    final expand = find.bySemanticsLabel('Expand Fire section');
+    // Tapping again re-expands and the detail returns.
+    final expand = find.bySemanticsLabel('Expand Draw section');
     await tester.ensureVisible(expand);
     await tester.pump();
     await tester.tap(expand);
     await _settle(tester);
-    expect(container.read(sectionVisibilityProvider)['Fire'], isTrue);
-    expect(find.text('Sprinkler flow'), findsOneWidget);
+    expect(container.read(sectionVisibilityProvider)['Draw'], isTrue);
+    expect(find.text('Ortho'), findsOneWidget);
   });
 
   test('toggle() flips a section from its default seed', () {

@@ -81,7 +81,7 @@ void main() {
     // workflow step. 0.025 m/px -> 1 / 0.025 = 40 px per metre exactly.
     expect(
       container.read(statusMessageProvider),
-      'Scale set: 1 m = 40 px - next: set floor heights (Floors)',
+      'Scale set: 1 m = 40 px - next: set floor heights (Building)',
     );
   });
 

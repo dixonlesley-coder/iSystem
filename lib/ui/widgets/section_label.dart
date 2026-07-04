@@ -14,7 +14,10 @@ class MechXSectionLabel extends StatelessWidget {
   Widget build(BuildContext context) => Text(
         text.toUpperCase(),
         style: context.type.caption.copyWith(
-          color: context.colors.textMuted,
+          // F3: a STRUCTURAL heading — `textSecondary` (~5.9:1 on white) clears
+          // WCAG AA, where the old `textMuted` (~2.8:1) did not. Only the colour
+          // tier changes; the uppercase + tracking stay.
+          color: context.colors.textSecondary,
           letterSpacing: 0.8,
           fontWeight: FontWeight.w600,
         ),

@@ -99,7 +99,7 @@ void main() {
 
     // Still armed, not yet cleared — the snapshot survives the first tap.
     expect(container.read(recoveryDocProvider), isNotNull);
-    expect(find.text('Discard - sure?'), findsOneWidget);
+    expect(find.text('Tap again to discard'), findsOneWidget);
     expect(find.byKey(const ValueKey('recovery-banner')), findsOneWidget);
   });
 

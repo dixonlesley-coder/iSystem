@@ -16,6 +16,7 @@ import '../inspector/project_panel.dart'
         exportMepUnifiedReport,
         exportMepUnifiedReportPdf,
         exportSubmittalPackage;
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
@@ -50,9 +51,10 @@ class ReviewHub extends ConsumerWidget {
     }
     final wastePct = purchased <= 0 ? 0.0 : 100 * (purchased - required) / purchased;
 
+    final s = context.strings;
     return HubScaffold(
-      title: 'Review',
-      lead: 'Check the design before you issue it.',
+      title: s(StringKey.reviewHubTitle),
+      lead: s(StringKey.reviewHubLead),
       children: [
         const _ComplianceCard(),
         const SizedBox(height: MechXSpacing.md),
@@ -62,17 +64,19 @@ class ReviewHub extends ConsumerWidget {
         // sizing' row. Panels-sized + BOM line items stay unique.
         HubStatRow(
           stats: [
-            ('Panels sized', '$panels'),
-            ('BOM line items', '${bom.length}'),
+            (s(StringKey.reviewStatPanelsSized), '$panels'),
+            (s(StringKey.reviewStatBomLineItems), '${bom.length}'),
           ],
         ),
         if (cutPlan.isNotEmpty) ...[
           const SizedBox(height: MechXSpacing.md),
           HubStatRow(
             stats: [
-              ('Stock pipes', '$totalBars'),
-              ('Pipe required', '${required.toStringAsFixed(1)} m'),
-              ('Offcut waste', '${wastePct.toStringAsFixed(0)}%'),
+              (s(StringKey.reviewStatStockPipes), '$totalBars'),
+              (s(StringKey.reviewStatPipeRequired),
+                  '${required.toStringAsFixed(1)} m'),
+              (s(StringKey.reviewStatOffcutWaste),
+                  '${wastePct.toStringAsFixed(0)}%'),
             ],
           ),
           const SizedBox(height: MechXSpacing.md),
@@ -83,13 +87,7 @@ class ReviewHub extends ConsumerWidget {
         const SizedBox(height: MechXSpacing.md),
         _ConsumablesCard(),
         const SizedBox(height: MechXSpacing.lg),
-        const HubNote(
-          'Stock lengths: 4 m PVC/PPR, 6 m steel (sprinkler/hydrant), and duct '
-          'sections 1.2 m BJLS / 4 m PU. The cut plan reuses offcuts to minimise '
-          'waste; couplings and duct flanges on the canvas fall at these '
-          'boundaries. The calc report (PDF or MD, below) carries the full '
-          'breakdown.',
-        ),
+        HubNote(s(StringKey.reviewStockNote)),
         const SizedBox(height: MechXSpacing.md),
         const _ExportDeliverablesCard(),
       ],
@@ -115,6 +113,7 @@ class _ExportDeliverablesCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
+    final s = context.strings;
     // WATCHED (H2): the verdict re-computes live as issues are fixed, moving
     // together with the IssuesCard above.
     final summary = ref.watch(complianceSummaryProvider);
@@ -132,7 +131,7 @@ class _ExportDeliverablesCard extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Export deliverables',
+          Text(s(StringKey.reviewExportDeliverables),
               style: type.subtitle.copyWith(color: colors.textPrimary)),
           const SizedBox(height: MechXSpacing.sm),
           Row(
@@ -149,8 +148,8 @@ class _ExportDeliverablesCard extends ConsumerWidget {
               const SizedBox(width: MechXSpacing.sm),
               Text(
                 allPass
-                    ? 'PASS — ready to issue'
-                    : 'REVIEW REQUIRED — you decide whether to issue',
+                    ? s(StringKey.reviewIssueReady)
+                    : s(StringKey.reviewIssueReviewRequired),
                 style: type.caption.copyWith(color: verdictColor),
               ),
             ],
@@ -165,7 +164,7 @@ class _ExportDeliverablesCard extends ConsumerWidget {
           Align(
             alignment: Alignment.centerLeft,
             child: MechXButton(
-              label: 'Export submittal package...',
+              label: s(StringKey.reviewExportSubmittalPackage),
               primary: true,
               onPressed: () => exportSubmittalPackage(ref),
             ),
@@ -176,39 +175,36 @@ class _ExportDeliverablesCard extends ConsumerWidget {
             runSpacing: MechXSpacing.xs,
             children: [
               MechXButton(
-                label: 'Export calc report (MD)',
+                label: s(StringKey.inspectorExportCalcReportMd),
                 onPressed: () => exportCalcReport(ref),
               ),
               MechXButton(
-                label: 'Export calc report (PDF)',
+                label: s(StringKey.inspectorExportCalcReportPdfBtn),
                 onPressed: () => exportCalcReportPdf(ref),
               ),
               MechXButton(
-                label: 'Export unified MEP report (MD)',
+                label: s(StringKey.inspectorExportMepReportMd),
                 onPressed: () => exportMepUnifiedReport(ref),
               ),
               MechXButton(
-                label: 'Export unified MEP report (PDF)',
+                label: s(StringKey.inspectorExportMepReportPdfBtn),
                 onPressed: () => exportMepUnifiedReportPdf(ref),
               ),
               MechXButton(
                 // H8: the MD export writes a spreadsheet CSV sibling too —
                 // the label says so.
-                label: 'Export equipment schedule (MD + CSV)',
+                label: s(StringKey.inspectorExportEquipmentScheduleMd),
                 onPressed: () => exportEquipmentSchedule(ref),
               ),
               MechXButton(
-                label: 'Export equipment schedule (PDF)',
+                label: s(StringKey.inspectorExportEquipmentSchedulePdfBtn),
                 onPressed: () => exportEquipmentSchedulePdf(ref),
               ),
             ],
           ),
           const SizedBox(height: MechXSpacing.sm),
           Text(
-            'The submittal package above bundles the drawings too (the current '
-            "sheet's annotated plan, the mechanical riser, and the electrical "
-            'single-line). For a single per-sheet drawing, use the Export '
-            'buttons on the Projects screen or the Riser view.',
+            s(StringKey.reviewSubmittalHint),
             style: type.caption.copyWith(color: colors.textMuted),
           ),
         ],
@@ -229,6 +225,7 @@ class _ComplianceCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
+    final s = context.strings;
     // WATCHED (H2): fixing an issue updates this verdict immediately, in step
     // with the live IssuesCard below.
     final summary = ref.watch(complianceSummaryProvider);
@@ -261,11 +258,13 @@ class _ComplianceCard extends ConsumerWidget {
               ),
               const SizedBox(width: MechXSpacing.sm),
               Text(
-                allPass ? 'PASS' : 'REVIEW REQUIRED',
+                allPass
+                    ? s(StringKey.reviewVerdictPass)
+                    : s(StringKey.reviewVerdictReviewRequired),
                 style: type.subtitle.copyWith(color: headlineColor),
               ),
               const SizedBox(width: MechXSpacing.sm),
-              Text('design sign-off',
+              Text(s(StringKey.reviewDesignSignoff),
                   style: type.caption.copyWith(color: colors.textMuted)),
             ],
           ),
@@ -294,7 +293,9 @@ class _ComplianceCard extends ConsumerWidget {
                             .copyWith(color: colors.textPrimary)),
                   ),
                   Text(
-                    item.pass ? 'PASS' : 'REVIEW',
+                    item.pass
+                        ? s(StringKey.reviewItemPass)
+                        : s(StringKey.reviewItemReview),
                     style: type.caption.copyWith(
                       color: item.pass ? colors.success : colors.warning,
                     ),
@@ -341,7 +342,7 @@ class _CutPlanCard extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Pipe cut plan',
+          Text(context.strings(StringKey.reviewPipeCutPlan),
               style: type.subtitle.copyWith(color: colors.textPrimary)),
           const SizedBox(height: MechXSpacing.sm),
           for (final g in plan)
@@ -382,19 +383,20 @@ class _ConsumablesCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
+    final s = context.strings;
     final e = ref.watch(consumablesProvider);
     if (e.isEmpty) return const SizedBox.shrink();
 
     final rows = <(String, String)>[
       if (e.pvcCementCans > 0)
-        ('PVC solvent cement', '${e.pvcCementCans} can'
+        (s(StringKey.reviewConsumablePvcCement), '${e.pvcCementCans} can'
             '${e.pvcCementCans == 1 ? '' : 's'}  (${e.solventJoints} joints)'),
       if (e.ductSealantCartridges > 0)
-        ('Duct joint sealant', '${e.ductSealantCartridges} cartridge'
+        (s(StringKey.reviewConsumableDuctSealant), '${e.ductSealantCartridges} cartridge'
             '${e.ductSealantCartridges == 1 ? '' : 's'}  '
             '(${e.ductSealMetres.toStringAsFixed(1)} m)'),
       if (e.threadTapeRolls > 0)
-        ('Thread-seal tape', '${e.threadTapeRolls} roll'
+        (s(StringKey.reviewConsumableThreadTape), '${e.threadTapeRolls} roll'
             '${e.threadTapeRolls == 1 ? '' : 's'}  (${e.threadedJoints} joints)'),
     ];
 
@@ -408,7 +410,7 @@ class _ConsumablesCard extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Consumables (estimate)',
+          Text(s(StringKey.reviewConsumablesTitle),
               style: type.subtitle.copyWith(color: colors.textPrimary)),
           const SizedBox(height: MechXSpacing.sm),
           for (final r in rows)
@@ -427,9 +429,7 @@ class _ConsumablesCard extends ConsumerWidget {
               ),
             ),
           Text(
-            'Estimate — coverage assumes ~1 L cement tins, 300 ml sealant '
-            'cartridges, 30 joints/tape roll (verify per datasheet). PPR water '
-            'pipe is heat-fused (no cement).',
+            s(StringKey.reviewConsumablesNote),
             style: type.caption.copyWith(color: colors.textMuted),
           ),
         ],

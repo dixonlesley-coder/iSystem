@@ -1804,6 +1804,8 @@ class _DrawSection extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
     final drawing = ref.watch(networkControllerProvider);
     final ctrl = ref.read(networkControllerProvider.notifier);
     final ortho = ref.watch(orthoProvider);
@@ -1832,11 +1834,14 @@ class _DrawSection extends ConsumerWidget {
     final measureMode = ref.watch(measureModeProvider);
     final tankMode = ref.watch(tankModeProvider);
     final roomMode = ref.watch(roomModeProvider);
-    Widget tool(String label, DrawTool t) => MechXButton(
+    // Every peer draw tool shares ONE selected idiom — the tinted
+    // selected-segment look (F1) — so the tool group reads consistently and no
+    // tool competes with the layer/service accent as a solid-accent fill.
+    Widget tool(String label, DrawTool t) => _TintedToggle(
           label: label,
           // While the measure / tank / room tool is on, no draw tool reads as active.
-          primary: drawing.tool == t && !measureMode && !tankMode && !roomMode,
-          onPressed: () {
+          selected: drawing.tool == t && !measureMode && !tankMode && !roomMode,
+          onTap: () {
             ctrl.setTool(t);
             ref.read(measureModeProvider.notifier).set(false);
             ref.read(tankModeProvider.notifier).set(false);
@@ -1848,24 +1853,50 @@ class _DrawSection extends ConsumerWidget {
     // command palette ("Duplicate floor up") — a niche power action that no
     // longer crowds the primary draw toolbar.
 
+    // A muted group caption (the Design-inputs section idiom) so the Draw
+    // section reads as a few whitespace-separated labelled groups instead of one
+    // flat wall of equal-weight rows — the primary Tools group leads (F5).
+    Widget groupLabel(String text) =>
+        Text(text, style: type.caption.copyWith(color: colors.textMuted));
+
+    // The Select tool is the drawing default, so at rest it would carry a SOLID
+    // accent fill and compete with the layer/service accent for "the primary
+    // action". Render its SELECTED state as the tinted selected-segment idiom
+    // (F1) so a single solid-accent primary remains on the Layout.
+    final selectActive = drawing.tool == DrawTool.select &&
+        !measureMode &&
+        !tankMode &&
+        !roomMode;
+
     return DisclosureSection(
       name: 'Draw',
       child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        groupLabel('Tools'),
+        const SizedBox(height: MechXSpacing.xs),
         Wrap(
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
           children: [
-            tool('Select', DrawTool.select),
+            _TintedToggle(
+              label: 'Select',
+              selected: selectActive,
+              onTap: () {
+                ctrl.setTool(DrawTool.select);
+                ref.read(measureModeProvider.notifier).set(false);
+                ref.read(tankModeProvider.notifier).set(false);
+                ref.read(roomModeProvider.notifier).set(false);
+              },
+            ),
             tool('Run', DrawTool.drawRun),
             tool('Riser', DrawTool.drawRiser),
             // Measure is a separate mode (annotation, not a network element);
             // turning it on collapses the draw tool to Select.
-            MechXButton(
+            _TintedToggle(
               label: 'Measure',
-              primary: measureMode,
-              onPressed: () {
+              selected: measureMode,
+              onTap: () {
                 final on = !measureMode;
                 ref.read(measureModeProvider.notifier).set(on);
                 if (on) {
@@ -1878,10 +1909,10 @@ class _DrawSection extends ConsumerWidget {
             // Tank tool: drag a rectangle on the calibrated plan to designate a
             // tank/reservoir area; its capacity comes from the footprint × depth
             // (edit depth/material in the Tanks inspector below).
-            MechXButton(
+            _TintedToggle(
               label: 'Tank',
-              primary: tankMode,
-              onPressed: () {
+              selected: tankMode,
+              onTap: () {
                 final on = !tankMode;
                 ref.read(tankModeProvider.notifier).set(on);
                 if (on) {
@@ -1895,10 +1926,10 @@ class _DrawSection extends ConsumerWidget {
             // room/zone; its design airflow (CFM) comes from area × ceiling ×
             // target ACH, and the ducts/diffusers/equipment auto-size from it
             // (edit room type / ACH / ceiling / equipment in the Rooms inspector).
-            MechXButton(
+            _TintedToggle(
               label: 'Room',
-              primary: roomMode,
-              onPressed: () {
+              selected: roomMode,
+              onTap: () {
                 final on = !roomMode;
                 ref.read(roomModeProvider.notifier).set(on);
                 if (on) {
@@ -1910,7 +1941,9 @@ class _DrawSection extends ConsumerWidget {
             ),
           ],
         ),
-        const SizedBox(height: MechXSpacing.sm),
+        const SizedBox(height: MechXSpacing.md),
+        groupLabel('Service'),
+        const SizedBox(height: MechXSpacing.xs),
         Wrap(
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
@@ -1923,7 +1956,7 @@ class _DrawSection extends ConsumerWidget {
               ),
           ],
         ),
-        const SizedBox(height: MechXSpacing.sm),
+        const SizedBox(height: MechXSpacing.md),
         Wrap(
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
@@ -1936,10 +1969,13 @@ class _DrawSection extends ConsumerWidget {
               label: 'Redo',
               onPressed: ref.read(historyProvider.notifier).redo,
             ),
-            MechXButton(
+            // Ortho's SELECTED state uses the tinted selected-segment idiom too
+            // (F1) — it's a persistent draw toggle, not the screen's primary
+            // action, so it must not read as a solid-accent fill.
+            _TintedToggle(
               label: 'Ortho',
-              primary: ortho,
-              onPressed: () => ref.read(orthoProvider.notifier).toggle(),
+              selected: ortho,
+              onTap: () => ref.read(orthoProvider.notifier).toggle(),
             ),
           ],
         ),
@@ -1947,6 +1983,66 @@ class _DrawSection extends ConsumerWidget {
         const SegmentPalette(),
       ],
     ),
+    );
+  }
+}
+
+/// A tool/toggle button whose SELECTED state uses the tinted selected-segment
+/// idiom — an `accentMuted` fill + an accent border + an accent label, the same
+/// "selected" look the service chips / segmented controls already use — rather
+/// than a solid-accent [MechXButton] fill (F1). Unselected, it matches the
+/// default gray [MechXButton] at rest (a soft `surfaceHover` fill, no visible
+/// border), and a transparent 1-px border keeps the button the exact same size
+/// in both states so it never jumps when toggled. Built locally on the shared
+/// tokens (the button package is owned elsewhere, so it is not edited).
+class _TintedToggle extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _TintedToggle({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: MechXFocusRing(
+        onActivated: onTap,
+        borderRadius: MechXRadii.control,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              // Match the default MechXButton padding, compensating the heavier
+              // selected border so the toggle never resizes between states.
+              horizontal: MechXSpacing.sm + 4 - (selected ? 1 : 0),
+              vertical: MechXSpacing.xs + 2 - (selected ? 1 : 0),
+            ),
+            decoration: BoxDecoration(
+              color: selected ? colors.accentMuted : colors.surfaceHover,
+              borderRadius: MechXRadii.control,
+              border: Border.all(
+                color: selected ? colors.accent : const Color(0x00000000),
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: Text(
+              label,
+              style: type.label.copyWith(
+                color: selected ? colors.accent : colors.textPrimary,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -2545,7 +2641,9 @@ class _SizingSection extends ConsumerWidget {
     final sized = ref.watch(sizingProvider);
 
     return DisclosureSection(
-      name: 'Sizing',
+      // E5: this section holds occupancy/rainfall/runoff design INPUTS, not
+      // results — name it for what the engineer sets here.
+      name: 'Design inputs',
       child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2707,8 +2805,17 @@ class _ResultsSection extends ConsumerWidget {
       }
     }
 
+    // E1: gate the disclosure default on real content the way the Scale section
+    // gates on calibration — a plumbing network with sized runs/risers (or a
+    // solved feed) opens itself; a blank launch stays a quiet collapsed header
+    // instead of showing dash rows. Mirrors the empty-state predicate below.
+    final hasNetworkResults =
+        bom.isNotEmpty || solution != null || downfeed != null || hwr != null;
+
     return DisclosureSection(
-      name: 'Network',
+      // E5: this is the plumbing sizing RESULTS surface, not a generic "Network".
+      name: 'Results',
+      defaultExpanded: hasNetworkResults,
       child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2944,6 +3051,11 @@ class _FireSection extends ConsumerWidget {
 
     return DisclosureSection(
       name: 'Fire',
+      // E1: expand only when fire (sprinkler/hydrant) pipework actually exists —
+      // otherwise this section computed a full fire-pump duty from building
+      // defaults alone and greeted a blank launch with a phantom rating. An
+      // empty project now keeps a quiet collapsed header.
+      defaultExpanded: hasFireEdges,
       child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -3044,7 +3156,7 @@ class _ServiceChip extends StatelessWidget {
               vertical: MechXSpacing.xs - (selected ? 1 : 0),
             ),
             decoration: BoxDecoration(
-              color: selected ? colors.accentMuted : colors.background,
+              color: selected ? colors.accentMuted : colors.surface,
               borderRadius: MechXRadii.control,
               border: Border.all(
                 color: selected ? colors.accent : colors.border,
@@ -3183,6 +3295,29 @@ class _SelectionSection extends ConsumerWidget {
     // chips (re-servicing all is always coherent).
     final allAir = allEdges && selEdges.every((e) => e.service.isAir);
     final allPipe = allEdges && selEdges.every((e) => !e.service.isAir);
+    // E6: resolve the batch's shared size override for the compact size stepper
+    // — a single shared size, null (every edge on Auto), or "mixed" when the
+    // selected edges disagree (differing sizes, or a mix of Auto + sized).
+    Diameter? batchSizeCommon;
+    var batchSizeMixed = false;
+    if (allEdges && selEdges.isNotEmpty) {
+      final mmSet = <int>{};
+      var anyAuto = false;
+      for (final e in selEdges) {
+        if (e.sizeOverride == null) {
+          anyAuto = true;
+        } else {
+          mmSet.add(e.sizeOverride!.inMillimeters.round());
+        }
+      }
+      if (mmSet.isEmpty) {
+        batchSizeCommon = null; // every edge on Auto
+      } else if (mmSet.length == 1 && !anyAuto) {
+        batchSizeCommon = Diameter.mm(mmSet.first.toDouble());
+      } else {
+        batchSizeMixed = true;
+      }
+    }
     NodeRole? commonRole;
     if (allNodes) {
       commonRole = selNodes.first.role;
@@ -3274,38 +3409,13 @@ class _SelectionSection extends ConsumerWidget {
               const SizedBox(height: MechXSpacing.sm),
               label('Size'),
               const SizedBox(height: MechXSpacing.xs),
-              Wrap(
-                spacing: MechXSpacing.xs,
-                runSpacing: MechXSpacing.xs,
-                children: [
-                  _Pill(
-                    label: 'Auto',
-                    selected: selEdges.every((e) => e.sizeOverride == null),
-                    onTap: () => ctrl.setEdgesSizeOverride(edgeIds, null),
-                  ),
-                  if (allAir)
-                    for (final mm in standardDuctDiametersMm)
-                      _Pill(
-                        label: 'Ø${mm.round()}',
-                        selected: selEdges.every((e) =>
-                            e.sizeOverride != null &&
-                            (e.sizeOverride!.inMillimeters - mm).abs() < 0.5),
-                        onTap: () =>
-                            ctrl.setEdgesSizeOverride(edgeIds, Diameter.mm(mm)),
-                      )
-                  else
-                    for (final inches in npsInches)
-                      _Pill(
-                        label: npsLabel(inches),
-                        selected: selEdges.every((e) =>
-                            e.sizeOverride != null &&
-                            (e.sizeOverride!.inMillimeters - npsToMm(inches))
-                                    .abs() <
-                                0.5),
-                        onTap: () => ctrl.setEdgesSizeOverride(
-                            edgeIds, Diameter.mm(npsToMm(inches))),
-                      ),
-                ],
+              // E6: a compact stepper replaces the inline ~11-pill ladder; it
+              // applies to every selected edge in one undo step.
+              _sizeStepper(
+                isAir: allAir,
+                current: batchSizeCommon,
+                mixed: batchSizeMixed,
+                onSet: (d) => ctrl.setEdgesSizeOverride(edgeIds, d),
               ),
               const SizedBox(height: MechXSpacing.sm),
               label('Material'),
@@ -3553,66 +3663,9 @@ class _SelectionSection extends ConsumerWidget {
             ),
           ],
         ],
-        const SizedBox(height: MechXSpacing.sm),
-        Wrap(
-          spacing: MechXSpacing.xs,
-          runSpacing: MechXSpacing.xs,
-          children: [
-            for (final r in NodeRole.values)
-              _Pill(
-                label: _roleLabel(r),
-                selected: node.role == r,
-                onTap: () => ctrl.setNodeRole(node.id, r),
-              ),
-          ],
-        ),
-        // Per-node mounting height — "how high on the wall" this fixture/outlet
-        // sits above its own floor. Drives the vertical pipe/cable run to it
-        // (§10). Shown in cm; "default" = the role's standard height.
-        const SizedBox(height: MechXSpacing.sm),
-        Text('Mounting height (above floor)',
-            style:
-                context.type.caption.copyWith(color: context.colors.textMuted)),
-        const SizedBox(height: MechXSpacing.xs),
-        Row(
-          children: [
-            SteppedValueField(
-              display: node.mountHeight == null
-                  ? 'default'
-                  : '${(node.mountHeight!.meters * 100).round()} cm',
-              editSeed: node.mountHeight == null
-                  ? ''
-                  : (node.mountHeight!.meters * 100).round().toString(),
-              gap: MechXSpacing.sm,
-              min: 0,
-              onDecrement: () {
-                final base = node.mountHeight?.meters ??
-                    const MountingHeights().fixtureHeight.meters;
-                final next = base - 0.05;
-                // Stepping down through floor level reverts to the role default.
-                ctrl.setNodeMountHeight(
-                    node.id, next <= 0 ? null : Length(next));
-              },
-              onIncrement: () {
-                final base = node.mountHeight?.meters ??
-                    const MountingHeights().fixtureHeight.meters;
-                ctrl.setNodeMountHeight(node.id, Length(base + 0.05));
-              },
-              // The typed value is in cm (the displayed unit); store as metres.
-              // A non-positive / empty entry reverts to the role default.
-              onSubmit: (v) => ctrl.setNodeMountHeight(
-                  node.id, (v == null || v <= 0) ? null : Length(v / 100)),
-            ),
-            if (node.mountHeight != null) ...[
-              const SizedBox(width: MechXSpacing.sm),
-              MechXButton(
-                label: 'Reset',
-                tertiary: true,
-                onPressed: () => ctrl.setNodeMountHeight(node.id, null),
-              ),
-            ],
-          ],
-        ),
+        // E2: identity first — the fixture/type group (below, gated on the
+        // fixture role) leads the node editor; Role + Mounting height are
+        // demoted into the collapsed "Placement" disclosure further down.
         if (node.role == NodeRole.fixture) ...[
           if (showFixtureType) ...[
           const SizedBox(height: MechXSpacing.sm),
@@ -3764,6 +3817,81 @@ class _SelectionSection extends ConsumerWidget {
           ),
           ],
         ],
+        // E2: placement (role + mounting height) is rarely changed once a node
+        // is placed, so it is demoted below the identity into a collapsed
+        // disclosure — every control preserved, just regrouped.
+        const SizedBox(height: MechXSpacing.sm),
+        DisclosureSection(
+          name: 'Placement',
+          defaultExpanded: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Wrap(
+                spacing: MechXSpacing.xs,
+                runSpacing: MechXSpacing.xs,
+                children: [
+                  for (final r in NodeRole.values)
+                    _Pill(
+                      label: _roleLabel(r),
+                      selected: node.role == r,
+                      onTap: () => ctrl.setNodeRole(node.id, r),
+                    ),
+                ],
+              ),
+              // Per-node mounting height — "how high on the wall" this
+              // fixture/outlet sits above its own floor. Drives the vertical
+              // pipe/cable run to it (§10). Shown in cm; "default" = the role's
+              // standard height.
+              const SizedBox(height: MechXSpacing.sm),
+              Text('Mounting height (above floor)',
+                  style: context.type.caption
+                      .copyWith(color: context.colors.textMuted)),
+              const SizedBox(height: MechXSpacing.xs),
+              Row(
+                children: [
+                  SteppedValueField(
+                    display: node.mountHeight == null
+                        ? 'default'
+                        : '${(node.mountHeight!.meters * 100).round()} cm',
+                    editSeed: node.mountHeight == null
+                        ? ''
+                        : (node.mountHeight!.meters * 100).round().toString(),
+                    gap: MechXSpacing.sm,
+                    min: 0,
+                    onDecrement: () {
+                      final base = node.mountHeight?.meters ??
+                          const MountingHeights().fixtureHeight.meters;
+                      final next = base - 0.05;
+                      // Stepping down through floor level reverts to the role
+                      // default.
+                      ctrl.setNodeMountHeight(
+                          node.id, next <= 0 ? null : Length(next));
+                    },
+                    onIncrement: () {
+                      final base = node.mountHeight?.meters ??
+                          const MountingHeights().fixtureHeight.meters;
+                      ctrl.setNodeMountHeight(node.id, Length(base + 0.05));
+                    },
+                    // The typed value is in cm (the displayed unit); store as
+                    // metres. A non-positive / empty entry reverts to the role
+                    // default.
+                    onSubmit: (v) => ctrl.setNodeMountHeight(node.id,
+                        (v == null || v <= 0) ? null : Length(v / 100)),
+                  ),
+                  if (node.mountHeight != null) ...[
+                    const SizedBox(width: MechXSpacing.sm),
+                    MechXButton(
+                      label: 'Reset',
+                      tertiary: true,
+                      onPressed: () => ctrl.setNodeMountHeight(node.id, null),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
         const SizedBox(height: MechXSpacing.sm),
         Align(
           alignment: Alignment.centerLeft,
@@ -3808,13 +3936,25 @@ class _SelectionSection extends ConsumerWidget {
         Text('$kind · ${len.toStringAsFixed(2)} m · $sizeStr'
             '${edge.sizeOverride != null ? ' (set)' : ''}',
             style: context.type.caption.copyWith(color: context.colors.textMuted)),
-        if (material != null) ...[
-          const SizedBox(height: MechXSpacing.xxs),
-          Text('Material: $material',
-              style: context.type.caption
-                  .copyWith(color: context.colors.textSecondary)),
-        ],
-        // Air-duct velocity check (warns too-high / too-low for the chosen size).
+        // E3: the editable controls (size / material / service) lead; the
+        // read-only procurement takeoff is demoted into the "Details" disclosure
+        // below. These use the SAME setters the right-click menu does — the
+        // "Auto" size step clears the override; "Default"/"Auto" material falls
+        // back to the service default.
+        const SizedBox(height: MechXSpacing.sm),
+        Text('Size',
+            style:
+                context.type.caption.copyWith(color: context.colors.textMuted)),
+        const SizedBox(height: MechXSpacing.xs),
+        // E6: a compact stepper replaces the inline ~11-pill Ø/DN ladder.
+        _sizeStepper(
+          fieldKey: const ValueKey('edge-size-stepper'),
+          isAir: edge.service.isAir,
+          current: edge.sizeOverride,
+          onSet: (d) => ctrl.setEdgeSizeOverride(edge.id, d),
+        ),
+        // Air-duct velocity check (warns too-high / too-low for the chosen
+        // size) — live feedback attached to the size control above.
         if (edge.service.isAir && sizing != null) ...[
           const SizedBox(height: MechXSpacing.xxs),
           Builder(builder: (context) {
@@ -3838,69 +3978,6 @@ class _SelectionSection extends ConsumerWidget {
               style: context.type.caption
                   .copyWith(color: context.colors.textMuted)),
         ],
-        if (takeoff != null) ...[
-          const SizedBox(height: MechXSpacing.xxs),
-          Text(
-            'Sheet: ${takeoff.developedAreaM2.toStringAsFixed(2)} m2'
-            ' (perimeter x length) · '
-            '${takeoff.sheets} ${takeoff.product == DuctProduct.pu ? 'panel' : 'sheet'}'
-            '${takeoff.sheets == 1 ? '' : 's'} '
-            '@ ${takeoff.sheetAreaM2.toStringAsFixed(2)} m2 · '
-            '${takeoff.thicknessMm.toStringAsFixed(takeoff.product == DuctProduct.pu ? 0 : 2)} mm',
-            style: context.type.caption
-                .copyWith(color: context.colors.textSecondary),
-          ),
-        ],
-        if (accessories != null) ...[
-          const SizedBox(height: MechXSpacing.xxs),
-          Text(
-            'Accessories: ${accessories.flangeAngleM.toStringAsFixed(1)} m '
-            'covering angle · ${accessories.gasketM.toStringAsFixed(1)} m gasket'
-            ' · ${accessories.hangers} hanger'
-            '${accessories.hangers == 1 ? '' : 's'} · ${accessories.bolts} bolts',
-            style: context.type.caption
-                .copyWith(color: context.colors.textSecondary),
-          ),
-        ],
-        // Size + material editors (E9) — the SAME setters the right-click menu
-        // uses, mirroring the node terminal's face-size pills. The "Auto" size
-        // pill clears the override; "Default"/"Auto" material falls back to the
-        // service default.
-        const SizedBox(height: MechXSpacing.sm),
-        Text('Size',
-            style:
-                context.type.caption.copyWith(color: context.colors.textMuted)),
-        const SizedBox(height: MechXSpacing.xs),
-        Wrap(
-          spacing: MechXSpacing.xs,
-          runSpacing: MechXSpacing.xs,
-          children: [
-            _Pill(
-              label: 'Auto',
-              selected: edge.sizeOverride == null,
-              onTap: () => ctrl.setEdgeSizeOverride(edge.id, null),
-            ),
-            if (edge.service.isAir)
-              for (final mm in standardDuctDiametersMm)
-                _Pill(
-                  label: 'Ø${mm.round()}',
-                  selected: edge.sizeOverride != null &&
-                      (edge.sizeOverride!.inMillimeters - mm).abs() < 0.5,
-                  onTap: () =>
-                      ctrl.setEdgeSizeOverride(edge.id, Diameter.mm(mm)),
-                )
-            else
-              for (final inches in npsInches)
-                _Pill(
-                  label: npsLabel(inches),
-                  selected: edge.sizeOverride != null &&
-                      (edge.sizeOverride!.inMillimeters - npsToMm(inches)).abs() <
-                          0.5,
-                  onTap: () => ctrl.setEdgeSizeOverride(
-                      edge.id, Diameter.mm(npsToMm(inches))),
-                ),
-          ],
-        ),
         const SizedBox(height: MechXSpacing.sm),
         Text('Material',
             style:
@@ -3950,12 +4027,57 @@ class _SelectionSection extends ConsumerWidget {
               ),
           ],
         ),
+        // E3: read-only material echo + duct procurement takeoff (developed m²,
+        // sheets, covering angle / gasket / hangers / bolts), tucked into a
+        // collapsed "Details" disclosure so the editable controls above lead.
+        // Only rendered when there's something to show.
+        if (material != null || takeoff != null || accessories != null) ...[
+          const SizedBox(height: MechXSpacing.sm),
+          DisclosureSection(
+            name: 'Details',
+            defaultExpanded: false,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (material != null)
+                  Text('Material: $material',
+                      style: context.type.caption
+                          .copyWith(color: context.colors.textSecondary)),
+                if (takeoff != null) ...[
+                  if (material != null)
+                    const SizedBox(height: MechXSpacing.xxs),
+                  Text(
+                    'Sheet: ${takeoff.developedAreaM2.toStringAsFixed(2)} m2'
+                    ' (perimeter x length) · '
+                    '${takeoff.sheets} ${takeoff.product == DuctProduct.pu ? 'panel' : 'sheet'}'
+                    '${takeoff.sheets == 1 ? '' : 's'} '
+                    '@ ${takeoff.sheetAreaM2.toStringAsFixed(2)} m2 · '
+                    '${takeoff.thicknessMm.toStringAsFixed(takeoff.product == DuctProduct.pu ? 0 : 2)} mm',
+                    style: context.type.caption
+                        .copyWith(color: context.colors.textSecondary),
+                  ),
+                ],
+                if (accessories != null) ...[
+                  const SizedBox(height: MechXSpacing.xxs),
+                  Text(
+                    'Accessories: ${accessories.flangeAngleM.toStringAsFixed(1)} m '
+                    'covering angle · ${accessories.gasketM.toStringAsFixed(1)} m gasket'
+                    ' · ${accessories.hangers} hanger'
+                    '${accessories.hangers == 1 ? '' : 's'} · ${accessories.bolts} bolts',
+                    style: context.type.caption
+                        .copyWith(color: context.colors.textSecondary),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
           runSpacing: MechXSpacing.xs,
           children: [
-            // (Size override is cleared by the "Auto" size pill above, E9.)
+            // (Size override is cleared by stepping "Size" down to Auto, E6.)
             MechXButton(
               label: 'Delete ${edge.kind == EdgeKind.riser ? 'riser' : 'run'}',
               onPressed: () {
@@ -3968,6 +4090,98 @@ class _SelectionSection extends ConsumerWidget {
       ],
     );
   }
+}
+
+/// A compact size stepper (E6) that replaces the inline ~11-pill Ø/DN ladder in
+/// the single and batch edge editors — the ladder crowded a 272-px column. It
+/// walks the SAME standard ladder (round-duct Ø in mm for air, NPS/DN for pipe)
+/// with "Auto" (a null size override) sitting just below the smallest size, and
+/// the value can be typed directly (snapped to the nearest ladder entry; an
+/// empty entry ⇒ Auto). Every ladder size stays reachable and the apply intent
+/// is unchanged — [onSet] wraps the same `setEdge(s)SizeOverride` the pills
+/// called. [mixed] marks a multi-selection whose edges disagree: it shows
+/// "Mixed", stepping down resets all to Auto and stepping up sets all to the
+/// smallest size.
+Widget _sizeStepper({
+  required bool isAir,
+  required Diameter? current,
+  required void Function(Diameter?) onSet,
+  bool mixed = false,
+  Key? fieldKey,
+}) {
+  final ladderMm = isAir
+      ? standardDuctDiametersMm
+      : <double>[for (final inches in npsInches) npsToMm(inches)];
+
+  String labelForIndex(int i) =>
+      isAir ? 'Ø${ladderMm[i].round()}' : npsLabel(npsInches[i]);
+  String seedForIndex(int i) {
+    if (isAir) return ladderMm[i].round().toString();
+    final inches = npsInches[i];
+    return inches == inches.roundToDouble()
+        ? inches.round().toString()
+        : inches.toString();
+  }
+
+  var idx = -1;
+  if (!mixed && current != null) {
+    final mm = current.inMillimeters;
+    for (var i = 0; i < ladderMm.length; i++) {
+      if ((ladderMm[i] - mm).abs() < 0.5) {
+        idx = i;
+        break;
+      }
+    }
+  }
+
+  final display = mixed ? 'Mixed' : (idx < 0 ? 'Auto' : labelForIndex(idx));
+  final editSeed = (mixed || idx < 0) ? '' : seedForIndex(idx);
+
+  VoidCallback? onDec;
+  VoidCallback? onInc;
+  if (mixed) {
+    onDec = () => onSet(null); // → Auto
+    onInc = () => onSet(Diameter.mm(ladderMm.first)); // → smallest
+  } else if (idx < 0) {
+    // Auto sits below the smallest size — can't step lower; stepping up enters
+    // the ladder at the smallest standard size.
+    onDec = null;
+    onInc = () => onSet(Diameter.mm(ladderMm.first));
+  } else {
+    onDec = () => onSet(idx == 0 ? null : Diameter.mm(ladderMm[idx - 1]));
+    onInc = idx >= ladderMm.length - 1
+        ? null
+        : () => onSet(Diameter.mm(ladderMm[idx + 1]));
+  }
+
+  return SteppedValueField(
+    key: fieldKey,
+    display: display,
+    editSeed: editSeed,
+    gap: MechXSpacing.sm,
+    onDecrement: onDec,
+    onIncrement: onInc,
+    onSubmit: (v) {
+      if (v == null) {
+        onSet(null);
+        return;
+      }
+      // The typed value is in the ladder's own unit (inches for pipe, mm for
+      // air); snap it to the nearest standard size so the selectable set is
+      // exactly the ladder the pills offered.
+      final targetMm = isAir ? v : npsToMm(v);
+      var best = 0;
+      var bestErr = double.infinity;
+      for (var i = 0; i < ladderMm.length; i++) {
+        final err = (ladderMm[i] - targetMm).abs();
+        if (err < bestErr) {
+          bestErr = err;
+          best = i;
+        }
+      }
+      onSet(Diameter.mm(ladderMm[best]));
+    },
+  );
 }
 
 /// HVAC / duct sizing controls + fan duty readout (the air-path analogue of the
@@ -4008,6 +4222,10 @@ class _HvacSection extends ConsumerWidget {
 
     return DisclosureSection(
       name: 'HVAC · ducting',
+      // E1: expand only when air elements exist (a sized fan, or a supply/return
+      // balance). A plumbing-only launch keeps a quiet collapsed header rather
+      // than opening on a "Draw a duct network…" empty prompt.
+      defaultExpanded: fan != null || balance != null,
       child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -4162,7 +4380,7 @@ class _Pill extends StatelessWidget {
               vertical: MechXSpacing.xs - (selected ? 1 : 0),
             ),
             decoration: BoxDecoration(
-              color: selected ? colors.accentMuted : colors.background,
+              color: selected ? colors.accentMuted : colors.surface,
               borderRadius: MechXRadii.control,
               border: Border.all(
                 color: selected ? colors.accent : colors.border,
