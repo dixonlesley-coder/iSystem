@@ -52,9 +52,6 @@ import 'electrical_canvas.dart';
 import 'electrical_controls.dart';
 import 'electrical_export.dart';
 import 'electrical_format.dart';
-import 'electrical_inspector.dart'
-    show ElectricalCircuitInspector, ElectricalPanelInspector;
-import 'electrical_palette.dart';
 import 'panel_geometry.dart';
 import 'power_oneline_view.dart';
 import 'sld_sheet_painter.dart';
@@ -100,11 +97,11 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
 
   _Tab _tab = _Tab.singleLine;
 
-  /// The circuit whose inspector panel is open (null = closed).
-  _CircuitRef? _editing;
-
-  /// The panel whose PROPERTIES drawer is open (null = closed).
-  String? _panelEditing;
+  // The circuit / panel open in the inline inspector column moved OUT of this
+  // State to `electricalInspectorTargetProvider` (C1/C4) so the SIBLING
+  // inspector column — rendered by the shared shell scaffold — reads + drives
+  // the same target the canvas opens. This view only SETS the provider (on
+  // double-click / context-menu Edit / +Way flows) and clears it (Esc / Close).
 
   /// An open right-click context menu (panel or circuit) + its anchor.
   _PanelMenuState? _panelMenu;
@@ -142,13 +139,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       ref.read(electricalProjectProvider.notifier);
 
   void _closeOverlays() {
-    if (_editing != null ||
-        _panelEditing != null ||
-        _panelMenu != null ||
-        _circuitMenu != null) {
+    ref.read(electricalInspectorTargetProvider.notifier).clear();
+    if (_panelMenu != null || _circuitMenu != null) {
       setState(() {
-        _editing = null;
-        _panelEditing = null;
         _panelMenu = null;
         _circuitMenu = null;
       });
@@ -184,14 +177,10 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       setState(() => _showExportMenu = false);
       return KeyEventResult.handled;
     }
-    if (_editing != null ||
-        _panelEditing != null ||
-        _showService ||
-        _showSources ||
-        _showAdvanced) {
+    final hasEdit = ref.read(electricalInspectorTargetProvider) != null;
+    if (hasEdit || _showService || _showSources || _showAdvanced) {
+      ref.read(electricalInspectorTargetProvider.notifier).clear();
       setState(() {
-        _editing = null;
-        _panelEditing = null;
         _showService = false;
         _showSources = false;
         _showAdvanced = false;
@@ -289,12 +278,10 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         Positioned.fill(
           child: ColoredBox(color: colors.canvas, child: body),
         ),
-        // Tap-away scrim behind any open menu / inspector.
-        if (_editing != null ||
-            _panelEditing != null ||
-            _panelMenu != null ||
-            _circuitMenu != null ||
-            _showExportMenu)
+        // Tap-away scrim behind any open menu / export popover. (The circuit /
+        // panel editors no longer float here — they live in the sibling inline
+        // inspector column, closed via its Close button or Esc.)
+        if (_panelMenu != null || _circuitMenu != null || _showExportMenu)
           Positioned.fill(
             child: Listener(
               onPointerDown: (_) {
@@ -325,8 +312,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           ),
         if (_circuitMenu != null) _buildCircuitMenu(),
         if (_panelMenu != null) _buildPanelMenu(),
-        if (_editing != null) _buildInspector(),
-        if (_panelEditing != null) _buildPanelInspector(),
         if (_showAdvanced)
           _AdvancedDrawer(
             advanced: advanced,
@@ -351,26 +336,25 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     ElectricalProject project,
     ElectricalSystemResult result,
   ) {
-    // The Loads palette sits on the RIGHT — consistent with the inspector/DRAW
-    // column in every other workspace (Layout, Schematic). The canvas leads.
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          child: Stack(
+    // The Loads palette + the circuit/panel editors now live in the shared
+    // collapsible inspector column (a sibling in the shell scaffold), NOT baked
+    // into this canvas row — so the electrical workspace's frame matches the
+    // mechanical Layout/Riser. The canvas fills the whole area here.
+    return Stack(
             children: [
               Positioned.fill(
                 child: ElectricalCanvas(
                   key: _canvasKey,
                   viewport: _viewport,
-                  // Panel double-click opens the panel PROPERTIES drawer
-                  // (name / tag / diversity / headroom); a way row double-click
-                  // keeps opening the circuit editor below.
-                  onEditPanel: (panelId) =>
-                      setState(() => _panelEditing = panelId),
-                  onEditCircuit: (panelId, circuitId) => setState(
-                    () => _editing = _CircuitRef(panelId, circuitId),
-                  ),
+                  // Panel double-click opens the panel PROPERTIES editor
+                  // (name / tag / diversity / headroom) in the inspector column;
+                  // a way row double-click opens the circuit editor there.
+                  onEditPanel: (panelId) => ref
+                      .read(electricalInspectorTargetProvider.notifier)
+                      .editPanel(panelId),
+                  onEditCircuit: (panelId, circuitId) => ref
+                      .read(electricalInspectorTargetProvider.notifier)
+                      .editCircuit(panelId, circuitId),
                   onPanelMenu: _openPanelMenu,
                   onCircuitMenu: (panelId, circuitId, gp) => setState(() {
                     _circuitMenu = _CircuitRef(panelId, circuitId);
@@ -444,10 +428,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                   ),
                 ),
             ],
-          ),
-        ),
-        const ElectricalPalette(),
-      ],
     );
   }
 
@@ -497,10 +477,10 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   }
 
   void _openService() {
+    ref.read(electricalInspectorTargetProvider.notifier).clear();
     setState(() {
       _panelMenu = null;
       _circuitMenu = null;
-      _editing = null;
       _showAdvanced = false;
       _showSources = false;
       _showService = true;
@@ -508,10 +488,10 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   }
 
   void _openSources() {
+    ref.read(electricalInspectorTargetProvider.notifier).clear();
     setState(() {
       _panelMenu = null;
       _circuitMenu = null;
-      _editing = null;
       _showAdvanced = false;
       _showService = false;
       _showSources = true;
@@ -537,10 +517,12 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         items: [
           ElectricalMenuAction(
             context.strings(StringKey.electricalMenuEdit),
-            () => setState(() {
-              _editing = ref0;
-              _circuitMenu = null;
-            }),
+            () {
+              ref
+                  .read(electricalInspectorTargetProvider.notifier)
+                  .editCircuit(ref0.panelId, ref0.circuitId);
+              setState(() => _circuitMenu = null);
+            },
           ),
           ElectricalMenuAction(context.strings(StringKey.electricalMenuDuplicate),
               () {
@@ -572,22 +554,22 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         items: [
           ElectricalMenuAction(
               context.strings(StringKey.electricalPanelProperties), () {
-            setState(() {
-              _panelMenu = null;
-              _panelEditing = panel.id;
-            });
+            ref
+                .read(electricalInspectorTargetProvider.notifier)
+                .editPanel(panel.id);
+            setState(() => _panelMenu = null);
           }),
           ElectricalMenuAction(
               context.strings(StringKey.electricalMenuOpenPanel), () {
             final first = panel.circuits
                 .where((c) => c.loadKind != LoadKind.feeder)
                 .firstOrNull;
-            setState(() {
-              _panelMenu = null;
-              if (first != null) {
-                _editing = _CircuitRef(panel.id, first.id);
-              }
-            });
+            if (first != null) {
+              ref
+                  .read(electricalInspectorTargetProvider.notifier)
+                  .editCircuit(panel.id, first.id);
+            }
+            setState(() => _panelMenu = null);
           }),
           ElectricalMenuAction(
             context.strings(panel.essential
@@ -636,51 +618,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     );
   }
 
-  Widget _buildInspector() {
-    final ref0 = _editing!;
-    final project = ref.watch(electricalProjectProvider);
-    final panel = project.panels.where((p) => p.id == ref0.panelId).firstOrNull;
-    final circuit = panel?.circuits
-        .where((c) => c.id == ref0.circuitId)
-        .firstOrNull;
-    if (panel == null || circuit == null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
-      return const SizedBox.shrink();
-    }
-    return Positioned(
-      top: 0,
-      right: 0,
-      bottom: 0,
-      child: ElectricalCircuitInspector(
-        key: ValueKey('${ref0.panelId}/${ref0.circuitId}'),
-        panel: panel,
-        circuit: circuit,
-        controller: _controller,
-        onClose: _closeOverlays,
-      ),
-    );
-  }
-
-  Widget _buildPanelInspector() {
-    final panelId = _panelEditing!;
-    final project = ref.watch(electricalProjectProvider);
-    final panel = project.panels.where((p) => p.id == panelId).firstOrNull;
-    if (panel == null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
-      return const SizedBox.shrink();
-    }
-    return Positioned(
-      top: 0,
-      right: 0,
-      bottom: 0,
-      child: ElectricalPanelInspector(
-        key: ValueKey('panel/$panelId'),
-        panel: panel,
-        controller: _controller,
-        onClose: _closeOverlays,
-      ),
-    );
-  }
 }
 
 class _PanelMenuState {

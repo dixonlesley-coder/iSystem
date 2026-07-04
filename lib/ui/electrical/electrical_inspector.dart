@@ -153,12 +153,20 @@ class ElectricalCircuitInspector extends StatelessWidget {
   final ElectricalProjectController controller;
   final VoidCallback onClose;
 
+  /// When true the editor lays out INLINE inside the shared collapsible
+  /// inspector column (C4): transparent (it floats on the column's Liquid-Glass
+  /// surface), full column width, no slide-in — the standalone electrical
+  /// workspace's selection-first idiom. When false (the default) it is the
+  /// 340-px floating right-drawer the Layout-canvas electrical layer still uses.
+  final bool inline;
+
   const ElectricalCircuitInspector({
     super.key,
     required this.panel,
     required this.circuit,
     required this.controller,
     required this.onClose,
+    this.inline = false,
   });
 
   static const _cableTypes = <String?>[
@@ -178,27 +186,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
     final colors = context.colors;
     final type = context.type;
 
-    // Slide-in from the right + fade on open (and on switching circuits, since
-    // the host keys this by panel/circuit), matching the iOS sheet idiom.
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.appear,
-      curve: MechXMotion.standard,
-      builder: (context, t, child) => Opacity(
-        opacity: t,
-        child: Transform.translate(
-          offset: Offset(340 * (1 - t), 0),
-          child: child,
-        ),
-      ),
-      child: Container(
-        width: 340,
-        decoration: BoxDecoration(
-          color: colors.surface,
-          border: Border(left: BorderSide(color: colors.border)),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: Column(
+    final inner = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
@@ -413,39 +401,16 @@ class ElectricalCircuitInspector extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
+        );
 
-// ── Panel inspector (the I3 properties drawer) ───────────────────────────────
-
-/// The panel PROPERTIES drawer — name / tag / diversity / headroom (spare % +
-/// CADANGAN spare ways) / supply flags — opened on panel double-click or the
-/// 'Panel properties' context-menu row. Same 340-px right-drawer idiom as
-/// [ElectricalCircuitInspector]; every edit routes through the controller's
-/// undoable intents.
-class ElectricalPanelInspector extends StatelessWidget {
-  final ElectricalPanel panel;
-  final ElectricalProjectController controller;
-  final VoidCallback onClose;
-
-  const ElectricalPanelInspector({
-    super.key,
-    required this.panel,
-    required this.controller,
-    required this.onClose,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    final headroom = panel.headroom ?? HeadroomSpec.none;
-
-    // Slide-in from the right + fade on open (host keys this by panel), the
-    // same iOS sheet idiom as the circuit inspector.
+    if (inline) {
+      // Transparent, full-width, no slide-in — floats on the shared inspector
+      // column's Liquid-Glass surface (the selection-first idiom, C4).
+      return inner;
+    }
+    // The 340-px floating right-drawer with a slide-in + fade on open (and on
+    // switching circuits, since the host keys this by panel/circuit), matching
+    // the iOS sheet idiom — the Layout-canvas electrical layer path.
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
       duration: MechXMotion.appear,
@@ -464,7 +429,43 @@ class ElectricalPanelInspector extends StatelessWidget {
           border: Border(left: BorderSide(color: colors.border)),
           boxShadow: MechXShadow.popover,
         ),
-        child: Column(
+        child: inner,
+      ),
+    );
+  }
+}
+
+// ── Panel inspector (the I3 properties drawer) ───────────────────────────────
+
+/// The panel PROPERTIES drawer — name / tag / diversity / headroom (spare % +
+/// CADANGAN spare ways) / supply flags — opened on panel double-click or the
+/// 'Panel properties' context-menu row. Same 340-px right-drawer idiom as
+/// [ElectricalCircuitInspector]; every edit routes through the controller's
+/// undoable intents.
+class ElectricalPanelInspector extends StatelessWidget {
+  final ElectricalPanel panel;
+  final ElectricalProjectController controller;
+  final VoidCallback onClose;
+
+  /// See [ElectricalCircuitInspector.inline] — true lays this out inline in the
+  /// shared collapsible inspector column (C4); false is the 340-px drawer.
+  final bool inline;
+
+  const ElectricalPanelInspector({
+    super.key,
+    required this.panel,
+    required this.controller,
+    required this.onClose,
+    this.inline = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final headroom = panel.headroom ?? HeadroomSpec.none;
+
+    final inner = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
@@ -605,7 +606,32 @@ class ElectricalPanelInspector extends StatelessWidget {
               ),
             ),
           ],
+        );
+
+    if (inline) {
+      return inner;
+    }
+    // Slide-in from the right + fade on open (host keys this by panel), the
+    // same iOS sheet idiom as the circuit inspector.
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: MechXMotion.appear,
+      curve: MechXMotion.standard,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(
+          offset: Offset(340 * (1 - t), 0),
+          child: child,
         ),
+      ),
+      child: Container(
+        width: 340,
+        decoration: BoxDecoration(
+          color: colors.surface,
+          border: Border(left: BorderSide(color: colors.border)),
+          boxShadow: MechXShadow.popover,
+        ),
+        child: inner,
       ),
     );
   }

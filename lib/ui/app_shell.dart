@@ -20,6 +20,7 @@ import '../update/update_banner.dart';
 import '../update/version_label.dart';
 import 'ai/copilot_panel.dart';
 import 'commercial/commercial_hub.dart';
+import 'electrical/electrical_inspector.dart';
 import 'electrical/electrical_palette.dart';
 import 'electrical/electrical_view.dart';
 import 'inspector/collapsible_inspector.dart';
@@ -230,8 +231,29 @@ class _DesignWorkspace extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final view = ref.watch(workspaceViewProvider);
+    // C1: the abstract electrical workspace now rides the SAME shared scaffold
+    // as the mechanical Layout / Riser — a canvas-coloured backdrop with a
+    // Liquid-Glass CollapsibleInspector — so the frame reads identically and
+    // only the CONTENT differs. It is NOT sheet-based (its single-line / riser
+    // tabs are projections of the solved model, not a calibrated PDF), so the
+    // SheetRail is omitted here ("sheet rail where it applies"); the mechanical
+    // views keep it. The inspector column is selection-first (C4): the open
+    // circuit / panel editor when one is selected, else the Loads palette.
     if (view == WorkspaceView.electrical) {
-      return const ElectricalView();
+      return Stack(
+        children: [
+          Positioned.fill(child: ColoredBox(color: colors.canvas)),
+          Row(
+            children: [
+              const Expanded(child: ElectricalView()),
+              CollapsibleInspector(
+                expandedWidth: ProjectPanel.width,
+                child: const _ElectricalWorkspaceInspectorColumn(),
+              ),
+            ],
+          ),
+        ],
+      );
     }
     final Widget canvas = view == WorkspaceView.schematic
         ? const SchematicView()
@@ -300,6 +322,74 @@ class _ElectricalInspectorColumn extends StatelessWidget {
           const Expanded(child: ElectricalPalette()),
         ],
       ),
+    );
+  }
+}
+
+/// The right inspector for the STANDALONE electrical workspace (C1/C4) — the
+/// selection-first inline column that replaces the old floating slide-in
+/// drawers. When a circuit / panel edit target is set
+/// ([electricalInspectorTargetProvider], driven by the canvas's double-click /
+/// context-menu Edit), its editor body renders INLINE at the top (the SAME
+/// `ElectricalCircuitInspector` / `ElectricalPanelInspector` bodies, in their
+/// `inline` form — transparent, so they float on the CollapsibleInspector's
+/// Liquid-Glass); with nothing selected it shows the Loads palette. Transparent
+/// (floats on the inspector glass), mirroring `_ElectricalInspectorColumn` /
+/// `_RiserInspectorColumn`.
+class _ElectricalWorkspaceInspectorColumn extends ConsumerWidget {
+  const _ElectricalWorkspaceInspectorColumn();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final target = ref.watch(electricalInspectorTargetProvider);
+    final project = ref.watch(electricalProjectProvider);
+    final ctrl = ref.read(electricalProjectProvider.notifier);
+    void clear() =>
+        ref.read(electricalInspectorTargetProvider.notifier).clear();
+
+    Widget? editor;
+    if (target is ElectricalCircuitTarget) {
+      final panel =
+          project.panels.where((p) => p.id == target.panelId).firstOrNull;
+      final circuit =
+          panel?.circuits.where((c) => c.id == target.circuitId).firstOrNull;
+      if (panel != null && circuit != null) {
+        editor = ElectricalCircuitInspector(
+          key: ValueKey('${target.panelId}/${target.circuitId}'),
+          panel: panel,
+          circuit: circuit,
+          controller: ctrl,
+          onClose: clear,
+          inline: true,
+        );
+      }
+    } else if (target is ElectricalPanelTarget) {
+      final panel =
+          project.panels.where((p) => p.id == target.panelId).firstOrNull;
+      if (panel != null) {
+        editor = ElectricalPanelInspector(
+          key: ValueKey('panel/${target.panelId}'),
+          panel: panel,
+          controller: ctrl,
+          onClose: clear,
+          inline: true,
+        );
+      }
+    }
+    // A stale target whose panel / circuit was deleted: clear it next frame so
+    // the column falls back to the palette (never a blank inspector).
+    if (target != null && editor == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => clear());
+    }
+
+    return SizedBox(
+      width: ProjectPanel.width,
+      // Transparent: floats on the CollapsibleInspector's Liquid-Glass surface.
+      child: editor ??
+          const Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [Expanded(child: ElectricalPalette())],
+          ),
     );
   }
 }

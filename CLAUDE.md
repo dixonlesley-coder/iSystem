@@ -294,11 +294,16 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `_LayerSegment` + Riser `_TabButton` → the canonical `MechXSegment` for radios, with independent
   toggles split to a distinct checkbox/eye idiom — the Riser toolbar no longer shows Auto+Details+Notes
   as identical "selected" pills), the shared `CanvasGuideButton` help everywhere incl. Riser Auto, and
-  the Riser inspector converged onto `MechXSectionLabel` + the tinted selected-segment idiom. **This
-  completes the implementable scope of `APPLE-DESIGN-REVIEW.md` — all 8 themes (A–H) are landed or (the
-  one tier-5 item) explicitly dispositioned; the DELIBERATELY-DEFERRED item is C1/C4, the electrical-
-  shell restructure (bring `ElectricalView` under the shared shell scaffold + inline inspector — a
-  large architectural refactor of a functional workspace, lowest priority, a dedicated follow-up).**
+  the Riser inspector converged onto `MechXSectionLabel` + the tinted selected-segment idiom. **The
+  final tier-5 item — C1/C4, the electrical-shell restructure — HAS ALSO LANDED** (a dedicated
+  follow-up after the campaign merged): the standalone electrical workspace (`WorkspaceView.electrical`)
+  now renders through the SAME shared `_DesignWorkspace` scaffold as Layout/Riser (canvas-backdrop +
+  `CollapsibleInspector`, no `SheetRail`); its editing was lifted from local `_editing`/`_panelEditing`
+  to a transient `electricalInspectorTargetProvider` (sealed `ElectricalCircuitTarget`/`ElectricalPanelTarget`)
+  so the floating 340-px drawer is replaced by a selection-first `_ElectricalWorkspaceInspectorColumn`
+  (circuit/panel editor INLINE on top, else the Loads palette); the editors gained an `inline` mode with
+  the Layout electrical LAYER keeping the drawer form (golden 06 byte-identical). **With this, EVERY
+  finding of `APPLE-DESIGN-REVIEW.md` (all 8 themes A–H, C1–C5 included) is landed — nothing deferred.**
 - **UX & workflow review (2026-07-02) — the plan of record for the prior UX/workflow work**:
   `UX-WORKFLOW-REVIEW.md` (root) holds 83 consolidated, adversarially code-verified findings
   (from 115 raw across 12 review lenses; 32 high / 42 medium / 9 low, two proven with widget
