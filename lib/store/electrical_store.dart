@@ -30,6 +30,7 @@ import 'package:mechx_engine/units.dart';
 
 import 'electrical_feed.dart';
 import 'history_store.dart';
+import 'inspector_store.dart';
 import 'project_store.dart';
 
 /// The outcome of a [ElectricalProjectController.connectFeeder] attempt — a
@@ -118,6 +119,88 @@ class ElectricalSelectionController extends Notifier<ElectricalSelection?> {
   void clear() {
     if (state != null) state = null;
   }
+}
+
+/// The editor target driving the STANDALONE electrical workspace's inline,
+/// selection-first inspector column (C1/C4): a single way (circuit), a whole
+/// panel's properties, or (null) nothing — in which case the column shows the
+/// Loads palette. Lifted out of `ElectricalView`'s local `State` so the sibling
+/// inspector column, rendered by the SHARED shell scaffold, can read + drive the
+/// same target the canvas opens. Mutually exclusive (one editor at a time).
+///
+/// Distinct from [electricalSelectionProvider] (the Layout electrical LAYER's
+/// marker selection) on purpose: this drives the abstract single-line
+/// workspace's inspector, so lifting it here never disturbs the Layout layer.
+/// Transient UI state — NEVER persisted to `.mechx`.
+@immutable
+sealed class ElectricalInspectorTarget {
+  const ElectricalInspectorTarget();
+}
+
+/// Edit one way (circuit) on a panel — the circuit inspector body.
+@immutable
+class ElectricalCircuitTarget extends ElectricalInspectorTarget {
+  final String panelId;
+  final String circuitId;
+  const ElectricalCircuitTarget(this.panelId, this.circuitId);
+
+  @override
+  bool operator ==(Object other) =>
+      other is ElectricalCircuitTarget &&
+      other.panelId == panelId &&
+      other.circuitId == circuitId;
+
+  @override
+  int get hashCode => Object.hash(panelId, circuitId);
+}
+
+/// Edit a whole panel's properties — the panel inspector body.
+@immutable
+class ElectricalPanelTarget extends ElectricalInspectorTarget {
+  final String panelId;
+  const ElectricalPanelTarget(this.panelId);
+
+  @override
+  bool operator ==(Object other) =>
+      other is ElectricalPanelTarget && other.panelId == panelId;
+
+  @override
+  int get hashCode => panelId.hashCode;
+}
+
+/// The active inline-inspector edit target (null = nothing → the Loads palette
+/// shows). A `Notifier` (not local widget state) so the electrical canvas and
+/// the sibling inspector column drive one shared target.
+final electricalInspectorTargetProvider = NotifierProvider<
+    ElectricalInspectorTargetController, ElectricalInspectorTarget?>(
+  ElectricalInspectorTargetController.new,
+);
+
+class ElectricalInspectorTargetController
+    extends Notifier<ElectricalInspectorTarget?> {
+  @override
+  ElectricalInspectorTarget? build() => null;
+
+  void editCircuit(String panelId, String circuitId) {
+    _revealInspector();
+    state = ElectricalCircuitTarget(panelId, circuitId);
+  }
+
+  void editPanel(String panelId) {
+    _revealInspector();
+    state = ElectricalPanelTarget(panelId);
+  }
+
+  void clear() {
+    if (state != null) state = null;
+  }
+
+  /// Opening an editor un-collapses the inspector column, mirroring the
+  /// mechanical canvas's double-click ("opens the thing" — `selection_overlay`).
+  /// The inline editor now lives INSIDE the shared `CollapsibleInspector`, so
+  /// without this an edit on a collapsed inspector would set an invisible target.
+  void _revealInspector() =>
+      ref.read(inspectorCollapsedProvider.notifier).set(false);
 }
 
 /// The canonical electrical project. The controller owns the single

@@ -81,10 +81,23 @@ per-package adversarial review, integrated centrally: full gate + golden regen +
   checkbox/eye idiom — so the Riser toolbar no longer shows Auto + Details + Notes as identical blue
   pills (golden 04). C3: the bespoke Schematic help replaced by the shared `CanvasGuideButton` +
   `CanvasGuideLegend`, added to Auto mode too. C5: the Riser inspector column converged onto
-  `MechXSectionLabel` + the tinted selected-segment idiom. **The tier-5 C1/C4 electrical-shell
-  restructure is deliberately DEFERRED** — a large architectural refactor of a functional workspace
-  (bring `ElectricalView` under the shared shell scaffold + replace its floating drawer with the inline
-  inspector), the lowest review priority; better as a dedicated effort than rushed at campaign end.
+  `MechXSectionLabel` + the tinted selected-segment idiom.
+- **C1 + C4 — the electrical-shell restructure (the last deferred tier-5 item) — HAS ALSO LANDED**
+  (as a dedicated follow-up after the campaign merged). The standalone electrical workspace
+  (`WorkspaceView.electrical`) no longer early-returns its own frame — it renders through the SAME
+  shared `_DesignWorkspace` scaffold as Layout/Riser (the canvas-backdrop + a `CollapsibleInspector`;
+  no `SheetRail`, since the single-line isn't sheet-based). Editing was LIFTED from `ElectricalView`'s
+  local `_editing`/`_panelEditing` state to a transient `electricalInspectorTargetProvider` (a sealed
+  `ElectricalCircuitTarget`/`ElectricalPanelTarget`), so the floating 340-px slide-in DRAWER (C4) is
+  gone: a new selection-first `_ElectricalWorkspaceInspectorColumn` shows the circuit/panel editor
+  INLINE at the top when something is selected, else the Loads palette (the mechanical
+  selection-first idiom). The editors gained an `inline` mode; the Layout electrical LAYER keeps the
+  drawer form (`inline:false`) and is byte-identical (golden 06 unchanged). So the electrical view now
+  reads as one app — shared top bar / nav rail / status bar / workflow stepper / collapsible inspector
+  — with only the canvas content differing. Goldens 05/08/10/11 (the standalone electrical frame)
+  regenerated + eyeballed; a latent RenderFlex overflow the narrower canvas exposed (the auto-board
+  summary header) was fixed with a `FittedBox`. **With this, EVERY finding of the review (all 8 themes,
+  C1–C5 included) is landed — nothing remains deferred.**
 
 ## The premise — how iSystem is *supposed* to function
 
@@ -181,7 +194,7 @@ independently flagged the same drift, which is a strong signal.
 
 ---
 
-## Theme C — One app: make Electrical and Riser stop feeling like guests  ◑ C2/C3/C5 LANDED (Wave 5b); C1/C4 deferred (tier-5 restructure)
+## Theme C — One app: make Electrical and Riser stop feeling like guests  ✅ LANDED (C2/C3/C5 Wave 5b; C1/C4 follow-up)
 
 The electrical workspace is a PanelMaker port and still *reads* like one — a structurally different
 window with its own idioms. An engineer shouldn't have to re-learn the app when they switch tabs.

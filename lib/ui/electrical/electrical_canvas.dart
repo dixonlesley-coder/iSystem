@@ -1557,51 +1557,78 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
         behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
         onDoubleTap: widget.onDoubleTap,
-        child: Row(
-          children: [
-            Container(
-              width: 8,
-              height: 8,
-              margin: const EdgeInsets.only(right: MechXSpacing.xs),
-              decoration: BoxDecoration(
-                color: colors.accent,
-                borderRadius: const BorderRadius.all(Radius.circular(2)),
+        child: LayoutBuilder(
+          builder: (context, constraints) => Row(
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                margin: const EdgeInsets.only(right: MechXSpacing.xs),
+                decoration: BoxDecoration(
+                  color: colors.accent,
+                  borderRadius: const BorderRadius.all(Radius.circular(2)),
+                ),
               ),
-            ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (tag != null && tag.isNotEmpty)
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (tag != null && tag.isNotEmpty)
+                      Text(
+                        tag,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: type.caption.copyWith(
+                          color: colors.accent,
+                          fontWeight: FontWeight.w700,
+                          fontFamily: 'Roboto Mono',
+                        ),
+                      ),
                     Text(
-                      tag,
+                      panel.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: type.caption.copyWith(
-                        color: colors.accent,
+                      style: type.label.copyWith(
+                        color: colors.textPrimary,
                         fontWeight: FontWeight.w700,
-                        fontFamily: 'Roboto Mono',
                       ),
                     ),
-                  Text(
-                    panel.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: type.label.copyWith(
-                      color: colors.textPrimary,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: MechXSpacing.xs),
-            ..._badges(context),
-            // Explicit expand affordance (I7) — frames this board's schedule
-            // (the LOD flip was previously an invisible zoom threshold).
-            const SizedBox(width: MechXSpacing.xxs),
-            _ExpandChevron(onTap: widget.onExpandSchedule),
-          ],
+              const SizedBox(width: MechXSpacing.xs),
+              // Trailing controls: the status badges + the expand-schedule
+              // chevron. NON-FLEX, so the [Expanded] name stays greedy and the
+              // cluster sits flush-right at its natural width — byte-identical to
+              // a plain trailing Row when it fits. The [ConstrainedBox] caps it at
+              // half the header width, so a NARROW summary card (the auto MEP
+              // board's stacked badges on a single-way 280-px card) SCALES the
+              // cluster down via the scale-down FittedBox instead of overflowing
+              // the fixed card width; on a roomy card the natural width is under
+              // the cap, so the FittedBox never scales and the layout is
+              // unchanged (unlike a Flexible, which would pin the name to half and
+              // let the cluster drift off the right edge).
+              ConstrainedBox(
+                constraints:
+                    BoxConstraints(maxWidth: constraints.maxWidth * 0.5),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ..._badges(context),
+                      // Explicit expand affordance (I7) — frames this board's
+                      // schedule (the LOD flip was previously an invisible zoom
+                      // threshold).
+                      const SizedBox(width: MechXSpacing.xxs),
+                      _ExpandChevron(onTap: widget.onExpandSchedule),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
