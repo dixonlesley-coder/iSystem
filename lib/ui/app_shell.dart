@@ -135,6 +135,17 @@ class _AppShellState extends ConsumerState<AppShell> {
         ref.read(firstAutoSizeNudgeProvider.notifier).maybeFire(next.length);
       }
     });
+    // A2: latch "Building visited" the first time the engineer opens the
+    // Building (floors) section, so the workflow stepper's Floors stage
+    // reflects a real interaction rather than the default 3-floor seed. This is
+    // the always-mounted host; the latch itself is session-transient
+    // (`buildingVisitedProvider`) and never fires in the seeded golden suite
+    // (which drives Review/Commercial/Projects but never opens Building).
+    ref.listen(shellSectionProvider, (previous, next) {
+      if (next == ShellSection.building) {
+        ref.read(buildingVisitedProvider.notifier).markVisited();
+      }
+    });
     // The auto-update banner + command palette are stacked on top as non-layout
     // overlays (each renders nothing when idle).
     return Focus(
@@ -498,6 +509,15 @@ class _TopBar extends ConsumerWidget {
               ),
             ],
             const Spacer(),
+            // D1: a small, permanent entry point for the command palette, which
+            // is otherwise reachable only via the invisible Ctrl/Cmd+K
+            // accelerator. A quiet keycap pill (a hint, not a primary action)
+            // that both advertises the shortcut and opens the palette on click.
+            _PaletteHintButton(
+              onTap: () =>
+                  ref.read(commandPaletteOpenProvider.notifier).open(),
+            ),
+            const SizedBox(width: MechXSpacing.sm),
             // Actions sit flush-right. The zoom read-out is a quiet pill: a
             // soft tinted fill carries it, no hairline border — less visual
             // mass than a fully-outlined chip (HIG).
@@ -550,6 +570,66 @@ class _TopBar extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.sm),
         child: Text('·', style: TextStyle(fontFamily: 'Roboto', color: color)),
       );
+}
+
+/// The top-bar command-palette affordance (D1): a quiet keycap pill mirroring
+/// the zoom read-out's soft-tint idiom — a permanent, unobtrusive entry point
+/// for the palette (which otherwise has no visible entry at all, only the
+/// invisible Ctrl/Cmd+K accelerator). A hint, not a primary action: it never
+/// wears the solid accent; it brightens on hover and opens the palette on
+/// click. The keycap is plain ASCII ("Ctrl K", Windows-first) so it can never
+/// render as tofu, and it is keyboard-focusable + Enter/Space-activatable via
+/// the shared focus ring, announced as an "Open command palette" button.
+class _PaletteHintButton extends StatefulWidget {
+  final VoidCallback onTap;
+  const _PaletteHintButton({required this.onTap});
+
+  @override
+  State<_PaletteHintButton> createState() => _PaletteHintButtonState();
+}
+
+class _PaletteHintButtonState extends State<_PaletteHintButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Semantics(
+      button: true,
+      label: 'Open command palette',
+      child: MechXFocusRing(
+        borderRadius: MechXRadii.control,
+        onActivated: widget.onTap,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: AnimatedContainer(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
+              padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm,
+                vertical: MechXSpacing.xxs,
+              ),
+              decoration: BoxDecoration(
+                color: _hover ? colors.surfaceHover : colors.background,
+                borderRadius: MechXRadii.control,
+              ),
+              child: Text(
+                'Ctrl K',
+                style: type.mono.copyWith(
+                  color: _hover ? colors.textSecondary : colors.textMuted,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _StatusBar extends ConsumerWidget {

@@ -15,6 +15,8 @@ library;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/units.dart';
 
 import 'network_store.dart';
 import 'project_store.dart';
@@ -115,9 +117,42 @@ class ReportExportedController extends Notifier<bool> {
   void markExported() => state = true;
 }
 
+/// Whether the engineer has opened the Building (floors) screen this session —
+/// the honest "the user has actually engaged with the floor setup" signal for
+/// the stepper's Floors stage. Session-transient by design (a fresh launch
+/// starts unvisited), so a cold launch shows Floors as NOT done rather than
+/// pre-ticking it off the default 3-floor seed (A2). Latched by the app shell
+/// when the Building section is shown.
+final buildingVisitedProvider =
+    NotifierProvider<BuildingVisitedController, bool>(
+  BuildingVisitedController.new,
+);
+
+class BuildingVisitedController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void markVisited() {
+    if (!state) state = true;
+  }
+}
+
+/// The default floor stack seeded by `ProjectController.build()` — a fresh,
+/// untouched building. The stepper's Floors stage is DONE only once the stack
+/// has been changed away from this seed (a template applied, a floor
+/// added/renamed/re-heighted); kept in sync with `project_store.dart`. Combined
+/// with [buildingVisitedProvider] so simply visiting the Building screen also
+/// counts (A2).
+const List<Floor> _kDefaultFloorStack = [
+  Floor('Ground', Length(4.0)),
+  Floor('Level 1', Length(3.5)),
+  Floor('Level 2', Length(3.5)),
+];
+
 /// Live workflow stage state for the status-bar stepper. Done when:
 ///  • Calibrate — any loaded sheet has a calibration;
-///  • Floors    — the building has more than the single default floor;
+///  • Floors    — the engineer has engaged with the levels (visited/edited the
+///    Building screen, or changed the stack away from the default seed);
 ///  • Draw      — the network has at least one edge;
 ///  • Size      — at least one edge is sized;
 ///  • Report    — a deliverable (report/drawing/BOM) was exported this session.
@@ -129,11 +164,21 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
 
   final calibrated =
       sheets.any((s) => project.calibrationFor(s.id) != null);
-  // A fresh project ships with a single default floor; "Floors" is done once
-  // the engineer has set up more than that one level.
-  final floorsSet = project.floors.length > 1;
   final hasNetwork = edges.isNotEmpty;
   final sized = sizing.isNotEmpty;
+  // A fresh project ships with the default 3-floor seed, so the old
+  // `floors.length > 1` marked Floors DONE before the user touched anything —
+  // the map lied on first contact (A2). "Floors" is honest only once the
+  // engineer has genuinely engaged with the levels: opened the Building screen
+  // this session ([buildingVisitedProvider]), changed the stack away from the
+  // seed (a template, or an added / renamed / re-heighted floor), OR moved past
+  // floors in the workflow by drawing a network (you cannot meaningfully draw
+  // without accepting the building) — the [hasNetwork] clause keeps the
+  // "active" pointer from wedging backward on Floors for a legitimate
+  // default-floor project that finished everything but never opened Building.
+  final floorsSet = ref.watch(buildingVisitedProvider) ||
+      hasNetwork ||
+      !listEquals(project.floors, _kDefaultFloorStack);
 
   return WorkflowState({
     WorkflowStage.calibrate: calibrated,

@@ -409,6 +409,9 @@ enum StringKey {
   electricalGuide5,
   electricalGuide6,
   electricalGuide7,
+
+  // Calibration overlay — next-step baton (A6).
+  calibrationScaleSetNext, // {scale}
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -864,6 +867,12 @@ const Map<StringKey, String> _en = {
       'Select a panel or floating load and press Delete; right-click a way to delete it',
   StringKey.electricalGuide7:
       'Drag the empty canvas to pan; scroll to zoom; panels reveal their internals up close',
+
+  // Calibration overlay — next-step baton (A6). Points at the "Building" screen
+  // (floors + heights), matching the nav-rail label — the baton-pass and its
+  // destination now share ONE name.
+  StringKey.calibrationScaleSetNext:
+      'Scale set: {scale} - next: set floor heights (Building)',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -1323,6 +1332,11 @@ const Map<StringKey, String> _id = {
       'Pilih panel atau beban mengambang lalu tekan Delete; klik-kanan jalur untuk menghapusnya',
   StringKey.electricalGuide7:
       'Seret kanvas kosong untuk menggeser; gulir untuk zoom; panel menampilkan isinya saat didekatkan',
+
+  // Calibration overlay — next-step baton (A6). "Bangunan" matches the nav-rail
+  // Building label.
+  StringKey.calibrationScaleSetNext:
+      'Skala diatur: {scale} - berikutnya: atur tinggi lantai (Bangunan)',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

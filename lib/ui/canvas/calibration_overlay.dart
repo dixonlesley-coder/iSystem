@@ -7,6 +7,7 @@ import '../../store/calibration_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../format/scale_format.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
@@ -51,12 +52,17 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
         .read(projectControllerProvider.notifier)
         .setCalibration(widget.sheetId, cal);
     ref.read(calibrationControllerProvider.notifier).cancel();
-    // Confirm the resolved scale and point at the next workflow step (Floors)
-    // — the completed-stage speaks instead of leaving the engineer to notice
-    // the sheet-rail dot change on their own. One shared human formatter (D1).
-    ref.read(statusMessageProvider.notifier).showStatus(
-        'Scale set: ${formatScaleReadout(cal.metersPerPixel, isPdf: _isPdfSheet())}'
-        ' - next: set floor heights (Floors)');
+    // Confirm the resolved scale and point at the next workflow step — the
+    // "Building" screen (floors + heights), naming it exactly as the nav rail
+    // does so the baton-pass and its destination share ONE name (A6). The
+    // completed stage speaks instead of leaving the engineer to notice the
+    // sheet-rail dot change on their own. One shared human formatter (D1);
+    // localized so a Bahasa user gets the baton in Bahasa too.
+    final strings = MechXStringsData(ref.read(localeProvider));
+    ref.read(statusMessageProvider.notifier).showStatus(strings.format(
+      StringKey.calibrationScaleSetNext,
+      {'scale': formatScaleReadout(cal.metersPerPixel, isPdf: _isPdfSheet())},
+    ));
   }
 
   /// The live implied-scale read-out beneath the entry field. Renders nothing

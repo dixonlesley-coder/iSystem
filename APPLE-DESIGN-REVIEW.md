@@ -7,6 +7,26 @@ inspector information architecture, the visual design system, canvas direct-mani
 cross-workspace cohesion & discoverability, and copy/feedback/clarity. Every finding below is
 file:line-grounded; the highest-impact claims were adversarially spot-checked against the code.
 
+## Implementation status (waves)
+
+Being implemented in five waves via multi-agent orchestration (disjoint-ownership impl packages +
+per-package adversarial review, integrated centrally: full gate + golden regen + review-fix pass).
+
+- **Wave 1 — Themes A + D (orientation & discoverability) — LANDED.** A1 first-run orientation card
+  (empty-Layout, one-time, machine-local `AppSettings.seenFirstRun`), A2 stepper honesty (Floors no
+  longer pre-ticks the default seed; done on Building-visited / stack-diverged / network-drawn — the
+  last clause keeps the "active" pointer from wedging backward), A3 template card routes into Import
+  (no more dead end), A4 first-draw hint on the calibrated-but-empty canvas, A5 import navigates to
+  DESIGN → Layout + selects the new sheet, A6 one name ("Building") across the calibration baton +
+  nav + stepper, A7 honest on-canvas "Floor N of M" (counts sheet-occupied floors). D1 a permanent
+  "Ctrl K" palette affordance in the top bar, D2 keycaps on palette rows that have a shortcut, D3
+  the submittal export added to the palette. Goldens 01–08/10–15 shifted by the D1 pill only (the
+  A2 stepper stays byte-identical in the seeded network); regenerated + eyeballed.
+- **Wave 2 — Theme B + Theme H copy — pending.**
+- **Wave 3 — Themes E + F — pending.**
+- **Wave 4 — Theme G — pending.**
+- **Wave 5 — Theme C + H1/H6 — pending.**
+
 ## The premise — how iSystem is *supposed* to function
 
 An engineer opens the app, drops in a PDF floor plan, tells it the scale, sets the floor heights,
@@ -43,7 +63,7 @@ The bones are strong. Everything below is about making the app feel like *one* c
 
 ---
 
-## Theme A — Orientation: teach the sequence, never let a step lie
+## Theme A — Orientation: teach the sequence, never let a step lie  ✅ LANDED (Wave 1)
 
 The app's whole premise is a **non-obvious ordered workflow** (calibrate → floors → draw → size →
 report), yet the only map is a 5-chip stepper in the status bar, and two of the signposts are
@@ -131,7 +151,7 @@ window with its own idioms. An engineer shouldn't have to re-learn the app when 
 
 ---
 
-## Theme D — Make the power findable
+## Theme D — Make the power findable  ✅ LANDED (Wave 1)
 
 The app has ~40 palette actions and a rich shortcut set, but they're nearly invisible to anyone
 who doesn't already know they exist.

@@ -72,6 +72,11 @@ class AppSettings {
   final String aiApiKey;
   final String aiModel;
 
+  /// Whether the user has seen (and dismissed) the first-run orientation card
+  /// (Apple-design review A1). Machine-local, additive: false on a fresh
+  /// install, latched true once dismissed so the welcome card never returns.
+  final bool seenFirstRun;
+
   const AppSettings({
     this.mru = const [],
     this.lastOpenPath,
@@ -80,6 +85,7 @@ class AppSettings {
     this.aiProvider = 'anthropic',
     this.aiApiKey = '',
     this.aiModel = kDefaultAnthropicModel,
+    this.seenFirstRun = false,
   });
 
   static const int _mruCap = 10;
@@ -93,6 +99,7 @@ class AppSettings {
     String? aiProvider,
     String? aiApiKey,
     String? aiModel,
+    bool? seenFirstRun,
   }) =>
       AppSettings(
         mru: mru ?? this.mru,
@@ -104,6 +111,7 @@ class AppSettings {
         aiProvider: aiProvider ?? this.aiProvider,
         aiApiKey: aiApiKey ?? this.aiApiKey,
         aiModel: aiModel ?? this.aiModel,
+        seenFirstRun: seenFirstRun ?? this.seenFirstRun,
       );
 
   /// Promote [path] to the front of the MRU (dedup by path, refresh its name +
@@ -136,6 +144,7 @@ class AppSettings {
         'aiProvider': aiProvider,
         if (aiApiKey.isNotEmpty) 'aiApiKey': aiApiKey,
         'aiModel': aiModel,
+        if (seenFirstRun) 'seenFirstRun': true,
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -155,6 +164,7 @@ class AppSettings {
         aiModel: raw['aiModel'] is String && (raw['aiModel'] as String).isNotEmpty
             ? raw['aiModel'] as String
             : kDefaultAnthropicModel,
+        seenFirstRun: raw['seenFirstRun'] == true,
       );
 }
 
@@ -231,6 +241,13 @@ class AppSettingsController extends Notifier<AppSettings> {
 
   /// Remove a project file (moved/deleted) from the recent list.
   void removeRecent(String path) => set(state.withoutRecent(path));
+
+  /// Latch the first-run orientation card as seen (A1) so it never returns.
+  /// No-op (and no write) once already set.
+  void markFirstRunSeen() {
+    if (state.seenFirstRun) return;
+    set(state.copyWith(seenFirstRun: true));
+  }
 
   void _persist() {
     final p = _persistPath;

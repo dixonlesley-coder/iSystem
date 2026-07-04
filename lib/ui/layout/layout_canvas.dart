@@ -26,6 +26,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 
+import '../../data/app_settings.dart';
 import '../../store/annotation_store.dart';
 import '../../store/calibration_store.dart';
 import '../../store/electrical_store.dart';
@@ -63,6 +64,7 @@ import '../widgets/canvas_guide_popover.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_empty_state_card.dart';
 import 'electrical_layer.dart';
+import 'first_run_guide.dart';
 import 'layer_switcher.dart';
 
 /// The unified Layout workspace: a top bar (layer switcher + sheet/floor
@@ -774,8 +776,7 @@ class _LayoutTopBar extends ConsumerWidget {
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 200),
               child: Text(
-                '${current.name}  ·  Floor '
-                '${sheets.floorFor(current.id, levelCount) + 1} of $levelCount',
+                _floorLabel(sheets, current.id, current.name, levelCount),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.right,
@@ -786,6 +787,25 @@ class _LayoutTopBar extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// The honest on-canvas floor label (A7). The building seeds three default
+/// levels, so a single imported plan otherwise reads "Floor 1 of 3" against two
+/// phantom, unmapped floors. Count only the floors a sheet actually OCCUPIES as
+/// the denominator (never below the current floor number, so it can't undercount
+/// a genuinely tall building), and drop the "Floor N of M" breadcrumb entirely
+/// when there is effectively a single floor — showing just the sheet name. For a
+/// fully-mapped building (every level carries a sheet, e.g. the demo project)
+/// this is byte-identical to the old `<name>  ·  Floor N of levelCount`.
+String _floorLabel(
+    SheetsState sheets, String sheetId, String sheetName, int levelCount) {
+  final n = sheets.floorFor(sheetId, levelCount) + 1;
+  final occupied = sheets.sheets
+      .map((s) => sheets.floorFor(s.id, levelCount))
+      .toSet()
+      .length;
+  final m = occupied > n ? occupied : n;
+  return m <= 1 ? sheetName : '$sheetName  ·  Floor $n of $m';
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -804,27 +824,59 @@ class _SharedSheet extends ConsumerWidget {
     final sheet = sheetsState.current;
 
     if (sheet == null) {
-      // A branded empty-state card (the shared one, matching the electrical
-      // workspace's), not bare text — and it CARRIES its actions (the Apple
-      // empty-state rule) instead of describing buttons that live elsewhere.
+      // A1: on a genuinely empty project, lead with a one-time, dismissible
+      // orientation card naming the five-step workflow. It sits ABOVE the
+      // branded empty-state card (which keeps carrying its own Import / template
+      // actions), and disappears for good once the machine-local "seen" flag is
+      // latched — so a returning user just sees the empty state.
+      final seenFirstRun = ref.watch(appSettingsProvider).seenFirstRun;
       return ColoredBox(
         color: colors.canvas,
         child: Center(
-          child: MechXEmptyStateCard(
-            title: 'No sheet loaded',
-            body: 'Import a PDF floor plan to begin — then calibrate its '
-                'scale and draw on the Plumbing, HVAC and Electrical layers.',
-            actions: [
-              MechXButton(
-                label: 'Import plan...',
-                primary: true,
-                onPressed: () => importPlan(context, ref),
-              ),
-              MechXButton(
-                label: 'New from template...',
-                onPressed: () => showTemplatesDialog(context),
-              ),
-            ],
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(MechXSpacing.lg),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (!seenFirstRun) ...[
+                  FirstRunOrientationCard(
+                    // Latch on BOTH paths so the one-time card never returns —
+                    // taking the primary "Import a plan" action counts as
+                    // having seen the orientation just as much as dismissing it
+                    // (otherwise a later File -> New re-shows it).
+                    onImport: () {
+                      ref.read(appSettingsProvider.notifier).markFirstRunSeen();
+                      importPlan(context, ref);
+                    },
+                    onDismiss: () => ref
+                        .read(appSettingsProvider.notifier)
+                        .markFirstRunSeen(),
+                  ),
+                  const SizedBox(height: MechXSpacing.md),
+                ],
+                // A branded empty-state card (the shared one, matching the
+                // electrical workspace's), not bare text — and it CARRIES its
+                // actions (the Apple empty-state rule) instead of describing
+                // buttons that live elsewhere.
+                MechXEmptyStateCard(
+                  title: 'No sheet loaded',
+                  body: 'Import a PDF floor plan to begin — then calibrate its '
+                      'scale and draw on the Plumbing, HVAC and Electrical '
+                      'layers.',
+                  actions: [
+                    MechXButton(
+                      label: 'Import plan...',
+                      primary: true,
+                      onPressed: () => importPlan(context, ref),
+                    ),
+                    MechXButton(
+                      label: 'New from template...',
+                      onPressed: () => showTemplatesDialog(context),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       );
@@ -833,6 +885,10 @@ class _SharedSheet extends ConsumerWidget {
     final content = host.contentFor(sheet);
     final calibrating = ref.watch(calibrationControllerProvider).isActive;
     final drawing = ref.watch(networkControllerProvider).isDrawing;
+    // A4: has anything been drawn yet? The first-draw hint teaches the primary
+    // gesture only until the very first node lands anywhere in the network.
+    final hasDrawing =
+        ref.watch(networkControllerProvider).network.nodes.isNotEmpty;
     final showHeatmap = ref.watch(showHeatmapProvider);
     final calibration =
         ref.watch(projectControllerProvider).calibrationFor(sheet.id);
@@ -1035,6 +1091,25 @@ class _SharedSheet extends ConsumerWidget {
             left: 0,
             right: 0,
             child: Center(child: _CalibrateHint()),
+          ),
+        // A4: first-draw hint — a quiet, non-interactive nudge over a
+        // calibrated-but-empty mechanical canvas teaching the primary draw
+        // gesture. Shown only while idle (Select, no active mode) so it never
+        // collides with the mode pill, and gated off the moment anything is
+        // drawn. IgnorePointer so it never eats a drawing tap.
+        if (mechanicalActive &&
+            calibrated &&
+            !calibrating &&
+            !drawing &&
+            !measureMode &&
+            !tankMode &&
+            !roomMode &&
+            !hasDrawing)
+          const Positioned(
+            top: MechXSpacing.md,
+            left: 0,
+            right: 0,
+            child: Center(child: IgnorePointer(child: FirstDrawHint())),
           ),
         // On-canvas mode pill — the active tool made visible on the canvas
         // itself (renders nothing in Select mode). Drops below the calibrate

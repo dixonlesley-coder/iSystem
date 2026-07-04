@@ -254,7 +254,21 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
-- **UX & workflow review (2026-07-02) — the CURRENT plan of record for UX/workflow work**:
+- **Apple-design review (2026-07-04) — the CURRENT plan of record for ease-of-use/UX polish**:
+  `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
+  UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the
+  remaining gap is *consistency + restraint of application* and *orientation between steps*. 8 themes
+  (A orientation · B one-vocabulary · C one-app · D findable-power · E calmer-inspector · F visual-
+  restraint · G canvas-frame · H speak-clearly), every finding file:line-grounded, sequenced into 5
+  implementation waves. **Wave 1 (Themes A + D — orientation & discoverability) HAS LANDED** (see the
+  §15 row): a one-time first-run orientation card, an honest workflow stepper (Floors no longer pre-
+  ticks the default seed), the template card routes into Import, a first-draw hint, import navigates
+  to the plan, one "Building" name, honest "Floor N of M", a "Ctrl K" palette affordance + palette
+  keycaps. Every fix is additive / guardrail-safe (custom design system, offline, byte-identical-when-
+  idle, opaque content, ASCII+Roboto on canvas) and touches UI/app-shell/strings only. Work the
+  remaining waves (2 vocabulary+copy · 3 inspector+restraint · 4 canvas-frame · 5 one-app+localize)
+  from this document.
+- **UX & workflow review (2026-07-02) — the plan of record for the prior UX/workflow work**:
   `UX-WORKFLOW-REVIEW.md` (root) holds 83 consolidated, adversarially code-verified findings
   (from 115 raw across 12 review lenses; 32 high / 42 medium / 9 low, two proven with widget
   tests) covering first-run honesty (demo sheets + the sample switchboard leak into real

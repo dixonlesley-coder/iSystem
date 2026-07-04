@@ -13,10 +13,12 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/network_store.dart';
+import '../../store/sheets_store.dart';
 import '../../store/templates.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
+import 'project_io.dart';
 
 /// Open the template picker as a modal over the current [MechXTheme].
 Future<void> showTemplatesDialog(BuildContext context) {
@@ -116,9 +118,24 @@ class _TemplatesDialog extends ConsumerWidget {
                 final t = kBuildingTemplates[i];
                 return _TemplateTile(
                   template: t,
-                  onApply: () {
+                  onApply: () async {
+                    // A3: applying a template seeds the building (floors /
+                    // occupancy / fire / rainfall) but attaches NO drawable
+                    // sheet — so on an empty project route straight into Import
+                    // rather than dropping the engineer back onto a "No plan
+                    // attached" canvas. Import runs while THIS dialog is still
+                    // mounted (so `ref` / `context` stay valid across the OS file
+                    // picker) and skips the unsaved-work guard — the only
+                    // "unsaved work" is the template we just applied and want to
+                    // keep. On a project that ALREADY has sheets, applying a
+                    // template just closes (no forced import).
+                    final hadNoSheets =
+                        ref.read(sheetsControllerProvider).sheets.isEmpty;
                     applyTemplate(ref, t);
-                    Navigator.of(context).pop();
+                    if (hadNoSheets) {
+                      await importPlan(context, ref, skipDiscardGuard: true);
+                    }
+                    if (context.mounted) Navigator.of(context).pop();
                   },
                 );
               },
