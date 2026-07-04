@@ -185,7 +185,7 @@ class ProjectsScreen extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Apply a building template',
+              Text(context.strings(StringKey.projectApplyBuildingTemplate),
                   style: type.subtitle.copyWith(color: colors.textPrimary)),
               const SizedBox(height: MechXSpacing.xs),
               Text(

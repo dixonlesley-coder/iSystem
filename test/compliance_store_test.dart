@@ -42,6 +42,7 @@ void main() {
             severity: IssueSeverity.warning,
             title: 'Sheet not calibrated',
             message: 'x',
+            kind: 'sheet-uncalibrated:x',
           ),
         ],
         electricalWarnings: const [],
@@ -97,12 +98,14 @@ void main() {
           title: 'Unverified: KHA ampacity table',
           message: 'KHA table awaits the official PUIL clause.',
           isVerify: true,
+          kind: 'verify:kha',
         ),
         DesignIssue(
           severity: IssueSeverity.info,
           title: 'Unverified: nominal voltage',
           message: 'Nominal voltage awaits confirmation.',
           isVerify: true,
+          kind: 'verify:nominal',
         ),
       ];
       // Unacknowledged: the standards row REVIEWs and the whole verdict fails —
@@ -135,6 +138,7 @@ void main() {
         severity: IssueSeverity.warning,
         title: 'Duct velocity out of band',
         message: 'A supply duct is over 7 m/s.',
+        kind: 'duct-velocity',
       );
       // A warning is not acknowledgeable; even if its key is (spuriously) in the
       // acknowledged set, it must still fail — acknowledgement can't hide it.
@@ -162,12 +166,14 @@ void main() {
           title: 'Unverified: one',
           message: 'one',
           isVerify: true,
+          kind: 'verify:one',
         ),
         DesignIssue(
           severity: IssueSeverity.info,
           title: 'Unverified: two',
           message: 'two',
           isVerify: true,
+          kind: 'verify:two',
         ),
       ];
       final s = buildComplianceSummaryFrom(

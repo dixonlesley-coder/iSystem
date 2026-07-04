@@ -418,6 +418,171 @@ enum StringKey {
   // by app_shell.dart H5).
   autoSizedRuns, // {count} — the sizing-success status toast
   recoveryTornUnreadable, // torn / unreadable crash-recovery banner
+
+  // ── Apple design review Wave 5a (Themes H1 + H6) — the trust-surface
+  //    localization. These keys are DEFINED here only; later Wire packages
+  //    consume them (each owns its target file, NOT this one). EN values are
+  //    byte-identical to today's literals so the EN-rendered goldens do not
+  //    move. Parameterized templates carry identical {placeholders} in EN + ID
+  //    (i18n_test pins this). Where a count needs an English plural, the value
+  //    is split into a template that takes a pre-pluralized `{phrase}`
+  //    placeholder plus a NOUN one/many pair the store feeds to
+  //    `pluralCount(n, one, many)` / `plural(n, one, many)` — so today's EN is
+  //    reproduced exactly while ID (no inflection) uses one word for both.
+
+  // H1 — compliance roll-up categories (store/compliance_store.dart).
+  complianceCategoryAirVelocity,
+  complianceCategorySheetCalibration,
+  complianceCategoryStandardsVerification,
+  complianceCategoryElectricalSizing,
+
+  // H1 — compliance roll-up detail phrases.
+  complianceDetailAllWithinBand,
+  complianceDetailOutOfBand, // {n}
+  complianceDetailAllCalibrated,
+  complianceDetailUncalibrated, // {n}
+  complianceDetailAllVerified,
+  complianceDetailAckNoneOpen, // {n}
+  complianceDetailRequireVerification, // {values} = pluralCount(n,'value','values')
+  complianceDetailOpenAck, // {open} {ack}
+  complianceDetailNoSizingErrors,
+  complianceDetailWarningsNoErrors, // {warnings} = pluralCount(n,'warning','warnings')
+  complianceDetailErrorsWarnings, // {errors} {warnings}
+
+  // H1 — compliance pluralized nouns (fed to pluralCount(one, many)). The
+  // 'finding'/'advisory note' details ARE the bare pluralCount phrase (no
+  // surrounding template); 'value'/'warning'/'error' fill the templates above.
+  complianceNounValueOne,
+  complianceNounValueMany,
+  complianceNounWarningOne,
+  complianceNounWarningMany,
+  complianceNounErrorOne,
+  complianceNounErrorMany,
+  complianceNounFindingOne,
+  complianceNounFindingMany,
+  complianceNounAdvisoryNoteOne,
+  complianceNounAdvisoryNoteMany,
+
+  // H1 — Review hub chrome (ui/review/review_hub.dart). The six deliverable
+  // buttons ('Export calc report (MD)' …) reuse the existing inspectorExport*
+  // keys (identical EN), so they are NOT re-declared here.
+  reviewHubTitle,
+  reviewHubLead,
+  reviewStatPanelsSized,
+  reviewStatBomLineItems,
+  reviewStatStockPipes,
+  reviewStatPipeRequired,
+  reviewStatOffcutWaste,
+  reviewStockNote,
+  reviewExportDeliverables,
+  reviewIssueReady,
+  reviewIssueReviewRequired,
+  reviewExportSubmittalPackage,
+  reviewSubmittalHint,
+  reviewVerdictPass,
+  reviewVerdictReviewRequired,
+  reviewDesignSignoff,
+  reviewItemPass,
+  reviewItemReview,
+  reviewPipeCutPlan,
+  reviewConsumablesTitle,
+  reviewConsumablePvcCement,
+  reviewConsumableDuctSealant,
+  reviewConsumableThreadTape,
+  reviewConsumablesNote,
+
+  // H1 — Design issues card chrome (ui/review/issues_card.dart). The
+  // '$text  ($count)' group-label wrapper stays in the widget; only the label
+  // text is keyed.
+  issuesCardCleanTitle,
+  issuesCardCleanBody,
+  issuesCardTitle,
+  issuesCardQuickFixes,
+  issuesCardWarnings,
+  issuesCardAdvisory,
+  issuesCardAcknowledged,
+  issuesCardAcknowledgeAll,
+  issuesCardAcknowledge,
+  issuesCardUndo,
+  issuesCardLocate,
+
+  // H1 — Design issue TITLES (store/design_issues_store.dart). The engine-
+  // sourced messages (air-velocity check.message, drainage a.message, the
+  // electrical w.message) are a SEPARATE register and are NOT keyed here.
+  issueOrphanTitle,
+  issueDuctVelocityTitle,
+  issueTerminalVelocityTitle,
+  issueAirDuctUnsizedTitle,
+  issueAirTerminalUnsizedTitle,
+  issueDuctOverCapacityTitle,
+  issueDiffuserStrandedTitle,
+  issueSheetNotCalibratedTitle,
+  issueMultiSheetFloorTitle,
+  issueNetworkIslandTitle,
+  issueNetworkNoSourceTitle,
+  issueDrainageSlopeTitle,
+  issueDrainageLengthTitle,
+  issueDrainageCleanoutTitle,
+  issueLegionellaTitle,
+  issueElectricalTitle, // {code} = w.code.replaceAll('-', ' ')
+  issueUnverifiedTitle, // {name} = the // VERIFY value's short label
+
+  // H1 — Design issue MESSAGES.
+  issueOrphanFloorMessage, // {floor} = index+1, {floors} = pluralCount(n,'floor','floors')
+  issueOrphanSheetMessage,
+  issueAirDuctUnsizedMessage,
+  issueAirTerminalUnsizedMessage,
+  issueDuctOverCapacityMessage,
+  issueDiffuserStrandedMessage,
+  issueSheetNotCalibratedCriticalMessage, // {name}
+  issueSheetNotCalibratedWarningMessage, // {name}
+  issueMultiSheetFloorMessage, // {count} {floor} {names}
+  issueNetworkIslandMessage, // {service} {nodes} = pluralCount(n,'node','nodes')
+  issueNetworkNoSourceMessage, // {service} {nodes}
+  issueDrainageCleanoutMessage,
+  issueLegionellaMessage, // {temp}
+
+  // H1 — Design issue pluralized nouns + batch-action labels
+  // (issueBatchActionsProvider). Batch labels use plural(n, one, many) (bare
+  // word) filled into {noun}; messages use pluralCount(n, one, many) ("N word").
+  issueNounFloorOne,
+  issueNounFloorMany,
+  issueNounNodeOne,
+  issueNounNodeMany,
+  issueNounVelocityOne,
+  issueNounVelocityMany,
+  issueNounElementOne,
+  issueNounElementMany,
+  issueNounSheetOne,
+  issueNounSheetMany,
+  issueBatchSelectVelocity, // {c} {noun}
+  issueBatchSelectUnsized, // {c} {noun}
+  issueBatchCalibrateNoSource, // {n}
+  issueBatchCalibrateCopy, // {n} {noun}
+
+  // H6 — Copilot panel (ui/ai/copilot_panel.dart).
+  copilotTitle,
+  copilotClose,
+  copilotDescription,
+  copilotThinkingButton,
+  copilotAsk,
+  copilotHintEnabled,
+  copilotHintDisabled,
+  copilotPlanning,
+  copilotApplied,
+  copilotSkipped,
+  copilotDone,
+  copilotNoSuggestion,
+  copilotProposedPlan, // {changes} = pluralCount(n,'change','changes')
+  copilotApply,
+  copilotDiscard,
+  copilotChangeNounOne,
+  copilotChangeNounMany,
+
+  // H6 — half-localized odds & ends (electrical empty state; Projects screen +
+  // templates dialog title/barrierLabel).
+  electricalLoadSampleProject,
+  projectApplyBuildingTemplate,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -885,6 +1050,213 @@ const Map<StringKey, String> _en = {
   StringKey.recoveryTornUnreadable:
       'The recovery file could not be read. Start a new project or open a '
           'saved copy.',
+
+  // ── Apple design review Wave 5a (H1 + H6) — trust-surface localization. EN
+  //    values are BYTE-IDENTICAL to the literals they replace.
+
+  // H1 — compliance roll-up categories.
+  StringKey.complianceCategoryAirVelocity: 'Air velocities within band',
+  StringKey.complianceCategorySheetCalibration: 'Sheet calibration',
+  StringKey.complianceCategoryStandardsVerification: 'Standards verification',
+  StringKey.complianceCategoryElectricalSizing: 'Electrical circuit sizing',
+
+  // H1 — compliance roll-up detail phrases.
+  StringKey.complianceDetailAllWithinBand: 'all within band',
+  StringKey.complianceDetailOutOfBand: '{n} out of band',
+  StringKey.complianceDetailAllCalibrated: 'all sheets calibrated',
+  StringKey.complianceDetailUncalibrated: '{n} uncalibrated',
+  StringKey.complianceDetailAllVerified: 'all values verified',
+  StringKey.complianceDetailAckNoneOpen: '{n} acknowledged, none open',
+  StringKey.complianceDetailRequireVerification:
+      '{values} require verification or acknowledgement before submission',
+  StringKey.complianceDetailOpenAck: '{open} open, {ack} acknowledged',
+  StringKey.complianceDetailNoSizingErrors: 'no sizing errors',
+  StringKey.complianceDetailWarningsNoErrors: '{warnings}, no errors',
+  StringKey.complianceDetailErrorsWarnings: '{errors}, {warnings}',
+
+  // H1 — compliance pluralized nouns (pluralCount(one, many)).
+  StringKey.complianceNounValueOne: 'value',
+  StringKey.complianceNounValueMany: 'values',
+  StringKey.complianceNounWarningOne: 'warning',
+  StringKey.complianceNounWarningMany: 'warnings',
+  StringKey.complianceNounErrorOne: 'error',
+  StringKey.complianceNounErrorMany: 'errors',
+  StringKey.complianceNounFindingOne: 'finding',
+  StringKey.complianceNounFindingMany: 'findings',
+  StringKey.complianceNounAdvisoryNoteOne: 'advisory note',
+  StringKey.complianceNounAdvisoryNoteMany: 'advisory notes',
+
+  // H1 — Review hub chrome.
+  StringKey.reviewHubTitle: 'Review',
+  StringKey.reviewHubLead: 'Check the design before you issue it.',
+  StringKey.reviewStatPanelsSized: 'Panels sized',
+  StringKey.reviewStatBomLineItems: 'BOM line items',
+  StringKey.reviewStatStockPipes: 'Stock pipes',
+  StringKey.reviewStatPipeRequired: 'Pipe required',
+  StringKey.reviewStatOffcutWaste: 'Offcut waste',
+  StringKey.reviewStockNote:
+      'Stock lengths: 4 m PVC/PPR, 6 m steel (sprinkler/hydrant), and duct '
+          'sections 1.2 m BJLS / 4 m PU. The cut plan reuses offcuts to minimise '
+          'waste; couplings and duct flanges on the canvas fall at these '
+          'boundaries. The calc report (PDF or MD, below) carries the full '
+          'breakdown.',
+  StringKey.reviewExportDeliverables: 'Export deliverables',
+  StringKey.reviewIssueReady: 'PASS — ready to issue',
+  StringKey.reviewIssueReviewRequired:
+      'REVIEW REQUIRED — you decide whether to issue',
+  StringKey.reviewExportSubmittalPackage: 'Export submittal package...',
+  StringKey.reviewSubmittalHint:
+      'The submittal package above bundles the drawings too (the current '
+          "sheet's annotated plan, the mechanical riser, and the electrical "
+          'single-line). For a single per-sheet drawing, use the Export '
+          'buttons on the Projects screen or the Riser view.',
+  StringKey.reviewVerdictPass: 'PASS',
+  StringKey.reviewVerdictReviewRequired: 'REVIEW REQUIRED',
+  StringKey.reviewDesignSignoff: 'design sign-off',
+  StringKey.reviewItemPass: 'PASS',
+  StringKey.reviewItemReview: 'REVIEW',
+  StringKey.reviewPipeCutPlan: 'Pipe cut plan',
+  StringKey.reviewConsumablesTitle: 'Consumables (estimate)',
+  StringKey.reviewConsumablePvcCement: 'PVC solvent cement',
+  StringKey.reviewConsumableDuctSealant: 'Duct joint sealant',
+  StringKey.reviewConsumableThreadTape: 'Thread-seal tape',
+  StringKey.reviewConsumablesNote:
+      'Estimate — coverage assumes ~1 L cement tins, 300 ml sealant '
+          'cartridges, 30 joints/tape roll (verify per datasheet). PPR water '
+          'pipe is heat-fused (no cement).',
+
+  // H1 — Design issues card chrome.
+  StringKey.issuesCardCleanTitle: 'No design issues found',
+  StringKey.issuesCardCleanBody:
+      'Air velocities are in band, sheets are calibrated, and '
+          'every standards value is accounted for.',
+  StringKey.issuesCardTitle: 'Design issues',
+  StringKey.issuesCardQuickFixes: 'Quick fixes',
+  StringKey.issuesCardWarnings: 'Warnings',
+  StringKey.issuesCardAdvisory: 'Advisory',
+  StringKey.issuesCardAcknowledged: 'Acknowledged',
+  StringKey.issuesCardAcknowledgeAll: 'Acknowledge all',
+  StringKey.issuesCardAcknowledge: 'Acknowledge',
+  StringKey.issuesCardUndo: 'Undo',
+  StringKey.issuesCardLocate: 'Locate',
+
+  // H1 — Design issue titles.
+  StringKey.issueOrphanTitle: 'Element references a missing floor or sheet',
+  StringKey.issueDuctVelocityTitle: 'Duct velocity out of band',
+  StringKey.issueTerminalVelocityTitle: 'Terminal face velocity out of band',
+  StringKey.issueAirDuctUnsizedTitle: 'Air duct not manually sized',
+  StringKey.issueAirTerminalUnsizedTitle: 'Air terminal not manually sized',
+  StringKey.issueDuctOverCapacityTitle: 'Duct over capacity',
+  StringKey.issueDiffuserStrandedTitle: 'Diffuser not connected to any duct',
+  StringKey.issueSheetNotCalibratedTitle: 'Sheet not calibrated',
+  StringKey.issueMultiSheetFloorTitle: 'Multiple sheets mapped to one floor',
+  StringKey.issueNetworkIslandTitle: 'Network branch not connected',
+  StringKey.issueNetworkNoSourceTitle: 'Network has no source',
+  StringKey.issueDrainageSlopeTitle: 'Drainage slope below self-cleansing',
+  StringKey.issueDrainageLengthTitle: 'Drainage branch too long',
+  StringKey.issueDrainageCleanoutTitle:
+      'Drainage stack has no cleanout at its base',
+  StringKey.issueLegionellaTitle: 'Hot-water return temperature low',
+  StringKey.issueElectricalTitle: 'Electrical: {code}',
+  StringKey.issueUnverifiedTitle: 'Unverified: {name}',
+
+  // H1 — Design issue messages.
+  StringKey.issueOrphanFloorMessage:
+      'A drawn element sits on floor {floor}, which no longer '
+          'exists (the building has {floors}) — it is being '
+          'sized at a clamped elevation. Delete it or move it onto a real '
+          'floor.',
+  StringKey.issueOrphanSheetMessage:
+      'A drawn element belongs to a sheet that is no longer loaded — '
+          're-import that sheet or delete the orphaned element.',
+  StringKey.issueAirDuctUnsizedMessage:
+      'This duct carries air but has no chosen size — still '
+          'relying on auto-sizing.',
+  StringKey.issueAirTerminalUnsizedMessage:
+      'This terminal carries air but has no chosen face size.',
+  StringKey.issueDuctOverCapacityMessage:
+      'This duct carries more air than the largest standard duct can '
+          'handle within the velocity / friction limit — it was clamped to the '
+          'largest standard size. Split the run or add a parallel duct.',
+  StringKey.issueDiffuserStrandedMessage:
+      'This air terminal carries a design airflow but has no duct '
+          'connected — its demand is invisible to duct sizing and the BOM. '
+          'Route a duct to it (or wire the supply trunk after auto-placing '
+          'diffusers).',
+  StringKey.issueSheetNotCalibratedCriticalMessage:
+      '"{name}" carries drawn runs but has no scale set — they '
+          'are sizing to ZERO length. Calibrate the sheet before sizing or '
+          'export, or the BOM and pressures will be wrong.',
+  StringKey.issueSheetNotCalibratedWarningMessage:
+      '"{name}" has no scale set — its run/riser lengths cannot '
+          'be measured. Calibrate the sheet to size it.',
+  StringKey.issueMultiSheetFloorMessage:
+      '{count} sheets map to floor "{floor}" '
+          '({names}) — only one plan per floor feeds sizing at that elevation, '
+          'so the extras are stacked there (often an import that ran past the '
+          'floor count). Re-map the extra sheets or add floors.',
+  StringKey.issueNetworkIslandMessage:
+      'A {service} branch with {nodes} is disconnected from its fed '
+          'network — it is rooted heuristically and sized as if supplied. '
+          'Connect it to the source, or add a plant.',
+  StringKey.issueNetworkNoSourceMessage:
+      'A {service} component with {nodes} has no plant/source — it is '
+          'being rooted heuristically and sized as if supplied. Add a pump / '
+          'tank / AHU source.',
+  StringKey.issueDrainageCleanoutMessage:
+      'A drainage stack reaches its lowest drawn point here with no '
+          'cleanout component at or beside the base — rodding access is '
+          'conventional at every stack base. Place a cleanout, or confirm '
+          'access exists elsewhere.',
+  StringKey.issueLegionellaMessage:
+      'Modelled recirculation return temperature '
+          '{temp} °C is below the '
+          'anti-Legionella floor (~55 °C). Reduce the loop temperature drop or '
+          'add trace heating. (// VERIFY vs SNI / WHO guidance.)',
+
+  // H1 — Design issue pluralized nouns + batch labels.
+  StringKey.issueNounFloorOne: 'floor',
+  StringKey.issueNounFloorMany: 'floors',
+  StringKey.issueNounNodeOne: 'node',
+  StringKey.issueNounNodeMany: 'nodes',
+  StringKey.issueNounVelocityOne: 'velocity',
+  StringKey.issueNounVelocityMany: 'velocities',
+  StringKey.issueNounElementOne: 'element',
+  StringKey.issueNounElementMany: 'elements',
+  StringKey.issueNounSheetOne: 'sheet',
+  StringKey.issueNounSheetMany: 'sheets',
+  StringKey.issueBatchSelectVelocity: 'Select {c} out-of-band {noun}',
+  StringKey.issueBatchSelectUnsized: 'Select {c} unsized air {noun}',
+  StringKey.issueBatchCalibrateNoSource:
+      'Calibrate one sheet to copy scale to {n} more',
+  StringKey.issueBatchCalibrateCopy: 'Copy scale to {n} uncalibrated {noun}',
+
+  // H6 — Copilot panel.
+  StringKey.copilotTitle: 'Ask Claude',
+  StringKey.copilotClose: 'Close',
+  StringKey.copilotDescription:
+      'Select a room or element, then ask Claude to add equipment, runs or '
+          "terminals — or to auto-place a room's air terminals. Claude adds and "
+          'advises; it does not edit or delete existing elements. You review '
+          'every step before it is applied.',
+  StringKey.copilotThinkingButton: 'Thinking…',
+  StringKey.copilotAsk: 'Ask',
+  StringKey.copilotHintEnabled: 'e.g. design supply air for this room',
+  StringKey.copilotHintDisabled: 'Add an API key in Preferences to enable',
+  StringKey.copilotPlanning: 'Claude is planning…',
+  StringKey.copilotApplied: 'Applied.',
+  StringKey.copilotSkipped: 'Skipped',
+  StringKey.copilotDone: 'Done',
+  StringKey.copilotNoSuggestion: 'No suggestion.',
+  StringKey.copilotProposedPlan: 'Proposed plan · {changes}',
+  StringKey.copilotApply: 'Apply',
+  StringKey.copilotDiscard: 'Discard',
+  StringKey.copilotChangeNounOne: 'change',
+  StringKey.copilotChangeNounMany: 'changes',
+
+  // H6 — half-localized odds & ends.
+  StringKey.electricalLoadSampleProject: 'Load sample project',
+  StringKey.projectApplyBuildingTemplate: 'Apply a building template',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -1356,6 +1728,216 @@ const Map<StringKey, String> _id = {
   StringKey.recoveryTornUnreadable:
       'Berkas pemulihan tidak dapat dibaca. Mulai proyek baru atau buka '
           'salinan tersimpan.',
+
+  // ── Apple design review Wave 5a (H1 + H6) — trust-surface localization.
+
+  // H1 — compliance roll-up categories.
+  StringKey.complianceCategoryAirVelocity: 'Kecepatan udara dalam batas',
+  StringKey.complianceCategorySheetCalibration: 'Kalibrasi lembar',
+  StringKey.complianceCategoryStandardsVerification: 'Verifikasi standar',
+  StringKey.complianceCategoryElectricalSizing: 'Pengukuran sirkuit listrik',
+
+  // H1 — compliance roll-up detail phrases.
+  StringKey.complianceDetailAllWithinBand: 'semua dalam batas',
+  StringKey.complianceDetailOutOfBand: '{n} di luar batas',
+  StringKey.complianceDetailAllCalibrated: 'semua lembar terkalibrasi',
+  StringKey.complianceDetailUncalibrated: '{n} belum dikalibrasi',
+  StringKey.complianceDetailAllVerified: 'semua nilai terverifikasi',
+  StringKey.complianceDetailAckNoneOpen: '{n} diakui, tidak ada yang terbuka',
+  StringKey.complianceDetailRequireVerification:
+      '{values} perlu diverifikasi atau diakui sebelum pengajuan',
+  StringKey.complianceDetailOpenAck: '{open} terbuka, {ack} diakui',
+  StringKey.complianceDetailNoSizingErrors: 'tidak ada kesalahan pengukuran',
+  StringKey.complianceDetailWarningsNoErrors: '{warnings}, tanpa kesalahan',
+  StringKey.complianceDetailErrorsWarnings: '{errors}, {warnings}',
+
+  // H1 — compliance pluralized nouns (ID has no plural inflection: same word).
+  StringKey.complianceNounValueOne: 'nilai',
+  StringKey.complianceNounValueMany: 'nilai',
+  StringKey.complianceNounWarningOne: 'peringatan',
+  StringKey.complianceNounWarningMany: 'peringatan',
+  StringKey.complianceNounErrorOne: 'kesalahan',
+  StringKey.complianceNounErrorMany: 'kesalahan',
+  StringKey.complianceNounFindingOne: 'temuan',
+  StringKey.complianceNounFindingMany: 'temuan',
+  StringKey.complianceNounAdvisoryNoteOne: 'catatan anjuran',
+  StringKey.complianceNounAdvisoryNoteMany: 'catatan anjuran',
+
+  // H1 — Review hub chrome.
+  StringKey.reviewHubTitle: 'Tinjauan',
+  StringKey.reviewHubLead: 'Periksa desain sebelum Anda menerbitkannya.',
+  StringKey.reviewStatPanelsSized: 'Panel terhitung',
+  StringKey.reviewStatBomLineItems: 'Item baris BOM',
+  StringKey.reviewStatStockPipes: 'Batang pipa',
+  StringKey.reviewStatPipeRequired: 'Pipa diperlukan',
+  StringKey.reviewStatOffcutWaste: 'Sisa potongan',
+  StringKey.reviewStockNote:
+      'Panjang batang: 4 m PVC/PPR, 6 m baja (sprinkler/hidran), dan bagian '
+          'saluran 1,2 m BJLS / 4 m PU. Rencana potong menggunakan kembali sisa '
+          'potongan untuk meminimalkan limbah; kopling dan flensa saluran pada '
+          'kanvas jatuh di batas-batas ini. Laporan hitung (PDF atau MD, di '
+          'bawah) memuat rincian lengkapnya.',
+  StringKey.reviewExportDeliverables: 'Ekspor dokumen serah',
+  StringKey.reviewIssueReady: 'LULUS — siap diterbitkan',
+  StringKey.reviewIssueReviewRequired:
+      'PERLU TINJAUAN — Anda memutuskan apakah akan menerbitkan',
+  StringKey.reviewExportSubmittalPackage: 'Ekspor paket serah...',
+  StringKey.reviewSubmittalHint:
+      'Paket serah di atas juga menyertakan gambar (denah beranotasi lembar '
+          'saat ini, riser mekanikal, dan satu-garis kelistrikan). Untuk satu '
+          'gambar per lembar, gunakan tombol Ekspor di layar Proyek atau '
+          'tampilan Riser.',
+  StringKey.reviewVerdictPass: 'LULUS',
+  StringKey.reviewVerdictReviewRequired: 'PERLU TINJAUAN',
+  StringKey.reviewDesignSignoff: 'pengesahan desain',
+  StringKey.reviewItemPass: 'LULUS',
+  StringKey.reviewItemReview: 'TINJAU',
+  StringKey.reviewPipeCutPlan: 'Rencana potong pipa',
+  StringKey.reviewConsumablesTitle: 'Bahan habis pakai (perkiraan)',
+  StringKey.reviewConsumablePvcCement: 'Semen pelarut PVC',
+  StringKey.reviewConsumableDuctSealant: 'Sealant sambungan saluran',
+  StringKey.reviewConsumableThreadTape: 'Pita seal ulir',
+  StringKey.reviewConsumablesNote:
+      'Perkiraan — cakupan mengasumsikan kaleng semen ~1 L, kartrid sealant '
+          '300 ml, 30 sambungan/rol pita (verifikasi per lembar data). Pipa air '
+          'PPR dilas-panas (tanpa semen).',
+
+  // H1 — Design issues card chrome.
+  StringKey.issuesCardCleanTitle: 'Tidak ditemukan masalah desain',
+  StringKey.issuesCardCleanBody:
+      'Kecepatan udara dalam batas, lembar terkalibrasi, dan '
+          'setiap nilai standar telah diperhitungkan.',
+  StringKey.issuesCardTitle: 'Masalah desain',
+  StringKey.issuesCardQuickFixes: 'Perbaikan cepat',
+  StringKey.issuesCardWarnings: 'Peringatan',
+  StringKey.issuesCardAdvisory: 'Anjuran',
+  StringKey.issuesCardAcknowledged: 'Diakui',
+  StringKey.issuesCardAcknowledgeAll: 'Akui semua',
+  StringKey.issuesCardAcknowledge: 'Akui',
+  StringKey.issuesCardUndo: 'Urungkan',
+  StringKey.issuesCardLocate: 'Cari lokasi',
+
+  // H1 — Design issue titles.
+  StringKey.issueOrphanTitle: 'Elemen merujuk lantai atau lembar yang hilang',
+  StringKey.issueDuctVelocityTitle: 'Kecepatan saluran di luar batas',
+  StringKey.issueTerminalVelocityTitle: 'Kecepatan muka terminal di luar batas',
+  StringKey.issueAirDuctUnsizedTitle: 'Saluran udara belum diukur manual',
+  StringKey.issueAirTerminalUnsizedTitle: 'Terminal udara belum diukur manual',
+  StringKey.issueDuctOverCapacityTitle: 'Saluran melebihi kapasitas',
+  StringKey.issueDiffuserStrandedTitle:
+      'Difuser tidak terhubung ke saluran mana pun',
+  StringKey.issueSheetNotCalibratedTitle: 'Lembar belum dikalibrasi',
+  StringKey.issueMultiSheetFloorTitle:
+      'Beberapa lembar dipetakan ke satu lantai',
+  StringKey.issueNetworkIslandTitle: 'Cabang jaringan tidak terhubung',
+  StringKey.issueNetworkNoSourceTitle: 'Jaringan tidak memiliki sumber',
+  StringKey.issueDrainageSlopeTitle: 'Kemiringan drainase di bawah swa-bersih',
+  StringKey.issueDrainageLengthTitle: 'Cabang drainase terlalu panjang',
+  StringKey.issueDrainageCleanoutTitle:
+      'Tegak drainase tidak memiliki cleanout di dasarnya',
+  StringKey.issueLegionellaTitle: 'Suhu balik air panas rendah',
+  StringKey.issueElectricalTitle: 'Listrik: {code}',
+  StringKey.issueUnverifiedTitle: 'Belum terverifikasi: {name}',
+
+  // H1 — Design issue messages.
+  StringKey.issueOrphanFloorMessage:
+      'Sebuah elemen tergambar berada di lantai {floor}, yang sudah tidak ada '
+          'lagi (bangunan memiliki {floors}) — elemen ini diukur pada elevasi '
+          'yang dijepit. Hapus atau pindahkan ke lantai yang nyata.',
+  StringKey.issueOrphanSheetMessage:
+      'Sebuah elemen tergambar termasuk dalam lembar yang tidak lagi dimuat — '
+          'impor ulang lembar itu atau hapus elemen yatim tersebut.',
+  StringKey.issueAirDuctUnsizedMessage:
+      'Saluran ini mengalirkan udara tetapi belum memiliki ukuran terpilih — '
+          'masih mengandalkan pengukuran otomatis.',
+  StringKey.issueAirTerminalUnsizedMessage:
+      'Terminal ini mengalirkan udara tetapi belum memiliki ukuran muka '
+          'terpilih.',
+  StringKey.issueDuctOverCapacityMessage:
+      'Saluran ini mengalirkan lebih banyak udara daripada yang bisa ditangani '
+          'saluran standar terbesar dalam batas kecepatan / gesekan — ukurannya '
+          'dijepit ke ukuran standar terbesar. Bagi salurannya atau tambahkan '
+          'saluran paralel.',
+  StringKey.issueDiffuserStrandedMessage:
+      'Terminal udara ini membawa aliran udara desain tetapi tidak ada saluran '
+          'yang terhubung — kebutuhannya tak terlihat oleh pengukuran saluran '
+          'dan BOM. Arahkan saluran ke sana (atau sambungkan trunk suplai '
+          'setelah menempatkan difuser otomatis).',
+  StringKey.issueSheetNotCalibratedCriticalMessage:
+      '"{name}" memuat saluran tergambar tetapi belum memiliki skala — '
+          'semuanya diukur ke panjang NOL. Kalibrasi lembar sebelum pengukuran '
+          'atau ekspor, atau BOM dan tekanan akan salah.',
+  StringKey.issueSheetNotCalibratedWarningMessage:
+      '"{name}" belum memiliki skala — panjang saluran/riser-nya tidak dapat '
+          'diukur. Kalibrasi lembar untuk mengukurnya.',
+  StringKey.issueMultiSheetFloorMessage:
+      '{count} lembar dipetakan ke lantai "{floor}" ({names}) — hanya satu '
+          'denah per lantai yang memasok pengukuran pada elevasi itu, sehingga '
+          'kelebihannya ditumpuk di sana (sering kali impor yang melewati '
+          'jumlah lantai). Petakan ulang lembar tambahan atau tambahkan lantai.',
+  StringKey.issueNetworkIslandMessage:
+      'Cabang {service} dengan {nodes} terputus dari jaringan yang dipasoknya — '
+          'ia diakar secara heuristik dan diukur seolah-olah dipasok. Hubungkan '
+          'ke sumber, atau tambahkan plant.',
+  StringKey.issueNetworkNoSourceMessage:
+      'Komponen {service} dengan {nodes} tidak memiliki plant/sumber — ia '
+          'diakar secara heuristik dan diukur seolah-olah dipasok. Tambahkan '
+          'sumber pompa / tangki / AHU.',
+  StringKey.issueDrainageCleanoutMessage:
+      'Sebuah tegak drainase mencapai titik gambar terendahnya di sini tanpa '
+          'komponen cleanout di atau di samping dasarnya — akses rodding lazim '
+          'ada di setiap dasar tegak. Tempatkan cleanout, atau pastikan akses '
+          'tersedia di tempat lain.',
+  StringKey.issueLegionellaMessage:
+      'Suhu balik resirkulasi termodelkan {temp} °C berada di bawah batas '
+          'anti-Legionella (~55 °C). Kurangi penurunan suhu loop atau tambahkan '
+          'pemanas jejak. (// VERIFY terhadap panduan SNI / WHO.)',
+
+  // H1 — Design issue pluralized nouns + batch labels.
+  StringKey.issueNounFloorOne: 'lantai',
+  StringKey.issueNounFloorMany: 'lantai',
+  StringKey.issueNounNodeOne: 'simpul',
+  StringKey.issueNounNodeMany: 'simpul',
+  StringKey.issueNounVelocityOne: 'kecepatan',
+  StringKey.issueNounVelocityMany: 'kecepatan',
+  StringKey.issueNounElementOne: 'elemen',
+  StringKey.issueNounElementMany: 'elemen',
+  StringKey.issueNounSheetOne: 'lembar',
+  StringKey.issueNounSheetMany: 'lembar',
+  StringKey.issueBatchSelectVelocity: 'Pilih {c} {noun} di luar batas',
+  StringKey.issueBatchSelectUnsized: 'Pilih {c} {noun} udara belum terukur',
+  StringKey.issueBatchCalibrateNoSource:
+      'Kalibrasi satu lembar untuk menyalin skala ke {n} lainnya',
+  StringKey.issueBatchCalibrateCopy: 'Salin skala ke {n} {noun} belum dikalibrasi',
+
+  // H6 — Copilot panel.
+  StringKey.copilotTitle: 'Tanya Claude',
+  StringKey.copilotClose: 'Tutup',
+  StringKey.copilotDescription:
+      'Pilih ruangan atau elemen, lalu minta Claude menambahkan peralatan, '
+          'saluran, atau terminal — atau menempatkan terminal udara ruangan '
+          'secara otomatis. Claude menambahkan dan memberi saran; ia tidak '
+          'mengubah atau menghapus elemen yang ada. Anda meninjau setiap '
+          'langkah sebelum diterapkan.',
+  StringKey.copilotThinkingButton: 'Berpikir…',
+  StringKey.copilotAsk: 'Tanya',
+  StringKey.copilotHintEnabled: 'mis. desain suplai udara untuk ruangan ini',
+  StringKey.copilotHintDisabled:
+      'Tambahkan kunci API di Preferensi untuk mengaktifkan',
+  StringKey.copilotPlanning: 'Claude sedang merencanakan…',
+  StringKey.copilotApplied: 'Diterapkan.',
+  StringKey.copilotSkipped: 'Dilewati',
+  StringKey.copilotDone: 'Selesai',
+  StringKey.copilotNoSuggestion: 'Tidak ada saran.',
+  StringKey.copilotProposedPlan: 'Rencana usulan · {changes}',
+  StringKey.copilotApply: 'Terapkan',
+  StringKey.copilotDiscard: 'Buang',
+  StringKey.copilotChangeNounOne: 'perubahan',
+  StringKey.copilotChangeNounMany: 'perubahan',
+
+  // H6 — half-localized odds & ends.
+  StringKey.electricalLoadSampleProject: 'Muat proyek contoh',
+  StringKey.projectApplyBuildingTemplate: 'Terapkan templat bangunan',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

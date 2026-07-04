@@ -67,7 +67,16 @@ per-package adversarial review, integrated centrally: full gate + golden regen +
   Goldens 01/02/03/06 (the Layout minimap) regenerated + eyeballed (no collision with the heatmap
   legend or the collapse chevron); G3/G4/G5 golden-neutral. Additive: the minimap `ValueNotifier` +
   the eased `AnimationController` are disposed; grid-snap is default-off/byte-identical.
-- **Wave 5 — Theme C + H1/H6 — pending.**
+- **Wave 5a — H1 + H6 (localize the trust surface) — LANDED.** The compliance verdict + category
+  rows + detail messages, the whole Review hub + issues card, and every `DesignIssue` title/message
+  now resolve through `context.strings`/`MechXStringsData(locale)` (123 new EN+ID StringKeys), so the
+  sign-off surface renders in Bahasa. To keep acknowledgements + the compliance fan-in working across
+  locales, `DesignIssue` gained a stable locale-independent `kind` discriminator (its `key` is now
+  `kind`-based, not the localized title) and the compliance store matches on `kind`, not English
+  title substrings. H6: the Ask-Claude copilot + the half-localized "Load sample project" / "Apply a
+  building template" are localized. EN byte-identical ⇒ goldens 12/14/15 unchanged.
+- **Wave 5b — Theme C consistency (C2/C3/C5) — pending; the tier-5 C1/C4 electrical-shell restructure
+  is deferred (a large architectural refactor of a functional workspace, lowest priority).**
 
 ## The premise — how iSystem is *supposed* to function
 
@@ -302,7 +311,7 @@ tool entry — lags.
 
 ---
 
-## Theme H — Speak clearly, and in Bahasa where it counts  ◑ H2–H5/H7 LANDED (Wave 2); H1/H6 → Wave 5
+## Theme H — Speak clearly, and in Bahasa where it counts  ✅ LANDED (H2–H5/H7 Wave 2; H1/H6 Wave 5a)
 
 The copy is mostly good; the load-bearing gap is that the **trust surface is English-only** for a
 Bahasa user — for an app whose premise is Indonesian SNI/PUIL compliance, that's not cosmetic.

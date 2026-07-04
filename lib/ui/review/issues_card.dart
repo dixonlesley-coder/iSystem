@@ -8,6 +8,7 @@ import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../shell/nav_rail.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/severity_glyph.dart';
@@ -27,6 +28,7 @@ class IssuesCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
+    final s = context.strings;
     final issues = ref.watch(designIssuesProvider);
     if (issues.isEmpty) {
       // A clean design earns an explicit, positive confirmation rather than an
@@ -52,12 +54,11 @@ class IssuesCard extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('No design issues found',
+                  Text(s(StringKey.issuesCardCleanTitle),
                       style:
                           type.subtitle.copyWith(color: colors.textPrimary)),
                   Text(
-                    'Air velocities are in band, sheets are calibrated, and '
-                    'every standards value is accounted for.',
+                    s(StringKey.issuesCardCleanBody),
                     style: type.caption.copyWith(color: colors.textMuted),
                   ),
                 ],
@@ -157,7 +158,7 @@ class IssuesCard extends ConsumerWidget {
         children: [
           Row(
             children: [
-              Text('Design issues',
+              Text(s(StringKey.issuesCardTitle),
                   style: type.subtitle.copyWith(color: colors.textPrimary)),
               const SizedBox(width: MechXSpacing.sm),
               Text('${issues.length}',
@@ -166,7 +167,7 @@ class IssuesCard extends ConsumerWidget {
           ),
           if (batchActions.isNotEmpty) ...[
             const SizedBox(height: MechXSpacing.sm),
-            _GroupLabel('Quick fixes', batchActions.length),
+            _GroupLabel(s(StringKey.issuesCardQuickFixes), batchActions.length),
             const SizedBox(height: MechXSpacing.xs),
             Wrap(
               spacing: MechXSpacing.xs,
@@ -183,7 +184,7 @@ class IssuesCard extends ConsumerWidget {
           ],
           if (warnings.isNotEmpty) ...[
             const SizedBox(height: MechXSpacing.sm),
-            _GroupLabel('Warnings', warnings.length),
+            _GroupLabel(s(StringKey.issuesCardWarnings), warnings.length),
             for (final i in warnings)
               _IssueRow(
                   issue: i, onTap: i.isLocatable ? () => locate(i) : null),
@@ -192,12 +193,14 @@ class IssuesCard extends ConsumerWidget {
             const SizedBox(height: MechXSpacing.sm),
             Row(
               children: [
-                Expanded(child: _GroupLabel('Advisory', openInfos.length)),
+                Expanded(
+                    child:
+                        _GroupLabel(s(StringKey.issuesCardAdvisory), openInfos.length)),
                 // Acknowledge every open advisory at once — the fast path to a
                 // reachable PASS once the engineer has reviewed the register.
                 if (openAckableKeys.isNotEmpty)
                   _AckAction(
-                    label: 'Acknowledge all',
+                    label: s(StringKey.issuesCardAcknowledgeAll),
                     onTap: () => ackCtrl.acknowledgeAll(openAckableKeys),
                   ),
               ],
@@ -206,20 +209,21 @@ class IssuesCard extends ConsumerWidget {
               _IssueRow(
                 issue: i,
                 onTap: i.isLocatable ? () => locate(i) : null,
-                ackLabel: i.isAcknowledgeable ? 'Acknowledge' : null,
+                ackLabel:
+                    i.isAcknowledgeable ? s(StringKey.issuesCardAcknowledge) : null,
                 onAck:
                     i.isAcknowledgeable ? () => ackCtrl.acknowledge(i.key) : null,
               ),
           ],
           if (ackInfos.isNotEmpty) ...[
             const SizedBox(height: MechXSpacing.sm),
-            _GroupLabel('Acknowledged', ackInfos.length),
+            _GroupLabel(s(StringKey.issuesCardAcknowledged), ackInfos.length),
             for (final i in ackInfos)
               _IssueRow(
                 issue: i,
                 onTap: i.isLocatable ? () => locate(i) : null,
                 muted: true,
-                ackLabel: 'Undo',
+                ackLabel: s(StringKey.issuesCardUndo),
                 onAck: () => ackCtrl.unacknowledge(i.key),
               ),
           ],
@@ -382,7 +386,7 @@ class _IssueRow extends StatelessWidget {
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: onTap,
-                  child: Text('Locate',
+                  child: Text(context.strings(StringKey.issuesCardLocate),
                       style: type.caption.copyWith(color: colors.accent)),
                 ),
               ),

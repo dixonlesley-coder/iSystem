@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../store/network_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/templates.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
@@ -26,7 +27,7 @@ Future<void> showTemplatesDialog(BuildContext context) {
   return showGeneralDialog<void>(
     context: context,
     barrierDismissible: true,
-    barrierLabel: 'Apply a building template',
+    barrierLabel: context.strings(StringKey.projectApplyBuildingTemplate),
     barrierColor: theme.colors.scrim,
     transitionDuration: MechXMotion.appear,
     pageBuilder: (ctx, _, _) => MechXTheme(
@@ -75,7 +76,8 @@ class _TemplatesDialog extends ConsumerWidget {
           Row(
             children: [
               Expanded(
-                child: Text('Apply a building template',
+                child: Text(
+                    context.strings(StringKey.projectApplyBuildingTemplate),
                     style: type.title.copyWith(color: colors.textPrimary)),
               ),
               MechXButton(

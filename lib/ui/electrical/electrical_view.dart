@@ -1169,7 +1169,7 @@ class _EmptyState extends StatelessWidget {
             onPressed: onSetUp,
           ),
           MechXButton(
-            label: 'Load sample project',
+            label: context.strings(StringKey.electricalLoadSampleProject),
             onPressed: onLoadSample,
           ),
         ],

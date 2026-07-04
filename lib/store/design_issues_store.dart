@@ -22,8 +22,10 @@ import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 
+import '../ui/strings/app_strings.dart';
 import '../ui/strings/plural.dart';
 import 'air_warnings_store.dart';
+import 'app_state.dart';
 import 'electrical_store.dart';
 import 'models/sheet.dart';
 import 'network_store.dart';
@@ -100,12 +102,24 @@ class DesignIssue {
   /// file impact; default false keeps every non-verify issue byte-identical.
   final bool isVerify;
 
+  /// H1 (Wave 5a) — a STABLE, locale-INDEPENDENT discriminator for this issue's
+  /// class (e.g. `'duct-velocity'`, `'sheet-uncalibrated:<sheetId>'`,
+  /// `'no-source:<service>'`, `'electrical:<code>'`, `'verify:<citation>'`). Set
+  /// at every construction from engine/enum data, NEVER from the (now localized)
+  /// [title]/[message]. It is the basis for both [key] (so an acknowledgement
+  /// made in English still matches the same row in Bahasa) and the compliance
+  /// fan-in's category matching (which used to substring-match English titles and
+  /// would silently mis-bucket a localized title). Additive & derived/transient
+  /// (never persisted to `.mechx`); default `''` for anything unclassified.
+  final String kind;
+
   const DesignIssue({
     required this.severity,
     required this.title,
     required this.message,
     this.locate,
     this.isVerify = false,
+    this.kind = '',
   });
 
   bool get isLocatable => locate != null;
@@ -117,17 +131,24 @@ class DesignIssue {
   /// an acknowledgement must never hide a genuine error.
   bool get isAcknowledgeable => severity == IssueSeverity.info;
 
-  /// A stable identity for persisting an acknowledgement (H1). Standards items
-  /// carry no [locate], so they key purely on title + message — stable across
-  /// sessions (they come from the fixed `// VERIFY` checklists); a locatable
-  /// advisory folds its element target in so each is acknowledged individually.
+  /// A stable identity for persisting an acknowledgement (H1). Keyed on the
+  /// locale-independent [kind] (+ the element target), NOT the localized
+  /// title/message — so an acknowledgement recorded in English still matches the
+  /// same row when the app is switched to Bahasa. Each [kind] embeds whatever it
+  /// needs to stay unique per acknowledgeable row (the sheet id, the service, the
+  /// standards citation…) so a locatable advisory folds its element target in and
+  /// each is acknowledged individually. NOTE: this differs from the pre-Wave-5a
+  /// `'$title $message $locKey'` scheme, so a project acknowledged by an OLDER
+  /// build re-surfaces its advisories ONCE on first open under this build — a safe
+  /// direction (an acknowledgement only relaxes an advisory; it can never hide a
+  /// warning/error), after which the new keys persist.
   String get key {
     final loc = locate;
     final locKey = loc == null
         ? ''
         : '${loc.sheetId}|${loc.nodeId ?? ''}|${loc.edgeId ?? ''}'
             '|${loc.panelId ?? ''}|${loc.circuitId ?? ''}';
-    return '$title $message $locKey';
+    return '$kind $locKey';
   }
 
   @override
@@ -168,6 +189,12 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final drainAdvisories = ref.watch(drainageAdvisoryProvider);
   final legionellaReturnTempC = ref.watch(hotWaterLegionellaProvider);
 
+  // Wave 5a (H1) — every user-facing title/message resolves through the active
+  // locale; kinds + engine-sourced messages (velocity/drainage/electrical
+  // `.message`, the `{service}` enum name, the `{code}`/`{name}` citations) stay
+  // engine English. EN ⇒ byte-identical.
+  final str = MechXStringsData(ref.watch(localeProvider));
+
   final criticals = <DesignIssue>[];
   final warnings = <DesignIssue>[];
   final infos = <DesignIssue>[];
@@ -196,15 +223,16 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     if (!badFloor && !badSheet) continue;
     criticals.add(DesignIssue(
       severity: IssueSeverity.critical,
-      title: 'Element references a missing floor or sheet',
+      kind: 'orphan',
+      title: str(StringKey.issueOrphanTitle),
       message: badFloor
-          ? 'A drawn element sits on floor ${n.floorIndex + 1}, which no longer '
-              'exists (the building has '
-              '${pluralCount(levelCount, 'floor', 'floors')}) — it is being '
-              'sized at a clamped elevation. Delete it or move it onto a real '
-              'floor.'
-          : 'A drawn element belongs to a sheet that is no longer loaded — '
-              're-import that sheet or delete the orphaned element.',
+          ? str.format(StringKey.issueOrphanFloorMessage, {
+              'floor': '${n.floorIndex + 1}',
+              'floors': pluralCount(levelCount,
+                  str(StringKey.issueNounFloorOne),
+                  str(StringKey.issueNounFloorMany)),
+            })
+          : str(StringKey.issueOrphanSheetMessage),
       locate: IssueLocation(n.sheetId, nodeId: n.id),
     ));
   }
@@ -221,7 +249,8 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       final sheetId = sheetForEdge(edge);
       warnings.add(DesignIssue(
         severity: IssueSeverity.warning,
-        title: 'Duct velocity out of band',
+        kind: 'duct-velocity',
+        title: str(StringKey.issueDuctVelocityTitle),
         message: check.message,
         locate: sheetId == null
             ? null
@@ -230,7 +259,8 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     } else if (node != null) {
       warnings.add(DesignIssue(
         severity: IssueSeverity.warning,
-        title: 'Terminal face velocity out of band',
+        kind: 'terminal-velocity',
+        title: str(StringKey.issueTerminalVelocityTitle),
         message: check.message,
         locate: IssueLocation(node.sheetId, nodeId: id),
       ));
@@ -245,17 +275,18 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       final sheetId = sheetForEdge(edge);
       infos.add(DesignIssue(
         severity: IssueSeverity.info,
-        title: 'Air duct not manually sized',
-        message: 'This duct carries air but has no chosen size — still '
-            'relying on auto-sizing.',
+        kind: 'air-duct-unsized',
+        title: str(StringKey.issueAirDuctUnsizedTitle),
+        message: str(StringKey.issueAirDuctUnsizedMessage),
         locate:
             sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
       ));
     } else if (node != null) {
       infos.add(DesignIssue(
         severity: IssueSeverity.info,
-        title: 'Air terminal not manually sized',
-        message: 'This terminal carries air but has no chosen face size.',
+        kind: 'air-terminal-unsized',
+        title: str(StringKey.issueAirTerminalUnsizedTitle),
+        message: str(StringKey.issueAirTerminalUnsizedMessage),
         locate: IssueLocation(node.sheetId, nodeId: id),
       ));
     }
@@ -270,10 +301,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     final sheetId = sheetForEdge(edge);
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
-      title: 'Duct over capacity',
-      message: 'This duct carries more air than the largest standard duct can '
-          'handle within the velocity / friction limit — it was clamped to the '
-          'largest standard size. Split the run or add a parallel duct.',
+      kind: 'duct-over-capacity',
+      title: str(StringKey.issueDuctOverCapacityTitle),
+      message: str(StringKey.issueDuctOverCapacityMessage),
       locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
     ));
   }
@@ -288,11 +318,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     if (n.airflow == null || net.edgesAt(n.id).isNotEmpty) continue;
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
-      title: 'Diffuser not connected to any duct',
-      message: 'This air terminal carries a design airflow but has no duct '
-          'connected — its demand is invisible to duct sizing and the BOM. '
-          'Route a duct to it (or wire the supply trunk after auto-placing '
-          'diffusers).',
+      kind: 'diffuser-stranded',
+      title: str(StringKey.issueDiffuserStrandedTitle),
+      message: str(StringKey.issueDiffuserStrandedMessage),
       locate: IssueLocation(n.sheetId, nodeId: n.id),
     ));
   }
@@ -313,18 +341,19 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     if (sheetsWithEdges.contains(s.id)) {
       criticals.add(DesignIssue(
         severity: IssueSeverity.critical,
-        title: 'Sheet not calibrated',
-        message: '"${s.name}" carries drawn runs but has no scale set — they '
-            'are sizing to ZERO length. Calibrate the sheet before sizing or '
-            'export, or the BOM and pressures will be wrong.',
+        kind: 'sheet-uncalibrated:${s.id}',
+        title: str(StringKey.issueSheetNotCalibratedTitle),
+        message: str.format(
+            StringKey.issueSheetNotCalibratedCriticalMessage, {'name': s.name}),
         locate: IssueLocation(s.id),
       ));
     } else {
       warnings.add(DesignIssue(
         severity: IssueSeverity.warning,
-        title: 'Sheet not calibrated',
-        message: '"${s.name}" has no scale set — its run/riser lengths cannot '
-            'be measured. Calibrate the sheet to size it.',
+        kind: 'sheet-uncalibrated:${s.id}',
+        title: str(StringKey.issueSheetNotCalibratedTitle),
+        message: str.format(
+            StringKey.issueSheetNotCalibratedWarningMessage, {'name': s.name}),
         locate: IssueLocation(s.id),
       ));
     }
@@ -347,11 +376,13 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     final names = entry.value.map((s) => '"${s.name}"').join(', ');
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
-      title: 'Multiple sheets mapped to one floor',
-      message: '${entry.value.length} sheets map to floor "$floorName" '
-          '($names) — only one plan per floor feeds sizing at that elevation, '
-          'so the extras are stacked there (often an import that ran past the '
-          'floor count). Re-map the extra sheets or add floors.',
+      kind: 'multi-sheet-floor',
+      title: str(StringKey.issueMultiSheetFloorTitle),
+      message: str.format(StringKey.issueMultiSheetFloorMessage, {
+        'count': '${entry.value.length}',
+        'floor': floorName,
+        'names': names,
+      }),
       locate: IssueLocation(entry.value.last.id),
     ));
   }
@@ -367,18 +398,21 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     final repNode = repId == null ? null : nodeById[repId];
     final service = d.service.name;
     final n = d.nodeIds.length;
-    final title =
-        d.isIsland ? 'Network branch not connected' : 'Network has no source';
-    final nodeWord = pluralCount(n, 'node', 'nodes');
+    final title = d.isIsland
+        ? str(StringKey.issueNetworkIslandTitle)
+        : str(StringKey.issueNetworkNoSourceTitle);
+    final defectKind =
+        d.isIsland ? 'network-island:$service' : 'no-source:$service';
+    final nodeWord = pluralCount(
+        n, str(StringKey.issueNounNodeOne), str(StringKey.issueNounNodeMany));
     final message = d.isIsland
-        ? 'A $service branch with $nodeWord is disconnected from its fed '
-            'network — it is rooted heuristically and sized as if supplied. '
-            'Connect it to the source, or add a plant.'
-        : 'A $service component with $nodeWord has no plant/source — it is '
-            'being rooted heuristically and sized as if supplied. Add a pump / '
-            'tank / AHU source.';
+        ? str.format(StringKey.issueNetworkIslandMessage,
+            {'service': service, 'nodes': nodeWord})
+        : str.format(StringKey.issueNetworkNoSourceMessage,
+            {'service': service, 'nodes': nodeWord});
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
+      kind: defectKind,
       title: title,
       message: message,
       locate: repNode == null
@@ -393,12 +427,19 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   for (final a in drainAdvisories) {
     final edge = edgeById[a.edgeId];
     final sheetId = edge == null ? null : sheetForEdge(edge);
-    final title = switch (a.kind) {
-      DrainageAdvisoryKind.minSlope => 'Drainage slope below self-cleansing',
-      DrainageAdvisoryKind.developedLength => 'Drainage branch too long',
+    final (title, advKind) = switch (a.kind) {
+      DrainageAdvisoryKind.minSlope => (
+          str(StringKey.issueDrainageSlopeTitle),
+          'drainage-slope'
+        ),
+      DrainageAdvisoryKind.developedLength => (
+          str(StringKey.issueDrainageLengthTitle),
+          'drainage-length'
+        ),
     };
     infos.add(DesignIssue(
       severity: IssueSeverity.info,
+      kind: advKind,
       title: title,
       message: a.message,
       locate: sheetId == null
@@ -416,11 +457,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     final node = nodeById[id];
     infos.add(DesignIssue(
       severity: IssueSeverity.info,
-      title: 'Drainage stack has no cleanout at its base',
-      message: 'A drainage stack reaches its lowest drawn point here with no '
-          'cleanout component at or beside the base — rodding access is '
-          'conventional at every stack base. Place a cleanout, or confirm '
-          'access exists elsewhere.',
+      kind: 'drainage-cleanout',
+      title: str(StringKey.issueDrainageCleanoutTitle),
+      message: str(StringKey.issueDrainageCleanoutMessage),
       locate: node == null ? null : IssueLocation(node.sheetId, nodeId: id),
     ));
   }
@@ -429,11 +468,10 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   if (legionellaReturnTempC != null) {
     infos.add(DesignIssue(
       severity: IssueSeverity.info,
-      title: 'Hot-water return temperature low',
-      message: 'Modelled recirculation return temperature '
-          '${legionellaReturnTempC.toStringAsFixed(0)} °C is below the '
-          'anti-Legionella floor (~55 °C). Reduce the loop temperature drop or '
-          'add trace heating. (// VERIFY vs SNI / WHO guidance.)',
+      kind: 'legionella',
+      title: str(StringKey.issueLegionellaTitle),
+      message: str.format(StringKey.issueLegionellaMessage,
+          {'temp': legionellaReturnTempC.toStringAsFixed(0)}),
     ));
   }
 
@@ -456,10 +494,13 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     };
     final issue = DesignIssue(
       severity: severity,
-      // A short humanized form of the code (e.g. 'cable-ampacity-inadequate' →
-      // 'Electrical: cable ampacity inadequate'); the engine message carries
+      // The stable code (e.g. 'electrical:cable-ampacity-inadequate') is the
+      // discriminator; the title humanizes the code for display (e.g.
+      // 'Electrical: cable ampacity inadequate'), the engine message carries
       // the specifics.
-      title: 'Electrical: ${w.code.replaceAll('-', ' ')}',
+      kind: 'electrical:${w.code}',
+      title: str.format(
+          StringKey.issueElectricalTitle, {'code': w.code.replaceAll('-', ' ')}),
       message: w.message,
       locate: w.panelId == null
           ? null
@@ -488,7 +529,11 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     if (v.status != VerificationStatus.secondarySource) return;
     infos.add(DesignIssue(
       severity: IssueSeverity.info,
-      title: 'Unverified: ${_verifyLabel(v)}',
+      // The citation is the stable, locale-independent per-value discriminator
+      // (so each unverified value is acknowledged individually across locales);
+      // [isVerify] stays the flag the compliance roll-up + provenance dot read.
+      kind: 'verify:${v.citation}',
+      title: str.format(StringKey.issueUnverifiedTitle, {'name': _verifyLabel(v)}),
       message: v.note ?? v.citation,
       isVerify: true,
     ));
@@ -664,6 +709,7 @@ final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
   final sheets = ref.watch(sheetsControllerProvider);
   final velocity = ref.watch(airVelocityChecksProvider);
   final unsized = ref.watch(airUnsizedProvider);
+  final str = MechXStringsData(ref.watch(localeProvider));
 
   final nodeIds = {for (final n in net.nodes) n.id};
   final edgeIds = {for (final e in net.edges) e.id};
@@ -684,7 +730,11 @@ final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
     final c = velN.length + velE.length;
     actions.add(IssueBatchAction(
       kind: IssueBatchKind.selectVelocityWarnings,
-      label: 'Select $c out-of-band ${c == 1 ? 'velocity' : 'velocities'}',
+      label: str.format(StringKey.issueBatchSelectVelocity, {
+        'c': '$c',
+        'noun': plural(c, str(StringKey.issueNounVelocityOne),
+            str(StringKey.issueNounVelocityMany)),
+      }),
       enabled: true,
       nodeIds: velN,
       edgeIds: velE,
@@ -705,7 +755,11 @@ final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
     final c = unN.length + unE.length;
     actions.add(IssueBatchAction(
       kind: IssueBatchKind.selectUnsizedAir,
-      label: 'Select $c unsized air ${c == 1 ? 'element' : 'elements'}',
+      label: str.format(StringKey.issueBatchSelectUnsized, {
+        'c': '$c',
+        'noun': plural(c, str(StringKey.issueNounElementOne),
+            str(StringKey.issueNounElementMany)),
+      }),
       enabled: true,
       nodeIds: unN,
       edgeIds: unE,
@@ -729,8 +783,12 @@ final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
     actions.add(IssueBatchAction(
       kind: IssueBatchKind.calibrateAllSheets,
       label: source == null
-          ? 'Calibrate one sheet to copy scale to $n more'
-          : 'Copy scale to $n uncalibrated ${n == 1 ? 'sheet' : 'sheets'}',
+          ? str.format(StringKey.issueBatchCalibrateNoSource, {'n': '$n'})
+          : str.format(StringKey.issueBatchCalibrateCopy, {
+              'n': '$n',
+              'noun': plural(n, str(StringKey.issueNounSheetOne),
+                  str(StringKey.issueNounSheetMany)),
+            }),
       enabled: source != null,
       sourceSheetId: source,
       targetSheetIds: uncalibrated,

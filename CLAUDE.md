@@ -281,8 +281,17 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   minimap on the Layout canvas (top-right; the Riser minimap deferred — its viewport model differs), a
   MAGNETIC calibrated grid (grid-intersection snapping as the lowest-precedence snap, ortho-gated,
   wired at the draw/nub-pull/drag sites, the typed-exact-length path excluded), an inspector-collapsed
-  on-canvas tool cluster, eased programmatic viewport changes, and left-drag-a-run-to-move-it. Work the
-  remaining wave (5 one-app+localize-trust [Theme C + H1/H6]) from this document.
+  on-canvas tool cluster, eased programmatic viewport changes, and left-drag-a-run-to-move-it.
+  **Wave 5a (H1 + H6 — localize the TRUST surface) HAS ALSO LANDED** (see the §15 row): the compliance
+  verdict + category rows + detail messages, the whole Review hub + issues card, and every
+  `DesignIssue` title/message now resolve through the i18n mechanism (123 new EN+ID keys), so the
+  Bahasa sign-off surface renders in Indonesian; to keep acknowledgements + the compliance fan-in
+  working across locales, `DesignIssue` gained a stable locale-independent `kind` discriminator (its
+  ack `key` is `kind`-based, not the localized title, and the compliance store matches on `kind`, not
+  English title substrings); H6 localized the Ask-Claude copilot + the half-localized "Load sample
+  project" / "Apply a building template" (EN byte-identical ⇒ goldens hold). Remaining: **Wave 5b**
+  (Theme-C consistency C2/C3/C5); the tier-5 C1/C4 electrical-shell restructure is deferred (a large
+  architectural refactor of a functional workspace, lowest review priority). Work it from this document.
 - **UX & workflow review (2026-07-02) — the plan of record for the prior UX/workflow work**:
   `UX-WORKFLOW-REVIEW.md` (root) holds 83 consolidated, adversarially code-verified findings
   (from 115 raw across 12 review lenses; 32 high / 42 medium / 9 low, two proven with widget
