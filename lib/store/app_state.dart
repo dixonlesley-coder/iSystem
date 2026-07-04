@@ -9,6 +9,7 @@ import 'package:mechx_engine/sizing/storm_sizing.dart'
 import 'package:mechx_engine/standards/sni.dart';
 
 import '../ai/ai_client.dart';
+import '../ui/strings/app_strings.dart';
 
 /// HVAC duct preferences (shape + sizing method) driving the air code path.
 @immutable
@@ -212,9 +213,10 @@ class FirstAutoSizeNudgeController extends Notifier<bool> {
   void maybeFire(int count) {
     if (state || count <= 0) return;
     state = true;
-    ref
-        .read(statusMessageProvider.notifier)
-        .showStatus('Auto-sized $count runs - sizes shown on the plan');
+    ref.read(statusMessageProvider.notifier).showStatus(
+          MechXStringsData(ref.read(localeProvider))
+              .format(StringKey.autoSizedRuns, {'count': '$count'}),
+        );
   }
 }
 

@@ -22,7 +22,7 @@ void main() {
       expect(container.read(firstAutoSizeNudgeProvider), isTrue);
       expect(
         container.read(statusMessageProvider),
-        'Auto-sized 5 runs - sizes shown on the plan',
+        'Auto-sized 5 runs · sizes shown on the plan',
       );
     });
 
@@ -33,7 +33,7 @@ void main() {
       container.read(firstAutoSizeNudgeProvider.notifier).maybeFire(3);
       expect(
         container.read(statusMessageProvider),
-        'Auto-sized 3 runs - sizes shown on the plan',
+        'Auto-sized 3 runs · sizes shown on the plan',
       );
 
       // Clear the message so the assertion below proves the second call is a
@@ -57,7 +57,7 @@ void main() {
       expect(container.read(firstAutoSizeNudgeProvider), isTrue);
       expect(
         container.read(statusMessageProvider),
-        'Auto-sized 2 runs - sizes shown on the plan',
+        'Auto-sized 2 runs · sizes shown on the plan',
       );
     });
   });

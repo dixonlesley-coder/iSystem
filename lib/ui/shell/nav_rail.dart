@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../store/design_issues_store.dart';
 import '../../store/electrical_store.dart';
 import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
@@ -175,6 +176,14 @@ class NavRail extends ConsumerWidget {
             onTap: () => sectionCtrl.set(ShellSection.review),
             badgeCount: openIssues,
             badgeColor: reviewBadgeColor,
+            // B2 — this Review badge is ALL open design issues across EVERY
+            // discipline (mechanical + electrical), not the electrical-only
+            // toolbar count on the Electrical workspace. Say so for screen
+            // readers so the two on-screen numbers can't be conflated; the
+            // visible pill (a bare count) is unchanged.
+            badgeSemanticLabel: openIssues > 0
+                ? '${pluralCount(openIssues, 'open design issue', 'open design issues')}, all disciplines'
+                : null,
           ),
           _NavItem(
             glyph: _Glyph.commercial,
@@ -335,6 +344,12 @@ class _NavItem extends StatefulWidget {
   final int badgeCount;
   final Color? badgeColor;
 
+  /// B2 — an optional screen-reader label for the count badge, spelling out its
+  /// SCOPE (e.g. "3 open design issues, all disciplines") so an assistive reader
+  /// gets the meaning, not just a bare number that could be confused with the
+  /// electrical-only toolbar count. Null ⇒ the badge reads as its plain count.
+  final String? badgeSemanticLabel;
+
   const _NavItem({
     required this.glyph,
     required this.label,
@@ -343,6 +358,7 @@ class _NavItem extends StatefulWidget {
     required this.onTap,
     this.badgeCount = 0,
     this.badgeColor,
+    this.badgeSemanticLabel,
   });
 
   @override
@@ -419,10 +435,24 @@ class _NavItemState extends State<_NavItem> {
                 Positioned(
                   right: -6,
                   top: -4,
-                  child: _CountBadge(
-                    count: widget.badgeCount,
-                    color: widget.badgeColor ?? context.colors.danger,
-                  ),
+                  // B2 — when a scope label is supplied, replace the badge's
+                  // raw-number semantics with the spelled-out meaning so a
+                  // screen reader hears "3 open design issues, all disciplines"
+                  // rather than an ambiguous "3". Purely assistive: the painted
+                  // pill (and every at-rest pixel) is unchanged.
+                  child: widget.badgeSemanticLabel != null
+                      ? Semantics(
+                          label: widget.badgeSemanticLabel,
+                          excludeSemantics: true,
+                          child: _CountBadge(
+                            count: widget.badgeCount,
+                            color: widget.badgeColor ?? context.colors.danger,
+                          ),
+                        )
+                      : _CountBadge(
+                          count: widget.badgeCount,
+                          color: widget.badgeColor ?? context.colors.danger,
+                        ),
                 ),
             ],
           ),

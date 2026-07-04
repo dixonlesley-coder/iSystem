@@ -98,7 +98,7 @@ void main() {
     expect(
       container
           .read(designIssuesProvider)
-          .any((i) => i.title == 'Unverified standard'),
+          .any((i) => i.isVerify),
       isTrue,
       reason: 'the default standards profiles should surface VERIFY items',
     );

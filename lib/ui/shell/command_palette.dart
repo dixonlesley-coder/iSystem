@@ -299,13 +299,13 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
     // — Deliverable exports —
     _Command(
       id: 'export.calc',
-      title: 'Export calculation report',
+      title: 'Export calc report',
       subtitle: 'Markdown',
       run: () => exportCalcReport(ref),
     ),
     _Command(
       id: 'export.calcPdf',
-      title: 'Export calculation report (PDF)',
+      title: 'Export calc report (PDF)',
       subtitle: 'Typeset A4 PDF',
       run: () => exportCalcReportPdf(ref),
     ),

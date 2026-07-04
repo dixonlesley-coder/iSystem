@@ -22,7 +22,20 @@ per-package adversarial review, integrated centrally: full gate + golden regen +
   "Ctrl K" palette affordance in the top bar, D2 keycaps on palette rows that have a shortcut, D3
   the submittal export added to the palette. Goldens 01–08/10–15 shifted by the D1 pill only (the
   A2 stepper stays byte-identical in the seeded network); regenerated + eyeballed.
-- **Wave 2 — Theme B + Theme H copy — pending.**
+- **Wave 2 — Theme B (one vocabulary) + Theme H copy (H2–H5, H7) — LANDED.** B1 one noun for a
+  drawn edge ("run"), B3 "sheet" for the object / "plan" for the verb, B4 matched abbreviations
+  (calc↔calc, BOM everywhere). H2 a pure `plural(n,one,many)`/`pluralCount` helper kills the "(s)"
+  dev-speak across the compliance roll-up, design issues, the electrical advanced-study caption and
+  the mechanical BOM caption; H3 "Tap again to discard"; H4 the auto-sized toast localized + one
+  noun + a middot; H5 the torn-recovery message says what to DO, localized; H7 specific "Unverified:
+  <value>" titles (behind a stable `DesignIssue.isVerify` discriminator so counts/badges are
+  unchanged) + the stray "PALETTE" caps normalized. The B2 issue-count scope landed the electrical
+  toolbar ("Electrical issues (N)", still ID-localized) + an all-disciplines a11y label on the nav
+  Review badge. Goldens 05/08/10/11 (electrical toolbar) + 12/15 (compliance plurals + verify
+  titles) + 13 (BOM titles/caption) regenerated + eyeballed. Deferred (documented): the two
+  `commercialBomLead` template "(s)" — the localized-template pluralization limitation (ID is
+  inflection-free; grammatical EN needs per-count logic the template can't express), matching the
+  prior J7 disposition.
 - **Wave 3 — Themes E + F — pending.**
 - **Wave 4 — Theme G — pending.**
 - **Wave 5 — Theme C + H1/H6 — pending.**
@@ -101,7 +114,7 @@ misleading.
 
 ---
 
-## Theme B — One vocabulary: the same thing must have the same name everywhere
+## Theme B — One vocabulary: the same thing must have the same name everywhere  ✅ LANDED (Wave 2)
 
 Apple ships a controlled vocabulary; drift makes a user distrust the model. Multiple lenses
 independently flagged the same drift, which is a strong signal.
@@ -260,7 +273,7 @@ tool entry — lags.
 
 ---
 
-## Theme H — Speak clearly, and in Bahasa where it counts
+## Theme H — Speak clearly, and in Bahasa where it counts  ◑ H2–H5/H7 LANDED (Wave 2); H1/H6 → Wave 5
 
 The copy is mostly good; the load-bearing gap is that the **trust surface is English-only** for a
 Bahasa user — for an app whose premise is Indonesian SNI/PUIL compliance, that's not cosmetic.

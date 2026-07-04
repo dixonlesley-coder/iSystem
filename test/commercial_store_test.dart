@@ -186,7 +186,7 @@ void main() {
       container.read(shellSectionProvider.notifier).set(ShellSection.commercial);
       await tester.pump();
 
-      expect(find.text('Bill of materials'), findsOneWidget);
+      expect(find.text('BOM'), findsOneWidget);
       expect(find.text('Pricelist'), findsOneWidget);
       expect(find.text('Quotation'), findsOneWidget);
       expect(find.text('Export BOM (CSV)'), findsOneWidget);

@@ -15,6 +15,7 @@ import 'package:mechx_engine/electrical/panel_results.dart'
     show ElectricalWarning, WarningSeverity;
 import 'package:mechx_engine/report/mep_report.dart';
 
+import '../ui/strings/plural.dart';
 import 'design_issues_store.dart';
 import 'electrical_store.dart';
 
@@ -66,7 +67,10 @@ ComplianceSummary buildComplianceSummaryFrom({
   // structurally reachable while the full tiered register still prints in the
   // report (guardrail 6 intact). The acknowledged count is surfaced honestly in
   // the row detail rather than silently dropped.
-  final unverifiedItems = claim((i) => i.title == 'Unverified standard');
+  // H7a — verify rows now NAME their specific value in the title, so the generic
+  // 'Unverified standard' literal is gone; discriminate on the stable
+  // [DesignIssue.isVerify] flag instead.
+  final unverifiedItems = claim((i) => i.isVerify);
   final openUnverified = unverifiedItems.where((i) => !isAck(i)).length;
   final ackUnverified = unverifiedItems.length - openUnverified;
   // Electrical warnings are fanned into designIssuesProvider (Wave 3) with an
@@ -113,22 +117,25 @@ ComplianceSummary buildComplianceSummaryFrom({
                   ? 'all values verified'
                   : '$ackUnverified acknowledged, none open')
               : (ackUnverified == 0
-                  ? '$openUnverified value(s) require verification or '
-                      'acknowledgement before submission'
+                  ? '${pluralCount(openUnverified, 'value', 'values')} require '
+                      'verification or acknowledgement before submission'
                   : '$openUnverified open, $ackUnverified acknowledged')),
       for (final e in remainder.entries)
         ComplianceItem(e.key,
             pass: !e.value.any(isFail),
             detail: e.value.any(isFail)
-                ? '${e.value.where(isFail).length} finding(s)'
-                : '${e.value.length} advisory note(s)'),
+                ? pluralCount(
+                    e.value.where(isFail).length, 'finding', 'findings')
+                : pluralCount(
+                    e.value.length, 'advisory note', 'advisory notes')),
       ComplianceItem('Electrical circuit sizing',
           pass: eErrors == 0,
           detail: eErrors == 0
               ? (eWarns == 0
                   ? 'no sizing errors'
-                  : '$eWarns warning(s), no errors')
-              : '$eErrors error(s), $eWarns warning(s)'),
+                  : '${pluralCount(eWarns, 'warning', 'warnings')}, no errors')
+              : '${pluralCount(eErrors, 'error', 'errors')}, '
+                  '${pluralCount(eWarns, 'warning', 'warnings')}'),
     ],
   );
 }

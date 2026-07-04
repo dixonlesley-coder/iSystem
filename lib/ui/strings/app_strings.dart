@@ -412,6 +412,12 @@ enum StringKey {
 
   // Calibration overlay — next-step baton (A6).
   calibrationScaleSetNext, // {scale}
+
+  // Apple design review Wave 2 — status + recovery copy. Defined here; wired by
+  // other packages (autoSizedRuns by app_state.dart H4, recoveryTornUnreadable
+  // by app_shell.dart H5).
+  autoSizedRuns, // {count} — the sizing-success status toast
+  recoveryTornUnreadable, // torn / unreadable crash-recovery banner
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -445,7 +451,7 @@ const Map<StringKey, String> _en = {
   StringKey.commercialExportProposalMd: 'Export proposal (Markdown)',
 
   // Commercial workspace — electrical BOM.
-  StringKey.commercialBomTitle: 'Bill of materials',
+  StringKey.commercialBomTitle: 'BOM',
   StringKey.commercialColQty: 'Qty',
   StringKey.commercialColPart: 'Part',
   StringKey.commercialColBrand: 'Brand',
@@ -572,7 +578,7 @@ const Map<StringKey, String> _en = {
   StringKey.shellRestore: 'Restore',
   StringKey.shellDismiss: 'Dismiss',
   StringKey.shellDiscardSnapshot: 'Discard snapshot',
-  StringKey.shellDiscardConfirm: 'Discard - sure?',
+  StringKey.shellDiscardConfirm: 'Tap again to discard',
 
   // App shell — busy pill.
   StringKey.busyImportingPlan: 'Importing plan...',
@@ -592,7 +598,7 @@ const Map<StringKey, String> _en = {
   // App shell — Layout electrical inspector.
   StringKey.shellElectricalLayer: 'Electrical layer',
   StringKey.shellElectricalLayerHelp:
-      'Drag a load onto a panel to add a way, or onto the plan to '
+      'Drag a load onto a panel to add a way, or onto the sheet to '
           'place it. Double-click to edit; right-click for the menu.',
 
   // Schematic / elevation — toolbar + palette.
@@ -615,7 +621,7 @@ const Map<StringKey, String> _en = {
   StringKey.schematicTitleAirRiser: 'AIR DUCT RISER',
   StringKey.schematicTitleFireRiser: 'FIRE RISER',
   StringKey.schematicNoNetwork: 'No network drawn',
-  StringKey.schematicPalette: 'PALETTE',
+  StringKey.schematicPalette: 'Palette',
   StringKey.schematicPaletteHelp:
       'Drag onto a floor to drop a riser to the floor above. Its length is '
           'the elevation delta. Drag a riser sideways to move it; right-click '
@@ -708,7 +714,7 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorAirTerminalAirflow: 'Air terminal (diffuser) airflow',
   StringKey.inspectorClearSizeOverride: 'Clear size override',
   StringKey.inspectorEdgeSizeHint:
-      'Right-click the segment to set its size and material.',
+      'Right-click the run to set its size and material.',
 
   // Inspector — Scale section.
   StringKey.inspectorNotCalibrated: 'Not calibrated — mark a known distance',
@@ -742,16 +748,16 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorRevisionDescHint: 'Description',
 
   // Export — OS save-dialog titles.
-  StringKey.exportTitleCalcReport: 'Export calculation report',
+  StringKey.exportTitleCalcReport: 'Export calc report',
   StringKey.exportTitleMepReport: 'Export unified MEP report',
   StringKey.exportTitleEquipmentSchedule: 'Export equipment schedule',
-  StringKey.exportTitleCalcReportPdf: 'Export calculation report (PDF)',
+  StringKey.exportTitleCalcReportPdf: 'Export calc report (PDF)',
   StringKey.exportTitleMepReportPdf: 'Export unified MEP report (PDF)',
   StringKey.exportTitleEquipmentSchedulePdf: 'Export equipment schedule (PDF)',
   StringKey.exportTitleDrawingDxf: 'Export drawing (DXF)',
   StringKey.exportTitleDrawingPdf: 'Export drawing (PDF)',
   StringKey.exportTitleAnnotatedPlanPdf: 'Export annotated plan (PDF)',
-  StringKey.exportTitleBom: 'Export bill of materials',
+  StringKey.exportTitleBom: 'Export BOM',
   StringKey.exportTitleSldDxf: 'Export single-line (DXF)',
   StringKey.exportTitleSldPdf: 'Export single-line (PDF)',
   StringKey.exportTitleRiserSetPdf: 'Export riser drawing set (PDF)',
@@ -767,8 +773,8 @@ const Map<StringKey, String> _en = {
   StringKey.electricalTabSingleLine: 'Single-line',
   StringKey.electricalTabPowerOneLine: 'Power one-line',
   StringKey.electricalTabBuildingRiser: 'Building riser',
-  StringKey.electricalToolbarIssues: 'Issues',
-  StringKey.electricalToolbarIssuesCount: 'Issues ({n})',
+  StringKey.electricalToolbarIssues: 'Electrical issues',
+  StringKey.electricalToolbarIssuesCount: 'Electrical issues ({n})',
   StringKey.electricalServiceEarthing: 'Service & Earthing',
   StringKey.electricalAddPanel: '+ Panel',
   StringKey.electricalExport: 'Export',
@@ -873,6 +879,12 @@ const Map<StringKey, String> _en = {
   // destination now share ONE name.
   StringKey.calibrationScaleSetNext:
       'Scale set: {scale} - next: set floor heights (Building)',
+
+  // Apple design review Wave 2 — status + recovery copy.
+  StringKey.autoSizedRuns: 'Auto-sized {count} runs · sizes shown on the plan',
+  StringKey.recoveryTornUnreadable:
+      'The recovery file could not be read. Start a new project or open a '
+          'saved copy.',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -907,7 +919,7 @@ const Map<StringKey, String> _id = {
   StringKey.commercialExportProposalMd: 'Ekspor proposal (Markdown)',
 
   // Commercial workspace — electrical BOM.
-  StringKey.commercialBomTitle: 'Daftar material',
+  StringKey.commercialBomTitle: 'BOM',
   StringKey.commercialColQty: 'Jml',
   StringKey.commercialColPart: 'Komponen',
   StringKey.commercialColBrand: 'Merek',
@@ -1035,7 +1047,7 @@ const Map<StringKey, String> _id = {
   StringKey.shellRestore: 'Pulihkan',
   StringKey.shellDismiss: 'Tutup',
   StringKey.shellDiscardSnapshot: 'Buang cadangan',
-  StringKey.shellDiscardConfirm: 'Buang - yakin?',
+  StringKey.shellDiscardConfirm: 'Ketuk lagi untuk membuang',
 
   // App shell — busy pill.
   StringKey.busyImportingPlan: 'Mengimpor denah...',
@@ -1055,7 +1067,7 @@ const Map<StringKey, String> _id = {
   // App shell — Layout electrical inspector.
   StringKey.shellElectricalLayer: 'Lapisan listrik',
   StringKey.shellElectricalLayerHelp:
-      'Seret beban ke panel untuk menambah jalur, atau ke denah untuk '
+      'Seret beban ke panel untuk menambah jalur, atau ke lembar untuk '
           'menempatkannya. Klik-ganda untuk mengedit; klik-kanan untuk menu.',
 
   // Schematic / elevation — toolbar + palette.
@@ -1078,7 +1090,7 @@ const Map<StringKey, String> _id = {
   StringKey.schematicTitleAirRiser: 'RISER DUCTING UDARA',
   StringKey.schematicTitleFireRiser: 'RISER PEMADAM',
   StringKey.schematicNoNetwork: 'Belum ada jaringan digambar',
-  StringKey.schematicPalette: 'PALET',
+  StringKey.schematicPalette: 'Palet',
   StringKey.schematicPaletteHelp:
       'Seret ke lantai untuk menjatuhkan riser ke lantai di atasnya. '
           'Panjangnya adalah selisih elevasi. Seret riser ke samping untuk '
@@ -1172,7 +1184,7 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorAirTerminalAirflow: 'Aliran udara terminal (difuser)',
   StringKey.inspectorClearSizeOverride: 'Hapus penimpaan ukuran',
   StringKey.inspectorEdgeSizeHint:
-      'Klik-kanan segmen untuk mengatur ukuran dan materialnya.',
+      'Klik-kanan saluran untuk mengatur ukuran dan materialnya.',
 
   // Inspector — Scale section.
   StringKey.inspectorNotCalibrated:
@@ -1207,16 +1219,16 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorRevisionDescHint: 'Uraian',
 
   // Export — OS save-dialog titles.
-  StringKey.exportTitleCalcReport: 'Ekspor laporan perhitungan',
+  StringKey.exportTitleCalcReport: 'Ekspor laporan hitung',
   StringKey.exportTitleMepReport: 'Ekspor laporan MEP terpadu',
   StringKey.exportTitleEquipmentSchedule: 'Ekspor jadwal peralatan',
-  StringKey.exportTitleCalcReportPdf: 'Ekspor laporan perhitungan (PDF)',
+  StringKey.exportTitleCalcReportPdf: 'Ekspor laporan hitung (PDF)',
   StringKey.exportTitleMepReportPdf: 'Ekspor laporan MEP terpadu (PDF)',
   StringKey.exportTitleEquipmentSchedulePdf: 'Ekspor jadwal peralatan (PDF)',
   StringKey.exportTitleDrawingDxf: 'Ekspor gambar (DXF)',
   StringKey.exportTitleDrawingPdf: 'Ekspor gambar (PDF)',
   StringKey.exportTitleAnnotatedPlanPdf: 'Ekspor denah beranotasi (PDF)',
-  StringKey.exportTitleBom: 'Ekspor daftar material',
+  StringKey.exportTitleBom: 'Ekspor BOM',
   StringKey.exportTitleSldDxf: 'Ekspor satu-garis (DXF)',
   StringKey.exportTitleSldPdf: 'Ekspor satu-garis (PDF)',
   StringKey.exportTitleRiserSetPdf: 'Ekspor set gambar riser (PDF)',
@@ -1232,8 +1244,8 @@ const Map<StringKey, String> _id = {
   StringKey.electricalTabSingleLine: 'Satu-garis',
   StringKey.electricalTabPowerOneLine: 'Daya satu-garis',
   StringKey.electricalTabBuildingRiser: 'Riser bangunan',
-  StringKey.electricalToolbarIssues: 'Masalah',
-  StringKey.electricalToolbarIssuesCount: 'Masalah ({n})',
+  StringKey.electricalToolbarIssues: 'Masalah kelistrikan',
+  StringKey.electricalToolbarIssuesCount: 'Masalah kelistrikan ({n})',
   StringKey.electricalServiceEarthing: 'Sambungan & Pembumian',
   StringKey.electricalAddPanel: '+ Panel',
   StringKey.electricalExport: 'Ekspor',
@@ -1337,6 +1349,13 @@ const Map<StringKey, String> _id = {
   // Building label.
   StringKey.calibrationScaleSetNext:
       'Skala diatur: {scale} - berikutnya: atur tinggi lantai (Bangunan)',
+
+  // Apple design review Wave 2 — status + recovery copy.
+  StringKey.autoSizedRuns:
+      'Ukuran otomatis {count} saluran · ukuran ditampilkan pada denah',
+  StringKey.recoveryTornUnreadable:
+      'Berkas pemulihan tidak dapat dibaca. Mulai proyek baru atau buka '
+          'salinan tersimpan.',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

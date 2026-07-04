@@ -39,6 +39,7 @@ import '../../store/electrical_store.dart';
 import '../../store/project_store.dart';
 import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
@@ -760,6 +761,13 @@ class _Toolbar extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   MechXButton(
+                    // B2 — this count is ELECTRICAL-ONLY (result.warnings for the
+                    // electrical system). The StringKey values are now SCOPED
+                    // ('Electrical issues' / 'Masalah kelistrikan') so the label
+                    // can't be conflated with the nav Review badge (all OPEN
+                    // issues, every discipline) or the Review hub's all-count,
+                    // both on-screen at the same time — while keeping the ID
+                    // translation (localized via context.strings, not a literal).
                     label: warningCount > 0
                         ? context.strings.format(
                             StringKey.electricalToolbarIssuesCount,
@@ -1770,8 +1778,10 @@ class _AdvancedBody extends StatelessWidget {
             _PanelAdvancedRow(panel: result.panels[id]!, advanced: advanced),
         const SizedBox(height: MechXSpacing.sm),
         Text(
+          // H2 — no dev-speak "value(s)": pick the correct noun for the count.
           'Estimates — verify against PUIL 2011 / IEC 60364. '
-          '${advanced.verifyItems.length} value(s) pending verification.',
+          '${pluralCount(advanced.verifyItems.length, 'value', 'values')} '
+          'pending verification.',
           style: type.caption.copyWith(color: colors.textMuted),
         ),
       ],

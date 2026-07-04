@@ -69,7 +69,7 @@ void main() {
       final row = _item(s, 'Some future advisory');
       // Info severity ⇒ an advisory note, not a failure.
       expect(row.pass, isTrue);
-      expect(row.detail, '1 advisory note(s)');
+      expect(row.detail, '1 advisory note');
     });
 
     test('an error-severity electrical warning fails the electrical row', () {
@@ -86,7 +86,7 @@ void main() {
       );
       final row = _item(s, 'Electrical circuit sizing');
       expect(row.pass, isFalse);
-      expect(row.detail, '1 error(s), 0 warning(s)');
+      expect(row.detail, '1 error, 0 warnings');
     });
 
     // ── H1: reachable PASS via advisory acknowledgement ──────────────────────
@@ -94,13 +94,15 @@ void main() {
       const items = [
         DesignIssue(
           severity: IssueSeverity.info,
-          title: 'Unverified standard',
+          title: 'Unverified: KHA ampacity table',
           message: 'KHA table awaits the official PUIL clause.',
+          isVerify: true,
         ),
         DesignIssue(
           severity: IssueSeverity.info,
-          title: 'Unverified standard',
+          title: 'Unverified: nominal voltage',
           message: 'Nominal voltage awaits confirmation.',
+          isVerify: true,
         ),
       ];
       // Unacknowledged: the standards row REVIEWs and the whole verdict fails —
@@ -157,13 +159,15 @@ void main() {
       const items = [
         DesignIssue(
           severity: IssueSeverity.info,
-          title: 'Unverified standard',
+          title: 'Unverified: one',
           message: 'one',
+          isVerify: true,
         ),
         DesignIssue(
           severity: IssueSeverity.info,
-          title: 'Unverified standard',
+          title: 'Unverified: two',
           message: 'two',
+          isVerify: true,
         ),
       ];
       final s = buildComplianceSummaryFrom(

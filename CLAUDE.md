@@ -260,14 +260,19 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   remaining gap is *consistency + restraint of application* and *orientation between steps*. 8 themes
   (A orientation · B one-vocabulary · C one-app · D findable-power · E calmer-inspector · F visual-
   restraint · G canvas-frame · H speak-clearly), every finding file:line-grounded, sequenced into 5
-  implementation waves. **Wave 1 (Themes A + D — orientation & discoverability) HAS LANDED** (see the
-  §15 row): a one-time first-run orientation card, an honest workflow stepper (Floors no longer pre-
-  ticks the default seed), the template card routes into Import, a first-draw hint, import navigates
-  to the plan, one "Building" name, honest "Floor N of M", a "Ctrl K" palette affordance + palette
-  keycaps. Every fix is additive / guardrail-safe (custom design system, offline, byte-identical-when-
-  idle, opaque content, ASCII+Roboto on canvas) and touches UI/app-shell/strings only. Work the
-  remaining waves (2 vocabulary+copy · 3 inspector+restraint · 4 canvas-frame · 5 one-app+localize)
-  from this document.
+  implementation waves. **Waves 1 + 2 HAVE LANDED** (see the two §15 rows). **Wave 1 (Themes A + D —
+  orientation & discoverability):** a one-time first-run orientation card, an honest workflow stepper
+  (Floors no longer pre-ticks the default seed), the template card routes into Import, a first-draw
+  hint, import navigates to the plan, one "Building" name, honest "Floor N of M", a "Ctrl K" palette
+  affordance + palette keycaps. **Wave 2 (Theme B one-vocabulary + Theme H copy H2–H5/H7):** one noun
+  for a drawn edge ("run"), "sheet" vs "plan", matched abbreviations (BOM/calc), scoped "Issues"
+  counts; a pure `plural`/`pluralCount` helper (`ui/strings/plural.dart`) kills the "(s)" dev-speak,
+  "Tap again to discard", a localized auto-sized toast + torn-recovery message, and specific
+  "Unverified: <value>" titles behind a stable `DesignIssue.isVerify` discriminator. Every fix is
+  additive / guardrail-safe (custom design system, offline, byte-identical-when-idle, opaque content,
+  ASCII+Roboto on canvas) and touches UI/app-shell/strings only. Work the remaining waves (3
+  inspector+restraint [Themes E+F] · 4 canvas-frame [Theme G] · 5 one-app+localize-trust [Theme C +
+  H1/H6]) from this document.
 - **UX & workflow review (2026-07-02) — the plan of record for the prior UX/workflow work**:
   `UX-WORKFLOW-REVIEW.md` (root) holds 83 consolidated, adversarially code-verified findings
   (from 115 raw across 12 review lenses; 32 high / 42 medium / 9 low, two proven with widget

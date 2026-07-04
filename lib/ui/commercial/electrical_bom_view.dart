@@ -5,6 +5,7 @@ import 'package:mechx_engine/electrical/catalog.dart';
 
 import '../../store/commercial_store.dart';
 import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'commercial_table.dart';
@@ -123,13 +124,13 @@ class MechanicalBomView extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Mechanical bill of materials',
+        Text('Mechanical BOM',
             style: type.title.copyWith(color: colors.textPrimary)),
         const SizedBox(height: MechXSpacing.xxs),
         Text(
           est.lines.isEmpty
               ? 'Size a mechanical network to price its pipe, duct and fittings.'
-              : '${est.lines.length} line(s), ${est.unpricedCount} unpriced',
+              : '${pluralCount(est.lines.length, 'line', 'lines')}, ${est.unpricedCount} unpriced',
           style: type.caption.copyWith(color: colors.textMuted),
         ),
         const SizedBox(height: MechXSpacing.sm),

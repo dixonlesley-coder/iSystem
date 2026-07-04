@@ -157,7 +157,7 @@ void main() {
     // unfiltered list and would otherwise be scrolled off).
     await tester.enterText(find.byType(EditableText), 'export');
     await tester.pump();
-    expect(find.text('Export calculation report'), findsOneWidget);
+    expect(find.text('Export calc report'), findsOneWidget);
     expect(find.text('Go to Riser'), findsNothing);
   });
 

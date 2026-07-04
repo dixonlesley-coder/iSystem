@@ -644,10 +644,12 @@ class _StatusBar extends ConsumerWidget {
     final calibrated =
         sheet != null && project.calibrationFor(sheet.id) != null;
     // The standards-provenance dot lights only when there are genuinely
-    // unverified values to flag — a quiet caption otherwise.
+    // unverified values to flag — a quiet caption otherwise. H7a — verify rows
+    // now name their specific value in the title, so match on the stable
+    // [DesignIssue.isVerify] flag rather than the old generic literal.
     final hasUnverified = ref
         .watch(designIssuesProvider)
-        .any((i) => i.title == 'Unverified standard');
+        .any((i) => i.isVerify);
 
     final caption = type.caption;
 
@@ -1107,10 +1109,8 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
                   Expanded(
                     child: Text(
                       doc == null
-                          ? 'A recovery snapshot from the previous session '
-                              'exists but could not be read - it was likely '
-                              'torn by an interrupted write and cannot be '
-                              'restored.'
+                          // H5 — say what to DO, not what broke internally.
+                          ? context.strings(StringKey.recoveryTornUnreadable)
                           : context.strings
                               .format(StringKey.shellRecoverPrompt, {
                               'name': doc.projectName,
