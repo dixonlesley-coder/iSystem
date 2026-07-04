@@ -198,12 +198,17 @@ class CanvasViewState extends ConsumerState<CanvasView>
   }
 
   /// Pan (keeping the current scale) so [world] (content px) lands at the
-  /// viewport centre — the minimap tap / drag-to-navigate target (G1). Eased
-  /// (G4). No-op before the first layout.
+  /// viewport centre — the minimap tap / drag-to-navigate target (G1).
+  /// IMMEDIATE (not eased): a minimap click/drag is DIRECT MANIPULATION (like a
+  /// scrollbar), so it must track 1:1 rather than trail behind a per-frame tween
+  /// (a drag that re-eased every frame would rubber-band). The discrete zoom /
+  /// fit buttons keep the G4 ease; `_stopAnim` cancels any in-flight zoom so the
+  /// direct pan takes over cleanly. No-op before the first layout.
   void centreOnWorld(Offset world) {
     if (_viewportSize.isEmpty) return;
+    _stopAnim();
     final s = _current.scale;
-    _animateTo(ViewportTransform(
+    _emit(ViewportTransform(
       scale: s,
       offset: _viewportSize.center(Offset.zero) - world * s,
     ));

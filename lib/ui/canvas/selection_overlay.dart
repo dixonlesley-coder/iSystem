@@ -13,6 +13,7 @@ import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import 'canvas_grid.dart' show calibratedGridWorldStep;
 import 'drawing_overlay.dart' show RubberBandPainter, snapOrTeePoint;
 import 'edge_context_menu.dart';
 import 'service_style.dart';
@@ -97,15 +98,18 @@ class _NetworkSelectionOverlayState
     }
     final snapWorld = 14 / transform.scale;
     // G2 — a nub-pulled main also honours the magnetic grid (lowest precedence)
-    // when ortho/grid is on and the sheet is calibrated.
-    final gridMpp = effectiveOrtho
-        ? ref.read(projectControllerProvider).calibrationFor(sheetId)?.metersPerPixel
-        : null;
+    // when ortho is on, the sheet is calibrated, AND the minor grid is visible
+    // at this zoom (so it never snaps to an invisible crossing).
+    final gridMpp =
+        ref.read(projectControllerProvider).calibrationFor(sheetId)?.metersPerPixel;
+    final gridSnap = effectiveOrtho &&
+        gridMpp != null &&
+        calibratedGridWorldStep(gridMpp) * transform.scale >= 6.0;
     ref
         .read(networkControllerProvider.notifier)
         .drawRunFromNode(from, world,
             snapRadius: snapWorld,
-            gridSnap: effectiveOrtho,
+            gridSnap: gridSnap,
             gridMetersPerPixel: gridMpp);
   }
 
@@ -390,18 +394,20 @@ class _NetworkSelectionOverlayState
             // endpoint onto a nearby fitting.
             if (sel.containsNode(id) && sel.nodeIds.length > 1) return;
             // G2 — a dragged node settles onto the magnetic grid (lowest
-            // precedence, after fittings) when ortho/grid is on + calibrated.
+            // precedence, after fittings) when ortho is on, the sheet is
+            // calibrated, AND the minor grid is visible at this zoom.
             final gridOrtho =
                 ref.read(orthoProvider) ^ HardwareKeyboard.instance.isShiftPressed;
-            final gridMpp = gridOrtho
-                ? ref
-                    .read(projectControllerProvider)
-                    .calibrationFor(sheetId)
-                    ?.metersPerPixel
-                : null;
+            final gridMpp = ref
+                .read(projectControllerProvider)
+                .calibrationFor(sheetId)
+                ?.metersPerPixel;
+            final gridSnap = gridOrtho &&
+                gridMpp != null &&
+                calibratedGridWorldStep(gridMpp) * scale >= 6.0;
             ref.read(networkControllerProvider.notifier).endNodeDragWithSnap(
                 id, snapWorld,
-                gridSnap: gridOrtho, gridMetersPerPixel: gridMpp);
+                gridSnap: gridSnap, gridMetersPerPixel: gridMpp);
           },
           child: const SizedBox.expand(),
         ),
@@ -532,20 +538,24 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
         onPanEnd: (_) {
           setState(() => _pressing = false);
           // G2 — the resized endpoint also honours the magnetic grid (lowest
-          // precedence) when ortho/grid is on + the node's sheet is calibrated.
+          // precedence) when ortho is on, the node's sheet is calibrated, AND
+          // the minor grid is visible at this zoom.
           final gridOrtho =
               ref.read(orthoProvider) ^ HardwareKeyboard.instance.isShiftPressed;
           final node =
               ref.read(networkControllerProvider).network.nodeById(widget.nodeId);
-          final gridMpp = (gridOrtho && node != null)
-              ? ref
+          final gridMpp = node == null
+              ? null
+              : ref
                   .read(projectControllerProvider)
                   .calibrationFor(node.sheetId)
-                  ?.metersPerPixel
-              : null;
+                  ?.metersPerPixel;
+          final gridSnap = gridOrtho &&
+              gridMpp != null &&
+              calibratedGridWorldStep(gridMpp) * widget.scale >= 6.0;
           ref.read(networkControllerProvider.notifier).endNodeDragWithSnap(
               widget.nodeId, widget.snapWorld,
-              gridSnap: gridOrtho, gridMetersPerPixel: gridMpp);
+              gridSnap: gridSnap, gridMetersPerPixel: gridMpp);
           // Keep the (still-present) edge selected after a snap/merge.
           if (ref
               .read(networkControllerProvider)
