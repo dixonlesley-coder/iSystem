@@ -75,8 +75,16 @@ per-package adversarial review, integrated centrally: full gate + golden regen +
   `kind`-based, not the localized title) and the compliance store matches on `kind`, not English
   title substrings. H6: the Ask-Claude copilot + the half-localized "Load sample project" / "Apply a
   building template" are localized. EN byte-identical ⇒ goldens 12/14/15 unchanged.
-- **Wave 5b — Theme C consistency (C2/C3/C5) — pending; the tier-5 C1/C4 electrical-shell restructure
-  is deferred (a large architectural refactor of a functional workspace, lowest priority).**
+- **Wave 5b — Theme C consistency (C2/C3/C5) — LANDED.** C2: the forked `_LayerSegment` (Layout) +
+  Riser `_TabButton` converged onto the canonical `MechXSegment` for RADIO groups, and the independent
+  TOGGLES (Legend/Notes/Details/Infer/Title-block, and the layer visibility eye) now use a distinct
+  checkbox/eye idiom — so the Riser toolbar no longer shows Auto + Details + Notes as identical blue
+  pills (golden 04). C3: the bespoke Schematic help replaced by the shared `CanvasGuideButton` +
+  `CanvasGuideLegend`, added to Auto mode too. C5: the Riser inspector column converged onto
+  `MechXSectionLabel` + the tinted selected-segment idiom. **The tier-5 C1/C4 electrical-shell
+  restructure is deliberately DEFERRED** — a large architectural refactor of a functional workspace
+  (bring `ElectricalView` under the shared shell scaffold + replace its floating drawer with the inline
+  inspector), the lowest review priority; better as a dedicated effort than rushed at campaign end.
 
 ## The premise — how iSystem is *supposed* to function
 
@@ -173,7 +181,7 @@ independently flagged the same drift, which is a strong signal.
 
 ---
 
-## Theme C — One app: make Electrical and Riser stop feeling like guests
+## Theme C — One app: make Electrical and Riser stop feeling like guests  ◑ C2/C3/C5 LANDED (Wave 5b); C1/C4 deferred (tier-5 restructure)
 
 The electrical workspace is a PanelMaker port and still *reads* like one — a structurally different
 window with its own idioms. An engineer shouldn't have to re-learn the app when they switch tabs.

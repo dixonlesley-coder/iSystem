@@ -13,7 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../store/layer_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
-import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_segment.dart';
 
 /// A compact "Layers" panel: a segmented active-layer picker + an eye toggle per
 /// discipline. Sits in the canvas top bar.
@@ -53,10 +53,17 @@ class LayerSwitcher extends ConsumerWidget {
   }
 }
 
-/// One segment: the discipline name (taps to make it the ACTIVE layer) + a small
-/// eye dot that toggles its visibility (a no-op for the active layer, which is
-/// always shown). The active segment is filled; a hidden layer reads muted.
-class _LayerSegment extends StatefulWidget {
+/// One layer entry — a RADIO select (the discipline name, which makes the layer
+/// ACTIVE/editable) paired with an independent visibility TOGGLE (the eye).
+///
+/// C2 (one segment idiom · radio vs toggle must LOOK different): the name reuses
+/// the shared [MechXSegment] tinted selected-segment idiom — the very same
+/// widget the Riser Auto/Edit tabs and the draw-tool pills use — instead of
+/// forking it, so "the active layer" reads exactly like every other "pick one
+/// of N" in the app. The eye stays a DISTINCT on/off glyph (never the accent
+/// pill), so a viewer can tell "pick one" (active layer) from "flip each"
+/// (show/hide). The eye is a no-op for the active layer, which is always shown.
+class _LayerSegment extends StatelessWidget {
   final DisciplineLayer layer;
   final bool active;
   final bool visible;
@@ -72,80 +79,58 @@ class _LayerSegment extends StatefulWidget {
   });
 
   @override
-  State<_LayerSegment> createState() => _LayerSegmentState();
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Padding(
+      padding: const EdgeInsets.only(right: MechXSpacing.xxs),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // The RADIO select — the shared tinted selected-segment idiom
+          // (keyboard focus + Enter/Space come free from MechXSegment).
+          MechXSegment(
+            label: layer.label,
+            selected: active,
+            onTap: onSelect,
+            selectedWeight: FontWeight.w700,
+          ),
+          // The visibility TOGGLE — a distinct eye glyph the accent pill never
+          // touches. Colour carries the layer's on/off/active state (the label
+          // stays identity-only).
+          _EyeToggle(
+            visible: visible,
+            color: active
+                ? colors.textPrimary
+                : (visible ? colors.textSecondary : colors.textMuted),
+            onTap: onToggleVisible,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-class _LayerSegmentState extends State<_LayerSegment> {
-  bool _hover = false;
+/// The visibility toggle: a tappable [_EyeDot] — a pointer affordance (the
+/// keyboard path selects the layer via the name segment). Distinct from the
+/// radio tint by construction — it is never filled with the accent.
+class _EyeToggle extends StatelessWidget {
+  final bool visible;
+  final Color color;
+  final VoidCallback onTap;
+  const _EyeToggle(
+      {required this.visible, required this.color, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    // The selected segment uses the app-wide tinted-fill language (accentMuted
-    // + accent hairline + primary label), matching the DRAW service pills, the
-    // electrical tabs, and the inspector chips — instead of white-on-accent.
-    final fg = widget.active
-        ? colors.textPrimary
-        : (widget.visible ? colors.textSecondary : colors.textMuted);
-    final bg = widget.active
-        ? colors.accentMuted
-        : (_hover ? colors.surfaceHover : const Color(0x00000000));
-
-    return Padding(
-      padding: const EdgeInsets.only(right: MechXSpacing.xxs),
-      // Keyboard focus + Enter/Space select the layer (the eye dot stays a
-      // pointer affordance). The ring radius matches the segment fill.
-      child: MechXFocusRing(
-        borderRadius: const BorderRadius.all(MechXRadii.md),
-        onActivated: widget.onSelect,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          onEnter: (_) => setState(() => _hover = true),
-          onExit: (_) => setState(() => _hover = false),
-          // Ease the hover / selection fill so the segment doesn't jump state.
-          child: AnimatedContainer(
-            duration: MechXMotion.hover,
-            curve: MechXMotion.standard,
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: MechXRadii.control,
-              border: Border.all(
-                color: widget.active ? colors.accent : const Color(0x00000000),
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Name — selects the active layer.
-                GestureDetector(
-                  onTap: widget.onSelect,
-                  behavior: HitTestBehavior.opaque,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                        MechXSpacing.sm, MechXSpacing.xs, MechXSpacing.xs,
-                        MechXSpacing.xs),
-                    child: Text(widget.layer.label,
-                        style: type.label.copyWith(
-                          color: fg,
-                          fontWeight:
-                              widget.active ? FontWeight.w700 : FontWeight.w500,
-                        )),
-                  ),
-                ),
-                // Visibility eye dot — toggles draw on/off (active stays on).
-                GestureDetector(
-                  onTap: widget.onToggleVisible,
-                  behavior: HitTestBehavior.opaque,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                        2, MechXSpacing.xs, MechXSpacing.sm, MechXSpacing.xs),
-                    child: _EyeDot(visible: widget.visible, color: fg),
-                  ),
-                ),
-              ],
-            ),
-          ),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+              horizontal: MechXSpacing.xs, vertical: MechXSpacing.xs),
+          child: _EyeDot(visible: visible, color: color),
         ),
       ),
     );

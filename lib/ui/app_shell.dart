@@ -41,6 +41,7 @@ import 'theme/mechx_theme.dart';
 import 'widgets/glass_surface.dart';
 import 'widgets/mechx_button.dart';
 import 'widgets/mechx_focus_ring.dart';
+import 'widgets/section_label.dart';
 import 'widgets/severity_glyph.dart';
 
 /// Top-level layout (PanelMaker-style chrome): a left navigation rail beside a
@@ -325,12 +326,13 @@ class _RiserInspectorColumn extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Riser',
-                style: type.subtitle.copyWith(color: colors.textPrimary)),
+            // C5: converge on the shared section-heading idiom
+            // (`MechXSectionLabel`) the main + electrical inspectors use, rather
+            // than a raw ad-hoc `Text` title with a bespoke type/colour.
+            const MechXSectionLabel('Riser'),
             const SizedBox(height: MechXSpacing.md),
             // Building context (levels/height) → opens the Building page.
-            Text('Building',
-                style: type.caption.copyWith(color: colors.textMuted)),
+            const MechXSectionLabel('Building'),
             const SizedBox(height: MechXSpacing.xs),
             _RiserSummaryCard(
               summary:
@@ -343,20 +345,24 @@ class _RiserInspectorColumn extends ConsumerWidget {
             const SizedBox(height: MechXSpacing.lg),
             // Feed strategy — the input that decides each riser's function tag
             // (gravity downfeed vs upfeed/booster) on the diagram.
-            Text('Feed strategy',
-                style: type.caption.copyWith(color: colors.textMuted)),
+            const MechXSectionLabel('Feed strategy'),
             const SizedBox(height: MechXSpacing.xs),
-            MechXButton(
+            // C5: the two feed-strategy choices are a mutually-exclusive segment,
+            // so they wear the shared TINTED selected-segment idiom (accentMuted
+            // fill + accent border) used by the draw tools / service chips — not a
+            // solid-accent fill, so a single solid accent stays reserved for the
+            // primary action.
+            _TintedToggle(
               label: 'Upfeed pump',
-              primary: strategy == FeedStrategy.upfeed,
-              onPressed: () =>
+              selected: strategy == FeedStrategy.upfeed,
+              onTap: () =>
                   ref.read(feedStrategyProvider.notifier).set(FeedStrategy.upfeed),
             ),
             const SizedBox(height: MechXSpacing.xs),
-            MechXButton(
+            _TintedToggle(
               label: 'Roof-tank downfeed',
-              primary: strategy == FeedStrategy.downfeed,
-              onPressed: () => ref
+              selected: strategy == FeedStrategy.downfeed,
+              onTap: () => ref
                   .read(feedStrategyProvider.notifier)
                   .set(FeedStrategy.downfeed),
             ),
@@ -367,6 +373,63 @@ class _RiserInspectorColumn extends ConsumerWidget {
               style: type.caption.copyWith(color: colors.textMuted),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A tinted selected-segment toggle (C5) — the shared idiom used by the draw
+/// tools / service chips: a soft `accentMuted` fill + accent border when
+/// selected, so a single SOLID accent stays reserved for the primary action.
+/// A local mirror of the (file-private) `_TintedToggle` in `project_panel.dart`
+/// — same styling, kept in step so the riser inspector reads as one app.
+class _TintedToggle extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _TintedToggle({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: MechXFocusRing(
+        onActivated: onTap,
+        borderRadius: MechXRadii.control,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              // Match the default MechXButton padding, compensating the heavier
+              // selected border so the toggle never resizes between states.
+              horizontal: MechXSpacing.sm + 4 - (selected ? 1 : 0),
+              vertical: MechXSpacing.xs + 2 - (selected ? 1 : 0),
+            ),
+            decoration: BoxDecoration(
+              color: selected ? colors.accentMuted : colors.surfaceHover,
+              borderRadius: MechXRadii.control,
+              border: Border.all(
+                color: selected ? colors.accent : const Color(0x00000000),
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: Text(
+              label,
+              style: type.label.copyWith(
+                color: selected ? colors.accent : colors.textPrimary,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ),
         ),
       ),
     );

@@ -289,9 +289,16 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   working across locales, `DesignIssue` gained a stable locale-independent `kind` discriminator (its
   ack `key` is `kind`-based, not the localized title, and the compliance store matches on `kind`, not
   English title substrings); H6 localized the Ask-Claude copilot + the half-localized "Load sample
-  project" / "Apply a building template" (EN byte-identical ⇒ goldens hold). Remaining: **Wave 5b**
-  (Theme-C consistency C2/C3/C5); the tier-5 C1/C4 electrical-shell restructure is deferred (a large
-  architectural refactor of a functional workspace, lowest review priority). Work it from this document.
+  project" / "Apply a building template" (EN byte-identical ⇒ goldens hold). **Wave 5b (Theme-C
+  consistency C2/C3/C5) HAS ALSO LANDED** (see the §15 row): one segment idiom (the forked
+  `_LayerSegment` + Riser `_TabButton` → the canonical `MechXSegment` for radios, with independent
+  toggles split to a distinct checkbox/eye idiom — the Riser toolbar no longer shows Auto+Details+Notes
+  as identical "selected" pills), the shared `CanvasGuideButton` help everywhere incl. Riser Auto, and
+  the Riser inspector converged onto `MechXSectionLabel` + the tinted selected-segment idiom. **This
+  completes the implementable scope of `APPLE-DESIGN-REVIEW.md` — all 8 themes (A–H) are landed or (the
+  one tier-5 item) explicitly dispositioned; the DELIBERATELY-DEFERRED item is C1/C4, the electrical-
+  shell restructure (bring `ElectricalView` under the shared shell scaffold + inline inspector — a
+  large architectural refactor of a functional workspace, lowest priority, a dedicated follow-up).**
 - **UX & workflow review (2026-07-02) — the plan of record for the prior UX/workflow work**:
   `UX-WORKFLOW-REVIEW.md` (root) holds 83 consolidated, adversarially code-verified findings
   (from 115 raw across 12 review lenses; 32 high / 42 medium / 9 low, two proven with widget
