@@ -194,6 +194,7 @@ enum StringKey {
   // Schematic / elevation — help popover.
   schematicElevationGuide,
   schematicClose,
+  canvasGuideTitle,
   schematicHelp1,
   schematicHelp2,
   schematicHelp3,
@@ -799,6 +800,7 @@ const Map<StringKey, String> _en = {
   // Schematic / elevation — help popover.
   StringKey.schematicElevationGuide: 'Elevation guide',
   StringKey.schematicClose: 'Close',
+  StringKey.canvasGuideTitle: 'Canvas guide',
   StringKey.schematicHelp1:
       'Drag the Riser card onto a floor to place a riser to the floor above',
   StringKey.schematicHelp2:
@@ -1475,6 +1477,7 @@ const Map<StringKey, String> _id = {
   // Schematic / elevation — help popover.
   StringKey.schematicElevationGuide: 'Panduan elevasi',
   StringKey.schematicClose: 'Tutup',
+  StringKey.canvasGuideTitle: 'Panduan kanvas',
   StringKey.schematicHelp1:
       'Seret kartu Riser ke lantai untuk menempatkan riser ke lantai di atasnya',
   StringKey.schematicHelp2:

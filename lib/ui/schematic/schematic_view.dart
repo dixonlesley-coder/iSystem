@@ -1014,6 +1014,9 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
                 top: 48,
                 child: CanvasGuideLegend(
                   onClose: widget.onToggleHelp,
+                  // C3 follow-up: keep the Riser's own localized heading
+                  // ("Elevation guide" / "Panduan elevasi") the bespoke popover had.
+                  title: context.strings(StringKey.schematicElevationGuide),
                   items: [
                     context.strings(StringKey.schematicHelpModes),
                     context.strings(StringKey.schematicHelp2),
@@ -1463,6 +1466,8 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                   child: CanvasGuideLegend(
                     onClose: widget.onToggleHelp,
                     width: 320,
+                    // C3 follow-up: keep the Riser's own localized heading.
+                    title: context.strings(StringKey.schematicElevationGuide),
                     items: [
                       context.strings(StringKey.schematicHelpModes),
                       context.strings(StringKey.schematicHelp1),

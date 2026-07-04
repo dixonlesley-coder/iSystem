@@ -1,8 +1,10 @@
 import 'package:flutter/widgets.dart';
 
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'glass_surface.dart';
+import 'mechx_focus_ring.dart';
 
 /// A small floating "(?)" affordance + its gesture-help popover, lifted from the
 /// electrical canvas so the mechanical Layout canvas can advertise the same
@@ -27,23 +29,30 @@ class CanvasGuideButton extends StatelessWidget {
     final colors = context.colors;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onToggle,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          width: 26,
-          height: 26,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: open ? colors.accent : colors.surface,
-            shape: BoxShape.circle,
-            border: Border.all(color: open ? colors.accent : colors.border),
-          ),
-          child: Text(
-            '?',
-            style: context.type.label.copyWith(
-              color: open ? const Color(0xFFFFFFFF) : colors.textSecondary,
+      // Keyboard-activatable (Enter/Space) — the bespoke help buttons this
+      // shared widget replaced carried a focus ring; keep that a11y here so the
+      // Layout / electrical / Riser guides can all be reached without the mouse.
+      // The ring only paints when focused, so the idle button is byte-identical.
+      child: MechXFocusRing(
+        onActivated: onToggle,
+        child: GestureDetector(
+          onTap: onToggle,
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            width: 26,
+            height: 26,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: open ? colors.accent : colors.surface,
+              shape: BoxShape.circle,
+              border: Border.all(color: open ? colors.accent : colors.border),
+            ),
+            child: Text(
+              '?',
+              style: context.type.label.copyWith(
+                color: open ? const Color(0xFFFFFFFF) : colors.textSecondary,
+              ),
             ),
           ),
         ),
@@ -59,11 +68,17 @@ class CanvasGuideLegend extends StatelessWidget {
   final List<String> items;
   final VoidCallback onClose;
   final double width;
+
+  /// Optional heading. Null ⇒ the localized default "Canvas guide"; a caller
+  /// with a discipline-specific name (e.g. the Riser's "Elevation guide") passes
+  /// its own already-localized title.
+  final String? title;
   const CanvasGuideLegend({
     super.key,
     required this.items,
     required this.onClose,
     this.width = 310,
+    this.title,
   });
 
   @override
@@ -99,7 +114,7 @@ class CanvasGuideLegend extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'Canvas guide',
+                    title ?? context.strings(StringKey.canvasGuideTitle),
                     style: type.subtitle.copyWith(color: colors.textPrimary),
                   ),
                 ),
@@ -108,7 +123,7 @@ class CanvasGuideLegend extends StatelessWidget {
                   child: GestureDetector(
                     onTap: onClose,
                     child: Text(
-                      'Close',
+                      context.strings(StringKey.schematicClose),
                       style: type.label.copyWith(color: colors.textMuted),
                     ),
                   ),
