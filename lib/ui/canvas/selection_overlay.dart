@@ -157,8 +157,8 @@ class _NetworkSelectionOverlayState
 
   /// The [DisclosureSection] name most relevant to the element (must match the
   /// section names in `project_panel.dart`): air → 'HVAC · ducting', fire →
-  /// 'Fire', anything else piped → 'Sizing'; null (nothing to expand) for a
-  /// bare/free node with no service context.
+  /// 'Fire', anything else piped → 'Design inputs'; null (nothing to expand)
+  /// for a bare/free node with no service context.
   String? _relevantSectionFor({String? nodeId, String? edgeId}) {
     final net = ref.read(networkControllerProvider).network;
     String? forService(ServiceType s) {
@@ -166,7 +166,7 @@ class _NetworkSelectionOverlayState
       if (s == ServiceType.fireSprinkler || s == ServiceType.fireHydrant) {
         return 'Fire';
       }
-      return 'Sizing';
+      return 'Design inputs';
     }
 
     if (edgeId != null) {

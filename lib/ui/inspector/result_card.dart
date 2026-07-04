@@ -45,7 +45,10 @@ class ResultCard extends StatelessWidget {
         vertical: MechXSpacing.sm,
       ),
       decoration: BoxDecoration(
-        color: colors.background,
+        // F2: a headline result card RAISES (iOS elevation) — `surface` is the
+        // elevated tone above the grouped `background`, so the promoted result
+        // reads lifted off the panel, not recessed into it.
+        color: colors.surface,
         borderRadius: MechXRadii.control,
         border: Border.all(color: colors.border),
       ),

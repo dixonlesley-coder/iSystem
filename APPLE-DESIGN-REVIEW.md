@@ -36,7 +36,23 @@ per-package adversarial review, integrated centrally: full gate + golden regen +
   `commercialBomLead` template "(s)" — the localized-template pluralization limitation (ID is
   inflection-free; grammatical EN needs per-count logic the template can't express), matching the
   prior J7 disposition.
-- **Wave 3 — Themes E + F — pending.**
+- **Wave 3 — Theme E (calmer inspector) + Theme F (visual restraint) — LANDED.** E1 data-gated the
+  Network/Fire/HVAC result sections (Fire no longer shows a phantom fire-pump duty with zero fire
+  pipework); E2 identity-first node editor (placement demoted to a disclosure); E3 controls-first
+  edge editor (takeoff in a "Details" disclosure); E4 the electrical circuit/panel drawers lead with
+  identity + rating and demote the expert params under "Advanced"; E5 honest section names
+  ("Sizing"→"Design inputs", "Network"→"Results"); E6 the ~11-pill size ladder collapsed to a shared
+  `SteppedValueField` stepper. F1 the whole draw-tool group uses ONE tinted selected-segment idiom
+  (Select/Run/Riser/Measure/Tank/Room/Ortho) so the solid accent is reserved for the primary; F2
+  content cards/chips RAISE (`surface`, not the recessed `background`); F3 structural headings pass
+  AA in light (`textMuted`→`textSecondary`); F4 nav type routed through the tokens; F5 the DRAW wall
+  grouped ("Tools"/"Service" + whitespace); F6 a primary anchor in the top bar (Save accent when
+  dirty, the theme toggle demoted to a compact icon); F7 motion literals → `MechXMotion` tokens.
+  Integration fixed the reviews' finds: the `selection_overlay` double-click-to-expand key
+  (E5 companion), 5 stale widget-test assertions, the F1 tool-group consistency, and the `_ServiceChip`
+  F2 companion. Goldens 01–08/10–15 regenerated + eyeballed (dark/light/hub). Deferred (documented):
+  the electrical "Advanced" edit-loss-on-collapse (consistent with the existing commit-on-blur Close
+  behavior) + its EN literal (Wave 5 electrical i18n); the lone nav-item 10.5 size (no scale token).
 - **Wave 4 — Theme G — pending.**
 - **Wave 5 — Theme C + H1/H6 — pending.**
 
@@ -183,7 +199,7 @@ who doesn't already know they exist.
 
 ---
 
-## Theme E — A calmer inspector: progressive disclosure, applied evenly
+## Theme E — A calmer inspector: progressive disclosure, applied evenly  ✅ LANDED (Wave 3)
 
 The inspector already owns every calm-disclosure mechanism (`DisclosureSection`, master-detail,
 `ResultCard`, honest empty states). The gaps are *uneven application* — mostly reorders and a few
@@ -213,7 +229,7 @@ The inspector already owns every calm-disclosure mechanism (`DisclosureSection`,
 
 ---
 
-## Theme F — Visual restraint: one primary action, consistent depth, legible in both themes
+## Theme F — Visual restraint: one primary action, consistent depth, legible in both themes  ✅ LANDED (Wave 3)
 
 The token system is mature; the gaps are about *restraint of application*.
 

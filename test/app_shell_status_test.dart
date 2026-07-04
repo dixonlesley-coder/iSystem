@@ -70,16 +70,23 @@ void main() {
     final startedDark =
         container.read(brightnessProvider) == Brightness.dark;
 
-    // In light mode the button acts toward dark; in dark, toward light.
-    expect(find.text(startedDark ? 'Switch to light' : 'Switch to dark'),
+    // F6: the theme toggle is a compact icon control that NAMES its action to a
+    // screen reader (a Semantics label — act toward the opposite mode) instead
+    // of a visible text label. In light mode it acts toward dark; in dark,
+    // toward light.
+    expect(
+        find.bySemanticsLabel(
+            startedDark ? 'Switch to light' : 'Switch to dark'),
         findsOneWidget);
 
-    await tester.tap(
-        find.text(startedDark ? 'Switch to light' : 'Switch to dark'));
+    await tester.tap(find.bySemanticsLabel(
+        startedDark ? 'Switch to light' : 'Switch to dark'));
     await tester.pump();
 
     // After the flip the label names the NEW action (the opposite mode).
-    expect(find.text(startedDark ? 'Switch to dark' : 'Switch to light'),
+    expect(
+        find.bySemanticsLabel(
+            startedDark ? 'Switch to dark' : 'Switch to light'),
         findsOneWidget);
   });
 

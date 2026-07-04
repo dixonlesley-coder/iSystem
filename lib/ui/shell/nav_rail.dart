@@ -132,7 +132,9 @@ class NavRail extends ConsumerWidget {
             child: collapsed
                 ? const SizedBox(width: double.infinity)
                 : _GroupLabel(strings(StringKey.navGroupDesign),
-                    style: type.caption.copyWith(color: colors.textMuted)),
+                    // F4: the DESIGN group heading is micro-scale — route it
+                    // through the `micro` token instead of caption+`fontSize: 9`.
+                    style: type.micro.copyWith(color: colors.textMuted)),
           ),
           const SizedBox(height: MechXSpacing.xxs),
           _NavItem(
@@ -234,7 +236,9 @@ class _GroupLabel extends StatelessWidget {
         child: Text(
           text,
           textAlign: TextAlign.center,
-          style: style.copyWith(letterSpacing: 0.6, fontSize: 9),
+          // F4: size/family come from the `micro` token supplied by the caller;
+          // only the wider all-caps group tracking is applied here.
+          style: style.copyWith(letterSpacing: 0.6),
         ),
       );
 }
@@ -530,6 +534,7 @@ class _CountBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = count > 9 ? '9+' : '$count';
+    final type = context.type;
     return Container(
       constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
       padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
@@ -541,9 +546,10 @@ class _CountBadge extends StatelessWidget {
       child: Text(
         label,
         textAlign: TextAlign.center,
-        style: TextStyle(
-          fontFamily: 'Roboto',
-          fontSize: 9,
+        // F4: the count is micro-scale — route through the `micro` token (font
+        // family + size + tracking) instead of a hand-rebuilt raw TextStyle,
+        // keeping only the badge's tight line-height and heavier weight.
+        style: type.micro.copyWith(
           height: 1.0,
           fontWeight: FontWeight.w700,
           color: context.colors.onAccent,

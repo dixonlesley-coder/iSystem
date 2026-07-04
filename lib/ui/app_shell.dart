@@ -543,6 +543,11 @@ class _TopBar extends ConsumerWidget {
             const SizedBox(width: MechXSpacing.xs),
             MechXButton(
               label: context.strings(StringKey.shellSave),
+              // F6: Save is the top bar's primary anchor — it wears the solid
+              // accent while the work is dirty (the same `projectDirtyProvider`
+              // signal that drives the "edited" dot), and falls back to the
+              // quiet gray button once the work matches the last clean save.
+              primary: dirty,
               onPressed: () => saveProject(ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
@@ -551,14 +556,15 @@ class _TopBar extends ConsumerWidget {
               onPressed: () => importPlan(context, ref),
             ),
             const SizedBox(width: MechXSpacing.sm),
-            MechXButton(
-              // Name the ACTION, not the current mode: in light mode the button
-              // acts toward dark, and vice-versa.
-              label: brightness == Brightness.dark
+            // F6: the theme toggle is DEMOTED from a full gray button (a visual
+            // peer of Save) to a compact, muted icon control so it stops
+            // competing with the primary action. Names the ACTION for a screen
+            // reader (act toward the opposite mode).
+            _ThemeToggleButton(
+              semanticLabel: brightness == Brightness.dark
                   ? context.strings(StringKey.shellSwitchToLight)
                   : context.strings(StringKey.shellSwitchToDark),
-              onPressed: () =>
-                  ref.read(brightnessProvider.notifier).toggle(),
+              onTap: () => ref.read(brightnessProvider.notifier).toggle(),
             ),
           ],
         ),
@@ -630,6 +636,104 @@ class _PaletteHintButtonState extends State<_PaletteHintButton> {
       ),
     );
   }
+}
+
+/// The demoted theme toggle (F6): a compact, muted icon control — the sibling
+/// of [_PaletteHintButton]'s quiet idiom — so the "switch appearance" action no
+/// longer reads as a gray-button peer of the primary Save. Transparent at rest
+/// (an iconic glyph, not a filled chip), it brightens on hover, is
+/// keyboard-focusable + Enter/Space-activatable via the shared focus ring, and
+/// announces its ACTION (switch to light / dark) to a screen reader. The glyph
+/// is custom-painted (no icon font) so it can never render as tofu.
+class _ThemeToggleButton extends StatefulWidget {
+  final String semanticLabel;
+  final VoidCallback onTap;
+  const _ThemeToggleButton({required this.semanticLabel, required this.onTap});
+
+  @override
+  State<_ThemeToggleButton> createState() => _ThemeToggleButtonState();
+}
+
+class _ThemeToggleButtonState extends State<_ThemeToggleButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Semantics(
+      button: true,
+      label: widget.semanticLabel,
+      child: MechXFocusRing(
+        borderRadius: MechXRadii.control,
+        onActivated: widget.onTap,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: AnimatedContainer(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
+              padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.sm,
+                vertical: MechXSpacing.xs,
+              ),
+              decoration: BoxDecoration(
+                color: _hover ? colors.surfaceHover : const Color(0x00000000),
+                borderRadius: MechXRadii.control,
+              ),
+              child: CustomPaint(
+                size: const Size(16, 16),
+                painter: _ThemeGlyphPainter(
+                  color: _hover ? colors.textSecondary : colors.textMuted,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The "appearance" (light/dark) mark: a ring with its left half filled — the
+/// conventional half-moon-in-a-circle theme glyph. Custom-painted from
+/// primitives (no icon font, no trig), so it never renders as tofu.
+class _ThemeGlyphPainter extends CustomPainter {
+  final Color color;
+  const _ThemeGlyphPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+    final c = Offset(w * 0.5, h * 0.5);
+    final r = w * 0.30;
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..strokeCap = StrokeCap.round;
+    final fill = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(c, r, stroke);
+    // The left half: a semicircle (chord = 2·r, radius = r ⇒ exact half circle)
+    // closed back along the vertical diameter.
+    final leftHalf = Path()
+      ..moveTo(c.dx, c.dy - r)
+      ..arcToPoint(
+        Offset(c.dx, c.dy + r),
+        radius: Radius.circular(r),
+        clockwise: false,
+      )
+      ..close();
+    canvas.drawPath(leftHalf, fill);
+  }
+
+  @override
+  bool shouldRepaint(_ThemeGlyphPainter old) => old.color != color;
 }
 
 class _StatusBar extends ConsumerWidget {

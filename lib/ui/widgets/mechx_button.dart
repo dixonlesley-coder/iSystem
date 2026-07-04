@@ -88,7 +88,10 @@ class _MechXButtonState extends State<MechXButton> {
       };
     }
 
-    final scale = _down ? 0.97 : (_hover ? 0.98 : 1.0);
+    // F7: the press DOWN-scale is the shared motion token (0.98), not a stray
+    // 0.97 literal. The subtle hover shrink stays 0.98 (there is no upward
+    // hoverLift here — a button dips on hover, it does not lift).
+    final scale = _down ? MechXMotion.pressScale : (_hover ? 0.98 : 1.0);
 
     Widget visual = AnimatedScale(
       scale: _enabled ? scale : 1.0,

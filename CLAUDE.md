@@ -270,9 +270,15 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   "Tap again to discard", a localized auto-sized toast + torn-recovery message, and specific
   "Unverified: <value>" titles behind a stable `DesignIssue.isVerify` discriminator. Every fix is
   additive / guardrail-safe (custom design system, offline, byte-identical-when-idle, opaque content,
-  ASCII+Roboto on canvas) and touches UI/app-shell/strings only. Work the remaining waves (3
-  inspector+restraint [Themes E+F] · 4 canvas-frame [Theme G] · 5 one-app+localize-trust [Theme C +
-  H1/H6]) from this document.
+  ASCII+Roboto on canvas) and touches UI/app-shell/strings only. **Wave 3 (Themes E + F — calmer
+  inspector + visual restraint) HAS ALSO LANDED** (see the §15 row): data-gated result sections
+  (Fire no longer shows a phantom fire-pump duty), identity-first node/edge/electrical editors with
+  expert params under disclosures, honest section names (Sizing→"Design inputs", Network→"Results"),
+  the size ladder collapsed to a `SteppedValueField`; one tinted selected-segment idiom across the
+  draw tools, content cards that RAISE (`surface`), AA-legible headings (`textSecondary`), a top-bar
+  primary anchor (Save accent when dirty + a demoted theme icon), and motion literals routed through
+  `MechXMotion`. Work the remaining waves (4 canvas-frame [Theme G] · 5 one-app+localize-trust
+  [Theme C + H1/H6]) from this document.
 - **UX & workflow review (2026-07-02) — the plan of record for the prior UX/workflow work**:
   `UX-WORKFLOW-REVIEW.md` (root) holds 83 consolidated, adversarially code-verified findings
   (from 115 raw across 12 review lenses; 32 high / 42 medium / 9 low, two proven with widget
