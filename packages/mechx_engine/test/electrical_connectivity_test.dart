@@ -57,5 +57,27 @@ void main() {
           .toList();
       expect(ids, ['SP2', 'SP3']);
     });
+
+    // M1: a legitimate dual-source design has MORE than one root (a normal MDP +
+    // an emergency MDP, each fed by the source spine, neither by a feeder).
+    // compute.dart supports multiple roots, so the check must NOT flag the
+    // second root when the project models a second supply (dualTransformer /
+    // sources) or the board is `essential` (genset-backed).
+    test('a dual-source design (multiple roots) is NOT flagged', () {
+      // Two roots, no feeder between them, but a second transformer is modelled.
+      final dualTx = ElectricalProject(
+        panels: [_panel('MDP'), _panel('EMDP')],
+        dualTransformer: true,
+      );
+      expect(electricalConnectivityDefects(dualTx), isEmpty);
+
+      // An essential (genset-backed) second root is a legitimate source-fed
+      // board, even without the project-level multi-source flags.
+      final essentialRoot = ElectricalProject(panels: [
+        _panel('MDP'),
+        const ElectricalPanel(id: 'EMDP', name: 'EMDP', essential: true),
+      ]);
+      expect(electricalConnectivityDefects(essentialRoot), isEmpty);
+    });
   });
 }

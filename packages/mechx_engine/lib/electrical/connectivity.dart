@@ -39,11 +39,15 @@ class ElectricalConnectivityDefect {
 /// Root identification mirrors `compute.dart`: a panel referenced by some
 /// circuit's [ElectricalCircuit.feedsPanelId] is "fed by a feeder"; the panels
 /// NOT referenced are root candidates (`panels.where((p) => !parentOf
-/// .containsKey(p.id))`). In a well-formed project exactly one such panel
-/// exists — the main board fed by the incomer/source — so THE root is taken as
-/// the first unfed panel in project order (the MDP is listed first) and is never
-/// a defect. Any FURTHER unfed panel is a floating board flagged
-/// [ElectricalConnectivityDefectKind.unfedPanel].
+/// .containsKey(p.id))`). `compute.dart` allows MULTIPLE roots (a real
+/// dual-source design — a normal MDP plus a genset/emergency MDP, each fed by
+/// the source spine), so a further un-fed board is only a defect in a
+/// SINGLE-supply building. The first un-fed panel (the MDP, listed first) is THE
+/// primary root and is never a defect; any FURTHER un-fed panel is flagged
+/// [ElectricalConnectivityDefectKind.unfedPanel] — UNLESS the project models
+/// more than one supply (`dualTransformer`, distributed `sources`) or the board
+/// is `essential` (genset-backed), in which case it is a legitimate additional
+/// source-fed root.
 ///
 /// With a single panel there is never a defect (it is the root). A degenerate
 /// project where every panel is fed (a feeder cycle with no root — a distinct
@@ -66,8 +70,18 @@ List<ElectricalConnectivityDefect> electricalConnectivityDefects(
     }
   }
 
-  // THE root = the first panel not fed by any feeder (mirrors compute.dart's
-  // root candidates; a well-formed project has exactly one). Never a defect.
+  // Multiple roots are LEGITIMATE when the building models more than one supply:
+  // a dual transformer, distributed sources (a genset feeds an emergency MDP),
+  // or a panel explicitly marked essential (genset/emergency-backed) — the
+  // source spine feeds each such root, NOT a feeder. `compute.dart` itself
+  // supports multiple roots (`panels.where((p) => !parentOf.containsKey(p.id))`),
+  // so flagging every non-first root would false-positive on a real dual-source
+  // design. Only a SINGLE-supply building expects exactly one main board — there
+  // a second root is a forgotten feeder.
+  final multiSource = project.dualTransformer || project.sources != null;
+
+  // THE primary root = the first panel not fed by any feeder (mirrors
+  // compute.dart's root candidates; the MDP is listed first). Never a defect.
   String? root;
   for (final p in panels) {
     if (!fed.contains(p.id)) {
@@ -78,8 +92,10 @@ List<ElectricalConnectivityDefect> electricalConnectivityDefects(
 
   final defects = <ElectricalConnectivityDefect>[];
   for (final p in panels) {
-    if (p.id == root) continue; // the root is fed by the incomer/source
+    if (p.id == root) continue; // the primary root, fed by the incomer/source
     if (fed.contains(p.id)) continue; // fed by a feeder → connected
+    if (multiSource) continue; // a legit additional source-fed root
+    if (p.essential) continue; // a genset/emergency-backed root, not unfed
     defects.add(ElectricalConnectivityDefect(
       panelId: p.id,
       kind: ElectricalConnectivityDefectKind.unfedPanel,

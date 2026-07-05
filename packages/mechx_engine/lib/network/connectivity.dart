@@ -138,10 +138,12 @@ List<NetworkComponentDefect> networkConnectivityDefects(Network net) {
 /// whole pressurized/air component with no source, this flags an INDIVIDUAL node
 /// drawn wrong.
 enum NetworkElementDefectKind {
-  /// A degree-1 distribution [NodeRole.main] that dead-ends WITHOUT a valid
-  /// termination — a pipe/duct drawn to nowhere (covers every service, gravity
-  /// included: a dangling drain is an error, but a fixture / floor-drain
-  /// terminal is not).
+  /// A degree-1 distribution [NodeRole.main] on a PRESSURIZED or AIR service that
+  /// dead-ends WITHOUT a valid termination — a pressure pipe / duct drawn to
+  /// nowhere (it should end at a fixture / terminal / plant). GRAVITY services
+  /// (drainage / vent / rainwater) are excluded: a bare degree-1 end there is a
+  /// legitimate terminus (soil-stack outfall, vent-through-roof, rainwater
+  /// discharge), so it is never a loose-end (see [networkElementDefects]).
   looseEnd,
 
   /// A degree-0 node — placed on the sheet but connected to nothing (an unplaced
@@ -220,10 +222,19 @@ List<NetworkElementDefect> networkElementDefects(Network net) {
       ));
     } else if (degree == 1 &&
         node.role == NodeRole.main &&
+        edges!.single.service.regime != FlowRegime.gravity &&
         !_isValidTermination(node)) {
+      // GRAVITY (drainage / vent / rainwater) is SKIPPED for loose-ends, exactly
+      // as networkConnectivityDefects skips it (lines 19-21): a degree-1 bare end
+      // there is the NORMAL way to draw a legitimate terminus — a soil-stack
+      // outfall to the sewer, a vent-through-roof, a rainwater discharge — none
+      // of which the sizer needs connected (it roots gravity components at these
+      // bare leaves). Only PRESSURIZED + AIR bare ends are genuinely "drawn to
+      // nowhere" (a pressure pipe/duct should terminate at a fixture/terminal/
+      // plant, never open air). A degree-0 gravity node is still an orphan above.
       defects.add(NetworkElementDefect(
         nodeId: node.id,
-        service: edges!.single.service,
+        service: edges.single.service,
         kind: NetworkElementDefectKind.looseEnd,
       ));
     }

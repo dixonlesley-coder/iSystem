@@ -153,32 +153,51 @@ void main() {
       expect(networkElementDefects(net), isEmpty);
     });
 
-    // A dangling drain (gravity service) IS a looseEnd, but a floor-drain
-    // terminal on the same graph is NOT — gravity is covered, valid terminals
-    // are spared.
-    test('gravity: a bare drain dead-end is a looseEnd, a floor-drain is not',
-        () {
+    // H1: a bare degree-1 end on a GRAVITY service (drainage / vent / rainwater)
+    // is a legitimate terminus — a soil-stack outfall, a vent-through-roof, a
+    // rainwater discharge — so it is NOT a looseEnd (mirroring the gravity skip
+    // in networkConnectivityDefects). The SAME bare end on a pressurized service
+    // IS a looseEnd, and a fully-disconnected gravity node is still an orphan.
+    test('gravity bare ends are legitimate termini (not looseEnds); a '
+        'pressurized bare end still is; a gravity orphan still is', () {
       const j = NetNode(id: 'J', sheetId: 's1', x: 5, y: 0, floorIndex: 0);
-      const dangling =
+      const bareEnd =
           NetNode(id: 'A', sheetId: 's1', x: 0, y: 0, floorIndex: 0);
-      const drain = NetNode(
+      const floorDrain = NetNode(
           id: 'B',
           sheetId: 's1',
           x: 10,
           y: 0,
           floorIndex: 0,
           component: NodeComponent.floorDrain);
-      const e1 = NetEdge(
-          id: 'e1', fromId: 'A', toId: 'J', service: ServiceType.drainage);
-      const e2 = NetEdge(
-          id: 'e2', fromId: 'J', toId: 'B', service: ServiceType.drainage);
-      const net = Network(nodes: [j, dangling, drain], edges: [e1, e2]);
+      const d1 = NetEdge(
+          id: 'd1', fromId: 'A', toId: 'J', service: ServiceType.drainage);
+      const d2 = NetEdge(
+          id: 'd2', fromId: 'J', toId: 'B', service: ServiceType.drainage);
+      // Gravity: the bare end 'A' is a legitimate outfall — no defect at all.
+      const gravityNet =
+          Network(nodes: [j, bareEnd, floorDrain], edges: [d1, d2]);
+      expect(networkElementDefects(gravityNet), isEmpty);
 
-      final defects = networkElementDefects(net);
-      expect(defects, hasLength(1));
-      expect(defects.single.nodeId, 'A');
-      expect(defects.single.kind, NetworkElementDefectKind.looseEnd);
-      expect(defects.single.service, ServiceType.drainage);
+      // Pressurized: the identical bare-main degree-1 end IS a looseEnd (a
+      // pressure pipe should terminate at a fixture/terminal, not open air).
+      const p1 = NetEdge(
+          id: 'p1', fromId: 'A', toId: 'J', service: ServiceType.coldWater);
+      const p2 = NetEdge(
+          id: 'p2', fromId: 'J', toId: 'B', service: ServiceType.coldWater);
+      final pressurized = networkElementDefects(
+          const Network(nodes: [j, bareEnd, floorDrain], edges: [p1, p2]));
+      expect(pressurized, hasLength(1));
+      expect(pressurized.single.nodeId, 'A');
+      expect(pressurized.single.kind, NetworkElementDefectKind.looseEnd);
+      expect(pressurized.single.service, ServiceType.coldWater);
+
+      // A gravity node with NO edges at all is still an orphan.
+      const stray = NetNode(id: 'C', sheetId: 's1', x: 50, y: 50, floorIndex: 0);
+      final withOrphan = networkElementDefects(
+          const Network(nodes: [j, bareEnd, floorDrain, stray], edges: [d1, d2]));
+      expect(withOrphan.map((x) => x.nodeId), ['C']);
+      expect(withOrphan.single.isOrphan, isTrue);
     });
 
     // Determinism: the result is sorted by node id.
