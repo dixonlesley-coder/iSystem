@@ -157,9 +157,14 @@ void main() {
 }
 
 /// Poll [path] until [ready] passes on its contents (the settings write is
-/// fire-and-forget, like the autosave mirror), or a short timeout elapses.
+/// fire-and-forget, like the autosave mirror), or the timeout elapses. The
+/// timeout is generous (10 s) because the write is a debounced, off-thread disk
+/// mirror: on a loaded CI runner (notably the Windows release gate) it can take
+/// well over a second to flush, and a tight window made this test flaky. A real
+/// never-write still fails fast enough — we poll every 10 ms and return on the
+/// first success.
 Future<bool> _awaitFile(String path, bool Function(String) ready,
-    {Duration timeout = const Duration(seconds: 3)}) async {
+    {Duration timeout = const Duration(seconds: 10)}) async {
   final deadline = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(deadline)) {
     try {
