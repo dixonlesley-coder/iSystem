@@ -528,6 +528,14 @@ enum StringKey {
   issueElectricalTitle, // {code} = w.code.replaceAll('-', ' ')
   issueUnverifiedTitle, // {name} = the // VERIFY value's short label
 
+  // Unconnected-element checks (loose run/duct ends, orphans, unfed panels).
+  issueUnconnectedLooseEndTitle,
+  issueUnconnectedLooseEndMessage,
+  issueUnconnectedOrphanTitle,
+  issueUnconnectedOrphanMessage,
+  issueUnfedPanelTitle,
+  issueUnfedPanelMessage, // {panel} = the unfed panel's name
+
   // H1 — Design issue MESSAGES.
   issueOrphanFloorMessage, // {floor} = index+1, {floors} = pluralCount(n,'floor','floors')
   issueOrphanSheetMessage,
@@ -1057,7 +1065,7 @@ const Map<StringKey, String> _en = {
   //    values are BYTE-IDENTICAL to the literals they replace.
 
   // H1 — compliance roll-up categories.
-  StringKey.complianceCategoryAirVelocity: 'Air velocities within band',
+  StringKey.complianceCategoryAirVelocity: 'Air velocity',
   StringKey.complianceCategorySheetCalibration: 'Sheet calibration',
   StringKey.complianceCategoryStandardsVerification: 'Standards verification',
   StringKey.complianceCategoryElectricalSizing: 'Electrical circuit sizing',
@@ -1070,7 +1078,7 @@ const Map<StringKey, String> _en = {
   StringKey.complianceDetailAllVerified: 'all values verified',
   StringKey.complianceDetailAckNoneOpen: '{n} acknowledged, none open',
   StringKey.complianceDetailRequireVerification:
-      '{values} require verification or acknowledgement before submission',
+      '{values} to verify or acknowledge',
   StringKey.complianceDetailOpenAck: '{open} open, {ack} acknowledged',
   StringKey.complianceDetailNoSizingErrors: 'no sizing errors',
   StringKey.complianceDetailWarningsNoErrors: '{warnings}, no errors',
@@ -1156,11 +1164,22 @@ const Map<StringKey, String> _en = {
   StringKey.issueNetworkNoSourceTitle: 'Network has no source',
   StringKey.issueDrainageSlopeTitle: 'Drainage slope below self-cleansing',
   StringKey.issueDrainageLengthTitle: 'Drainage branch too long',
-  StringKey.issueDrainageCleanoutTitle:
-      'Drainage stack has no cleanout at its base',
+  StringKey.issueDrainageCleanoutTitle: 'Drainage stack cleanout',
   StringKey.issueLegionellaTitle: 'Hot-water return temperature low',
   StringKey.issueElectricalTitle: 'Electrical: {code}',
   StringKey.issueUnverifiedTitle: 'Unverified: {name}',
+  StringKey.issueUnconnectedLooseEndTitle: 'Unconnected run end',
+  StringKey.issueUnconnectedLooseEndMessage:
+      'This run ends at a bare junction — it is not joined to a fixture, '
+      'terminal, plant, or another run. Connect the loose end or remove it.',
+  StringKey.issueUnconnectedOrphanTitle: 'Unconnected element',
+  StringKey.issueUnconnectedOrphanMessage:
+      'This element is placed but not connected to anything. Connect it into '
+      'the network, or remove it.',
+  StringKey.issueUnfedPanelTitle: 'Panel not connected to a supply',
+  StringKey.issueUnfedPanelMessage:
+      '"{panel}" is neither the origin board nor fed by a feeder — it is wired '
+      'to nothing. Feed it from an upstream panel.',
 
   // H1 — Design issue messages.
   StringKey.issueOrphanFloorMessage:
@@ -1735,7 +1754,7 @@ const Map<StringKey, String> _id = {
   // ── Apple design review Wave 5a (H1 + H6) — trust-surface localization.
 
   // H1 — compliance roll-up categories.
-  StringKey.complianceCategoryAirVelocity: 'Kecepatan udara dalam batas',
+  StringKey.complianceCategoryAirVelocity: 'Kecepatan udara',
   StringKey.complianceCategorySheetCalibration: 'Kalibrasi lembar',
   StringKey.complianceCategoryStandardsVerification: 'Verifikasi standar',
   StringKey.complianceCategoryElectricalSizing: 'Pengukuran sirkuit listrik',
@@ -1748,7 +1767,7 @@ const Map<StringKey, String> _id = {
   StringKey.complianceDetailAllVerified: 'semua nilai terverifikasi',
   StringKey.complianceDetailAckNoneOpen: '{n} diakui, tidak ada yang terbuka',
   StringKey.complianceDetailRequireVerification:
-      '{values} perlu diverifikasi atau diakui sebelum pengajuan',
+      '{values} untuk diverifikasi atau diakui',
   StringKey.complianceDetailOpenAck: '{open} terbuka, {ack} diakui',
   StringKey.complianceDetailNoSizingErrors: 'tidak ada kesalahan pengukuran',
   StringKey.complianceDetailWarningsNoErrors: '{warnings}, tanpa kesalahan',
@@ -1836,11 +1855,23 @@ const Map<StringKey, String> _id = {
   StringKey.issueNetworkNoSourceTitle: 'Jaringan tidak memiliki sumber',
   StringKey.issueDrainageSlopeTitle: 'Kemiringan drainase di bawah swa-bersih',
   StringKey.issueDrainageLengthTitle: 'Cabang drainase terlalu panjang',
-  StringKey.issueDrainageCleanoutTitle:
-      'Tegak drainase tidak memiliki cleanout di dasarnya',
+  StringKey.issueDrainageCleanoutTitle: 'Cleanout tegak drainase',
   StringKey.issueLegionellaTitle: 'Suhu balik air panas rendah',
   StringKey.issueElectricalTitle: 'Listrik: {code}',
   StringKey.issueUnverifiedTitle: 'Belum terverifikasi: {name}',
+  StringKey.issueUnconnectedLooseEndTitle: 'Ujung jalur tidak terhubung',
+  StringKey.issueUnconnectedLooseEndMessage:
+      'Jalur ini berakhir di sambungan kosong — tidak tersambung ke fikstur, '
+      'terminal, plant, atau jalur lain. Sambungkan ujung yang menggantung '
+      'atau hapus.',
+  StringKey.issueUnconnectedOrphanTitle: 'Elemen tidak terhubung',
+  StringKey.issueUnconnectedOrphanMessage:
+      'Elemen ini ditempatkan tetapi tidak terhubung ke apa pun. Sambungkan ke '
+      'jaringan, atau hapus.',
+  StringKey.issueUnfedPanelTitle: 'Panel tidak terhubung ke suplai',
+  StringKey.issueUnfedPanelMessage:
+      '"{panel}" bukan panel asal maupun disuplai oleh feeder — tidak '
+      'tersambung ke apa pun. Suplai dari panel di hulunya.',
 
   // H1 — Design issue messages.
   StringKey.issueOrphanFloorMessage:

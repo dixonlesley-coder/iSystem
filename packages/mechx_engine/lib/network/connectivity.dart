@@ -132,3 +132,103 @@ List<NetworkComponentDefect> networkConnectivityDefects(Network net) {
 
   return defects;
 }
+
+/// What kind of per-ELEMENT (node-level) connectivity problem a node has —
+/// complementary to the component-level [NetworkDefectKind]. Where that flags a
+/// whole pressurized/air component with no source, this flags an INDIVIDUAL node
+/// drawn wrong.
+enum NetworkElementDefectKind {
+  /// A degree-1 distribution [NodeRole.main] that dead-ends WITHOUT a valid
+  /// termination — a pipe/duct drawn to nowhere (covers every service, gravity
+  /// included: a dangling drain is an error, but a fixture / floor-drain
+  /// terminal is not).
+  looseEnd,
+
+  /// A degree-0 node — placed on the sheet but connected to nothing (an unplaced
+  /// tank/pump/fixture, or a stray click). Applies to a node of any role.
+  orphan,
+}
+
+/// One per-node connectivity defect: the [nodeId], the [kind], and — for a
+/// [NetworkElementDefectKind.looseEnd] — the [service] of the single incident
+/// edge. [service] is null for an [NetworkElementDefectKind.orphan] (a degree-0
+/// node has no incident edge, hence no service).
+class NetworkElementDefect {
+  final String nodeId;
+  final ServiceType? service;
+  final NetworkElementDefectKind kind;
+
+  const NetworkElementDefect({
+    required this.nodeId,
+    this.service,
+    required this.kind,
+  });
+
+  /// True for the "placed but connected to nothing" defect.
+  bool get isOrphan => kind == NetworkElementDefectKind.orphan;
+
+  /// True for the "dangling degree-1 main" defect.
+  bool get isLooseEnd => kind == NetworkElementDefectKind.looseEnd;
+}
+
+/// Whether [node] is a legitimate END of a run — a terminal / equipment where a
+/// pipe/duct is SUPPOSED to stop, so a degree-1 node there is by design and
+/// never a [NetworkElementDefectKind.looseEnd]. True when ANY of:
+///   • a non-[NodeRole.main] role ([NodeRole.fixture] / [NodeRole.plant] are
+///     ends by definition);
+///   • a served plumbing [NetNode.fixture] or user [NetNode.customFixtureId];
+///   • a design [NetNode.airflow] (a diffuser / grille air terminal);
+///   • a [NetNode.roofAreaM2] (a rainwater outlet catchment);
+///   • ANY placed [NetNode.component] — every [NodeComponent] value is real
+///     equipment or a real marker (pump / tank / valve / meter / drain /
+///     diffuser / AC / riser connection point); the enum has NO "bare junction"
+///     value, so a bare fitting is exactly `component == null`.
+bool _isValidTermination(NetNode node) =>
+    node.role != NodeRole.main ||
+    node.fixture != null ||
+    node.customFixtureId != null ||
+    node.airflow != null ||
+    node.roofAreaM2 != null ||
+    node.component != null;
+
+/// Detect every per-ELEMENT connectivity defect in [net]:
+///   • [NetworkElementDefectKind.orphan] — a node in [Network.nodes] with degree
+///     0 (connected to nothing);
+///   • [NetworkElementDefectKind.looseEnd] — a degree-1 [NodeRole.main] that is
+///     not a valid termination ([_isValidTermination]).
+///
+/// A node's degree counts every incident edge across the WHOLE graph (all
+/// services), matching [Network.edgesAt]. Pure + read-only — never sizes.
+/// Deterministic: the result is sorted by node id.
+List<NetworkElementDefect> networkElementDefects(Network net) {
+  // Incident edges per node across every service. An edge is counted once per
+  // node (a degenerate self-loop counts once), mirroring Network.edgesAt.
+  final incident = <String, List<NetEdge>>{};
+  for (final e in net.edges) {
+    (incident[e.fromId] ??= []).add(e);
+    if (e.toId != e.fromId) (incident[e.toId] ??= []).add(e);
+  }
+
+  final defects = <NetworkElementDefect>[];
+  for (final node in net.nodes) {
+    final edges = incident[node.id];
+    final degree = edges?.length ?? 0;
+    if (degree == 0) {
+      defects.add(NetworkElementDefect(
+        nodeId: node.id,
+        kind: NetworkElementDefectKind.orphan,
+      ));
+    } else if (degree == 1 &&
+        node.role == NodeRole.main &&
+        !_isValidTermination(node)) {
+      defects.add(NetworkElementDefect(
+        nodeId: node.id,
+        service: edges!.single.service,
+        kind: NetworkElementDefectKind.looseEnd,
+      ));
+    }
+  }
+
+  defects.sort((a, b) => a.nodeId.compareTo(b.nodeId));
+  return defects;
+}

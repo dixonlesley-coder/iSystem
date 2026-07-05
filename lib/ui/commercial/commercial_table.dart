@@ -109,16 +109,28 @@ class CommercialTable extends StatelessWidget {
             ),
             child: Row(
               children: [
-                for (final c in columns)
+                for (var i = 0; i < columns.length; i++)
                   Expanded(
-                    flex: c.flex,
-                    child: Text(
-                      c.label,
-                      textAlign:
-                          c.alignEnd ? TextAlign.right : TextAlign.left,
-                      style: type.caption.copyWith(
-                        color: colors.textMuted,
-                        fontWeight: FontWeight.w600,
+                    flex: columns[i].flex,
+                    child: Padding(
+                      // A gutter between columns so a right-aligned numeric cell
+                      // (Qty) never butts against the next column's text — the
+                      // header otherwise reads "QtyPart"/"QtyUnit" and a row as
+                      // "1MCCB"/"14.8m". The last column keeps the row's edge.
+                      padding: EdgeInsets.only(
+                        right: i == columns.length - 1
+                            ? 0
+                            : MechXSpacing.sm + 2,
+                      ),
+                      child: Text(
+                        columns[i].label,
+                        textAlign: columns[i].alignEnd
+                            ? TextAlign.right
+                            : TextAlign.left,
+                        style: type.caption.copyWith(
+                          color: colors.textMuted,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),
@@ -193,11 +205,18 @@ class _RowView extends StatelessWidget {
           for (var j = 0; j < columns.length; j++)
             Expanded(
               flex: columns[j].flex,
-              child: _cell(
-                context,
-                row.cells[j],
-                column: columns[j],
-                emphasized: emph,
+              child: Padding(
+                // Match the header gutter so numeric cells never touch the next
+                // column (see the header note).
+                padding: EdgeInsets.only(
+                  right: j == columns.length - 1 ? 0 : MechXSpacing.sm + 2,
+                ),
+                child: _cell(
+                  context,
+                  row.cells[j],
+                  column: columns[j],
+                  emphasized: emph,
+                ),
               ),
             ),
         ],

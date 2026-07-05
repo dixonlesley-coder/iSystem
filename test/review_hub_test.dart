@@ -54,7 +54,7 @@ void main() {
     // rows. With the default const standards profiles carrying // VERIFY items,
     // the Standards row must be REVIEW (so the overall verdict is REVIEW
     // REQUIRED).
-    expect(find.text('Air velocities within band'), findsOneWidget);
+    expect(find.text('Air velocity'), findsOneWidget);
     expect(find.text('Sheet calibration'), findsOneWidget);
     expect(find.text('Standards verification'), findsOneWidget);
     expect(find.text('REVIEW REQUIRED'), findsOneWidget);

@@ -197,11 +197,17 @@ screen applies them via `ProjectController.setFloors` + the occupancy/fire/rainf
 **unified Design Issues review panel** (`store/design_issues_store.dart`
 `designIssuesProvider` — a read-only fan-in that aggregates every existing design warning
 into one typed `DesignIssue` list: out-of-band air velocities + unsized air elements
-[`airVelocityChecksProvider`/`airUnsizedProvider`], uncalibrated sheets, and unverified
-`// VERIFY` standards [`SniProfile`/`SniVentilationProfile`/`PuilProfile.verifyChecklist`],
-each with a severity + an optional `IssueLocation(sheetId, {nodeId, edgeId})`; surfaced as an
-`IssuesCard` in the Review hub grouped Warnings/Advisory with a count, a locatable row jumping
-to the element via sheet + selection + `WorkspaceView.plan` — no engine change);
+[`airVelocityChecksProvider`/`airUnsizedProvider`], uncalibrated sheets, unverified
+`// VERIFY` standards [`SniProfile`/`SniVentilationProfile`/`PuilProfile.verifyChecklist`], and
+**network connectivity** — component-level no-source/island [`network/connectivity.dart`
+`networkConnectivityDefects`] PLUS per-element **unconnected** checks: a loose run/duct END
+(a degree-1 bare-`main` junction that isn't a fixture / terminal / plant / another run) and an
+ORPHAN (a node placed but joined to nothing, incl. unplaced equipment) via `networkElementDefects`,
+and an **unfed electrical panel** via `electrical/connectivity.dart` `electricalConnectivityDefects`
+(all read-only, never resize; each a warning with a stable per-element `kind` + locate) —
+each with a severity + an optional `IssueLocation(sheetId, {nodeId, edgeId})` (or `panelId`);
+surfaced as an `IssuesCard` in the Review hub grouped Warnings/Advisory with a count, a locatable
+row jumping to the element via sheet + selection + `WorkspaceView.plan`);
 **command palette + workflow stepper** (`store/command_store.dart` — `commandPaletteOpenProvider`
 + a pure `fuzzyScore`/`fuzzyMatches` + `workflowStageStateProvider` deriving the five
 `WorkflowStage`s [Calibrate · Floors · Draw · Size · Report] done/active O(1) from project

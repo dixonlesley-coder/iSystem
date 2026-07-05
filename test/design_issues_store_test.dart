@@ -90,11 +90,64 @@ void main() {
       expect(velIssue.locate!.sheetId, sheetId);
     });
 
+    test('a loose run end and an orphan node surface as locatable warnings; '
+        'a valid termination (plant) never does', () {
+      final c = makeContainer();
+      const sheetId = 's1';
+      // A cold-water run from a plant (a valid source termination) to a BARE
+      // main junction with nothing attached — the main end is a loose end. The
+      // plant end is a legitimate termination and must NOT be flagged.
+      const src = NetNode(
+        id: 'src',
+        sheetId: sheetId,
+        x: 0,
+        y: 0,
+        floorIndex: 0,
+        role: NodeRole.plant,
+      );
+      const loose =
+          NetNode(id: 'loose', sheetId: sheetId, x: 100, y: 0, floorIndex: 0);
+      const run = NetEdge(
+        id: 'r1',
+        fromId: 'src',
+        toId: 'loose',
+        service: ServiceType.coldWater,
+      );
+      // A node placed with no edges at all — an orphan (unconnected element).
+      const orphan = NetNode(
+          id: 'orphan', sheetId: sheetId, x: 300, y: 300, floorIndex: 0);
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [src, loose, orphan], edges: [run]),
+          );
+
+      final issues = c.read(designIssuesProvider);
+      final looseIssue = issues.firstWhere(
+        (i) => i.title == 'Unconnected run end',
+        orElse: () => fail('expected a loose-end warning'),
+      );
+      expect(looseIssue.severity, IssueSeverity.warning);
+      expect(looseIssue.locate!.nodeId, 'loose');
+      expect(looseIssue.locate!.sheetId, sheetId);
+
+      final orphanIssue = issues.firstWhere(
+        (i) => i.title == 'Unconnected element',
+        orElse: () => fail('expected an orphan warning'),
+      );
+      expect(orphanIssue.severity, IssueSeverity.warning);
+      expect(orphanIssue.locate!.nodeId, 'orphan');
+
+      // The plant source is a valid termination — never a loose-end/orphan.
+      expect(
+        issues.where((i) => i.kind.endsWith(':src')),
+        isEmpty,
+      );
+    });
+
     test('a drainage stack base without a cleanout surfaces an info advisory; '
         'a served base stays silent', () {
       final c = makeContainer();
       const sheetId = 's1';
-      const title = 'Drainage stack has no cleanout at its base';
+      const title = 'Drainage stack cleanout';
       // A soil riser dropping from floor 1 to its base on floor 0, no cleanout
       // anywhere — the base is surfaced as a muted (info) locatable advisory.
       const j1 = NetNode(id: 'j1', sheetId: sheetId, x: 0, y: 0, floorIndex: 1);
