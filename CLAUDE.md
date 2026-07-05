@@ -524,8 +524,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.8.1`** (`pubspec.yaml` is the version source of truth; each release = bump
-  → merge to the default branch → `release.yml` `workflow_dispatch` with
+  is `v1.11.0`** (the release that ships the whole Apple-design review — Waves 1–5
+  + the C1/C4 electrical-shell restructure — atop the v1.10.0 UX/workflow-review
+  baseline; `pubspec.yaml` is the version source of truth, `1.11.0+17`; each release
+  = bump → merge to the default branch → `release.yml` `workflow_dispatch` with
   `publish=true`).
   **Wave 4b (electrical drawings export) landed**: pure-engine
   `report/electrical_calc_report.dart` (Markdown over the sized system + power one-line
