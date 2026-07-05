@@ -127,29 +127,30 @@ class HeatmapLegend extends StatelessWidget {
               ),
             ),
             const SizedBox(height: MechXSpacing.xxs),
-            // Always show the numeric min/max kPa endpoints — whole, never
-            // truncated — even when the field is (near-)uniform, where both
-            // ends read the same value.
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('Low ${bar(minKpa)}',
-                    maxLines: 1,
-                    softWrap: false,
-                    style: type.mono.copyWith(color: colors.textMuted)),
-                const SizedBox(width: MechXSpacing.xs),
-                Text('High ${bar(maxKpa)}',
-                    maxLines: 1,
-                    softWrap: false,
-                    textAlign: TextAlign.right,
-                    style: type.mono.copyWith(color: colors.textMuted)),
-              ],
-            ),
+            // Show the numeric kPa endpoints — whole, never truncated. When the
+            // field is (near-)uniform both ends read the same value, so a single
+            // "Uniform NN kPa" line reads honestly instead of the identical
+            // "Low 31 / High 31" pair (which looked like a bug).
             if (uniform)
-              Padding(
-                padding: const EdgeInsets.only(top: MechXSpacing.xxs),
-                child: Text('uniform field',
-                    style: type.caption.copyWith(color: colors.textMuted)),
+              Text('Uniform ${bar(minKpa)}',
+                  maxLines: 1,
+                  softWrap: false,
+                  style: type.mono.copyWith(color: colors.textMuted))
+            else
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Low ${bar(minKpa)}',
+                      maxLines: 1,
+                      softWrap: false,
+                      style: type.mono.copyWith(color: colors.textMuted)),
+                  const SizedBox(width: MechXSpacing.xs),
+                  Text('High ${bar(maxKpa)}',
+                      maxLines: 1,
+                      softWrap: false,
+                      textAlign: TextAlign.right,
+                      style: type.mono.copyWith(color: colors.textMuted)),
+                ],
               ),
           ],
         ),

@@ -49,15 +49,18 @@ void main() {
   setUpAll(_loadFonts);
 
   testWidgets(
-      'the uniform-field case renders "Low 31 kPa / High 31 kPa" whole '
-      '(the golden-03 truncation)', (tester) async {
+      'the uniform-field case renders a single "Uniform 31 kPa" line whole '
+      '(no confusing identical Low/High pair)', (tester) async {
     await tester.pumpWidget(_host(
       const HeatmapLegend(minKpa: 31, maxKpa: 31),
     ));
-    _expectRendersWhole(tester, 'Low 31 kPa');
-    _expectRendersWhole(tester, 'High 31 kPa');
-    // The near-uniform note still shows.
-    expect(find.text('uniform field'), findsOneWidget);
+    // A uniform field reads honestly as ONE value, not an identical Low/High
+    // pair (which looked like a bug), and needs no separate "uniform field"
+    // note — the single line says it.
+    _expectRendersWhole(tester, 'Uniform 31 kPa');
+    expect(find.text('Low 31 kPa'), findsNothing);
+    expect(find.text('High 31 kPa'), findsNothing);
+    expect(find.text('uniform field'), findsNothing);
   });
 
   testWidgets('wide endpoint values still render whole (intrinsic sizing)',

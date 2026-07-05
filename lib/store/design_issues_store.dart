@@ -12,6 +12,7 @@ library;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/connectivity.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/network/connectivity.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -421,6 +422,31 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
+  // ── 3c. Unconnected elements: loose run/duct ends + orphans (warning) ────────
+  // A finer-grained companion to 3b: a single run/duct that ENDS in mid-air at a
+  // bare junction (no fixture / terminal / plant / another run), or an element
+  // placed but joined to NOTHING at all. Detected read-only by the pure engine
+  // (`networkElementDefects`) — never resizes. Each defect is its OWN warning
+  // (a per-node `kind` so acking/fixing one never hides the others), locatable
+  // via the node's sheet.
+  for (final d in networkElementDefects(net)) {
+    final node = nodeById[d.nodeId];
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: d.isOrphan
+          ? 'unconnected-orphan:${d.nodeId}'
+          : 'unconnected-loose-end:${d.nodeId}',
+      title: d.isOrphan
+          ? str(StringKey.issueUnconnectedOrphanTitle)
+          : str(StringKey.issueUnconnectedLooseEndTitle),
+      message: d.isOrphan
+          ? str(StringKey.issueUnconnectedOrphanMessage)
+          : str(StringKey.issueUnconnectedLooseEndMessage),
+      locate:
+          node == null ? null : IssueLocation(node.sheetId, nodeId: d.nodeId),
+    ));
+  }
+
   // ── 4. Drainage advisories: too-flat slope / over-long branch (info) ────────
   // Each advisory is edge-locatable via the edge's `from` node sheet. Title is
   // fixed (golden-friendly); the engine message carries the specifics.
@@ -514,6 +540,31 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       case IssueSeverity.info:
         infos.add(issue);
     }
+  }
+
+  // ── 5c. Unconnected (unfed) electrical panels (warning, locatable) ──────────
+  // The electrical analogue of 3c: a sub-panel that is neither the origin nor
+  // fed by any feeder — a board wired to nothing. Detected read-only by the pure
+  // engine (`electricalConnectivityDefects`). Located on the single-line via the
+  // panel id (the Review row jumps to the Electrical workspace + focuses it).
+  final electricalProject = ref.watch(electricalProjectProvider);
+  for (final d in electricalConnectivityDefects(electricalProject)) {
+    final panel =
+        electricalProject.panels.where((p) => p.id == d.panelId).firstOrNull;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      // NOT prefixed `electrical:` on purpose: the compliance store CLAIMS every
+      // `electrical:*` design-issue (it assumes those mirror the solved system's
+      // own warnings, already counted in the 'Electrical circuit sizing' row).
+      // This unfed-panel check is designIssues-ONLY, so an `electrical:` kind
+      // would be claimed AND never counted — swallowed from the sign-off card.
+      // A plain kind lets it surface as its own compliance row + fail the verdict.
+      kind: 'unfed-panel:${d.panelId}',
+      title: str(StringKey.issueUnfedPanelTitle),
+      message: str.format(
+          StringKey.issueUnfedPanelMessage, {'panel': panel?.name ?? d.panelId}),
+      locate: IssueLocation('', panelId: d.panelId),
+    ));
   }
 
   // ── 6. Unverified // VERIFY standards (info, not locatable) ─────────────────

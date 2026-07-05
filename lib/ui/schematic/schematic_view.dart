@@ -456,24 +456,41 @@ class _Toolbar extends StatelessWidget {
             Container(width: 1, height: 22, color: colors.border),
             const SizedBox(width: MechXSpacing.md),
             Flexible(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(context.strings(StringKey.schematicRiserService),
-                        style: context.type.caption
-                            .copyWith(color: colors.textMuted)),
-                    const SizedBox(width: MechXSpacing.sm),
-                    for (final s in ServiceType.values) ...[
-                      _ServiceChip(
-                        service: s,
-                        selected: s == service,
-                        onTap: () => onService(s),
-                      ),
-                      const SizedBox(width: MechXSpacing.xs),
-                    ],
+              // All ten services don't fit the toolbar, so the chip strip
+              // scrolls horizontally. A soft right-edge fade signals "more to
+              // scroll" so a chip clipped at the viewport edge reads as
+              // scrollable rather than a broken half-word (e.g. "Exhaus").
+              child: ShaderMask(
+                shaderCallback: (rect) => const LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  stops: [0.0, 0.93, 1.0],
+                  colors: [
+                    Color(0xFF000000),
+                    Color(0xFF000000),
+                    Color(0x00000000),
                   ],
+                ).createShader(rect),
+                blendMode: BlendMode.dstIn,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(context.strings(StringKey.schematicRiserService),
+                          style: context.type.caption
+                              .copyWith(color: colors.textMuted)),
+                      const SizedBox(width: MechXSpacing.sm),
+                      for (final s in ServiceType.values) ...[
+                        _ServiceChip(
+                          service: s,
+                          selected: s == service,
+                          onTap: () => onService(s),
+                        ),
+                        const SizedBox(width: MechXSpacing.xs),
+                      ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -1960,10 +1977,21 @@ class _AutoSchematicPainter extends CustomPainter {
       final elevM = building.elevationOf(i).meters;
       final label = '${floor.name}  +${elevM.toStringAsFixed(1)} m';
 
+      // Keep the floor label clear of the top-left (?) guide button: on a
+      // compressed surface the topmost band's label would otherwise paint under
+      // it (e.g. "Level 1 +4.0 m" behind the button). When the label row falls
+      // within the button's height, start it just right of the button instead
+      // of at the gutter edge.
+      final labelY = top + MechXSpacing.xs;
+      const buttonBottom = MechXSpacing.sm + 26; // button: top=sm, 26px tall
+      final labelX = labelY < buttonBottom + MechXSpacing.xs
+          ? MechXSpacing.md + 26 + MechXSpacing.sm
+          : MechXSpacing.sm;
+
       _drawText(
         canvas,
         label,
-        Offset(MechXSpacing.sm, top + MechXSpacing.xs),
+        Offset(labelX, labelY),
         fontSize: _floorLabelFontSize,
         color: colors.textMuted,
         fontWeight: FontWeight.w500,

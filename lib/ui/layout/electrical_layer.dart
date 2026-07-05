@@ -193,7 +193,10 @@ class ElectricalLayoutLayer extends ConsumerWidget {
           // `_UnplacedTray` caps its own scroll region (see `_kTrayMaxHeight`).
           Positioned(
             right: MechXSpacing.md,
-            top: MechXSpacing.md,
+            // Sit BELOW the top-right minimap (≤108px tall, pinned at top:sm on
+            // the Layout canvas) so the two top-right overlays don't collide —
+            // the tray was overlapping and clipping against it.
+            top: MechXSpacing.sm + 108 + MechXSpacing.md,
             child: _UnplacedTray(
               project: project,
               result: result,

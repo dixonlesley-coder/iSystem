@@ -197,11 +197,17 @@ screen applies them via `ProjectController.setFloors` + the occupancy/fire/rainf
 **unified Design Issues review panel** (`store/design_issues_store.dart`
 `designIssuesProvider` — a read-only fan-in that aggregates every existing design warning
 into one typed `DesignIssue` list: out-of-band air velocities + unsized air elements
-[`airVelocityChecksProvider`/`airUnsizedProvider`], uncalibrated sheets, and unverified
-`// VERIFY` standards [`SniProfile`/`SniVentilationProfile`/`PuilProfile.verifyChecklist`],
-each with a severity + an optional `IssueLocation(sheetId, {nodeId, edgeId})`; surfaced as an
-`IssuesCard` in the Review hub grouped Warnings/Advisory with a count, a locatable row jumping
-to the element via sheet + selection + `WorkspaceView.plan` — no engine change);
+[`airVelocityChecksProvider`/`airUnsizedProvider`], uncalibrated sheets, unverified
+`// VERIFY` standards [`SniProfile`/`SniVentilationProfile`/`PuilProfile.verifyChecklist`], and
+**network connectivity** — component-level no-source/island [`network/connectivity.dart`
+`networkConnectivityDefects`] PLUS per-element **unconnected** checks: a loose run/duct END
+(a degree-1 bare-`main` junction that isn't a fixture / terminal / plant / another run) and an
+ORPHAN (a node placed but joined to nothing, incl. unplaced equipment) via `networkElementDefects`,
+and an **unfed electrical panel** via `electrical/connectivity.dart` `electricalConnectivityDefects`
+(all read-only, never resize; each a warning with a stable per-element `kind` + locate) —
+each with a severity + an optional `IssueLocation(sheetId, {nodeId, edgeId})` (or `panelId`);
+surfaced as an `IssuesCard` in the Review hub grouped Warnings/Advisory with a count, a locatable
+row jumping to the element via sheet + selection + `WorkspaceView.plan`);
 **command palette + workflow stepper** (`store/command_store.dart` — `commandPaletteOpenProvider`
 + a pure `fuzzyScore`/`fuzzyMatches` + `workflowStageStateProvider` deriving the five
 `WorkflowStage`s [Calibrate · Floors · Draw · Size · Report] done/active O(1) from project
@@ -524,11 +530,11 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.11.0`** (the release that ships the whole Apple-design review — Waves 1–5
-  + the C1/C4 electrical-shell restructure — atop the v1.10.0 UX/workflow-review
-  baseline; `pubspec.yaml` is the version source of truth, `1.11.0+17`; each release
-  = bump → merge to the default branch → `release.yml` `workflow_dispatch` with
-  `publish=true`).
+  is `v1.12.0`** (the unconnected-element design checks — loose pipe/duct ends,
+  orphans, unfed panels, surfaced as locatable Review warnings — plus a golden-review
+  readability batch, atop the v1.11.0 Apple-design-review baseline; `pubspec.yaml` is
+  the version source of truth, `1.12.0+18`; each release = bump → merge to the default
+  branch → `release.yml` `workflow_dispatch` with `publish=true`).
   **Wave 4b (electrical drawings export) landed**: pure-engine
   `report/electrical_calc_report.dart` (Markdown over the sized system + power one-line
   + verify items) and `report/electrical_dxf_export.dart` (R12 DXF single-line —

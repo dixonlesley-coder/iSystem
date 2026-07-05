@@ -27,7 +27,7 @@ void main() {
       );
       expect(s.allPass, isTrue);
       expect(s.date, '2026-07-02');
-      expect(_item(s, 'Air velocities within band').pass, isTrue);
+      expect(_item(s, 'Air velocity').pass, isTrue);
       expect(_item(s, 'Sheet calibration').pass, isTrue);
       expect(_item(s, 'Standards verification').pass, isTrue);
       expect(_item(s, 'Electrical circuit sizing').pass, isTrue);
@@ -154,7 +154,7 @@ void main() {
         date: 'd',
         acknowledged: {warn.key},
       );
-      expect(_item(s, 'Air velocities within band').pass, isFalse);
+      expect(_item(s, 'Air velocity').pass, isFalse);
       expect(_item(s, 'Electrical circuit sizing').pass, isFalse);
       expect(s.allPass, isFalse);
     });
