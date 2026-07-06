@@ -9,12 +9,12 @@ this one asks what they never looked at, what regressed, and what still forces a
 professional back into AutoCAD or Excel. The product goal ordering every priority here:
 **user friendliness and ease of use first.**
 
-**Course correction (2026-07-06, same day):** the product owner sharpened the goal — the
-EXPORTS must be construction-ready: a mandor (site foreman) and site engineers build from
-them directly, with no AutoCAD redraw and no Excel supplement. An export-readiness audit
+**Addition (2026-07-06, same day):** the product owner sharpened the goal — the EXPORTS
+must be construction-ready: a mandor (site foreman) and site engineers build from them
+directly, with no AutoCAD redraw and no Excel supplement. An export-readiness audit
 (Theme N: the real artifact set generated, rasterized, and reviewed by four site-lens
-critics) was added, and the implementation plan below was re-sequenced so the
-**Export-Ready Campaign** leads; in-app comfort work follows it.
+critics) was added ON TOP of the original review, and its 25 findings form an additional
+**Wave 7 — export-ready deliverables**; Waves 1-6 stand unchanged.
 
 ## Method
 
@@ -41,8 +41,8 @@ critics) was added, and the implementation plan below was re-sequenced so the
 
 **Total: 106 verified findings — 33 high / 59 medium / 14 low** (81 from the two-lens
 review, themes A–M; 25 from the export-readiness audit, Theme N). Grouped into 14 themes
-and sequenced into the Export-Ready Campaign (ER-1..ER-5) followed by five app waves
-(AW-1..AW-5).
+and sequenced into seven implementation waves — the original six, plus Wave 7 for the
+export-ready work.
 
 ## Executive summary — the six storylines
 
@@ -84,7 +84,7 @@ and sequenced into the Export-Ready Campaign (ER-1..ER-5) followed by five app w
    a drainage stack can size smaller than its branches (N17); one global drawing number
    stamps every sheet (N19); and the riser DXF puts plumbing on E-BREAKER layers (N15).
    These are the findings that decide whether the foreman builds from iSystem or from a
-   redrawn AutoCAD set — the plan below now leads with them.
+   redrawn AutoCAD set — they form their own dedicated Wave 7 below.
 
 What is already excellent and must not regress: the one-geometry `SldSheet` pipeline, the
 §10 elevation truth, the honesty/`// VERIFY` surface, the undo timeline, atomic saves, and
@@ -1211,124 +1211,45 @@ The transparency section is titled '## ⚠ Unverified values', and the standards
 - **Direction:** ASCII heading ('Unverified values'), and reword the basis note to a governed statement ('Designed to SNI 8153:2015; 2025 edition published — differences under review') sourced from the profile.
 
 
-## Implementation plan — the Export-Ready Campaign, then the app waves
+## Implementation plan — seven waves
 
-**Re-sequenced 2026-07-06 on the product owner's direction: the exports are the
-product.** The Export-Ready Campaign (ER-1..ER-5) carries everything that decides
-whether a mandor and the engineers can build from the issued set without an AutoCAD
-redraw or an Excel supplement; the app waves (AW-1..AW-5, the surviving original
-sequence) follow. Each phase leaves the gate green (`flutter analyze` + engine + app
-tests) and re-captures only deliberately-changed goldens. The export-samples dev tool
-(`packages/mechx_engine/tool/generate_export_samples.dart`) is the acceptance harness:
-after every ER phase, regenerate the 13 artifacts and re-read the sheets.
+Waves 1-6 are the original ease-of-use sequencing (visible/honesty defects first, then
+feel, trust, deliverable fidelity, velocity, polish — unchanged). Wave 7 is the ADDITIONAL
+export-ready wave from the 2026-07-06 audit: all 25 Theme-N findings as one deliverable
+campaign, schedulable independently of the others. Each wave leaves the gate green
+(`flutter analyze` + engine + app tests) and re-captures only deliberately-changed goldens.
 
-### ER-1 — Fix what the sheets say (all small)
+### Wave 1 - Stop the lies, fix the visible defects
 
-Every item is S-effort and corrupts or contradicts an ISSUED artifact today: garbled separators in purchase-critical cells, a life-safety RCD present in one document and absent from its sibling, an untitled flagship drawing, fused size tags, clipped goldens, unstable tags, a compliance check that never reaches the verdict. This phase alone makes the current exports honest.
+Everything here is small (S effort), user-visible, and either factually wrong on screen today or lets the app silently misbehave. This wave alone removes most of what makes v1.12.0 feel unfinished: labels clipped in the app's own goldens, an empty state that gives wrong instructions, a read-only mode that commits edits, a compliance verdict missing a whole check, and exports whose equipment tags change between runs.
 
 | ID | Finding | Severity | Effort |
 |---|---|---|---|
-| N1 | Every vector PDF garbles the '·' separator to '?' — inside the purchase-critical cells | high | S |
-| N10 | Socket RCDs appear in the calc report but not on the board schedule the panel is built from | high | S |
-| N2 | The mechanical riser PDF titles itself 'Untitled project' | medium | S |
-| N3 | Colliding size tags fuse into unreadable strings on plan and riser — a wrong-diameter risk | medium | S |
-| N7 | No sheet lists every fixture a floor serves — the fan-out caps at 4 with '+N more' | medium | S |
-| N12 | MCCB incomers print a B/C/D curve code — 'MCCB C160A/4P' is not a valid designation | low | S |
-| N18 | One duct prints four ways across the set: Ø315, DN315, O315, and bare 315 | low | S |
-| N25 | The calc report reads unprofessionally for a permit office: emoji heading and a superseded-standard admission | medium | S |
 | E1 | The fixed on-canvas help button overlaps and clips real diagram labels in the Riser top-left corner | high | S |
-| B9 | The 'focus this panel' deep zoom clips the board schedule at both edges at common window widths | high | S |
-| H5 | Riser fan-out truncates circuit names mid-word with no ellipsis, producing garbled labels on an issued drawing | medium | S |
-| I1 | Pressure-zone over-limit check never reaches the compliance verdict | high | S |
-| J3 | Equipment-schedule tags (AHU-01, AHU-02…) are re-synthesized from room list order every export, not from stable room identity | high | S |
-| G7 | Generic DETAIL WATER METER / DETAIL PRV SET boxes draw unconditionally regardless of whether the project has those components | low | S |
-| I7 | Two fire-protection verdict strings leak hardcoded English into the Bahasa Indonesia calc report | low | S |
-| E6 | Floor elevation notation disagrees between the live canvas and the exported drawing | medium | S |
-
-### ER-2 — Print the numbers the site needs
-
-The engine already computes lengths, velocities, fault data, and sizing bases — it just never prints them. Cable lengths (already driving Vdrop), per-device kA, CT ratios, riser cut lengths, per-run fixture-unit/flow/velocity bases, pipe velocity, phase imbalance, containment notation.
-
-| ID | Finding | Severity | Effort |
-|---|---|---|---|
-| N8 | No cable length or panel location anywhere in the electrical set | high | M |
-| N9 | No breaker carries an interrupting capacity (kA) on a representative project | high | M |
-| N6 | The riser diagram carries no lengths — riser spools cannot be prefabricated from it | medium | M |
-| N11 | Metering prints as a bare 'CT' glyph — no ratio, class, or burden | medium | M |
-| N16 | The calc report never shows the per-run sizing basis (fixture units, flow, velocity) | medium | M |
-| I3 | Water/drainage pipe velocity — a code-driven sizing input — is never displayed anywhere in the app or the calc report | high | S |
-| H3 | Breaker short-circuit rating (Icu, kA) shows on the PDF/DXF export but never on the live canvas the engineer designs against | medium | S |
-| H7 | Phase-imbalance percentage is computed but never printed on the panel schedule itself | low | S |
-| H6 | Large-CSA feeder cables silently drop all route/containment notation | medium | S |
-| I5 | The calc report's Bill of Materials cannot show which sizes were manually overridden, and never breaks results out per run | medium | M |
-
-### ER-3 — Locate, identify, set out
-
-One tag system across plan/riser/BOM/report so an element can be referenced; fixture and equipment identity on the plan; mounting heights from the already-modelled elevations; gridline/dimension ties so the mandor can mark the slab; the plan-accurate electrical layout export for panel locations and cable routes.
-
-| ID | Finding | Severity | Effort |
-|---|---|---|---|
-| N13 | No shared element tag links plan, riser, BOM, and report — a run cannot be traced across the set | high | L |
-| N5 | No mounting height or elevation on any plan run — every service is a flat 2D line | high | M |
-| N4 | Plans carry no setting-out data — no gridlines, no dimensions, no ties to structure | high | M |
-| G1 | Mechanical equipment on the plan carries no tag — cannot be told apart or cross-referenced | high | L |
-| H1 | No plan-accurate electrical layout export — only schematic single-lines | high | L |
-| N14 | The BOM has no material column, and duct sizes file under 'nominal_dn_mm' | high | M |
-
-### ER-4 — One coherent submittal set
-
-Per-sheet drawing numbers, one title block with sign-off rows and a set-wide sheet counter, cover sheet + Daftar Gambar + general-notes/master-legend, the all-sheets package, a complete procurement schedule (apparatus categories + editable model/spec), correct DXF layer namespaces, one air-colour and size-notation language.
-
-| ID | Finding | Severity | Effort |
-|---|---|---|---|
-| N19 | One global drawing number stamps every exported sheet — the set has no unique DWG numbers | high | M |
-| N20 | Two incompatible title blocks across the set; SLD sheets lack DRAWN/CHECKED/APPROVED and sheet i-of-N | high | L |
-| N21 | No cover sheet, drawing list (Daftar Gambar), or general-notes/master-symbol sheet is generated | medium | L |
-| N24 | Every sheet carries a different private legend; plan symbols are defined nowhere on the plan | medium | M |
-| N22 | The equipment schedule omits the transformer, genset, and capacitor bank the model already carries | medium | M |
-| N23 | Every equipment-schedule Model/spec is the '—' placeholder, with no app field to fill it | medium | M |
-| N15 | The mechanical riser DXF writes plumbing onto ELECTRICAL layers (E-BREAKER/E-TEXT/E-FRAME) | medium | M |
-| J2 | The one-folder submittal package only bundles the plan drawing for the currently active sheet, not every floor | high | M |
-| E2 | Supply-air, return-air, and exhaust colors disagree between canvas, PDF, and DXF | high | M |
-| I6 | The title-block Revision tag and the Revision-history table are two disconnected fields with no cross-check | medium | S |
-
-### ER-5 — Drawing content that ends the redraw
-
-The deeper drafting-fidelity lifts: the stack>=branch engine rule, slope annotation, isolation-valve conventions, the hot-water recirc loop, drainage/vent riser fidelity with the STP terminus, pump-set valve trains.
-
-| ID | Finding | Severity | Effort |
-|---|---|---|---|
-| N17 | A drainage stack can size SMALLER than the branches discharging into it (DN65 stack, DN75 branches) | medium | M |
-| G5 | Drainage/vent/rainwater runs never show their fall/slope on the plan | medium | S |
-| G6 | No isolation valve is drawn, suggested, or flagged missing at a floor's riser branch takeoff | medium | M |
-| G2 | Hot-water recirculation loop has no visual representation on the riser diagram | high | L |
-| G3 | Auto-generated PUMP-SET DETAIL omits the suction/discharge valve train the app already models elsewhere | medium | M |
-| G4 | Drainage/vent/rainwater risers get none of clean water's reference-detail treatment, and there is no STP/septic/sewer terminus symbol | high | L |
-
-### AW-1 — In-app honesty and visible defects
-
-The remaining Wave-1 items that live inside the app rather than on the issued sheets.
-
-| ID | Finding | Severity | Effort |
-|---|---|---|---|
 | B1 | Switching sheets/floors mid-draw silently corrupts the network with a phantom node | high | S |
 | B2 | Air-duct warning badges collide with size labels instead of dodging them | medium | S |
 | B3 | Dropping a riser on the top floor band silently reconnects it to the floor below, with no drop preview | medium | S |
 | B4 | Auto mode is documented and labeled 'read-only' but a single click can add a permanent network edge | medium | S |
+| B9 | The 'focus this panel' deep zoom clips the board schedule at both edges at common window widths | high | S |
 | D1 | Power one-line's empty state tells the user to add sources 'from the Loads palette' but no such cards exist there | high | S |
 | D3 | Main/run edges shown in Riser Edit mode look identical to risers but are completely inert | medium | S |
 | D7 | The on-canvas (?) guide explains Layout-to-Riser but never Layout's electrical layer to the Electrical workspace | medium | S |
 | A2 | 'New from template' silently mutates project state when the forced file picker is cancelled | medium | S |
 | A3 | Onboarding calls step 2 'Floors'; the nav rail item you must click is called 'Building' | medium | S |
 | A4 | Workflow stepper marks 'Floors' done just because something was drawn, without the engineer ever reviewing floor heights | medium | S |
+| E6 | Floor elevation notation disagrees between the live canvas and the exported drawing | medium | S |
+| H5 | Riser fan-out truncates circuit names mid-word with no ellipsis, producing garbled labels on an issued drawing | medium | S |
+| I1 | Pressure-zone over-limit check never reaches the compliance verdict | high | S |
+| I7 | Two fire-protection verdict strings leak hardcoded English into the Bahasa Indonesia calc report | low | S |
 | B8 | A size label that can't find a clear spot vanishes with no trace it exists | low | S |
+| G7 | Generic DETAIL WATER METER / DETAIL PRV SET boxes draw unconditionally regardless of whether the project has those components | low | S |
+| J3 | Equipment-schedule tags (AHU-01, AHU-02…) are re-synthesized from room list order every export, not from stable room identity | high | S |
 | J4 | Duplicate floor silently drops any equipment node not wired into a run | low | S |
 | L2 | Review-hub compliance actions (Locate / Acknowledge / quick-fix) are mouse-only | high | S |
-| C5 | A circuit's starter/control type has no UI control anywhere, making the drafting feature it drives permanently unreachable by hand | medium | S |
 
-### AW-2 — Feel: responsiveness, input, and Windows basics
+### Wave 2 - Feel: responsiveness, input, and Windows basics
 
-Unchanged from the original Wave 2.
+The app must feel native before it can feel polished. The headline item is decoupling the full sizing+solve+BOM pipeline from every drag frame; the rest are the Windows-citizenship and input-consistency items that make a desktop app trustworthy: async open, remembered window state, file association, keyboard reach, honest hit targets.
 
 | ID | Finding | Severity | Effort |
 |---|---|---|---|
@@ -1347,23 +1268,46 @@ Unchanged from the original Wave 2.
 | C2 | Selection auto-scroll-to-top only fires the first time; re-selecting a different element while scrolled away leaves the updated editor invisible | medium | S |
 | D9 | Two 'reveal panel detail' gestures on the same summary card zoom to inconsistent, undocumented scales | low | S |
 
-### AW-3 — In-app trust surface
+### Wave 3 - The trust surface: make sign-off possible
 
-The interactive halves of the trust storyline (the printed halves moved into ER-2/ER-4). H2's drawing half is superseded by N10; its canvas half remains here.
+The MEP lens's sharpest verdict: results exist but cannot be interrogated. Pipe velocity is sized-to but never shown; the heatmap cannot answer 'does this fixture pass'; acknowledgements have no author or timestamp; a plan revision silently keeps a stale calibration; the submittal package quietly omits floors. This wave turns outputs into evidence.
 
 | ID | Finding | Severity | Effort |
 |---|---|---|---|
 | I2 | The pressure heatmap has no absolute reference and no per-node readout — it cannot answer 'does this fixture pass?' | high | M |
+| I3 | Water/drainage pipe velocity — a code-driven sizing input — is never displayed anywhere in the app or the calc report | high | S |
 | E4 | The pressure heatmap's flat/uniform state renders as washed-out tan, not a confident data visualization | medium | S |
 | I4 | Advisory acknowledgement — the mechanism that makes PASS reachable — has no author, timestamp, or justification | medium | S |
+| I5 | The calc report's Bill of Materials cannot show which sizes were manually overridden, and never breaks results out per run | medium | M |
+| I6 | The title-block Revision tag and the Revision-history table are two disconnected fields with no cross-check | medium | S |
 | J1 | Replacing a mid-project plan revision silently keeps the old scale calibration with no re-verification prompt | high | M |
+| J2 | The one-folder submittal package only bundles the plan drawing for the currently active sheet, not every floor | high | M |
 | H2 | RCD/RCBO protection is invisible on the panel schedule and single-line drawing | high | S |
+| H3 | Breaker short-circuit rating (Icu, kA) shows on the PDF/DXF export but never on the live canvas the engineer designs against | medium | S |
 | H4 | CT ratio for revenue metering is computed but never reaches the drawing or the UI | medium | S |
+| H7 | Phase-imbalance percentage is computed but never printed on the panel schedule itself | low | S |
+
+### Wave 4 - Deliverable fidelity: kill the AutoCAD redraw
+
+The drafter lens's redraw-forcers, in dependency order: stable equipment tags on the plan, the hot-water return loop and drainage/vent riser fidelity, valve trains at takeoffs and pump sets, slope annotation, one air-colour language across canvas/PDF/DXF, containment notation, and the missing plan-accurate electrical layout export.
+
+| ID | Finding | Severity | Effort |
+|---|---|---|---|
+| G1 | Mechanical equipment on the plan carries no tag — cannot be told apart or cross-referenced | high | L |
+| G2 | Hot-water recirculation loop has no visual representation on the riser diagram | high | L |
+| G3 | Auto-generated PUMP-SET DETAIL omits the suction/discharge valve train the app already models elsewhere | medium | M |
+| G4 | Drainage/vent/rainwater risers get none of clean water's reference-detail treatment, and there is no STP/septic/sewer terminus symbol | high | L |
+| G5 | Drainage/vent/rainwater runs never show their fall/slope on the plan | medium | S |
+| G6 | No isolation valve is drawn, suggested, or flagged missing at a floor's riser branch takeoff | medium | M |
+| E2 | Supply-air, return-air, and exhaust colors disagree between canvas, PDF, and DXF | high | M |
 | E5 | No on-canvas legend for the colour-only Plumbing services while drawing | medium | S |
+| H1 | No plan-accurate electrical layout export — only schematic single-lines | high | L |
+| H6 | Large-CSA feeder cables silently drop all route/containment notation | medium | S |
+| C5 | A circuit's starter/control type has no UI control anywhere, making the drafting feature it drives permanently unreachable by hand | medium | S |
 
-### AW-4 — Drafting velocity and workspace parity
+### Wave 5 - Drafting velocity and workspace parity
 
-Unchanged from the original Wave 5.
+Production speed on real towers: layer lock and per-service isolate, rotate/mirror, click-to-place-repeatedly, one plan reused across repeated floors, batch undo, and bringing the electrical and riser canvases up to the Layout selection/editing bar (including finishing the inline-inspector convergence).
 
 | ID | Finding | Severity | Effort |
 |---|---|---|---|
@@ -1378,9 +1322,9 @@ Unchanged from the original Wave 5.
 | C1 | Electrical editing still uses floating right-side drawers instead of the converged persistent inline inspector | medium | M |
 | D6 | The Loads palette stays fully interactive-looking on the read-only Building-riser and Power-one-line tabs | medium | S |
 
-### AW-5 — Structure and long-tail polish
+### Wave 6 - Structure and long-tail polish
 
-Unchanged from the original Wave 6.
+The remaining information-architecture and visual-consistency items, the accessibility semantics pass, the minimum-window/reflow lift, and the one deliberately-scoped-out deep item (spatial clash checking) recorded as future work rather than silently dropped.
 
 | ID | Finding | Severity | Effort |
 |---|---|---|---|
@@ -1397,6 +1341,48 @@ Unchanged from the original Wave 6.
 | L4 | Screen-reader labelling covers a small fraction of the app's interactive controls | medium | M |
 | M1 | No minimum window size and no responsive reflow — fixed-px chrome breaks at ordinary Windows widths, and was never actually tested below 1280x832 | high | L |
 | J5 | No spatial clash/coordination check between disciplines sharing the same calibrated plan | low | L |
+
+### Wave 7 - Export-ready deliverables (Theme N)
+
+The additional wave landing the export-readiness audit: everything the four site-lens
+critics proved missing or wrong on the ISSUED artifact set, kept together so the exports
+cross the "build from it directly" bar as one campaign. It is additive to Waves 1-6 and
+independent of them — given the product priority on export readiness it can be scheduled
+at any point, including first. The export-samples dev tool
+(`packages/mechx_engine/tool/generate_export_samples.dart`) is this wave's acceptance
+harness: regenerate the 13 artifacts and re-read the sheets after each batch. Suggested
+internal order: the S-effort sheet-truth fixes (N1, N10, N2, N3, N7, N12, N18, N25), then
+print-the-numbers (N8, N9, N6, N11, N16), then locate/set-out (N13, N4, N5, N14), then the
+submittal set (N19, N20, N21, N22, N23, N24, N15) and the engine rule N17.
+
+| ID | Finding | Severity | Effort |
+|---|---|---|---|
+| N1 | Every vector PDF garbles the '·' separator to '?' — inside the purchase-critical cells | high | S |
+| N10 | Socket RCDs appear in the calc report but not on the board schedule the panel is built from | high | S |
+| N4 | Plans carry no setting-out data — no gridlines, no dimensions, no ties to structure | high | M |
+| N5 | No mounting height or elevation on any plan run — every service is a flat 2D line | high | M |
+| N8 | No cable length or panel location anywhere in the electrical set | high | M |
+| N9 | No breaker carries an interrupting capacity (kA) on a representative project | high | M |
+| N13 | No shared element tag links plan, riser, BOM, and report — a run cannot be traced across the set | high | L |
+| N14 | The BOM has no material column, and duct sizes file under 'nominal_dn_mm' | high | M |
+| N19 | One global drawing number stamps every exported sheet — the set has no unique DWG numbers | high | M |
+| N20 | Two incompatible title blocks across the set; SLD sheets lack DRAWN/CHECKED/APPROVED and sheet i-of-N | high | L |
+| N2 | The mechanical riser PDF titles itself 'Untitled project' | medium | S |
+| N3 | Colliding size tags fuse into unreadable strings on plan and riser — a wrong-diameter risk | medium | S |
+| N6 | The riser diagram carries no lengths — riser spools cannot be prefabricated from it | medium | M |
+| N7 | No sheet lists every fixture a floor serves — the fan-out caps at 4 with '+N more' | medium | S |
+| N11 | Metering prints as a bare 'CT' glyph — no ratio, class, or burden | medium | M |
+| N15 | The mechanical riser DXF writes plumbing onto ELECTRICAL layers (E-BREAKER/E-TEXT/E-FRAME) | medium | M |
+| N16 | The calc report never shows the per-run sizing basis (fixture units, flow, velocity) | medium | M |
+| N17 | A drainage stack can size SMALLER than the branches discharging into it (DN65 stack, DN75 branches) | medium | M |
+| N21 | No cover sheet, drawing list (Daftar Gambar), or general-notes/master-symbol sheet is generated | medium | L |
+| N22 | The equipment schedule omits the transformer, genset, and capacitor bank the model already carries | medium | M |
+| N23 | Every equipment-schedule Model/spec is the '—' placeholder, with no app field to fill it | medium | M |
+| N24 | Every sheet carries a different private legend; plan symbols are defined nowhere on the plan | medium | M |
+| N25 | The calc report reads unprofessionally for a permit office: emoji heading and a superseded-standard admission | medium | S |
+| N12 | MCCB incomers print a B/C/D curve code — 'MCCB C160A/4P' is not a valid designation | low | S |
+| N18 | One duct prints four ways across the set: Ø315, DN315, O315, and bare 315 | low | S |
+
 ## Deferred / explicitly out of scope
 
 - **J5 (spatial clash/coordination check)** is the one L-effort item consciously deferred:

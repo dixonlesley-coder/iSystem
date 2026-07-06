@@ -261,11 +261,12 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 ## Known gaps / TODO (see decisions log for detail)
 
 - **Workflow + goldens two-lens review + export-readiness audit (2026-07-06) — the CURRENT plan
-  of record; EXPORT-READY FIRST**: `WORKFLOW-GOLDENS-REVIEW.md` (root) is a fresh,
+  of record (7 waves: the original 6 + the additional export-ready Wave 7)**:
+  `WORKFLOW-GOLDENS-REVIEW.md` (root) is a fresh,
   adversarially-verified review of the v1.12.0 workflow and the 16 golden screenshots from two
   POVs — a senior Apple UI/software engineer and a senior Indonesian MEP drafter/engineer — run
   AFTER the three prior campaigns (UX-workflow, CAD-output, Apple-design) fully landed, then
-  **course-corrected the same day on the product owner's direction: the EXPORTS are the product**
+  **extended the same day on the product owner's direction: the EXPORTS are the product**
   (a mandor/foreman and site engineers must build from the issued set directly — no AutoCAD
   redraw, no Excel supplement). **106 verified findings** (33 high / 59 medium / 14 low) in
   **14 themes (A–N)**: 81 from the two-lens review (70 raw → 67 merged → **0 refuted** by an
@@ -282,23 +283,22 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   setting-out ties; a drainage stack can auto-size SMALLER than its branches (DN65 stack / DN75
   branch — no stack≥branch clamp in `_sizeSanitaryEdge`); ONE global `documentNumber` stamps
   every exported sheet; the mech riser DXF writes plumbing onto E-BREAKER/E-TEXT layers; the
-  riser PDF titles itself "Untitled project". Sequenced as the **Export-Ready Campaign first**
-  (ER-1 fix-what-the-sheets-say [all S: `?` garble, RCD-on-schedule, untitled riser, fused tags,
-  clipped goldens 09/10/11, unstable tags, zone-check→compliance] → ER-2 print-the-numbers
-  [cable lengths, kA, CT, riser cut lengths, per-run FU/flow/velocity basis] → ER-3
-  locate/identify/set-out [one tag across plan/riser/BOM/report, heights, gridline ties,
-  electrical plan export] → ER-4 one-submittal-set [per-sheet DWG numbers, one title block with
-  sign-off + i-of-N, Daftar Gambar/cover/master legend, complete equipment schedule, DXF layer
-  namespaces] → ER-5 drawing-content rules [stack≥branch, slope, valve trains, HW-recirc +
-  drainage riser fidelity]) **then app waves AW-1..AW-5** (in-app honesty/visible defects; feel —
-  the every-drag-frame full re-solve, keyboard reach, Windows basics [.mechx association, window
-  state, min-size]; in-app trust [heatmap probe/scale, audited acks, stale-calibration prompt];
-  velocity/parity [layer lock, rotate/mirror, repeat-place, shared plan, multi-select parity];
-  structure/polish + the one deferred item: spatial clash checking). Three territories NO prior
+  riser PDF titles itself "Untitled project". Sequenced into **seven waves — the ORIGINAL six
+  unchanged** (W1 stop-the-lies/visible defects [clipped goldens 09/10/11, "read-only" Auto mode
+  committing an edge, the phantom mid-draw node, zone-check→compliance, unstable tags] → W2 feel
+  [the every-drag-frame full re-solve, keyboard reach, Windows basics: .mechx association, window
+  state, min-size] → W3 trust surface [heatmap probe/scale, velocity display, audited acks,
+  stale-calibration prompt, all-sheets submittal, RCD/kA/CT visibility] → W4 deliverable fidelity
+  [equipment tags, HW-recirc + drainage/vent riser fidelity + STP terminus, valve trains, slope,
+  one air-colour language, plan-accurate electrical export] → W5 velocity/parity [layer lock,
+  rotate/mirror, repeat-place, shared plan, multi-select parity] → W6 structure/polish + the one
+  deferred item: spatial clash checking) **plus the ADDITIONAL Wave 7 — export-ready
+  deliverables**: all 25 Theme-N findings as one campaign, additive to and schedulable
+  independently of Waves 1–6 (including first), with the dev tool as its acceptance harness
+  (regenerate the 13 artifacts + re-read the sheets after each batch). Three territories NO prior
   campaign covered: performance-feel, keyboard-only/accessibility, Windows-desktop citizenship.
-  Nothing from this review is implemented yet — work new improvements from that document (ER
-  phases first) rather than re-reviewing; after every ER phase, regenerate the 13 artifacts with
-  the dev tool and re-read the sheets.
+  Nothing from this review is implemented yet — work new improvements from that document rather
+  than re-reviewing.
 - **Apple-design review (2026-07-04) — the prior plan of record for ease-of-use/UX polish (fully landed)**:
   `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
   UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the
