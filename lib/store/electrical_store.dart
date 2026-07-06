@@ -13,7 +13,7 @@
 /// stores (`solve_store.dart`).
 library;
 
-import 'package:flutter/widgets.dart' show immutable;
+import 'package:flutter/widgets.dart' show immutable, Offset;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
@@ -122,16 +122,19 @@ class ElectricalSelectionController extends Notifier<ElectricalSelection?> {
   }
 }
 
-/// The editor target driving the STANDALONE electrical workspace's inline,
-/// selection-first inspector column (C1/C4): a single way (circuit), a whole
-/// panel's properties, or (null) nothing — in which case the column shows the
-/// Loads palette. Lifted out of `ElectricalView`'s local `State` so the sibling
-/// inspector column, rendered by the SHARED shell scaffold, can read + drive the
-/// same target the canvas opens. Mutually exclusive (one editor at a time).
+/// The editor target driving the electrical inline, selection-first inspector
+/// column (C1/C4): a single way (circuit), a whole panel's properties, the
+/// project-wide Service / Sources / Advanced sections, or (null) nothing — in
+/// which case the column shows the Loads palette. Lifted out of local `State` so
+/// the sibling inspector column, rendered by the SHARED shell scaffold, can read
+/// + drive the same target the canvas opens. Mutually exclusive (one editor at a
+/// time). Drives BOTH the standalone electrical workspace AND the unified Layout
+/// canvas's electrical layer (C1: a double-click there routes here too, so the
+/// shared column shows the editor inline instead of a floating drawer).
 ///
 /// Distinct from [electricalSelectionProvider] (the Layout electrical LAYER's
-/// marker selection) on purpose: this drives the abstract single-line
-/// workspace's inspector, so lifting it here never disturbs the Layout layer.
+/// marker selection) — that tracks which on-plan marker is highlighted; THIS
+/// tracks which editor body the inspector column shows.
 /// Transient UI state — NEVER persisted to `.mechx`.
 @immutable
 sealed class ElectricalInspectorTarget {
@@ -169,6 +172,40 @@ class ElectricalPanelTarget extends ElectricalInspectorTarget {
   int get hashCode => panelId.hashCode;
 }
 
+/// Show the project-wide Service & Earthing settings — earthing system, origin
+/// fault level, busbar clearing time + the MEP-duty feed (C1: was a floating
+/// `_AnimatedDrawerShell`, now an inline section in the shared inspector column).
+@immutable
+class ElectricalServiceTarget extends ElectricalInspectorTarget {
+  const ElectricalServiceTarget();
+  @override
+  bool operator ==(Object other) => other is ElectricalServiceTarget;
+  @override
+  int get hashCode => (ElectricalServiceTarget).hashCode;
+}
+
+/// Show the SOURCE-chain editor — genset / transformer / capacitor / dual-tx
+/// (C1: was a floating drawer, now an inline section in the shared column).
+@immutable
+class ElectricalSourcesTarget extends ElectricalInspectorTarget {
+  const ElectricalSourcesTarget();
+  @override
+  bool operator ==(Object other) => other is ElectricalSourcesTarget;
+  @override
+  int get hashCode => (ElectricalSourcesTarget).hashCode;
+}
+
+/// Show the read-only Issues & advanced-study review (C1: was a 420-px floating
+/// drawer, now an inline section in the shared inspector column).
+@immutable
+class ElectricalAdvancedTarget extends ElectricalInspectorTarget {
+  const ElectricalAdvancedTarget();
+  @override
+  bool operator ==(Object other) => other is ElectricalAdvancedTarget;
+  @override
+  int get hashCode => (ElectricalAdvancedTarget).hashCode;
+}
+
 /// The active inline-inspector edit target (null = nothing → the Loads palette
 /// shows). A `Notifier` (not local widget state) so the electrical canvas and
 /// the sibling inspector column drive one shared target.
@@ -192,6 +229,30 @@ class ElectricalInspectorTargetController
     state = ElectricalPanelTarget(panelId);
   }
 
+  /// Open the Service & Earthing inline section (C1).
+  void showService() {
+    _revealInspector();
+    state = const ElectricalServiceTarget();
+  }
+
+  /// Open the Sources inline section (C1).
+  void showSources() {
+    _revealInspector();
+    state = const ElectricalSourcesTarget();
+  }
+
+  /// Toggle the Issues & advanced-study inline section (C1) — the toolbar's
+  /// Issues button acts as a toggle (open when closed, close when already
+  /// showing it).
+  void toggleAdvanced() {
+    if (state is ElectricalAdvancedTarget) {
+      state = null;
+    } else {
+      _revealInspector();
+      state = const ElectricalAdvancedTarget();
+    }
+  }
+
   void clear() {
     if (state != null) state = null;
   }
@@ -202,6 +263,28 @@ class ElectricalInspectorTargetController
   /// without this an edit on a collapsed inspector would set an invisible target.
   void _revealInspector() =>
       ref.read(inspectorCollapsedProvider.notifier).set(false);
+}
+
+/// The active tab of the standalone electrical workspace. Lifted out of
+/// `ElectricalView`'s local `State` (C1/D6) so the SIBLING inspector column —
+/// rendered by the shared shell scaffold — can read it: the Loads palette is
+/// interactive only on [singleLine] and renders disabled on the read-only
+/// projections. Transient UI state — NEVER persisted to `.mechx`.
+enum ElectricalTab { singleLine, powerOneLine, riser }
+
+/// The active [ElectricalTab] (defaults to the interactive single-line canvas).
+final electricalTabProvider =
+    NotifierProvider<ElectricalTabController, ElectricalTab>(
+  ElectricalTabController.new,
+);
+
+class ElectricalTabController extends Notifier<ElectricalTab> {
+  @override
+  ElectricalTab build() => ElectricalTab.singleLine;
+
+  void set(ElectricalTab tab) {
+    if (state != tab) state = tab;
+  }
 }
 
 /// The canonical electrical project. The controller owns the single
@@ -912,6 +995,35 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// No-op when the id is unknown.
   void setPanelPosition(String id, double x, double y) =>
       _replacePanel(id, (p) => p.copyWith(x: x, y: y), record: false);
+
+  /// Move SEVERAL panels to absolute canvas positions in ONE undo step (D2 —
+  /// the multi-select group arrow-nudge). The caller passes each panel's
+  /// already-resolved+snapped target (`positions` = id → world Offset), so
+  /// auto-laid panels [with null x/y] materialise at their resolved spot + the
+  /// nudge delta. Unknown ids are skipped; an empty map is a no-op (byte-
+  /// identical). One `_commit`, so a single Ctrl+Z restores every moved panel.
+  void movePanels(Map<String, Offset> positions) {
+    if (positions.isEmpty) return;
+    _commit(_withProject(panels: [
+      for (final p in state.panels)
+        if (positions.containsKey(p.id))
+          p.copyWith(x: positions[p.id]!.dx, y: positions[p.id]!.dy)
+        else
+          p,
+    ]));
+  }
+
+  /// Delete SEVERAL panels in ONE undo step (D2 — the multi-select Delete). The
+  /// feeder ways that fed a deleted panel are left dangling exactly as
+  /// [deletePanel] leaves them (single-panel parity). Empty ⇒ no-op.
+  void deletePanels(Iterable<String> ids) {
+    final set = ids.toSet();
+    if (set.isEmpty) return;
+    _commit(_withProject(panels: [
+      for (final p in state.panels)
+        if (!set.contains(p.id)) p,
+    ]));
+  }
 
   /// Add a new panel at a canvas position. When [fedByCircuitId] is given it is
   /// a fed sub-board; otherwise a utility-fed board.

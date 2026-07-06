@@ -123,8 +123,13 @@ const List<_Group> _groups = [
 ];
 
 /// The scrollable palette column.
+///
+/// [enabled] gates interactivity (D6): on the read-only Building-riser / Power
+/// one-line tabs the palette has no drop target, so it renders dimmed + inert
+/// (no drag, no keyboard activation) with a one-line hint replacing the header.
 class ElectricalPalette extends ConsumerStatefulWidget {
-  const ElectricalPalette({super.key});
+  final bool enabled;
+  const ElectricalPalette({super.key, this.enabled = true});
 
   @override
   ConsumerState<ElectricalPalette> createState() => _ElectricalPaletteState();
@@ -194,6 +199,8 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    final type = context.type;
+    final enabled = widget.enabled;
     return GlassSurface(
       // Floats over the electrical canvas; its left edge faces the diagram.
       edge: Border(
@@ -210,12 +217,26 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
               MechXSpacing.md,
               MechXSpacing.xs,
             ),
-            child: MechXSectionLabel(
-                context.strings(StringKey.electricalPaletteLoads)),
+            // D6: on a read-only projection the header is a plain hint (no drop
+            // target here); otherwise the "Loads" section label.
+            child: enabled
+                ? MechXSectionLabel(
+                    context.strings(StringKey.electricalPaletteLoads))
+                : Text(
+                    context.strings(StringKey.electricalPaletteReadOnly),
+                    style: type.caption.copyWith(color: colors.textMuted),
+                  ),
           ),
           const SizedBox(height: MechXSpacing.sm),
           Expanded(
-            child: MechXScrollbar(
+            // D6: dim + inert (no drag / no keyboard activation) when disabled.
+            child: IgnorePointer(
+              ignoring: !enabled,
+              child: ExcludeFocus(
+                excluding: !enabled,
+                child: Opacity(
+                  opacity: enabled ? 1.0 : 0.4,
+                  child: MechXScrollbar(
               controller: _scrollController,
               child: SingleChildScrollView(
               controller: _scrollController,
@@ -253,8 +274,8 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
                           // L1: a keyboard alternative to dragging — Enter/Space
                           // on a focused card adds the way to the selected (or
                           // first) panel, mirroring the mechanical
-                          // SegmentPalette's dropAtCentre.
-                          onActivate: () => _addLoad(c),
+                          // SegmentPalette's dropAtCentre. Null when read-only.
+                          onActivate: enabled ? () => _addLoad(c) : null,
                           // Show the load's industry-standard symbol so the
                           // palette matches how it'll appear on the plan.
                           leading: LoadSymbol(
@@ -270,6 +291,9 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
                 ],
               ),
             ),
+            ),
+                ),
+              ),
             ),
           ),
         ],

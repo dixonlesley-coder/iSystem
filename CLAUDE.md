@@ -377,8 +377,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (H1); size-matched conduit tokens (H6); a starter picker in the circuit editor (C5); and the
   two Wave-7 residuals closed (TX/genset/cap-bank Model-spec hooks; the auto-fitting title
   cell). Gate: engine 1371 / app 957 / analyze clean; goldens 01/02/03/09/10_single_line
-  re-captured; harness 16 artifacts, all verdicts PASS. Waves 5–6 remain — work them from
-  that document.
+  re-captured; harness 16 artifacts, all verdicts PASS. **Wave 5 (velocity + parity) HAS ALSO
+  LANDED** (2026-07-06, see the §15 row): per-discipline layer LOCK excluded from every hit
+  path (F1), per-service view isolate chips inside multi-service layers (F4, view-only),
+  click-to-place-repeatedly armed palette mode (F5), one-undo duplicate-floor-to-range (F3),
+  rotate/mirror selection transforms with exact 45° preservation + Shift+R/Shift+M bindings
+  (F2), 'Use plan on another floor…' shared-source sheets (F6, dedupe-verified), the FINISHED
+  inline-inspector convergence — no more drawer overlays anywhere electrical (C1), electrical
+  marquee/multi-select/nudge (D2), riser-edit multi-select + batch move (D5), and honestly
+  disabled palettes on read-only tabs (D6). The review caught + fixed a marquee edge-capture
+  gap in the inert-service filter. Gate: engine 1371 / app 997 / analyze clean; goldens
+  01/02/03/06/10_electrical_riser re-captured. Wave 6 (structure & polish) remains — work it
+  from that document.
 - **Apple-design review (2026-07-04) — the prior plan of record for ease-of-use/UX polish (fully landed)**:
   `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
   UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the

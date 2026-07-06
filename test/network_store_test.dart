@@ -407,6 +407,71 @@ void main() {
       expect(s2.single.floorIndex, 1);
     });
 
+    test('F3: duplicateFloorToTargets is ONE undo step for the whole range',
+        () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // Two runs on s1/floor 0: 3 nodes, 2 run edges.
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(100, 0));
+      n.placeRunPoint('s1', 0, const Offset(200, 0));
+      n.setTool(DrawTool.select);
+      final before = c.read(networkControllerProvider).network;
+      final beforeNodes = before.nodes.length; // 3
+      final beforeEdges = before.edges.length; // 2
+
+      // Batch-duplicate onto THREE target floors in one action.
+      n.duplicateFloorToTargets(
+        fromSheetId: 's1',
+        fromFloor: 0,
+        targets: const [
+          (sheetId: 's2', floor: 1),
+          (sheetId: 's3', floor: 2),
+          (sheetId: 's4', floor: 3),
+        ],
+      );
+      final after = c.read(networkControllerProvider).network;
+      // 3 targets × (3 nodes + 2 edges).
+      expect(after.nodes.length, beforeNodes + 3 * 3);
+      expect(after.edges.length, beforeEdges + 3 * 2);
+      for (final s in const ['s2', 's3', 's4']) {
+        expect(after.nodes.where((nd) => nd.sheetId == s).length, 3,
+            reason: 'each target floor got its own copy of the 3 nodes');
+      }
+
+      // ONE undo (via the global timeline) restores the ENTIRE pre-duplicate
+      // state — proving the whole range collapsed to a single history entry.
+      c.read(historyProvider.notifier).undo();
+      final undone = c.read(networkControllerProvider).network;
+      expect(undone.nodes.length, beforeNodes);
+      expect(undone.edges.length, beforeEdges);
+      expect(undone.nodes.where((nd) => nd.sheetId != 's1'), isEmpty,
+          reason: "a single undo removed all three floors' copies");
+    });
+
+    test('F3: duplicateFloorToTargets skips a source==target pair', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(100, 0));
+      n.setTool(DrawTool.select);
+      final before = c.read(networkControllerProvider).network.nodes.length;
+      // The source pair is a no-op; only s2 receives a copy.
+      n.duplicateFloorToTargets(
+        fromSheetId: 's1',
+        fromFloor: 0,
+        targets: const [
+          (sheetId: 's1', floor: 0),
+          (sheetId: 's2', floor: 1),
+        ],
+      );
+      final after = c.read(networkControllerProvider).network;
+      expect(after.nodes.where((nd) => nd.sheetId == 's1').length, before);
+      expect(after.nodes.where((nd) => nd.sheetId == 's2').length, before);
+    });
+
     test('node drag moves the node and is a single undo step', () {
       final c = makeContainer();
       final n = twoRunChain(c);

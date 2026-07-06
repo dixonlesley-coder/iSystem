@@ -93,7 +93,6 @@ typedef CanvasViewport = ({ViewportTransform transform, Size size});
 class _CanvasSelection {
   final String panelId;
   final String? circuitId;
-  const _CanvasSelection.panel(this.panelId) : circuitId = null;
   const _CanvasSelection.circuit(this.panelId, String this.circuitId);
   bool get isCircuit => circuitId != null;
 }
@@ -153,19 +152,90 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   Offset _feederCursor = Offset.zero;
   String? _feederHoverPanel;
 
-  // The selected element (a panel, or a way within one) — drives the selection
-  // ring / row highlight + the Delete key (I5).
+  // The selected WAY within a panel (a schedule row) — drives the row highlight
+  // + the Delete key (I5). Panel selection is the separate [_selectedPanels] set
+  // (D2 multi-select) so shift-click / marquee can select several boards; at
+  // most one of the two is active at a time.
   _CanvasSelection? _selection;
 
-  String? get _selectedPanel =>
-      _selection != null && !_selection!.isCircuit ? _selection!.panelId : null;
+  // D2: the multi-selected panels (shift-click toggles, marquee unions, a plain
+  // click replaces). Drives the selection ring, group move / arrow-nudge, and
+  // multi-Delete.
+  Set<String> _selectedPanels = const {};
 
-  void _selectPanel(String id) =>
-      setState(() => _selection = _CanvasSelection.panel(id));
-  void _selectCircuit(String panelId, String circuitId) =>
-      setState(() => _selection = _CanvasSelection.circuit(panelId, circuitId));
+  // D2: the in-flight marquee (screen-space rectangle) drawn by an empty-canvas
+  // left-drag; null when not marqueeing.
+  Offset? _marqueeStart;
+  Offset? _marqueeCurrent;
+
+  // D2: live group-drag world positions (id → world) captured at drag start;
+  // null when no panel body drag is in flight.
+  Map<String, Offset>? _panelDragWorld;
+
+  void _selectPanel(String id) {
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+    setState(() {
+      _selection = null;
+      if (shift) {
+        final next = {..._selectedPanels};
+        if (!next.add(id)) next.remove(id);
+        _selectedPanels = next;
+      } else {
+        _selectedPanels = {id};
+      }
+    });
+  }
+
+  void _selectCircuit(String panelId, String circuitId) => setState(() {
+        _selection = _CanvasSelection.circuit(panelId, circuitId);
+        _selectedPanels = const {};
+      });
+
   void _clearSelection() {
-    if (_selection != null) setState(() => _selection = null);
+    if (_selection != null || _selectedPanels.isNotEmpty) {
+      setState(() {
+        _selection = null;
+        _selectedPanels = const {};
+      });
+    }
+  }
+
+  double _snapGrid(double v) => (v / kGrid).round() * kGrid.toDouble();
+
+  // ── D2: panel body drag (single or group move) ──────────────────────────────
+
+  void _beginPanelDrag(String panelId, Map<String, Offset> positions) {
+    _ctrl.pushUndoSnapshot();
+    // Drag the whole selection when the grabbed panel is part of a multi-select;
+    // otherwise just this panel (and make it the selection, so the ring tracks).
+    final group = (_selectedPanels.contains(panelId) && _selectedPanels.length > 1)
+        ? _selectedPanels
+        : {panelId};
+    if (!_selectedPanels.contains(panelId)) {
+      setState(() {
+        _selectedPanels = {panelId};
+        _selection = null;
+      });
+    }
+    _panelDragWorld = {
+      for (final id in group) id: positions[id] ?? Offset.zero,
+    };
+  }
+
+  void _updatePanelDrag(Offset worldDelta) {
+    final map = _panelDragWorld;
+    if (map == null) return;
+    map.updateAll((id, w) => w + worldDelta);
+    map.forEach((id, w) => _ctrl.setPanelPosition(id, w.dx, w.dy));
+  }
+
+  void _endPanelDrag() {
+    final map = _panelDragWorld;
+    if (map != null) {
+      map.forEach((id, w) =>
+          _ctrl.setPanelPosition(id, _snapGrid(w.dx), _snapGrid(w.dy)));
+    }
+    _panelDragWorld = null;
   }
 
   /// Frame the content on the first layout — computed SYNCHRONOUSLY (assigning
@@ -271,22 +341,78 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     if (event.buttons & kMiddleMouseButton != 0) {
       _panning = true;
       _lastPanPoint = event.localPosition;
+      return;
+    }
+    // D2: a primary-button drag on BLANK canvas starts a marquee (a panel body /
+    // feeder drag owns its own gesture, so a hit on a panel leaves the drag to
+    // pan / move it). Middle-drag still pans; pinch still zooms.
+    if (event.buttons & kPrimaryButton != 0) {
+      final project = ref.read(electricalProjectProvider);
+      final result = ref.read(electricalResultProvider);
+      final positions = _positions(project, result);
+      if (_panelAt(event.localPosition, positions, result.panels) == null) {
+        _marqueeStart = event.localPosition;
+        _marqueeCurrent = event.localPosition;
+      }
     }
   }
 
   void _onPointerMove(PointerMoveEvent event) {
-    if (!_panning) return;
-    _setTransform(_current.panned(event.localPosition - _lastPanPoint));
-    _lastPanPoint = event.localPosition;
+    if (_panning) {
+      _setTransform(_current.panned(event.localPosition - _lastPanPoint));
+      _lastPanPoint = event.localPosition;
+      return;
+    }
+    if (_marqueeStart != null) {
+      setState(() => _marqueeCurrent = event.localPosition);
+    }
   }
 
-  void _onPointerUp(PointerUpEvent event) => _panning = false;
+  void _onPointerUp(PointerUpEvent event) {
+    _panning = false;
+    final start = _marqueeStart;
+    final current = _marqueeCurrent;
+    if (start != null && current != null) {
+      final rect = Rect.fromPoints(start, current);
+      // A tiny box is a click (onTap clears); only a real drag marquee-selects.
+      if (rect.width > 4 || rect.height > 4) _selectPanelsInRect(rect);
+      setState(() {
+        _marqueeStart = null;
+        _marqueeCurrent = null;
+      });
+    }
+  }
 
-  // Left-drag on blank canvas pans (no box-select for this pass — matches the
-  // reference's panOnDrag default behaviour).
+  /// D2: union of the panels whose screen footprint overlaps the marquee [rect]
+  /// (shift-held extends the current selection, else replaces it).
+  void _selectPanelsInRect(Rect rect) {
+    final project = ref.read(electricalProjectProvider);
+    final result = ref.read(electricalResultProvider);
+    final positions = _positions(project, result);
+    final vt = _current;
+    final detail = vt.scale >= kLodThreshold;
+    final hit = <String>{};
+    positions.forEach((id, world) {
+      final panel = result.panels[id];
+      if (panel == null) return;
+      final w = panelCardWidthAt(panel, detail);
+      final h = panelFootprint(panel, detail);
+      final tl = vt.worldToScreen(world);
+      final r = Rect.fromLTWH(tl.dx, tl.dy, w * vt.scale, h * vt.scale);
+      if (r.overlaps(rect)) hit.add(id);
+    });
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+    setState(() {
+      _selection = null;
+      _selectedPanels = shift ? {..._selectedPanels, ...hit} : hit;
+    });
+  }
+
   void _onScaleStart(ScaleStartDetails details) => _lastScale = 1.0;
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
+    // D2: don't pan while a marquee is being drawn (the Listener drives it).
+    if (_marqueeStart != null) return;
     var vt = _current;
     if (details.focalPointDelta != Offset.zero) {
       vt = vt.panned(details.focalPointDelta);
@@ -322,8 +448,44 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       ref.read(historyProvider.notifier).redo();
       return KeyEventResult.handled;
     }
+    // D2: arrow keys nudge the selected panel(s) by one grid step, one undo step.
+    final isArrow = key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown;
+    if (_selectedPanels.isNotEmpty && isArrow) {
+      final dx = key == LogicalKeyboardKey.arrowLeft
+          ? -kGrid.toDouble()
+          : key == LogicalKeyboardKey.arrowRight
+              ? kGrid.toDouble()
+              : 0.0;
+      final dy = key == LogicalKeyboardKey.arrowUp
+          ? -kGrid.toDouble()
+          : key == LogicalKeyboardKey.arrowDown
+              ? kGrid.toDouble()
+              : 0.0;
+      final project = ref.read(electricalProjectProvider);
+      final result = ref.read(electricalResultProvider);
+      final positions = _positions(project, result);
+      final targets = <String, Offset>{
+        for (final id in _selectedPanels)
+          if (positions[id] != null)
+            id: Offset(
+              _snapGrid(positions[id]!.dx + dx),
+              _snapGrid(positions[id]!.dy + dy),
+            ),
+      };
+      if (targets.isNotEmpty) _ctrl.movePanels(targets);
+      return KeyEventResult.handled;
+    }
     if (key == LogicalKeyboardKey.delete ||
         key == LogicalKeyboardKey.backspace) {
+      // D2: a multi-panel selection deletes together (one undo step).
+      if (_selectedPanels.isNotEmpty) {
+        _ctrl.deletePanels(_selectedPanels);
+        setState(() => _selectedPanels = const {});
+        return KeyEventResult.handled;
+      }
       final sel = _selection;
       if (sel != null) {
         if (sel.isCircuit) {
@@ -336,8 +498,15 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       }
     }
     if (key == LogicalKeyboardKey.escape) {
-      if (_selection != null) {
-        setState(() => _selection = null);
+      if (_marqueeStart != null) {
+        setState(() {
+          _marqueeStart = null;
+          _marqueeCurrent = null;
+        });
+        return KeyEventResult.handled;
+      }
+      if (_selection != null || _selectedPanels.isNotEmpty) {
+        _clearSelection();
         return KeyEventResult.handled;
       }
     }
@@ -527,6 +696,22 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                         result.panels,
                         icuKaByPanel,
                       ),
+                    // D2: the marquee rectangle (empty-canvas left-drag), same
+                    // translucent-accent visual language as the mechanical
+                    // canvas's rubber-band. Ignores pointers so it never eats
+                    // the drag it is tracking.
+                    if (_marqueeStart != null && _marqueeCurrent != null)
+                      Positioned.fromRect(
+                        rect: Rect.fromPoints(_marqueeStart!, _marqueeCurrent!),
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: colors.accent.withAlpha(28),
+                              border: Border.all(color: colors.accent),
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               );
@@ -657,10 +842,11 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
           onAcceptWithDetails: (d) => _ctrl.moveCircuit(
               d.data.fromPanelId, d.data.circuitId, panel.panelId),
           builder: (ctx, cand, rej) => _PanelDraggable(
-          panelId: panel.panelId,
-          world: world,
-          scale: scale,
-          controller: _ctrl,
+          // D2: route the body drag through the state so a grabbed panel that is
+          // part of a multi-selection moves the WHOLE selection in one undo step.
+          onDragStart: () => _beginPanelDrag(panel.panelId, positions),
+          onDragUpdate: (screenDelta) => _updatePanelDrag(screenDelta / scale),
+          onDragEnd: _endPanelDrag,
           child: _ScaledChild(
             scale: scale,
             width: w,
@@ -671,7 +857,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               project: project,
               result: result,
               breakerIcuKaByPanelId: icuKaByPanel,
-              selected: _selectedPanel == panel.panelId,
+              selected: _selectedPanels.contains(panel.panelId),
               selectedCircuitId:
                   (_selection?.isCircuit ?? false) &&
                           _selection!.panelId == panel.panelId
@@ -833,9 +1019,15 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   void focusIssue(String panelId, {String? circuitId}) {
     focusPanelSchedule(panelId);
     setState(() {
-      _selection = circuitId == null
-          ? _CanvasSelection.panel(panelId)
-          : _CanvasSelection.circuit(panelId, circuitId);
+      if (circuitId == null) {
+        // A whole-board locate rings the panel (D2: panel selection is the
+        // multi-select set, not the way [_selection]).
+        _selection = null;
+        _selectedPanels = {panelId};
+      } else {
+        _selection = _CanvasSelection.circuit(panelId, circuitId);
+        _selectedPanels = const {};
+      }
     });
   }
 
@@ -870,6 +1062,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   }
 
   ViewportTransform get transform => _current;
+
+  /// D2: the current multi-selected panels (test-only observation hook).
+  @visibleForTesting
+  Set<String> get selectedPanelIds => _selectedPanels;
 }
 
 /// Drag payload for re-parenting a load: which circuit, off which panel.
@@ -2204,60 +2400,33 @@ class _OutletHandle extends StatelessWidget {
 // Panel body drag (move) — wraps the card so a body drag repositions the panel.
 // ════════════════════════════════════════════════════════════════════════════
 
-class _PanelDraggable extends StatefulWidget {
-  final String panelId;
-  final Offset world;
-  final double scale;
-  final ElectricalProjectController controller;
+/// Wraps a panel card so a body drag repositions the panel(s). The actual move
+/// is driven by the host state (D2): [onDragUpdate] carries the raw SCREEN delta
+/// (`d.delta`), letting the host move a whole multi-selection together in one
+/// undo step, snapping to the grid on release.
+class _PanelDraggable extends StatelessWidget {
+  final VoidCallback onDragStart;
+  final ValueChanged<Offset> onDragUpdate;
+  final VoidCallback onDragEnd;
   final Widget child;
 
   const _PanelDraggable({
-    required this.panelId,
-    required this.world,
-    required this.scale,
-    required this.controller,
+    required this.onDragStart,
+    required this.onDragUpdate,
+    required this.onDragEnd,
     required this.child,
   });
-
-  @override
-  State<_PanelDraggable> createState() => _PanelDraggableState();
-}
-
-class _PanelDraggableState extends State<_PanelDraggable> {
-  Offset? _dragWorld;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onPanStart: (_) {
-        // One undo snapshot per drag — the live `setPanelPosition` updates
-        // don't record, so the whole move collapses into a single undo step.
-        widget.controller.pushUndoSnapshot();
-        _dragWorld = widget.world;
-      },
-      onPanUpdate: (d) {
-        final next = (_dragWorld ?? widget.world) + d.delta / widget.scale;
-        _dragWorld = next;
-        widget.controller.setPanelPosition(widget.panelId, next.dx, next.dy);
-      },
-      onPanEnd: (_) {
-        final w = _dragWorld;
-        if (w != null) {
-          // Snap to the 16px world grid on release.
-          widget.controller.setPanelPosition(
-            widget.panelId,
-            _snap(w.dx),
-            _snap(w.dy),
-          );
-        }
-        _dragWorld = null;
-      },
-      child: widget.child,
+      onPanStart: (_) => onDragStart(),
+      onPanUpdate: (d) => onDragUpdate(d.delta),
+      onPanEnd: (_) => onDragEnd(),
+      child: child,
     );
   }
-
-  double _snap(double v) => (v / kGrid).round() * kGrid.toDouble();
 }
 
 // ════════════════════════════════════════════════════════════════════════════

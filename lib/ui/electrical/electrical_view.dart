@@ -80,8 +80,6 @@ class _CircuitRef {
 /// exporters draw — one source of truth, no parallel layout. (The compact
 /// whole-building Overview remains an EXPORT — 'Building single-line (overview)'
 /// — but no longer a redundant tab now the single-line canvas covers it.)
-enum _Tab { singleLine, powerOneLine, riser }
-
 /// Renders the electrical single-line canvas and hosts the editing overlays.
 class ElectricalView extends ConsumerStatefulWidget {
   const ElectricalView({super.key});
@@ -96,7 +94,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   final GlobalKey<SldSheetViewState> _riserKey =
       GlobalKey<SldSheetViewState>();
 
-  _Tab _tab = _Tab.singleLine;
+  // The active tab moved OUT of this State to `electricalTabProvider` (C1/D6)
+  // so the SIBLING inspector column can read it (the Loads palette is inert on
+  // the read-only projections). This view SETS + WATCHES the provider.
 
   // The circuit / panel open in the inline inspector column moved OUT of this
   // State to `electricalInspectorTargetProvider` (C1/C4) so the SIBLING
@@ -109,17 +109,8 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   _CircuitRef? _circuitMenu;
   Offset _menuAt = Offset.zero;
 
-  /// Whether the advanced-study drawer is open.
-  bool _showAdvanced = false;
-
   /// Whether the gesture-help popover is open.
   bool _showHelp = false;
-
-  /// Whether the Service & Earthing inspector is open.
-  bool _showService = false;
-
-  /// Whether the Sources editor (genset / capacitor / transformer) is open.
-  bool _showSources = false;
 
   /// Whether the Export menu (SLD / report / power one-line) is open.
   bool _showExportMenu = false;
@@ -178,14 +169,10 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       setState(() => _showExportMenu = false);
       return KeyEventResult.handled;
     }
-    final hasEdit = ref.read(electricalInspectorTargetProvider) != null;
-    if (hasEdit || _showService || _showSources || _showAdvanced) {
+    // Any open inline inspector section (circuit / panel / Service / Sources /
+    // Advanced) is one shared target — Esc clears it.
+    if (ref.read(electricalInspectorTargetProvider) != null) {
       ref.read(electricalInspectorTargetProvider.notifier).clear();
-      setState(() {
-        _showService = false;
-        _showSources = false;
-        _showAdvanced = false;
-      });
       return KeyEventResult.handled;
     }
     if (_showHelp) {
@@ -193,20 +180,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
-  }
-
-  /// G5 — the Issues-drawer "locate" action: close the advanced drawer, switch
-  /// to the single-line canvas (the only tab hosting the interactive board
-  /// schedule), and frame + select the offending panel / way. Mirrors the
-  /// Review -> Electrical jump seam already wired in this file.
-  void _locateWarning(String panelId, String? circuitId) {
-    setState(() {
-      _showAdvanced = false;
-      if (_tab != _Tab.singleLine) _tab = _Tab.singleLine;
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _canvasKey.currentState?.focusIssue(panelId, circuitId: circuitId);
-    });
   }
 
   @override
@@ -223,7 +196,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     // clear the request.
     ref.listen(electricalFocusProvider, (prev, req) {
       if (req == null) return;
-      if (_tab != _Tab.singleLine) setState(() => _tab = _Tab.singleLine);
+      ref.read(electricalTabProvider.notifier).set(ElectricalTab.singleLine);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final circuitId = req.circuitId;
         if (circuitId != null) {
@@ -239,29 +212,32 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       });
     });
 
+    final tab = ref.watch(electricalTabProvider);
+    final advancedOpen =
+        ref.watch(electricalInspectorTargetProvider) is ElectricalAdvancedTarget;
     final body = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _Toolbar(
           warningCount: result.warnings.length,
-          tab: _tab,
-          onTab: (t) => setState(() => _tab = t),
-          onIssues: () => setState(() => _showAdvanced = false),
+          tab: tab,
+          onTab: (t) => ref.read(electricalTabProvider.notifier).set(t),
           onService: _openService,
           onSources: _openSources,
           onAddPanel: _addPanel,
           onExport: () => setState(() => _showExportMenu = !_showExportMenu),
           onToggleAdvanced: () =>
-              setState(() => _showAdvanced = !_showAdvanced),
-          advancedOpen: _showAdvanced,
+              ref.read(electricalInspectorTargetProvider.notifier)
+                  .toggleAdvanced(),
+          advancedOpen: advancedOpen,
         ),
         Expanded(
-          child: switch (_tab) {
-            _Tab.singleLine => _buildCanvasArea(project, result),
-            _Tab.powerOneLine => PowerOneLineView(
+          child: switch (tab) {
+            ElectricalTab.singleLine => _buildCanvasArea(project, result),
+            ElectricalTab.powerOneLine => PowerOneLineView(
               oneLine: advanced.powerOneLine,
             ),
-            _Tab.riser => _buildRiserArea(project, result),
+            ElectricalTab.riser => _buildRiserArea(project, result),
           },
         ),
       ],
@@ -315,21 +291,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           ),
         if (_circuitMenu != null) _buildCircuitMenu(),
         if (_panelMenu != null) _buildPanelMenu(),
-        if (_showAdvanced)
-          _AdvancedDrawer(
-            advanced: advanced,
-            result: result,
-            onClose: () => setState(() => _showAdvanced = false),
-            onLocate: _locateWarning,
-          ),
-        if (_showService)
-          _ServiceInspector(
-            onClose: () => setState(() => _showService = false),
-          ),
-        if (_showSources)
-          _SourcesEditor(
-            onClose: () => setState(() => _showSources = false),
-          ),
+        // C1: the Service & Earthing / Sources / Advanced-study editors no longer
+        // float here — like the circuit / panel editors they now render INLINE in
+        // the sibling inspector column (driven by electricalInspectorTargetProvider).
       ],
       ),
     );
@@ -480,25 +444,23 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   }
 
   void _openService() {
-    ref.read(electricalInspectorTargetProvider.notifier).clear();
-    setState(() {
-      _panelMenu = null;
-      _circuitMenu = null;
-      _showAdvanced = false;
-      _showSources = false;
-      _showService = true;
-    });
+    ref.read(electricalInspectorTargetProvider.notifier).showService();
+    if (_panelMenu != null || _circuitMenu != null) {
+      setState(() {
+        _panelMenu = null;
+        _circuitMenu = null;
+      });
+    }
   }
 
   void _openSources() {
-    ref.read(electricalInspectorTargetProvider.notifier).clear();
-    setState(() {
-      _panelMenu = null;
-      _circuitMenu = null;
-      _showAdvanced = false;
-      _showService = false;
-      _showSources = true;
-    });
+    ref.read(electricalInspectorTargetProvider.notifier).showSources();
+    if (_panelMenu != null || _circuitMenu != null) {
+      setState(() {
+        _panelMenu = null;
+        _circuitMenu = null;
+      });
+    }
   }
 
   void _openPanelMenu(String panelId, Offset globalPos) {
@@ -632,9 +594,8 @@ class _PanelMenuState {
 
 class _Toolbar extends StatelessWidget {
   final int warningCount;
-  final _Tab tab;
-  final ValueChanged<_Tab> onTab;
-  final VoidCallback onIssues;
+  final ElectricalTab tab;
+  final ValueChanged<ElectricalTab> onTab;
   final VoidCallback onService;
   final VoidCallback onSources;
   final VoidCallback onAddPanel;
@@ -646,7 +607,6 @@ class _Toolbar extends StatelessWidget {
     required this.warningCount,
     required this.tab,
     required this.onTab,
-    required this.onIssues,
     required this.onService,
     required this.onSources,
     required this.onAddPanel,
@@ -672,22 +632,22 @@ class _Toolbar extends StatelessWidget {
           // Tabs (left) — the shared selectable-segment vocabulary.
           MechXSegment(
             label: context.strings(StringKey.electricalTabSingleLine),
-            selected: tab == _Tab.singleLine,
-            onTap: () => onTab(_Tab.singleLine),
+            selected: tab == ElectricalTab.singleLine,
+            onTap: () => onTab(ElectricalTab.singleLine),
           ),
           const SizedBox(width: MechXSpacing.xs),
           MechXSegment(
             label: context.strings(StringKey.electricalTabPowerOneLine),
-            selected: tab == _Tab.powerOneLine,
-            onTap: () => onTab(_Tab.powerOneLine),
+            selected: tab == ElectricalTab.powerOneLine,
+            onTap: () => onTab(ElectricalTab.powerOneLine),
           ),
           const SizedBox(width: MechXSpacing.xs),
           MechXSegment(
             // 'Building riser' — disambiguated from the nav rail's mechanical
             // Riser view (one word must not name two destinations).
             label: context.strings(StringKey.electricalTabBuildingRiser),
-            selected: tab == _Tab.riser,
-            onTap: () => onTab(_Tab.riser),
+            selected: tab == ElectricalTab.riser,
+            onTap: () => onTab(ElectricalTab.riser),
           ),
           // Actions (right). The canonical MechXButton "gray button"; danger /
           // muted tones only recolour the label.
@@ -1204,81 +1164,16 @@ class _SldProjectionArea extends StatelessWidget {
   }
 }
 
-// ── Animated drawer shell ───────────────────────────────────────────────────
-
-/// A right-anchored sheet drawer: the modal scrim fades in over the content
-/// (using the brightness-aware [MechXColors.scrim]) and the panel slides in
-/// from the right + fades on mount (MechXMotion.appear), matching the iOS
-/// sheet idiom. Tap the scrim to close. Reused by the Service & Earthing and
-/// the Advanced-study drawers so both present identically.
-class _AnimatedDrawerShell extends StatefulWidget {
-  final double width;
-  final VoidCallback onClose;
-  final Widget child;
-  const _AnimatedDrawerShell({
-    required this.width,
-    required this.onClose,
-    required this.child,
-  });
-
-  @override
-  State<_AnimatedDrawerShell> createState() => _AnimatedDrawerShellState();
-}
-
-class _AnimatedDrawerShellState extends State<_AnimatedDrawerShell> {
-  bool _shown = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() => _shown = true);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: widget.onClose,
-            child: AnimatedOpacity(
-              opacity: _shown ? 1 : 0,
-              duration: MechXMotion.appear,
-              curve: MechXMotion.standard,
-              child: ColoredBox(color: colors.scrim),
-            ),
-          ),
-        ),
-        Positioned(
-          top: 0,
-          right: 0,
-          bottom: 0,
-          child: AnimatedSlide(
-            offset: _shown ? Offset.zero : const Offset(1, 0),
-            duration: MechXMotion.appear,
-            curve: MechXMotion.standard,
-            child: AnimatedOpacity(
-              opacity: _shown ? 1 : 0,
-              duration: MechXMotion.appear,
-              curve: MechXMotion.standard,
-              child: SizedBox(width: widget.width, child: widget.child),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 // ── Service inspector ─────────────────────────────────────────────────────────
 
-class _ServiceInspector extends ConsumerWidget {
+/// The project-wide Service & Earthing settings — earthing system, origin fault
+/// level, busbar clearing time + the MEP-duty feed. C1: an INLINE inspector
+/// section (transparent, floats on the shared column's Liquid-Glass), no longer
+/// a floating right-drawer. Opened via the toolbar 'Service & Earthing' button →
+/// [electricalInspectorTargetProvider] `showService`.
+class ElectricalServiceInspector extends ConsumerWidget {
   final VoidCallback onClose;
-  const _ServiceInspector({required this.onClose});
+  const ElectricalServiceInspector({super.key, required this.onClose});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1294,16 +1189,7 @@ class _ServiceInspector extends ConsumerWidget {
     final duties = ref.watch(mepEquipmentLoadsProvider);
     final dutyFeedOn = ref.watch(mepDutyFeedEnabledProvider);
 
-    return _AnimatedDrawerShell(
-      width: 340,
-      onClose: onClose,
-      child: Container(
-        decoration: BoxDecoration(
-          color: colors.surface,
-          border: Border(left: BorderSide(color: colors.border)),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: Column(
+    return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
@@ -1416,9 +1302,7 @@ class _ServiceInspector extends ConsumerWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
+        );
   }
 }
 
@@ -1431,9 +1315,9 @@ class _ServiceInspector extends ConsumerWidget {
 /// the dual-transformer split bus. All route through the store's
 /// field-preserving `_withProject`; the capacitor / transformer are drawing
 /// inputs only (// VERIFY, never a sizing path).
-class _SourcesEditor extends ConsumerWidget {
+class ElectricalSourcesInspector extends ConsumerWidget {
   final VoidCallback onClose;
-  const _SourcesEditor({required this.onClose});
+  const ElectricalSourcesInspector({super.key, required this.onClose});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1456,16 +1340,7 @@ class _SourcesEditor extends ConsumerWidget {
             context.strings(StringKey.electricalGensetTransferManual),
         };
 
-    return _AnimatedDrawerShell(
-      width: 340,
-      onClose: onClose,
-      child: Container(
-        decoration: BoxDecoration(
-          color: colors.surface,
-          border: Border(left: BorderSide(color: colors.border)),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: Column(
+    return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
@@ -1594,42 +1469,36 @@ class _SourcesEditor extends ConsumerWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
+        );
   }
 }
 
-// ── Advanced study drawer (read-only A8) ────────────────────────────────────
+// ── Advanced study section (read-only A8) ───────────────────────────────────
 
-class _AdvancedDrawer extends StatelessWidget {
-  final AdvancedStudy advanced;
-  final ElectricalSystemResult result;
+/// The read-only Issues & advanced-study review. C1: an INLINE inspector section
+/// (transparent) hosted in the shared column, no longer a 420-px floating drawer.
+/// A warning's "locate" routes through [electricalFocusProvider] (the same
+/// Review→Electrical jump the workspace already consumes) and clears this target.
+class ElectricalAdvancedInspector extends ConsumerWidget {
   final VoidCallback onClose;
-
-  /// G5 — locate a warning's offending board / way on the single-line canvas.
-  final void Function(String panelId, String? circuitId) onLocate;
-  const _AdvancedDrawer({
-    required this.advanced,
-    required this.result,
-    required this.onClose,
-    required this.onLocate,
-  });
+  const ElectricalAdvancedInspector({super.key, required this.onClose});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    return _AnimatedDrawerShell(
-      width: 420,
-      onClose: onClose,
-      child: Container(
-        decoration: BoxDecoration(
-          color: colors.surface,
-          border: Border(left: BorderSide(color: colors.border)),
-          boxShadow: MechXShadow.popover,
-        ),
-        child: Column(
+    final advanced = ref.watch(electricalAdvancedProvider);
+    final result = ref.watch(electricalResultProvider);
+    void onLocate(String panelId, String? circuitId) {
+      // Frame the offending board/way on the single-line canvas (via the
+      // workspace's electricalFocusProvider listener) and close this section.
+      ref.read(electricalInspectorTargetProvider.notifier).clear();
+      ref
+          .read(electricalFocusProvider.notifier)
+          .request(panelId, circuitId: circuitId);
+    }
+
+    return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
@@ -1679,9 +1548,7 @@ class _AdvancedDrawer extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
+        );
   }
 }
 

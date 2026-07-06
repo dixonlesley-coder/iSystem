@@ -5,6 +5,7 @@ import 'package:mechx_engine/network/network.dart';
 import '../../data/project_document.dart' show SavedAssembly;
 import '../../store/network_store.dart';
 import '../../store/sheets_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'segment_palette.dart';
@@ -151,8 +152,82 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
     if (_assemblyLocal != null) setState(() => _assemblyLocal = null);
   }
 
+  /// Route a [PaletteItem] to its matching store add-action at [world] — the
+  /// ONE placement path shared by a drag-drop (`onAcceptWithDetails`) and an
+  /// F5 armed click, so both use the identical merge/snap behaviour.
+  void _placeItem(PaletteItem data, Offset world) {
+    final transform = _transform;
+    final ctrl = ref.read(networkControllerProvider.notifier);
+    final snapWorld = _kSnapScreenPx / transform.scale; // ≈14 screen px
+    // B12: for a POINT drop with no node/edge merge target, snap the free drop
+    // position onto the plan underlay (a DXF wall / reference line / PDF ink
+    // ridge) so a placed fixture/fitting lands on the architecture. The merge
+    // (node/edge) path always takes precedence — underlay only moves a free
+    // drop; a segment drop keeps its two-endpoint node snap unchanged.
+    Offset pointWorld(Offset w) {
+      if (_mergeTarget(w, snapWorld).point != null) return w;
+      return underlaySnapFor(ref, widget.sheetId, transform.scale)?.call(w) ?? w;
+    }
+
+    switch (data.kind) {
+      case PaletteItemKind.pipeSegment:
+      case PaletteItemKind.ductSegment:
+        // A segment snaps its two endpoints to nearby nodes (addSegment).
+        ctrl.addSegment(
+          widget.sheetId,
+          widget.floorIndex,
+          world,
+          service: data.service,
+          snapRadius: snapWorld,
+        );
+      // C2: point drops go through the MERGE intents so the snap ring's promise
+      // is TRUE — adopt the ringed node / tee into the ringed run, never a
+      // coincident free twin that carries demand the solve misses.
+      case PaletteItemKind.fitting:
+        ctrl.mergeOrAddFitting(
+            widget.sheetId, widget.floorIndex, pointWorld(world),
+            snapRadius: snapWorld);
+      case PaletteItemKind.terminal:
+        ctrl.mergeOrAddTerminal(
+            widget.sheetId, widget.floorIndex, pointWorld(world),
+            snapRadius: snapWorld);
+      case PaletteItemKind.component:
+        final c = data.component;
+        if (c != null) {
+          ctrl.mergeOrAddComponent(
+              widget.sheetId, widget.floorIndex, pointWorld(world), c,
+              snapRadius: snapWorld);
+        }
+    }
+  }
+
+  /// The human label of an armed item for the hint pill.
+  String _armedLabel(PaletteItem item) => switch (item.kind) {
+        PaletteItemKind.pipeSegment ||
+        PaletteItemKind.ductSegment =>
+          'Segment',
+        PaletteItemKind.fitting => 'Fitting',
+        PaletteItemKind.terminal => 'Terminal',
+        PaletteItemKind.component => item.component?.label ?? 'Component',
+      };
+
   @override
   Widget build(BuildContext context) {
+    // F5 — while a palette card is ARMED, a canvas tap places another instance
+    // (right-click / Esc disarms). The capture layer sits ABOVE the drop
+    // targets; it is translucent, so a palette DRAG still reaches the drop
+    // target beneath and middle-drag pan / scroll-zoom still reach the canvas.
+    // Null when nothing is armed ⇒ the overlay is byte-identical.
+    final armed = ref.watch(armedPlacementProvider);
+    return Stack(
+      children: [
+        _buildDropTargets(context),
+        if (armed != null) _buildArmedCapture(context, armed),
+      ],
+    );
+  }
+
+  Widget _buildDropTargets(BuildContext context) {
     // Outer target: a SAVED ASSEMBLY card. It stamps the block CENTRED at the
     // cursor (fresh ids, one undo step, no merge — an assembly is placed whole,
     // it does not tee/adopt), so the preview is a simple drop-zone tint + a
@@ -212,6 +287,69 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
     );
   }
 
+  /// F5 — the armed click-to-place capture layer + a hint pill. Translucent so
+  /// palette drag-drop and canvas pan/zoom still work; a primary tap places
+  /// another instance, a secondary tap disarms.
+  Widget _buildArmedCapture(BuildContext context, PaletteItem armed) {
+    final colors = context.colors;
+    final type = context.type;
+    return Positioned.fill(
+      child: MouseRegion(
+        cursor: SystemMouseCursors.precise,
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTapUp: (d) =>
+              _placeItem(armed, _transform.screenToWorld(d.localPosition)),
+          onSecondaryTap: () =>
+              ref.read(armedPlacementProvider.notifier).disarm(),
+          child: Stack(
+            children: [
+              // The cursor-hint pill (top-centre) — mirrors the draw-tool mode
+              // pill so an armed placement mode reads on the canvas itself.
+              Positioned(
+                top: MechXSpacing.md + 40,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: MechXSpacing.sm + 2,
+                        vertical: MechXSpacing.xs + 1),
+                    decoration: BoxDecoration(
+                      color: colors.surface.withAlpha(240),
+                      borderRadius: MechXRadii.control,
+                      border: Border.all(color: colors.accent),
+                      boxShadow: MechXShadow.card,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 7,
+                          height: 7,
+                          margin: const EdgeInsets.only(right: MechXSpacing.xs),
+                          decoration: BoxDecoration(
+                            color: colors.accent,
+                            borderRadius: MechXRadii.small,
+                          ),
+                        ),
+                        Text(
+                          context.strings.format(StringKey.placementArmedHint,
+                              {'item': _armedLabel(armed)}),
+                          style: type.label.copyWith(color: colors.textPrimary),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildPaletteTarget(BuildContext context) {
     return DragTarget<PaletteItem>(
       hitTestBehavior: HitTestBehavior.translucent,
@@ -227,53 +365,8 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
       onAcceptWithDetails: (details) {
         final box = context.findRenderObject() as RenderBox?;
         if (box == null) return;
-        final local = box.globalToLocal(details.offset);
-        final transform = _transform;
-        final world = transform.screenToWorld(local);
-        final ctrl = ref.read(networkControllerProvider.notifier);
-        final snapWorld = _kSnapScreenPx / transform.scale; // ≈14 screen px
-        // B12: for a POINT drop with no node/edge merge target, snap the free
-        // drop position onto the plan underlay (a DXF wall / reference line / PDF
-        // ink ridge) so a placed fixture/fitting lands on the architecture. The
-        // merge (node/edge) path always takes precedence — underlay only moves a
-        // free drop; a segment drop keeps its two-endpoint node snap unchanged.
-        Offset pointWorld(Offset w) {
-          if (_mergeTarget(w, snapWorld).point != null) return w;
-          return underlaySnapFor(ref, widget.sheetId, transform.scale)
-                  ?.call(w) ??
-              w;
-        }
-
-        switch (details.data.kind) {
-          case PaletteItemKind.pipeSegment:
-          case PaletteItemKind.ductSegment:
-            // A segment snaps its two endpoints to nearby nodes (addSegment).
-            ctrl.addSegment(
-              widget.sheetId,
-              widget.floorIndex,
-              world,
-              service: details.data.service,
-              snapRadius: snapWorld,
-            );
-          // C2: point drops now go through the MERGE intents so the snap ring's
-          // promise is TRUE — adopt the ringed node / tee into the ringed run,
-          // never a coincident free twin that carries demand the solve misses.
-          case PaletteItemKind.fitting:
-            ctrl.mergeOrAddFitting(
-                widget.sheetId, widget.floorIndex, pointWorld(world),
-                snapRadius: snapWorld);
-          case PaletteItemKind.terminal:
-            ctrl.mergeOrAddTerminal(
-                widget.sheetId, widget.floorIndex, pointWorld(world),
-                snapRadius: snapWorld);
-          case PaletteItemKind.component:
-            final c = details.data.component;
-            if (c != null) {
-              ctrl.mergeOrAddComponent(
-                  widget.sheetId, widget.floorIndex, pointWorld(world), c,
-                  snapRadius: snapWorld);
-            }
-        }
+        final world = _transform.screenToWorld(box.globalToLocal(details.offset));
+        _placeItem(details.data, world);
         _clearDrag();
       },
       builder: (context, candidate, rejected) {

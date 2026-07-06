@@ -164,6 +164,69 @@ class SheetsController extends Notifier<SheetsState> {
   void addSheet(Sheet sheet) =>
       state = state.copyWith(sheets: [...state.sheets, sheet]);
 
+  /// F6: reuse an ALREADY-imported plan on another building floor — create a new
+  /// rail entry that SHARES [sheetId]'s source (pdf/dxf/dwg path + page + natural
+  /// size) and a COPY of its calibration, mapped to [floorIndex], with NO
+  /// re-import and NO re-calibration (the repetitive-tower "typical floor"
+  /// workflow). The new sheet gets a fresh unique id and its own name, so it is
+  /// an ordinary independent sheet: the shared-source relationship is plain
+  /// DUPLICATION, not a live link — a later recalibration or plan-replace on
+  /// either sheet leaves the other untouched. It is selected on creation.
+  ///
+  /// Additive / NOT undoable, like [addSheet] / [addSheets] (the new sheet
+  /// references no drawn node yet). The copied calibration is stamped via
+  /// [ProjectController.setCalibration] (an undoable project edit — so a single
+  /// Ctrl+Z clears just the copied scale, leaving the new sheet uncalibrated;
+  /// the sheet itself, like every sheet-add here, is not undoable).
+  ///
+  /// Portability is unaffected: the `.mechx` embed dedupes by source path
+  /// (`gatherSheetAssets`), so two sheets sharing one plan store that plan ONCE.
+  /// Returns the new sheet id, or null when [sheetId] is unknown.
+  String? duplicateSheetToFloor(String sheetId, int floorIndex) {
+    final source = state.sheetById(sheetId);
+    if (source == null) return null;
+    // Fresh unique id — mirrors [addSheets]' collision-avoidance so a second
+    // duplicate onto the same floor never reuses the id.
+    final used = state.sheets.map((s) => s.id).toSet();
+    final base = '$sheetId-f${floorIndex + 1}';
+    var id = base;
+    var n = 2;
+    while (used.contains(id)) {
+      id = '$base-$n';
+      n++;
+    }
+    // Name after the target floor so the rail reads at a glance.
+    final floors = ref.read(projectControllerProvider).floors;
+    final floorName = (floorIndex >= 0 && floorIndex < floors.length)
+        ? floors[floorIndex].name
+        : 'Floor ${floorIndex + 1}';
+    final duplicate = Sheet(
+      id: id,
+      name: '${source.name} - $floorName',
+      pdfPath: source.pdfPath,
+      dxfPath: source.dxfPath,
+      dwgPath: source.dwgPath,
+      pageIndex: source.pageIndex,
+      sizePx: source.sizePx,
+    );
+    final sheets = [...state.sheets, duplicate];
+    final sheetFloors = Map<String, int>.from(state.sheetFloors)
+      ..[id] = floorIndex;
+    state = state.copyWith(
+      sheets: sheets,
+      currentIndex: sheets.length - 1,
+      sheetFloors: sheetFloors,
+    );
+    // Copy the source's calibration onto the new sheet — a COPY (ScaleCalibration
+    // is immutable, so a shared reference can never couple the two). A no-op when
+    // the source is uncalibrated (the new sheet then reads "not calibrated").
+    final cal = ref.read(projectControllerProvider).calibrationFor(sheetId);
+    if (cal != null) {
+      ref.read(projectControllerProvider.notifier).setCalibration(id, cal);
+    }
+    return id;
+  }
+
   /// Append every sheet in [incoming] to the current set in ONE action (A6
   /// multi-file add), remapping any id that would collide with a live sheet — or
   /// a sibling earlier in this same batch — to a fresh unique one (`<id>-1`,

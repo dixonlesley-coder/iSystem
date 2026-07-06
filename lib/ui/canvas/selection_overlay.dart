@@ -8,6 +8,7 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
 
 import '../../store/inspector_store.dart';
+import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
@@ -254,16 +255,22 @@ class _NetworkSelectionOverlayState
     final hover = ref.watch(hoverTargetProvider);
     final calibration =
         ref.watch(projectControllerProvider).calibrationFor(sheetId);
+    // F1/F4 — services made INERT by a locked reference layer or the per-service
+    // view filter: their nodes carry no drag handle / outlet nub and never
+    // hit-test, so a faded coordination element is visible-but-inert. Empty by
+    // default ⇒ every node handled exactly as before (byte-identical).
+    final inert = ref.watch(inertServicesProvider);
 
     // On-floor node drag handles (opaque, small) sit above the translucent tap
     // layer: dragging a handle moves the node; tapping it selects it; anywhere
     // else, the tap layer selects/clears and drags fall through to canvas pan.
     // Drag-end snaps the node to a nearby node (merge) so a segment endpoint
-    // "connects" to a fitting.
+    // "connects" to a fitting. A node whose every incident edge is inert gets no
+    // handle (F1/F4).
     final snapWorld = 14 / transform.scale;
     final handles = <Widget>[
       for (final n in net.nodes)
-        if (_onFloor(n))
+        if (_onFloor(n) && !_nodeInert(net, n.id, inert))
           _dragHandle(ref, n.id, transform.worldToScreen(Offset(n.x, n.y)),
               transform.scale, snapWorld),
     ];
@@ -277,6 +284,7 @@ class _NetworkSelectionOverlayState
       for (final n in net.nodes)
         if (_onFloor(n) &&
             n.role != NodeRole.fixture &&
+            !_nodeInert(net, n.id, inert) &&
             (n.id == hoveredNodeId ||
                 selection.containsNode(n.id) ||
                 selection.nodeId == n.id ||
@@ -294,6 +302,9 @@ class _NetworkSelectionOverlayState
     if (selection.isEdge) {
       for (final e in net.edges) {
         if (e.id != selection.edgeId || e.kind != EdgeKind.run) continue;
+        // A selected run whose service was just locked/hidden loses its
+        // resize handles too (F1/F4).
+        if (inert.contains(e.service)) continue;
         for (final nid in [e.fromId, e.toId]) {
           final n = net.nodeById(nid);
           if (n == null || !_onFloor(n)) continue;
@@ -733,14 +744,35 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
 bool _isOnFloor(NetNode n, String sheetId, int floorIndex) =>
     n.sheetId == sheetId && n.floorIndex == floorIndex;
 
-/// Nearest node id on this floor within the node hit radius, or null.
+/// F1/F4 — whether a node is INERT to canvas interaction: it has at least one
+/// incident edge AND every incident edge's service is in [inert] (a locked
+/// reference layer's service or an individually hidden one). A node touched by
+/// any active/visible edge, or a free (unwired) node, is NOT inert — so a
+/// coordination pipe becomes visible-but-inert without stranding loose
+/// equipment. Empty [inert] ⇒ always false (byte-identical, zero extra cost).
+bool _nodeInert(Network net, String nodeId, Set<ServiceType> inert) {
+  if (inert.isEmpty) return false;
+  var touched = false;
+  for (final e in net.edges) {
+    if (e.fromId != nodeId && e.toId != nodeId) continue;
+    touched = true;
+    if (!inert.contains(e.service)) return false;
+  }
+  return touched;
+}
+
+/// Nearest node id on this floor within the node hit radius, or null. [inert]
+/// services (F1 locked layer / F4 hidden) are skipped so a faded coordination
+/// element can't be clicked.
 String? _nodeAt(Network net, ViewportTransform transform, Offset world,
-    String sheetId, int floorIndex) {
+    String sheetId, int floorIndex,
+    {Set<ServiceType> inertServices = const {}}) {
   final nodeHitR = 13 / transform.scale; // ≈13 screen px
   String? node;
   var best = nodeHitR * nodeHitR;
   for (final n in net.nodes) {
     if (!_isOnFloor(n, sheetId, floorIndex)) continue;
+    if (_nodeInert(net, n.id, inertServices)) continue;
     final dx = n.x - world.dx;
     final dy = n.y - world.dy;
     final d2 = dx * dx + dy * dy;
@@ -764,11 +796,15 @@ String? _nodeAt(Network net, ViewportTransform transform, Offset world,
 /// (byte-identical). Riser endpoint-marker hit-testing is unaffected.
 String? _edgeAt(Network net, ViewportTransform transform, Offset world,
     String sheetId, int floorIndex,
-    {Map<String, EdgeSizing>? sizing, double? metersPerPixel}) {
+    {Map<String, EdgeSizing>? sizing,
+    double? metersPerPixel,
+    Set<ServiceType> inertServices = const {}}) {
   final riserHitR = 8 / transform.scale;
   String? edge;
   var bestDist = double.infinity;
   for (final e in net.edges) {
+    // F1/F4 — a locked-layer / hidden-service edge is inert to clicks.
+    if (inertServices.contains(e.service)) continue;
     final a = net.nodeById(e.fromId);
     final b = net.nodeById(e.toId);
     if (a == null || b == null) continue;
@@ -852,6 +888,10 @@ class _SelectionGestureLayerState
       .calibrationFor(_sheetId)
       ?.metersPerPixel;
 
+  /// F1/F4 — the services currently inert to canvas interaction (locked layer /
+  /// hidden service), read fresh at each gesture. Empty ⇒ byte-identical.
+  Set<ServiceType> get _inert => ref.read(inertServicesProvider);
+
   @override
   Widget build(BuildContext context) {
     final transform = ref.watch(sheetsControllerProvider).viewportFor(_sheetId) ??
@@ -865,10 +905,11 @@ class _SelectionGestureLayerState
       onHover: (e) {
         final net = ref.read(networkControllerProvider).network;
         final world = transform.screenToWorld(e.localPosition);
-        final node = _nodeAt(net, transform, world, _sheetId, _floor);
+        final node = _nodeAt(net, transform, world, _sheetId, _floor,
+            inertServices: _inert);
         final edge = node == null
             ? _edgeAt(net, transform, world, _sheetId, _floor,
-                sizing: _sizing, metersPerPixel: _mpp)
+                sizing: _sizing, metersPerPixel: _mpp, inertServices: _inert)
             : null;
         ref.read(hoverTargetProvider.notifier).set(
             node == null && edge == null
@@ -883,7 +924,8 @@ class _SelectionGestureLayerState
         final sel = ref.read(selectionProvider.notifier);
         final shift = HardwareKeyboard.instance.isShiftPressed;
         final world = transform.screenToWorld(details.localPosition);
-        final node = _nodeAt(net, transform, world, _sheetId, _floor);
+        final node = _nodeAt(net, transform, world, _sheetId, _floor,
+            inertServices: _inert);
         if (node != null) {
           if (shift) {
             sel.toggleNode(node);
@@ -894,7 +936,7 @@ class _SelectionGestureLayerState
           return;
         }
         final edge = _edgeAt(net, transform, world, _sheetId, _floor,
-            sizing: _sizing, metersPerPixel: _mpp);
+            sizing: _sizing, metersPerPixel: _mpp, inertServices: _inert);
         if (edge != null) {
           if (shift) {
             sel.toggleEdge(edge);
@@ -914,16 +956,23 @@ class _SelectionGestureLayerState
         final net = ref.read(networkControllerProvider).network;
         final sel = ref.read(selectionProvider.notifier);
         final world = transform.screenToWorld(details.localPosition);
-        final nodeId = _nodeAt(net, transform, world, _sheetId, _floor);
+        final nodeId = _nodeAt(net, transform, world, _sheetId, _floor,
+            inertServices: _inert);
         if (nodeId != null) {
           // ANY node gets a menu: fitting rows for a bare junction, the face
-          // ladder for an air terminal, Select similar + Delete for all.
-          sel.selectNode(nodeId);
+          // ladder for an air terminal, Select similar + Delete for all. F2:
+          // right-clicking a node that's part of a MULTI-selection keeps the
+          // whole set alive (mirroring E1 for edges) so the menu can rotate /
+          // mirror / delete the group; an unselected node collapses to just it.
+          final current = ref.read(selectionProvider);
+          if (!(current.containsNode(nodeId) && current.isMulti)) {
+            sel.selectNode(nodeId);
+          }
           showNodeContextMenu(context, ref, nodeId, details.globalPosition);
           return;
         }
         final edge = _edgeAt(net, transform, world, _sheetId, _floor,
-            sizing: _sizing, metersPerPixel: _mpp);
+            sizing: _sizing, metersPerPixel: _mpp, inertServices: _inert);
         if (edge == null) {
           sel.clear();
           showCanvasContextMenu(
@@ -955,10 +1004,11 @@ class _SelectionGestureLayerState
       onPanStart: (details) {
         final net = ref.read(networkControllerProvider).network;
         final world = transform.screenToWorld(details.localPosition);
-        final nodeHit = _nodeAt(net, transform, world, _sheetId, _floor);
+        final nodeHit = _nodeAt(net, transform, world, _sheetId, _floor,
+            inertServices: _inert);
         final edgeHit = nodeHit == null
             ? _edgeAt(net, transform, world, _sheetId, _floor,
-                sizing: _sizing, metersPerPixel: _mpp)
+                sizing: _sizing, metersPerPixel: _mpp, inertServices: _inert)
             : null;
         final shift = HardwareKeyboard.instance.isShiftPressed;
         // G5: a plain (no-Shift) left-drag starting on a RUN's BODY moves that
@@ -1060,15 +1110,23 @@ class _SelectionGestureLayerState
         final a = transform.screenToWorld(start);
         final b = transform.screenToWorld(now);
         final rect = Rect.fromPoints(a, b);
+        final inert = _inert;
         final nodeIds = <String>{};
         for (final n in net.nodes) {
           if (!_isOnFloor(n, _sheetId, _floor)) continue;
+          // F1/F4 — a rubber-band never grabs a locked-layer / hidden-service
+          // node (parity with tap-select).
+          if (_nodeInert(net, n.id, inert)) continue;
           if (rect.contains(Offset(n.x, n.y))) nodeIds.add(n.id);
         }
         // A run edge is captured when BOTH endpoints fall inside the rect.
         final edgeIds = <String>{};
         for (final e in net.edges) {
           if (e.kind != EdgeKind.run) continue;
+          // F1/F4 — a rubber-band never grabs a locked-layer / hidden-service
+          // run, even when both endpoints are shared with visible edges and
+          // thus land in nodeIds (parity with _edgeAt tap-select).
+          if (inert.contains(e.service)) continue;
           if (nodeIds.contains(e.fromId) && nodeIds.contains(e.toId)) {
             edgeIds.add(e.id);
           }

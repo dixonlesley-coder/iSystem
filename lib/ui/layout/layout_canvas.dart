@@ -52,6 +52,7 @@ import '../canvas/heatmap_layer.dart';
 import '../canvas/measurement_overlay.dart';
 import '../canvas/mode_pill.dart';
 import '../canvas/reference_line_overlay.dart';
+import '../canvas/segment_palette.dart' show armedPlacementProvider;
 import '../canvas/smart_input_bar.dart';
 import '../canvas/tank_overlay.dart';
 import '../canvas/room_overlay.dart';
@@ -98,11 +99,11 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   void toggleGuide() => setState(() => _showGuide = !_showGuide);
   void closeGuide() => setState(() => _showGuide = false);
 
-  /// The electrical circuit/panel open in the inspector / a context menu.
-  ElectricalEditTarget? _editing;
-
-  /// The panel whose PROPERTIES drawer is open (null = closed).
-  String? _panelEditing;
+  /// The electrical circuit/panel open in a context menu (the on-canvas
+  /// popover). The circuit / panel EDITOR itself is no longer a floating drawer
+  /// here (C1): a double-click / menu Edit routes through
+  /// [electricalInspectorTargetProvider], so the SHARED inspector column shows
+  /// the editor inline (like the standalone electrical workspace).
   ElectricalPanelMenuTarget? _panelMenu;
   ElectricalEditTarget? _circuitMenu;
   Offset _menuAt = Offset.zero;
@@ -215,11 +216,10 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
               ),
             ),
           ),
-          // Electrical edit overlays (scrim + menus + inspector), hosted here.
-          if (_editing != null ||
-              _panelEditing != null ||
-              _panelMenu != null ||
-              _circuitMenu != null)
+          // Electrical context-menu overlays (scrim + menus), hosted here. The
+          // circuit / panel editors are no longer floating drawers (C1) — they
+          // render inline in the shared inspector column.
+          if (_panelMenu != null || _circuitMenu != null)
             Positioned.fill(
               child: Listener(
                 behavior: HitTestBehavior.translucent,
@@ -229,8 +229,6 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
             ),
           if (_circuitMenu != null) _buildCircuitMenu(),
           if (_panelMenu != null) _buildPanelMenu(),
-          if (_editing != null) _buildInspector(),
-          if (_panelEditing != null) _buildPanelInspector(),
         ],
       ),
     );
@@ -246,35 +244,47 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     return box?.globalToLocal(global) ?? global;
   }
 
+  /// Close the on-canvas context menus, AND the shared inline inspector editor
+  /// (its target). Used by the scrim tap and Esc.
   void _closeOverlays() {
-    if (_editing != null ||
-        _panelEditing != null ||
-        _panelMenu != null ||
-        _circuitMenu != null) {
+    ref.read(electricalInspectorTargetProvider.notifier).clear();
+    if (_panelMenu != null || _circuitMenu != null) {
       setState(() {
-        _editing = null;
-        _panelEditing = null;
         _panelMenu = null;
         _circuitMenu = null;
       });
     }
   }
 
-  /// Panel double-click opens the panel PROPERTIES drawer (name / tag /
-  /// diversity / headroom); a way / load double-click keeps opening the
-  /// circuit editor via [onEditCircuit].
-  void onEditPanel(String panelId) =>
-      setState(() => _panelEditing = panelId);
+  /// Close only the on-canvas context menus (leaves the inline editor open).
+  void _closeMenus() {
+    if (_panelMenu != null || _circuitMenu != null) {
+      setState(() {
+        _panelMenu = null;
+        _circuitMenu = null;
+      });
+    }
+  }
 
-  void onEditCircuit(String panelId, String circuitId) =>
-      setState(() => _editing = ElectricalEditTarget(panelId, circuitId));
+  /// Panel double-click opens the panel PROPERTIES editor (name / tag /
+  /// diversity / headroom) INLINE in the shared inspector column; a way / load
+  /// double-click opens the circuit editor there via [onEditCircuit] (C1).
+  void onEditPanel(String panelId) {
+    ref.read(electricalInspectorTargetProvider.notifier).editPanel(panelId);
+    _closeMenus();
+  }
+
+  void onEditCircuit(String panelId, String circuitId) {
+    ref
+        .read(electricalInspectorTargetProvider.notifier)
+        .editCircuit(panelId, circuitId);
+    _closeMenus();
+  }
 
   void onPanelMenu(String panelId, Offset globalPos) {
     setState(() {
       _panelMenu = ElectricalPanelMenuTarget(panelId);
       _circuitMenu = null;
-      _editing = null;
-      _panelEditing = null;
       _menuAt = _toLocal(globalPos);
     });
   }
@@ -283,8 +293,6 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     setState(() {
       _circuitMenu = ElectricalEditTarget(panelId, circuitId);
       _panelMenu = null;
-      _editing = null;
-      _panelEditing = null;
       _menuAt = _toLocal(globalPos);
     });
   }
@@ -297,10 +305,11 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
           child: ElectricalCircuitMenu(
             target: _circuitMenu!,
             controller: _ctrl,
-            onEdit: () => setState(() {
-              _editing = _circuitMenu;
-              _circuitMenu = null;
-            }),
+            // C1: Edit routes to the shared inline inspector column.
+            onEdit: () {
+              final t = _circuitMenu!;
+              onEditCircuit(t.panelId, t.circuitId);
+            },
             onDone: () => setState(() => _circuitMenu = null),
           ),
         ),
@@ -323,79 +332,20 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         child: ElectricalPanelMenu(
           panel: panel,
           controller: _ctrl,
-          onProperties: () => setState(() {
-            _panelMenu = null;
-            _panelEditing = panel.id;
-          }),
+          // C1: both open the editor inline in the shared inspector column.
+          onProperties: () => onEditPanel(panel.id),
           onOpen: () {
             final first = panel.circuits
                 .where((c) => c.loadKind != LoadKind.feeder)
                 .firstOrNull;
-            setState(() {
-              _panelMenu = null;
-              if (first != null) {
-                _editing = ElectricalEditTarget(panel.id, first.id);
-              }
-            });
+            if (first != null) {
+              onEditCircuit(panel.id, first.id);
+            } else {
+              _closeMenus();
+            }
           },
           onDone: () => setState(() => _panelMenu = null),
         ),
-      ),
-    );
-  }
-
-  Widget _buildInspector() {
-    final target = _editing!;
-    final project = ref.watch(electricalProjectProvider);
-    final panel =
-        project.panels.where((p) => p.id == target.panelId).firstOrNull;
-    final circuit =
-        panel?.circuits.where((c) => c.id == target.circuitId).firstOrNull;
-    if (panel == null || circuit == null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
-      return const SizedBox.shrink();
-    }
-    // H2/H3 — the way's solved protection (breaker/RCD/Icu), the SAME figures
-    // the board schedule prints, for the circuit editor's read-only line.
-    final result = ref.watch(electricalResultProvider);
-    final circuitResult = result.panels[panel.id]?.circuits
-        .where((c) => c.circuitId == circuit.id)
-        .firstOrNull;
-    final icuKa =
-        ref.watch(electricalAdvancedProvider).fault.panels[panel.id]?.incomerKa;
-    return Positioned(
-      top: 0,
-      right: 0,
-      bottom: 0,
-      child: ElectricalCircuitInspector(
-        key: ValueKey('${target.panelId}/${target.circuitId}'),
-        panel: panel,
-        circuit: circuit,
-        controller: _ctrl,
-        onClose: _closeOverlays,
-        circuitResult: circuitResult,
-        breakerIcuKa: icuKa,
-      ),
-    );
-  }
-
-  Widget _buildPanelInspector() {
-    final panelId = _panelEditing!;
-    final project = ref.watch(electricalProjectProvider);
-    final panel = project.panels.where((p) => p.id == panelId).firstOrNull;
-    if (panel == null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
-      return const SizedBox.shrink();
-    }
-    return Positioned(
-      top: 0,
-      right: 0,
-      bottom: 0,
-      child: ElectricalPanelInspector(
-        key: ValueKey('panel/$panelId'),
-        panel: panel,
-        controller: _ctrl,
-        onClose: _closeOverlays,
       ),
     );
   }
@@ -416,8 +366,8 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       // D3: Space still PANS while placing the two calibration points; it is
       // blocked ONLY in the distance-entry phase, where the "Known distance"
       // text field is focused and could legitimately want the space bar.
-      final textEntryPossible = _editing != null ||
-          _panelEditing != null ||
+      final textEntryPossible =
+          ref.read(electricalInspectorTargetProvider) != null ||
           ref.read(calibrationControllerProvider).isEnteringDistance ||
           ref.read(networkControllerProvider).isDrawing;
       if (textEntryPossible) return KeyEventResult.ignored;
@@ -543,6 +493,31 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     // guarded so a focused text field (calibration / smart input / inspector)
     // types normally. F fits the canvas; the rest are mechanical.
     if (!mod && !isTextEntryFocused()) {
+      // F2 selection transforms — Shift+R / Shift+M (Alt reverses the
+      // direction/axis), checked BEFORE the bare-key tool shortcuts so plain
+      // R/M keep arming the Run/Measure tools. One undo step per press; the
+      // store no-ops (no empty undo entry) on a degenerate selection.
+      final shifted = HardwareKeyboard.instance.isShiftPressed;
+      if (activeMechanical &&
+          shifted &&
+          (key == LogicalKeyboardKey.keyR || key == LogicalKeyboardKey.keyM)) {
+        final sel = ref.read(selectionProvider);
+        final nodeIds = sel.nodeIds.isEmpty
+            ? {if (sel.nodeId != null) sel.nodeId!}
+            : sel.nodeIds;
+        final edgeIds = sel.edgeIds.isEmpty
+            ? {if (sel.edgeId != null) sel.edgeId!}
+            : sel.edgeIds;
+        if (nodeIds.isEmpty && edgeIds.isEmpty) return KeyEventResult.ignored;
+        final alt = HardwareKeyboard.instance.isAltPressed;
+        final net = ref.read(networkControllerProvider.notifier);
+        if (key == LogicalKeyboardKey.keyR) {
+          net.rotateSelection(nodeIds, edgeIds, clockwise: !alt);
+        } else {
+          net.mirrorSelection(nodeIds, edgeIds, horizontal: !alt);
+        }
+        return KeyEventResult.handled;
+      }
       // F fits via the shared fit-request seam so it works even when the
       // CanvasView itself doesn't hold focus (W3-P5; the command palette's Fit
       // action bumps the same provider).
@@ -602,8 +577,12 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     }
 
     if (key == LogicalKeyboardKey.escape) {
-      if (_editing != null ||
-          _panelEditing != null ||
+      // F5: Esc first disarms a click-to-place-repeatedly palette selection.
+      if (ref.read(armedPlacementProvider) != null) {
+        ref.read(armedPlacementProvider.notifier).disarm();
+        return KeyEventResult.handled;
+      }
+      if (ref.read(electricalInspectorTargetProvider) != null ||
           _panelMenu != null ||
           _circuitMenu != null) {
         _closeOverlays();

@@ -1899,9 +1899,62 @@ class NetworkController extends Notifier<DrawingState> {
     required int toFloor,
   }) {
     final old = state.network;
-    final clones = <String, String>{}; // old node id → new node id
     final addedNodes = <NetNode>[];
     final addedEdges = <NetEdge>[];
+    _appendFloorClones(old, fromSheetId, fromFloor, toSheetId, toFloor,
+        addedNodes, addedEdges);
+    if (addedNodes.isEmpty && addedEdges.isEmpty) return;
+    _commit(Network(
+      nodes: [...old.nodes, ...addedNodes],
+      edges: [...old.edges, ...addedEdges],
+    ));
+  }
+
+  /// F3 — batch-duplicate one source floor's runs + loose equipment onto SEVERAL
+  /// target `(sheetId, floor)` pairs in ONE commit, so a range-duplicate is a
+  /// SINGLE undo step (not one per target floor). Every target's clones
+  /// accumulate into the same nodes/edges list before a single [_commit], so
+  /// Ctrl+Z restores the whole pre-duplicate state at once. Clone rules mirror
+  /// [duplicateFloor] exactly (per-target fresh ids, risers excluded, loose
+  /// free-standing equipment carried). A source == target pair is skipped; an
+  /// empty / duplicate-only batch commits nothing.
+  void duplicateFloorToTargets({
+    required String fromSheetId,
+    required int fromFloor,
+    required List<({String sheetId, int floor})> targets,
+  }) {
+    final old = state.network;
+    final addedNodes = <NetNode>[];
+    final addedEdges = <NetEdge>[];
+    for (final t in targets) {
+      if (t.sheetId == fromSheetId && t.floor == fromFloor) continue;
+      _appendFloorClones(old, fromSheetId, fromFloor, t.sheetId, t.floor,
+          addedNodes, addedEdges);
+    }
+    if (addedNodes.isEmpty && addedEdges.isEmpty) return;
+    _commit(Network(
+      nodes: [...old.nodes, ...addedNodes],
+      edges: [...old.edges, ...addedEdges],
+    ));
+  }
+
+  /// Append the clones of [fromSheetId]/[fromFloor]'s runs + loose equipment
+  /// onto [toSheetId]/[toFloor] into [addedNodes]/[addedEdges] with fresh ids —
+  /// the shared clone core of [duplicateFloor] (single target) and
+  /// [duplicateFloorToTargets] (a batch that shares ONE undo step). Does NOT
+  /// commit: the caller decides how many targets fold into a single commit.
+  /// Each call uses its OWN old→new id map, so the same source node clones
+  /// independently onto every target floor.
+  void _appendFloorClones(
+    Network old,
+    String fromSheetId,
+    int fromFloor,
+    String toSheetId,
+    int toFloor,
+    List<NetNode> addedNodes,
+    List<NetEdge> addedEdges,
+  ) {
+    final clones = <String, String>{}; // old node id → new node id (this target)
 
     String cloneNode(NetNode n) {
       final existing = clones[n.id];
@@ -1960,11 +2013,6 @@ class NetworkController extends Notifier<DrawingState> {
       if (touched.contains(n.id)) continue;
       cloneNode(n); // adds to addedNodes on the target floor with a fresh id
     }
-    if (addedNodes.isEmpty && addedEdges.isEmpty) return;
-    _commit(Network(
-      nodes: [...old.nodes, ...addedNodes],
-      edges: [...old.edges, ...addedEdges],
-    ));
   }
 
   // ── Multi-select copy / paste / delete ──────────────────────────────────────
@@ -2248,6 +2296,109 @@ class NetworkController extends Notifier<DrawingState> {
             !nodeIds.contains(e.toId))
         .toList();
     _commit(Network(nodes: nodes, edges: edges));
+  }
+
+  // ── Multi-select transforms (rotate / mirror) ───────────────────────────────
+
+  /// The EFFECTIVE node set of a [nodeIds]/[edgeIds] selection: the chosen nodes
+  /// PLUS both endpoints of every chosen edge (edges follow their endpoints —
+  /// mirrors [copySelection]'s kept-node rule), keeping only ids that exist in
+  /// the live network. So `select-similar` (which yields edges only) still
+  /// transforms every touched node.
+  Set<String> _selectionNodeSet(Set<String> nodeIds, Set<String> edgeIds) {
+    final net = state.network;
+    final present = {for (final n in net.nodes) n.id};
+    final ids = <String>{
+      for (final id in nodeIds)
+        if (present.contains(id)) id,
+    };
+    for (final e in net.edges) {
+      if (!edgeIds.contains(e.id)) continue;
+      if (present.contains(e.fromId)) ids.add(e.fromId);
+      if (present.contains(e.toId)) ids.add(e.toId);
+    }
+    return ids;
+  }
+
+  /// Rotate every node in the [nodeIds]/[edgeIds] selection 90 degrees about the
+  /// selection's bounding-box centre, in ONE undo step. [clockwise] picks the
+  /// visual direction on the plan (screen space has +y DOWN, so a clockwise turn
+  /// maps a delta (dx,dy) -> (-dy, dx); counter-clockwise -> (dy, -dx)). Edges
+  /// follow their endpoints automatically (they reference node ids, and the
+  /// positions live on the nodes). Axis-aligned and 45-degree geometry stay
+  /// EXACT — a right-angle turn only swaps/negates coordinate deltas, no trig.
+  /// Node ELEVATIONS / floor indices are untouched (a plan-view turn is
+  /// horizontal only, so §10 vertical/riser length is unaffected). No-op when
+  /// the effective set has fewer than two nodes, or when every node sits on the
+  /// centre (a degenerate box — e.g. a single stacked riser column at one x,y),
+  /// so a no-change turn never pushes an empty undo step.
+  void rotateSelection(Set<String> nodeIds, Set<String> edgeIds,
+      {required bool clockwise}) {
+    final net = state.network;
+    final ids = _selectionNodeSet(nodeIds, edgeIds);
+    if (ids.length < 2) return;
+    final (cx, cy) = _selectionCentre(net, ids);
+    var moved = false;
+    final nodes = <NetNode>[];
+    for (final n in net.nodes) {
+      if (!ids.contains(n.id)) {
+        nodes.add(n);
+        continue;
+      }
+      final dx = n.x - cx;
+      final dy = n.y - cy;
+      final nx = clockwise ? cx - dy : cx + dy;
+      final ny = clockwise ? cy + dx : cy - dx;
+      if (nx != n.x || ny != n.y) moved = true;
+      nodes.add(n.copyWith(x: nx, y: ny));
+    }
+    if (!moved) return;
+    _commit(Network(nodes: nodes, edges: net.edges));
+  }
+
+  /// Mirror every node in the [nodeIds]/[edgeIds] selection about the selection's
+  /// bounding-box centre, in ONE undo step. [horizontal] flips LEFT/RIGHT across
+  /// the vertical centre line (x -> 2·cx − x); otherwise flips TOP/BOTTOM across
+  /// the horizontal centre line (y -> 2·cy − y). The centre is preserved by the
+  /// reflection, so mirroring the same axis TWICE is an exact identity. Edges
+  /// follow their endpoints; elevations / floor indices are untouched; a 45-degree
+  /// diagonal stays exact (one coordinate is negated about the centre). Same
+  /// effective-set / no-op guards as [rotateSelection].
+  void mirrorSelection(Set<String> nodeIds, Set<String> edgeIds,
+      {required bool horizontal}) {
+    final net = state.network;
+    final ids = _selectionNodeSet(nodeIds, edgeIds);
+    if (ids.length < 2) return;
+    final (cx, cy) = _selectionCentre(net, ids);
+    var moved = false;
+    final nodes = <NetNode>[];
+    for (final n in net.nodes) {
+      if (!ids.contains(n.id)) {
+        nodes.add(n);
+        continue;
+      }
+      final nx = horizontal ? (2 * cx - n.x) : n.x;
+      final ny = horizontal ? n.y : (2 * cy - n.y);
+      if (nx != n.x || ny != n.y) moved = true;
+      nodes.add(n.copyWith(x: nx, y: ny));
+    }
+    if (!moved) return;
+    _commit(Network(nodes: nodes, edges: net.edges));
+  }
+
+  /// The bounding-box centre (in sheet/world px) of the nodes whose ids are in
+  /// [ids]. [ids] is assumed non-empty and to reference live nodes.
+  (double, double) _selectionCentre(Network net, Set<String> ids) {
+    var minX = double.infinity, minY = double.infinity;
+    var maxX = -double.infinity, maxY = -double.infinity;
+    for (final n in net.nodes) {
+      if (!ids.contains(n.id)) continue;
+      minX = math.min(minX, n.x);
+      minY = math.min(minY, n.y);
+      maxX = math.max(maxX, n.x);
+      maxY = math.max(maxY, n.y);
+    }
+    return ((minX + maxX) / 2, (minY + maxY) / 2);
   }
 
   void _replaceNode(NetNode updated) {

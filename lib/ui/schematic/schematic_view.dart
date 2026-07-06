@@ -1116,8 +1116,19 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   Offset _lastPanPoint = Offset.zero;
   double _lastScale = 1.0;
 
-  // In-flight horizontal riser drag.
+  // In-flight horizontal riser drag (the grabbed riser).
   String? _draggingRiser;
+
+  // D5: batch horizontal move — each selected riser's node x at drag start, plus
+  // the cursor world-x at start, so the whole selection moves by ONE shared
+  // delta (relative offsets preserved). Null when no drag is in flight.
+  Map<String, double>? _dragBaseX;
+  double _dragBaseCursorX = 0;
+
+  // D5: the in-flight marquee (screen-space), drawn by an empty-canvas left-drag
+  // to rubber-band-select several risers. Null when not marqueeing.
+  Offset? _marqueeStart;
+  Offset? _marqueeCurrent;
 
   // B3: the floor band a palette drag would drop the riser BASE on — tracked
   // live from the DragTarget so the painter highlights the real target band
@@ -1231,12 +1242,43 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       final w = _current.screenToWorld(event.localPosition);
       final hit = _riserAt(w, 16 / _current.scale);
       if (hit != null) {
-        _draggingRiser = hit;
-        ref.read(selectionProvider.notifier).selectEdge(hit);
-        // The snapshot waits for the first real movement (F3).
-        _dragSnapshotPending = true;
+        // D5: shift toggles into the multi-selection; a plain click on a riser
+        // NOT already in the selection replaces it (a click on one already in a
+        // multi-selection keeps the set, so a group drag works).
+        final shift = HardwareKeyboard.instance.isShiftPressed;
+        final selNotifier = ref.read(selectionProvider.notifier);
+        if (shift) {
+          selNotifier.toggleEdge(hit);
+        } else if (!ref.read(selectionProvider).containsEdge(hit)) {
+          selNotifier.selectEdge(hit);
+        }
+        if (ref.read(selectionProvider).containsEdge(hit)) {
+          _draggingRiser = hit;
+          _beginRiserDrag(w.dx);
+          // The snapshot waits for the first real movement (F3).
+          _dragSnapshotPending = true;
+        }
+      } else {
+        // D5: empty-canvas left-drag draws a marquee (rubber-band multi-select).
+        _marqueeStart = event.localPosition;
+        _marqueeCurrent = event.localPosition;
       }
     }
+  }
+
+  /// D5: snapshot each selected riser's node x (+ the cursor world-x) so the
+  /// group moves by one shared delta.
+  void _beginRiserDrag(double cursorWorldX) {
+    final net = ref.read(networkControllerProvider).network;
+    final base = <String, double>{};
+    for (final id in ref.read(selectionProvider).edgeIds) {
+      final e = net.edgeById(id);
+      if (e == null || e.kind != EdgeKind.riser) continue;
+      final a = net.nodeById(e.fromId);
+      if (a != null) base[id] = a.x;
+    }
+    _dragBaseX = base;
+    _dragBaseCursorX = cursorWorldX;
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -1256,9 +1298,20 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
         ref.read(dragSessionProvider.notifier).beginDrag();
       }
       final w = _current.screenToWorld(event.localPosition);
-      ref
-          .read(networkControllerProvider.notifier)
-          .moveRiserHorizontal(dragging, w.dx);
+      final ctrl = ref.read(networkControllerProvider.notifier);
+      final base = _dragBaseX;
+      if (base != null && base.isNotEmpty) {
+        // D5: move the WHOLE selection by one shared delta (relative x offsets
+        // between risers preserved), one undo step.
+        final delta = w.dx - _dragBaseCursorX;
+        base.forEach((id, x0) => ctrl.moveRiserHorizontal(id, x0 + delta));
+      } else {
+        ctrl.moveRiserHorizontal(dragging, w.dx);
+      }
+      return;
+    }
+    if (_marqueeStart != null) {
+      setState(() => _marqueeCurrent = event.localPosition);
     }
   }
 
@@ -1269,15 +1322,53 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       ref.read(dragSessionProvider.notifier).endDrag();
     }
     _draggingRiser = null;
+    _dragBaseX = null;
     _dragSnapshotPending = false;
+    // D5: finalize the marquee → select every riser its box crosses.
+    final start = _marqueeStart;
+    final current = _marqueeCurrent;
+    if (start != null && current != null) {
+      final rect = Rect.fromPoints(start, current);
+      if (rect.width > 4 || rect.height > 4) _selectRisersInRect(rect);
+      setState(() {
+        _marqueeStart = null;
+        _marqueeCurrent = null;
+      });
+    }
+  }
+
+  /// D5: union of the risers whose on-screen vertical leg crosses the marquee
+  /// [rect] (shift extends the current selection, else replaces it).
+  void _selectRisersInRect(Rect rect) {
+    final net = ref.read(networkControllerProvider).network;
+    final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    final vt = _current;
+    final hit = <String>{};
+    for (final e in net.edges) {
+      if (e.kind != EdgeKind.riser) continue;
+      final a = net.nodeById(e.fromId);
+      final b = net.nodeById(e.toId);
+      if (a == null || b == null) continue;
+      final yA = _bandCentreWorldY(a.floorIndex, levelCount);
+      final yB = _bandCentreWorldY(b.floorIndex, levelCount);
+      final p1 = vt.worldToScreen(Offset(a.x, math.min(yA, yB)));
+      final p2 = vt.worldToScreen(Offset(a.x, math.max(yA, yB)));
+      if (Rect.fromPoints(p1, p2).inflate(3).overlaps(rect)) hit.add(e.id);
+    }
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+    if (shift) {
+      ref.read(selectionProvider.notifier).addMulti(const {}, hit);
+    } else {
+      ref.read(selectionProvider.notifier).setMulti(const {}, hit);
+    }
   }
 
   void _onScaleStart(ScaleStartDetails details) => _lastScale = 1.0;
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
-    // Single-pointer pan only when NOT dragging a riser (the Listener handles
-    // the riser drag); trackpad pinch always zooms.
-    if (_draggingRiser != null) return;
+    // Single-pointer pan only when NOT dragging a riser or drawing a marquee
+    // (the Listener handles both); trackpad pinch always zooms.
+    if (_draggingRiser != null || _marqueeStart != null) return;
     var vt = _current;
     if (details.pointerCount > 1 && details.focalPointDelta != Offset.zero) {
       vt = vt.panned(details.focalPointDelta);
@@ -1325,6 +1416,13 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     if (key == LogicalKeyboardKey.escape) {
       if (widget.showHelp) {
         widget.onToggleHelp();
+        return KeyEventResult.handled;
+      }
+      if (_marqueeStart != null) {
+        setState(() {
+          _marqueeStart = null;
+          _marqueeCurrent = null;
+        });
         return KeyEventResult.handled;
       }
       if (ref.read(selectionProvider).hasSelection) {
@@ -1457,10 +1555,13 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                       building: building,
                       colors: colors,
                       transform: vt,
-                      selectedEdgeId: selection.edgeId,
+                      selectedEdgeIds: selection.edgeIds,
                       bandWorldH: _bandWorldH,
                       worldWidth: _worldWidth,
                       highlightFloor: _dragBandFloor,
+                      marquee: (_marqueeStart != null && _marqueeCurrent != null)
+                          ? Rect.fromPoints(_marqueeStart!, _marqueeCurrent!)
+                          : null,
                     ),
                   ),
                 );
@@ -3160,10 +3261,11 @@ class _EditSchematicPainter extends CustomPainter {
     required this.building,
     required this.colors,
     required this.transform,
-    required this.selectedEdgeId,
+    required this.selectedEdgeIds,
     required this.bandWorldH,
     required this.worldWidth,
     this.highlightFloor,
+    this.marquee,
   });
 
   final Network network;
@@ -3171,13 +3273,19 @@ class _EditSchematicPainter extends CustomPainter {
   final BuildingLevels building;
   final MechXColors colors;
   final ViewportTransform transform;
-  final String? selectedEdgeId;
+
+  /// D5: the multi-selected riser edges (highlighted); a single-select is a set
+  /// of one.
+  final Set<String> selectedEdgeIds;
   final double bandWorldH;
   final double worldWidth;
 
   /// B3: the floor band to highlight as the live drop target (the riser base
   /// lands here). Null when no palette card is being dragged over the canvas.
   final int? highlightFloor;
+
+  /// D5: the in-flight marquee rectangle (screen space), or null.
+  final Rect? marquee;
 
   double _bandCentreWorldY(int floorIndex) {
     final inverted = (building.levelCount - 1) - floorIndex;
@@ -3193,6 +3301,19 @@ class _EditSchematicPainter extends CustomPainter {
     _paintBands(canvas, size);
     _paintEdges(canvas);
     _paintNodes(canvas);
+    // D5: the rubber-band marquee, same translucent-accent language as the
+    // Layout / electrical canvases.
+    final m = marquee;
+    if (m != null) {
+      canvas.drawRect(m, Paint()..color = colors.accent.withAlpha(28));
+      canvas.drawRect(
+        m,
+        Paint()
+          ..color = colors.accent
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
+      );
+    }
   }
 
   void _paintBands(Canvas canvas, Size size) {
@@ -3250,7 +3371,7 @@ class _EditSchematicPainter extends CustomPainter {
       final b = network.nodeById(edge.toId);
       if (a == null || b == null) continue;
       final color = serviceColor(edge.service);
-      final selected = edge.id == selectedEdgeId;
+      final selected = selectedEdgeIds.contains(edge.id);
 
       final fromS = transform.worldToScreen(_worldOf(a));
       final toS = transform.worldToScreen(_worldOf(b));
@@ -3487,8 +3608,10 @@ class _EditSchematicPainter extends CustomPainter {
       old.building != building ||
       old.colors != colors ||
       old.transform != transform ||
-      old.selectedEdgeId != selectedEdgeId ||
-      old.highlightFloor != highlightFloor;
+      old.selectedEdgeIds.length != selectedEdgeIds.length ||
+      !old.selectedEdgeIds.containsAll(selectedEdgeIds) ||
+      old.highlightFloor != highlightFloor ||
+      old.marquee != marquee;
 }
 
 // ---------------------------------------------------------------------------

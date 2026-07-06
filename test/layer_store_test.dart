@@ -125,4 +125,93 @@ void main() {
           isTrue);
     });
   });
+
+  group('F1: reference-layer lock', () {
+    ProviderContainer make() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    test('default: nothing is locked', () {
+      final c = make();
+      expect(c.read(lockedDisciplinesProvider), isEmpty);
+    });
+
+    test('toggle locks a non-active layer, then unlocks it', () {
+      final c = make();
+      // plumbing is active; lock HVAC (a reference layer).
+      c.read(lockedDisciplinesProvider.notifier).toggle(DisciplineLayer.hvac);
+      expect(c.read(lockedDisciplinesProvider), {DisciplineLayer.hvac});
+      // toggle again → unlocked.
+      c.read(lockedDisciplinesProvider.notifier).toggle(DisciplineLayer.hvac);
+      expect(c.read(lockedDisciplinesProvider), isEmpty);
+    });
+
+    test('the ACTIVE layer can never be locked (lock is for references)', () {
+      final c = make();
+      // plumbing is active by default — locking it is a no-op.
+      c.read(lockedDisciplinesProvider.notifier)
+          .toggle(DisciplineLayer.plumbing);
+      expect(c.read(lockedDisciplinesProvider), isEmpty);
+    });
+
+    test('making a locked layer active unlocks it', () {
+      final c = make();
+      c.read(lockedDisciplinesProvider.notifier).toggle(DisciplineLayer.hvac);
+      expect(c.read(lockedDisciplinesProvider).contains(DisciplineLayer.hvac),
+          isTrue);
+      // Switch to edit HVAC → it can't stay a locked reference layer.
+      c.read(activeDisciplineProvider.notifier).set(DisciplineLayer.hvac);
+      expect(c.read(lockedDisciplinesProvider).contains(DisciplineLayer.hvac),
+          isFalse);
+    });
+
+    test('inertServices carries every locked discipline\'s services', () {
+      final c = make();
+      expect(c.read(inertServicesProvider), isEmpty);
+      // Lock plumbing (5 services) while HVAC is active.
+      c.read(activeDisciplineProvider.notifier).set(DisciplineLayer.hvac);
+      c.read(lockedDisciplinesProvider.notifier)
+          .toggle(DisciplineLayer.plumbing);
+      expect(c.read(inertServicesProvider),
+          servicesFor(DisciplineLayer.plumbing).toSet());
+    });
+  });
+
+  group('F4: per-service view filter', () {
+    ProviderContainer make() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    test('default: nothing hidden', () {
+      final c = make();
+      expect(c.read(hiddenServicesProvider), isEmpty);
+    });
+
+    test('toggle hides a single service, then shows it', () {
+      final c = make();
+      c.read(hiddenServicesProvider.notifier).toggle(ServiceType.drainage);
+      expect(c.read(hiddenServicesProvider), {ServiceType.drainage});
+      // Cold water on the SAME plumbing layer stays shown.
+      expect(c.read(hiddenServicesProvider).contains(ServiceType.coldWater),
+          isFalse);
+      c.read(hiddenServicesProvider.notifier).toggle(ServiceType.drainage);
+      expect(c.read(hiddenServicesProvider), isEmpty);
+    });
+
+    test('inertServices unions hidden services with locked-layer services', () {
+      final c = make();
+      // Hide drainage (plumbing active) and lock HVAC.
+      c.read(hiddenServicesProvider.notifier).toggle(ServiceType.drainage);
+      c.read(lockedDisciplinesProvider.notifier).toggle(DisciplineLayer.hvac);
+      final inert = c.read(inertServicesProvider);
+      expect(inert.contains(ServiceType.drainage), isTrue);
+      expect(inert.containsAll(servicesFor(DisciplineLayer.hvac)), isTrue);
+      // Cold water (visible, unlocked) is NOT inert.
+      expect(inert.contains(ServiceType.coldWater), isFalse);
+    });
+  });
 }

@@ -104,9 +104,13 @@ class NetworkLayer extends ConsumerWidget {
     // Layer filtering (unified canvas only).
     Set<DisciplineLayer> visible = DisciplineLayer.values.toSet();
     DisciplineLayer? active;
+    // F4 — per-service view filter (hidden services omitted from render + hit
+    // test). Empty by default ⇒ byte-identical.
+    Set<ServiceType> hiddenServices = const {};
     if (layerFiltered) {
       visible = ref.watch(layerVisibilityProvider);
       active = ref.watch(activeDisciplineProvider);
+      hiddenServices = ref.watch(hiddenServicesProvider);
     }
 
     return IgnorePointer(
@@ -130,6 +134,7 @@ class NetworkLayer extends ConsumerWidget {
           layerFiltered: layerFiltered,
           visibleDisciplines: visible,
           activeDiscipline: active,
+          hiddenServices: hiddenServices,
           warningIds: warningIds,
           unsizedIds: unsizedIds,
           overCapacityIds: overCapacityIds,
@@ -221,6 +226,11 @@ class _NetworkPainter extends CustomPainter {
   final Set<DisciplineLayer> visibleDisciplines;
   final DisciplineLayer? activeDiscipline;
 
+  /// F4 — services the engineer has individually hidden within a visible
+  /// discipline (a view filter): omitted from paint AND hit-test. Empty ⇒
+  /// byte-identical.
+  final Set<ServiceType> hiddenServices;
+
   /// Ids of air elements (edges / terminal nodes) whose velocity is out of band.
   final Set<String> warningIds;
 
@@ -248,6 +258,7 @@ class _NetworkPainter extends CustomPainter {
     this.layerFiltered = false,
     this.visibleDisciplines = const {},
     this.activeDiscipline,
+    this.hiddenServices = const {},
     this.warningIds = const {},
     this.unsizedIds = const {},
     this.overCapacityIds = const {},
@@ -267,9 +278,12 @@ class _NetworkPainter extends CustomPainter {
   bool _edgeHovered(String id) => id == hoveredEdgeId;
   bool _nodeHovered(String id) => id == hoveredNodeId;
 
-  /// Whether a service's discipline should be drawn at all (visibility).
+  /// Whether a service should be drawn at all: its discipline must be visible
+  /// AND the service must not be individually hidden by the F4 view filter.
   bool _serviceVisible(ServiceType s) =>
-      !layerFiltered || visibleDisciplines.contains(disciplineOf(s));
+      !layerFiltered ||
+      (visibleDisciplines.contains(disciplineOf(s)) &&
+          !hiddenServices.contains(s));
 
   /// The opacity multiplier for a service: 1.0 when not layer-filtered or when
   /// its discipline is the active one; [_kFadedAlpha] when it's a visible-but-
@@ -295,7 +309,9 @@ class _NetworkPainter extends CustomPainter {
     for (final e in net.edges) {
       if (e.fromId != n.id && e.toId != n.id) continue;
       touched = true;
-      if (visibleDisciplines.contains(disciplineOf(e.service))) visible = true;
+      // F4 — a node stays visible only while at least one touching edge's
+      // service is itself visible (discipline shown AND not individually hidden).
+      if (_serviceVisible(e.service)) visible = true;
       if (disciplineOf(e.service) == activeDiscipline) active = true;
     }
     if (!touched) return (visible: true, opacity: 1.0);
@@ -1246,11 +1262,15 @@ class _NetworkPainter extends CustomPainter {
       old.layerFiltered != layerFiltered ||
       old.activeDiscipline != activeDiscipline ||
       !_sameSet(old.visibleDisciplines, visibleDisciplines) ||
+      !_sameSvcSet(old.hiddenServices, hiddenServices) ||
       !_sameStrSet(old.warningIds, warningIds) ||
       !_sameStrSet(old.unsizedIds, unsizedIds) ||
       !_sameStrSet(old.overCapacityIds, overCapacityIds);
 
   static bool _sameSet(Set<DisciplineLayer> a, Set<DisciplineLayer> b) =>
+      a.length == b.length && a.containsAll(b);
+
+  static bool _sameSvcSet(Set<ServiceType> a, Set<ServiceType> b) =>
       a.length == b.length && a.containsAll(b);
 
   static bool _sameStrSet(Set<String> a, Set<String> b) =>

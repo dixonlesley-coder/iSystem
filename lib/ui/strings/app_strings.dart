@@ -393,6 +393,7 @@ enum StringKey {
   electricalPaletteLoads,
   electricalPaletteMotorsPumps,
   electricalPaletteDistribution,
+  electricalPaletteReadOnly,
 
   // Electrical workspace — Loads palette card labels.
   electricalLoadLighting,
@@ -663,6 +664,14 @@ enum StringKey {
   canvasLegendTitle,
   tooltipHideLegend,
   tooltipShowLegend,
+
+  // Workflow-goldens review Theme F (drafting velocity): the layer-switcher
+  // reference-layer LOCK (F1), the per-service view filter (F4) and the
+  // click-to-place-repeatedly armed hint pill (F5).
+  tooltipLockLayer,
+  tooltipUnlockLayer,
+  tooltipFilterServices,
+  placementArmedHint, // {item}
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -1094,6 +1103,8 @@ const Map<StringKey, String> _en = {
   StringKey.electricalPaletteLoads: 'Loads',
   StringKey.electricalPaletteMotorsPumps: 'Motors & pumps',
   StringKey.electricalPaletteDistribution: 'Distribution',
+  StringKey.electricalPaletteReadOnly:
+      'Read-only view — switch to Single-line to edit',
 
   // Electrical workspace — Loads palette card labels.
   StringKey.electricalLoadLighting: 'Lighting',
@@ -1416,6 +1427,12 @@ const Map<StringKey, String> _en = {
   StringKey.canvasLegendTitle: 'Legend',
   StringKey.tooltipHideLegend: 'Hide legend',
   StringKey.tooltipShowLegend: 'Show legend',
+
+  // Theme F — layer lock (F1) / per-service filter (F4) / armed placement (F5).
+  StringKey.tooltipLockLayer: 'Lock layer',
+  StringKey.tooltipUnlockLayer: 'Unlock layer',
+  StringKey.tooltipFilterServices: 'Filter services',
+  StringKey.placementArmedHint: 'Placing {item} · click to place · Esc to cancel',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -1852,6 +1869,8 @@ const Map<StringKey, String> _id = {
   StringKey.electricalPaletteLoads: 'Beban',
   StringKey.electricalPaletteMotorsPumps: 'Motor & pompa',
   StringKey.electricalPaletteDistribution: 'Distribusi',
+  StringKey.electricalPaletteReadOnly:
+      'Tampilan hanya-baca — beralih ke Segaris untuk mengedit',
 
   // Electrical workspace — Loads palette card labels.
   StringKey.electricalLoadLighting: 'Pencahayaan',
@@ -2180,6 +2199,13 @@ const Map<StringKey, String> _id = {
   StringKey.canvasLegendTitle: 'Keterangan',
   StringKey.tooltipHideLegend: 'Sembunyikan keterangan',
   StringKey.tooltipShowLegend: 'Tampilkan keterangan',
+
+  // Theme F — layer lock (F1) / per-service filter (F4) / armed placement (F5).
+  StringKey.tooltipLockLayer: 'Kunci lapisan',
+  StringKey.tooltipUnlockLayer: 'Buka kunci lapisan',
+  StringKey.tooltipFilterServices: 'Saring layanan',
+  StringKey.placementArmedHint:
+      'Menempatkan {item} · klik untuk menaruh · Esc untuk batal',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]
