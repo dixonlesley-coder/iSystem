@@ -152,6 +152,47 @@ void main() {
     expect(joined.contains('²'), isFalse); // ²
   });
 
+  test('H6: a large-CSA feeder shows a `tray` route token, small ways `PVC`',
+      () {
+    // A huge 3-phase load forces the cable CSA past the conduit range
+    // (> 70 mm2), so its PENGHANTAR cell must state an explicit `tray` route
+    // method instead of a silent blank — while a small final way keeps `PVC`.
+    const big = ElectricalProject(
+      id: 'big',
+      name: 'Big load',
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'MDP',
+          circuits: [
+            ElectricalCircuit(
+              id: 'huge',
+              name: 'Chiller',
+              loadKind: LoadKind.general,
+              loadW: 180000,
+              phases: 3,
+              cableType: 'NYY',
+            ),
+            ElectricalCircuit(
+              id: 'tiny',
+              name: 'Lighting',
+              loadKind: LoadKind.lighting,
+              isLighting: true,
+              loadW: 600,
+              phases: 1,
+              cableType: 'NYM',
+            ),
+          ],
+        ),
+      ],
+    );
+    final r = computeSystem(profile, big);
+    final s = buildElectricalSld(project: big, result: r);
+    final joined = s.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+    expect(joined, contains('tray'), reason: 'large feeder states its route');
+    expect(joined, contains('PVC'), reason: 'small ways keep conduit');
+  });
+
   test('a panel with spare-ways + a fault level shows CADANGAN + Icw', () {
     // Headroom (2 spare ways) + an origin fault level (so the busbar withstand
     // fold runs ⇒ Icw is reported). MDP carries the headroom + fault.

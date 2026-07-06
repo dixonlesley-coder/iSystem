@@ -10,6 +10,7 @@
 library;
 
 import 'package:flutter/widgets.dart';
+import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
@@ -199,6 +200,20 @@ class ElectricalCircuitInspector extends StatelessWidget {
 
   bool get _isMotor =>
       circuit.loadKind == LoadKind.motor || circuit.loadKind == LoadKind.pump;
+
+  /// The human drafting label for a [StarterType] in the picker — the same
+  /// control terms the board-schedule token uses (DOL / VFD / star-delta …).
+  /// Drafting acronyms are identical in EN/ID, so (like the cable-family
+  /// options) only the "None" entry is localized.
+  static String _starterLabel(StarterType s) => switch (s) {
+        StarterType.dol => 'DOL',
+        StarterType.starDelta => 'Star-delta',
+        StarterType.reversing => 'Reversing',
+        StarterType.softStarter => 'Soft-start',
+        StarterType.vfd => 'VFD',
+        StarterType.ats => 'ATS',
+        StarterType.pump => 'Pump',
+      };
 
   /// The way's protection notation, e.g. `MCB 16A 1ph · Icu 6kA · RCD 30mA A` —
   /// the SAME breaker/Icu/RCD tokens `buildElectricalPanelDetail` prints on the
@@ -450,6 +465,45 @@ class ElectricalCircuitInspector extends StatelessWidget {
                                     ),
                             ),
                           ),
+                          // C5 — the motor-control / STARTER type. Gated to
+                          // motor/pump kinds (like the motor-power field above),
+                          // this is the only hand-set path for
+                          // ElectricalCircuit.starterType, which the board
+                          // schedule drafter appends as a control token
+                          // (DOL / VFD / star-delta) on the way's DEVICE cell.
+                          // "None" clears it back to a bare breaker cell.
+                          if (_isMotor)
+                            ElectricalField(
+                              label: context
+                                  .strings(StringKey.electricalFieldStarter),
+                              child: ElectricalEnumPicker<StarterType?>(
+                                value: circuit.starterType,
+                                options: const [
+                                  null,
+                                  StarterType.dol,
+                                  StarterType.starDelta,
+                                  StarterType.reversing,
+                                  StarterType.softStarter,
+                                  StarterType.vfd,
+                                  StarterType.ats,
+                                ],
+                                label: (s) => s == null
+                                    ? context.strings(
+                                        StringKey.electricalStarterNone)
+                                    : _starterLabel(s),
+                                onChanged: (s) => s == null
+                                    ? controller.setCircuit(
+                                        panel.id,
+                                        circuit.id,
+                                        clearStarterType: true,
+                                      )
+                                    : controller.setCircuit(
+                                        panel.id,
+                                        circuit.id,
+                                        starterType: s,
+                                      ),
+                              ),
+                            ),
                         ],
                       ),
                     ),

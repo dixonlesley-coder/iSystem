@@ -170,6 +170,14 @@ class EquipmentScheduleData {
   /// no longer omitted from the tender schedule when the model does carry it.
   final ElectricalProject? electricalProject;
 
+  /// N23 (residual) — engineer-entered "Model / spec" datasheet strings for the
+  /// PANEL + source-apparatus rows (which, unlike pumps/fans, carry no per-item
+  /// override), keyed by the row's STABLE tag: a panel's `tag`/`name`, and the
+  /// fixed apparatus tags `TX-01` / `G-01` / `CB-01`. A missing/empty entry ⇒
+  /// the engine's `'—'` placeholder (byte-identical to before). Never used for
+  /// pump/fan rows (those keep their per-item [PumpScheduleItem.modelSpec]).
+  final Map<String, String> modelSpecs;
+
   const EquipmentScheduleData({
     required this.projectName,
     required this.date,
@@ -177,6 +185,7 @@ class EquipmentScheduleData {
     this.fans = const [],
     this.electrical,
     this.electricalProject,
+    this.modelSpecs = const {},
   });
 }
 
@@ -192,6 +201,13 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
   EquipmentScheduleData data,
 ) {
   final rows = <EquipmentScheduleRow>[];
+
+  // N23 (residual): the engineer-entered model/spec for a PANEL / apparatus row
+  // by its stable tag, else the engine's '—' placeholder. Whitespace-only ⇒ '—'.
+  String specFor(String tag) {
+    final v = data.modelSpecs[tag];
+    return (v != null && v.trim().isNotEmpty) ? v.trim() : '—';
+  }
 
   // ── Pumps ────────────────────────────────────────────────────────────────
   for (var i = 0; i < data.pumps.length; i++) {
@@ -237,12 +253,13 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
     for (final id in e.order) {
       final p = e.panels[id];
       if (p == null) continue;
+      final tag = (p.tag != null && p.tag!.isNotEmpty) ? p.tag! : p.name;
       rows.add(EquipmentScheduleRow(
-        tag: (p.tag != null && p.tag!.isNotEmpty) ? p.tag! : p.name,
+        tag: tag,
         service: '${p.system.label} distribution',
         duty: '${_fmt(p.demandW / 1000.0, dp: 1)} kW demand',
         size: '${_fmt(p.incomer.breaker.ratingA.amperes, dp: 0)} A incomer',
-        modelSpec: '—',
+        modelSpec: specFor(tag),
         qty: 1,
         category: EquipmentCategory.panel,
       ));
@@ -262,7 +279,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
         service: 'Distribution transformer',
         duty: '${_fmt(tx.inKilovoltAmperes, dp: 0)} kVA',
         size: '',
-        modelSpec: '—',
+        modelSpec: specFor('TX-01'),
         qty: ep.dualTransformer ? 2 : 1,
         category: EquipmentCategory.transformer,
       ));
@@ -285,7 +302,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
           service: 'Standby generator',
           duty: '${_fmt(genKva.inKilovoltAmperes, dp: 0)} kVA',
           size: '',
-          modelSpec: '—',
+          modelSpec: specFor('G-01'),
           qty: 1,
           category: EquipmentCategory.generator,
         ));
@@ -299,7 +316,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
         service: 'PF-correction bank',
         duty: '${_fmt(kvar, dp: 0)} kvar',
         size: '',
-        modelSpec: '—',
+        modelSpec: specFor('CB-01'),
         qty: 1,
         category: EquipmentCategory.capacitorBank,
       ));

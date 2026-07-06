@@ -197,6 +197,66 @@ Network _stackNet({bool withCleanout = true, bool ventToTop = true}) => Network(
       ],
     );
 
+/// An upfeed cold-water riser WITH a booster pump on the ground main — exercises
+/// the G3 pump-set valve train (suction/discharge glyph rows around the pump).
+Network _riserNetWithPump() => Network(
+      nodes: [
+        _n('gt', 200, 0,
+            role: NodeRole.plant,
+            component: NodeComponent.groundTank,
+            tankLitres: 8000),
+        _n('p', 200, 0, role: NodeRole.plant, component: NodeComponent.pump),
+        _n('m0', 200, 0),
+        _n('m1', 200, 1),
+        _n('wc', 120, 1,
+            role: NodeRole.fixture,
+            fixture: PlumbingFixture.waterClosetFlushValve),
+      ],
+      edges: [
+        _e('gp', 'gt', 'p', ServiceType.coldWater),
+        _e('pm', 'p', 'm0', ServiceType.coldWater),
+        _e('r', 'm0', 'm1', ServiceType.coldWater, kind: EdgeKind.riser),
+        _e('b', 'm1', 'wc', ServiceType.coldWater),
+      ],
+    );
+
+/// A hot-water supply riser + a per-floor lavatory branch — exercises the G2
+/// recirculation RETURN leg (the return riser + recirc pump are drawn from the
+/// hotWaterRecirc signal, not a drawn return edge).
+Network _hwRiserNet() => Network(
+      nodes: [
+        _n('hm0', 250, 0),
+        _n('hm1', 250, 1),
+        _n('hlav', 320, 1,
+            role: NodeRole.fixture, fixture: PlumbingFixture.lavatory),
+      ],
+      edges: [
+        _e('hr', 'hm0', 'hm1', ServiceType.hotWater, kind: EdgeKind.riser),
+        _e('hb', 'hm1', 'hlav', ServiceType.hotWater),
+      ],
+    );
+
+/// A drainage stack that carries a FLOOR DRAIN + a vent-through-roof + a ground
+/// exit — exercises the G4 drainage reference details + the sewer terminus.
+Network _drainNet() => Network(
+      nodes: [
+        _n('d-exit', 300, 0), // the drainage exit (a plain main on floor 0)
+        _n('d-b0', 300, 0), // the stack base
+        _n('d-b1', 300, 1),
+        _n('d-fd', 360, 1,
+            role: NodeRole.fixture, component: NodeComponent.floorDrain),
+        _n('v-1', 340, 1),
+        _n('v-top', 340, 2),
+      ],
+      edges: [
+        _e('d-e', 'd-exit', 'd-b0', ServiceType.drainage),
+        _e('d-r', 'd-b0', 'd-b1', ServiceType.drainage, kind: EdgeKind.riser),
+        _e('d-f', 'd-b1', 'd-fd', ServiceType.drainage),
+        _e('v-t', 'd-b1', 'v-1', ServiceType.vent),
+        _e('v-r', 'v-1', 'v-top', ServiceType.vent, kind: EdgeKind.riser),
+      ],
+    );
+
 const _levels = BuildingLevels([
   Floor('Ground', Length(4)),
   Floor('Level 1', Length(4)),
@@ -844,6 +904,110 @@ void main() {
       // The combined view draws the drainage edge too; focusing CW drops it.
       expect(cwOnly.prims.length, lessThan(all.prims.length));
       expect(cwOnly.legend.map((e) => e.code), isNot(contains('D')));
+    });
+
+    // ── G3: the pump-set detail draws the suction/discharge valve train ───────
+    test('G3: the PUMP-SET DETAIL draws the suction/discharge valve train', () {
+      final s = buildMechanicalRiserSld(
+        network: _riserNetWithPump(),
+        building: _levels,
+        detailCallouts: true,
+        equipmentDetailByNodeId: const {'p': '2.2 kW'},
+      );
+      final text = _labels(s);
+      expect(text, contains('PUMP-SET DETAIL'));
+      // Suction leg (GV - STR - FJ) + discharge leg (CV - GV - FJ) glyph rows.
+      expect(text, contains('STR')); // suction strainer
+      expect(text, contains('CV')); // discharge check valve
+      expect(text, contains('FJ')); // flexible joints
+      expect(text, contains('GV')); // isolation gate valves
+      expect(text, contains('BOOSTER PUMP 2.2 kW'));
+      // A tank-only plant (no pump) draws NO valve train — nothing fabricated.
+      final noPump = _labels(buildMechanicalRiserSld(
+          network: _riserNet(),
+          building: _levels,
+          downfeed: true,
+          detailCallouts: true));
+      expect(noPump, contains('PUMP-SET DETAIL')); // the roof-tank still shows
+      expect(noPump, isNot(contains('STR')));
+      expect(noPump, isNot(contains('CV')));
+      expect(noPump, isNot(contains('FJ')));
+    });
+
+    // ── G4: drainage reference details + the sewer/STP terminus ───────────────
+    test('G4: drainage reference details + the disposal terminus draw on the '
+        'drainage view', () {
+      final s = buildMechanicalRiserSld(
+        network: _drainNet(),
+        building: _levels,
+        detailCallouts: true,
+      );
+      final text = _labels(s);
+      expect(text, contains('DETAIL FLOOR DRAIN'));
+      expect(text, contains('DETAIL VTR'));
+      // The terminus at the drainage exit — a GENERIC disposal label, never a
+      // fabricated STP / city-sewer destination the model can't confirm.
+      expect(text, contains('KE SALURAN PEMBUANGAN'));
+      expect(text, isNot(contains('KE STP')));
+      expect(text, isNot(contains('KE RIOL')));
+      // Focusing the clean-water view hides the drainage reference boxes + the
+      // terminus (they belong to the drainage view).
+      final cw = _labels(buildMechanicalRiserSld(
+          network: _drainNet(),
+          building: _levels,
+          focus: ServiceType.coldWater,
+          detailCallouts: true));
+      expect(cw, isNot(contains('DETAIL FLOOR DRAIN')));
+      expect(cw, isNot(contains('KE SALURAN PEMBUANGAN')));
+      // Honesty: a drainage net WITHOUT a floor drain shows no FLOOR DRAIN box.
+      final noFd = _labels(buildMechanicalRiserSld(
+          network: _stackNet(), building: _levels, detailCallouts: true));
+      expect(noFd, isNot(contains('DETAIL FLOOR DRAIN')));
+    });
+
+    test('G4: the terminus is data-gated — no drainage ⇒ no disposal label', () {
+      // A pure cold-water riser carries no drainage exit, so no terminus.
+      final s = buildMechanicalRiserSld(
+          network: _riserNet(),
+          building: _levels,
+          downfeed: true,
+          detailCallouts: true);
+      expect(_labels(s), isNot(contains('KE SALURAN PEMBUANGAN')));
+    });
+
+    // ── G2: the hot-water recirculation return leg ───────────────────────────
+    test('G2: hotWaterRecirc draws the HWR return leg + recirc pump; off ⇒ '
+        'byte-identical', () {
+      final withR = buildMechanicalRiserSld(
+        network: _hwRiserNet(),
+        building: _levels,
+        hotWaterRecirc: true,
+      );
+      final text = _labels(withR);
+      expect(text, contains('HWR')); // the return-leg tag
+      expect(text, contains('HWR PUMP')); // the recirc pump at the loop base
+      // A THINNER + DASHED hot-water (HW-layer) return riser exists.
+      expect(
+          withR.prims.whereType<SldLine>().any((l) =>
+              l.dashed &&
+              l.layer == 'HW' &&
+              l.weight == SldWeight.thin &&
+              l.x1 == l.x2),
+          isTrue);
+      // Off (or default) draws NOTHING — byte-identical through a full render.
+      final off = buildMechanicalRiserSld(
+          network: _hwRiserNet(), building: _levels, hotWaterRecirc: false);
+      final def =
+          buildMechanicalRiserSld(network: _hwRiserNet(), building: _levels);
+      expect(sldSheetToDxf(sheet: off), sldSheetToDxf(sheet: def));
+      expect(_labels(off), isNot(contains('HWR')));
+      // No hot-water riser ⇒ nothing drawn even with the flag on.
+      final noHw = _labels(buildMechanicalRiserSld(
+          network: _riserNet(),
+          building: _levels,
+          downfeed: true,
+          hotWaterRecirc: true));
+      expect(noHw, isNot(contains('HWR')));
     });
   });
 }

@@ -61,6 +61,7 @@ import '../canvas/sheet_canvas.dart' show sheetContentBuilderProvider;
 import '../canvas/viewport.dart';
 import '../canvas/zoom_controls.dart';
 import '../electrical/electrical_inspector.dart';
+import 'service_legend_chip.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../shell/project_io.dart';
@@ -1186,6 +1187,15 @@ class _SharedSheet extends ConsumerWidget {
             right: 0,
             child: const Center(child: ModePill()),
           ),
+        // On-canvas service-colour legend chip (bottom-left, above the zoom
+        // cluster) — the colour key for the ACTIVE layer's services while
+        // drawing (E5). Self-hides on the electrical layer (no service colours);
+        // default ON, so the plumbing key is always in reach.
+        Positioned(
+          left: MechXSpacing.md,
+          bottom: MechXSpacing.md + 44,
+          child: const ServiceLegendChip(),
+        ),
         // On-canvas zoom controls (bottom-left) — the same cluster the
         // electrical canvas shows, so both workspaces share the affordance.
         Positioned(

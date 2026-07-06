@@ -269,6 +269,41 @@ void main() {
               }.contains(r.category)),
           isFalse);
     });
+
+    test('N23 residual: modelSpecs fill panel + apparatus Model/spec by tag', () {
+      final data = EquipmentScheduleData(
+        projectName: 'B',
+        date: 'd',
+        electrical: result,
+        electricalProject: project,
+        modelSpecs: const {
+          'MDP': 'Schneider Prisma iPM',
+          'TX-01': 'Trafindo 630 kVA cast-resin',
+          'G-01': 'Cummins C55 D5',
+          'CB-01': 'Nokian 50 kvar',
+        },
+      );
+      final rows = buildEquipmentScheduleRows(data);
+      final byCat = {for (final r in rows) r.category: r};
+      expect(byCat[EquipmentCategory.panel]!.modelSpec, 'Schneider Prisma iPM');
+      expect(byCat[EquipmentCategory.transformer]!.modelSpec,
+          'Trafindo 630 kVA cast-resin');
+      expect(byCat[EquipmentCategory.generator]!.modelSpec, 'Cummins C55 D5');
+      expect(byCat[EquipmentCategory.capacitorBank]!.modelSpec,
+          'Nokian 50 kvar');
+
+      // A missing / blank entry keeps the engine's '—' placeholder.
+      final none = buildEquipmentScheduleRows(EquipmentScheduleData(
+        projectName: 'B',
+        date: 'd',
+        electrical: result,
+        electricalProject: project,
+        modelSpecs: const {'MDP': '   '},
+      ));
+      expect(
+          none.firstWhere((r) => r.category == EquipmentCategory.panel).modelSpec,
+          '—');
+    });
   });
 
   // ── Empty data set ──────────────────────────────────────────────────────

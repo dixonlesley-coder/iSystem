@@ -89,6 +89,7 @@ enum StringKey {
   electricalExportReportSub,
   electricalExportPowerOneLine,
   electricalExportPowerOneLineSub,
+  electricalExportPlan,
   electricalExportSchedules,
   electricalExportSchedulesPdf,
 
@@ -322,6 +323,8 @@ enum StringKey {
   exportTitleRiserSetDxf,
   exportTitlePanelSchedulesPdf,
   exportTitlePowerOneLineDxf,
+  exportTitleElectricalPlanPdf,
+  exportTitleElectricalPlanDxf,
   exportTitleElectricalReport,
   exportTitleElectricalBom,
   exportTitleElectricalProposal,
@@ -369,6 +372,8 @@ enum StringKey {
   electricalPhase3,
   electricalFieldCableType,
   electricalCablePanelDefault,
+  electricalFieldStarter,
+  electricalStarterNone,
   electricalToggleLighting,
   electricalToggleLifeSafety,
 
@@ -652,6 +657,12 @@ enum StringKey {
   tooltipZoomFit,
   tooltipCollapseInspector,
   tooltipExpandInspector,
+
+  // E5 — the on-canvas service-colour LEGEND chip (Layout canvas, bottom-left):
+  // its title + the show/hide tooltips.
+  canvasLegendTitle,
+  tooltipHideLegend,
+  tooltipShowLegend,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -741,6 +752,7 @@ const Map<StringKey, String> _en = {
   StringKey.electricalExportReportSub: 'Markdown',
   StringKey.electricalExportPowerOneLine: 'Power one-line',
   StringKey.electricalExportPowerOneLineSub: 'DXF (needs energy sources)',
+  StringKey.electricalExportPlan: 'Layout plan (denah)',
   StringKey.electricalExportSchedules: 'Panel schedules',
   StringKey.electricalExportSchedulesPdf: 'PDF (one panel per sheet)',
 
@@ -1011,6 +1023,8 @@ const Map<StringKey, String> _en = {
   StringKey.exportTitleRiserSetDxf:
       'Export riser drawing set (DXF, one file per system)',
   StringKey.exportTitlePanelSchedulesPdf: 'Export panel schedules (PDF)',
+  StringKey.exportTitleElectricalPlanPdf: 'Export layout plan (PDF)',
+  StringKey.exportTitleElectricalPlanDxf: 'Export layout plan (DXF)',
   StringKey.exportTitlePowerOneLineDxf: 'Export power one-line (DXF)',
   StringKey.exportTitleElectricalReport: 'Export electrical report',
   StringKey.exportTitleElectricalBom: 'Export electrical BOM',
@@ -1059,6 +1073,8 @@ const Map<StringKey, String> _en = {
   StringKey.electricalPhase3: '3-phase',
   StringKey.electricalFieldCableType: 'Cable type',
   StringKey.electricalCablePanelDefault: 'Panel default',
+  StringKey.electricalFieldStarter: 'Starter / control',
+  StringKey.electricalStarterNone: 'None',
   StringKey.electricalToggleLighting: 'Lighting circuit (3% Vd limit)',
   StringKey.electricalToggleLifeSafety: 'Life-safety (no RCD)',
 
@@ -1395,6 +1411,11 @@ const Map<StringKey, String> _en = {
   StringKey.tooltipZoomFit: 'Fit view',
   StringKey.tooltipCollapseInspector: 'Collapse inspector',
   StringKey.tooltipExpandInspector: 'Expand inspector',
+
+  // E5 — the on-canvas service-colour legend chip.
+  StringKey.canvasLegendTitle: 'Legend',
+  StringKey.tooltipHideLegend: 'Hide legend',
+  StringKey.tooltipShowLegend: 'Show legend',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -1485,6 +1506,7 @@ const Map<StringKey, String> _id = {
   StringKey.electricalExportReportSub: 'Markdown',
   StringKey.electricalExportPowerOneLine: 'Diagram daya satu-garis',
   StringKey.electricalExportPowerOneLineSub: 'DXF (perlu sumber energi)',
+  StringKey.electricalExportPlan: 'Denah instalasi (denah)',
   StringKey.electricalExportSchedules: 'Diagram panel',
   StringKey.electricalExportSchedulesPdf: 'PDF (satu panel per lembar)',
 
@@ -1759,6 +1781,8 @@ const Map<StringKey, String> _id = {
   StringKey.exportTitleRiserSetDxf:
       'Ekspor set gambar riser (DXF, satu berkas per sistem)',
   StringKey.exportTitlePanelSchedulesPdf: 'Ekspor diagram panel (PDF)',
+  StringKey.exportTitleElectricalPlanPdf: 'Ekspor denah instalasi (PDF)',
+  StringKey.exportTitleElectricalPlanDxf: 'Ekspor denah instalasi (DXF)',
   StringKey.exportTitlePowerOneLineDxf: 'Ekspor daya satu-garis (DXF)',
   StringKey.exportTitleElectricalReport: 'Ekspor laporan kelistrikan',
   StringKey.exportTitleElectricalBom: 'Ekspor BOM kelistrikan',
@@ -1807,6 +1831,8 @@ const Map<StringKey, String> _id = {
   StringKey.electricalPhase3: '3-fasa',
   StringKey.electricalFieldCableType: 'Jenis kabel',
   StringKey.electricalCablePanelDefault: 'Default panel',
+  StringKey.electricalFieldStarter: 'Starter / kontrol',
+  StringKey.electricalStarterNone: 'Tidak ada',
   StringKey.electricalToggleLighting: 'Sirkuit pencahayaan (batas Vd 3%)',
   StringKey.electricalToggleLifeSafety: 'Keselamatan jiwa (tanpa RCD)',
 
@@ -2149,6 +2175,11 @@ const Map<StringKey, String> _id = {
   StringKey.tooltipZoomFit: 'Sesuaikan tampilan',
   StringKey.tooltipCollapseInspector: 'Ciutkan panel',
   StringKey.tooltipExpandInspector: 'Perluas panel',
+
+  // E5 — the on-canvas service-colour legend chip.
+  StringKey.canvasLegendTitle: 'Keterangan',
+  StringKey.tooltipHideLegend: 'Sembunyikan keterangan',
+  StringKey.tooltipShowLegend: 'Tampilkan keterangan',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

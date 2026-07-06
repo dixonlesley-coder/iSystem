@@ -13,6 +13,7 @@ import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_pdf_export.dart'
     show electricalSldToPdf;
+import 'package:mechx_engine/report/electrical_plan_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/equipment_schedule.dart';
 import 'package:mechx_engine/report/mep_commercial.dart'
@@ -20,6 +21,7 @@ import 'package:mechx_engine/report/mep_commercial.dart'
 import 'package:mechx_engine/report/mep_report.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
+import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
 import 'package:mechx_engine/report/report_blocks.dart';
 import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
@@ -574,21 +576,50 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     // PF-correction bank) the electrical project may carry, so the schedule
     // no longer omits the highest-value long-lead items on the source spine.
     electricalProject: ref.read(electricalProjectProvider),
+    // N23 (residual): the engineer-entered model/spec for the PANEL + apparatus
+    // rows (pumps/fans carry their own per-item override above), keyed by the
+    // panel tag/name + the fixed TX-01/G-01/CB-01 apparatus tags.
+    modelSpecs: specs,
   );
 }
 
 /// N23 — the equipment tags [gatherEquipmentScheduleData] currently assigns,
-/// paired with their service label, for the model/spec edit surface below.
-/// Deliberately mirrors the pump/fan/AHU tagging above (NOT the electrical
-/// panel/apparatus rows, which the engine doesn't yet accept a per-row
-/// override for) rather than re-deriving it from the built [EquipmentScheduleRow]s,
-/// so a blank spec never masquerades as the engine's own '—' placeholder.
+/// paired with their service label, for the model/spec edit surface below. The
+/// pump/fan/AHU rows are read from the schedule inputs directly (their tags are
+/// assigned by the app); the electrical PANEL + source-apparatus rows
+/// (transformer / standby genset / PF-correction bank) are taken from the BUILT
+/// [EquipmentScheduleRow]s so the same stable tags the engine keys `modelSpecs`
+/// on (a panel's tag/name, `TX-01` / `G-01` / `CB-01`) get an edit field too.
+///
+/// The section's VISIBILITY is gated on mechanical equipment (pumps/fans/AHU)
+/// being present ([_hasMechanicalEquipmentTargets]) — so merely seeding an
+/// electrical project's panels never SURFACES this mechanical-inspector section
+/// (a blank-mechanical launch stays byte-identical); the panel/apparatus rows
+/// ride along only once the section is already shown for real mechanical duty.
 List<({String tag, String service})> _equipmentSpecTargets(WidgetRef ref) {
   final data = gatherEquipmentScheduleData(ref);
+  const apparatus = {
+    EquipmentCategory.panel,
+    EquipmentCategory.transformer,
+    EquipmentCategory.generator,
+    EquipmentCategory.capacitorBank,
+  };
   return [
     for (final p in data.pumps) (tag: p.tag!, service: p.service),
     for (final f in data.fans) (tag: f.tag!, service: f.service),
+    for (final r in buildEquipmentScheduleRows(data))
+      if (apparatus.contains(r.category)) (tag: r.tag, service: r.service),
   ];
+}
+
+/// Whether the equipment model/spec section should be SHOWN — true only when
+/// the project carries sized MECHANICAL equipment (a pump or fan/AHU). The
+/// electrical panel/apparatus rows are additive detail once shown; they never
+/// surface the section on their own (keeps the goldens' seeded-electrical launch
+/// byte-identical).
+bool _hasMechanicalEquipmentTargets(WidgetRef ref) {
+  final data = gatherEquipmentScheduleData(ref);
+  return data.pumps.isNotEmpty || data.fans.isNotEmpty;
 }
 
 Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
@@ -765,6 +796,11 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
     edgeTags: elementTags(net),
     // N4/B12: the setting-out grid from axis-aligned traced reference lines.
     grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
+    // G1: the stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
+    // glyph, and G5: the laid gravity fall (1:N) folded into gravity-run size
+    // labels — the same tokens the on-canvas plan shows, now on the issued DXF.
+    nodeTags: equipmentNodeTags(net),
+    gravitySlope: const SizingContext().drainageSlope,
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -790,8 +826,9 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
   final project = ref.read(projectControllerProvider);
   final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
+  final net = ref.read(networkControllerProvider).network;
   final bytes = networkToPdf(
-    net: ref.read(networkControllerProvider).network,
+    net: net,
     sizing: ref.read(sizingProvider),
     sheetId: sheet.id,
     floorIndex: floorIndex,
@@ -804,6 +841,11 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
     // sheet, faded raster for a PDF sheet; null (placeholder / unreadable
     // source) keeps the plain export.
     underlay: await buildPlanUnderlay(sheet),
+    // G1: stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
+    // glyph, and G5: the laid gravity fall (1:N) on gravity-run size labels —
+    // the same tokens the on-canvas plan shows, now on the issued PDF.
+    nodeTags: equipmentNodeTags(net),
+    gravitySlope: const SizingContext().drainageSlope,
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -873,6 +915,11 @@ Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     // (vertical → lettered columns, horizontal → numbered rows); diagonal ones
     // are snap-only. Empty ⇒ no grid drawn (byte-identical).
     grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
+    // G1: stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
+    // glyph, and G5: the laid gravity fall (1:N) on gravity-run size labels —
+    // the same tokens the on-canvas plan shows, now on the issued plan PDF.
+    nodeTags: equipmentNodeTags(net),
+    gravitySlope: const SizingContext().drainageSlope,
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -1172,6 +1219,10 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       // shared by both plan formats.
       final grid =
           buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id);
+      // G1/G5: the equipment tags + gravity fall, shared by both plan formats
+      // (the same tokens the on-canvas plan shows).
+      final nodeTags = equipmentNodeTags(net);
+      final gravitySlope = const SizingContext().drainageSlope;
       // One file per sheet, numbered by rail position so a multi-floor bundle
       // never collides (`project-plan-1-Ground Floor.pdf`, `-2-Level 1.pdf`…).
       final suffix = 'plan-${i + 1}-${sheet.name}';
@@ -1190,6 +1241,8 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
         edgeElevationLabels: elevationLabels,
         edgeTags: tags,
         grid: grid,
+        nodeTags: nodeTags,
+        gravitySlope: gravitySlope,
       ));
       await File(out('$suffix.dxf')).writeAsString(networkToDxf(
         net: net,
@@ -1202,7 +1255,40 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
         edgeElevationLabels: elevationLabels,
         edgeTags: tags,
         grid: grid,
+        nodeTags: nodeTags,
+        gravitySlope: gravitySlope,
       ));
+      // H1: the electrical installation layout (denah instalasi listrik) for
+      // this same sheet+floor — panels/loads at their placed positions + feeder
+      // routes over the same underlay — so the tender folder carries the
+      // electrical denah beside each mechanical plan. Written only when the
+      // sheet actually has placed electrical items (else no file, honestly).
+      final ePlan = buildElectricalPlanData(
+        project: ref.read(electricalProjectProvider),
+        result: ref.read(electricalResultProvider),
+        sheetId: sheet.id,
+        floorIndex: floorIndex,
+        calibrations: project.calibrations,
+        building: project.building,
+      );
+      if (!ePlan.isEmpty) {
+        final eChrome = sldChrome(DrawingSeries.electricalLayout);
+        await File(out('elec-$suffix.pdf')).writeAsBytes(electricalPlanToPdf(
+          data: ePlan,
+          projectName: base,
+          sheetName: sheet.name,
+          dateString: today,
+          chrome: eChrome,
+          metersPerPixel: metersPerPixel,
+          underlay: underlay,
+        ));
+        await File(out('elec-$suffix.dxf')).writeAsString(electricalPlanToDxf(
+          data: ePlan,
+          projectName: base,
+          sheetName: sheet.name,
+          chrome: eChrome,
+        ));
+      }
     }
   } finally {
     ref.read(busyProvider.notifier).clear();
@@ -2129,7 +2215,14 @@ class _EquipmentModelSpecSection extends ConsumerWidget {
     ref.watch(ductFanProvider);
     ref.watch(ductSettingsProvider);
     ref.watch(roomAreasProvider);
+    // N23 residual: the electrical panels + source apparatus are edit targets
+    // too, so react to their live state (a panel added / a source configured).
+    ref.watch(electricalResultProvider);
+    ref.watch(electricalProjectProvider);
     final specs = ref.watch(equipmentModelSpecProvider);
+    // Gate visibility on mechanical equipment so seeding an electrical project's
+    // panels alone never surfaces this mechanical-inspector section (goldens).
+    if (!_hasMechanicalEquipmentTargets(ref)) return const SizedBox.shrink();
     final targets = _equipmentSpecTargets(ref);
     if (targets.isEmpty) return const SizedBox.shrink();
 

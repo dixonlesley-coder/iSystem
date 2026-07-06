@@ -145,8 +145,9 @@ String _earthConductor(double peCsaMm2) {
 /// A PVC conduit size (mm) derived from the conductor — a ~40 % fill general-
 /// practice estimate (// VERIFY, NOT an SNI clause; the model carries no conduit
 /// field). Returns null for large feeders (beyond the conduit range — they run
-/// on tray / cable-ladder, so no conduit token). A 3-phase run (5-core) bumps up
-/// one trade size for the extra cores.
+/// on tray / cable-ladder; the schedule then prints an explicit `tray` route
+/// token instead, H6). A 3-phase run (5-core) bumps up one trade size for the
+/// extra cores.
 int? _conduitMm(double csaMm2, bool threePhase) {
   final base = csaMm2 <= 4
       ? 20
@@ -451,7 +452,12 @@ SldSheet buildElectricalSld({
           ? _earthConductor(c.grounding.peCsaMm2)
           : '';
       final conduitMm = _conduitMm(c.cable.csaMm2, c.threePhase);
-      final conduit = conduitMm != null ? ' · PVC ${conduitMm}mm' : '';
+      // H6: a way whose conductor exceeds the conduit range (CSA > 70 mm2) runs
+      // on cable tray / ladder, not in conduit — print an explicit `tray` route
+      // token so EVERY row states a route method (the code's own convention;
+      // never a silent blank next to neighbours that show `· PVC NNmm`).
+      // // VERIFY — a drawing convention (the model carries no containment field).
+      final conduit = conduitMm != null ? ' · PVC ${conduitMm}mm' : ' · tray';
       // The run LENGTH the solve already used for this way (geo-derived when
       // placed, else the manual circuit length) — the cable-takeoff figure that
       // also drove the printed Vdrop (N8). Printed ONLY when a real length

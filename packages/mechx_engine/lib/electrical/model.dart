@@ -204,6 +204,7 @@ class ElectricalCircuit {
     String? sourceEquipmentId,
     Current? flaOverrideA,
     StarterType? starterType,
+    bool clearStarterType = false,
     LayoutPos? loadPos,
     bool clearLoadPos = false,
   }) =>
@@ -232,7 +233,8 @@ class ElectricalCircuit {
         feedsPanelId: feedsPanelId ?? this.feedsPanelId,
         sourceEquipmentId: sourceEquipmentId ?? this.sourceEquipmentId,
         flaOverrideA: flaOverrideA ?? this.flaOverrideA,
-        starterType: starterType ?? this.starterType,
+        starterType:
+            clearStarterType ? null : (starterType ?? this.starterType),
         loadPos: clearLoadPos ? null : (loadPos ?? this.loadPos),
       );
 

@@ -17,6 +17,7 @@ import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/fault.dart' show defaultLvUtilityFaultKa;
 import 'package:mechx_engine/electrical/geo_length.dart';
@@ -639,6 +640,8 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     bool? isLighting,
     String? cableType,
     bool clearCableType = false,
+    StarterType? starterType,
+    bool clearStarterType = false,
   }) {
     _replaceCircuit(
       panelId,
@@ -658,6 +661,8 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         isLighting: isLighting,
         cableType: cableType,
         clearCableType: clearCableType,
+        starterType: starterType,
+        clearStarterType: clearStarterType,
       ),
     );
   }

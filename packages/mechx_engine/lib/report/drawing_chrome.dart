@@ -143,12 +143,13 @@ class DrawingChrome {
 /// source of its running drawing number. A drafting-office numbering convention
 /// (discipline prefix + a hundreds band per drawing TYPE), NOT an engineering
 /// value, so no `// VERIFY`. Mechanical plans run `M-1xx`, the mechanical riser
-/// `M-2xx`; electrical per-panel/board detail `E-2xx`, the building overview
-/// single-line `E-3xx`, the floor-by-floor riser `E-4xx`, the power one-line
-/// `E-5xx`.
+/// `M-2xx`; electrical layout (installation) plans `E-1xx`, the per-panel/board
+/// detail `E-2xx`, the building overview single-line `E-3xx`, the floor-by-floor
+/// riser `E-4xx`, the power one-line `E-5xx`.
 enum DrawingSeries {
   mechanicalPlan('M', 1),
   mechanicalRiser('M', 2),
+  electricalLayout('E', 1),
   electricalDetail('E', 2),
   electricalOverview('E', 3),
   electricalRiser('E', 4),
@@ -230,18 +231,25 @@ String serviceChromeLabel(ServiceType s) => switch (s) {
     };
 
 /// Per-service stroke colour as RGB in 0..1 — the single source shared by the
-/// PDF exporters so legend swatches match the drawn lines.
+/// PDF exporters (via `_serviceColor` in `pdf_export` / `plan_pdf_export`) so a
+/// legend swatch, a plotted line and the LIVE on-canvas line all read the SAME
+/// colour (E2). Every triple is the on-canvas `serviceColor` hex divided by 255
+/// (the engine can't import the Flutter `service_style.dart`, so the CANVAS is
+/// the single truth and this mirrors it channel-for-channel); the app-side
+/// `service_colour_parity_test` walks every ServiceType asserting the two agree.
+/// Supply/return/exhaust air previously disagreed across canvas / PDF / DXF —
+/// they now derive from the canvas lavender / steel-blue / slate-grey.
 (double, double, double) serviceChromeColor(ServiceType s) => switch (s) {
-      ServiceType.coldWater => (0.13, 0.45, 0.85),
-      ServiceType.hotWater => (0.85, 0.30, 0.20),
-      ServiceType.drainage => (0.50, 0.35, 0.20),
-      ServiceType.vent => (0.20, 0.60, 0.60),
-      ServiceType.rainwater => (0.20, 0.70, 0.85),
-      ServiceType.duct => (0.20, 0.60, 0.30),
-      ServiceType.returnAir => (0.50, 0.60, 0.20),
-      ServiceType.exhaust => (0.50, 0.30, 0.60),
-      ServiceType.fireSprinkler => (0.80, 0.15, 0.15),
-      ServiceType.fireHydrant => (0.60, 0.10, 0.10),
+      ServiceType.coldWater => (0x2D / 255, 0x6C / 255, 0xDF / 255), // #2D6CDF
+      ServiceType.hotWater => (0xE5 / 255, 0x67 / 255, 0x3A / 255), // #E5673A
+      ServiceType.drainage => (0x8A / 255, 0x6D / 255, 0x3B / 255), // #8A6D3B
+      ServiceType.vent => (0x2B / 255, 0xB6 / 255, 0xA3 / 255), // #2BB6A3
+      ServiceType.rainwater => (0x3A / 255, 0xA0 / 255, 0xE5 / 255), // #3AA0E5
+      ServiceType.duct => (0x8A / 255, 0x7B / 255, 0xD8 / 255), // #8A7BD8
+      ServiceType.returnAir => (0x6F / 255, 0x8F / 255, 0xC0 / 255), // #6F8FC0
+      ServiceType.exhaust => (0x5B / 255, 0x64 / 255, 0x70 / 255), // #5B6470
+      ServiceType.fireSprinkler => (0xD9 / 255, 0x38 / 255, 0x38 / 255), // #D93838
+      ServiceType.fireHydrant => (0xB0 / 255, 0x25 / 255, 0x25 / 255), // #B02525
     };
 
 String _n(double v) => v.toStringAsFixed(2);
@@ -362,6 +370,43 @@ String pdfSheetFrame({
   return cs.toString();
 }
 
+// ── Helvetica AFM widths (units per 1000 em, chars 0x20–0x7E) ────────────────
+// Standard Adobe metrics for base-14 Helvetica — embedded so the title-block
+// TITLE cell can measure text and auto-fit a long drawing title (Wave-7).
+const List<int> _helveticaWidths = [
+  278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, //
+  278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, //
+  584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, //
+  500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, //
+  667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, //
+  278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, //
+  278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
+];
+
+/// Width of [s] at [size] pt in Helvetica (the title block's `/F1` font).
+double _helveticaTextWidth(String s, double size) {
+  var units = 0;
+  for (final c in s.codeUnits) {
+    units += (c >= 0x20 && c <= 0x7e) ? _helveticaWidths[c - 0x20] : 556;
+  }
+  return units * size / 1000.0;
+}
+
+/// The largest font size (<= [maxSize], floored at [minSize]) at which [text]
+/// fits within [cellW] points in Helvetica — used to auto-shrink the title
+/// block's TITLE cell so a long drawing title (e.g.
+/// `DIAGRAM SISTEM AIR BERSIH & AIR KOTOR`) never bleeds past the fixed cell
+/// (Wave-7 residual). Returns [maxSize] VERBATIM when the text already fits, so
+/// a short/absent title keeps the 8 pt rendering byte-for-byte. Pure.
+double fitTitleFontSize(String text, double cellW,
+    {double maxSize = 8, double minSize = 5}) {
+  if (text.isEmpty || cellW <= 0) return maxSize;
+  final wMax = _helveticaTextWidth(text, maxSize);
+  if (wMax <= cellW) return maxSize;
+  final scaled = maxSize * cellW / wMax;
+  return scaled < minSize ? minSize : scaled;
+}
+
 /// A boxed ISO-7200 title block in the bottom-RIGHT of the page. Rows are the
 /// filtered [_titleBlockRows]; each row is a small muted label cell + a value
 /// cell, hairline-ruled. Returns the content-stream `ops` PLUS the block
@@ -412,7 +457,15 @@ String pdfSheetFrame({
     // name) is a ruled cell for hand completion (N20) — its rules + label stay,
     // only the (empty) value TEXT is omitted.
     if (value.trim().isNotEmpty) {
-      cs.writeln('BT /F1 8 Tf 0 0 0 rg '
+      // Wave-7 residual: a long TITLE would bleed past the fixed value cell —
+      // auto-shrink JUST the TITLE row's font to fit it. Every other row (and a
+      // title that already fits) stays at 8 pt, so the output is byte-identical
+      // for the common case.
+      final vsize = label == 'TITLE'
+          ? fitTitleFontSize(value, blockW - labelW - 8)
+          : 8.0;
+      final vsizeStr = vsize == 8.0 ? '8' : _n(vsize);
+      cs.writeln('BT /F1 $vsizeStr Tf 0 0 0 rg '
           '${_n(x0 + labelW + 4)} ${_n(ty)} Td (${_pdfText(value)}) Tj ET');
     }
   }
@@ -669,21 +722,24 @@ const kDxfLayerAnno = 'G-ANNO-TEXT';
 /// DXF sheet-frame / title-block layer.
 const kDxfLayerFrame = 'G-ANNO-TTLB';
 
-/// Nearest-ACI colour index per service, chosen from the `serviceChromeColor`
-/// hues (ACI: 1 red, 2 yellow, 3 green, 4 cyan, 5 blue, 6 magenta, 7 white,
-/// 8 grey). Cold water reads blue, hot water orange, rainwater cyan, sprinkler
-/// red, hydrant a darker red, exhaust grey; supply/return air stay distinct.
+/// Nearest-ACI colour index per service, in the SAME hue family as the canvas
+/// `serviceChromeColor` (the single truth, E2). ACI base palette: 1 red,
+/// 2 yellow, 3 green, 4 cyan, 5 blue, 6 magenta, 7 white, 8 grey; the extended
+/// index 150 is azure (~210°). Cold water reads blue, hot water orange,
+/// rainwater cyan, sprinkler red, hydrant a darker red; the three air services
+/// now match the canvas — supply air its lavender/violet (6), return air its
+/// steel-blue (150 azure, distinct from cold-water 5), exhaust its slate-grey (8).
 int serviceAciColorFor(ServiceType s) => switch (s) {
-      ServiceType.coldWater => 5, // blue
-      ServiceType.hotWater => 30, // orange
-      ServiceType.drainage => 34, // brown
-      ServiceType.vent => 3, // green (teal-ish)
-      ServiceType.rainwater => 4, // cyan
-      ServiceType.duct => 6, // magenta/violet (supply air)
-      ServiceType.returnAir => 52, // olive/green-yellow (return air)
-      ServiceType.exhaust => 8, // grey
-      ServiceType.fireSprinkler => 1, // red
-      ServiceType.fireHydrant => 12, // dark red
+      ServiceType.coldWater => 5, // blue      (#2D6CDF)
+      ServiceType.hotWater => 30, // orange    (#E5673A)
+      ServiceType.drainage => 34, // brown     (#8A6D3B)
+      ServiceType.vent => 3, // green/teal (#2BB6A3)
+      ServiceType.rainwater => 4, // cyan      (#3AA0E5)
+      ServiceType.duct => 6, // violet    (#8A7BD8 supply-air lavender)
+      ServiceType.returnAir => 150, // azure  (#6F8FC0 steel-blue, distinct from 5)
+      ServiceType.exhaust => 8, // grey      (#5B6470 slate)
+      ServiceType.fireSprinkler => 1, // red       (#D93838)
+      ServiceType.fireHydrant => 12, // dark red  (#B02525)
     };
 
 /// PDF dash pattern (on/off run lengths in points) per service, or null for a

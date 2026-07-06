@@ -365,7 +365,20 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   export now loops EVERY sheet in the rail (was: `sheets.current` only) via a new testable
   `writeSubmittalPackageToDir`, each sheet keeping its own N19 drawing number + a disambiguated
   filename, with the Daftar Gambar front matter listing one row per bundled sheet and progress on
-  the shared busy pill. Waves 4–6 remain — work them from that document.
+  the shared busy pill. **Wave 4 (deliverable fidelity) HAS ALSO LANDED** (2026-07-06, see the
+  §15 row): one pure `equipmentNodeTags` source prints P-01/TK-01/AHU-01 beside equipment on
+  canvas + all plan exports (G1, review-caught app-wiring fix included); a data-gated HW-recirc
+  return leg with HWR tags + recirc pump on the riser (G2); real suction/discharge valve trains
+  in the pump-set detail (G3); floor-drain/VTR reference details + an honestly-generic drainage
+  terminus (G4); real design-slope '1:100' + fall arrows on gravity runs (G5); an on-canvas
+  service-colour legend chip (E5); ONE service-colour source with a PDF↔DXF parity test (E2);
+  the plan-accurate ELECTRICAL LAYOUT export (`electrical_plan_drawing.dart`, E-1xx, honest
+  unplaced note — artifact 14 of the dev-tool harness) wired into Export + the submittal set
+  (H1); size-matched conduit tokens (H6); a starter picker in the circuit editor (C5); and the
+  two Wave-7 residuals closed (TX/genset/cap-bank Model-spec hooks; the auto-fitting title
+  cell). Gate: engine 1371 / app 957 / analyze clean; goldens 01/02/03/09/10_single_line
+  re-captured; harness 16 artifacts, all verdicts PASS. Waves 5–6 remain — work them from
+  that document.
 - **Apple-design review (2026-07-04) — the prior plan of record for ease-of-use/UX polish (fully landed)**:
   `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
   UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the

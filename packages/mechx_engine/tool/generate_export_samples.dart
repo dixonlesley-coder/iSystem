@@ -30,6 +30,7 @@ import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
 import 'package:mechx_engine/report/electrical_pdf_export.dart';
+import 'package:mechx_engine/report/electrical_plan_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/equipment_schedule.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
@@ -160,6 +161,23 @@ Network buildNetwork() {
   run('cw-w2', 'cw-h2', 'cw-wc2', ServiceType.coldWater);
   run('cw-l2', 'cw-h2', 'cw-lav2', ServiceType.coldWater);
   run('cw-s2', 'cw-h2', 'cw-sh2', ServiceType.coldWater);
+
+  // ── HOT WATER: heater base -> riser -> per-floor lavatories (recirc loop) ───
+  // A hot-water supply riser + branches; the recirc RETURN leg (G2) is drawn by
+  // the riser SLD from the hotWaterRecirc signal, not a drawn return edge.
+  node(const NetNode(id: 'hw-b0', sheetId: 's0', x: 250, y: 380, floorIndex: 0));
+  node(const NetNode(id: 'hw-b1', sheetId: 's1', x: 250, y: 380, floorIndex: 1));
+  node(const NetNode(id: 'hw-b2', sheetId: 's2', x: 250, y: 380, floorIndex: 2));
+  run('hw-r01', 'hw-b0', 'hw-b1', ServiceType.hotWater, kind: EdgeKind.riser);
+  run('hw-r12', 'hw-b1', 'hw-b2', ServiceType.hotWater, kind: EdgeKind.riser);
+  node(const NetNode(
+      id: 'hw-lav1', sheetId: 's1', x: 320, y: 380, floorIndex: 1,
+      role: NodeRole.fixture, fixture: PlumbingFixture.lavatory));
+  node(const NetNode(
+      id: 'hw-lav2', sheetId: 's2', x: 320, y: 380, floorIndex: 2,
+      role: NodeRole.fixture, fixture: PlumbingFixture.lavatory));
+  run('hw-l1', 'hw-b1', 'hw-lav1', ServiceType.hotWater);
+  run('hw-l2', 'hw-b2', 'hw-lav2', ServiceType.hotWater);
 
   // ── DRAINAGE stack + per-floor fixture branches -> ground exit ──────────────
   node(const NetNode(
@@ -471,6 +489,12 @@ void main(List<String> args) {
   // N13: one stable element tag per edge (riser stack tag / run floor tag),
   // threaded into BOTH plan formats so they trace to the riser + BOM + report.
   final edgeTagsMap = elementTags(net);
+  // G1: one stable equipment tag per plant/air-unit node (P-01 / TK-01 / AHU-01),
+  // threaded into the plan PDF + DXF beside each equipment glyph.
+  final nodeTagsMap = equipmentNodeTags(net);
+  // G5: the laid drainage fall the sizer actually uses (ctx gradient, not a
+  // hardcoded default) — shown as `1:100` on gravity runs.
+  final gravitySlope = const SizingContext().drainageSlope;
   print('network: ${net.nodes.length} nodes, ${net.edges.length} edges; '
       'sized ${sizing.length} edges');
 
@@ -566,6 +590,9 @@ void main(List<String> args) {
           grid: referenceGrid,
           // N13: the stable element tag on each run/riser label.
           edgeTags: edgeTagsMap,
+          // G1 equipment tags + G5 gravity fall.
+          nodeTags: nodeTagsMap,
+          gravitySlope: gravitySlope,
           sheetId: 's0',
           floorIndex: 0,
           projectName: projectName,
@@ -600,6 +627,9 @@ void main(List<String> args) {
           grid: referenceGrid,
           // N13: the stable element tag on each run/riser label.
           edgeTags: edgeTagsMap,
+          // G1 equipment tags + G5 gravity fall.
+          nodeTags: nodeTagsMap,
+          gravitySlope: gravitySlope,
           sheetId: 's1',
           floorIndex: 1,
           projectName: projectName,
@@ -638,6 +668,9 @@ void main(List<String> args) {
           grid: referenceGrid,
           // N13: the stable element tag on each run label + riser marker.
           edgeTags: edgeTagsMap,
+          // G1 equipment tags + G5 gravity fall.
+          nodeTags: nodeTagsMap,
+          gravitySlope: gravitySlope,
           chrome: DrawingChrome(
             // N19: derived per sheet (mechanical plan band, rail position 1).
             drawingNumber: sheetDrawingNumber(
@@ -686,6 +719,9 @@ void main(List<String> args) {
         'Pompa booster 2.2 kW',
       ],
       detailCallouts: true,
+      // G2: the fixture carries a hot-water loop, so the riser draws the HWR
+      // return leg + recirc pump (the app supplies this from the recirc solve).
+      hotWaterRecirc: net.edges.any((e) => e.service == ServiceType.hotWater),
     );
     writeBytes(
         'riser-mech.pdf',
@@ -793,6 +829,39 @@ void main(List<String> args) {
           result: result,
           diagramTitle: 'DIAGRAM PANEL',
           chrome: elecDetailChrome,
+        ));
+  });
+
+  // 14 — plan-accurate electrical LAYOUT (denah instalasi listrik) for the
+  // ground floor: panels + loads at their real placed sheet positions, feeders
+  // with §10 cable lengths, and an honest "Unplaced" corner note for the panels
+  // / loads not placed on this sheet+floor (H1). PDF + DXF share one geometry.
+  attempt('elec-layout.pdf', () {
+    final planData = buildElectricalPlanData(
+      project: project,
+      result: result,
+      sheetId: 's0',
+      floorIndex: 0,
+      calibrations: calibrations,
+      building: building,
+    );
+    writeBytes(
+        'elec-layout.pdf',
+        electricalPlanToPdf(
+          data: planData,
+          projectName: projectName,
+          sheetName: 'Denah Lantai Dasar',
+          dateString: dateString,
+          chrome: elecChromeFor(DrawingSeries.electricalLayout),
+          metersPerPixel: calibrations['s0']?.metersPerPixel,
+        ));
+    writeText(
+        'elec-layout.dxf',
+        electricalPlanToDxf(
+          data: planData,
+          projectName: projectName,
+          sheetName: 'Denah Lantai Dasar',
+          chrome: elecChromeFor(DrawingSeries.electricalLayout),
         ));
   });
 

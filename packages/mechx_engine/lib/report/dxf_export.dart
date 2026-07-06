@@ -71,6 +71,12 @@ int _strokeBand(EdgeSizing s) {
 /// marker, so the plan DXF carries the SAME element identifier the riser
 /// single-line, BOM and calc report use. A missing/empty entry ⇒ unchanged; the
 /// default null map ⇒ byte-identical.
+///
+/// With [nodeTags] present (G1) each `node id → equipment tag` (`P-01` …, from
+/// `equipmentNodeTags`) is emitted as a TEXT beside that equipment glyph. With
+/// [gravitySlope] present (G5) each gravity run's size TEXT gains the laid fall
+/// `1:N` from that real `SizingContext.drainageSlope`. Both null ⇒
+/// byte-identical.
 String networkToDxf({
   required Network net,
   required Map<String, EdgeSizing> sizing,
@@ -82,6 +88,8 @@ String networkToDxf({
   Map<String, String>? edgeElevationLabels,
   ReferenceGrid? grid,
   Map<String, String>? edgeTags,
+  Map<String, String>? nodeTags,
+  double? gravitySlope,
 }) {
   if (metersPerPixel != null && metersPerPixel > 0) {
     return _professionalDxf(
@@ -95,6 +103,8 @@ String networkToDxf({
       edgeElevationLabels: edgeElevationLabels,
       grid: grid,
       edgeTags: edgeTags,
+      nodeTags: nodeTags,
+      gravitySlope: gravitySlope,
     );
   }
 
@@ -203,9 +213,17 @@ String networkToDxf({
       final s = sizing[e.id];
       if (s != null) {
         final elev = edgeElevationLabels?[e.id];
-        final size = elev != null && elev.isNotEmpty
-            ? '${_sizeLabel(e, s)} - $elev'
-            : _sizeLabel(e, s);
+        // G5: the laid fall (`1:100`) for a gravity RUN, from the real ctx
+        // gradient (never hardcoded).
+        final slope = (e.service.regime == FlowRegime.gravity &&
+                gravitySlope != null)
+            ? gravitySlopeLabel(gravitySlope)
+            : null;
+        final size = [
+          _sizeLabel(e, s),
+          if (elev != null && elev.isNotEmpty) elev,
+          if (slope != null) slope,
+        ].join(' - ');
         // N13: prepend the stable element tag (`CW-F2 - DN50 - CL +2.70`).
         final tag = edgeTags?[e.id];
         final labelText = tag != null && tag.isNotEmpty ? '$tag - $size' : size;
@@ -277,6 +295,16 @@ String networkToDxf({
     } else if (n.role == NodeRole.fixture) {
       emitPrims(planFixturePrims(cx: n.x, cy: -n.y, size: 16), svc.name, -n.y);
     }
+    // G1: the stable equipment tag (`P-01` …) as TEXT beside the glyph.
+    final eqTag = nodeTags?[n.id];
+    if (eqTag != null && eqTag.isNotEmpty) {
+      g(0, 'TEXT');
+      g(8, svc.name);
+      g(10, n.x + 12);
+      g(20, -n.y - 14);
+      g(40, 12);
+      g(1, eqTag);
+    }
   }
 
   // ── Issuable-document chrome (opt-in; byte-identical when null/empty) ───────
@@ -308,6 +336,8 @@ String _professionalDxf({
   required Map<String, String>? edgeElevationLabels,
   required ReferenceGrid? grid,
   required Map<String, String>? edgeTags,
+  required Map<String, String>? nodeTags,
+  required double? gravitySlope,
 }) {
   final b = StringBuffer();
   void g(int code, Object value) {
@@ -524,9 +554,17 @@ String _professionalDxf({
       if (s != null) {
         // N5: append the centreline-elevation token to the size label.
         final elev = edgeElevationLabels?[e.id];
-        final size = elev != null && elev.isNotEmpty
-            ? '${_sizeLabel(e, s)} - $elev'
-            : _sizeLabel(e, s);
+        // G5: the laid fall (`1:100`) for a gravity RUN, from the real ctx
+        // gradient (never hardcoded).
+        final slope = (e.service.regime == FlowRegime.gravity &&
+                gravitySlope != null)
+            ? gravitySlopeLabel(gravitySlope)
+            : null;
+        final size = [
+          _sizeLabel(e, s),
+          if (elev != null && elev.isNotEmpty) elev,
+          if (slope != null) slope,
+        ].join(' - ');
         // N13: prepend the stable element tag (`CW-F2 - DN50 - CL +2.70`).
         final tag = edgeTags?[e.id];
         final labelText = tag != null && tag.isNotEmpty ? '$tag - $size' : size;
@@ -627,6 +665,17 @@ String _professionalDxf({
           planFixturePrims(cx: n.x * mmPerPx, cy: cyMm, size: 16 * mmPerPx),
           layer,
           cyMm);
+    }
+    // G1: the stable equipment tag (`P-01` …) as real-mm TEXT on the ANNO
+    // layer beside the glyph.
+    final eqTag = nodeTags?[n.id];
+    if (eqTag != null && eqTag.isNotEmpty) {
+      g(0, 'TEXT');
+      g(8, kDxfLayerAnno);
+      g(10, n.x * mmPerPx + 12 * mmPerPx);
+      g(20, cyMm - textH * 1.4);
+      g(40, textH);
+      g(1, eqTag);
     }
   }
 

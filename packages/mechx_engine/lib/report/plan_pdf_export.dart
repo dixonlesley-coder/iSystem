@@ -29,19 +29,10 @@ import 'plan_symbols.dart';
 import 'sld_sheet.dart';
 
 /// Per-service stroke colour as RGB in the 0..1 range (no Flutter `Color`).
-/// Matches `pdf_export.dart` so the annotated and plain PDFs read the same.
-(double, double, double) _serviceColor(ServiceType s) => switch (s) {
-      ServiceType.coldWater => (0.13, 0.45, 0.85),
-      ServiceType.hotWater => (0.85, 0.30, 0.20),
-      ServiceType.drainage => (0.50, 0.35, 0.20),
-      ServiceType.vent => (0.20, 0.60, 0.60),
-      ServiceType.rainwater => (0.20, 0.70, 0.85),
-      ServiceType.duct => (0.20, 0.60, 0.30),
-      ServiceType.returnAir => (0.50, 0.60, 0.20),
-      ServiceType.exhaust => (0.50, 0.30, 0.60),
-      ServiceType.fireSprinkler => (0.80, 0.15, 0.15),
-      ServiceType.fireHydrant => (0.60, 0.10, 0.10),
-    };
+/// Delegates to the ONE shared `serviceChromeColor` table (E2) — matches
+/// `pdf_export.dart` AND the live canvas `serviceColor`, so the annotated /
+/// plain PDFs and the on-screen line read the same colour.
+(double, double, double) _serviceColor(ServiceType s) => serviceChromeColor(s);
 
 /// The size half of an edge label: `DN50` (pipe), `O200` (round duct, the
 /// ASCII stand-in for Ø since Roboto/Helvetica printable-ASCII has no Ø), or
@@ -147,6 +138,17 @@ bool _boxesOverlap(LabelBox a, LabelBox b) =>
 /// missing/empty entry ⇒ that edge's label is unchanged; the default empty map ⇒
 /// byte-identical.
 ///
+/// With [nodeTags] present (G1) each entry's `node id → equipment tag` (the
+/// stable `P-01` / `TK-01` / `AHU-01` from `equipmentNodeTags`) is drawn as a
+/// small leader label beside that equipment glyph, so a pump on the plan carries
+/// the SAME tag the equipment schedule / BOM use. A missing entry ⇒ that node is
+/// unlabelled; the default null map ⇒ byte-identical.
+///
+/// With [gravitySlope] present (G5) each gravity-regime (drainage / vent /
+/// rainwater) RUN's size label gains the laid fall as a drafting ratio `1:N`
+/// (e.g. `DN100 - 3.5 m - 1:100`) from that real `SizingContext.drainageSlope`
+/// value — never a hardcoded default. Null ⇒ byte-identical.
+///
 /// With [underlay] present (A1) the floor-plan substrate is painted FIRST,
 /// beneath every network stroke: a [VectorPlanUnderlay] as pale-grey thin
 /// linework, a [RasterPlanUnderlay] as a FlateDecode image XObject scaled to
@@ -169,6 +171,8 @@ Uint8List planToPdf({
   Map<String, String>? edgeElevationLabels,
   ReferenceGrid? grid,
   Map<String, String>? edgeTags,
+  Map<String, String>? nodeTags,
+  double? gravitySlope,
 }) {
   final pageW = paper.widthPt; // landscape sheet width, points
   final pageH = paper.heightPt; // landscape sheet height, points
@@ -409,11 +413,20 @@ Uint8List planToPdf({
     final elev = edgeElevationLabels?[e.id];
     final sizeText = s != null ? _sizeLabel(e, s) : null;
     final lenText = (len != null && len.meters > 0) ? _lengthLabel(len) : null;
+    // G5: the laid fall (`1:100`) for a gravity-regime RUN, from the real ctx
+    // gradient the caller passes (never a hardcoded default) — a foreman reads
+    // the required fall off the soil/waste run itself.
+    final slopeText = (e.kind == EdgeKind.run &&
+            e.service.regime == FlowRegime.gravity &&
+            gravitySlope != null)
+        ? gravitySlopeLabel(gravitySlope)
+        : null;
     // N5: append the centreline-elevation token to the size/length label.
     final parts = <String>[
       if (sizeText != null) sizeText,
       if (lenText != null) lenText,
       if (elev != null && elev.isNotEmpty) elev,
+      if (slopeText != null) slopeText,
     ];
     final core = parts.isEmpty ? null : parts.join(' - ');
     // N13: prepend the stable element tag (`CW-R1 · DN50 - 3.5 m`). U+00B7 is
@@ -507,6 +520,14 @@ Uint8List planToPdf({
     } else {
       cs.writeln('0.20 0.20 0.20 rg');
       circle(px, py, 2, fill: true);
+    }
+    // G1: the stable equipment tag (`P-01` / `TK-01` / `AHU-01` …) beside the
+    // glyph, placed with the same collision-aware leadered placer the run
+    // labels use so it dodges the sized-run tags + other equipment tags.
+    final eqTag = nodeTags?[n.id];
+    if (eqTag != null && eqTag.isNotEmpty) {
+      final w = eqTag.length * 9.0 * 0.55;
+      edgeLabel(px + 10, py, px + 10 + w, py, eqTag);
     }
   }
 

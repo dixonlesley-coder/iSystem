@@ -3,6 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/plan_symbols.dart'
+    show equipmentNodeTags, gravitySlopeLabel;
 import 'package:mechx_engine/report/riser_tags.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
@@ -319,6 +321,14 @@ class _NetworkPainter extends CustomPainter {
     // floor: on a multi-service layer a run label carries its service code
     // (DN15-CW); on a single-service view it stays bare (DN15).
     final riserTagById = riserTags(net, null);
+    // G1: one stable equipment tag per plant/air-unit node (P-01 / TK-01 / …),
+    // the SAME source the plan exporters + equipment schedule use.
+    final equipmentTagById = equipmentNodeTags(net);
+    // G5: the laid gravity fall as a `1:100` token — read from the SizingContext
+    // gradient the sizer actually uses (the store builds SizingContext without
+    // overriding drainageSlope), never a hardcoded string.
+    final gravitySlopeText =
+        gravitySlopeLabel(const SizingContext().drainageSlope);
     final visibleServices = <ServiceType>{};
     for (final e in net.edges) {
       if (!_serviceVisible(e.service)) continue;
@@ -445,6 +455,12 @@ class _NetworkPainter extends CustomPainter {
           if (multiService) label = '$label-${riserServiceCode(e.service)}';
           final tag = _productTag(e, s);
           if (tag != null) label = '$label  $tag';
+          // G5: append the laid fall (`1:100`) on a gravity-regime run so the
+          // soil/waste/rainwater branch shows its slope, not just its size.
+          if (e.service.regime == FlowRegime.gravity &&
+              gravitySlopeText != null) {
+            label = '$label  $gravitySlopeText';
+          }
           labelSide = _label(canvas, pa, pb, outer, label, placedLabels);
         }
         // Air status badge (independent of the size-label toggle), active layer
@@ -533,6 +549,14 @@ class _NetworkPainter extends CustomPainter {
       }
       if (n.component != null) {
         _componentGlyph(canvas, p, n.component!, layer.opacity);
+        // G1: the stable equipment tag (P-01 / TK-01 / AHU-01 …) beside the
+        // glyph — the plan↔schedule cross-reference. Active layer only (like the
+        // size + riser labels), collision-aware against the run labels already
+        // placed this frame.
+        final eqTag = equipmentTagById[n.id];
+        if (eqTag != null && layer.opacity >= 1.0) {
+          _equipmentTagLabel(canvas, p, eqTag, placedLabels);
+        }
       } else if (n.role != NodeRole.main || joints[n.id] == null) {
         // A plain junction that carries a fitting glyph (drawn above) no longer
         // needs the bare dot; a free main node (no pipes yet) still gets it.
@@ -1021,6 +1045,52 @@ class _NetworkPainter extends CustomPainter {
       Paint()..color = const Color(0xCCFFFFFF),
     );
     tp.paint(canvas, Offset(left, top));
+  }
+
+  /// The stable equipment tag (e.g. `P-01`) beside an equipment glyph at
+  /// [glyph], in dark ink on a translucent white chip so it reads over the plan
+  /// (G1). Collision-aware like the run labels: tries right / left / below /
+  /// above of the glyph and takes the first slot that clears [placed] (adding
+  /// its box), else draws to the right anyway — an identifier is never dropped.
+  /// ASCII-only (Roboto-safe).
+  void _equipmentTagLabel(
+      Canvas canvas, Offset glyph, String tag, List<Rect> placed) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: tag,
+        style: const TextStyle(
+          fontFamily: 'Roboto',
+          fontSize: 9.5,
+          color: Color(0xFF15171B),
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final boxW = tp.width + 6;
+    final boxH = tp.height + 3;
+    final candidates = <Offset>[
+      Offset(glyph.dx + 13 + boxW / 2, glyph.dy), // right
+      Offset(glyph.dx - 13 - boxW / 2, glyph.dy), // left
+      Offset(glyph.dx, glyph.dy + 13 + boxH / 2), // below
+      Offset(glyph.dx, glyph.dy - 13 - boxH / 2), // above
+    ];
+    var center = candidates.first;
+    for (final c in candidates) {
+      final r = Rect.fromCenter(center: c, width: boxW, height: boxH);
+      if (!placed.any(r.overlaps)) {
+        center = c;
+        placed.add(r);
+        break;
+      }
+    }
+    final rect = Rect.fromCenter(center: center, width: boxW, height: boxH);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(2.5)),
+      Paint()..color = const Color(0xCCFFFFFF),
+    );
+    tp.paint(
+        canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
   }
 
   /// Compact ASCII-safe material tag for an edge ("PPR16", "PVC-AW", "BJLS 0.6",

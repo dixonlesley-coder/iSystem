@@ -309,6 +309,8 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               onReport: () => _runExport(exportElectricalCalcReport),
               onPowerOneLine: () => _runExport(exportPowerOneLineDxf),
               onPowerOneLinePdf: () => _runExport(exportPowerOneLinePdf),
+              onPlanPdf: () => _runExport(exportElectricalPlanPdf),
+              onPlanDxf: () => _runExport(exportElectricalPlanDxf),
             ),
           ),
         if (_circuitMenu != null) _buildCircuitMenu(),
@@ -781,6 +783,8 @@ class _ExportMenu extends StatelessWidget {
   final VoidCallback onReport;
   final VoidCallback onPowerOneLine;
   final VoidCallback onPowerOneLinePdf;
+  final VoidCallback onPlanPdf;
+  final VoidCallback onPlanDxf;
   const _ExportMenu({
     required this.onSld,
     required this.onSldPdf,
@@ -792,6 +796,8 @@ class _ExportMenu extends StatelessWidget {
     required this.onReport,
     required this.onPowerOneLine,
     required this.onPowerOneLinePdf,
+    required this.onPlanPdf,
+    required this.onPlanDxf,
   });
 
   @override
@@ -822,6 +828,19 @@ class _ExportMenu extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
+            // H1 — the plan-accurate installation layout (denah instalasi
+            // listrik): panels + loads at their real placed positions on the
+            // floor plan, the drawing an Indonesian building-permit set requires.
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportPlan),
+              sub: context.strings(StringKey.electricalExportSldPdf),
+              onTap: onPlanPdf,
+            ),
+            _ExportRow(
+              label: context.strings(StringKey.electricalExportPlan),
+              sub: context.strings(StringKey.electricalExportSldDxf),
+              onTap: onPlanDxf,
+            ),
             _ExportRow(
               label: context.strings(StringKey.electricalExportSld),
               sub: context.strings(StringKey.electricalExportSldDxf),

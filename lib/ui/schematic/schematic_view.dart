@@ -928,6 +928,10 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
                   detailByNode: detailByNode,
                   supplyPump: pump,
                   showDetails: widget.showDetails,
+                  // G2: the hot-water recirculation loop exists when the engine
+                  // sizes one (the provider is non-null) — draw the HWR return.
+                  hotWaterRecirc:
+                      ref.watch(hotWaterRecircProvider) != null,
                 ),
               ),
             ),
@@ -1894,6 +1898,7 @@ class _AutoSchematicPainter extends CustomPainter {
     this.detailByNode = const {},
     this.supplyPump,
     this.showDetails = true,
+    this.hotWaterRecirc = false,
   });
 
   final Network network;
@@ -1904,6 +1909,12 @@ class _AutoSchematicPainter extends CustomPainter {
   /// The system supply-pump duty (one trunk pump) — used for the plant-detail
   /// callout's BOOSTER PUMP kW caption. Null ⇒ no kW caption (no fabricated duty).
   final PumpDuty? supplyPump;
+
+  /// G2: true when the engine's hot-water RECIRCULATION loop exists (the
+  /// `hotWaterRecircProvider` result is non-null). When set — and the network
+  /// carries hot-water risers — the supply riser gains a thinner dashed `HWR`
+  /// return leg + a recirc-pump glyph. False / no hot-water riser ⇒ nothing.
+  final bool hotWaterRecirc;
 
   /// Draw the H101-style DETAIL callouts (plant detail + valve assemblies) and
   /// the per-floor branch fan-out. Toolbar-toggleable, default on.
@@ -1956,12 +1967,88 @@ class _AutoSchematicPainter extends CustomPainter {
     // accumulates its own placed rects so run tags don't stack on each other.
     final occupied = _floorLabelRects(size);
     _paintEdges(canvas, nodePos, occupied);
+    // G2: the hot-water recirculation return leg rides alongside the supply
+    // riser — a structural element (drawn whenever the recirc loop exists),
+    // not a toggleable detail callout.
+    if (hotWaterRecirc) _paintHotWaterReturn(canvas, nodePos);
     _paintNodes(canvas, nodePos);
     if (showDetails) {
       _paintFloorFanOut(canvas, size);
       _paintPlantDetail(canvas, size);
       _paintValveCallouts(canvas, size);
       _paintStackDetails(canvas, size, nodePos);
+    }
+  }
+
+  /// G2: draw the hot-water RECIRCULATION return leg(s) — a thinner dashed
+  /// `HWR` return riser alongside each hot-water supply riser, a down arrow
+  /// (return flow), and a recirc-pump glyph at the loop base. Mirrors the export
+  /// builder's `_emitHotWaterReturn`.
+  void _paintHotWaterReturn(Canvas canvas, Map<String, Offset> nodePos) {
+    if (!(focus == null || focus == ServiceType.hotWater)) return;
+    final hwRisers = network.edges
+        .where((e) =>
+            e.service == ServiceType.hotWater &&
+            e.kind == EdgeKind.riser &&
+            nodePos[e.fromId] != null &&
+            nodePos[e.toId] != null)
+        .toList();
+    if (hwRisers.isEmpty) return;
+    final color = serviceColor(ServiceType.hotWater);
+    const off = 12.0;
+    final dashPaint = Paint()
+      ..color = color
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    for (final e in hwRisers) {
+      final from = nodePos[e.fromId]!;
+      final to = nodePos[e.toId]!;
+      final midX = (from.dx + to.dx) / 2;
+      final legX = midX + off;
+      final yTop = math.min(from.dy, to.dy);
+      final yBot = math.max(from.dy, to.dy);
+      _dashedLine(canvas, Offset(legX, yTop), Offset(legX, yBot), dashPaint);
+      _dashedLine(canvas, Offset(midX, yTop), Offset(legX, yTop), dashPaint);
+      // A down arrow — recirculation flow returns to the heater.
+      _drawArrow(canvas, Offset(legX, (yTop + yBot) / 2), false, color);
+      _drawText(
+        canvas,
+        'HWR',
+        Offset(legX + 5, (yTop + yBot) / 2 - MechXSpacing.sm),
+        fontSize: 9,
+        color: color,
+        fontWeight: FontWeight.w600,
+      );
+    }
+    // The recirc pump glyph at the loop base — the lowest hot-water node.
+    NetNode? lowest;
+    for (final e in hwRisers) {
+      for (final id in [e.fromId, e.toId]) {
+        final n = network.nodeById(id);
+        if (n == null) continue;
+        if (lowest == null || n.floorIndex < lowest.floorIndex) lowest = n;
+      }
+    }
+    final lp = lowest == null ? null : nodePos[lowest.id];
+    if (lp != null) {
+      final px = lp.dx + off;
+      const box = 18.0;
+      canvas.drawCircle(
+          Offset(px, lp.dy), box * 0.62, Paint()..color = colors.canvas);
+      canvas.save();
+      canvas.translate(px - box / 2, lp.dy - box / 2);
+      paintComponentSymbol(
+          canvas, const Size(box, box), NodeComponent.pump, color);
+      canvas.restore();
+      _drawText(
+        canvas,
+        'HWR PUMP',
+        Offset(px + box / 2 + 3, lp.dy - 4),
+        fontSize: 8,
+        color: colors.textMuted,
+        fontWeight: FontWeight.w500,
+      );
     }
   }
 
@@ -2517,6 +2604,14 @@ class _AutoSchematicPainter extends CustomPainter {
       focus == ServiceType.coldWater ||
       focus == ServiceType.hotWater;
 
+  /// G4: whether a drainage/vent reference detail should draw for the active
+  /// focus (the combined view or a drainage/vent/rainwater filter).
+  bool get _drainageFocus =>
+      focus == null ||
+      focus == ServiceType.drainage ||
+      focus == ServiceType.vent ||
+      focus == ServiceType.rainwater;
+
   /// Capacity (m3, ASCII) of the first node with [component], or null.
   String? _tankM3(NodeComponent component) {
     for (final n in network.nodes) {
@@ -2547,23 +2642,23 @@ class _AutoSchematicPainter extends CustomPainter {
     if (!hasRoof && !hasGround && !hasPump) return;
 
     final color = serviceColor(ServiceType.coldWater);
-    const boxW = 210.0;
-    const boxH = 120.0;
+    const boxW = 250.0;
+    const boxH = 150.0;
     const pad = MechXSpacing.md;
     // Guard a too-narrow / too-short viewport.
     if (size.width < boxW + 2 * pad || size.height < boxH + 2 * pad) return;
-    final rect =
-        Rect.fromLTWH(size.width - boxW - pad, pad, boxW, boxH);
+    final rect = Rect.fromLTWH(size.width - boxW - pad, pad, boxW, boxH);
     _detailBox(canvas, rect, 'PUMP-SET DETAIL', titleColor: colors.textMuted);
 
+    final cx = rect.left + boxW / 2;
     const glyph = 22.0;
-    final leftX = rect.left + 14;
-    var y = rect.top + 22;
+    var y = rect.top + 24;
 
-    // ROOF TANK row.
+    // ROOF TANK row (centred) with its capacity + GRAVITASI down-leg label.
+    double? roofBottom;
     if (hasRoof) {
       canvas.save();
-      canvas.translate(leftX, y);
+      canvas.translate(cx - glyph / 2, y);
       paintComponentSymbol(
           canvas, const Size(glyph, glyph), NodeComponent.roofTank, color);
       canvas.restore();
@@ -2571,58 +2666,111 @@ class _AutoSchematicPainter extends CustomPainter {
       _drawText(
         canvas,
         m3 != null ? 'ROOF TANK $m3 m3' : 'ROOF TANK',
-        Offset(leftX + glyph + 8, y + glyph / 2 - 6),
+        Offset(cx + glyph / 2 + 8, y + glyph / 2 - 6),
         fontSize: 9,
         color: colors.textSecondary,
         fontWeight: FontWeight.w500,
-        maxWidth: boxW - (glyph + 28),
+        maxWidth: rect.right - (cx + glyph / 2 + 12),
       );
-      // GRAVITASI leg label on the down-leg below the roof tank (downfeed feed).
       if (downfeed) {
         _drawText(
           canvas,
           'GRAVITASI',
-          Offset(leftX + glyph / 2 + 4, y + glyph + 1),
+          Offset(cx - glyph / 2 - 4, y + glyph + 1),
           fontSize: 8,
           color: color,
           fontWeight: FontWeight.w600,
         );
       }
-      y += glyph + 18;
+      roofBottom = y + glyph;
+      y += glyph + 26;
     }
 
-    // A short vertical connecting leg down to the pump (when both present).
-    if (hasRoof && hasPump) {
+    // PUMP row with the suction / discharge VALVE TRAIN (G3): the pump centred,
+    // flanked by its real train — suction (GV · STR · FJ) left, discharge (CV ·
+    // GV · FJ) right — the safety-critical assembly drawn, not a bare icon.
+    if (hasPump) {
+      final pumpC = _hasComponent(NodeComponent.boosterSet)
+          ? NodeComponent.boosterSet
+          : NodeComponent.pump;
+      final trainCy = y + glyph / 2;
+      if (roofBottom != null) {
+        canvas.drawLine(
+          Offset(cx, roofBottom),
+          Offset(cx, trainCy - glyph / 2),
+          Paint()
+            ..color = color
+            ..strokeWidth = 1
+            ..style = PaintingStyle.stroke,
+        );
+      }
+      const train = <(String, String)>[
+        ('GV', 'GV'),
+        ('STR', 'STR'),
+        ('FJ', 'FJ'),
+        ('PUMP', ''),
+        ('CV', 'CV'),
+        ('GV', 'GV'),
+        ('FJ', 'FJ'),
+      ];
+      const gap = 32.0;
+      const gl = 16.0;
+      final firstCx = cx - (train.length - 1) / 2 * gap;
       canvas.drawLine(
-        Offset(leftX + glyph / 2, rect.top + 22 + glyph),
-        Offset(leftX + glyph / 2, y),
+        Offset(firstCx - gl / 2, trainCy),
+        Offset(firstCx + (train.length - 1) * gap + gl / 2, trainCy),
         Paint()
           ..color = color
           ..strokeWidth = 1
           ..style = PaintingStyle.stroke,
       );
-    }
-
-    // BOOSTER PUMP row.
-    if (hasPump) {
-      final pumpC = _hasComponent(NodeComponent.boosterSet)
-          ? NodeComponent.boosterSet
-          : NodeComponent.pump;
-      canvas.save();
-      canvas.translate(leftX, y);
-      paintComponentSymbol(canvas, const Size(glyph, glyph), pumpC, color);
-      canvas.restore();
+      for (var i = 0; i < train.length; i++) {
+        final (token, abbrev) = train[i];
+        final gx = firstCx + i * gap;
+        // Halo so the glyph reads over the run line.
+        canvas.drawCircle(
+            Offset(gx, trainCy), gl * 0.62, Paint()..color = colors.canvas);
+        if (token == 'PUMP') {
+          canvas.save();
+          canvas.translate(gx - (gl + 3) / 2, trainCy - (gl + 3) / 2);
+          paintComponentSymbol(canvas, Size(gl + 3, gl + 3), pumpC, color);
+          canvas.restore();
+        } else if (token == 'FJ') {
+          _paintFlexJoint(
+              canvas,
+              Rect.fromCenter(
+                  center: Offset(gx, trainCy), width: gl, height: gl),
+              color);
+        } else {
+          canvas.save();
+          canvas.translate(gx - gl / 2, trainCy - gl / 2);
+          paintComponentSymbol(
+              canvas, const Size(gl, gl), _trainComponent(token), color);
+          canvas.restore();
+        }
+        if (abbrev.isNotEmpty) {
+          _drawText(
+            canvas,
+            abbrev,
+            Offset(gx, trainCy + gl / 2 + 2),
+            fontSize: 8,
+            color: colors.textMuted,
+            fontWeight: FontWeight.w500,
+            centered: true,
+          );
+        }
+      }
       final kw = supplyPump != null
           ? '${supplyPump!.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW'
           : null;
       _drawText(
         canvas,
         kw != null ? 'BOOSTER PUMP $kw' : 'BOOSTER PUMP',
-        Offset(leftX + glyph + 8, y + glyph / 2 - 6),
+        Offset(cx, trainCy + gl / 2 + 16),
         fontSize: 9,
         color: colors.textSecondary,
         fontWeight: FontWeight.w500,
-        maxWidth: boxW - (glyph + 28),
+        centered: true,
       );
       // TRANSFER (ground -> roof lift) when a ground tank exists; else BOOSTER
       // (pump-up) on upfeed.
@@ -2631,13 +2779,42 @@ class _AutoSchematicPainter extends CustomPainter {
         _drawText(
           canvas,
           leg,
-          Offset(leftX + glyph / 2 + 4, y + glyph + 1),
+          Offset(cx, trainCy + gl / 2 + 30),
           fontSize: 8,
           color: color,
           fontWeight: FontWeight.w600,
+          centered: true,
         );
       }
     }
+  }
+
+  /// The [NodeComponent] for a pump-set valve-train token (GV / STR / CV).
+  NodeComponent _trainComponent(String token) => switch (token) {
+        'GV' => NodeComponent.gateValve,
+        'STR' => NodeComponent.strainer,
+        'CV' => NodeComponent.checkValve,
+        _ => NodeComponent.gateValve,
+      };
+
+  /// A FLEXIBLE-JOINT glyph (two flanges + a bellows "W") in [r] — the canvas
+  /// counterpart of `planFlexibleJointPrims`, for the pump-set valve train (G3).
+  void _paintFlexJoint(Canvas canvas, Rect r, Color color) {
+    final p = Paint()
+      ..color = color
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    double fx(double f) => r.left + f * r.width;
+    double fy(double f) => r.top + f * r.height;
+    void ln(double x1, double y1, double x2, double y2) =>
+        canvas.drawLine(Offset(fx(x1), fy(y1)), Offset(fx(x2), fy(y2)), p);
+    ln(0.18, 0.28, 0.18, 0.72);
+    ln(0.82, 0.28, 0.82, 0.72);
+    ln(0.18, 0.50, 0.35, 0.32);
+    ln(0.35, 0.32, 0.50, 0.68);
+    ln(0.50, 0.68, 0.65, 0.32);
+    ln(0.65, 0.32, 0.82, 0.50);
   }
 
   /// (2) VALVE-ASSEMBLY CALLOUTS — compact bordered detail boxes at the
@@ -2651,27 +2828,41 @@ class _AutoSchematicPainter extends CustomPainter {
   /// real device (no exact-glyph claim). The present boxes are centred as a
   /// group so a lone detail still reads balanced.
   void _paintValveCallouts(Canvas canvas, Size size) {
-    if (!_waterFocus) return;
-    final color = serviceColor(ServiceType.coldWater);
+    final cwColor = serviceColor(ServiceType.coldWater);
+    final drColor = serviceColor(ServiceType.drainage);
     const boxW = 156.0;
     const boxH = 64.0;
     const gapBetween = MechXSpacing.md;
+    final topFloor = building.levelCount - 1;
 
-    final details = <(String, List<(NodeComponent, String)>)>[
-      if (_hasComponent(NodeComponent.waterMeter))
+    // Each box is drawn ONLY when the network carries its key device (G7/G4):
+    // WATER METER / PRV SET (clean water), FLOOR DRAIN / VTR (drainage/vent). The
+    // combined view shows every applicable box in one centred row.
+    final details = <(String, List<(NodeComponent, String)>, Color)>[
+      if (_waterFocus && _hasComponent(NodeComponent.waterMeter))
         ('DETAIL WATER METER', const [
           (NodeComponent.gateValve, 'GV'),
           (NodeComponent.waterMeter, 'WM'),
           (NodeComponent.gateValve, 'GV'),
           (NodeComponent.gateValve, 'U'),
-        ]),
-      if (_hasComponent(NodeComponent.prv))
+        ], cwColor),
+      if (_waterFocus && _hasComponent(NodeComponent.prv))
         ('DETAIL PRV SET', const [
           (NodeComponent.gateValve, 'GV'),
           (NodeComponent.strainer, 'STR'),
           (NodeComponent.prv, 'PRV'),
           (NodeComponent.gateValve, 'GV'),
-        ]),
+        ], cwColor),
+      if (_drainageFocus && _hasComponent(NodeComponent.floorDrain))
+        ('DETAIL FLOOR DRAIN', const [
+          (NodeComponent.floorDrain, 'FD'),
+          (NodeComponent.cleanout, 'CO'),
+        ], drColor),
+      if (_drainageFocus &&
+          ventTopTerminalIds(network, topFloor: topFloor).isNotEmpty)
+        ('DETAIL VTR', const [
+          (NodeComponent.airVent, 'VTR'),
+        ], drColor),
     ];
     if (details.isEmpty) return;
 
@@ -2682,14 +2873,14 @@ class _AutoSchematicPainter extends CustomPainter {
     }
     var left = (size.width - totalW) / 2;
     final top = size.height - boxH - MechXSpacing.md;
-    for (final (title, items) in details) {
+    for (final (title, items, c) in details) {
       final rect = Rect.fromLTWH(left, top, boxW, boxH);
-      _detailBox(canvas, rect, title, titleColor: color);
+      _detailBox(canvas, rect, title, titleColor: c);
       _drawDetailGlyphRow(
         canvas,
         Offset(rect.left + 12, rect.top + 24),
         items,
-        color,
+        c,
         glyph: 15,
         gap: 32,
       );
@@ -2763,6 +2954,86 @@ class _AutoSchematicPainter extends CustomPainter {
         );
       }
     }
+    // G4: the DRAINAGE TERMINUS — where the soil/waste leaves the building. A
+    // generic disposal glyph + 'KE SALURAN PEMBUANGAN'; the destination is NEVER
+    // invented (no 'KE STP' / 'KE RIOL KOTA' the model can't confirm).
+    if (focus == null ||
+        focus == ServiceType.drainage ||
+        focus == ServiceType.rainwater) {
+      final exitId = _drainageExitNodeId(network);
+      final p = exitId == null ? null : nodePos[exitId];
+      if (p != null) {
+        final c = Offset(p.dx, p.dy + 22);
+        _paintSewerTerminus(canvas, c, drainColor);
+        _drawText(
+          canvas,
+          'KE SALURAN PEMBUANGAN',
+          Offset(c.dx + 12, c.dy - 4),
+          fontSize: 8,
+          color: drainColor,
+          fontWeight: FontWeight.w600,
+        );
+      }
+    }
+  }
+
+  /// The DRAINAGE EXIT node (G4) — the lowest drainage-connected node,
+  /// preferring a genuine outlet (a plain main, not a fixture/cleanout branch)
+  /// and, among equals, a leaf. Null when there's no drainage. Mirrors the
+  /// export builder's `_drainageExitNodeId`.
+  String? _drainageExitNodeId(Network net) {
+    final touching = <String>{};
+    for (final e in net.edges) {
+      if (e.service != ServiceType.drainage) continue;
+      touching
+        ..add(e.fromId)
+        ..add(e.toId);
+    }
+    final nodes = <NetNode>[
+      for (final id in touching)
+        if (net.nodeById(id) != null) net.nodeById(id)!,
+    ];
+    if (nodes.isEmpty) return null;
+    int drainDegree(String id) => net.edges
+        .where((e) =>
+            e.service == ServiceType.drainage &&
+            (e.fromId == id || e.toId == id))
+        .length;
+    bool poorExit(NetNode n) =>
+        n.role == NodeRole.fixture || n.component == NodeComponent.cleanout;
+    nodes.sort((a, b) {
+      final byFloor = a.floorIndex.compareTo(b.floorIndex);
+      if (byFloor != 0) return byFloor;
+      final byExit = (poorExit(a) ? 1 : 0).compareTo(poorExit(b) ? 1 : 0);
+      if (byExit != 0) return byExit;
+      final byDeg = drainDegree(a.id).compareTo(drainDegree(b.id));
+      if (byDeg != 0) return byDeg;
+      final byX = a.x.compareTo(b.x);
+      return byX != 0 ? byX : a.id.compareTo(b.id);
+    });
+    return nodes.first.id;
+  }
+
+  /// A SEWER / DISCHARGE TERMINUS glyph centred on [c] — the canvas counterpart
+  /// of `planSewerTerminusPrims` (a down arrow into a hatched ground line).
+  void _paintSewerTerminus(Canvas canvas, Offset c, Color color,
+      {double size = 18}) {
+    final p = Paint()
+      ..color = color
+      ..strokeWidth = 1.4
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    double fx(double f) => c.dx + (f - 0.5) * size;
+    double fy(double f) => c.dy + (f - 0.5) * size;
+    void ln(double x1, double y1, double x2, double y2) =>
+        canvas.drawLine(Offset(fx(x1), fy(y1)), Offset(fx(x2), fy(y2)), p);
+    ln(0.50, 0.10, 0.50, 0.58);
+    ln(0.50, 0.58, 0.38, 0.42);
+    ln(0.50, 0.58, 0.62, 0.42);
+    ln(0.16, 0.66, 0.84, 0.66);
+    ln(0.30, 0.66, 0.20, 0.82);
+    ln(0.50, 0.66, 0.40, 0.82);
+    ln(0.70, 0.66, 0.60, 0.82);
   }
 
   /// (5) PER-FLOOR BRANCH FAN-OUT — under each floor band, a compact column of
@@ -2874,7 +3145,8 @@ class _AutoSchematicPainter extends CustomPainter {
       old.riserTagsById != riserTagsById ||
       old.detailByNode != detailByNode ||
       old.supplyPump != supplyPump ||
-      old.showDetails != showDetails;
+      old.showDetails != showDetails ||
+      old.hotWaterRecirc != hotWaterRecirc;
 }
 
 // ---------------------------------------------------------------------------

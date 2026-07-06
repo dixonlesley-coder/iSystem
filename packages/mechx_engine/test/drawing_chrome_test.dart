@@ -14,6 +14,26 @@ import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
+// Standard Adobe Helvetica AFM advances (units/1000 em, 0x20–0x7E) — a local
+// copy so this test can independently measure that a fitted title fits the cell.
+const List<int> _helvW = [
+  278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, //
+  278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, //
+  584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, //
+  500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, //
+  667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, //
+  278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, //
+  278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
+];
+
+double _helvWidth(String s, double size) {
+  var units = 0;
+  for (final c in s.codeUnits) {
+    units += (c >= 0x20 && c <= 0x7e) ? _helvW[c - 0x20] : 556;
+  }
+  return units * size / 1000.0;
+}
+
 void main() {
   const net = Network(
     nodes: [
@@ -183,6 +203,61 @@ void main() {
       );
       expect(empty.ops, '');
       expect(empty.height, 0.0);
+    });
+  });
+
+  group('fitTitleFontSize (Wave-7 residual)', () {
+    // The title-block value cell is blockW(190) - labelW(52) - 8 = 130 pt wide.
+    const cellW = 130.0;
+
+    test('a short/absent title keeps the 8 pt rendering verbatim', () {
+      // A title that already fits returns maxSize EXACTLY (byte-identical path).
+      expect(fitTitleFontSize('GROUND FLOOR PLUMBING', cellW), 8.0);
+      expect(fitTitleFontSize('', cellW), 8.0);
+      expect(fitTitleFontSize('PLAN', cellW), 8.0);
+    });
+
+    test('a long title auto-shrinks to fit the cell', () {
+      // The real bleeding case from the sample riser sheet.
+      const long = 'DIAGRAM SISTEM AIR BERSIH & AIR KOTOR';
+      final size = fitTitleFontSize(long, cellW);
+      expect(size, lessThan(8.0)); // it shrank
+      expect(size, greaterThanOrEqualTo(5.0)); // never below the floor
+      // At the returned size the title actually fits the cell (within rounding).
+      final wAt8 = _helvWidth(long, 8.0);
+      expect(wAt8, greaterThan(cellW)); // it genuinely overflowed at 8 pt
+      expect(_helvWidth(long, size), lessThanOrEqualTo(cellW + 0.01));
+    });
+
+    test('an extreme title is floored at minSize, not shrunk to nothing', () {
+      final size = fitTitleFontSize('X' * 200, cellW);
+      expect(size, 5.0);
+    });
+
+    test('the title-block TITLE cell shrinks a long title, keeps a short one',
+        () {
+      final long = pdfTitleBlock(
+        const DrawingChrome(),
+        pageW: 842,
+        pageH: 595,
+        margin: 24,
+        projectName: 'P',
+        titleTextOverride: 'DIAGRAM SISTEM AIR BERSIH & AIR KOTOR',
+      );
+      // The TITLE value is emitted at a reduced font (a fractional Tf), never the
+      // fixed 8 pt that would bleed past the cell.
+      expect(long.ops, contains('DIAGRAM SISTEM AIR BERSIH & AIR KOTOR'));
+      expect(RegExp(r'/F1 [0-7]\.\d+ Tf').hasMatch(long.ops), isTrue);
+      // A short title still renders at the literal 8 pt (byte-identical path).
+      final short = pdfTitleBlock(
+        const DrawingChrome(drawingTitle: 'PLAN'),
+        pageW: 842,
+        pageH: 595,
+        margin: 24,
+        projectName: 'P',
+      );
+      expect(short.ops, contains('/F1 8 Tf 0 0 0 rg'));
+      expect(short.ops, contains('(PLAN) Tj'));
     });
   });
 
