@@ -260,6 +260,39 @@ focusPanelSchedule frames a board at a FIXED scale (kBoardScheduleThreshold + 0.
 - **User impact:** Every Review->Locate jump and every summary-card expand chevron lands the engineer on a schedule whose identifying columns are cut off; on a 1366/1440-wide laptop no zoom level shows a whole way row. The app's own regression golden immortalises the defect, so it reads as intended behaviour.
 - **Direction:** Clamp the focus scale to fit the board width (s = min(1.65, viewportWidth * 0.94 / boardWidth)) with kLodThreshold as the floor; if the clamped scale would fall below kLodThreshold, prefer fit-width and accept the summary card, or scroll-lock horizontally to the GRUP column. Re-capture golden 11 deliberately. Also chase the clipped warning-badge fragment in the toolbar (visible in the same golden).
 
+### B10. Endpoint-resize and node drags ignore the ortho constraint, un-straightening drawn runs
+**HIGH** · effort S · friction · lens: user-reported (2026-07-06, product owner)
+
+Drawing snaps to 45-degree steps (orthoSnap, snapping.dart:9; Ortho default-on; Shift = one-off
+free angle) and the nub-pull preview + release honour it — but the selected-run endpoint RESIZE
+handles (endNodeDragWithSnap call sites, selection_overlay.dart:408/:556) and plain node drags
+apply no angle snap at all. Stretching an endpoint or nudging a junction leaves a once-straight
+run slightly askew, which then prints askew on the exported plan.
+
+- **Evidence:** selection_overlay.dart:408/:556 (no orthoSnap on the resize path); snapping.dart:9.
+- **User impact:** The drafter draws straight 45/90 runs, edits one endpoint, and the line is no
+  longer straight — invisible on canvas at working zoom, visible on the issued sheet.
+- **Direction:** Apply the same effectiveOrtho snap (anchor = the run's other endpoint) to the
+  resize-handle live drag + release, and to degree-1 node drags while Ortho is on.
+
+### B11. The outlet nub unmounts mid-pull, freezing the new run a short distance from the mainline
+**HIGH** · effort S · friction · lens: user-reported (2026-07-06, product owner)
+
+The outlet nub is mounted only while its node is hovered or selected (C7 gating,
+selection_overlay.dart:238-245). During a pull from a merely-hovered node the pointer leaves the
+18px nub, its own MouseRegion.onExit clears hoverTargetProvider (:439), the rebuild unmounts the
+nub, and the active pan gesture DIES — the preview line freezes close to the mainline and cannot
+be dragged further. Pulling works only when the node was clicked (selected) first, so the failure
+looks intermittent.
+
+- **Evidence:** selection_overlay.dart:238-245 (mount gate), :436-439 (onExit clears the latch
+  that keeps it mounted), :442-451 (the pan handlers that die on unmount).
+- **User impact:** The core tee-off gesture — dragging a new line out of the mainline — stops
+  dead after a few pixels unless the user knows to click the node first; reads as a broken tool.
+- **Direction:** Keep the nub mounted while its pull is active (gate adds `_pullFrom == n.id`)
+  and skip the onExit hover-clear while `_pullFrom != null`; widget-test the full pull gesture
+  from a hovered-unselected node.
+
 
 ## Theme C — Inspector and information architecture
 
@@ -1265,6 +1298,8 @@ The app must feel native before it can feel polished. The headline item is decou
 | M4 | Several icon-only chrome controls have no Windows-style hover tooltip | low | S |
 | B5 | The clickable corridor around a pipe/duct stays a fixed ~8px band even as true-width zoom renders it up to 120px wide | medium | S |
 | B6 | The outlet-pull nub and the node's move handle have overlapping click boxes with no visible boundary | medium | S |
+| B10 | Endpoint-resize and node drags ignore the ortho constraint, un-straightening drawn runs | high | S |
+| B11 | The outlet nub unmounts mid-pull, freezing the new run a short distance from the mainline | high | S |
 | C2 | Selection auto-scroll-to-top only fires the first time; re-selecting a different element while scrolled away leaves the updated editor invisible | medium | S |
 | D9 | Two 'reveal panel detail' gestures on the same summary card zoom to inconsistent, undocumented scales | low | S |
 
