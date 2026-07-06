@@ -297,8 +297,17 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   independently of Waves 1–6 (including first), with the dev tool as its acceptance harness
   (regenerate the 13 artifacts + re-read the sheets after each batch). Three territories NO prior
   campaign covered: performance-feel, keyboard-only/accessibility, Windows-desktop citizenship.
-  Nothing from this review is implemented yet — work new improvements from that document rather
-  than re-reviewing.
+  **Wave 1 (stop-the-lies / visible defects) HAS LANDED** (2026-07-06, see the §15 row): all 19
+  items — riser corner reserved for the (?) button (goldens 09/10 unclipped), fit-width board
+  schedule + the un-clipped toolbar issues pill (golden 11), honest Auto-mode commit hint + Edit
+  drop preview/redirect toast, ghosted inert edges, one `FFL +X.XX` notation (shared engine
+  `fflLabel`), data-gated valve detail boxes, phantom mid-draw node cancelled on sheet switch,
+  duct badge dodges the size chip, dropped-label tick mark, duplicate-floor keeps loose
+  equipment, template-cancel status toast, 'Building' naming converged, stepper Floors no longer
+  ticked by drawing alone, corrected power-one-line empty state, electrical-layer guide line,
+  PRV zone-over-limit → compliance verdict, fire verdicts localized, stable equipment tags,
+  keyboard-reachable Review actions. Goldens 01–15 regenerated; engine 1263 / app 842 / analyze
+  clean. Waves 2–7 remain — work them from that document rather than re-reviewing.
 - **Apple-design review (2026-07-04) — the prior plan of record for ease-of-use/UX polish (fully landed)**:
   `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
   UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the

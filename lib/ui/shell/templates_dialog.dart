@@ -12,6 +12,7 @@ library;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../store/app_state.dart';
 import '../../store/network_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/templates.dart';
@@ -121,21 +122,40 @@ class _TemplatesDialog extends ConsumerWidget {
                 return _TemplateTile(
                   template: t,
                   onApply: () async {
-                    // A3: applying a template seeds the building (floors /
-                    // occupancy / fire / rainfall) but attaches NO drawable
-                    // sheet — so on an empty project route straight into Import
-                    // rather than dropping the engineer back onto a "No plan
-                    // attached" canvas. Import runs while THIS dialog is still
-                    // mounted (so `ref` / `context` stay valid across the OS file
-                    // picker) and skips the unsaved-work guard — the only
-                    // "unsaved work" is the template we just applied and want to
-                    // keep. On a project that ALREADY has sheets, applying a
-                    // template just closes (no forced import).
+                    // A3 (earlier campaign): applying a template seeds the
+                    // building (floors / occupancy / fire / rainfall) but
+                    // attaches NO drawable sheet — so on an empty project route
+                    // straight into Import rather than dropping the engineer
+                    // back onto a "No plan attached" canvas. Import runs while
+                    // THIS dialog is still mounted (so `ref` / `context` stay
+                    // valid across the OS file picker) and skips the
+                    // unsaved-work guard — the only "unsaved work" is the
+                    // template we just applied and want to keep. On a project
+                    // that ALREADY has sheets, applying a template just closes
+                    // (no forced import).
                     final hadNoSheets =
                         ref.read(sheetsControllerProvider).sheets.isEmpty;
                     applyTemplate(ref, t);
                     if (hadNoSheets) {
-                      await importPlan(context, ref, skipDiscardGuard: true);
+                      final imported =
+                          await importPlan(context, ref, skipDiscardGuard: true);
+                      if (!imported) {
+                        // A2 (workflow-goldens review): the template mutation
+                        // above is REAL even though the forced picker was
+                        // cancelled/failed — closing silently here would drop
+                        // the engineer back on an apparently-unchanged canvas
+                        // with no sign anything happened. Surface a status
+                        // confirmation and stay on this dialog (rather than
+                        // popping) so they can pick another template or try
+                        // Import again.
+                        if (context.mounted) {
+                          ref.read(statusMessageProvider.notifier).showStatus(
+                                MechXStringsData(ref.read(localeProvider))(
+                                    StringKey.templateAppliedImportPrompt),
+                              );
+                        }
+                        return;
+                      }
                     }
                     if (context.mounted) Navigator.of(context).pop();
                   },

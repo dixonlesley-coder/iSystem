@@ -410,7 +410,10 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               'bar': ra.remoteHeadPressure.inBar.toStringAsFixed(2),
               'minbar': ra.minOperatingPressure.inBar.toStringAsFixed(2),
               'fric': ra.branchLineFrictionHead.meters.toStringAsFixed(1),
-              'verdict': ra.verdict,
+              // I7 — localized off the boolean, not the engine's English getter.
+              'verdict': ra.meetsMinimumPressure
+                  ? strings(RptStringKey.fireRemoteAreaVerdictOk)
+                  : strings(RptStringKey.fireRemoteAreaVerdictUnder),
             })
           ),
         if (st != null)
@@ -436,7 +439,10 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               'churn': fp.churn.head.meters.toStringAsFixed(0),
               'overload': fp.overload.head.meters.toStringAsFixed(0),
               'motor': fp.selectedMotor.inKiloWatts.toStringAsFixed(1),
-              'verdict': fp.verdict,
+              // I7 — localized off the boolean, not the engine's English getter.
+              'verdict': fp.oversized
+                  ? strings(RptStringKey.firePumpVerdictOversized)
+                  : strings(RptStringKey.firePumpVerdictWithin),
             })
           ),
         if (fp != null)

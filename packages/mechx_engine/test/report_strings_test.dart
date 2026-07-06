@@ -102,6 +102,37 @@ void main() {
       expect(buildCalcReportMarkdown(data, const ReportStrings.id()),
           isNot(equals(buildCalcReportMarkdown(data))));
     });
+
+    test('I7: the two fire-protection verdicts are localized (no English leak)',
+        () {
+      final id = buildCalcReportMarkdown(data, const ReportStrings.id());
+      // The fixture carries both a remote-area and a fire-pump result.
+      final ra = data.sprinklerRemoteArea!;
+      final fp = data.firePumpRating!;
+      // The Bahasa report must NOT contain any English verdict literal…
+      for (final english in const [
+        'Remote head OK',
+        'Remote head under-pressure',
+        'Oversized pump curve',
+        'Rating curve within standard range',
+      ]) {
+        expect(id, isNot(contains(english)),
+            reason: 'English fire verdict "$english" leaked into the ID report');
+      }
+      // …and MUST carry the Indonesian verdict for whichever branch the fixture
+      // took (asserted from the result's own boolean).
+      const idStr = ReportStrings.id();
+      expect(
+          id,
+          contains(ra.meetsMinimumPressure
+              ? idStr(RptStringKey.fireRemoteAreaVerdictOk)
+              : idStr(RptStringKey.fireRemoteAreaVerdictUnder)));
+      expect(
+          id,
+          contains(fp.oversized
+              ? idStr(RptStringKey.firePumpVerdictOversized)
+              : idStr(RptStringKey.firePumpVerdictWithin)));
+    });
   });
 
   // ── Electrical calc report ────────────────────────────────────────────────

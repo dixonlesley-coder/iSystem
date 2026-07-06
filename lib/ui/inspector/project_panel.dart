@@ -455,11 +455,30 @@ Future<void> exportEquipmentSchedule(WidgetRef ref) => runExportGuarded(
       write: () => _writeEquipmentSchedule(ref),
     );
 
+/// J3 — a STABLE equipment tag for a room's air-handling unit, derived from the
+/// room's PERSISTED identity rather than its position in the live list. A room's
+/// tag must not change when an unrelated room is added, deleted, reordered, or
+/// skipped (an uncalibrated sheet's room has no sizing) between revisions, or the
+/// schedule/BOM lose traceability to what was procured/installed.
+///
+/// `RoomAreaController` mints ids as `r0`, `r1`, … — a monotonic first-assigned
+/// ordinal that round-trips in `.mechx`. The AHU number is that ordinal + 1
+/// (so it also matches the room's `Room N` display name). Numbers may therefore
+/// carry gaps after a deletion — that is the point: each unit keeps its number
+/// for life. Falls back to the live index only when an id carries no trailing
+/// integer (defensive — every real room id does).
+String _roomScheduleTag(RoomArea room, int fallbackIndex) {
+  final m = RegExp(r'(\d+)$').firstMatch(room.id);
+  final n = m != null ? int.parse(m.group(1)!) + 1 : fallbackIndex + 1;
+  return 'AHU-${n.toString().padLeft(2, '0')}';
+}
+
 /// Gather the live solved equipment (pumps, fans, room AHU/FCU/AC, and
 /// electrical panels) into an [EquipmentScheduleData]. Shared by the MD/CSV and
 /// PDF exports; the engine only TABULATES already-solved duties (no new sizing).
-/// Tags are assigned here (sequential when a source carries none), so the engine
-/// results stay untouched. Public for the export wiring test.
+/// Tags are assigned here (sequential when a source carries none, stable per
+/// room identity for AHUs), so the engine results stay untouched. Public for the
+/// export wiring test.
 EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   final project = ref.read(projectControllerProvider);
 
@@ -499,8 +518,8 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   // Air-handling: each drawn ROOM's AHU/FCU/AC equipment duty (FanDuty).
   final ducts = ref.read(ductSettingsProvider);
   final rooms = ref.read(roomAreasProvider);
-  var ahuSeq = 0;
-  for (final r in rooms) {
+  for (var i = 0; i < rooms.length; i++) {
+    final r = rooms[i];
     final cal = project.calibrationFor(r.sheetId);
     final sizing = r.sizing(
       cal?.metersPerPixel,
@@ -508,11 +527,14 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       ductMethod: ducts.method,
     );
     if (sizing == null) continue;
-    ahuSeq++;
+    // J3: the AHU tag tracks the room's STABLE identity, not its live list
+    // position — deleting / reordering / skipping (uncalibrated) another room
+    // never renumbers this unit, so a procured AHU-03 stays AHU-03 across
+    // revisions ([_roomScheduleTag]).
     fans.add(FanScheduleItem(
       duty: sizing.equipment,
       service: r.name,
-      tag: 'AHU-${ahuSeq.toString().padLeft(2, '0')}',
+      tag: _roomScheduleTag(r, i),
       airHandling: true,
     ));
   }

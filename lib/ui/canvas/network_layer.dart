@@ -389,6 +389,10 @@ class _NetworkPainter extends CustomPainter {
 
         // Size labels are drawn only when the toggle is on, and never on a faded
         // (coordination) layer — to keep the active layer's annotation readable.
+        // [labelSide] records which perpendicular side the chip took (null when
+        // no chip was drawn) so the status badge below can dodge to the other
+        // side (B2).
+        int? labelSide;
         if (s != null && showLabels && opacity >= 1.0) {
           String label;
           if (s.isRectangular) {
@@ -403,19 +407,27 @@ class _NetworkPainter extends CustomPainter {
           if (multiService) label = '$label-${riserServiceCode(e.service)}';
           final tag = _productTag(e, s);
           if (tag != null) label = '$label  $tag';
-          _label(canvas, pa, pb, outer, label, placedLabels);
+          labelSide = _label(canvas, pa, pb, outer, label, placedLabels);
         }
         // Air status badge (independent of the size-label toggle), active layer
         // only. Precedence: over-capacity (hard size limit) → out-of-band
-        // velocity warning → not-yet-sized advisory.
-        if (opacity >= 1.0) {
-          final mid = Offset((pa.dx + pb.dx) / 2, (pa.dy + pb.dy) / 2 - 13);
+        // velocity warning → not-yet-sized advisory. B2: the badge sits
+        // PERPENDICULAR to the duct axis, clear of the casing, on the side the
+        // size chip did NOT take — so neither the DN/Ø chip nor (on a vertical
+        // duct) the casing is overprinted. Its footprint joins [placedLabels] so
+        // a later run's label dodges it too.
+        if (opacity >= 1.0 &&
+            (overCapacityIds.contains(e.id) ||
+                warningIds.contains(e.id) ||
+                unsizedIds.contains(e.id))) {
+          final badge = _badgeCenter(pa, pb, outer, labelSide);
+          placedLabels.add(Rect.fromCenter(center: badge, width: 16, height: 16));
           if (overCapacityIds.contains(e.id)) {
-            _overCapacityBadge(canvas, mid);
+            _overCapacityBadge(canvas, badge);
           } else if (warningIds.contains(e.id)) {
-            _warnBadge(canvas, mid);
-          } else if (unsizedIds.contains(e.id)) {
-            _unsizedBadge(canvas, mid);
+            _warnBadge(canvas, badge);
+          } else {
+            _unsizedBadge(canvas, badge);
           }
         }
       } else {
@@ -515,6 +527,26 @@ class _NetworkPainter extends CustomPainter {
   }
 
   /// A small hollow advisory dot for an air element not yet manually sized.
+  /// The screen point for an air status badge on the run pa→pb (B2): offset
+  /// PERPENDICULAR to the duct axis, clear of the [outer] casing, on the side
+  /// OPPOSITE the size chip ([labelSide]: `1` chip upper → badge lower, `-1`
+  /// chip lower → badge upper, `null` no chip → default lower). This keeps the
+  /// "!"/triangle off the DN/Ø chip and, on a vertical duct, off the casing
+  /// (both of which the old fixed `mid.y-13` offset overprinted). Falls back to
+  /// the midpoint for a degenerate zero-length run.
+  Offset _badgeCenter(Offset pa, Offset pb, double outer, int? labelSide) {
+    final mid = (pa + pb) / 2;
+    final len = (pb - pa).distance;
+    if (len <= 1e-6) return mid;
+    final u = (pb - pa) / len;
+    var perp = Offset(-u.dy, u.dx);
+    if (perp.dy > 0) perp = -perp; // consistent "up" (perp+)
+    // Opposite the chip; default lower (perp-) when there is no chip.
+    final side = labelSide == -1 ? 1.0 : -1.0;
+    final off = outer / 2 + 10; // clear the wall + the badge halo
+    return mid + perp * side * off;
+  }
+
   void _unsizedBadge(Canvas canvas, Offset center) {
     canvas.drawCircle(center, 4, Paint()..color = const Color(0xFFFFFFFF));
     canvas.drawCircle(
@@ -1015,7 +1047,13 @@ class _NetworkPainter extends CustomPainter {
   /// body on the "upper" side, with LOD (skipped when the run is shorter than the
   /// text) and a per-frame collision dodge (opposite side → quarter-point → drop).
   /// [placedLabels] carries the screen-space bounds already placed this frame.
-  void _label(Canvas canvas, Offset pa, Offset pb, double outer, String text,
+  ///
+  /// Returns the perpendicular SIDE the chip landed on (`1` = "upper"/perp+,
+  /// `-1` = "lower"/perp-) so the air status badge can dodge to the opposite
+  /// side (B2), or `null` when the label was dropped for space (LOD-short or a
+  /// full collision) — in which case a small tick is left at the midpoint so a
+  /// sized run never reads identical to an unsized one (B8).
+  int? _label(Canvas canvas, Offset pa, Offset pb, double outer, String text,
       List<Rect> placedLabels) {
     final tp = TextPainter(
       text: TextSpan(
@@ -1034,7 +1072,11 @@ class _NetworkPainter extends CustomPainter {
     final boxW = tp.width + 8;
     final boxH = tp.height + 4;
     // LOD: don't crowd a short run with a label longer than it (plus a margin).
-    if (runLen < tp.width + 12) return;
+    // B8: leave a tick so the sized-but-unlabelled run is still marked.
+    if (runLen < tp.width + 12) {
+      _droppedLabelMark(canvas, (pa + pb) / 2);
+      return null;
+    }
 
     final u = (pb - pa) / runLen;
     // Perpendicular pointing "up" (toward smaller screen y) for a consistent side.
@@ -1046,24 +1088,35 @@ class _NetworkPainter extends CustomPainter {
     final off = outer / 2 + 5 + boxH / 2;
 
     // Candidate centres in order: upper side, opposite side, quarter-point upper.
+    // The parallel `sides` list records which perpendicular side each candidate
+    // sits on so the caller can steer the badge to the other side (B2).
     final quarter = pa + u * (runLen * 0.25);
     final candidates = <Offset>[
       mid + perp * off,
       mid - perp * off,
       quarter + perp * off,
     ];
+    const sides = <int>[1, -1, 1];
     Offset? center;
-    for (final c in candidates) {
+    var side = 1;
+    for (var i = 0; i < candidates.length; i++) {
+      final c = candidates[i];
       // Collision test uses the axis-aligned chip box (a good-enough proxy for
       // the rotated label); deterministic in edge-list order.
       final r = Rect.fromCenter(center: c, width: boxW, height: boxH);
       if (!placedLabels.any(r.overlaps)) {
         center = c;
+        side = sides[i];
         placedLabels.add(r);
         break;
       }
     }
-    if (center == null) return; // still colliding → drop (size is one click away)
+    if (center == null) {
+      // Still colliding → drop the chip but leave a tick (B8) so the run doesn't
+      // read as unsized.
+      _droppedLabelMark(canvas, mid);
+      return null;
+    }
 
     // Rotate to the bearing; flip 180° when it would read upside-down.
     var angle = math.atan2(u.dy, u.dx);
@@ -1079,6 +1132,17 @@ class _NetworkPainter extends CustomPainter {
     );
     tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
     canvas.restore();
+    return side;
+  }
+
+  /// A tiny placeholder tick left at a run's midpoint when its size label was
+  /// dropped for space (B8) — a short run or a full collision dodge. It signals
+  /// "a size value exists here, just not shown" so a sized run never reads
+  /// identical to an unsized one. Deliberately DISTINCT from the hollow
+  /// unsized-advisory ring: a small SOLID chip-coloured dot with a white halo.
+  void _droppedLabelMark(Canvas canvas, Offset mid) {
+    canvas.drawCircle(mid, 3.0, Paint()..color = const Color(0xFFFFFFFF));
+    canvas.drawCircle(mid, 2.0, Paint()..color = const Color(0xD915171B));
   }
 
   @override

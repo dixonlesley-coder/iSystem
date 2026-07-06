@@ -119,7 +119,13 @@ void _revealImportedSheet(WidgetRef ref, int sheetIndex) {
 /// [skipDiscardGuard] bypasses the empty-project unsaved-work guard for the A3
 /// template flow, where the only "unsaved work" is the just-applied template the
 /// engineer wants to keep; every other caller leaves it false (unchanged).
-Future<void> importPlan(BuildContext context, WidgetRef ref,
+///
+/// Returns `true` when a plan was actually imported (added or replaced), `false`
+/// on any cancel/guard-abort/failure — so a caller that forced this dialog open
+/// (the templates flow, A2) can tell a genuine cancel from a completed import
+/// and react (e.g. surface that the template mutation still happened) instead of
+/// assuming success.
+Future<bool> importPlan(BuildContext context, WidgetRef ref,
     {bool skipDiscardGuard = false}) async {
   final startedNonEmpty =
       ref.read(sheetsControllerProvider).sheets.isNotEmpty;
@@ -128,17 +134,17 @@ Future<void> importPlan(BuildContext context, WidgetRef ref,
   // Add-vs-Replace AFTER the file is chosen; only the Replace branch destroys
   // anything, so its guard runs there.
   if (!startedNonEmpty && !skipDiscardGuard) {
-    if (!await confirmDiscardIfDirty(context, ref)) return;
+    if (!await confirmDiscardIfDirty(context, ref)) return false;
   }
-  if (!context.mounted) return;
+  if (!context.mounted) return false;
   final result = await FilePicker.pickFiles(
     type: FileType.custom,
     allowedExtensions: const ['pdf', 'dxf', 'dwg'],
     allowMultiple: false,
   );
-  if (result == null || result.files.isEmpty) return;
+  if (result == null || result.files.isEmpty) return false;
   final path = result.files.single.path;
-  if (path == null || path.isEmpty) return;
+  if (path == null || path.isEmpty) return false;
 
   final lower = path.toLowerCase();
   final isDxf = lower.endsWith('.dxf');
@@ -163,27 +169,27 @@ Future<void> importPlan(BuildContext context, WidgetRef ref,
       ref
           .read(loadErrorProvider.notifier)
           .set('That $what had no importable geometry.');
-      return;
+      return false;
     }
     // Multi-page PDF: let the user pick which pages to bring in (single-page
     // documents — and every DXF, which is one sheet — import straight through).
     if (sheets.length > 1 && context.mounted) {
       final chosen = await showPdfPagePicker(context, sheets);
-      if (chosen == null) return; // cancelled — keep the current project
-      if (chosen.isEmpty) return;
+      if (chosen == null) return false; // cancelled — keep the current project
+      if (chosen.isEmpty) return false;
       sheets = chosen;
     }
 
     // Into a NON-EMPTY project, ask whether to ADD or REPLACE.
     if (startedNonEmpty) {
-      if (!context.mounted) return;
+      if (!context.mounted) return false;
       final existing = ref.read(sheetsControllerProvider).sheets.length;
       final choice = await showImportChoiceDialog(
         context,
         existingSheets: existing,
         incomingSheets: sheets.length,
       );
-      if (choice == null) return; // cancelled — keep the current project
+      if (choice == null) return false; // cancelled — keep the current project
       if (choice == ImportChoice.add) {
         // ADD destroys nothing (current sheets, calibration and network stay),
         // so no dirty-guard: append the new sheets (fresh unique ids remapped by
@@ -198,11 +204,11 @@ Future<void> importPlan(BuildContext context, WidgetRef ref,
         ref
             .read(statusMessageProvider.notifier)
             .showStatus('$added ${added == 1 ? 'sheet' : 'sheets'} added');
-        return;
+        return true;
       }
       // REPLACE destroys the current sheets + orphans drawn work — guard now.
-      if (!context.mounted) return;
-      if (!await confirmDiscardIfDirty(context, ref)) return;
+      if (!context.mounted) return false;
+      if (!await confirmDiscardIfDirty(context, ref)) return false;
     }
 
     // Replace-all: an empty project, or the explicit Replace choice.
@@ -220,9 +226,11 @@ Future<void> importPlan(BuildContext context, WidgetRef ref,
     ref
         .read(statusMessageProvider.notifier)
         .showStatus('$n ${n == 1 ? 'sheet' : 'sheets'} imported');
+    return true;
   } catch (e) {
     // Surface the failure instead of silently keeping the old sheets.
     ref.read(loadErrorProvider.notifier).set('Could not import $what: $e');
+    return false;
   } finally {
     ref.read(busyProvider.notifier).clear();
   }

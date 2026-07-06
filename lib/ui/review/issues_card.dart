@@ -11,6 +11,7 @@ import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
+import '../widgets/mechx_focus_ring.dart';
 import '../widgets/severity_glyph.dart';
 
 /// The unified "Design Issues" card for the Review hub — every design warning
@@ -243,13 +244,21 @@ class _AckAction extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Text(label,
-            style: type.caption.copyWith(color: colors.accent)),
+    // L2: keyboard-reachable + Enter/Space-activatable (Tab focuses the ring,
+    // MergeSemantics folds it into one announced button). At rest the ring
+    // paints nothing ⇒ goldens byte-identical.
+    return MergeSemantics(
+      child: MechXFocusRing(
+        onActivated: onTap,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: Text(label,
+                style: type.caption.copyWith(color: colors.accent)),
+          ),
+        ),
       ),
     );
   }
@@ -285,9 +294,16 @@ class _BatchChip extends StatelessWidget {
       child: Text(label, style: type.caption.copyWith(color: fg)),
     );
     if (!enabled) return chip;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(onTap: onTap, child: chip),
+    // L2: keyboard-reachable + Enter/Space-activatable (matches the chip's own
+    // rounded shape). MergeSemantics folds the ring + label into one button.
+    return MergeSemantics(
+      child: MechXFocusRing(
+        onActivated: onTap,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(onTap: onTap, child: chip),
+        ),
+      ),
     );
   }
 }
@@ -381,13 +397,20 @@ class _IssueRow extends StatelessWidget {
           if (onTap != null)
             Padding(
               padding: const EdgeInsets.only(left: MechXSpacing.sm, top: 1),
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: onTap,
-                  child: Text(context.strings(StringKey.issuesCardLocate),
-                      style: type.caption.copyWith(color: colors.accent)),
+              // L2: the Locate jump is keyboard-reachable + Enter/Space-fires;
+              // MergeSemantics announces one "Locate, button" node.
+              child: MergeSemantics(
+                child: MechXFocusRing(
+                  onActivated: onTap,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: onTap,
+                      child: Text(context.strings(StringKey.issuesCardLocate),
+                          style: type.caption.copyWith(color: colors.accent)),
+                    ),
+                  ),
                 ),
               ),
             ),

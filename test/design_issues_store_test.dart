@@ -1,5 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/compliance_store.dart';
 import 'package:mechx/store/design_issues_store.dart';
 import 'package:mechx/store/electrical_focus_store.dart';
 import 'package:mechx/store/electrical_store.dart';
@@ -9,6 +11,7 @@ import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
+import 'package:mechx/ui/strings/app_strings.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/geometry/building.dart';
@@ -583,6 +586,69 @@ void main() {
           );
       expect(issue.severity, IssueSeverity.warning);
       expect(issue.isLocatable, isTrue);
+    });
+  });
+
+  group('pressure-zone over-limit fan-in (I1)', () {
+    // A tall building forces a downfeed pressure zone whose lowest fixture
+    // exceeds the SNI max fixture static pressure (392.266 kPa).
+    //
+    // 8 floors × 5.0 m, ρg = 9810, targetResidual = 225 000 Pa.
+    //   effective span ceiling = (392266 − 225000)/9810 ≈ 17.05 m, so
+    //   computeDownfeedZones partitions into zones [7–4] and [3–0].
+    //   For zone [3–0]: feed = ceiling(3) = 15 + 5 − 0.3 = 19.7 m,
+    //                   bottom = fixture(0) = 0 + 1.1 = 1.1 m, span = 18.6 m,
+    //   bottomStatic = 225000 + 9810·18.6 = 407 466 Pa ≈ 407 kPa > 392 kPa
+    //   ⇒ withinLimit is false ⇒ an over-limit pressure zone.
+    List<Floor> tallFloors() =>
+        [for (var i = 0; i < 8; i++) Floor('L$i', const Length(5.0))];
+
+    test('an over-limit pressure zone surfaces a warning DesignIssue', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      c.read(projectControllerProvider.notifier).setFloors(tallFloors());
+
+      final zoneIssues = c
+          .read(designIssuesProvider)
+          .where((i) => i.kind.startsWith('pressure-zone:'))
+          .toList();
+      expect(zoneIssues, isNotEmpty,
+          reason: 'a tall building must flag its over-limit pressure zone');
+      expect(zoneIssues.every((i) => i.severity == IssueSeverity.warning),
+          isTrue);
+      // The message names the worst static + the SNI limit (407 kPa > 392 kPa).
+      expect(zoneIssues.first.message, contains('kPa'));
+    });
+
+    test('a normal-height building raises no pressure-zone issue (default state '
+        'byte-identical)', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      // The default 3-floor building (4.0/3.5/3.5 m) fits in one zone well under
+      // the limit — no pressure-zone warning at all.
+      expect(
+        c
+            .read(designIssuesProvider)
+            .where((i) => i.kind.startsWith('pressure-zone:')),
+        isEmpty,
+      );
+    });
+
+    test('the over-limit zone blocks the compliance verdict with its own row',
+        () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      c.read(projectControllerProvider.notifier).setFloors(tallFloors());
+
+      const en = MechXStringsData(AppLocale.en);
+      final title = en(StringKey.issuePressureZoneTitle);
+      final summary = c.read(complianceSummaryProvider);
+      final row = summary.items.firstWhere((i) => i.category == title,
+          orElse: () => throw StateError('missing pressure-zone compliance row'));
+      // The zone check is a warning ⇒ its row fails ⇒ the overall verdict can no
+      // longer PASS (exactly how an uncalibrated sheet blocks sign-off).
+      expect(row.pass, isFalse);
+      expect(summary.allPass, isFalse);
     });
   });
 

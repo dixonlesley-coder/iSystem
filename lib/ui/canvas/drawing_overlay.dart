@@ -58,7 +58,13 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
     // free-angle run without four inspector trips) — effective ortho = the
     // setting XOR Shift, applied to BOTH the preview and the tap commit.
     final effectiveOrtho = ortho ^ HardwareKeyboard.instance.isShiftPressed;
-    final pending = drawing.pendingPoint;
+    // B1: a run started on another sheet/floor does NOT belong on this one — its
+    // pixel offset would resolve against this sheet's geometry. Ignore it for the
+    // rubber band here; the next click restarts the run on this sheet (the store
+    // refuses the cross-sheet commit) so no phantom node is planted.
+    final pending = drawing.pendingOnSheet(widget.sheetId, widget.floorIndex)
+        ? drawing.pendingPoint
+        : null;
     final previewHover = (effectiveOrtho && pending != null && _hoverWorld != null)
         ? orthoSnap(pending, _hoverWorld!)
         : _hoverWorld;
@@ -153,7 +159,7 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
         child: CustomPaint(
           size: Size.infinite,
           painter: RubberBandPainter(
-            pending: drawing.pendingPoint,
+            pending: pending,
             hover: endHover,
             snapScreen:
                 ringPt != null ? transform.worldToScreen(ringPt) : null,

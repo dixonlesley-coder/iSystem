@@ -46,6 +46,14 @@ String riserServiceCode(ServiceType s) => switch (s) {
       ServiceType.fireHydrant => 'FH',
     };
 
+/// The industry floor-elevation notation drawn in the riser single-line gutter —
+/// the finished-floor-level datum with the `FFL` abbreviation and two decimals
+/// (e.g. `FFL +4.00`). ONE formatter shared by the live Riser canvas painter and
+/// the exported [buildMechanicalRiserSld] SldSheet so the working view and the
+/// issued deliverable read the elevation identically (E6). [meters] is the SI
+/// elevation; this is a display formatter only (no unit maths).
+String fflLabel(double meters) => 'FFL +${meters.toStringAsFixed(2)}';
+
 bool _isSupplyTank(NodeComponent? c) =>
     c == NodeComponent.groundTank || c == NodeComponent.pump ||
     c == NodeComponent.boosterSet;

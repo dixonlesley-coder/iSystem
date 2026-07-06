@@ -1268,6 +1268,10 @@ const _electricalLayerGuideItems = <String>[
   'Right-click a panel or circuit for Edit / Duplicate / Delete',
   'Drag a placed panel or load to move it on the plan',
   'Drag the empty canvas to pan; scroll to zoom',
+  // D7: cross-reference to the standalone Electrical workspace, mirroring the
+  // mechanical list's Riser cross-reference — both read/write the SAME
+  // electrical model, just two different projections of it.
+  'Panels and loads placed here also appear in the Electrical workspace (left nav)',
 ];
 
 /// A small tappable nudge over an uncalibrated sheet — starts scale calibration.

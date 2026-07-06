@@ -794,7 +794,12 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
         .read(networkControllerProvider.notifier)
         .connectRiser(r.fromId, r.toId, r.service);
     if (added != null) {
-      ref.read(statusMessageProvider.notifier).showStatus('Riser added');
+      // B4: this IS a real, sized network edge committed from the read-only Auto
+      // view — signal that it is reversible so the click is never a silent,
+      // unrecoverable mutation (paired with the on-hover "Click to add" hint).
+      ref
+          .read(statusMessageProvider.notifier)
+          .showStatus('Riser added — Ctrl+Z to undo');
     }
   }
 
@@ -1041,6 +1046,36 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
                   ],
                 ),
               ),
+            // B4: hovering a dashed inferred connector — the ONE interactive
+            // element in this otherwise read-only view — surfaces an explicit
+            // "Click to add this riser" hint (top-centre), so committing a real
+            // sized edge is a deliberate, confirmed action instead of a silent
+            // mutation while the engineer believes the view is read-only.
+            if (_hoverInferred)
+              Positioned(
+                top: MechXSpacing.sm,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: MechXSpacing.sm,
+                          vertical: MechXSpacing.xs),
+                      decoration: BoxDecoration(
+                        color: colors.accent,
+                        borderRadius: MechXRadii.control,
+                        boxShadow: MechXShadow.popover,
+                      ),
+                      child: Text(
+                        'Click to add this riser',
+                        style: context.type.label
+                            .copyWith(color: colors.onAccent),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
           ],
         );
       },
@@ -1079,6 +1114,12 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
 
   // In-flight horizontal riser drag.
   String? _draggingRiser;
+
+  // B3: the floor band a palette drag would drop the riser BASE on — tracked
+  // live from the DragTarget so the painter highlights the real target band
+  // (redirected down one for a top-band hover), replacing the old whole-canvas
+  // tint as the only drop feedback. Null when no card is over the canvas.
+  int? _dragBandFloor;
 
   // F3: the undo snapshot is DEFERRED from pointer-down to the FIRST move of
   // an actual riser drag (the onPanStart semantics the Layout / electrical
@@ -1298,32 +1339,58 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
 
   // ── Palette drop ────────────────────────────────────────────────────────────
 
-  void _onDrop(Offset localScreen) {
-    final box = context.findRenderObject() as RenderBox?;
-    if (box == null) return;
+  /// The floor index a drop at [localScreen] would place the riser's BASE on:
+  /// the band under the cursor, redirected DOWN one when the cursor is on the
+  /// topmost band (a riser always spans to the floor above, so the top band
+  /// can't host a base). Null when there are < 2 floors or the point is out of
+  /// range. B3: shared by the drag-preview highlight and the actual drop so the
+  /// highlight shows exactly where the base will land.
+  ({int floorIndex, bool redirected})? _dropTarget(Offset localScreen) {
+    final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    if (levelCount < 2) return null;
     final w = _current.screenToWorld(localScreen);
-    final building = ref.read(projectControllerProvider).building;
-    final levelCount = building.levelCount;
-    if (levelCount < 2) return;
-
-    // Which floor band the drop landed in.
     final invertedRaw = (w.dy / _bandWorldH).floor();
     final inverted = invertedRaw.clamp(0, levelCount - 1);
     var floorIndex = (levelCount - 1) - inverted;
-    // A riser spans to the floor ABOVE — if the drop is on the top floor, drop
-    // it on the floor below so it still spans a real elevation delta.
-    if (floorIndex + 1 >= levelCount) floorIndex = levelCount - 2;
-    if (floorIndex < 0) return;
+    final redirected = floorIndex + 1 >= levelCount;
+    if (redirected) floorIndex = levelCount - 2;
+    if (floorIndex < 0) return null;
+    return (floorIndex: floorIndex, redirected: redirected);
+  }
+
+  void _onDrop(Offset localScreen) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final building = ref.read(projectControllerProvider).building;
+    final target = _dropTarget(localScreen);
+    if (target == null) return;
+    final floorIndex = target.floorIndex;
+    final w = _current.screenToWorld(localScreen);
 
     final sheetId = _sheetIdForFloor(floorIndex);
     final id = ref.read(networkControllerProvider.notifier).placeRiserAt(
           sheetId,
           floorIndex,
           w.dx,
-          levelCount,
+          building.levelCount,
           service: widget.service,
         );
-    if (id != null) ref.read(selectionProvider.notifier).selectEdge(id);
+    if (id != null) {
+      ref.read(selectionProvider.notifier).selectEdge(id);
+      // B3: a drop on the TOP band has no floor above it, so the riser's base
+      // was placed on the floor BELOW (it still spans a real elevation delta up
+      // to the top). Say so — a top-band drop otherwise draws a connection one
+      // floor off the target, indistinguishable from a correct drop.
+      if (target.redirected &&
+          floorIndex + 1 < building.levelCount &&
+          floorIndex < building.levelCount) {
+        final lower = building.floors[floorIndex].name;
+        final upper = building.floors[floorIndex + 1].name;
+        ref
+            .read(statusMessageProvider.notifier)
+            .showStatus('Riser to $upper — base on $lower below');
+      }
+    }
   }
 
   /// The sheet id mapped to [floorIndex] (so the riser's lower node sits on the
@@ -1383,6 +1450,7 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                       selectedEdgeId: selection.edgeId,
                       bandWorldH: _bandWorldH,
                       worldWidth: _worldWidth,
+                      highlightFloor: _dragBandFloor,
                     ),
                   ),
                 );
@@ -1404,8 +1472,28 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
               Positioned.fill(
                 child: DragTarget<_RiserDragData>(
                   hitTestBehavior: HitTestBehavior.translucent,
+                  // B3: track the target band live so the painter can highlight
+                  // exactly where the riser base will land (redirected down one
+                  // on the top band) — honest drop feedback, not a blanket tint.
+                  onMove: (details) {
+                    final box = context.findRenderObject() as RenderBox?;
+                    if (box == null) return;
+                    final t = _dropTarget(box.globalToLocal(details.offset));
+                    final f = t?.floorIndex;
+                    if (f != _dragBandFloor) {
+                      setState(() => _dragBandFloor = f);
+                    }
+                  },
+                  onLeave: (_) {
+                    if (_dragBandFloor != null) {
+                      setState(() => _dragBandFloor = null);
+                    }
+                  },
                   onAcceptWithDetails: (details) {
                     final box = context.findRenderObject() as RenderBox?;
+                    if (_dragBandFloor != null) {
+                      setState(() => _dragBandFloor = null);
+                    }
                     if (box == null) return;
                     _onDrop(box.globalToLocal(details.offset));
                   },
@@ -1879,7 +1967,9 @@ class _AutoSchematicPainter extends CustomPainter {
       final top = _bandTopY(i, size.height);
       final floor = building.floors[i];
       final elevM = building.elevationOf(i).meters;
-      final label = '${floor.name}  +${elevM.toStringAsFixed(1)} m';
+      // E6: the SAME FFL notation the export gutter uses (one shared formatter),
+      // so the working canvas and the issued sheet read the elevation identically.
+      final label = '${floor.name}  ${fflLabel(elevM)}';
       final tp = TextPainter(
         text: TextSpan(
           text: label,
@@ -1975,7 +2065,8 @@ class _AutoSchematicPainter extends CustomPainter {
 
       final floor = building.floors[i];
       final elevM = building.elevationOf(i).meters;
-      final label = '${floor.name}  +${elevM.toStringAsFixed(1)} m';
+      // E6: shared FFL formatter — same term + precision as the exported gutter.
+      final label = '${floor.name}  ${fflLabel(elevM)}';
 
       // Keep the floor label clear of the top-left (?) guide button: on a
       // compressed surface the topmost band's label would otherwise paint under
@@ -2543,58 +2634,61 @@ class _AutoSchematicPainter extends CustomPainter {
     }
   }
 
-  /// (2) VALVE-ASSEMBLY CALLOUTS — a row of two compact bordered detail boxes at
-  /// the BOTTOM-CENTRE (clear of the bottom-left legend + bottom-right title /
-  /// notes): a WATER METER set and a PRV set. Generic reference details (always
-  /// drawn when Details is on), each a row of valve glyphs + ASCII abbrevs. The
-  /// glyph is schematic; the abbrev names the real device (no exact-glyph claim).
+  /// (2) VALVE-ASSEMBLY CALLOUTS — compact bordered detail boxes at the
+  /// BOTTOM-CENTRE (clear of the bottom-left legend + bottom-right title /
+  /// notes): a WATER METER set and a PRV set, each a row of valve glyphs + ASCII
+  /// abbrevs. Each is drawn ONLY when the network actually carries that
+  /// assembly's key device (G7, mirroring the plant detail's has()-gating) — the
+  /// meter box when a waterMeter node exists, the PRV box when a prv node exists
+  /// — so a project without either shows neither (no boilerplate detail passing
+  /// as an as-designed assembly). The glyph is schematic; the abbrev names the
+  /// real device (no exact-glyph claim). The present boxes are centred as a
+  /// group so a lone detail still reads balanced.
   void _paintValveCallouts(Canvas canvas, Size size) {
     if (!_waterFocus) return;
     final color = serviceColor(ServiceType.coldWater);
     const boxW = 156.0;
     const boxH = 64.0;
     const gapBetween = MechXSpacing.md;
-    final totalW = boxW * 2 + gapBetween;
+
+    final details = <(String, List<(NodeComponent, String)>)>[
+      if (_hasComponent(NodeComponent.waterMeter))
+        ('DETAIL WATER METER', const [
+          (NodeComponent.gateValve, 'GV'),
+          (NodeComponent.waterMeter, 'WM'),
+          (NodeComponent.gateValve, 'GV'),
+          (NodeComponent.gateValve, 'U'),
+        ]),
+      if (_hasComponent(NodeComponent.prv))
+        ('DETAIL PRV SET', const [
+          (NodeComponent.gateValve, 'GV'),
+          (NodeComponent.strainer, 'STR'),
+          (NodeComponent.prv, 'PRV'),
+          (NodeComponent.gateValve, 'GV'),
+        ]),
+    ];
+    if (details.isEmpty) return;
+
+    final totalW = details.length * boxW + (details.length - 1) * gapBetween;
     // Width guard: only draw when there's room clear of the corner overlays.
     if (size.width < totalW + 320 || size.height < boxH + 2 * MechXSpacing.md) {
       return;
     }
-    final left = (size.width - totalW) / 2;
+    var left = (size.width - totalW) / 2;
     final top = size.height - boxH - MechXSpacing.md;
-
-    // Box A — DETAIL WATER METER.
-    final rectA = Rect.fromLTWH(left, top, boxW, boxH);
-    _detailBox(canvas, rectA, 'DETAIL WATER METER', titleColor: color);
-    _drawDetailGlyphRow(
-      canvas,
-      Offset(rectA.left + 12, rectA.top + 24),
-      const [
-        (NodeComponent.gateValve, 'GV'),
-        (NodeComponent.waterMeter, 'WM'),
-        (NodeComponent.gateValve, 'GV'),
-        (NodeComponent.gateValve, 'U'),
-      ],
-      color,
-      glyph: 15,
-      gap: 32,
-    );
-
-    // Box B — DETAIL PRV SET.
-    final rectB = Rect.fromLTWH(left + boxW + gapBetween, top, boxW, boxH);
-    _detailBox(canvas, rectB, 'DETAIL PRV SET', titleColor: color);
-    _drawDetailGlyphRow(
-      canvas,
-      Offset(rectB.left + 8, rectB.top + 24),
-      const [
-        (NodeComponent.gateValve, 'GV'),
-        (NodeComponent.strainer, 'STR'),
-        (NodeComponent.prv, 'PRV'),
-        (NodeComponent.gateValve, 'GV'),
-      ],
-      color,
-      glyph: 15,
-      gap: 32,
-    );
+    for (final (title, items) in details) {
+      final rect = Rect.fromLTWH(left, top, boxW, boxH);
+      _detailBox(canvas, rect, title, titleColor: color);
+      _drawDetailGlyphRow(
+        canvas,
+        Offset(rect.left + 12, rect.top + 24),
+        items,
+        color,
+        glyph: 15,
+        gap: 32,
+      );
+      left += boxW + gapBetween;
+    }
   }
 
   /// (B2) STACK DETAIL — the drainage/vent riser conventions, all data-gated on
@@ -2683,11 +2777,19 @@ class _AutoSchematicPainter extends CustomPainter {
     const stubX = MechXSpacing.sm;
     const rowPitch = 11.0;
     const gutterW = 150.0;
+    // E1: the fixed top-left (?) guide button (x:16-42, y:8-34 screen) has no
+    // world awareness, so on the TOPMOST band (whose top is y=0) the fan-out
+    // stubs would paint under it and be clipped (goldens 09/10 showed a bare
+    // "e"/half-eaten "Supply diffuser"). Reserve the corner: start any fan-out
+    // row that would fall within the button's height just below it — mirroring
+    // the FFL-label offset in _paintBands.
+    const buttonBottom = MechXSpacing.sm + 26;
     for (final fan in fans) {
       if (fan.floorIndex < 0 || fan.floorIndex >= n) continue;
       final top = _bandTopY(fan.floorIndex, size.height);
       // Start below the FFL label (which sits at top + xs, ~12px tall).
       var y = top + 20;
+      if (y < buttonBottom + MechXSpacing.xs) y = buttonBottom + MechXSpacing.xs;
       final color =
           focus != null ? serviceColor(focus!) : colors.textSecondary;
       for (final label in fan.labels) {
@@ -2783,6 +2885,7 @@ class _EditSchematicPainter extends CustomPainter {
     required this.selectedEdgeId,
     required this.bandWorldH,
     required this.worldWidth,
+    this.highlightFloor,
   });
 
   final Network network;
@@ -2793,6 +2896,10 @@ class _EditSchematicPainter extends CustomPainter {
   final String? selectedEdgeId;
   final double bandWorldH;
   final double worldWidth;
+
+  /// B3: the floor band to highlight as the live drop target (the riser base
+  /// lands here). Null when no palette card is being dragged over the canvas.
+  final int? highlightFloor;
 
   double _bandCentreWorldY(int floorIndex) {
     final inverted = (building.levelCount - 1) - floorIndex;
@@ -2823,6 +2930,15 @@ class _EditSchematicPainter extends CustomPainter {
       final inverted = (n - 1) - i;
       final bandTopWorldY = inverted * bandWorldH;
       final bandBotWorldY = bandTopWorldY + bandWorldH;
+      // B3: a translucent fill on the band a drag would drop the riser base on
+      // (the drop preview) — obvious BEFORE releasing, and on the top-band case
+      // it lights the real (redirected-down) base band rather than misleading.
+      if (i == highlightFloor) {
+        final tl = transform.worldToScreen(Offset(0, bandTopWorldY));
+        final br = transform.worldToScreen(Offset(worldWidth, bandBotWorldY));
+        canvas.drawRect(Rect.fromPoints(tl, br),
+            Paint()..color = colors.accent.withAlpha(30));
+      }
       // Floor surface line at the bottom of the band.
       final leftS = transform.worldToScreen(Offset(0, bandBotWorldY));
       final rightS = transform.worldToScreen(Offset(worldWidth, bandBotWorldY));
@@ -2830,7 +2946,8 @@ class _EditSchematicPainter extends CustomPainter {
 
       final floor = building.floors[i];
       final elevM = building.elevationOf(i).meters;
-      final label = '${floor.name}  +${elevM.toStringAsFixed(1)} m';
+      // E6: shared FFL formatter — same term + precision as the exported gutter.
+      final label = '${floor.name}  ${fflLabel(elevM)}';
       final labelAt = transform.worldToScreen(
           Offset(8, bandBotWorldY - bandWorldH + 8 / transform.scale));
       _drawText(
@@ -2918,7 +3035,17 @@ class _EditSchematicPainter extends CustomPainter {
           fontWeight: FontWeight.w600,
         );
       } else {
-        canvas.drawLine(fromS, toS, linePaint);
+        // D3: a plain run/main is INERT in Edit mode (only risers select / size
+        // here — _riserAt filters to EdgeKind.riser). Render it visibly PASSIVE
+        // — a thin, dimmed, DASHED ghost, like the inferred connectors — so only
+        // the interactive risers carry solid full-opacity service ink and
+        // nothing inert reads as actionable (was near-identical to a riser).
+        final ghost = Paint()
+          ..color = color.withAlpha(90)
+          ..strokeWidth = 1.5
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round;
+        _dashedLine(canvas, fromS, toS, ghost);
         final s = sizing[edge.id];
         if (s != null) {
           final mid = Offset((fromS.dx + toS.dx) / 2, (fromS.dy + toS.dy) / 2);
@@ -2927,12 +3054,29 @@ class _EditSchematicPainter extends CustomPainter {
             _sizeLabel(s),
             mid + const Offset(0, -14),
             fontSize: 10,
-            color: color,
+            color: color.withAlpha(120),
             fontWeight: FontWeight.w500,
             centered: true,
           );
         }
       }
+    }
+  }
+
+  /// Draw a dashed segment from [a] to [b] (D3: the passive-run ghost). A tiny
+  /// local copy of the Auto painter's dash helper — kept here so the Edit
+  /// painter stays self-contained.
+  void _dashedLine(Canvas canvas, Offset a, Offset b, Paint paint,
+      {double dash = 6, double gap = 4}) {
+    final total = (b - a).distance;
+    if (total <= 0) return;
+    final dir = (b - a) / total;
+    var d = 0.0;
+    while (d < total) {
+      final start = a + dir * d;
+      final end = a + dir * math.min(d + dash, total);
+      canvas.drawLine(start, end, paint);
+      d += dash + gap;
     }
   }
 
@@ -3065,7 +3209,8 @@ class _EditSchematicPainter extends CustomPainter {
       old.building != building ||
       old.colors != colors ||
       old.transform != transform ||
-      old.selectedEdgeId != selectedEdgeId;
+      old.selectedEdgeId != selectedEdgeId ||
+      old.highlightFloor != highlightFloor;
 }
 
 // ---------------------------------------------------------------------------

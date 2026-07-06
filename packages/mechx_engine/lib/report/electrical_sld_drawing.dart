@@ -1336,6 +1336,26 @@ String _ffl(double meters) {
   return meters < 0 ? '-$s' : '+$s';
 }
 
+/// Truncate a fan-out circuit NAME to [maxLen] characters total (the same
+/// on-canvas width budget the old bare `substring(0, 14)` used), but cut on a
+/// word boundary and append an ASCII ellipsis when the name is shortened —
+/// never a bare mid-word chop like the old 'Lighting groun' / 'Power socke'.
+/// Falls back to a hard cut (still budgeted so the total stays <= [maxLen])
+/// only when no reasonable word boundary exists (e.g. one long unbroken
+/// token). (H5)
+String _fanOutLabel(String name, {int maxLen = 14}) {
+  if (name.length <= maxLen) return name;
+  const ellipsis = '...';
+  final budget = maxLen - ellipsis.length;
+  if (budget <= 0) return name.substring(0, maxLen);
+  final lastSpace = name.lastIndexOf(' ', budget);
+  // Only honour the word boundary when it keeps a meaningful chunk of the
+  // name (else a boundary right at the start would truncate harder than a
+  // plain hard cut for no readability gain).
+  final cut = lastSpace >= (budget * 0.4).floor() ? lastSpace : budget;
+  return '${name.substring(0, cut).trimRight()}$ellipsis';
+}
+
 /// Build the FLOOR-BY-FLOOR electrical riser: every panel placed on its building
 /// FLOOR (by true elevation — highest floor at the TOP of the y-down sheet),
 /// laid left-to-right within its floor band; feeders draw as a vertical riser in
@@ -1535,7 +1555,7 @@ SldSheet buildElectricalRiser({
     for (final cr in shown) {
       final sy = y + _ovH + 4 + row * _fanRowH;
       prims.add(SldLine(x + 8, sy, x + 22, sy, weight: SldWeight.thin, role: role));
-      final nm = cr.name.length > 14 ? cr.name.substring(0, 14) : cr.name;
+      final nm = _fanOutLabel(cr.name);
       final ph = cr.threePhase ? ' 3ph' : '';
       prims.add(SldLabel(x + 26, sy + 3,
           '$nm ${_num(cr.breaker.ratingA.amperes)}A$ph',

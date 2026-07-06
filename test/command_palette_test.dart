@@ -176,6 +176,34 @@ void main() {
           isTrue);
     });
 
+    test(
+        'A4: drawing an edge alone does NOT mark Floors done — Building is '
+        'unreviewed', () {
+      final c = makeContainer();
+      // Calibrate first (as a real workflow would), so Calibrate is done and
+      // Floors is the ONLY remaining gap being exercised here.
+      c
+          .read(projectControllerProvider.notifier)
+          .setCalibration('s1', const ScaleCalibration(0.01));
+      final net = c.read(networkControllerProvider.notifier);
+      net.setService(ServiceType.coldWater);
+      net.setTool(DrawTool.drawRun);
+      net.placeRunPoint('s1', 0, const Offset(100, 100));
+      net.placeRunPoint('s1', 0, const Offset(300, 100));
+      net.setTool(DrawTool.select);
+      final s = c.read(workflowStageStateProvider);
+      // §10 makes the floor stack the sole source of truth for every riser's
+      // vertical length — a network existing must never tick Floors done on
+      // its own, or an engineer could draw first and get a green Floors
+      // checkmark while every riser is silently sized off the untouched
+      // default 3-floor seed, never reviewed.
+      expect(s.isDone(WorkflowStage.draw), isTrue);
+      expect(s.isDone(WorkflowStage.floors), isFalse);
+      // The active pointer goes back to Floors (the first not-done stage) —
+      // a distinct highlighted state, not the same green tick Draw now shows.
+      expect(s.active, WorkflowStage.floors);
+    });
+
     test('a custom floor stack (diverged from the seed) marks Floors done', () {
       final c = makeContainer();
       c

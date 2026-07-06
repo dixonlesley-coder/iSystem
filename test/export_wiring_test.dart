@@ -10,13 +10,16 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/document_control_store.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx/ui/electrical/electrical_export.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
 import 'package:mechx/ui/schematic/schematic_export.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart' show buildCalcReportBlocks;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart'
@@ -170,8 +173,10 @@ void main() {
       'buildLiveRiserSheet carries the B1 canvas-parity extras (equipment '
       'detail suffix + KETERANGAN notes + detail callouts)', (tester) async {
     final (ref, container) = await harness(tester);
-    // A roof tank with a REAL stored capacity feeding a ground-floor main —
-    // the exported sheet must carry at least what the Auto canvas draws.
+    // A roof tank with a REAL stored capacity feeding a ground-floor main that
+    // ALSO carries a water meter + a PRV — the exported sheet must carry at
+    // least what the Auto canvas draws, and the G7-gated valve callouts only
+    // ride when the drawn network actually has those devices.
     const net = Network(nodes: [
       NetNode(
         id: 'rt',
@@ -184,6 +189,20 @@ void main() {
         tankCapacityLitres: 5000,
       ),
       NetNode(id: 'm', sheetId: 's1', x: 0, y: 100, floorIndex: 0),
+      NetNode(
+          id: 'wm',
+          sheetId: 's1',
+          x: 40,
+          y: 100,
+          floorIndex: 0,
+          component: NodeComponent.waterMeter),
+      NetNode(
+          id: 'prv',
+          sheetId: 's1',
+          x: 80,
+          y: 100,
+          floorIndex: 0,
+          component: NodeComponent.prv),
     ], edges: [
       NetEdge(
           id: 'r1',
@@ -191,6 +210,9 @@ void main() {
           toId: 'm',
           service: ServiceType.coldWater,
           kind: EdgeKind.riser),
+      NetEdge(id: 'em', fromId: 'm', toId: 'wm', service: ServiceType.coldWater),
+      NetEdge(
+          id: 'ep', fromId: 'm', toId: 'prv', service: ServiceType.coldWater),
     ]);
     container.read(networkControllerProvider.notifier).loadNetwork(net);
     final sheet = buildLiveRiserSheet(ref, null);
@@ -201,7 +223,7 @@ void main() {
     // The KETERANGAN system-notes block echoes the live feed strategy.
     expect(labels, contains('KETERANGAN'));
     expect(labels, contains('Feed:'));
-    // The H101 detail callouts ride the export (detailCallouts: true).
+    // The G7-gated H101 detail callouts ride the export when the devices exist.
     expect(labels, contains('DETAIL WATER METER'));
     expect(labels, contains('DETAIL PRV SET'));
     expect(labels, contains('ROOF TANK 5 m3'));
@@ -437,5 +459,44 @@ void main() {
     expect(lines.first, 'tag,category,service,duty,size,model_spec,qty');
     // Header + one line per scheduled row.
     expect(lines.length, rows.length + 1);
+  });
+
+  // ── J3: equipment-schedule AHU tags are STABLE across a room deletion ───────
+  testWidgets(
+      'J3: deleting a middle room never renumbers another room\'s AHU tag',
+      (tester) async {
+    final (ref, container) = await harness(tester);
+    // Calibrate a sheet so every room's air sizing resolves (100 px = 1 m).
+    const sheetId = 's1';
+    container
+        .read(projectControllerProvider.notifier)
+        .setCalibration(sheetId, const ScaleCalibration(0.01));
+    final roomsCtrl = container.read(roomAreasProvider.notifier);
+    // Three sized rooms (ids r0, r1, r2 → 'Room 1/2/3').
+    for (var i = 0; i < 3; i++) {
+      roomsCtrl.add(
+          sheetId: sheetId, floorIndex: 0, ax: 0, ay: 0, bx: 500, by: 500);
+    }
+    final rooms = container.read(roomAreasProvider);
+    expect(rooms, hasLength(3));
+
+    // Rev A: capture each room's AHU tag, keyed by its (stable) name.
+    Map<String, String> ahuTags() => {
+          for (final f
+              in gatherEquipmentScheduleData(ref).fans.where((f) => f.airHandling))
+            f.service: f.tag!,
+        };
+    final revA = ahuTags();
+    expect(revA, {'Room 1': 'AHU-01', 'Room 2': 'AHU-02', 'Room 3': 'AHU-03'});
+
+    // Delete the MIDDLE room (Room 2 / id r1) and regenerate.
+    roomsCtrl.removeById(rooms[1].id);
+    final revB = ahuTags();
+
+    // The surviving rooms keep their exact tags — Room 3 stays AHU-03 (the old
+    // positional counter would have silently renumbered it to AHU-02).
+    expect(revB['Room 1'], revA['Room 1']);
+    expect(revB['Room 3'], revA['Room 3']);
+    expect(revB, {'Room 1': 'AHU-01', 'Room 3': 'AHU-03'});
   });
 }

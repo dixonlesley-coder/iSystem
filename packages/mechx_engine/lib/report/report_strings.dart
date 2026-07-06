@@ -115,12 +115,19 @@ enum RptStringKey {
   fireSprinklerValue, // {lps} {count}
   fireRemoteAreaKey, // {k}
   fireRemoteAreaValue, // {lpm} {bar} {minbar} {fric} {verdict}
+  // I7 — the two fire-verdict sentences used to leak the engine's hardcoded
+  // English into the (otherwise localized) report; the calc-report now picks the
+  // localized key off the result's boolean (meetsMinimumPressure / oversized).
+  fireRemoteAreaVerdictOk,
+  fireRemoteAreaVerdictUnder,
   fireStandpipeKey,
   fireStandpipeValue, // {lps} {m} {kw} {mm}
   firePumpKey, // {des}
   firePumpDuty,
   firePumpStandby,
   firePumpValue, // {rated} {head} {churn} {overload} {motor} {verdict}
+  firePumpVerdictOversized,
+  firePumpVerdictWithin,
   fireJockeyKey,
   fireJockeyValue, // {lps} {m} {standby}
   fireJockeyStandby,
@@ -354,6 +361,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
       '{lpm} L/min @ **{bar} bar** (min {minbar} bar) · '
           'branch friction {fric} m · **{verdict}** '
           '_(K-factor + min head pressure — general practice, // VERIFY)_',
+  RptStringKey.fireRemoteAreaVerdictOk: 'Remote head OK',
+  RptStringKey.fireRemoteAreaVerdictUnder: 'Remote head under-pressure',
   RptStringKey.fireStandpipeKey: 'Standpipe:',
   RptStringKey.fireStandpipeValue:
       '**{lps} L/s** · fire pump {m} m · {kw} kW · min riser {mm} mm',
@@ -364,6 +373,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
       'rated {rated} L/s @ {head} m · churn {churn} m (140 %) · '
           '150 % flow @ {overload} m (65 %) · motor **{motor} kW** · '
           '**{verdict}** _(curve acceptance ratios — NFPA 20 limits, // VERIFY)_',
+  RptStringKey.firePumpVerdictOversized: 'Oversized pump curve',
+  RptStringKey.firePumpVerdictWithin: 'Rating curve within standard range',
   RptStringKey.fireJockeyKey: 'Jockey pump:',
   RptStringKey.fireJockeyValue:
       '{lps} L/s @ {m} m (pressure maintenance){standby}',
@@ -614,6 +625,8 @@ const Map<RptStringKey, String> kReportStringsId = {
       '{lpm} L/min @ **{bar} bar** (min {minbar} bar) · '
           'gesekan cabang {fric} m · **{verdict}** '
           '_(K-factor + tekanan head min — praktik umum, // VERIFY)_',
+  RptStringKey.fireRemoteAreaVerdictOk: 'Head terjauh OK',
+  RptStringKey.fireRemoteAreaVerdictUnder: 'Head terjauh kurang tekanan',
   RptStringKey.fireStandpipeKey: 'Pipa tegak:',
   RptStringKey.fireStandpipeValue:
       '**{lps} L/s** · pompa pemadam {m} m · {kw} kW · riser min {mm} mm',
@@ -624,6 +637,8 @@ const Map<RptStringKey, String> kReportStringsId = {
       'rated {rated} L/s @ {head} m · churn {churn} m (140 %) · '
           'aliran 150 % @ {overload} m (65 %) · motor **{motor} kW** · '
           '**{verdict}** _(rasio penerimaan kurva — batas NFPA 20, // VERIFY)_',
+  RptStringKey.firePumpVerdictOversized: 'Kurva pompa kebesaran',
+  RptStringKey.firePumpVerdictWithin: 'Kurva rating dalam rentang standar',
   RptStringKey.fireJockeyKey: 'Pompa jockey:',
   RptStringKey.fireJockeyValue:
       '{lps} L/s @ {m} m (pemeliharaan tekanan){standby}',

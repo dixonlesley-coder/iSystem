@@ -80,7 +80,8 @@ const double _kSpreadStep = 18;
 ///   • [notes] — real project echoes rendered as a bordered KETERANGAN block
 ///     bottom-right (above where the renderers stamp the title block);
 ///   • [detailCallouts] — the H101 reference details on the clean-water focus:
-///     DETAIL WATER METER (GV·WM·GV·U) + DETAIL PRV SET (GV·STR·PRV·GV)
+///     DETAIL WATER METER (GV·WM·GV·U) — only when a waterMeter node exists —
+///     and DETAIL PRV SET (GV·STR·PRV·GV) — only when a prv node exists (G7) —
 ///     bottom-centre, and the PUMP-SET plant detail (roof-tank glyph +
 ///     capacity, booster glyph + duty, GRAVITASI/TRANSFER/BOOSTER leg labels)
 ///     in a right margin column — the plant detail drawn ONLY when the network
@@ -191,7 +192,7 @@ SldSheet buildMechanicalRiserSld({
     if (building != null && f < building.levelCount) {
       final ffl = building.elevationOf(f).meters;
       placer.reserve(SldLabel(
-          8, top + 32, 'FFL +${ffl.toStringAsFixed(2)}',
+          8, top + 32, fflLabel(ffl),
           size: 8, role: SldRole.source));
     }
   }
@@ -380,23 +381,40 @@ SldSheet buildMechanicalRiserSld({
         equipmentDetailByNodeId: equipmentDetailByNodeId, downfeed: downfeed)) {
       maxX = contentMaxX + 12 + _plantW;
     }
-    // Generic valve-assembly reference details, bottom-centre of the band.
-    const totalW = _calloutW * 2 + 16;
-    const left = _gutterW + (_drawW - totalW) / 2;
-    _emitDetailBox(prims, left, extrasTop, 'DETAIL WATER METER', const [
-      (NodeComponent.gateValve, 'GV'),
-      (NodeComponent.waterMeter, 'WM'),
-      (NodeComponent.gateValve, 'GV'),
-      (NodeComponent.gateValve, 'U'),
-    ]);
-    _emitDetailBox(
-        prims, left + _calloutW + 16, extrasTop, 'DETAIL PRV SET', const [
-      (NodeComponent.gateValve, 'GV'),
-      (NodeComponent.strainer, 'STR'),
-      (NodeComponent.prv, 'PRV'),
-      (NodeComponent.gateValve, 'GV'),
-    ]);
-    extrasBottom = math.max(extrasBottom, extrasTop + _calloutH);
+    // Valve-assembly detail callouts, bottom-centre of the band — each drawn
+    // ONLY when the network actually carries the assembly's key device (G7,
+    // mirroring the plant detail's has()-gating): the WATER METER detail when a
+    // waterMeter node exists, the PRV SET detail when a prv node exists. A
+    // project without either shows neither box (honesty — no boilerplate detail
+    // masquerading as an as-designed assembly). The present boxes are centred as
+    // a group so a lone detail still reads balanced.
+    bool has(NodeComponent c) => network.nodes.any((n) => n.component == c);
+    final valveDetails = <(String, List<(NodeComponent, String)>)>[
+      if (has(NodeComponent.waterMeter))
+        ('DETAIL WATER METER', const [
+          (NodeComponent.gateValve, 'GV'),
+          (NodeComponent.waterMeter, 'WM'),
+          (NodeComponent.gateValve, 'GV'),
+          (NodeComponent.gateValve, 'U'),
+        ]),
+      if (has(NodeComponent.prv))
+        ('DETAIL PRV SET', const [
+          (NodeComponent.gateValve, 'GV'),
+          (NodeComponent.strainer, 'STR'),
+          (NodeComponent.prv, 'PRV'),
+          (NodeComponent.gateValve, 'GV'),
+        ]),
+    ];
+    if (valveDetails.isNotEmpty) {
+      final totalW =
+          valveDetails.length * _calloutW + (valveDetails.length - 1) * 16;
+      var bx = _gutterW + (_drawW - totalW) / 2;
+      for (final (title, items) in valveDetails) {
+        _emitDetailBox(prims, bx, extrasTop, title, items);
+        bx += _calloutW + 16;
+      }
+      extrasBottom = math.max(extrasBottom, extrasTop + _calloutH);
+    }
   }
   if (notes.isNotEmpty) {
     // The KETERANGAN system-notes block, bottom-RIGHT (the renderers stamp the

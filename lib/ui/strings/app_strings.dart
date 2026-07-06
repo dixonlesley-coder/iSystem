@@ -536,6 +536,10 @@ enum StringKey {
   issueUnfedPanelTitle,
   issueUnfedPanelMessage, // {panel} = the unfed panel's name
 
+  // I1 — downfeed pressure-zone over the SNI max fixture static pressure.
+  issuePressureZoneTitle,
+  issuePressureZoneMessage, // {bottom} {top} {kpa} {limit}
+
   // H1 — Design issue MESSAGES.
   issueOrphanFloorMessage, // {floor} = index+1, {floors} = pluralCount(n,'floor','floors')
   issueOrphanSheetMessage,
@@ -592,6 +596,22 @@ enum StringKey {
   // templates dialog title/barrierLabel).
   electricalLoadSampleProject,
   projectApplyBuildingTemplate,
+
+  // Workflow-goldens review (2026-07-06): A2 template-cancel confirmation, A3
+  // stepper/orientation-card term convergence (one "Building" everywhere), D1
+  // Power one-line empty-state copy correction.
+  templateAppliedImportPrompt,
+  workflowStageCalibrate,
+  workflowStageBuilding,
+  workflowStageDraw,
+  workflowStageSize,
+  workflowStageReport,
+  firstRunStepCalibrateDesc,
+  firstRunStepBuildingDesc,
+  firstRunStepDrawDesc,
+  firstRunStepSizeDesc,
+  firstRunStepReportDesc,
+  electricalPowerOneLineEmptyBody,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -1180,6 +1200,11 @@ const Map<StringKey, String> _en = {
   StringKey.issueUnfedPanelMessage:
       '"{panel}" is neither the origin board nor fed by a feeder — it is wired '
       'to nothing. Feed it from an upstream panel.',
+  StringKey.issuePressureZoneTitle: 'Pressure zone over the fixture limit',
+  StringKey.issuePressureZoneMessage:
+      'The pressure zone from "{bottom}" to "{top}" reaches {kpa} kPa static at '
+      'its lowest fixture, above the SNI max fixture static of {limit} kPa. Add '
+      'a PRV / break-tank to split the zone.',
 
   // H1 — Design issue messages.
   StringKey.issueOrphanFloorMessage:
@@ -1278,6 +1303,23 @@ const Map<StringKey, String> _en = {
   // H6 — half-localized odds & ends.
   StringKey.electricalLoadSampleProject: 'Load sample project',
   StringKey.projectApplyBuildingTemplate: 'Apply a building template',
+
+  // Workflow-goldens review (2026-07-06).
+  StringKey.templateAppliedImportPrompt:
+      'Template applied — import a plan when ready',
+  StringKey.workflowStageCalibrate: 'Calibrate',
+  StringKey.workflowStageBuilding: 'Building',
+  StringKey.workflowStageDraw: 'Draw',
+  StringKey.workflowStageSize: 'Size',
+  StringKey.workflowStageReport: 'Report',
+  StringKey.firstRunStepCalibrateDesc: 'set the drawing scale on your plan',
+  StringKey.firstRunStepBuildingDesc: "set each level's height",
+  StringKey.firstRunStepDrawDesc: 'lay out pipes, ducts and panels',
+  StringKey.firstRunStepSizeDesc: 'auto-size everything to SNI / PUIL',
+  StringKey.firstRunStepReportDesc: 'export the BOM and calc report',
+  StringKey.electricalPowerOneLineEmptyBody:
+      'Add a generator from the Sources button in the toolbar above to build '
+          'a hybrid power one-line with source interlocks.',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -1872,6 +1914,11 @@ const Map<StringKey, String> _id = {
   StringKey.issueUnfedPanelMessage:
       '"{panel}" bukan panel asal maupun disuplai oleh feeder — tidak '
       'tersambung ke apa pun. Suplai dari panel di hulunya.',
+  StringKey.issuePressureZoneTitle: 'Zona tekanan melebihi batas fikstur',
+  StringKey.issuePressureZoneMessage:
+      'Zona tekanan dari "{bottom}" hingga "{top}" mencapai {kpa} kPa statik di '
+      'fikstur terendahnya, di atas tekanan statik fikstur maksimum SNI {limit} '
+      'kPa. Tambahkan PRV / tangki pemutus untuk membagi zona.',
 
   // H1 — Design issue messages.
   StringKey.issueOrphanFloorMessage:
@@ -1972,6 +2019,23 @@ const Map<StringKey, String> _id = {
   // H6 — half-localized odds & ends.
   StringKey.electricalLoadSampleProject: 'Muat proyek contoh',
   StringKey.projectApplyBuildingTemplate: 'Terapkan templat bangunan',
+
+  // Workflow-goldens review (2026-07-06).
+  StringKey.templateAppliedImportPrompt:
+      'Templat diterapkan — impor denah saat sudah siap',
+  StringKey.workflowStageCalibrate: 'Kalibrasi',
+  StringKey.workflowStageBuilding: 'Bangunan',
+  StringKey.workflowStageDraw: 'Gambar',
+  StringKey.workflowStageSize: 'Ukuran',
+  StringKey.workflowStageReport: 'Laporan',
+  StringKey.firstRunStepCalibrateDesc: 'atur skala gambar pada denah Anda',
+  StringKey.firstRunStepBuildingDesc: 'atur tinggi setiap lantai',
+  StringKey.firstRunStepDrawDesc: 'gambar pipa, saluran, dan panel',
+  StringKey.firstRunStepSizeDesc: 'ukuran otomatis sesuai SNI / PUIL',
+  StringKey.firstRunStepReportDesc: 'ekspor BOM dan laporan perhitungan',
+  StringKey.electricalPowerOneLineEmptyBody:
+      'Tambahkan generator dari tombol Sumber di toolbar di atas untuk '
+          'membangun diagram satu-garis daya hibrida dengan interlock sumber.',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

@@ -686,25 +686,44 @@ class _Toolbar extends StatelessWidget {
             selected: tab == _Tab.riser,
             onTap: () => onTab(_Tab.riser),
           ),
-          const Spacer(),
-          // Actions (right) — horizontally scrollable so a narrow window never
-          // overflows the toolbar. The canonical MechXButton "gray button";
-          // danger / muted tones only recolour the label.
-          Flexible(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              reverse: true,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
+          // Actions (right). The canonical MechXButton "gray button"; danger /
+          // muted tones only recolour the label.
+          //
+          // B9: this used to be a `Spacer()` (an `Expanded` doing nothing)
+          // FOLLOWED BY a `Flexible` holding a horizontally-scrolling Row —
+          // two flex:1 siblings splitting the free width 50/50, so the
+          // actions got only HALF the room they were actually owed, and (with
+          // `reverse: true` anchoring its scroll offset at the END) whichever
+          // button that squeeze cut into painted only a sliver at the clip
+          // boundary (golden 11's stray fragment "near the tabs"). A single
+          // `Expanded` now claims ALL the leftover width for the actions
+          // (right-aligned via `Align`, so it still hugs the trailing edge
+          // when everything fits), and a `Wrap` can't silently clip a child
+          // either way: any button that doesn't fit the remaining width on
+          // this line simply flows onto a second line, still right-aligned
+          // and always shown in FULL. The toolbar grows a little taller on a
+          // narrow window instead of hiding a fragment of a button (the
+          // Column above wraps a plain `Expanded` canvas below, so a taller
+          // toolbar just costs it a few px, never overflows).
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                runAlignment: WrapAlignment.end,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: MechXSpacing.xs,
+                runSpacing: MechXSpacing.xs,
                 children: [
                   MechXButton(
-                    // B2 — this count is ELECTRICAL-ONLY (result.warnings for the
-                    // electrical system). The StringKey values are now SCOPED
-                    // ('Electrical issues' / 'Masalah kelistrikan') so the label
-                    // can't be conflated with the nav Review badge (all OPEN
-                    // issues, every discipline) or the Review hub's all-count,
-                    // both on-screen at the same time — while keeping the ID
-                    // translation (localized via context.strings, not a literal).
+                    // B2 — this count is ELECTRICAL-ONLY (result.warnings for
+                    // the electrical system). The StringKey values are now
+                    // SCOPED ('Electrical issues' / 'Masalah kelistrikan') so
+                    // the label can't be conflated with the nav Review badge
+                    // (all OPEN issues, every discipline) or the Review hub's
+                    // all-count, both on-screen at the same time — while
+                    // keeping the ID translation (localized via
+                    // context.strings, not a literal).
                     label: warningCount > 0
                         ? context.strings.format(
                             StringKey.electricalToolbarIssuesCount,
@@ -715,22 +734,19 @@ class _Toolbar extends StatelessWidget {
                         : MechXButtonTone.normal,
                     onPressed: onToggleAdvanced,
                   ),
-                  const SizedBox(width: MechXSpacing.xs),
                   MechXButton(
-                    label: context.strings(StringKey.electricalServiceEarthing),
+                    label:
+                        context.strings(StringKey.electricalServiceEarthing),
                     onPressed: onService,
                   ),
-                  const SizedBox(width: MechXSpacing.xs),
                   MechXButton(
                     label: context.strings(StringKey.electricalSources),
                     onPressed: onSources,
                   ),
-                  const SizedBox(width: MechXSpacing.xs),
                   MechXButton(
                     label: context.strings(StringKey.electricalAddPanel),
                     onPressed: onAddPanel,
                   ),
-                  const SizedBox(width: MechXSpacing.xs),
                   MechXButton(
                     // J4 — Export is the deliverable action; it reads in the
                     // normal (primary-label) tone like the mechanical export

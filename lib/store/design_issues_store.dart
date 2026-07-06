@@ -447,6 +447,47 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
+  // ── 3d. Downfeed pressure zone over the SNI max fixture static (I1, warning) ─
+  // A pressure zone whose lowest fixture would exceed the SNI max fixture static
+  // pressure needs a PRV / break-tank to split it. Derived from the building
+  // height (zoneStaticsProvider) REGARDLESS of feed strategy — an over-pressure
+  // zone is an SNI 8153:2015 safety concern the Review sign-off must reflect,
+  // yet it previously only showed inline in the downfeed inspector (and not at
+  // all on upfeed). Read-only: never resizes. Each over-limit zone is its own
+  // warning, best-effort locatable to a sheet mapped onto its bottom floor. Its
+  // generic title rolls up into its own compliance row (which then blocks PASS).
+  final zoneStatics = ref.watch(zoneStaticsProvider);
+  if (zoneStatics.any((z) => !z.withinLimit)) {
+    final maxFixKpa =
+        const SniProfile().maxFixtureStaticPressure.value.inKiloPascals;
+    final floors = project.building.floors;
+    // First sheet mapped onto each building floor (for the locate jump).
+    final sheetForFloor = <int, String>{};
+    for (final s in sheets.sheets) {
+      sheetForFloor.putIfAbsent(sheets.floorFor(s.id, levelCount), () => s.id);
+    }
+    for (final z in zoneStatics) {
+      if (z.withinLimit) continue;
+      final bottomIdx = z.zone.bottomFloorIndex.clamp(0, floors.length - 1);
+      final topIdx = z.zone.topFloorIndex.clamp(0, floors.length - 1);
+      warnings.add(DesignIssue(
+        severity: IssueSeverity.warning,
+        kind:
+            'pressure-zone:${z.zone.bottomFloorIndex}-${z.zone.topFloorIndex}',
+        title: str(StringKey.issuePressureZoneTitle),
+        message: str.format(StringKey.issuePressureZoneMessage, {
+          'bottom': floors[bottomIdx].name,
+          'top': floors[topIdx].name,
+          'kpa': z.bottomStatic.inKiloPascals.toStringAsFixed(0),
+          'limit': maxFixKpa.toStringAsFixed(0),
+        }),
+        locate: sheetForFloor[z.zone.bottomFloorIndex] == null
+            ? null
+            : IssueLocation(sheetForFloor[z.zone.bottomFloorIndex]!),
+      ));
+    }
+  }
+
   // ── 4. Drainage advisories: too-flat slope / over-long branch (info) ────────
   // Each advisory is edge-locatable via the edge's `from` node sheet. Title is
   // fixed (golden-friendly); the engine message carries the specifics.

@@ -46,14 +46,34 @@ class DrawingState {
   final DrawTool tool;
   final Offset? pendingPoint;
 
+  /// The sheet + floor the [pendingPoint] was placed on (B1). [pendingPoint] is
+  /// a bare pixel offset that only means anything against ITS sheet's geometry;
+  /// if the engineer switches the active sheet/floor mid-run, the next click
+  /// would otherwise resolve this stale offset against the NEW sheet, planting a
+  /// phantom junction there. [placeRunPoint] compares these to the click's
+  /// sheet/floor and RESTARTS the run on the new sheet instead of committing a
+  /// cross-sheet edge. Both null whenever [pendingPoint] is null.
+  final String? pendingSheetId;
+  final int? pendingFloorIndex;
+
   const DrawingState({
     this.network = const Network(),
     this.service = ServiceType.coldWater,
     this.tool = DrawTool.select,
     this.pendingPoint,
+    this.pendingSheetId,
+    this.pendingFloorIndex,
   });
 
   bool get isDrawing => tool != DrawTool.select;
+
+  /// Whether [pendingPoint] belongs to [sheetId]/[floorIndex] — i.e. the run in
+  /// progress was started on the sheet/floor the caller is now acting on. True
+  /// when there is no pending run. Used to gate a cross-sheet placement (B1) and
+  /// the on-canvas rubber band so neither leaks onto the wrong sheet.
+  bool pendingOnSheet(String sheetId, int floorIndex) =>
+      pendingPoint == null ||
+      (pendingSheetId == sheetId && pendingFloorIndex == floorIndex);
 }
 
 class NetworkController extends Notifier<DrawingState> {
@@ -84,7 +104,8 @@ class NetworkController extends Notifier<DrawingState> {
 
   String _id(String prefix) => '$prefix${_seq++}';
 
-  void _commit(Network next, {Offset? pendingPoint}) {
+  void _commit(Network next,
+      {Offset? pendingPoint, String? pendingSheetId, int? pendingFloorIndex}) {
     _dragSnapshotPending = false; // a normal commit stands on its own snapshot
     _undo.add(state.network);
     if (_undo.length > 200) _undo.removeAt(0);
@@ -95,6 +116,9 @@ class NetworkController extends Notifier<DrawingState> {
       service: state.service,
       tool: state.tool,
       pendingPoint: pendingPoint,
+      // The origin only travels with a live pending point (a chained run).
+      pendingSheetId: pendingPoint == null ? null : pendingSheetId,
+      pendingFloorIndex: pendingPoint == null ? null : pendingFloorIndex,
     );
   }
 
@@ -188,6 +212,25 @@ class NetworkController extends Notifier<DrawingState> {
         service: state.service,
         tool: state.tool,
         pendingPoint: world,
+        pendingSheetId: sheetId,
+        pendingFloorIndex: floorIndex,
+      );
+      return;
+    }
+
+    // B1: the pending point belongs to the sheet/floor it was placed on. If the
+    // engineer switched the active sheet (or its floor mapping) mid-run, that
+    // pixel offset is meaningless here — committing an edge would resolve it
+    // against THIS sheet's geometry and plant a phantom junction. Restart the
+    // run at this click on the new sheet instead of drawing a cross-sheet edge.
+    if (!state.pendingOnSheet(sheetId, floorIndex)) {
+      state = DrawingState(
+        network: state.network,
+        service: state.service,
+        tool: state.tool,
+        pendingPoint: world,
+        pendingSheetId: sheetId,
+        pendingFloorIndex: floorIndex,
       );
       return;
     }
@@ -212,6 +255,8 @@ class NetworkController extends Notifier<DrawingState> {
         service: state.service,
         tool: state.tool,
         pendingPoint: world,
+        pendingSheetId: sheetId,
+        pendingFloorIndex: floorIndex,
       );
       return;
     }
@@ -219,6 +264,8 @@ class NetworkController extends Notifier<DrawingState> {
     _commit(
       Network(nodes: nodes, edges: edges),
       pendingPoint: world, // chain from here
+      pendingSheetId: sheetId,
+      pendingFloorIndex: floorIndex,
     );
   }
 
@@ -376,6 +423,8 @@ class NetworkController extends Notifier<DrawingState> {
       service: state.service,
       tool: state.tool,
       pendingPoint: state.pendingPoint,
+      pendingSheetId: state.pendingSheetId,
+      pendingFloorIndex: state.pendingFloorIndex,
     );
   }
 
@@ -531,6 +580,9 @@ class NetworkController extends Notifier<DrawingState> {
       service: state.service,
       tool: state.tool,
       pendingPoint: pending,
+      // The re-anchored chain point stays on the run's originating sheet/floor.
+      pendingSheetId: pending == null ? null : state.pendingSheetId,
+      pendingFloorIndex: pending == null ? null : state.pendingFloorIndex,
     );
   }
 
@@ -1802,7 +1854,15 @@ class NetworkController extends Notifier<DrawingState> {
   /// Copy every horizontal RUN (and the nodes it touches) on
   /// [fromSheetId]/[fromFloor] onto [toSheetId]/[toFloor] with fresh ids —
   /// "same layout on the next floor". Risers are not copied (they span floors).
-  /// No-op if the source floor has no runs.
+  ///
+  /// J4: also carries FREE-STANDING nodes — equipment/fixtures/terminals placed
+  /// on the source floor but not yet wired into any run (a fire extinguisher,
+  /// hose reel, or AC unit dropped before its pipe/duct is routed). Without this
+  /// they vanish floor-by-floor on a multi-target duplicate, only noticed later
+  /// when the BOM / fire review comes up short. A node is loose when NO edge
+  /// (run OR riser) touches it; risers exclude their own endpoints (they span
+  /// floors and aren't copied). No-op only if the floor has neither runs nor
+  /// loose nodes.
   void duplicateFloor({
     required String fromSheetId,
     required int fromFloor,
@@ -1857,7 +1917,21 @@ class NetworkController extends Notifier<DrawingState> {
         kind: EdgeKind.run,
       ));
     }
-    if (addedEdges.isEmpty) return;
+    // Loose nodes: everything on the source floor no edge touches (J4). The run
+    // loop already cloned every wired node, so these are the free-standing
+    // equipment/fixtures — copy them so the floor's content moves intact.
+    final touched = <String>{};
+    for (final e in old.edges) {
+      touched
+        ..add(e.fromId)
+        ..add(e.toId);
+    }
+    for (final n in old.nodes) {
+      if (n.sheetId != fromSheetId || n.floorIndex != fromFloor) continue;
+      if (touched.contains(n.id)) continue;
+      cloneNode(n); // adds to addedNodes on the target floor with a fresh id
+    }
+    if (addedNodes.isEmpty && addedEdges.isEmpty) return;
     _commit(Network(
       nodes: [...old.nodes, ...addedNodes],
       edges: [...old.edges, ...addedEdges],
@@ -2181,6 +2255,8 @@ class NetworkController extends Notifier<DrawingState> {
       service: state.service,
       tool: state.tool,
       pendingPoint: state.pendingPoint,
+      pendingSheetId: state.pendingSheetId,
+      pendingFloorIndex: state.pendingFloorIndex,
     );
   }
 
@@ -2206,6 +2282,8 @@ class NetworkController extends Notifier<DrawingState> {
       service: state.service,
       tool: state.tool,
       pendingPoint: state.pendingPoint,
+      pendingSheetId: state.pendingSheetId,
+      pendingFloorIndex: state.pendingFloorIndex,
     );
   }
 

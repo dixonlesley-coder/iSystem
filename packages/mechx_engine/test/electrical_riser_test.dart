@@ -261,4 +261,56 @@ void main() {
       expect(l.text.contains('³'), isFalse, reason: l.text);
     }
   });
+
+  // H5: buildElectricalRiser's per-floor fan-out used to hard-`substring(0,
+  // 14)` a circuit name with no ellipsis, producing a mid-word chop like
+  // 'Power socke' / 'Lighting - Lev'. It should now cut on a word boundary and
+  // append an ASCII ellipsis, and never silently drop the fact it was cut.
+  test('a long circuit name in the fan-out is truncated at a word boundary '
+      'with an ellipsis, never mid-word', () {
+    const longName = 'Power socket ring - workshop';
+    const longNameProject = ElectricalProject(
+      id: 'ln',
+      name: 'Long names',
+      panels: [
+        ElectricalPanel(
+          id: 'P1',
+          name: 'LP-1',
+          layoutPos: LayoutPos(sheetId: 's', floorIndex: 0, x: 100, y: 100),
+          circuits: [
+            ElectricalCircuit(
+                id: 'c1',
+                name: longName,
+                loadKind: LoadKind.general,
+                loadW: 2000,
+                length: Length(10)),
+          ],
+        ),
+      ],
+    );
+    final r = computeSystem(profile, longNameProject);
+    final sheet = buildElectricalRiser(
+        project: longNameProject, result: r, building: building);
+    final stub = sheet.prims
+        .whereType<SldLabel>()
+        .where((l) => l.size == 6 && l.text.contains('A'))
+        .map((l) => l.text)
+        .toList();
+    expect(stub, isNotEmpty);
+    final label = stub.first;
+
+    // Truncated with an explicit ASCII ellipsis, and the word it was cut at
+    // is never split mid-token.
+    expect(label, contains('...'), reason: label);
+    expect(label, isNot(contains('workshop')), reason: label);
+    final namePart = label.split('...').first;
+    final words = longName.split(' ');
+    final wordBoundaryPrefixes = [
+      for (var i = 1; i <= words.length; i++) words.sublist(0, i).join(' ')
+    ];
+    expect(wordBoundaryPrefixes, contains(namePart), reason: label);
+    // The total budget (name + ellipsis) stays within the old 14-char width
+    // so the on-canvas column layout is unaffected.
+    expect(namePart.length + 3, lessThanOrEqualTo(14));
+  });
 }

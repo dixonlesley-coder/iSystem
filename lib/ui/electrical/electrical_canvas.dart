@@ -782,15 +782,27 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   /// [kBoardScheduleThreshold] so the deep-zoom engine schedule renders. No-op
   /// if the panel/viewport isn't available yet. (Powers a "focus this panel"
   /// gesture and the deep-zoom golden.)
+  ///
+  /// B9: the "comfortable reading" scale is a FIXED [kBoardScheduleThreshold]
+  /// `+ 0.3`, but the schedule card is [panelCardWidthAt] world units wide — at
+  /// common laptop widths (once the nav rail + inspector are subtracted) that
+  /// fixed scale needs more horizontal room than the canvas actually has, and
+  /// the schedule clips at both edges (its GRUP column, name, incomer line and
+  /// TOTAL footer all fall off-screen; golden 11 shipped this). Clamp the
+  /// scale to whatever actually fits the viewport width (94%, leaving a slim
+  /// margin), floored at [kLodThreshold] so the schedule LOD itself never
+  /// drops back to the summary card even on a narrow canvas.
   void focusPanelSchedule(String panelId, {double? scale}) {
     final project = ref.read(electricalProjectProvider);
     final result = ref.read(electricalResultProvider);
     final pos = _positions(project, result)[panelId];
     final panel = result.panels[panelId];
     if (pos == null || panel == null || _viewportSize.isEmpty) return;
-    final s = scale ?? (kBoardScheduleThreshold + 0.3);
     final w = panelCardWidthAt(panel, true);
     final h = panelFootprint(panel, true);
+    final desired = scale ?? (kBoardScheduleThreshold + 0.3);
+    final fitWidthScale = _viewportSize.width * 0.94 / w;
+    final s = math.max(kLodThreshold, math.min(desired, fitWidthScale));
     final worldCentre = Offset(pos.dx + w / 2, pos.dy + h / 2);
     _setTransform(ViewportTransform(
       scale: s,

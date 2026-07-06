@@ -5,6 +5,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/electrical_store.dart';
+import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/ui/review/issues_card.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
 
@@ -75,5 +77,42 @@ void main() {
     expect(find.textContaining('Advisory'), findsOneWidget);
     expect(find.text('Air velocity high'), findsOneWidget);
     expect(find.text('Unverified standard'), findsOneWidget);
+  });
+
+  testWidgets('L2: the Locate action is keyboard-focusable and Enter fires it',
+      (tester) async {
+    setDesktopSurface(tester);
+    const issue = DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'duct-velocity',
+      title: 'Duct velocity out of band',
+      message: 'A supply duct is over 7 m/s.',
+      locate: IssueLocation('s1', edgeId: 'e1'),
+    );
+    await tester.pumpWidget(_host(const [issue]));
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(IssuesCard)),
+      listen: false,
+    );
+    // Start off the Layout view so the locate jump is observable.
+    container
+        .read(workspaceViewProvider.notifier)
+        .set(WorkspaceView.electrical);
+
+    final locate = find.text('Locate');
+    expect(locate, findsOneWidget);
+    // Focus the MechXFocusRing hosting the Locate label, then press Enter —
+    // the mouse-only path the finding flagged is now keyboard-reachable.
+    Focus.of(tester.element(locate)).requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+
+    // Enter fired the same callback a mouse tap would: jumped to Layout and
+    // selected the flagged edge.
+    expect(container.read(workspaceViewProvider), WorkspaceView.plan);
+    expect(container.read(selectionProvider).edgeId, 'e1');
   });
 }

@@ -65,6 +65,54 @@ Network _riserNet() => Network(
       ],
     );
 
+/// A cold-water riser that ALSO carries a water meter + a PRV inline on the
+/// ground-floor main. The G7 valve detail callouts gate on these components
+/// existing, so this fixture exercises the both-boxes-present path.
+Network _riserNetWithValves() => Network(
+      nodes: [
+        _n('rt', 200, 2,
+            role: NodeRole.plant,
+            component: NodeComponent.roofTank,
+            tankLitres: 5000),
+        _n('m', 200, 0),
+        _n('wm', 160, 0, component: NodeComponent.waterMeter),
+        _n('prv', 240, 0, component: NodeComponent.prv),
+        _n('wc', 120, 0,
+            role: NodeRole.fixture,
+            fixture: PlumbingFixture.waterClosetFlushValve),
+        _n('lav', 280, 0,
+            role: NodeRole.fixture, fixture: PlumbingFixture.lavatory),
+      ],
+      edges: [
+        _e('riser', 'rt', 'm', ServiceType.coldWater, kind: EdgeKind.riser),
+        _e('em', 'm', 'wm', ServiceType.coldWater),
+        _e('ep', 'm', 'prv', ServiceType.coldWater),
+        _e('b1', 'm', 'wc', ServiceType.coldWater),
+        _e('b2', 'm', 'lav', ServiceType.coldWater),
+      ],
+    );
+
+/// The bare cold-water riser plus exactly ONE extra [component] node on the
+/// ground main — used to prove each valve detail box gates independently (G7).
+Network _riserNetWithComponent(NodeComponent component) => Network(
+      nodes: [
+        _n('rt', 200, 2,
+            role: NodeRole.plant,
+            component: NodeComponent.roofTank,
+            tankLitres: 5000),
+        _n('m', 200, 0),
+        _n('c', 160, 0, component: component),
+        _n('wc', 120, 0,
+            role: NodeRole.fixture,
+            fixture: PlumbingFixture.waterClosetFlushValve),
+      ],
+      edges: [
+        _e('riser', 'rt', 'm', ServiceType.coldWater, kind: EdgeKind.riser),
+        _e('ec', 'm', 'c', ServiceType.coldWater),
+        _e('b1', 'm', 'wc', ServiceType.coldWater),
+      ],
+    );
+
 /// A dense two-riser cold-water network: two roof-tank riser stacks plus two
 /// COINCIDENT fixtures on a floor (same world x) and two close branch runs whose
 /// centred sized tags overlap — exercises the spread + ladder + leader paths.
@@ -510,8 +558,10 @@ void main() {
 
     test('B1: detailCallouts draws the valve references + the data-gated '
         'plant detail on the water focus only', () {
+      // A cold-water riser that ALSO carries a water meter + PRV inline — the
+      // detail callouts key off those components existing (G7).
       final s = buildMechanicalRiserSld(
-        network: _riserNet(),
+        network: _riserNetWithValves(),
         building: _levels,
         downfeed: true,
         detailCallouts: true,
@@ -528,25 +578,51 @@ void main() {
       expect(text, contains('GRAVITASI'));
       // Honesty: no supplied capacity => the row stays plain.
       final noCap = buildMechanicalRiserSld(
-          network: _riserNet(),
+          network: _riserNetWithValves(),
           building: _levels,
           downfeed: true,
           detailCallouts: true);
       expect(_labels(noCap), contains('ROOF TANK'));
       expect(_labels(noCap), isNot(contains('ROOF TANK 5 m3')));
       // No plant nodes at all => the plant detail is omitted entirely (the
-      // generic valve references still draw — they are reference details).
+      // valve references are also omitted — the stack net carries no meter/PRV).
       final noPlant = buildMechanicalRiserSld(
           network: _stackNet(), building: _levels, detailCallouts: true);
-      expect(_labels(noPlant), contains('DETAIL WATER METER'));
       expect(_labels(noPlant), isNot(contains('PUMP-SET DETAIL')));
       // A non-water focus omits the clean-water details entirely.
       final drain = buildMechanicalRiserSld(
-          network: _stackNet(),
+          network: _riserNetWithValves(),
           building: _levels,
           focus: ServiceType.drainage,
           detailCallouts: true);
       expect(_labels(drain), isNot(contains('DETAIL WATER METER')));
+    });
+
+    test('G7: the valve detail callouts are DATA-GATED on the drawn '
+        'components — each box draws only when its device exists', () {
+      // A plain cold-water riser with NO meter and NO PRV: neither box draws,
+      // even with Details on (was drawn unconditionally — the finding).
+      final none = _labels(buildMechanicalRiserSld(
+          network: _riserNet(),
+          building: _levels,
+          downfeed: true,
+          detailCallouts: true));
+      expect(none, isNot(contains('DETAIL WATER METER')));
+      expect(none, isNot(contains('DETAIL PRV SET')));
+      // Water meter only => only the meter box (independent gating).
+      final meterOnly = _labels(buildMechanicalRiserSld(
+          network: _riserNetWithComponent(NodeComponent.waterMeter),
+          building: _levels,
+          detailCallouts: true));
+      expect(meterOnly, contains('DETAIL WATER METER'));
+      expect(meterOnly, isNot(contains('DETAIL PRV SET')));
+      // PRV only => only the PRV box.
+      final prvOnly = _labels(buildMechanicalRiserSld(
+          network: _riserNetWithComponent(NodeComponent.prv),
+          building: _levels,
+          detailCallouts: true));
+      expect(prvOnly, contains('DETAIL PRV SET'));
+      expect(prvOnly, isNot(contains('DETAIL WATER METER')));
     });
 
     // ── B2: drainage / vent stack detail ─────────────────────────────────────
