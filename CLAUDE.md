@@ -260,7 +260,35 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
-- **Apple-design review (2026-07-04) — the CURRENT plan of record for ease-of-use/UX polish**:
+- **Workflow + goldens two-lens review (2026-07-06) — the CURRENT plan of record for ease-of-use work**:
+  `WORKFLOW-GOLDENS-REVIEW.md` (root) is a fresh, adversarially-verified review of the v1.12.0
+  workflow and the 16 golden screenshots from two POVs — a senior Apple UI/software engineer and a
+  senior Indonesian MEP drafter/engineer — run AFTER the three prior campaigns (UX-workflow,
+  CAD-output, Apple-design) fully landed. **81 verified findings** (23 high / 46 medium / 12 low;
+  70 raw → 67 merged → **0 refuted** by an independent adversarial verification pass, + 13 from a
+  completeness critic + 1 orchestrator-verified), grouped into 13 themes (A–M) and sequenced into
+  **6 waves**: **W1 stop-the-lies / visible defects** (the goldens themselves ship defects — the
+  riser (?) help button clips the top-floor fan-out label in goldens 09/10, the focused board
+  schedule cuts off its own panel name/incomer/TOTAL in golden 11 [fixed 1.65× focus zoom, no
+  fit-to-width]; "read-only" Auto mode commits a permanent edge on a click; the power-one-line
+  empty state instructs using palette cards that don't exist; the pressure-zone over-limit check
+  never reaches the compliance verdict; equipment-schedule tags re-synthesize per export),
+  **W2 feel** (every node-drag frame re-runs the full sizing+solve+BOM pipeline synchronously on
+  the UI thread; keyboard reach for the Loads palette + Review actions; Windows basics — .mechx
+  file association, remembered window state, min-size/reflow), **W3 trust surface** (heatmap
+  absolute scale + per-node probe, pipe velocity displayed anywhere at all, audited
+  acknowledgements [author/time/reason], stale-calibration prompt on plan re-import, all-sheets
+  submittal package, RCD/kA/CT visibility), **W4 deliverable fidelity — kill the AutoCAD redraw**
+  (equipment tags on plan, HW-recirc loop + drainage/vent riser fidelity + STP terminus, valve
+  trains at takeoffs/pump sets, slope annotation, ONE air-colour language across canvas/PDF/DXF,
+  plan-accurate electrical layout export), **W5 velocity/parity** (layer lock, rotate/mirror,
+  click-to-place-repeatedly, one plan reused across repeated floors, electrical/riser
+  multi-select, finishing the inline-inspector convergence), **W6 structure/polish** (+ the one
+  deliberately-deferred item: spatial clash checking). Three territories NO prior campaign ever
+  covered: performance-feel on large projects, keyboard-only/accessibility, Windows-desktop
+  citizenship. Nothing from this review is implemented yet — work new ease-of-use improvements
+  from that document rather than re-reviewing.
+- **Apple-design review (2026-07-04) — the prior plan of record for ease-of-use/UX polish (fully landed)**:
   `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
   UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the
   remaining gap is *consistency + restraint of application* and *orientation between steps*. 8 themes
