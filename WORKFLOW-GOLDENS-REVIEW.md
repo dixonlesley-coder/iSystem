@@ -311,7 +311,13 @@ PDF sheets are raster (pdfrx) and have no geometry at all.
   intersection) between node-snap and grid-snap precedence — every existing snap gesture
   inherits it, with the existing snap-ring feedback. (2) PDF: a 'trace reference line' tool —
   two clicks along a wall create a persisted snappable construction line (additive `.mechx`
-  list, tolerant; doubles as the N4 gridline substrate). Optional later: raster snap-to-ink.
+  list, tolerant; doubles as the N4 gridline substrate). (3) PDF raster snap-to-ink (same
+  batch, product-owner direction 2026-07-06): render the page once to a cached per-sheet
+  grayscale luminance map (async, LRU few sheets), and a PURE unit-tested
+  `findInkSnap(luminance, w, h, cursorPx, radiusPx)` picks the nearest sufficiently-dark
+  ridge inside the standard 14-screen-px radius (threshold relative to page background,
+  1-2 px centreline refinement) as the lowest-precedence underlay candidate — below vector/
+  reference-line snaps, above the magnetic grid; one 'Snap to plan' toggle governs all three.
 
 
 ## Theme C — Inspector and information architecture
