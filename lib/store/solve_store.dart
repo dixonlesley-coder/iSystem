@@ -6,6 +6,7 @@ import 'package:mechx_engine/network/duct_static.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/network/zoning.dart';
+import 'package:mechx_engine/pressure_field.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/fan.dart';
 import 'package:mechx_engine/sizing/hot_water.dart';
@@ -40,7 +41,7 @@ Map<String, FlowRate> _supplyFlows(
 /// strategy is downfeed or there is no supply network.
 final solveProvider = Provider<PressureSolution?>((ref) {
   if (ref.watch(feedStrategyProvider) != FeedStrategy.upfeed) return null;
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
   final edges = _supplyEdges(net);
@@ -64,7 +65,7 @@ final solveProvider = Provider<PressureSolution?>((ref) {
 /// is upfeed or there is no supply network.
 final downfeedProvider = Provider<DownfeedSolution?>((ref) {
   if (ref.watch(feedStrategyProvider) != FeedStrategy.downfeed) return null;
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
   final edges = _supplyEdges(net);
@@ -154,7 +155,7 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
   final solution = ref.watch(solveProvider);
   if (solution == null) return null;
   final sizing = ref.watch(sizingProvider);
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   var flow = const FlowRate(0);
   for (final e in net.edges) {
     if (e.service != kSupplyService) continue;
@@ -219,7 +220,7 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
 /// supply and return index-run statics (the AHU fan sees both). Null when
 /// there's no sized air network.
 final ductFanProvider = Provider<FanDuty?>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
 
@@ -240,7 +241,7 @@ final ductFanProvider = Provider<FanDuty?>((ref) {
 /// there's no sized air network.
 final airBalanceProvider = Provider<({double supplyLps, double returnLps})?>(
   (ref) {
-    final net = ref.watch(networkControllerProvider).network;
+    final net = ref.watch(sizingNetworkProvider);
     final sizing = ref.watch(sizingProvider);
     final project = ref.watch(projectControllerProvider);
     final s = _airSystem(net, sizing, project, ServiceType.duct);
@@ -284,7 +285,7 @@ final zoneStaticsProvider = Provider<List<DownfeedZoneStatic>>((ref) {
 
 /// Bill of materials for the sized network.
 final bomProvider = Provider<List<BomLine>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   if (sizing.isEmpty) return const [];
   final project = ref.watch(projectControllerProvider);
@@ -300,7 +301,7 @@ final bomProvider = Provider<List<BomLine>>((ref) {
 /// segments merged through pass-through vertices) — the basis for placing stock
 /// couplings efficiently and for the cut plan. Empty when nothing is sized.
 final pipeChainsProvider = Provider<List<PipeChain>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   if (sizing.isEmpty) return const [];
   final project = ref.watch(projectControllerProvider);
@@ -324,7 +325,7 @@ final pipeCutPlanProvider = Provider<List<PipeCutGroup>>((ref) {
 /// return diameter defaults to the smallest hot-water size. Null when there's
 /// no hot-water network.
 final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
   final hwEdges =
@@ -369,7 +370,7 @@ final hotWaterLegionellaProvider = Provider<double?>((ref) {
 final consumablesProvider = Provider<ConsumablesEstimate>((ref) {
   final fittings = ref.watch(fittingsProvider);
   final chains = ref.watch(pipeChainsProvider);
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
 
@@ -427,10 +428,49 @@ final consumablesProvider = Provider<ConsumablesEstimate>((ref) {
 
 /// Estimated fittings (elbows/tees/crosses/reducers) for the sized network.
 final fittingsProvider = Provider<List<FittingLine>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   if (sizing.isEmpty) return const [];
   return buildFittings(net: net, sizing: sizing);
+});
+
+/// Key for [heatmapFieldProvider]: the sheet/floor being rendered plus the
+/// sheet's content extent (which fixes the sample grid). The viewport transform
+/// is deliberately NOT part of the key — panning/zooming must reuse the cached
+/// field, not re-sample it (K3).
+typedef HeatmapFieldKey = ({
+  String sheetId,
+  int floorIndex,
+  double width,
+  double height,
+});
+
+/// The sampled residual-pressure scalar field for the heatmap overlay (K3),
+/// memoized on the solve result ([residualByNodeProvider]) + node positions +
+/// sheet + sample grid. Because the viewport transform is not an input, panning
+/// or zooming the canvas reuses the SAME cached [ScalarField] object instead of
+/// re-running the O(cells·nodes) inverse-distance-weighting every frame — only a
+/// new solve (or a node move that shifts positions/residuals) recomputes it.
+/// Null when there is no residual data for this sheet/floor. The `~28 cells
+/// across the longer edge` resolution matches the painter's prior inline sample.
+final heatmapFieldProvider =
+    Provider.family<ScalarField?, HeatmapFieldKey>((ref, key) {
+  final residual = ref.watch(residualByNodeProvider);
+  if (residual.isEmpty) return null;
+  final net = ref.watch(sizingNetworkProvider);
+  final nodes = <FieldNode>[
+    for (final n in net.nodes)
+      if (n.sheetId == key.sheetId && n.floorIndex == key.floorIndex)
+        if (residual[n.id] != null)
+          FieldNode(n.x, n.y, residual[n.id]!.inKiloPascals),
+  ];
+  if (nodes.isEmpty) return null;
+  final resolution = (math.max(key.width, key.height) / 28).clamp(1.0, 1e9);
+  return sampleField(
+    nodes: nodes,
+    bounds: FieldBounds(0, 0, key.width, key.height),
+    resolution: resolution,
+  );
 });
 
 /// Whether to overlay the pressure heatmap on the canvas.

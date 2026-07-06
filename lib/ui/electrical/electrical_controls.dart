@@ -10,6 +10,7 @@ import 'package:flutter/widgets.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/context_menu.dart';
+import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_segment.dart';
 import '../widgets/mechx_text_field.dart';
 
@@ -161,42 +162,50 @@ class ElectricalToggleRow extends StatelessWidget {
     final type = context.type;
     return Padding(
       padding: const EdgeInsets.only(bottom: MechXSpacing.md),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => onChanged(!value),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                label,
-                style: type.body.copyWith(color: colors.textSecondary),
+      // L3: this row drives every essential/UPS-backed/submeter/
+      // dual-transformer/advanced-study toggle in the electrical inspectors —
+      // wrap it in the shared focus ring so Tab reaches it and Enter/Space
+      // fires the same toggle as a tap.
+      child: MechXFocusRing(
+        onActivated: () => onChanged(!value),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => onChanged(!value),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: type.body.copyWith(color: colors.textSecondary),
+                ),
               ),
-            ),
-            const SizedBox(width: MechXSpacing.sm),
-            AnimatedContainer(
-              duration: MechXMotion.fast,
-              width: 36,
-              height: 20,
-              padding: const EdgeInsets.all(MechXSpacing.xxs),
-              decoration: BoxDecoration(
-                color: value ? colors.accent : colors.border,
-                borderRadius: const BorderRadius.all(Radius.circular(10)),
-              ),
-              child: Align(
-                alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  // White thumb is the correct iOS switch knob in BOTH modes:
-                  // it reads on the accent (on) and on the border grey (off).
-                  decoration: BoxDecoration(
-                    color: colors.onAccent,
-                    shape: BoxShape.circle,
+              const SizedBox(width: MechXSpacing.sm),
+              AnimatedContainer(
+                duration: MechXMotion.fast,
+                width: 36,
+                height: 20,
+                padding: const EdgeInsets.all(MechXSpacing.xxs),
+                decoration: BoxDecoration(
+                  color: value ? colors.accent : colors.border,
+                  borderRadius: const BorderRadius.all(Radius.circular(10)),
+                ),
+                child: Align(
+                  alignment:
+                      value ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    // White thumb is the correct iOS switch knob in BOTH modes:
+                    // it reads on the accent (on) and on the border grey (off).
+                    decoration: BoxDecoration(
+                      color: colors.onAccent,
+                      shape: BoxShape.circle,
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

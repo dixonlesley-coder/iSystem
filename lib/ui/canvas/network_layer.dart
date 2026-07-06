@@ -141,6 +141,44 @@ class NetworkLayer extends ConsumerWidget {
 /// (editable) layer — ghosted for coordination, not for editing.
 const double _kFadedAlpha = 0.28;
 
+/// The on-screen outer width (px) of a pipe/duct, scaled CONTINUOUSLY from its
+/// sized nominal bore (or a small default when unsized) — so a pipe visibly
+/// grows with its DN. Kept in screen px (constant at any zoom) and clamped to
+/// a sane band so the thinnest still reads as a pipe and the fattest doesn't
+/// dominate. Ducts use a gentler slope (their mm are far larger).
+///
+/// E4 — TRUE-WIDTH when calibrated: once the sheet has a real scale
+/// ([metersPerPixel]) this also knows the element's PHYSICAL footprint in
+/// screen px (`mm/1000 / metresPerPixel × scale`). The final width is
+/// `max(clampedPx, min(truePx, cap))`: at a zoomed-OUT view the physical
+/// footprint is tiny so the clamp floor wins (byte-identical to before — a
+/// 600×400 duct no longer paints ~13 px at every zoom), and as the engineer
+/// zooms IN the duct/large-pipe grows to its real footprint (capped so a
+/// trunk can't swamp the sheet). Uncalibrated sheets keep the pure screen-px
+/// band.
+///
+/// Top-level (not painter-private) — B5's canvas hit-test corridor
+/// (`selection_overlay.dart`'s `_edgeAt`) reuses this SAME formula so the
+/// clickable band tracks exactly what's drawn, instead of duplicating (and
+/// risking drifting from) the true-width math.
+double pipeOuterPx(EdgeSizing? s, ServiceType svc,
+    {required double scale, double? metersPerPixel}) {
+  final double mm = s == null
+      ? 20
+      : (s.isRectangular
+          ? math.max(s.width!.inMillimeters, s.height!.inMillimeters)
+          : s.diameter.inMillimeters);
+  final double clamped = svc.regime == FlowRegime.air
+      ? (6.0 + mm * 0.012).clamp(8.0, 20.0)
+      : (3.6 + mm * 0.06).clamp(4.0, 16.0);
+  final mpp = metersPerPixel;
+  if (mpp == null || mpp <= 0) return clamped;
+  // Physical footprint of the element in screen pixels at the current zoom.
+  final truePx = (mm / 1000.0) / mpp * scale;
+  // 120 px cap so a large trunk grows realistically without dominating.
+  return math.max(clamped, math.min(truePx, 120.0));
+}
+
 class _NetworkPainter extends CustomPainter {
   final Network net;
   final String sheetId;
@@ -559,37 +597,11 @@ class _NetworkPainter extends CustomPainter {
     );
   }
 
-  /// The on-screen outer width (px) of a pipe, scaled CONTINUOUSLY from its
-  /// sized nominal bore (or a small default when unsized) — so a pipe visibly
-  /// grows with its DN. Kept in screen px (constant at any zoom) and clamped to
-  /// a sane band so the thinnest still reads as a pipe and the fattest doesn't
-  /// dominate. Ducts use a gentler slope (their mm are far larger).
-  ///
-  /// E4 — TRUE-WIDTH when calibrated: once the sheet has a real scale
-  /// ([metersPerPixel]) the painter also knows the element's PHYSICAL footprint
-  /// in screen px (`mm/1000 / metresPerPixel × transform.scale`). The final
-  /// width is `max(clampedPx, min(truePx, cap))`: at a zoomed-OUT view the
-  /// physical footprint is tiny so the clamp floor wins (byte-identical to
-  /// before — a 600×400 duct no longer paints ~13 px at every zoom), and as the
-  /// engineer zooms IN the duct/large-pipe grows to its real footprint (capped
-  /// so a trunk can't swamp the sheet). Uncalibrated sheets keep the pure
-  /// screen-px band.
-  double _pipeOuterPx(EdgeSizing? s, ServiceType svc) {
-    final double mm = s == null
-        ? 20
-        : (s.isRectangular
-            ? math.max(s.width!.inMillimeters, s.height!.inMillimeters)
-            : s.diameter.inMillimeters);
-    final double clamped = svc.regime == FlowRegime.air
-        ? (6.0 + mm * 0.012).clamp(8.0, 20.0)
-        : (3.6 + mm * 0.06).clamp(4.0, 16.0);
-    final mpp = metersPerPixel;
-    if (mpp == null || mpp <= 0) return clamped;
-    // Physical footprint of the element in screen pixels at the current zoom.
-    final truePx = (mm / 1000.0) / mpp * transform.scale;
-    // 120 px cap so a large trunk grows realistically without dominating.
-    return math.max(clamped, math.min(truePx, 120.0));
-  }
+  /// The on-screen outer width (px) of a pipe — delegates to the top-level
+  /// [pipeOuterPx] (shared with the B5 canvas hit-test corridor in
+  /// selection_overlay.dart) with this painter's own scale/calibration.
+  double _pipeOuterPx(EdgeSizing? s, ServiceType svc) => pipeOuterPx(s, svc,
+      scale: transform.scale, metersPerPixel: metersPerPixel);
 
   /// A coupling joint mark across a pipe — a short perpendicular steel collar at
   /// a stock-length boundary along the run.

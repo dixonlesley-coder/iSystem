@@ -331,8 +331,16 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   luminance cache) — one candidate path at every snap gesture with precedence node > vector >
   reference line > ink > grid, gated by a default-ON 'Snap to plan' toggle beside Ortho.
   Gate: engine 1341 / app 899 / analyze clean; goldens 01/02/03 shifted (new DRAW chip+toggle).
-  Residual: the legacy `sheet_canvas.dart` host lacks only the trace-tool overlay. Waves 2
-  (remainder) and 3–6 remain — work them from that document.
+  Residual: the legacy `sheet_canvas.dart` host lacks only the trace-tool overlay.
+  **The Wave 2 remainder HAS ALSO LANDED** (2026-07-06, see the §15 row): K1 drag-session
+  throttle (no heavy re-solve per drag frame; at-rest byte-identical), K3 heatmap field
+  memoization, K2 isolate-offloaded Open, K4 threshold-gated isolate autosave encode with a
+  TOCTOU-safe tick, L1 Loads-palette keyboard path, L3 focus-ring sweep, L5+M4 one custom
+  tooltip mechanism on icon-only chrome, C2 every-selection auto-scroll, D9 converged reveal
+  zoom, B5 width-scaled hit corridors, B6 nub/handle hit separation, M2 `.mechx` association +
+  CLI open, M3 Windows window-placement persistence (Windows-CI-verified). Gate: engine 1341 /
+  app 927 / analyze clean; goldens byte-identical. Waves 3–6 remain — work them from that
+  document.
 - **Apple-design review (2026-07-04) — the prior plan of record for ease-of-use/UX polish (fully landed)**:
   `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
   UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the

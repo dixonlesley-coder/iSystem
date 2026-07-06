@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
@@ -106,6 +107,9 @@ class NetworkController extends Notifier<DrawingState> {
 
   void _commit(Network next,
       {Offset? pendingPoint, String? pendingSheetId, int? pendingFloorIndex}) {
+    // K1 safety-net: any committing edit ends a live drag session, so a missed
+    // endDrag can never leave the heavy chain frozen (no-op when none is open).
+    ref.read(dragSessionProvider.notifier).endDrag();
     _dragSnapshotPending = false; // a normal commit stands on its own snapshot
     _undo.add(state.network);
     if (_undo.length > 200) _undo.removeAt(0);
@@ -133,6 +137,8 @@ class NetworkController extends Notifier<DrawingState> {
       _commit(next);
       return;
     }
+    // K1: end the throttle session on the drag's terminal commit (final refresh).
+    ref.read(dragSessionProvider.notifier).endDrag();
     _dragSnapshotPending = false;
     state = DrawingState(
       network: next,
@@ -431,6 +437,8 @@ class NetworkController extends Notifier<DrawingState> {
       pendingSheetId: state.pendingSheetId,
       pendingFloorIndex: state.pendingFloorIndex,
     );
+    // K1: throttle the heavy chain during a live riser drag (no-op at rest).
+    ref.read(dragSessionProvider.notifier).tickDrag();
   }
 
   /// Remap node `floorIndex` after the building floor STACK changed, in ONE
@@ -2279,6 +2287,9 @@ class NetworkController extends Notifier<DrawingState> {
       pendingSheetId: state.pendingSheetId,
       pendingFloorIndex: state.pendingFloorIndex,
     );
+    // K1: coalesce the heavy sizing/solve chain to the throttle cadence while a
+    // drag is active (no-op when it isn't, so a programmatic move is unchanged).
+    ref.read(dragSessionProvider.notifier).tickDrag();
   }
 
   /// Translate EVERY node in [nodeIds] by ([dx], [dy]) sheet/world px WITHOUT
@@ -2306,6 +2317,8 @@ class NetworkController extends Notifier<DrawingState> {
       pendingSheetId: state.pendingSheetId,
       pendingFloorIndex: state.pendingFloorIndex,
     );
+    // K1: same throttle gate as moveNode for a live GROUP drag.
+    ref.read(dragSessionProvider.notifier).tickDrag();
   }
 
   /// Set the network WITHOUT recording an undo step, preserving the active
@@ -2352,6 +2365,123 @@ class NetworkController extends Notifier<DrawingState> {
 
 final networkControllerProvider =
     NotifierProvider<NetworkController, DrawingState>(NetworkController.new);
+
+/// Transient live-drag session state (K1 — performance-feel). A node drag
+/// mutates the canonical [Network] on every pointer-move frame (see
+/// [NetworkController.moveNode]); the cheap geometry/paint path watches
+/// [networkControllerProvider] directly and stays per-frame live. The HEAVY
+/// sizing/solve/BOM chain, however, watches the THROTTLED [sizingNetworkProvider]
+/// instead, so during an active drag it recomputes at most once per
+/// [DragSessionController.throttleInterval] (a coalesced timer tick) plus exactly
+/// once on drag end — never once per frame. At rest (no active drag) the throttle
+/// is inert and [sizingNetworkProvider] mirrors the live network, so results are
+/// byte-identical.
+@immutable
+class DragSession {
+  /// True between [DragSessionController.beginDrag] and [endDrag].
+  final bool active;
+
+  /// Bumps once on each drag close (settle or [endDrag]) so a downstream read
+  /// can observe that a session ended even if the network object is unchanged.
+  final int tick;
+
+  /// The network snapshot the heavy chain sizes against WHILE a drag is active
+  /// — captured at drag start so per-frame [NetworkController.moveNode] updates
+  /// (which the cheap paint path still sees live) do NOT re-run the pipeline.
+  /// The active branch returning this fixed snapshot (rather than reading the
+  /// live network) also makes the freeze robust to Riverpod's lazy rebuild: a
+  /// stale live-network invalidation just re-yields the same snapshot. Null when
+  /// no drag is active.
+  final Network? frozen;
+
+  const DragSession({this.active = false, this.tick = 0, this.frozen});
+}
+
+final dragSessionProvider =
+    NotifierProvider<DragSessionController, DragSession>(
+        DragSessionController.new);
+
+class DragSessionController extends Notifier<DragSession> {
+  Timer? _throttle;
+
+  /// The maximum cadence at which the heavy sizing/solve chain refreshes while a
+  /// drag is in flight. ~150 ms keeps the pipeline responsive without re-running
+  /// the whole multi-floor solve on every pointer-move frame. Settable so tests
+  /// can pin it deterministically.
+  Duration throttleInterval = const Duration(milliseconds: 150);
+
+  @override
+  DragSession build() {
+    ref.onDispose(() {
+      _throttle?.cancel();
+      _throttle = null;
+    });
+    return const DragSession();
+  }
+
+  /// Open a drag session (call at a genuine pointer-drag START): the heavy chain
+  /// freezes on the CURRENT network snapshot while the drag runs. Idempotent;
+  /// cancels any stale settle tick.
+  void beginDrag() {
+    _throttle?.cancel();
+    _throttle = null;
+    if (state.active) return;
+    state = DragSession(
+      active: true,
+      tick: state.tick,
+      frozen: ref.read(networkControllerProvider).network,
+    );
+  }
+
+  /// Record a drag frame. Debounces the settle: while the drag keeps moving (a
+  /// fresh frame within [throttleInterval]) the heavy chain stays frozen on the
+  /// drag-start snapshot; once the pointer SETTLES (no frame for
+  /// [throttleInterval]) the session closes and the chain refreshes against the
+  /// live network. This self-heals a missed [endDrag] (a cancelled/early-returned
+  /// drag can never leave the heavy chain permanently frozen). No-op when no drag
+  /// is active (so a keyboard nudge or a programmatic [moveNode] — which never
+  /// [beginDrag] — is byte-identical).
+  void tickDrag() {
+    if (!state.active) return;
+    _throttle?.cancel();
+    _throttle = Timer(throttleInterval, () {
+      _throttle = null;
+      if (state.active) _close();
+    });
+  }
+
+  /// Close the drag session (call at pointer-drag END): the heavy chain refreshes
+  /// once against the settled live network. Cancels any pending settle tick.
+  /// No-op when nothing is open (safety-net callers).
+  void endDrag() {
+    _throttle?.cancel();
+    _throttle = null;
+    if (state.active) _close();
+  }
+
+  void _close() =>
+      state = DragSession(active: false, tick: state.tick + 1, frozen: null);
+}
+
+/// The network the HEAVY sizing/solve/BOM providers size against. At rest this
+/// mirrors the live [networkControllerProvider] network reactively (byte-
+/// identical to reading it directly). During an active drag it samples the live
+/// network only when the throttle advances (or the session opens/closes), so the
+/// per-frame position updates that keep the canvas paint live do NOT re-run the
+/// whole pipeline every frame (K1).
+final sizingNetworkProvider = Provider<Network>((ref) {
+  final drag = ref.watch(dragSessionProvider);
+  if (!drag.active || drag.frozen == null) {
+    // At rest: watch the live network so any edit recomputes immediately.
+    return ref.watch(networkControllerProvider).network;
+  }
+  // During a drag: return the fixed drag-start snapshot (the ONLY reactive input
+  // is `drag`). A per-frame moveNode changes the live network but NOT this value,
+  // so the heavy sizing/solve/BOM chain stays frozen until the drag settles or
+  // ends — while the canvas paint path, which watches networkControllerProvider
+  // directly, stays per-frame live.
+  return drag.frozen!;
+});
 
 /// Whether run drawing snaps to the nearest 45° (ortho). Default on.
 final orthoProvider =

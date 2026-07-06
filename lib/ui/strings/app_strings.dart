@@ -619,6 +619,16 @@ enum StringKey {
   firstRunStepSizeDesc,
   firstRunStepReportDesc,
   electricalPowerOneLineEmptyBody,
+
+  // L5/M4 — the shared MechXTooltip hover-tooltip mechanism, applied to
+  // icon-only chrome that previously had no visible on-hover caption (the
+  // zoom cluster, the inspector collapse chevron; the theme toggle and the
+  // sheet-rail calibration dot reuse existing StringKeys below).
+  tooltipZoomIn,
+  tooltipZoomOut,
+  tooltipZoomFit,
+  tooltipCollapseInspector,
+  tooltipExpandInspector,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -1335,6 +1345,13 @@ const Map<StringKey, String> _en = {
   StringKey.electricalPowerOneLineEmptyBody:
       'Add a generator from the Sources button in the toolbar above to build '
           'a hybrid power one-line with source interlocks.',
+
+  // L5/M4 — the shared MechXTooltip hover-tooltip mechanism.
+  StringKey.tooltipZoomIn: 'Zoom in',
+  StringKey.tooltipZoomOut: 'Zoom out',
+  StringKey.tooltipZoomFit: 'Fit view',
+  StringKey.tooltipCollapseInspector: 'Collapse inspector',
+  StringKey.tooltipExpandInspector: 'Expand inspector',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -2060,6 +2077,13 @@ const Map<StringKey, String> _id = {
   StringKey.electricalPowerOneLineEmptyBody:
       'Tambahkan generator dari tombol Sumber di toolbar di atas untuk '
           'membangun diagram satu-garis daya hibrida dengan interlock sumber.',
+
+  // L5/M4 — the shared MechXTooltip hover-tooltip mechanism.
+  StringKey.tooltipZoomIn: 'Perbesar',
+  StringKey.tooltipZoomOut: 'Perkecil',
+  StringKey.tooltipZoomFit: 'Sesuaikan tampilan',
+  StringKey.tooltipCollapseInspector: 'Ciutkan panel',
+  StringKey.tooltipExpandInspector: 'Perluas panel',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

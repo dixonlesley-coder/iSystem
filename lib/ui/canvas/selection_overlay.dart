@@ -5,17 +5,20 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
 
 import '../../store/inspector_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
+import '../../store/sizing_store.dart' show sizingProvider;
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'canvas_grid.dart' show calibratedGridWorldStep;
 import 'drawing_overlay.dart' show RubberBandPainter, snapOrTeePoint;
 import 'edge_context_menu.dart';
+import 'network_layer.dart' show pipeOuterPx;
 import 'service_style.dart';
 import 'snapping.dart';
 import 'underlay_snap_service.dart';
@@ -281,7 +284,8 @@ class _NetworkSelectionOverlayState
                 // pointer leaving the 18px nub mid-pull never unmounts it (and
                 // kills the live pan gesture).
                 _pullFrom == n.id))
-          _outletNub(n.id, transform.worldToScreen(Offset(n.x, n.y)), transform),
+          _outletNub(n.id, transform.worldToScreen(Offset(n.x, n.y)), transform,
+              isHovered: n.id == hoveredNodeId),
     ];
 
     // A selected run's two endpoints get larger, accented resize handles — the
@@ -483,10 +487,23 @@ class _NetworkSelectionOverlayState
   /// The small accent "outlet" nub offset up-right of a node — drag it to pull a
   /// mainline run out of the node. Reports the pull to the host state, which
   /// paints the preview line and lays the run on release.
-  Widget _outletNub(String nodeId, Offset screen, ViewportTransform transform) {
+  ///
+  /// B6: [off] clears the node's 24px move-handle hit box (r=12 in
+  /// [_dragHandle]) — the two square GestureDetector hit RECTS (not the
+  /// painted circles) previously overlapped ~6x6 screen px at off=15 (15 <
+  /// 12+9), so a drag started in that corner could trigger a pull
+  /// instead of a node move with no visual cue. off=24 clears both axes
+  /// (24 > 12+9) while keeping both hit targets at their original >=18px
+  /// diameter. [isHovered] drives a subtle non-idle scale/shadow cue (also
+  /// shown mid-pull) so the nub visibly reads as "grabbed" — never painted at
+  /// rest, so an idle canvas stays byte-identical.
+  Widget _outletNub(String nodeId, Offset screen, ViewportTransform transform,
+      {required bool isHovered}) {
     final colors = context.colors;
-    const off = 15.0; // up-right of the node, clear of the move handle
+    const off = 24.0; // up-right of the node, clear of the 24px move handle
     const r = 9.0;
+    final pulling = _pullFrom == nodeId;
+    final active = isHovered || pulling;
     return Positioned(
       key: ValueKey('outlet-$nodeId'),
       left: screen.dx + off - r,
@@ -522,15 +539,17 @@ class _NetworkSelectionOverlayState
             _pullNow = null;
           }),
           child: Center(
-            child: Container(
-              width: 11,
-              height: 11,
+            child: AnimatedContainer(
+              duration: MechXMotion.press,
+              curve: MechXMotion.standard,
+              width: active ? 13 : 11,
+              height: active ? 13 : 11,
               decoration: BoxDecoration(
                 color: colors.accent,
                 shape: BoxShape.circle,
                 border: Border.fromBorderSide(
                     BorderSide(color: colors.onAccent, width: 1.5)),
-                boxShadow: MechXShadow.card,
+                boxShadow: pulling ? MechXShadow.popover : MechXShadow.card,
               ),
             ),
           ),
@@ -735,11 +754,20 @@ String? _nodeAt(Network net, ViewportTransform transform, Offset world,
 
 /// Nearest edge id within the edge hit radius (runs by segment distance,
 /// risers by their endpoint marker), or null.
+///
+/// B5: a RUN's clickable corridor tracks the true-width rendered pipe/duct
+/// body ([pipeOuterPx] — the SAME formula the painter draws, via [sizing] +
+/// [metersPerPixel]) instead of staying a fixed ~8px hairline once a
+/// calibrated duct/pipe renders up to 120 screen px wide — `max(8px,
+/// renderedHalfWidth + 4px)` so a fat duct is clickable across its visible
+/// body. An unsized/uncalibrated run still resolves to the original 8px band
+/// (byte-identical). Riser endpoint-marker hit-testing is unaffected.
 String? _edgeAt(Network net, ViewportTransform transform, Offset world,
-    String sheetId, int floorIndex) {
-  final edgeHitR = 8 / transform.scale;
+    String sheetId, int floorIndex,
+    {Map<String, EdgeSizing>? sizing, double? metersPerPixel}) {
+  final riserHitR = 8 / transform.scale;
   String? edge;
-  var best = edgeHitR;
+  var bestDist = double.infinity;
   for (final e in net.edges) {
     final a = net.nodeById(e.fromId);
     final b = net.nodeById(e.toId);
@@ -749,17 +777,20 @@ String? _edgeAt(Network net, ViewportTransform transform, Offset world,
           !_isOnFloor(b, sheetId, floorIndex)) {
         continue;
       }
+      final outer = pipeOuterPx(sizing?[e.id], e.service,
+          scale: transform.scale, metersPerPixel: metersPerPixel);
+      final edgeHitR = math.max(8.0, outer / 2 + 4.0) / transform.scale;
       final d = _distToSegment(world, Offset(a.x, a.y), Offset(b.x, b.y));
-      if (d <= best) {
-        best = d;
+      if (d <= edgeHitR && d < bestDist) {
+        bestDist = d;
         edge = e.id;
       }
     } else {
       for (final n in [a, b]) {
         if (!_isOnFloor(n, sheetId, floorIndex)) continue;
         final d = (Offset(n.x, n.y) - world).distance;
-        if (d <= best) {
-          best = d;
+        if (d <= riserHitR && d < bestDist) {
+          bestDist = d;
           edge = e.id;
         }
       }
@@ -812,6 +843,15 @@ class _SelectionGestureLayerState
   String get _sheetId => widget.sheetId;
   int get _floor => widget.floorIndex;
 
+  /// B5: the live sizing map + this sheet's calibration, read fresh at each
+  /// gesture (not watched) so `_edgeAt`'s hit corridor matches what the
+  /// painter currently draws without adding a rebuild dependency here.
+  Map<String, EdgeSizing> get _sizing => ref.read(sizingProvider);
+  double? get _mpp => ref
+      .read(projectControllerProvider)
+      .calibrationFor(_sheetId)
+      ?.metersPerPixel;
+
   @override
   Widget build(BuildContext context) {
     final transform = ref.watch(sheetsControllerProvider).viewportFor(_sheetId) ??
@@ -827,7 +867,8 @@ class _SelectionGestureLayerState
         final world = transform.screenToWorld(e.localPosition);
         final node = _nodeAt(net, transform, world, _sheetId, _floor);
         final edge = node == null
-            ? _edgeAt(net, transform, world, _sheetId, _floor)
+            ? _edgeAt(net, transform, world, _sheetId, _floor,
+                sizing: _sizing, metersPerPixel: _mpp)
             : null;
         ref.read(hoverTargetProvider.notifier).set(
             node == null && edge == null
@@ -852,7 +893,8 @@ class _SelectionGestureLayerState
           }
           return;
         }
-        final edge = _edgeAt(net, transform, world, _sheetId, _floor);
+        final edge = _edgeAt(net, transform, world, _sheetId, _floor,
+            sizing: _sizing, metersPerPixel: _mpp);
         if (edge != null) {
           if (shift) {
             sel.toggleEdge(edge);
@@ -880,7 +922,8 @@ class _SelectionGestureLayerState
           showNodeContextMenu(context, ref, nodeId, details.globalPosition);
           return;
         }
-        final edge = _edgeAt(net, transform, world, _sheetId, _floor);
+        final edge = _edgeAt(net, transform, world, _sheetId, _floor,
+            sizing: _sizing, metersPerPixel: _mpp);
         if (edge == null) {
           sel.clear();
           showCanvasContextMenu(
@@ -914,7 +957,8 @@ class _SelectionGestureLayerState
         final world = transform.screenToWorld(details.localPosition);
         final nodeHit = _nodeAt(net, transform, world, _sheetId, _floor);
         final edgeHit = nodeHit == null
-            ? _edgeAt(net, transform, world, _sheetId, _floor)
+            ? _edgeAt(net, transform, world, _sheetId, _floor,
+                sizing: _sizing, metersPerPixel: _mpp)
             : null;
         final shift = HardwareKeyboard.instance.isShiftPressed;
         // G5: a plain (no-Shift) left-drag starting on a RUN's BODY moves that

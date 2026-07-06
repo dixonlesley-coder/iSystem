@@ -14,6 +14,7 @@ import '../../store/project_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
+import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_text_field.dart';
 
 /// Open the offset dialog for run [edgeId]. No-op if the edge is gone, is a
@@ -198,22 +199,27 @@ class _SideButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        alignment: Alignment.center,
-        padding: const EdgeInsets.symmetric(vertical: MechXSpacing.sm),
-        decoration: BoxDecoration(
-          color: selected ? colors.accentMuted : colors.background,
-          borderRadius: MechXRadii.control,
-          border: Border.all(
-            color: selected ? colors.accent : colors.border,
+    // L3: the Left/Right picker was a bare GestureDetector — wrap it in the
+    // shared focus ring so Tab reaches it and Enter/Space picks the side.
+    return MechXFocusRing(
+      onActivated: onTap,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(vertical: MechXSpacing.sm),
+          decoration: BoxDecoration(
+            color: selected ? colors.accentMuted : colors.background,
+            borderRadius: MechXRadii.control,
+            border: Border.all(
+              color: selected ? colors.accent : colors.border,
+            ),
           ),
-        ),
-        child: Text(
-          label,
-          style: type.body.copyWith(
-            color: selected ? colors.accent : colors.textSecondary,
+          child: Text(
+            label,
+            style: type.body.copyWith(
+              color: selected ? colors.accent : colors.textSecondary,
+            ),
           ),
         ),
       ),

@@ -5,10 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/app_settings.dart';
 import 'package:mechx/data/autosave.dart';
+import 'package:mechx/data/project_assets.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx/data/recovery.dart' show appSupportDirOverride;
 import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/units.dart';
@@ -196,5 +199,50 @@ void main() {
 
     // Unmount so the transient status-message timer is disposed in-body.
     await tester.pumpWidget(const SizedBox());
+  });
+
+  // K2: opening a portable .mechx with an embedded plan must decode + rehydrate
+  // off the UI thread (the exact freeze class Save's gatherSheetAssetsAsync
+  // already fixed) — driven through the REAL openProjectPath, no OS dialog.
+  testWidgets(
+      'K2: opening a portable project with an embedded plan repoints the '
+      'sheet to the extracted local file and clears the busy pill',
+      (tester) async {
+    final ref = await pumpRef(tester);
+    final tmp = Directory.systemTemp.createTempSync('mechx_open_test');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+
+    // A source plan to embed, then delete — simulating opening the portable
+    // file on a machine that never had the original PDF.
+    final pdf = File('${tmp.path}/plan.pdf')..writeAsBytesSync([7, 7, 7, 7]);
+    final doc = ProjectDocument(
+      projectName: 'Portable',
+      floors: const [Floor('Ground', Length(3.0))],
+      calibrations: const {},
+      sheets: [Sheet(id: 'a', name: 'p', pdfPath: pdf.path)],
+      network: const Network(),
+    );
+    final portable =
+        doc.withSheets(doc.sheets, assets: gatherSheetAssets(doc.sheets));
+    final projectFile = File('${tmp.path}/project.mechx')
+      ..writeAsStringSync(portable.encode());
+    pdf.deleteSync();
+
+    await tester.runAsync(
+        () => openProjectPath(ref.context, ref, projectFile.path));
+    await tester.pump();
+
+    expect(ref.read(loadErrorProvider), isNull);
+    expect(ref.read(currentProjectPathProvider), projectFile.path);
+    final sheets = ref.read(sheetsControllerProvider).sheets;
+    expect(sheets, hasLength(1));
+    // Repointed to the extracted local file — the original path is gone.
+    expect(sheets.single.pdfPath, isNot(pdf.path));
+    final extracted = File(sheets.single.pdfPath!);
+    expect(extracted.existsSync(), isTrue);
+    expect(extracted.readAsBytesSync(), [7, 7, 7, 7]); // original bytes back
+    // The busy pill (set for the duration of the async decode+rehydrate) is
+    // cleared once Open completes.
+    expect(ref.read(busyProvider), isNull);
   });
 }

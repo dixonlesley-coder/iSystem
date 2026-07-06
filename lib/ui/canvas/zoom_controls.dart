@@ -1,9 +1,11 @@
 import 'package:flutter/widgets.dart';
 
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_tooltip.dart';
 
 /// The on-canvas zoom cluster (+ / − / fit) shared by BOTH the mechanical and
 /// electrical canvases, so the two workspaces present one zoom affordance. A
@@ -26,6 +28,7 @@ class ZoomControls extends StatelessWidget {
   Widget build(BuildContext context) {
     // Liquid-Glass zoom cluster — a translucent blurred pill floating over the
     // canvas (iOS map-style), lifted by the card shadow.
+    final strings = context.strings;
     return GlassSurface(
       borderRadius: MechXRadii.control,
       blurSigma: MechXGlass.blurSigmaLight,
@@ -33,11 +36,22 @@ class ZoomControls extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _IconBtn(glyph: '+', onTap: onIn),
+          // L5/M4: each glyph is otherwise unlabeled icon-only chrome — a
+          // hover tooltip names the action for a sighted mouse user.
+          MechXTooltip(
+            message: strings(StringKey.tooltipZoomIn),
+            child: _IconBtn(glyph: '+', onTap: onIn),
+          ),
           _Sep(),
-          _IconBtn(glyph: '-', onTap: onOut),
+          MechXTooltip(
+            message: strings(StringKey.tooltipZoomOut),
+            child: _IconBtn(glyph: '-', onTap: onOut),
+          ),
           _Sep(),
-          _IconBtn(glyph: 'fit', onTap: onFit),
+          MechXTooltip(
+            message: strings(StringKey.tooltipZoomFit),
+            child: _IconBtn(glyph: 'fit', onTap: onFit),
+          ),
         ],
       ),
     );

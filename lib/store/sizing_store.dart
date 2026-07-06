@@ -51,7 +51,7 @@ const Map<ServiceType, double> kDefaultLeafFixtureUnits = {
 /// (per-branch) demand: water supply via accumulated fixture units → Hunter
 /// curve; other services via accumulated flows.
 final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   if (net.edges.isEmpty) return const {};
   final occupancy = ref.watch(occupancyProvider);
   final ducts = ref.watch(ductSettingsProvider);
@@ -159,7 +159,7 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
 /// Empty when there's no drainage network, so a project without drainage is
 /// byte-identical (no issues surfaced).
 final drainageAdvisoryProvider = Provider<List<DrainageAdvisory>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
   // The laid design slope is the same default the sizer uses (SizingContext).
   final slope = const SizingContext().drainageSlope; // m/m // VERIFY

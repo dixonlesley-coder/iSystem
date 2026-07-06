@@ -42,6 +42,7 @@ import 'theme/mechx_theme.dart';
 import 'widgets/glass_surface.dart';
 import 'widgets/mechx_button.dart';
 import 'widgets/mechx_focus_ring.dart';
+import 'widgets/mechx_tooltip.dart';
 import 'widgets/section_label.dart';
 import 'widgets/severity_glyph.dart';
 
@@ -813,33 +814,39 @@ class _ThemeToggleButtonState extends State<_ThemeToggleButton> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Semantics(
-      button: true,
-      label: widget.semanticLabel,
-      child: MechXFocusRing(
-        borderRadius: MechXRadii.control,
-        onActivated: widget.onTap,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          onEnter: (_) => setState(() => _hover = true),
-          onExit: (_) => setState(() => _hover = false),
-          child: GestureDetector(
-            onTap: widget.onTap,
-            child: AnimatedContainer(
-              duration: MechXMotion.hover,
-              curve: MechXMotion.standard,
-              padding: const EdgeInsets.symmetric(
-                horizontal: MechXSpacing.sm,
-                vertical: MechXSpacing.xs,
-              ),
-              decoration: BoxDecoration(
-                color: _hover ? colors.surfaceHover : const Color(0x00000000),
-                borderRadius: MechXRadii.control,
-              ),
-              child: CustomPaint(
-                size: const Size(16, 16),
-                painter: _ThemeGlyphPainter(
-                  color: _hover ? colors.textSecondary : colors.textMuted,
+    // L5/M4: the demoted, icon-only toggle previously only named itself for a
+    // screen reader (semanticLabel); a hover tooltip now shows the same text
+    // to a sighted mouse user too.
+    return MechXTooltip(
+      message: widget.semanticLabel,
+      child: Semantics(
+        button: true,
+        label: widget.semanticLabel,
+        child: MechXFocusRing(
+          borderRadius: MechXRadii.control,
+          onActivated: widget.onTap,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            onEnter: (_) => setState(() => _hover = true),
+            onExit: (_) => setState(() => _hover = false),
+            child: GestureDetector(
+              onTap: widget.onTap,
+              child: AnimatedContainer(
+                duration: MechXMotion.hover,
+                curve: MechXMotion.standard,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: MechXSpacing.sm,
+                  vertical: MechXSpacing.xs,
+                ),
+                decoration: BoxDecoration(
+                  color: _hover ? colors.surfaceHover : const Color(0x00000000),
+                  borderRadius: MechXRadii.control,
+                ),
+                child: CustomPaint(
+                  size: const Size(16, 16),
+                  painter: _ThemeGlyphPainter(
+                    color: _hover ? colors.textSecondary : colors.textMuted,
+                  ),
                 ),
               ),
             ),

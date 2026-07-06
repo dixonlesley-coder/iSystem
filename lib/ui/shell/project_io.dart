@@ -495,44 +495,87 @@ Future<void> openProjectPath(
   await _applyOpenedFile(ref, path);
 }
 
-/// Load the `.mechx` at [path] into the live state (shared by [openProject] and
-/// [openProjectPath]): rehydrate embedded plans, reset the clean baseline, drop
-/// this project's stale recovery slot, and record it in the machine-local MRU.
-Future<void> _applyOpenedFile(WidgetRef ref, String path) async {
+/// M2 (Windows-desktop citizenship): the project file to auto-open from the
+/// process command-line [args]. Explorer's double-click / "Open with" verb (and
+/// the taskbar jump list) launch the exe with the file path as an argument, and
+/// `windows/runner` forwards those to this Dart entrypoint — so a returned path
+/// is opened at launch. Returns the FIRST argument naming a `.mechx` file
+/// (case-insensitive), skipping empty tokens and switches (a leading `-`); null
+/// when none applies.
+///
+/// PURE — it never touches the filesystem or any provider, so the launch
+/// decision is unit-testable in isolation; the caller checks the file exists
+/// (and that a crash-recovery snapshot doesn't take precedence) before opening.
+/// Single-instance forwarding (handing the path to an ALREADY-running iSystem
+/// instead of launching a second one) is deliberately OUT of scope.
+String? launchProjectPathFromArgs(List<String> args) {
+  for (final a in args) {
+    if (a.isEmpty || a.startsWith('-')) continue;
+    if (a.toLowerCase().endsWith('.mechx')) return a;
+  }
+  return null;
+}
+
+/// M2: open a `.mechx` handed to the app on the command line (Explorer
+/// double-click / "Open with" / jump list), routed through the SAME core loader
+/// [_applyOpenedFileWith] that File → Open and the recent-projects list use.
+/// Called ONCE from `main` at launch against the root [container], so there is no
+/// live dirty project to guard and no [BuildContext] — the caller has already
+/// ensured no crash-recovery snapshot is pending (recovery takes precedence). A
+/// path that no longer exists is silently ignored (the app just opens its normal
+/// empty state) rather than surfacing a launch-time error banner.
+Future<void> openProjectAtLaunch(
+    ProviderContainer container, String path) async {
+  if (!await File(path).exists()) return;
+  await _applyOpenedFileWith(container.read, path);
+}
+
+/// Load the `.mechx` at [path] into the live state (shared by [openProject],
+/// [openProjectPath], and the launch/command-line open): rehydrate embedded
+/// plans, reset the clean baseline, drop this project's stale recovery slot, and
+/// record it in the machine-local MRU.
+Future<void> _applyOpenedFile(WidgetRef ref, String path) =>
+    _applyOpenedFileWith(ref.read, path);
+
+/// The loader core, expressed against a [ProviderReader] so it runs identically
+/// from a widget ([WidgetRef.read] — Open / recent projects) and from the launch
+/// root container ([ProviderContainer.read] — the command-line open).
+Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
   // The project we're leaving — its recovery slot must be cleared too, or a
   // later launch would offer to restore the work we just navigated away from.
-  final priorPath = ref.read(currentProjectPathProvider);
-  ref.read(busyProvider.notifier).set(
-      MechXStringsData(ref.read(localeProvider))(StringKey.busyOpeningProject));
+  final priorPath = read(currentProjectPathProvider);
+  read(busyProvider.notifier).set(
+      MechXStringsData(read(localeProvider))(StringKey.busyOpeningProject));
   try {
-    final doc = ProjectDocument.decode(await File(path).readAsString());
-    // Extract any embedded source plans to local files + repoint the sheets,
-    // so a portable project renders even without the original plan files here.
-    applyDocument(ref.read, rehydrateAssets(doc));
+    final source = await File(path).readAsString();
+    // Decode + extract any embedded source plans (gunzip + repoint the sheets
+    // so a portable project renders even without the original plan files here)
+    // TOGETHER off the UI thread — the exact freeze Save already fixed for its
+    // symmetric asset-embedding work (see gatherSheetAssetsAsync).
+    final doc = await decodeAndRehydrateAsync(source);
+    applyDocument(read, doc);
     // The just-loaded state is the clean baseline; capture its canonical
     // encoding so autosave won't immediately mirror it to recovery.
-    ref
-        .read(lastSavedSignatureProvider.notifier)
-        .set(buildDocument(ref.read).encode());
+    read(lastSavedSignatureProvider.notifier)
+        .set(buildDocument(read).encode());
     // Fresh baseline ⇒ fresh mirror: any later divergence must re-snapshot.
-    ref.read(autosaveMirrorProvider.notifier).clear();
-    ref.read(currentProjectPathProvider.notifier).set(path);
-    ref.read(projectDirtyProvider.notifier).set(false);
+    read(autosaveMirrorProvider.notifier).clear();
+    read(currentProjectPathProvider.notifier).set(path);
+    read(projectDirtyProvider.notifier).set(false);
     // Drop any stale crash snapshot for THIS file, the project we left, and
     // the untitled slot.
     await clearRecoverySlots([priorPath, path, null]);
-    ref.read(recoveryDocProvider.notifier).clear();
-    ref.read(loadErrorProvider.notifier).clear();
-    ref
-        .read(appSettingsProvider.notifier)
-        .recordRecent(path, ref.read(projectControllerProvider).name);
-    ref.read(statusMessageProvider.notifier).showStatus('Project opened');
+    read(recoveryDocProvider.notifier).clear();
+    read(loadErrorProvider.notifier).clear();
+    read(appSettingsProvider.notifier)
+        .recordRecent(path, read(projectControllerProvider).name);
+    read(statusMessageProvider.notifier).showStatus('Project opened');
   } on ProjectDocumentException catch (e) {
     // Malformed/incompatible file — surface why, leave the project untouched.
-    ref.read(loadErrorProvider.notifier).set(e.message);
+    read(loadErrorProvider.notifier).set(e.message);
   } catch (e) {
-    ref.read(loadErrorProvider.notifier).set('Could not open project: $e');
+    read(loadErrorProvider.notifier).set('Could not open project: $e');
   } finally {
-    ref.read(busyProvider.notifier).clear();
+    read(busyProvider.notifier).clear();
   }
 }

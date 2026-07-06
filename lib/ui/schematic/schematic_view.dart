@@ -1248,6 +1248,8 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       if (_dragSnapshotPending) {
         _dragSnapshotPending = false;
         ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+        // K1: throttle the heavy chain during the live riser drag.
+        ref.read(dragSessionProvider.notifier).beginDrag();
       }
       final w = _current.screenToWorld(event.localPosition);
       ref
@@ -1258,6 +1260,10 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
 
   void _onPointerUp(PointerUpEvent event) {
     _panning = false;
+    // K1: close the throttle session on riser-drag release (final refresh).
+    if (_draggingRiser != null) {
+      ref.read(dragSessionProvider.notifier).endDrag();
+    }
     _draggingRiser = null;
     _dragSnapshotPending = false;
   }

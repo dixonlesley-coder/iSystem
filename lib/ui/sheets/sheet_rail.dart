@@ -10,6 +10,7 @@ import '../../store/sheets_store.dart';
 import '../shell/duplicate_floor_dialog.dart';
 import '../shell/nav_rail.dart';
 import '../shell/project_io.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/context_menu.dart';
@@ -17,6 +18,7 @@ import '../widgets/glass_surface.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_text_field.dart';
+import '../widgets/mechx_tooltip.dart';
 import 'pdf_page_picker.dart';
 
 /// Left rail: multi-sheet navigation, slimmed to a compact tile strip so the
@@ -350,11 +352,19 @@ class _RailItemState extends ConsumerState<_RailItem> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    CustomPaint(
-                      size: const Size(9, 9),
-                      painter: _CalibrationGlyph(
-                        calibrated: calibrated,
-                        color: calibrated ? colors.success : colors.warning,
+                    // L5/M4: the glyph's meaning (calibrated vs not) was
+                    // colour + shape only — a hover tooltip now spells it out.
+                    MechXTooltip(
+                      edge: MechXTooltipEdge.right,
+                      message: context.strings(calibrated
+                          ? StringKey.shellCalibrated
+                          : StringKey.shellUncalibrated),
+                      child: CustomPaint(
+                        size: const Size(9, 9),
+                        painter: _CalibrationGlyph(
+                          calibrated: calibrated,
+                          color: calibrated ? colors.success : colors.warning,
+                        ),
                       ),
                     ),
                     const SizedBox(width: 2),

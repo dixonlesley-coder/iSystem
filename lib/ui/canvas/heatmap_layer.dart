@@ -37,20 +37,32 @@ class HeatmapLayer extends ConsumerWidget {
     final transform = ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
         const ViewportTransform();
 
-    final nodes = <FieldNode>[
+    // Legend endpoints stay the raw node residual range (byte-identical), a
+    // cheap O(nodes) pass. The expensive IDW sampling is cached in the provider.
+    final values = <double>[
       for (final n in net.nodes)
         if (n.sheetId == sheetId && n.floorIndex == floorIndex)
-          if (residual[n.id] != null)
-            FieldNode(n.x, n.y, residual[n.id]!.inKiloPascals),
+          if (residual[n.id] != null) residual[n.id]!.inKiloPascals,
     ];
-    if (nodes.isEmpty) return const SizedBox.shrink();
+    if (values.isEmpty) return const SizedBox.shrink();
 
-    var minKpa = nodes.first.value;
-    var maxKpa = nodes.first.value;
-    for (final n in nodes) {
-      if (n.value < minKpa) minKpa = n.value;
-      if (n.value > maxKpa) maxKpa = n.value;
+    var minKpa = values.first;
+    var maxKpa = values.first;
+    for (final v in values) {
+      if (v < minKpa) minKpa = v;
+      if (v > maxKpa) maxKpa = v;
     }
+
+    // K3: the sampled field is memoized on the solve + sheet + sample grid, so a
+    // pure pan/zoom (only [transform] changes) reuses this cached object and the
+    // painter just redraws its cells — no per-frame re-sampling.
+    final field = ref.watch(heatmapFieldProvider((
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      width: contentSize.width,
+      height: contentSize.height,
+    )));
+    if (field == null) return const SizedBox.shrink();
 
     return IgnorePointer(
       child: Stack(
@@ -58,9 +70,8 @@ class HeatmapLayer extends ConsumerWidget {
           Positioned.fill(
             child: CustomPaint(
               painter: _HeatmapPainter(
-                nodes: nodes,
+                field: field,
                 transform: transform,
-                contentSize: contentSize,
               ),
             ),
           ),
@@ -160,27 +171,21 @@ class HeatmapLegend extends StatelessWidget {
 }
 
 class _HeatmapPainter extends CustomPainter {
-  final List<FieldNode> nodes;
+  /// The pre-sampled residual field (cached in [heatmapFieldProvider]). The
+  /// painter only maps its cells to screen — it never re-samples (K3).
+  final ScalarField field;
   final ViewportTransform transform;
-  final Size contentSize;
 
   _HeatmapPainter({
-    required this.nodes,
+    required this.field,
     required this.transform,
-    required this.contentSize,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    // ~28 cells across the longer edge.
-    final resolution = (contentSize.longestSide / 28).clamp(1.0, 1e9);
-    final field = sampleField(
-      nodes: nodes,
-      bounds: FieldBounds(0, 0, contentSize.width, contentSize.height),
-      resolution: resolution,
-    );
     final min = field.min;
     final max = field.max;
+    final resolution = field.cellSize;
     final cell = resolution * transform.scale;
 
     for (var row = 0; row < field.rows; row++) {
@@ -207,7 +212,8 @@ class _HeatmapPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_HeatmapPainter old) =>
-      old.nodes != nodes ||
-      old.transform != transform ||
-      old.contentSize != contentSize;
+      // A pure pan/zoom keeps the SAME cached field (identity) → repaint to
+      // redraw cells at the new offset/scale, but no re-sample. A new solve
+      // yields a new field object → repaint.
+      !identical(old.field, field) || old.transform != transform;
 }

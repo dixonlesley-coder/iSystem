@@ -736,7 +736,6 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
           world.dy + cardH / 2 - kLoadNodeH / 2,
         );
         final mp = vt.worldToScreen(mergedWorld);
-        final focal = mp + Offset(kLoadW * scale / 2, kLoadNodeH * scale / 2);
         widgets.add(
           Positioned(
             left: mp.dx,
@@ -745,7 +744,13 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
             height: kLoadNodeH * scale,
             child: _ScaledTap(
               onTap: _clearSelection,
-              onDoubleTap: () => _expandLoadsAt(focal),
+              // D9: this used to zoom to the bare kLodThreshold tier-crossing
+              // minimum (0.78) — far short of the schedule's "comfortable
+              // reading" scale the chevron gesture (focusPanelSchedule) frames.
+              // Converge both "reveal panel detail" gestures on the SAME
+              // framing so a double-tap here lands exactly where the summary
+              // card's expand chevron would.
+              onDoubleTap: () => focusPanelSchedule(panel.panelId),
               child: _ScaledChild(
                 scale: scale,
                 width: kLoadW,
@@ -822,14 +827,6 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
           ? _CanvasSelection.panel(panelId)
           : _CanvasSelection.circuit(panelId, circuitId);
     });
-  }
-
-  /// Zoom in just past the LOD threshold, anchored at [focalScreen], so a
-  /// merged-loads node breaks out into its individual loads (double-tap to
-  /// expand). No-op if already in detail.
-  void _expandLoadsAt(Offset focalScreen) {
-    if (_current.scale >= kLodThreshold) return;
-    _setTransform(_current.zoomedTo(kLodThreshold + 0.06, focalScreen));
   }
 
   /// Zoom back OUT to the summary card for [panelId] (I7) — frame it just below

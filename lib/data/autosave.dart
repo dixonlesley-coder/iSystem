@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:isolate';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/model.dart' show ElectricalProject;
@@ -314,10 +315,61 @@ Timer startAutosave(
   // inject a unique fixed temp path so concurrently-running isolates don't race.
   String? recoveryPath,
 }) {
+  // A `Timer.periodic` callback can't `await`, and the encode below now does —
+  // guard against a slow tick still being in flight when the next one fires (two
+  // overlapping ticks would race each other over the shared mirror/recovery
+  // state), by skipping a tick rather than starting a second one on top of it.
+  var tickInFlight = false;
   return Timer.periodic(interval, (_) {
+    if (tickInFlight) return;
+    tickInFlight = true;
+    _autosaveTick(c, recoveryPath).whenComplete(() => tickInFlight = false);
+  });
+}
+
+/// Above this many network elements the tick's JSON encode moves off-thread.
+/// Below it the encode is sub-millisecond, and a synchronous encode keeps the
+/// tick's timing deterministic (an [Isolate.run] spawn costs more than the
+/// encode it offloads for small docs, and made recovery-write latency flaky
+/// under test/suite load).
+const int kAutosaveOffloadThreshold = 400;
+
+/// One autosave tick's body, factored out so it can `await` (the
+/// `Timer.periodic` callback itself cannot). [buildDocument] must stay on the UI
+/// isolate — it reads live Riverpod state, which isn't isolate-transferable —
+/// but the resulting [ProjectDocument] is a plain, already-built data graph, so
+/// for a LARGE project the tick's actual CPU cost (the indented JSON stringify
+/// over the whole project: floors, sheets, the full Network, the electrical
+/// sub-model, settings) is offloaded to an [Isolate.run], the same pattern
+/// [gatherSheetAssetsAsync] uses for the Save path's asset embedding — so the
+/// periodic dirty-check no longer competes with drag/pan/solve for the UI
+/// thread's frame budget. Small projects (under [kAutosaveOffloadThreshold]
+/// elements) encode synchronously: the isolate spawn would cost more than the
+/// encode, and the deterministic timing keeps the recovery-write invariants
+/// (and their tests) exact.
+Future<void> _autosaveTick(ProviderContainer c, String? recoveryPath) async {
+  try {
     final doc = buildDocument(c.read);
-    final encoded = doc.encode();
+    final complexity = doc.network.nodes.length +
+        doc.network.edges.length +
+        doc.sheets.length;
+    // Capture the comparands BEFORE the off-thread encode: a Save / Open /
+    // File-New can land while the encode is in flight, and comparing this
+    // tick's pre-await snapshot against a post-await baseline would write a
+    // phantom recovery slot for already-superseded work (the TOCTOU the
+    // synchronous encode could never hit).
     final saved = c.read(lastSavedSignatureProvider);
+    final pathBefore = c.read(currentProjectPathProvider);
+    final encoded = complexity > kAutosaveOffloadThreshold
+        ? await Isolate.run(doc.encode)
+        : doc.encode();
+    // If the clean baseline or the project identity moved while the encode
+    // was off-thread, this tick's snapshot is stale — skip; the next tick
+    // (15 s) reads the settled state.
+    if (c.read(lastSavedSignatureProvider) != saved ||
+        c.read(currentProjectPathProvider) != pathBefore) {
+      return;
+    }
     // Clean when it matches the last real Save, or (never saved yet) still equals
     // the untouched virgin default — either way there is nothing worth recovering.
     final clean = saved != null
@@ -340,5 +392,8 @@ Timer startAutosave(
       // Stash the source file so a Restore can re-link the file identity.
       sourcePath: projectPath,
     );
-  });
+  } on StateError {
+    // The container was torn down (app quit / test teardown) while this tick's
+    // off-thread encode was still in flight — nothing left to update.
+  }
 }

@@ -2,10 +2,12 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/inspector_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_tooltip.dart';
 
 /// Wraps a right-side inspector ([child]) with a collapse/expand affordance so
 /// the canvas can become the focal point. A slim vertical toggle strip (a
@@ -102,37 +104,46 @@ class _ToggleStripState extends State<_ToggleStrip> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final fg = _hover ? colors.accent : colors.textMuted;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: MechXFocusRing(
-        onActivated: widget.onTap,
-        borderRadius: MechXRadii.control,
-        child: GestureDetector(
-          onTap: widget.onTap,
-          child: Semantics(
-            button: true,
-            label: widget.collapsed ? 'Expand inspector' : 'Collapse inspector',
-            child: AnimatedContainer(
-              duration: MechXMotion.hover,
-              curve: MechXMotion.standard,
-              width: CollapsibleInspector.collapsedWidth,
-              color: _hover ? colors.surfaceHover : const Color(0x00000000),
-              alignment: Alignment.topCenter,
-              padding: const EdgeInsets.symmetric(vertical: MechXSpacing.sm),
-              // The chevron points left while expanded ("collapse it away"),
-              // and rotates a half-turn to point right when collapsed ("open it
-              // back out"). Rotating — rather than swapping a painter — reads as
-              // one continuous motion. (Expanded is the half-turn so the at-rest
-              // direction matches the prior left-pointing painter exactly.)
-              child: AnimatedRotation(
-                turns: widget.collapsed ? 0.0 : 0.5,
-                duration: MechXMotion.appear,
+    final label = context.strings(widget.collapsed
+        ? StringKey.tooltipExpandInspector
+        : StringKey.tooltipCollapseInspector);
+    // L5/M4: this chevron was icon-only with no visible on-hover caption (only
+    // an accessibility-only Semantics label) — a hover tooltip now names it
+    // for a sighted mouse user too.
+    return MechXTooltip(
+      message: label,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: MechXFocusRing(
+          onActivated: widget.onTap,
+          borderRadius: MechXRadii.control,
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: Semantics(
+              button: true,
+              label: label,
+              child: AnimatedContainer(
+                duration: MechXMotion.hover,
                 curve: MechXMotion.standard,
-                child: CustomPaint(
-                  size: const Size(18, 18),
-                  painter: _ChevronPainter(color: fg),
+                width: CollapsibleInspector.collapsedWidth,
+                color: _hover ? colors.surfaceHover : const Color(0x00000000),
+                alignment: Alignment.topCenter,
+                padding: const EdgeInsets.symmetric(vertical: MechXSpacing.sm),
+                // The chevron points left while expanded ("collapse it away"),
+                // and rotates a half-turn to point right when collapsed ("open it
+                // back out"). Rotating — rather than swapping a painter — reads as
+                // one continuous motion. (Expanded is the half-turn so the at-rest
+                // direction matches the prior left-pointing painter exactly.)
+                child: AnimatedRotation(
+                  turns: widget.collapsed ? 0.0 : 0.5,
+                  duration: MechXMotion.appear,
+                  curve: MechXMotion.standard,
+                  child: CustomPaint(
+                    size: const Size(18, 18),
+                    painter: _ChevronPainter(color: fg),
+                  ),
                 ),
               ),
             ),

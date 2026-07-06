@@ -1315,8 +1315,20 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
     // editor is pinned FIRST, and picking something on canvas snaps the panel
     // to the top so the pick is immediately visible — the panel otherwise
     // gives no cue that anything changed.
+    //
+    // C2: this used to guard on prev being EMPTY, so only the very first
+    // empty→non-empty pick ever jumped — clicking through several elements in
+    // sequence while the panel is scrolled to Results/Fire/HVAC left the
+    // Selection editor silently updating out of view. Jump on any CHANGE of
+    // selection identity (a different node/edge, not just a rebuild of the
+    // same one), guarded to only actually move the scroll offset when the
+    // panel is scrolled away from the top (an already-at-top panel has
+    // nothing to jump).
     ref.listen(selectionProvider, (prev, next) {
-      if ((prev == null || prev.isEmpty) && !next.isEmpty && _scroll.hasClients) {
+      if (!_scroll.hasClients || next.isEmpty) return;
+      final changed =
+          prev == null || prev.nodeId != next.nodeId || prev.edgeId != next.edgeId;
+      if (changed && _scroll.offset > 0) {
         _scroll.jumpTo(0);
       }
     });

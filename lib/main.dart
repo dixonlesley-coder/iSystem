@@ -12,8 +12,9 @@ import 'store/models/sheet.dart';
 import 'ui/canvas/dxf_sheet_page.dart';
 import 'ui/canvas/pdf_sheet_page.dart';
 import 'ui/canvas/sheet_canvas.dart';
+import 'ui/shell/project_io.dart';
 
-void main() async {
+void main(List<String> args) async {
   // pdfrxFlutterInitialize calls WidgetsFlutterBinding.ensureInitialized()
   // internally, so we don't need to call it again here.
   await pdfrxFlutterInitialize();
@@ -80,6 +81,21 @@ void main() async {
     }
   }
   startAutosave(container);
+
+  // M2 (Windows-desktop citizenship): a `.mechx` handed to us on the command
+  // line — an Explorer double-click, "Open with", or a taskbar jump-list entry
+  // (windows/runner forwards the file path to this entrypoint) — is auto-opened
+  // after bootstrap, through the SAME loader File → Open uses. A pending
+  // crash-recovery snapshot takes PRECEDENCE: the engineer's unsaved work must
+  // never be shadowed by a double-clicked file, so we only auto-open when there
+  // is nothing to recover. Opening happens BEFORE the first frame, so the app
+  // paints straight into the project (a missing path is silently ignored).
+  // Single-instance forwarding (handing the path to an already-running iSystem
+  // rather than launching a second window) is deliberately out of scope.
+  final launchOpenPath = launchProjectPathFromArgs(args);
+  if (launchOpenPath != null && container.read(recoveryDocProvider) == null) {
+    await openProjectAtLaunch(container, launchOpenPath);
+  }
 
   runApp(
     UncontrolledProviderScope(
