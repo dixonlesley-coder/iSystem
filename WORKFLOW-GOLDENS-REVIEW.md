@@ -293,6 +293,26 @@ looks intermittent.
   and skip the onExit hover-clear while `_pullFrom != null`; widget-test the full pull gesture
   from a hovered-unselected node.
 
+### B12. Plan underlay geometry is not a snap surface — a riser cannot snap to the shaft wall
+**HIGH** · effort M · gap · lens: user-reported (2026-07-06, product owner)
+
+The imported plan is display-only. For DXF/DWG sheets the parsed vector geometry already exists
+and is cached per sheet (dxf_sheet_page.dart:37 `_cache: Map<String, DxfDrawing?>`) but is never
+consulted by the snapping layer, so drawing against a wall/shaft line is freehand eyeballing.
+PDF sheets are raster (pdfrx) and have no geometry at all.
+
+- **Evidence:** dxf_sheet_page.dart:37-51 (cached DxfDrawing, paint-only); the snap sites
+  (network_store `_snap`, snapping.dart `snapOrTeePoint`, drop_overlay, endpoint drag) consult
+  network nodes + the magnetic grid only — no underlay candidates.
+- **User impact:** The drafter cannot place a riser snapped to the shaft wall or run pipe tight
+  along a corridor wall — positions drift off the architecture, and the exported plan shows it.
+- **Direction:** (1) DXF/DWG: expose the cached DxfDrawing to snapping, build a per-sheet
+  segment spatial index, add underlay snap candidates (endpoint / nearest-on-segment /
+  intersection) between node-snap and grid-snap precedence — every existing snap gesture
+  inherits it, with the existing snap-ring feedback. (2) PDF: a 'trace reference line' tool —
+  two clicks along a wall create a persisted snappable construction line (additive `.mechx`
+  list, tolerant; doubles as the N4 gridline substrate). Optional later: raster snap-to-ink.
+
 
 ## Theme C — Inspector and information architecture
 
@@ -1300,6 +1320,7 @@ The app must feel native before it can feel polished. The headline item is decou
 | B6 | The outlet-pull nub and the node's move handle have overlapping click boxes with no visible boundary | medium | S |
 | B10 | Endpoint-resize and node drags ignore the ortho constraint, un-straightening drawn runs | high | S |
 | B11 | The outlet nub unmounts mid-pull, freezing the new run a short distance from the mainline | high | S |
+| B12 | Plan underlay geometry is not a snap surface — a riser cannot snap to the shaft wall | high | M |
 | C2 | Selection auto-scroll-to-top only fires the first time; re-selecting a different element while scrolled away leaves the updated editor invisible | medium | S |
 | D9 | Two 'reveal panel detail' gestures on the same summary card zoom to inconsistent, undocumented scales | low | S |
 
