@@ -307,7 +307,23 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   ticked by drawing alone, corrected power-one-line empty state, electrical-layer guide line,
   PRV zone-over-limit → compliance verdict, fire verdicts localized, stable equipment tags,
   keyboard-reachable Review actions. Goldens 01–15 regenerated; engine 1263 / app 842 / analyze
-  clean. Waves 2–7 remain — work them from that document rather than re-reviewing.
+  clean. **Wave 7 (export-ready deliverables — all 25 Theme-N findings) HAS ALSO LANDED**
+  (2026-07-06, see the §15 row): the PDFs now render the real `·`/`Ø` glyphs via WinAnsi (0 `?`
+  bytes, PDF==DXF), the board schedule carries LENGTH + per-device kA (3-tier fallback) + RCD +
+  CT-ratio tokens and MCCBs drop the curve letter, riser tags carry lengths and grouped fixture
+  counts, plan labels carry CL elevations + gridline bubbles/tie dimensions, drainage stacks
+  clamp ≥ their largest branch (`stackRaisedForBranch`), the BOM gained material/tag + honest
+  duct-size columns (CSV headers changed: `nominal_size_mm`+`material`), the calc report gained
+  a per-run sizing-basis schedule + governed standards wording, the equipment schedule gained
+  TX/genset/capacitor rows + an editable Model/spec map (`DesignSettings.equipmentModelSpecs`),
+  every export stamps a distinct per-sheet DWG number (pure `DrawingSeries`), every PDF sheet
+  renders ONE tabular title block with the DRAWN/CHECKED/APPROVED sign-off trio + SHEET i-of-N,
+  the mech riser DXF uses M-* layers, and a bilingual cover + Daftar Gambar generator leads the
+  submittal set. Acceptance harness: the 13 artifacts regenerate + 25/25 on-paper verdicts PASS.
+  Gate: engine 1341 / app 844 / analyze clean; only electrical goldens 05/08/10/11 shifted.
+  Residuals recorded: panel/apparatus Model-spec hooks, in-app reference-grid tooling (→ the
+  B10–B12 drafting batch), the 190 pt title-cell width. Waves 2–6 remain (the user-reported
+  B10/B11/B12 drafting-feel batch leads Wave 2) — work them from that document.
 - **Apple-design review (2026-07-04) — the prior plan of record for ease-of-use/UX polish (fully landed)**:
   `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
   UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the

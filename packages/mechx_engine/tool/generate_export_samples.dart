@@ -24,6 +24,7 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
+import 'package:mechx_engine/report/cover_sheet.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
@@ -33,6 +34,8 @@ import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/equipment_schedule.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
+import 'package:mechx_engine/report/plan_symbols.dart';
+import 'package:mechx_engine/report/riser_tags.dart' show elementTags;
 import 'package:mechx_engine/report/sld_export.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart';
@@ -60,6 +63,44 @@ final calibrations = <String, ScaleCalibration>{
   's1': const ScaleCalibration(0.02),
   's2': const ScaleCalibration(0.02),
 };
+
+// N4: a representative structural setting-out grid (column axes A–D, row axes
+// 1–3) in sheet pixels, threaded into the plan exports so a riser ties back to
+// the nearest grid intersection (as a real drawing would carry from the
+// architect's model).
+const referenceGrid = ReferenceGrid(
+  columns: [
+    GridAxis('A', 170),
+    GridAxis('B', 480),
+    GridAxis('C', 760),
+    GridAxis('D', 1040),
+  ],
+  rows: [
+    GridAxis('1', 220),
+    GridAxis('2', 320),
+    GridAxis('3', 420),
+  ],
+);
+
+// N5: the per-run centreline-elevation labels the app builds from the §10 model
+// (`nodeElevation` above each run's floor FFL). Mirrors
+// `project_panel.planEdgeElevationLabels`; the engine takes the finished strings.
+Map<String, String> elevationLabels(Network net) {
+  const mounting = MountingHeights();
+  final out = <String, String>{};
+  for (final e in net.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    final a = net.nodeById(e.fromId);
+    final b = net.nodeById(e.toId);
+    if (a == null || b == null) continue;
+    final ea = nodeElevation(a, building, mounting).meters;
+    final eb = nodeElevation(b, building, mounting).meters;
+    final aboveFfl = (ea + eb) / 2 - building.elevationOf(a.floorIndex).meters;
+    final sign = aboveFfl >= 0 ? '+' : '-';
+    out[e.id] = 'CL $sign${aboveFfl.abs().toStringAsFixed(2)}';
+  }
+  return out;
+}
 
 // ── The drawn network ────────────────────────────────────────────────────────
 Network buildNetwork() {
@@ -238,6 +279,35 @@ Map<String, EdgeSizing> sizeNetwork(Network net) {
   );
 }
 
+// N16: per-edge accumulated fixture units for the calc-report run/riser
+// schedule — cold-water UBAP (rooted at the ground tank) + drainage DFU (rooted
+// at the ground exit), the same node loads the sizing uses.
+Map<String, double> buildEdgeFixtureUnits(Network net) {
+  const profile = SniProfile();
+  const occupancy = Occupancy.public;
+  final cwUnits = <String, double>{
+    for (final n in net.nodes)
+      if (n.fixture != null)
+        n.id: profile.fixtureUnitLoad(n.fixture!, occupancy: occupancy),
+  };
+  final drUnits = <String, double>{
+    for (final n in net.nodes)
+      if (n.fixture != null) n.id: drainageFixtureUnit(n.fixture!),
+  };
+  return <String, double>{
+    ...accumulateFixtureUnits(
+        net: net,
+        service: ServiceType.coldWater,
+        rootId: 'cw-gtank',
+        terminalUnits: cwUnits),
+    ...accumulateFixtureUnits(
+        net: net,
+        service: ServiceType.drainage,
+        rootId: 'dr-exit',
+        terminalUnits: drUnits),
+  };
+}
+
 // ── Electrical model: MDP -> LP-1 / PP-1 / EMG ───────────────────────────────
 ElectricalProject buildElectrical() {
   const mdp = ElectricalPanel(
@@ -397,6 +467,10 @@ void main(List<String> args) {
       e.id: edgeLength(e, net,
           calibrationBySheet: calibrations, building: building),
   };
+  final elevLabels = elevationLabels(net);
+  // N13: one stable element tag per edge (riser stack tag / run floor tag),
+  // threaded into BOTH plan formats so they trace to the riser + BOM + report.
+  final edgeTagsMap = elementTags(net);
   print('network: ${net.nodes.length} nodes, ${net.edges.length} edges; '
       'sized ${sizing.length} edges');
 
@@ -410,6 +484,75 @@ void main(List<String> args) {
     }
   }
 
+  // 0 — front matter: cover + Daftar Gambar (drawing list) + general-notes &
+  // MASTER legend (N21 / N24), rendered through the shared SLD multi-page path.
+  attempt('cover-sheets.pdf', () {
+    final elec = buildElectrical();
+    final drawings = <DrawingListEntry>[
+      DrawingListEntry(
+          number:
+              sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: 1),
+          title: 'GROUND FLOOR - PLUMBING & RISERS',
+          revision: 'Rev. 0',
+          date: dateString),
+      DrawingListEntry(
+          number:
+              sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: 2),
+          title: 'LANTAI 1 - PLUMBING & HVAC',
+          revision: 'Rev. 0',
+          date: dateString),
+      DrawingListEntry(
+          number: sheetDrawingNumber(series: DrawingSeries.mechanicalRiser),
+          title: 'DIAGRAM RISER MEKANIKAL / MECHANICAL RISER SLD',
+          revision: 'Rev. 0',
+          date: dateString),
+      DrawingListEntry(
+          number: sheetDrawingNumber(series: DrawingSeries.electricalDetail),
+          title: 'DIAGRAM PANEL / ELECTRICAL SLD',
+          revision: 'Rev. 0',
+          date: dateString),
+    ];
+    final cables = <String>{
+      for (final p in elec.panels)
+        for (final c in p.circuits)
+          if (c.cableType != null && c.cableType!.isNotEmpty) c.cableType!,
+    };
+    final frontMatter = buildSubmittalFrontMatter(
+      projectName: projectName,
+      drawings: drawings,
+      clientName: 'PT Contoh Developer',
+      coverDrawingNumber: 'MEP-000',
+      revision: 'Rev. 0',
+      date: dateString,
+      preparedBy: 'CAD',
+      services: {for (final e in net.edges) e.service},
+      components: {
+        for (final n in net.nodes)
+          if (n.component != null) n.component!,
+      },
+      cableFamilies: cables,
+    );
+    writeBytes(
+        'cover-sheets.pdf',
+        sldSheetsToPdf(
+          frontMatter,
+          title: 'iSystem MEP submittal',
+          diagramTitles: kFrontMatterDiagramTitles,
+          chrome: const DrawingChrome(
+            // N20: the front matter carries the same full title block as every
+            // issued sheet — DWG NO + the DRAWN/CHECKED/APPROVED sign-off block
+            // (APPROVED stays a blank ruled cell for hand sign-off).
+            drawingNumber: 'MEP-000',
+            revisionNumber: 'Rev. 0',
+            clientName: 'PT Contoh Developer',
+            drawnBy: 'CAD',
+            checkedBy: 'MEP',
+            dateString: dateString,
+          ),
+          projectName: projectName,
+        ));
+  });
+
   // 1 & 2 — annotated plan PDFs (A3, calibrated, issuable chrome).
   attempt('plan-ground.pdf', () {
     writeBytes(
@@ -418,6 +561,11 @@ void main(List<String> args) {
           net: net,
           sizing: sizing,
           edgeLengths: edgeLengths,
+          // N5: centreline heights; N4: setting-out grid + riser ties.
+          edgeElevationLabels: elevLabels,
+          grid: referenceGrid,
+          // N13: the stable element tag on each run/riser label.
+          edgeTags: edgeTagsMap,
           sheetId: 's0',
           floorIndex: 0,
           projectName: projectName,
@@ -425,7 +573,9 @@ void main(List<String> args) {
           dateString: dateString,
           metersPerPixel: 0.02,
           chrome: DrawingChrome(
-            drawingNumber: 'M-101',
+            // N19: derived per sheet (mechanical plan band, rail position 1).
+            drawingNumber: sheetDrawingNumber(
+                series: DrawingSeries.mechanicalPlan, index: 1),
             revisionNumber: 'Rev. 0',
             sheetIndex: 1,
             sheetTotal: 3,
@@ -445,6 +595,11 @@ void main(List<String> args) {
           net: net,
           sizing: sizing,
           edgeLengths: edgeLengths,
+          // N5: centreline heights; N4: setting-out grid + riser ties.
+          edgeElevationLabels: elevLabels,
+          grid: referenceGrid,
+          // N13: the stable element tag on each run/riser label.
+          edgeTags: edgeTagsMap,
           sheetId: 's1',
           floorIndex: 1,
           projectName: projectName,
@@ -452,7 +607,9 @@ void main(List<String> args) {
           dateString: dateString,
           metersPerPixel: 0.02,
           chrome: DrawingChrome(
-            drawingNumber: 'M-102',
+            // N19: derived per sheet (mechanical plan band, rail position 2).
+            drawingNumber: sheetDrawingNumber(
+                series: DrawingSeries.mechanicalPlan, index: 2),
             revisionNumber: 'Rev. 0',
             sheetIndex: 2,
             sheetTotal: 3,
@@ -476,8 +633,15 @@ void main(List<String> args) {
           sheetId: 's0',
           floorIndex: 0,
           metersPerPixel: 0.02,
+          // N5: centreline heights; N4: setting-out grid + riser ties.
+          edgeElevationLabels: elevLabels,
+          grid: referenceGrid,
+          // N13: the stable element tag on each run label + riser marker.
+          edgeTags: edgeTagsMap,
           chrome: DrawingChrome(
-            drawingNumber: 'M-101',
+            // N19: derived per sheet (mechanical plan band, rail position 1).
+            drawingNumber: sheetDrawingNumber(
+                series: DrawingSeries.mechanicalPlan, index: 1),
             revisionNumber: 'Rev. 0',
             sheetIndex: 1,
             sheetTotal: 3,
@@ -491,16 +655,26 @@ void main(List<String> args) {
 
   // 4 — mechanical riser single-line (combined services) → PDF + DXF.
   attempt('riser-mech', () {
-    final riserChrome = const DrawingChrome(
-      drawingNumber: 'M-201',
+    // N19: the mechanical riser band M-201 (derived, not hand-typed).
+    // N20: the riser sheet carries the same full title block as every issued
+    // sheet — SHEET (1 of 1) + the DRAWN/CHECKED/APPROVED sign-off block.
+    final riserChrome = DrawingChrome(
+      drawingNumber:
+          sheetDrawingNumber(series: DrawingSeries.mechanicalRiser, index: 1),
       revisionNumber: 'Rev. 0',
+      sheetIndex: 1,
+      sheetTotal: 1,
       clientName: 'PT Contoh Developer',
+      drawnBy: 'CAD',
+      checkedBy: 'MEP',
       dateString: dateString,
     );
     final riserSheet = buildMechanicalRiserSld(
       network: net,
       sizing: sizing,
       building: building,
+      // N6: the §10 length-per-edge map — every run/riser tag carries metres.
+      edgeLengths: edgeLengths,
       supplyNote: 'Air bersih: tangki bawah -> pompa booster -> riser upfeed',
       equipmentDetailByNodeId: const {
         'cw-gtank': '5.0 m3',
@@ -520,6 +694,8 @@ void main(List<String> args) {
           title: projectName,
           diagramTitle: 'DIAGRAM SISTEM AIR BERSIH & AIR KOTOR',
           chrome: riserChrome,
+          // N2: the live project name in the title-block PROJECT row.
+          projectName: projectName,
         ));
     writeText(
         'riser-mech.dxf',
@@ -527,6 +703,9 @@ void main(List<String> args) {
           sheet: riserSheet,
           diagramTitle: 'DIAGRAM SISTEM AIR BERSIH & AIR KOTOR',
           chrome: riserChrome,
+          projectName: projectName,
+          // N15: a plumbing riser DXF uses the M-* layer namespace, never E-*.
+          layers: SldDxfLayers.mechanical,
         ));
   });
 
@@ -539,12 +718,23 @@ void main(List<String> args) {
     originFaultLevel: const Current(16000),
     busbarClearingTimeS: 0.1,
   );
-  final elecChrome = const DrawingChrome(
-    drawingNumber: 'E-201',
-    revisionNumber: 'Rev. 0',
-    clientName: 'PT Contoh Developer',
-    dateString: dateString,
-  );
+  // N19: each electrical DRAWING TYPE gets its own number band — the per-panel
+  // detail E-201, the building overview E-301, the floor-by-floor riser E-401 —
+  // so three different electrical drawings never all read 'E-201'.
+  // N20: every electrical sheet carries the same full title block — the
+  // DRAWN/CHECKED/APPROVED sign-off block (APPROVED a blank ruled cell); the
+  // paginated detail export re-stamps its own per-page SHEET counter.
+  DrawingChrome elecChromeFor(DrawingSeries series) => DrawingChrome(
+        drawingNumber: sheetDrawingNumber(series: series),
+        revisionNumber: 'Rev. 0',
+        clientName: 'PT Contoh Developer',
+        drawnBy: 'CAD',
+        checkedBy: 'MEP',
+        dateString: dateString,
+      );
+  final elecDetailChrome = elecChromeFor(DrawingSeries.electricalDetail);
+  final elecOverviewChrome = elecChromeFor(DrawingSeries.electricalOverview);
+  final elecRiserChrome = elecChromeFor(DrawingSeries.electricalRiser);
 
   // 5 — per-panel detail single-line (one page per panel).
   attempt('elec-detail.pdf', () {
@@ -555,7 +745,7 @@ void main(List<String> args) {
           result: result,
           title: projectName,
           diagramTitle: 'DIAGRAM PANEL',
-          chrome: elecChrome,
+          chrome: elecDetailChrome,
         ));
   });
 
@@ -570,7 +760,7 @@ void main(List<String> args) {
           diagramTitle: 'BUILDING SINGLE-LINE (OVERVIEW)',
           overview: true,
           sourceChain: true,
-          chrome: elecChrome,
+          chrome: elecOverviewChrome,
         ));
   });
 
@@ -590,7 +780,7 @@ void main(List<String> args) {
           sheet: riserSheet,
           title: projectName,
           diagramTitle: 'DIAGRAM RISER LISTRIK',
-          chrome: elecChrome,
+          chrome: elecRiserChrome,
         ));
   });
 
@@ -602,7 +792,7 @@ void main(List<String> args) {
           project: project,
           result: result,
           diagramTitle: 'DIAGRAM PANEL',
-          chrome: elecChrome,
+          chrome: elecDetailChrome,
         ));
   });
 
@@ -644,6 +834,13 @@ void main(List<String> args) {
       occupancy: Occupancy.public,
       bom: bom,
       fittings: fittings,
+      // N16: the per-run/riser sizing schedule (tag/size/FU/flow/vel/length).
+      runSchedule: buildRunSchedule(
+        net: net,
+        sizing: sizing,
+        edgeLengths: edgeLengths,
+        edgeFixtureUnits: buildEdgeFixtureUnits(net),
+      ),
       revisions: const [
         Revision('2026-07-06', 'Issued for construction (Rev. 0)'),
       ],
@@ -684,6 +881,9 @@ void main(List<String> args) {
             duty: ahuFan, service: 'Office AHU', airHandling: true),
       ],
       electrical: result,
+      // N22: the transformer / standby genset / capacitor bank the model
+      // already carries reach the procurement schedule.
+      electricalProject: project,
     );
     writeText('equipment-schedule.md', buildEquipmentScheduleMarkdown(data));
   });

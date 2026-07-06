@@ -295,6 +295,11 @@ enum StringKey {
   inspectorRevisionDateHint,
   inspectorRevisionDescHint,
 
+  // Inspector — Equipment schedule model/spec editor (N23).
+  inspectorEquipmentSchedule,
+  inspectorEquipmentScheduleHint,
+  inspectorModelSpecHint,
+
   // Export — OS save-dialog titles.
   exportTitleCalcReport,
   exportTitleMepReport,
@@ -941,6 +946,12 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorAddRevision: 'Add revision',
   StringKey.inspectorRevisionDateHint: 'YYYY-MM-DD',
   StringKey.inspectorRevisionDescHint: 'Description',
+
+  // Inspector — Equipment schedule model/spec editor (N23).
+  StringKey.inspectorEquipmentSchedule: 'Equipment schedule',
+  StringKey.inspectorEquipmentScheduleHint:
+      'Model / spec for the issued equipment schedule. Blank prints as "—".',
+  StringKey.inspectorModelSpecHint: 'Model / spec',
 
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Export calc report',
@@ -1653,6 +1664,13 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorAddRevision: 'Tambah revisi',
   StringKey.inspectorRevisionDateHint: 'YYYY-MM-DD',
   StringKey.inspectorRevisionDescHint: 'Uraian',
+
+  // Inspector — Equipment schedule model/spec editor (N23).
+  StringKey.inspectorEquipmentSchedule: 'Jadwal peralatan',
+  StringKey.inspectorEquipmentScheduleHint:
+      'Model / spesifikasi untuk jadwal peralatan yang diterbitkan. Kosong '
+      'tercetak sebagai "—".',
+  StringKey.inspectorModelSpecHint: 'Model / spesifikasi',
 
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Ekspor laporan hitung',

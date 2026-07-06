@@ -1063,6 +1063,62 @@ void main() {
         isTrue);
   });
 
+  test(
+      'N23: equipment model/spec overrides round-trip; empty ⇒ byte-identical',
+      () {
+    const empty = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    // An untouched project carries no key at all (byte-identical .mechx).
+    final emptySettingsJson = empty.toJson()['settings'] as Map;
+    expect(emptySettingsJson.containsKey('equipmentModelSpecs'), isFalse);
+    expect(ProjectDocument.fromJson(empty.toJson())
+        .settings
+        .equipmentModelSpecs, isEmpty);
+
+    const populated = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      settings: DesignSettings(equipmentModelSpecs: {
+        'P-01': 'Grundfos CR 15-4',
+        'AHU-01': 'Daikin FXAQ25AVM',
+      }),
+    );
+    final decoded = ProjectDocument.decode(populated.encode());
+    expect(decoded.settings.equipmentModelSpecs, {
+      'P-01': 'Grundfos CR 15-4',
+      'AHU-01': 'Daikin FXAQ25AVM',
+    });
+  });
+
+  test(
+      'N23: a corrupt equipment model/spec entry (non-string value/blank) is '
+      'dropped, good ones kept', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      settings: DesignSettings(equipmentModelSpecs: {'P-01': 'Good pump'}),
+    );
+    final json = doc.toJson();
+    json['settings']['equipmentModelSpecs'] = <String, dynamic>{
+      'P-01': 'Good pump',
+      'F-01': '', // blank ⇒ dropped
+      'AHU-01': 42, // non-string value ⇒ dropped
+    };
+    final decoded = ProjectDocument.fromJson(json);
+    expect(decoded.settings.equipmentModelSpecs, {'P-01': 'Good pump'});
+  });
+
   test('a corrupt saved-assembly entry is dropped, good ones kept', () {
     const doc = ProjectDocument(
       projectName: 'X',

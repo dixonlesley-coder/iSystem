@@ -1,6 +1,7 @@
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/report/equipment_schedule.dart';
 import 'package:mechx_engine/sizing/fan.dart';
 import 'package:mechx_engine/sizing/pump.dart';
@@ -166,6 +167,108 @@ void main() {
     final md = buildEquipmentScheduleMarkdown(data);
     expect(md, contains('## Electrical panels'));
     expect(md, contains('| MDP | 3-phase distribution |'));
+  });
+
+  // ── Source apparatus (transformer / genset / capacitor) — N22 ────────────
+  group('source apparatus from the electrical project', () {
+    const profile = PuilProfile();
+    const project = ElectricalProject(
+      id: 'p1',
+      name: 'B',
+      transformerKva: ApparentPower(630000), // 630 kVA
+      capacitorBankKvar: 50,
+      // Forced 40 kVA genset so the row is deterministic (independent of demand).
+      sources: ElectricalSources(
+          generator: GeneratorSource(kva: ApparentPower(40000))),
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'MDP',
+          tag: 'MDP',
+          circuits: [
+            ElectricalCircuit(
+                id: 'c1',
+                name: 'Lighting',
+                loadKind: LoadKind.lighting,
+                isLighting: true,
+                loadW: 1800,
+                length: Length(20)),
+          ],
+        ),
+      ],
+    );
+    final result = computeSystem(profile, project);
+
+    test('transformer / genset / capacitor rows are read from the project', () {
+      final data = EquipmentScheduleData(
+        projectName: 'B',
+        date: 'd',
+        electrical: result,
+        electricalProject: project,
+      );
+      final rows = buildEquipmentScheduleRows(data);
+      final byCat = {for (final r in rows) r.category: r};
+      expect(byCat[EquipmentCategory.transformer]!.duty, '630 kVA');
+      expect(byCat[EquipmentCategory.generator]!.duty, '40 kVA');
+      expect(byCat[EquipmentCategory.capacitorBank]!.duty, '50 kvar');
+
+      final md = buildEquipmentScheduleMarkdown(data);
+      expect(md, contains('## Transformer'));
+      expect(md, contains('## Standby generator'));
+      expect(md, contains('## Capacitor bank'));
+      expect(md, contains('| TX-01 | Distribution transformer | 630 kVA |'));
+    });
+
+    test('a genset with no forced kVA sizes off the demand × backup fraction',
+        () {
+      const genProject = ElectricalProject(
+        id: 'p2',
+        name: 'B',
+        sources: ElectricalSources(
+            generator: GeneratorSource(backupFraction: 0.6)),
+        panels: [
+          ElectricalPanel(
+            id: 'MDP',
+            name: 'MDP',
+            circuits: [
+              ElectricalCircuit(
+                  id: 'c1',
+                  name: 'Load',
+                  loadKind: LoadKind.general,
+                  loadW: 20000,
+                  length: Length(20)),
+            ],
+          ),
+        ],
+      );
+      final genResult = computeSystem(profile, genProject);
+      final rows = buildEquipmentScheduleRows(EquipmentScheduleData(
+        projectName: 'B',
+        date: 'd',
+        electrical: genResult,
+        electricalProject: genProject,
+      ));
+      final gen = rows.firstWhere(
+          (r) => r.category == EquipmentCategory.generator);
+      // Ladder-snapped kVA against 0.6 × the diversified demand (> 0).
+      expect(gen.duty, endsWith('kVA'));
+      expect(gen.duty, isNot('0 kVA'));
+    });
+
+    test('no electricalProject ⇒ no source-apparatus rows (byte-identical)', () {
+      final rows = buildEquipmentScheduleRows(EquipmentScheduleData(
+        projectName: 'B',
+        date: 'd',
+        electrical: result,
+      ));
+      expect(
+          rows.any((r) => const {
+                EquipmentCategory.transformer,
+                EquipmentCategory.generator,
+                EquipmentCategory.capacitorBank,
+              }.contains(r.category)),
+          isFalse);
+    });
   });
 
   // ── Empty data set ──────────────────────────────────────────────────────

@@ -57,12 +57,23 @@ int _strokeBand(EdgeSizing s) {
       sizeMm: s.diameter.inMillimeters, isDuct: s.service.isAir);
 }
 
-/// Keep PDF text to printable ASCII (WinAnsi-safe) and escape the three PDF
-/// string metacharacters so a sheet name or label never breaks the syntax.
+/// WinAnsi (Latin-1) code points the drawing labels legitimately emit, passed
+/// through as their own byte (code point == WinAnsi byte at these positions) so
+/// a `/WinAnsiEncoding` Helvetica renders the real glyph, not `?`: U+00B7
+/// middle-dot separator (SIZE·SERVICE / cable·conduit), U+00B0 degree, U+00B1
+/// plus-minus, U+00B2/00B3 super-2/3, U+00D8/00F8 O-stroke.
+const _winAnsiPassThrough = {0xB0, 0xB1, 0xB2, 0xB3, 0xB7, 0xD8, 0xF8};
+
+/// Keep PDF text to WinAnsi-encodable characters (printable ASCII + the few
+/// Latin-1 glyphs above) and escape the three PDF string metacharacters so a
+/// sheet name or label never breaks the syntax; anything else falls back to `?`.
 String _pdfText(String raw) {
   final b = StringBuffer();
   for (final code in raw.runes) {
-    final c = (code >= 0x20 && code <= 0x7e) ? code : 0x3f /* ? */;
+    final c =
+        (code >= 0x20 && code <= 0x7e) || _winAnsiPassThrough.contains(code)
+            ? code
+            : 0x3f /* ? */;
     if (c == 0x28 || c == 0x29 || c == 0x5c) b.writeCharCode(0x5c); // ( ) \
     b.writeCharCode(c);
   }

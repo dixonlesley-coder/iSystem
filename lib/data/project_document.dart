@@ -172,6 +172,18 @@ class DesignSettings {
   /// is acknowledged.
   final List<String> acknowledgedIssueKeys;
 
+  /// N23 — editable per-equipment "Model / spec" free text, keyed by the
+  /// STABLE equipment tag the schedule already assigns (e.g. `"P-01"`,
+  /// `"AHU-03"`) → a datasheet model/spec string the engineer types once so
+  /// every exported equipment schedule (Markdown / CSV / PDF) carries it
+  /// instead of the engine's `'—'` placeholder (`report/equipment_schedule.dart`
+  /// `PumpScheduleItem.modelSpec` / `FanScheduleItem.modelSpec`). Keyed by tag
+  /// rather than row identity — the tag is the one handle that survives a
+  /// re-solve (duties change, the procured pump doesn't). Defaults to empty —
+  /// a project that has never entered a spec is byte-identical to before this
+  /// feature.
+  final Map<String, String> equipmentModelSpecs;
+
   const DesignSettings({
     this.occupancy = Occupancy.private,
     this.upfeed = false,
@@ -204,6 +216,7 @@ class DesignSettings {
     this.revisions = const [],
     this.savedAssemblies = const [],
     this.acknowledgedIssueKeys = const [],
+    this.equipmentModelSpecs = const {},
   });
 
   Map<String, dynamic> toJson() => {
@@ -258,6 +271,10 @@ class DesignSettings {
         // so an untouched project stays byte-identical).
         if (acknowledgedIssueKeys.isNotEmpty)
           'acknowledgedIssueKeys': acknowledgedIssueKeys,
+        // Equipment-schedule model/spec overrides (N23; additive — encoded only
+        // when non-empty so an untouched project stays byte-identical).
+        if (equipmentModelSpecs.isNotEmpty)
+          'equipmentModelSpecs': equipmentModelSpecs,
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -326,6 +343,8 @@ class DesignSettings {
         savedAssemblies: _savedAssembliesFromJson(json['savedAssemblies']),
         acknowledgedIssueKeys:
             _stringListFromJson(json['acknowledgedIssueKeys']),
+        equipmentModelSpecs:
+            _equipmentModelSpecsFromJson(json['equipmentModelSpecs']),
       );
 
   /// Tolerantly read a list of strings: a non-list (or absent) value yields an
@@ -396,6 +415,18 @@ class DesignSettings {
     final out = <String, double>{};
     raw.forEach((k, v) {
       if (k is String && v is num && v > 0) out[k] = v.toDouble();
+    });
+    return out;
+  }
+
+  /// Tolerantly read the N23 equipment `tag → model/spec` map: a non-map (or
+  /// absent) value, a non-string key, a non-string value, or a blank value is
+  /// dropped (mirrors [_priceListFromJson]'s shape for a string-valued map).
+  static Map<String, String> _equipmentModelSpecsFromJson(Object? raw) {
+    if (raw is! Map) return const {};
+    final out = <String, String>{};
+    raw.forEach((k, v) {
+      if (k is String && v is String && v.trim().isNotEmpty) out[k] = v;
     });
     return out;
   }

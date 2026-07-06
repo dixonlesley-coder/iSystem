@@ -2,7 +2,9 @@ import 'dart:math' as math;
 
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/drainage_sizing.dart';
 import 'package:mechx_engine/sizing/duct_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
@@ -183,6 +185,115 @@ void main() {
     expect(sized['t']!.diameter.inMillimeters, 75);
     expect(sized['b1']!.diameter.inMillimeters, 65);
     expect(sized['t']!.service, ServiceType.drainage);
+  });
+
+  group('N17 — a drainage stack must never size smaller than a branch feeding it', () {
+    // The branch and stack DFU tables disagree at dfu=20: the branch table's
+    // (20, 75) row gives 75 mm while the stack table's (24, 65) row (20 ≤ 24)
+    // gives only 65 mm for the SAME load — a stack carrying no more DFU than
+    // the one branch discharging into it sizes smaller than that branch. This
+    // is the exact DN65-stack/DN75-branch violation from the finding.
+    test('DN65-stack/DN75-branch topology: the stack is raised to DN75 and flagged',
+        () {
+      // root (the building's drain exit) --R1(riser)--> j --B(run)--> fx.
+      const net = Network(
+        nodes: [
+          NetNode(
+            id: 'root',
+            sheetId: 's1',
+            x: 0,
+            y: 0,
+            floorIndex: 0,
+            role: NodeRole.plant,
+          ),
+          NetNode(id: 'j', sheetId: 's1', x: 0, y: 0, floorIndex: 1),
+          NetNode(id: 'fx', sheetId: 's1', x: 100, y: 0, floorIndex: 1),
+        ],
+        edges: [
+          NetEdge(
+            id: 'R1',
+            fromId: 'root',
+            toId: 'j',
+            service: ServiceType.drainage,
+            kind: EdgeKind.riser,
+          ),
+          NetEdge(id: 'B', fromId: 'j', toId: 'fx', service: ServiceType.drainage),
+        ],
+      );
+      final sized = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {},
+        nodeDrainageUnits: const {'fx': 20.0},
+      );
+      // Sanity: confirm the raw table disagreement this finding is about.
+      expect(sized['B']!.diameter.inMillimeters, 75); // branch table (20,75)
+      // The stack must be raised to match — not left at its own raw 65 mm
+      // (stack table (24,65)) — and the raise must be recorded.
+      expect(sized['R1']!.diameter.inMillimeters, 75);
+      expect(sized['R1']!.stackRaisedForBranch, isTrue);
+      // Velocity is recomputed at the RAISED diameter, not stale from 65 mm.
+      final expectedV = manningVelocity(
+        manningN: const SizingContext().drainageManningN,
+        hydraulicRadius: const Length(0.075 / 4.0),
+        slope: const SizingContext().drainageSlope,
+      );
+      expect(
+        sized['R1']!.velocity.metersPerSecond,
+        closeTo(expectedV.metersPerSecond, 1e-12),
+      );
+      // The branch itself is never touched by this rule.
+      expect(sized['B']!.stackRaisedForBranch, isFalse);
+    });
+
+    test('an already-adequate stack (more DFU than any one branch) is byte-identical',
+        () {
+      // Three floor branches (15 DFU each → branch table (20,75) = 75 mm)
+      // combine on ONE stack segment to 45 DFU → stack table (240,100) =
+      // 100 mm, already ≥ any single branch — no clamp should fire.
+      const net = Network(
+        nodes: [
+          NetNode(
+            id: 'root',
+            sheetId: 's1',
+            x: 0,
+            y: 0,
+            floorIndex: 0,
+            role: NodeRole.plant,
+          ),
+          NetNode(id: 'j', sheetId: 's1', x: 0, y: 0, floorIndex: 1),
+          NetNode(id: 'fx1', sheetId: 's1', x: 100, y: -20, floorIndex: 1),
+          NetNode(id: 'fx2', sheetId: 's1', x: 100, y: 0, floorIndex: 1),
+          NetNode(id: 'fx3', sheetId: 's1', x: 100, y: 20, floorIndex: 1),
+        ],
+        edges: [
+          NetEdge(
+            id: 'R1',
+            fromId: 'root',
+            toId: 'j',
+            service: ServiceType.drainage,
+            kind: EdgeKind.riser,
+          ),
+          NetEdge(id: 'B1', fromId: 'j', toId: 'fx1', service: ServiceType.drainage),
+          NetEdge(id: 'B2', fromId: 'j', toId: 'fx2', service: ServiceType.drainage),
+          NetEdge(id: 'B3', fromId: 'j', toId: 'fx3', service: ServiceType.drainage),
+        ],
+      );
+      final sized = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {},
+        nodeDrainageUnits: const {'fx1': 15.0, 'fx2': 15.0, 'fx3': 15.0},
+      );
+      expect(sized['B1']!.diameter.inMillimeters, 75);
+      // The raw (unclamped) DFU-table value for the stack at 45 accumulated
+      // DFU, so this proves the result is untouched by the clamp, not just
+      // coincidentally equal.
+      final rawStack = drainDiameterForDfu(45.0, isStack: true);
+      expect(sized['R1']!.diameter.inMillimeters, rawStack.inMillimeters);
+      expect(sized['R1']!.diameter.inMillimeters, 100);
+      expect(sized['R1']!.stackRaisedForBranch, isFalse);
+    });
   });
 
   test('rooting at a plant keeps every fixture-leaf load (no root-drop)', () {

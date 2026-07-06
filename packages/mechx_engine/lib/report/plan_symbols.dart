@@ -16,6 +16,7 @@ library;
 import 'dart:math' as math;
 
 import '../network/network.dart';
+import 'drawing_chrome.dart' show LabelBox;
 import 'sld_sheet.dart';
 
 /// Equipment glyph for [c] as neutral drawing primitives, centred on
@@ -297,4 +298,212 @@ String? riserUpDown({required int hereFloor, required int otherFloor}) {
   if (otherFloor > hereFloor) return 'UP';
   if (otherFloor < hereFloor) return 'DN';
   return null;
+}
+
+// ── N3: never-drop leadered edge-label placer ───────────────────────────────
+//
+// The shared `drawing_chrome.placeEdgeLabel` DROPS a size tag when no greedy
+// slot clears — on dense branches that silently loses labels, and two short
+// branches sharing a midpoint print nothing. This placer mirrors the riser
+// side (`mechanical_sld_drawing._LabelPlacer`): a tag is the drawing's content
+// and is NEVER dropped — when the greedy ladder can't clear, it ESCAPES
+// perpendicular in growing steps and ties the pulled-off label back to its run
+// with a LEADER, so tags never fuse into one unreadable token. Byte-identical
+// to the old placer whenever the first greedy slot clears (the common case).
+
+/// Perpendicular escape step (× textSize) + count for [placeEdgeLabelLeadered]
+/// when no greedy ladder slot clears — the tag is pushed further off the line
+/// in growing steps rather than dropped, then tied back with a leader. The step
+/// COUNT is generous (12) so a DENSE riser base — several branch runs + two
+/// coincident risers + the tie dimensions converging on one node (N3) — spreads
+/// its tags far enough to clear instead of settling on a least-bad overlap.
+const double _kLeaderEscapeFactor = 1.6;
+const int _kLeaderEscapeSteps = 12;
+
+/// A resolved leadered edge-label placement: the text anchor (baseline START)
+/// + the rotation in degrees CCW in the y-up output space, PLUS an optional
+/// [leaderAnchor] (the edge midpoint) — non-null when the label was pulled off
+/// the line and a thin leader should be drawn from the run to the label so it
+/// stays legible/unfused (N3).
+class LeaderedLabelPlacement {
+  final double x;
+  final double y;
+  final double angleDeg;
+  final ({double x, double y})? leaderAnchor;
+  const LeaderedLabelPlacement({
+    required this.x,
+    required this.y,
+    required this.angleDeg,
+    this.leaderAnchor,
+  });
+}
+
+bool _boxesOverlap(LabelBox a, LabelBox b) =>
+    a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
+
+/// Summed overlap AREA of [r] against every already-[placed] box (0 = clear) —
+/// used to pick the least-bad escape slot.
+double _totalOverlapArea(LabelBox r, List<LabelBox> placed) {
+  var total = 0.0;
+  for (final p in placed) {
+    final dx = math.min(r.maxX, p.maxX) - math.max(r.minX, p.minX);
+    final dy = math.min(r.maxY, p.maxY) - math.max(r.minY, p.minY);
+    if (dx > 0 && dy > 0) total += dx * dy;
+  }
+  return total;
+}
+
+/// Place [text] along the edge (ax,ay)→(bx,by) in the y-up output space, rotated
+/// to the edge bearing (flipped past ±90° so it never reads upside-down), offset
+/// perpendicular by 0.7 × [textSize] on the consistent upper side. Greedy pass
+/// (midpoint upper/lower, quarter upper/lower) against [placed]; the first slot
+/// that clears wins with NO leader (byte-identical to `placeEdgeLabel`'s first
+/// candidate). When NONE clears — two short branch tags sharing a midpoint (N3)
+/// — the placer ESCAPES perpendicular from the midpoint in growing steps (up
+/// then down) until it clears, falling back to the least-overlapping escape slot
+/// if even that can't fully clear; the escaped label is ALWAYS returned with a
+/// [leaderAnchor] so the caller ties it back to the run. Never returns null: a
+/// size tag is content, never dropped. A successful placement appends its box to
+/// [placed]. Pure and deterministic given a stable emission order.
+LeaderedLabelPlacement placeEdgeLabelLeadered({
+  required double ax,
+  required double ay,
+  required double bx,
+  required double by,
+  required String text,
+  required double textSize,
+  required List<LabelBox> placed,
+}) {
+  final dx = bx - ax, dy = by - ay;
+  var angle = (dx == 0 && dy == 0) ? 0.0 : math.atan2(dy, dx);
+  if (angle > math.pi / 2 || angle <= -math.pi / 2) {
+    angle += angle > 0 ? -math.pi : math.pi;
+  }
+  final ca = math.cos(angle), sa = math.sin(angle);
+  final w = text.length * textSize * 0.55;
+  final mx = (ax + bx) / 2, my = (ay + by) / 2;
+  final angleDeg = angle * 180 / math.pi;
+
+  // The baseline START (anchor) of a label at ([cx],[cy]) offset perpendicular
+  // by [d] — the value the renderers feed a `Tm`/group-50 rotation.
+  (double, double) anchorFor(double cx, double cy, double d) =>
+      (cx - sa * d - ca * w / 2, cy + ca * d - sa * w / 2);
+  // Axis-aligned bounds of the rotated w × textSize text rect at that anchor.
+  LabelBox boxAt(double cx, double cy, double d) {
+    final (x0, y0) = anchorFor(cx, cy, d);
+    final xs = [x0, x0 + ca * w, x0 - sa * textSize, x0 + ca * w - sa * textSize];
+    final ys = [y0, y0 + sa * w, y0 + ca * textSize, y0 + sa * w + ca * textSize];
+    return (
+      minX: xs.reduce(math.min),
+      minY: ys.reduce(math.min),
+      maxX: xs.reduce(math.max),
+      maxY: ys.reduce(math.max),
+    );
+  }
+
+  final du = 0.7 * textSize; // upper offset
+  final dl = -(0.7 * textSize + textSize); // lower offset (backs off the box)
+
+  // Greedy ladder: midpoint upper, midpoint lower, quarter upper, quarter lower
+  // (the exact order — and geometry — of the old greedy placer).
+  final greedy = <(double, double, double)>[
+    (mx, my, du),
+    (mx, my, dl),
+    (ax + dx * 0.25, ay + dy * 0.25, du),
+    (ax + dx * 0.25, ay + dy * 0.25, dl),
+  ];
+  for (final (cx, cy, d) in greedy) {
+    final box = boxAt(cx, cy, d);
+    if (!placed.any((p) => _boxesOverlap(p, box))) {
+      placed.add(box);
+      final (x0, y0) = anchorFor(cx, cy, d);
+      return LeaderedLabelPlacement(x: x0, y: y0, angleDeg: angleDeg);
+    }
+  }
+
+  // Nothing cleared → escape perpendicular from the midpoint in growing steps,
+  // tracking the least-overlapping fallback. The tag is never dropped.
+  var bestD = du;
+  var bestBox = boxAt(mx, my, du);
+  var bestOverlap = double.infinity;
+  var cleared = false;
+  for (var k = 1; k <= _kLeaderEscapeSteps && !cleared; k++) {
+    final step = _kLeaderEscapeFactor * textSize * k;
+    for (final d in [du + step, dl - step]) {
+      final box = boxAt(mx, my, d);
+      final ov = _totalOverlapArea(box, placed);
+      if (ov < bestOverlap) {
+        bestOverlap = ov;
+        bestBox = box;
+        bestD = d;
+      }
+      if (ov <= 0) {
+        cleared = true;
+        break;
+      }
+    }
+  }
+  placed.add(bestBox);
+  final (x0, y0) = anchorFor(mx, my, bestD);
+  return LeaderedLabelPlacement(
+      x: x0, y: y0, angleDeg: angleDeg, leaderAnchor: (x: mx, y: my));
+}
+
+// ── N4: reference setting-out grid (first honest increment) ─────────────────
+//
+// The plan export draws the network + labels + chrome but nothing that LOCATES
+// a pipe in the building — no column grid, no dimension to a structural datum.
+// This adds an OPT-IN reference grid (labelled column/row axes in sheet pixels,
+// the same space the drawn nodes live in) the exporters draw as thin chain
+// lines with bubble labels, plus auto per-riser TIE dimensions to the nearest
+// axes. Null/empty ⇒ nothing drawn (byte-identical). Positions are supplied by
+// the caller; the engine never invents a grid.
+
+/// DXF layer the reference gridlines live on (grey, chain linetype) so a CAD
+/// user can toggle the setting-out grid independently.
+const String kDxfLayerGrid = 'G-ANNO-GRID';
+
+/// One labelled setting-out axis at a fixed sheet-pixel [position] — a vertical
+/// column line (constant x, label like `A`) or a horizontal row line (constant
+/// y, label like `1`), per which list it sits in on [ReferenceGrid].
+class GridAxis {
+  final String label;
+  final double position;
+  const GridAxis(this.label, this.position);
+}
+
+/// A reference setting-out grid for a plan export (N4): vertical column axes
+/// ([columns], constant sheet-x) + horizontal row axes ([rows], constant
+/// sheet-y), in sheet pixels. [isEmpty] ⇒ the exporters draw nothing.
+class ReferenceGrid {
+  final List<GridAxis> columns;
+  final List<GridAxis> rows;
+  const ReferenceGrid({this.columns = const [], this.rows = const []});
+  bool get isEmpty => columns.isEmpty && rows.isEmpty;
+}
+
+/// The axis in [axes] whose [GridAxis.position] is nearest [pos], or null when
+/// [axes] is empty — for a riser tie to its closest setting-out line.
+GridAxis? nearestAxis(List<GridAxis> axes, double pos) {
+  GridAxis? best;
+  var bestErr = double.infinity;
+  for (final a in axes) {
+    final err = (a.position - pos).abs();
+    if (err < bestErr) {
+      bestErr = err;
+      best = a;
+    }
+  }
+  return best;
+}
+
+/// Format a tie-dimension offset of [offsetPx] sheet pixels as an integer
+/// millimetre string (CAD dimension convention, no unit), or null when the
+/// sheet is uncalibrated ([metersPerPixel] null/≤0 — a dimension without a scale
+/// would be fabricated) or the node sits on the axis (< 1 mm, nothing to tie).
+String? formatTieOffsetMm(double offsetPx, double? metersPerPixel) {
+  if (metersPerPixel == null || metersPerPixel <= 0) return null;
+  final mm = offsetPx * metersPerPixel * 1000;
+  if (mm < 1) return null;
+  return mm.round().toString();
 }

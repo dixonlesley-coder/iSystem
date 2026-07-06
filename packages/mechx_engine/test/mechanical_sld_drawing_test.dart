@@ -296,6 +296,42 @@ void main() {
       expect(dxf, contains('LEGEND'));
     });
 
+    test('N15: a plumbing riser DXF uses M-* layers, NEVER the electrical E-*',
+        () {
+      // The mechanical wrapper defaults to the M-* namespace, so the riser's
+      // text / frame / device graphics land on M-TEXT / M-FRAME / M-DETAIL and
+      // never on E-BREAKER / E-TEXT / E-FRAME (a plumbing drawing must not carry
+      // electrical layers).
+      final sheet = buildMechanicalRiserSld(
+        network: _riserNet(),
+        sizing: {'riser': _sz('riser', ServiceType.coldWater, 50)},
+        building: _levels,
+        downfeed: true,
+        supplyNote: 'Feed: gravity downfeed - roof tank',
+      );
+      final dxf =
+          sldSheetToDxf(sheet: sheet, diagramTitle: 'DIAGRAM SISTEM AIR BERSIH');
+      // No electrical class layer appears anywhere in the output.
+      for (final e in const [
+        'E-BREAKER',
+        'E-TEXT',
+        'E-FRAME',
+        'E-BUS',
+        'E-FEEDER',
+        'E-ESSENTIAL',
+      ]) {
+        expect(dxf, isNot(contains(e)), reason: 'must not emit $e');
+      }
+      // The mechanical layers ARE declared + used (LAYER records + entities).
+      expect(dxf, contains('LAYER\n2\nM-TEXT\n'));
+      expect(dxf, contains('LAYER\n2\nM-FRAME\n'));
+      expect(dxf, contains('LAYER\n2\nM-DETAIL\n'));
+      expect(dxf, contains('8\nM-TEXT\n'));
+      expect(dxf, contains('8\nM-FRAME\n'));
+      // Pipe runs keep their explicit per-service layer (e.g. cold water 'CW').
+      expect(dxf, contains('8\nCW\n'));
+    });
+
     test('sldSheetsToPdf issues a numbered SET — page count matches the input',
         () {
       // Three sheets (a per-service pair + a combined view of the same riser)
@@ -444,6 +480,138 @@ void main() {
       final leaders = s.prims.whereType<SldLine>().where((l) =>
           l.weight == SldWeight.thin && l.x1 != l.x2 && l.y1 != l.y2);
       expect(leaders, isNotEmpty);
+    });
+
+    // ── N3: adjacent short branch tags must never fuse ───────────────────────
+    test('N3: a dense cluster of coincident short branch tags stays '
+        'collision-free with leaders (no "15-CW-PPR25-CW-PPR" fusing)', () {
+      // A header feeding SIX fixtures mapping to the SAME band column (same x)
+      // on one floor: their branch tags share a midpoint and exhaust the short
+      // divert ladder. Before the escape fallback the least-overlap slot still
+      // overprinted, fusing tags into one token ("15-CW-PPR25-CW-PPR").
+      const fixtures = [
+        PlumbingFixture.waterClosetFlushValve,
+        PlumbingFixture.lavatory,
+        PlumbingFixture.shower,
+        PlumbingFixture.kitchenSink,
+        PlumbingFixture.bathtub,
+        PlumbingFixture.urinalFlushTank,
+      ];
+      const sizes = [15.0, 20.0, 25.0, 32.0, 40.0, 50.0];
+      final net = Network(
+        nodes: [
+          _n('h', 100, 0),
+          for (var i = 0; i < fixtures.length; i++)
+            _n('f$i', 400, 0, role: NodeRole.fixture, fixture: fixtures[i]),
+        ],
+        edges: [
+          for (var i = 0; i < fixtures.length; i++)
+            _e('r$i', 'h', 'f$i', ServiceType.coldWater),
+        ],
+      );
+      final s = buildMechanicalRiserSld(
+        network: net,
+        sizing: {
+          for (var i = 0; i < sizes.length; i++)
+            'r$i': _sz('r$i', ServiceType.coldWater, sizes[i]),
+        },
+        building: _levels,
+      );
+      final labels = s.prims.whereType<SldLabel>().toList();
+      for (var i = 0; i < labels.length; i++) {
+        for (var j = i + 1; j < labels.length; j++) {
+          expect(_labelBoxesIntersect(labels[i], labels[j]), isFalse,
+              reason: 'labels "${labels[i].text}" and "${labels[j].text}" '
+                  'fused');
+        }
+      }
+      // Every branch size survives, distinct — nothing fused or dropped.
+      final text = _labels(s);
+      for (final tag in [
+        '15-CW-PPR',
+        '20-CW-PPR',
+        '25-CW-PPR',
+        '32-CW-PPR',
+        '40-CW-PPR',
+        '50-CW-PPR',
+      ]) {
+        expect(text, contains(tag));
+      }
+      // The diverted tags carry leaders back to their runs (diagonal thin line).
+      expect(
+          s.prims.whereType<SldLine>().where((l) =>
+              l.weight == SldWeight.thin && l.x1 != l.x2 && l.y1 != l.y2),
+          isNotEmpty);
+    });
+
+    // ── N6: run + riser lengths on the pipe tags ─────────────────────────────
+    test('N6: edgeLengths append " - x.x m" to run + riser tags; an absent '
+        'edge stays bare', () {
+      final s = buildMechanicalRiserSld(
+        network: _riserNet(),
+        sizing: {
+          'riser': _sz('riser', ServiceType.coldWater, 50),
+          'b1': _sz('b1', ServiceType.coldWater, 25),
+          'b2': _sz('b2', ServiceType.coldWater, 20),
+        },
+        building: _levels,
+        downfeed: true,
+        edgeLengths: {
+          'riser': const Length(7.5), // §10 elevation delta
+          'b1': const Length(3.2), // branch run length
+        },
+      );
+      final text = _labels(s);
+      expect(text, contains('50-CW-PPR-GRAVITASI - 7.5 m')); // riser lift
+      expect(text, contains('25-CW-PPR-GRAVITASI - 3.2 m')); // branch stub
+      // b2 is sized but carries NO length entry ⇒ bare tag (never fabricated).
+      expect(text, contains('20-CW-PPR-GRAVITASI'));
+      expect(text, isNot(contains('20-CW-PPR-GRAVITASI - ')));
+    });
+
+    // ── N7: grouped per-type fan-out (no "+N more" truncation) ───────────────
+    test('N7: the fan-out enumerates every fixture grouped by type with counts',
+        () {
+      // Floor 1 distributes 3 WCs + 2 lavatories + 1 shower — 6 fixtures, past
+      // the legacy cap of 4 (which showed "4 + +2 more").
+      final net = Network(
+        nodes: [
+          _n('m', 200, 0),
+          for (var i = 0; i < 3; i++)
+            _n('wc$i', 100.0 + i, 1,
+                role: NodeRole.fixture,
+                fixture: PlumbingFixture.waterClosetFlushValve),
+          for (var i = 0; i < 2; i++)
+            _n('lav$i', 200.0 + i, 1,
+                role: NodeRole.fixture, fixture: PlumbingFixture.lavatory),
+          _n('sh', 300, 1,
+              role: NodeRole.fixture, fixture: PlumbingFixture.shower),
+        ],
+        edges: [_e('r', 'm', 'wc0', ServiceType.coldWater)],
+      );
+      final text = _labels(buildMechanicalRiserSld(network: net, building: _levels));
+      expect(text, contains('WC x3'));
+      expect(text, contains('Lavatory x2'));
+      expect(text, contains('Shower')); // count 1 stays bare (no " x1")
+      expect(text, isNot(contains('Shower x1')));
+      expect(text, isNot(contains('more'))); // no truncation row
+    });
+
+    // ── N2: the exported title block carries the real project name ───────────
+    test('N2: sldSheetToPdf/Dxf stamp the passed project name (no '
+        '"Untitled project")', () {
+      final sheet = buildMechanicalRiserSld(
+          network: _riserNet(), building: _levels, downfeed: true);
+      final pdf =
+          latin1.decode(sldSheetToPdf(sheet: sheet, projectName: 'Menara Contoh'));
+      expect(pdf, contains('(Menara Contoh)'));
+      expect(pdf, isNot(contains('Untitled project')));
+      final dxf = sldSheetToDxf(sheet: sheet, projectName: 'Menara Contoh');
+      expect(dxf, contains('Menara Contoh'));
+      expect(dxf, isNot(contains('Untitled project')));
+      // Omitted ⇒ the placeholder (byte-identical default preserved).
+      expect(latin1.decode(sldSheetToPdf(sheet: sheet)),
+          contains('Untitled project'));
     });
 
     // ── B1: export parity with the live Auto canvas ──────────────────────────

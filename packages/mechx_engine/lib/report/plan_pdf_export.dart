@@ -72,12 +72,23 @@ String _lengthLabel(Length l) {
   return '$txt m';
 }
 
-/// Keep PDF text to printable ASCII (WinAnsi-safe) and escape the three PDF
-/// string metacharacters so a name or label never breaks the syntax.
+/// WinAnsi (Latin-1) code points the drawing labels legitimately emit, passed
+/// through as their own byte (code point == WinAnsi byte at these positions) so
+/// a `/WinAnsiEncoding` Helvetica renders the real glyph, not `?`: U+00B7
+/// middle-dot separator (SIZE·SERVICE / cable·conduit), U+00B0 degree, U+00B1
+/// plus-minus, U+00B2/00B3 super-2/3, U+00D8/00F8 O-stroke.
+const _winAnsiPassThrough = {0xB0, 0xB1, 0xB2, 0xB3, 0xB7, 0xD8, 0xF8};
+
+/// Keep PDF text to WinAnsi-encodable characters (printable ASCII + the few
+/// Latin-1 glyphs above) and escape the three PDF string metacharacters so a
+/// name or label never breaks the syntax; anything else falls back to `?`.
 String _pdfText(String raw) {
   final b = StringBuffer();
   for (final code in raw.runes) {
-    final c = (code >= 0x20 && code <= 0x7e) ? code : 0x3f /* ? */;
+    final c =
+        (code >= 0x20 && code <= 0x7e) || _winAnsiPassThrough.contains(code)
+            ? code
+            : 0x3f /* ? */;
     if (c == 0x28 || c == 0x29 || c == 0x5c) b.writeCharCode(0x5c); // ( ) \
     b.writeCharCode(c);
   }
@@ -85,6 +96,12 @@ String _pdfText(String raw) {
 }
 
 String _n(double v) => v.toStringAsFixed(2);
+
+/// Axis-aligned overlap test for two [LabelBox]es (y-up output space) — the N3
+/// riser-base collision pass uses it to stagger the tie-dimension text and to
+/// seed the riser-label placer with the marker / UP-DN / tie boxes.
+bool _boxesOverlap(LabelBox a, LabelBox b) =>
+    a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
 
 /// Render the [sheetId]/[floorIndex] slice of [net] as a single-page ANNOTATED
 /// PDF and return its bytes. [edgeLengths] maps edge id → real §10 length (run
@@ -109,6 +126,27 @@ String _n(double v) => v.toStringAsFixed(2);
 /// [paper] selects the landscape sheet size (default A3 ⇒ byte-identical); A2
 /// / A1 enlarge the page, margins, fit, chrome anchoring and scale text alike.
 ///
+/// With [edgeElevationLabels] present (N5) each entry's `edge id → label` (e.g.
+/// `CL +2.70`, the centreline height above the run's floor FFL, built by the app
+/// from the §10 role-aware `nodeElevation`) is APPENDED to that run's size/length
+/// label (`DN32 - 4.2 m - CL +2.70`), so a foreman can hang each service at a
+/// defensible level. The engine stays pure — it receives the finished strings,
+/// never the elevation model. A missing/empty entry ⇒ that run is unchanged.
+///
+/// With [grid] present (N4) a reference setting-out grid is drawn — thin chain
+/// column/row lines with bubble labels, plus a leadered TIE dimension from each
+/// riser node to its nearest column + row axis (only when [metersPerPixel] gives
+/// a real scale — an unscaled dimension would be fabricated). Null/empty ⇒
+/// byte-identical.
+///
+/// With [edgeTags] present (N13) each entry's `edge id → stable tag` (the riser
+/// stack tag `CW-R1` for a riser, `<code>-F<floor>` for a run — built by the app
+/// via `elementTags`) is PREPENDED to that edge's label as `<tag> · <size> - …`,
+/// so a run/riser on the plan carries the SAME identifier the riser single-line,
+/// BOM and calc report use — answering "which run on the plan is CW-R1?". A
+/// missing/empty entry ⇒ that edge's label is unchanged; the default empty map ⇒
+/// byte-identical.
+///
 /// With [underlay] present (A1) the floor-plan substrate is painted FIRST,
 /// beneath every network stroke: a [VectorPlanUnderlay] as pale-grey thin
 /// linework, a [RasterPlanUnderlay] as a FlateDecode image XObject scaled to
@@ -128,6 +166,9 @@ Uint8List planToPdf({
   double? metersPerPixel,
   PlanUnderlay? underlay,
   PaperSize paper = PaperSize.a3Landscape,
+  Map<String, String>? edgeElevationLabels,
+  ReferenceGrid? grid,
+  Map<String, String>? edgeTags,
 }) {
   final pageW = paper.widthPt; // landscape sheet width, points
   final pageH = paper.heightPt; // landscape sheet height, points
@@ -293,12 +334,14 @@ Uint8List planToPdf({
     return null;
   }
 
-  // A7 label discipline: rotate to the edge bearing (a `Tm` text matrix),
-  // offset to the consistent upper side, drop on unresolvable collision.
+  // A7/N3 label discipline: rotate to the edge bearing (a `Tm` text matrix),
+  // offset to the consistent upper side; when a dense branch can't clear, the
+  // tag ESCAPES further out and is tied back to its run with a thin leader —
+  // never dropped, never fused (see `placeEdgeLabelLeadered`).
   final placedLabels = <LabelBox>[];
   void edgeLabel(double ax, double ay, double bx, double by, String text) {
     const size = 9.0;
-    final p = placeEdgeLabel(
+    final p = placeEdgeLabelLeadered(
         ax: ax,
         ay: ay,
         bx: bx,
@@ -306,7 +349,12 @@ Uint8List planToPdf({
         text: text,
         textSize: size,
         placed: placedLabels);
-    if (p == null) return; // dropped rather than overprinting
+    final lead = p.leaderAnchor;
+    if (lead != null) {
+      // A thin dark-grey leader from the run midpoint to the pulled-off label.
+      cs.writeln('0.30 0.30 0.30 RG 0.5 w');
+      cs.writeln('${_n(lead.x)} ${_n(lead.y)} m ${_n(p.x)} ${_n(p.y)} l S');
+    }
     final rad = p.angleDeg * math.pi / 180;
     final pc = math.cos(rad), ps = math.sin(rad);
     cs.writeln('BT /F1 9 Tf 0 0 0 rg '
@@ -314,7 +362,43 @@ Uint8List planToPdf({
         '${_n(p.x)} ${_n(p.y)} Tm (${_pdfText(text)}) Tj ET');
   }
 
-  // Edges: lines (runs) + riser markers, each labelled size · length.
+  // N4: the reference setting-out grid — thin chain column/row lines with bubble
+  // labels — is drawn BENEATH the network (the MEP strokes overprint it) when
+  // present. The per-riser tie dimensions ride ON TOP (after the nodes).
+  if (grid != null && !grid.isEmpty && hasContent) {
+    const bubbleR = 9.0;
+    cs.writeln('0.55 0.55 0.55 RG 0.4 w');
+    cs.writeln('[8 3 2 3] 0 d'); // chain linetype for a setting-out grid
+    for (final ax in grid.columns) {
+      final gx = tx(ax.position);
+      final y1 = ty(minY), y2 = ty(maxY);
+      cs.writeln('${_n(gx)} ${_n(y1)} m ${_n(gx)} ${_n(y2)} l S');
+      final topY = math.max(y1, y2) + bubbleR + 2;
+      circle(gx, topY, bubbleR);
+      cs.writeln('BT /F1 8 Tf 0 0 0 rg '
+          '${_n(gx - ax.label.length * 2.2)} ${_n(topY - 3)} Td '
+          '(${_pdfText(ax.label)}) Tj ET');
+    }
+    for (final ay in grid.rows) {
+      final gy = ty(ay.position);
+      final x1 = tx(minX), x2 = tx(maxX);
+      cs.writeln('${_n(x1)} ${_n(gy)} m ${_n(x2)} ${_n(gy)} l S');
+      final leftX = math.min(x1, x2) - bubbleR - 2;
+      circle(leftX, gy, bubbleR);
+      cs.writeln('BT /F1 8 Tf 0 0 0 rg '
+          '${_n(leftX - ay.label.length * 2.2)} ${_n(gy - 3)} Td '
+          '(${_pdfText(ay.label)}) Tj ET');
+    }
+    cs.writeln('[] 0 d'); // back to solid
+  }
+
+  // N3: riser-base labels are DEFERRED to a final pass so they dodge not just
+  // each other + the run labels, but the riser marker, its UP/DN text, AND the
+  // N4 tie-dimension text (all registered as occupied boxes below) — a crowded
+  // base pushes the tag off with a leader instead of overprinting the cluster.
+  final riserLabelJobs = <({double px, double py, String text})>[];
+
+  // Edges: lines (runs) + riser markers, each labelled size · length · elev.
   for (final e in net.edges) {
     final a = net.nodeById(e.fromId);
     final c = net.nodeById(e.toId);
@@ -322,11 +406,25 @@ Uint8List planToPdf({
 
     final s = sizing[e.id];
     final len = edgeLengths[e.id];
+    final elev = edgeElevationLabels?[e.id];
     final sizeText = s != null ? _sizeLabel(e, s) : null;
     final lenText = (len != null && len.meters > 0) ? _lengthLabel(len) : null;
-    final label = sizeText != null && lenText != null
-        ? '$sizeText - $lenText'
-        : (sizeText ?? lenText);
+    // N5: append the centreline-elevation token to the size/length label.
+    final parts = <String>[
+      if (sizeText != null) sizeText,
+      if (lenText != null) lenText,
+      if (elev != null && elev.isNotEmpty) elev,
+    ];
+    final core = parts.isEmpty ? null : parts.join(' - ');
+    // N13: prepend the stable element tag (`CW-R1 · DN50 - 3.5 m`). U+00B7 is
+    // WinAnsi pass-through, so the separator survives the PDF text encoder.
+    final tag = edgeTags?[e.id];
+    final String? label;
+    if (tag != null && tag.isNotEmpty) {
+      label = core == null ? tag : '$tag · $core';
+    } else {
+      label = core;
+    }
 
     if (e.kind == EdgeKind.run) {
       if (!onFloor(a) || !onFloor(c)) continue;
@@ -357,32 +455,38 @@ Uint8List planToPdf({
       cs.writeln('1.4 w'); // markers keep the symbol weight, solid
       for (final n in [a, c]) {
         if (!onFloor(n)) continue;
-        circle(tx(n.x), ty(n.y), 5);
+        final nx = tx(n.x), ny = ty(n.y);
+        circle(nx, ny, 5);
+        // N3: the marker circle is an occupied box so the base labels dodge it.
+        placedLabels.add((minX: nx - 5, minY: ny - 5, maxX: nx + 5, maxY: ny + 5));
         // A5 riser UP/DN sense from the endpoints' floor indices, above marker.
         final other = n.id == a.id ? c : a;
         final sense =
             riserUpDown(hereFloor: n.floorIndex, otherFloor: other.floorIndex);
         if (sense != null) {
+          final uw = sense.length * 9 * 0.55;
+          final ux = nx + 8;
+          var uy = ny - 8;
+          LabelBox upBox(double y) =>
+              (minX: ux, minY: y, maxX: ux + uw, maxY: y + 9);
+          // Two risers can share a node (one UP, one DN); step the second sense
+          // clear of the first so the marks STACK instead of overprinting (N3).
+          for (var step = 0; step < 4; step++) {
+            if (!placedLabels.any((p) => _boxesOverlap(p, upBox(uy)))) break;
+            uy -= 12;
+          }
           cs.writeln('BT /F1 9 Tf 0 0 0 rg '
-              '${_n(tx(n.x) + 8)} ${_n(ty(n.y) - 8)} Td (${_pdfText(sense)}) Tj ET');
+              '${_n(ux)} ${_n(uy)} Td (${_pdfText(sense)}) Tj ET');
+          // Register the UP/DN box so the riser tag never lands on it (N3).
+          placedLabels.add(upBox(uy));
         }
       }
-      // Riser length label at the on-floor end. A riser has no on-plan
-      // bearing, so it stays horizontal; its box is recorded so later run
-      // labels dodge it (A7 greedy collision).
+      // Defer the riser length/tag label to the final pass (after the tie
+      // dimensions are placed), so it dodges the marker + UP/DN + tie boxes.
       final marker = onFloor(a) ? a : (onFloor(c) ? c : null);
       if (marker != null && label != null) {
-        final lx = tx(marker.x) + 8;
-        final ly = ty(marker.y) + 3;
-        cs.writeln('BT /F1 9 Tf 0 0 0 rg '
-            '${_n(lx)} ${_n(ly)} Td '
-            '(${_pdfText(label)}) Tj ET');
-        placedLabels.add((
-          minX: lx,
-          minY: ly,
-          maxX: lx + label.length * 9 * 0.55,
-          maxY: ly + 9,
-        ));
+        riserLabelJobs
+            .add((px: tx(marker.x), py: ty(marker.y), text: label));
       }
     }
   }
@@ -404,6 +508,84 @@ Uint8List planToPdf({
       cs.writeln('0.20 0.20 0.20 rg');
       circle(px, py, 2, fill: true);
     }
+  }
+
+  // N4: per-riser TIE dimensions — the offset from each riser node to its
+  // nearest column + row axis, as a leadered dimension the mandor sets out from.
+  // Drawn ON TOP of the network, only with a real scale (an unscaled dimension
+  // would be fabricated — see `formatTieOffsetMm`).
+  if (grid != null && !grid.isEmpty && hasContent && metersPerPixel != null) {
+    final riserNodeIds = <String>{};
+    for (final e in net.edges) {
+      if (e.kind == EdgeKind.run) continue;
+      for (final id in [e.fromId, e.toId]) {
+        final n = net.nodeById(id);
+        if (n != null && onFloor(n)) riserNodeIds.add(id);
+      }
+    }
+    void tieDim(double fromXpx, double fromYpx, double toXpx, double toYpx,
+        String label) {
+      final lax = tx(fromXpx), lay = ty(fromYpx); // axis end (page space)
+      final lbx = tx(toXpx), lby = ty(toYpx); // node end (at the riser marker)
+      cs.writeln('0.20 0.20 0.20 RG 0.5 w');
+      cs.writeln('${_n(lax)} ${_n(lay)} m ${_n(lbx)} ${_n(lby)} l S');
+      // N3: stagger the dimension text AWAY from the marker (the node end) —
+      // back off along the line toward the axis, then step perpendicular until
+      // the box clears everything already placed (marker / UP-DN / labels).
+      // Register the cleared box so the riser tag (placed last) dodges it too.
+      const fs = 7.0;
+      final w = label.length * fs * 0.55;
+      const h = fs;
+      final dxp = lbx - lax, dyp = lby - lay;
+      final len = math.sqrt(dxp * dxp + dyp * dyp);
+      final ux = len > 1e-6 ? dxp / len : 1.0;
+      final uy = len > 1e-6 ? dyp / len : 0.0;
+      final perpX = uy, perpY = -ux; // the line direction rotated by -90 deg
+      final along = math.min(22.0, len * 0.5); // back off from the node
+      final cx0 = lbx - ux * along;
+      final cy0 = lby - uy * along;
+      LabelBox boxAt(double bcx, double bcy) => (
+            minX: bcx - w / 2,
+            minY: bcy - h / 2,
+            maxX: bcx + w / 2,
+            maxY: bcy + h / 2,
+          );
+      var cx = cx0 + perpX * 7, cy = cy0 + perpY * 7;
+      for (var step = 0; step < 6; step++) {
+        if (!placedLabels.any((p) => _boxesOverlap(p, boxAt(cx, cy)))) break;
+        final off = 7 + (step + 1) * (h + 4);
+        cx = cx0 + perpX * off;
+        cy = cy0 + perpY * off;
+      }
+      placedLabels.add(boxAt(cx, cy));
+      cs.writeln('BT /F1 7 Tf 0 0 0 rg '
+          '${_n(cx - w / 2)} ${_n(cy - h / 2)} Td '
+          '(${_pdfText(label)}) Tj ET');
+    }
+
+    for (final id in riserNodeIds) {
+      final n = net.nodeById(id)!;
+      final col = nearestAxis(grid.columns, n.x);
+      if (col != null) {
+        final off = formatTieOffsetMm((n.x - col.position).abs(), metersPerPixel);
+        if (off != null) tieDim(col.position, n.y, n.x, n.y, off);
+      }
+      final row = nearestAxis(grid.rows, n.y);
+      if (row != null) {
+        final off = formatTieOffsetMm((n.y - row.position).abs(), metersPerPixel);
+        if (off != null) tieDim(n.x, row.position, n.x, n.y, off);
+      }
+    }
+  }
+
+  // N3: the deferred riser-base labels — placed LAST via the leadered placer so
+  // they dodge the marker + UP/DN + tie-dimension boxes registered above. A
+  // short horizontal "edge" just right of the marker keeps the tag beside it in
+  // the common case; a crowded base escapes (up/down) and ties back with a
+  // leader rather than overprinting the cluster.
+  for (final job in riserLabelJobs) {
+    final w = job.text.length * 9.0 * 0.55;
+    edgeLabel(job.px + 8, job.py, job.px + 8 + w, job.py, job.text);
   }
 
   // ── Issuable-document chrome (opt-in; byte-identical when null) ─────────────

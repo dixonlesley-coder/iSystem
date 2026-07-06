@@ -18,15 +18,27 @@
 /// flag // VERIFY — a tag and a quantity are bookkeeping, not engineering claims.
 library;
 
-import '../electrical/model.dart' show ElectricalSystemInfo;
+import '../electrical/model.dart' show ElectricalProject, ElectricalSystemInfo;
 import '../electrical/panel_results.dart';
+import '../electrical/sources.dart' show selectGeneratorKva;
 import '../sizing/fan.dart';
 import '../sizing/pump.dart';
+import '../units.dart' show ApparentPower;
 import 'report_blocks.dart';
 import 'report_strings.dart';
 
-/// The category a schedule row belongs to — drives the section grouping.
-enum EquipmentCategory { pump, fan, airHandling, panel }
+/// The category a schedule row belongs to — drives the section grouping. The
+/// source apparatus (transformer / standby generator / capacitor bank) sit AFTER
+/// the panel section so an existing (apparatus-free) schedule is byte-identical.
+enum EquipmentCategory {
+  pump,
+  fan,
+  airHandling,
+  panel,
+  transformer,
+  generator,
+  capacitorBank,
+}
 
 extension EquipmentCategoryInfo on EquipmentCategory {
   /// The schedule-section heading for this category.
@@ -35,6 +47,9 @@ extension EquipmentCategoryInfo on EquipmentCategory {
         EquipmentCategory.fan => 'Fans',
         EquipmentCategory.airHandling => 'Air-handling (AHU / FCU / AC)',
         EquipmentCategory.panel => 'Electrical panels',
+        EquipmentCategory.transformer => 'Transformer',
+        EquipmentCategory.generator => 'Standby generator',
+        EquipmentCategory.capacitorBank => 'Capacitor bank',
       };
 }
 
@@ -144,12 +159,24 @@ class EquipmentScheduleData {
   /// the panel section is skipped.
   final ElectricalSystemResult? electrical;
 
+  /// The electrical project the source apparatus (transformer / standby genset /
+  /// PF-correction bank) is read from (N22): a transformer row from
+  /// [ElectricalProject.transformerKva], a genset row from
+  /// `sources.generator` (kVA snapped up the standard ladder against the
+  /// backup fraction × the diversified demand — the SAME derivation the building
+  /// single-line source spine draws), and a capacitor row from
+  /// `capacitorBankKvar`. Null (or an apparatus the project doesn't carry) ⇒ no
+  /// such row — the highest-value long-lead apparatus is never fabricated, but
+  /// no longer omitted from the tender schedule when the model does carry it.
+  final ElectricalProject? electricalProject;
+
   const EquipmentScheduleData({
     required this.projectName,
     required this.date,
     this.pumps = const [],
     this.fans = const [],
     this.electrical,
+    this.electricalProject,
   });
 }
 
@@ -222,6 +249,63 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
     }
   }
 
+  // ── Source apparatus (transformer / standby genset / PF bank) ──────────────
+  // The longest-lead, highest-value apparatus, tabulated from the project (no
+  // new physics — the genset kVA is a ladder SELECTION mirroring the source
+  // spine). Each is emitted only when the model actually carries it.
+  final ep = data.electricalProject;
+  if (ep != null) {
+    final tx = ep.transformerKva;
+    if (tx != null && tx.inKilovoltAmperes > 0) {
+      rows.add(EquipmentScheduleRow(
+        tag: 'TX-01',
+        service: 'Distribution transformer',
+        duty: '${_fmt(tx.inKilovoltAmperes, dp: 0)} kVA',
+        size: '',
+        modelSpec: '—',
+        qty: ep.dualTransformer ? 2 : 1,
+        category: EquipmentCategory.transformer,
+      ));
+    }
+
+    final gen = ep.sources?.generator;
+    if (gen != null) {
+      // Forced nameplate wins; else snap the backup demand up the genset ladder
+      // (backupFraction × diversified demand), exactly as the source spine does.
+      // No result / no demand and no forced kVA ⇒ can't size ⇒ no row.
+      final demandVa = data.electrical?.supply.demandVa;
+      final ApparentPower? genKva = gen.kva ??
+          (demandVa != null && demandVa.inKilovoltAmperes > 0
+              ? selectGeneratorKva(
+                  ApparentPower(demandVa.voltAmperes * gen.backupFraction))
+              : null);
+      if (genKva != null && genKva.inKilovoltAmperes > 0) {
+        rows.add(EquipmentScheduleRow(
+          tag: 'G-01',
+          service: 'Standby generator',
+          duty: '${_fmt(genKva.inKilovoltAmperes, dp: 0)} kVA',
+          size: '',
+          modelSpec: '—',
+          qty: 1,
+          category: EquipmentCategory.generator,
+        ));
+      }
+    }
+
+    final kvar = ep.capacitorBankKvar;
+    if (kvar != null && kvar > 0) {
+      rows.add(EquipmentScheduleRow(
+        tag: 'CB-01',
+        service: 'PF-correction bank',
+        duty: '${_fmt(kvar, dp: 0)} kvar',
+        size: '',
+        modelSpec: '—',
+        qty: 1,
+        category: EquipmentCategory.capacitorBank,
+      ));
+    }
+  }
+
   return rows;
 }
 
@@ -236,6 +320,10 @@ String _categoryHeading(EquipmentCategory cat, ReportStrings strings) =>
       EquipmentCategory.fan => strings(RptStringKey.catFans),
       EquipmentCategory.airHandling => strings(RptStringKey.catAirHandling),
       EquipmentCategory.panel => strings(RptStringKey.catPanels),
+      EquipmentCategory.transformer => strings(RptStringKey.catTransformer),
+      EquipmentCategory.generator => strings(RptStringKey.catGenerator),
+      EquipmentCategory.capacitorBank =>
+        strings(RptStringKey.catCapacitorBank),
     };
 
 List<RptBlock> buildEquipmentScheduleBlocks(EquipmentScheduleData data,

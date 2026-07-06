@@ -149,11 +149,18 @@ enum RptStringKey {
   // BOM + fittings tables.
   tblLengthM,
   tblSegments,
+  tblMaterial,
   bomRiser,
   bomRun,
   tblFitting,
   tblCount,
   calcClosingNote,
+
+  // Per-run/riser sizing schedule (N16).
+  headingRunSchedule,
+  tblFixtureUnits,
+  tblFlowLps,
+  tblVelocityMs,
 
   // Service names.
   svcColdWater,
@@ -204,6 +211,7 @@ enum RptStringKey {
   tblPhase,
   tblBreaker,
   tblCable,
+  tblLength,
   tblVdropCum,
   tblRcd,
 
@@ -248,6 +256,9 @@ enum RptStringKey {
   catFans,
   catAirHandling,
   catPanels,
+  catTransformer,
+  catGenerator,
+  catCapacitorBank,
   tblTag,
   tblDuty,
   tblModelSpec,
@@ -272,8 +283,16 @@ const Map<RptStringKey, String> kReportStringsEn = {
   // Mechanical.
   RptStringKey.calcTitle: 'MEP Calculation Report — {name}',
   RptStringKey.calcGenerated: '_Generated {date} · MechX_',
-  RptStringKey.calcStandardsBasis: '**Standards basis:** {name} ({rev})',
-  RptStringKey.headingUnverified: '⚠ Unverified values',
+  // N25 — a governed standards statement, not an unqualified "superseded"
+  // admission. {rev} is intentionally no longer echoed here (it carried the
+  // provenance blob); per-value provenance still prints in the Unverified
+  // section. Threaded via report_strings so the profile's revision data is
+  // untouched.
+  RptStringKey.calcStandardsBasis:
+      '**Standards basis:** {name}. Designed to SNI 8153:2015; the 2025 edition '
+          'has been published — differences under review.',
+  // N25 — ASCII heading (was the "⚠ …" emoji heading a permit office rejects).
+  RptStringKey.headingUnverified: 'Unverified values',
   RptStringKey.headingBuilding: 'Building',
   RptStringKey.headingWaterSupply: 'Water supply',
   RptStringKey.headingPressureZones: 'Pressure zones (PRV)',
@@ -399,10 +418,15 @@ const Map<RptStringKey, String> kReportStringsEn = {
 
   RptStringKey.tblLengthM: 'Length (m)',
   RptStringKey.tblSegments: 'Segments',
+  RptStringKey.tblMaterial: 'Material',
   RptStringKey.bomRiser: 'riser',
   RptStringKey.bomRun: 'run',
   RptStringKey.tblFitting: 'Fitting',
   RptStringKey.tblCount: 'Count',
+  RptStringKey.headingRunSchedule: 'Run / riser schedule',
+  RptStringKey.tblFixtureUnits: 'FU',
+  RptStringKey.tblFlowLps: 'Flow (L/s)',
+  RptStringKey.tblVelocityMs: 'Vel (m/s)',
   RptStringKey.calcClosingNote:
       '_Sizes are auto-calculated to SNI velocity/demand rules. Confirm '
           'all UNVERIFIED values and review against the applicable SNI before use._',
@@ -460,6 +484,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.tblPhase: 'Phase',
   RptStringKey.tblBreaker: 'Breaker',
   RptStringKey.tblCable: 'Cable',
+  RptStringKey.tblLength: 'Length',
   RptStringKey.tblVdropCum: 'Vdrop (cum)',
   RptStringKey.tblRcd: 'RCD',
 
@@ -505,6 +530,9 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.catFans: 'Fans',
   RptStringKey.catAirHandling: 'Air-handling (AHU / FCU / AC)',
   RptStringKey.catPanels: 'Electrical panels',
+  RptStringKey.catTransformer: 'Transformer',
+  RptStringKey.catGenerator: 'Standby generator',
+  RptStringKey.catCapacitorBank: 'Capacitor bank',
   RptStringKey.tblTag: 'Tag',
   RptStringKey.tblDuty: 'Duty',
   RptStringKey.tblModelSpec: 'Model / spec',
@@ -534,8 +562,10 @@ const Map<RptStringKey, String> kReportStringsId = {
   // Mechanical.
   RptStringKey.calcTitle: 'LAPORAN PERHITUNGAN MEP — {name}',
   RptStringKey.calcGenerated: '_Dibuat {date} · MechX_',
-  RptStringKey.calcStandardsBasis: '**Dasar standar:** {name} ({rev})',
-  RptStringKey.headingUnverified: '⚠ Nilai belum terverifikasi',
+  RptStringKey.calcStandardsBasis:
+      '**Dasar standar:** {name}. Dirancang mengacu SNI 8153:2015; edisi 2025 '
+          'telah terbit — perbedaan sedang ditinjau.',
+  RptStringKey.headingUnverified: 'Nilai belum terverifikasi',
   RptStringKey.headingBuilding: 'Bangunan',
   RptStringKey.headingWaterSupply: 'Pasokan air',
   RptStringKey.headingPressureZones: 'Zona tekanan (PRV)',
@@ -663,10 +693,15 @@ const Map<RptStringKey, String> kReportStringsId = {
 
   RptStringKey.tblLengthM: 'Panjang (m)',
   RptStringKey.tblSegments: 'Segmen',
+  RptStringKey.tblMaterial: 'Material',
   RptStringKey.bomRiser: 'riser',
   RptStringKey.bomRun: 'saluran',
   RptStringKey.tblFitting: 'Sambungan',
   RptStringKey.tblCount: 'Jumlah',
+  RptStringKey.headingRunSchedule: 'Jadwal saluran / riser',
+  RptStringKey.tblFixtureUnits: 'UBAP',
+  RptStringKey.tblFlowLps: 'Aliran (L/s)',
+  RptStringKey.tblVelocityMs: 'Kecepatan (m/s)',
   RptStringKey.calcClosingNote:
       '_Ukuran dihitung otomatis sesuai aturan kecepatan/permintaan SNI. '
           'Konfirmasi semua nilai BELUM TERVERIFIKASI dan tinjau terhadap SNI '
@@ -726,6 +761,7 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.tblPhase: 'Fasa',
   RptStringKey.tblBreaker: 'Pemutus',
   RptStringKey.tblCable: 'Kabel',
+  RptStringKey.tblLength: 'Panjang',
   RptStringKey.tblVdropCum: 'Drop V (kum)',
   RptStringKey.tblRcd: 'RCD',
 
@@ -771,6 +807,9 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.catFans: 'Kipas',
   RptStringKey.catAirHandling: 'Penanganan udara (AHU / FCU / AC)',
   RptStringKey.catPanels: 'Panel listrik',
+  RptStringKey.catTransformer: 'Transformator',
+  RptStringKey.catGenerator: 'Genset cadangan',
+  RptStringKey.catCapacitorBank: 'Bank kapasitor',
   RptStringKey.tblTag: 'Tag',
   RptStringKey.tblDuty: 'Kapasitas',
   RptStringKey.tblModelSpec: 'Model / spesifikasi',

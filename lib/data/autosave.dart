@@ -10,6 +10,7 @@ import '../store/design_issues_store.dart';
 import '../store/document_control_store.dart';
 import '../store/electrical_feed.dart';
 import '../store/electrical_store.dart';
+import '../store/equipment_spec_store.dart';
 import '../store/fire_store.dart';
 import '../store/assemblies_store.dart';
 import '../store/fixture_library_store.dart';
@@ -143,6 +144,8 @@ ProjectDocument buildDocument(ProviderReader read) {
       revisions: read(documentControlProvider).revisions,
       // Acknowledged advisory keys (H1) round-trip with the project.
       acknowledgedIssueKeys: read(acknowledgedIssuesProvider).toList(),
+      // The N23 equipment model/spec overrides round-trip with the project.
+      equipmentModelSpecs: read(equipmentModelSpecProvider),
     ),
     // The electrical sub-model (v2) round-trips alongside the plumbing project.
     electrical: read(electricalProjectProvider),
@@ -260,6 +263,9 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   // Restore acknowledged advisory keys (H1; absent on an older file ⇒ empty ⇒
   // compliance behaves exactly as before).
   read(acknowledgedIssuesProvider.notifier).set(s.acknowledgedIssueKeys.toSet());
+  // Restore the N23 equipment model/spec overrides (absent on an older file ⇒
+  // empty ⇒ every row prints the engine's own '—' placeholder).
+  read(equipmentModelSpecProvider.notifier).set(s.equipmentModelSpecs);
   // Restore the electrical project. A v2 file carries one; a plumbing-only / v1
   // document has NO electrical sub-model — fall back to an EMPTY project (no
   // fictitious sample switchboard), so its BOM / equipment schedule / unified

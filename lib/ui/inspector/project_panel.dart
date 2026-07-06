@@ -7,6 +7,7 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
+import 'package:mechx_engine/report/cover_sheet.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
@@ -22,7 +23,9 @@ import 'package:mechx_engine/report/plan_pdf_export.dart';
 import 'package:mechx_engine/report/report_blocks.dart';
 import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
-import 'package:mechx_engine/report/sld_export.dart' show sldSheetToPdf;
+import 'package:mechx_engine/report/riser_tags.dart' show elementTags;
+import 'package:mechx_engine/report/sld_export.dart'
+    show sldSheetToPdf, sldSheetsToPdf;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
@@ -52,6 +55,7 @@ import '../../store/document_control_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/command_store.dart';
 import '../../store/commercial_store.dart';
+import '../../store/equipment_spec_store.dart';
 import '../../store/export_prefs.dart';
 import '../../store/fire_store.dart';
 import '../../store/fixture_library_store.dart';
@@ -234,13 +238,17 @@ Future<String?> pickExportSave(
 /// chains), so they are emitted ONCE on the first BOM row of each (service, DN)
 /// group — sum-safe — and left empty on the rest, and empty when the plan has no
 /// entry for a group (a riser-only DN, an air duct: never invented).
+///
+/// N13: a `tag` column (right after `kind`) carries the stable element tag
+/// (`CW-R1` for a riser, `CW-F2` for a floor-grouped run) so a CSV takeoff line
+/// traces to the same run/riser on the plan, riser single-line and calc report.
 String bomCsvWithCutPlan(List<BomLine> bom, List<PipeCutGroup> cutPlan) {
   final planByKey = <({ServiceType service, int mm}), PipeCutGroup>{
     for (final g in cutPlan) (service: g.service, mm: g.diameterMm): g,
   };
   final emitted = <({ServiceType service, int mm})>{};
   final buffer = StringBuffer(
-      'service,kind,floor,nominal_dn_mm,length_m,segments,'
+      'service,kind,tag,floor,nominal_dn_mm,length_m,segments,'
       'stock_length_m,bars_purchased,waste_pct\n');
   for (final line in bom) {
     final key = (service: line.service, mm: line.diameterMm);
@@ -250,6 +258,8 @@ String bomCsvWithCutPlan(List<BomLine> bom, List<PipeCutGroup> cutPlan) {
       ..write(line.service.name)
       ..write(',')
       ..write(line.kind.name)
+      ..write(',')
+      ..write(line.tag)
       ..write(',')
       ..write(line.floorIndex == null ? '' : (line.floorIndex! + 1))
       ..write(',')
@@ -481,26 +491,34 @@ String _roomScheduleTag(RoomArea room, int fallbackIndex) {
 /// export wiring test.
 EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   final project = ref.read(projectControllerProvider);
+  // N23: the engineer-entered "Model / spec" overrides, keyed by the SAME
+  // stable tag assigned below — looked up once so a re-solve (which never
+  // touches this map) still carries the entered spec through.
+  final specs = ref.read(equipmentModelSpecProvider);
 
   // Pumps: the domestic-supply booster (upfeed) + the standpipe fire pump.
   final pumps = <PumpScheduleItem>[];
   final supplyPump = ref.read(pumpDutyProvider);
   if (supplyPump != null) {
+    const tag = 'P-01';
     pumps.add(PumpScheduleItem(
       duty: supplyPump,
       service: 'Domestic water supply',
-      tag: 'P-01',
+      tag: tag,
+      modelSpec: specs[tag],
     ));
   }
   final standpipe = ref.read(standpipeDesignProvider);
   if (standpipe.requiredFlow.cubicMetersPerSecond > 0) {
+    const tag = 'FP-01';
     pumps.add(PumpScheduleItem(
       duty: sizePump(
         flow: standpipe.requiredFlow,
         head: standpipe.pumpHead,
       ),
       service: 'Fire standpipe pump',
-      tag: 'FP-01',
+      tag: tag,
+      modelSpec: specs[tag],
     ));
   }
 
@@ -508,10 +526,12 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   final fans = <FanScheduleItem>[];
   final ductFan = ref.read(ductFanProvider);
   if (ductFan != null) {
+    const tag = 'F-01';
     fans.add(FanScheduleItem(
       duty: ductFan,
       service: 'Mechanical ventilation',
-      tag: 'F-01',
+      tag: tag,
+      modelSpec: specs[tag],
     ));
   }
 
@@ -531,10 +551,12 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     // position — deleting / reordering / skipping (uncalibrated) another room
     // never renumbers this unit, so a procured AHU-03 stays AHU-03 across
     // revisions ([_roomScheduleTag]).
+    final tag = _roomScheduleTag(r, i);
     fans.add(FanScheduleItem(
       duty: sizing.equipment,
       service: r.name,
-      tag: _roomScheduleTag(r, i),
+      tag: tag,
+      modelSpec: specs[tag],
       airHandling: true,
     ));
   }
@@ -545,7 +567,25 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     pumps: pumps,
     fans: fans,
     electrical: ref.read(electricalResultProvider),
+    // N22 (app half): the source apparatus (transformer / standby genset /
+    // PF-correction bank) the electrical project may carry, so the schedule
+    // no longer omits the highest-value long-lead items on the source spine.
+    electricalProject: ref.read(electricalProjectProvider),
   );
+}
+
+/// N23 — the equipment tags [gatherEquipmentScheduleData] currently assigns,
+/// paired with their service label, for the model/spec edit surface below.
+/// Deliberately mirrors the pump/fan/AHU tagging above (NOT the electrical
+/// panel/apparatus rows, which the engine doesn't yet accept a per-row
+/// override for) rather than re-deriving it from the built [EquipmentScheduleRow]s,
+/// so a blank spec never masquerades as the engine's own '—' placeholder.
+List<({String tag, String service})> _equipmentSpecTargets(WidgetRef ref) {
+  final data = gatherEquipmentScheduleData(ref);
+  return [
+    for (final p in data.pumps) (tag: p.tag!, service: p.service),
+    for (final f in data.fans) (tag: f.tag!, service: f.service),
+  ];
 }
 
 Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
@@ -608,11 +648,13 @@ Future<void> exportEquipmentSchedulePdf(WidgetRef ref) => runExportGuarded(
 /// "X of Y" / ISO-7200 title block) for the current [sheetId]/[floorIndex].
 /// The legend lists the services actually present on this floor; the sheet
 /// counter is the sheet's position in the rail. The document-control identity
-/// (D3: drawing number, revision tag, client, DRAWN/CHECKED/APPROVED) comes
-/// from [documentControlProvider] — an unset field stays null so its title-block
-/// row is simply omitted. The issue DATE is formatted HERE (the engine never
-/// reads the clock). North defaults to 0 (page-up). Pure-data: the export
-/// engine renders it. Public for the export wiring test.
+/// (D3: revision tag, client, DRAWN/CHECKED/APPROVED) comes from
+/// [documentControlProvider] — an unset field stays null so its title-block row
+/// is simply omitted, EXCEPT the drawing NUMBER, which is always DERIVED per
+/// sheet (N19: `M-1xx` by rail position, or the manual `documentNumber` verbatim
+/// when set). The issue DATE is formatted HERE (the engine never reads the
+/// clock). North defaults to 0 (page-up). Pure-data: the export engine renders
+/// it. Public for the export wiring test.
 DrawingChrome issuableChrome(
   WidgetRef ref, {
   required String sheetId,
@@ -643,7 +685,15 @@ DrawingChrome issuableChrome(
     sheetIndex: idx >= 0 ? idx + 1 : null,
     sheetTotal: sheets.isNotEmpty ? sheets.length : null,
     legendServices: legend,
-    drawingNumber: doc.documentNumber,
+    // N19: the plan's drawing number is DERIVED per sheet — the mechanical plan
+    // band `M-1xx`, running by RAIL POSITION — so sheet 1 is `M-101`, sheet 2
+    // `M-102`, never one number on every plan. A manual `documentNumber` remains
+    // the verbatim override, so a set left on the defaults still numbers itself.
+    drawingNumber: sheetDrawingNumber(
+      base: doc.documentNumber,
+      series: DrawingSeries.mechanicalPlan,
+      index: idx >= 0 ? idx + 1 : 1,
+    ),
     revisionNumber: doc.revisionTag,
     clientName: doc.clientName,
     drawnBy: doc.preparedBy,
@@ -651,6 +701,29 @@ DrawingChrome issuableChrome(
     approvedBy: doc.approvedBy,
     dateString: DateTime.now().toIso8601String().split('T').first,
   );
+}
+
+/// N5: a per-run centreline-elevation label ('CL +2.70') keyed by edge id — the
+/// height of each horizontal run above its floor's FFL, from the §10 role-aware
+/// [nodeElevation] (mains at the ceiling, fixture branches at fixture height).
+/// Only RUN edges get an entry (risers carry the FFL gutter on the riser sheet);
+/// the pure exporters receive the finished strings and never read the model. The
+/// average of the two endpoint elevations is the run's representative centreline.
+Map<String, String> planEdgeElevationLabels(Network net, BuildingLevels building) {
+  const mounting = MountingHeights();
+  final out = <String, String>{};
+  for (final e in net.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    final a = net.nodeById(e.fromId);
+    final b = net.nodeById(e.toId);
+    if (a == null || b == null) continue;
+    final ea = nodeElevation(a, building, mounting).meters;
+    final eb = nodeElevation(b, building, mounting).meters;
+    final aboveFfl = (ea + eb) / 2 - building.elevationOf(a.floorIndex).meters;
+    final sign = aboveFfl >= 0 ? '+' : '-';
+    out[e.id] = 'CL $sign${aboveFfl.abs().toStringAsFixed(2)}';
+  }
+  return out;
 }
 
 /// Export the current sheet/floor's drawn network as a DXF drawing file.
@@ -671,8 +744,9 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
   // vector-only; a PDF-backed sheet's raster rides the PDF exports instead).
   final planUnderlay =
       sheet.dxfPath != null ? await buildPlanUnderlay(sheet) : null;
+  final net = ref.read(networkControllerProvider).network;
   final dxf = networkToDxf(
-    net: ref.read(networkControllerProvider).network,
+    net: net,
     sizing: ref.read(sizingProvider),
     sheetId: sheet.id,
     floorIndex: floorIndex,
@@ -681,6 +755,11 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
     // (HEADER/$INSUNITS + named layers); null keeps the legacy pixel DXF.
     metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
     underlay: planUnderlay is VectorPlanUnderlay ? planUnderlay : null,
+    // N5: the §10 centreline-height token folded into each run's size label.
+    edgeElevationLabels: planEdgeElevationLabels(net, project.building),
+    // N13: the stable element tag (`CW-R1` / `CW-F2`) on each run/riser so the
+    // plan DXF traces to the same element the riser + BOM + report carry.
+    edgeTags: elementTags(net),
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -780,6 +859,11 @@ Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     // sheet, faded raster for a PDF sheet; null (placeholder / unreadable
     // source) keeps the plain export.
     underlay: await buildPlanUnderlay(sheet),
+    // N5: the §10 centreline-height token folded into each run's size label.
+    edgeElevationLabels: planEdgeElevationLabels(net, project.building),
+    // N13: the stable element tag (`CW-R1` / `CW-F2`) prepended to each label so
+    // the plan traces to the same element the riser + BOM + report carry.
+    edgeTags: elementTags(net),
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -823,10 +907,15 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
   final sep = Platform.pathSeparator;
   String out(String suffix) => '$dir$sep$base-$suffix';
 
-  DrawingChrome sldChrome() => DrawingChrome(
+  // N19: the riser single-line and the electrical single-line in the package
+  // are DIFFERENT drawings, so each derives its own number by [series] (the
+  // mechanical riser `M-201`, the electrical detail `E-201`) rather than sharing
+  // one `documentNumber` verbatim.
+  DrawingChrome sldChrome(DrawingSeries series) => DrawingChrome(
         sheetIndex: 1,
         sheetTotal: 1,
-        drawingNumber: doc.documentNumber,
+        drawingNumber:
+            sheetDrawingNumber(base: doc.documentNumber, series: series),
         revisionNumber: doc.revisionTag,
         clientName: doc.clientName,
         drawnBy: doc.preparedBy,
@@ -834,6 +923,92 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
         approvedBy: doc.approvedBy,
         dateString: today,
       );
+
+  // ── N21/N24: front matter — cover + Daftar Gambar + general-notes & MASTER
+  // legend — written FIRST so the issued set opens with a cover, an index, and
+  // the shared symbol dictionary (services / equipment / riser markers / flow
+  // chevron / fixture triangle / cable families). Built from the SAME derived
+  // drawing numbers the individual sheets stamp; rendered through the shared SLD
+  // path so it carries the uniform title block. ────────────────────────────────
+  final netFm = ref.read(networkControllerProvider).network;
+  final eProjectFm = ref.read(electricalProjectProvider);
+  final eResultFm = ref.read(electricalResultProvider);
+  final sheetsFm = ref.read(sheetsControllerProvider);
+  final curSheetFm = sheetsFm.current;
+  final rev = doc.revisionTag ?? '';
+
+  final drawingList = <DrawingListEntry>[];
+  if (curSheetFm != null) {
+    final fIdx =
+        sheetsFm.floorFor(curSheetFm.id, project.building.levelCount);
+    final planChromeFm =
+        issuableChrome(ref, sheetId: curSheetFm.id, floorIndex: fIdx);
+    drawingList.add(DrawingListEntry(
+      number: planChromeFm.drawingNumber ?? '',
+      title: 'PLAN - ${curSheetFm.name}',
+      revision: rev,
+      date: today,
+    ));
+  }
+  drawingList.add(DrawingListEntry(
+    number: sheetDrawingNumber(
+        base: doc.documentNumber, series: DrawingSeries.mechanicalRiser),
+    title: 'DIAGRAM RISER MEKANIKAL / MECHANICAL RISER SLD',
+    revision: rev,
+    date: today,
+  ));
+  if (eResultFm.order.isNotEmpty) {
+    drawingList.add(DrawingListEntry(
+      number: sheetDrawingNumber(
+          base: doc.documentNumber, series: DrawingSeries.electricalDetail),
+      title: 'DIAGRAM PANEL / ELECTRICAL SLD',
+      revision: rev,
+      date: today,
+    ));
+  }
+
+  // Cable families the electrical set actually specifies; fall back to the
+  // conventional NYY/NYM defaults only when panels exist but none are typed.
+  final specifiedCables = <String>{
+    for (final p in eProjectFm.panels)
+      for (final c in p.circuits)
+        if (c.cableType != null && c.cableType!.trim().isNotEmpty) c.cableType!,
+  };
+  final frontMatter = buildSubmittalFrontMatter(
+    projectName: base,
+    drawings: drawingList,
+    clientName: doc.clientName,
+    coverDrawingNumber: doc.documentNumber,
+    revision: doc.revisionTag,
+    date: today,
+    preparedBy: doc.preparedBy,
+    services: {for (final e in netFm.edges) e.service},
+    components: {
+      for (final n in netFm.nodes)
+        if (n.component != null) n.component!,
+    },
+    cableFamilies: specifiedCables.isNotEmpty
+        ? specifiedCables
+        : (eResultFm.order.isNotEmpty
+            ? const <String>{'NYY', 'NYM'}
+            : const <String>{}),
+  );
+  await File(out('00-cover-sheets.pdf')).writeAsBytes(sldSheetsToPdf(
+    frontMatter,
+    title: 'iSystem MEP submittal',
+    diagramTitles: kFrontMatterDiagramTitles,
+    // No per-set DWG NO on the shared block (each front-matter sheet is a
+    // distinct page — the cover carries the project number in its own register).
+    chrome: DrawingChrome(
+      revisionNumber: doc.revisionTag,
+      clientName: doc.clientName,
+      drawnBy: doc.preparedBy,
+      checkedBy: doc.checkedBy,
+      approvedBy: doc.approvedBy,
+      dateString: today,
+    ),
+    projectName: base,
+  ));
 
   // ── Reports ───────────────────────────────────────────────────────────────
   final mech = buildMechanicalReportData(ref);
@@ -931,7 +1106,7 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
     sheet: buildLiveRiserSheet(ref, null),
     title: 'iSystem mechanical single-line',
     diagramTitle: 'MECHANICAL SINGLE-LINE DIAGRAM',
-    chrome: sldChrome(),
+    chrome: sldChrome(DrawingSeries.mechanicalRiser),
   ));
 
   // ── Current-sheet annotated plan (PDF + DXF), when a sheet is loaded ─────────
@@ -955,6 +1130,10 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
           building: project.building,
         ),
     };
+    // N5: the §10 centreline-height token folded into each run's size label.
+    final elevationLabels = planEdgeElevationLabels(net, project.building);
+    // N13: the stable element tags shared by both plan formats + the reports.
+    final tags = elementTags(net);
     await File(out('plan.pdf')).writeAsBytes(planToPdf(
       net: net,
       sizing: sizing,
@@ -967,6 +1146,8 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
       chrome: planChrome,
       metersPerPixel: metersPerPixel,
       underlay: underlay,
+      edgeElevationLabels: elevationLabels,
+      edgeTags: tags,
     ));
     await File(out('plan.dxf')).writeAsString(networkToDxf(
       net: net,
@@ -976,6 +1157,8 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
       chrome: planChrome,
       metersPerPixel: metersPerPixel,
       underlay: underlay is VectorPlanUnderlay ? underlay : null,
+      edgeElevationLabels: elevationLabels,
+      edgeTags: tags,
     ));
   }
 
@@ -990,7 +1173,7 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
         result: eResult,
         breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
       ),
-      chrome: sldChrome(),
+      chrome: sldChrome(DrawingSeries.electricalDetail),
     ));
   }
 
@@ -1191,6 +1374,10 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
               // ── Document control (issuable-sheet identity, D3) ────────────
               const _DocumentControlSection(),
               const SizedBox(height: MechXSpacing.lg),
+
+              // ── Equipment schedule model/spec (N23; only shown once there's
+              // at least one tagged pump/fan/AHU to fill in a spec for) ─────
+              const _EquipmentModelSpecSection(),
             ],
           ),
         ),
@@ -1815,6 +2002,76 @@ class _DocumentControlSectionState
               onPressed: _addRevision,
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// N23 — the compact "Model / spec" editor for the equipment schedule: one
+/// row per tagged pump / fan / AHU-FCU-AC (the same tags
+/// `gatherEquipmentScheduleData` assigns), each with a free-text field
+/// committing straight into [equipmentModelSpecProvider] (persisted with the
+/// project). Threaded into every equipment-schedule export (Markdown / CSV /
+/// PDF) by tag, so a spec entered here is what procurement sees. Renders
+/// nothing when there is no tagged equipment yet — an empty/blank project is
+/// byte-identical to before this feature.
+class _EquipmentModelSpecSection extends ConsumerWidget {
+  const _EquipmentModelSpecSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // [_equipmentSpecTargets] (like the export gather it shares) reads rather
+    // than watches, so explicitly watch every provider its tag/service
+    // derivation depends on — this section then shows/hides and its rows stay
+    // live as the pump/fan/room duties change, matching how `_ResultsSection`
+    // / `_RoomsSection` watch the same state.
+    ref.watch(projectControllerProvider);
+    ref.watch(pumpDutyProvider);
+    ref.watch(standpipeDesignProvider);
+    ref.watch(ductFanProvider);
+    ref.watch(ductSettingsProvider);
+    ref.watch(roomAreasProvider);
+    final specs = ref.watch(equipmentModelSpecProvider);
+    final targets = _equipmentSpecTargets(ref);
+    if (targets.isEmpty) return const SizedBox.shrink();
+
+    final colors = context.colors;
+    final type = context.type;
+    final ctrl = ref.read(equipmentModelSpecProvider.notifier);
+
+    return DisclosureSection(
+      name: context.strings(StringKey.inspectorEquipmentSchedule),
+      defaultExpanded: false,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            context.strings(StringKey.inspectorEquipmentScheduleHint),
+            style: type.caption.copyWith(color: colors.textMuted),
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          for (final t in targets)
+            Padding(
+              padding: const EdgeInsets.only(bottom: MechXSpacing.sm),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '${t.tag} · ${t.service}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: type.caption.copyWith(color: colors.textSecondary),
+                  ),
+                  const SizedBox(height: MechXSpacing.xxs),
+                  MechXTextField(
+                    value: specs[t.tag] ?? '',
+                    hint: context.strings(StringKey.inspectorModelSpecHint),
+                    onCommitted: (v) => ctrl.setSpec(t.tag, v),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );

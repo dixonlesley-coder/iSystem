@@ -426,16 +426,24 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
     // save survives as the target or its `.bak`.
     await atomicWriteString(full, portable.encode());
   } catch (e) {
-    ref.read(loadErrorProvider.notifier).set('Could not save project: $e');
+    if (ref.context.mounted) {
+      ref.read(loadErrorProvider.notifier).set('Could not save project: $e');
+    }
     return;
   } finally {
-    ref.read(busyProvider.notifier).clear();
+    // The widget can be torn down while the save (asset gzip + atomic write, on
+    // a real isolate) is in flight — the app quit through Save-then-exit, or a
+    // test completes the instant the file lands. Touching a disposed `ref` then
+    // throws, so guard every post-await provider access on the still-live tree.
+    if (ref.context.mounted) ref.read(busyProvider.notifier).clear();
   }
   // The work is now safely on disk — record it as the clean baseline, remember
   // the home file for the next quick save, and drop any recovery snapshot.
   // Resetting the autosave mirror means work that turns dirty again AFTER this
   // save (even by undoing to a previously-mirrored state) gets a fresh
-  // recovery snapshot on the next tick.
+  // recovery snapshot on the next tick. If the tree was disposed during the
+  // write awaits (quit-during-save), the file is safe — skip the UI bookkeeping.
+  if (!ref.context.mounted) return;
   ref.read(lastSavedSignatureProvider.notifier).set(baseline);
   ref.read(autosaveMirrorProvider.notifier).clear();
   ref.read(currentProjectPathProvider.notifier).set(full);
@@ -443,6 +451,10 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   // Drop the recovery snapshot for the prior identity, the saved file, and the
   // shared untitled slot (a first save promotes from untitled to a named file).
   await clearRecoverySlots([priorPath, full, null]);
+  // `clearRecoverySlots` is an async file op — the tree can be disposed while it
+  // is in flight (see the `finally` note). The remaining work is in-memory UI
+  // bookkeeping that only matters while the app is alive, so drop it if gone.
+  if (!ref.context.mounted) return;
   ref.read(recoveryDocProvider.notifier).clear();
   // Remember this file in the machine-local MRU / last-open list.
   ref.read(appSettingsProvider.notifier).recordRecent(full, project.name);

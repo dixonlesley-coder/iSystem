@@ -5,6 +5,7 @@ import 'package:mechx_engine/geometry/dxf_drawing.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
+import 'package:mechx_engine/report/plan_symbols.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -384,5 +385,300 @@ void main() {
     expect(s.startsWith('%PDF-1.4'), isTrue);
     expect(s, contains('(Empty Project) Tj'));
     expect(s.trimRight().endsWith('%%EOF'), isTrue);
+  });
+
+  test('N5: an elevation label is appended to the run size+length label', () {
+    final s = latin1.decode(planToPdf(
+      net: net,
+      sizing: sizing,
+      edgeLengths: lengths,
+      sheetId: 's1',
+      floorIndex: 0,
+      projectName: 'Tower A',
+      sheetName: 'Ground Floor',
+      dateString: '2026-06-27',
+      edgeElevationLabels: const {'e0': 'CL +2.70'},
+    ));
+    // The run label now reads size - length - elevation, one token.
+    expect(s, contains('(DN50 - 30 m - CL +2.70) Tj'));
+  });
+
+  test('N5: null/absent elevation map leaves the bytes byte-identical', () {
+    expect(build(), equals(planToPdf(
+      net: net,
+      sizing: sizing,
+      edgeLengths: lengths,
+      sheetId: 's1',
+      floorIndex: 0,
+      projectName: 'Tower A',
+      sheetName: 'Ground Floor',
+      dateString: '2026-06-27',
+      edgeElevationLabels: null,
+    )));
+    // An empty entry for the edge is also a no-op.
+    expect(build(), equals(planToPdf(
+      net: net,
+      sizing: sizing,
+      edgeLengths: lengths,
+      sheetId: 's1',
+      floorIndex: 0,
+      projectName: 'Tower A',
+      sheetName: 'Ground Floor',
+      dateString: '2026-06-27',
+      edgeElevationLabels: const {'e0': ''},
+    )));
+  });
+
+  group('N4: reference setting-out grid', () {
+    const grid = ReferenceGrid(
+      columns: [GridAxis('A', 100), GridAxis('B', 400)],
+      rows: [GridAxis('1', 150)],
+    );
+    Uint8List withGrid({double? mpp}) => planToPdf(
+          net: net,
+          sizing: sizing,
+          edgeLengths: lengths,
+          sheetId: 's1',
+          floorIndex: 0,
+          projectName: 'Tower A',
+          sheetName: 'Ground Floor',
+          dateString: '2026-06-27',
+          metersPerPixel: mpp,
+          grid: grid,
+        );
+
+    test('draws chain gridlines + bubble axis labels', () {
+      final s = latin1.decode(withGrid());
+      expect(s, contains('[8 3 2 3] 0 d')); // the chain (setting-out) linetype
+      expect(s, contains('(A) Tj'));
+      expect(s, contains('(B) Tj'));
+      expect(s, contains('(1) Tj'));
+    });
+
+    test('a riser node ties to the nearest column when calibrated', () {
+      // The riser marker n1 sits at x=400 (== column B), y=200. Nearest column
+      // B offset 0 (skipped); nearest row 1 at y=150 → |200−150|=50 px ×
+      // 0.02 m/px × 1000 = 1000 mm tie dimension.
+      final s = latin1.decode(withGrid(mpp: 0.02));
+      expect(s, contains('(1000) Tj'));
+    });
+
+    test('no tie dimensions without a scale (would be fabricated)', () {
+      // Uncalibrated: gridlines still draw, but no tie numbers.
+      final s = latin1.decode(withGrid());
+      expect(s, isNot(contains('(1000) Tj')));
+    });
+
+    test('null/empty grid leaves the bytes byte-identical', () {
+      expect(build(), equals(planToPdf(
+        net: net,
+        sizing: sizing,
+        edgeLengths: lengths,
+        sheetId: 's1',
+        floorIndex: 0,
+        projectName: 'Tower A',
+        sheetName: 'Ground Floor',
+        dateString: '2026-06-27',
+        grid: null,
+      )));
+      expect(build(), equals(planToPdf(
+        net: net,
+        sizing: sizing,
+        edgeLengths: lengths,
+        sheetId: 's1',
+        floorIndex: 0,
+        projectName: 'Tower A',
+        sheetName: 'Ground Floor',
+        dateString: '2026-06-27',
+        grid: const ReferenceGrid(),
+      )));
+    });
+  });
+
+  test('N1: a "·" in a title-block value renders as WinAnsi 0xB7, not "?"', () {
+    final bytes = planToPdf(
+      net: net,
+      sizing: sizing,
+      edgeLengths: lengths,
+      sheetId: 's1',
+      floorIndex: 0,
+      projectName: 'Tower A · Blok 3',
+      sheetName: 'Ground Floor',
+      dateString: '2026-06-27',
+    );
+    // The shared assembler declares WinAnsi so the byte maps to the real glyph.
+    expect(latin1.decode(bytes), contains('/Encoding /WinAnsiEncoding'));
+    // The middle dot is emitted as byte 0xB7, so the name reads back intact.
+    expect(bytes, contains(0xB7));
+    expect(latin1.decode(bytes), contains('(Tower A · Blok 3) Tj'));
+    expect(latin1.decode(bytes), isNot(contains('Tower A ? Blok 3')));
+  });
+
+  // ── N13: the stable element tag is prepended to the plan labels ────────────
+  group('N13 element tags', () {
+    Uint8List buildTagged(Map<String, String> tags) => planToPdf(
+          net: net,
+          sizing: sizing,
+          edgeLengths: lengths,
+          sheetId: 's1',
+          floorIndex: 0,
+          projectName: 'Tower A',
+          sheetName: 'Ground Floor',
+          dateString: '2026-06-27',
+          edgeTags: tags,
+        );
+
+    test('a run/riser tag is prepended to its label with a middot separator',
+        () {
+      // The app passes elementTags(): the run e0 → CW-F1, the riser e1 → CW-R1.
+      final s = latin1.decode(buildTagged(const {'e0': 'CW-F1', 'e1': 'CW-R1'}));
+      // The tag rides in front of the size/length (middot is WinAnsi 0xB7).
+      expect(s, contains('CW-F1 · DN50 - 30 m'));
+      expect(s, contains('CW-R1 · '));
+      // The riser marker label still carries the riser tag on-floor.
+      expect(s, contains('CW-R1'));
+    });
+
+    test('a null/empty edgeTags map keeps the bytes byte-identical', () {
+      expect(buildTagged(const {}), equals(build()));
+      expect(
+          planToPdf(
+            net: net,
+            sizing: sizing,
+            edgeLengths: lengths,
+            sheetId: 's1',
+            floorIndex: 0,
+            projectName: 'Tower A',
+            sheetName: 'Ground Floor',
+            dateString: '2026-06-27',
+          ),
+          equals(build()));
+    });
+  });
+
+  // ── N3: the riser-base cluster never overprints ────────────────────────────
+  group('N3 riser-base collision', () {
+    // A riser whose base sits close to a setting-out grid intersection: the
+    // riser tag+size+length label, the UP/DN marker and BOTH N4 tie dimensions
+    // land on the SAME point. The exporter must stagger the tie text away from
+    // the marker and leader the riser tag off, so no two rects overprint.
+    const collideNet = Network(
+      nodes: [
+        NetNode(id: 'far', sheetId: 's1', x: 120, y: 205, floorIndex: 0),
+        NetNode(id: 'j', sheetId: 's1', x: 405, y: 205, floorIndex: 0),
+        NetNode(id: 'up', sheetId: 's1', x: 405, y: 205, floorIndex: 1),
+      ],
+      edges: [
+        NetEdge(
+            id: 'run', fromId: 'far', toId: 'j', service: ServiceType.drainage),
+        NetEdge(
+            id: 'riser',
+            fromId: 'j',
+            toId: 'up',
+            service: ServiceType.drainage,
+            kind: EdgeKind.riser),
+      ],
+    );
+    const collideSizing = {
+      'riser': EdgeSizing(
+        edgeId: 'riser',
+        service: ServiceType.drainage,
+        flow: FlowRate(0.004),
+        diameter: Diameter(0.075),
+        velocity: Velocity(1.2),
+      ),
+    };
+    const collideLengths = {'run': Length(30.0), 'riser': Length(4.0)};
+    // Column B 10 px left of the riser (→ 200 mm tie), row 1 5 px above (→ 100 mm).
+    const grid = ReferenceGrid(
+      columns: [GridAxis('B', 395)],
+      rows: [GridAxis('1', 200)],
+    );
+
+    bool overlap(LabelBox a, LabelBox b) =>
+        a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
+
+    // Every drawn text label as (text, its y-up bounding box), parsed from the
+    // content stream — a Td (plain) or Tm (rotated) anchor + the /F1 size, over
+    // the same char × size × 0.55 width heuristic the exporter's placer uses.
+    List<({String text, LabelBox box})> labelsOf(String pdf) {
+      final re = RegExp(
+          r'/F1 (\d+(?:\.\d+)?) Tf[^()\n]*?(-?\d+\.\d+) (-?\d+\.\d+) '
+          r'T[dm] \(([^)]*)\) Tj');
+      final out = <({String text, LabelBox box})>[];
+      for (final m in re.allMatches(pdf)) {
+        final fs = double.parse(m.group(1)!);
+        final x = double.parse(m.group(2)!);
+        final y = double.parse(m.group(3)!);
+        final text = m.group(4)!;
+        final w = text.length * fs * 0.55;
+        out.add((
+          text: text,
+          box: (minX: x, minY: y, maxX: x + w, maxY: y + fs),
+        ));
+      }
+      return out;
+    }
+
+    test('the riser tag, UP marker + both tie dims are non-overlapping rects',
+        () {
+      final s = latin1.decode(planToPdf(
+        net: collideNet,
+        sizing: collideSizing,
+        edgeLengths: collideLengths,
+        sheetId: 's1',
+        floorIndex: 0,
+        projectName: 'Tower A',
+        sheetName: 'GF',
+        dateString: '2026-07-06',
+        metersPerPixel: 0.02,
+        grid: grid,
+        edgeTags: const {'riser': 'D-R1'},
+      ));
+      final all = labelsOf(s);
+      LabelBox find(bool Function(String) pred) =>
+          all.firstWhere((l) => pred(l.text)).box;
+      final riser = find((t) => t.contains('D-R1')); // 'D-R1 · DN75 - 4 m'
+      final up = find((t) => t == 'UP');
+      final tie200 = find((t) => t == '200'); // the column tie
+      final tie100 = find((t) => t == '100'); // the row tie
+      final cluster = <LabelBox>[riser, up, tie200, tie100];
+      for (var i = 0; i < cluster.length; i++) {
+        for (var j = i + 1; j < cluster.length; j++) {
+          expect(overlap(cluster[i], cluster[j]), isFalse,
+              reason: 'riser-base labels $i and $j overprint');
+        }
+      }
+      // The tag survived the crowded base (never dropped).
+      expect(s, contains('D-R1'));
+    });
+
+    test('without the fix the naive slot WOULD overprint (guard is meaningful)',
+        () {
+      // Sanity anchor: at the naive fixed offset the OLD exporter used
+      // (marker + 8, marker + 3) the riser tag box overlaps the row tie text
+      // that lands beside the marker — so the passing non-overlap test above is
+      // proving a real resolution, not a vacuous one.
+      final s = latin1.decode(planToPdf(
+        net: collideNet,
+        sizing: collideSizing,
+        edgeLengths: collideLengths,
+        sheetId: 's1',
+        floorIndex: 0,
+        projectName: 'Tower A',
+        sheetName: 'GF',
+        dateString: '2026-07-06',
+        metersPerPixel: 0.02,
+        grid: grid,
+        edgeTags: const {'riser': 'D-R1'},
+      ));
+      final all = labelsOf(s);
+      final riser = all.firstWhere((l) => l.text.contains('D-R1')).box;
+      // The riser tag carries real content (size + length), so it is a wide box.
+      expect(riser.maxX - riser.minX, greaterThan(40));
+      // Both tie dimensions are present (the crowded inputs that used to pile up).
+      expect(all.where((l) => l.text == '200'), isNotEmpty);
+      expect(all.where((l) => l.text == '100'), isNotEmpty);
+    });
   });
 }

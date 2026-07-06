@@ -94,8 +94,13 @@ void main() {
   });
 
   group('pdfTitleBlock', () {
-    test('renders only rows whose value is present + a positive height', () {
-      // drawingTitle + drawnBy set; clientName intentionally absent.
+    test('value-gated rows drop; the sign-off block always rules a cell (N20)',
+        () {
+      // drawingTitle + drawnBy set; clientName / rev / approver intentionally
+      // absent. N20: DRAWN/CHECKED/APPROVED are the SAME on every issued sheet —
+      // a blank one is a RULED cell for hand sign-off — so all three rows draw
+      // (their labels), only the empty VALUE text is omitted; CLIENT/REV (empty,
+      // not sign-off) drop entirely.
       const c = DrawingChrome(
         drawingNumber: 'M-101',
         drawingTitle: 'GROUND FLOOR PLUMBING',
@@ -108,16 +113,50 @@ void main() {
         margin: 24,
         projectName: 'Tower A',
       );
-      // Present rows: PROJECT, TITLE, DWG NO, DRAWN -> 4 rows * 13pt = 52.
-      expect(tb.height, closeTo(52.0, 1e-9));
+      // Present rows: PROJECT, TITLE, DWG NO, DRAWN, CHECKED, APPROVED ->
+      // 6 rows * 13pt = 78 (the sign-off trio is always ruled).
+      expect(tb.height, closeTo(78.0, 1e-9));
       expect(tb.ops, contains('(PROJECT) Tj'));
       expect(tb.ops, contains('(Tower A) Tj'));
       expect(tb.ops, contains('(TITLE) Tj'));
       expect(tb.ops, contains('(GROUND FLOOR PLUMBING) Tj'));
+      // The whole sign-off block rules a cell even when only DRAWN has a name.
       expect(tb.ops, contains('(DRAWN) Tj'));
-      // Absent rows are not drawn.
+      expect(tb.ops, contains('(AB) Tj'));
+      expect(tb.ops, contains('(CHECKED) Tj'));
+      expect(tb.ops, contains('(APPROVED) Tj'));
+      // A blank sign-off cell rules but writes NO value text (no empty '() Tj').
+      expect(tb.ops, isNot(contains('() Tj')));
+      // Value-gated empty rows are still not drawn.
       expect(tb.ops, isNot(contains('(CLIENT) Tj')));
       expect(tb.ops, isNot(contains('(REV) Tj')));
+    });
+
+    test('a fully-empty block still draws nothing (byte-identity, N20)', () {
+      // No populated row anywhere ⇒ the sign-off trio must NOT force a block, so
+      // an exporter with a blank chrome stays byte-identical to before N20.
+      final empty = pdfTitleBlock(
+        const DrawingChrome(),
+        pageW: 842,
+        pageH: 595,
+        margin: 24,
+        projectName: '',
+      );
+      expect(empty.ops, '');
+      expect(empty.height, 0.0);
+      // A blank chrome with only a project name draws the full uniform set
+      // (PROJECT + the ruled sign-off trio).
+      final named = pdfTitleBlock(
+        const DrawingChrome(),
+        pageW: 842,
+        pageH: 595,
+        margin: 24,
+        projectName: 'Tower A',
+      );
+      expect(named.ops, contains('(PROJECT) Tj'));
+      expect(named.ops, contains('(DRAWN) Tj'));
+      expect(named.ops, contains('(CHECKED) Tj'));
+      expect(named.ops, contains('(APPROVED) Tj'));
     });
 
     test('scaleTextOverride wins over chrome.scaleText; empty -> no rows', () {
@@ -452,13 +491,79 @@ void main() {
           sheetTotal: 3,
         ),
       ));
-      // The drawing number + revision are stamped in the title block, alongside
-      // the sheet counter. (A single-line is schematic — no north arrow.)
+      // N20: the SLD now stamps the SAME shared drawing_chrome tabular block the
+      // plan exporters use — DWG NO / REV / SHEET as labelled rows (the SHEET
+      // value cell is '1 of 3', not 'Sheet 1 of 3'), the diagram title as the
+      // TITLE row. (A single-line is schematic — no north arrow.)
       expect(s, contains('E-201'));
       expect(s, contains('Rev. A'));
-      expect(s, contains('(Sheet 1 of 3) Tj'));
+      expect(s, contains('(SHEET) Tj'));
+      expect(s, contains('(1 of 3) Tj'));
       expect(s, contains('ELECTRICAL SINGLE-LINE DIAGRAM'));
       expect(s.trimRight().endsWith('%%EOF'), isTrue);
+    });
+  });
+
+  group('sheetDrawingNumber (N19)', () {
+    test('a blank base derives the per-series/per-index code', () {
+      // The exact bands the issued set uses (matching the sample harness).
+      expect(
+          sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: 1),
+          'M-101');
+      expect(
+          sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: 2),
+          'M-102');
+      expect(sheetDrawingNumber(series: DrawingSeries.mechanicalRiser),
+          'M-201');
+      expect(sheetDrawingNumber(series: DrawingSeries.electricalDetail),
+          'E-201');
+      expect(sheetDrawingNumber(series: DrawingSeries.electricalOverview),
+          'E-301');
+      expect(sheetDrawingNumber(series: DrawingSeries.electricalRiser),
+          'E-401');
+      expect(sheetDrawingNumber(series: DrawingSeries.electricalPowerOneLine),
+          'E-501');
+    });
+
+    test('every plan sheet gets a DISTINCT number (the N19 fix)', () {
+      // Three plans on a blank base ⇒ three different numbers, never one number
+      // on every sheet.
+      final nums = [
+        for (var i = 1; i <= 3; i++)
+          sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: i),
+      ];
+      expect(nums, ['M-101', 'M-102', 'M-103']);
+      expect(nums.toSet().length, 3);
+    });
+
+    test('a non-empty base is the verbatim override (trimmed)', () {
+      expect(
+          sheetDrawingNumber(
+              base: 'ME-2024-001', series: DrawingSeries.mechanicalPlan),
+          'ME-2024-001');
+      // Whitespace-only counts as blank ⇒ still derives.
+      expect(
+          sheetDrawingNumber(base: '   ', series: DrawingSeries.electricalRiser),
+          'E-401');
+      expect(
+          sheetDrawingNumber(
+              base: '  E-9  ', series: DrawingSeries.electricalDetail),
+          'E-9');
+    });
+
+    test('an index past the band is padded, never bleeding to the next band',
+        () {
+      expect(
+          sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: 12),
+          'M-112');
+      // Stays within the M-1xx discipline band even past 99.
+      expect(
+          sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: 100),
+          'M-1100');
+      // A non-positive index clamps to 1 (defensive).
+      expect(
+          sheetDrawingNumber(series: DrawingSeries.mechanicalRiser, index: 0),
+          'M-201');
     });
   });
 }

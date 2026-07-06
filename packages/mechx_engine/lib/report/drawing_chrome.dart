@@ -115,6 +115,74 @@ class DrawingChrome {
     final t = sheetTotal ?? i;
     return '$i of $t';
   }
+
+  /// A copy with the sheet counter overridden (every other field kept). A
+  /// paginated exporter builds one chrome and re-stamps the per-page `i of N`
+  /// through this so each page's SHEET row reads its own number without the
+  /// caller reconstructing the whole value. A null argument leaves that part
+  /// unchanged.
+  DrawingChrome withSheet(int? index, int? total) => DrawingChrome(
+        drawingNumber: drawingNumber,
+        revisionNumber: revisionNumber,
+        sheetIndex: index ?? sheetIndex,
+        sheetTotal: total ?? sheetTotal,
+        northAngleRad: northAngleRad,
+        legendServices: legendServices,
+        scaleBarLabel: scaleBarLabel,
+        clientName: clientName,
+        drawingTitle: drawingTitle,
+        drawnBy: drawnBy,
+        checkedBy: checkedBy,
+        approvedBy: approvedBy,
+        dateString: dateString,
+        scaleText: scaleText,
+      );
+}
+
+/// The discipline + number BAND a sheet belongs to in an issued MEP set — the
+/// source of its running drawing number. A drafting-office numbering convention
+/// (discipline prefix + a hundreds band per drawing TYPE), NOT an engineering
+/// value, so no `// VERIFY`. Mechanical plans run `M-1xx`, the mechanical riser
+/// `M-2xx`; electrical per-panel/board detail `E-2xx`, the building overview
+/// single-line `E-3xx`, the floor-by-floor riser `E-4xx`, the power one-line
+/// `E-5xx`.
+enum DrawingSeries {
+  mechanicalPlan('M', 1),
+  mechanicalRiser('M', 2),
+  electricalDetail('E', 2),
+  electricalOverview('E', 3),
+  electricalRiser('E', 4),
+  electricalPowerOneLine('E', 5);
+
+  const DrawingSeries(this.disciplinePrefix, this.hundreds);
+
+  /// `M` (mechanical) or `E` (electrical) — the sheet-number discipline prefix.
+  final String disciplinePrefix;
+
+  /// The hundreds band for this drawing TYPE (1 plans, 2 riser/detail, …).
+  final int hundreds;
+}
+
+/// Derive a UNIQUE per-sheet drawing number so an issued set never stamps one
+/// number on every sheet (N19). When [base] (the manual `documentNumber`) is
+/// non-empty the user has named the sheet explicitly, so it is honoured VERBATIM
+/// (the override). When [base] is blank the number is DERIVED from the sheet's
+/// [series] + a 1-based [index] within that band — `<prefix>-<hundreds><index2>`
+/// (`M-101`, `M-102`, `M-201`, `E-201`, `E-301`, `E-401`) — so a set left on the
+/// defaults still numbers every sheet uniquely by discipline/role/position
+/// instead of blank-on-every-sheet. Pure — the caller supplies the running
+/// index (a plan's rail position, a set sheet's ordinal). Indices past 99 keep
+/// the discipline band (`M-1100`), never bleeding into the next hundreds.
+String sheetDrawingNumber({
+  String? base,
+  required DrawingSeries series,
+  int index = 1,
+}) {
+  final b = base?.trim() ?? '';
+  if (b.isNotEmpty) return b;
+  final i = index < 1 ? 1 : index;
+  return '${series.disciplinePrefix}-${series.hundreds}'
+      '${i.toString().padLeft(2, '0')}';
 }
 
 /// A named LANDSCAPE sheet size for the plan PDF exporters — ISO A-series,
@@ -178,12 +246,23 @@ String serviceChromeLabel(ServiceType s) => switch (s) {
 
 String _n(double v) => v.toStringAsFixed(2);
 
-/// Keep PDF text to printable ASCII (WinAnsi-safe) and escape the three PDF
-/// string metacharacters — same rule the exporters use for their own text.
+/// WinAnsi (Latin-1) code points the chrome text (title block / legend / scale)
+/// legitimately emits, passed through as their own byte (code point == WinAnsi
+/// byte at these positions) so a `/WinAnsiEncoding` Helvetica renders the real
+/// glyph, not `?`: U+00B7 middle dot, U+00B0 degree, U+00B1 plus-minus,
+/// U+00B2/00B3 super-2/3, U+00D8/00F8 O-stroke.
+const _winAnsiPassThrough = {0xB0, 0xB1, 0xB2, 0xB3, 0xB7, 0xD8, 0xF8};
+
+/// Keep PDF text to WinAnsi-encodable characters (printable ASCII + the few
+/// Latin-1 glyphs above) and escape the three PDF string metacharacters — same
+/// rule the exporters use for their own text; anything else falls back to `?`.
 String _pdfText(String raw) {
   final b = StringBuffer();
   for (final code in raw.runes) {
-    final c = (code >= 0x20 && code <= 0x7e) ? code : 0x3f /* ? */;
+    final c =
+        (code >= 0x20 && code <= 0x7e) || _winAnsiPassThrough.contains(code)
+            ? code
+            : 0x3f /* ? */;
     if (c == 0x28 || c == 0x29 || c == 0x5c) b.writeCharCode(0x5c); // ( ) \
     b.writeCharCode(c);
   }
@@ -250,7 +329,20 @@ List<(String, String)> _titleBlockRows(
     ('APPROVED', chrome.approvedBy ?? ''),
     if (chrome.sheetCounter != null) ('SHEET', chrome.sheetCounter!),
   ];
-  return rows.where((r) => r.$2.trim().isNotEmpty).toList();
+  // N20: the DRAWN / CHECKED / APPROVED sign-off block belongs on EVERY issued
+  // sheet's title block — a blank one is a RULED cell for hand sign-off (the
+  // drafting convention; an approval is stamped by hand, never invented as
+  // initials), so those three rows are kept even with an empty value while the
+  // renderers omit only the empty VALUE text. The informational rows above stay
+  // value-gated. When the block carries NO real value at all (a fully-empty
+  // chrome + blank project name) nothing is drawn, so an empty chrome stays
+  // byte-identical to before this row set became uniform.
+  const signOffRows = {'DRAWN', 'CHECKED', 'APPROVED'};
+  final hasValue = rows.any((r) => r.$2.trim().isNotEmpty);
+  if (!hasValue) return const [];
+  return rows
+      .where((r) => r.$2.trim().isNotEmpty || signOffRows.contains(r.$1))
+      .toList();
 }
 
 // ── Issuable-SHEET PDF renderers (content-stream fragments, page space) ─────
@@ -316,9 +408,13 @@ String pdfSheetFrame({
     // Muted label cell (grey, small).
     cs.writeln('BT /F1 6 Tf 0.4 0.4 0.4 rg '
         '${_n(x0 + 3)} ${_n(ty)} Td (${_pdfText(label)}) Tj ET');
-    // Value cell (black).
-    cs.writeln('BT /F1 8 Tf 0 0 0 rg '
-        '${_n(x0 + labelW + 4)} ${_n(ty)} Td (${_pdfText(value)}) Tj ET');
+    // Value cell (black). A blank sign-off cell (DRAWN/CHECKED/APPROVED with no
+    // name) is a ruled cell for hand completion (N20) — its rules + label stay,
+    // only the (empty) value TEXT is omitted.
+    if (value.trim().isNotEmpty) {
+      cs.writeln('BT /F1 8 Tf 0 0 0 rg '
+          '${_n(x0 + labelW + 4)} ${_n(ty)} Td (${_pdfText(value)}) Tj ET');
+    }
   }
   return (ops: cs.toString(), height: height);
 }
@@ -744,7 +840,9 @@ String dxfTitleBlock(
     if (i > 0) line(x0, rowTop, x0 + blockW, rowTop);
     final ty = rowBot + txt * 0.5;
     text(x0 + u * 0.4, ty, txt * 0.7, label);
-    text(x0 + labelW + u * 0.4, ty, txt, value);
+    // A blank sign-off cell (N20) stays a ruled cell — the label + rules draw,
+    // the empty value TEXT is omitted.
+    if (value.trim().isNotEmpty) text(x0 + labelW + u * 0.4, ty, txt, value);
   }
   return b.toString();
 }
@@ -1261,7 +1359,10 @@ Uint8List assemblePlanPdfDocument({
         '${raster != null ? '/XObject << /Im1 6 0 R >> ' : ''}'
         '>> /Contents 4 0 R >>',
     '<< /Length $contentLen >>\nstream\n$content\nendstream',
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    // WinAnsi so the Latin-1 bytes `_pdfText` emits (U+00B7 middle dot, degree,
+    // super-2/3, O-stroke, plus-minus) render as their real glyph, not `?`.
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica '
+        '/Encoding /WinAnsiEncoding >>',
     if (raster != null) pdfRasterUnderlayObject(raster),
   ];
 

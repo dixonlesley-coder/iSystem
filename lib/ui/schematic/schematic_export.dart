@@ -24,6 +24,7 @@ import 'package:mechx_engine/report/riser_tags.dart'
 import 'package:mechx_engine/report/sld_export.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
 import 'package:mechx_engine/standards/sni.dart' show Occupancy;
+import 'package:mechx_engine/units.dart' show Length;
 
 import '../../store/app_state.dart';
 import '../../store/document_control_store.dart';
@@ -137,9 +138,10 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
 /// notes, and the H101 detail callouts — so the issued sheet is always >= the
 /// preview. Public for the export wiring test.
 SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
+  final project = ref.read(projectControllerProvider);
   final network = ref.read(networkControllerProvider).network;
   final sizing = ref.read(sizingProvider);
-  final building = ref.read(projectControllerProvider).building;
+  final building = project.building;
   final feed = ref.read(feedStrategyProvider);
   // Per-node capacity/duty suffixes — the same provider-fed resolution the
   // canvas uses (`equipmentDetail` returns null when no datum exists).
@@ -149,6 +151,18 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
     for (final node in network.nodes)
       node.id: ?equipmentDetail(node, supplyPump: pump, fan: fan),
   };
+  // N6: the same §10 length-per-edge map the plan export builds — a run via the
+  // sheet calibration, a riser via the true elevation delta — so every pipe
+  // run/riser tag carries its take-off / prefab length on the issued sheet.
+  final edgeLengths = <String, Length>{
+    for (final e in network.edges)
+      e.id: edgeLength(
+        e,
+        network,
+        calibrationBySheet: project.calibrations,
+        building: building,
+      ),
+  };
   return buildMechanicalRiserSld(
     network: network,
     sizing: sizing,
@@ -157,6 +171,7 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
     downfeed: feed == FeedStrategy.downfeed,
     supplyNote: _supplyNote(network, feed),
     equipmentDetailByNodeId: detailByNode,
+    edgeLengths: edgeLengths,
     notes: _systemNotes(ref, network),
     detailCallouts: true,
   );
@@ -166,14 +181,20 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
 /// drawing number / revision tag / client / DRAWN-CHECKED-APPROVED identity
 /// from [documentControlProvider] (unset fields stay null so their title-block
 /// rows are omitted) plus today's date — the app formats the clock, the engine
-/// never reads it.
+/// never reads it. N19: the drawing NUMBER is derived per sheet (mechanical
+/// riser band `M-2xx`, running by [index]) so a set never stamps one number on
+/// every sheet; the manual `documentNumber` remains the verbatim override.
 DrawingChrome _riserChrome(WidgetRef ref,
     {required int index, required int total}) {
   final doc = ref.read(documentControlProvider);
   return DrawingChrome(
     sheetIndex: index,
     sheetTotal: total,
-    drawingNumber: doc.documentNumber,
+    drawingNumber: sheetDrawingNumber(
+      base: doc.documentNumber,
+      series: DrawingSeries.mechanicalRiser,
+      index: index,
+    ),
     revisionNumber: doc.revisionTag,
     clientName: doc.clientName,
     drawnBy: doc.preparedBy,
@@ -193,13 +214,16 @@ Future<void> exportMechanicalRiserPdf(WidgetRef ref, ServiceType? focus) =>
       name: 'riser single-line (PDF)',
       write: () async {
         final sheet = buildLiveRiserSheet(ref, focus);
+        final project = ref.read(projectControllerProvider);
         final bytes = sldSheetToPdf(
           sheet: sheet,
           title: 'iSystem mechanical single-line',
           diagramTitle: _diagramTitle(focus),
           chrome: _riserChrome(ref, index: 1, total: 1),
+          // N2: the live project name stamps the title-block PROJECT row
+          // (no more 'Untitled project' on the flagship riser sheet).
+          projectName: project.name.isEmpty ? null : project.name,
         );
-        final project = ref.read(projectControllerProvider);
         final base = project.name.isEmpty ? 'mechanical' : project.name;
         final path = await FilePicker.saveFile(
           dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -223,12 +247,16 @@ Future<void> exportMechanicalRiserDxf(WidgetRef ref, ServiceType? focus) =>
       name: 'riser single-line (DXF)',
       write: () async {
         final sheet = buildLiveRiserSheet(ref, focus);
+        final project = ref.read(projectControllerProvider);
         final dxf = sldSheetToDxf(
           sheet: sheet,
           diagramTitle: _diagramTitle(focus),
           chrome: _riserChrome(ref, index: 1, total: 1),
+          // N2: the live project name stamps the title-block PROJECT row.
+          projectName: project.name.isEmpty ? null : project.name,
+          // N15: a plumbing riser DXF uses the M-* layer namespace, never E-*.
+          layers: SldDxfLayers.mechanical,
         );
-        final project = ref.read(projectControllerProvider);
         final base = project.name.isEmpty ? 'mechanical' : project.name;
         final path = await FilePicker.saveFile(
           dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -329,6 +357,10 @@ Future<void> exportMechanicalRiserSetDxf(
             sheet: buildLiveRiserSheet(ref, f),
             diagramTitle: _diagramTitle(f),
             chrome: _riserChrome(ref, index: i + 1, total: foci.length),
+            // N2: the live project name on every sheet of the set.
+            projectName: project.name.isEmpty ? null : project.name,
+            // N15: the M-* layer namespace, never E-*.
+            layers: SldDxfLayers.mechanical,
           );
           await File('$stem-$code.dxf').writeAsString(dxf);
         }

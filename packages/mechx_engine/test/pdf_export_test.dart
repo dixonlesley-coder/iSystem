@@ -387,6 +387,21 @@ void main() {
     expect(s.trimRight().endsWith('%%EOF'), isTrue);
   });
 
+  test('N1: a "·" in the title renders as WinAnsi 0xB7, not "?"', () {
+    final bytes = networkToPdf(
+      net: net,
+      sizing: sizing,
+      sheetId: 's1',
+      floorIndex: 0,
+      title: 'Ground Floor · cold',
+    );
+    // The shared assembler declares WinAnsi so byte 0xB7 is the real middle dot.
+    expect(latin1.decode(bytes), contains('/Encoding /WinAnsiEncoding'));
+    expect(bytes, contains(0xB7));
+    expect(latin1.decode(bytes), contains('(Ground Floor · cold) Tj'));
+    expect(latin1.decode(bytes), isNot(contains('Ground Floor ? cold')));
+  });
+
   group('A7 placeEdgeLabel (label rotation / offset / greedy collision)', () {
     // All cases: text 'DN50' (4 chars) at size 10 → estimated width
     // w = 4 × 10 × 0.55 = 22, perpendicular offset 0.7 × 10 = 7.

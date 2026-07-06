@@ -313,6 +313,47 @@ void main() {
       expect(fans.first.overflow, 2);
     });
 
+    test('N7: groups tally every fixture per TYPE with no cap loss', () {
+      // 3 WCs + 2 lavatories + 1 shower on one floor — 6 fixtures past the
+      // legacy per-fixture cap of 4.
+      final net = Network(
+        nodes: [
+          fix('wc0', 100, 0), fix('wc1', 101, 0), fix('wc2', 102, 0),
+          fix('lav0', 200, 0), fix('lav1', 201, 0),
+          fix('sh', 300, 0),
+        ],
+        edges: const [],
+      );
+      // labelOf maps each id to its fixture TYPE (WC / Lavatory / Shower).
+      String typeOf(NetNode n) => n.id.startsWith('wc')
+          ? 'WC'
+          : n.id.startsWith('lav')
+              ? 'Lavatory'
+              : 'Shower';
+      final fans = floorFanOuts(net, labelOf: typeOf, max: 4);
+      expect(fans, hasLength(1));
+      final groups = fans.first.groups;
+      // First-appearance order (x-then-id): WC, Lavatory, Shower.
+      expect(groups.map((g) => g.label), ['WC', 'Lavatory', 'Shower']);
+      expect(groups.map((g) => g.count), [3, 2, 1]);
+      // No distinct-type overflow (3 types << the group cap).
+      expect(fans.first.groupOverflow, 0);
+      // The whole population is represented — no fixture silently dropped.
+      expect(groups.fold<int>(0, (a, g) => a + g.count), 6);
+    });
+
+    test('N7: distinct-type overflow is surfaced past groupMax, never dropped',
+        () {
+      // Three distinct types, groupMax 2 => the third type overflows.
+      final net = Network(
+        nodes: [fix('a', 100, 0), fix('b', 200, 0), fix('c', 300, 0)],
+        edges: const [],
+      );
+      final fans = floorFanOuts(net, labelOf: (n) => n.id, groupMax: 2);
+      expect(fans.first.groups.map((g) => g.label), ['a', 'b']);
+      expect(fans.first.groupOverflow, 1);
+    });
+
     test('focus filter excludes nodes not in the visible set', () {
       final net = Network(
         nodes: [fix('keep', 100, 0), fix('drop', 200, 0)],

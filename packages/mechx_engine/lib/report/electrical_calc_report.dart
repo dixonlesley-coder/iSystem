@@ -277,6 +277,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
           strings(RptStringKey.tblPhase),
           strings(RptStringKey.tblBreaker),
           strings(RptStringKey.tblCable),
+          strings(RptStringKey.tblLength),
           strings(RptStringKey.tblVdropCum),
           strings(RptStringKey.tblRcd),
         ],
@@ -291,6 +292,9 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
                   '${c.breaker.deviceClass.name.toUpperCase()}/${c.breaker.curve.name.toUpperCase()}',
               '${(c.cable.runsPerPhase ?? 1) > 1 ? '${c.cable.runsPerPhase}×' : ''}'
                   '${_n(c.cable.csaMm2)} mm²',
+              // Run length (N8) — the figure that drove the printed Vdrop;
+              // geo-derived when placed, else the manual length. Absent ⇒ '—'.
+              c.lengthM > 0 ? '${_n(c.lengthM)} m' : '—',
               '${_n(c.voltageDrop.dropPercent)}% '
                   '(${_n(c.cumulativeDropPercent)}%)'
                   '${c.voltageDrop.withinLimit ? '' : ' ${strings(RptStringKey.verdictOver)}'}',
@@ -299,7 +303,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
                   : '—',
             ],
         ],
-        mdSeparator: '| --- | --- | --- | --- | --- | --- | --- | --- |',
+        mdSeparator: '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
       ));
     }
 

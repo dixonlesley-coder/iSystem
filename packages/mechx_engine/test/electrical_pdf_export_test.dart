@@ -154,7 +154,7 @@ void main() {
     expect(s, isNot(contains('[4 3] 0 d')));
   });
 
-  test('C3 — chrome renders CLIENT/DATE/SCALE/DRAWN/CHECKED/APPROVED rows', () {
+  test('C3/N20 — chrome renders the shared tabular title block', () {
     final s = latin1.decode(electricalSldToPdf(
       project: project,
       result: result,
@@ -168,6 +168,14 @@ void main() {
         sheetTotal: 1,
       ),
     ));
+    // N20: the SLD stamps the SAME shared drawing_chrome tabular grid the plan
+    // exporters use — PROJECT/CLIENT/TITLE/SCALE/DATE/DRAWN/CHECKED/APPROVED/
+    // SHEET as labelled rows. The diagram title is the TITLE row; the SHEET row
+    // value is '1 of 1' (not 'Sheet 1 of 1').
+    expect(s, contains('(PROJECT)'));
+    expect(s, contains('(Test building)'));
+    expect(s, contains('(TITLE)'));
+    expect(s, contains('(ELECTRICAL SINGLE-LINE DIAGRAM)'));
     expect(s, contains('(CLIENT)'));
     expect(s, contains('(PT Contoh)'));
     expect(s, contains('(DATE)'));
@@ -179,7 +187,8 @@ void main() {
     // A single-line is schematic: SCALE defaults NTS when no scale is given.
     expect(s, contains('(SCALE)'));
     expect(s, contains('(NTS)'));
-    expect(s, contains('(Sheet 1 of 1)'));
+    expect(s, contains('(SHEET)'));
+    expect(s, contains('(1 of 1)'));
   });
 
   test('an explicit chrome.scaleText wins over the NTS default', () {
@@ -212,6 +221,62 @@ void main() {
     expect('[] 0 d'.allMatches(s).length, 1);
     // The reset comes after the set, so the solid line stays solid.
     expect(s.indexOf('[] 0 d'), greaterThan(s.indexOf('[4 3] 0 d')));
+  });
+
+  group('N1 WinAnsi text encoding (the "·" separator, not "?")', () {
+    test('the Helvetica font dict declares /WinAnsiEncoding', () {
+      // Without it the base-14 Helvetica falls back to StandardEncoding, where
+      // byte 0xB7 is NOT the middle dot; the explicit /WinAnsiEncoding pins it.
+      final s = latin1.decode(
+          electricalSldToPdf(project: project, result: result, title: 'SLD'));
+      expect(s, contains('/Encoding /WinAnsiEncoding'));
+    });
+
+    test('a middle-dot label emits the WinAnsi byte 0xB7, never "?"', () {
+      // A real cable · conduit / device · starter cell carries U+00B7 — the
+      // finding's exact garble ("NYY ... ? PVC 25", "MCB 16A 3ph ? star-delta").
+      const sheet = SldSheet(
+        prims: [SldLabel(4, 10, 'NYY 4x6 mm2 · PVC 25')],
+        minX: 0,
+        minY: 0,
+        maxX: 200,
+        maxY: 20,
+        legend: [],
+        supplyNote: '',
+      );
+      final bytes = electricalSldToPdf(sheet: sheet);
+      // The dot is written as the single WinAnsi byte 0xB7 (183)…
+      expect(bytes, contains(0xB7));
+      // …so under latin1 the literal reads back intact, NOT as 'NYY ... ? PVC'.
+      final s = latin1.decode(bytes);
+      expect(s, contains('NYY 4x6 mm2 · PVC 25'));
+      expect(s, isNot(contains('NYY 4x6 mm2 ? PVC 25')));
+    });
+
+    test('a genuinely non-WinAnsi glyph still falls back to "?"', () {
+      // U+2211 (∑) is not a WinAnsi glyph → the '?' fallback must survive so a
+      // future unmappable character never writes a byte the font can't render.
+      const sheet = SldSheet(
+        prims: [SldLabel(4, 10, 'A ∑ B')],
+        minX: 0,
+        minY: 0,
+        maxX: 100,
+        maxY: 20,
+        legend: [],
+        supplyNote: '',
+      );
+      final s = latin1.decode(electricalSldToPdf(sheet: sheet));
+      expect(s, contains('A ? B'));
+    });
+
+    test('the realistic detail set carries no garbled "?" separator', () {
+      // The finding's core: a contractor pricing from the sheet must never read
+      // '? star-delta' or '? PVC 25'. The MDP→LP-1 detail is all ASCII + '·',
+      // so no output byte is '?' (0x3f).
+      final bytes =
+          electricalSldToPdfPaginated(project: project, result: result);
+      expect(bytes, isNot(contains(0x3f)));
+    });
   });
 
   group('electricalSldToPdfPaginated (C1)', () {

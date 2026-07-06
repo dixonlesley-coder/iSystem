@@ -21,6 +21,7 @@ import '../network/network.dart';
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../standards/pipe_products.dart' show PipeProduct;
 import '../standards/sni.dart' show PlumbingFixture;
+import '../units.dart' show Length;
 import 'plan_symbols.dart' show planComponentPrims, planFixturePrims;
 import 'riser_tags.dart';
 import 'sld_sheet.dart';
@@ -56,6 +57,12 @@ const double kMechRiserLabelCharW = 0.6;
 // A chosen label slot pulled more than this far (drawing units) from its default
 // anchor gets a short leader line back to the element it tags.
 const double _kLeaderThreshold = 14;
+// When the ladder finds no CLEAR slot (two short branch tags share a midpoint),
+// the placer escapes further out in these steps until it clears, then leaders
+// back — so tags never fuse into one unreadable token (N3). VERIFY: a drafting
+// declutter heuristic, not a standard.
+const double _kEscapeStep = 12;
+const int _kEscapeSteps = 6;
 // Minimal x nudge per coincident node so two fixtures at the same world x don't
 // stack their markers/labels.
 const double _kSpreadStep = 18;
@@ -88,6 +95,12 @@ const double _kSpreadStep = 18;
 ///     actually carries the relevant plant nodes, its capacity/duty text only
 ///     when [equipmentDetailByNodeId] supplies it (absent data ⇒ omitted).
 /// Pure — no clock, no IO.
+///
+/// [edgeLengths] (N6) is the SAME §10 length-per-edge map the plan export
+/// consumes — a riser carries its true elevation delta, a run its calibrated
+/// pixel length. When supplied, each pipe run/riser tag gains a ` - x.x m`
+/// suffix so the riser sheet is a take-off / prefab source (an edge with no
+/// entry, or the default EMPTY map, appends nothing ⇒ byte-identical).
 SldSheet buildMechanicalRiserSld({
   required Network network,
   Map<String, EdgeSizing> sizing = const {},
@@ -96,6 +109,7 @@ SldSheet buildMechanicalRiserSld({
   bool downfeed = false,
   String supplyNote = '',
   Map<String, String> equipmentDetailByNodeId = const {},
+  Map<String, Length> edgeLengths = const {},
   List<String> notes = const [],
   bool detailCallouts = false,
 }) {
@@ -206,14 +220,17 @@ SldSheet buildMechanicalRiserSld({
     if (fo.floorIndex < loFloor || fo.floorIndex > hiFloor) continue;
     var y = bandTop(fo.floorIndex) + 18;
     placer.reserve(SldLabel(fanX, y, 'BRANCHES', size: 7, bold: true));
-    for (final lbl in fo.labels) {
+    // N7: enumerate EVERY fixture the floor serves, grouped per type with a
+    // count (`WC x3`) — no `+N more` truncation. A count of 1 stays bare.
+    for (final g in fo.groups) {
       y += 12;
-      placer.reserve(SldLabel(fanX + 6, y, lbl, size: 7));
+      final row = g.count > 1 ? '${g.label} x${g.count}' : g.label;
+      placer.reserve(SldLabel(fanX + 6, y, row, size: 7));
     }
-    if (fo.overflow > 0) {
+    if (fo.groupOverflow > 0) {
       y += 12;
-      placer.reserve(SldLabel(fanX + 6, y, '+${fo.overflow} more', size: 7,
-          role: SldRole.source));
+      placer.reserve(SldLabel(fanX + 6, y, '+${fo.groupOverflow} types',
+          size: 7, role: SldRole.source));
     }
   }
 
@@ -294,7 +311,7 @@ SldSheet buildMechanicalRiserSld({
     }
 
     final fn = riserFunctionFor(network, e, downfeed: downfeed);
-    final tag = _pipeTag(sz, e, function: fn);
+    final tag = _pipeTag(sz, e, function: fn, length: edgeLengths[e.id]);
     if (e.kind == EdgeKind.riser) {
       // Tag + riser id beside the vertical leg.
       final midY = (a.dy + b.dy) / 2;
@@ -462,15 +479,30 @@ Set<String>? _focusedNodeIds(Network network, ServiceType? focus) {
   return ids;
 }
 
-/// The industry pipe tag `SIZE-SERVICE-MATERIAL[-FUNCTION]`; an air duct reads
-/// `O<mm>` (ASCII, no Ø). A null sizing falls back to a service-only tag.
-String _pipeTag(EdgeSizing? s, NetEdge edge, {RiserFunction? function}) {
+/// The industry pipe tag `SIZE-SERVICE-MATERIAL[-FUNCTION][ - x.x m]`; an air
+/// duct reads `O<mm>` (ASCII, no Ø). A null sizing falls back to a service-only
+/// tag. [length] (N6), when non-null and positive, appends the run/riser length
+/// as ` - x.x m` (a §10 metre figure — take-off / prefab data); null ⇒ no
+/// suffix.
+String _pipeTag(EdgeSizing? s, NetEdge edge,
+    {RiserFunction? function, Length? length}) {
   final code = riserServiceCode(edge.service);
-  if (s == null) return code;
-  final mm = s.diameter.inMillimeters.round();
-  if (s.service.regime == FlowRegime.air) return 'O$mm';
-  final base = '$mm-$code-${_pipeMaterialCode(edge.pipeProduct, edge.service)}';
-  return function != null ? '$base-${function.code}' : base;
+  String tag;
+  if (s == null) {
+    tag = code;
+  } else {
+    final mm = s.diameter.inMillimeters.round();
+    if (s.service.regime == FlowRegime.air) {
+      tag = 'O$mm';
+    } else {
+      final base = '$mm-$code-${_pipeMaterialCode(edge.pipeProduct, edge.service)}';
+      tag = function != null ? '$base-${function.code}' : base;
+    }
+  }
+  if (length != null && length.meters > 0) {
+    tag = '$tag - ${length.meters.toStringAsFixed(1)} m';
+  }
+  return tag;
 }
 
 /// Pipe material code — the edge's chosen product, else the conventional default
@@ -812,6 +844,16 @@ class _LabelPlacer {
   _LabelRect _rectFor(double x, double y, String text, double size) =>
       _LabelRect(x, y - size, x + _labelWidth(text, size), y);
 
+  /// Total overlap AREA of a label box at ([x], [y]) against every placed box.
+  double _overlapAt(double x, double y, String text, double size) {
+    final r = _rectFor(x, y, text, size);
+    var total = 0.0;
+    for (final p in _placed) {
+      total += p.overlap(r);
+    }
+    return total;
+  }
+
   /// Emit a FIXED-position label (gutter / fan-out) and record its box so
   /// movable tags divert around it.
   void reserve(SldLabel label) {
@@ -821,9 +863,15 @@ class _LabelPlacer {
 
   /// Place a MOVABLE tag at its default ([defaultX], [defaultY]) trying the
   /// [candidates] offsets (candidates[0] == the default) in order; the first
-  /// slot clearing every placed box wins, else the least-overlapping. A slot
-  /// displaced more than [_kLeaderThreshold] from the default gets a thin leader
-  /// from ([anchorX], [anchorY]) — the element the tag names — to the label.
+  /// slot clearing every placed box wins, else the least-overlapping. When NO
+  /// ladder slot clears — two short branch tags sharing a midpoint (N3) — the
+  /// placer ESCAPES further out (growing vertical steps, down then up) until it
+  /// clears, so tags never overprint into one fused token. A tag is the
+  /// drawing's content and is never dropped: if even the escape can't fully
+  /// clear, the least-overlapping escape slot is used. Any slot displaced more
+  /// than [_kLeaderThreshold] from the default — or that could not be fully
+  /// cleared — gets a thin leader from ([anchorX], [anchorY]), the element the
+  /// tag names, to the label.
   void place(
     double defaultX,
     double defaultY,
@@ -837,15 +885,13 @@ class _LabelPlacer {
   }) {
     Offset best = candidates.isEmpty ? const Offset(0, 0) : candidates.first;
     var bestOverlap = double.infinity;
+    var cleared = false;
     for (final c in candidates) {
-      final r = _rectFor(defaultX + c.dx, defaultY + c.dy, text, size);
-      var total = 0.0;
-      for (final p in _placed) {
-        total += p.overlap(r);
-      }
+      final total = _overlapAt(defaultX + c.dx, defaultY + c.dy, text, size);
       if (total <= 0) {
         best = c;
         bestOverlap = 0;
+        cleared = true;
         break;
       }
       if (total < bestOverlap) {
@@ -853,12 +899,31 @@ class _LabelPlacer {
         best = c;
       }
     }
+    // No ladder slot cleared → escape vertically (down then up, growing) from
+    // the least-bad column until a clear slot appears.
+    if (!cleared) {
+      final baseDx = best.dx;
+      for (var k = 1; k <= _kEscapeSteps && !cleared; k++) {
+        for (final dy in [_kEscapeStep * k, -_kEscapeStep * k]) {
+          final total = _overlapAt(defaultX + baseDx, defaultY + dy, text, size);
+          if (total < bestOverlap) {
+            bestOverlap = total;
+            best = Offset(baseDx, dy);
+          }
+          if (total <= 0) {
+            cleared = true;
+            break;
+          }
+        }
+      }
+    }
     final lx = defaultX + best.dx;
     final ly = defaultY + best.dy;
     _placed.add(_rectFor(lx, ly, text, size));
-    // A tag pulled well off its default anchor gets a leader so its element
-    // stays legible.
-    if (math.sqrt(best.dx * best.dx + best.dy * best.dy) > _kLeaderThreshold) {
+    // A tag pulled well off its default anchor — or one that could not be fully
+    // cleared — gets a leader so its element stays legible / unfused.
+    if (!cleared ||
+        math.sqrt(best.dx * best.dx + best.dy * best.dy) > _kLeaderThreshold) {
       prims.add(SldLine(anchorX, anchorY, lx, ly,
           weight: SldWeight.thin, role: role));
     }

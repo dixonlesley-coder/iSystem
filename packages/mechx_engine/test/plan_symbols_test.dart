@@ -1,4 +1,5 @@
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/drawing_chrome.dart' show LabelBox;
 import 'package:mechx_engine/report/plan_symbols.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
 import 'package:test/test.dart';
@@ -116,6 +117,84 @@ void main() {
       for (final s in ['UP', 'DN']) {
         expect(s.codeUnits.every((c) => c >= 0x20 && c <= 0x7e), isTrue);
       }
+    });
+  });
+
+  // ── N3: never-drop leadered edge-label placer ──────────────────────────────
+  group('placeEdgeLabelLeadered (N3)', () {
+    test('a clear first placement returns no leader (the common case)', () {
+      final placed = <LabelBox>[];
+      final p = placeEdgeLabelLeadered(
+          ax: 0, ay: 0, bx: 100, by: 0, text: 'DN50', textSize: 9, placed: placed);
+      expect(p.leaderAnchor, isNull);
+      expect(placed, hasLength(1)); // the box was recorded
+    });
+
+    test('the first placement matches the greedy geometry exactly', () {
+      // Horizontal edge midpoint (50,0), upper side d = 0.7·9 = 6.3, width
+      // w = 4·9·0.55 = 19.8 → anchor x0 = 50 − 19.8/2 = 40.1, y0 = 0 + 6.3.
+      final p = placeEdgeLabelLeadered(
+          ax: 0, ay: 0, bx: 100, by: 0, text: 'DN50', textSize: 9, placed: []);
+      expect(p.x, closeTo(40.1, 1e-9));
+      expect(p.y, closeTo(6.3, 1e-9));
+      expect(p.angleDeg, closeTo(0, 1e-9));
+    });
+
+    test('crowded tags sharing a midpoint never fuse: extras escape + leader',
+        () {
+      // Three identical short edges: the greedy ladder seats the 1st upper and
+      // the 2nd lower (both clear, no leader); the 3rd exhausts every greedy
+      // slot, so it ESCAPES perpendicular and is tied back with a leader — never
+      // dropped, never fused (the OLD placer returned null here).
+      final placed = <LabelBox>[];
+      final a = placeEdgeLabelLeadered(
+          ax: 0, ay: 0, bx: 30, by: 0, text: 'DN15', textSize: 9, placed: placed);
+      final b = placeEdgeLabelLeadered(
+          ax: 0, ay: 0, bx: 30, by: 0, text: 'DN25', textSize: 9, placed: placed);
+      final c = placeEdgeLabelLeadered(
+          ax: 0, ay: 0, bx: 30, by: 0, text: 'DN32', textSize: 9, placed: placed);
+      expect(a.leaderAnchor, isNull); // first clears (upper)
+      expect(b.leaderAnchor, isNull); // second clears (lower)
+      expect(c.leaderAnchor, isNotNull); // third escaped → leadered
+      expect(c.leaderAnchor!.x, closeTo(15, 1e-9)); // the edge midpoint
+      // All three boxes recorded — no label was dropped.
+      expect(placed, hasLength(3));
+    });
+
+    test('never returns null even when every escape slot is crowded', () {
+      // Pre-fill the placed list with a wide band of boxes so no slot is clear;
+      // the placer must still return a (leadered) placement, not throw/null.
+      final placed = <LabelBox>[
+        for (var dy = -200.0; dy <= 200.0; dy += 5)
+          (minX: -100, minY: dy, maxX: 100, maxY: dy + 4),
+      ];
+      final p = placeEdgeLabelLeadered(
+          ax: 0, ay: 0, bx: 40, by: 0, text: 'DN80', textSize: 9, placed: placed);
+      expect(p, isA<LeaderedLabelPlacement>());
+      expect(p.leaderAnchor, isNotNull);
+    });
+  });
+
+  // ── N4: reference setting-out grid helpers ─────────────────────────────────
+  group('reference grid helpers (N4)', () {
+    test('nearestAxis picks the closest position (and null when empty)', () {
+      const axes = [GridAxis('A', 100), GridAxis('B', 300), GridAxis('C', 600)];
+      expect(nearestAxis(axes, 260)?.label, 'B');
+      expect(nearestAxis(axes, 90)?.label, 'A');
+      expect(nearestAxis(const <GridAxis>[], 5), isNull);
+    });
+
+    test('formatTieOffsetMm converts px→mm; null when unscaled or on-axis', () {
+      // 120 px × 0.02 m/px × 1000 = 2400 mm.
+      expect(formatTieOffsetMm(120, 0.02), '2400');
+      expect(formatTieOffsetMm(0, 0.02), isNull); // on the axis
+      expect(formatTieOffsetMm(120, null), isNull); // uncalibrated
+      expect(formatTieOffsetMm(120, 0), isNull);
+    });
+
+    test('an empty ReferenceGrid is isEmpty', () {
+      expect(const ReferenceGrid().isEmpty, isTrue);
+      expect(const ReferenceGrid(columns: [GridAxis('A', 1)]).isEmpty, isFalse);
     });
   });
 }
