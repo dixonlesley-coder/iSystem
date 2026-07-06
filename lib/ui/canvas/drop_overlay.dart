@@ -9,6 +9,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'segment_palette.dart';
 import 'segment_symbols.dart';
+import 'underlay_snap_service.dart';
 import 'viewport.dart';
 
 /// ≈14 screen px snap radius — the same value the store's add-actions use, so
@@ -231,6 +232,18 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
         final world = transform.screenToWorld(local);
         final ctrl = ref.read(networkControllerProvider.notifier);
         final snapWorld = _kSnapScreenPx / transform.scale; // ≈14 screen px
+        // B12: for a POINT drop with no node/edge merge target, snap the free
+        // drop position onto the plan underlay (a DXF wall / reference line / PDF
+        // ink ridge) so a placed fixture/fitting lands on the architecture. The
+        // merge (node/edge) path always takes precedence — underlay only moves a
+        // free drop; a segment drop keeps its two-endpoint node snap unchanged.
+        Offset pointWorld(Offset w) {
+          if (_mergeTarget(w, snapWorld).point != null) return w;
+          return underlaySnapFor(ref, widget.sheetId, transform.scale)
+                  ?.call(w) ??
+              w;
+        }
+
         switch (details.data.kind) {
           case PaletteItemKind.pipeSegment:
           case PaletteItemKind.ductSegment:
@@ -246,16 +259,18 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
           // promise is TRUE — adopt the ringed node / tee into the ringed run,
           // never a coincident free twin that carries demand the solve misses.
           case PaletteItemKind.fitting:
-            ctrl.mergeOrAddFitting(widget.sheetId, widget.floorIndex, world,
+            ctrl.mergeOrAddFitting(
+                widget.sheetId, widget.floorIndex, pointWorld(world),
                 snapRadius: snapWorld);
           case PaletteItemKind.terminal:
-            ctrl.mergeOrAddTerminal(widget.sheetId, widget.floorIndex, world,
+            ctrl.mergeOrAddTerminal(
+                widget.sheetId, widget.floorIndex, pointWorld(world),
                 snapRadius: snapWorld);
           case PaletteItemKind.component:
             final c = details.data.component;
             if (c != null) {
               ctrl.mergeOrAddComponent(
-                  widget.sheetId, widget.floorIndex, world, c,
+                  widget.sheetId, widget.floorIndex, pointWorld(world), c,
                   snapRadius: snapWorld);
             }
         }
@@ -292,6 +307,12 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
               if (t.point != null) {
                 ringScreen = transform.worldToScreen(t.point!);
                 ringIsTee = t.isTee;
+              } else {
+                // B12: no merge target — preview the plan-underlay snap the drop
+                // will use, so the ring matches where the point will land.
+                final u = underlaySnapFor(ref, widget.sheetId, transform.scale)
+                    ?.call(world);
+                if (u != null) ringScreen = transform.worldToScreen(u);
               }
           }
         }

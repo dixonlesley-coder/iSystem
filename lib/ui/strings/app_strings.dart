@@ -237,6 +237,8 @@ enum StringKey {
   inspectorRedo,
   inspectorClear,
   inspectorOrtho,
+  inspectorSnapToPlan,
+  inspectorRefLine,
   inspectorDuplicateFloorUp,
 
   // Inspector — Sizing section.
@@ -884,6 +886,8 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorRedo: 'Redo',
   StringKey.inspectorClear: 'Clear',
   StringKey.inspectorOrtho: 'Ortho',
+  StringKey.inspectorSnapToPlan: 'Snap to plan',
+  StringKey.inspectorRefLine: 'Ref line',
   StringKey.inspectorDuplicateFloorUp: 'Duplicate floor up',
 
   // Inspector — Sizing section.
@@ -1601,6 +1605,8 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorRedo: 'Ulangi',
   StringKey.inspectorClear: 'Bersihkan',
   StringKey.inspectorOrtho: 'Orto',
+  StringKey.inspectorSnapToPlan: 'Kancing ke gambar',
+  StringKey.inspectorRefLine: 'Garis acuan',
   StringKey.inspectorDuplicateFloorUp: 'Gandakan ke lantai atas',
 
   // Inspector — Sizing section.

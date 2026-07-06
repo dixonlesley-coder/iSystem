@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/models/sheet.dart';
+import 'package:mechx/store/reference_line_store.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
 import 'package:mechx_engine/electrical/control/starter.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
@@ -299,6 +300,44 @@ void main() {
       network: Network(),
     );
     expect(ProjectDocument.decode(bare.encode()).rooms, isEmpty);
+  });
+
+  test('reference lines round-trip; an old file loads none', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [Sheet(id: 's1', name: 'P', sizePx: Size(100, 100))],
+      network: Network(),
+      referenceLines: [
+        ReferenceLine(
+          id: 'rl0',
+          sheetId: 's1',
+          x1: 0,
+          y1: 0,
+          x2: 30,
+          y2: 40,
+          label: 'Shaft wall',
+        ),
+      ],
+    );
+    final decoded = ProjectDocument.decode(doc.encode());
+    expect(decoded.referenceLines, hasLength(1));
+    final line = decoded.referenceLines.first;
+    expect(line.id, 'rl0');
+    expect(line.sheetId, 's1');
+    expect(line.label, 'Shaft wall');
+    expect(line.pixelLength, closeTo(50, 1e-9));
+
+    // A document without the referenceLines key loads an empty list.
+    const bare = ProjectDocument(
+      projectName: 'Y',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    expect(ProjectDocument.decode(bare.encode()).referenceLines, isEmpty);
   });
 
   test('diffuser face size round-trips on a node; absent ⇒ null', () {

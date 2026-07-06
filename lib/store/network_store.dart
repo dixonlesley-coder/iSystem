@@ -204,6 +204,7 @@ class NetworkController extends Notifier<DrawingState> {
     double? endSnapRadius,
     bool gridSnap = false,
     double? gridMetersPerPixel,
+    Offset? Function(Offset world)? underlaySnap,
   }) {
     if (state.tool != DrawTool.drawRun) return;
     if (state.pendingPoint == null) {
@@ -243,10 +244,14 @@ class NetworkController extends Notifier<DrawingState> {
     // tee/adopt — else the run silently disconnects at its source).
     final aId = _resolveDrawEndpoint(nodes, edges, sheetId, floorIndex,
         state.pendingPoint!, snapRadius, state.service,
-        gridSnap: gridSnap, gridMetersPerPixel: gridMetersPerPixel);
+        gridSnap: gridSnap,
+        gridMetersPerPixel: gridMetersPerPixel,
+        underlaySnap: underlaySnap);
     final bId = _resolveDrawEndpoint(nodes, edges, sheetId, floorIndex, world,
         endSnapRadius ?? snapRadius, state.service,
-        gridSnap: gridSnap, gridMetersPerPixel: gridMetersPerPixel);
+        gridSnap: gridSnap,
+        gridMetersPerPixel: gridMetersPerPixel,
+        underlaySnap: underlaySnap);
     if (aId == bId) {
       // zero-length / same node — just advance the pending point. Any split the
       // resolve did was on a LOCAL copy; discarding it leaves state untouched.
@@ -1552,6 +1557,7 @@ class NetworkController extends Notifier<DrawingState> {
     double snapRadius = 12,
     bool gridSnap = false,
     double? gridMetersPerPixel,
+    Offset? Function(Offset world)? underlaySnap,
   }) {
     final from = state.network.nodeById(fromId);
     if (from == null) return null;
@@ -1563,7 +1569,9 @@ class NetworkController extends Notifier<DrawingState> {
     final edges = [...state.network.edges];
     final farId = _resolveDrawEndpoint(
         nodes, edges, sheetId, floorIndex, world, snapRadius, svc,
-        gridSnap: gridSnap, gridMetersPerPixel: gridMetersPerPixel);
+        gridSnap: gridSnap,
+        gridMetersPerPixel: gridMetersPerPixel,
+        underlaySnap: underlaySnap);
     if (farId == fromId) return null; // collapsed onto the source — nothing laid
 
     final edgeId = _id('e');
@@ -1588,6 +1596,7 @@ class NetworkController extends Notifier<DrawingState> {
     ServiceType service, {
     bool gridSnap = false,
     double? gridMetersPerPixel,
+    Offset? Function(Offset world)? underlaySnap,
   }) {
     // 1) snap to an existing node on this floor.
     final snapped = _snap(nodes, sheetId, floorIndex, world, snapRadius);
@@ -1644,15 +1653,18 @@ class NetworkController extends Notifier<DrawingState> {
       return jId;
     }
 
-    // 3) a fresh junction node at the release point — but if grid-snapping is
-    // armed (the ortho/grid is on) and nothing above adopted the point, let the
-    // VISIBLE metre grid attract it: drop the node on the nearest painted grid
-    // intersection when that crossing lies within the SAME snap radius. This is
-    // the LOWEST-precedence snap (a node hit in step 1 / a same-service tee in
-    // step 2 always wins); beyond the radius the exact point stands, so mid-cell
-    // drawing is never yanked to a line. Default off ⇒ byte-identical.
+    // 3) a fresh junction node at the release point — but first offer the point
+    // to the PLAN UNDERLAY (B12): a DXF wall/shaft line, a traced reference line,
+    // or a PDF ink ridge near the release attracts the node. Underlay outranks
+    // the grid (a real architectural edge beats an abstract metre crossing) but
+    // sits BELOW node/tee snap (steps 1-2 already returned). Null ⇒ no underlay.
+    // Then the VISIBLE metre grid as the lowest-precedence snap (unchanged). Both
+    // default off/absent ⇒ byte-identical.
     var point = world;
-    if (gridSnap && gridMetersPerPixel != null) {
+    final u = underlaySnap?.call(world);
+    if (u != null) {
+      point = u;
+    } else if (gridSnap && gridMetersPerPixel != null) {
       final g = nearestGridIntersection(world, gridMetersPerPixel);
       if ((g - world).distanceSquared <= r2) point = g;
     }
@@ -1673,6 +1685,7 @@ class NetworkController extends Notifier<DrawingState> {
     double snapRadiusWorld, {
     bool gridSnap = false,
     double? gridMetersPerPixel,
+    Offset? Function(Offset world)? underlaySnap,
   }) {
     final dragged = state.network.nodeById(nodeId);
     if (dragged == null) {
@@ -1707,7 +1720,9 @@ class NetworkController extends Notifier<DrawingState> {
       // AND for an already-CONNECTED node whose endpoint is dragged onto another
       // run (C1) — the tap never targets the dragged node's own edges.
       _tapNodeIntoNearestEdge(dragged, snapRadiusWorld,
-          gridSnap: gridSnap, gridMetersPerPixel: gridMetersPerPixel);
+          gridSnap: gridSnap,
+          gridMetersPerPixel: gridMetersPerPixel,
+          underlaySnap: underlaySnap);
       return;
     }
 
@@ -1747,6 +1762,7 @@ class NetworkController extends Notifier<DrawingState> {
     double radiusWorld, {
     bool gridSnap = false,
     double? gridMetersPerPixel,
+    Offset? Function(Offset world)? underlaySnap,
   }) {
     final net = state.network;
 
@@ -1780,22 +1796,27 @@ class NetworkController extends Notifier<DrawingState> {
     final e = bestEdge;
     if (e == null) {
       // No node to merge onto (checked by the caller) and no run to tap into —
-      // the drag's LAST resort is the grid: if grid-snapping is armed and the
-      // node landed within the radius of a painted grid intersection, nudge it
-      // exactly onto that crossing (the magnetic-grid analogue of merge/tap, and
-      // its lowest precedence). Otherwise leave the node where it fell and disarm
-      // the pending snapshot. Default off ⇒ byte-identical.
-      if (gridSnap && gridMetersPerPixel != null) {
+      // the drag's LAST resorts are, in precedence: the PLAN UNDERLAY (B12 — a
+      // DXF wall / reference line / PDF ink ridge near the drop) then the metre
+      // GRID. Underlay outranks grid; both leave the node where it fell when
+      // nothing is in range. Default absent/off ⇒ byte-identical.
+      final u = underlaySnap?.call(dp);
+      final Offset? target;
+      if (u != null) {
+        target = u;
+      } else if (gridSnap && gridMetersPerPixel != null) {
         final g = nearestGridIntersection(dp, gridMetersPerPixel);
-        if ((g - dp).distanceSquared <= radiusWorld * radiusWorld &&
-            (g.dx != dragged.x || g.dy != dragged.y)) {
-          final moved = [
-            for (final n in net.nodes)
-              n.id == dragged.id ? n.copyWith(x: g.dx, y: g.dy) : n,
-          ];
-          _commitDragEnd(Network(nodes: moved, edges: net.edges));
-          return;
-        }
+        target = ((g - dp).distanceSquared <= radiusWorld * radiusWorld) ? g : null;
+      } else {
+        target = null;
+      }
+      if (target != null && (target.dx != dragged.x || target.dy != dragged.y)) {
+        final moved = [
+          for (final n in net.nodes)
+            n.id == dragged.id ? n.copyWith(x: target.dx, y: target.dy) : n,
+        ];
+        _commitDragEnd(Network(nodes: moved, edges: net.edges));
+        return;
       }
       _dragSnapshotPending = false; // no commit — disarm (see endNodeDragWithSnap)
       return;

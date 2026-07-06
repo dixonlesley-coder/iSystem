@@ -38,6 +38,7 @@ import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/sheets_store.dart';
+import '../../store/snap_settings_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/calibration_overlay.dart';
 import '../canvas/canvas_grid.dart' show calibratedGridWorldStep;
@@ -50,6 +51,7 @@ import '../canvas/drop_overlay.dart';
 import '../canvas/heatmap_layer.dart';
 import '../canvas/measurement_overlay.dart';
 import '../canvas/mode_pill.dart';
+import '../canvas/reference_line_overlay.dart';
 import '../canvas/smart_input_bar.dart';
 import '../canvas/tank_overlay.dart';
 import '../canvas/room_overlay.dart';
@@ -623,6 +625,10 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         ref.read(roomModeProvider.notifier).set(false);
         return KeyEventResult.handled;
       }
+      if (ref.read(refLineModeProvider)) {
+        ref.read(refLineModeProvider.notifier).set(false);
+        return KeyEventResult.handled;
+      }
       if (ref.read(networkControllerProvider).tool != DrawTool.select) {
         ref.read(networkControllerProvider.notifier).setTool(DrawTool.select);
         return KeyEventResult.handled;
@@ -644,6 +650,9 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     final measure = ref.read(measureModeProvider.notifier);
     final tank = ref.read(tankModeProvider.notifier);
     final room = ref.read(roomModeProvider.notifier);
+    // Any keyboard-armed tool clears the B12 ref-line trace mode (mutual
+    // exclusion with the annotation modes).
+    ref.read(refLineModeProvider.notifier).set(false);
     switch (tool) {
       case null:
         measure.set(false);
@@ -689,7 +698,8 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       ref.read(networkControllerProvider).tool == DrawTool.select &&
       !ref.read(measureModeProvider) &&
       !ref.read(tankModeProvider) &&
-      !ref.read(roomModeProvider);
+      !ref.read(roomModeProvider) &&
+      !ref.read(refLineModeProvider);
 
   /// The 0-based service index for a number key (`1`..`9`, top-row or numpad),
   /// or null for any other key. (A switch, not a const map — [LogicalKeyboardKey]
@@ -922,6 +932,7 @@ class _SharedSheet extends ConsumerWidget {
     final measureMode = ref.watch(measureModeProvider);
     final tankMode = ref.watch(tankModeProvider);
     final roomMode = ref.watch(roomModeProvider);
+    final refLineMode = ref.watch(refLineModeProvider);
 
     // G3: the on-canvas tool cluster only appears when the inspector is
     // collapsed (the canvas-focus state), so an inspector-open workspace stays
@@ -1065,6 +1076,19 @@ class _SharedSheet extends ConsumerWidget {
               ),
             ),
           ),
+        // Reference lines (B12) — saved construction lines always render (a
+        // mechanical layer visible); the Ref line trace tool captures clicks only
+        // when active. They double as the plan snap surface + the N4 grid seed.
+        if (mechanicalVisible && !calibrating)
+          Positioned.fill(
+            child: IgnorePointer(
+              ignoring: spaceHeld,
+              child: ReferenceLineOverlay(
+                sheetId: sheet.id,
+                active: mechanicalActive && refLineMode && !drawing,
+              ),
+            ),
+          ),
         // Mechanical drawing / drop / selection overlays — ONLY when a mechanical
         // layer is active (so editing routes to the active discipline). The
         // selection/drop overlays stand down while the measure tool is on.
@@ -1081,7 +1105,8 @@ class _SharedSheet extends ConsumerWidget {
             !calibrating &&
             !measureMode &&
             !tankMode &&
-            !roomMode)
+            !roomMode &&
+            !refLineMode)
           Positioned.fill(
             child: IgnorePointer(
               ignoring: spaceHeld,
@@ -1102,7 +1127,8 @@ class _SharedSheet extends ConsumerWidget {
             !calibrating &&
             !measureMode &&
             !tankMode &&
-            !roomMode)
+            !roomMode &&
+            !refLineMode)
           Positioned.fill(
             child: IgnorePointer(
               ignoring: spaceHeld,
@@ -1132,6 +1158,7 @@ class _SharedSheet extends ConsumerWidget {
             !measureMode &&
             !tankMode &&
             !roomMode &&
+            !refLineMode &&
             !hasDrawing)
           const Positioned(
             top: MechXSpacing.md,

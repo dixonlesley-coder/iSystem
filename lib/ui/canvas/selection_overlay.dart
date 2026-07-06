@@ -18,6 +18,7 @@ import 'drawing_overlay.dart' show RubberBandPainter, snapOrTeePoint;
 import 'edge_context_menu.dart';
 import 'service_style.dart';
 import 'snapping.dart';
+import 'underlay_snap_service.dart';
 import 'viewport.dart';
 
 /// Interaction layer active while the Select tool is chosen: a tap picks the
@@ -63,7 +64,34 @@ class _NetworkSelectionOverlayState
   String? _pullFrom;
   Offset? _pullNow;
 
+  /// B10: the UNSNAPPED world position accumulated over a single-node drag —
+  /// the ortho snap is applied to this (a degree-1 node), never to the
+  /// already-snapped node position. Null at rest / during a group drag.
+  Offset? _nodeDragRaw;
+
   bool _onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
+
+  /// World position of the SOLE neighbour of a DEGREE-1 node — the anchor for
+  /// the ortho constraint on a plain node drag. Null when the node has 0 or
+  /// >= 2 incident edges (a junction drag stays free — snapping one edge would
+  /// un-straighten the other) or the neighbour is missing.
+  Offset? _singleNeighbourOf(Network net, String nodeId) {
+    String? otherId;
+    var count = 0;
+    for (final e in net.edges) {
+      if (e.fromId == nodeId) {
+        otherId = e.toId;
+        count++;
+      } else if (e.toId == nodeId) {
+        otherId = e.fromId;
+        count++;
+      }
+      if (count > 1) return null;
+    }
+    if (count != 1 || otherId == null) return null;
+    final other = net.nodeById(otherId);
+    return other == null ? null : Offset(other.x, other.y);
+  }
 
   Offset _toLocal(Offset global) {
     final box = context.findRenderObject() as RenderBox?;
@@ -110,7 +138,14 @@ class _NetworkSelectionOverlayState
         .drawRunFromNode(from, world,
             snapRadius: snapWorld,
             gridSnap: gridSnap,
-            gridMetersPerPixel: gridMpp);
+            gridMetersPerPixel: gridMpp,
+            // B12 — snap the pulled main's far end onto a plan wall / reference
+            // line / PDF ink ridge (between node/tee and grid precedence); the
+            // source node anchors the ortho ray so the main stays straight.
+            underlaySnap: underlaySnapFor(ref, sheetId, transform.scale,
+                orthoAnchor: (effectiveOrtho && fromNode != null)
+                    ? Offset(fromNode.x, fromNode.y)
+                    : null));
   }
 
   // ── Double-click → open in the inspector ────────────────────────────────────
@@ -241,7 +276,11 @@ class _NetworkSelectionOverlayState
             n.role != NodeRole.fixture &&
             (n.id == hoveredNodeId ||
                 selection.containsNode(n.id) ||
-                selection.nodeId == n.id))
+                selection.nodeId == n.id ||
+                // B11: keep the nub mounted while ITS pull is active, so the
+                // pointer leaving the 18px nub mid-pull never unmounts it (and
+                // kills the live pan gesture).
+                _pullFrom == n.id))
           _outletNub(n.id, transform.worldToScreen(Offset(n.x, n.y)), transform),
     ];
 
@@ -372,6 +411,11 @@ class _NetworkSelectionOverlayState
               ref.read(selectionProvider.notifier).selectNode(id);
             }
             ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+            // B10: seed the raw-drag tracker (only consumed by the single,
+            // degree-1 ortho path below).
+            final node =
+                ref.read(networkControllerProvider).network.nodeById(id);
+            _nodeDragRaw = node == null ? null : Offset(node.x, node.y);
           },
           onPanUpdate: (d) {
             final sel = ref.read(selectionProvider);
@@ -382,12 +426,25 @@ class _NetworkSelectionOverlayState
               ctrl.moveMany(sel.nodeIds, dx, dy);
               return;
             }
-            final node =
-                ref.read(networkControllerProvider).network.nodeById(id);
+            final net = ref.read(networkControllerProvider).network;
+            final node = net.nodeById(id);
             if (node == null) return;
-            ctrl.moveNode(id, node.x + dx, node.y + dy);
+            final raw =
+                (_nodeDragRaw ?? Offset(node.x, node.y)) + Offset(dx, dy);
+            _nodeDragRaw = raw;
+            // B10: a DEGREE-1 node ortho-snaps against its single neighbour
+            // (Ortho ^ Shift); a degree>=2 junction (no single anchor) or a
+            // free orphan drags freely, exactly as before.
+            final effectiveOrtho = ref.read(orthoProvider) ^
+                HardwareKeyboard.instance.isShiftPressed;
+            final anchor = _singleNeighbourOf(net, id);
+            final target = (effectiveOrtho && anchor != null)
+                ? orthoSnap(anchor, raw)
+                : raw;
+            ctrl.moveNode(id, target.dx, target.dy);
           },
           onPanEnd: (_) {
+            _nodeDragRaw = null; // B10: end the raw-drag tracking
             final sel = ref.read(selectionProvider);
             // A group move is already committed live over the pushUndoSnapshot
             // baseline (one undo step); only a single-node drag snaps/merges its
@@ -405,9 +462,17 @@ class _NetworkSelectionOverlayState
             final gridSnap = gridOrtho &&
                 gridMpp != null &&
                 calibratedGridWorldStep(gridMpp) * scale >= 6.0;
+            // B12 — a dragged node also settles onto the plan underlay (above the
+            // grid). A degree-1 node keeps its ortho anchor so the run stays
+            // straight; a junction/orphan drags free (anchor null).
+            final anchor = _singleNeighbourOf(
+                ref.read(networkControllerProvider).network, id);
             ref.read(networkControllerProvider.notifier).endNodeDragWithSnap(
                 id, snapWorld,
-                gridSnap: gridSnap, gridMetersPerPixel: gridMpp);
+                gridSnap: gridSnap,
+                gridMetersPerPixel: gridMpp,
+                underlaySnap: underlaySnapFor(ref, sheetId, scale,
+                    orthoAnchor: gridOrtho ? anchor : null));
           },
           child: const SizedBox.expand(),
         ),
@@ -436,7 +501,14 @@ class _NetworkSelectionOverlayState
         onEnter: (_) => ref
             .read(hoverTargetProvider.notifier)
             .set((nodeId: nodeId, edgeId: null)),
-        onExit: (_) => ref.read(hoverTargetProvider.notifier).clear(),
+        // B11: while a pull is in flight the pointer leaves the nub bounds
+        // immediately — DON'T clear the hover latch then (a rebuild would
+        // unmount the nub and kill the active pan gesture). The gesture layer
+        // re-establishes hover after release.
+        onExit: (_) {
+          if (_pullFrom != null) return;
+          ref.read(hoverTargetProvider.notifier).clear();
+        },
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onPanStart: (d) {
@@ -512,6 +584,22 @@ class _ResizeHandle extends ConsumerStatefulWidget {
 class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
   bool _pressing = false;
 
+  /// B10: the UNSNAPPED endpoint world position accumulated over the drag —
+  /// the ortho snap is applied to this, never to the already-snapped node
+  /// position (which would discard perpendicular motion each frame and stick
+  /// the endpoint on its starting ray). Null at rest.
+  Offset? _rawWorld;
+
+  /// World position of the run's OTHER endpoint — the anchor the ortho 45°
+  /// constraint snaps against; null if the edge/other node is gone.
+  Offset? _otherEnd(Network net) {
+    final e = net.edgeById(widget.edgeId);
+    if (e == null) return null;
+    final otherId = e.fromId == widget.nodeId ? e.toId : e.fromId;
+    final other = net.nodeById(otherId);
+    return other == null ? null : Offset(other.x, other.y);
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -522,21 +610,37 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
         onPanStart: (_) {
           setState(() => _pressing = true);
           ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
-        },
-        onPanUpdate: (d) {
           final node = ref
               .read(networkControllerProvider)
               .network
               .nodeById(widget.nodeId);
+          _rawWorld = node == null ? null : Offset(node.x, node.y);
+        },
+        onPanUpdate: (d) {
+          final net = ref.read(networkControllerProvider).network;
+          final node = net.nodeById(widget.nodeId);
           if (node == null) return;
+          final raw = (_rawWorld ?? Offset(node.x, node.y)) +
+              Offset(d.delta.dx / widget.scale, d.delta.dy / widget.scale);
+          _rawWorld = raw;
+          // B10: apply the effective-ortho 45° snap (Ortho ^ Shift) against the
+          // run's other endpoint, so stretching an endpoint keeps the run
+          // straight (matches the nub-pull preview/release).
+          final effectiveOrtho = ref.read(orthoProvider) ^
+              HardwareKeyboard.instance.isShiftPressed;
+          final anchor = _otherEnd(net);
+          final target = (effectiveOrtho && anchor != null)
+              ? orthoSnap(anchor, raw)
+              : raw;
           ref.read(networkControllerProvider.notifier).moveNode(
                 widget.nodeId,
-                node.x + d.delta.dx / widget.scale,
-                node.y + d.delta.dy / widget.scale,
+                target.dx,
+                target.dy,
               );
         },
         onPanEnd: (_) {
           setState(() => _pressing = false);
+          _rawWorld = null;
           // G2 — the resized endpoint also honours the magnetic grid (lowest
           // precedence) when ortho is on, the node's sheet is calibrated, AND
           // the minor grid is visible at this zoom.
@@ -553,9 +657,19 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
           final gridSnap = gridOrtho &&
               gridMpp != null &&
               calibratedGridWorldStep(gridMpp) * widget.scale >= 6.0;
+          // B12 — the resized endpoint also snaps onto the plan underlay (above
+          // the grid); the run's OTHER endpoint anchors the ortho ray so the run
+          // stays straight when Ortho is on.
+          final anchor = _otherEnd(
+              ref.read(networkControllerProvider).network);
           ref.read(networkControllerProvider.notifier).endNodeDragWithSnap(
               widget.nodeId, widget.snapWorld,
-              gridSnap: gridSnap, gridMetersPerPixel: gridMpp);
+              gridSnap: gridSnap,
+              gridMetersPerPixel: gridMpp,
+              underlaySnap: node == null
+                  ? null
+                  : underlaySnapFor(ref, node.sheetId, widget.scale,
+                      orthoAnchor: gridOrtho ? anchor : null));
           // Keep the (still-present) edge selected after a snap/merge.
           if (ref
               .read(networkControllerProvider)
@@ -565,7 +679,10 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
             ref.read(selectionProvider.notifier).selectEdge(widget.edgeId);
           }
         },
-        onPanCancel: () => setState(() => _pressing = false),
+        onPanCancel: () {
+          _rawWorld = null;
+          setState(() => _pressing = false);
+        },
         child: Center(
           child: AnimatedScale(
             scale: _pressing ? 0.85 : 1.0,

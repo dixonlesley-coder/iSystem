@@ -34,6 +34,14 @@ class SheetsState {
   Sheet? get current =>
       sheets.isEmpty ? null : sheets[currentIndex.clamp(0, sheets.length - 1)];
 
+  /// The sheet with [sheetId], or null when it isn't loaded.
+  Sheet? sheetById(String sheetId) {
+    for (final s in sheets) {
+      if (s.id == sheetId) return s;
+    }
+    return null;
+  }
+
   /// Stored viewport for [sheetId], or `null` if it hasn't been framed yet
   /// (the canvas will fit-to-view on first show).
   ViewportTransform? viewportFor(String sheetId) => viewports[sheetId];

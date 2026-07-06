@@ -17,6 +17,7 @@ import 'package:mechx_engine/units.dart';
 
 import '../store/annotation_store.dart';
 import '../store/models/sheet.dart';
+import '../store/reference_line_store.dart';
 import '../ui/canvas/viewport.dart';
 
 /// Thrown by [ProjectDocument.decode]/[ProjectDocument.fromJson] when a file is
@@ -606,6 +607,12 @@ class ProjectDocument {
   /// ACH → airflow). An annotation, not part of the network; empty by default.
   final List<RoomArea> rooms;
 
+  /// Traced reference lines on the calibrated sheets (B12) — a construction
+  /// line the snapping layer can use as a snap surface on a raster (PDF) sheet
+  /// with no importable vector geometry. An annotation, not part of the
+  /// network; empty by default.
+  final List<ReferenceLine> referenceLines;
+
   /// Optional electrical sub-model (panels + earthing system). Added in v2;
   /// null for a v1 file or a project with no electrical design yet.
   final ElectricalProject? electrical;
@@ -633,6 +640,7 @@ class ProjectDocument {
     this.measurements = const [],
     this.tanks = const [],
     this.rooms = const [],
+    this.referenceLines = const [],
     this.assets = const {},
   });
 
@@ -653,6 +661,7 @@ class ProjectDocument {
         measurements: measurements,
         tanks: tanks,
         rooms: rooms,
+        referenceLines: referenceLines,
         assets: assets ?? this.assets,
       );
 
@@ -695,6 +704,7 @@ class ProjectDocument {
         'measurements': [for (final m in measurements) m.toJson()],
         'tanks': [for (final t in tanks) t.toJson()],
         'rooms': [for (final r in rooms) r.toJson()],
+        'referenceLines': [for (final r in referenceLines) r.toJson()],
         if (electrical != null) 'electrical': electrical!.toJson(),
         // Embedded source plans (base64), only when present ⇒ path-only projects
         // stay byte-identical.
@@ -797,6 +807,11 @@ class ProjectDocument {
     final rooms = <RoomArea>[
       for (final r in (json['rooms'] as List? ?? const [])) ?RoomArea.fromJson(r),
     ];
+    // Traced reference lines (B12; additive, absent on an older file ⇒ empty).
+    final referenceLines = <ReferenceLine>[
+      for (final r in (json['referenceLines'] as List? ?? const []))
+        ?ReferenceLine.fromJson(r),
+    ];
     // Embedded source plans (additive; absent ⇒ empty ⇒ paths used as-is).
     final assets = <String, String>{
       for (final e in (json['assets'] as Map? ?? const {}).entries)
@@ -817,6 +832,7 @@ class ProjectDocument {
       measurements: measurements,
       tanks: tanks,
       rooms: rooms,
+      referenceLines: referenceLines,
       assets: assets,
     );
   }

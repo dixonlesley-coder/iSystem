@@ -17,7 +17,9 @@ import '../store/fixture_library_store.dart';
 import '../store/history_store.dart';
 import '../store/network_store.dart';
 import '../store/project_store.dart';
+import '../store/reference_line_store.dart';
 import '../store/sheets_store.dart';
+import '../ui/canvas/underlay_snap_service.dart';
 import 'project_document.dart';
 import 'recovery.dart';
 
@@ -155,6 +157,8 @@ ProjectDocument buildDocument(ProviderReader read) {
     tanks: read(tankAreasProvider),
     // Designated room/zone areas round-trip with the project.
     rooms: read(roomAreasProvider),
+    // Traced reference lines (B12) round-trip with the project.
+    referenceLines: read(referenceLinesProvider),
   );
 }
 
@@ -280,6 +284,13 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(tankAreasProvider.notifier).set(doc.tanks);
   // Restore designated room/zone areas (absent on an older file ⇒ empty).
   read(roomAreasProvider.notifier).set(doc.rooms);
+  // Restore traced reference lines (B12; absent on an older file ⇒ empty).
+  read(referenceLinesProvider.notifier).set(doc.referenceLines);
+  // Drop the underlay snap caches (vector/ink/reference indices) — they are keyed
+  // by sheet id / source path / reference-line ids, all of which restart
+  // deterministically per project, so a new project must not inherit the previous
+  // one's snap geometry for a colliding id/path.
+  read(underlaySnapServiceProvider).invalidateAll();
   // Clear any stale room/tank selection so a deterministic reused id (r0/t0)
   // from the previous project doesn't surface as a phantom selection in the new
   // one (mirrors clearing the network selection on load).

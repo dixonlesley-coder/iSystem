@@ -11,9 +11,12 @@ import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/smart_input_store.dart';
+import '../../store/reference_line_store.dart';
+import '../../store/snap_settings_store.dart';
 import 'canvas_grid.dart' show calibratedGridWorldStep, nearestGridIntersection;
 import 'service_style.dart';
 import 'snapping.dart';
+import 'underlay_snap_service.dart';
 import 'viewport.dart';
 
 /// Interaction layer active while a draw tool is selected. Maps taps to
@@ -83,16 +86,31 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
     final gridMpp = calibration?.metersPerPixel;
     final gridEligible = gridMpp != null &&
         calibratedGridWorldStep(gridMpp) * transform.scale >= 6.0;
+    // B12: the plan underlay is a snap surface too — offered AFTER a node/tee
+    // snap (snapPt) and BEFORE the grid, so the ring preview matches the store's
+    // commit precedence (node/tee > underlay > grid). Gated by 'Snap to plan'.
+    final sheet = ref.watch(sheetsControllerProvider).sheetById(widget.sheetId);
+    final snapToPlan = ref.watch(snapToPlanProvider);
+    final refLines = ref.watch(referenceLinesProvider);
+    final underlaySvc = ref.read(underlaySnapServiceProvider);
     var endHover = previewHover;
     var ringPt = snapPt;
-    if (effectiveOrtho &&
-        gridEligible &&
-        snapPt == null &&
-        previewHover != null) {
-      final g = nearestGridIntersection(previewHover, gridMpp);
-      if ((g - previewHover).distance <= snapWorld) {
-        endHover = g;
-        ringPt = g;
+    if (snapPt == null && previewHover != null) {
+      final u = (sheet != null)
+          ? underlaySvc.snap(
+              sheet, refLines, previewHover, 14 / transform.scale,
+              enabled: snapToPlan,
+              orthoAnchor: effectiveOrtho ? pending : null)
+          : null;
+      if (u != null) {
+        endHover = u.point;
+        ringPt = u.point;
+      } else if (effectiveOrtho && gridEligible) {
+        final g = nearestGridIntersection(previewHover, gridMpp);
+        if ((g - previewHover).distance <= snapWorld) {
+          endHover = g;
+          ringPt = g;
+        }
       }
     }
 
@@ -127,6 +145,15 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
                 // preview above. Off when Shift frees the angle.
                 gridSnap: effOrtho && gridEligible,
                 gridMetersPerPixel: gridMpp,
+                // B12 — the plan underlay snap (DXF wall / reference line / PDF
+                // ink), between node/tee and grid precedence. The anchor keeps a
+                // straight run on-axis when ortho constrains the angle.
+                underlaySnap: sheet == null
+                    ? null
+                    : underlaySvc.callback(
+                        sheet, refLines, transform.scale,
+                        enabled: snapToPlan,
+                        orthoAnchor: effOrtho ? pending : null),
               );
             case DrawTool.drawRiser:
               // C6: consume the placement result — a single-floor building has

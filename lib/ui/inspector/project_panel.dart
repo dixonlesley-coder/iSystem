@@ -63,15 +63,18 @@ import '../../store/history_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
+import '../../store/reference_line_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
+import '../../store/snap_settings_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/edge_context_menu.dart' show npsLabel;
 import '../canvas/segment_palette.dart';
 import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
 import '../electrical/electrical_export.dart' show breakerIcuKaByPanel;
+import '../../report/reference_grid_builder.dart';
 import '../format/scale_format.dart';
 import '../schematic/schematic_export.dart' show buildLiveRiserSheet;
 import '../shell/nav_rail.dart';
@@ -760,6 +763,8 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
     // N13: the stable element tag (`CW-R1` / `CW-F2`) on each run/riser so the
     // plan DXF traces to the same element the riser + BOM + report carry.
     edgeTags: elementTags(net),
+    // N4/B12: the setting-out grid from axis-aligned traced reference lines.
+    grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -864,6 +869,10 @@ Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     // N13: the stable element tag (`CW-R1` / `CW-F2`) prepended to each label so
     // the plan traces to the same element the riser + BOM + report carry.
     edgeTags: elementTags(net),
+    // N4/B12: axis-aligned traced reference lines become the setting-out grid
+    // (vertical → lettered columns, horizontal → numbered rows); diagonal ones
+    // are snap-only. Empty ⇒ no grid drawn (byte-identical).
+    grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -1134,6 +1143,9 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
     final elevationLabels = planEdgeElevationLabels(net, project.building);
     // N13: the stable element tags shared by both plan formats + the reports.
     final tags = elementTags(net);
+    // N4/B12: the setting-out grid from axis-aligned traced reference lines,
+    // shared by both plan formats.
+    final grid = buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id);
     await File(out('plan.pdf')).writeAsBytes(planToPdf(
       net: net,
       sizing: sizing,
@@ -1148,6 +1160,7 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
       underlay: underlay,
       edgeElevationLabels: elevationLabels,
       edgeTags: tags,
+      grid: grid,
     ));
     await File(out('plan.dxf')).writeAsString(networkToDxf(
       net: net,
@@ -1159,6 +1172,7 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
       underlay: underlay is VectorPlanUnderlay ? underlay : null,
       edgeElevationLabels: elevationLabels,
       edgeTags: tags,
+      grid: grid,
     ));
   }
 
@@ -2113,18 +2127,25 @@ class _DrawSection extends ConsumerWidget {
     final measureMode = ref.watch(measureModeProvider);
     final tankMode = ref.watch(tankModeProvider);
     final roomMode = ref.watch(roomModeProvider);
+    final refLineMode = ref.watch(refLineModeProvider);
     // Every peer draw tool shares ONE selected idiom — the tinted
     // selected-segment look (F1) — so the tool group reads consistently and no
     // tool competes with the layer/service accent as a solid-accent fill.
     Widget tool(String label, DrawTool t) => _TintedToggle(
           label: label,
-          // While the measure / tank / room tool is on, no draw tool reads as active.
-          selected: drawing.tool == t && !measureMode && !tankMode && !roomMode,
+          // While the measure / tank / room / ref-line tool is on, no draw tool
+          // reads as active.
+          selected: drawing.tool == t &&
+              !measureMode &&
+              !tankMode &&
+              !roomMode &&
+              !refLineMode,
           onTap: () {
             ctrl.setTool(t);
             ref.read(measureModeProvider.notifier).set(false);
             ref.read(tankModeProvider.notifier).set(false);
             ref.read(roomModeProvider.notifier).set(false);
+            ref.read(refLineModeProvider.notifier).set(false);
           },
         );
 
@@ -2145,7 +2166,8 @@ class _DrawSection extends ConsumerWidget {
     final selectActive = drawing.tool == DrawTool.select &&
         !measureMode &&
         !tankMode &&
-        !roomMode;
+        !roomMode &&
+        !refLineMode;
 
     return DisclosureSection(
       name: 'Draw',
@@ -2166,6 +2188,7 @@ class _DrawSection extends ConsumerWidget {
                 ref.read(measureModeProvider.notifier).set(false);
                 ref.read(tankModeProvider.notifier).set(false);
                 ref.read(roomModeProvider.notifier).set(false);
+                ref.read(refLineModeProvider.notifier).set(false);
               },
             ),
             tool('Run', DrawTool.drawRun),
@@ -2179,6 +2202,25 @@ class _DrawSection extends ConsumerWidget {
                 final on = !measureMode;
                 ref.read(measureModeProvider.notifier).set(on);
                 if (on) {
+                  ref.read(tankModeProvider.notifier).set(false);
+                  ref.read(roomModeProvider.notifier).set(false);
+                  ref.read(refLineModeProvider.notifier).set(false);
+                  ctrl.setTool(DrawTool.select);
+                }
+              },
+            ),
+            // Ref line (B12): a two-click construction line traced along the
+            // imported plan (e.g. a shaft wall) that a PDF sheet can then SNAP
+            // to — and that seeds the N4 setting-out grid on export. A separate
+            // annotation mode, like Measure.
+            _TintedToggle(
+              label: context.strings(StringKey.inspectorRefLine),
+              selected: refLineMode,
+              onTap: () {
+                final on = !refLineMode;
+                ref.read(refLineModeProvider.notifier).set(on);
+                if (on) {
+                  ref.read(measureModeProvider.notifier).set(false);
                   ref.read(tankModeProvider.notifier).set(false);
                   ref.read(roomModeProvider.notifier).set(false);
                   ctrl.setTool(DrawTool.select);
@@ -2197,6 +2239,7 @@ class _DrawSection extends ConsumerWidget {
                 if (on) {
                   ref.read(measureModeProvider.notifier).set(false);
                   ref.read(roomModeProvider.notifier).set(false);
+                  ref.read(refLineModeProvider.notifier).set(false);
                   ctrl.setTool(DrawTool.select);
                 }
               },
@@ -2214,6 +2257,7 @@ class _DrawSection extends ConsumerWidget {
                 if (on) {
                   ref.read(measureModeProvider.notifier).set(false);
                   ref.read(tankModeProvider.notifier).set(false);
+                  ref.read(refLineModeProvider.notifier).set(false);
                   ctrl.setTool(DrawTool.select);
                 }
               },
@@ -2255,6 +2299,13 @@ class _DrawSection extends ConsumerWidget {
               label: 'Ortho',
               selected: ortho,
               onTap: () => ref.read(orthoProvider.notifier).toggle(),
+            ),
+            // B12: gates ALL plan-underlay snap sources (DXF vector, reference
+            // lines, PDF ink) — never the node/grid snap. Default ON.
+            _TintedToggle(
+              label: context.strings(StringKey.inspectorSnapToPlan),
+              selected: ref.watch(snapToPlanProvider),
+              onTap: () => ref.read(snapToPlanProvider.notifier).toggle(),
             ),
           ],
         ),

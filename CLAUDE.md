@@ -321,9 +321,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   the mech riser DXF uses M-* layers, and a bilingual cover + Daftar Gambar generator leads the
   submittal set. Acceptance harness: the 13 artifacts regenerate + 25/25 on-paper verdicts PASS.
   Gate: engine 1341 / app 844 / analyze clean; only electrical goldens 05/08/10/11 shifted.
-  Residuals recorded: panel/apparatus Model-spec hooks, in-app reference-grid tooling (→ the
-  B10–B12 drafting batch), the 190 pt title-cell width. Waves 2–6 remain (the user-reported
-  B10/B11/B12 drafting-feel batch leads Wave 2) — work them from that document.
+  Residuals recorded: panel/apparatus Model-spec hooks, the 190 pt title-cell width.
+  **Wave 2 batch 1 (the user-reported B10/B11/B12 drafting-feel fixes + N4 app wiring) HAS ALSO
+  LANDED** (2026-07-06, see the §15 row): the outlet nub survives a full pull (B11), ortho 45°
+  applies to endpoint-resize + degree-1 node drags (B10), and the plan underlay is a snap
+  surface (B12) — DXF vector snapping (pure grid-bucketed index over the cached `DxfDrawing`),
+  two-click traced reference lines (additive `.mechx`, exported as N4 gridline bubbles when
+  axis-aligned + labelled), and PDF raster snap-to-ink (pure `findInkSnap` over an async LRU
+  luminance cache) — one candidate path at every snap gesture with precedence node > vector >
+  reference line > ink > grid, gated by a default-ON 'Snap to plan' toggle beside Ortho.
+  Gate: engine 1341 / app 899 / analyze clean; goldens 01/02/03 shifted (new DRAW chip+toggle).
+  Residual: the legacy `sheet_canvas.dart` host lacks only the trace-tool overlay. Waves 2
+  (remainder) and 3–6 remain — work them from that document.
 - **Apple-design review (2026-07-04) — the prior plan of record for ease-of-use/UX polish (fully landed)**:
   `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
   UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the
