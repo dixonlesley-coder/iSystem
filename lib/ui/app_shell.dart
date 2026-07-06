@@ -283,12 +283,23 @@ class _DesignWorkspace extends ConsumerWidget {
     // over a full-bleed CANVAS-coloured backdrop (painted behind the whole
     // workspace), so the chrome frosts the canvas tone — distinct from the
     // opaque content — without occluding the canvas's own overlays.
+    //
+    // D4: the Riser (schematic) canvas is, like Electrical, NOT sheet-based —
+    // Auto/Edit always render the WHOLE building across every floor
+    // regardless of the selected sheet (schematic_view.dart's
+    // `_sheetIdForFloor` never consults `sheets.currentIndex`), so the same
+    // "sheet rail where it applies" reasoning that omits it for Electrical
+    // applies here too: clicking a floor number did nothing, just confusing
+    // dead chrome. Omit it rather than wire a floor-focus control — the
+    // Riser-scoped inspector already gives building/floor context, and
+    // "every floor stacked" is the Riser's whole point (a per-floor filter
+    // would fight that).
     return Stack(
       children: [
         Positioned.fill(child: ColoredBox(color: colors.canvas)),
         Row(
           children: [
-            const SheetRail(),
+            if (view != WorkspaceView.schematic) const SheetRail(),
             Expanded(child: canvas),
             inspector,
           ],

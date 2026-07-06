@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/store/inspector_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/canvas/segment_palette.dart';
@@ -86,6 +87,12 @@ void main() {
     // Production launches with NO sheets (A1); seed the demo sheets so the
     // keyboard-activated cards have a current sheet to drop their nodes onto.
     seedDemoSheets(container);
+    // C3: the Draw section default-collapses once the network has any
+    // nodes/edges (drafting toolbar's first job done), which would unmount the
+    // Riser card after the Terminal placement below. Pin Draw open — the user's
+    // explicit section choice always wins over the default — so both cards stay
+    // reachable across the two activations.
+    container.read(sectionVisibilityProvider.notifier).set('Draw', true);
     await tester.pump();
     Network net() => container.read(networkControllerProvider).network;
 

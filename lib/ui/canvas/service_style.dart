@@ -4,8 +4,15 @@ import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 
 /// Distinct, legible line colour per service (readable on the light/dark canvas).
+///
+/// Cold water is a DEEP cobalt blue (#1E4FC4), deliberately deepened from the
+/// old #2D6CDF so it reads as drawing INK, distinct from the app's bright
+/// systemBlue selection accent (#007AFF) it used to collapse into — E3. This is
+/// the single source of truth: the engine-side `serviceChromeColor` (PDF) and
+/// `serviceAciColorFor` (DXF) mirror it channel-for-channel, pinned by
+/// `service_colour_parity_test`.
 Color serviceColor(ServiceType service) => switch (service) {
-      ServiceType.coldWater => const Color(0xFF2D6CDF),
+      ServiceType.coldWater => const Color(0xFF1E4FC4),
       ServiceType.hotWater => const Color(0xFFE5673A),
       ServiceType.drainage => const Color(0xFF8A6D3B),
       ServiceType.vent => const Color(0xFF2BB6A3),

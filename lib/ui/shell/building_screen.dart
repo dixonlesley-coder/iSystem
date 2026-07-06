@@ -7,6 +7,7 @@ import '../../store/models/sheet.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../sheets/pdf_page_picker.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
@@ -176,6 +177,7 @@ class _LevelCard extends StatelessWidget {
               SteppedValueField(
                 display: '${floor.height.meters.toStringAsFixed(1)} m',
                 editSeed: floor.height.meters.toStringAsFixed(1),
+                label: context.strings(StringKey.a11yFieldFloorToFloorHeight),
                 gap: MechXSpacing.sm,
                 valueWidth: 84,
                 valueAlign: TextAlign.center,
@@ -260,6 +262,7 @@ class _AddLevelsRowState extends State<_AddLevelsRow> {
           SteppedValueField(
             display: '$_count',
             editSeed: '$_count',
+            label: context.strings(StringKey.a11yFieldNumberOfLevels),
             gap: MechXSpacing.xs,
             min: 1,
             max: 50,
@@ -274,6 +277,7 @@ class _AddLevelsRowState extends State<_AddLevelsRow> {
           SteppedValueField(
             display: '${_height.toStringAsFixed(1)} m',
             editSeed: _height.toStringAsFixed(1),
+            label: context.strings(StringKey.a11yFieldFloorHeight),
             gap: MechXSpacing.xs,
             min: 0.5,
             max: 20.0,

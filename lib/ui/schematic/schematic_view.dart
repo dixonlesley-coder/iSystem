@@ -3831,7 +3831,7 @@ class _TitleBlock extends ConsumerWidget {
 }
 
 /// The system-NOTES (KETERANGAN) card for the Auto single-line — a compact
-/// floating-glass card that echoes the project inputs that actually exist:
+/// card that echoes the project inputs that actually exist:
 ///   • the FEED strategy (gravity downfeed vs upfeed / booster);
 ///   • each TANK present, with its real capacity (m3, from the node);
 ///   • the OCCUPANCY class; and
@@ -3842,6 +3842,16 @@ class _TitleBlock extends ConsumerWidget {
 /// HONESTY: every line is a direct echo of a real provider / node value. A datum
 /// that doesn't exist (no tank, no pump on downfeed) is simply not drawn. Only
 /// rendered when a network exists (the parent early-returns 'No network').
+///
+/// D8: this and the PUMP-SET / valve `_detailBox` callouts are the SAME
+/// conceptual thing — a toggleable drafting reference annotation on the
+/// issuable single-line (this one gated by the 'Notes' chip, those by
+/// 'Details') — but used to render in two unrelated visual systems (this a
+/// Liquid-Glass `GlassSurface` with a popover shadow and a large card radius,
+/// those flat canvas-painted boxes). Liquid Glass is reserved for persistent
+/// NAVIGATION/CONTROL chrome (golden rule 8) — a drafting annotation is
+/// DIAGRAM CONTENT, so this card now matches `_detailBox`'s flat, opaque,
+/// hairline-bordered treatment instead.
 class _SystemNotes extends ConsumerWidget {
   final ServiceType? focus;
   final Network network;
@@ -3899,12 +3909,20 @@ class _SystemNotes extends ConsumerWidget {
           'Peak design flow: ${pump.flow.inLitersPerSecond.toStringAsFixed(1)} L/s');
     }
 
+    // D8: the SAME flat/opaque/hairline treatment `_detailBox` paints for the
+    // PUMP-SET / valve callouts — a small radius (4, not `MechXRadii.card`'s
+    // larger one), `colors.canvas` fill, a 1px `colors.border` stroke, no
+    // blur/shadow — so this reference annotation reads as the SAME drafting
+    // chrome family as the other 'Details'-gated callouts beside it, instead
+    // of a mismatched Liquid-Glass popover.
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 240),
-      child: GlassSurface(
-        borderRadius: MechXRadii.card,
-        shadow: MechXShadow.popover,
-        edge: Border.all(color: colors.glassEdge),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: colors.canvas,
+          borderRadius: const BorderRadius.all(Radius.circular(4)),
+          border: Border.all(color: colors.border),
+        ),
         child: Padding(
           padding: const EdgeInsets.all(MechXSpacing.sm),
           child: Column(

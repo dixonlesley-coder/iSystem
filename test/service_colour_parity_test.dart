@@ -30,5 +30,25 @@ void main() {
     }
     // Return air moved off olive (52) onto an azure blue matching #6F8FC0.
     expect(serviceAciColorFor(ServiceType.returnAir), 150);
+    // Cold water stays ACI 5 (blue) — the nearest index to the deepened cobalt.
+    expect(serviceAciColorFor(ServiceType.coldWater), 5);
+  });
+
+  test('cold water is the deep-cobalt E3 value, distinct from the UI accent',
+      () {
+    // E3: cold water was #2D6CDF (hue ~219 deg), only ~8 deg off the app's
+    // systemBlue selection accent (#007AFF, ~211 deg) and near-identical
+    // lightness, so 'this line is cold-water pipe' and 'this control is
+    // selected' collapsed into one blue. It is now #1E4FC4 — a DEEPER, darker
+    // cobalt: same-family blue (still reads 'cold water') but well below the
+    // accent in luminance so it reads as drawing ink, not interactive chrome.
+    // Pinned here (canvas == chrome is already asserted above) so the two blues
+    // can never quietly drift back together.
+    const cw = 0xFF1E4FC4;
+    expect(serviceColor(ServiceType.coldWater).toARGB32(), cw);
+    final (r, g, b) = serviceChromeColor(ServiceType.coldWater);
+    expect(r, closeTo(0x1E / 255, 1e-9));
+    expect(g, closeTo(0x4F / 255, 1e-9));
+    expect(b, closeTo(0xC4 / 255, 1e-9));
   });
 }

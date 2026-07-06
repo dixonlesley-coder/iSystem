@@ -421,12 +421,18 @@ class ElectricalCircuitInspector extends StatelessWidget {
                           ElectricalField(
                             label:
                                 context.strings(StringKey.electricalFieldCosPhi),
+                            // C6: a 0-1 ratio field — the honest range lives in
+                            // the label (StringKey carries '(0-1)'), and an
+                            // out-of-range commit is REJECTED (field-error
+                            // idiom below the field), not silently clamped.
                             child: ElectricalNumInput(
                               value: circuit.cosPhi,
+                              min: 0.0,
+                              max: 1.0,
                               onChanged: (v) => controller.setCircuit(
                                 panel.id,
                                 circuit.id,
-                                cosPhi: v.clamp(0.0, 1.0),
+                                cosPhi: v,
                               ),
                             ),
                           ),
@@ -435,10 +441,12 @@ class ElectricalCircuitInspector extends StatelessWidget {
                                 .strings(StringKey.electricalFieldDemandFactor),
                             child: ElectricalNumInput(
                               value: circuit.demandFactor,
+                              min: 0.0,
+                              max: 1.0,
                               onChanged: (v) => controller.setCircuit(
                                 panel.id,
                                 circuit.id,
-                                demandFactor: v.clamp(0.0, 1.0),
+                                demandFactor: v,
                               ),
                             ),
                           ),
@@ -673,19 +681,26 @@ class ElectricalPanelInspector extends StatelessWidget {
                           ElectricalField(
                             label: context
                                 .strings(StringKey.electricalFieldDiversity),
+                            // C6: a 0-1 ratio field, same treatment as cos phi
+                            // / demand factor above — honest range in the
+                            // label, out-of-range REJECTED not clamped.
                             child: ElectricalNumInput(
                               value: panel.diversityFactor,
-                              onChanged: (v) => controller.setPanelDiversity(
-                                panel.id,
-                                v.clamp(0.0, 1.0),
-                              ),
+                              min: 0.0,
+                              max: 1.0,
+                              onChanged: (v) =>
+                                  controller.setPanelDiversity(panel.id, v),
                             ),
                           ),
                           ElectricalField(
                             label: context.strings(
                                 StringKey.electricalFieldHeadroomSpare),
+                            // C6: the 0-100 percent field — a '%' suffix baked
+                            // onto the at-rest display so it never looks like
+                            // the adjacent 0-1 ratio fields above.
                             child: ElectricalNumInput(
                               value: headroom.sparePercentage,
+                              suffix: '%',
                               onChanged: (v) => controller.setPanelHeadroom(
                                 panel.id,
                                 HeadroomSpec(

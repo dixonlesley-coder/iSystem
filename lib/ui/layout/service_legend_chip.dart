@@ -61,6 +61,9 @@ class ServiceLegendChip extends ConsumerWidget {
               message: strings(expanded
                   ? StringKey.tooltipHideLegend
                   : StringKey.tooltipShowLegend),
+              semanticLabel: strings(expanded
+                  ? StringKey.tooltipHideLegend
+                  : StringKey.tooltipShowLegend),
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () =>

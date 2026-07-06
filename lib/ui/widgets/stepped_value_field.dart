@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'mechx_focus_ring.dart';
@@ -68,6 +69,15 @@ class SteppedValueField extends StatefulWidget {
   /// Interval between repeated fires while a glyph is held down.
   final Duration repeatInterval;
 
+  /// L4 (a11y): the field's own human name (e.g. `'Ceiling height'`), used ONLY
+  /// to name the `−` / `+` glyph buttons for a screen reader — a dense inspector
+  /// otherwise announces an undifferentiated run of "minus, plus" with no way to
+  /// tell which numeric row each belongs to. When set, the buttons announce
+  /// "Decrease {label}" / "Increase {label}"; null ⇒ the generic "Decrease" /
+  /// "Increase". Visual layout is untouched (the glyph's own char is hidden from
+  /// semantics), so goldens are unaffected.
+  final String? label;
+
   const SteppedValueField({
     super.key,
     required this.display,
@@ -82,6 +92,7 @@ class SteppedValueField extends StatefulWidget {
     this.valueAlign = TextAlign.start,
     this.valueColor,
     this.repeatInterval = const Duration(milliseconds: 120),
+    this.label,
   });
 
   @override
@@ -221,6 +232,11 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
               : tappable;
     }
 
+    final strings = context.strings;
+    String stepLabel(StringKey k) => widget.label == null
+        ? strings(k)
+        : '${strings(k)} ${widget.label}';
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -228,6 +244,7 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
           glyph: '−',
           onTap: widget.onDecrement,
           repeatInterval: widget.repeatInterval,
+          semanticLabel: stepLabel(StringKey.a11yDecrease),
         ),
         SizedBox(width: widget.gap),
         valueSlot,
@@ -236,6 +253,7 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
           glyph: '+',
           onTap: widget.onIncrement,
           repeatInterval: widget.repeatInterval,
+          semanticLabel: stepLabel(StringKey.a11yIncrease),
         ),
       ],
     );
@@ -252,10 +270,15 @@ class _StepperGlyphButton extends StatefulWidget {
   final VoidCallback? onTap;
   final Duration repeatInterval;
 
+  /// L4 (a11y): the field-specific accessible name for this glyph button; the
+  /// glyph char itself is hidden from semantics so only this reads out.
+  final String? semanticLabel;
+
   const _StepperGlyphButton({
     required this.glyph,
     required this.onTap,
     required this.repeatInterval,
+    this.semanticLabel,
   });
 
   @override
@@ -308,10 +331,15 @@ class _StepperGlyphButtonState extends State<_StepperGlyphButton> {
               _hover && enabled ? colors.surfaceHover : const Color(0x00000000),
           borderRadius: MechXRadii.control,
         ),
-        child: Text(
-          widget.glyph,
-          style: TextStyle(
-              fontFamily: 'Roboto', fontSize: 16, height: 1.0, color: fg),
+        child: ExcludeSemantics(
+          // The bare "−"/"+" is decorative once the button carries a real
+          // field-specific label (`semanticLabel`); hide it so a screen reader
+          // announces "Decrease Ceiling height", not "minus".
+          child: Text(
+            widget.glyph,
+            style: TextStyle(
+                fontFamily: 'Roboto', fontSize: 16, height: 1.0, color: fg),
+          ),
         ),
       ),
     );
@@ -325,6 +353,7 @@ class _StepperGlyphButtonState extends State<_StepperGlyphButton> {
       child: MechXFocusRing(
         enabled: enabled,
         onActivated: widget.onTap,
+        semanticLabel: enabled ? widget.semanticLabel : null,
         child: GestureDetector(
           onTap: widget.onTap,
           onTapDown: enabled ? (_) => setState(() => _down = true) : null,

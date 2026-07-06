@@ -17,6 +17,7 @@ import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
 import 'package:mechx/ui/schematic/schematic_view.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
+import 'package:mechx/ui/widgets/glass_surface.dart';
 import 'package:mechx_engine/network/network.dart';
 
 // ---------------------------------------------------------------------------
@@ -218,6 +219,46 @@ void main() {
       ]));
       await tester.pump();
       expect(find.text('Feed: gravity downfeed (roof tank)'), findsOneWidget);
+    });
+  });
+
+  group('SchematicView — D8 Notes card material', () {
+    testWidgets(
+        'the Notes card is flat/opaque (matching the Details callouts), not '
+        'Liquid Glass', (tester) async {
+      await tester.pumpWidget(
+        _harness(const SchematicView(), overrides: _demoOverrides()),
+      );
+      await tester.pump();
+
+      // showDetails/showNotes default true at the store level, so the Notes
+      // card renders without any toolbar interaction. 'Notes' also labels the
+      // toolbar toggle chip, so there are two matches — the card's own title
+      // (muted caption, w600) is the second/last one.
+      expect(find.text('Notes'), findsNWidgets(2));
+      final notesTitle = find.text('Notes').last;
+
+      // No Liquid-Glass ancestor between the Notes title and the SchematicView
+      // root — Liquid Glass is reserved for nav/control chrome (golden rule
+      // 8), and a drafting annotation is diagram content.
+      expect(
+        find.ancestor(of: notesTitle, matching: find.byType(GlassSurface)),
+        findsNothing,
+      );
+
+      // The card is a flat DecoratedBox with the SAME opaque `colors.canvas`
+      // fill + hairline border the PUMP-SET/valve `_detailBox` callouts use —
+      // not a translucent/blurred/shadowed popover.
+      final decoratedBox = tester.widget<DecoratedBox>(
+        find
+            .ancestor(of: notesTitle, matching: find.byType(DecoratedBox))
+            .first,
+      );
+      final decoration = decoratedBox.decoration as BoxDecoration;
+      final colors = MechXThemeData.dark.colors;
+      expect(decoration.color, colors.canvas);
+      expect(decoration.border, Border.all(color: colors.border));
+      expect(decoration.boxShadow, isNull);
     });
   });
 

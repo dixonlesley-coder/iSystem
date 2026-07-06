@@ -672,6 +672,41 @@ enum StringKey {
   tooltipUnlockLayer,
   tooltipFilterServices,
   placementArmedHint, // {item}
+
+  // L4 (a11y) — screen-reader names for icon-only controls that carry no visible
+  // caption: the layer-visibility eye, and the shared numeric stepper's −/+
+  // glyph buttons (suffixed with the field name where the caller supplies one).
+  a11yShowLayer,
+  a11yHideLayer,
+  a11yDecrease, // optional " {field}" suffix appended by the caller
+  a11yIncrease, // optional " {field}" suffix appended by the caller
+
+  // L4 (a11y) — the on-canvas minimap's screen-reader name (it is otherwise an
+  // unlabelled tap/drag surface), plus the field-name labels the numeric
+  // steppers pass to a11yDecrease/a11yIncrease so a screen reader can tell one
+  // dense inspector row from the next ("Decrease Ceiling height").
+  a11yMinimapHint,
+  a11yFieldDepth,
+  a11yFieldCeilingHeight,
+  a11yFieldAirChangesPerHour,
+  a11yFieldFloorToFloorHeight,
+  a11yFieldNumberOfLevels,
+  a11yFieldFloorHeight,
+
+  // A1 — the Layout empty-state's 'Load sample project' action (mirrors the
+  // electrical workspace's `electricalLoadSampleProject`, kept as its own key
+  // since the two seed independent domains).
+  layoutLoadSampleProject,
+
+  // A5 — the Projects-hub export surface: a leading 'Export deliverables'
+  // group (reuses `reviewExportDeliverables`'s header text) followed by
+  // labelled Drawings / Reports / Data disclosures, with the two near-
+  // identical plan-PDF rows given a clarifying one-line subtitle each.
+  projectsExportGroupDrawings,
+  projectsExportGroupReports,
+  projectsExportGroupData,
+  projectsExportDrawingPdfHint,
+  projectsExportAnnotatedPlanPdfHint,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -1073,8 +1108,8 @@ const Map<StringKey, String> _en = {
   StringKey.electricalFieldLoadKind: 'Load kind',
   StringKey.electricalFieldMotorPower: 'Motor power (kW)',
   StringKey.electricalFieldLoadW: 'Load (W)',
-  StringKey.electricalFieldCosPhi: 'cos phi',
-  StringKey.electricalFieldDemandFactor: 'Demand factor',
+  StringKey.electricalFieldCosPhi: 'cos phi (0-1)',
+  StringKey.electricalFieldDemandFactor: 'Demand factor (0-1)',
   StringKey.electricalFieldRunLength: 'Run length (m)',
   StringKey.electricalFieldSupplyPhase: 'Supply phase',
   StringKey.electricalPhaseAuto: 'Auto',
@@ -1089,7 +1124,7 @@ const Map<StringKey, String> _en = {
 
   // Electrical workspace — panel inspector.
   StringKey.electricalFieldTag: 'Tag (e.g. LP-1)',
-  StringKey.electricalFieldDiversity: 'Diversity factor',
+  StringKey.electricalFieldDiversity: 'Diversity factor (0-1)',
   StringKey.electricalFieldHeadroomSpare: 'Headroom — spare demand (%)',
   StringKey.electricalFieldSpareWays: 'Spare ways (CADANGAN)',
   StringKey.electricalToggleEssential: 'Essential (genset-backed)',
@@ -1433,6 +1468,29 @@ const Map<StringKey, String> _en = {
   StringKey.tooltipUnlockLayer: 'Unlock layer',
   StringKey.tooltipFilterServices: 'Filter services',
   StringKey.placementArmedHint: 'Placing {item} · click to place · Esc to cancel',
+  StringKey.a11yShowLayer: 'Show layer',
+  StringKey.a11yHideLayer: 'Hide layer',
+  StringKey.a11yDecrease: 'Decrease',
+  StringKey.a11yIncrease: 'Increase',
+  StringKey.a11yMinimapHint: 'Canvas minimap — tap or drag to jump the view',
+  StringKey.a11yFieldDepth: 'Depth',
+  StringKey.a11yFieldCeilingHeight: 'Ceiling height',
+  StringKey.a11yFieldAirChangesPerHour: 'Air changes per hour',
+  StringKey.a11yFieldFloorToFloorHeight: 'Floor-to-floor height',
+  StringKey.a11yFieldNumberOfLevels: 'Number of levels',
+  StringKey.a11yFieldFloorHeight: 'Floor height',
+
+  // A1 — Layout empty-state 'Load sample project'.
+  StringKey.layoutLoadSampleProject: 'Load sample project',
+
+  // A5 — Projects-hub export grouping.
+  StringKey.projectsExportGroupDrawings: 'Drawings',
+  StringKey.projectsExportGroupReports: 'Reports',
+  StringKey.projectsExportGroupData: 'Data',
+  StringKey.projectsExportDrawingPdfHint:
+      'Plain plan — no calibrated run/riser lengths on size labels.',
+  StringKey.projectsExportAnnotatedPlanPdfHint:
+      'Annotated plan — includes real run/riser lengths on every size label.',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -1839,8 +1897,8 @@ const Map<StringKey, String> _id = {
   StringKey.electricalFieldLoadKind: 'Jenis beban',
   StringKey.electricalFieldMotorPower: 'Daya motor (kW)',
   StringKey.electricalFieldLoadW: 'Beban (W)',
-  StringKey.electricalFieldCosPhi: 'cos phi',
-  StringKey.electricalFieldDemandFactor: 'Faktor permintaan',
+  StringKey.electricalFieldCosPhi: 'cos phi (0-1)',
+  StringKey.electricalFieldDemandFactor: 'Faktor permintaan (0-1)',
   StringKey.electricalFieldRunLength: 'Panjang tarikan (m)',
   StringKey.electricalFieldSupplyPhase: 'Fasa suplai',
   StringKey.electricalPhaseAuto: 'Otomatis',
@@ -1855,7 +1913,7 @@ const Map<StringKey, String> _id = {
 
   // Electrical workspace — panel inspector.
   StringKey.electricalFieldTag: 'Tag (mis. LP-1)',
-  StringKey.electricalFieldDiversity: 'Faktor diversitas',
+  StringKey.electricalFieldDiversity: 'Faktor diversitas (0-1)',
   StringKey.electricalFieldHeadroomSpare: 'Cadangan — permintaan luang (%)',
   StringKey.electricalFieldSpareWays: 'Jalur cadangan (CADANGAN)',
   StringKey.electricalToggleEssential: 'Esensial (didukung genset)',
@@ -2206,6 +2264,31 @@ const Map<StringKey, String> _id = {
   StringKey.tooltipFilterServices: 'Saring layanan',
   StringKey.placementArmedHint:
       'Menempatkan {item} · klik untuk menaruh · Esc untuk batal',
+  StringKey.a11yShowLayer: 'Tampilkan lapisan',
+  StringKey.a11yHideLayer: 'Sembunyikan lapisan',
+  StringKey.a11yDecrease: 'Kurangi',
+  StringKey.a11yIncrease: 'Tambah',
+  StringKey.a11yMinimapHint:
+      'Peta mini kanvas — ketuk atau seret untuk memindahkan tampilan',
+  StringKey.a11yFieldDepth: 'Kedalaman',
+  StringKey.a11yFieldCeilingHeight: 'Tinggi plafon',
+  StringKey.a11yFieldAirChangesPerHour: 'Pergantian udara per jam',
+  StringKey.a11yFieldFloorToFloorHeight: 'Tinggi antar lantai',
+  StringKey.a11yFieldNumberOfLevels: 'Jumlah lantai',
+  StringKey.a11yFieldFloorHeight: 'Tinggi lantai',
+
+  // A1 — Layout empty-state 'Load sample project'.
+  StringKey.layoutLoadSampleProject: 'Muat proyek contoh',
+
+  // A5 — Projects-hub export grouping.
+  StringKey.projectsExportGroupDrawings: 'Gambar',
+  StringKey.projectsExportGroupReports: 'Laporan',
+  StringKey.projectsExportGroupData: 'Data',
+  StringKey.projectsExportDrawingPdfHint:
+      'Denah polos — tanpa panjang jalur/riser terkalibrasi pada label ukuran.',
+  StringKey.projectsExportAnnotatedPlanPdfHint:
+      'Denah beranotasi — menyertakan panjang jalur/riser sebenarnya pada '
+          'setiap label ukuran.',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

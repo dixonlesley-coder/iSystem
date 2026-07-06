@@ -240,7 +240,8 @@ String serviceChromeLabel(ServiceType s) => switch (s) {
 /// Supply/return/exhaust air previously disagreed across canvas / PDF / DXF —
 /// they now derive from the canvas lavender / steel-blue / slate-grey.
 (double, double, double) serviceChromeColor(ServiceType s) => switch (s) {
-      ServiceType.coldWater => (0x2D / 255, 0x6C / 255, 0xDF / 255), // #2D6CDF
+      ServiceType.coldWater =>
+        (0x1E / 255, 0x4F / 255, 0xC4 / 255), // #1E4FC4 (deep cobalt, E3)
       ServiceType.hotWater => (0xE5 / 255, 0x67 / 255, 0x3A / 255), // #E5673A
       ServiceType.drainage => (0x8A / 255, 0x6D / 255, 0x3B / 255), // #8A6D3B
       ServiceType.vent => (0x2B / 255, 0xB6 / 255, 0xA3 / 255), // #2BB6A3
@@ -730,7 +731,7 @@ const kDxfLayerFrame = 'G-ANNO-TTLB';
 /// now match the canvas — supply air its lavender/violet (6), return air its
 /// steel-blue (150 azure, distinct from cold-water 5), exhaust its slate-grey (8).
 int serviceAciColorFor(ServiceType s) => switch (s) {
-      ServiceType.coldWater => 5, // blue      (#2D6CDF)
+      ServiceType.coldWater => 5, // blue      (#1E4FC4 deep cobalt, E3)
       ServiceType.hotWater => 30, // orange    (#E5673A)
       ServiceType.drainage => 34, // brown     (#8A6D3B)
       ServiceType.vent => 3, // green/teal (#2BB6A3)

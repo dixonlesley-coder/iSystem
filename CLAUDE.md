@@ -387,8 +387,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   marquee/multi-select/nudge (D2), riser-edit multi-select + batch move (D5), and honestly
   disabled palettes on read-only tabs (D6). The review caught + fixed a marquee edge-capture
   gap in the inert-service filter. Gate: engine 1371 / app 997 / analyze clean; goldens
-  01/02/03/06/10_electrical_riser re-captured. Wave 6 (structure & polish) remains — work it
-  from that document.
+  01/02/03/06/10_electrical_riser re-captured. **Wave 6 (structure & polish) HAS ALSO LANDED** (2026-07-06, see the §15
+  row) — 'Load sample project' on the Layout empty state (A1), the ranked export surface +
+  primary-accent correction on the Projects hub (A5/A6), the Draw section default-collapsing
+  once a network exists (C3), the Rooms editor's identity-first ResultCards (C4), honest
+  percent/ratio fields that reject instead of clamp (C6), minimap chrome (B7), the Riser rail
+  hidden + chrome converged (D4/D8), a native 1024×700 minimum window + reflow test (M1), the
+  Semantics sweep (L4), and the cold-water cobalt split from the selection accent through the
+  one colour source (E3). **THE WORKFLOW-GOLDENS-REVIEW CAMPAIGN IS COMPLETE: all 7 waves
+  landed — 108 of its 109 findings (106 + the 3 user-reported B10/B11/B12) shipped or
+  explicitly dispositioned; the sole deferred item is J5 spatial clash checking.** Final
+  gate: engine 1371 / app 1015 / analyze clean; goldens re-captured throughout; the
+  16-artifact export harness green.
 - **Apple-design review (2026-07-04) — the prior plan of record for ease-of-use/UX polish (fully landed)**:
   `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
   UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the

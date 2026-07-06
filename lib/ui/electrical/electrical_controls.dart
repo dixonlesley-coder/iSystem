@@ -82,29 +82,94 @@ class ElectricalTextInput extends StatelessWidget {
 /// (Esc cancels, restoring the displayed value), so typing `0.85` never
 /// momentarily commits `0` (which would re-size the whole system) and each edit
 /// is one undo step. Only a well-formed number that actually differs propagates.
-class ElectricalNumInput extends StatelessWidget {
+///
+/// C6 — 0-1 ratio fields (cos phi, demand/diversity factor) and the 0-100
+/// percent field (headroom spare) used to render through this SAME bare
+/// textbox with no unit suffix and no range enforcement, so a value typed in
+/// the wrong scale (e.g. `85` meaning 85% into a 0-1 field) silently CLAMPED
+/// to the boundary (1.0) with no signal the input was rejected. Two additive,
+/// opt-in knobs fix this without touching any existing caller:
+///  * [suffix] bakes an honest unit onto the at-rest display only (e.g. '%')
+///    — never part of the editable text, so the parse guard is unaffected.
+///  * [min]/[max], when BOTH set, turn a well-formed but out-of-range commit
+///    into a REJECTION (not a clamp): [onChanged] is not called, the field
+///    reverts to [value] (the existing MechXTextField blur-revert), and an
+///    inline caption names the valid range — the same field-error idiom
+///    `offset_dialog.dart` uses for its distance field.
+class ElectricalNumInput extends StatefulWidget {
   final double value;
   final ValueChanged<double> onChanged;
+  final String? suffix;
+  final double? min;
+  final double? max;
   const ElectricalNumInput({
     super.key,
     required this.value,
     required this.onChanged,
+    this.suffix,
+    this.min,
+    this.max,
   });
 
   static String _fmt(double v) =>
       v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
   @override
+  State<ElectricalNumInput> createState() => _ElectricalNumInputState();
+}
+
+class _ElectricalNumInputState extends State<ElectricalNumInput> {
+  String? _error;
+
+  @override
   Widget build(BuildContext context) {
     final type = context.type;
-    return MechXTextField(
-      value: _fmt(value),
+    final colors = context.colors;
+    final field = MechXTextField(
+      value: ElectricalNumInput._fmt(widget.value),
       textStyle: type.mono,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      onChanged: (_) {
+        // Clear a stale rejection message as soon as the user edits again —
+        // it described the PREVIOUS attempt, not the one in progress.
+        if (_error != null) setState(() => _error = null);
+      },
       onCommitted: (s) {
         final v = double.tryParse(s.trim());
-        if (v != null && v != value) onChanged(v);
+        if (v == null) return;
+        if (widget.min != null &&
+            widget.max != null &&
+            (v < widget.min! || v > widget.max!)) {
+          setState(() => _error =
+              'Enter a value between ${ElectricalNumInput._fmt(widget.min!)} '
+              'and ${ElectricalNumInput._fmt(widget.max!)}');
+          return;
+        }
+        if (v != widget.value) widget.onChanged(v);
       },
+    );
+    if (widget.suffix == null && _error == null) return field;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (widget.suffix == null)
+          field
+        else
+          Row(
+            children: [
+              Expanded(child: field),
+              const SizedBox(width: MechXSpacing.xs),
+              Text(widget.suffix!,
+                  style: type.caption.copyWith(color: colors.textMuted)),
+            ],
+          ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(top: MechXSpacing.xxs),
+            child: Text(_error!,
+                style: type.caption.copyWith(color: colors.danger)),
+          ),
+      ],
     );
   }
 }

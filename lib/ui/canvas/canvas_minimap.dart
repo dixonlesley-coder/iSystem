@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'viewport.dart';
@@ -12,6 +13,14 @@ import 'viewport.dart';
 /// record so both workspaces track their view the same way.
 typedef MinimapViewport = ({ViewportTransform transform, Size size});
 
+/// B7: the minimap silhouette fills with `sheetPaper` — a real drawing "page",
+/// fixed light in BOTH themes (see `PlaceholderSheetPage._ink`'s identical
+/// reasoning). A theme-variant token like `textMuted`/`textSecondary` is
+/// calibrated for the dark-canvas chrome and loses contrast against that fixed
+/// light paper in dark mode, so anything drawn ON the paper (the viewport
+/// frame, the 'MAP' caption) uses this same fixed ink instead.
+const Color _paperInk = Color(0xFF9AA1AC);
+
 /// A small on-canvas MINIMAP (G1) — a scaled overview of the fixed-size sheet
 /// ([contentSize]) with the drawn-content [markers] and the current viewport
 /// rectangle; tap or drag to recenter the canvas.
@@ -21,6 +30,15 @@ typedef MinimapViewport = ({ViewportTransform transform, Size size});
 /// painter uses) so the two workspaces read as one tool. It is chrome, but
 /// content-bearing (a scaled render), so it stays OPAQUE for legibility — like
 /// the electrical minimap — not Liquid Glass.
+///
+/// B7: at rest this used to be an unlabelled box filled with `colors.canvas`
+/// — the VOID margin colour behind sheets, not the actual sheet, so it read
+/// as an unexplained dark rectangle. The sheet silhouette now fills with
+/// `sheetPaper` (the same white/grouped tone the real sheet renders in) and
+/// carries a small 'MAP' caption; its outer radius matches `MechXRadii.card`
+/// (the same radius the Layout electrical layer's 'Not on this sheet' tray
+/// uses) so the two top-right/right-column overlays read as one family
+/// instead of two unrelated boxes.
 class CanvasMinimap extends StatelessWidget {
   /// The world-space (content-pixel) bounds of the sheet — the minimap frames
   /// the rectangle 0,0 .. [contentSize].
@@ -59,39 +77,70 @@ class CanvasMinimap extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    final type = context.type;
     final s = _fitScale();
     final box = Size(contentSize.width * s, contentSize.height * s);
     if (box.isEmpty) return const SizedBox.shrink();
     void recenter(Offset local) =>
         onRecenter(Offset(local.dx / s, local.dy / s));
-    return SizedBox.fromSize(
-      size: box,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: MechXRadii.control,
-          border: Border.all(color: colors.border),
-          boxShadow: MechXShadow.card,
-        ),
-        child: ClipRRect(
-          borderRadius: MechXRadii.control,
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTapUp: (d) => recenter(d.localPosition),
-              onPanStart: (d) => recenter(d.localPosition),
-              onPanUpdate: (d) => recenter(d.localPosition),
-              child: CustomPaint(
-                painter: _MinimapPainter(
-                  contentSize: contentSize,
-                  scale: s,
-                  markers: markers,
-                  viewport: viewport,
-                  sheetFill: colors.canvas,
-                  sheetEdge: colors.border,
-                  marker: colors.accent,
-                  frame: colors.textMuted,
+    return Semantics(
+      label: context.strings(StringKey.a11yMinimapHint),
+      child: SizedBox.fromSize(
+        size: box,
+        // B7: MechXRadii.card (not the smaller `control`) so this box shares
+        // a radius with the Layout electrical layer's 'Not on this sheet'
+        // tray — the two top-right overlays read as one family.
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: MechXRadii.card,
+            border: Border.all(color: colors.border),
+            boxShadow: MechXShadow.card,
+          ),
+          child: ClipRRect(
+            borderRadius: MechXRadii.card,
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapUp: (d) => recenter(d.localPosition),
+                onPanStart: (d) => recenter(d.localPosition),
+                onPanUpdate: (d) => recenter(d.localPosition),
+                child: Stack(
+                  children: [
+                    CustomPaint(
+                      size: box,
+                      painter: _MinimapPainter(
+                        contentSize: contentSize,
+                        scale: s,
+                        markers: markers,
+                        viewport: viewport,
+                        // B7: the sheet silhouette fills with the real sheet
+                        // colour (sheetPaper), not `colors.canvas` — the void
+                        // margin colour BEHIND sheets — so the minimap no
+                        // longer looks like an unexplained dark rectangle.
+                        sheetFill: colors.sheetPaper,
+                        sheetEdge: colors.border,
+                        marker: colors.accent,
+                        // Fixed ink (not the theme-variant textMuted) — it
+                        // must read against the now-fixed-light paper in
+                        // BOTH themes, same reasoning as the caption below.
+                        frame: _paperInk,
+                      ),
+                    ),
+                    // B7: a tiny caption so a first-time user can tell what
+                    // this box is without experimentally dragging it.
+                    Positioned(
+                      left: 4,
+                      top: 3,
+                      child: IgnorePointer(
+                        child: Text(
+                          'MAP',
+                          style: type.micro.copyWith(color: _paperInk),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),

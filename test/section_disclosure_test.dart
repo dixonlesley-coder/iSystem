@@ -65,9 +65,11 @@ void main() {
       listen: false,
     );
 
-    // The Draw section always renders and defaults expanded (it is not
-    // data-gated the way Fire/HVAC now are), so its detail (e.g. the "Ortho"
-    // toggle) is visible at rest.
+    // The Draw section always renders. On a fresh empty project (no network
+    // drawn yet, as here) it defaults expanded — like Fire/HVAC, C3 gates its
+    // default on real state (the network having runs), but the "nothing
+    // drawn yet" state is the one case where Draw itself IS the real state —
+    // so its detail (e.g. the "Ortho" toggle) is visible at rest.
     expect(find.text('Ortho'), findsOneWidget);
     expect(container.read(sectionVisibilityProvider)['Draw'], isNull);
 

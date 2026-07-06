@@ -463,22 +463,28 @@ class _NavItemState extends State<_NavItem> {
           AnimatedSize(
             duration: MechXMotion.appear,
             curve: MechXMotion.standard,
+            // The caption is decorative for accessibility — the button carries
+            // the same name via `semanticLabel` below (so it reads once, in both
+            // the expanded and collapsed states) — so hide the Text from the
+            // semantics tree to avoid a duplicate/competing node.
             child: widget.collapsed
                 ? const SizedBox.shrink()
-                : Padding(
-                    padding: const EdgeInsets.only(top: MechXSpacing.xxs + 2),
-                    child: Text(
-                      widget.label,
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: type.caption.copyWith(
-                        fontSize: 10.5,
-                        height: 1.1,
-                        color: fg,
-                        fontWeight: widget.active
-                            ? FontWeight.w600
-                            : FontWeight.w500,
+                : ExcludeSemantics(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: MechXSpacing.xxs + 2),
+                      child: Text(
+                        widget.label,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: type.caption.copyWith(
+                          fontSize: 10.5,
+                          height: 1.1,
+                          color: fg,
+                          fontWeight: widget.active
+                              ? FontWeight.w600
+                              : FontWeight.w500,
+                        ),
                       ),
                     ),
                   ),
@@ -495,6 +501,12 @@ class _NavItemState extends State<_NavItem> {
     final row = MechXFocusRing(
       borderRadius: const BorderRadius.all(MechXRadii.md),
       onActivated: widget.onTap,
+      // L4 (a11y): the button carries the destination name explicitly in BOTH
+      // states — the visible caption (hidden from semantics above) is decorative
+      // and would otherwise be swallowed by this button node's semantics
+      // boundary, so the name is announced once whether the rail is expanded or
+      // collapsed to icon-only.
+      semanticLabel: widget.label,
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         onEnter: (_) => _setHover(true),

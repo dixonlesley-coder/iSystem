@@ -1563,6 +1563,7 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
               SteppedValueField(
                 display: floorName,
                 editSeed: '${floor + 1}',
+                label: context.strings(StringKey.inspectorMapsToFloor),
                 gap: MechXSpacing.xs,
                 valueColor: colors.textSecondary,
                 min: 1,
@@ -2345,8 +2346,22 @@ class _DrawSection extends ConsumerWidget {
         !roomMode &&
         !refLineMode;
 
+    // C3: Draw is the biggest section in the panel (Tools + Service chips +
+    // Undo/Redo/Ortho + the full SegmentPalette) and, unlike every other
+    // content section, never gated its default on real state — it always
+    // opened, burying Sizing/Results/Fire/HVAC below the fold every session.
+    // Mirror the Results/Fire gating idiom: a fresh, empty project (nothing
+    // drawn yet) needs the palette open by default (the first-run path), but
+    // once the network has real runs/risers the drafting toolbar has already
+    // done its first job, so default-collapse it and let Sizing/Results rise.
+    // The user's own manual expand/collapse (sectionVisibilityProvider) always
+    // wins over this default for the session.
+    final networkExists =
+        drawing.network.nodes.isNotEmpty || drawing.network.edges.isNotEmpty;
+
     return DisclosureSection(
       name: 'Draw',
+      defaultExpanded: !networkExists,
       child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2754,6 +2769,7 @@ class _TanksSection extends ConsumerWidget {
                       SteppedValueField(
                         display: '${t.depthM.toStringAsFixed(2)} m',
                         editSeed: t.depthM.toStringAsFixed(2),
+                        label: context.strings(StringKey.a11yFieldDepth),
                         gap: 0,
                         valueWidth: 56,
                         valueAlign: TextAlign.center,
@@ -2857,11 +2873,6 @@ class _RoomsSection extends ConsumerWidget {
         '${b.count} x ${b.each.squareSide.inMillimeters.round()} mm @ '
         '${b.each.faceVelocity.metersPerSecond.toStringAsFixed(1)} m/s';
 
-    String equip(RoomAirResult s) =>
-        '${airEquipmentLabel(s.equipmentKind)} · '
-        '${s.equipment.totalStaticPressure.pascals.round()} Pa · '
-        'motor ${s.equipment.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW';
-
     return DisclosureSection(
       name: 'Rooms (ACH airflow)',
       child: Column(
@@ -2936,18 +2947,26 @@ class _RoomsSection extends ConsumerWidget {
                       ],
                     ),
                     const SizedBox(height: MechXSpacing.sm),
+                    // C4: identity (name, above) leads; the 1-2 headline
+                    // results — design airflow and the sized equipment's duty
+                    // — are promoted to the shared ResultCard (matching the
+                    // Fire/HVAC sections), with the supporting duct/bank
+                    // figures demoted to muted caption rows beneath. A room
+                    // with no scale set yet has nothing to promote.
                     if (s == null)
                       Text('set scale',
                           style:
                               type.caption.copyWith(color: colors.textMuted))
                     else ...[
-                      Text(
-                          '${s.airflowCfm.round()} CFM · '
-                          '${s.airflow.inLitersPerSecond.round()} L/s · '
-                          '${s.airflow.inCubicMetersPerHour.round()} m3/h',
-                          style:
-                              type.caption.copyWith(color: colors.accent)),
-                      const SizedBox(height: MechXSpacing.xxs),
+                      ResultCard(
+                        headline: '${s.airflowCfm.round()} CFM',
+                        label: 'Design airflow · '
+                            '${s.airflow.inLitersPerSecond.round()} L/s · '
+                            '${s.airflow.inCubicMetersPerHour.round()} m3/h',
+                        verdict: 'sized',
+                        verdictColor: colors.success,
+                      ),
+                      const SizedBox(height: MechXSpacing.xs),
                       Text(duct(s),
                           style:
                               type.caption.copyWith(color: colors.textMuted)),
@@ -2957,37 +2976,46 @@ class _RoomsSection extends ConsumerWidget {
                       Text('Return ${bank(s.return_)}',
                           style:
                               type.caption.copyWith(color: colors.textMuted)),
-                      Text(equip(s),
-                          style:
-                              type.caption.copyWith(color: colors.textMuted)),
+                      const SizedBox(height: MechXSpacing.xs),
+                      ResultCard(
+                        headline:
+                            '${s.equipment.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW',
+                        label: '${airEquipmentLabel(s.equipmentKind)} · '
+                            '${s.equipment.totalStaticPressure.pascals.round()} Pa',
+                        verdict: 'sized',
+                        verdictColor: colors.success,
+                      ),
                     ],
                     // Cooling (AC) — shown only when an AC indoor unit sits in
                     // the room. Auto-computes the BTU/h + PK requirement and a
-                    // per-unit recommendation split across the placed units.
+                    // per-unit recommendation split across the placed units,
+                    // promoted to its own ResultCard (verdict flags an
+                    // over-range unit the way the master row's warning dot
+                    // already did).
                     if (perUnit != null) ...() {
                       final labels = {for (final n in acs) n.component!.label};
                       final typeStr =
                           labels.length == 1 ? labels.first : 'mixed';
                       return <Widget>[
+                        const SizedBox(height: MechXSpacing.xs),
+                        ResultCard(
+                          headline: '${pkStr(perUnit.pk)} PK',
+                          label: '${acs.length} ${acs.length == 1 ? 'unit' : 'units'} '
+                              '($typeStr) · ${perUnit.nominalBtuPerHr.round()} BTU/h',
+                          verdict: perUnit.exceedsRange ? 'over' : 'sized',
+                          verdictColor: perUnit.exceedsRange
+                              ? colors.danger
+                              : colors.success,
+                        ),
                         const SizedBox(height: MechXSpacing.xxs),
                         Text(
-                          // The raw computed load PK (= BTU/h ÷ 9000); the unit
-                          // line below shows the recommended market-ladder PK,
-                          // so the two figures are labelled to read as distinct.
-                          'Cooling (AC): ${load!.btuPerHr.round()} BTU/h · '
+                          // The raw computed load PK (= BTU/h ÷ 9000); the
+                          // ResultCard above shows the recommended
+                          // market-ladder PK, so the two figures are labelled
+                          // to read as distinct.
+                          'Cooling load ${load!.btuPerHr.round()} BTU/h · '
                           '${load.pk.toStringAsFixed(1)} PK (load)',
-                          style: type.caption.copyWith(color: colors.accent),
-                        ),
-                        Text(
-                          '${acs.length} ${acs.length == 1 ? 'unit' : 'units'} '
-                          '($typeStr) -> ${pkStr(perUnit.pk)} PK each (recommended) '
-                          '(${perUnit.nominalBtuPerHr.round()} BTU/h, '
-                          '~${(acInputPowerW(coolingBtuPerHr: perUnit.nominalBtuPerHr) / 1000).toStringAsFixed(2)} kW)',
-                          style: type.caption.copyWith(
-                            color: perUnit.exceedsRange
-                                ? colors.danger
-                                : colors.textMuted,
-                          ),
+                          style: type.caption.copyWith(color: colors.textMuted),
                         ),
                         Text('Feeds the electrical panel at the kW above.',
                             style: type.caption
@@ -3000,91 +3028,112 @@ class _RoomsSection extends ConsumerWidget {
                           ),
                       ];
                     }(),
-                    const SizedBox(height: MechXSpacing.xs),
-                    // Ceiling height stepper.
-                    Row(
-                      children: [
-                        Text('Ceiling',
-                            style: type.caption
-                                .copyWith(color: colors.textMuted)),
-                        const Spacer(),
-                        SteppedValueField(
-                          display: '${r.ceilingHeightM.toStringAsFixed(2)} m',
-                          editSeed: r.ceilingHeightM.toStringAsFixed(2),
-                          gap: 0,
-                          valueWidth: 56,
-                          valueAlign: TextAlign.center,
-                          valueColor: colors.textPrimary,
-                          min: 1.5,
-                          max: 12,
-                          onDecrement: () =>
-                              ctrl.setCeiling(r.id, r.ceilingHeightM - 0.25),
-                          onIncrement: () =>
-                              ctrl.setCeiling(r.id, r.ceilingHeightM + 0.25),
-                          onSubmit: (v) {
-                            if (v != null) ctrl.setCeiling(r.id, v);
-                          },
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: MechXSpacing.xxs),
-                    // ACH stepper (override; 'Auto' resets to the room-type value).
-                    Row(
-                      children: [
-                        Text('ACH',
-                            style: type.caption
-                                .copyWith(color: colors.textMuted)),
-                        const SizedBox(width: MechXSpacing.xs),
-                        _Pill(
-                          label: 'Auto',
-                          selected: r.achOverride == null,
-                          onTap: () => ctrl.setAch(r.id, null),
-                        ),
-                        const Spacer(),
-                        SteppedValueField(
-                          display: '${r.effectiveAch().toStringAsFixed(0)}/h',
-                          editSeed: r.effectiveAch().toStringAsFixed(0),
-                          gap: 0,
-                          valueWidth: 56,
-                          valueAlign: TextAlign.center,
-                          valueColor: colors.textPrimary,
-                          min: 0.5,
-                          max: 60,
-                          onDecrement: () =>
-                              ctrl.setAch(r.id, r.effectiveAch() - 1),
-                          onIncrement: () =>
-                              ctrl.setAch(r.id, r.effectiveAch() + 1),
-                          onSubmit: (v) {
-                            if (v != null) ctrl.setAch(r.id, v);
-                          },
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: MechXSpacing.xs),
-                    Wrap(
-                      spacing: MechXSpacing.xs,
-                      runSpacing: MechXSpacing.xs,
-                      children: [
-                        for (final t in RoomType.values)
-                          _Pill(
-                            label: roomTypeLabel(t),
-                            selected: r.roomType == t,
-                            onTap: () => ctrl.setRoomType(r.id, t),
+                    const SizedBox(height: MechXSpacing.sm),
+                    // C4: ceiling/ACH/room-type/equipment-kind are set once and
+                    // rarely revisited — demote them below the identity +
+                    // promoted results into a collapsed disclosure, mirroring
+                    // the node editor's identity-first + demoted-Placement
+                    // pattern (every control preserved, just regrouped).
+                    DisclosureSection(
+                      name: 'Room settings',
+                      defaultExpanded: false,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Ceiling height stepper.
+                          Row(
+                            children: [
+                              Text('Ceiling',
+                                  style: type.caption
+                                      .copyWith(color: colors.textMuted)),
+                              const Spacer(),
+                              SteppedValueField(
+                                display:
+                                    '${r.ceilingHeightM.toStringAsFixed(2)} m',
+                                editSeed: r.ceilingHeightM.toStringAsFixed(2),
+                                label: context.strings(
+                                    StringKey.a11yFieldCeilingHeight),
+                                gap: 0,
+                                valueWidth: 56,
+                                valueAlign: TextAlign.center,
+                                valueColor: colors.textPrimary,
+                                min: 1.5,
+                                max: 12,
+                                onDecrement: () => ctrl.setCeiling(
+                                    r.id, r.ceilingHeightM - 0.25),
+                                onIncrement: () => ctrl.setCeiling(
+                                    r.id, r.ceilingHeightM + 0.25),
+                                onSubmit: (v) {
+                                  if (v != null) ctrl.setCeiling(r.id, v);
+                                },
+                              ),
+                            ],
                           ),
-                      ],
-                    ),
-                    const SizedBox(height: MechXSpacing.xs),
-                    Wrap(
-                      spacing: MechXSpacing.xs,
-                      runSpacing: MechXSpacing.xs,
-                      children: [
-                        for (final k in AirEquipmentKind.values)
-                          _Pill(
-                            label: airEquipmentLabel(k),
-                            selected: r.equipmentKind == k,
-                            onTap: () => ctrl.setEquipment(r.id, k),
+                          const SizedBox(height: MechXSpacing.xxs),
+                          // ACH stepper (override; 'Auto' resets to the
+                          // room-type value).
+                          Row(
+                            children: [
+                              Text('ACH',
+                                  style: type.caption
+                                      .copyWith(color: colors.textMuted)),
+                              const SizedBox(width: MechXSpacing.xs),
+                              _Pill(
+                                label: 'Auto',
+                                selected: r.achOverride == null,
+                                onTap: () => ctrl.setAch(r.id, null),
+                              ),
+                              const Spacer(),
+                              SteppedValueField(
+                                display:
+                                    '${r.effectiveAch().toStringAsFixed(0)}/h',
+                                editSeed: r.effectiveAch().toStringAsFixed(0),
+                                label: context.strings(
+                                    StringKey.a11yFieldAirChangesPerHour),
+                                gap: 0,
+                                valueWidth: 56,
+                                valueAlign: TextAlign.center,
+                                valueColor: colors.textPrimary,
+                                min: 0.5,
+                                max: 60,
+                                onDecrement: () =>
+                                    ctrl.setAch(r.id, r.effectiveAch() - 1),
+                                onIncrement: () =>
+                                    ctrl.setAch(r.id, r.effectiveAch() + 1),
+                                onSubmit: (v) {
+                                  if (v != null) ctrl.setAch(r.id, v);
+                                },
+                              ),
+                            ],
                           ),
-                      ],
+                          const SizedBox(height: MechXSpacing.xs),
+                          Wrap(
+                            spacing: MechXSpacing.xs,
+                            runSpacing: MechXSpacing.xs,
+                            children: [
+                              for (final t in RoomType.values)
+                                _Pill(
+                                  label: roomTypeLabel(t),
+                                  selected: r.roomType == t,
+                                  onTap: () => ctrl.setRoomType(r.id, t),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: MechXSpacing.xs),
+                          Wrap(
+                            spacing: MechXSpacing.xs,
+                            runSpacing: MechXSpacing.xs,
+                            children: [
+                              for (final k in AirEquipmentKind.values)
+                                _Pill(
+                                  label: airEquipmentLabel(k),
+                                  selected: r.equipmentKind == k,
+                                  onTap: () => ctrl.setEquipment(r.id, k),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                     const SizedBox(height: MechXSpacing.xs),
                     // Drop the sized supply diffusers + a return grille onto the
@@ -3193,6 +3242,7 @@ class _SizingSection extends ConsumerWidget {
             SteppedValueField(
               display: '${ref.watch(rainfallIntensityProvider).round()} mm/hr',
               editSeed: '${ref.watch(rainfallIntensityProvider).round()}',
+              label: 'Rainfall (storm)',
               gap: MechXSpacing.xs,
               min: 50,
               max: 600,
@@ -3218,6 +3268,7 @@ class _SizingSection extends ConsumerWidget {
             SteppedValueField(
               display: ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
               editSeed: ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
+              label: 'Runoff coefficient',
               gap: MechXSpacing.xs,
               min: 0.5,
               max: 1.0,
@@ -4144,6 +4195,7 @@ class _SelectionSection extends ConsumerWidget {
               display: node.tankCapacityLitres == null
                   ? '—'
                   : '${node.tankCapacityLitres!.round()} L',
+              label: 'Tank capacity',
               editSeed: node.tankCapacityLitres == null
                   ? ''
                   : node.tankCapacityLitres!.round().toString(),
@@ -4177,6 +4229,7 @@ class _SelectionSection extends ConsumerWidget {
                     node.electricalLoadW == null ? ' · default' : '';
                 return '${(w / 1000).toStringAsFixed(2)} kW$suffix';
               }(),
+              label: 'Electrical load',
               editSeed: ((node.electricalLoadW ??
                           node.component!.defaultMotorKw * 1000) /
                       1000)
@@ -4260,6 +4313,7 @@ class _SelectionSection extends ConsumerWidget {
             display: node.airflow == null
                 ? '—'
                 : '${node.airflow!.inLitersPerSecond.toStringAsFixed(0)} L/s',
+            label: 'Air terminal airflow',
             editSeed: node.airflow == null
                 ? ''
                 : node.airflow!.inLitersPerSecond.toStringAsFixed(0),
@@ -4338,6 +4392,7 @@ class _SelectionSection extends ConsumerWidget {
             display: node.roofAreaM2 == null
                 ? '—'
                 : '${node.roofAreaM2!.toStringAsFixed(0)} m2',
+            label: 'Rainwater outlet roof area',
             editSeed: node.roofAreaM2 == null
                 ? ''
                 : node.roofAreaM2!.toStringAsFixed(0),
@@ -4391,6 +4446,7 @@ class _SelectionSection extends ConsumerWidget {
                     display: node.mountHeight == null
                         ? 'default'
                         : '${(node.mountHeight!.meters * 100).round()} cm',
+                    label: 'Mounting height',
                     editSeed: node.mountHeight == null
                         ? ''
                         : (node.mountHeight!.meters * 100).round().toString(),
@@ -4667,6 +4723,7 @@ Widget _sizeStepper({
   required void Function(Diameter?) onSet,
   bool mixed = false,
   Key? fieldKey,
+  String label = 'Nominal size',
 }) {
   final ladderMm = isAir
       ? standardDuctDiametersMm
@@ -4717,6 +4774,7 @@ Widget _sizeStepper({
     key: fieldKey,
     display: display,
     editSeed: editSeed,
+    label: label,
     gap: MechXSpacing.sm,
     onDecrement: onDec,
     onIncrement: onInc,

@@ -37,6 +37,15 @@ int Scale(int source, double scale_factor) {
   return static_cast<int>(source * scale_factor);
 }
 
+// M1: the smallest LOGICAL window size the app is designed to remain usable at.
+// Below this the fixed-px chrome (nav rail + sheet rail + right inspector) plus
+// a usable canvas overflow with no reflow, so the native window enforces a floor
+// via WM_GETMINMAXINFO — the OS itself can't shrink the frame smaller (e.g. a
+// Windows 11 Snap Layout that would otherwise clip the rails). Scaled to physical
+// pixels by the window's current monitor DPI at handle time.
+constexpr int kMinWindowLogicalWidth = 1024;
+constexpr int kMinWindowLogicalHeight = 700;
+
 // Dynamically loads the |EnableNonClientDpiScaling| from the User32 module.
 // This API is only needed for PerMonitor V1 awareness mode.
 void EnableFullDpiSupportIfAvailable(HWND hwnd) {
@@ -304,6 +313,21 @@ Win32Window::MessageHandler(HWND hwnd,
         PostQuitMessage(0);
       }
       return 0;
+
+    case WM_GETMINMAXINFO: {
+      // M1: clamp the minimum track size to kMinWindowLogicalWidth/Height,
+      // converted to physical pixels using this window's monitor DPI so the
+      // floor is correct at 100/125/150 % Windows scaling. (During creation
+      // this can arrive before the child view exists; the client-area sizing
+      // in WM_SIZE still applies, so no special-casing is needed here.)
+      auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
+      HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+      const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+      const double scale_factor = dpi / 96.0;
+      info->ptMinTrackSize.x = Scale(kMinWindowLogicalWidth, scale_factor);
+      info->ptMinTrackSize.y = Scale(kMinWindowLogicalHeight, scale_factor);
+      return 0;
+    }
 
     case WM_DPICHANGED: {
       auto newRectSize = reinterpret_cast<RECT*>(lparam);

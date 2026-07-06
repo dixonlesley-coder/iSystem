@@ -178,9 +178,11 @@ class _LockToggle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    final label = context.strings(
+        locked ? StringKey.tooltipUnlockLayer : StringKey.tooltipLockLayer);
     return MechXTooltip(
-      message: context.strings(
-          locked ? StringKey.tooltipUnlockLayer : StringKey.tooltipLockLayer),
+      message: label,
+      semanticLabel: label,
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         child: GestureDetector(
@@ -265,6 +267,7 @@ class _ServiceFilterToggle extends StatelessWidget {
     final colors = context.colors;
     return MechXTooltip(
       message: context.strings(StringKey.tooltipFilterServices),
+      semanticLabel: context.strings(StringKey.tooltipFilterServices),
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         child: GestureDetector(
@@ -380,15 +383,23 @@ class _EyeToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.xs, vertical: MechXSpacing.xs),
-          child: _EyeDot(visible: visible, color: color),
+    // L4 (a11y): the eye is icon-only with no caption — name the show/hide
+    // action for a screen reader (the label reflects the action, i.e. what a tap
+    // does next: hide when currently shown, show when hidden).
+    return Semantics(
+      button: true,
+      label: context.strings(
+          visible ? StringKey.a11yHideLayer : StringKey.a11yShowLayer),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.xs, vertical: MechXSpacing.xs),
+            child: _EyeDot(visible: visible, color: color),
+          ),
         ),
       ),
     );

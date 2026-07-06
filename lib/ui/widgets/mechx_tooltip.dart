@@ -33,12 +33,23 @@ class MechXTooltip extends StatefulWidget {
   final MechXTooltipEdge edge;
   final Duration waitDuration;
 
+  /// L4 (a11y): when non-null, the wrapped icon-only control is also exposed to
+  /// a screen reader as a labelled button — so the same name the hover bubble
+  /// shows a sighted mouse user is announced to an assistive one (the visual
+  /// tooltip alone is invisible to a screen reader). Pass the control's own name
+  /// (commonly the same string as [message]). Default null ⇒ no Semantics node
+  /// is added, so a control that already carries its own label (e.g. the theme
+  /// toggle) is unchanged and never double-announced. Semantics is
+  /// layout/paint-transparent ⇒ goldens are unaffected either way.
+  final String? semanticLabel;
+
   const MechXTooltip({
     super.key,
     required this.message,
     required this.child,
     this.edge = MechXTooltipEdge.bottom,
     this.waitDuration = const Duration(milliseconds: 600),
+    this.semanticLabel,
   });
 
   @override
@@ -70,7 +81,7 @@ class _MechXTooltipState extends State<MechXTooltip> {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
+    final Widget content = MouseRegion(
       onEnter: (_) => _scheduleShow(),
       onExit: (_) => _hide(),
       child: OverlayPortal(
@@ -82,6 +93,12 @@ class _MechXTooltipState extends State<MechXTooltip> {
         ),
         child: CompositedTransformTarget(link: _link, child: widget.child),
       ),
+    );
+    if (widget.semanticLabel == null) return content;
+    return Semantics(
+      button: true,
+      label: widget.semanticLabel,
+      child: content,
     );
   }
 }

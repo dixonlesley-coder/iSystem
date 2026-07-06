@@ -312,8 +312,9 @@ void main() {
       expect(grey, greaterThanOrEqualTo(0));
       expect(s, contains('0.50 w')); // the thin underlay stroke
       // Painted FIRST: before the cold-water stroke colour is ever set.
-      // E2: cold-water is now the canvas #2D6CDF (0x2D/0x6C/0xDF /255 -> 2 dp).
-      expect(grey, lessThan(s.indexOf('0.18 0.42 0.87 RG')));
+      // E3: cold-water deepened to the canvas #1E4FC4 (0x1E/0x4F/0xC4 /255 ->
+      // 2 dp = 0.12 0.31 0.77), distinct from the app's systemBlue accent.
+      expect(grey, lessThan(s.indexOf('0.12 0.31 0.77 RG')));
     });
 
     test('raster: a FlateDecode /Image XObject, painted before the network',
@@ -326,9 +327,9 @@ void main() {
       expect(s, contains('/ColorSpace /DeviceRGB'));
       expect(s, contains('/Filter /FlateDecode'));
       // The image paints FIRST — its Do op precedes the first network stroke.
-      // E2: cold-water is now the canvas #2D6CDF (0.18 0.42 0.87 at 2 dp).
+      // E3: cold-water deepened to the canvas #1E4FC4 (0.12 0.31 0.77 at 2 dp).
       expect(s.indexOf('/Im1 Do'), greaterThanOrEqualTo(0));
-      expect(s.indexOf('/Im1 Do'), lessThan(s.indexOf('0.18 0.42 0.87 RG')));
+      expect(s.indexOf('/Im1 Do'), lessThan(s.indexOf('0.12 0.31 0.77 RG')));
     });
 
     test('raster: the image stream is the zlib-deflated RGB rows (verbatim)',

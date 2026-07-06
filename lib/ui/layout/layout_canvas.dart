@@ -35,6 +35,7 @@ import '../../store/inspector_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
+import '../../store/sample_project.dart';
 import '../../store/selection_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/sheets_store.dart';
@@ -63,6 +64,7 @@ import '../canvas/viewport.dart';
 import '../canvas/zoom_controls.dart';
 import '../electrical/electrical_inspector.dart';
 import 'service_legend_chip.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../shell/project_io.dart';
@@ -887,6 +889,18 @@ class _SharedSheet extends ConsumerWidget {
                     MechXButton(
                       label: 'New from template...',
                       onPressed: () => showTemplatesDialog(context),
+                    ),
+                    // A1: a zero-file way to try the app — mirrors the
+                    // electrical workspace's 'Load sample project'. Latches
+                    // the first-run flag too (same reasoning as onImport
+                    // above), since loading the sample is just as much
+                    // "having seen the orientation" as importing a real plan.
+                    MechXButton(
+                      label: context.strings(StringKey.layoutLoadSampleProject),
+                      onPressed: () {
+                        ref.read(appSettingsProvider.notifier).markFirstRunSeen();
+                        loadSampleLayoutProject(ref);
+                      },
                     ),
                   ],
                 ),
