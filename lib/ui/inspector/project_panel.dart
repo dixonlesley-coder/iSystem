@@ -887,8 +887,9 @@ Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
 /// H4 — the ONE-FOLDER SUBMITTAL PACKAGE. Pick a destination folder ONCE, then
 /// write the full deliverable set — the calc report + unified MEP report (MD +
 /// PDF), the equipment schedule (MD + CSV + PDF), the M+E+P BOM (CSV) + costed
-/// quotation (MD), the mechanical riser single-line (PDF), the current sheet's
-/// annotated plan (PDF + DXF), and the electrical single-line (PDF, when panels
+/// quotation (MD), the mechanical riser single-line (PDF), EVERY sheet's
+/// annotated plan (PDF + DXF — J2: the whole rail, not just the sheet that
+/// happened to be active), and the electrical single-line (PDF, when panels
 /// exist) — all consistently named `$project-*` into that one folder. Routed
 /// through the shared export guard (zero-length gate + success/error feedback);
 /// the chosen folder seeds `lastExportDirProvider` so subsequent single exports
@@ -907,7 +908,20 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
   );
   if (dir == null || dir.isEmpty) return false;
   ref.read(lastExportDirProvider.notifier).set(dir);
+  return writeSubmittalPackageToDir(ref, dir);
+}
 
+/// J2: the submittal package's actual file-writing pass, factored out of
+/// [_writeSubmittalPackage] so a test can drive it directly with an explicit
+/// [dir] — bypassing the (headless-incompatible) `FilePicker.getDirectoryPath`
+/// call above. Every sheet in the rail gets its own annotated plan PDF + DXF
+/// (not just `sheets.current`), each numbered by [issuableChrome]'s per-sheet
+/// N19 drawing number (`M-101`/`M-102`/… by rail position); the Daftar Gambar
+/// (N21) front matter lists one row per bundled sheet to match. Progress
+/// during the per-sheet loop rides the shared [busyProvider] pill, cleared in
+/// a `finally` so a thrown mid-loop error never leaves it stuck.
+@visibleForTesting
+Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
   final project = ref.read(projectControllerProvider);
   final base = project.name.trim().isEmpty ? 'project' : project.name.trim();
   final strings = reportStringsFor(ref);
@@ -943,18 +957,18 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
   final eProjectFm = ref.read(electricalProjectProvider);
   final eResultFm = ref.read(electricalResultProvider);
   final sheetsFm = ref.read(sheetsControllerProvider);
-  final curSheetFm = sheetsFm.current;
   final rev = doc.revisionTag ?? '';
 
+  // J2: one Daftar Gambar row per BUNDLED sheet — every floor in the rail,
+  // not just whichever sheet happened to be active — matching the per-sheet
+  // plan export loop below.
   final drawingList = <DrawingListEntry>[];
-  if (curSheetFm != null) {
-    final fIdx =
-        sheetsFm.floorFor(curSheetFm.id, project.building.levelCount);
-    final planChromeFm =
-        issuableChrome(ref, sheetId: curSheetFm.id, floorIndex: fIdx);
+  for (final s in sheetsFm.sheets) {
+    final fIdx = sheetsFm.floorFor(s.id, project.building.levelCount);
+    final planChromeFm = issuableChrome(ref, sheetId: s.id, floorIndex: fIdx);
     drawingList.add(DrawingListEntry(
       number: planChromeFm.drawingNumber ?? '',
-      title: 'PLAN - ${curSheetFm.name}',
+      title: 'PLAN - ${s.name}',
       revision: rev,
       date: today,
     ));
@@ -1118,62 +1132,80 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
     chrome: sldChrome(DrawingSeries.mechanicalRiser),
   ));
 
-  // ── Current-sheet annotated plan (PDF + DXF), when a sheet is loaded ─────────
-  final sheets = ref.read(sheetsControllerProvider);
-  final sheet = sheets.current;
-  if (sheet != null) {
-    final levelCount = project.building.levelCount;
-    final floorIndex = sheets.floorFor(sheet.id, levelCount);
-    final net = ref.read(networkControllerProvider).network;
-    final sizing = ref.read(sizingProvider);
-    final planChrome =
-        issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex);
-    final metersPerPixel = project.calibrationFor(sheet.id)?.metersPerPixel;
-    final underlay = await buildPlanUnderlay(sheet);
-    final edgeLengths = <String, Length>{
-      for (final e in net.edges)
-        e.id: edgeLength(
-          e,
-          net,
-          calibrationBySheet: project.calibrations,
-          building: project.building,
-        ),
-    };
-    // N5: the §10 centreline-height token folded into each run's size label.
-    final elevationLabels = planEdgeElevationLabels(net, project.building);
-    // N13: the stable element tags shared by both plan formats + the reports.
-    final tags = elementTags(net);
-    // N4/B12: the setting-out grid from axis-aligned traced reference lines,
-    // shared by both plan formats.
-    final grid = buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id);
-    await File(out('plan.pdf')).writeAsBytes(planToPdf(
-      net: net,
-      sizing: sizing,
-      edgeLengths: edgeLengths,
-      sheetId: sheet.id,
-      floorIndex: floorIndex,
-      projectName: base,
-      sheetName: sheet.name,
-      dateString: today,
-      chrome: planChrome,
-      metersPerPixel: metersPerPixel,
-      underlay: underlay,
-      edgeElevationLabels: elevationLabels,
-      edgeTags: tags,
-      grid: grid,
-    ));
-    await File(out('plan.dxf')).writeAsString(networkToDxf(
-      net: net,
-      sizing: sizing,
-      sheetId: sheet.id,
-      floorIndex: floorIndex,
-      chrome: planChrome,
-      metersPerPixel: metersPerPixel,
-      underlay: underlay is VectorPlanUnderlay ? underlay : null,
-      edgeElevationLabels: elevationLabels,
-      edgeTags: tags,
-      grid: grid,
-    ));
+  // ── Every sheet's annotated plan (PDF + DXF) — J2: the whole rail, not just
+  // whichever sheet happened to be active, so a multi-floor tender folder is
+  // complete without manually switching sheets and re-exporting by hand. Each
+  // sheet keeps its own drawing number (N19, by rail position) and filename.
+  // Progress rides the shared busy pill; cleared in `finally` so a thrown
+  // mid-loop error (a bad underlay, a disk error) never leaves it stuck.
+  final planSheets = sheetsFm.sheets;
+  final localeStrings = MechXStringsData(ref.read(localeProvider));
+  try {
+    for (var i = 0; i < planSheets.length; i++) {
+      final sheet = planSheets[i];
+      ref.read(busyProvider.notifier).set(localeStrings.format(
+        StringKey.busyExportingSubmittal,
+        {'current': '${i + 1}', 'total': '${planSheets.length}'},
+      ));
+      final levelCount = project.building.levelCount;
+      final floorIndex = sheetsFm.floorFor(sheet.id, levelCount);
+      final net = ref.read(networkControllerProvider).network;
+      final sizing = ref.read(sizingProvider);
+      final planChrome =
+          issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex);
+      final metersPerPixel = project.calibrationFor(sheet.id)?.metersPerPixel;
+      final underlay = await buildPlanUnderlay(sheet);
+      final edgeLengths = <String, Length>{
+        for (final e in net.edges)
+          e.id: edgeLength(
+            e,
+            net,
+            calibrationBySheet: project.calibrations,
+            building: project.building,
+          ),
+      };
+      // N5: the §10 centreline-height token folded into each run's size label.
+      final elevationLabels = planEdgeElevationLabels(net, project.building);
+      // N13: the stable element tags shared by both plan formats + the reports.
+      final tags = elementTags(net);
+      // N4/B12: the setting-out grid from axis-aligned traced reference lines,
+      // shared by both plan formats.
+      final grid =
+          buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id);
+      // One file per sheet, numbered by rail position so a multi-floor bundle
+      // never collides (`project-plan-1-Ground Floor.pdf`, `-2-Level 1.pdf`…).
+      final suffix = 'plan-${i + 1}-${sheet.name}';
+      await File(out('$suffix.pdf')).writeAsBytes(planToPdf(
+        net: net,
+        sizing: sizing,
+        edgeLengths: edgeLengths,
+        sheetId: sheet.id,
+        floorIndex: floorIndex,
+        projectName: base,
+        sheetName: sheet.name,
+        dateString: today,
+        chrome: planChrome,
+        metersPerPixel: metersPerPixel,
+        underlay: underlay,
+        edgeElevationLabels: elevationLabels,
+        edgeTags: tags,
+        grid: grid,
+      ));
+      await File(out('$suffix.dxf')).writeAsString(networkToDxf(
+        net: net,
+        sizing: sizing,
+        sheetId: sheet.id,
+        floorIndex: floorIndex,
+        chrome: planChrome,
+        metersPerPixel: metersPerPixel,
+        underlay: underlay is VectorPlanUnderlay ? underlay : null,
+        edgeElevationLabels: elevationLabels,
+        edgeTags: tags,
+        grid: grid,
+      ));
+    }
+  } finally {
+    ref.read(busyProvider.notifier).clear();
   }
 
   // ── Electrical single-line (PDF), when the project has sized panels ──────────
@@ -1466,7 +1498,10 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
   /// a [DisclosureSection] whose default is calibration-aware: EXPANDED while the
   /// sheet is uncalibrated (the gating step demands attention), collapsing once
   /// a scale is set so it stops competing with the draw flow (a user's explicit
-  /// toggle still wins over the default).
+  /// toggle still wins over the default). J1: also stays expanded while the
+  /// sheet's calibration is STALE (its plan was just replaced) — the Design
+  /// Issue's locate jump lands here needing the same attention as "not
+  /// calibrated".
   Widget _scaleSection(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
@@ -1474,11 +1509,17 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
     final project = ref.watch(projectControllerProvider);
     final calibration =
         currentSheet == null ? null : project.calibrationFor(currentSheet.id);
+    final stale =
+        currentSheet != null && project.isCalibrationStale(currentSheet.id);
+    // Bound once so the stale-row widgets below don't re-derive nullability
+    // from [currentSheet] (avoids relying on the analyzer's boolean-guard
+    // promotion of an unrelated local).
+    final staleSheetId = stale ? currentSheet.id : null;
     return Padding(
       padding: const EdgeInsets.only(bottom: MechXSpacing.lg),
       child: DisclosureSection(
         name: 'Scale',
-        defaultExpanded: calibration == null,
+        defaultExpanded: calibration == null || stale,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -1496,8 +1537,9 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
                     height: 7,
                     margin: const EdgeInsets.only(right: MechXSpacing.sm),
                     decoration: BoxDecoration(
-                      color:
-                          calibration == null ? colors.warning : colors.success,
+                      color: calibration == null || stale
+                          ? colors.warning
+                          : colors.success,
                       borderRadius: const BorderRadius.all(Radius.circular(4)),
                     ),
                   ),
@@ -1516,6 +1558,35 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
                 ],
               ),
             ),
+            // J1: a calibration that SURVIVED a plan-source swap needs
+            // re-verification — a distinct warning row + an explicit
+            // "Scale confirmed" action that clears the flag WITHOUT touching
+            // the scale itself (the engineer checked and it still holds).
+            if (staleSheetId != null) ...[
+              const SizedBox(height: MechXSpacing.sm),
+              Container(
+                padding: const EdgeInsets.all(MechXSpacing.sm),
+                decoration: BoxDecoration(
+                  color: colors.warning.withAlpha(24),
+                  borderRadius: MechXRadii.control,
+                  border: Border.all(color: colors.warning),
+                ),
+                child: Text(
+                  context.strings(StringKey.issueCalibrationStaleTitle),
+                  style: type.caption.copyWith(color: colors.warning),
+                ),
+              ),
+              const SizedBox(height: MechXSpacing.sm),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: MechXButton(
+                  label: context.strings(StringKey.inspectorScaleConfirmed),
+                  onPressed: () => ref
+                      .read(projectControllerProvider.notifier)
+                      .confirmCalibration(staleSheetId),
+                ),
+              ),
+            ],
             if (currentSheet != null) ...[
               const SizedBox(height: MechXSpacing.sm),
               Align(
@@ -3914,6 +3985,37 @@ class _SelectionSection extends ConsumerWidget {
         Text('Node · floor ${node.floorIndex + 1} · elev '
             '${elev.toStringAsFixed(1)} m',
             style: context.type.caption.copyWith(color: context.colors.textMuted)),
+        // I2 — the pressure-solve PROBE. Whenever the solve has a residual for
+        // this node, surface its actual residual pressure so a fixture can be
+        // spot-checked against the SNI target the heatmap colour alone can't
+        // name. For a demand (fixture) node it carries the PASS/LOW verdict
+        // against that target (min residual); other nodes just show the value.
+        Builder(builder: (context) {
+          final residual = ref.watch(residualByNodeProvider)[node.id];
+          if (residual == null) return const SizedBox.shrink();
+          final target = ref.watch(targetResidualProvider);
+          final kpa = residual.inKiloPascals;
+          final isFixture = node.role == NodeRole.fixture;
+          // Mirror the heatmap legend's 0.5 kPa slack (= 500 Pa), NOT 0.5 Pa —
+          // both verdicts read the same targetResidualProvider, so they must use
+          // the same-unit tolerance or a sub-target residual splits PASS vs LOW.
+          final pass = residual.pascals >= target.pascals - 500;
+          final verdict = isFixture
+              ? ' · ${pass ? 'PASS' : 'LOW'} (min '
+                  '${target.inKiloPascals.toStringAsFixed(0)} kPa)'
+              : '';
+          return Padding(
+            padding: const EdgeInsets.only(top: MechXSpacing.xxs),
+            child: Text(
+              'Residual ${kpa.toStringAsFixed(0)} kPa$verdict',
+              style: context.type.caption.copyWith(
+                color: !isFixture
+                    ? context.colors.textSecondary
+                    : (pass ? context.colors.success : context.colors.danger),
+              ),
+            ),
+          );
+        }),
         if (node.component != null) ...[
           const SizedBox(height: MechXSpacing.xxs),
           Row(
@@ -4309,6 +4411,28 @@ class _SelectionSection extends ConsumerWidget {
                 color: (check != null && check.isWarning)
                     ? context.colors.danger
                     : context.colors.textSecondary,
+              ),
+            );
+          }),
+        ],
+        // I3 — water / drainage velocity vs the SNI max pipe-velocity band. The
+        // auto-sizer sizes TO this limit (SNI 03-7065-2005 caps supply at
+        // 2,0 m/s), but the resulting velocity was previously invisible for
+        // non-air pipes. Surface it with the SAME verdict idiom the air path
+        // uses so the engineer can certify the SNI velocity compliance live.
+        if (!edge.service.isAir && sizing != null) ...[
+          Builder(builder: (context) {
+            final check = ref.watch(waterVelocityChecksProvider)[edge.id];
+            if (check == null) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(top: MechXSpacing.xxs),
+              child: Text(
+                'Velocity: ${check.message}',
+                style: context.type.caption.copyWith(
+                  color: check.isWarning
+                      ? context.colors.danger
+                      : context.colors.textSecondary,
+                ),
               ),
             );
           }),

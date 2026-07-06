@@ -13,6 +13,10 @@ import 'package:flutter/widgets.dart';
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show ElectricalCircuitResult;
+import 'package:mechx_engine/report/electrical_sld_drawing.dart'
+    show breakerScheduleLabel;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
@@ -22,6 +26,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import 'electrical_controls.dart';
+import 'electrical_format.dart' show fmtNum, fmtRcdType;
 
 /// Identifies a circuit being edited / menu'd (panel + circuit id).
 class ElectricalEditTarget {
@@ -160,6 +165,18 @@ class ElectricalCircuitInspector extends StatelessWidget {
   /// 340-px floating right-drawer the Layout-canvas electrical layer still uses.
   final bool inline;
 
+  /// The way's SOLVED result (H2/H3 — the same breaker/RCD figures the board
+  /// schedule prints), when the caller can resolve one. Null while the network
+  /// hasn't solved yet, or for a circuit the current result doesn't carry — the
+  /// protection line is simply omitted then (nothing fabricated).
+  final ElectricalCircuitResult? circuitResult;
+
+  /// The panel's resolved breaking-capacity (Icu, kA) — H3, the SAME figure
+  /// `buildElectricalPanelDetail`/the board schedule show for this board's
+  /// devices (the fault study's chosen rating; see `breakerIcuKaByPanel`).
+  /// Null ⇒ no Icu suffix (never fabricated).
+  final double? breakerIcuKa;
+
   const ElectricalCircuitInspector({
     super.key,
     required this.panel,
@@ -167,6 +184,8 @@ class ElectricalCircuitInspector extends StatelessWidget {
     required this.controller,
     required this.onClose,
     this.inline = false,
+    this.circuitResult,
+    this.breakerIcuKa,
   });
 
   static const _cableTypes = <String?>[
@@ -180,6 +199,24 @@ class ElectricalCircuitInspector extends StatelessWidget {
 
   bool get _isMotor =>
       circuit.loadKind == LoadKind.motor || circuit.loadKind == LoadKind.pump;
+
+  /// The way's protection notation, e.g. `MCB 16A 1ph · Icu 6kA · RCD 30mA A` —
+  /// the SAME breaker/Icu/RCD tokens `buildElectricalPanelDetail` prints on the
+  /// board-schedule DEVICE cell for this circuit (H2 RCD, H3 kA), read off the
+  /// already-solved [circuitResult] rather than recomputed here. Null when the
+  /// caller has no solved result for this circuit (nothing fabricated).
+  String? _protectionLine() {
+    final c = circuitResult;
+    if (c == null) return null;
+    final poles = c.threePhase ? 3 : 1;
+    final ka = breakerIcuKa;
+    final icu = (ka != null && ka > 0) ? ' · Icu ${fmtNum(ka)}kA' : '';
+    final rcd = c.rcd.required
+        ? ' · RCD ${c.rcd.ratingMa}mA'
+            '${c.rcd.type != null ? ' ${fmtRcdType(c.rcd.type!)}' : ''}'
+        : '';
+    return '${breakerScheduleLabel(c.breaker, poles)}$icu$rcd';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -219,6 +256,26 @@ class ElectricalCircuitInspector extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    // H2/H3 — a compact READ-ONLY line surfacing the way's
+                    // solved protection (breaker + breaking-capacity + RCD),
+                    // the SAME figures the board schedule prints for this row
+                    // (`breakerScheduleLabel` + the Icu/RCD tokens), so an
+                    // engineer editing a way sees its protection verdict
+                    // without switching back to the schedule view. Omitted
+                    // (not even the label) when the network hasn't solved a
+                    // result for this circuit yet.
+                    if (_protectionLine() != null)
+                      ElectricalField(
+                        label:
+                            context.strings(StringKey.electricalFieldProtection),
+                        child: Text(
+                          _protectionLine()!,
+                          style: type.body.copyWith(
+                            color: colors.textPrimary,
+                            fontFamily: MechXTypography.monoFamily,
+                          ),
+                        ),
+                      ),
                     ElectricalField(
                       label: context.strings(StringKey.electricalFieldName),
                       child: ElectricalTextInput(

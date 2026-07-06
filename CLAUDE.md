@@ -339,8 +339,33 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   tooltip mechanism on icon-only chrome, C2 every-selection auto-scroll, D9 converged reveal
   zoom, B5 width-scaled hit corridors, B6 nub/handle hit separation, M2 `.mechx` association +
   CLI open, M3 Windows window-placement persistence (Windows-CI-verified). Gate: engine 1341 /
-  app 927 / analyze clean; goldens byte-identical. Waves 3–6 remain — work them from that
-  document.
+  app 927 / analyze clean; goldens byte-identical. **Wave 3 (the trust surface) HAS ALSO LANDED
+  IN FULL** (2026-07-06, see the two §15 rows): the heatmap became an instrument — an SNI-target
+  tick + 'Min NN kPa' on the legend gradient and a per-node 'Residual NN kPa' PASS/LOW probe in
+  the node inspector (I2), with the uniform-field state rendering a calm neutral tint + an
+  honest 'Uniform NN kPa · PASS/LOW' verdict (E4, golden 03 re-captured); live water/drainage
+  velocity verdicts in the edge inspector via `waterVelocityChecksProvider` reusing the engine
+  `checkVelocityBand` against `SniProfile` caps (I3); auditable acknowledgements —
+  `IssueAck{key,author,note,date}` persisted additively (legacy bare-string acks load
+  tolerantly), an initials+reason inline form on Acknowledge, and 'Acknowledged: … — author,
+  date: note' rows in the report's compliance section (I4); a revision-tag vs revision-history
+  advisory (I6); manual-override '*' marks + footnote in the BOM CSV/report (I5, default
+  byte-identical); H2/H3/H4 verified closed by Wave-7's N10/N9/N11 (the live canvas paints the
+  same engine schedule) plus a read-only RCD/kA line in the circuit editor; and the 3-phase
+  phase-imbalance % on the schedule TOTAL footer (H7, hand-derived test). The review pass
+  caught + fixed a kPa-vs-Pa tolerance mismatch between legend and probe. Gate: engine 1348 /
+  app 954 / analyze clean; goldens 03/05/11 re-captured + visually verified. J1/J2 detail:
+  replacing a sheet's plan mid-project
+  (`SheetsController.replaceSheetSource`, "Replace plan…") now flags its surviving calibration
+  STALE (additive `ProjectState.staleCalibrations`, tolerant `.mechx`, no version bump) —
+  surfaced as a distinct locatable Design Issue ('Plan replaced — re-verify scale', EN+ID), a
+  warning-state sheet-rail dot, and a Scale-inspector **'Scale confirmed'** button
+  (`ProjectController.confirmCalibration`) that clears it without re-measuring; re-calibrating
+  (or `applyCalibrationToAllSheets`) clears it too. The one-folder submittal package's plan/DXF
+  export now loops EVERY sheet in the rail (was: `sheets.current` only) via a new testable
+  `writeSubmittalPackageToDir`, each sheet keeping its own N19 drawing number + a disambiguated
+  filename, with the Daftar Gambar front matter listing one row per bundled sheet and progress on
+  the shared busy pill. Waves 4–6 remain — work them from that document.
 - **Apple-design review (2026-07-04) — the prior plan of record for ease-of-use/UX polish (fully landed)**:
   `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
   UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the

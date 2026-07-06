@@ -1,8 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/data/project_document.dart' show IssueAck;
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/compliance_store.dart';
 import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/document_control_store.dart';
 import 'package:mechx/store/electrical_focus_store.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/network_store.dart';
@@ -265,6 +267,52 @@ void main() {
       expect(calib, isNotEmpty);
       expect(calib.every((i) => i.severity == IssueSeverity.warning), isTrue);
       expect(c.read(designIssueCriticalCountProvider), 0);
+    });
+
+    // ── J1: stale calibration since the last plan swap ────────────────────
+    test('a stale calibration surfaces a distinct "Plan replaced" warning, '
+        'not the "not calibrated" one', () {
+      final c = makeContainer();
+      c
+          .read(projectControllerProvider.notifier)
+          .setCalibration('s1', const ScaleCalibration(0.02));
+      c.read(projectControllerProvider.notifier).markCalibrationStale('s1');
+
+      final issues = c.read(designIssuesProvider);
+      final stale = issues
+          .where((i) => i.kind == 'sheet-calibration-stale:s1')
+          .toList();
+      expect(stale, hasLength(1));
+      expect(stale.single.severity, IssueSeverity.warning);
+      expect(stale.single.title, 'Plan replaced — re-verify scale');
+      expect(stale.single.locate?.sheetId, 's1');
+
+      // s1 is CALIBRATED (just stale) so it must NOT also carry the plain
+      // "not calibrated" issue.
+      final notCalibrated = issues
+          .where((i) =>
+              i.title == 'Sheet not calibrated' && i.locate?.sheetId == 's1')
+          .toList();
+      expect(notCalibrated, isEmpty);
+    });
+
+    test('confirming a stale calibration clears its warning', () {
+      final c = makeContainer();
+      final proj = c.read(projectControllerProvider.notifier);
+      proj.setCalibration('s1', const ScaleCalibration(0.02));
+      proj.markCalibrationStale('s1');
+      expect(
+          c
+              .read(designIssuesProvider)
+              .where((i) => i.kind == 'sheet-calibration-stale:s1'),
+          isNotEmpty);
+
+      proj.confirmCalibration('s1');
+      expect(
+          c
+              .read(designIssuesProvider)
+              .where((i) => i.kind == 'sheet-calibration-stale:s1'),
+          isEmpty);
     });
 
     test('a source-less pressurized component surfaces a "Network has no '
@@ -746,6 +794,114 @@ void main() {
       expect(c.read(electricalFocusProvider)?.circuitId, 'w3');
       c.read(electricalFocusProvider.notifier).clear();
       expect(c.read(electricalFocusProvider), isNull);
+    });
+  });
+
+  group('I6 — document-control revision inconsistency', () {
+    ProviderContainer makeContainer() {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    test('a default project raises NO revision-tag advisory (byte-identical)',
+        () {
+      final c = makeContainer();
+      expect(
+        c
+            .read(designIssuesProvider)
+            .where((i) => i.kind == 'revision-tag-missing'),
+        isEmpty,
+      );
+    });
+
+    test('revision history + a blank title-block tag surfaces the advisory', () {
+      final c = makeContainer();
+      c
+          .read(documentControlProvider.notifier)
+          .addRevision('2026-07-06', 'Issued for tender');
+      final rev = c
+          .read(designIssuesProvider)
+          .where((i) => i.kind == 'revision-tag-missing')
+          .toList();
+      expect(rev, hasLength(1));
+      expect(rev.single.severity, IssueSeverity.info);
+      // Locatable to the Document control section (not a drawn element).
+      expect(rev.single.locate?.documentControl, isTrue);
+    });
+
+    test('setting the Revision tag clears the advisory', () {
+      final c = makeContainer();
+      final ctrl = c.read(documentControlProvider.notifier);
+      ctrl.addRevision('2026-07-06', 'Issued for tender');
+      ctrl.setRevisionTag('B');
+      expect(
+        c
+            .read(designIssuesProvider)
+            .where((i) => i.kind == 'revision-tag-missing'),
+        isEmpty,
+      );
+    });
+  });
+
+  group('I4 — acknowledgement audit metadata', () {
+    test('acknowledge records author/date/note and relaxes the verdict', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+
+      // The default const standards profiles carry secondarySource // VERIFY
+      // items ⇒ the Standards row is REVIEW until they are acknowledged.
+      final open = c.read(complianceSummaryProvider);
+      expect(open.allPass, isFalse);
+
+      final ackable = c
+          .read(designIssuesProvider)
+          .where((i) => i.isAcknowledgeable)
+          .map((i) => i.key)
+          .toList();
+      expect(ackable, isNotEmpty);
+      c.read(acknowledgedIssuesProvider.notifier).acknowledgeAll(
+            ackable,
+            author: 'LD',
+            note: 'reviewed the register',
+            date: '2026-07-06',
+          );
+
+      // The metadata is recorded per key.
+      final acks = c.read(acknowledgedIssuesProvider);
+      expect(acks[ackable.first]!.author, 'LD');
+      expect(acks[ackable.first]!.date, '2026-07-06');
+      expect(acks[ackable.first]!.note, 'reviewed the register');
+
+      // The report compliance summary carries an acknowledgement-log row per
+      // accepted advisory (audit trail), and the verdict is now reachable.
+      final IssueAck sample = acks.values.first;
+      expect(sample.author, 'LD');
+      final summary = c.read(complianceSummaryProvider);
+      expect(summary.allPass, isTrue);
+      final ackRows = summary.items.where((it) =>
+          it.category.startsWith('Acknowledged:') &&
+          it.detail.contains('LD') &&
+          it.detail.contains('2026-07-06'));
+      expect(ackRows, isNotEmpty);
+    });
+
+    test('the on-screen check-only summary omits the acknowledgement-log rows',
+        () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ackable = c
+          .read(designIssuesProvider)
+          .where((i) => i.isAcknowledgeable)
+          .map((i) => i.key)
+          .toList();
+      c.read(acknowledgedIssuesProvider.notifier).acknowledgeAll(ackable,
+          author: 'LD', date: '2026-07-06');
+      final checkOnly = c.read(complianceCheckItemsProvider);
+      expect(checkOnly.items.any((it) => it.category.startsWith('Acknowledged:')),
+          isFalse);
+      // Both providers agree on the verdict.
+      expect(checkOnly.allPass, c.read(complianceSummaryProvider).allPass);
     });
   });
 }

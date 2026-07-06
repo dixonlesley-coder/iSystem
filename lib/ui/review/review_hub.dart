@@ -214,10 +214,13 @@ class _ExportDeliverablesCard extends ConsumerWidget {
 }
 
 /// The pre-issue compliance roll-up: an overall PASS / REVIEW REQUIRED verdict
-/// plus the three category rows (air velocities / sheet calibration / standards
-/// verification) the unified MEP report also prints. Read-only over the shared
-/// [complianceSummaryProvider] (which derives from `designIssuesProvider`) — it
-/// invents no new checks, so the Review hub and the exported report always agree.
+/// plus the category rows (air velocities / sheet calibration / standards
+/// verification …) the unified MEP report also prints. Read-only over
+/// [complianceCheckItemsProvider] (the CHECK rows; the per-advisory
+/// acknowledgement audit log the report also prints is surfaced by the
+/// IssuesCard's Acknowledged group below, not duplicated here). Its verdict is
+/// identical to the shared [complianceSummaryProvider], so the hub and the
+/// exported report always agree.
 class _ComplianceCard extends ConsumerWidget {
   const _ComplianceCard();
 
@@ -228,7 +231,7 @@ class _ComplianceCard extends ConsumerWidget {
     final s = context.strings;
     // WATCHED (H2): fixing an issue updates this verdict immediately, in step
     // with the live IssuesCard below.
-    final summary = ref.watch(complianceSummaryProvider);
+    final summary = ref.watch(complianceCheckItemsProvider);
     final allPass = summary.allPass;
     final headlineColor = allPass ? colors.success : colors.warning;
 

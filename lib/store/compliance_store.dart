@@ -15,6 +15,7 @@ import 'package:mechx_engine/electrical/panel_results.dart'
     show ElectricalWarning, WarningSeverity;
 import 'package:mechx_engine/report/mep_report.dart';
 
+import '../data/project_document.dart' show IssueAck;
 import '../ui/strings/app_strings.dart';
 import '../ui/strings/plural.dart';
 import 'app_state.dart';
@@ -34,6 +35,12 @@ ComplianceSummary buildComplianceSummaryFrom({
   required List<ElectricalWarning> electricalWarnings,
   required String date,
   Set<String> acknowledged = const {},
+  // I4 — the AUDIT metadata for each acknowledged advisory (author, date,
+  // justification), keyed by issue key. Only the live provider supplies this;
+  // the pure tests / report path that omit it get NO acknowledgement-log rows,
+  // so the compliance table stays byte-identical (the pass/fail logic uses
+  // [acknowledged], not this).
+  Map<String, IssueAck> acks = const {},
   // Wave 5a (H1): category + detail strings resolve through the active locale.
   // Defaults to English so the report-export path and pure tests that omit it
   // stay byte-identical.
@@ -107,6 +114,30 @@ ComplianceSummary buildComplianceSummaryFrom({
       .where((w) => w.severity == WarningSeverity.warning)
       .length;
 
+  // I4 — the ACKNOWLEDGEMENT LOG: one PASS row per accepted advisory carrying
+  // its audit trail (who, when, why) so the signed deliverable records the
+  // basis on which a `secondarySource` value was accepted, not only a bare
+  // count. Emitted ONLY when [acks] metadata is supplied (the live provider),
+  // so the pure/report tests that pass just [acknowledged] stay byte-identical.
+  final ackLog = <ComplianceItem>[];
+  for (final i in issues) {
+    if (!isAck(i)) continue;
+    final a = acks[i.key];
+    if (a == null) continue;
+    final meta = <String>[
+      if (a.author.isNotEmpty) a.author,
+      if (a.date.isNotEmpty) a.date,
+    ].join(', ');
+    final detail = a.note.isEmpty
+        ? meta
+        : (meta.isEmpty ? a.note : '$meta: ${a.note}');
+    ackLog.add(ComplianceItem(
+      strings.format(StringKey.complianceAckEntry, {'label': i.title}),
+      pass: true,
+      detail: detail,
+    ));
+  }
+
   return ComplianceSummary(
     date: date,
     items: [
@@ -172,6 +203,8 @@ ComplianceSummary buildComplianceSummaryFrom({
                       strings(StringKey.complianceNounWarningOne),
                       strings(StringKey.complianceNounWarningMany)),
                 })),
+      // I4 — the acknowledgement log rows (empty unless [acks] was supplied).
+      ...ackLog,
     ],
   );
 }
@@ -180,13 +213,35 @@ ComplianceSummary buildComplianceSummaryFrom({
 /// category rows and the IssuesCard always move together (H2). The exports read
 /// the same provider, so the screen and the issued report never disagree.
 final complianceSummaryProvider = Provider<ComplianceSummary>((ref) {
+  final acks = ref.watch(acknowledgedIssuesProvider);
   return buildComplianceSummaryFrom(
     issues: ref.watch(designIssuesProvider),
     electricalWarnings: ref.watch(electricalResultProvider).warnings,
-    acknowledged: ref.watch(acknowledgedIssuesProvider),
+    acknowledged: acks.keys.toSet(),
+    acks: acks,
     strings: MechXStringsData(ref.watch(localeProvider)),
     // The verdict date is formatted app-side (the engine never reads the
     // clock); it only rolls at midnight, which no open session cares about.
+    date: DateTime.now().toIso8601String().split('T').first,
+  );
+});
+
+/// I4 — the on-screen compliance roll-up: the design CHECK rows only, WITHOUT
+/// the per-advisory acknowledgement log. The audit log (who accepted what, when,
+/// why) is surfaced by the IssuesCard's Acknowledged group on the same screen
+/// and printed in the exported report ([complianceSummaryProvider]); omitting it
+/// here keeps the sign-off CARD a clean checks list rather than duplicating the
+/// acknowledged advisories. The overall verdict is IDENTICAL to
+/// [complianceSummaryProvider] (ack-log rows are all PASS, so they never move
+/// `allPass`), so the two never disagree. Default state (nothing acknowledged) ⇒
+/// byte-identical to [complianceSummaryProvider].
+final complianceCheckItemsProvider = Provider<ComplianceSummary>((ref) {
+  return buildComplianceSummaryFrom(
+    issues: ref.watch(designIssuesProvider),
+    electricalWarnings: ref.watch(electricalResultProvider).warnings,
+    acknowledged: ref.watch(acknowledgedIssuesProvider).keys.toSet(),
+    // No `acks` ⇒ no acknowledgement-log rows.
+    strings: MechXStringsData(ref.watch(localeProvider)),
     date: DateTime.now().toIso8601String().split('T').first,
   );
 });

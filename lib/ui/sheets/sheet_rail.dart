@@ -280,7 +280,12 @@ class _RailItemState extends ConsumerState<_RailItem> {
     final colors = context.colors;
     final type = context.type;
     final project = ref.watch(projectControllerProvider);
-    final calibrated = project.calibrationFor(widget.sheet.id) != null;
+    final hasCalibration = project.calibrationFor(widget.sheet.id) != null;
+    // J1: a calibration that survived a plan-source swap is STALE until
+    // re-verified — the rail dot stays in the warning state (same shape as
+    // "never calibrated") rather than reading falsely green.
+    final stale = project.isCalibrationStale(widget.sheet.id);
+    final calibrated = hasCalibration && !stale;
     // Which building floor this sheet maps to (B7): stamped on the tile so a
     // remap — or a silent pile-up when more sheets than floors default onto the
     // top — is visible at a glance, not invisible. 1-based, ASCII ("F3").
@@ -354,11 +359,16 @@ class _RailItemState extends ConsumerState<_RailItem> {
                   children: [
                     // L5/M4: the glyph's meaning (calibrated vs not) was
                     // colour + shape only — a hover tooltip now spells it out.
+                    // J1: a stale calibration gets its own tooltip wording
+                    // (distinct from "never calibrated") even though it shares
+                    // the warning glyph/shape.
                     MechXTooltip(
                       edge: MechXTooltipEdge.right,
                       message: context.strings(calibrated
                           ? StringKey.shellCalibrated
-                          : StringKey.shellUncalibrated),
+                          : (stale
+                              ? StringKey.shellCalibrationStale
+                              : StringKey.shellUncalibrated)),
                       child: CustomPaint(
                         size: const Size(9, 9),
                         painter: _CalibrationGlyph(

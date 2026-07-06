@@ -134,6 +134,7 @@ enum StringKey {
   shellNoSheet,
   shellUncalibrated,
   shellCalibrated,
+  shellCalibrationStale, // J1 — sheet-rail tooltip: plan replaced, re-verify scale
   shellStandardsProvenance,
   shellViewportHints,
 
@@ -154,6 +155,7 @@ enum StringKey {
   busyConvertingDwg,
   busyOpeningProject,
   busySaving,
+  busyExportingSubmittal, // {current} {total} — J2 per-sheet submittal export
 
   // Unsaved-changes guard dialog (Open / Import / quit).
   confirmDiscardTitle,
@@ -272,6 +274,7 @@ enum StringKey {
   inspectorCalibrateScale,
   inspectorReCalibrate,
   inspectorMapsToFloor,
+  inspectorScaleConfirmed, // J1 — clears the "plan replaced" stale flag
 
   // Inspector — HVAC section.
   inspectorRound,
@@ -352,6 +355,7 @@ enum StringKey {
 
   // Electrical workspace — circuit inspector.
   electricalCircuitEditTitle,
+  electricalFieldProtection,
   electricalFieldName,
   electricalFieldLoadKind,
   electricalFieldMotorPower,
@@ -444,6 +448,11 @@ enum StringKey {
   complianceCategoryStandardsVerification,
   complianceCategoryElectricalSizing,
 
+  // I4 — the acknowledgement-log row category (compliance_store.dart): one row
+  // per accepted advisory, carrying its audit trail (author/date/note) in the
+  // detail so the signed report records who accepted a value, when, and why.
+  complianceAckEntry, // {label} = the acknowledged advisory's title
+
   // H1 — compliance roll-up detail phrases.
   complianceDetailAllWithinBand,
   complianceDetailOutOfBand, // {n}
@@ -514,6 +523,13 @@ enum StringKey {
   issuesCardUndo,
   issuesCardLocate,
 
+  // I4 — the inline acknowledgement form (issues_card.dart): the engineer
+  // records their initials + an optional one-line reason before an advisory is
+  // accepted, so the sign-off carries an accountable author + justification.
+  issuesCardAckInitials, // hint for the initials field
+  issuesCardAckReasonHint, // hint for the optional reason field
+  issuesCardAckCancel, // dismiss the inline form
+
   // H1 — Design issue TITLES (store/design_issues_store.dart). The engine-
   // sourced messages (air-velocity check.message, drainage a.message, the
   // electrical w.message) are a SEPARATE register and are NOT keyed here.
@@ -525,6 +541,7 @@ enum StringKey {
   issueDuctOverCapacityTitle,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
+  issueCalibrationStaleTitle, // J1 — plan replaced, old scale unverified
   issueMultiSheetFloorTitle,
   issueNetworkIslandTitle,
   issueNetworkNoSourceTitle,
@@ -547,6 +564,11 @@ enum StringKey {
   issuePressureZoneTitle,
   issuePressureZoneMessage, // {bottom} {top} {kpa} {limit}
 
+  // I6 — document-control revision inconsistency (revision history logged but
+  // the title-block Revision left blank).
+  issueRevisionTagMissingTitle,
+  issueRevisionTagMissingMessage,
+
   // H1 — Design issue MESSAGES.
   issueOrphanFloorMessage, // {floor} = index+1, {floors} = pluralCount(n,'floor','floors')
   issueOrphanSheetMessage,
@@ -556,6 +578,7 @@ enum StringKey {
   issueDiffuserStrandedMessage,
   issueSheetNotCalibratedCriticalMessage, // {name}
   issueSheetNotCalibratedWarningMessage, // {name}
+  issueCalibrationStaleMessage, // J1 — {name}
   issueMultiSheetFloorMessage, // {count} {floor} {names}
   issueNetworkIslandMessage, // {service} {nodes} = pluralCount(n,'node','nodes')
   issueNetworkNoSourceMessage, // {service} {nodes}
@@ -775,6 +798,7 @@ const Map<StringKey, String> _en = {
   StringKey.shellNoSheet: 'No sheet',
   StringKey.shellUncalibrated: 'Uncalibrated',
   StringKey.shellCalibrated: 'Calibrated',
+  StringKey.shellCalibrationStale: 'Plan replaced — re-verify scale',
   StringKey.shellStandardsProvenance: 'SNI 8153:2015 (draft)',
   StringKey.shellViewportHints:
       'scroll zoom · Space/middle-drag pan · F fit · Ctrl+0 100%',
@@ -796,6 +820,8 @@ const Map<StringKey, String> _en = {
   StringKey.busyConvertingDwg: 'Converting DWG...',
   StringKey.busyOpeningProject: 'Opening project...',
   StringKey.busySaving: 'Saving...',
+  StringKey.busyExportingSubmittal:
+      'Exporting submittal package ({current}/{total})...',
 
   // Unsaved-changes guard dialog.
   StringKey.confirmDiscardTitle: 'Unsaved changes',
@@ -935,6 +961,7 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorCalibrateScale: 'Calibrate scale',
   StringKey.inspectorReCalibrate: 'Re-calibrate',
   StringKey.inspectorMapsToFloor: 'Maps to floor',
+  StringKey.inspectorScaleConfirmed: 'Scale confirmed',
 
   // Inspector — HVAC section.
   StringKey.inspectorRound: 'Round',
@@ -1018,6 +1045,7 @@ const Map<StringKey, String> _en = {
 
   // Electrical workspace — circuit inspector.
   StringKey.electricalCircuitEditTitle: 'Edit circuit',
+  StringKey.electricalFieldProtection: 'Protection',
   StringKey.electricalFieldName: 'Name',
   StringKey.electricalFieldLoadKind: 'Load kind',
   StringKey.electricalFieldMotorPower: 'Motor power (kW)',
@@ -1114,6 +1142,7 @@ const Map<StringKey, String> _en = {
   StringKey.complianceCategorySheetCalibration: 'Sheet calibration',
   StringKey.complianceCategoryStandardsVerification: 'Standards verification',
   StringKey.complianceCategoryElectricalSizing: 'Electrical circuit sizing',
+  StringKey.complianceAckEntry: 'Acknowledged: {label}',
 
   // H1 — compliance roll-up detail phrases.
   StringKey.complianceDetailAllWithinBand: 'all within band',
@@ -1194,6 +1223,9 @@ const Map<StringKey, String> _en = {
   StringKey.issuesCardAcknowledge: 'Acknowledge',
   StringKey.issuesCardUndo: 'Undo',
   StringKey.issuesCardLocate: 'Locate',
+  StringKey.issuesCardAckInitials: 'Initials',
+  StringKey.issuesCardAckReasonHint: 'Reason (optional)',
+  StringKey.issuesCardAckCancel: 'Cancel',
 
   // H1 — Design issue titles.
   StringKey.issueOrphanTitle: 'Element references a missing floor or sheet',
@@ -1204,6 +1236,7 @@ const Map<StringKey, String> _en = {
   StringKey.issueDuctOverCapacityTitle: 'Duct over capacity',
   StringKey.issueDiffuserStrandedTitle: 'Diffuser not connected to any duct',
   StringKey.issueSheetNotCalibratedTitle: 'Sheet not calibrated',
+  StringKey.issueCalibrationStaleTitle: 'Plan replaced — re-verify scale',
   StringKey.issueMultiSheetFloorTitle: 'Multiple sheets mapped to one floor',
   StringKey.issueNetworkIslandTitle: 'Network branch not connected',
   StringKey.issueNetworkNoSourceTitle: 'Network has no source',
@@ -1230,6 +1263,11 @@ const Map<StringKey, String> _en = {
       'The pressure zone from "{bottom}" to "{top}" reaches {kpa} kPa static at '
       'its lowest fixture, above the SNI max fixture static of {limit} kPa. Add '
       'a PRV / break-tank to split the zone.',
+  StringKey.issueRevisionTagMissingTitle: 'Revision not set for logged history',
+  StringKey.issueRevisionTagMissingMessage:
+      'The revision history has entries but the title-block Revision is blank, '
+      'so every issued sheet and report stamps no revision. Set the current '
+      'Revision under Document control.',
 
   // H1 — Design issue messages.
   StringKey.issueOrphanFloorMessage:
@@ -1261,6 +1299,11 @@ const Map<StringKey, String> _en = {
   StringKey.issueSheetNotCalibratedWarningMessage:
       '"{name}" has no scale set — its run/riser lengths cannot '
           'be measured. Calibrate the sheet to size it.',
+  StringKey.issueCalibrationStaleMessage:
+      '"{name}"\'s plan was replaced but kept its OLD scale — a revised '
+          'drawing (different DPI, plot scale, or title block) can silently '
+          'carry the wrong calibration. Re-check the scale, or confirm it '
+          'still holds.',
   StringKey.issueMultiSheetFloorMessage:
       '{count} sheets map to floor "{floor}" '
           '({names}) — only one plan per floor feeds sizing at that elevation, '
@@ -1499,6 +1542,7 @@ const Map<StringKey, String> _id = {
   StringKey.shellNoSheet: 'Tidak ada lembar',
   StringKey.shellUncalibrated: 'Belum dikalibrasi',
   StringKey.shellCalibrated: 'Terkalibrasi',
+  StringKey.shellCalibrationStale: 'Denah diganti — verifikasi ulang skala',
   StringKey.shellStandardsProvenance: 'SNI 8153:2015 (draf)',
   StringKey.shellViewportHints:
       'gulir zoom · Spasi/seret-tengah geser · F pas · Ctrl+0 100%',
@@ -1521,6 +1565,8 @@ const Map<StringKey, String> _id = {
   StringKey.busyConvertingDwg: 'Mengonversi DWG...',
   StringKey.busyOpeningProject: 'Membuka proyek...',
   StringKey.busySaving: 'Menyimpan...',
+  StringKey.busyExportingSubmittal:
+      'Mengekspor paket submittal ({current}/{total})...',
 
   // Unsaved-changes guard dialog.
   StringKey.confirmDiscardTitle: 'Perubahan belum disimpan',
@@ -1662,6 +1708,7 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorCalibrateScale: 'Kalibrasi skala',
   StringKey.inspectorReCalibrate: 'Kalibrasi ulang',
   StringKey.inspectorMapsToFloor: 'Memetakan ke lantai',
+  StringKey.inspectorScaleConfirmed: 'Skala dikonfirmasi',
 
   // Inspector — HVAC section.
   StringKey.inspectorRound: 'Bulat',
@@ -1746,6 +1793,7 @@ const Map<StringKey, String> _id = {
 
   // Electrical workspace — circuit inspector.
   StringKey.electricalCircuitEditTitle: 'Ubah sirkuit',
+  StringKey.electricalFieldProtection: 'Proteksi',
   StringKey.electricalFieldName: 'Nama',
   StringKey.electricalFieldLoadKind: 'Jenis beban',
   StringKey.electricalFieldMotorPower: 'Daya motor (kW)',
@@ -1841,6 +1889,7 @@ const Map<StringKey, String> _id = {
   StringKey.complianceCategorySheetCalibration: 'Kalibrasi lembar',
   StringKey.complianceCategoryStandardsVerification: 'Verifikasi standar',
   StringKey.complianceCategoryElectricalSizing: 'Pengukuran sirkuit listrik',
+  StringKey.complianceAckEntry: 'Diakui: {label}',
 
   // H1 — compliance roll-up detail phrases.
   StringKey.complianceDetailAllWithinBand: 'semua dalam batas',
@@ -1921,6 +1970,9 @@ const Map<StringKey, String> _id = {
   StringKey.issuesCardAcknowledge: 'Akui',
   StringKey.issuesCardUndo: 'Urungkan',
   StringKey.issuesCardLocate: 'Cari lokasi',
+  StringKey.issuesCardAckInitials: 'Inisial',
+  StringKey.issuesCardAckReasonHint: 'Alasan (opsional)',
+  StringKey.issuesCardAckCancel: 'Batal',
 
   // H1 — Design issue titles.
   StringKey.issueOrphanTitle: 'Elemen merujuk lantai atau lembar yang hilang',
@@ -1932,6 +1984,8 @@ const Map<StringKey, String> _id = {
   StringKey.issueDiffuserStrandedTitle:
       'Difuser tidak terhubung ke saluran mana pun',
   StringKey.issueSheetNotCalibratedTitle: 'Lembar belum dikalibrasi',
+  StringKey.issueCalibrationStaleTitle:
+      'Denah diganti — verifikasi ulang skala',
   StringKey.issueMultiSheetFloorTitle:
       'Beberapa lembar dipetakan ke satu lantai',
   StringKey.issueNetworkIslandTitle: 'Cabang jaringan tidak terhubung',
@@ -1960,6 +2014,12 @@ const Map<StringKey, String> _id = {
       'Zona tekanan dari "{bottom}" hingga "{top}" mencapai {kpa} kPa statik di '
       'fikstur terendahnya, di atas tekanan statik fikstur maksimum SNI {limit} '
       'kPa. Tambahkan PRV / tangki pemutus untuk membagi zona.',
+  StringKey.issueRevisionTagMissingTitle:
+      'Revisi belum diisi untuk riwayat yang tercatat',
+  StringKey.issueRevisionTagMissingMessage:
+      'Riwayat revisi memiliki entri tetapi kolom Revisi pada kop gambar kosong, '
+      'sehingga setiap lembar dan laporan yang diterbitkan tidak mencantumkan '
+      'revisi. Isi Revisi saat ini di bawah Kontrol dokumen.',
 
   // H1 — Design issue messages.
   StringKey.issueOrphanFloorMessage:
@@ -1992,6 +2052,11 @@ const Map<StringKey, String> _id = {
   StringKey.issueSheetNotCalibratedWarningMessage:
       '"{name}" belum memiliki skala — panjang saluran/riser-nya tidak dapat '
           'diukur. Kalibrasi lembar untuk mengukurnya.',
+  StringKey.issueCalibrationStaleMessage:
+      'Denah "{name}" telah diganti tetapi masih memakai skala LAMA — gambar '
+          'revisi (DPI, skala cetak, atau kop gambar yang berbeda) dapat diam-'
+          'diam membawa kalibrasi yang salah. Verifikasi ulang skalanya, atau '
+          'konfirmasi bahwa skala itu masih berlaku.',
   StringKey.issueMultiSheetFloorMessage:
       '{count} lembar dipetakan ke lantai "{floor}" ({names}) — hanya satu '
           'denah per lantai yang memasok pengukuran pada elevasi itu, sehingga '

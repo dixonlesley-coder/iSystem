@@ -23,7 +23,8 @@ import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/lightning.dart' show LpsLevelLabel;
 import 'package:mechx_engine/electrical/load_kind.dart';
-import 'package:mechx_engine/electrical/metering.dart' show MeteringKindLabel;
+import 'package:mechx_engine/electrical/metering.dart'
+    show MeteringKind, MeteringKindLabel;
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/electrical/sources.dart'
@@ -1761,7 +1762,14 @@ class _PanelAdvancedRow extends StatelessWidget {
       if (encl != null)
         '${fmtNum(encl.widthMm)}x${fmtNum(encl.heightMm)}x${fmtNum(encl.depthMm)}',
       if (spd != null) spd.type.label,
-      if (meter != null) meter.metering.label,
+      // H4 — a CT-operated board (demand > the direct-metering limit) prints
+      // the resolved CT ratio + revenue accuracy class ('CT 200/5A cl.0.5S'),
+      // not just the bare metering-kind label; a direct-metered board still
+      // shows just 'direct' (no ratio to report).
+      if (meter != null)
+        meter.metering == MeteringKind.ct
+            ? 'CT ${meter.ctRatio}A cl.${meter.ctClass}'
+            : meter.metering.label,
     ];
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs + 1),

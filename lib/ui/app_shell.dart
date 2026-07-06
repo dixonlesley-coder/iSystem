@@ -355,6 +355,15 @@ class _ElectricalWorkspaceInspectorColumn extends ConsumerWidget {
       final circuit =
           panel?.circuits.where((c) => c.id == target.circuitId).firstOrNull;
       if (panel != null && circuit != null) {
+        // H2/H3 — the way's solved protection (breaker/RCD/Icu), the SAME
+        // figures the board schedule prints, for the circuit editor's
+        // read-only protection line.
+        final result = ref.watch(electricalResultProvider);
+        final circuitResult = result.panels[panel.id]?.circuits
+            .where((c) => c.circuitId == circuit.id)
+            .firstOrNull;
+        final icuKa =
+            ref.watch(electricalAdvancedProvider).fault.panels[panel.id]?.incomerKa;
         editor = ElectricalCircuitInspector(
           key: ValueKey('${target.panelId}/${target.circuitId}'),
           panel: panel,
@@ -362,6 +371,8 @@ class _ElectricalWorkspaceInspectorColumn extends ConsumerWidget {
           controller: ctrl,
           onClose: clear,
           inline: true,
+          circuitResult: circuitResult,
+          breakerIcuKa: icuKa,
         );
       }
     } else if (target is ElectricalPanelTarget) {

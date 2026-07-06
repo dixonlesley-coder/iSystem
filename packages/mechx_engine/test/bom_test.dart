@@ -410,6 +410,70 @@ void main() {
     });
   });
 
+  // ── I5: manual-override provenance ─────────────────────────────────────────
+  group('buildBom — I5 manual override flag', () {
+    // e1 carries a manual size override; e2/e3 do not.
+    const e1over = NetEdge(
+      id: 'e1',
+      fromId: 'n0',
+      toId: 'n1',
+      service: ServiceType.coldWater,
+      kind: EdgeKind.run,
+      sizeOverride: Diameter(0.025),
+    );
+    const netOver = Network(
+      nodes: [_n0, _n1, _n2, _n3],
+      edges: [e1over, _e2, _e3],
+    );
+
+    test('a line with any overridden edge is flagged manual; the rest are not',
+        () {
+      final bom = buildBom(
+        net: netOver,
+        sizing: _sizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      // The DN25 run line merges e1 (override) + e2 (auto) → manual (any).
+      expect(_lineWhere(bom, ServiceType.coldWater, EdgeKind.run, 25).manual,
+          isTrue);
+      // The DN50 riser line (e3) was auto-sized → not manual.
+      expect(_lineWhere(bom, ServiceType.coldWater, EdgeKind.riser, 50).manual,
+          isFalse);
+    });
+
+    test('bomToCsv appends a manual column with a * token only for overrides',
+        () {
+      final bom = buildBom(
+        net: netOver,
+        sizing: _sizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      final lines = bomToCsv(bom).trim().split('\n');
+      // The conditional column is present and trails the header.
+      expect(lines.first, endsWith(',manual'));
+      // The run line carries the marker; the riser line's cell is empty.
+      expect(lines.any((l) => l.startsWith('coldWater,run,') && l.endsWith(',*')),
+          isTrue);
+      expect(
+          lines.any((l) => l.startsWith('coldWater,riser,') && l.endsWith(',')),
+          isTrue);
+    });
+
+    test('an all-auto BOM stays byte-identical (no manual column, all false)',
+        () {
+      final bom = buildBom(
+        net: _net,
+        sizing: _sizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      expect(bom.every((l) => !l.manual), isTrue);
+      expect(bomToCsv(bom).split('\n').first.contains('manual'), isFalse);
+    });
+  });
+
   // ── N14/N18: material + one size notation ──────────────────────────────────
   group('material + duct notation', () {
     const dNet = Network(

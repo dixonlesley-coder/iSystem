@@ -31,6 +31,7 @@ void main() {
       projectName: 'Tower A',
       floors: [Floor('Ground', Length(4.0)), Floor('L1', Length(3.5))],
       calibrations: {'s1': ScaleCalibration(0.02)},
+      staleCalibrations: {'s1'}, // J1 — plan replaced, unverified
       sheets: [
         Sheet(id: 's1', name: 'Ground Floor', sizePx: Size(1684, 1190)),
         Sheet(
@@ -111,6 +112,7 @@ void main() {
     expect(decoded.floors.length, 2);
     expect(decoded.floors.first.height.meters, 4.0);
     expect(decoded.calibrations['s1']?.metersPerPixel, 0.02);
+    expect(decoded.staleCalibrations, {'s1'}); // J1
     expect(decoded.sheets.length, 4);
     expect(decoded.sheets[1].pdfPath, '/x/plan.pdf');
     expect(decoded.sheets[1].sizePx, const Size(800, 600));
@@ -765,6 +767,8 @@ void main() {
     expect(decoded.version, 1);
     expect(decoded.projectName, 'Legacy');
     expect(decoded.electrical, isNull);
+    // J1: absent on an older file ⇒ no stale flags (tolerant).
+    expect(decoded.staleCalibrations, isEmpty);
   });
 
   test('fixture library + a node referencing it survive encode/decode', () {
@@ -1102,6 +1106,32 @@ void main() {
         isTrue);
   });
 
+  test('J1: staleCalibrations — empty is omitted (byte-identical); '
+      'non-empty round-trips', () {
+    const empty = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    final projectJson = empty.toJson()['project'] as Map;
+    expect(projectJson.containsKey('staleCalibrations'), isFalse);
+    expect(ProjectDocument.fromJson(empty.toJson()).staleCalibrations, isEmpty);
+
+    const flagged = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {'s1': ScaleCalibration(0.02)},
+      staleCalibrations: {'s1'},
+      sheets: [],
+      network: Network(),
+    );
+    expect((flagged.toJson()['project'] as Map)['staleCalibrations'], ['s1']);
+    expect(ProjectDocument.fromJson(flagged.toJson()).staleCalibrations,
+        {'s1'});
+  });
+
   test(
       'N23: equipment model/spec overrides round-trip; empty ⇒ byte-identical',
       () {
@@ -1196,5 +1226,70 @@ void main() {
       () => ProjectDocument.fromJson(json),
       throwsA(isA<ProjectDocumentException>()),
     );
+  });
+
+  test('I4: acknowledged advisories + audit metadata round-trip; empty ⇒ '
+      'byte-identical', () {
+    const empty = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    // An untouched project carries no key (byte-identical .mechx).
+    expect((empty.toJson()['settings'] as Map).containsKey('acknowledgedIssues'),
+        isFalse);
+    expect(ProjectDocument.fromJson(empty.toJson()).settings.acknowledgedIssues,
+        isEmpty);
+
+    const populated = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+      settings: DesignSettings(acknowledgedIssues: [
+        IssueAck(
+            key: 'verify:SNI 03-7065-2005 — max supply velocity',
+            author: 'LD',
+            note: 'accepted per client memo',
+            date: '2026-07-06'),
+        // A metadata-less ack (only a key) is valid too.
+        IssueAck(key: 'drainage-slope drainage-slope|s1||e2|'),
+      ]),
+    );
+    final decoded = ProjectDocument.decode(populated.encode());
+    expect(decoded.settings.acknowledgedIssues, hasLength(2));
+    final first = decoded.settings.acknowledgedIssues.first;
+    expect(first.key, 'verify:SNI 03-7065-2005 — max supply velocity');
+    expect(first.author, 'LD');
+    expect(first.note, 'accepted per client memo');
+    expect(first.date, '2026-07-06');
+    final second = decoded.settings.acknowledgedIssues[1];
+    expect(second.author, isEmpty);
+    expect(second.note, isEmpty);
+    expect(second.date, isEmpty);
+  });
+
+  test('I4: a pre-I4 file (bare acknowledgedIssueKeys string list) loads with '
+      'blank audit fields', () {
+    const doc = ProjectDocument(
+      projectName: 'X',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    final json = doc.toJson();
+    // Inject the legacy shape the new field supersedes.
+    (json['settings'] as Map)['acknowledgedIssueKeys'] = <String>[
+      'verify:x ',
+      'legionella ',
+    ];
+    final decoded = ProjectDocument.fromJson(json);
+    expect(decoded.settings.acknowledgedIssues, hasLength(2));
+    expect(decoded.settings.acknowledgedIssues.first.key, 'verify:x ');
+    expect(decoded.settings.acknowledgedIssues.first.author, isEmpty);
   });
 }

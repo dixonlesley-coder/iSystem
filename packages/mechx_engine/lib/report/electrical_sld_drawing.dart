@@ -522,10 +522,20 @@ SldSheet buildElectricalSld({
     }
 
     // TOTAL footer — the panel's diversified demand (W/kW + line current) + the
-    // per-phase R/S/T line-current totals (the phase balance).
+    // per-phase R/S/T line-current totals (the phase balance). H7: a 3-phase
+    // board also carries its already-computed phase-IMBALANCE percentage
+    // (`ElectricalPanelResult.imbalancePercent`, the same figure the Markdown
+    // calc report prints per panel) — never recomputed here, and only appended
+    // when the board is genuinely 3-phase (a single-phase board's imbalance is
+    // always 0/meaningless — `p.system.isThreePhase` gates it) and the value is
+    // a real number (`isFinite` — the engine's own balancer never produces
+    // NaN/Infinity, but the drawing layer never trusts that silently).
+    final imbalance = p.system.isThreePhase && p.imbalancePercent.isFinite
+        ? '  ·  imbalance ${_num(p.imbalancePercent)}%'
+        : '';
     final footerY = busBot + _rowH / 2 + 3;
     prims.add(SldLabel(blockX + 8, footerY,
-        'TOTAL  ${_watts(p.demandW)} / ${_num(p.demandCurrent.amperes)}A',
+        'TOTAL  ${_watts(p.demandW)} / ${_num(p.demandCurrent.amperes)}A$imbalance',
         size: 8.5, bold: true));
     if (p.system.isThreePhase) {
       final pb = p.phaseBalance;

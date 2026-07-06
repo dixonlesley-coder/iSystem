@@ -107,6 +107,7 @@ ProjectDocument buildDocument(ProviderReader read) {
     projectName: project.name,
     floors: project.floors,
     calibrations: project.calibrations,
+    staleCalibrations: project.staleCalibrations,
     sheets: sheets.sheets,
     network: read(networkControllerProvider).network,
     viewports: sheets.viewports,
@@ -145,8 +146,9 @@ ProjectDocument buildDocument(ProviderReader read) {
       checkedBy: read(documentControlProvider).checkedBy,
       approvedBy: read(documentControlProvider).approvedBy,
       revisions: read(documentControlProvider).revisions,
-      // Acknowledged advisory keys (H1) round-trip with the project.
-      acknowledgedIssueKeys: read(acknowledgedIssuesProvider).toList(),
+      // Acknowledged advisories + their I4 audit metadata (H1 + I4) round-trip
+      // with the project.
+      acknowledgedIssues: read(acknowledgedIssuesProvider).values.toList(),
       // The N23 equipment model/spec overrides round-trip with the project.
       equipmentModelSpecs: read(equipmentModelSpecProvider),
     ),
@@ -208,6 +210,7 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
         name: doc.projectName,
         floors: doc.floors,
         calibrations: doc.calibrations,
+        staleCalibrations: doc.staleCalibrations,
       );
   read(sheetsControllerProvider.notifier).loadSheets(
         doc.sheets,
@@ -265,9 +268,11 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
     approvedBy: s.approvedBy,
     revisions: s.revisions,
   ));
-  // Restore acknowledged advisory keys (H1; absent on an older file ⇒ empty ⇒
-  // compliance behaves exactly as before).
-  read(acknowledgedIssuesProvider.notifier).set(s.acknowledgedIssueKeys.toSet());
+  // Restore acknowledged advisories + their I4 audit metadata (H1 + I4; absent
+  // on an older file ⇒ empty ⇒ compliance behaves exactly as before). A pre-I4
+  // file's bare keys rehydrate with blank author/note/date.
+  read(acknowledgedIssuesProvider.notifier)
+      .set({for (final a in s.acknowledgedIssues) a.key: a});
   // Restore the N23 equipment model/spec overrides (absent on an older file ⇒
   // empty ⇒ every row prints the engine's own '—' placeholder).
   read(equipmentModelSpecProvider.notifier).set(s.equipmentModelSpecs);

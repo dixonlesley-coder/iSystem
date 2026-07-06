@@ -292,6 +292,40 @@ void main() {
       expect(md, isNot(contains('| DN200 | 2 |')));
     });
 
+    test('I5: an all-auto BOM has no * marker and no manual footnote', () {
+      final md = buildCalcReportMarkdown(data());
+      expect(md, isNot(contains(' * |')));
+      expect(md, isNot(contains('manually overridden')));
+    });
+
+    test('I5: a manually-overridden BOM line prints a * marker + a footnote', () {
+      final md = buildCalcReportMarkdown(CalcReportData(
+        projectName: 'X',
+        date: 'd',
+        standardsName: profile.name,
+        standardsRevision: profile.revision,
+        verifyItems: const [],
+        building: const BuildingLevels([Floor('G', Length(3))]),
+        feedStrategy: 'Upfeed pump',
+        targetResidual: const Pressure(200000),
+        bom: const [
+          BomLine(
+              service: ServiceType.coldWater,
+              kind: EdgeKind.run,
+              diameterMm: 32,
+              material: 'PPR',
+              manual: true,
+              totalLength: Length(6.0),
+              segmentCount: 1),
+        ],
+        fittings: const [],
+      ));
+      // The overridden line's size cell carries the * marker.
+      expect(md, contains('| DN32 * | PPR |'));
+      // A footnote resolves the marker (EN).
+      expect(md, contains('Sizes marked * were manually overridden.'));
+    });
+
     test('run schedule renders per-edge tag/size/FU/flow/velocity/length', () {
       final md = buildCalcReportMarkdown(data());
       expect(md, contains('## Run / riser schedule'));

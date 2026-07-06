@@ -215,6 +215,13 @@ class SheetsController extends Notifier<SheetsState> {
   /// [source], so a PDF→DXF swap clears the stale pdfPath. No-op when [sheetId]
   /// is gone or the source is already identical. Not undoable — a source swap,
   /// like [loadSheets].
+  ///
+  /// J1: the swapped-in plan can silently carry the OLD calibration (keyed by
+  /// sheet id) even though a revised drawing may have a different DPI/plot
+  /// scale/title block — so this flags the sheet's calibration STALE via
+  /// [ProjectController.markCalibrationStale] (a no-op when the sheet has no
+  /// calibration yet), surfaced as a Design Issue + a warning-state rail dot
+  /// until the engineer re-calibrates or explicitly confirms the old scale.
   void replaceSheetSource(String sheetId, Sheet source) {
     final idx = state.sheets.indexWhere((s) => s.id == sheetId);
     if (idx < 0) return;
@@ -232,6 +239,7 @@ class SheetsController extends Notifier<SheetsState> {
     final sheets = [...state.sheets];
     sheets[idx] = replaced;
     state = state.copyWith(sheets: sheets);
+    ref.read(projectControllerProvider.notifier).markCalibrationStale(sheetId);
   }
 
   /// Remove the sheet with [sheetId] from the project AND prune every drawn node

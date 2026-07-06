@@ -652,8 +652,10 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                   ? strings(RptStringKey.bomRiser)
                   : strings(RptStringKey.bomRun),
               line.tag,
-              // N18: one size notation — Ø round duct / W×H rect / DN pipe.
-              line.sizeLabel,
+              // N18: one size notation — Ø round duct / W×H rect / DN pipe. I5:
+              // a `*` marks a size that came from a MANUAL override, resolved by
+              // the footnote below.
+              line.manual ? '${line.sizeLabel} *' : line.sizeLabel,
               line.material,
               line.totalLength.meters.toStringAsFixed(1),
               '${line.segmentCount}',
@@ -661,6 +663,19 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
         ],
         mdSeparator: '|---|---|---|---|---|---:|---:|',
       ));
+    // I5 — a footnote resolving the `*` marker when any BOM line is a manual
+    // override, so a reviewer/auditor sees from the deliverable alone that a
+    // human overrode a code-derived size. Localized inline (the shared report
+    // string table is outside this change's scope); the marker is mid-sentence
+    // so it renders literally in both the Markdown and PDF outputs. A paragraph
+    // (trailing blank line) keeps clean spacing before the next section. Absent
+    // when nothing was overridden ⇒ byte-identical.
+    if (d.bom.any((l) => l.manual)) {
+      blocks.add(RptParagraph(switch (strings.locale) {
+        ReportLocale.en => 'Sizes marked * were manually overridden.',
+        ReportLocale.id => 'Ukuran bertanda * diatur secara manual.',
+      }));
+    }
   }
   if (d.fittings.isNotEmpty) {
     blocks

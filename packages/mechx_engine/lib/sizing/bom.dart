@@ -45,6 +45,14 @@ class BomLine {
   /// safe — the multi-stack join uses `/`, never a comma or pipe.
   final String tag;
 
+  /// I5 — true when this line's size came from a MANUAL override on at least one
+  /// of its edges ([NetEdge.sizeOverride]) rather than purely from the auto-sizer
+  /// (SNI-driven). Surfaced as a `*` marker in the CSV + report BOM rows (with a
+  /// "* manually sized" footnote) so a reviewer/auditor can see from the
+  /// deliverable alone that a human overrode a code-derived size. Defaults false
+  /// ⇒ an all-auto BOM is byte-identical.
+  final bool manual;
+
   /// Rectangular-duct dimensions (mm), rounded — non-null only for a rect duct.
   /// Round ducts / pipes leave both null and are sized by [diameterMm].
   final int? widthMm;
@@ -63,6 +71,7 @@ class BomLine {
     required this.segmentCount,
     this.material = '',
     this.tag = '',
+    this.manual = false,
     this.widthMm,
     this.heightMm,
     this.floorIndex,
@@ -159,7 +168,7 @@ List<BomLine> buildBom({
   // carry the SAME identifier the plan / riser single-line draw (N13).
   final riserTagByEdge = riserTags(net, null);
 
-  // Accumulator: key → (totalMeters, segmentCount, riser tags in the group).
+  // Accumulator: key → (totalMeters, segmentCount, riser tags, manual flag).
   final acc = <({
     ServiceType service,
     EdgeKind kind,
@@ -168,7 +177,7 @@ List<BomLine> buildBom({
     int? widthMm,
     int? heightMm,
     int? floorIndex
-  }), ({double meters, int count, Set<String> riserTags})>{};
+  }), ({double meters, int count, Set<String> riserTags, bool manual})>{};
 
   for (final edge in net.edges) {
     final es = sizing[edge.id];
@@ -204,6 +213,8 @@ List<BomLine> buildBom({
 
     // N13: which riser stack tag(s) this group covers (risers only).
     final rt = edge.kind == EdgeKind.riser ? riserTagByEdge[edge.id] : null;
+    // I5: a line is "manual" when any of its edges carried a size override.
+    final manual = edge.sizeOverride != null;
 
     final prev = acc[key];
     if (prev == null) {
@@ -211,6 +222,7 @@ List<BomLine> buildBom({
         meters: len.meters,
         count: 1,
         riserTags: {if (rt != null) rt},
+        manual: manual,
       );
     } else {
       if (rt != null) prev.riserTags.add(rt);
@@ -218,6 +230,7 @@ List<BomLine> buildBom({
         meters: prev.meters + len.meters,
         count: prev.count + 1,
         riserTags: prev.riserTags,
+        manual: prev.manual || manual,
       );
     }
   }
@@ -253,6 +266,7 @@ List<BomLine> buildBom({
         diameterMm: entry.key.diameterMm,
         material: entry.key.material,
         tag: tagFor(entry.key, entry.value.riserTags),
+        manual: entry.value.manual,
         widthMm: entry.key.widthMm,
         heightMm: entry.key.heightMm,
         totalLength: Length(entry.value.meters),
@@ -411,11 +425,20 @@ Length totalLengthForService(List<BomLine> bom, ServiceType service) {
 /// When any line carries a [BomLine.floorIndex] (i.e. the BOM was built with
 /// `groupByFloor: true`) a `floor` column is inserted — the 1-based human floor
 /// number, empty for risers.
+///
+/// I5: when any line is a MANUAL override ([BomLine.manual]) a trailing `manual`
+/// column is inserted, carrying `*` for an overridden line (empty otherwise), so
+/// a takeoff can tell an engineer-forced size from a code-derived one. Both
+/// columns are conditional, so an all-auto / un-floored BOM stays byte-identical.
 String bomToCsv(List<BomLine> bom) {
   final includeFloor = bom.any((l) => l.floorIndex != null);
-  final buffer = StringBuffer(includeFloor
-      ? 'service,kind,tag,floor,nominal_size_mm,material,length_m,segments\n'
-      : 'service,kind,tag,nominal_size_mm,material,length_m,segments\n');
+  final includeManual = bom.any((l) => l.manual);
+  final header = StringBuffer('service,kind,tag,');
+  if (includeFloor) header.write('floor,');
+  header.write('nominal_size_mm,material,length_m,segments');
+  if (includeManual) header.write(',manual');
+  header.write('\n');
+  final buffer = StringBuffer(header.toString());
   for (final line in bom) {
     buffer
       ..write(line.service.name)
@@ -436,8 +459,13 @@ String bomToCsv(List<BomLine> bom) {
       ..write(',')
       ..write(line.totalLength.meters.toStringAsFixed(2))
       ..write(',')
-      ..write(line.segmentCount)
-      ..write('\n');
+      ..write(line.segmentCount);
+    if (includeManual) {
+      buffer
+        ..write(',')
+        ..write(line.manual ? '*' : '');
+    }
+    buffer.write('\n');
   }
   return buffer.toString();
 }

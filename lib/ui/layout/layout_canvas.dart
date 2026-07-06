@@ -354,6 +354,14 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
       return const SizedBox.shrink();
     }
+    // H2/H3 — the way's solved protection (breaker/RCD/Icu), the SAME figures
+    // the board schedule prints, for the circuit editor's read-only line.
+    final result = ref.watch(electricalResultProvider);
+    final circuitResult = result.panels[panel.id]?.circuits
+        .where((c) => c.circuitId == circuit.id)
+        .firstOrNull;
+    final icuKa =
+        ref.watch(electricalAdvancedProvider).fault.panels[panel.id]?.incomerKa;
     return Positioned(
       top: 0,
       right: 0,
@@ -364,6 +372,8 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         circuit: circuit,
         controller: _ctrl,
         onClose: _closeOverlays,
+        circuitResult: circuitResult,
+        breakerIcuKa: icuKa,
       ),
     );
   }

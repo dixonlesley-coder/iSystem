@@ -7,6 +7,7 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/network/zoning.dart';
 import 'package:mechx_engine/pressure_field.dart';
+import 'package:mechx_engine/sizing/air_velocity.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/fan.dart';
 import 'package:mechx_engine/sizing/hot_water.dart';
@@ -25,6 +26,12 @@ import 'sizing_store.dart';
 
 Pressure get _targetResidual =>
     SupplyDesignCriteria.recommended().targetFixtureResidualPressure;
+
+/// The absolute pass threshold the pressure solve holds at the critical fixture
+/// (the design target residual, ≈2.25 bar). Exposed so the heatmap legend's
+/// threshold anchor and the per-node inspector probe (I2) read the SAME value
+/// the solve used, instead of the heatmap's relative min/max alone.
+final targetResidualProvider = Provider<Pressure>((ref) => _targetResidual);
 
 List<NetEdge> _supplyEdges(Network net) =>
     net.edges.where((e) => e.service == kSupplyService).toList();
@@ -93,6 +100,34 @@ final residualByNodeProvider = Provider<Map<String, Pressure>>((ref) {
   final down = ref.watch(downfeedProvider);
   if (down != null) return down.residualPressure;
   return const {};
+});
+
+/// Per-edge WATER / DRAINAGE velocity checks keyed by edge id — the non-air
+/// (pressurized / gravity) analogue of [airVelocityChecksProvider] (I3). Pipe
+/// velocity is a code-driven sizing input (SNI 03-7065-2005 caps supply velocity
+/// at 2,0 m/s) that was previously invisible for water/drainage runs, showing
+/// only for air ducts. Reuses the SAME [VelocityCheck] verdict idiom, judged
+/// against the SNI max pipe velocity from [SniProfile] (supply 2,0 m/s / drain
+/// 3,0 m/s) — the max is the compliance gate, so the band minimum is 0 (only an
+/// over-velocity pipe warns; the too-low branch never fires and no NEW band is
+/// invented). Only edges with a positive solved velocity are included, so a vent
+/// (no flow velocity) is omitted. Read-only — it never resizes anything.
+final waterVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  const profile = SniProfile();
+  final out = <String, VelocityCheck>{};
+  for (final e in net.edges) {
+    if (e.service.isAir) continue;
+    final s = sizing[e.id];
+    if (s == null || s.velocity.metersPerSecond <= 0) continue;
+    final max = e.service.regime == FlowRegime.gravity
+        ? profile.maxDrainVelocity.value
+        : profile.maxSupplyVelocity.value;
+    out[e.id] =
+        checkVelocityBand(s.velocity, min: const Velocity(0), max: max);
+  }
+  return out;
 });
 
 /// Pick the supply source/tank. The source is the pump/tank entry, NOT an

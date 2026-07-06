@@ -11,6 +11,11 @@ import 'package:mechx/ui/theme/mechx_theme.dart';
 /// mono labels, so the numeric endpoints it exists to show shipped as
 /// "Low 31 k… / High 31 …" (golden 03). It now sizes to the labels' intrinsic
 /// width: every endpoint renders whole, at any value width.
+///
+/// Finding I2/E4 — the legend now also carries the ABSOLUTE pass anchor: the
+/// SNI target residual (a threshold tick + a "Min NN kPa" label on a spread
+/// field; a PASS/LOW verdict on the uniform field), so the colours read against
+/// the code requirement, not just the view's own min/max.
 Future<void> _loadFonts() async {
   Future<ByteData> bytes(String path) async =>
       ByteData.sublistView(await File(path).readAsBytes());
@@ -50,28 +55,45 @@ void main() {
 
   testWidgets(
       'the uniform-field case renders a single "Uniform 31 kPa" line whole '
-      '(no confusing identical Low/High pair)', (tester) async {
+      'with an honest LOW verdict against the target (no Low/High pair)',
+      (tester) async {
     await tester.pumpWidget(_host(
-      const HeatmapLegend(minKpa: 31, maxKpa: 31),
+      // 31 kPa everywhere, target 225 kPa ⇒ below the requirement ⇒ LOW.
+      const HeatmapLegend(minKpa: 31, maxKpa: 31, targetKpa: 225),
     ));
     // A uniform field reads honestly as ONE value, not an identical Low/High
-    // pair (which looked like a bug), and needs no separate "uniform field"
-    // note — the single line says it.
+    // pair (which looked like a bug), and carries the PASS/LOW verdict.
     _expectRendersWhole(tester, 'Uniform 31 kPa');
+    expect(find.text('LOW'), findsOneWidget);
+    expect(find.text('PASS'), findsNothing);
     expect(find.text('Low 31 kPa'), findsNothing);
     expect(find.text('High 31 kPa'), findsNothing);
     expect(find.text('uniform field'), findsNothing);
   });
 
-  testWidgets('wide endpoint values still render whole (intrinsic sizing)',
+  testWidgets('a uniform field at/above the target reads PASS', (tester) async {
+    await tester.pumpWidget(_host(
+      const HeatmapLegend(minKpa: 260, maxKpa: 260, targetKpa: 225),
+    ));
+    _expectRendersWhole(tester, 'Uniform 260 kPa');
+    expect(find.text('PASS'), findsOneWidget);
+    expect(find.text('LOW'), findsNothing);
+  });
+
+  testWidgets(
+      'wide endpoint values still render whole and the target Min label shows',
       (tester) async {
     await tester.pumpWidget(_host(
-      const HeatmapLegend(minKpa: 3.2, maxKpa: 12345),
+      const HeatmapLegend(minKpa: 3.2, maxKpa: 12345, targetKpa: 225),
     ));
     // toStringAsFixed(0): 3.2 -> "3", 12345 -> "12345".
     _expectRendersWhole(tester, 'Low 3 kPa');
     _expectRendersWhole(tester, 'High 12345 kPa');
-    // A genuinely spread field shows no uniform note.
+    // The absolute anchor is labelled (the threshold tick's meaning).
+    _expectRendersWhole(tester, 'Min 225 kPa');
+    // A genuinely spread field shows no uniform verdict / note.
+    expect(find.text('PASS'), findsNothing);
+    expect(find.text('LOW'), findsNothing);
     expect(find.text('uniform field'), findsNothing);
   });
 }
