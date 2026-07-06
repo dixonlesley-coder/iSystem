@@ -260,34 +260,45 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
-- **Workflow + goldens two-lens review (2026-07-06) — the CURRENT plan of record for ease-of-use work**:
-  `WORKFLOW-GOLDENS-REVIEW.md` (root) is a fresh, adversarially-verified review of the v1.12.0
-  workflow and the 16 golden screenshots from two POVs — a senior Apple UI/software engineer and a
-  senior Indonesian MEP drafter/engineer — run AFTER the three prior campaigns (UX-workflow,
-  CAD-output, Apple-design) fully landed. **81 verified findings** (23 high / 46 medium / 12 low;
-  70 raw → 67 merged → **0 refuted** by an independent adversarial verification pass, + 13 from a
-  completeness critic + 1 orchestrator-verified), grouped into 13 themes (A–M) and sequenced into
-  **6 waves**: **W1 stop-the-lies / visible defects** (the goldens themselves ship defects — the
-  riser (?) help button clips the top-floor fan-out label in goldens 09/10, the focused board
-  schedule cuts off its own panel name/incomer/TOTAL in golden 11 [fixed 1.65× focus zoom, no
-  fit-to-width]; "read-only" Auto mode commits a permanent edge on a click; the power-one-line
-  empty state instructs using palette cards that don't exist; the pressure-zone over-limit check
-  never reaches the compliance verdict; equipment-schedule tags re-synthesize per export),
-  **W2 feel** (every node-drag frame re-runs the full sizing+solve+BOM pipeline synchronously on
-  the UI thread; keyboard reach for the Loads palette + Review actions; Windows basics — .mechx
-  file association, remembered window state, min-size/reflow), **W3 trust surface** (heatmap
-  absolute scale + per-node probe, pipe velocity displayed anywhere at all, audited
-  acknowledgements [author/time/reason], stale-calibration prompt on plan re-import, all-sheets
-  submittal package, RCD/kA/CT visibility), **W4 deliverable fidelity — kill the AutoCAD redraw**
-  (equipment tags on plan, HW-recirc loop + drainage/vent riser fidelity + STP terminus, valve
-  trains at takeoffs/pump sets, slope annotation, ONE air-colour language across canvas/PDF/DXF,
-  plan-accurate electrical layout export), **W5 velocity/parity** (layer lock, rotate/mirror,
-  click-to-place-repeatedly, one plan reused across repeated floors, electrical/riser
-  multi-select, finishing the inline-inspector convergence), **W6 structure/polish** (+ the one
-  deliberately-deferred item: spatial clash checking). Three territories NO prior campaign ever
-  covered: performance-feel on large projects, keyboard-only/accessibility, Windows-desktop
-  citizenship. Nothing from this review is implemented yet — work new ease-of-use improvements
-  from that document rather than re-reviewing.
+- **Workflow + goldens two-lens review + export-readiness audit (2026-07-06) — the CURRENT plan
+  of record; EXPORT-READY FIRST**: `WORKFLOW-GOLDENS-REVIEW.md` (root) is a fresh,
+  adversarially-verified review of the v1.12.0 workflow and the 16 golden screenshots from two
+  POVs — a senior Apple UI/software engineer and a senior Indonesian MEP drafter/engineer — run
+  AFTER the three prior campaigns (UX-workflow, CAD-output, Apple-design) fully landed, then
+  **course-corrected the same day on the product owner's direction: the EXPORTS are the product**
+  (a mandor/foreman and site engineers must build from the issued set directly — no AutoCAD
+  redraw, no Excel supplement). **106 verified findings** (33 high / 59 medium / 14 low) in
+  **14 themes (A–N)**: 81 from the two-lens review (70 raw → 67 merged → **0 refuted** by an
+  independent adversarial pass, + 13 from a completeness critic + 1 orchestrator-verified) plus
+  **Theme N — a 25-finding export-readiness audit** in which a committed dev tool
+  (`packages/mechx_engine/tool/generate_export_samples.dart`, the campaign's acceptance harness)
+  generated the REAL 13-artifact export set from a representative 3-storey fixture, the PDFs were
+  rasterized, and four site-lens critics (foreman, mechanical site engineer, electrical
+  kontraktor, document controller) reviewed the actual sheets. Headline Theme-N proof: every
+  vector PDF garbles the engine's own `·` separator to `?` INSIDE cable-spec/starter cells (the
+  DXF of the same set is correct — the two formats contradict); socket RCDs print in the calc
+  report but NOT on the board schedule a panel is built from; no sheet anywhere carries cable
+  lengths (though length drives the printed Vdrop), per-device kA, mounting heights, or
+  setting-out ties; a drainage stack can auto-size SMALLER than its branches (DN65 stack / DN75
+  branch — no stack≥branch clamp in `_sizeSanitaryEdge`); ONE global `documentNumber` stamps
+  every exported sheet; the mech riser DXF writes plumbing onto E-BREAKER/E-TEXT layers; the
+  riser PDF titles itself "Untitled project". Sequenced as the **Export-Ready Campaign first**
+  (ER-1 fix-what-the-sheets-say [all S: `?` garble, RCD-on-schedule, untitled riser, fused tags,
+  clipped goldens 09/10/11, unstable tags, zone-check→compliance] → ER-2 print-the-numbers
+  [cable lengths, kA, CT, riser cut lengths, per-run FU/flow/velocity basis] → ER-3
+  locate/identify/set-out [one tag across plan/riser/BOM/report, heights, gridline ties,
+  electrical plan export] → ER-4 one-submittal-set [per-sheet DWG numbers, one title block with
+  sign-off + i-of-N, Daftar Gambar/cover/master legend, complete equipment schedule, DXF layer
+  namespaces] → ER-5 drawing-content rules [stack≥branch, slope, valve trains, HW-recirc +
+  drainage riser fidelity]) **then app waves AW-1..AW-5** (in-app honesty/visible defects; feel —
+  the every-drag-frame full re-solve, keyboard reach, Windows basics [.mechx association, window
+  state, min-size]; in-app trust [heatmap probe/scale, audited acks, stale-calibration prompt];
+  velocity/parity [layer lock, rotate/mirror, repeat-place, shared plan, multi-select parity];
+  structure/polish + the one deferred item: spatial clash checking). Three territories NO prior
+  campaign covered: performance-feel, keyboard-only/accessibility, Windows-desktop citizenship.
+  Nothing from this review is implemented yet — work new improvements from that document (ER
+  phases first) rather than re-reviewing; after every ER phase, regenerate the 13 artifacts with
+  the dev tool and re-read the sheets.
 - **Apple-design review (2026-07-04) — the prior plan of record for ease-of-use/UX polish (fully landed)**:
   `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
   UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the
