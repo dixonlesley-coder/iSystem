@@ -115,6 +115,46 @@ void main() {
     });
   });
 
+  group('perpendicular foot (B24, anchor supplied)', () {
+    final wall = UnderlaySnapIndex.fromSegments(
+      const [UnderlaySegment(0, 0, 100, 0)],
+    );
+
+    test('anchor drop surfaces a perpendicular foot at the cursor', () {
+      // Anchor above the wall at x=30 ⇒ its 90° foot is (30,0). Cursor near it
+      // ties the on-segment nearest point, so perpendicular (higher priority)
+      // wins the label.
+      final c = wall.query(30, 2, 8, anchorX: 30, anchorY: 40)!;
+      expect(c.kind, UnderlaySnapKind.perpendicular);
+      expect(c.x, closeTo(30, 1e-9));
+      expect(c.y, closeTo(0, 1e-9));
+      expect(c.distance, closeTo(2, 1e-9));
+    });
+
+    test('no anchor ⇒ the same query reads onSegment (byte-identical)', () {
+      final c = wall.query(30, 2, 8)!;
+      expect(c.kind, UnderlaySnapKind.onSegment);
+      expect(c.x, closeTo(30, 1e-9));
+      expect(c.y, closeTo(0, 1e-9));
+    });
+
+    test('cursor away from the drop stays onSegment, not perpendicular', () {
+      // Foot is at (30,0) but the cursor is over x=60 → the perpendicular foot is
+      // out of radius and the nearest wall point wins.
+      final c = wall.query(60, 2, 8, anchorX: 30, anchorY: 40)!;
+      expect(c.kind, UnderlaySnapKind.onSegment);
+      expect(c.x, closeTo(60, 1e-9));
+    });
+
+    test('foot outside the wall interior is not offered (t clamped)', () {
+      // Anchor projects to t<0 (left of the wall) ⇒ no true perpendicular foot;
+      // the near-corner query resolves to the endpoint, never perpendicular.
+      final c = wall.query(2, 2, 8, anchorX: -20, anchorY: 40)!;
+      expect(c.kind, isNot(UnderlaySnapKind.perpendicular));
+      expect(c.kind, UnderlaySnapKind.onSegment);
+    });
+  });
+
   group('UnderlaySnapIndex.fromDrawing', () {
     // A closed 100×50 rectangle wall loop, world coords Y-up.
     final drawing = const DxfDrawing(

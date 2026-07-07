@@ -15,6 +15,7 @@ import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sizing_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/context_menu.dart';
 import 'offset_dialog.dart';
@@ -41,6 +42,148 @@ String npsLabel(double inches) {
   return '$whole $fracStr"';
 }
 
+// ── B18: Trim/Extend a run to a picked boundary ─────────────────────────────
+
+/// B18 — the armed 'Trim/Extend to...' target: the run [edgeId] whose
+/// endpoint [endNodeId] will be moved to meet the NEXT clicked boundary run.
+/// Null when nothing is armed. Armed from this file's edge context menu;
+/// consumed by the selection-overlay gesture layer (a click on a run calls
+/// [NetworkController.trimExtendEdge], a miss stays armed).
+@immutable
+class TrimExtendTarget {
+  final String edgeId;
+  final String endNodeId;
+  const TrimExtendTarget(this.edgeId, this.endNodeId);
+
+  @override
+  bool operator ==(Object other) =>
+      other is TrimExtendTarget &&
+      other.edgeId == edgeId &&
+      other.endNodeId == endNodeId;
+
+  @override
+  int get hashCode => Object.hash(edgeId, endNodeId);
+}
+
+final trimExtendArmedProvider =
+    NotifierProvider<TrimExtendArmedController, TrimExtendTarget?>(
+  TrimExtendArmedController.new,
+);
+
+class TrimExtendArmedController extends Notifier<TrimExtendTarget?> {
+  @override
+  TrimExtendTarget? build() => null;
+
+  void arm(TrimExtendTarget target) => state = target;
+  void disarm() => state = null;
+}
+
+// ── B19: Fix corner ──────────────────────────────────────────────────────────
+
+/// The single RUN edge incident to [nodeId] when it is a lone (degree-1) run
+/// end (not a riser), else null — a read-only geometry probe mirroring
+/// `NetworkController`'s own private eligibility check for `joinCorner`.
+NetEdge? soleDanglingRunEdge(Network net, String nodeId) {
+  NetEdge? found;
+  for (final e in net.edges) {
+    if (e.fromId == nodeId || e.toId == nodeId) {
+      if (found != null) return null; // degree > 1
+      found = e;
+    }
+  }
+  if (found == null || found.kind == EdgeKind.riser) return null;
+  return found;
+}
+
+/// B19 — the nearest OTHER degree-1 same-service dangling run end within
+/// [thresholdWorld] world px of [nodeId] (same sheet/floor), or null when none
+/// qualifies. A read-only probe for the 'Fix corner' action (context menu +
+/// the loose-end Design Issue row) — the actual join is
+/// [NetworkController.joinCorner], which independently re-verifies eligibility.
+String? cornerJoinPartner(Network net, String nodeId,
+    {double thresholdWorld = 30}) {
+  final edge = soleDanglingRunEdge(net, nodeId);
+  final node = net.nodeById(nodeId);
+  if (edge == null || node == null) return null;
+  String? best;
+  var bestD2 = thresholdWorld * thresholdWorld;
+  for (final other in net.nodes) {
+    if (other.id == nodeId) continue;
+    if (other.sheetId != node.sheetId || other.floorIndex != node.floorIndex) {
+      continue;
+    }
+    final oe = soleDanglingRunEdge(net, other.id);
+    if (oe == null || oe.id == edge.id || oe.service != edge.service) continue;
+    final dx = other.x - node.x;
+    final dy = other.y - node.y;
+    final d2 = dx * dx + dy * dy;
+    if (d2 <= bestD2) {
+      bestD2 = d2;
+      best = other.id;
+    }
+  }
+  return best;
+}
+
+// ── B27: Match properties (brush one run's size/material/service onto others) ─
+
+/// B27 — the armed 'Match properties' brush: the source run's service-safe
+/// properties (size override, material, and the service itself), captured at
+/// arm time. Consumed by the selection-overlay gesture layer: each subsequent
+/// click on a run of the SAME discipline family (the same [ServiceRegime])
+/// receives them, one click at a time; a click on a different family is
+/// ignored (never forces a duct's rectangular sizing method onto a water
+/// pipe, or vice-versa).
+@immutable
+class MatchPropertiesBrush {
+  final String sourceEdgeId;
+  final ServiceType service;
+  final Diameter? sizeOverride;
+  final DuctProduct? ductProduct;
+  final PipeProduct? pipeProduct;
+
+  const MatchPropertiesBrush({
+    required this.sourceEdgeId,
+    required this.service,
+    this.sizeOverride,
+    this.ductProduct,
+    this.pipeProduct,
+  });
+}
+
+final matchPropertiesArmedProvider =
+    NotifierProvider<MatchPropertiesArmedController, MatchPropertiesBrush?>(
+  MatchPropertiesArmedController.new,
+);
+
+class MatchPropertiesArmedController extends Notifier<MatchPropertiesBrush?> {
+  @override
+  MatchPropertiesBrush? build() => null;
+
+  void arm(MatchPropertiesBrush brush) => state = brush;
+  void disarm() => state = null;
+}
+
+/// Apply [brush] onto [target] when they share a discipline family (the same
+/// flow regime): the size override, the regime-appropriate material, and the
+/// service itself — in ONE undo step via [NetworkController.setEdgeProperties]
+/// (so a single brush click is a single Ctrl+Z, not up to three). The setter
+/// no-ops when nothing changes, so a target that already matches is a safe
+/// no-op. Returns false — applying NOTHING — when the families differ.
+bool applyMatchProperties(
+    NetworkController ctrl, MatchPropertiesBrush brush, NetEdge target) {
+  if (target.service.regime != brush.service.regime) return false;
+  final air = brush.service.regime == FlowRegime.air;
+  ctrl.setEdgeProperties(
+    target.id,
+    service: brush.service,
+    sizeOverride: brush.sizeOverride,
+    pipeProduct: air ? null : brush.pipeProduct,
+    ductProduct: air ? brush.ductProduct : null,
+  );
+  return true;
+}
+
 /// Show the per-edge right-click menu as a custom positioned panel in the root
 /// [Overlay] (NO Material / showMenu). [globalPosition] is where the user
 /// right-clicked; the menu is clamped inside the screen. A full-screen
@@ -52,8 +195,13 @@ void showEdgeContextMenu(
   BuildContext context,
   WidgetRef ref,
   String edgeId,
-  Offset globalPosition,
-) {
+  Offset globalPosition, {
+  // B18 — the click's WORLD position (same sheet as the edge), used to pick
+  // the nearer endpoint for 'Trim/Extend to...'. Null hides that row (a
+  // caller with no world coordinate handy — e.g. the riser schematic canvas —
+  // is unaffected; the row simply doesn't apply there).
+  Offset? world,
+}) {
   final overlay = Overlay.of(context, rootOverlay: true);
   final theme = MechXTheme.of(context);
   late OverlayEntry entry;
@@ -63,6 +211,7 @@ void showEdgeContextMenu(
       child: _EdgeMenuLayer(
         anchor: globalPosition,
         edgeId: edgeId,
+        world: world,
         onDismiss: () => entry.remove(),
       ),
     ),
@@ -265,6 +414,19 @@ class _NodeMenuLayer extends ConsumerWidget {
           ),
         const MechXMenuDivider(),
       ],
+      // B19 — 'Fix corner': offered only on a lone (degree-1) run end that has
+      // another same-service dangling end within reach; a read-only probe, so
+      // a node with nothing nearby to join simply never shows the row.
+      if (!isMulti && cornerJoinPartner(net, nodeId) != null)
+        MechXMenuRow(
+          label: context.strings(StringKey.fixCornerAction),
+          onTap: () {
+            final partner = cornerJoinPartner(net, nodeId);
+            if (partner != null) ctrl.joinCorner(nodeId, partner);
+            sel.clear();
+            onDismiss();
+          },
+        ),
       MechXMenuRow(
         label: 'Select similar',
         onTap: () {
@@ -405,12 +567,14 @@ class _CanvasMenuLayer extends ConsumerWidget {
 class _EdgeMenuLayer extends ConsumerWidget {
   final Offset anchor;
   final String edgeId;
+  final Offset? world;
   final VoidCallback onDismiss;
 
   const _EdgeMenuLayer({
     required this.anchor,
     required this.edgeId,
     required this.onDismiss,
+    this.world,
   });
 
   @override
@@ -453,7 +617,7 @@ class _EdgeMenuLayer extends ConsumerWidget {
           width: menuWidth,
           child: ConstrainedBox(
             constraints: BoxConstraints(maxHeight: maxHeight),
-            child: _EdgeMenuPanel(edge: edge, onDismiss: onDismiss),
+            child: _EdgeMenuPanel(edge: edge, onDismiss: onDismiss, world: world),
           ),
         ),
       ],
@@ -464,8 +628,9 @@ class _EdgeMenuLayer extends ConsumerWidget {
 class _EdgeMenuPanel extends ConsumerWidget {
   final NetEdge edge;
   final VoidCallback onDismiss;
+  final Offset? world;
 
-  const _EdgeMenuPanel({required this.edge, required this.onDismiss});
+  const _EdgeMenuPanel({required this.edge, required this.onDismiss, this.world});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -672,6 +837,48 @@ class _EdgeMenuPanel extends ConsumerWidget {
         onTap: () {
           // Open the dialog with the live context first, then dismiss the menu.
           showOffsetDialog(context, ref, edge.id);
+          close();
+        },
+      ));
+    }
+    // B18 — 'Trim/Extend to...': arms a boundary pick against the endpoint
+    // nearer the right-click. Needs a world position (the caller-supplied
+    // click point) to disambiguate the two ends; single-run only.
+    if (!multi && edge.kind == EdgeKind.run && world != null) {
+      final a = net.nodeById(edge.fromId);
+      final b = net.nodeById(edge.toId);
+      if (a != null && b != null) {
+        final da = (Offset(a.x, a.y) - world!).distanceSquared;
+        final db = (Offset(b.x, b.y) - world!).distanceSquared;
+        final endId = da <= db ? a.id : b.id;
+        children.add(MechXMenuRow(
+          label: context.strings(StringKey.edgeMenuTrimExtend),
+          onTap: () {
+            ref.read(matchPropertiesArmedProvider.notifier).disarm();
+            ref
+                .read(trimExtendArmedProvider.notifier)
+                .arm(TrimExtendTarget(edge.id, endId));
+            close();
+          },
+        ));
+      }
+    }
+    // B27 — 'Match properties': arms a brush carrying this run's service-safe
+    // properties (size override, material, service); single-run only.
+    if (!multi && edge.kind == EdgeKind.run) {
+      children.add(MechXMenuRow(
+        label: context.strings(StringKey.edgeMenuMatchProperties),
+        onTap: () {
+          ref.read(trimExtendArmedProvider.notifier).disarm();
+          ref.read(matchPropertiesArmedProvider.notifier).arm(
+                MatchPropertiesBrush(
+                  sourceEdgeId: edge.id,
+                  service: edge.service,
+                  sizeOverride: edge.sizeOverride,
+                  ductProduct: edge.ductProduct,
+                  pipeProduct: edge.pipeProduct,
+                ),
+              );
           close();
         },
       ));

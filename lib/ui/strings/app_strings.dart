@@ -707,6 +707,28 @@ enum StringKey {
   projectsExportGroupData,
   projectsExportDrawingPdfHint,
   projectsExportAnnotatedPlanPdfHint,
+
+  // B17 — the ortho two-click route-mode chip shown at the rubber-band head
+  // while drawing (Tab cycles the leg order).
+  drawRouteModeAuto,
+  drawRouteModeHFirst,
+  drawRouteModeVFirst,
+  drawRouteModeZ,
+
+  // B18/B19/B27 — the CAD edit-time context-menu actions: Trim/Extend a run
+  // to a picked boundary, join two dangling ends into a clean corner (also
+  // offered on the loose-end Design Issue row), and Match properties (a brush
+  // that copies a source run's size/material/service onto each clicked run of
+  // the same discipline family).
+  edgeMenuTrimExtend,
+  trimExtendArmedHint,
+  trimExtendNoIntersection,
+  fixCornerAction,
+  edgeMenuMatchProperties,
+  matchPropertiesArmedHint, // {service}
+
+  // B22 — the a11y field name for the on-canvas run-length inline stepper.
+  a11yFieldRunLength,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -1491,6 +1513,21 @@ const Map<StringKey, String> _en = {
       'Plain plan — no calibrated run/riser lengths on size labels.',
   StringKey.projectsExportAnnotatedPlanPdfHint:
       'Annotated plan — includes real run/riser lengths on every size label.',
+
+  // B17 — ortho route-mode chip.
+  StringKey.drawRouteModeAuto: 'Auto route · Tab',
+  StringKey.drawRouteModeHFirst: 'L: across then up · Tab',
+  StringKey.drawRouteModeVFirst: 'L: up then across · Tab',
+  StringKey.drawRouteModeZ: 'Z route · Tab',
+
+  // B18/B19/B27 — CAD edit-time context-menu actions + armed-mode status pills.
+  StringKey.edgeMenuTrimExtend: 'Trim/Extend to...',
+  StringKey.trimExtendArmedHint: 'Trim/Extend: click a boundary run',
+  StringKey.trimExtendNoIntersection: 'No intersection with that run',
+  StringKey.fixCornerAction: 'Fix corner',
+  StringKey.edgeMenuMatchProperties: 'Match properties',
+  StringKey.matchPropertiesArmedHint: 'Matching {service} · click a run · Esc exits',
+  StringKey.a11yFieldRunLength: 'Run length',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -2289,6 +2326,21 @@ const Map<StringKey, String> _id = {
   StringKey.projectsExportAnnotatedPlanPdfHint:
       'Denah beranotasi — menyertakan panjang jalur/riser sebenarnya pada '
           'setiap label ukuran.',
+
+  // B17 — ortho route-mode chip.
+  StringKey.drawRouteModeAuto: 'Rute otomatis · Tab',
+  StringKey.drawRouteModeHFirst: 'L: mendatar lalu naik · Tab',
+  StringKey.drawRouteModeVFirst: 'L: naik lalu mendatar · Tab',
+  StringKey.drawRouteModeZ: 'Rute Z · Tab',
+
+  // B18/B19/B27 — CAD edit-time context-menu actions + armed-mode status pills.
+  StringKey.edgeMenuTrimExtend: 'Potong/Perpanjang ke...',
+  StringKey.trimExtendArmedHint: 'Potong/Perpanjang: klik jalur batas',
+  StringKey.trimExtendNoIntersection: 'Tidak ada perpotongan dengan jalur itu',
+  StringKey.fixCornerAction: 'Perbaiki sudut',
+  StringKey.edgeMenuMatchProperties: 'Samakan properti',
+  StringKey.matchPropertiesArmedHint: 'Menyamakan {service} · klik jalur · Esc keluar',
+  StringKey.a11yFieldRunLength: 'Panjang jalur',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

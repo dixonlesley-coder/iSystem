@@ -17,6 +17,7 @@ import '../ui/canvas/canvas_grid.dart' show nearestGridIntersection;
 import '../ui/canvas/snapping.dart' show orthoElbow;
 import 'annotation_store.dart' show RoomArea;
 import 'history_store.dart';
+import 'route_geometry.dart';
 import 'selection_store.dart';
 
 /// Active canvas tool.
@@ -977,6 +978,40 @@ class NetworkController extends Notifier<DrawingState> {
     );
   }
 
+  /// Apply a matched set of an edge's properties — [service], the manual
+  /// nominal-size override [sizeOverride], and the regime-appropriate material
+  /// ([pipeProduct] / [ductProduct]) — in ONE undo step (a single [_commit] /
+  /// one timeline entry), mirroring the E1 batch setters' "one undo step"
+  /// discipline. This exists so the B27 'Match properties' brush can't push up
+  /// to three timeline entries (size + material + service) per click. Passing
+  /// null for a size/material CLEARS it. No-op when the edge is gone or nothing
+  /// actually changes (so a target that already matches is byte-identical).
+  void setEdgeProperties(
+    String id, {
+    required ServiceType service,
+    Diameter? sizeOverride,
+    PipeProduct? pipeProduct,
+    DuctProduct? ductProduct,
+  }) {
+    final idx = state.network.edges.indexWhere((e) => e.id == id);
+    if (idx < 0) return;
+    final e = state.network.edges[idx];
+    final changed = e.service != service ||
+        e.sizeOverride?.meters != sizeOverride?.meters ||
+        e.pipeProduct != pipeProduct ||
+        e.ductProduct != ductProduct;
+    if (!changed) return;
+    _replaceEdge(e.copyWith(
+      service: service,
+      sizeOverride: sizeOverride,
+      clearSizeOverride: sizeOverride == null,
+      pipeProduct: pipeProduct,
+      clearPipeProduct: pipeProduct == null,
+      ductProduct: ductProduct,
+      clearDuctProduct: ductProduct == null,
+    ));
+  }
+
   // ── E1: batch property setters (one undo step, mirroring deleteMany) ────────
   // Each plural setter mirrors its single-id sibling but applies to EVERY id in
   // one commit, so a multi-selection edited from the inspector / context menu is
@@ -1600,6 +1635,342 @@ class NetworkController extends Notifier<DrawingState> {
     edges.add(NetEdge(id: edgeId, fromId: fromId, toId: connectTo, service: svc));
     _commit(Network(nodes: nodes, edges: edges));
     return edgeId;
+  }
+
+  /// B17 — commit a whole two-click ORTHO route (a polyline of [points], from
+  /// [orthoRoute]) as ONE undo step. The FIRST point resolves into the network
+  /// (snap to a node / tee into a same-service run / adopt), each interior point
+  /// becomes an exact bend junction (kept precise so the ortho geometry the
+  /// caller computed is never re-snapped askew), and the LAST point resolves
+  /// like a normal draw END — so it may itself auto-elbow onto an off-ray snap
+  /// target (composes with B13). Consecutive duplicate points are skipped.
+  /// Records nothing and returns null when the route collapses to no edge
+  /// (fewer than 2 distinct points, or every leg zero-length). Returns the id
+  /// the route ENDS on. Clears any pending run (the route is a finished draw).
+  String? commitRoute(
+    String sheetId,
+    int floorIndex,
+    List<Offset> points,
+    ServiceType service, {
+    double snapRadius = 12,
+    double? endSnapRadius,
+    bool gridSnap = false,
+    double? gridMetersPerPixel,
+    Offset? Function(Offset world)? underlaySnap,
+    bool ortho = true,
+  }) {
+    // Drop consecutive duplicates so a degenerate route never mints a zero-leg.
+    final pts = <Offset>[];
+    for (final p in points) {
+      if (pts.isEmpty || (p - pts.last).distance > kRouteStraightEpsilonPx) {
+        pts.add(p);
+      }
+    }
+    if (pts.length < 2) return null;
+
+    final nodes = [...state.network.nodes];
+    final edges = [...state.network.edges];
+    // The start resolves into the network so the route actually connects to its
+    // source (snap/tee/adopt at the normal radius, like placeRunPoint's start).
+    var prevId = _resolveDrawEndpoint(nodes, edges, sheetId, floorIndex,
+        pts.first, snapRadius, service,
+        gridSnap: gridSnap,
+        gridMetersPerPixel: gridMetersPerPixel,
+        underlaySnap: underlaySnap);
+    var addedAny = false;
+    for (var i = 1; i < pts.length; i++) {
+      final isLast = i == pts.length - 1;
+      final String toId;
+      if (isLast) {
+        final resolved = _resolveDrawEndpoint(nodes, edges, sheetId, floorIndex,
+            pts[i], endSnapRadius ?? snapRadius, service,
+            gridSnap: gridSnap,
+            gridMetersPerPixel: gridMetersPerPixel,
+            underlaySnap: underlaySnap);
+        if (resolved == prevId) continue; // collapsed onto the previous node
+        final anchor = nodes.firstWhere((n) => n.id == prevId);
+        toId = _autoElbowEndpoint(nodes, edges, sheetId, floorIndex,
+            Offset(anchor.x, anchor.y), pts[i], resolved, service,
+            ortho: ortho);
+      } else {
+        // An interior BEND — an exact fresh junction at the computed corner.
+        final jId = _id('n');
+        nodes.add(NetNode(
+            id: jId,
+            sheetId: sheetId,
+            x: pts[i].dx,
+            y: pts[i].dy,
+            floorIndex: floorIndex));
+        toId = jId;
+      }
+      if (toId == prevId) continue;
+      edges.add(NetEdge(
+          id: _id('e'), fromId: prevId, toId: toId, service: service));
+      addedAny = true;
+      prevId = toId;
+    }
+    if (!addedAny) return null;
+    _commit(Network(nodes: nodes, edges: edges));
+    return prevId;
+  }
+
+  /// B18 — TRIM/EXTEND run [edgeId]'s endpoint [endNodeId] to where the run's
+  /// line meets boundary run [boundaryEdgeId]. Moves that endpoint to the
+  /// intersection; if it lands MID-SPAN on the boundary the boundary is split
+  /// into a TEE there (the moved endpoint becomes the junction); if it lands on
+  /// a boundary end node the two nodes MERGE. Returns true (one undo step) on a
+  /// real change; false — mutating NOTHING — when the runs are parallel, the
+  /// crossing is off the boundary segment, or the inputs are invalid (missing /
+  /// riser / cross-sheet / the endpoint already sits on the boundary).
+  bool trimExtendEdge(
+      String edgeId, String endNodeId, String boundaryEdgeId) {
+    if (edgeId == boundaryEdgeId) return false;
+    final net = state.network;
+    final e = net.edgeById(edgeId);
+    final b = net.edgeById(boundaryEdgeId);
+    if (e == null || b == null) return false;
+    if (e.kind == EdgeKind.riser || b.kind == EdgeKind.riser) return false;
+    if (endNodeId != e.fromId && endNodeId != e.toId) return false;
+    // The moving end already belonging to the boundary is a no-op.
+    if (endNodeId == b.fromId || endNodeId == b.toId) return false;
+    final anchorId = endNodeId == e.fromId ? e.toId : e.fromId;
+    final mover = net.nodeById(endNodeId);
+    final anchor = net.nodeById(anchorId);
+    final q0 = net.nodeById(b.fromId);
+    final q1 = net.nodeById(b.toId);
+    if (mover == null || anchor == null || q0 == null || q1 == null) {
+      return false;
+    }
+    if (mover.sheetId != q0.sheetId || mover.floorIndex != q0.floorIndex) {
+      return false;
+    }
+    final a0 = Offset(anchor.x, anchor.y);
+    final da = Offset(mover.x - anchor.x, mover.y - anchor.y);
+    final bPos = Offset(q0.x, q0.y);
+    final db = Offset(q1.x - q0.x, q1.y - q0.y);
+    if ((da.dx == 0 && da.dy == 0) || (db.dx == 0 && db.dy == 0)) return false;
+    final params = lineIntersectionParams(a0, da, bPos, db);
+    if (params == null) return false; // parallel
+    final (tA, sB) = params;
+    const segTol = 1e-9;
+    if (sB < -segTol || sB > 1 + segTol) return false; // off the boundary span
+    final inter = Offset(a0.dx + da.dx * tA, a0.dy + da.dy * tA);
+
+    // Landed on a boundary end node -> merge the two nodes cleanly.
+    const mergePx = 0.5;
+    String? mergeTarget;
+    if ((inter - Offset(q0.x, q0.y)).distance <= mergePx) {
+      mergeTarget = q0.id;
+    } else if ((inter - Offset(q1.x, q1.y)).distance <= mergePx) {
+      mergeTarget = q1.id;
+    }
+    if (mergeTarget != null && mergeTarget != endNodeId) {
+      final finalNodes =
+          net.nodes.where((n) => n.id != endNodeId).toList();
+      final finalEdges = <NetEdge>[];
+      for (final ed in net.edges) {
+        final from = ed.fromId == endNodeId ? mergeTarget : ed.fromId;
+        final to = ed.toId == endNodeId ? mergeTarget : ed.toId;
+        if (from == to) continue; // collapsed self-loop
+        finalEdges.add((from == ed.fromId && to == ed.toId)
+            ? ed
+            : ed.copyWith(fromId: from, toId: to));
+      }
+      _commit(Network(nodes: finalNodes, edges: finalEdges));
+      return true;
+    }
+
+    // Mid-span -> move the endpoint to the crossing and TEE the boundary there
+    // (the moved endpoint becomes the boundary's split junction).
+    final nodes = [
+      for (final n in net.nodes)
+        n.id == endNodeId ? n.copyWith(x: inter.dx, y: inter.dy) : n,
+    ];
+    final edges = <NetEdge>[];
+    for (final ed in net.edges) {
+      if (ed.id != boundaryEdgeId) {
+        edges.add(ed);
+        continue;
+      }
+      edges.add(ed.copyWith(toId: endNodeId));
+      edges.add(NetEdge(
+        id: _id('e'),
+        fromId: endNodeId,
+        toId: ed.toId,
+        service: ed.service,
+        kind: ed.kind,
+        pipeProduct: ed.pipeProduct,
+        ductProduct: ed.ductProduct,
+        sizeOverride: ed.sizeOverride,
+      ));
+    }
+    _commit(Network(nodes: nodes, edges: edges));
+    return true;
+  }
+
+  /// B19 — CORNER-JOIN two dangling degree-1 ends [endNodeIdA]/[endNodeIdB] of
+  /// the SAME service: extend both their segments to their lines' intersection,
+  /// then merge the two nodes into ONE bend junction there (each segment keeps
+  /// its exact bearing, so a clean right-angle/45 corner results). Returns true
+  /// (one undo step) on success; false — mutating NOTHING — when the ends are
+  /// the same node, either isn't a lone same-sheet run end, the services differ,
+  /// the segments are parallel, or the intersection is absurdly far (beyond ~3x
+  /// the longer segment — a near-parallel meeting off in space).
+  bool joinCorner(String endNodeIdA, String endNodeIdB) {
+    if (endNodeIdA == endNodeIdB) return false;
+    final net = state.network;
+    final na = net.nodeById(endNodeIdA);
+    final nb = net.nodeById(endNodeIdB);
+    if (na == null || nb == null) return false;
+    if (na.sheetId != nb.sheetId || na.floorIndex != nb.floorIndex) {
+      return false;
+    }
+    final ea = _soleRunEdge(endNodeIdA);
+    final eb = _soleRunEdge(endNodeIdB);
+    if (ea == null || eb == null || ea.id == eb.id) return false;
+    if (ea.service != eb.service) return false;
+    final anchorAId = ea.fromId == endNodeIdA ? ea.toId : ea.fromId;
+    final anchorBId = eb.fromId == endNodeIdB ? eb.toId : eb.fromId;
+    final aa = net.nodeById(anchorAId);
+    final ab = net.nodeById(anchorBId);
+    if (aa == null || ab == null) return false;
+    final a0 = Offset(aa.x, aa.y);
+    final da = Offset(na.x - aa.x, na.y - aa.y);
+    final b0 = Offset(ab.x, ab.y);
+    final db = Offset(nb.x - ab.x, nb.y - ab.y);
+    if ((da.dx == 0 && da.dy == 0) || (db.dx == 0 && db.dy == 0)) return false;
+    final params = lineIntersectionParams(a0, da, b0, db);
+    if (params == null) return false; // parallel
+    final inter = Offset(a0.dx + da.dx * params.$1, a0.dy + da.dy * params.$1);
+    final maxLen = math.max(da.distance, db.distance);
+    final reach = math.max((inter - Offset(na.x, na.y)).distance,
+        (inter - Offset(nb.x, nb.y)).distance);
+    if (reach > 3 * maxLen) return false; // absurdly far — refuse honestly
+
+    // Merge: move A's node to the corner, re-point B's edge from B's node onto
+    // A's node, drop B's node (and any self-loop the merge would form).
+    final nodes = <NetNode>[];
+    for (final n in net.nodes) {
+      if (n.id == endNodeIdB) continue; // dropped into A
+      nodes.add(n.id == endNodeIdA ? n.copyWith(x: inter.dx, y: inter.dy) : n);
+    }
+    final edges = <NetEdge>[];
+    for (final ed in net.edges) {
+      final from = ed.fromId == endNodeIdB ? endNodeIdA : ed.fromId;
+      final to = ed.toId == endNodeIdB ? endNodeIdA : ed.toId;
+      if (from == to) continue;
+      edges.add((from == ed.fromId && to == ed.toId)
+          ? ed
+          : ed.copyWith(fromId: from, toId: to));
+    }
+    _commit(Network(nodes: nodes, edges: edges));
+    return true;
+  }
+
+  /// The single RUN edge incident to [nodeId] when the node is a lone (degree-1)
+  /// run end, else null — a node with no edge, more than one edge, or whose sole
+  /// edge is a riser is NOT a plan-view dangling end.
+  NetEdge? _soleRunEdge(String nodeId) {
+    NetEdge? found;
+    for (final e in state.network.edges) {
+      if (e.fromId == nodeId || e.toId == nodeId) {
+        if (found != null) return null; // degree > 1
+        found = e;
+      }
+    }
+    if (found == null || found.kind == EdgeKind.riser) return null;
+    return found;
+  }
+
+  /// B20 — SEGMENT grip-drag: translate BOTH endpoints of run [edgeId] along the
+  /// segment's NORMAL by the normal-component of [delta] (world px), so the
+  /// segment slides parallel to itself (ortho preserved by construction) and any
+  /// neighbour segments sharing an endpoint stretch to follow. A LIVE,
+  /// non-recording mutation (pair with [pushUndoSnapshot] at drag start + the
+  /// throttle — exactly like [moveNode]/[moveMany]); one undo step per drag
+  /// session. No-op for a missing/riser/zero-length edge or a zero normal push.
+  void dragSegment(String edgeId, Offset delta) {
+    final edge = state.network.edgeById(edgeId);
+    if (edge == null || edge.kind == EdgeKind.riser) return;
+    final a = state.network.nodeById(edge.fromId);
+    final b = state.network.nodeById(edge.toId);
+    if (a == null || b == null) return;
+    final vx = b.x - a.x;
+    final vy = b.y - a.y;
+    final len = math.sqrt(vx * vx + vy * vy);
+    if (len == 0) return; // degenerate — no defined normal
+    // Unit normal (perpendicular to the segment) and the signed push along it.
+    final nx = -vy / len;
+    final ny = vx / len;
+    final proj = delta.dx * nx + delta.dy * ny;
+    if (proj == 0) return;
+    final mx = nx * proj;
+    final my = ny * proj;
+    final moved = {edge.fromId, edge.toId};
+    final nodes = [
+      for (final n in state.network.nodes)
+        if (moved.contains(n.id)) n.copyWith(x: n.x + mx, y: n.y + my) else n,
+    ];
+    state = DrawingState(
+      network: Network(nodes: nodes, edges: state.network.edges),
+      service: state.service,
+      tool: state.tool,
+      pendingPoint: state.pendingPoint,
+      pendingSheetId: state.pendingSheetId,
+      pendingFloorIndex: state.pendingFloorIndex,
+    );
+    // K1: coalesce the heavy chain to the throttle cadence during the drag.
+    ref.read(dragSessionProvider.notifier).tickDrag();
+  }
+
+  /// B22 — DIMENSION-DRIVEN edit: move run [edgeId]'s free end along the run's
+  /// bearing so its calibrated length becomes exactly [metres]. The mover is the
+  /// degree-1 endpoint (the free end) when there is a unique one, else the
+  /// caller-picked [moveEndId]; the OTHER end anchors the bearing. [metersPerPixel]
+  /// is the sheet's calibration (kept UI/clock-free — passed in). Returns true
+  /// (one undo step) on success; false — mutating NOTHING — for a missing/riser
+  /// edge, a non-positive length or scale, a degenerate (zero-length) run, or an
+  /// ambiguous mover (both/neither end free and no valid [moveEndId]).
+  bool setRunLength(String edgeId, double metres, double metersPerPixel,
+      {String? moveEndId}) {
+    if (metres <= 0 || metersPerPixel <= 0) return false;
+    final net = state.network;
+    final e = net.edgeById(edgeId);
+    if (e == null || e.kind == EdgeKind.riser) return false;
+
+    String moverId;
+    if (moveEndId != null) {
+      if (moveEndId != e.fromId && moveEndId != e.toId) return false;
+      moverId = moveEndId;
+    } else {
+      final fromFree = net.edgesAt(e.fromId).length == 1;
+      final toFree = net.edgesAt(e.toId).length == 1;
+      if (fromFree && !toFree) {
+        moverId = e.fromId;
+      } else if (toFree && !fromFree) {
+        moverId = e.toId;
+      } else {
+        return false; // ambiguous — caller must pick moveEndId
+      }
+    }
+    final anchorId = moverId == e.fromId ? e.toId : e.fromId;
+    final mover = net.nodeById(moverId);
+    final anchor = net.nodeById(anchorId);
+    if (mover == null || anchor == null) return false;
+    final vx = mover.x - anchor.x;
+    final vy = mover.y - anchor.y;
+    final len = math.sqrt(vx * vx + vy * vy);
+    if (len == 0) return false; // no bearing to move along
+    final targetPx = metres / metersPerPixel;
+    final nxpos = anchor.x + vx / len * targetPx;
+    final nypos = anchor.y + vy / len * targetPx;
+    if (nxpos == mover.x && nypos == mover.y) return false; // already exact
+    final nodes = [
+      for (final n in net.nodes)
+        n.id == moverId ? n.copyWith(x: nxpos, y: nypos) : n,
+    ];
+    _commit(Network(nodes: nodes, edges: net.edges));
+    return true;
   }
 
   /// B13 — the CAD auto-elbow. When [ortho] is on and the resolved far endpoint

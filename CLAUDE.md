@@ -339,7 +339,15 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   riser marker as the drafting-standard circle-with-chevrons (canvas + plan exports, one
   convention), and true-diameter zoom rendering (glyphs/halos size off the widest incident
   pipe via `glyphRadiusPx`; unsized byte-identical). Gate: engine 1371 / app 1025; goldens
-  01/02/03 re-captured. B17–B30 (the queued CAD-muscle-memory set) follow as batch 3.
+  01/02/03 re-captured. **Drafting-feel batch 3 (B17–B30) HAS ALSO LANDED** (2026-07-07, see the §15 row):
+  two-click ortho routing with Tab leg-flip (`orthoRoute`/`commitRoute`, composes with the
+  auto-elbow), trim/extend to intersection, corner-join (+ the loose-end issue's 'Fix corner'
+  action), segment grip-drag, dimension-driven length editing, the cursor polar chip, the live
+  gravity invert readout, draw auto-pan, smart alignment guides, the OSNAP `SnapKind` marker
+  vocabulary + midpoint/perpendicular-foot candidates, Alt parallel-offset lock, the
+  window/crossing marquee, the match-properties brush (atomic `setEdgeProperties` after a
+  review-caught undo fix), and hover measurement chips. All gesture-time only — goldens
+  byte-identical. Gate: engine 1371 / app 1093 / analyze clean.
   **The Wave 2 remainder HAS ALSO LANDED** (2026-07-06, see the §15 row): K1 drag-session
   throttle (no heavy re-solve per drag frame; at-rest byte-identical), K3 heatmap field
   memoization, K2 isolate-offloaded Open, K4 threshold-gated isolate autosave encode with a

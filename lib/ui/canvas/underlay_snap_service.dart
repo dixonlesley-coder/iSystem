@@ -38,6 +38,7 @@ import '../../store/sheets_store.dart';
 import '../../store/snap_settings_store.dart';
 import 'dxf_sheet_page.dart';
 import 'ink_snap.dart';
+import 'snapping.dart';
 import 'underlay_snap.dart';
 
 /// Which underlay source a snap latched onto (for the caller's ring feedback /
@@ -45,13 +46,37 @@ import 'underlay_snap.dart';
 enum UnderlaySource { vector, referenceLine, ink }
 
 /// One resolved underlay snap: the snapped [point] (sheet/world px), which
-/// [source] produced it, and its [distance] from the query.
+/// [source] produced it, its [distance] from the query, and the [kind] of
+/// feature it latched onto (the B24 OSNAP marker vocabulary — the UI draws a
+/// distinct marker per [SnapKind]). [source] keeps the provenance (vector wall
+/// vs traced reference line) even where both read as [SnapKind.refline].
 @immutable
 class UnderlaySnapHit {
   final Offset point;
   final UnderlaySource source;
   final double distance;
-  const UnderlaySnapHit(this.point, this.source, this.distance);
+  final SnapKind kind;
+  const UnderlaySnapHit(this.point, this.source, this.distance,
+      {this.kind = SnapKind.refline});
+}
+
+/// Map an underlay [source] + its geometric [uk] to the shared [SnapKind] marker
+/// vocabulary: endpoint / intersection / perpendicular are geometric features
+/// regardless of the producing line; a plain nearest-on-a-line snap (DXF wall or
+/// reference line) reads as [SnapKind.refline]; PDF ink reads as [SnapKind.ink].
+SnapKind snapKindForUnderlay(UnderlaySource source, UnderlaySnapKind? uk) {
+  if (source == UnderlaySource.ink) return SnapKind.ink;
+  switch (uk) {
+    case UnderlaySnapKind.endpoint:
+      return SnapKind.endpoint;
+    case UnderlaySnapKind.intersection:
+      return SnapKind.intersection;
+    case UnderlaySnapKind.perpendicular:
+      return SnapKind.perpendicular;
+    case UnderlaySnapKind.onSegment:
+    case null:
+      return SnapKind.refline;
+  }
 }
 
 /// Max sheets whose PDF luminance map is kept resident (LRU).
@@ -83,12 +108,14 @@ final underlaySnapServiceProvider =
 /// The underlay snap callback for [sheetId] at the current zoom [scale], reading
 /// the live 'Snap to plan' toggle + reference-line set, or null when the sheet
 /// isn't loaded. Pass into a store gesture's `underlaySnap:` param. [orthoAnchor]
-/// (the run's fixed endpoint) keeps a straight run on-axis when Ortho is active.
+/// (the run's fixed endpoint) keeps a straight run on-axis when Ortho is active;
+/// [anchor] (the run's pending start) enables the B24 perpendicular-foot snap.
 Offset? Function(Offset world)? underlaySnapFor(
   WidgetRef ref,
   String sheetId,
   double scale, {
   Offset? orthoAnchor,
+  Offset? anchor,
 }) {
   final sheet = ref.read(sheetsControllerProvider).sheetById(sheetId);
   if (sheet == null) return null;
@@ -97,6 +124,7 @@ Offset? Function(Offset world)? underlaySnapFor(
         ref.read(referenceLinesProvider),
         scale,
         orthoAnchor: orthoAnchor,
+        anchor: anchor,
         enabled: ref.read(snapToPlanProvider),
       );
 }
@@ -139,6 +167,11 @@ class UnderlaySnapService {
   /// (Ortho constrained the angle first) a candidate is accepted only if it lies
   /// near the constrained ray anchor→world, so an underlay snap never bends a
   /// straight run off-axis (same spirit as the magnetic-grid gate).
+  ///
+  /// [anchor] (the draw run's pending/start point, B24) enables the
+  /// **perpendicular-foot** candidate on DXF walls + reference lines — a 90° drop
+  /// from the anchor onto a line's interior — offered within the same precedence
+  /// (above a plain on-segment hit). Null ⇒ no perpendicular candidates.
   UnderlaySnapHit? snap(
     Sheet sheet,
     List<ReferenceLine> lines,
@@ -146,6 +179,7 @@ class UnderlaySnapService {
     double radiusWorld, {
     required bool enabled,
     Offset? orthoAnchor,
+    Offset? anchor,
   }) {
     if (!enabled || radiusWorld <= 0) return null;
 
@@ -160,14 +194,16 @@ class UnderlaySnapService {
       return perp <= radiusWorld;
     }
 
-    // 1) DXF/DWG vector candidates (endpoint > intersection > on-segment).
+    // 1) DXF/DWG vector candidates (endpoint > intersection > perp > on-segment).
     final vec = _vectorIndexFor(sheet);
     if (vec != null && !vec.isEmpty) {
-      final c = vec.query(world.dx, world.dy, radiusWorld);
+      final c = vec.query(world.dx, world.dy, radiusWorld,
+          anchorX: anchor?.dx, anchorY: anchor?.dy);
       if (c != null) {
         final p = Offset(c.x, c.y);
         if (onRay(p)) {
-          return UnderlaySnapHit(p, UnderlaySource.vector, c.distance);
+          return UnderlaySnapHit(p, UnderlaySource.vector, c.distance,
+              kind: snapKindForUnderlay(UnderlaySource.vector, c.kind));
         }
       }
     }
@@ -175,11 +211,13 @@ class UnderlaySnapService {
     // 2) Traced reference lines (always contribute).
     final refIdx = _referenceIndexFor(sheet.id, lines);
     if (refIdx != null && !refIdx.isEmpty) {
-      final c = refIdx.query(world.dx, world.dy, radiusWorld);
+      final c = refIdx.query(world.dx, world.dy, radiusWorld,
+          anchorX: anchor?.dx, anchorY: anchor?.dy);
       if (c != null) {
         final p = Offset(c.x, c.y);
         if (onRay(p)) {
-          return UnderlaySnapHit(p, UnderlaySource.referenceLine, c.distance);
+          return UnderlaySnapHit(p, UnderlaySource.referenceLine, c.distance,
+              kind: snapKindForUnderlay(UnderlaySource.referenceLine, c.kind));
         }
       }
     }
@@ -196,7 +234,8 @@ class UnderlaySnapService {
           final p = Offset(hit.x / lum.scale, hit.y / lum.scale);
           if (onRay(p)) {
             return UnderlaySnapHit(
-                p, UnderlaySource.ink, hit.distance / lum.scale);
+                p, UnderlaySource.ink, hit.distance / lum.scale,
+                kind: SnapKind.ink);
           }
         }
       }
@@ -308,11 +347,12 @@ class UnderlaySnapService {
     List<ReferenceLine> lines,
     double scale, {
     Offset? orthoAnchor,
+    Offset? anchor,
     bool enabled = true,
   }) {
     final radiusWorld = 14.0 / (scale <= 0 ? 1.0 : scale);
     return (world) => snap(sheet, lines, world, radiusWorld,
-            enabled: enabled, orthoAnchor: orthoAnchor)
+            enabled: enabled, orthoAnchor: orthoAnchor, anchor: anchor)
         ?.point;
   }
 

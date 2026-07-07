@@ -1,13 +1,22 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../store/smart_input_store.dart';
 import '../theme/design_tokens.dart';
 import 'canvas_grid.dart';
 import 'canvas_minimap.dart';
 import 'viewport.dart';
+
+/// B30 — the screen-space edge band (px) inside which the live draw pointer
+/// drives auto-pan.
+const double _kAutoPanBand = 24.0;
+
+/// B30 — peak auto-pan speed (px per ~16 ms tick) at full edge penetration.
+const double _kAutoPanMaxSpeed = 14.0;
 
 /// A bump signal asking the live [CanvasView] to fit its content to the
 /// viewport. A mounted [CanvasViewState] listens and calls [CanvasViewState.fitView]
@@ -122,11 +131,78 @@ class CanvasViewState extends ConsumerState<CanvasView>
       ..addListener(_onAnimTick);
   }
 
+  // B30 — auto-pan ticker, live only while a draw gesture publishes a pointer.
+  Timer? _autoPanTimer;
+
   @override
   void dispose() {
+    _autoPanTimer?.cancel();
     _animCtrl.dispose();
     _focus.dispose();
     super.dispose();
+  }
+
+  // ── B30 auto-pan (drives the existing pan path while drawing near an edge) ────
+
+  void _startAutoPan() {
+    _autoPanTimer ??= Timer.periodic(
+        const Duration(milliseconds: 16), (_) => _autoPanTick());
+  }
+
+  void _stopAutoPan() {
+    _autoPanTimer?.cancel();
+    _autoPanTimer = null;
+  }
+
+  void _autoPanTick() {
+    final probe = ref.read(canvasAutoPanProbeProvider);
+    if (probe == null || _viewportSize.isEmpty) return;
+    final w = _viewportSize.width, h = _viewportSize.height;
+    // Ignore a pointer well outside this viewport (a stale / other-canvas probe).
+    if (probe.dx < -_kAutoPanBand ||
+        probe.dx > w + _kAutoPanBand ||
+        probe.dy < -_kAutoPanBand ||
+        probe.dy > h + _kAutoPanBand) {
+      return;
+    }
+    double dx = 0, dy = 0;
+    if (probe.dx < _kAutoPanBand) {
+      dx = (_kAutoPanBand - probe.dx) / _kAutoPanBand * _kAutoPanMaxSpeed;
+    } else if (probe.dx > w - _kAutoPanBand) {
+      dx = -((probe.dx - (w - _kAutoPanBand)) / _kAutoPanBand) *
+          _kAutoPanMaxSpeed;
+    }
+    if (probe.dy < _kAutoPanBand) {
+      dy = (_kAutoPanBand - probe.dy) / _kAutoPanBand * _kAutoPanMaxSpeed;
+    } else if (probe.dy > h - _kAutoPanBand) {
+      dy = -((probe.dy - (h - _kAutoPanBand)) / _kAutoPanBand) *
+          _kAutoPanMaxSpeed;
+    }
+    if (dx == 0 && dy == 0) return;
+    // Clamp so we stop at the content bounds (never scroll past the sheet).
+    final vt = _current;
+    final cw = widget.contentSize.width * vt.scale;
+    final ch = widget.contentSize.height * vt.scale;
+    dx = _clampPan(dx, vt.offset.dx, vt.offset.dx + cw, w);
+    dy = _clampPan(dy, vt.offset.dy, vt.offset.dy + ch, h);
+    if (dx == 0 && dy == 0) return;
+    panByScreen(Offset(dx, dy));
+  }
+
+  /// Clamp a pan delta on one axis so the content edge can't move past the
+  /// viewport edge. [contentMin]/[contentMax] are the content span in screen px;
+  /// [viewMax] the viewport size on that axis.
+  static double _clampPan(
+      double d, double contentMin, double contentMax, double viewMax) {
+    if (d > 0) {
+      final room = -contentMin; // room before content start reaches 0
+      return room <= 0 ? 0 : math.min(d, room);
+    }
+    if (d < 0) {
+      final room = viewMax - contentMax; // room before content end reaches edge
+      return room >= 0 ? 0 : math.max(d, room);
+    }
+    return 0;
   }
 
   void _emit(ViewportTransform next) {
@@ -345,6 +421,15 @@ class CanvasViewState extends ConsumerState<CanvasView>
     // shared bump provider (the command palette's Fit action, the Layout F key);
     // fire on every bump. fitView() self-guards an empty viewport.
     ref.listen(canvasFitRequestProvider, (_, _) => fitView());
+    // B30 — start/stop the auto-pan ticker as a draw gesture publishes / clears
+    // its pointer. Null probe ⇒ ticker stopped ⇒ byte-identical when idle.
+    ref.listen<Offset?>(canvasAutoPanProbeProvider, (_, next) {
+      if (next == null) {
+        _stopAutoPan();
+      } else {
+        _startAutoPan();
+      }
+    });
     return Focus(
       focusNode: _focus,
       autofocus: true,

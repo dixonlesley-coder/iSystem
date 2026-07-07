@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/store/reference_line_store.dart';
 import 'package:mechx/ui/canvas/dxf_sheet_page.dart';
+import 'package:mechx/ui/canvas/snapping.dart';
 import 'package:mechx/ui/canvas/underlay_snap_service.dart';
 import 'package:mechx_engine/geometry/dxf_drawing.dart';
 
@@ -150,6 +151,77 @@ void main() {
         svc.snap(pdfSheet, lines, const Offset(90, 90), 8, enabled: true),
         isNull,
       );
+    });
+  });
+
+  group('UnderlaySnapService.snap — SnapKind marker vocabulary (B24)', () {
+    const dxfSheet = Sheet(
+        id: 'dxf1', name: 'd', dxfPath: '/wall.dxf', sizePx: Size(100, 100));
+    const pdfSheet = Sheet(
+        id: 'pdf1', name: 'p', pdfPath: '/x.pdf', sizePx: Size(100, 100));
+
+    test('DXF corner reads as SnapKind.endpoint', () {
+      DxfSheetPage.cacheForTest('/wall.dxf', _wallDrawing());
+      final svc = UnderlaySnapService();
+      // The wall spans sheet (20,20)→(80,20); query outside the left corner.
+      final hit = svc.snap(dxfSheet, const [], const Offset(18, 18), 8,
+          enabled: true);
+      expect(hit, isNotNull);
+      expect(hit!.source, UnderlaySource.vector);
+      expect(hit.kind, SnapKind.endpoint);
+      expect(hit.point.dx, closeTo(20, 1e-6));
+      expect(hit.point.dy, closeTo(20, 1e-6));
+    });
+
+    test('nearest point on a DXF wall reads as SnapKind.refline', () {
+      DxfSheetPage.cacheForTest('/wall.dxf', _wallDrawing());
+      final svc = UnderlaySnapService();
+      final hit = svc.snap(dxfSheet, const [], const Offset(50, 22), 8,
+          enabled: true);
+      expect(hit, isNotNull);
+      expect(hit!.source, UnderlaySource.vector);
+      expect(hit.kind, SnapKind.refline);
+    });
+
+    test('reference-line nearest point reads as SnapKind.refline', () {
+      final svc = UnderlaySnapService();
+      final lines = [
+        const ReferenceLine(
+            id: 'r1', sheetId: 'pdf1', x1: 10, y1: 20, x2: 30, y2: 20),
+      ];
+      final hit =
+          svc.snap(pdfSheet, lines, const Offset(20, 22), 8, enabled: true);
+      expect(hit, isNotNull);
+      expect(hit!.source, UnderlaySource.referenceLine);
+      expect(hit.kind, SnapKind.refline);
+    });
+
+    test('PDF ink reads as SnapKind.ink', () {
+      final svc = UnderlaySnapService();
+      svc.primeInkForTest('pdf1', _stripeAt(20, 100, 100), 100, 100, 1.0);
+      final hit = svc.snap(pdfSheet, const [], const Offset(21, 40), 8,
+          enabled: true);
+      expect(hit, isNotNull);
+      expect(hit!.source, UnderlaySource.ink);
+      expect(hit.kind, SnapKind.ink);
+    });
+
+    test('anchor enables a perpendicular-foot snap on the DXF wall', () {
+      DxfSheetPage.cacheForTest('/wall.dxf', _wallDrawing());
+      final svc = UnderlaySnapService();
+      // Anchor at sheet (50,40) drops perpendicular to the wall foot (50,20);
+      // the cursor near it snaps there tagged perpendicular.
+      final hit = svc.snap(dxfSheet, const [], const Offset(50, 22), 8,
+          enabled: true, anchor: const Offset(50, 40));
+      expect(hit, isNotNull);
+      expect(hit!.kind, SnapKind.perpendicular);
+      expect(hit.point.dx, closeTo(50, 1e-6));
+      expect(hit.point.dy, closeTo(20, 1e-6));
+
+      // No anchor ⇒ the same query is a plain on-line refline hit.
+      final plain = svc.snap(dxfSheet, const [], const Offset(50, 22), 8,
+          enabled: true);
+      expect(plain!.kind, SnapKind.refline);
     });
   });
 }

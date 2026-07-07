@@ -155,8 +155,16 @@ class _SmartInputBarState extends ConsumerState<SmartInputBar> {
                 // tree while drawing, so idle focus is untouched; canvas clicks
                 // (pointer) keep working regardless of who holds key focus.
                 autofocus: true,
-                onChanged: (_) {
+                onChanged: (text) {
                   if (_error != null) setState(() => _error = null);
+                  // B25 — seed the Alt parallel-offset lock with the last valid
+                  // typed length, so 'type an offset, then Alt over a wall' works.
+                  final parsed = parseDrawingInput(text);
+                  if (parsed.ok) {
+                    ref
+                        .read(parallelOffsetProvider.notifier)
+                        .set(parsed.lengthMm!);
+                  }
                   setState(() {}); // refresh the live preview
                 },
                 maxLines: 1,
