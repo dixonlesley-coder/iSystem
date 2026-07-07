@@ -366,6 +366,104 @@ grow/shrink with zoom like real objects.
   the incident pipe diameter with a minimum screen floor; reuse the B5 renderedWidth source so
   hit corridors stay in sync; plan exports already carry true widths where sized.
 
+### B17. Two-click orthogonal routing (auto-L/Z) with Tab leg-flip
+**HIGH** · effort M · gap · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+Drawing to a destination requires placing every intermediate bend by hand; CAD routes H-then-V (or V-then-H) automatically from two clicks, Tab flipping which leg leads, with a Z-route when both offsets are large.
+
+- **Direction:** A pure route helper (start, end, mode) -> 2-3 axis-aligned legs; draw-overlay preview shows the candidate path live, Tab cycles L-first/L-last/Z; commit through the existing multi-segment path in ONE undo step; ortho-off (Shift) bypasses.
+
+### B18. Trim / Extend a run to its intersection with a boundary run
+**MEDIUM** · effort M · gap · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+Cleaning overshoots/undershoots means dragging endpoints by eye; AutoCAD TR/EX resolves them exactly.
+
+- **Direction:** Context-menu 'Trim/Extend to...' arms a boundary pick; compute the segment-line intersection; move the endpoint there (splitting the boundary into a tee when they now meet mid-span), one undo step; no intersection => status toast, no-op.
+
+### B19. Corner cleanup: join two dangling ends into a clean bend
+**MEDIUM** · effort S · gap · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+Two runs that nearly meet leave loose ends the connectivity checker flags but cannot fix.
+
+- **Direction:** A 'Fix corner' action (context menu + the loose-end Design Issue row): extend both segments to their intersection, merge the two dangling nodes into one bend junction, one undo step; parallel/no-intersection cases refuse honestly.
+
+### B20. Segment grip-drag: move a whole segment perpendicular, stretching its neighbours
+**MEDIUM** · effort M · friction · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+Re-routing around an obstacle means moving two endpoints separately and re-straightening; CAD drags the segment as a unit.
+
+- **Direction:** A mid-segment grip on the selected run: dragging translates the segment along its normal, moving both shared junctions and stretching the adjacent collinear segments; ortho preserved by construction; one undo step per drag.
+
+### B21. Cursor-following polar readout while drawing
+**MEDIUM** · effort S · friction · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+The live length/angle lives in the edge smart-input bar, outside foveal vision; CAD shows it at the cursor.
+
+- **Direction:** A small chip riding the rubber band: '3.24 m @ 45' (ASCII), from the same calibration math the smart bar uses; Tab moves focus into the smart bar's length field; hidden when uncalibrated (px instead).
+
+### B22. Dimension-driven editing: type a new length on a selected run
+**MEDIUM** · effort M · gap · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+A drawn run's length can only be changed by dragging; typing an exact length is the parametric CAD idiom.
+
+- **Direction:** Clicking the selected run's length label opens an inline field; committing moves the FREE endpoint (degree-1, else the picked end) along the run's bearing to the exact length via the existing endpoint path; one undo step.
+
+### B23. Smart alignment guides against existing nodes
+**HIGH** · effort M · gap · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+Placing fixtures in rows relies on the grid or eyeballing; alignment with existing geometry is invisible.
+
+- **Direction:** While placing/dragging, when the candidate x or y comes within tolerance of an existing node's x/y on the sheet, flash a dashed guide through that node and snap onto it (a new low-precedence candidate above the grid); throttled to the nearest few nodes for performance.
+
+### B24. OSNAP marker vocabulary + midpoint and perpendicular snap kinds
+**MEDIUM** · effort M · gap · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+Every snap shows the same ring, and midpoint/perpendicular snaps do not exist — the two most-used OSNAPs after endpoint.
+
+- **Direction:** Distinct custom-painted markers (square endpoint, triangle midpoint, x intersection, perpendicular foot) at the snap point; add midpoint-of-run and perpendicular-foot-onto-underlay-line candidates into the existing precedence (between node and vector).
+
+### B25. Parallel-offset tracking: draw parallel to a wall at a typed offset
+**MEDIUM** · effort M · gap · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+Wall-following pipe routing needs repeated measuring; CAD offset-tracking locks the draw to a parallel at a set distance.
+
+- **Direction:** With the underlay snap armed, a modifier over a B12 vector/reference line locks the rubber band onto a parallel at the smart-bar-typed offset (default from the last use); the lock renders as a dashed track; release or Esc unlocks.
+
+### B26. Crossing vs window marquee selection
+**MEDIUM** · effort S · friction · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+The marquee has one mode; AutoCAD muscle memory expects left-to-right = fully-enclosed only, right-to-left = everything touched (dashed style).
+
+- **Direction:** Direction-sensitive marquee: window (solid border, enclosed-only) vs crossing (dashed border, touch); applies to both the mechanical and electrical marquees for parity.
+
+### B27. Match properties: brush one run's service/size/material onto others
+**MEDIUM** · effort S · gap · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+Fixing scattered runs one-by-one via the inspector is slow; MA-style painting is the CAD idiom.
+
+- **Direction:** Context-menu 'Match properties' on a source run arms a brush cursor; each clicked run receives the source's service-safe properties (size override, material; service only when compatible), each click one undo step; Esc exits.
+
+### B28. Hover measurements without selecting
+**LOW** · effort S · clarity · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+Interrogating a run means selecting it and reading the inspector.
+
+- **Direction:** A transient hover chip after ~500 ms: 'DN50 - 3.2 m' on runs, 'FFL +2.70' on nodes with elevation, reusing the tooltip mechanism; suppressed while drawing/dragging.
+
+### B29. Live invert-level readout while drawing drainage
+**HIGH** · effort M · gap · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+Gravity design's core question — will I clear the beam/sewer — is invisible until after sizing; no lightweight tool shows it live.
+
+- **Direction:** While drawing a gravity service with a calibrated sheet, the polar chip gains an 'IL -0.42' line: the running invert from the start node's elevation minus slope x developed length (the design slope the sizing context uses); honest omission when uncalibrated or slope unknown.
+
+### B30. Auto-pan when the rubber band reaches the viewport edge
+**LOW** · effort S · friction · lens: user-approved queue (2026-07-07, product owner: 'queue them')
+
+Long corridor runs force a mid-draw zoom-out because the canvas will not scroll while drawing.
+
+- **Direction:** While drawing/pulling, the cursor entering an edge band (~24 px) pans the sheet at a speed proportional to penetration, reusing the existing pan path; stops at content bounds.
+
 ## Theme C — Inspector and information architecture
 
 The right-hand column: selection-first behaviour, disclosure discipline, and whether every model field the app acts on is actually editable somewhere.
