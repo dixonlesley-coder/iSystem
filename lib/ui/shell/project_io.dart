@@ -119,7 +119,13 @@ void _revealImportedSheet(WidgetRef ref, int sheetIndex) {
 /// [skipDiscardGuard] bypasses the empty-project unsaved-work guard for the A3
 /// template flow, where the only "unsaved work" is the just-applied template the
 /// engineer wants to keep; every other caller leaves it false (unchanged).
-Future<void> importPlan(BuildContext context, WidgetRef ref,
+///
+/// Returns `true` when a plan was actually imported (added or replaced), `false`
+/// on any cancel/guard-abort/failure — so a caller that forced this dialog open
+/// (the templates flow, A2) can tell a genuine cancel from a completed import
+/// and react (e.g. surface that the template mutation still happened) instead of
+/// assuming success.
+Future<bool> importPlan(BuildContext context, WidgetRef ref,
     {bool skipDiscardGuard = false}) async {
   final startedNonEmpty =
       ref.read(sheetsControllerProvider).sheets.isNotEmpty;
@@ -128,17 +134,17 @@ Future<void> importPlan(BuildContext context, WidgetRef ref,
   // Add-vs-Replace AFTER the file is chosen; only the Replace branch destroys
   // anything, so its guard runs there.
   if (!startedNonEmpty && !skipDiscardGuard) {
-    if (!await confirmDiscardIfDirty(context, ref)) return;
+    if (!await confirmDiscardIfDirty(context, ref)) return false;
   }
-  if (!context.mounted) return;
+  if (!context.mounted) return false;
   final result = await FilePicker.pickFiles(
     type: FileType.custom,
     allowedExtensions: const ['pdf', 'dxf', 'dwg'],
     allowMultiple: false,
   );
-  if (result == null || result.files.isEmpty) return;
+  if (result == null || result.files.isEmpty) return false;
   final path = result.files.single.path;
-  if (path == null || path.isEmpty) return;
+  if (path == null || path.isEmpty) return false;
 
   final lower = path.toLowerCase();
   final isDxf = lower.endsWith('.dxf');
@@ -163,27 +169,27 @@ Future<void> importPlan(BuildContext context, WidgetRef ref,
       ref
           .read(loadErrorProvider.notifier)
           .set('That $what had no importable geometry.');
-      return;
+      return false;
     }
     // Multi-page PDF: let the user pick which pages to bring in (single-page
     // documents — and every DXF, which is one sheet — import straight through).
     if (sheets.length > 1 && context.mounted) {
       final chosen = await showPdfPagePicker(context, sheets);
-      if (chosen == null) return; // cancelled — keep the current project
-      if (chosen.isEmpty) return;
+      if (chosen == null) return false; // cancelled — keep the current project
+      if (chosen.isEmpty) return false;
       sheets = chosen;
     }
 
     // Into a NON-EMPTY project, ask whether to ADD or REPLACE.
     if (startedNonEmpty) {
-      if (!context.mounted) return;
+      if (!context.mounted) return false;
       final existing = ref.read(sheetsControllerProvider).sheets.length;
       final choice = await showImportChoiceDialog(
         context,
         existingSheets: existing,
         incomingSheets: sheets.length,
       );
-      if (choice == null) return; // cancelled — keep the current project
+      if (choice == null) return false; // cancelled — keep the current project
       if (choice == ImportChoice.add) {
         // ADD destroys nothing (current sheets, calibration and network stay),
         // so no dirty-guard: append the new sheets (fresh unique ids remapped by
@@ -198,11 +204,11 @@ Future<void> importPlan(BuildContext context, WidgetRef ref,
         ref
             .read(statusMessageProvider.notifier)
             .showStatus('$added ${added == 1 ? 'sheet' : 'sheets'} added');
-        return;
+        return true;
       }
       // REPLACE destroys the current sheets + orphans drawn work — guard now.
-      if (!context.mounted) return;
-      if (!await confirmDiscardIfDirty(context, ref)) return;
+      if (!context.mounted) return false;
+      if (!await confirmDiscardIfDirty(context, ref)) return false;
     }
 
     // Replace-all: an empty project, or the explicit Replace choice.
@@ -220,9 +226,11 @@ Future<void> importPlan(BuildContext context, WidgetRef ref,
     ref
         .read(statusMessageProvider.notifier)
         .showStatus('$n ${n == 1 ? 'sheet' : 'sheets'} imported');
+    return true;
   } catch (e) {
     // Surface the failure instead of silently keeping the old sheets.
     ref.read(loadErrorProvider.notifier).set('Could not import $what: $e');
+    return false;
   } finally {
     ref.read(busyProvider.notifier).clear();
   }
@@ -418,16 +426,24 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
     // save survives as the target or its `.bak`.
     await atomicWriteString(full, portable.encode());
   } catch (e) {
-    ref.read(loadErrorProvider.notifier).set('Could not save project: $e');
+    if (ref.context.mounted) {
+      ref.read(loadErrorProvider.notifier).set('Could not save project: $e');
+    }
     return;
   } finally {
-    ref.read(busyProvider.notifier).clear();
+    // The widget can be torn down while the save (asset gzip + atomic write, on
+    // a real isolate) is in flight — the app quit through Save-then-exit, or a
+    // test completes the instant the file lands. Touching a disposed `ref` then
+    // throws, so guard every post-await provider access on the still-live tree.
+    if (ref.context.mounted) ref.read(busyProvider.notifier).clear();
   }
   // The work is now safely on disk — record it as the clean baseline, remember
   // the home file for the next quick save, and drop any recovery snapshot.
   // Resetting the autosave mirror means work that turns dirty again AFTER this
   // save (even by undoing to a previously-mirrored state) gets a fresh
-  // recovery snapshot on the next tick.
+  // recovery snapshot on the next tick. If the tree was disposed during the
+  // write awaits (quit-during-save), the file is safe — skip the UI bookkeeping.
+  if (!ref.context.mounted) return;
   ref.read(lastSavedSignatureProvider.notifier).set(baseline);
   ref.read(autosaveMirrorProvider.notifier).clear();
   ref.read(currentProjectPathProvider.notifier).set(full);
@@ -435,6 +451,10 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   // Drop the recovery snapshot for the prior identity, the saved file, and the
   // shared untitled slot (a first save promotes from untitled to a named file).
   await clearRecoverySlots([priorPath, full, null]);
+  // `clearRecoverySlots` is an async file op — the tree can be disposed while it
+  // is in flight (see the `finally` note). The remaining work is in-memory UI
+  // bookkeeping that only matters while the app is alive, so drop it if gone.
+  if (!ref.context.mounted) return;
   ref.read(recoveryDocProvider.notifier).clear();
   // Remember this file in the machine-local MRU / last-open list.
   ref.read(appSettingsProvider.notifier).recordRecent(full, project.name);
@@ -475,44 +495,87 @@ Future<void> openProjectPath(
   await _applyOpenedFile(ref, path);
 }
 
-/// Load the `.mechx` at [path] into the live state (shared by [openProject] and
-/// [openProjectPath]): rehydrate embedded plans, reset the clean baseline, drop
-/// this project's stale recovery slot, and record it in the machine-local MRU.
-Future<void> _applyOpenedFile(WidgetRef ref, String path) async {
+/// M2 (Windows-desktop citizenship): the project file to auto-open from the
+/// process command-line [args]. Explorer's double-click / "Open with" verb (and
+/// the taskbar jump list) launch the exe with the file path as an argument, and
+/// `windows/runner` forwards those to this Dart entrypoint — so a returned path
+/// is opened at launch. Returns the FIRST argument naming a `.mechx` file
+/// (case-insensitive), skipping empty tokens and switches (a leading `-`); null
+/// when none applies.
+///
+/// PURE — it never touches the filesystem or any provider, so the launch
+/// decision is unit-testable in isolation; the caller checks the file exists
+/// (and that a crash-recovery snapshot doesn't take precedence) before opening.
+/// Single-instance forwarding (handing the path to an ALREADY-running iSystem
+/// instead of launching a second one) is deliberately OUT of scope.
+String? launchProjectPathFromArgs(List<String> args) {
+  for (final a in args) {
+    if (a.isEmpty || a.startsWith('-')) continue;
+    if (a.toLowerCase().endsWith('.mechx')) return a;
+  }
+  return null;
+}
+
+/// M2: open a `.mechx` handed to the app on the command line (Explorer
+/// double-click / "Open with" / jump list), routed through the SAME core loader
+/// [_applyOpenedFileWith] that File → Open and the recent-projects list use.
+/// Called ONCE from `main` at launch against the root [container], so there is no
+/// live dirty project to guard and no [BuildContext] — the caller has already
+/// ensured no crash-recovery snapshot is pending (recovery takes precedence). A
+/// path that no longer exists is silently ignored (the app just opens its normal
+/// empty state) rather than surfacing a launch-time error banner.
+Future<void> openProjectAtLaunch(
+    ProviderContainer container, String path) async {
+  if (!await File(path).exists()) return;
+  await _applyOpenedFileWith(container.read, path);
+}
+
+/// Load the `.mechx` at [path] into the live state (shared by [openProject],
+/// [openProjectPath], and the launch/command-line open): rehydrate embedded
+/// plans, reset the clean baseline, drop this project's stale recovery slot, and
+/// record it in the machine-local MRU.
+Future<void> _applyOpenedFile(WidgetRef ref, String path) =>
+    _applyOpenedFileWith(ref.read, path);
+
+/// The loader core, expressed against a [ProviderReader] so it runs identically
+/// from a widget ([WidgetRef.read] — Open / recent projects) and from the launch
+/// root container ([ProviderContainer.read] — the command-line open).
+Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
   // The project we're leaving — its recovery slot must be cleared too, or a
   // later launch would offer to restore the work we just navigated away from.
-  final priorPath = ref.read(currentProjectPathProvider);
-  ref.read(busyProvider.notifier).set(
-      MechXStringsData(ref.read(localeProvider))(StringKey.busyOpeningProject));
+  final priorPath = read(currentProjectPathProvider);
+  read(busyProvider.notifier).set(
+      MechXStringsData(read(localeProvider))(StringKey.busyOpeningProject));
   try {
-    final doc = ProjectDocument.decode(await File(path).readAsString());
-    // Extract any embedded source plans to local files + repoint the sheets,
-    // so a portable project renders even without the original plan files here.
-    applyDocument(ref.read, rehydrateAssets(doc));
+    final source = await File(path).readAsString();
+    // Decode + extract any embedded source plans (gunzip + repoint the sheets
+    // so a portable project renders even without the original plan files here)
+    // TOGETHER off the UI thread — the exact freeze Save already fixed for its
+    // symmetric asset-embedding work (see gatherSheetAssetsAsync).
+    final doc = await decodeAndRehydrateAsync(source);
+    applyDocument(read, doc);
     // The just-loaded state is the clean baseline; capture its canonical
     // encoding so autosave won't immediately mirror it to recovery.
-    ref
-        .read(lastSavedSignatureProvider.notifier)
-        .set(buildDocument(ref.read).encode());
+    read(lastSavedSignatureProvider.notifier)
+        .set(buildDocument(read).encode());
     // Fresh baseline ⇒ fresh mirror: any later divergence must re-snapshot.
-    ref.read(autosaveMirrorProvider.notifier).clear();
-    ref.read(currentProjectPathProvider.notifier).set(path);
-    ref.read(projectDirtyProvider.notifier).set(false);
+    read(autosaveMirrorProvider.notifier).clear();
+    read(currentProjectPathProvider.notifier).set(path);
+    read(projectDirtyProvider.notifier).set(false);
     // Drop any stale crash snapshot for THIS file, the project we left, and
     // the untitled slot.
     await clearRecoverySlots([priorPath, path, null]);
-    ref.read(recoveryDocProvider.notifier).clear();
-    ref.read(loadErrorProvider.notifier).clear();
-    ref
-        .read(appSettingsProvider.notifier)
-        .recordRecent(path, ref.read(projectControllerProvider).name);
-    ref.read(statusMessageProvider.notifier).showStatus('Project opened');
+    read(recoveryDocProvider.notifier).clear();
+    read(loadErrorProvider.notifier).clear();
+    read(appSettingsProvider.notifier)
+        .recordRecent(path, read(projectControllerProvider).name);
+    read(statusMessageProvider.notifier).showStatus('Project opened');
   } on ProjectDocumentException catch (e) {
     // Malformed/incompatible file — surface why, leave the project untouched.
-    ref.read(loadErrorProvider.notifier).set(e.message);
+    read(loadErrorProvider.notifier).set(e.message);
   } catch (e) {
-    ref.read(loadErrorProvider.notifier).set('Could not open project: $e');
+    read(loadErrorProvider.notifier).set('Could not open project: $e');
   } finally {
-    ref.read(busyProvider.notifier).clear();
+    read(busyProvider.notifier).clear();
   }
 }

@@ -102,6 +102,17 @@ class EdgeSizing {
   /// design issue. Default false ⇒ in-range ducts are byte-identical.
   final bool overCapacity;
 
+  /// True when this is a drainage STACK (riser) edge whose own DFU-table
+  /// diameter was raised to match a larger horizontal branch discharging into
+  /// it (directly, or via a raised stack segment further up the same stack) —
+  /// see [drain.drainDiameterForDfu]'s separate stack/branch tables (N17: the
+  /// stack table is more generous, so a stack can size *smaller* than a branch
+  /// carrying the identical DFU load, which is a code violation — no stack may
+  /// be smaller than a branch connected to it). The caller surfaces this as a
+  /// per-edge note ("stack raised to match branch"). Default false ⇒ an
+  /// already-adequate stack is byte-identical.
+  final bool stackRaisedForBranch;
+
   /// The edge endpoint the flow comes FROM (== [edgeId]'s owning [NetEdge]'s
   /// `fromId` or `toId`), i.e. the upstream node — a READ-ONLY orientation
   /// record for drawing a flow-direction arrow. NEVER affects any computed size
@@ -118,6 +129,7 @@ class EdgeSizing {
     this.width,
     this.height,
     this.overCapacity = false,
+    this.stackRaisedForBranch = false,
     this.flowFromId,
   });
 
@@ -135,6 +147,7 @@ class EdgeSizing {
         width: width,
         height: height,
         overCapacity: overCapacity,
+        stackRaisedForBranch: stackRaisedForBranch,
         flowFromId: fromId,
       );
 }
@@ -643,6 +656,18 @@ Map<String, EdgeSizing> autoSizeNetwork(
             }
           }
         }
+        // N17 — a stack must never size smaller than a branch discharging
+        // into it (two different DFU tables can otherwise disagree). Only
+        // meaningful for drainage (vent has one DFU table; this `service`
+        // iteration is single-service, so a vent pass is a no-op here).
+        if (service == ServiceType.drainage) {
+          _clampDrainageStacksToBranches(
+            net: net,
+            sanitary: sanitary,
+            edgeParents: edgeParents,
+            ctx: ctx,
+          );
+        }
       } else if (service == ServiceType.rainwater) {
         // Accumulate storm runoff and size each downpipe from the rainwater
         // capacity table (not Manning).
@@ -749,18 +774,111 @@ EdgeSizing _sizeSanitaryEdge(NetEdge edge, double dfu, SizingContext ctx) {
   final Diameter d = edge.service == ServiceType.vent
       ? drain.ventDiameterForDfu(dfu)
       : drain.drainDiameterForDfu(dfu, isStack: isStack);
+  return _sanitaryEdgeSizing(edge, d, ctx);
+}
+
+/// Build the [EdgeSizing] for a sanitary (drainage/vent) [edge] at an already-
+/// chosen [diameter] (either the raw DFU-table pick, or a diameter raised by
+/// [_clampDrainageStacksToBranches]). Factored out of [_sizeSanitaryEdge] so
+/// the stack/branch clamp can rebuild a stack's sizing at its raised diameter
+/// without duplicating the velocity computation.
+EdgeSizing _sanitaryEdgeSizing(
+  NetEdge edge,
+  Diameter diameter,
+  SizingContext ctx, {
+  bool stackRaisedForBranch = false,
+}) {
   final v = edge.service == ServiceType.vent
       ? const Velocity(0)
       : manningVelocity(
           manningN: ctx.drainageManningN,
-          hydraulicRadius: Length(d.meters / 4.0),
+          hydraulicRadius: Length(diameter.meters / 4.0),
           slope: ctx.drainageSlope,
         );
   return EdgeSizing(
     edgeId: edge.id,
     service: edge.service,
     flow: const FlowRate(0),
-    diameter: d,
+    diameter: diameter,
     velocity: v,
+    stackRaisedForBranch: stackRaisedForBranch,
   );
+}
+
+/// N17 — a drainage STACK (riser) segment must never be smaller than a
+/// horizontal branch discharging into it. Branch and stack diameters come
+/// from two DIFFERENT DFU capacity tables (the stack table is more generous —
+/// a vertical stack self-cleanses better than a horizontal run), so a stack
+/// segment can legitimately DFU-size *smaller* than a branch carrying the
+/// identical load (e.g. DFU 20 ⇒ a DN65 stack vs a DN75 branch) even though
+/// accumulated DFU only grows toward the root — the code violation is real,
+/// not a sizing-order artifact.
+///
+/// For every drainage riser edge, raise its diameter to at least the largest
+/// of: its own DFU-table diameter, any branch (non-riser) edge discharging
+/// directly at its away-from-root node, and the (already-raised) diameter of
+/// any further riser segment continuing the stack above that same node — so a
+/// raise made high in the stack also propagates DOWN toward the root and a
+/// lower segment never necks down below a raised segment above it. [sanitary]
+/// is mutated in place; [edgeParents] is the edgeId → root-side-node map
+/// [accumulateFixtureUnits] filled for this same (single-service, single-
+/// component) pass. Only meaningful for [ServiceType.drainage] — vents use one
+/// DFU table (no stack/branch split) and rainwater downpipes use one capacity
+/// table over the same monotonically-accumulated flow, so neither can exhibit
+/// this particular two-table mismatch and neither is touched here.
+void _clampDrainageStacksToBranches({
+  required Network net,
+  required Map<String, EdgeSizing> sanitary,
+  required Map<String, String> edgeParents,
+  required SizingContext ctx,
+}) {
+  // node → edges rooted there, i.e. edges whose ROOT-SIDE endpoint is this
+  // node (the continuations AWAY from root passing through it — the stack
+  // segment(s) and/or branch(es) immediately upstream of this junction).
+  final childEdgesAt = <String, List<String>>{};
+  for (final entry in edgeParents.entries) {
+    (childEdgesAt[entry.value] ??= []).add(entry.key);
+  }
+
+  String awayNodeOf(NetEdge e) {
+    final rootSide = edgeParents[e.id];
+    return e.fromId == rootSide ? e.toId : e.fromId;
+  }
+
+  final memo = <String, double>{};
+  double effectiveMm(String edgeId) {
+    final cached = memo[edgeId];
+    if (cached != null) return cached;
+    final edge = net.edgeById(edgeId)!;
+    var maxMm = sanitary[edgeId]!.diameter.inMillimeters;
+    for (final childId in childEdgesAt[awayNodeOf(edge)] ?? const <String>[]) {
+      final child = net.edgeById(childId);
+      if (child == null || child.service != ServiceType.drainage) continue;
+      final childMm = child.kind == EdgeKind.riser
+          ? effectiveMm(childId)
+          : sanitary[childId]!.diameter.inMillimeters;
+      if (childMm > maxMm) maxMm = childMm;
+    }
+    memo[edgeId] = maxMm;
+    return maxMm;
+  }
+
+  for (final edgeId in edgeParents.keys) {
+    final edge = net.edgeById(edgeId);
+    if (edge == null ||
+        edge.kind != EdgeKind.riser ||
+        edge.service != ServiceType.drainage) {
+      continue;
+    }
+    final base = sanitary[edgeId]!.diameter.inMillimeters;
+    final effective = effectiveMm(edgeId);
+    if (effective > base) {
+      sanitary[edgeId] = _sanitaryEdgeSizing(
+        edge,
+        Diameter.mm(effective),
+        ctx,
+        stackRaisedForBranch: true,
+      );
+    }
+  }
 }

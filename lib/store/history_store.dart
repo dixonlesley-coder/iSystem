@@ -7,6 +7,7 @@ import 'app_state.dart';
 import 'electrical_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
+import 'reference_line_store.dart';
 import 'sheets_store.dart';
 
 /// Which domain controller owns a recorded action. Each domain keeps its own
@@ -29,7 +30,19 @@ import 'sheets_store.dart';
 /// where the nodes moved but the floors didn't (or vice-versa). This replaces
 /// the old sheet-only undo domain, which recorded the mapping and the node
 /// remap as two separate entries (a single Ctrl+Z reverted only one half).
-enum UndoDomain { network, project, electrical, annotation, structural }
+///
+/// [referenceLine] (B12) covers the traced reference-line list — a single flat
+/// list, so (unlike [annotation]) it keeps its own local snapshot stack right
+/// in [ReferenceLineController] (mirrors [electrical]'s local-stack pattern)
+/// rather than a shared cross-list coordinator.
+enum UndoDomain {
+  network,
+  project,
+  electrical,
+  annotation,
+  structural,
+  referenceLine,
+}
 
 /// A single, global undo/redo timeline across every domain. Domain controllers
 /// call [HistoryController.record] from their forward mutations; undo/redo here
@@ -101,6 +114,9 @@ class HistoryController extends Notifier<int> {
         redo ? c.redo() : c.undo();
       case UndoDomain.structural:
         final c = ref.read(structuralHistoryProvider.notifier);
+        redo ? c.redo() : c.undo();
+      case UndoDomain.referenceLine:
+        final c = ref.read(referenceLinesProvider.notifier);
         redo ? c.redo() : c.undo();
     }
   }

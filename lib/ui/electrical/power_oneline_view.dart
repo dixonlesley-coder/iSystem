@@ -9,6 +9,7 @@ library;
 import 'package:flutter/widgets.dart';
 import 'package:mechx_engine/electrical/power_oneline.dart';
 
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/section_label.dart';
@@ -42,9 +43,13 @@ class PowerOneLineView extends StatelessWidget {
                   Text('No energy sources',
                       style: type.title.copyWith(color: colors.textPrimary)),
                   const SizedBox(height: MechXSpacing.xs),
+                  // D1: the Loads palette carries no generator/solar/battery
+                  // card — a generator is only addable via the Sources button
+                  // in the electrical toolbar, so point there instead of a
+                  // dead-end instruction.
                   Text(
-                    'Add a generator, solar PV or battery from the Loads palette '
-                    'to build a hybrid power one-line with source interlocks.',
+                    context.strings(
+                        StringKey.electricalPowerOneLineEmptyBody),
                     style: type.body.copyWith(color: colors.textSecondary),
                   ),
                 ],

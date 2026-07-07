@@ -4,7 +4,7 @@
 ///
 ///  • [FirstRunOrientationCard] (A1) — a one-time, dismissible welcome card on a
 ///    genuinely EMPTY project (no sheets) that names the five-step workflow
-///    (Calibrate · Floors · Draw · Size · Report) and points at "Import a plan".
+///    (Calibrate · Building · Draw · Size · Report) and points at "Import a plan".
 ///    Its "seen" state is a machine-local flag (see `data/app_settings.dart`),
 ///    so once dismissed it never returns; it never shows once a sheet exists.
 ///
@@ -21,19 +21,39 @@ library;
 
 import 'package:flutter/widgets.dart';
 
+import '../../store/command_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 
 /// The five workflow steps, in order — the map the newcomer is missing. Each is
-/// (name, one-line "what it does").
-const List<(String, String)> _kWorkflowSteps = [
-  ('Calibrate', 'set the drawing scale on your plan'),
-  ('Floors', "set each level's height"),
-  ('Draw', 'lay out pipes, ducts and panels'),
-  ('Size', 'auto-size everything to SNI / PUIL'),
-  ('Report', 'export the BOM and calc report'),
-];
+/// (name, one-line "what it does"). Localized via [strings]; the step names
+/// reuse [WorkflowStageInfo.label] (A3) so the orientation card and the
+/// status-bar stepper always agree on ONE term per stage — notably "Building"
+/// for the floor/height step, matching the nav-rail destination it points at.
+List<(String, String)> _workflowSteps(MechXStringsData strings) => [
+      (
+        WorkflowStage.calibrate.label(strings),
+        strings(StringKey.firstRunStepCalibrateDesc),
+      ),
+      (
+        WorkflowStage.floors.label(strings),
+        strings(StringKey.firstRunStepBuildingDesc),
+      ),
+      (
+        WorkflowStage.draw.label(strings),
+        strings(StringKey.firstRunStepDrawDesc),
+      ),
+      (
+        WorkflowStage.size.label(strings),
+        strings(StringKey.firstRunStepSizeDesc),
+      ),
+      (
+        WorkflowStage.report.label(strings),
+        strings(StringKey.firstRunStepReportDesc),
+      ),
+    ];
 
 /// A1 — the one-time first-run orientation card. Additive: it sits ABOVE the
 /// existing empty-state card, so the empty Layout still carries its own Import /
@@ -53,6 +73,7 @@ class FirstRunOrientationCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    final steps = _workflowSteps(context.strings);
     return _GuideEntrance(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 380),
@@ -77,12 +98,12 @@ class FirstRunOrientationCard extends StatelessWidget {
                 style: type.body.copyWith(color: colors.textSecondary),
               ),
               const SizedBox(height: MechXSpacing.md),
-              for (var i = 0; i < _kWorkflowSteps.length; i++) ...[
+              for (var i = 0; i < steps.length; i++) ...[
                 if (i > 0) const SizedBox(height: MechXSpacing.sm),
                 _StepRow(
                   number: i + 1,
-                  name: _kWorkflowSteps[i].$1,
-                  description: _kWorkflowSteps[i].$2,
+                  name: steps[i].$1,
+                  description: steps[i].$2,
                 ),
               ],
               const SizedBox(height: MechXSpacing.md),

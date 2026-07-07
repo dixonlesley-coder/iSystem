@@ -53,6 +53,123 @@ const kDxfLayerEFrame = 'E-FRAME';
 /// Essential (emergency-supply) graphics — ACI red, toggleable as one layer.
 const kDxfLayerEEssential = 'E-ESSENTIAL';
 
+// ── Mechanical class layers (N15 — a plumbing riser must NEVER land on E-*) ──
+
+/// Mechanical annotation text.
+const kDxfLayerMText = 'M-TEXT';
+
+/// Mechanical sheet frame: title block + legend.
+const kDxfLayerMFrame = 'M-FRAME';
+
+/// Mechanical device / detail graphics — glyphs, node boxes, callouts, datum
+/// lines. Pipe runs keep their explicit per-service `SldLine.layer` (a service
+/// code like `CW`/`V`/`D`); everything else that has no explicit layer lands
+/// here instead of the electrical `E-BREAKER`.
+const kDxfLayerMDetail = 'M-DETAIL';
+
+/// The DXF layer NAMESPACE an SLD render routes its prims onto. The electrical
+/// default is the `E-*` distribution-board set; the MECHANICAL riser (routed
+/// here via `sld_export.dart`) passes [mechanical] so a plumbing riser's text /
+/// frame / device graphics land on `M-TEXT` / `M-FRAME` / `M-DETAIL` and never
+/// on `E-BREAKER` / `E-TEXT` / `E-FRAME` (N15). A pipe LINE carrying an explicit
+/// `SldLine.layer` (a service code) still wins under either namespace. A pure
+/// drafting-office naming convention, no `// VERIFY`.
+class SldDxfLayers {
+  /// Thick bus lines (electrical busbars). Mechanical has no bus ⇒ [device].
+  final String bus;
+
+  /// Medium feeder-routing lines. Mechanical has no feeder ⇒ [device].
+  final String feeder;
+
+  /// Thin device / detail graphics (block outlines, meter circles, glyphs).
+  final String device;
+
+  /// All annotation TEXT.
+  final String text;
+
+  /// Sheet frame: title block + legend.
+  final String frame;
+
+  /// Essential (emergency-supply) graphics. Mechanical has no essential ⇒
+  /// [device].
+  final String essential;
+
+  final int busAci;
+  final int feederAci;
+  final int deviceAci;
+  final int textAci;
+  final int frameAci;
+  final int essentialAci;
+
+  const SldDxfLayers({
+    required this.bus,
+    required this.feeder,
+    required this.device,
+    required this.text,
+    required this.frame,
+    required this.essential,
+    required this.busAci,
+    required this.feederAci,
+    required this.deviceAci,
+    required this.textAci,
+    required this.frameAci,
+    required this.essentialAci,
+  });
+
+  /// The electrical `E-*` distribution-board namespace (the default — keeps
+  /// every electrical export byte-identical, including the ACI table order).
+  static const electrical = SldDxfLayers(
+    bus: kDxfLayerEBus,
+    feeder: kDxfLayerEFeeder,
+    device: kDxfLayerEBreaker,
+    text: kDxfLayerEText,
+    frame: kDxfLayerEFrame,
+    essential: kDxfLayerEEssential,
+    busAci: 7,
+    feederAci: 4,
+    deviceAci: 7,
+    textAci: 7,
+    frameAci: 8,
+    essentialAci: 1,
+  );
+
+  /// The mechanical `M-*` namespace — bus / feeder / essential collapse onto
+  /// `M-DETAIL` (a plumbing riser has neither).
+  static const mechanical = SldDxfLayers(
+    bus: kDxfLayerMDetail,
+    feeder: kDxfLayerMDetail,
+    device: kDxfLayerMDetail,
+    text: kDxfLayerMText,
+    frame: kDxfLayerMFrame,
+    essential: kDxfLayerMDetail,
+    busAci: 7,
+    feederAci: 7,
+    deviceAci: 7,
+    textAci: 7,
+    frameAci: 8,
+    essentialAci: 7,
+  );
+
+  /// The de-duplicated class-layer table rows `(name, aci)` in a stable order
+  /// (bus, feeder, device, text, frame, essential) — the first ACI seen for a
+  /// name wins, so the collapsed mechanical set lists `M-DETAIL` once. For the
+  /// electrical namespace this reproduces the original six-row order verbatim.
+  List<(String, int)> classLayers() {
+    final byName = <String, int>{};
+    for (final (name, aci) in [
+      (bus, busAci),
+      (feeder, feederAci),
+      (device, deviceAci),
+      (text, textAci),
+      (frame, frameAci),
+      (essential, essentialAci),
+    ]) {
+      byName.putIfAbsent(name, () => aci);
+    }
+    return [for (final e in byName.entries) (e.key, e.value)];
+  }
+}
+
 /// DXF group-370 lineweight (1/100 mm) per [SldWeight] bucket.
 int _lineweightFor(SldWeight w) => switch (w) {
       SldWeight.thin => 13,
@@ -157,6 +274,8 @@ String electricalSldToDxf({
   bool overview = false,
   bool sourceChain = false,
   DrawingChrome? chrome,
+  String? projectName,
+  SldDxfLayers layers = SldDxfLayers.electrical,
 }) {
   assert(sheet != null || (project != null && result != null),
       'electricalSldToDxf needs either a prebuilt sheet or project+result');
@@ -178,21 +297,23 @@ String electricalSldToDxf({
         SldRole.source => 5,
       };
 
-  // Class-layer routing: an explicit [SldLine.layer] WINS (used as-is); the
-  // essential role isolates onto E-ESSENTIAL (one CAD toggle for the emergency
-  // sub-tree); else a line routes by weight — thick busbars → E-BUS, medium
-  // feeder runs → E-FEEDER, thin device/way graphics → E-BREAKER.
+  // Class-layer routing (within the active [layers] namespace): an explicit
+  // [SldLine.layer] WINS (used as-is); the essential role isolates onto the
+  // essential layer (one CAD toggle for the emergency sub-tree); else a line
+  // routes by weight — thick busbars → bus, medium feeder runs → feeder, thin
+  // device/way graphics → device. Under the mechanical namespace bus/feeder/
+  // device all collapse to M-DETAIL, so a plumbing riser never emits E-*.
   String lineLayer(SldLine l) =>
       l.layer ??
       (l.role == SldRole.essential
-          ? kDxfLayerEEssential
+          ? layers.essential
           : switch (l.weight) {
-              SldWeight.thick => kDxfLayerEBus,
-              SldWeight.medium => kDxfLayerEFeeder,
-              SldWeight.thin => kDxfLayerEBreaker,
+              SldWeight.thick => layers.bus,
+              SldWeight.medium => layers.feeder,
+              SldWeight.thin => layers.device,
             });
   String shapeLayer(SldRole role) =>
-      role == SldRole.essential ? kDxfLayerEEssential : kDxfLayerEBreaker;
+      role == SldRole.essential ? layers.essential : layers.device;
 
   // Drawing-space primitives (panels / busbars / ways / feeders).
   for (final p in sheetResolved.prims) {
@@ -206,7 +327,7 @@ String electricalSldToDxf({
         d.box(shapeLayer(p.role), p.x, p.y, p.w, p.h,
             color: colorFor(p.role), lineweight: _lineweightFor(p.weight));
       case SldLabel():
-        d.text(kDxfLayerEText, p.x, p.y, p.text,
+        d.text(layers.text, p.x, p.y, p.text,
             size: p.size * 1.3, color: colorFor(p.role));
       case SldCircle():
         d.circle(shapeLayer(p.role), p.cx, p.cy, p.r,
@@ -223,15 +344,19 @@ String electricalSldToDxf({
   const labelW = 88.0;
   final tbH = rows.isEmpty ? 96.0 : 84.0 + rows.length * rowH + 6.0;
   final frameTop = sheetResolved.maxY + 60;
-  final pname = (project?.name.isNotEmpty ?? false)
-      ? project!.name
-      : 'Untitled project';
-  d.box(kDxfLayerEFrame, sheetResolved.minX, frameTop, tbW, tbH);
-  d.text(kDxfLayerEFrame, sheetResolved.minX + 8, frameTop + 22, pname,
-      size: 16);
-  d.text(kDxfLayerEFrame, sheetResolved.minX + 8, frameTop + 44, diagramTitle,
+  // [projectName] overrides the derived name — a prebuilt sheet (mechanical
+  // riser) carries no [project], so the app passes the live name to avoid the
+  // `Untitled project` placeholder (N2). Null / empty ⇒ the derived name.
+  final pname = (projectName != null && projectName.isNotEmpty)
+      ? projectName
+      : (project?.name.isNotEmpty ?? false)
+          ? project!.name
+          : 'Untitled project';
+  d.box(layers.frame, sheetResolved.minX, frameTop, tbW, tbH);
+  d.text(layers.frame, sheetResolved.minX + 8, frameTop + 22, pname, size: 16);
+  d.text(layers.frame, sheetResolved.minX + 8, frameTop + 44, diagramTitle,
       size: 12);
-  d.text(kDxfLayerEFrame, sheetResolved.minX + 8, frameTop + 66,
+  d.text(layers.frame, sheetResolved.minX + 8, frameTop + 66,
       sheetResolved.supplyNote,
       size: 10);
   if (rows.isNotEmpty) {
@@ -241,26 +366,26 @@ String electricalSldToDxf({
     final bandBot = bandTop + rows.length * rowH;
     // Band top rule + full-height label|value divider (the box bottom closes
     // the band 6 units below).
-    d.connector(kDxfLayerEFrame, x0, bandTop, x0 + tbW, bandTop);
-    d.connector(kDxfLayerEFrame, x0 + labelW, bandTop, x0 + labelW, bandBot);
+    d.connector(layers.frame, x0, bandTop, x0 + tbW, bandTop);
+    d.connector(layers.frame, x0 + labelW, bandTop, x0 + labelW, bandBot);
     for (var i = 0; i < rows.length; i++) {
       final (label, value) = rows[i];
       final rowTop = bandTop + i * rowH;
-      if (i > 0) d.connector(kDxfLayerEFrame, x0, rowTop, x0 + tbW, rowTop);
-      d.text(kDxfLayerEFrame, x0 + 8, rowTop + 13, label, size: 7);
-      d.text(kDxfLayerEFrame, x0 + labelW + 8, rowTop + 13, value, size: 10);
+      if (i > 0) d.connector(layers.frame, x0, rowTop, x0 + tbW, rowTop);
+      d.text(layers.frame, x0 + 8, rowTop + 13, label, size: 7);
+      d.text(layers.frame, x0 + labelW + 8, rowTop + 13, value, size: 10);
     }
-    d.connector(kDxfLayerEFrame, x0, bandBot, x0 + tbW, bandBot);
+    d.connector(layers.frame, x0, bandBot, x0 + tbW, bandBot);
   }
 
   if (sheetResolved.legend.isNotEmpty) {
     final lx = sheetResolved.minX + 400;
-    d.box(kDxfLayerEFrame, lx, frameTop, 300,
+    d.box(layers.frame, lx, frameTop, 300,
         math.max(96, 22.0 + sheetResolved.legend.length * 14));
-    d.text(kDxfLayerEFrame, lx + 8, frameTop + 16, 'LEGEND', size: 11);
+    d.text(layers.frame, lx + 8, frameTop + 16, 'LEGEND', size: 11);
     var row = 0;
     for (final e in sheetResolved.legend) {
-      d.text(kDxfLayerEFrame, lx + 8, frameTop + 32 + row * 14,
+      d.text(layers.frame, lx + 8, frameTop + 32 + row * 14,
           '${e.code}  -  ${e.meaning}',
           size: 9);
       row++;
@@ -270,18 +395,13 @@ String electricalSldToDxf({
   d.end();
 
   // TABLES precede ENTITIES: the shared CONTINUOUS/DASHED/DASHDOT line-types
-  // + one LAYER record per class layer (E-ESSENTIAL red; feeder cyan mirroring
-  // the reference drawings' cyan-normal; chrome grey; 7 elsewhere), plus any
+  // + one LAYER record per class layer of the ACTIVE namespace (electrical:
+  // E-ESSENTIAL red, feeder cyan mirroring the reference drawings' cyan-normal,
+  // frame grey, 7 elsewhere; mechanical: M-DETAIL / M-TEXT / M-FRAME), plus any
   // explicit per-prim layer name (colour 7, CONTINUOUS) so nothing references
   // an undefined layer.
-  final classNames = {
-    kDxfLayerEBus,
-    kDxfLayerEFeeder,
-    kDxfLayerEBreaker,
-    kDxfLayerEText,
-    kDxfLayerEFrame,
-    kDxfLayerEEssential,
-  };
+  final classLayers = layers.classLayers();
+  final classNames = {for (final (name, _) in classLayers) name};
   final explicit = <String>{
     for (final p in sheetResolved.prims)
       if (p is SldLine && p.layer != null && !classNames.contains(p.layer))
@@ -289,12 +409,7 @@ String electricalSldToDxf({
   }.toList()
     ..sort();
   final tables = dxfTablesSection(layers: [
-    (kDxfLayerEBus, 7, 'CONTINUOUS'),
-    (kDxfLayerEFeeder, 4, 'CONTINUOUS'),
-    (kDxfLayerEBreaker, 7, 'CONTINUOUS'),
-    (kDxfLayerEText, 7, 'CONTINUOUS'),
-    (kDxfLayerEFrame, 8, 'CONTINUOUS'),
-    (kDxfLayerEEssential, 1, 'CONTINUOUS'),
+    for (final (name, aci) in classLayers) (name, aci, 'CONTINUOUS'),
     for (final name in explicit) (name, 7, 'CONTINUOUS'),
   ]);
   return tables + d.toString();

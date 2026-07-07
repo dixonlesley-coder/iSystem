@@ -17,6 +17,7 @@ import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx/ui/electrical/electrical_canvas.dart';
 import 'package:mechx/ui/electrical/electrical_view.dart';
+import 'package:mechx/ui/electrical/panel_geometry.dart';
 import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
@@ -222,7 +223,18 @@ void main() {
     schedCanvas.focusPanelSchedule('mdp');
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(schedCanvas.currentScale, greaterThanOrEqualTo(kBoardScheduleThreshold));
+    // B9: the fixed `kBoardScheduleThreshold + 0.3` reading scale clipped the
+    // 920-unit-wide board schedule at both edges once the canvas (nav rail +
+    // inspector subtracted from the 1440px surface) was narrower than the
+    // schedule needed. `focusPanelSchedule` now clamps to whatever scale
+    // actually fits the canvas width, floored at `kLodThreshold` so the
+    // schedule LOD still renders. Assert both halves of that contract: still
+    // in the schedule LOD, and the framed board no longer overflows the
+    // canvas.
+    final schedCanvasSize = tester.getSize(find.byType(ElectricalCanvas));
+    expect(schedCanvas.currentScale, greaterThanOrEqualTo(kLodThreshold));
+    expect(schedCanvas.currentScale * panelDetailWidth(),
+        lessThanOrEqualTo(schedCanvasSize.width));
     await expectLater(
         app, matchesGoldenFile('goldens/11_electrical_schedule.png'));
 

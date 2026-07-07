@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/app_settings.dart';
 import '../../store/project_store.dart';
+import '../inspector/disclosure_header.dart';
 import '../inspector/project_panel.dart'
     show
         ExportIdentityBar,
@@ -67,44 +68,52 @@ class ProjectsScreen extends ConsumerWidget {
                         style:
                             type.subtitle.copyWith(color: colors.textPrimary)),
                   ),
+                  // A6: the workflow-primary action on this hub — starting a
+                  // project — carries the one accent button (mirroring the
+                  // top bar's own single-accent convention), not Export.
                   MechXButton(
                     label: 'New project',
+                    primary: true,
                     onPressed: () => newProject(context, ref),
                   ),
                 ],
               ),
               const SizedBox(height: MechXSpacing.sm),
               MechXTextField(value: project.name, onChanged: ctrl.setName),
-              const SizedBox(height: MechXSpacing.md),
+            ],
+          ),
+        ),
+        const SizedBox(height: MechXSpacing.md),
+        // ── Export ────────────────────────────────────────────────────────
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(MechXSpacing.md),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: MechXRadii.card,
+            border: Border.all(color: colors.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
               // H5: the document-control identity right at the export surface.
               const ExportIdentityBar(),
               const SizedBox(height: MechXSpacing.md),
-              Text('Export',
-                  style: type.caption.copyWith(color: colors.textMuted)),
-              const SizedBox(height: MechXSpacing.xs),
-              // H4: the one-folder submittal package — pick a folder once, get
-              // the whole consistently-named deliverable set.
-              Align(
-                alignment: Alignment.centerLeft,
-                child: MechXButton(
-                  label: 'Export submittal package...',
-                  primary: true,
-                  onPressed: () => exportSubmittalPackage(ref),
-                ),
-              ),
+              // A5: a leading, visually-primary 'Export deliverables' group —
+              // the cross-discipline submittal package + the unified MEP
+              // report — ahead of the per-artifact rows below. No longer an
+              // accent button (A6 moves the page's one accent to 'New
+              // project'); it stays first and its own labelled group instead.
+              Text(context.strings(StringKey.reviewExportDeliverables),
+                  style: type.subtitle.copyWith(color: colors.textPrimary)),
               const SizedBox(height: MechXSpacing.xs),
               Wrap(
                 spacing: MechXSpacing.xs,
                 runSpacing: MechXSpacing.xs,
                 children: [
                   MechXButton(
-                    label: context.strings(StringKey.inspectorExportCalcReportMd),
-                    onPressed: () => exportCalcReport(ref),
-                  ),
-                  MechXButton(
-                    label: context
-                        .strings(StringKey.inspectorExportCalcReportPdfBtn),
-                    onPressed: () => exportCalcReportPdf(ref),
+                    label: 'Export submittal package...',
+                    onPressed: () => exportSubmittalPackage(ref),
                   ),
                   MechXButton(
                     label: context.strings(StringKey.inspectorExportMepReportMd),
@@ -115,30 +124,85 @@ class ProjectsScreen extends ConsumerWidget {
                         .strings(StringKey.inspectorExportMepReportPdfBtn),
                     onPressed: () => exportMepUnifiedReportPdf(ref),
                   ),
-                  MechXButton(
-                    label: context.strings(
-                        StringKey.inspectorExportEquipmentScheduleMd),
-                    onPressed: () => exportEquipmentSchedule(ref),
-                  ),
-                  MechXButton(
-                    label: context.strings(
-                        StringKey.inspectorExportEquipmentSchedulePdfBtn),
-                    onPressed: () => exportEquipmentSchedulePdf(ref),
-                  ),
-                  MechXButton(
-                    label: context.strings(StringKey.inspectorExportDrawingDxf),
-                    onPressed: () => exportDrawingDxf(ref),
-                  ),
-                  MechXButton(
-                    label: context.strings(StringKey.inspectorExportDrawingPdf),
-                    onPressed: () => exportDrawingPdf(ref),
-                  ),
-                  MechXButton(
-                    label: context
-                        .strings(StringKey.inspectorExportAnnotatedPlanPdf),
-                    onPressed: () => exportAnnotatedPlanPdf(ref),
-                  ),
                 ],
+              ),
+              const SizedBox(height: MechXSpacing.md),
+              // Per-artifact rows, grouped under labelled disclosures so the
+              // hub reads as a scannable set of clusters instead of one flat
+              // wall of same-weight buttons.
+              DisclosureSection(
+                name: context.strings(StringKey.projectsExportGroupDrawings),
+                defaultExpanded: false,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: MechXButton(
+                        label:
+                            context.strings(StringKey.inspectorExportDrawingDxf),
+                        onPressed: () => exportDrawingDxf(ref),
+                      ),
+                    ),
+                    const SizedBox(height: MechXSpacing.xs),
+                    _ExportRow(
+                      label: context.strings(StringKey.inspectorExportDrawingPdf),
+                      hint: context
+                          .strings(StringKey.projectsExportDrawingPdfHint),
+                      onPressed: () => exportDrawingPdf(ref),
+                    ),
+                    const SizedBox(height: MechXSpacing.xs),
+                    _ExportRow(
+                      label: context
+                          .strings(StringKey.inspectorExportAnnotatedPlanPdf),
+                      hint: context.strings(
+                          StringKey.projectsExportAnnotatedPlanPdfHint),
+                      onPressed: () => exportAnnotatedPlanPdf(ref),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: MechXSpacing.sm),
+              DisclosureSection(
+                name: context.strings(StringKey.projectsExportGroupReports),
+                defaultExpanded: false,
+                child: Wrap(
+                  spacing: MechXSpacing.xs,
+                  runSpacing: MechXSpacing.xs,
+                  children: [
+                    MechXButton(
+                      label:
+                          context.strings(StringKey.inspectorExportCalcReportMd),
+                      onPressed: () => exportCalcReport(ref),
+                    ),
+                    MechXButton(
+                      label: context
+                          .strings(StringKey.inspectorExportCalcReportPdfBtn),
+                      onPressed: () => exportCalcReportPdf(ref),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: MechXSpacing.sm),
+              DisclosureSection(
+                name: context.strings(StringKey.projectsExportGroupData),
+                defaultExpanded: false,
+                child: Wrap(
+                  spacing: MechXSpacing.xs,
+                  runSpacing: MechXSpacing.xs,
+                  children: [
+                    MechXButton(
+                      label: context.strings(
+                          StringKey.inspectorExportEquipmentScheduleMd),
+                      onPressed: () => exportEquipmentSchedule(ref),
+                    ),
+                    MechXButton(
+                      label: context.strings(
+                          StringKey.inspectorExportEquipmentSchedulePdfBtn),
+                      onPressed: () => exportEquipmentSchedulePdf(ref),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -264,6 +328,39 @@ class _RecentRow extends StatelessWidget {
           MechXButton(label: 'Remove', tertiary: true, onPressed: onRemove),
         ],
       ),
+    );
+  }
+}
+
+/// A5: one export button plus a short clarifying caption underneath — used
+/// for the two near-identical plan-PDF rows (plain drawing vs annotated with
+/// real run/riser lengths) so the difference reads without opening either
+/// file.
+class _ExportRow extends StatelessWidget {
+  final String label;
+  final String hint;
+  final VoidCallback onPressed;
+
+  const _ExportRow({
+    required this.label,
+    required this.hint,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: MechXButton(label: label, onPressed: onPressed),
+        ),
+        const SizedBox(height: MechXSpacing.xxs),
+        Text(hint, style: type.caption.copyWith(color: colors.textMuted)),
+      ],
     );
   }
 }

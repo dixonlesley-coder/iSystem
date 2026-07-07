@@ -122,6 +122,20 @@ ProjectDocument rehydrateAssets(ProjectDocument doc) {
   return doc.withSheets(sheets);
 }
 
+/// The off-UI-thread variant of the whole OPEN decode path: JSON-decode
+/// [source] (a large `.mechx` can be a sizeable object graph to parse) and
+/// [rehydrateAssets] it (gunzip + disk writes) TOGETHER on one [Isolate] — the
+/// two heaviest steps opening a portable project incurs, mirroring
+/// [gatherSheetAssetsAsync]'s offload for the symmetric Save-side embed. Doing
+/// both steps in one isolate hop (rather than decoding on the UI thread, then
+/// hopping again just to rehydrate) avoids shipping the freshly-decoded — and
+/// potentially large — document across the isolate boundary twice. Throws
+/// [ProjectDocumentException] for a malformed/unsupported file exactly as
+/// [ProjectDocument.decode] does (`Isolate.run` rethrows the same exception
+/// type in the calling isolate).
+Future<ProjectDocument> decodeAndRehydrateAsync(String source) =>
+    Isolate.run(() => rehydrateAssets(ProjectDocument.decode(source)));
+
 /// Repoint a sheet's render path (pdf or dxf) at the extracted local file when
 /// its original path was embedded; otherwise return it unchanged.
 Sheet _repoint(Sheet s, Map<String, String> localForKey) {

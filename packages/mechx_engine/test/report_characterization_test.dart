@@ -35,7 +35,8 @@ void main() {
         '# MEP Calculation Report — Menara Kencana',
         '## Design basis',
         '## Revision history',
-        '## ⚠ Unverified values',
+        // N25: ASCII heading (was '## ⚠ Unverified values').
+        '## Unverified values',
         '## Building',
         '## Water supply',
         '### Pressure zones (PRV)',
@@ -55,10 +56,11 @@ void main() {
           md,
           contains('| Zone (floors) | Top residual (kPa) | Bottom static (kPa) '
               '| Within limit |\n|---|---:|---:|---|\n'));
+      // N14: the BOM table gained a Material column. N13: + a Tag column.
       expect(
           md,
-          contains('| Service | Type | Size | Length (m) | Segments |\n'
-              '|---|---|---|---:|---:|\n'));
+          contains('| Service | Type | Tag | Size | Material | Length (m) | '
+              'Segments |\n|---|---|---|---|---|---:|---:|\n'));
       expect(md,
           contains('| Service | Fitting | Size | Count |\n|---|---|---|---:|\n'));
     });
@@ -66,8 +68,8 @@ void main() {
     test('load-bearing rows survive verbatim', () {
       // Revision-table pipe escaping.
       expect(md, contains(r'| 2026-07-02 | Pipe\|escape check |'));
-      // The tight unverified heading (NO blank line after it).
-      expect(md, contains('## ⚠ Unverified values\nThe following values'));
+      // The tight unverified heading (NO blank line after it) — N25 ASCII.
+      expect(md, contains('## Unverified values\nThe following values'));
       // Operating-point sub-bullets keep their two-space indent.
       expect(md, contains('\n  - System curve: static 15.0 m'));
       // The closing advisory footer after the rule.
@@ -75,9 +77,14 @@ void main() {
     });
 
     test('whole-document pin (FNV-1a + line count)', () {
-      // Recorded 2026-07-02 against the pre-refactor string builder.
+      // Re-baselined 2026-07-06 (Wave 7 N14/N18/N25): the BOM table gained a
+      // Material column, the size cell uses the one Ø/DN/W×H notation, the
+      // standards line is a governed statement and the Unverified heading is
+      // ASCII. Re-baselined again 2026-07-06 (Wave 7 N13): the BOM table gained a
+      // Tag column (the shared element tag) between Type and Size — the fixture's
+      // run line now reads `CW-F1`, the duct riser `SA-R1`. Line count unchanged.
       expect(md.split('\n').length, 94);
-      expect(fnv1a32(md), 0x430c11b6);
+      expect(fnv1a32(md), 0xa529ba98);
     });
   });
 
@@ -106,8 +113,9 @@ void main() {
       expect(md, contains('| Date | Description |\n| --- | --- |\n'));
       expect(
           md,
-          contains('| Way | Type | Ib | Phase | Breaker | Cable | Vdrop (cum) '
-              '| RCD |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n'));
+          contains('| Way | Type | Ib | Phase | Breaker | Cable | Length '
+              '| Vdrop (cum) | RCD |\n'
+              '| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n'));
     });
 
     test('load-bearing rows survive verbatim', () {
@@ -122,8 +130,15 @@ void main() {
 
     test('whole-document pin (FNV-1a + line count)', () {
       // Recorded 2026-07-02 against the pre-refactor string builder.
+      // Re-baselined 2026-07-06 (Wave 7 N8): the per-way circuits table gained a
+      // Length column (geo-derived run length, driving the printed Vdrop) between
+      // Cable and Vdrop — the header/separator widened from 8 to 9 columns and
+      // each way row gained a length/'—' cell. Line count is unchanged (no new
+      // rows). The unified-report pin below already reflects this column (it was
+      // re-baselined with the column present); this standalone pin was the last
+      // to catch up.
       expect(md.split('\n').length, 87);
-      expect(fnv1a32(md), 0x47992514);
+      expect(fnv1a32(md), 0xe8363417);
     });
   });
 
@@ -153,7 +168,8 @@ void main() {
         '# Mechanical & plumbing',
         '## Design basis',
         '## Revision history',
-        '## ⚠ Unverified values',
+        // N25: ASCII heading in the embedded mechanical body.
+        '## Unverified values',
         '## Building',
         '## Water supply',
         '### Pressure zones (PRV)',
@@ -187,9 +203,13 @@ void main() {
     });
 
     test('whole-document pin (FNV-1a + line count)', () {
-      // Recorded 2026-07-02 against the pre-refactor string builder.
+      // Re-baselined 2026-07-06 (Wave 7): the embedded mechanical body carries
+      // the N14/N18/N25 changes (BOM Material column, Ø/DN notation, governed
+      // standards line, ASCII Unverified heading). Re-baselined again 2026-07-06
+      // (Wave 7 N13): the embedded mechanical BOM table gained the shared-element
+      // Tag column (run `CW-F1`, duct riser `SA-R1`). Line count is unchanged.
       expect(md.split('\n').length, 228);
-      expect(fnv1a32(md), 0x5f8e91fd);
+      expect(fnv1a32(md), 0x681c9890);
     });
   });
 

@@ -14,6 +14,26 @@ import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
+// Standard Adobe Helvetica AFM advances (units/1000 em, 0x20–0x7E) — a local
+// copy so this test can independently measure that a fitted title fits the cell.
+const List<int> _helvW = [
+  278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, //
+  278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, //
+  584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, //
+  500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, //
+  667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, //
+  278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, //
+  278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
+];
+
+double _helvWidth(String s, double size) {
+  var units = 0;
+  for (final c in s.codeUnits) {
+    units += (c >= 0x20 && c <= 0x7e) ? _helvW[c - 0x20] : 556;
+  }
+  return units * size / 1000.0;
+}
+
 void main() {
   const net = Network(
     nodes: [
@@ -94,8 +114,13 @@ void main() {
   });
 
   group('pdfTitleBlock', () {
-    test('renders only rows whose value is present + a positive height', () {
-      // drawingTitle + drawnBy set; clientName intentionally absent.
+    test('value-gated rows drop; the sign-off block always rules a cell (N20)',
+        () {
+      // drawingTitle + drawnBy set; clientName / rev / approver intentionally
+      // absent. N20: DRAWN/CHECKED/APPROVED are the SAME on every issued sheet —
+      // a blank one is a RULED cell for hand sign-off — so all three rows draw
+      // (their labels), only the empty VALUE text is omitted; CLIENT/REV (empty,
+      // not sign-off) drop entirely.
       const c = DrawingChrome(
         drawingNumber: 'M-101',
         drawingTitle: 'GROUND FLOOR PLUMBING',
@@ -108,16 +133,50 @@ void main() {
         margin: 24,
         projectName: 'Tower A',
       );
-      // Present rows: PROJECT, TITLE, DWG NO, DRAWN -> 4 rows * 13pt = 52.
-      expect(tb.height, closeTo(52.0, 1e-9));
+      // Present rows: PROJECT, TITLE, DWG NO, DRAWN, CHECKED, APPROVED ->
+      // 6 rows * 13pt = 78 (the sign-off trio is always ruled).
+      expect(tb.height, closeTo(78.0, 1e-9));
       expect(tb.ops, contains('(PROJECT) Tj'));
       expect(tb.ops, contains('(Tower A) Tj'));
       expect(tb.ops, contains('(TITLE) Tj'));
       expect(tb.ops, contains('(GROUND FLOOR PLUMBING) Tj'));
+      // The whole sign-off block rules a cell even when only DRAWN has a name.
       expect(tb.ops, contains('(DRAWN) Tj'));
-      // Absent rows are not drawn.
+      expect(tb.ops, contains('(AB) Tj'));
+      expect(tb.ops, contains('(CHECKED) Tj'));
+      expect(tb.ops, contains('(APPROVED) Tj'));
+      // A blank sign-off cell rules but writes NO value text (no empty '() Tj').
+      expect(tb.ops, isNot(contains('() Tj')));
+      // Value-gated empty rows are still not drawn.
       expect(tb.ops, isNot(contains('(CLIENT) Tj')));
       expect(tb.ops, isNot(contains('(REV) Tj')));
+    });
+
+    test('a fully-empty block still draws nothing (byte-identity, N20)', () {
+      // No populated row anywhere ⇒ the sign-off trio must NOT force a block, so
+      // an exporter with a blank chrome stays byte-identical to before N20.
+      final empty = pdfTitleBlock(
+        const DrawingChrome(),
+        pageW: 842,
+        pageH: 595,
+        margin: 24,
+        projectName: '',
+      );
+      expect(empty.ops, '');
+      expect(empty.height, 0.0);
+      // A blank chrome with only a project name draws the full uniform set
+      // (PROJECT + the ruled sign-off trio).
+      final named = pdfTitleBlock(
+        const DrawingChrome(),
+        pageW: 842,
+        pageH: 595,
+        margin: 24,
+        projectName: 'Tower A',
+      );
+      expect(named.ops, contains('(PROJECT) Tj'));
+      expect(named.ops, contains('(DRAWN) Tj'));
+      expect(named.ops, contains('(CHECKED) Tj'));
+      expect(named.ops, contains('(APPROVED) Tj'));
     });
 
     test('scaleTextOverride wins over chrome.scaleText; empty -> no rows', () {
@@ -144,6 +203,61 @@ void main() {
       );
       expect(empty.ops, '');
       expect(empty.height, 0.0);
+    });
+  });
+
+  group('fitTitleFontSize (Wave-7 residual)', () {
+    // The title-block value cell is blockW(190) - labelW(52) - 8 = 130 pt wide.
+    const cellW = 130.0;
+
+    test('a short/absent title keeps the 8 pt rendering verbatim', () {
+      // A title that already fits returns maxSize EXACTLY (byte-identical path).
+      expect(fitTitleFontSize('GROUND FLOOR PLUMBING', cellW), 8.0);
+      expect(fitTitleFontSize('', cellW), 8.0);
+      expect(fitTitleFontSize('PLAN', cellW), 8.0);
+    });
+
+    test('a long title auto-shrinks to fit the cell', () {
+      // The real bleeding case from the sample riser sheet.
+      const long = 'DIAGRAM SISTEM AIR BERSIH & AIR KOTOR';
+      final size = fitTitleFontSize(long, cellW);
+      expect(size, lessThan(8.0)); // it shrank
+      expect(size, greaterThanOrEqualTo(5.0)); // never below the floor
+      // At the returned size the title actually fits the cell (within rounding).
+      final wAt8 = _helvWidth(long, 8.0);
+      expect(wAt8, greaterThan(cellW)); // it genuinely overflowed at 8 pt
+      expect(_helvWidth(long, size), lessThanOrEqualTo(cellW + 0.01));
+    });
+
+    test('an extreme title is floored at minSize, not shrunk to nothing', () {
+      final size = fitTitleFontSize('X' * 200, cellW);
+      expect(size, 5.0);
+    });
+
+    test('the title-block TITLE cell shrinks a long title, keeps a short one',
+        () {
+      final long = pdfTitleBlock(
+        const DrawingChrome(),
+        pageW: 842,
+        pageH: 595,
+        margin: 24,
+        projectName: 'P',
+        titleTextOverride: 'DIAGRAM SISTEM AIR BERSIH & AIR KOTOR',
+      );
+      // The TITLE value is emitted at a reduced font (a fractional Tf), never the
+      // fixed 8 pt that would bleed past the cell.
+      expect(long.ops, contains('DIAGRAM SISTEM AIR BERSIH & AIR KOTOR'));
+      expect(RegExp(r'/F1 [0-7]\.\d+ Tf').hasMatch(long.ops), isTrue);
+      // A short title still renders at the literal 8 pt (byte-identical path).
+      final short = pdfTitleBlock(
+        const DrawingChrome(drawingTitle: 'PLAN'),
+        pageW: 842,
+        pageH: 595,
+        margin: 24,
+        projectName: 'P',
+      );
+      expect(short.ops, contains('/F1 8 Tf 0 0 0 rg'));
+      expect(short.ops, contains('(PLAN) Tj'));
     });
   });
 
@@ -452,13 +566,79 @@ void main() {
           sheetTotal: 3,
         ),
       ));
-      // The drawing number + revision are stamped in the title block, alongside
-      // the sheet counter. (A single-line is schematic — no north arrow.)
+      // N20: the SLD now stamps the SAME shared drawing_chrome tabular block the
+      // plan exporters use — DWG NO / REV / SHEET as labelled rows (the SHEET
+      // value cell is '1 of 3', not 'Sheet 1 of 3'), the diagram title as the
+      // TITLE row. (A single-line is schematic — no north arrow.)
       expect(s, contains('E-201'));
       expect(s, contains('Rev. A'));
-      expect(s, contains('(Sheet 1 of 3) Tj'));
+      expect(s, contains('(SHEET) Tj'));
+      expect(s, contains('(1 of 3) Tj'));
       expect(s, contains('ELECTRICAL SINGLE-LINE DIAGRAM'));
       expect(s.trimRight().endsWith('%%EOF'), isTrue);
+    });
+  });
+
+  group('sheetDrawingNumber (N19)', () {
+    test('a blank base derives the per-series/per-index code', () {
+      // The exact bands the issued set uses (matching the sample harness).
+      expect(
+          sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: 1),
+          'M-101');
+      expect(
+          sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: 2),
+          'M-102');
+      expect(sheetDrawingNumber(series: DrawingSeries.mechanicalRiser),
+          'M-201');
+      expect(sheetDrawingNumber(series: DrawingSeries.electricalDetail),
+          'E-201');
+      expect(sheetDrawingNumber(series: DrawingSeries.electricalOverview),
+          'E-301');
+      expect(sheetDrawingNumber(series: DrawingSeries.electricalRiser),
+          'E-401');
+      expect(sheetDrawingNumber(series: DrawingSeries.electricalPowerOneLine),
+          'E-501');
+    });
+
+    test('every plan sheet gets a DISTINCT number (the N19 fix)', () {
+      // Three plans on a blank base ⇒ three different numbers, never one number
+      // on every sheet.
+      final nums = [
+        for (var i = 1; i <= 3; i++)
+          sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: i),
+      ];
+      expect(nums, ['M-101', 'M-102', 'M-103']);
+      expect(nums.toSet().length, 3);
+    });
+
+    test('a non-empty base is the verbatim override (trimmed)', () {
+      expect(
+          sheetDrawingNumber(
+              base: 'ME-2024-001', series: DrawingSeries.mechanicalPlan),
+          'ME-2024-001');
+      // Whitespace-only counts as blank ⇒ still derives.
+      expect(
+          sheetDrawingNumber(base: '   ', series: DrawingSeries.electricalRiser),
+          'E-401');
+      expect(
+          sheetDrawingNumber(
+              base: '  E-9  ', series: DrawingSeries.electricalDetail),
+          'E-9');
+    });
+
+    test('an index past the band is padded, never bleeding to the next band',
+        () {
+      expect(
+          sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: 12),
+          'M-112');
+      // Stays within the M-1xx discipline band even past 99.
+      expect(
+          sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: 100),
+          'M-1100');
+      // A non-positive index clamps to 1 (defensive).
+      expect(
+          sheetDrawingNumber(series: DrawingSeries.mechanicalRiser, index: 0),
+          'M-201');
     });
   });
 }

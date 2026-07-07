@@ -10,6 +10,7 @@ import '../../store/sheets_store.dart';
 import '../shell/duplicate_floor_dialog.dart';
 import '../shell/nav_rail.dart';
 import '../shell/project_io.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/context_menu.dart';
@@ -17,6 +18,7 @@ import '../widgets/glass_surface.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_text_field.dart';
+import '../widgets/mechx_tooltip.dart';
 import 'pdf_page_picker.dart';
 
 /// Left rail: multi-sheet navigation, slimmed to a compact tile strip so the
@@ -216,6 +218,14 @@ class _RailItemState extends ConsumerState<_RailItem> {
             entry.remove();
             showDuplicateFloorDialog(context);
           },
+          // F6: only offer the reuse-plan action for a real imported plan; a
+          // placeholder page has no source to share.
+          onUsePlanElsewhere: widget.sheet.isPlaceholder
+              ? null
+              : () {
+                  entry.remove();
+                  _usePlanElsewhere();
+                },
           onRemove: () {
             entry.remove();
             _remove();
@@ -256,6 +266,40 @@ class _RailItemState extends ConsumerState<_RailItem> {
     ref.read(sheetsControllerProvider.notifier).setSheetFloor(widget.sheet.id, chosen);
   }
 
+  /// F6: create a shared-source copy of THIS sheet's plan on another building
+  /// floor — no re-import, no re-calibration. Opens an honest floor picker (its
+  /// copy spells out that the copy is a plain duplicate, not a live link), then
+  /// delegates to [SheetsController.duplicateSheetToFloor] and jumps to the new
+  /// sheet on the Layout canvas, ready to draw.
+  Future<void> _usePlanElsewhere() async {
+    final project = ref.read(projectControllerProvider);
+    final levelCount = project.building.levelCount;
+    final labels = <String>[
+      for (var i = 0; i < levelCount; i++)
+        i < project.floors.length ? project.floors[i].name : 'Floor ${i + 1}',
+    ];
+    final current = ref
+        .read(sheetsControllerProvider)
+        .floorFor(widget.sheet.id, levelCount);
+    final chosen = await showDuplicatePlanToFloorDialog(
+      context,
+      floorLabels: labels,
+      current: current,
+    );
+    if (chosen == null || !mounted) return;
+    final newId = ref
+        .read(sheetsControllerProvider.notifier)
+        .duplicateSheetToFloor(widget.sheet.id, chosen);
+    if (newId == null || !mounted) return;
+    // Land on the Layout canvas showing the freshly-created (already-selected)
+    // sheet, ready to draw its floor.
+    ref.read(shellSectionProvider.notifier).set(ShellSection.design);
+    ref.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
+    ref
+        .read(statusMessageProvider.notifier)
+        .showStatus('Plan reused on new sheet');
+  }
+
   /// A6: jump to this sheet on the Layout canvas and start the mark-a-known-
   /// distance calibration flow (mirrors the command palette's Start calibration).
   void _calibrate() {
@@ -278,7 +322,12 @@ class _RailItemState extends ConsumerState<_RailItem> {
     final colors = context.colors;
     final type = context.type;
     final project = ref.watch(projectControllerProvider);
-    final calibrated = project.calibrationFor(widget.sheet.id) != null;
+    final hasCalibration = project.calibrationFor(widget.sheet.id) != null;
+    // J1: a calibration that survived a plan-source swap is STALE until
+    // re-verified — the rail dot stays in the warning state (same shape as
+    // "never calibrated") rather than reading falsely green.
+    final stale = project.isCalibrationStale(widget.sheet.id);
+    final calibrated = hasCalibration && !stale;
     // Which building floor this sheet maps to (B7): stamped on the tile so a
     // remap — or a silent pile-up when more sheets than floors default onto the
     // top — is visible at a glance, not invisible. 1-based, ASCII ("F3").
@@ -350,11 +399,24 @@ class _RailItemState extends ConsumerState<_RailItem> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    CustomPaint(
-                      size: const Size(9, 9),
-                      painter: _CalibrationGlyph(
-                        calibrated: calibrated,
-                        color: calibrated ? colors.success : colors.warning,
+                    // L5/M4: the glyph's meaning (calibrated vs not) was
+                    // colour + shape only — a hover tooltip now spells it out.
+                    // J1: a stale calibration gets its own tooltip wording
+                    // (distinct from "never calibrated") even though it shares
+                    // the warning glyph/shape.
+                    MechXTooltip(
+                      edge: MechXTooltipEdge.right,
+                      message: context.strings(calibrated
+                          ? StringKey.shellCalibrated
+                          : (stale
+                              ? StringKey.shellCalibrationStale
+                              : StringKey.shellUncalibrated)),
+                      child: CustomPaint(
+                        size: const Size(9, 9),
+                        painter: _CalibrationGlyph(
+                          calibrated: calibrated,
+                          color: calibrated ? colors.success : colors.warning,
+                        ),
                       ),
                     ),
                     const SizedBox(width: 2),
@@ -524,6 +586,10 @@ class _SheetMenuLayer extends StatelessWidget {
   final VoidCallback onCalibrate;
   final VoidCallback onReplacePlan;
   final VoidCallback onDuplicateTo;
+
+  /// F6 — reuse THIS sheet's imported plan on another floor as a shared-source
+  /// copy. Null (hidden) for a placeholder sheet, which has no plan to reuse.
+  final VoidCallback? onUsePlanElsewhere;
   final VoidCallback onRemove;
   final VoidCallback onDismiss;
 
@@ -534,6 +600,7 @@ class _SheetMenuLayer extends StatelessWidget {
     required this.onCalibrate,
     required this.onReplacePlan,
     required this.onDuplicateTo,
+    required this.onUsePlanElsewhere,
     required this.onRemove,
     required this.onDismiss,
   });
@@ -541,10 +608,10 @@ class _SheetMenuLayer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    const menuWidth = 180.0;
-    // Tall enough for the seven rows + divider — clamp so it never hangs off the
+    const menuWidth = 200.0;
+    // Tall enough for the rows + divider — clamp so it never hangs off the
     // bottom of the window.
-    const menuHeight = 300.0;
+    const menuHeight = 344.0;
     final left =
         anchor.dx.clamp(0.0, (size.width - menuWidth).clamp(0.0, size.width));
     final top = anchor.dy
@@ -573,6 +640,12 @@ class _SheetMenuLayer extends StatelessWidget {
               // E4: copy this floor's runs onto a range of floors (the dialog
               // defaults its source to the current sheet's floor).
               MechXMenuRow(label: 'Duplicate to…', onTap: onDuplicateTo),
+              // F6: reuse this imported plan on another floor (shared source +
+              // copied calibration, no re-import) — a new independent sheet.
+              if (onUsePlanElsewhere != null)
+                MechXMenuRow(
+                    label: 'Use plan on another floor…',
+                    onTap: onUsePlanElsewhere!),
               const MechXMenuDivider(),
               MechXMenuRow(label: 'Remove sheet', danger: true, onTap: onRemove),
             ],
@@ -712,6 +785,118 @@ Future<int?> showAssignFloorDialog(
       );
     },
   );
+}
+
+/// F6: pick a building floor to place a SHARED-SOURCE copy of the current plan
+/// on. Resolves to the chosen floor index, or null when cancelled. Same picker
+/// as [showAssignFloorDialog] but titled + noted for the reuse workflow (the
+/// copy is a plain duplicate, not a live link). [current] marks the floor the
+/// source plan already maps to (a reference — the engineer picks a different
+/// one).
+Future<int?> showDuplicatePlanToFloorDialog(
+  BuildContext context, {
+  required List<String> floorLabels,
+  required int current,
+}) {
+  final theme = MechXTheme.of(context);
+  return showGeneralDialog<int>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Use plan on another floor',
+    barrierColor: theme.colors.scrim,
+    transitionDuration: MechXMotion.appear,
+    pageBuilder: (ctx, _, _) => MechXTheme(
+      data: theme,
+      child: Center(
+        child:
+            _DuplicatePlanDialog(floorLabels: floorLabels, current: current),
+      ),
+    ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(
+        parent: anim,
+        curve: MechXMotion.standard,
+        reverseCurve: MechXMotion.standard,
+      );
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
+class _DuplicatePlanDialog extends StatelessWidget {
+  final List<String> floorLabels;
+  final int current;
+  const _DuplicatePlanDialog(
+      {required this.floorLabels, required this.current});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Container(
+      width: 400,
+      constraints: const BoxConstraints(maxHeight: 560),
+      padding: const EdgeInsets.all(MechXSpacing.lg),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        boxShadow: MechXShadow.popover,
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text('Use plan on another floor',
+                    style: type.title.copyWith(color: colors.textPrimary)),
+              ),
+              MechXButton(
+                label: 'Cancel',
+                tertiary: true,
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.xs),
+          Text(
+              'Adds a new sheet that reuses this plan and a copy of its scale — '
+              'no re-import, no re-calibration. It is a plain copy, not a live '
+              'link: re-calibrating or replacing one sheet does not change the '
+              'other.',
+              style: type.caption.copyWith(color: colors.textMuted)),
+          const SizedBox(height: MechXSpacing.sm),
+          Flexible(
+            child: Container(
+              decoration: BoxDecoration(
+                color: colors.background,
+                borderRadius: MechXRadii.control,
+                border: Border.all(color: colors.border),
+              ),
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: const EdgeInsets.all(MechXSpacing.xxs),
+                itemCount: floorLabels.length,
+                itemBuilder: (ctx, i) => _FloorRow(
+                  label: floorLabels[i],
+                  selected: i == current,
+                  onTap: () => Navigator.of(context).pop(i),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _AssignFloorDialog extends StatelessWidget {

@@ -13,8 +13,8 @@
 ///
 /// [electricalSldToPdf] is the single-page export — with a NULL/EMPTY chrome it
 /// is byte-identical to before the N-page writer existed (a NON-empty chrome
-/// now also carries the C3 title-block rows, e.g. a SCALE `NTS` row, that the
-/// pre-wave writer never drew); [electricalSldToPdfPaginated] issues ONE PAGE
+/// now stamps the shared `pdfTitleBlock` tabular grid — the SAME title block the
+/// plan exporters use, N20); [electricalSldToPdfPaginated] issues ONE PAGE
 /// PER PANEL (root-first `result.order`, the `onlyPanelId` detail filter) with
 /// a real per-page `Sheet i of t`; [electricalSldSheetsToPdf] renders any list
 /// of prebuilt sheets as one multi-page document (the `sldSheetsToPdf` engine).
@@ -29,10 +29,20 @@ import '../electrical/panel_results.dart';
 import 'drawing_chrome.dart';
 import 'electrical_sld_drawing.dart';
 
+/// WinAnsi (Latin-1) code points the single-line labels legitimately emit,
+/// passed through as their own byte (code point == WinAnsi byte at these
+/// positions) so a `/WinAnsiEncoding` Helvetica renders the real glyph, not `?`:
+/// U+00B7 middle-dot separator (device·starter / cable·conduit), U+00B0 degree,
+/// U+00B1 plus-minus, U+00B2/00B3 super-2/3, U+00D8/00F8 O-stroke.
+const _winAnsiPassThrough = {0xB0, 0xB1, 0xB2, 0xB3, 0xB7, 0xD8, 0xF8};
+
 String _pdfText(String raw) {
   final b = StringBuffer();
   for (final code in raw.runes) {
-    final c = (code >= 0x20 && code <= 0x7e) ? code : 0x3f /* ? */;
+    final c =
+        (code >= 0x20 && code <= 0x7e) || _winAnsiPassThrough.contains(code)
+            ? code
+            : 0x3f /* ? */;
     if (c == 0x28 || c == 0x29 || c == 0x5c) b.writeCharCode(0x5c); // ( ) \
     b.writeCharCode(c);
   }
@@ -72,28 +82,13 @@ const double _pageW = 1190.55; // A3 landscape, points (420 mm)
 const double _pageH = 841.89; // 297 mm
 const double _margin = 40.0;
 
-/// The additional ISO-7200-style title-block rows a [DrawingChrome] carries —
-/// CLIENT / SCALE / DATE / DRAWN / CHECKED / APPROVED — filtered to those
-/// present. A single-line is schematic, so the SCALE row defaults to `NTS`
-/// (not to scale) whenever the chrome is non-empty and no scale text is given;
-/// null / empty chrome ⇒ no rows ⇒ the block stays byte-identical.
-List<(String, String)> _chromeTitleRows(DrawingChrome? chrome) {
-  if (chrome == null || chrome.isEmpty) return const [];
-  bool has(String? s) => s != null && s.isNotEmpty;
-  return [
-    if (has(chrome.clientName)) ('CLIENT', chrome.clientName!),
-    ('SCALE', has(chrome.scaleText) ? chrome.scaleText! : 'NTS'),
-    if (has(chrome.dateString)) ('DATE', chrome.dateString!),
-    if (has(chrome.drawnBy)) ('DRAWN', chrome.drawnBy!),
-    if (has(chrome.checkedBy)) ('CHECKED', chrome.checkedBy!),
-    if (has(chrome.approvedBy)) ('APPROVED', chrome.approvedBy!),
-  ];
-}
-
 /// Build one page's content stream: the auto-fitted drawing + sheet border +
-/// title block (+ the chrome's ruled rows) + device legend. [sheetIndexOverride]
-/// / [sheetTotalOverride] force the per-page `Sheet i of t` counter (the
-/// paginated exports); null falls back to the chrome's own counter.
+/// title block + device legend. WITH a non-empty [chrome] the title block is
+/// the SAME shared `pdfTitleBlock` tabular grid the plan exporters stamp (N20 —
+/// one title block across the whole issued set); WITHOUT chrome it is the legacy
+/// header-style block (byte-identical). [sheetIndexOverride] /
+/// [sheetTotalOverride] force the per-page `Sheet i of t` counter (the paginated
+/// exports) — folded into the chrome the shared block reads.
 String _sldPageContent({
   required SldSheet sheet,
   required String projectName,
@@ -103,13 +98,31 @@ String _sldPageContent({
   int? sheetIndexOverride,
   int? sheetTotalOverride,
 }) {
-  // The chrome's extra ruled rows grow the reserved title strip; no rows ⇒ the
-  // original 96 pt strip ⇒ byte-identical layout.
-  final extraRows = _chromeTitleRows(chrome);
-  const extraRowH = 13.0;
-  final extraH = extraRows.length * extraRowH;
+  // N20: WITH chrome the sheet carries the SAME shared drawing_chrome tabular
+  // title block the plan exporters stamp — PROJECT/CLIENT/TITLE/DWG NO/REV/
+  // SCALE/DATE/DRAWN/CHECKED/APPROVED/SHEET — bottom-right, with the diagram
+  // title as the TITLE row (a single-line is schematic ⇒ SCALE defaults `NTS`).
+  // WITHOUT chrome the sheet keeps the legacy header-style block, byte-identical.
+  final hasChrome = chrome != null && !chrome.isEmpty;
+  // A paginated export re-stamps the per-page `i of N`; fold that into the
+  // chrome the shared block reads so its SHEET row reads the page's own number.
+  final effChrome = hasChrome
+      ? chrome.withSheet(sheetIndexOverride, sheetTotalOverride)
+      : null;
+  final tb = hasChrome
+      ? pdfTitleBlock(effChrome!,
+          pageW: _pageW,
+          pageH: _pageH,
+          margin: _margin,
+          projectName: projectName,
+          scaleTextOverride: effChrome.scaleText ?? 'NTS',
+          titleTextOverride: diagramTitle)
+      : null;
+  // The device legend reserves the bottom-left; the title block the bottom-right.
+  final legendH =
+      sheet.legend.isNotEmpty ? 18.0 + sheet.legend.length * 11.0 : 0.0;
   final titleBlockH = // reserved strip across the page bottom
-      extraRows.isEmpty ? 96.0 : 96.0 + 12.0 + extraH;
+      hasChrome ? math.max(tb!.height, legendH) + 24.0 : 96.0;
 
   // ── Auto-fit the drawing into the area above the title block ────────────────
   final spanX = math.max(1e-6, sheet.maxX - sheet.minX);
@@ -176,79 +189,47 @@ String _sldPageContent({
   }
 
   // ── Title block (bottom-right) ──────────────────────────────────────────────
-  final tbW = math.min(360.0, _pageW - 2 * _margin);
-  final tbX = _pageW - _margin - tbW;
-  const tbY = _margin;
-  cs.writeln('0.20 0.20 0.20 RG 1.0 w');
-  cs.writeln('${_n(tbX)} ${_n(tbY)} ${_n(tbW)} ${_n(titleBlockH)} re S');
-  // internal divider under the title
-  cs.writeln('${_n(tbX)} ${_n(tbY + titleBlockH - 28)} m '
-      '${_n(tbX + tbW)} ${_n(tbY + titleBlockH - 28)} l S');
-  cs.writeln('BT /F1 13 Tf 0 0 0 rg '
-      '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 20)} Td (${_pdfText(projectName)}) Tj ET');
-  cs.writeln('BT /F1 11 Tf 0.15 0.15 0.15 rg '
-      '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 46)} Td '
-      '(${_pdfText(diagramTitle)}) Tj ET');
-  cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
-      '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 62)} Td '
-      '(${_pdfText(title)}) Tj ET');
-  cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
-      '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 76)} Td '
-      '(${_pdfText(sheet.supplyNote)}) Tj ET');
-  if (chrome != null) {
-    // Drawing number + revision (left of the sheet counter) — title-block facts.
-    final dwg = <String>[
-      if (chrome.drawingNumber != null && chrome.drawingNumber!.isNotEmpty)
-        chrome.drawingNumber!,
-      if (chrome.revisionNumber != null && chrome.revisionNumber!.isNotEmpty)
-        chrome.revisionNumber!,
-    ].join('   ');
-    if (dwg.isNotEmpty) {
-      cs.writeln('BT /F1 9 Tf 0 0 0 rg '
-          '${_n(tbX + 8)} ${_n(tbY + 22)} Td (${_pdfText(dwg)}) Tj ET');
+  if (hasChrome) {
+    // N20: the shared drawing_chrome tabular block — one title block across the
+    // whole issued set (plan + SLD). The diagram title is its TITLE row.
+    cs.write(tb!.ops);
+    // The honest supply note kept as a muted line just above the block (the
+    // schematic feed context the tabular grid has no row for).
+    if (sheet.supplyNote.isNotEmpty) {
+      final ny = _margin + math.max(tb.height, legendH) + 8;
+      cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
+          '${_n(_margin + 4)} ${_n(ny)} Td (${_pdfText(sheet.supplyNote)}) Tj ET');
     }
-  }
-  // Sheet counter: a paginated export forces its own per-page `i of t`;
-  // otherwise the chrome's counter (unchanged) when set.
-  String? counter;
-  if (sheetIndexOverride != null || sheetTotalOverride != null) {
-    final i = sheetIndexOverride ?? 1;
-    final t = sheetTotalOverride ?? i;
-    counter = 'Sheet $i of $t';
-  } else if (chrome != null &&
-      (chrome.sheetIndex != null || chrome.sheetTotal != null)) {
-    final i = chrome.sheetIndex ?? 1;
-    final t = chrome.sheetTotal ?? i;
-    counter = 'Sheet $i of $t';
-  }
-  if (counter != null) {
+  } else {
+    final tbW = math.min(360.0, _pageW - 2 * _margin);
+    final tbX = _pageW - _margin - tbW;
+    const tbY = _margin;
+    cs.writeln('0.20 0.20 0.20 RG 1.0 w');
+    cs.writeln('${_n(tbX)} ${_n(tbY)} ${_n(tbW)} ${_n(titleBlockH)} re S');
+    // internal divider under the title
+    cs.writeln('${_n(tbX)} ${_n(tbY + titleBlockH - 28)} m '
+        '${_n(tbX + tbW)} ${_n(tbY + titleBlockH - 28)} l S');
+    cs.writeln('BT /F1 13 Tf 0 0 0 rg '
+        '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 20)} Td (${_pdfText(projectName)}) Tj ET');
+    cs.writeln('BT /F1 11 Tf 0.15 0.15 0.15 rg '
+        '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 46)} Td '
+        '(${_pdfText(diagramTitle)}) Tj ET');
     cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
-        '${_n(tbX + 8)} ${_n(tbY + 8)} Td (${_pdfText(counter)}) Tj ET');
-  }
-  // The chrome's extra rows — CLIENT / SCALE / DATE / DRAWN / CHECKED /
-  // APPROVED — as a hairline-ruled label|value band between the header and the
-  // dwg-number/sheet lines, the `pdfTitleBlock` visual language. Rows absent ⇒
-  // nothing emitted (and the block height above stayed 96) ⇒ byte-identical.
-  if (extraRows.isNotEmpty) {
-    const labelW = 52.0;
-    const bandBot = tbY + 32.0;
-    final bandTop = bandBot + extraH;
-    cs.writeln('0.20 0.20 0.20 RG 0.5 w');
-    cs.writeln('${_n(tbX)} ${_n(bandTop)} m ${_n(tbX + tbW)} ${_n(bandTop)} l S');
-    cs.writeln('${_n(tbX)} ${_n(bandBot)} m ${_n(tbX + tbW)} ${_n(bandBot)} l S');
-    cs.writeln('${_n(tbX + labelW)} ${_n(bandBot)} m '
-        '${_n(tbX + labelW)} ${_n(bandTop)} l S');
-    for (var i = 0; i < extraRows.length; i++) {
-      final (label, value) = extraRows[i];
-      final rowTop = bandTop - i * extraRowH;
-      if (i > 0) {
-        cs.writeln('${_n(tbX)} ${_n(rowTop)} m ${_n(tbX + tbW)} ${_n(rowTop)} l S');
-      }
-      final tyRow = rowTop - extraRowH + 3.5;
-      cs.writeln('BT /F1 6 Tf 0.35 0.35 0.35 rg '
-          '${_n(tbX + 6)} ${_n(tyRow)} Td (${_pdfText(label)}) Tj ET');
-      cs.writeln('BT /F1 8 Tf 0 0 0 rg '
-          '${_n(tbX + labelW + 6)} ${_n(tyRow)} Td (${_pdfText(value)}) Tj ET');
+        '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 62)} Td '
+        '(${_pdfText(title)}) Tj ET');
+    cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
+        '${_n(tbX + 8)} ${_n(tbY + titleBlockH - 76)} Td '
+        '(${_pdfText(sheet.supplyNote)}) Tj ET');
+    // Sheet counter: a paginated export forces its own per-page `i of t`.
+    String? counter;
+    if (sheetIndexOverride != null || sheetTotalOverride != null) {
+      final i = sheetIndexOverride ?? 1;
+      final t = sheetTotalOverride ?? i;
+      counter = 'Sheet $i of $t';
+    }
+    if (counter != null) {
+      cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
+          '${_n(tbX + 8)} ${_n(tbY + 8)} Td (${_pdfText(counter)}) Tj ET');
     }
   }
 
@@ -298,7 +279,10 @@ Uint8List _assemblePdf(List<String> pageContents) {
       '<< /Length ${latin1.encode(pageContents[i]).length} >>\n'
           'stream\n${pageContents[i]}\nendstream',
     ],
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    // WinAnsi so the Latin-1 bytes `_pdfText` emits (U+00B7 middle dot, degree,
+    // super-2/3, O-stroke, plus-minus) render as their real glyph, not `?`.
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica '
+        '/Encoding /WinAnsiEncoding >>',
   ];
 
   final out = BytesBuilder();
@@ -333,6 +317,11 @@ String _projectName(ElectricalProject? project) =>
 /// single-line, or the [overview] / [sourceChain] variant) OR a prebuilt
 /// [sheet] (e.g. a riser built by the app with the live `BuildingLevels`) —
 /// keeping the [SldSheet] the single source of geometry.
+///
+/// [projectName] overrides the title-block PROJECT row: with a prebuilt [sheet]
+/// there is no [project] to read a name from, so pass the live name here to
+/// avoid the `Untitled project` placeholder (N2). Null / empty ⇒ the derived
+/// name (byte-identical).
 Uint8List electricalSldToPdf({
   ElectricalProject? project,
   ElectricalSystemResult? result,
@@ -342,6 +331,7 @@ Uint8List electricalSldToPdf({
   DrawingChrome? chrome,
   bool overview = false,
   bool sourceChain = false,
+  String? projectName,
 }) {
   assert(sheet != null || (project != null && result != null),
       'electricalSldToPdf needs either a prebuilt sheet or project+result');
@@ -356,7 +346,9 @@ Uint8List electricalSldToPdf({
   return _assemblePdf([
     _sldPageContent(
       sheet: sheetResolved,
-      projectName: _projectName(project),
+      projectName: (projectName != null && projectName.isNotEmpty)
+          ? projectName
+          : _projectName(project),
       title: title,
       diagramTitle: diagramTitle,
       chrome: chrome,

@@ -16,12 +16,20 @@ class MechXFocusRing extends StatefulWidget {
   final BorderRadius borderRadius;
   final bool enabled;
 
+  /// L4 (a11y): an explicit accessible name for the wrapped control. Supply this
+  /// ONLY for icon/glyph-only controls whose [child] carries no readable text
+  /// (a stepper `−`/`+`, a lock/eye toggle, a zoom glyph); a control whose child
+  /// already renders its own label must leave this null so the label isn't
+  /// announced twice. Default null ⇒ existing callers are unchanged.
+  final String? semanticLabel;
+
   const MechXFocusRing({
     super.key,
     required this.child,
     this.onActivated,
     this.borderRadius = MechXRadii.control,
     this.enabled = true,
+    this.semanticLabel,
   });
 
   @override
@@ -68,15 +76,16 @@ class _MechXFocusRingState extends State<MechXFocusRing> {
       ),
     );
 
-    // I7 (a11y): when this ring wraps an activatable control ([onActivated] set),
-    // mark it as a button and expose a tap action so a screen reader announces
-    // the role + can activate it. The wrapped [child] supplies the accessible
-    // label (its own text/glyph semantics), so nothing is excluded here. When
-    // there is no activation callback it stays a plain focus ring. Semantics is
-    // layout/paint-transparent ⇒ goldens unchanged.
-    if (widget.onActivated == null) return ring;
+    // I7 / L4 (a11y): when this ring wraps an activatable control ([onActivated]
+    // set), mark it as a button and expose a tap action so a screen reader
+    // announces the role + can activate it. The wrapped [child] supplies the
+    // accessible label from its own text; [semanticLabel] supplies one for an
+    // icon/glyph-only child that has none. When neither is set it stays a plain
+    // focus ring. Semantics is layout/paint-transparent ⇒ goldens unchanged.
+    if (widget.onActivated == null && widget.semanticLabel == null) return ring;
     return Semantics(
-      button: true,
+      button: widget.onActivated != null,
+      label: widget.semanticLabel,
       enabled: widget.enabled,
       onTap: widget.enabled ? widget.onActivated : null,
       child: ring,

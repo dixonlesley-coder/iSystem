@@ -788,6 +788,17 @@ void main() {
       await tester.pump();
       // The sample has no sources → the empty-state copy shows.
       expect(find.text('No energy sources'), findsOneWidget);
+      // D1: the empty state must point at the REAL path (the Sources button in
+      // the electrical toolbar) — the Loads palette has no generator/solar/
+      // battery card, so the old "from the Loads palette" instruction is gone.
+      expect(
+        find.text(
+          'Add a generator from the Sources button in the toolbar above to '
+          'build a hybrid power one-line with source interlocks.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Loads palette'), findsNothing);
     });
   });
 

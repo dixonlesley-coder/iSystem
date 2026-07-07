@@ -155,4 +155,35 @@ void main() {
         [const Sheet(id: 'a', name: 'ph')]);
     expect(assets, isEmpty);
   });
+
+  // K2: opening a portable project must decode + rehydrate off the UI thread —
+  // the same freeze class gatherSheetAssetsAsync already fixed for Save.
+  test(
+      'decodeAndRehydrateAsync decodes + rehydrates a portable doc off-thread, '
+      'byte-identical to the synchronous decode + rehydrateAssets', () async {
+    final pdf = File('${tmp.path}/orig2.pdf')..writeAsBytesSync([11, 22, 33]);
+    final doc = _doc([Sheet(id: 'a', name: 'p', pdfPath: pdf.path)]);
+    final portable =
+        doc.withSheets(doc.sheets, assets: gatherSheetAssets(doc.sheets));
+    final encoded = portable.encode();
+    // Simulate opening on a machine that doesn't have the original file.
+    pdf.deleteSync();
+
+    final syncResult = rehydrateAssets(ProjectDocument.decode(encoded));
+    final asyncResult = await decodeAndRehydrateAsync(encoded);
+
+    expect(asyncResult.encode(), syncResult.encode());
+    final extracted = File(asyncResult.sheets.single.pdfPath!);
+    expect(extracted.existsSync(), isTrue);
+    expect(extracted.readAsBytesSync(), [11, 22, 33]); // original bytes recovered
+  });
+
+  test(
+      'decodeAndRehydrateAsync surfaces a malformed file as '
+      'ProjectDocumentException, same as the synchronous decode', () async {
+    await expectLater(
+      decodeAndRehydrateAsync('not json'),
+      throwsA(isA<ProjectDocumentException>()),
+    );
+  });
 }

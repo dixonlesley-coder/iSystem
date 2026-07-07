@@ -89,6 +89,7 @@ enum StringKey {
   electricalExportReportSub,
   electricalExportPowerOneLine,
   electricalExportPowerOneLineSub,
+  electricalExportPlan,
   electricalExportSchedules,
   electricalExportSchedulesPdf,
 
@@ -134,6 +135,7 @@ enum StringKey {
   shellNoSheet,
   shellUncalibrated,
   shellCalibrated,
+  shellCalibrationStale, // J1 — sheet-rail tooltip: plan replaced, re-verify scale
   shellStandardsProvenance,
   shellViewportHints,
 
@@ -154,6 +156,7 @@ enum StringKey {
   busyConvertingDwg,
   busyOpeningProject,
   busySaving,
+  busyExportingSubmittal, // {current} {total} — J2 per-sheet submittal export
 
   // Unsaved-changes guard dialog (Open / Import / quit).
   confirmDiscardTitle,
@@ -237,6 +240,8 @@ enum StringKey {
   inspectorRedo,
   inspectorClear,
   inspectorOrtho,
+  inspectorSnapToPlan,
+  inspectorRefLine,
   inspectorDuplicateFloorUp,
 
   // Inspector — Sizing section.
@@ -270,6 +275,7 @@ enum StringKey {
   inspectorCalibrateScale,
   inspectorReCalibrate,
   inspectorMapsToFloor,
+  inspectorScaleConfirmed, // J1 — clears the "plan replaced" stale flag
 
   // Inspector — HVAC section.
   inspectorRound,
@@ -295,6 +301,11 @@ enum StringKey {
   inspectorRevisionDateHint,
   inspectorRevisionDescHint,
 
+  // Inspector — Equipment schedule model/spec editor (N23).
+  inspectorEquipmentSchedule,
+  inspectorEquipmentScheduleHint,
+  inspectorModelSpecHint,
+
   // Export — OS save-dialog titles.
   exportTitleCalcReport,
   exportTitleMepReport,
@@ -312,6 +323,8 @@ enum StringKey {
   exportTitleRiserSetDxf,
   exportTitlePanelSchedulesPdf,
   exportTitlePowerOneLineDxf,
+  exportTitleElectricalPlanPdf,
+  exportTitleElectricalPlanDxf,
   exportTitleElectricalReport,
   exportTitleElectricalBom,
   exportTitleElectricalProposal,
@@ -345,6 +358,7 @@ enum StringKey {
 
   // Electrical workspace — circuit inspector.
   electricalCircuitEditTitle,
+  electricalFieldProtection,
   electricalFieldName,
   electricalFieldLoadKind,
   electricalFieldMotorPower,
@@ -358,6 +372,8 @@ enum StringKey {
   electricalPhase3,
   electricalFieldCableType,
   electricalCablePanelDefault,
+  electricalFieldStarter,
+  electricalStarterNone,
   electricalToggleLighting,
   electricalToggleLifeSafety,
 
@@ -377,6 +393,7 @@ enum StringKey {
   electricalPaletteLoads,
   electricalPaletteMotorsPumps,
   electricalPaletteDistribution,
+  electricalPaletteReadOnly,
 
   // Electrical workspace — Loads palette card labels.
   electricalLoadLighting,
@@ -436,6 +453,11 @@ enum StringKey {
   complianceCategorySheetCalibration,
   complianceCategoryStandardsVerification,
   complianceCategoryElectricalSizing,
+
+  // I4 — the acknowledgement-log row category (compliance_store.dart): one row
+  // per accepted advisory, carrying its audit trail (author/date/note) in the
+  // detail so the signed report records who accepted a value, when, and why.
+  complianceAckEntry, // {label} = the acknowledged advisory's title
 
   // H1 — compliance roll-up detail phrases.
   complianceDetailAllWithinBand,
@@ -507,6 +529,13 @@ enum StringKey {
   issuesCardUndo,
   issuesCardLocate,
 
+  // I4 — the inline acknowledgement form (issues_card.dart): the engineer
+  // records their initials + an optional one-line reason before an advisory is
+  // accepted, so the sign-off carries an accountable author + justification.
+  issuesCardAckInitials, // hint for the initials field
+  issuesCardAckReasonHint, // hint for the optional reason field
+  issuesCardAckCancel, // dismiss the inline form
+
   // H1 — Design issue TITLES (store/design_issues_store.dart). The engine-
   // sourced messages (air-velocity check.message, drainage a.message, the
   // electrical w.message) are a SEPARATE register and are NOT keyed here.
@@ -518,6 +547,7 @@ enum StringKey {
   issueDuctOverCapacityTitle,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
+  issueCalibrationStaleTitle, // J1 — plan replaced, old scale unverified
   issueMultiSheetFloorTitle,
   issueNetworkIslandTitle,
   issueNetworkNoSourceTitle,
@@ -536,6 +566,15 @@ enum StringKey {
   issueUnfedPanelTitle,
   issueUnfedPanelMessage, // {panel} = the unfed panel's name
 
+  // I1 — downfeed pressure-zone over the SNI max fixture static pressure.
+  issuePressureZoneTitle,
+  issuePressureZoneMessage, // {bottom} {top} {kpa} {limit}
+
+  // I6 — document-control revision inconsistency (revision history logged but
+  // the title-block Revision left blank).
+  issueRevisionTagMissingTitle,
+  issueRevisionTagMissingMessage,
+
   // H1 — Design issue MESSAGES.
   issueOrphanFloorMessage, // {floor} = index+1, {floors} = pluralCount(n,'floor','floors')
   issueOrphanSheetMessage,
@@ -545,6 +584,7 @@ enum StringKey {
   issueDiffuserStrandedMessage,
   issueSheetNotCalibratedCriticalMessage, // {name}
   issueSheetNotCalibratedWarningMessage, // {name}
+  issueCalibrationStaleMessage, // J1 — {name}
   issueMultiSheetFloorMessage, // {count} {floor} {names}
   issueNetworkIslandMessage, // {service} {nodes} = pluralCount(n,'node','nodes')
   issueNetworkNoSourceMessage, // {service} {nodes}
@@ -592,6 +632,81 @@ enum StringKey {
   // templates dialog title/barrierLabel).
   electricalLoadSampleProject,
   projectApplyBuildingTemplate,
+
+  // Workflow-goldens review (2026-07-06): A2 template-cancel confirmation, A3
+  // stepper/orientation-card term convergence (one "Building" everywhere), D1
+  // Power one-line empty-state copy correction.
+  templateAppliedImportPrompt,
+  workflowStageCalibrate,
+  workflowStageBuilding,
+  workflowStageDraw,
+  workflowStageSize,
+  workflowStageReport,
+  firstRunStepCalibrateDesc,
+  firstRunStepBuildingDesc,
+  firstRunStepDrawDesc,
+  firstRunStepSizeDesc,
+  firstRunStepReportDesc,
+  electricalPowerOneLineEmptyBody,
+
+  // L5/M4 — the shared MechXTooltip hover-tooltip mechanism, applied to
+  // icon-only chrome that previously had no visible on-hover caption (the
+  // zoom cluster, the inspector collapse chevron; the theme toggle and the
+  // sheet-rail calibration dot reuse existing StringKeys below).
+  tooltipZoomIn,
+  tooltipZoomOut,
+  tooltipZoomFit,
+  tooltipCollapseInspector,
+  tooltipExpandInspector,
+
+  // E5 — the on-canvas service-colour LEGEND chip (Layout canvas, bottom-left):
+  // its title + the show/hide tooltips.
+  canvasLegendTitle,
+  tooltipHideLegend,
+  tooltipShowLegend,
+
+  // Workflow-goldens review Theme F (drafting velocity): the layer-switcher
+  // reference-layer LOCK (F1), the per-service view filter (F4) and the
+  // click-to-place-repeatedly armed hint pill (F5).
+  tooltipLockLayer,
+  tooltipUnlockLayer,
+  tooltipFilterServices,
+  placementArmedHint, // {item}
+
+  // L4 (a11y) — screen-reader names for icon-only controls that carry no visible
+  // caption: the layer-visibility eye, and the shared numeric stepper's −/+
+  // glyph buttons (suffixed with the field name where the caller supplies one).
+  a11yShowLayer,
+  a11yHideLayer,
+  a11yDecrease, // optional " {field}" suffix appended by the caller
+  a11yIncrease, // optional " {field}" suffix appended by the caller
+
+  // L4 (a11y) — the on-canvas minimap's screen-reader name (it is otherwise an
+  // unlabelled tap/drag surface), plus the field-name labels the numeric
+  // steppers pass to a11yDecrease/a11yIncrease so a screen reader can tell one
+  // dense inspector row from the next ("Decrease Ceiling height").
+  a11yMinimapHint,
+  a11yFieldDepth,
+  a11yFieldCeilingHeight,
+  a11yFieldAirChangesPerHour,
+  a11yFieldFloorToFloorHeight,
+  a11yFieldNumberOfLevels,
+  a11yFieldFloorHeight,
+
+  // A1 — the Layout empty-state's 'Load sample project' action (mirrors the
+  // electrical workspace's `electricalLoadSampleProject`, kept as its own key
+  // since the two seed independent domains).
+  layoutLoadSampleProject,
+
+  // A5 — the Projects-hub export surface: a leading 'Export deliverables'
+  // group (reuses `reviewExportDeliverables`'s header text) followed by
+  // labelled Drawings / Reports / Data disclosures, with the two near-
+  // identical plan-PDF rows given a clarifying one-line subtitle each.
+  projectsExportGroupDrawings,
+  projectsExportGroupReports,
+  projectsExportGroupData,
+  projectsExportDrawingPdfHint,
+  projectsExportAnnotatedPlanPdfHint,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -681,6 +796,7 @@ const Map<StringKey, String> _en = {
   StringKey.electricalExportReportSub: 'Markdown',
   StringKey.electricalExportPowerOneLine: 'Power one-line',
   StringKey.electricalExportPowerOneLineSub: 'DXF (needs energy sources)',
+  StringKey.electricalExportPlan: 'Layout plan (denah)',
   StringKey.electricalExportSchedules: 'Panel schedules',
   StringKey.electricalExportSchedulesPdf: 'PDF (one panel per sheet)',
 
@@ -738,6 +854,7 @@ const Map<StringKey, String> _en = {
   StringKey.shellNoSheet: 'No sheet',
   StringKey.shellUncalibrated: 'Uncalibrated',
   StringKey.shellCalibrated: 'Calibrated',
+  StringKey.shellCalibrationStale: 'Plan replaced — re-verify scale',
   StringKey.shellStandardsProvenance: 'SNI 8153:2015 (draft)',
   StringKey.shellViewportHints:
       'scroll zoom · Space/middle-drag pan · F fit · Ctrl+0 100%',
@@ -759,6 +876,8 @@ const Map<StringKey, String> _en = {
   StringKey.busyConvertingDwg: 'Converting DWG...',
   StringKey.busyOpeningProject: 'Opening project...',
   StringKey.busySaving: 'Saving...',
+  StringKey.busyExportingSubmittal:
+      'Exporting submittal package ({current}/{total})...',
 
   // Unsaved-changes guard dialog.
   StringKey.confirmDiscardTitle: 'Unsaved changes',
@@ -859,6 +978,8 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorRedo: 'Redo',
   StringKey.inspectorClear: 'Clear',
   StringKey.inspectorOrtho: 'Ortho',
+  StringKey.inspectorSnapToPlan: 'Snap to plan',
+  StringKey.inspectorRefLine: 'Ref line',
   StringKey.inspectorDuplicateFloorUp: 'Duplicate floor up',
 
   // Inspector — Sizing section.
@@ -896,6 +1017,7 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorCalibrateScale: 'Calibrate scale',
   StringKey.inspectorReCalibrate: 'Re-calibrate',
   StringKey.inspectorMapsToFloor: 'Maps to floor',
+  StringKey.inspectorScaleConfirmed: 'Scale confirmed',
 
   // Inspector — HVAC section.
   StringKey.inspectorRound: 'Round',
@@ -922,6 +1044,12 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorRevisionDateHint: 'YYYY-MM-DD',
   StringKey.inspectorRevisionDescHint: 'Description',
 
+  // Inspector — Equipment schedule model/spec editor (N23).
+  StringKey.inspectorEquipmentSchedule: 'Equipment schedule',
+  StringKey.inspectorEquipmentScheduleHint:
+      'Model / spec for the issued equipment schedule. Blank prints as "—".',
+  StringKey.inspectorModelSpecHint: 'Model / spec',
+
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Export calc report',
   StringKey.exportTitleMepReport: 'Export unified MEP report',
@@ -939,6 +1067,8 @@ const Map<StringKey, String> _en = {
   StringKey.exportTitleRiserSetDxf:
       'Export riser drawing set (DXF, one file per system)',
   StringKey.exportTitlePanelSchedulesPdf: 'Export panel schedules (PDF)',
+  StringKey.exportTitleElectricalPlanPdf: 'Export layout plan (PDF)',
+  StringKey.exportTitleElectricalPlanDxf: 'Export layout plan (DXF)',
   StringKey.exportTitlePowerOneLineDxf: 'Export power one-line (DXF)',
   StringKey.exportTitleElectricalReport: 'Export electrical report',
   StringKey.exportTitleElectricalBom: 'Export electrical BOM',
@@ -973,12 +1103,13 @@ const Map<StringKey, String> _en = {
 
   // Electrical workspace — circuit inspector.
   StringKey.electricalCircuitEditTitle: 'Edit circuit',
+  StringKey.electricalFieldProtection: 'Protection',
   StringKey.electricalFieldName: 'Name',
   StringKey.electricalFieldLoadKind: 'Load kind',
   StringKey.electricalFieldMotorPower: 'Motor power (kW)',
   StringKey.electricalFieldLoadW: 'Load (W)',
-  StringKey.electricalFieldCosPhi: 'cos phi',
-  StringKey.electricalFieldDemandFactor: 'Demand factor',
+  StringKey.electricalFieldCosPhi: 'cos phi (0-1)',
+  StringKey.electricalFieldDemandFactor: 'Demand factor (0-1)',
   StringKey.electricalFieldRunLength: 'Run length (m)',
   StringKey.electricalFieldSupplyPhase: 'Supply phase',
   StringKey.electricalPhaseAuto: 'Auto',
@@ -986,12 +1117,14 @@ const Map<StringKey, String> _en = {
   StringKey.electricalPhase3: '3-phase',
   StringKey.electricalFieldCableType: 'Cable type',
   StringKey.electricalCablePanelDefault: 'Panel default',
+  StringKey.electricalFieldStarter: 'Starter / control',
+  StringKey.electricalStarterNone: 'None',
   StringKey.electricalToggleLighting: 'Lighting circuit (3% Vd limit)',
   StringKey.electricalToggleLifeSafety: 'Life-safety (no RCD)',
 
   // Electrical workspace — panel inspector.
   StringKey.electricalFieldTag: 'Tag (e.g. LP-1)',
-  StringKey.electricalFieldDiversity: 'Diversity factor',
+  StringKey.electricalFieldDiversity: 'Diversity factor (0-1)',
   StringKey.electricalFieldHeadroomSpare: 'Headroom — spare demand (%)',
   StringKey.electricalFieldSpareWays: 'Spare ways (CADANGAN)',
   StringKey.electricalToggleEssential: 'Essential (genset-backed)',
@@ -1005,6 +1138,8 @@ const Map<StringKey, String> _en = {
   StringKey.electricalPaletteLoads: 'Loads',
   StringKey.electricalPaletteMotorsPumps: 'Motors & pumps',
   StringKey.electricalPaletteDistribution: 'Distribution',
+  StringKey.electricalPaletteReadOnly:
+      'Read-only view — switch to Single-line to edit',
 
   // Electrical workspace — Loads palette card labels.
   StringKey.electricalLoadLighting: 'Lighting',
@@ -1069,6 +1204,7 @@ const Map<StringKey, String> _en = {
   StringKey.complianceCategorySheetCalibration: 'Sheet calibration',
   StringKey.complianceCategoryStandardsVerification: 'Standards verification',
   StringKey.complianceCategoryElectricalSizing: 'Electrical circuit sizing',
+  StringKey.complianceAckEntry: 'Acknowledged: {label}',
 
   // H1 — compliance roll-up detail phrases.
   StringKey.complianceDetailAllWithinBand: 'all within band',
@@ -1149,6 +1285,9 @@ const Map<StringKey, String> _en = {
   StringKey.issuesCardAcknowledge: 'Acknowledge',
   StringKey.issuesCardUndo: 'Undo',
   StringKey.issuesCardLocate: 'Locate',
+  StringKey.issuesCardAckInitials: 'Initials',
+  StringKey.issuesCardAckReasonHint: 'Reason (optional)',
+  StringKey.issuesCardAckCancel: 'Cancel',
 
   // H1 — Design issue titles.
   StringKey.issueOrphanTitle: 'Element references a missing floor or sheet',
@@ -1159,6 +1298,7 @@ const Map<StringKey, String> _en = {
   StringKey.issueDuctOverCapacityTitle: 'Duct over capacity',
   StringKey.issueDiffuserStrandedTitle: 'Diffuser not connected to any duct',
   StringKey.issueSheetNotCalibratedTitle: 'Sheet not calibrated',
+  StringKey.issueCalibrationStaleTitle: 'Plan replaced — re-verify scale',
   StringKey.issueMultiSheetFloorTitle: 'Multiple sheets mapped to one floor',
   StringKey.issueNetworkIslandTitle: 'Network branch not connected',
   StringKey.issueNetworkNoSourceTitle: 'Network has no source',
@@ -1180,6 +1320,16 @@ const Map<StringKey, String> _en = {
   StringKey.issueUnfedPanelMessage:
       '"{panel}" is neither the origin board nor fed by a feeder — it is wired '
       'to nothing. Feed it from an upstream panel.',
+  StringKey.issuePressureZoneTitle: 'Pressure zone over the fixture limit',
+  StringKey.issuePressureZoneMessage:
+      'The pressure zone from "{bottom}" to "{top}" reaches {kpa} kPa static at '
+      'its lowest fixture, above the SNI max fixture static of {limit} kPa. Add '
+      'a PRV / break-tank to split the zone.',
+  StringKey.issueRevisionTagMissingTitle: 'Revision not set for logged history',
+  StringKey.issueRevisionTagMissingMessage:
+      'The revision history has entries but the title-block Revision is blank, '
+      'so every issued sheet and report stamps no revision. Set the current '
+      'Revision under Document control.',
 
   // H1 — Design issue messages.
   StringKey.issueOrphanFloorMessage:
@@ -1211,6 +1361,11 @@ const Map<StringKey, String> _en = {
   StringKey.issueSheetNotCalibratedWarningMessage:
       '"{name}" has no scale set — its run/riser lengths cannot '
           'be measured. Calibrate the sheet to size it.',
+  StringKey.issueCalibrationStaleMessage:
+      '"{name}"\'s plan was replaced but kept its OLD scale — a revised '
+          'drawing (different DPI, plot scale, or title block) can silently '
+          'carry the wrong calibration. Re-check the scale, or confirm it '
+          'still holds.',
   StringKey.issueMultiSheetFloorMessage:
       '{count} sheets map to floor "{floor}" '
           '({names}) — only one plan per floor feeds sizing at that elevation, '
@@ -1278,6 +1433,64 @@ const Map<StringKey, String> _en = {
   // H6 — half-localized odds & ends.
   StringKey.electricalLoadSampleProject: 'Load sample project',
   StringKey.projectApplyBuildingTemplate: 'Apply a building template',
+
+  // Workflow-goldens review (2026-07-06).
+  StringKey.templateAppliedImportPrompt:
+      'Template applied — import a plan when ready',
+  StringKey.workflowStageCalibrate: 'Calibrate',
+  StringKey.workflowStageBuilding: 'Building',
+  StringKey.workflowStageDraw: 'Draw',
+  StringKey.workflowStageSize: 'Size',
+  StringKey.workflowStageReport: 'Report',
+  StringKey.firstRunStepCalibrateDesc: 'set the drawing scale on your plan',
+  StringKey.firstRunStepBuildingDesc: "set each level's height",
+  StringKey.firstRunStepDrawDesc: 'lay out pipes, ducts and panels',
+  StringKey.firstRunStepSizeDesc: 'auto-size everything to SNI / PUIL',
+  StringKey.firstRunStepReportDesc: 'export the BOM and calc report',
+  StringKey.electricalPowerOneLineEmptyBody:
+      'Add a generator from the Sources button in the toolbar above to build '
+          'a hybrid power one-line with source interlocks.',
+
+  // L5/M4 — the shared MechXTooltip hover-tooltip mechanism.
+  StringKey.tooltipZoomIn: 'Zoom in',
+  StringKey.tooltipZoomOut: 'Zoom out',
+  StringKey.tooltipZoomFit: 'Fit view',
+  StringKey.tooltipCollapseInspector: 'Collapse inspector',
+  StringKey.tooltipExpandInspector: 'Expand inspector',
+
+  // E5 — the on-canvas service-colour legend chip.
+  StringKey.canvasLegendTitle: 'Legend',
+  StringKey.tooltipHideLegend: 'Hide legend',
+  StringKey.tooltipShowLegend: 'Show legend',
+
+  // Theme F — layer lock (F1) / per-service filter (F4) / armed placement (F5).
+  StringKey.tooltipLockLayer: 'Lock layer',
+  StringKey.tooltipUnlockLayer: 'Unlock layer',
+  StringKey.tooltipFilterServices: 'Filter services',
+  StringKey.placementArmedHint: 'Placing {item} · click to place · Esc to cancel',
+  StringKey.a11yShowLayer: 'Show layer',
+  StringKey.a11yHideLayer: 'Hide layer',
+  StringKey.a11yDecrease: 'Decrease',
+  StringKey.a11yIncrease: 'Increase',
+  StringKey.a11yMinimapHint: 'Canvas minimap — tap or drag to jump the view',
+  StringKey.a11yFieldDepth: 'Depth',
+  StringKey.a11yFieldCeilingHeight: 'Ceiling height',
+  StringKey.a11yFieldAirChangesPerHour: 'Air changes per hour',
+  StringKey.a11yFieldFloorToFloorHeight: 'Floor-to-floor height',
+  StringKey.a11yFieldNumberOfLevels: 'Number of levels',
+  StringKey.a11yFieldFloorHeight: 'Floor height',
+
+  // A1 — Layout empty-state 'Load sample project'.
+  StringKey.layoutLoadSampleProject: 'Load sample project',
+
+  // A5 — Projects-hub export grouping.
+  StringKey.projectsExportGroupDrawings: 'Drawings',
+  StringKey.projectsExportGroupReports: 'Reports',
+  StringKey.projectsExportGroupData: 'Data',
+  StringKey.projectsExportDrawingPdfHint:
+      'Plain plan — no calibrated run/riser lengths on size labels.',
+  StringKey.projectsExportAnnotatedPlanPdfHint:
+      'Annotated plan — includes real run/riser lengths on every size label.',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -1368,6 +1581,7 @@ const Map<StringKey, String> _id = {
   StringKey.electricalExportReportSub: 'Markdown',
   StringKey.electricalExportPowerOneLine: 'Diagram daya satu-garis',
   StringKey.electricalExportPowerOneLineSub: 'DXF (perlu sumber energi)',
+  StringKey.electricalExportPlan: 'Denah instalasi (denah)',
   StringKey.electricalExportSchedules: 'Diagram panel',
   StringKey.electricalExportSchedulesPdf: 'PDF (satu panel per lembar)',
 
@@ -1425,6 +1639,7 @@ const Map<StringKey, String> _id = {
   StringKey.shellNoSheet: 'Tidak ada lembar',
   StringKey.shellUncalibrated: 'Belum dikalibrasi',
   StringKey.shellCalibrated: 'Terkalibrasi',
+  StringKey.shellCalibrationStale: 'Denah diganti — verifikasi ulang skala',
   StringKey.shellStandardsProvenance: 'SNI 8153:2015 (draf)',
   StringKey.shellViewportHints:
       'gulir zoom · Spasi/seret-tengah geser · F pas · Ctrl+0 100%',
@@ -1447,6 +1662,8 @@ const Map<StringKey, String> _id = {
   StringKey.busyConvertingDwg: 'Mengonversi DWG...',
   StringKey.busyOpeningProject: 'Membuka proyek...',
   StringKey.busySaving: 'Menyimpan...',
+  StringKey.busyExportingSubmittal:
+      'Mengekspor paket submittal ({current}/{total})...',
 
   // Unsaved-changes guard dialog.
   StringKey.confirmDiscardTitle: 'Perubahan belum disimpan',
@@ -1548,6 +1765,8 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorRedo: 'Ulangi',
   StringKey.inspectorClear: 'Bersihkan',
   StringKey.inspectorOrtho: 'Orto',
+  StringKey.inspectorSnapToPlan: 'Kancing ke gambar',
+  StringKey.inspectorRefLine: 'Garis acuan',
   StringKey.inspectorDuplicateFloorUp: 'Gandakan ke lantai atas',
 
   // Inspector — Sizing section.
@@ -1586,6 +1805,7 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorCalibrateScale: 'Kalibrasi skala',
   StringKey.inspectorReCalibrate: 'Kalibrasi ulang',
   StringKey.inspectorMapsToFloor: 'Memetakan ke lantai',
+  StringKey.inspectorScaleConfirmed: 'Skala dikonfirmasi',
 
   // Inspector — HVAC section.
   StringKey.inspectorRound: 'Bulat',
@@ -1612,6 +1832,13 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorRevisionDateHint: 'YYYY-MM-DD',
   StringKey.inspectorRevisionDescHint: 'Uraian',
 
+  // Inspector — Equipment schedule model/spec editor (N23).
+  StringKey.inspectorEquipmentSchedule: 'Jadwal peralatan',
+  StringKey.inspectorEquipmentScheduleHint:
+      'Model / spesifikasi untuk jadwal peralatan yang diterbitkan. Kosong '
+      'tercetak sebagai "—".',
+  StringKey.inspectorModelSpecHint: 'Model / spesifikasi',
+
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Ekspor laporan hitung',
   StringKey.exportTitleMepReport: 'Ekspor laporan MEP terpadu',
@@ -1629,6 +1856,8 @@ const Map<StringKey, String> _id = {
   StringKey.exportTitleRiserSetDxf:
       'Ekspor set gambar riser (DXF, satu berkas per sistem)',
   StringKey.exportTitlePanelSchedulesPdf: 'Ekspor diagram panel (PDF)',
+  StringKey.exportTitleElectricalPlanPdf: 'Ekspor denah instalasi (PDF)',
+  StringKey.exportTitleElectricalPlanDxf: 'Ekspor denah instalasi (DXF)',
   StringKey.exportTitlePowerOneLineDxf: 'Ekspor daya satu-garis (DXF)',
   StringKey.exportTitleElectricalReport: 'Ekspor laporan kelistrikan',
   StringKey.exportTitleElectricalBom: 'Ekspor BOM kelistrikan',
@@ -1663,12 +1892,13 @@ const Map<StringKey, String> _id = {
 
   // Electrical workspace — circuit inspector.
   StringKey.electricalCircuitEditTitle: 'Ubah sirkuit',
+  StringKey.electricalFieldProtection: 'Proteksi',
   StringKey.electricalFieldName: 'Nama',
   StringKey.electricalFieldLoadKind: 'Jenis beban',
   StringKey.electricalFieldMotorPower: 'Daya motor (kW)',
   StringKey.electricalFieldLoadW: 'Beban (W)',
-  StringKey.electricalFieldCosPhi: 'cos phi',
-  StringKey.electricalFieldDemandFactor: 'Faktor permintaan',
+  StringKey.electricalFieldCosPhi: 'cos phi (0-1)',
+  StringKey.electricalFieldDemandFactor: 'Faktor permintaan (0-1)',
   StringKey.electricalFieldRunLength: 'Panjang tarikan (m)',
   StringKey.electricalFieldSupplyPhase: 'Fasa suplai',
   StringKey.electricalPhaseAuto: 'Otomatis',
@@ -1676,12 +1906,14 @@ const Map<StringKey, String> _id = {
   StringKey.electricalPhase3: '3-fasa',
   StringKey.electricalFieldCableType: 'Jenis kabel',
   StringKey.electricalCablePanelDefault: 'Default panel',
+  StringKey.electricalFieldStarter: 'Starter / kontrol',
+  StringKey.electricalStarterNone: 'Tidak ada',
   StringKey.electricalToggleLighting: 'Sirkuit pencahayaan (batas Vd 3%)',
   StringKey.electricalToggleLifeSafety: 'Keselamatan jiwa (tanpa RCD)',
 
   // Electrical workspace — panel inspector.
   StringKey.electricalFieldTag: 'Tag (mis. LP-1)',
-  StringKey.electricalFieldDiversity: 'Faktor diversitas',
+  StringKey.electricalFieldDiversity: 'Faktor diversitas (0-1)',
   StringKey.electricalFieldHeadroomSpare: 'Cadangan — permintaan luang (%)',
   StringKey.electricalFieldSpareWays: 'Jalur cadangan (CADANGAN)',
   StringKey.electricalToggleEssential: 'Esensial (didukung genset)',
@@ -1695,6 +1927,8 @@ const Map<StringKey, String> _id = {
   StringKey.electricalPaletteLoads: 'Beban',
   StringKey.electricalPaletteMotorsPumps: 'Motor & pompa',
   StringKey.electricalPaletteDistribution: 'Distribusi',
+  StringKey.electricalPaletteReadOnly:
+      'Tampilan hanya-baca — beralih ke Segaris untuk mengedit',
 
   // Electrical workspace — Loads palette card labels.
   StringKey.electricalLoadLighting: 'Pencahayaan',
@@ -1758,6 +1992,7 @@ const Map<StringKey, String> _id = {
   StringKey.complianceCategorySheetCalibration: 'Kalibrasi lembar',
   StringKey.complianceCategoryStandardsVerification: 'Verifikasi standar',
   StringKey.complianceCategoryElectricalSizing: 'Pengukuran sirkuit listrik',
+  StringKey.complianceAckEntry: 'Diakui: {label}',
 
   // H1 — compliance roll-up detail phrases.
   StringKey.complianceDetailAllWithinBand: 'semua dalam batas',
@@ -1838,6 +2073,9 @@ const Map<StringKey, String> _id = {
   StringKey.issuesCardAcknowledge: 'Akui',
   StringKey.issuesCardUndo: 'Urungkan',
   StringKey.issuesCardLocate: 'Cari lokasi',
+  StringKey.issuesCardAckInitials: 'Inisial',
+  StringKey.issuesCardAckReasonHint: 'Alasan (opsional)',
+  StringKey.issuesCardAckCancel: 'Batal',
 
   // H1 — Design issue titles.
   StringKey.issueOrphanTitle: 'Elemen merujuk lantai atau lembar yang hilang',
@@ -1849,6 +2087,8 @@ const Map<StringKey, String> _id = {
   StringKey.issueDiffuserStrandedTitle:
       'Difuser tidak terhubung ke saluran mana pun',
   StringKey.issueSheetNotCalibratedTitle: 'Lembar belum dikalibrasi',
+  StringKey.issueCalibrationStaleTitle:
+      'Denah diganti — verifikasi ulang skala',
   StringKey.issueMultiSheetFloorTitle:
       'Beberapa lembar dipetakan ke satu lantai',
   StringKey.issueNetworkIslandTitle: 'Cabang jaringan tidak terhubung',
@@ -1872,6 +2112,17 @@ const Map<StringKey, String> _id = {
   StringKey.issueUnfedPanelMessage:
       '"{panel}" bukan panel asal maupun disuplai oleh feeder — tidak '
       'tersambung ke apa pun. Suplai dari panel di hulunya.',
+  StringKey.issuePressureZoneTitle: 'Zona tekanan melebihi batas fikstur',
+  StringKey.issuePressureZoneMessage:
+      'Zona tekanan dari "{bottom}" hingga "{top}" mencapai {kpa} kPa statik di '
+      'fikstur terendahnya, di atas tekanan statik fikstur maksimum SNI {limit} '
+      'kPa. Tambahkan PRV / tangki pemutus untuk membagi zona.',
+  StringKey.issueRevisionTagMissingTitle:
+      'Revisi belum diisi untuk riwayat yang tercatat',
+  StringKey.issueRevisionTagMissingMessage:
+      'Riwayat revisi memiliki entri tetapi kolom Revisi pada kop gambar kosong, '
+      'sehingga setiap lembar dan laporan yang diterbitkan tidak mencantumkan '
+      'revisi. Isi Revisi saat ini di bawah Kontrol dokumen.',
 
   // H1 — Design issue messages.
   StringKey.issueOrphanFloorMessage:
@@ -1904,6 +2155,11 @@ const Map<StringKey, String> _id = {
   StringKey.issueSheetNotCalibratedWarningMessage:
       '"{name}" belum memiliki skala — panjang saluran/riser-nya tidak dapat '
           'diukur. Kalibrasi lembar untuk mengukurnya.',
+  StringKey.issueCalibrationStaleMessage:
+      'Denah "{name}" telah diganti tetapi masih memakai skala LAMA — gambar '
+          'revisi (DPI, skala cetak, atau kop gambar yang berbeda) dapat diam-'
+          'diam membawa kalibrasi yang salah. Verifikasi ulang skalanya, atau '
+          'konfirmasi bahwa skala itu masih berlaku.',
   StringKey.issueMultiSheetFloorMessage:
       '{count} lembar dipetakan ke lantai "{floor}" ({names}) — hanya satu '
           'denah per lantai yang memasok pengukuran pada elevasi itu, sehingga '
@@ -1972,6 +2228,67 @@ const Map<StringKey, String> _id = {
   // H6 — half-localized odds & ends.
   StringKey.electricalLoadSampleProject: 'Muat proyek contoh',
   StringKey.projectApplyBuildingTemplate: 'Terapkan templat bangunan',
+
+  // Workflow-goldens review (2026-07-06).
+  StringKey.templateAppliedImportPrompt:
+      'Templat diterapkan — impor denah saat sudah siap',
+  StringKey.workflowStageCalibrate: 'Kalibrasi',
+  StringKey.workflowStageBuilding: 'Bangunan',
+  StringKey.workflowStageDraw: 'Gambar',
+  StringKey.workflowStageSize: 'Ukuran',
+  StringKey.workflowStageReport: 'Laporan',
+  StringKey.firstRunStepCalibrateDesc: 'atur skala gambar pada denah Anda',
+  StringKey.firstRunStepBuildingDesc: 'atur tinggi setiap lantai',
+  StringKey.firstRunStepDrawDesc: 'gambar pipa, saluran, dan panel',
+  StringKey.firstRunStepSizeDesc: 'ukuran otomatis sesuai SNI / PUIL',
+  StringKey.firstRunStepReportDesc: 'ekspor BOM dan laporan perhitungan',
+  StringKey.electricalPowerOneLineEmptyBody:
+      'Tambahkan generator dari tombol Sumber di toolbar di atas untuk '
+          'membangun diagram satu-garis daya hibrida dengan interlock sumber.',
+
+  // L5/M4 — the shared MechXTooltip hover-tooltip mechanism.
+  StringKey.tooltipZoomIn: 'Perbesar',
+  StringKey.tooltipZoomOut: 'Perkecil',
+  StringKey.tooltipZoomFit: 'Sesuaikan tampilan',
+  StringKey.tooltipCollapseInspector: 'Ciutkan panel',
+  StringKey.tooltipExpandInspector: 'Perluas panel',
+
+  // E5 — the on-canvas service-colour legend chip.
+  StringKey.canvasLegendTitle: 'Keterangan',
+  StringKey.tooltipHideLegend: 'Sembunyikan keterangan',
+  StringKey.tooltipShowLegend: 'Tampilkan keterangan',
+
+  // Theme F — layer lock (F1) / per-service filter (F4) / armed placement (F5).
+  StringKey.tooltipLockLayer: 'Kunci lapisan',
+  StringKey.tooltipUnlockLayer: 'Buka kunci lapisan',
+  StringKey.tooltipFilterServices: 'Saring layanan',
+  StringKey.placementArmedHint:
+      'Menempatkan {item} · klik untuk menaruh · Esc untuk batal',
+  StringKey.a11yShowLayer: 'Tampilkan lapisan',
+  StringKey.a11yHideLayer: 'Sembunyikan lapisan',
+  StringKey.a11yDecrease: 'Kurangi',
+  StringKey.a11yIncrease: 'Tambah',
+  StringKey.a11yMinimapHint:
+      'Peta mini kanvas — ketuk atau seret untuk memindahkan tampilan',
+  StringKey.a11yFieldDepth: 'Kedalaman',
+  StringKey.a11yFieldCeilingHeight: 'Tinggi plafon',
+  StringKey.a11yFieldAirChangesPerHour: 'Pergantian udara per jam',
+  StringKey.a11yFieldFloorToFloorHeight: 'Tinggi antar lantai',
+  StringKey.a11yFieldNumberOfLevels: 'Jumlah lantai',
+  StringKey.a11yFieldFloorHeight: 'Tinggi lantai',
+
+  // A1 — Layout empty-state 'Load sample project'.
+  StringKey.layoutLoadSampleProject: 'Muat proyek contoh',
+
+  // A5 — Projects-hub export grouping.
+  StringKey.projectsExportGroupDrawings: 'Gambar',
+  StringKey.projectsExportGroupReports: 'Laporan',
+  StringKey.projectsExportGroupData: 'Data',
+  StringKey.projectsExportDrawingPdfHint:
+      'Denah polos — tanpa panjang jalur/riser terkalibrasi pada label ukuran.',
+  StringKey.projectsExportAnnotatedPlanPdfHint:
+      'Denah beranotasi — menyertakan panjang jalur/riser sebenarnya pada '
+          'setiap label ukuran.',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

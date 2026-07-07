@@ -349,7 +349,13 @@ void main() {
     test('renders non-empty PDF + DXF via the neutral wrapper', () {
       final sheet = buildPowerOneLineSheet(rich);
       final pdf = sldSheetToPdf(sheet: sheet, diagramTitle: 'POWER ONE-LINE');
-      final dxf = sldSheetToDxf(sheet: sheet, diagramTitle: 'POWER ONE-LINE');
+      // A power one-line is ELECTRICAL content, so it opts into the electrical
+      // layer namespace (the neutral wrapper defaults to mechanical M-* for a
+      // plumbing riser — N15).
+      final dxf = sldSheetToDxf(
+          sheet: sheet,
+          diagramTitle: 'POWER ONE-LINE',
+          layers: SldDxfLayers.electrical);
       expect(pdf, isNotEmpty);
       expect(dxf, contains('SECTION'));
       expect(dxf.trimRight(), endsWith('EOF'));

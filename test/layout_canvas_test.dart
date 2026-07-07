@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart' show kSecondaryButton;
@@ -14,6 +15,7 @@ import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/ui/canvas/calibration_overlay.dart';
 import 'package:mechx/ui/canvas/canvas_grid.dart';
 import 'package:mechx/ui/canvas/canvas_view.dart';
@@ -25,7 +27,9 @@ import 'package:mechx/ui/layout/layout_canvas.dart';
 import 'package:mechx/ui/layout/layer_switcher.dart';
 import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/units.dart';
 
 import 'test_util.dart';
 
@@ -48,6 +52,20 @@ ProviderContainer _containerOf(WidgetTester tester) =>
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
+
+/// Boot the full app on a desktop surface and seed the demo sheets, returning
+/// the app's ProviderContainer (shared setup for the B10/B11 drag tests).
+Future<ProviderContainer> _boot(WidgetTester tester) async {
+  setDesktopSurface(tester);
+  await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 50));
+  final c = _containerOf(tester);
+  seedDemoSheets(c);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 50));
+  return c;
+}
 
 void main() {
   setUpAll(_loadFonts);
@@ -551,5 +569,365 @@ void main() {
     expect(s1!.meters, s2!.meters);
     expect(c.read(selectionProvider).edgeIds.length, 2,
         reason: 'a batch edit must keep the multi-selection alive');
+  });
+
+  testWidgets(
+      'B11: a pull from a HOVERED (unselected) nub survives the mid-pull '
+      'hover-clear and lays the run at the FULL distance', (tester) async {
+    final c = await _boot(tester);
+
+    final ctrl = c.read(networkControllerProvider.notifier);
+    final sheet = c.read(sheetsControllerProvider).current!;
+    ctrl.addFitting(sheet.id, 0, const Offset(500, 500)); // a bare junction
+    await tester.pump();
+    final id = c.read(networkControllerProvider).network.nodes.last.id;
+
+    // Merely HOVER the node (do NOT select it) — the C7 gate mounts the nub.
+    c.read(hoverTargetProvider.notifier).set((nodeId: id, edgeId: null));
+    await tester.pump();
+    expect(c.read(selectionProvider).nodeId, isNot(id),
+        reason: 'the node must be hovered, not selected');
+    final theNub = find.byKey(ValueKey('outlet-$id'));
+    expect(theNub, findsOneWidget);
+
+    final vt = c.read(sheetsControllerProvider).viewportFor(sheet.id) ??
+        const ViewportTransform();
+
+    // Pull the mainline 200 px to the right, releasing far from the source.
+    final g = await tester.startGesture(tester.getCenter(theNub));
+    await tester.pump();
+    await g.moveBy(const Offset(80, 0)); // pull begins → _pullFrom == id
+    await tester.pump();
+    // Production fires the nub's MouseRegion.onExit here (the pointer left the
+    // 18 px nub) which cleared the hover latch. Reproduce that pressure: the
+    // B11 gate must keep the nub mounted (_pullFrom == id) so the live pan
+    // gesture is not torn down mid-pull.
+    c.read(hoverTargetProvider.notifier).clear();
+    await tester.pump();
+    await g.moveBy(const Offset(120, 0)); // continue to the full 200 px
+    await tester.pump();
+    await g.up();
+    await tester.pump();
+
+    final net = c.read(networkControllerProvider).network;
+    final runs =
+        net.edges.where((e) => e.fromId == id || e.toId == id).toList();
+    expect(runs.length, 1, reason: 'the pull must lay exactly one run');
+    final e = runs.first;
+    final farId = e.fromId == id ? e.toId : e.fromId;
+    final far = net.nodeById(farId)!;
+    final src = net.nodeById(id)!;
+    final distScreen =
+        (Offset(far.x, far.y) - Offset(src.x, src.y)).distance * vt.scale;
+    expect(distScreen, greaterThan(150),
+        reason: 'the run reached the full pull distance, not frozen short');
+  });
+
+  testWidgets(
+      'B10: resizing a selected run endpoint snaps to a 45-degree ray when '
+      'Ortho is on', (tester) async {
+    final c = await _boot(tester);
+    expect(c.read(orthoProvider), isTrue); // ortho is default-on
+
+    final sheet = c.read(sheetsControllerProvider).current!;
+    c.read(networkControllerProvider.notifier).addSegment(
+        sheet.id, 0, const Offset(500, 500),
+        service: ServiceType.coldWater);
+    await tester.pump();
+    final edge = c.read(networkControllerProvider).network.edges.single;
+    c.read(selectionProvider.notifier).selectEdge(edge.id);
+    await tester.pump();
+
+    final vt = c.read(sheetsControllerProvider).viewportFor(sheet.id) ??
+        const ViewportTransform();
+    final canvasRect = tester.getRect(find.byType(CanvasView));
+    Offset worldOf(String nid) {
+      final n = c.read(networkControllerProvider).network.nodeById(nid)!;
+      return Offset(n.x, n.y);
+    }
+
+    final a0 = worldOf(edge.fromId), b0 = worldOf(edge.toId);
+    final bId = b0.dx >= a0.dx ? edge.toId : edge.fromId; // right endpoint
+    final aId = bId == edge.toId ? edge.fromId : edge.toId; // the anchor
+
+    // Drag B by a world delta whose raw angle from A (~-45 deg but not on it)
+    // rounds to the -45 deg ray; ortho must pull it exactly onto that ray.
+    final bScreen = canvasRect.topLeft + vt.worldToScreen(worldOf(bId));
+    final g = await tester.startGesture(bScreen);
+    await tester.pump();
+    await g.moveBy(Offset(180 * vt.scale, -300 * vt.scale));
+    await tester.pump();
+    await g.up();
+    await tester.pump();
+
+    final v = worldOf(bId) - worldOf(aId);
+    expect(v.dx.abs(), greaterThan(50));
+    expect(v.dy.abs(), greaterThan(50));
+    expect((v.dx.abs() - v.dy.abs()).abs(), lessThan(2.0),
+        reason: 'ortho snaps the resized run onto the 45-degree diagonal; '
+            'got $v');
+  });
+
+  testWidgets(
+      'B10: Shift frees the endpoint resize from the ortho constraint',
+      (tester) async {
+    final c = await _boot(tester);
+
+    final sheet = c.read(sheetsControllerProvider).current!;
+    c.read(networkControllerProvider.notifier).addSegment(
+        sheet.id, 0, const Offset(500, 500),
+        service: ServiceType.coldWater);
+    await tester.pump();
+    final edge = c.read(networkControllerProvider).network.edges.single;
+    c.read(selectionProvider.notifier).selectEdge(edge.id);
+    await tester.pump();
+
+    final vt = c.read(sheetsControllerProvider).viewportFor(sheet.id) ??
+        const ViewportTransform();
+    final canvasRect = tester.getRect(find.byType(CanvasView));
+    Offset worldOf(String nid) {
+      final n = c.read(networkControllerProvider).network.nodeById(nid)!;
+      return Offset(n.x, n.y);
+    }
+
+    final a0 = worldOf(edge.fromId), b0 = worldOf(edge.toId);
+    final bId = b0.dx >= a0.dx ? edge.toId : edge.fromId;
+    final aId = bId == edge.toId ? edge.fromId : edge.toId;
+
+    // Hold Shift → effectiveOrtho is off → a mostly-horizontal drag with a
+    // clear vertical keeps its vertical rise (ortho would zero it).
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    final bScreen = canvasRect.topLeft + vt.worldToScreen(worldOf(bId));
+    final g = await tester.startGesture(bScreen);
+    await tester.pump();
+    await g.moveBy(Offset(300 * vt.scale, -90 * vt.scale));
+    await tester.pump();
+    await g.up();
+    await tester.pump();
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+
+    final v = worldOf(bId) - worldOf(aId);
+    expect(v.dy.abs(), greaterThan(30),
+        reason: 'Shift frees the drag — the vertical rise survives, it is not '
+            'snapped to the horizontal ray; got $v');
+  });
+
+  testWidgets(
+      'B10: a degree>=2 junction node drags FREELY under Ortho (snapping one '
+      'edge would un-straighten the other)', (tester) async {
+    final c = await _boot(tester);
+    expect(c.read(orthoProvider), isTrue);
+
+    final ctrl = c.read(networkControllerProvider.notifier);
+    final sheet = c.read(sheetsControllerProvider).current!;
+    ctrl.addFitting(sheet.id, 0, const Offset(500, 500));
+    final jId = c.read(networkControllerProvider).network.nodes.last.id;
+    // Two runs out of J → degree 2 (one horizontal, one vertical neighbour).
+    ctrl.drawRunFromNode(jId, const Offset(760, 500));
+    ctrl.drawRunFromNode(jId, const Offset(500, 760));
+    await tester.pump();
+    // Confirm the junction really is degree 2.
+    final degree = c
+        .read(networkControllerProvider)
+        .network
+        .edges
+        .where((e) => e.fromId == jId || e.toId == jId)
+        .length;
+    expect(degree, 2);
+
+    final vt = c.read(sheetsControllerProvider).viewportFor(sheet.id) ??
+        const ViewportTransform();
+    final canvasRect = tester.getRect(find.byType(CanvasView));
+    Offset worldOf(String nid) {
+      final n = c.read(networkControllerProvider).network.nodeById(nid)!;
+      return Offset(n.x, n.y);
+    }
+
+    final j0 = worldOf(jId);
+    final jScreen = canvasRect.topLeft + vt.worldToScreen(j0);
+    // A non-axis, non-45-degree drag (dy/dx ~ -0.56), driven in steps so the
+    // gesture arena settles on the node's drag handle (tap+pan) before moving.
+    final g = await tester.startGesture(jScreen);
+    await tester.pump();
+    final jStep = Offset(180 * vt.scale, -100 * vt.scale) / 5;
+    for (var i = 0; i < 5; i++) {
+      await g.moveBy(jStep);
+      await tester.pump();
+    }
+    await g.up();
+    await tester.pump();
+
+    final moved = worldOf(jId) - j0;
+    expect(moved.dx, greaterThan(0));
+    expect(moved.dy, lessThan(0));
+    // Free: the displacement follows the raw drag direction — NOT snapped to
+    // an axis (ratio ~ 0) nor a 45-degree ray (ratio ~ -1).
+    final ratio = moved.dy / moved.dx;
+    expect(ratio, lessThan(-0.2), reason: 'not snapped to horizontal; $moved');
+    expect(ratio, greaterThan(-0.9), reason: 'not snapped to 45 deg; $moved');
+  });
+
+  testWidgets(
+      'B5: a calibrated true-width duct is clickable across its rendered '
+      'body, not just an 8px hairline centreline', (tester) async {
+    final c = await _boot(tester);
+
+    final ctrl = c.read(networkControllerProvider.notifier);
+    final sheet = c.read(sheetsControllerProvider).current!;
+    c
+        .read(projectControllerProvider.notifier)
+        .setCalibration(sheet.id, const ScaleCalibration(0.01));
+
+    ctrl.addSegment(sheet.id, 0, const Offset(700, 700),
+        service: ServiceType.duct);
+    await tester.pump();
+    final edge = c.read(networkControllerProvider).network.edges.last;
+    // Give the far end demand so the run actually carries flow — an edge
+    // with no accumulated flow is skipped by autoSizeNetwork regardless of
+    // any size override.
+    ctrl.setNodeAirflow(edge.toId, FlowRate.litersPerSecond(500));
+    await tester.pump();
+
+    final vt = c.read(sheetsControllerProvider).viewportFor(sheet.id) ??
+        const ViewportTransform();
+    // A diameter chosen to render a robust ~48 screen-px true width at THIS
+    // test's actual zoom scale (a large calibrated trunk, zoomed in — the
+    // very scenario B5 concerns), whatever that scale happens to be.
+    const mpp = 0.01;
+    final mmForTarget = 48.0 * mpp * 1000 / vt.scale;
+    ctrl.setEdgeSizeOverride(edge.id, Diameter.mm(mmForTarget));
+    await tester.pump();
+
+    final sizing = c.read(sizingProvider);
+    final s = sizing[edge.id];
+    expect(s, isNotNull, reason: 'the duct must carry flow to be sized');
+    final outer = pipeOuterPx(s, ServiceType.duct,
+        scale: vt.scale, metersPerPixel: mpp);
+    expect(outer, greaterThan(30),
+        reason: 'the calibrated duct should render wide; got $outer');
+
+    final net = c.read(networkControllerProvider).network;
+    final a = net.nodeById(edge.fromId)!, b = net.nodeById(edge.toId)!;
+    final mid = Offset((a.x + b.x) / 2, (a.y + b.y) / 2);
+    final canvasRect = tester.getRect(find.byType(CanvasView));
+
+    // A tap 15 screen px off the (horizontal) run's centreline must still
+    // hit it — the old fixed 8px band would have missed this.
+    final probe = mid + Offset(0, 15 / vt.scale);
+    await tester.tapAt(canvasRect.topLeft + vt.worldToScreen(probe));
+    await tester.pump();
+    expect(c.read(selectionProvider).edgeId, edge.id,
+        reason: 'a tap 15px off the fat duct centreline must still hit it');
+  });
+
+  testWidgets(
+      'B5: an unsized/hairline run keeps the original fixed 8px hit band',
+      (tester) async {
+    final c = await _boot(tester);
+
+    final ctrl = c.read(networkControllerProvider.notifier);
+    final sheet = c.read(sheetsControllerProvider).current!;
+    // No calibration, no manual size override — this run only ever gets the
+    // flat default fixture-unit demand (~2 UBAP, a small DN), so its rendered
+    // body stays thin regardless.
+    ctrl.addSegment(sheet.id, 0, const Offset(900, 300),
+        service: ServiceType.coldWater);
+    await tester.pump();
+    final edge = c.read(networkControllerProvider).network.edges.last;
+
+    final vt = c.read(sheetsControllerProvider).viewportFor(sheet.id) ??
+        const ViewportTransform();
+    final outer = pipeOuterPx(c.read(sizingProvider)[edge.id],
+        ServiceType.coldWater, scale: vt.scale, metersPerPixel: null);
+    expect(math.max(8.0, outer / 2 + 4.0), 8.0,
+        reason: 'an uncalibrated/thin pipe must resolve to the original '
+            '8px hairline corridor; got outer=$outer');
+
+    final net = c.read(networkControllerProvider).network;
+    final a = net.nodeById(edge.fromId)!, b = net.nodeById(edge.toId)!;
+    final mid = Offset((a.x + b.x) / 2, (a.y + b.y) / 2);
+    final canvasRect = tester.getRect(find.byType(CanvasView));
+
+    // 15px off the centreline MISSES the fixed 8px band.
+    final far = mid + Offset(0, 15 / vt.scale);
+    await tester.tapAt(canvasRect.topLeft + vt.worldToScreen(far));
+    await tester.pump();
+    expect(c.read(selectionProvider).edgeId, isNot(edge.id),
+        reason: 'an unsized hairline run must not extend its hit band');
+
+    // 6px off the centreline still HITS (inside the original 8px band).
+    final near = mid + Offset(0, 6 / vt.scale);
+    await tester.tapAt(canvasRect.topLeft + vt.worldToScreen(near));
+    await tester.pump();
+    expect(c.read(selectionProvider).edgeId, edge.id,
+        reason: 'the original 8px hairline band must still register a hit');
+  });
+
+  testWidgets(
+      'B6: a drag started at the NUB centre pulls a mainline, a drag '
+      'started at the NODE centre moves the node — the two hit boxes no '
+      'longer overlap', (tester) async {
+    final c = await _boot(tester);
+
+    final ctrl = c.read(networkControllerProvider.notifier);
+    final sheet = c.read(sheetsControllerProvider).current!;
+    ctrl.addFitting(sheet.id, 0, const Offset(500, 500)); // a bare junction
+    await tester.pump();
+    final id = c.read(networkControllerProvider).network.nodes.last.id;
+
+    c.read(selectionProvider.notifier).selectNode(id);
+    await tester.pump();
+    final nub = find.byKey(ValueKey('outlet-$id'));
+    expect(nub, findsOneWidget);
+
+    Offset worldOf(String nid) {
+      final n = c.read(networkControllerProvider).network.nodeById(nid)!;
+      return Offset(n.x, n.y);
+    }
+
+    final before = worldOf(id);
+
+    // 1) A drag STARTING AT THE NUB'S CENTRE pulls a new mainline — the
+    // source node itself never moves.
+    final g1 = await tester.startGesture(tester.getCenter(nub));
+    await tester.pump();
+    await g1.moveBy(const Offset(80, 0));
+    await tester.pump();
+    await g1.up();
+    await tester.pump();
+
+    final afterPull = c.read(networkControllerProvider).network;
+    expect(
+        afterPull.edges.where((e) => e.fromId == id || e.toId == id).length,
+        1,
+        reason: 'the nub drag must lay exactly one new run');
+    expect(worldOf(id), before,
+        reason: 'a pull from the nub must never move the source node');
+
+    // 2) A drag STARTING AT THE NODE'S OWN CENTRE moves the node instead —
+    // no second run is laid.
+    final vt = c.read(sheetsControllerProvider).viewportFor(sheet.id) ??
+        const ViewportTransform();
+    final canvasRect = tester.getRect(find.byType(CanvasView));
+    final nodeCentre = canvasRect.topLeft + vt.worldToScreen(before);
+    final g2 = await tester.startGesture(nodeCentre);
+    await tester.pump();
+    // Driven in steps so the gesture arena settles on the node's drag handle
+    // (tap+pan) before moving — matches the B10 junction-drag test's pattern.
+    final step = const Offset(0, 80) / 5;
+    for (var i = 0; i < 5; i++) {
+      await g2.moveBy(step);
+      await tester.pump();
+    }
+    await g2.up();
+    await tester.pump();
+
+    final afterMove = c.read(networkControllerProvider).network;
+    expect(
+        afterMove.edges.where((e) => e.fromId == id || e.toId == id).length,
+        1,
+        reason: 'the node drag must not lay a second run');
+    expect(worldOf(id), isNot(before),
+        reason: 'a drag started at the node centre must move the node');
   });
 }

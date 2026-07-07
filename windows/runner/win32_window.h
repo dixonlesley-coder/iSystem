@@ -90,6 +90,17 @@ class Win32Window {
   // Update the window frame's theme to match the system theme.
   static void UpdateTheme(HWND const window);
 
+  // M3 (Windows-desktop citizenship): persist / restore the window position,
+  // size, and maximized state across launches via a small file in the same
+  // per-user app-data dir the Dart side uses for settings (%APPDATA%\iSystem).
+  // |SaveWindowPlacement| runs on WM_DESTROY (GetWindowPlacement); the loaded
+  // placement is applied on |Show|. Both are best-effort and defensive — a
+  // missing/corrupt file, an unavailable dir, or a saved rect that lands off
+  // every currently-connected monitor is silently ignored so the app always
+  // opens somewhere visible and never crashes on a bad file.
+  void SaveWindowPlacement();
+  void RestoreWindowPlacement();
+
   bool quit_on_close_ = false;
 
   // window handle for top level window.
@@ -97,6 +108,11 @@ class Win32Window {
 
   // window handle for hosted content.
   HWND child_content_ = nullptr;
+
+  // Placement loaded from disk in |Create|, applied in |Show| (M3). When
+  // |has_saved_placement_| is false, |Show| falls back to the default show.
+  bool has_saved_placement_ = false;
+  WINDOWPLACEMENT saved_placement_{};
 };
 
 #endif  // RUNNER_WIN32_WINDOW_H_

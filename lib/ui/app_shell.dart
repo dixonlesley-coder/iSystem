@@ -42,6 +42,7 @@ import 'theme/mechx_theme.dart';
 import 'widgets/glass_surface.dart';
 import 'widgets/mechx_button.dart';
 import 'widgets/mechx_focus_ring.dart';
+import 'widgets/mechx_tooltip.dart';
 import 'widgets/section_label.dart';
 import 'widgets/severity_glyph.dart';
 
@@ -282,12 +283,23 @@ class _DesignWorkspace extends ConsumerWidget {
     // over a full-bleed CANVAS-coloured backdrop (painted behind the whole
     // workspace), so the chrome frosts the canvas tone — distinct from the
     // opaque content — without occluding the canvas's own overlays.
+    //
+    // D4: the Riser (schematic) canvas is, like Electrical, NOT sheet-based —
+    // Auto/Edit always render the WHOLE building across every floor
+    // regardless of the selected sheet (schematic_view.dart's
+    // `_sheetIdForFloor` never consults `sheets.currentIndex`), so the same
+    // "sheet rail where it applies" reasoning that omits it for Electrical
+    // applies here too: clicking a floor number did nothing, just confusing
+    // dead chrome. Omit it rather than wire a floor-focus control — the
+    // Riser-scoped inspector already gives building/floor context, and
+    // "every floor stacked" is the Riser's whole point (a per-floor filter
+    // would fight that).
     return Stack(
       children: [
         Positioned.fill(child: ColoredBox(color: colors.canvas)),
         Row(
           children: [
-            const SheetRail(),
+            if (view != WorkspaceView.schematic) const SheetRail(),
             Expanded(child: canvas),
             inspector,
           ],
@@ -297,15 +309,95 @@ class _DesignWorkspace extends ConsumerWidget {
   }
 }
 
-/// The right inspector shown when Electrical is the active Layout layer: the
-/// Loads palette (drag onto the canvas) — the electrical editing toolset.
-class _ElectricalInspectorColumn extends StatelessWidget {
+/// Builds the INLINE electrical editor body for the current
+/// [electricalInspectorTargetProvider] target (a circuit / panel / the
+/// project-wide Service / Sources / Advanced sections), or null when nothing is
+/// targeted (the caller then shows the Loads palette). Shared (C1) by the
+/// standalone electrical workspace column AND the Layout electrical-layer column
+/// so both are selection-first. A stale target (its panel / circuit deleted) is
+/// cleared next frame and returns null. Transparent — floats on the column's
+/// Liquid-Glass.
+Widget? buildElectricalInlineEditor(WidgetRef ref, VoidCallback clear) {
+  final target = ref.watch(electricalInspectorTargetProvider);
+  if (target == null) return null;
+  final project = ref.watch(electricalProjectProvider);
+  final ctrl = ref.read(electricalProjectProvider.notifier);
+  Widget? editor;
+  if (target is ElectricalCircuitTarget) {
+    final panel =
+        project.panels.where((p) => p.id == target.panelId).firstOrNull;
+    final circuit =
+        panel?.circuits.where((c) => c.id == target.circuitId).firstOrNull;
+    if (panel != null && circuit != null) {
+      // H2/H3 — the way's solved protection (breaker/RCD/Icu), the SAME figures
+      // the board schedule prints, for the circuit editor's read-only line.
+      final result = ref.watch(electricalResultProvider);
+      final circuitResult = result.panels[panel.id]?.circuits
+          .where((c) => c.circuitId == circuit.id)
+          .firstOrNull;
+      final icuKa = ref
+          .watch(electricalAdvancedProvider)
+          .fault
+          .panels[panel.id]
+          ?.incomerKa;
+      editor = ElectricalCircuitInspector(
+        key: ValueKey('${target.panelId}/${target.circuitId}'),
+        panel: panel,
+        circuit: circuit,
+        controller: ctrl,
+        onClose: clear,
+        inline: true,
+        circuitResult: circuitResult,
+        breakerIcuKa: icuKa,
+      );
+    }
+  } else if (target is ElectricalPanelTarget) {
+    final panel =
+        project.panels.where((p) => p.id == target.panelId).firstOrNull;
+    if (panel != null) {
+      editor = ElectricalPanelInspector(
+        key: ValueKey('panel/${target.panelId}'),
+        panel: panel,
+        controller: ctrl,
+        onClose: clear,
+        inline: true,
+      );
+    }
+  } else if (target is ElectricalServiceTarget) {
+    // C1: the project-wide Service & Earthing / Sources / Advanced editors now
+    // render INLINE here (was a floating drawer over the canvas).
+    editor = ElectricalServiceInspector(onClose: clear);
+  } else if (target is ElectricalSourcesTarget) {
+    editor = ElectricalSourcesInspector(onClose: clear);
+  } else if (target is ElectricalAdvancedTarget) {
+    editor = ElectricalAdvancedInspector(onClose: clear);
+  }
+  // A stale target whose panel / circuit was deleted: clear it next frame so the
+  // column falls back to the palette (never a blank inspector).
+  if (editor == null) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => clear());
+  }
+  return editor;
+}
+
+/// The right inspector shown when Electrical is the active Layout layer (C1):
+/// selection-first — the inline circuit / panel editor when a marker is
+/// double-clicked (driven by [electricalInspectorTargetProvider], the same
+/// target the standalone workspace uses), else the "Electrical layer" header +
+/// the Loads palette (drag onto the canvas).
+class _ElectricalInspectorColumn extends ConsumerWidget {
   const _ElectricalInspectorColumn();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
+    void clear() =>
+        ref.read(electricalInspectorTargetProvider.notifier).clear();
+    final editor = buildElectricalInlineEditor(ref, clear);
+    if (editor != null) {
+      return SizedBox(width: ProjectPanel.width, child: editor);
+    }
     return SizedBox(
       width: ProjectPanel.width,
       // Transparent: floats on the CollapsibleInspector's Liquid-Glass surface.
@@ -341,54 +433,25 @@ class _ElectricalWorkspaceInspectorColumn extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final target = ref.watch(electricalInspectorTargetProvider);
-    final project = ref.watch(electricalProjectProvider);
-    final ctrl = ref.read(electricalProjectProvider.notifier);
     void clear() =>
         ref.read(electricalInspectorTargetProvider.notifier).clear();
+    final editor = buildElectricalInlineEditor(ref, clear);
 
-    Widget? editor;
-    if (target is ElectricalCircuitTarget) {
-      final panel =
-          project.panels.where((p) => p.id == target.panelId).firstOrNull;
-      final circuit =
-          panel?.circuits.where((c) => c.id == target.circuitId).firstOrNull;
-      if (panel != null && circuit != null) {
-        editor = ElectricalCircuitInspector(
-          key: ValueKey('${target.panelId}/${target.circuitId}'),
-          panel: panel,
-          circuit: circuit,
-          controller: ctrl,
-          onClose: clear,
-          inline: true,
-        );
-      }
-    } else if (target is ElectricalPanelTarget) {
-      final panel =
-          project.panels.where((p) => p.id == target.panelId).firstOrNull;
-      if (panel != null) {
-        editor = ElectricalPanelInspector(
-          key: ValueKey('panel/${target.panelId}'),
-          panel: panel,
-          controller: ctrl,
-          onClose: clear,
-          inline: true,
-        );
-      }
-    }
-    // A stale target whose panel / circuit was deleted: clear it next frame so
-    // the column falls back to the palette (never a blank inspector).
-    if (target != null && editor == null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => clear());
-    }
-
+    // D6: the Loads palette is interactive only on the Single-line tab; on the
+    // read-only Building-riser / Power one-line projections it renders inert.
+    final tab = ref.watch(electricalTabProvider);
     return SizedBox(
       width: ProjectPanel.width,
       // Transparent: floats on the CollapsibleInspector's Liquid-Glass surface.
       child: editor ??
-          const Column(
+          Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [Expanded(child: ElectricalPalette())],
+            children: [
+              Expanded(
+                child: ElectricalPalette(
+                    enabled: tab == ElectricalTab.singleLine),
+              ),
+            ],
           ),
     );
   }
@@ -813,33 +876,39 @@ class _ThemeToggleButtonState extends State<_ThemeToggleButton> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Semantics(
-      button: true,
-      label: widget.semanticLabel,
-      child: MechXFocusRing(
-        borderRadius: MechXRadii.control,
-        onActivated: widget.onTap,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          onEnter: (_) => setState(() => _hover = true),
-          onExit: (_) => setState(() => _hover = false),
-          child: GestureDetector(
-            onTap: widget.onTap,
-            child: AnimatedContainer(
-              duration: MechXMotion.hover,
-              curve: MechXMotion.standard,
-              padding: const EdgeInsets.symmetric(
-                horizontal: MechXSpacing.sm,
-                vertical: MechXSpacing.xs,
-              ),
-              decoration: BoxDecoration(
-                color: _hover ? colors.surfaceHover : const Color(0x00000000),
-                borderRadius: MechXRadii.control,
-              ),
-              child: CustomPaint(
-                size: const Size(16, 16),
-                painter: _ThemeGlyphPainter(
-                  color: _hover ? colors.textSecondary : colors.textMuted,
+    // L5/M4: the demoted, icon-only toggle previously only named itself for a
+    // screen reader (semanticLabel); a hover tooltip now shows the same text
+    // to a sighted mouse user too.
+    return MechXTooltip(
+      message: widget.semanticLabel,
+      child: Semantics(
+        button: true,
+        label: widget.semanticLabel,
+        child: MechXFocusRing(
+          borderRadius: MechXRadii.control,
+          onActivated: widget.onTap,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            onEnter: (_) => setState(() => _hover = true),
+            onExit: (_) => setState(() => _hover = false),
+            child: GestureDetector(
+              onTap: widget.onTap,
+              child: AnimatedContainer(
+                duration: MechXMotion.hover,
+                curve: MechXMotion.standard,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: MechXSpacing.sm,
+                  vertical: MechXSpacing.xs,
+                ),
+                decoration: BoxDecoration(
+                  color: _hover ? colors.surfaceHover : const Color(0x00000000),
+                  borderRadius: MechXRadii.control,
+                ),
+                child: CustomPaint(
+                  size: const Size(16, 16),
+                  painter: _ThemeGlyphPainter(
+                    color: _hover ? colors.textSecondary : colors.textMuted,
+                  ),
                 ),
               ),
             ),

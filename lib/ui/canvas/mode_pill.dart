@@ -5,6 +5,7 @@ import '../../store/annotation_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../../store/snap_settings_store.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
@@ -26,6 +27,7 @@ class ModePill extends ConsumerWidget {
     final measure = ref.watch(measureModeProvider);
     final tank = ref.watch(tankModeProvider);
     final room = ref.watch(roomModeProvider);
+    final refLine = ref.watch(refLineModeProvider);
 
     // The modes are mutually exclusive by the toolbar's design; resolve in
     // the same priority order the overlays mount. [keyHint] echoes the
@@ -71,6 +73,9 @@ class ModePill extends ConsumerWidget {
       label = 'Room';
       keyHint = 'B';
       done = () => ref.read(roomModeProvider.notifier).set(false);
+    } else if (refLine) {
+      label = 'Ref line';
+      done = () => ref.read(refLineModeProvider.notifier).set(false);
     }
     if (label == null) return const SizedBox.shrink();
 

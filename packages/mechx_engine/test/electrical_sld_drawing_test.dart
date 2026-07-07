@@ -6,6 +6,7 @@ import 'package:mechx_engine/electrical/earthing.dart' show EarthingSystem;
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/results.dart' show BreakerResult;
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
 import 'package:mechx_engine/report/electrical_pdf_export.dart';
@@ -93,12 +94,14 @@ void main() {
     // are exact: 7 column separators (6 px left of DEVICE / PENGHANTAR /
     // DAYA / KETERANGAN / R / S / T) spanning header band → bus bottom, and
     // one horizontal rule under each body row (MDP has 2 ways, 0 spares).
+    // The columns after DEVICE shift +28 (block widened for the kA + RCD
+    // tokens in the DEVICE cell — N9 / N10).
     final detail = buildElectricalSld(
         project: project, result: result, onlyPanelId: 'MDP');
     final lines = detail.prims.whereType<SldLine>().toList();
     const busTop = 46.0; // _headerH
     const busBot = busTop + 3 * 20.0 + 6; // (1 header + 2 way rows) · _rowH + 6
-    for (final colX in const [116.0, 224.0, 446.0, 506.0, 726.0, 772.0, 818.0]) {
+    for (final colX in const [116.0, 252.0, 474.0, 534.0, 754.0, 800.0, 846.0]) {
       final vert = lines.where((l) =>
           l.x1 == colX - 6 && l.x2 == colX - 6 && l.y1 == busTop && l.y2 == busBot);
       expect(vert.length, 1, reason: 'column separator at ${colX - 6}');
@@ -147,6 +150,47 @@ void main() {
     // ASCII-safe: no unicode phase glyph / squared metres in the labels.
     expect(joined.contains('Ø'), isFalse); // Ø
     expect(joined.contains('²'), isFalse); // ²
+  });
+
+  test('H6: a large-CSA feeder shows a `tray` route token, small ways `PVC`',
+      () {
+    // A huge 3-phase load forces the cable CSA past the conduit range
+    // (> 70 mm2), so its PENGHANTAR cell must state an explicit `tray` route
+    // method instead of a silent blank — while a small final way keeps `PVC`.
+    const big = ElectricalProject(
+      id: 'big',
+      name: 'Big load',
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'MDP',
+          circuits: [
+            ElectricalCircuit(
+              id: 'huge',
+              name: 'Chiller',
+              loadKind: LoadKind.general,
+              loadW: 180000,
+              phases: 3,
+              cableType: 'NYY',
+            ),
+            ElectricalCircuit(
+              id: 'tiny',
+              name: 'Lighting',
+              loadKind: LoadKind.lighting,
+              isLighting: true,
+              loadW: 600,
+              phases: 1,
+              cableType: 'NYM',
+            ),
+          ],
+        ),
+      ],
+    );
+    final r = computeSystem(profile, big);
+    final s = buildElectricalSld(project: big, result: r);
+    final joined = s.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+    expect(joined, contains('tray'), reason: 'large feeder states its route');
+    expect(joined, contains('PVC'), reason: 'small ways keep conduit');
   });
 
   test('a panel with spare-ways + a fault level shows CADANGAN + Icw', () {
@@ -767,6 +811,190 @@ void main() {
         expect(l.text.contains('Ø'), isFalse, reason: l.text);
         expect(l.text.contains('²'), isFalse, reason: l.text);
       }
+    });
+  });
+
+  group('Wave 7 export-readiness — length / kA / RCD / CT (N8-N11)', () {
+    // A 3-phase MDP feeding a 1-phase LP with a socket way; realistic run
+    // lengths; computed WITH an origin fault level so the busbar withstand (and
+    // thus the N9 kA fallback) is populated WITHOUT any fault-study kA map.
+    const wp = ElectricalProject(
+      id: 'wp',
+      name: 'Wave7',
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'MDP',
+          circuits: [
+            ElectricalCircuit(
+                id: 'f1', name: 'Feeder to LP-1', loadKind: LoadKind.feeder,
+                feedsPanelId: 'LP1', length: Length(24)),
+            ElectricalCircuit(
+                id: 'g1', name: 'Chiller', loadKind: LoadKind.general,
+                loadW: 40000, length: Length(18)),
+          ],
+        ),
+        ElectricalPanel(
+          id: 'LP1',
+          name: 'LP-1',
+          system: ElectricalSystem.singlePhase,
+          voltage: Voltage(220),
+          sourceType: PanelSource.feeder,
+          fedByCircuitId: 'f1',
+          circuits: [
+            ElectricalCircuit(
+                id: 's1', name: 'Sockets L.1', loadKind: LoadKind.socket,
+                loadW: 2000, points: 6, length: Length(22)),
+            ElectricalCircuit(
+                id: 'l1', name: 'Lighting', loadKind: LoadKind.lighting,
+                isLighting: true, loadW: 1200, length: Length(30)),
+          ],
+        ),
+      ],
+    );
+    final wpResult = computeSystem(profile, wp,
+        originFaultLevel: const Current(16000), busbarClearingTimeS: 0.1);
+
+    String allLabels() => wpResult.panels.keys
+        .map((id) => buildElectricalPanelDetail(
+                project: wp, result: wpResult, panelId: id)
+            .prims
+            .whereType<SldLabel>()
+            .map((t) => t.text)
+            .join('\n'))
+        .join('\n');
+
+    test('N8 — the schedule cell carries the run length (m) after the cable',
+        () {
+      final joined = allLabels();
+      // The socket way's 22 m + the lighting way's 30 m run lengths read on the
+      // conductor cell — the same lengths that drove the printed Vdrop.
+      expect(joined, contains('22 m'));
+      expect(joined, contains('30 m'));
+      // A cable cell reads `... mm2 ... · <n> m` (length appended after cable).
+      expect(RegExp(r'mm2.* · \d+(\.\d+)? m').hasMatch(joined), isTrue);
+    });
+
+    test('N8 — the overview feeder label carries the feeder run length', () {
+      final ov = buildElectricalOverview(project: wp, result: wpResult);
+      final feeder = ov.prims.whereType<SldLabel>().firstWhere(
+          (l) => l.text.contains(' mm2 ') && l.text.contains('·'));
+      // The LV feeder to LP-1 (24 m) reads on the feeder annotation.
+      expect(feeder.text, contains('24 m'));
+    });
+
+    test('N9 — the incomer + every DEVICE cell carry a kA from the withstand '
+        'fallback (no fault-study map)', () {
+      final mdp = buildElectricalPanelDetail(
+          project: wp, result: wpResult, panelId: 'MDP');
+      final labels =
+          mdp.prims.whereType<SldLabel>().map((t) => t.text).toList();
+      // The incomer sub-line carries a kA.
+      expect(labels.any((t) => t.startsWith('Incomer') && t.contains('kA')),
+          isTrue);
+      // A bare DEVICE row (not the incomer sub-line) carries a kA too.
+      expect(
+          labels.any((t) =>
+              !t.startsWith('Incomer') &&
+              RegExp(r'MC(B|CB) \d+A (1|3)ph \d+(\.\d+)?kA').hasMatch(t)),
+          isTrue);
+      // The kA convention is surfaced in the KETERANGAN legend.
+      expect(mdp.legend.map((e) => e.code), contains('kA'));
+    });
+
+    test('N10 — the socket way carries its RCD token; the report + schedule use '
+        'the same field', () {
+      final lp1 = buildElectricalPanelDetail(
+          project: wp, result: wpResult, panelId: 'LP1');
+      final joined =
+          lp1.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      // The 30 mA Type A socket RCD reads on the DEVICE cell.
+      expect(joined, contains('RCD 30mA A'));
+      // Exactly one RCD token on LP-1 (only the socket way; the lighting way
+      // in TN has none — no token invented).
+      expect('RCD '.allMatches(joined).length, 1);
+    });
+
+    test('N11 — a 3-phase board prints a derived CT ratio + class, not a bare '
+        'CT glyph', () {
+      final mdp = buildElectricalPanelDetail(
+          project: wp, result: wpResult, panelId: 'MDP');
+      final joined =
+          mdp.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      // A standard primary / 5 A secondary + class 1 metering accuracy.
+      expect(RegExp(r'CT \d+/5A cl\.1').hasMatch(joined), isTrue);
+      // The metering instruments are listed in the KETERANGAN legend.
+      final codes = mdp.legend.map((e) => e.code).toList();
+      expect(codes, contains('CT'));
+      expect(codes, contains('V / A / Hz'));
+    });
+
+    test('N11 — the CT primary is a standard rating at/above the demand current',
+        () {
+      final joined = buildElectricalPanelDetail(
+              project: wp, result: wpResult, panelId: 'MDP')
+          .prims
+          .whereType<SldLabel>()
+          .map((t) => t.text)
+          .join('\n');
+      final primary =
+          int.parse(RegExp(r'CT (\d+)/5A').firstMatch(joined)!.group(1)!);
+      final demandA = wpResult.panels['MDP']!.demandCurrent.amperes;
+      // The CT primary covers the demand current (never understated)…
+      expect(primary, greaterThanOrEqualTo(demandA));
+      // …and is one of the IEC preferred values (not a fabricated ratio).
+      const ladder = {
+        5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150, 200, 250, 300, //
+        400, 500, 600, 750, 800, 1000, 1250, 1500, 1600, 2000, 2500, 3000, //
+        4000, 5000, 6300,
+      };
+      expect(ladder.contains(primary), isTrue);
+    });
+  });
+
+  group('N12 — an MCCB carries no B/C/D trip-curve code in breakerLabel', () {
+    test('MCCB drops the curve; MCB keeps it', () {
+      const mccb = BreakerResult(
+          ratingA: Current(160),
+          deviceClass: BreakerClass.mccb,
+          curve: BreakerCurve.c);
+      const mcb = BreakerResult(
+          ratingA: Current(16),
+          deviceClass: BreakerClass.mcb,
+          curve: BreakerCurve.c);
+      expect(breakerLabel(mccb, 4), 'MCCB 160A/4P');
+      expect(breakerLabel(mcb, 1), 'MCB C16A/1P');
+    });
+
+    test('an all-MCCB board seeds NO Curve legend entry', () {
+      // A board large enough that its ways + incomer are all moulded-case.
+      const big = ElectricalProject(
+        id: 'big',
+        name: 'Big',
+        panels: [
+          ElectricalPanel(
+            id: 'MDP',
+            name: 'MDP',
+            circuits: [
+              ElectricalCircuit(
+                  id: 'g1', name: 'Chiller A', loadKind: LoadKind.general,
+                  loadW: 120000, length: Length(10)),
+              ElectricalCircuit(
+                  id: 'g2', name: 'Chiller B', loadKind: LoadKind.general,
+                  loadW: 120000, length: Length(12)),
+            ],
+          ),
+        ],
+      );
+      final r = computeSystem(profile, big);
+      final sheet = buildElectricalSld(project: big, result: r);
+      // The incomer + both ways are MCCBs (large ratings), so no MCB curve is
+      // printed and the legend seeds no "Curve X" entry from them.
+      final joined =
+          sheet.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      expect(joined, isNot(contains('MCCB C')));
+      expect(sheet.legend.map((e) => e.code).any((c) => c.startsWith('Curve')),
+          isFalse);
     });
   });
 }

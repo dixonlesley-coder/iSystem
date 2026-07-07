@@ -192,4 +192,54 @@ void main() {
     await tester.pump();
     expect(tester.takeException(), isNull);
   });
+
+  // B8: a sized run too SHORT for its chip must leave a dropped-label tick
+  // rather than vanish. A 14 px air duct carrying flow is auto-sized (so a chip
+  // is attempted) but far shorter than "Ø<mm>", so the LOD-drop path runs. Also
+  // exercises the B2 badge dodge (the unsized air duct draws a status badge).
+  testWidgets(
+      'NetworkLayer leaves a dropped-label tick + status badge for a short '
+      'sized air run without throwing (B8 / B2)', (tester) async {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    c.read(networkControllerProvider.notifier).loadNetwork(
+          const Network(
+            nodes: [
+              NetNode(id: 'src', sheetId: 's1', x: 60, y: 60, floorIndex: 0),
+              NetNode(
+                id: 'term',
+                sheetId: 's1',
+                x: 74, // 14 px away — shorter than the size chip
+                y: 60,
+                floorIndex: 0,
+                role: NodeRole.fixture,
+                airflow: FlowRate(0.4),
+              ),
+            ],
+            edges: [
+              NetEdge(
+                  id: 'shortDuct',
+                  fromId: 'src',
+                  toId: 'term',
+                  service: ServiceType.duct),
+            ],
+          ),
+        );
+    c.read(showSizingProvider.notifier).toggle(); // attempt the size chip
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: c,
+        child: const Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 200,
+            height: 160,
+            child: NetworkLayer(sheetId: 's1', floorIndex: 0),
+          ),
+        ),
+      ),
+    );
+    expect(tester.takeException(), isNull);
+  });
 }

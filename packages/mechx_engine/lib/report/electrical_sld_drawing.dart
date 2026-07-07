@@ -16,7 +16,8 @@ library;
 
 import 'dart:math' as math;
 
-import '../electrical/cable_family.dart' show defaultCableFamily;
+import '../electrical/cable_family.dart'
+    show cableFamilyDescription, defaultCableFamily;
 import '../electrical/control/starter.dart' show StarterType;
 import '../electrical/earthing.dart' show EarthingSystemInfo;
 import '../electrical/model.dart';
@@ -38,7 +39,11 @@ import 'sld_sheet.dart';
 export 'sld_sheet.dart';
 
 // ── Block geometry (drawing units) ───────────────────────────────────────────
-const double _blockW = 920;
+// The block widened 920 -> 948 (+28) to give the DEVICE column room for the
+// per-device breaking-capacity (kA, N9) + the socket-way RCD token (N10) that
+// now ride the breaker cell; the columns after DEVICE all shift +28 so their
+// widths are unchanged (golden rule 5: same geometry, all renderers follow).
+const double _blockW = 948;
 const double _headerH = 46;
 const double _rowH = 20;
 const double _bodyPad = 12;
@@ -52,13 +57,13 @@ const double _brH = 10;
 // `Diagram Panel` layout: GRUP | DEVICE | PENGHANTAR | DAYA | KETERANGAN, then
 // the R / S / T per-phase loading band on the right.
 const double _colGrup = 92; // way no (W1) — clears the breaker stub + symbol
-const double _colDevice = 116; // breaker (MCB 16A 1ph)
-const double _colPenghantar = 224; // conductor + conduit (NYY 4x6 + E6 · PVC 25)
-const double _colDaya = 446; // connected load (DAYA, W/kW)
-const double _colKeterangan = 506; // load name / -> sub-panel
-const double _colR = 726; // per-phase loading band (R/S/T line currents)
-const double _colS = 772;
-const double _colT = 818;
+const double _colDevice = 116; // breaker (MCB 16A 1ph[ 16kA][ · RCD 30mA A])
+const double _colPenghantar = 252; // conductor + conduit + length (NYY 4x6 · 22 m)
+const double _colDaya = 474; // connected load (DAYA, W/kW)
+const double _colKeterangan = 534; // load name / -> sub-panel
+const double _colR = 754; // per-phase loading band (R/S/T line currents)
+const double _colS = 800;
+const double _colT = 846;
 
 String _num(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
@@ -96,9 +101,17 @@ String _classCode(BreakerClass c) =>
 
 /// A breaker label like `MCB C16A/1P` — the curve-led form (kept for the
 /// incomer sub-line + the device legend so the trip curve stays surfaced).
-String breakerLabel(BreakerResult b, int poles) =>
-    '${_classCode(b.deviceClass)} ${_curveCode(b.curve)}'
-    '${_num(b.ratingA.amperes)}A/${poles}P';
+///
+/// The trip-curve letter is emitted ONLY for MCBs. A moulded-case breaker is
+/// specified by frame / trip / breaking capacity, NOT by a fixed B/C/D
+/// characteristic, so `MCCB C160A/4P` is not a valid designation — an MCCB reads
+/// `MCCB 160A/4P` (N12).
+String breakerLabel(BreakerResult b, int poles) {
+  final curve =
+      b.deviceClass == BreakerClass.mccb ? '' : _curveCode(b.curve);
+  return '${_classCode(b.deviceClass)} $curve'
+      '${_num(b.ratingA.amperes)}A/${poles}P';
+}
 
 /// A panel-SCHEDULE breaker label leading with rating + phase count, e.g.
 /// `MCB 16A 1ph` / `MCCB 40A 3ph` — the real Indonesian DIAGRAM PANEL form
@@ -132,8 +145,9 @@ String _earthConductor(double peCsaMm2) {
 /// A PVC conduit size (mm) derived from the conductor — a ~40 % fill general-
 /// practice estimate (// VERIFY, NOT an SNI clause; the model carries no conduit
 /// field). Returns null for large feeders (beyond the conduit range — they run
-/// on tray / cable-ladder, so no conduit token). A 3-phase run (5-core) bumps up
-/// one trade size for the extra cores.
+/// on tray / cable-ladder; the schedule then prints an explicit `tray` route
+/// token instead, H6). A 3-phase run (5-core) bumps up one trade size for the
+/// extra cores.
 int? _conduitMm(double csaMm2, bool threePhase) {
   final base = csaMm2 <= 4
       ? 20
@@ -168,6 +182,57 @@ String resolvedCableFamily(ElectricalCircuit? circuit) =>
     (circuit?.cableType != null && circuit!.cableType!.isNotEmpty)
         ? circuit.cableType!
         : defaultCableFamily(circuit?.loadKind);
+
+/// Standard metering CT primary ratings (A) — the IEC 61869-2 / 60044-1
+/// preferred-value series. The metering CT primary is the smallest standard
+/// rating at or above the panel demand (line) current, over a 5 A secondary.
+/// // VERIFY — the preferred-value ladder + the metering accuracy class are a
+/// representative selection, not a specific SNI/PUIL clause.
+const List<int> _ctPrimaryLadder = [
+  5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150, 200, 250, 300, 400, //
+  500, 600, 750, 800, 1000, 1250, 1500, 1600, 2000, 2500, 3000, 4000, 5000, //
+  6300,
+];
+
+/// The metering-CT label for a board carrying [demandA] line current:
+/// `CT <primary>/5A cl.1` — the smallest standard primary at or above the demand
+/// current, 5 A secondary, class 1 metering accuracy. Clamps to the top of the
+/// ladder for very large demands (never fabricates a non-standard ratio). N11.
+String _ctLabel(double demandA) {
+  var primary = _ctPrimaryLadder.last;
+  for (final p in _ctPrimaryLadder) {
+    if (p >= demandA) {
+      primary = p;
+      break;
+    }
+  }
+  return 'CT $primary/5A cl.1';
+}
+
+/// Resolve the per-device breaking-capacity figure (Icu, kA) to print on a
+/// panel's incomer sub-line + every DEVICE cell (N9): (1) the explicit
+/// [icuByPanelId] map — the fault study's CHOSEN standard Icu rating — when it
+/// carries this panel; else (2) the busbar-withstand prospective fault at this
+/// bus (present whenever the Fold-1 withstand ran — the app + dev tool default
+/// 16 kA); else (3) the project-wide origin fault level. Returns null when NONE
+/// is known (⇒ no kA appended, byte-identical). A device must be selected so its
+/// Icu >= the prospective fault at the bus (IEC 60947-2 / 60898-1) — // VERIFY
+/// (device-selection rule, not an SNI/PUIL clause) — so the figure reads as the
+/// minimum breaking capacity whether it is the chosen rating or the raw fault.
+double? _panelIcuKa(
+  String panelId,
+  ElectricalPanelResult p,
+  ElectricalProject project,
+  Map<String, double>? icuByPanelId,
+) {
+  final mapped = icuByPanelId?[panelId];
+  if (mapped != null) return mapped;
+  final w = p.busbar.withstand?.faultKa;
+  if (w != null && w > 0) return w;
+  final origin = project.originFaultLevelA;
+  if (origin != null && origin.amperes > 0) return origin.amperes / 1000;
+  return null;
+}
 
 /// Build the professional single-line for [project] / [result]. Pure geometry.
 ///
@@ -221,6 +286,10 @@ SldSheet buildElectricalSld({
   final usedCurves = <BreakerCurve>{};
   final usedClasses = <BreakerClass>{};
   final usedFamilies = <String>{};
+  // Whether any device carried a breaking capacity (N9) / any board drew a
+  // metering cluster (N11) — drives the matching KETERANGAN legend entries.
+  var anyIcuKa = false;
+  var anyMetering = false;
 
   // Lay panels top-to-bottom (root-first), indented by depth. Record each box +
   // each way's anchor so feeders can be routed afterward.
@@ -236,10 +305,13 @@ SldSheet buildElectricalSld({
     final model = modelById[id];
     final ways = p.circuits.length;
     // Breaking-capacity (Icu, kA) suffix for this board's devices — appended to
-    // the incomer sub-line + every way's DEVICE cell when the fault study fed a
-    // kA for this panel; empty (⇒ byte-identical) when unmapped.
-    final icuKa = breakerIcuKaByPanelId?[id];
+    // the incomer sub-line + every way's DEVICE cell. Resolves the fault study's
+    // chosen Icu rating when mapped, else the busbar-withstand prospective fault
+    // at the bus, else the project origin fault level (N9); empty (⇒ byte-
+    // identical) only when NONE of those is known — never fabricated.
+    final icuKa = _panelIcuKa(id, p, project, breakerIcuKaByPanelId);
     final kaSuffix = icuKa != null ? ' ${_num(icuKa)}kA' : '';
+    if (icuKa != null) anyIcuKa = true;
     // Reserved spare ways (CADANGAN) draw as extra schedule rows below the real
     // ways; a footer row carries the panel TOTAL. Both extend the block height
     // so the busbar + rows stay inside the box. 0 reserved + no footer growth ⇒
@@ -276,7 +348,11 @@ SldSheet buildElectricalSld({
         'Cu bus ${_num(p.busbar.csaMm2)}mm2$icw  '
         'demand ${_num(p.demandCurrent.amperes)}A',
         size: 8));
-    usedCurves.add(p.incomer.breaker.curve);
+    // The trip-curve legend is about MCB characteristics only — an MCCB carries
+    // no B/C/D curve (N12), so don't seed a curve legend entry from one.
+    if (p.incomer.breaker.deviceClass != BreakerClass.mccb) {
+      usedCurves.add(p.incomer.breaker.curve);
+    }
     usedClasses.add(p.incomer.breaker.deviceClass);
 
     // Incomer METERING cluster (top-right of the header) — V / A / Hz meters +
@@ -284,7 +360,8 @@ SldSheet buildElectricalSld({
     // (single-phase final boards carry no metering). The meters draw as CIRCLE
     // symbols (the DXF convention), each with a centred letter.
     if (p.system.isThreePhase) {
-      var mx = blockX + _blockW - 196;
+      anyMetering = true;
+      var mx = blockX + _blockW - 220;
       const my = 12.0; // within the header band
       const mr = 9.0; // meter circle radius (fits the old 18px slot)
       for (final m in const ['V', 'A', 'Hz']) {
@@ -293,7 +370,12 @@ SldSheet buildElectricalSld({
         prims.add(SldLabel(cx - m.length * 2.0, cy + 3, m, size: 7));
         mx += 30;
       }
-      prims.add(SldLabel(mx + 4, blockY + my + 13, 'CT', size: 8));
+      // The metering CT ratio (N11): the next standard primary above the panel
+      // demand current over a 5 A secondary + the metering accuracy class,
+      // e.g. `CT 200/5A cl.1` — replaces the bare `CT` glyph.
+      prims.add(SldLabel(
+          mx + 4, blockY + my + 13, _ctLabel(p.demandCurrent.amperes),
+          size: 8));
     }
 
     // Header / body divider (full width) for a clean schedule look.
@@ -351,7 +433,10 @@ SldSheet buildElectricalSld({
       // Stub from bus to breaker + the breaker symbol.
       prims.add(SldLine(bx + 4, rowY, bx + 28, rowY));
       prims.add(SldRect(bx + 28, rowY - _brH / 2, _brW, _brH));
-      usedCurves.add(c.breaker.curve);
+      // Only an MCB carries a B/C/D trip curve in the legend (N12).
+      if (c.breaker.deviceClass != BreakerClass.mccb) {
+        usedCurves.add(c.breaker.curve);
+      }
       usedClasses.add(c.breaker.deviceClass);
       final circuit = circuitById[c.circuitId];
       // Surface the cable family actually drawn (the explicit type, else the
@@ -367,22 +452,40 @@ SldSheet buildElectricalSld({
           ? _earthConductor(c.grounding.peCsaMm2)
           : '';
       final conduitMm = _conduitMm(c.cable.csaMm2, c.threePhase);
-      final conduit = conduitMm != null ? ' · PVC ${conduitMm}mm' : '';
+      // H6: a way whose conductor exceeds the conduit range (CSA > 70 mm2) runs
+      // on cable tray / ladder, not in conduit — print an explicit `tray` route
+      // token so EVERY row states a route method (the code's own convention;
+      // never a silent blank next to neighbours that show `· PVC NNmm`).
+      // // VERIFY — a drawing convention (the model carries no containment field).
+      final conduit = conduitMm != null ? ' · PVC ${conduitMm}mm' : ' · tray';
+      // The run LENGTH the solve already used for this way (geo-derived when
+      // placed, else the manual circuit length) — the cable-takeoff figure that
+      // also drove the printed Vdrop (N8). Printed ONLY when a real length
+      // exists (never fabricated); the ` m` suffix disambiguates it from the
+      // `mm` conduit token.
+      final length = c.lengthM > 0 ? ' · ${_num(c.lengthM)} m' : '';
       final cable =
-          '${cableLabel(circuit, c.cable.csaMm2, c.threePhase)} mm2$earth$conduit';
+          '${cableLabel(circuit, c.cable.csaMm2, c.threePhase)} mm2$earth$conduit$length';
       // DAYA in WATT (integer, dot thousands separator); a feeder (loadW 0) → '-'.
       final daya = c.loadW > 0 ? _wattsId(c.loadW) : '-';
       // DEVICE: breaker label + the motor-control / starter token (DOL / VSD /
       // star-delta) APPENDED only when the way carries a real starterType —
       // most final lighting/socket ways have none, so the cell stays bare.
       final starter = circuit?.starterType;
+      // The RCD / RCBO protection token (N10) — the SAME `RcdSpec` the calc
+      // report prints (schedule + report agree), appended only when the way
+      // actually carries an RCD (most sockets / TT finals). e.g. `RCD 30mA A`.
+      final rcd = c.rcd.required
+          ? ' · RCD ${c.rcd.ratingMa}mA'
+              '${c.rcd.type != null ? ' ${c.rcd.type!.name.toUpperCase()}' : ''}'
+          : '';
       // The breaker cell leads with rating + phase, then the Icu suffix (when
-      // fed), then the control / starter token — so the kA reads as part of the
-      // breaker spec, ahead of the motor-control note.
+      // fed), then the control / starter token, then the RCD token — so the kA
+      // reads as part of the breaker spec, ahead of the control / RCD notes.
       final breakerCell = '${breakerScheduleLabel(c.breaker, poles)}$kaSuffix';
-      final device = starter != null
-          ? '$breakerCell · ${_starterCode(starter)}'
-          : breakerCell;
+      final device = '$breakerCell'
+          '${starter != null ? ' · ${_starterCode(starter)}' : ''}'
+          '$rcd';
       final ib = _num(c.designCurrent.amperes);
       prims.add(SldLabel(blockX + _colGrup, rowY + 3, 'W${i + 1}', size: rowSize));
       prims.add(SldLabel(blockX + _colDevice, rowY + 3, device, size: rowSize));
@@ -425,10 +528,20 @@ SldSheet buildElectricalSld({
     }
 
     // TOTAL footer — the panel's diversified demand (W/kW + line current) + the
-    // per-phase R/S/T line-current totals (the phase balance).
+    // per-phase R/S/T line-current totals (the phase balance). H7: a 3-phase
+    // board also carries its already-computed phase-IMBALANCE percentage
+    // (`ElectricalPanelResult.imbalancePercent`, the same figure the Markdown
+    // calc report prints per panel) — never recomputed here, and only appended
+    // when the board is genuinely 3-phase (a single-phase board's imbalance is
+    // always 0/meaningless — `p.system.isThreePhase` gates it) and the value is
+    // a real number (`isFinite` — the engine's own balancer never produces
+    // NaN/Infinity, but the drawing layer never trusts that silently).
+    final imbalance = p.system.isThreePhase && p.imbalancePercent.isFinite
+        ? '  ·  imbalance ${_num(p.imbalancePercent)}%'
+        : '';
     final footerY = busBot + _rowH / 2 + 3;
     prims.add(SldLabel(blockX + 8, footerY,
-        'TOTAL  ${_watts(p.demandW)} / ${_num(p.demandCurrent.amperes)}A',
+        'TOTAL  ${_watts(p.demandW)} / ${_num(p.demandCurrent.amperes)}A$imbalance',
         size: 8.5, bold: true));
     if (p.system.isThreePhase) {
       final pb = p.phaseBalance;
@@ -499,10 +612,25 @@ SldSheet buildElectricalSld({
     }
   }
   for (final f in usedFamilies.toList()..sort()) {
-    legend.add(SldLegendEntry(f, 'Cable construction'));
+    // N24: each family carries its OWN construction description (voltage / use),
+    // never the ambiguous shared "Cable construction" against NYY and NYM alike.
+    legend.add(SldLegendEntry(f, cableFamilyDescription(f)));
   }
   legend.add(const SldLegendEntry('Ib', 'Design (load) current'));
   legend.add(const SldLegendEntry('VD!', 'Voltage drop over limit'));
+  // The breaking-capacity + metering conventions, listed only when they were
+  // actually drawn on a device / board (N9 / N11) — the kA source may be the
+  // chosen device Icu or the prospective fault, so the note states the
+  // selection rule the two share (Icu >= fault). // VERIFY.
+  if (anyIcuKa) {
+    legend.add(const SldLegendEntry(
+        'kA', 'Breaking capacity Icu (>= prospective fault at bus)'));
+  }
+  if (anyMetering) {
+    legend
+      ..add(const SldLegendEntry('V / A / Hz', 'Panel metering instruments'))
+      ..add(const SldLegendEntry('CT', 'Metering current transformer (x/5A)'));
+  }
 
   final s = result.supply;
   final supplyNote =
@@ -673,10 +801,12 @@ const double _assumedPanelPf = 0.85;
   return (feederCircuitOf, feederResultOf);
 }
 
-/// The feeder cable + breaker annotation for a resolvable feeder, e.g.
-/// `NYY 4x50 mm2 · MCCB 250A 3ph`. Null when the child's feeding circuit or its
-/// sized result is unresolved (⇒ omit the label rather than guess). ASCII-safe
-/// (the bundled middle dot is allowed).
+/// The feeder cable + breaker (+ run length) annotation for a resolvable feeder,
+/// e.g. `NYY 4x50 mm2 · MCCB 250A 3ph · 24 m`. The LENGTH (N8) is the run the
+/// solve already used for the feeder (geo-derived when placed, else the manual
+/// length) — appended only when a real length exists, never fabricated. Null
+/// when the child's feeding circuit or its sized result is unresolved (⇒ omit
+/// the label rather than guess). ASCII-safe (the bundled middle dot is allowed).
 String? _feederConnLabel(
   Map<String, ElectricalCircuit> feederCircuitOf,
   Map<String, ElectricalCircuitResult> feederResultOf,
@@ -686,8 +816,9 @@ String? _feederConnLabel(
   final circ = feederCircuitOf[child];
   if (cr == null || circ == null) return null;
   final poles = cr.threePhase ? 3 : 1;
+  final length = cr.lengthM > 0 ? ' · ${_num(cr.lengthM)} m' : '';
   return '${cableLabel(circ, cr.cable.csaMm2, cr.threePhase)} mm2 · '
-      '${breakerScheduleLabel(cr.breaker, poles)}';
+      '${breakerScheduleLabel(cr.breaker, poles)}$length';
 }
 
 /// The compact-node sub-line: `<In>A <poles>P · <kW>kW / <kVA>kVA` (the panel's
@@ -1336,6 +1467,26 @@ String _ffl(double meters) {
   return meters < 0 ? '-$s' : '+$s';
 }
 
+/// Truncate a fan-out circuit NAME to [maxLen] characters total (the same
+/// on-canvas width budget the old bare `substring(0, 14)` used), but cut on a
+/// word boundary and append an ASCII ellipsis when the name is shortened —
+/// never a bare mid-word chop like the old 'Lighting groun' / 'Power socke'.
+/// Falls back to a hard cut (still budgeted so the total stays <= [maxLen])
+/// only when no reasonable word boundary exists (e.g. one long unbroken
+/// token). (H5)
+String _fanOutLabel(String name, {int maxLen = 14}) {
+  if (name.length <= maxLen) return name;
+  const ellipsis = '...';
+  final budget = maxLen - ellipsis.length;
+  if (budget <= 0) return name.substring(0, maxLen);
+  final lastSpace = name.lastIndexOf(' ', budget);
+  // Only honour the word boundary when it keeps a meaningful chunk of the
+  // name (else a boundary right at the start would truncate harder than a
+  // plain hard cut for no readability gain).
+  final cut = lastSpace >= (budget * 0.4).floor() ? lastSpace : budget;
+  return '${name.substring(0, cut).trimRight()}$ellipsis';
+}
+
 /// Build the FLOOR-BY-FLOOR electrical riser: every panel placed on its building
 /// FLOOR (by true elevation — highest floor at the TOP of the y-down sheet),
 /// laid left-to-right within its floor band; feeders draw as a vertical riser in
@@ -1535,7 +1686,7 @@ SldSheet buildElectricalRiser({
     for (final cr in shown) {
       final sy = y + _ovH + 4 + row * _fanRowH;
       prims.add(SldLine(x + 8, sy, x + 22, sy, weight: SldWeight.thin, role: role));
-      final nm = cr.name.length > 14 ? cr.name.substring(0, 14) : cr.name;
+      final nm = _fanOutLabel(cr.name);
       final ph = cr.threePhase ? ' 3ph' : '';
       prims.add(SldLabel(x + 26, sy + 3,
           '$nm ${_num(cr.breaker.ratingA.amperes)}A$ph',

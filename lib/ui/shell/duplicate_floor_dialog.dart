@@ -4,12 +4,12 @@
 /// above and failed silently three ways).
 ///
 /// Pick a SOURCE floor (only floors that carry a sheet can be a source — their
-/// runs live on a plan) and CHECK the target floors to copy onto; Apply loops
-/// the existing [NetworkController.duplicateFloor] once per target (each its own
-/// undo step — the store commits one snapshot per call, which is as few as the
-/// public API allows) and confirms via the status pill. A target floor with no
-/// sheet can't receive a copy, so it is shown disabled with a "no plan" note —
-/// the honest answer to the old silent no-op.
+/// runs live on a plan) and CHECK the target floors to copy onto; Apply issues
+/// ONE [NetworkController.duplicateFloorToTargets] batch, so the whole range is
+/// a SINGLE undo step (F3 — one gesture, one Ctrl+Z) and confirms via the
+/// status pill. A target floor with no sheet can't receive a copy, so it is
+/// shown disabled with a "no plan" note — the honest answer to the old silent
+/// no-op.
 ///
 /// No Material: a [showGeneralDialog]-driven floating card themed with
 /// [MechXTheme], the same idiom as `templates_dialog.dart` /
@@ -307,20 +307,17 @@ class _DuplicateFloorDialogState extends ConsumerState<_DuplicateFloorDialog> {
     final net = ref.read(networkControllerProvider.notifier);
     final fromSheet = sheetByFloor[source]!;
     // Deterministic order: low floor first, so the range reads naturally.
-    final targets = _targets
+    final done = _targets
         .where((f) => f != source && sheetByFloor.containsKey(f))
         .toList()
       ..sort();
-    final done = <int>[];
-    for (final f in targets) {
-      net.duplicateFloor(
-        fromSheetId: fromSheet,
-        fromFloor: source,
-        toSheetId: sheetByFloor[f]!,
-        toFloor: f,
-      );
-      done.add(f);
-    }
+    // F3 — one batch commit for the whole range, so it collapses to ONE undo
+    // step instead of one per target floor.
+    net.duplicateFloorToTargets(
+      fromSheetId: fromSheet,
+      fromFloor: source,
+      targets: [for (final f in done) (sheetId: sheetByFloor[f]!, floor: f)],
+    );
     Navigator.of(context).pop();
     if (done.isEmpty) return;
     final total = sourceRuns * done.length;

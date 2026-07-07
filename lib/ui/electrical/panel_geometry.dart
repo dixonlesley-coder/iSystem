@@ -59,10 +59,13 @@ double panelCardWidth(int ways) => math.max(
 /// The engine board-schedule sheet WIDTH (mirrors `_blockW` in
 /// `report/electrical_sld_drawing.dart`). EVERY panel's schedule shares this
 /// width — the DXF/PDF convention (one uniform column layout) — so at the detail
-/// LOD the canvas renders them all at one consistent, readable scale.
-const double kScheduleSheetWidth = 920;
+/// LOD the canvas renders them all at one consistent, readable scale. Widened
+/// 920 -> 948 in lock-step with `_blockW` when the DEVICE column grew to carry
+/// the per-device kA + RCD tokens (Wave 7 N9 / N10), so the canvas frames the
+/// full schedule (the focus zoom clamps to this width).
+const double kScheduleSheetWidth = 948;
 
-/// The on-canvas scale the schedule sheet renders at (so 920 -> ~736 world px),
+/// The on-canvas scale the schedule sheet renders at (so 948 -> ~758 world px),
 /// keeping a multi-way board about the readable size it had before.
 const double kScheduleScale = 0.8;
 

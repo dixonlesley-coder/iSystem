@@ -16,6 +16,7 @@ library;
 import 'dart:math' as math;
 
 import '../network/network.dart';
+import 'drawing_chrome.dart' show LabelBox;
 import 'sld_sheet.dart';
 
 /// Equipment glyph for [c] as neutral drawing primitives, centred on
@@ -286,6 +287,62 @@ List<SldPrim> planFixturePrims({
   ];
 }
 
+/// A FLEXIBLE-JOINT (FJ) glyph — two end flanges bridged by a bellows "W" —
+/// centred on ([cx], [cy]) in a [size]×[size] box. FJ is a drawing device (a
+/// vibration-isolating pump-connection fitting), not a [NodeComponent], so it
+/// lives here as a standalone glyph the pump-set detail's suction/discharge
+/// valve train (G3) can draw alongside the gate/check-valve + strainer glyphs.
+/// Line-only, y-DOWN drawing space (mirrored about [cy] by a y-up renderer).
+List<SldPrim> planFlexibleJointPrims({
+  required double cx,
+  required double cy,
+  double size = 14,
+}) {
+  double fx(double f) => cx + (f - 0.5) * size;
+  double fy(double f) => cy + (f - 0.5) * size;
+  SldLine ln(double x1, double y1, double x2, double y2) =>
+      SldLine(fx(x1), fy(y1), fx(x2), fy(y2));
+  return [
+    // End flanges (short verticals).
+    ln(0.18, 0.28, 0.18, 0.72),
+    ln(0.82, 0.28, 0.82, 0.72),
+    // Bellows: a "W" between the flanges.
+    ln(0.18, 0.50, 0.35, 0.32),
+    ln(0.35, 0.32, 0.50, 0.68),
+    ln(0.50, 0.68, 0.65, 0.32),
+    ln(0.65, 0.32, 0.82, 0.50),
+  ];
+}
+
+/// A SEWER / DISCHARGE TERMINUS glyph (G4) — a downward arrow meeting a hatched
+/// ground line, the industry "discharge to the disposal system" mark — centred
+/// on ([cx], [cy]) in a [size]×[size] box. Drawn at a drainage stack's exit
+/// (the point where the soil/waste leaves the building) beside a
+/// 'KE SALURAN PEMBUANGAN' label. HONEST: it names the generic disposal outlet,
+/// never a specific septic/STP/city-sewer destination the model can't confirm.
+/// Line-only, y-DOWN drawing space.
+List<SldPrim> planSewerTerminusPrims({
+  required double cx,
+  required double cy,
+  double size = 14,
+}) {
+  double fx(double f) => cx + (f - 0.5) * size;
+  double fy(double f) => cy + (f - 0.5) * size;
+  SldLine ln(double x1, double y1, double x2, double y2) =>
+      SldLine(fx(x1), fy(y1), fx(x2), fy(y2));
+  return [
+    // Down arrow (flow leaving to the disposal system).
+    ln(0.50, 0.10, 0.50, 0.58),
+    ln(0.50, 0.58, 0.38, 0.42),
+    ln(0.50, 0.58, 0.62, 0.42),
+    // Ground / sewer line + hatch ticks below it.
+    ln(0.16, 0.66, 0.84, 0.66),
+    ln(0.30, 0.66, 0.20, 0.82),
+    ln(0.50, 0.66, 0.40, 0.82),
+    ln(0.70, 0.66, 0.60, 0.82),
+  ];
+}
+
 /// Riser vertical sense for a marker on floor [hereFloor] whose other endpoint
 /// is on [otherFloor]: `'UP'` when the run rises to a physically HIGHER floor
 /// (a larger `floorIndex` is a higher elevation — see `geometry/building.dart`
@@ -297,4 +354,288 @@ String? riserUpDown({required int hereFloor, required int otherFloor}) {
   if (otherFloor > hereFloor) return 'UP';
   if (otherFloor < hereFloor) return 'DN';
   return null;
+}
+
+// ── G1: stable equipment TAGS for the plan (P-01 / TK-01 / AHU-01 …) ─────────
+//
+// A NetNode carries no name/tag, so an equipment glyph on the plan (pump, tank,
+// AHU, fan, AC) reads as anonymous clip-art. This gives each MAJOR-EQUIPMENT
+// node a stable, deterministic tag from ONE source shared by the canvas + all
+// three plan exporters (never a second numbering), following the same
+// `<prefix>-NN` shape the equipment schedule uses (P-01, TK-01, AHU-01, F-01,
+// AC-01). Only role-bearing equipment is tagged — inline valves / meters /
+// fittings / drains / air terminals get their symbol, not a tag.
+//
+// NOTE — this numbering is INDEPENDENT of the equipment schedule's, not a
+// guaranteed cross-reference. The schedule (`gatherEquipmentScheduleData`)
+// gathers from SOLVED providers (pump/fan/room duties), not network nodes, and
+// numbers differently: the fire pump takes an `FP` prefix, room AHUs number by
+// stable room identity (with gaps), and tanks appear in no schedule row at all.
+// The tags therefore coincide only for a single-unit-per-prefix, all-calibrated
+// project; a multi-unit / fire-pump / skipped-room project WILL diverge.
+
+/// The equipment-tag prefix for [c] — `P` pumps/booster, `TK` tanks, `AHU`,
+/// `FCU`, `F` fans, `AC` indoor AC units — or null for a component that is not
+/// scheduled equipment (valves, meters, drains, terminals, dampers, riser mark).
+String? equipmentTagPrefix(NodeComponent c) => switch (c) {
+      NodeComponent.pump || NodeComponent.boosterSet => 'P',
+      NodeComponent.roofTank || NodeComponent.groundTank => 'TK',
+      NodeComponent.ahu => 'AHU',
+      NodeComponent.fcu => 'FCU',
+      NodeComponent.supplyFan || NodeComponent.exhaustFan => 'F',
+      NodeComponent.acCassette ||
+      NodeComponent.acSplitWall ||
+      NodeComponent.acDucted =>
+        'AC',
+      _ => null,
+    };
+
+/// Stable equipment tags keyed by NODE id (G1): a sequential `<prefix>-NN` per
+/// equipment CATEGORY, numbered in the network's node order (deterministic). A
+/// node with no equipment component gets no entry, so the map is empty for a
+/// network with no plant. This is the ONE tag source the on-canvas glyph label
+/// AND the PDF/DXF plan exporters both read (so the plan and its own canvas
+/// agree). It is NOT keyed to the equipment schedule's numbering — see the block
+/// comment above: the schedule numbers from solved providers with an `FP` fire-
+/// pump prefix + room-identity AHU numbering, so the two agree only for a
+/// single-unit / all-calibrated project.
+/// Pure + deterministic — never fabricates a tag for a non-equipment node.
+Map<String, String> equipmentNodeTags(Network net) {
+  final counters = <String, int>{};
+  final out = <String, String>{};
+  for (final n in net.nodes) {
+    final c = n.component;
+    if (c == null) continue;
+    final prefix = equipmentTagPrefix(c);
+    if (prefix == null) continue;
+    final next = (counters[prefix] ?? 0) + 1;
+    counters[prefix] = next;
+    out[n.id] = '$prefix-${next.toString().padLeft(2, '0')}';
+  }
+  return out;
+}
+
+// ── G5: gravity-run fall / slope label ───────────────────────────────────────
+//
+// `SizingContext.drainageSlope` is the laid gradient the drainage sizer uses,
+// but a plan run reads only its size (DN100) — an installer can't see the
+// required fall. This formats that REAL context gradient as the drafting fall
+// ratio `1:N`, appended to a gravity-regime (drainage / vent / rainwater) run's
+// size label in the canvas + both plan exporters. The caller passes the actual
+// `SizingContext.drainageSlope` — never a hardcoded default.
+
+/// The fall label for a gravity run at [slope] (m/m) as a drafting ratio `1:N`
+/// (slope 0.01 → `1:100`), or null when [slope] is non-positive / non-finite
+/// (nothing to quote). Pure.
+String? gravitySlopeLabel(double slope) {
+  if (!slope.isFinite || slope <= 0) return null;
+  return '1:${(1 / slope).round()}';
+}
+
+// ── N3: never-drop leadered edge-label placer ───────────────────────────────
+//
+// The shared `drawing_chrome.placeEdgeLabel` DROPS a size tag when no greedy
+// slot clears — on dense branches that silently loses labels, and two short
+// branches sharing a midpoint print nothing. This placer mirrors the riser
+// side (`mechanical_sld_drawing._LabelPlacer`): a tag is the drawing's content
+// and is NEVER dropped — when the greedy ladder can't clear, it ESCAPES
+// perpendicular in growing steps and ties the pulled-off label back to its run
+// with a LEADER, so tags never fuse into one unreadable token. Byte-identical
+// to the old placer whenever the first greedy slot clears (the common case).
+
+/// Perpendicular escape step (× textSize) + count for [placeEdgeLabelLeadered]
+/// when no greedy ladder slot clears — the tag is pushed further off the line
+/// in growing steps rather than dropped, then tied back with a leader. The step
+/// COUNT is generous (12) so a DENSE riser base — several branch runs + two
+/// coincident risers + the tie dimensions converging on one node (N3) — spreads
+/// its tags far enough to clear instead of settling on a least-bad overlap.
+const double _kLeaderEscapeFactor = 1.6;
+const int _kLeaderEscapeSteps = 12;
+
+/// A resolved leadered edge-label placement: the text anchor (baseline START)
+/// + the rotation in degrees CCW in the y-up output space, PLUS an optional
+/// [leaderAnchor] (the edge midpoint) — non-null when the label was pulled off
+/// the line and a thin leader should be drawn from the run to the label so it
+/// stays legible/unfused (N3).
+class LeaderedLabelPlacement {
+  final double x;
+  final double y;
+  final double angleDeg;
+  final ({double x, double y})? leaderAnchor;
+  const LeaderedLabelPlacement({
+    required this.x,
+    required this.y,
+    required this.angleDeg,
+    this.leaderAnchor,
+  });
+}
+
+bool _boxesOverlap(LabelBox a, LabelBox b) =>
+    a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
+
+/// Summed overlap AREA of [r] against every already-[placed] box (0 = clear) —
+/// used to pick the least-bad escape slot.
+double _totalOverlapArea(LabelBox r, List<LabelBox> placed) {
+  var total = 0.0;
+  for (final p in placed) {
+    final dx = math.min(r.maxX, p.maxX) - math.max(r.minX, p.minX);
+    final dy = math.min(r.maxY, p.maxY) - math.max(r.minY, p.minY);
+    if (dx > 0 && dy > 0) total += dx * dy;
+  }
+  return total;
+}
+
+/// Place [text] along the edge (ax,ay)→(bx,by) in the y-up output space, rotated
+/// to the edge bearing (flipped past ±90° so it never reads upside-down), offset
+/// perpendicular by 0.7 × [textSize] on the consistent upper side. Greedy pass
+/// (midpoint upper/lower, quarter upper/lower) against [placed]; the first slot
+/// that clears wins with NO leader (byte-identical to `placeEdgeLabel`'s first
+/// candidate). When NONE clears — two short branch tags sharing a midpoint (N3)
+/// — the placer ESCAPES perpendicular from the midpoint in growing steps (up
+/// then down) until it clears, falling back to the least-overlapping escape slot
+/// if even that can't fully clear; the escaped label is ALWAYS returned with a
+/// [leaderAnchor] so the caller ties it back to the run. Never returns null: a
+/// size tag is content, never dropped. A successful placement appends its box to
+/// [placed]. Pure and deterministic given a stable emission order.
+LeaderedLabelPlacement placeEdgeLabelLeadered({
+  required double ax,
+  required double ay,
+  required double bx,
+  required double by,
+  required String text,
+  required double textSize,
+  required List<LabelBox> placed,
+}) {
+  final dx = bx - ax, dy = by - ay;
+  var angle = (dx == 0 && dy == 0) ? 0.0 : math.atan2(dy, dx);
+  if (angle > math.pi / 2 || angle <= -math.pi / 2) {
+    angle += angle > 0 ? -math.pi : math.pi;
+  }
+  final ca = math.cos(angle), sa = math.sin(angle);
+  final w = text.length * textSize * 0.55;
+  final mx = (ax + bx) / 2, my = (ay + by) / 2;
+  final angleDeg = angle * 180 / math.pi;
+
+  // The baseline START (anchor) of a label at ([cx],[cy]) offset perpendicular
+  // by [d] — the value the renderers feed a `Tm`/group-50 rotation.
+  (double, double) anchorFor(double cx, double cy, double d) =>
+      (cx - sa * d - ca * w / 2, cy + ca * d - sa * w / 2);
+  // Axis-aligned bounds of the rotated w × textSize text rect at that anchor.
+  LabelBox boxAt(double cx, double cy, double d) {
+    final (x0, y0) = anchorFor(cx, cy, d);
+    final xs = [x0, x0 + ca * w, x0 - sa * textSize, x0 + ca * w - sa * textSize];
+    final ys = [y0, y0 + sa * w, y0 + ca * textSize, y0 + sa * w + ca * textSize];
+    return (
+      minX: xs.reduce(math.min),
+      minY: ys.reduce(math.min),
+      maxX: xs.reduce(math.max),
+      maxY: ys.reduce(math.max),
+    );
+  }
+
+  final du = 0.7 * textSize; // upper offset
+  final dl = -(0.7 * textSize + textSize); // lower offset (backs off the box)
+
+  // Greedy ladder: midpoint upper, midpoint lower, quarter upper, quarter lower
+  // (the exact order — and geometry — of the old greedy placer).
+  final greedy = <(double, double, double)>[
+    (mx, my, du),
+    (mx, my, dl),
+    (ax + dx * 0.25, ay + dy * 0.25, du),
+    (ax + dx * 0.25, ay + dy * 0.25, dl),
+  ];
+  for (final (cx, cy, d) in greedy) {
+    final box = boxAt(cx, cy, d);
+    if (!placed.any((p) => _boxesOverlap(p, box))) {
+      placed.add(box);
+      final (x0, y0) = anchorFor(cx, cy, d);
+      return LeaderedLabelPlacement(x: x0, y: y0, angleDeg: angleDeg);
+    }
+  }
+
+  // Nothing cleared → escape perpendicular from the midpoint in growing steps,
+  // tracking the least-overlapping fallback. The tag is never dropped.
+  var bestD = du;
+  var bestBox = boxAt(mx, my, du);
+  var bestOverlap = double.infinity;
+  var cleared = false;
+  for (var k = 1; k <= _kLeaderEscapeSteps && !cleared; k++) {
+    final step = _kLeaderEscapeFactor * textSize * k;
+    for (final d in [du + step, dl - step]) {
+      final box = boxAt(mx, my, d);
+      final ov = _totalOverlapArea(box, placed);
+      if (ov < bestOverlap) {
+        bestOverlap = ov;
+        bestBox = box;
+        bestD = d;
+      }
+      if (ov <= 0) {
+        cleared = true;
+        break;
+      }
+    }
+  }
+  placed.add(bestBox);
+  final (x0, y0) = anchorFor(mx, my, bestD);
+  return LeaderedLabelPlacement(
+      x: x0, y: y0, angleDeg: angleDeg, leaderAnchor: (x: mx, y: my));
+}
+
+// ── N4: reference setting-out grid (first honest increment) ─────────────────
+//
+// The plan export draws the network + labels + chrome but nothing that LOCATES
+// a pipe in the building — no column grid, no dimension to a structural datum.
+// This adds an OPT-IN reference grid (labelled column/row axes in sheet pixels,
+// the same space the drawn nodes live in) the exporters draw as thin chain
+// lines with bubble labels, plus auto per-riser TIE dimensions to the nearest
+// axes. Null/empty ⇒ nothing drawn (byte-identical). Positions are supplied by
+// the caller; the engine never invents a grid.
+
+/// DXF layer the reference gridlines live on (grey, chain linetype) so a CAD
+/// user can toggle the setting-out grid independently.
+const String kDxfLayerGrid = 'G-ANNO-GRID';
+
+/// One labelled setting-out axis at a fixed sheet-pixel [position] — a vertical
+/// column line (constant x, label like `A`) or a horizontal row line (constant
+/// y, label like `1`), per which list it sits in on [ReferenceGrid].
+class GridAxis {
+  final String label;
+  final double position;
+  const GridAxis(this.label, this.position);
+}
+
+/// A reference setting-out grid for a plan export (N4): vertical column axes
+/// ([columns], constant sheet-x) + horizontal row axes ([rows], constant
+/// sheet-y), in sheet pixels. [isEmpty] ⇒ the exporters draw nothing.
+class ReferenceGrid {
+  final List<GridAxis> columns;
+  final List<GridAxis> rows;
+  const ReferenceGrid({this.columns = const [], this.rows = const []});
+  bool get isEmpty => columns.isEmpty && rows.isEmpty;
+}
+
+/// The axis in [axes] whose [GridAxis.position] is nearest [pos], or null when
+/// [axes] is empty — for a riser tie to its closest setting-out line.
+GridAxis? nearestAxis(List<GridAxis> axes, double pos) {
+  GridAxis? best;
+  var bestErr = double.infinity;
+  for (final a in axes) {
+    final err = (a.position - pos).abs();
+    if (err < bestErr) {
+      bestErr = err;
+      best = a;
+    }
+  }
+  return best;
+}
+
+/// Format a tie-dimension offset of [offsetPx] sheet pixels as an integer
+/// millimetre string (CAD dimension convention, no unit), or null when the
+/// sheet is uncalibrated ([metersPerPixel] null/≤0 — a dimension without a scale
+/// would be fabricated) or the node sits on the axis (< 1 mm, nothing to tie).
+String? formatTieOffsetMm(double offsetPx, double? metersPerPixel) {
+  if (metersPerPixel == null || metersPerPixel <= 0) return null;
+  final mm = offsetPx * metersPerPixel * 1000;
+  if (mm < 1) return null;
+  return mm.round().toString();
 }

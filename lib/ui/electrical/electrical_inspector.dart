@@ -10,9 +10,14 @@
 library;
 
 import 'package:flutter/widgets.dart';
+import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show ElectricalCircuitResult;
+import 'package:mechx_engine/report/electrical_sld_drawing.dart'
+    show breakerScheduleLabel;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
@@ -22,6 +27,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import 'electrical_controls.dart';
+import 'electrical_format.dart' show fmtNum, fmtRcdType;
 
 /// Identifies a circuit being edited / menu'd (panel + circuit id).
 class ElectricalEditTarget {
@@ -160,6 +166,18 @@ class ElectricalCircuitInspector extends StatelessWidget {
   /// 340-px floating right-drawer the Layout-canvas electrical layer still uses.
   final bool inline;
 
+  /// The way's SOLVED result (H2/H3 — the same breaker/RCD figures the board
+  /// schedule prints), when the caller can resolve one. Null while the network
+  /// hasn't solved yet, or for a circuit the current result doesn't carry — the
+  /// protection line is simply omitted then (nothing fabricated).
+  final ElectricalCircuitResult? circuitResult;
+
+  /// The panel's resolved breaking-capacity (Icu, kA) — H3, the SAME figure
+  /// `buildElectricalPanelDetail`/the board schedule show for this board's
+  /// devices (the fault study's chosen rating; see `breakerIcuKaByPanel`).
+  /// Null ⇒ no Icu suffix (never fabricated).
+  final double? breakerIcuKa;
+
   const ElectricalCircuitInspector({
     super.key,
     required this.panel,
@@ -167,6 +185,8 @@ class ElectricalCircuitInspector extends StatelessWidget {
     required this.controller,
     required this.onClose,
     this.inline = false,
+    this.circuitResult,
+    this.breakerIcuKa,
   });
 
   static const _cableTypes = <String?>[
@@ -180,6 +200,38 @@ class ElectricalCircuitInspector extends StatelessWidget {
 
   bool get _isMotor =>
       circuit.loadKind == LoadKind.motor || circuit.loadKind == LoadKind.pump;
+
+  /// The human drafting label for a [StarterType] in the picker — the same
+  /// control terms the board-schedule token uses (DOL / VFD / star-delta …).
+  /// Drafting acronyms are identical in EN/ID, so (like the cable-family
+  /// options) only the "None" entry is localized.
+  static String _starterLabel(StarterType s) => switch (s) {
+        StarterType.dol => 'DOL',
+        StarterType.starDelta => 'Star-delta',
+        StarterType.reversing => 'Reversing',
+        StarterType.softStarter => 'Soft-start',
+        StarterType.vfd => 'VFD',
+        StarterType.ats => 'ATS',
+        StarterType.pump => 'Pump',
+      };
+
+  /// The way's protection notation, e.g. `MCB 16A 1ph · Icu 6kA · RCD 30mA A` —
+  /// the SAME breaker/Icu/RCD tokens `buildElectricalPanelDetail` prints on the
+  /// board-schedule DEVICE cell for this circuit (H2 RCD, H3 kA), read off the
+  /// already-solved [circuitResult] rather than recomputed here. Null when the
+  /// caller has no solved result for this circuit (nothing fabricated).
+  String? _protectionLine() {
+    final c = circuitResult;
+    if (c == null) return null;
+    final poles = c.threePhase ? 3 : 1;
+    final ka = breakerIcuKa;
+    final icu = (ka != null && ka > 0) ? ' · Icu ${fmtNum(ka)}kA' : '';
+    final rcd = c.rcd.required
+        ? ' · RCD ${c.rcd.ratingMa}mA'
+            '${c.rcd.type != null ? ' ${fmtRcdType(c.rcd.type!)}' : ''}'
+        : '';
+    return '${breakerScheduleLabel(c.breaker, poles)}$icu$rcd';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -219,6 +271,26 @@ class ElectricalCircuitInspector extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    // H2/H3 — a compact READ-ONLY line surfacing the way's
+                    // solved protection (breaker + breaking-capacity + RCD),
+                    // the SAME figures the board schedule prints for this row
+                    // (`breakerScheduleLabel` + the Icu/RCD tokens), so an
+                    // engineer editing a way sees its protection verdict
+                    // without switching back to the schedule view. Omitted
+                    // (not even the label) when the network hasn't solved a
+                    // result for this circuit yet.
+                    if (_protectionLine() != null)
+                      ElectricalField(
+                        label:
+                            context.strings(StringKey.electricalFieldProtection),
+                        child: Text(
+                          _protectionLine()!,
+                          style: type.body.copyWith(
+                            color: colors.textPrimary,
+                            fontFamily: MechXTypography.monoFamily,
+                          ),
+                        ),
+                      ),
                     ElectricalField(
                       label: context.strings(StringKey.electricalFieldName),
                       child: ElectricalTextInput(
@@ -349,12 +421,18 @@ class ElectricalCircuitInspector extends StatelessWidget {
                           ElectricalField(
                             label:
                                 context.strings(StringKey.electricalFieldCosPhi),
+                            // C6: a 0-1 ratio field — the honest range lives in
+                            // the label (StringKey carries '(0-1)'), and an
+                            // out-of-range commit is REJECTED (field-error
+                            // idiom below the field), not silently clamped.
                             child: ElectricalNumInput(
                               value: circuit.cosPhi,
+                              min: 0.0,
+                              max: 1.0,
                               onChanged: (v) => controller.setCircuit(
                                 panel.id,
                                 circuit.id,
-                                cosPhi: v.clamp(0.0, 1.0),
+                                cosPhi: v,
                               ),
                             ),
                           ),
@@ -363,10 +441,12 @@ class ElectricalCircuitInspector extends StatelessWidget {
                                 .strings(StringKey.electricalFieldDemandFactor),
                             child: ElectricalNumInput(
                               value: circuit.demandFactor,
+                              min: 0.0,
+                              max: 1.0,
                               onChanged: (v) => controller.setCircuit(
                                 panel.id,
                                 circuit.id,
-                                demandFactor: v.clamp(0.0, 1.0),
+                                demandFactor: v,
                               ),
                             ),
                           ),
@@ -393,6 +473,45 @@ class ElectricalCircuitInspector extends StatelessWidget {
                                     ),
                             ),
                           ),
+                          // C5 — the motor-control / STARTER type. Gated to
+                          // motor/pump kinds (like the motor-power field above),
+                          // this is the only hand-set path for
+                          // ElectricalCircuit.starterType, which the board
+                          // schedule drafter appends as a control token
+                          // (DOL / VFD / star-delta) on the way's DEVICE cell.
+                          // "None" clears it back to a bare breaker cell.
+                          if (_isMotor)
+                            ElectricalField(
+                              label: context
+                                  .strings(StringKey.electricalFieldStarter),
+                              child: ElectricalEnumPicker<StarterType?>(
+                                value: circuit.starterType,
+                                options: const [
+                                  null,
+                                  StarterType.dol,
+                                  StarterType.starDelta,
+                                  StarterType.reversing,
+                                  StarterType.softStarter,
+                                  StarterType.vfd,
+                                  StarterType.ats,
+                                ],
+                                label: (s) => s == null
+                                    ? context.strings(
+                                        StringKey.electricalStarterNone)
+                                    : _starterLabel(s),
+                                onChanged: (s) => s == null
+                                    ? controller.setCircuit(
+                                        panel.id,
+                                        circuit.id,
+                                        clearStarterType: true,
+                                      )
+                                    : controller.setCircuit(
+                                        panel.id,
+                                        circuit.id,
+                                        starterType: s,
+                                      ),
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -562,19 +681,26 @@ class ElectricalPanelInspector extends StatelessWidget {
                           ElectricalField(
                             label: context
                                 .strings(StringKey.electricalFieldDiversity),
+                            // C6: a 0-1 ratio field, same treatment as cos phi
+                            // / demand factor above — honest range in the
+                            // label, out-of-range REJECTED not clamped.
                             child: ElectricalNumInput(
                               value: panel.diversityFactor,
-                              onChanged: (v) => controller.setPanelDiversity(
-                                panel.id,
-                                v.clamp(0.0, 1.0),
-                              ),
+                              min: 0.0,
+                              max: 1.0,
+                              onChanged: (v) =>
+                                  controller.setPanelDiversity(panel.id, v),
                             ),
                           ),
                           ElectricalField(
                             label: context.strings(
                                 StringKey.electricalFieldHeadroomSpare),
+                            // C6: the 0-100 percent field — a '%' suffix baked
+                            // onto the at-rest display so it never looks like
+                            // the adjacent 0-1 ratio fields above.
                             child: ElectricalNumInput(
                               value: headroom.sparePercentage,
+                              suffix: '%',
                               onChanged: (v) => controller.setPanelHeadroom(
                                 panel.id,
                                 HeadroomSpec(

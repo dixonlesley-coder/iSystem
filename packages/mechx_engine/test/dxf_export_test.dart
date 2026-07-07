@@ -2,6 +2,7 @@ import 'package:mechx_engine/geometry/dxf_drawing.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
+import 'package:mechx_engine/report/plan_symbols.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -324,6 +325,117 @@ void main() {
           metersPerPixel: 0.05);
       expect(dxf, contains('DN50'));
       expect(dxf, contains('\n50\n90.0\n'));
+    });
+
+    test('N5: the elevation token is appended to the size label', () {
+      final dxf = networkToDxf(
+          net: net,
+          sizing: sizing,
+          sheetId: 's1',
+          floorIndex: 0,
+          metersPerPixel: 0.05,
+          edgeElevationLabels: const {'e': 'CL +2.70'});
+      expect(dxf, contains('DN50 - CL +2.70'));
+    });
+
+    test('N4: the setting-out grid + a riser tie dimension are emitted', () {
+      // Column B == the riser node x (100 px) → offset 0, skipped; row 1 at
+      // y=50 px → |0−50|·0.05·1000 = 2500 mm tie dimension on the ANNO layer.
+      final dxf = networkToDxf(
+          net: net,
+          sizing: sizing,
+          sheetId: 's1',
+          floorIndex: 0,
+          metersPerPixel: 0.05,
+          grid: const ReferenceGrid(
+            columns: [GridAxis('A', 0), GridAxis('B', 100)],
+            rows: [GridAxis('1', 50)],
+          ));
+      expect(dxf, contains('G-ANNO-GRID')); // the grid layer + entities
+      expect(dxf, contains('\n1\n2500\n')); // the riser tie dimension (mm)
+      expect(dxf, contains('\n1\nA\n')); // a column bubble label
+    });
+
+    test('N5/N4: null map + null grid keep the professional DXF byte-identical',
+        () {
+      expect(
+        pro(),
+        equals(networkToDxf(
+            net: net,
+            sizing: sizing,
+            sheetId: 's1',
+            floorIndex: 0,
+            metersPerPixel: 0.05,
+            edgeElevationLabels: null,
+            grid: null)),
+      );
+    });
+  });
+
+  test('N5: elevation token appends in the legacy pixel DXF too', () {
+    final dxf = networkToDxf(
+        net: net,
+        sizing: sizing,
+        sheetId: 's1',
+        floorIndex: 0,
+        edgeElevationLabels: const {'e': 'CL +2.70'});
+    expect(dxf, contains('DN50 - CL +2.70'));
+  });
+
+  // ── N13: the stable element tag on the plan DXF (run label + riser marker) ──
+  group('N13 element tags', () {
+    const tags = {'e': 'CW-F1', 'r': 'CW-R1'};
+
+    test('legacy pixel DXF: run label prepends the tag; riser marker gets a tag '
+        'TEXT', () {
+      final dxf = networkToDxf(
+          net: net,
+          sizing: sizing,
+          sheetId: 's1',
+          floorIndex: 0,
+          edgeTags: tags);
+      // The run's DN label is prefixed with its floor tag.
+      expect(dxf, contains('CW-F1 - DN50'));
+      // The riser marker carries a standalone tag TEXT (\n1\n<tag>\n).
+      expect(dxf, contains('\n1\nCW-R1\n'));
+    });
+
+    test('professional mm DXF: the tags ride the ANNO layer', () {
+      final dxf = networkToDxf(
+          net: net,
+          sizing: sizing,
+          sheetId: 's1',
+          floorIndex: 0,
+          metersPerPixel: 0.05,
+          edgeTags: tags);
+      expect(dxf, contains('CW-F1 - DN50'));
+      expect(dxf, contains('\n1\nCW-R1\n'));
+    });
+
+    test('a null edgeTags map keeps both DXF paths byte-identical', () {
+      expect(
+          networkToDxf(
+              net: net, sizing: sizing, sheetId: 's1', floorIndex: 0),
+          equals(networkToDxf(
+              net: net,
+              sizing: sizing,
+              sheetId: 's1',
+              floorIndex: 0,
+              edgeTags: null)));
+      expect(
+          networkToDxf(
+              net: net,
+              sizing: sizing,
+              sheetId: 's1',
+              floorIndex: 0,
+              metersPerPixel: 0.05),
+          equals(networkToDxf(
+              net: net,
+              sizing: sizing,
+              sheetId: 's1',
+              floorIndex: 0,
+              metersPerPixel: 0.05,
+              edgeTags: null)));
     });
   });
 }

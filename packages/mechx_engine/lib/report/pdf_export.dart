@@ -25,18 +25,9 @@ import 'plan_symbols.dart';
 import 'sld_sheet.dart';
 
 /// Per-service stroke colour as RGB in the 0..1 range (no Flutter `Color`).
-(double, double, double) _serviceColor(ServiceType s) => switch (s) {
-      ServiceType.coldWater => (0.13, 0.45, 0.85),
-      ServiceType.hotWater => (0.85, 0.30, 0.20),
-      ServiceType.drainage => (0.50, 0.35, 0.20),
-      ServiceType.vent => (0.20, 0.60, 0.60),
-      ServiceType.rainwater => (0.20, 0.70, 0.85),
-      ServiceType.duct => (0.20, 0.60, 0.30),
-      ServiceType.returnAir => (0.50, 0.60, 0.20),
-      ServiceType.exhaust => (0.50, 0.30, 0.60),
-      ServiceType.fireSprinkler => (0.80, 0.15, 0.15),
-      ServiceType.fireHydrant => (0.60, 0.10, 0.10),
-    };
+/// Delegates to the ONE shared `serviceChromeColor` table (E2) so the plotted
+/// line, the legend swatch and the live canvas line all read the same colour.
+(double, double, double) _serviceColor(ServiceType s) => serviceChromeColor(s);
 
 String _sizeLabel(NetEdge e, EdgeSizing s) {
   if (s.isRectangular) {
@@ -57,12 +48,23 @@ int _strokeBand(EdgeSizing s) {
       sizeMm: s.diameter.inMillimeters, isDuct: s.service.isAir);
 }
 
-/// Keep PDF text to printable ASCII (WinAnsi-safe) and escape the three PDF
-/// string metacharacters so a sheet name or label never breaks the syntax.
+/// WinAnsi (Latin-1) code points the drawing labels legitimately emit, passed
+/// through as their own byte (code point == WinAnsi byte at these positions) so
+/// a `/WinAnsiEncoding` Helvetica renders the real glyph, not `?`: U+00B7
+/// middle-dot separator (SIZE·SERVICE / cable·conduit), U+00B0 degree, U+00B1
+/// plus-minus, U+00B2/00B3 super-2/3, U+00D8/00F8 O-stroke.
+const _winAnsiPassThrough = {0xB0, 0xB1, 0xB2, 0xB3, 0xB7, 0xD8, 0xF8};
+
+/// Keep PDF text to WinAnsi-encodable characters (printable ASCII + the few
+/// Latin-1 glyphs above) and escape the three PDF string metacharacters so a
+/// sheet name or label never breaks the syntax; anything else falls back to `?`.
 String _pdfText(String raw) {
   final b = StringBuffer();
   for (final code in raw.runes) {
-    final c = (code >= 0x20 && code <= 0x7e) ? code : 0x3f /* ? */;
+    final c =
+        (code >= 0x20 && code <= 0x7e) || _winAnsiPassThrough.contains(code)
+            ? code
+            : 0x3f /* ? */;
     if (c == 0x28 || c == 0x29 || c == 0x5c) b.writeCharCode(0x5c); // ( ) \
     b.writeCharCode(c);
   }
@@ -88,6 +90,12 @@ String _n(double v) => v.toStringAsFixed(2);
 /// [paper] selects the landscape sheet size (default A3 ⇒ byte-identical); A2
 /// / A1 enlarge the page, margins, fit, chrome anchoring and scale text alike.
 ///
+/// With [nodeTags] present (G1) each `node id → equipment tag` (`P-01` …, from
+/// `equipmentNodeTags`) is drawn beside that equipment glyph; with
+/// [gravitySlope] present (G5) each gravity run's size label gains the laid fall
+/// `1:N` from that real `SizingContext.drainageSlope`. Both null ⇒
+/// byte-identical.
+///
 /// With [underlay] present (A1) the floor-plan substrate is painted FIRST,
 /// beneath every network stroke: a [VectorPlanUnderlay] as pale-grey thin
 /// linework, a [RasterPlanUnderlay] as a FlateDecode image XObject scaled to
@@ -104,6 +112,8 @@ Uint8List networkToPdf({
   double? metersPerPixel,
   PlanUnderlay? underlay,
   PaperSize paper = PaperSize.a3Landscape,
+  Map<String, String>? nodeTags,
+  double? gravitySlope,
 }) {
   final pageW = paper.widthPt; // landscape sheet width, points
   final pageH = paper.heightPt; // landscape sheet height, points
@@ -302,7 +312,16 @@ Uint8List networkToPdf({
         }
       }
       if (s != null) {
-        edgeLabel(tx(a.x), ty(a.y), tx(c.x), ty(c.y), _sizeLabel(e, s));
+        // G5: append the laid fall (`1:100`) to a gravity run's size label,
+        // from the real ctx gradient the caller passes (never hardcoded).
+        final slopeText = (e.service.regime == FlowRegime.gravity &&
+                gravitySlope != null)
+            ? gravitySlopeLabel(gravitySlope)
+            : null;
+        final label = slopeText != null
+            ? '${_sizeLabel(e, s)} - $slopeText'
+            : _sizeLabel(e, s);
+        edgeLabel(tx(a.x), ty(a.y), tx(c.x), ty(c.y), label);
       }
     } else {
       strokeColor(e.service);
@@ -335,6 +354,12 @@ Uint8List networkToPdf({
       strokePrims(planComponentPrims(comp, cx: px, cy: py, size: 14), py, col);
     } else if (n.role == NodeRole.fixture) {
       strokePrims(planFixturePrims(cx: px, cy: py, size: 14), py, col);
+    }
+    // G1: the stable equipment tag (`P-01` …) beside the equipment glyph.
+    final eqTag = nodeTags?[n.id];
+    if (eqTag != null && eqTag.isNotEmpty) {
+      final w = eqTag.length * 9.0 * 0.55;
+      edgeLabel(px + 10, py, px + 10 + w, py, eqTag);
     }
   }
 

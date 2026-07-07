@@ -260,7 +260,146 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
-- **Apple-design review (2026-07-04) — the CURRENT plan of record for ease-of-use/UX polish**:
+- **Workflow + goldens two-lens review + export-readiness audit (2026-07-06) — the CURRENT plan
+  of record (7 waves: the original 6 + the additional export-ready Wave 7)**:
+  `WORKFLOW-GOLDENS-REVIEW.md` (root) is a fresh,
+  adversarially-verified review of the v1.12.0 workflow and the 16 golden screenshots from two
+  POVs — a senior Apple UI/software engineer and a senior Indonesian MEP drafter/engineer — run
+  AFTER the three prior campaigns (UX-workflow, CAD-output, Apple-design) fully landed, then
+  **extended the same day on the product owner's direction: the EXPORTS are the product**
+  (a mandor/foreman and site engineers must build from the issued set directly — no AutoCAD
+  redraw, no Excel supplement). **106 verified findings** (33 high / 59 medium / 14 low) in
+  **14 themes (A–N)**: 81 from the two-lens review (70 raw → 67 merged → **0 refuted** by an
+  independent adversarial pass, + 13 from a completeness critic + 1 orchestrator-verified) plus
+  **Theme N — a 25-finding export-readiness audit** in which a committed dev tool
+  (`packages/mechx_engine/tool/generate_export_samples.dart`, the campaign's acceptance harness)
+  generated the REAL 13-artifact export set from a representative 3-storey fixture, the PDFs were
+  rasterized, and four site-lens critics (foreman, mechanical site engineer, electrical
+  kontraktor, document controller) reviewed the actual sheets. Headline Theme-N proof: every
+  vector PDF garbles the engine's own `·` separator to `?` INSIDE cable-spec/starter cells (the
+  DXF of the same set is correct — the two formats contradict); socket RCDs print in the calc
+  report but NOT on the board schedule a panel is built from; no sheet anywhere carries cable
+  lengths (though length drives the printed Vdrop), per-device kA, mounting heights, or
+  setting-out ties; a drainage stack can auto-size SMALLER than its branches (DN65 stack / DN75
+  branch — no stack≥branch clamp in `_sizeSanitaryEdge`); ONE global `documentNumber` stamps
+  every exported sheet; the mech riser DXF writes plumbing onto E-BREAKER/E-TEXT layers; the
+  riser PDF titles itself "Untitled project". Sequenced into **seven waves — the ORIGINAL six
+  unchanged** (W1 stop-the-lies/visible defects [clipped goldens 09/10/11, "read-only" Auto mode
+  committing an edge, the phantom mid-draw node, zone-check→compliance, unstable tags] → W2 feel
+  [the every-drag-frame full re-solve, keyboard reach, Windows basics: .mechx association, window
+  state, min-size] → W3 trust surface [heatmap probe/scale, velocity display, audited acks,
+  stale-calibration prompt, all-sheets submittal, RCD/kA/CT visibility] → W4 deliverable fidelity
+  [equipment tags, HW-recirc + drainage/vent riser fidelity + STP terminus, valve trains, slope,
+  one air-colour language, plan-accurate electrical export] → W5 velocity/parity [layer lock,
+  rotate/mirror, repeat-place, shared plan, multi-select parity] → W6 structure/polish + the one
+  deferred item: spatial clash checking) **plus the ADDITIONAL Wave 7 — export-ready
+  deliverables**: all 25 Theme-N findings as one campaign, additive to and schedulable
+  independently of Waves 1–6 (including first), with the dev tool as its acceptance harness
+  (regenerate the 13 artifacts + re-read the sheets after each batch). Three territories NO prior
+  campaign covered: performance-feel, keyboard-only/accessibility, Windows-desktop citizenship.
+  **Wave 1 (stop-the-lies / visible defects) HAS LANDED** (2026-07-06, see the §15 row): all 19
+  items — riser corner reserved for the (?) button (goldens 09/10 unclipped), fit-width board
+  schedule + the un-clipped toolbar issues pill (golden 11), honest Auto-mode commit hint + Edit
+  drop preview/redirect toast, ghosted inert edges, one `FFL +X.XX` notation (shared engine
+  `fflLabel`), data-gated valve detail boxes, phantom mid-draw node cancelled on sheet switch,
+  duct badge dodges the size chip, dropped-label tick mark, duplicate-floor keeps loose
+  equipment, template-cancel status toast, 'Building' naming converged, stepper Floors no longer
+  ticked by drawing alone, corrected power-one-line empty state, electrical-layer guide line,
+  PRV zone-over-limit → compliance verdict, fire verdicts localized, stable equipment tags,
+  keyboard-reachable Review actions. Goldens 01–15 regenerated; engine 1263 / app 842 / analyze
+  clean. **Wave 7 (export-ready deliverables — all 25 Theme-N findings) HAS ALSO LANDED**
+  (2026-07-06, see the §15 row): the PDFs now render the real `·`/`Ø` glyphs via WinAnsi (0 `?`
+  bytes, PDF==DXF), the board schedule carries LENGTH + per-device kA (3-tier fallback) + RCD +
+  CT-ratio tokens and MCCBs drop the curve letter, riser tags carry lengths and grouped fixture
+  counts, plan labels carry CL elevations + gridline bubbles/tie dimensions, drainage stacks
+  clamp ≥ their largest branch (`stackRaisedForBranch`), the BOM gained material/tag + honest
+  duct-size columns (CSV headers changed: `nominal_size_mm`+`material`), the calc report gained
+  a per-run sizing-basis schedule + governed standards wording, the equipment schedule gained
+  TX/genset/capacitor rows + an editable Model/spec map (`DesignSettings.equipmentModelSpecs`),
+  every export stamps a distinct per-sheet DWG number (pure `DrawingSeries`), every PDF sheet
+  renders ONE tabular title block with the DRAWN/CHECKED/APPROVED sign-off trio + SHEET i-of-N,
+  the mech riser DXF uses M-* layers, and a bilingual cover + Daftar Gambar generator leads the
+  submittal set. Acceptance harness: the 13 artifacts regenerate + 25/25 on-paper verdicts PASS.
+  Gate: engine 1341 / app 844 / analyze clean; only electrical goldens 05/08/10/11 shifted.
+  Residuals recorded: panel/apparatus Model-spec hooks, the 190 pt title-cell width.
+  **Wave 2 batch 1 (the user-reported B10/B11/B12 drafting-feel fixes + N4 app wiring) HAS ALSO
+  LANDED** (2026-07-06, see the §15 row): the outlet nub survives a full pull (B11), ortho 45°
+  applies to endpoint-resize + degree-1 node drags (B10), and the plan underlay is a snap
+  surface (B12) — DXF vector snapping (pure grid-bucketed index over the cached `DxfDrawing`),
+  two-click traced reference lines (additive `.mechx`, exported as N4 gridline bubbles when
+  axis-aligned + labelled), and PDF raster snap-to-ink (pure `findInkSnap` over an async LRU
+  luminance cache) — one candidate path at every snap gesture with precedence node > vector >
+  reference line > ink > grid, gated by a default-ON 'Snap to plan' toggle beside Ortho.
+  Gate: engine 1341 / app 899 / analyze clean; goldens 01/02/03 shifted (new DRAW chip+toggle).
+  Residual: the legacy `sheet_canvas.dart` host lacks only the trace-tool overlay.
+  **The Wave 2 remainder HAS ALSO LANDED** (2026-07-06, see the §15 row): K1 drag-session
+  throttle (no heavy re-solve per drag frame; at-rest byte-identical), K3 heatmap field
+  memoization, K2 isolate-offloaded Open, K4 threshold-gated isolate autosave encode with a
+  TOCTOU-safe tick, L1 Loads-palette keyboard path, L3 focus-ring sweep, L5+M4 one custom
+  tooltip mechanism on icon-only chrome, C2 every-selection auto-scroll, D9 converged reveal
+  zoom, B5 width-scaled hit corridors, B6 nub/handle hit separation, M2 `.mechx` association +
+  CLI open, M3 Windows window-placement persistence (Windows-CI-verified). Gate: engine 1341 /
+  app 927 / analyze clean; goldens byte-identical. **Wave 3 (the trust surface) HAS ALSO LANDED
+  IN FULL** (2026-07-06, see the two §15 rows): the heatmap became an instrument — an SNI-target
+  tick + 'Min NN kPa' on the legend gradient and a per-node 'Residual NN kPa' PASS/LOW probe in
+  the node inspector (I2), with the uniform-field state rendering a calm neutral tint + an
+  honest 'Uniform NN kPa · PASS/LOW' verdict (E4, golden 03 re-captured); live water/drainage
+  velocity verdicts in the edge inspector via `waterVelocityChecksProvider` reusing the engine
+  `checkVelocityBand` against `SniProfile` caps (I3); auditable acknowledgements —
+  `IssueAck{key,author,note,date}` persisted additively (legacy bare-string acks load
+  tolerantly), an initials+reason inline form on Acknowledge, and 'Acknowledged: … — author,
+  date: note' rows in the report's compliance section (I4); a revision-tag vs revision-history
+  advisory (I6); manual-override '*' marks + footnote in the BOM CSV/report (I5, default
+  byte-identical); H2/H3/H4 verified closed by Wave-7's N10/N9/N11 (the live canvas paints the
+  same engine schedule) plus a read-only RCD/kA line in the circuit editor; and the 3-phase
+  phase-imbalance % on the schedule TOTAL footer (H7, hand-derived test). The review pass
+  caught + fixed a kPa-vs-Pa tolerance mismatch between legend and probe. Gate: engine 1348 /
+  app 954 / analyze clean; goldens 03/05/11 re-captured + visually verified. J1/J2 detail:
+  replacing a sheet's plan mid-project
+  (`SheetsController.replaceSheetSource`, "Replace plan…") now flags its surviving calibration
+  STALE (additive `ProjectState.staleCalibrations`, tolerant `.mechx`, no version bump) —
+  surfaced as a distinct locatable Design Issue ('Plan replaced — re-verify scale', EN+ID), a
+  warning-state sheet-rail dot, and a Scale-inspector **'Scale confirmed'** button
+  (`ProjectController.confirmCalibration`) that clears it without re-measuring; re-calibrating
+  (or `applyCalibrationToAllSheets`) clears it too. The one-folder submittal package's plan/DXF
+  export now loops EVERY sheet in the rail (was: `sheets.current` only) via a new testable
+  `writeSubmittalPackageToDir`, each sheet keeping its own N19 drawing number + a disambiguated
+  filename, with the Daftar Gambar front matter listing one row per bundled sheet and progress on
+  the shared busy pill. **Wave 4 (deliverable fidelity) HAS ALSO LANDED** (2026-07-06, see the
+  §15 row): one pure `equipmentNodeTags` source prints P-01/TK-01/AHU-01 beside equipment on
+  canvas + all plan exports (G1, review-caught app-wiring fix included); a data-gated HW-recirc
+  return leg with HWR tags + recirc pump on the riser (G2); real suction/discharge valve trains
+  in the pump-set detail (G3); floor-drain/VTR reference details + an honestly-generic drainage
+  terminus (G4); real design-slope '1:100' + fall arrows on gravity runs (G5); an on-canvas
+  service-colour legend chip (E5); ONE service-colour source with a PDF↔DXF parity test (E2);
+  the plan-accurate ELECTRICAL LAYOUT export (`electrical_plan_drawing.dart`, E-1xx, honest
+  unplaced note — artifact 14 of the dev-tool harness) wired into Export + the submittal set
+  (H1); size-matched conduit tokens (H6); a starter picker in the circuit editor (C5); and the
+  two Wave-7 residuals closed (TX/genset/cap-bank Model-spec hooks; the auto-fitting title
+  cell). Gate: engine 1371 / app 957 / analyze clean; goldens 01/02/03/09/10_single_line
+  re-captured; harness 16 artifacts, all verdicts PASS. **Wave 5 (velocity + parity) HAS ALSO
+  LANDED** (2026-07-06, see the §15 row): per-discipline layer LOCK excluded from every hit
+  path (F1), per-service view isolate chips inside multi-service layers (F4, view-only),
+  click-to-place-repeatedly armed palette mode (F5), one-undo duplicate-floor-to-range (F3),
+  rotate/mirror selection transforms with exact 45° preservation + Shift+R/Shift+M bindings
+  (F2), 'Use plan on another floor…' shared-source sheets (F6, dedupe-verified), the FINISHED
+  inline-inspector convergence — no more drawer overlays anywhere electrical (C1), electrical
+  marquee/multi-select/nudge (D2), riser-edit multi-select + batch move (D5), and honestly
+  disabled palettes on read-only tabs (D6). The review caught + fixed a marquee edge-capture
+  gap in the inert-service filter. Gate: engine 1371 / app 997 / analyze clean; goldens
+  01/02/03/06/10_electrical_riser re-captured. **Wave 6 (structure & polish) HAS ALSO LANDED** (2026-07-06, see the §15
+  row) — 'Load sample project' on the Layout empty state (A1), the ranked export surface +
+  primary-accent correction on the Projects hub (A5/A6), the Draw section default-collapsing
+  once a network exists (C3), the Rooms editor's identity-first ResultCards (C4), honest
+  percent/ratio fields that reject instead of clamp (C6), minimap chrome (B7), the Riser rail
+  hidden + chrome converged (D4/D8), a native 1024×700 minimum window + reflow test (M1), the
+  Semantics sweep (L4), and the cold-water cobalt split from the selection accent through the
+  one colour source (E3). **THE WORKFLOW-GOLDENS-REVIEW CAMPAIGN IS COMPLETE: all 7 waves
+  landed — 108 of its 109 findings (106 + the 3 user-reported B10/B11/B12) shipped or
+  explicitly dispositioned; the sole deferred item is J5 spatial clash checking.** Final
+  gate: engine 1371 / app 1015 / analyze clean; goldens re-captured throughout; the
+  16-artifact export harness green.
+- **Apple-design review (2026-07-04) — the prior plan of record for ease-of-use/UX polish (fully landed)**:
   `APPLE-DESIGN-REVIEW.md` (root) is a fresh senior-Apple-UI-designer review run AFTER the 83-finding
   UX-workflow review shipped (v1.10.0) — its premise is that the infrastructure is mature and the
   remaining gap is *consistency + restraint of application* and *orientation between steps*. 8 themes
@@ -530,11 +669,12 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.12.0`** (the unconnected-element design checks — loose pipe/duct ends,
-  orphans, unfed panels, surfaced as locatable Review warnings — plus a golden-review
-  readability batch, atop the v1.11.0 Apple-design-review baseline; `pubspec.yaml` is
-  the version source of truth, `1.12.0+18`; each release = bump → merge to the default
-  branch → `release.yml` `workflow_dispatch` with `publish=true`).
+  is `v1.13.0`** (the ENTIRE WORKFLOW-GOLDENS-REVIEW campaign — all 7 waves — atop the
+  v1.12.0 baseline; `pubspec.yaml` is the version source of truth, `1.13.0+19`; each
+  release = bump → merge to the default branch → `release.yml` `workflow_dispatch` with
+  `publish=true`). The prior `v1.12.0` shipped the unconnected-element design checks
+  (loose pipe/duct ends, orphans, unfed panels, surfaced as locatable Review warnings)
+  plus a golden-review readability batch, atop the v1.11.0 Apple-design-review baseline.
   **Wave 4b (electrical drawings export) landed**: pure-engine
   `report/electrical_calc_report.dart` (Markdown over the sized system + power one-line
   + verify items) and `report/electrical_dxf_export.dart` (R12 DXF single-line —

@@ -15,6 +15,7 @@ import 'package:flutter/widgets.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'glass_surface.dart';
+import 'mechx_focus_ring.dart';
 
 /// A one-shot menu entrance: scales from ~0.92 -> 1.0 and fades 0 -> 1 over
 /// [MechXMotion.appear], anchored top-left so the menu grows out of the click
@@ -181,42 +182,49 @@ class _MechXMenuRowState extends State<MechXMenuRow> {
         : widget.muted
             ? colors.textMuted
             : colors.textPrimary;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          color: _hover ? colors.surfaceHover : const Color(0x00000000),
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm + 2,
-            vertical: MechXSpacing.xs + 1,
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  widget.label,
-                  style: (widget.mono ? type.mono : type.label).copyWith(
-                    color: fg,
-                    fontWeight: widget.selected ? FontWeight.w700 : null,
+    // L3: this is the ONE shared row every mechanical AND electrical
+    // right-click context menu renders — wrap it in the shared focus ring so
+    // Tab reaches a menu entry and Enter/Space fires it, matching every other
+    // interactive control's keyboard idiom.
+    return MechXFocusRing(
+      onActivated: widget.onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          child: AnimatedContainer(
+            duration: MechXMotion.hover,
+            curve: MechXMotion.standard,
+            color: _hover ? colors.surfaceHover : const Color(0x00000000),
+            padding: const EdgeInsets.symmetric(
+              horizontal: MechXSpacing.sm + 2,
+              vertical: MechXSpacing.xs + 1,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.label,
+                    style: (widget.mono ? type.mono : type.label).copyWith(
+                      color: fg,
+                      fontWeight: widget.selected ? FontWeight.w700 : null,
+                    ),
                   ),
                 ),
-              ),
-              if (widget.selected)
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: colors.accent,
-                    borderRadius: MechXRadii.small,
+                if (widget.selected)
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: colors.accent,
+                      borderRadius: MechXRadii.small,
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

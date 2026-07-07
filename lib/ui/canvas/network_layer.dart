@@ -3,6 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/plan_symbols.dart'
+    show equipmentNodeTags, gravitySlopeLabel;
 import 'package:mechx_engine/report/riser_tags.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
@@ -102,9 +104,13 @@ class NetworkLayer extends ConsumerWidget {
     // Layer filtering (unified canvas only).
     Set<DisciplineLayer> visible = DisciplineLayer.values.toSet();
     DisciplineLayer? active;
+    // F4 — per-service view filter (hidden services omitted from render + hit
+    // test). Empty by default ⇒ byte-identical.
+    Set<ServiceType> hiddenServices = const {};
     if (layerFiltered) {
       visible = ref.watch(layerVisibilityProvider);
       active = ref.watch(activeDisciplineProvider);
+      hiddenServices = ref.watch(hiddenServicesProvider);
     }
 
     return IgnorePointer(
@@ -128,6 +134,7 @@ class NetworkLayer extends ConsumerWidget {
           layerFiltered: layerFiltered,
           visibleDisciplines: visible,
           activeDiscipline: active,
+          hiddenServices: hiddenServices,
           warningIds: warningIds,
           unsizedIds: unsizedIds,
           overCapacityIds: overCapacityIds,
@@ -140,6 +147,44 @@ class NetworkLayer extends ConsumerWidget {
 /// Opacity applied to a service whose discipline is visible but not the active
 /// (editable) layer — ghosted for coordination, not for editing.
 const double _kFadedAlpha = 0.28;
+
+/// The on-screen outer width (px) of a pipe/duct, scaled CONTINUOUSLY from its
+/// sized nominal bore (or a small default when unsized) — so a pipe visibly
+/// grows with its DN. Kept in screen px (constant at any zoom) and clamped to
+/// a sane band so the thinnest still reads as a pipe and the fattest doesn't
+/// dominate. Ducts use a gentler slope (their mm are far larger).
+///
+/// E4 — TRUE-WIDTH when calibrated: once the sheet has a real scale
+/// ([metersPerPixel]) this also knows the element's PHYSICAL footprint in
+/// screen px (`mm/1000 / metresPerPixel × scale`). The final width is
+/// `max(clampedPx, min(truePx, cap))`: at a zoomed-OUT view the physical
+/// footprint is tiny so the clamp floor wins (byte-identical to before — a
+/// 600×400 duct no longer paints ~13 px at every zoom), and as the engineer
+/// zooms IN the duct/large-pipe grows to its real footprint (capped so a
+/// trunk can't swamp the sheet). Uncalibrated sheets keep the pure screen-px
+/// band.
+///
+/// Top-level (not painter-private) — B5's canvas hit-test corridor
+/// (`selection_overlay.dart`'s `_edgeAt`) reuses this SAME formula so the
+/// clickable band tracks exactly what's drawn, instead of duplicating (and
+/// risking drifting from) the true-width math.
+double pipeOuterPx(EdgeSizing? s, ServiceType svc,
+    {required double scale, double? metersPerPixel}) {
+  final double mm = s == null
+      ? 20
+      : (s.isRectangular
+          ? math.max(s.width!.inMillimeters, s.height!.inMillimeters)
+          : s.diameter.inMillimeters);
+  final double clamped = svc.regime == FlowRegime.air
+      ? (6.0 + mm * 0.012).clamp(8.0, 20.0)
+      : (3.6 + mm * 0.06).clamp(4.0, 16.0);
+  final mpp = metersPerPixel;
+  if (mpp == null || mpp <= 0) return clamped;
+  // Physical footprint of the element in screen pixels at the current zoom.
+  final truePx = (mm / 1000.0) / mpp * scale;
+  // 120 px cap so a large trunk grows realistically without dominating.
+  return math.max(clamped, math.min(truePx, 120.0));
+}
 
 class _NetworkPainter extends CustomPainter {
   final Network net;
@@ -181,6 +226,11 @@ class _NetworkPainter extends CustomPainter {
   final Set<DisciplineLayer> visibleDisciplines;
   final DisciplineLayer? activeDiscipline;
 
+  /// F4 — services the engineer has individually hidden within a visible
+  /// discipline (a view filter): omitted from paint AND hit-test. Empty ⇒
+  /// byte-identical.
+  final Set<ServiceType> hiddenServices;
+
   /// Ids of air elements (edges / terminal nodes) whose velocity is out of band.
   final Set<String> warningIds;
 
@@ -208,6 +258,7 @@ class _NetworkPainter extends CustomPainter {
     this.layerFiltered = false,
     this.visibleDisciplines = const {},
     this.activeDiscipline,
+    this.hiddenServices = const {},
     this.warningIds = const {},
     this.unsizedIds = const {},
     this.overCapacityIds = const {},
@@ -227,9 +278,12 @@ class _NetworkPainter extends CustomPainter {
   bool _edgeHovered(String id) => id == hoveredEdgeId;
   bool _nodeHovered(String id) => id == hoveredNodeId;
 
-  /// Whether a service's discipline should be drawn at all (visibility).
+  /// Whether a service should be drawn at all: its discipline must be visible
+  /// AND the service must not be individually hidden by the F4 view filter.
   bool _serviceVisible(ServiceType s) =>
-      !layerFiltered || visibleDisciplines.contains(disciplineOf(s));
+      !layerFiltered ||
+      (visibleDisciplines.contains(disciplineOf(s)) &&
+          !hiddenServices.contains(s));
 
   /// The opacity multiplier for a service: 1.0 when not layer-filtered or when
   /// its discipline is the active one; [_kFadedAlpha] when it's a visible-but-
@@ -255,7 +309,9 @@ class _NetworkPainter extends CustomPainter {
     for (final e in net.edges) {
       if (e.fromId != n.id && e.toId != n.id) continue;
       touched = true;
-      if (visibleDisciplines.contains(disciplineOf(e.service))) visible = true;
+      // F4 — a node stays visible only while at least one touching edge's
+      // service is itself visible (discipline shown AND not individually hidden).
+      if (_serviceVisible(e.service)) visible = true;
       if (disciplineOf(e.service) == activeDiscipline) active = true;
     }
     if (!touched) return (visible: true, opacity: 1.0);
@@ -281,6 +337,14 @@ class _NetworkPainter extends CustomPainter {
     // floor: on a multi-service layer a run label carries its service code
     // (DN15-CW); on a single-service view it stays bare (DN15).
     final riserTagById = riserTags(net, null);
+    // G1: one stable equipment tag per plant/air-unit node (P-01 / TK-01 / …),
+    // the SAME source the plan exporters + equipment schedule use.
+    final equipmentTagById = equipmentNodeTags(net);
+    // G5: the laid gravity fall as a `1:100` token — read from the SizingContext
+    // gradient the sizer actually uses (the store builds SizingContext without
+    // overriding drainageSlope), never a hardcoded string.
+    final gravitySlopeText =
+        gravitySlopeLabel(const SizingContext().drainageSlope);
     final visibleServices = <ServiceType>{};
     for (final e in net.edges) {
       if (!_serviceVisible(e.service)) continue;
@@ -389,6 +453,10 @@ class _NetworkPainter extends CustomPainter {
 
         // Size labels are drawn only when the toggle is on, and never on a faded
         // (coordination) layer — to keep the active layer's annotation readable.
+        // [labelSide] records which perpendicular side the chip took (null when
+        // no chip was drawn) so the status badge below can dodge to the other
+        // side (B2).
+        int? labelSide;
         if (s != null && showLabels && opacity >= 1.0) {
           String label;
           if (s.isRectangular) {
@@ -403,19 +471,33 @@ class _NetworkPainter extends CustomPainter {
           if (multiService) label = '$label-${riserServiceCode(e.service)}';
           final tag = _productTag(e, s);
           if (tag != null) label = '$label  $tag';
-          _label(canvas, pa, pb, outer, label, placedLabels);
+          // G5: append the laid fall (`1:100`) on a gravity-regime run so the
+          // soil/waste/rainwater branch shows its slope, not just its size.
+          if (e.service.regime == FlowRegime.gravity &&
+              gravitySlopeText != null) {
+            label = '$label  $gravitySlopeText';
+          }
+          labelSide = _label(canvas, pa, pb, outer, label, placedLabels);
         }
         // Air status badge (independent of the size-label toggle), active layer
         // only. Precedence: over-capacity (hard size limit) → out-of-band
-        // velocity warning → not-yet-sized advisory.
-        if (opacity >= 1.0) {
-          final mid = Offset((pa.dx + pb.dx) / 2, (pa.dy + pb.dy) / 2 - 13);
+        // velocity warning → not-yet-sized advisory. B2: the badge sits
+        // PERPENDICULAR to the duct axis, clear of the casing, on the side the
+        // size chip did NOT take — so neither the DN/Ø chip nor (on a vertical
+        // duct) the casing is overprinted. Its footprint joins [placedLabels] so
+        // a later run's label dodges it too.
+        if (opacity >= 1.0 &&
+            (overCapacityIds.contains(e.id) ||
+                warningIds.contains(e.id) ||
+                unsizedIds.contains(e.id))) {
+          final badge = _badgeCenter(pa, pb, outer, labelSide);
+          placedLabels.add(Rect.fromCenter(center: badge, width: 16, height: 16));
           if (overCapacityIds.contains(e.id)) {
-            _overCapacityBadge(canvas, mid);
+            _overCapacityBadge(canvas, badge);
           } else if (warningIds.contains(e.id)) {
-            _warnBadge(canvas, mid);
-          } else if (unsizedIds.contains(e.id)) {
-            _unsizedBadge(canvas, mid);
+            _warnBadge(canvas, badge);
+          } else {
+            _unsizedBadge(canvas, badge);
           }
         }
       } else {
@@ -483,6 +565,14 @@ class _NetworkPainter extends CustomPainter {
       }
       if (n.component != null) {
         _componentGlyph(canvas, p, n.component!, layer.opacity);
+        // G1: the stable equipment tag (P-01 / TK-01 / AHU-01 …) beside the
+        // glyph — the plan↔schedule cross-reference. Active layer only (like the
+        // size + riser labels), collision-aware against the run labels already
+        // placed this frame.
+        final eqTag = equipmentTagById[n.id];
+        if (eqTag != null && layer.opacity >= 1.0) {
+          _equipmentTagLabel(canvas, p, eqTag, placedLabels);
+        }
       } else if (n.role != NodeRole.main || joints[n.id] == null) {
         // A plain junction that carries a fitting glyph (drawn above) no longer
         // needs the bare dot; a free main node (no pipes yet) still gets it.
@@ -515,6 +605,26 @@ class _NetworkPainter extends CustomPainter {
   }
 
   /// A small hollow advisory dot for an air element not yet manually sized.
+  /// The screen point for an air status badge on the run pa→pb (B2): offset
+  /// PERPENDICULAR to the duct axis, clear of the [outer] casing, on the side
+  /// OPPOSITE the size chip ([labelSide]: `1` chip upper → badge lower, `-1`
+  /// chip lower → badge upper, `null` no chip → default lower). This keeps the
+  /// "!"/triangle off the DN/Ø chip and, on a vertical duct, off the casing
+  /// (both of which the old fixed `mid.y-13` offset overprinted). Falls back to
+  /// the midpoint for a degenerate zero-length run.
+  Offset _badgeCenter(Offset pa, Offset pb, double outer, int? labelSide) {
+    final mid = (pa + pb) / 2;
+    final len = (pb - pa).distance;
+    if (len <= 1e-6) return mid;
+    final u = (pb - pa) / len;
+    var perp = Offset(-u.dy, u.dx);
+    if (perp.dy > 0) perp = -perp; // consistent "up" (perp+)
+    // Opposite the chip; default lower (perp-) when there is no chip.
+    final side = labelSide == -1 ? 1.0 : -1.0;
+    final off = outer / 2 + 10; // clear the wall + the badge halo
+    return mid + perp * side * off;
+  }
+
   void _unsizedBadge(Canvas canvas, Offset center) {
     canvas.drawCircle(center, 4, Paint()..color = const Color(0xFFFFFFFF));
     canvas.drawCircle(
@@ -527,37 +637,11 @@ class _NetworkPainter extends CustomPainter {
     );
   }
 
-  /// The on-screen outer width (px) of a pipe, scaled CONTINUOUSLY from its
-  /// sized nominal bore (or a small default when unsized) — so a pipe visibly
-  /// grows with its DN. Kept in screen px (constant at any zoom) and clamped to
-  /// a sane band so the thinnest still reads as a pipe and the fattest doesn't
-  /// dominate. Ducts use a gentler slope (their mm are far larger).
-  ///
-  /// E4 — TRUE-WIDTH when calibrated: once the sheet has a real scale
-  /// ([metersPerPixel]) the painter also knows the element's PHYSICAL footprint
-  /// in screen px (`mm/1000 / metresPerPixel × transform.scale`). The final
-  /// width is `max(clampedPx, min(truePx, cap))`: at a zoomed-OUT view the
-  /// physical footprint is tiny so the clamp floor wins (byte-identical to
-  /// before — a 600×400 duct no longer paints ~13 px at every zoom), and as the
-  /// engineer zooms IN the duct/large-pipe grows to its real footprint (capped
-  /// so a trunk can't swamp the sheet). Uncalibrated sheets keep the pure
-  /// screen-px band.
-  double _pipeOuterPx(EdgeSizing? s, ServiceType svc) {
-    final double mm = s == null
-        ? 20
-        : (s.isRectangular
-            ? math.max(s.width!.inMillimeters, s.height!.inMillimeters)
-            : s.diameter.inMillimeters);
-    final double clamped = svc.regime == FlowRegime.air
-        ? (6.0 + mm * 0.012).clamp(8.0, 20.0)
-        : (3.6 + mm * 0.06).clamp(4.0, 16.0);
-    final mpp = metersPerPixel;
-    if (mpp == null || mpp <= 0) return clamped;
-    // Physical footprint of the element in screen pixels at the current zoom.
-    final truePx = (mm / 1000.0) / mpp * transform.scale;
-    // 120 px cap so a large trunk grows realistically without dominating.
-    return math.max(clamped, math.min(truePx, 120.0));
-  }
+  /// The on-screen outer width (px) of a pipe — delegates to the top-level
+  /// [pipeOuterPx] (shared with the B5 canvas hit-test corridor in
+  /// selection_overlay.dart) with this painter's own scale/calibration.
+  double _pipeOuterPx(EdgeSizing? s, ServiceType svc) => pipeOuterPx(s, svc,
+      scale: transform.scale, metersPerPixel: metersPerPixel);
 
   /// A coupling joint mark across a pipe — a short perpendicular steel collar at
   /// a stock-length boundary along the run.
@@ -979,6 +1063,52 @@ class _NetworkPainter extends CustomPainter {
     tp.paint(canvas, Offset(left, top));
   }
 
+  /// The stable equipment tag (e.g. `P-01`) beside an equipment glyph at
+  /// [glyph], in dark ink on a translucent white chip so it reads over the plan
+  /// (G1). Collision-aware like the run labels: tries right / left / below /
+  /// above of the glyph and takes the first slot that clears [placed] (adding
+  /// its box), else draws to the right anyway — an identifier is never dropped.
+  /// ASCII-only (Roboto-safe).
+  void _equipmentTagLabel(
+      Canvas canvas, Offset glyph, String tag, List<Rect> placed) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: tag,
+        style: const TextStyle(
+          fontFamily: 'Roboto',
+          fontSize: 9.5,
+          color: Color(0xFF15171B),
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final boxW = tp.width + 6;
+    final boxH = tp.height + 3;
+    final candidates = <Offset>[
+      Offset(glyph.dx + 13 + boxW / 2, glyph.dy), // right
+      Offset(glyph.dx - 13 - boxW / 2, glyph.dy), // left
+      Offset(glyph.dx, glyph.dy + 13 + boxH / 2), // below
+      Offset(glyph.dx, glyph.dy - 13 - boxH / 2), // above
+    ];
+    var center = candidates.first;
+    for (final c in candidates) {
+      final r = Rect.fromCenter(center: c, width: boxW, height: boxH);
+      if (!placed.any(r.overlaps)) {
+        center = c;
+        placed.add(r);
+        break;
+      }
+    }
+    final rect = Rect.fromCenter(center: center, width: boxW, height: boxH);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(2.5)),
+      Paint()..color = const Color(0xCCFFFFFF),
+    );
+    tp.paint(
+        canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
+  }
+
   /// Compact ASCII-safe material tag for an edge ("PPR16", "PVC-AW", "BJLS 0.6",
   /// "PU"), or null when no material is set. BJLS shows its auto sheet thickness
   /// derived from the sized largest side. No symbol glyphs (Roboto-safe).
@@ -1015,7 +1145,13 @@ class _NetworkPainter extends CustomPainter {
   /// body on the "upper" side, with LOD (skipped when the run is shorter than the
   /// text) and a per-frame collision dodge (opposite side → quarter-point → drop).
   /// [placedLabels] carries the screen-space bounds already placed this frame.
-  void _label(Canvas canvas, Offset pa, Offset pb, double outer, String text,
+  ///
+  /// Returns the perpendicular SIDE the chip landed on (`1` = "upper"/perp+,
+  /// `-1` = "lower"/perp-) so the air status badge can dodge to the opposite
+  /// side (B2), or `null` when the label was dropped for space (LOD-short or a
+  /// full collision) — in which case a small tick is left at the midpoint so a
+  /// sized run never reads identical to an unsized one (B8).
+  int? _label(Canvas canvas, Offset pa, Offset pb, double outer, String text,
       List<Rect> placedLabels) {
     final tp = TextPainter(
       text: TextSpan(
@@ -1034,7 +1170,11 @@ class _NetworkPainter extends CustomPainter {
     final boxW = tp.width + 8;
     final boxH = tp.height + 4;
     // LOD: don't crowd a short run with a label longer than it (plus a margin).
-    if (runLen < tp.width + 12) return;
+    // B8: leave a tick so the sized-but-unlabelled run is still marked.
+    if (runLen < tp.width + 12) {
+      _droppedLabelMark(canvas, (pa + pb) / 2);
+      return null;
+    }
 
     final u = (pb - pa) / runLen;
     // Perpendicular pointing "up" (toward smaller screen y) for a consistent side.
@@ -1046,24 +1186,35 @@ class _NetworkPainter extends CustomPainter {
     final off = outer / 2 + 5 + boxH / 2;
 
     // Candidate centres in order: upper side, opposite side, quarter-point upper.
+    // The parallel `sides` list records which perpendicular side each candidate
+    // sits on so the caller can steer the badge to the other side (B2).
     final quarter = pa + u * (runLen * 0.25);
     final candidates = <Offset>[
       mid + perp * off,
       mid - perp * off,
       quarter + perp * off,
     ];
+    const sides = <int>[1, -1, 1];
     Offset? center;
-    for (final c in candidates) {
+    var side = 1;
+    for (var i = 0; i < candidates.length; i++) {
+      final c = candidates[i];
       // Collision test uses the axis-aligned chip box (a good-enough proxy for
       // the rotated label); deterministic in edge-list order.
       final r = Rect.fromCenter(center: c, width: boxW, height: boxH);
       if (!placedLabels.any(r.overlaps)) {
         center = c;
+        side = sides[i];
         placedLabels.add(r);
         break;
       }
     }
-    if (center == null) return; // still colliding → drop (size is one click away)
+    if (center == null) {
+      // Still colliding → drop the chip but leave a tick (B8) so the run doesn't
+      // read as unsized.
+      _droppedLabelMark(canvas, mid);
+      return null;
+    }
 
     // Rotate to the bearing; flip 180° when it would read upside-down.
     var angle = math.atan2(u.dy, u.dx);
@@ -1079,6 +1230,17 @@ class _NetworkPainter extends CustomPainter {
     );
     tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
     canvas.restore();
+    return side;
+  }
+
+  /// A tiny placeholder tick left at a run's midpoint when its size label was
+  /// dropped for space (B8) — a short run or a full collision dodge. It signals
+  /// "a size value exists here, just not shown" so a sized run never reads
+  /// identical to an unsized one. Deliberately DISTINCT from the hollow
+  /// unsized-advisory ring: a small SOLID chip-coloured dot with a white halo.
+  void _droppedLabelMark(Canvas canvas, Offset mid) {
+    canvas.drawCircle(mid, 3.0, Paint()..color = const Color(0xFFFFFFFF));
+    canvas.drawCircle(mid, 2.0, Paint()..color = const Color(0xD915171B));
   }
 
   @override
@@ -1100,11 +1262,15 @@ class _NetworkPainter extends CustomPainter {
       old.layerFiltered != layerFiltered ||
       old.activeDiscipline != activeDiscipline ||
       !_sameSet(old.visibleDisciplines, visibleDisciplines) ||
+      !_sameSvcSet(old.hiddenServices, hiddenServices) ||
       !_sameStrSet(old.warningIds, warningIds) ||
       !_sameStrSet(old.unsizedIds, unsizedIds) ||
       !_sameStrSet(old.overCapacityIds, overCapacityIds);
 
   static bool _sameSet(Set<DisciplineLayer> a, Set<DisciplineLayer> b) =>
+      a.length == b.length && a.containsAll(b);
+
+  static bool _sameSvcSet(Set<ServiceType> a, Set<ServiceType> b) =>
       a.length == b.length && a.containsAll(b);
 
   static bool _sameStrSet(Set<String> a, Set<String> b) =>

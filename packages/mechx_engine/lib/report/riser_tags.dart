@@ -46,6 +46,14 @@ String riserServiceCode(ServiceType s) => switch (s) {
       ServiceType.fireHydrant => 'FH',
     };
 
+/// The industry floor-elevation notation drawn in the riser single-line gutter —
+/// the finished-floor-level datum with the `FFL` abbreviation and two decimals
+/// (e.g. `FFL +4.00`). ONE formatter shared by the live Riser canvas painter and
+/// the exported [buildMechanicalRiserSld] SldSheet so the working view and the
+/// issued deliverable read the elevation identically (E6). [meters] is the SI
+/// elevation; this is a display formatter only (no unit maths).
+String fflLabel(double meters) => 'FFL +${meters.toStringAsFixed(2)}';
+
 bool _isSupplyTank(NodeComponent? c) =>
     c == NodeComponent.groundTank || c == NodeComponent.pump ||
     c == NodeComponent.boosterSet;
@@ -215,6 +223,47 @@ class _RiserRef {
   const _RiserRef(this.edgeId, this.x, this.floorIndex);
 }
 
+/// The stable, cross-artifact ELEMENT TAG for [edge] (N13) — the SAME string on
+/// the plan, the riser single-line, the BOM and the calc report, so one
+/// run/riser can be traced across the whole issued set instead of matched by a
+/// bare, ambiguous `DN`.
+///
+///   * A RISER carries its per-service stack tag from [riserTags] (e.g.
+///     `CW-R1`) — position-derived and identical on every artifact. Pass the
+///     network-wide map in [riserTagByEdge] (compute it once via
+///     `riserTags(net, null)`); an edge with no riser-tag entry falls back to
+///     the bare service code.
+///   * A RUN carries `<service-code>-F<n>` where `n` is its 1-based building
+///     floor (the from-node's `floorIndex + 1`), e.g. `CW-F2` — the coarsest
+///     locator a per-(service, size, material, floor) BOM row can also carry (a
+///     per-run serial would not survive that aggregation, so it could not read
+///     identically on the BOM). A run whose from-node is unknown (should not
+///     happen) falls back to the bare service code.
+///
+/// Pure + deterministic. Never fabricates — an absent floor / riser tag simply
+/// degrades to the service code.
+String elementTagForEdge(
+    Network net, NetEdge edge, Map<String, String> riserTagByEdge) {
+  final code = riserServiceCode(edge.service);
+  if (edge.kind == EdgeKind.riser) {
+    return riserTagByEdge[edge.id] ?? code;
+  }
+  final floor = net.nodeById(edge.fromId)?.floorIndex;
+  return floor == null ? code : '$code-F${floor + 1}';
+}
+
+/// Per-edge stable element tags for the WHOLE [net] (N13), keyed by edge id: the
+/// [riserTags] stack tag for each riser, `<code>-F<floor>` for each run. This is
+/// the ONE map threaded into the plan-drawing labels ([planToPdf]/[networkToDxf]
+/// `edgeTags`), the BOM tag column and the calc-report run schedule, so a
+/// run/riser reads the same tag on all four artifacts. Pure + deterministic.
+Map<String, String> elementTags(Network net) {
+  final risers = riserTags(net, null);
+  return <String, String>{
+    for (final e in net.edges) e.id: elementTagForEdge(net, e, risers),
+  };
+}
+
 /// px tolerance for grouping nodes into one vertical COLUMN — shared with
 /// [riserTags]'s stack bucket so a co-linear riser stack that shares a tag id
 /// also shares a layout column.
@@ -276,22 +325,58 @@ Map<String, double> riserLayoutPositions(Network net, {ServiceType? focus}) {
   };
 }
 
-/// One floor's branch fan-out for the riser single-line: the short labels of the
-/// fixtures/terminals that floor DISTRIBUTES, capped at [max] with the overflow
-/// count surfaced (never silently dropped — the painter renders it as a
-/// `+N more` row). Pure bookkeeping over the network (no fabricated value).
+/// One grouped entry in a floor's fan-out: a fixture TYPE label and how many of
+/// that type the floor distributes (e.g. `WC` × 3). Grouping by type means a
+/// whole floor's fixture population fits in a few compact rows, so the riser
+/// SHEET can enumerate every fixture with counts instead of truncating at a
+/// per-fixture cap (N7). Pure bookkeeping — the count is a real tally, never a
+/// fabricated value.
+class FanGroup {
+  /// The fixture-type stub label (e.g. `WC`, `Lavatory`).
+  final String label;
+
+  /// How many fixtures of this type the floor distributes (>= 1).
+  final int count;
+
+  const FanGroup(this.label, this.count);
+}
+
+/// One floor's branch fan-out for the riser single-line: the fixtures/terminals
+/// that floor DISTRIBUTES, exposed two ways over the SAME node set —
+///   • [labels] / [overflow] — the legacy per-fixture list capped at `max` (the
+///     on-canvas Auto painter still renders this compact preview);
+///   • [groups] / [groupOverflow] — the per fixture-TYPE counts the issued riser
+///     SHEET renders, capped only at a much higher DISTINCT-TYPE bound so a real
+///     floor's whole fixture population is enumerated with no truncation (N7).
+/// A node counts as a distributed fixture when its [NodeRole] is `fixture`. Pure
+/// bookkeeping over the network (no fabricated value).
 class FloorFanOut {
   /// The floor index this fan-out belongs to.
   final int floorIndex;
 
-  /// The shown stub labels (length <= max).
+  /// The shown per-fixture stub labels (length <= max) — the legacy preview.
   final List<String> labels;
 
-  /// How many fixtures were elided past the cap (0 when none). Surfaced so the
-  /// cap is LOGGED, not silently dropped.
+  /// How many fixtures were elided past the per-fixture cap (0 when none).
   final int overflow;
 
-  const FloorFanOut(this.floorIndex, this.labels, this.overflow);
+  /// Per fixture-TYPE counts in first-appearance order (x-then-id) — the whole
+  /// floor with no per-fixture cap loss. Empty only when the floor has no
+  /// fixtures.
+  final List<FanGroup> groups;
+
+  /// Distinct fixture TYPES elided past the group cap (0 in practice — a real
+  /// floor never carries that many distinct types). Surfaced so the cap is
+  /// LOGGED, never silently dropped.
+  final int groupOverflow;
+
+  const FloorFanOut(
+    this.floorIndex,
+    this.labels,
+    this.overflow, {
+    this.groups = const [],
+    this.groupOverflow = 0,
+  });
 }
 
 /// The equipment detail SUFFIX drawn beside an equipment symbol on the
@@ -459,13 +544,16 @@ Set<String> ventTopTerminalIds(Network net, {required int topFloor}) {
 /// [visibleNodeIds] is the focus filter (null ⇒ all services). [labelOf] maps a
 /// node to its short stub label (the painter passes its own fixture/component
 /// label resolver). Deterministic ordering: by node x then id. Floors with no
-/// fixtures are omitted. Each floor keeps at most [max] labels; the rest are
-/// counted into [FloorFanOut.overflow].
+/// fixtures are omitted. The legacy [FloorFanOut.labels] keeps at most [max]
+/// per-fixture labels (overflow counted); the grouped [FloorFanOut.groups] tally
+/// every fixture per TYPE with no truncation, capped only at [groupMax] distinct
+/// types (a bound a real floor never reaches — surfaced via `groupOverflow`).
 List<FloorFanOut> floorFanOuts(
   Network net, {
   Set<String>? visibleNodeIds,
   required String Function(NetNode) labelOf,
   int max = 4,
+  int groupMax = 8,
 }) {
   final byFloor = <int, List<NetNode>>{};
   for (final node in net.nodes) {
@@ -488,7 +576,25 @@ List<FloorFanOut> floorFanOuts(
       shown.add(labelOf(n));
     }
     final overflow = nodes.length - shown.length;
-    out.add(FloorFanOut(floor, shown, overflow));
+    // Group every fixture on the floor by its type label — insertion order (a
+    // LinkedHashMap over the x-then-id sorted nodes) keeps the display
+    // deterministic and first-appearance ordered.
+    final counts = <String, int>{};
+    for (final n in nodes) {
+      final l = labelOf(n);
+      counts[l] = (counts[l] ?? 0) + 1;
+    }
+    final groups = <FanGroup>[];
+    var groupOverflow = 0;
+    for (final entry in counts.entries) {
+      if (groups.length >= groupMax) {
+        groupOverflow++;
+        continue;
+      }
+      groups.add(FanGroup(entry.key, entry.value));
+    }
+    out.add(FloorFanOut(floor, shown, overflow,
+        groups: groups, groupOverflow: groupOverflow));
   }
   return out;
 }

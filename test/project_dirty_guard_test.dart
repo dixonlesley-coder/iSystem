@@ -168,5 +168,29 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 60));
       expect(await _awaitRecovery(path), isNotNull);
     });
+
+    test(
+        'K4: disposing the container mid-tick does not throw (the per-tick '
+        'encode now runs off-thread, so a tick can still be awaiting its '
+        'Isolate.run result when a test/app tears the container down)',
+        () async {
+      final c = ProviderContainer();
+      final net = c.read(networkControllerProvider.notifier);
+      net.setTool(DrawTool.drawRun);
+      net.placeRunPoint('s1', 0, const Offset(0, 0));
+      net.placeRunPoint('s1', 0, const Offset(100, 0));
+      final timer = startAutosave(c,
+          interval: const Duration(milliseconds: 1), recoveryPath: path);
+      // Let a tick actually fire (kicking off its off-thread encode) before
+      // tearing everything down out from under it — mirrors the
+      // cancel-then-dispose teardown order every other test in this file uses.
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      timer.cancel();
+      c.dispose();
+      // If the in-flight tick's post-await container reads weren't guarded,
+      // this would throw a StateError into an unhandled Future and fail the
+      // test (or leak into a later one) rather than complete quietly.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
   });
 }

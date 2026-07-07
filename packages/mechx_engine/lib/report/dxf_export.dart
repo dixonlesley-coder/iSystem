@@ -57,6 +57,26 @@ int _strokeBand(EdgeSizing s) {
 /// the VECTOR form applies here — a raster underlay in an R12 DXF (a BMP-only
 /// IMAGE/IMAGEDEF chain, post-R12) is out of scope, so a PDF-backed sheet
 /// exports its DXF underlay-less.
+///
+/// With [edgeElevationLabels] present (N5) each run's `edge id → label` (e.g.
+/// `CL +2.70`) is APPENDED to that run's DN/Ø/W×H size text, so the DXF carries
+/// the same centreline height as the plan PDF. With [grid] present (N4, the
+/// professional/calibrated path only) a reference setting-out grid is emitted on
+/// [kDxfLayerGrid] plus per-riser tie dimensions on the annotation layer. Both
+/// null ⇒ byte-identical.
+///
+/// With [edgeTags] present (N13) each entry's `edge id → stable tag` (the riser
+/// stack tag `CW-R1` / a run's `<code>-F<floor>`, from `elementTags`) is
+/// PREPENDED to that run's size TEXT and emitted as a tag TEXT beside each riser
+/// marker, so the plan DXF carries the SAME element identifier the riser
+/// single-line, BOM and calc report use. A missing/empty entry ⇒ unchanged; the
+/// default null map ⇒ byte-identical.
+///
+/// With [nodeTags] present (G1) each `node id → equipment tag` (`P-01` …, from
+/// `equipmentNodeTags`) is emitted as a TEXT beside that equipment glyph. With
+/// [gravitySlope] present (G5) each gravity run's size TEXT gains the laid fall
+/// `1:N` from that real `SizingContext.drainageSlope`. Both null ⇒
+/// byte-identical.
 String networkToDxf({
   required Network net,
   required Map<String, EdgeSizing> sizing,
@@ -65,6 +85,11 @@ String networkToDxf({
   DrawingChrome? chrome,
   double? metersPerPixel,
   VectorPlanUnderlay? underlay,
+  Map<String, String>? edgeElevationLabels,
+  ReferenceGrid? grid,
+  Map<String, String>? edgeTags,
+  Map<String, String>? nodeTags,
+  double? gravitySlope,
 }) {
   if (metersPerPixel != null && metersPerPixel > 0) {
     return _professionalDxf(
@@ -75,6 +100,11 @@ String networkToDxf({
       chrome: chrome,
       metersPerPixel: metersPerPixel,
       underlay: underlay,
+      edgeElevationLabels: edgeElevationLabels,
+      grid: grid,
+      edgeTags: edgeTags,
+      nodeTags: nodeTags,
+      gravitySlope: gravitySlope,
     );
   }
 
@@ -182,12 +212,27 @@ String networkToDxf({
       g(21, -c.y);
       final s = sizing[e.id];
       if (s != null) {
+        final elev = edgeElevationLabels?[e.id];
+        // G5: the laid fall (`1:100`) for a gravity RUN, from the real ctx
+        // gradient (never hardcoded).
+        final slope = (e.service.regime == FlowRegime.gravity &&
+                gravitySlope != null)
+            ? gravitySlopeLabel(gravitySlope)
+            : null;
+        final size = [
+          _sizeLabel(e, s),
+          if (elev != null && elev.isNotEmpty) elev,
+          if (slope != null) slope,
+        ].join(' - ');
+        // N13: prepend the stable element tag (`CW-F2 - DN50 - CL +2.70`).
+        final tag = edgeTags?[e.id];
+        final labelText = tag != null && tag.isNotEmpty ? '$tag - $size' : size;
         g(0, 'TEXT');
         g(8, layer);
         g(10, (a.x + c.x) / 2);
         g(20, -(a.y + c.y) / 2);
         g(40, 12);
-        g(1, _sizeLabel(e, s));
+        g(1, labelText);
       }
       // A5 flow arrow on a sized, oriented, long-enough run.
       if (s != null && s.flowFromId != null) {
@@ -201,7 +246,8 @@ String networkToDxf({
       }
     } else {
       // Riser/drop: a marker circle at whichever endpoint is on this floor,
-      // now tagged with its UP/DN sense (A5).
+      // now tagged with its UP/DN sense (A5) and its stable element tag (N13).
+      final riserTag = edgeTags?[e.id];
       for (final n in [a, c]) {
         if (!onFloor(n)) continue;
         include(n.x, -n.y);
@@ -221,6 +267,16 @@ String networkToDxf({
           g(40, 12);
           g(1, sense);
         }
+        // N13: the riser stack tag (`CW-R1`) below the marker, so the plan DXF
+        // carries the same riser id the riser single-line + BOM do.
+        if (riserTag != null && riserTag.isNotEmpty) {
+          g(0, 'TEXT');
+          g(8, layer);
+          g(10, n.x + 10);
+          g(20, -n.y - 14);
+          g(40, 12);
+          g(1, riserTag);
+        }
       }
     }
   }
@@ -238,6 +294,16 @@ String networkToDxf({
           svc.name, -n.y);
     } else if (n.role == NodeRole.fixture) {
       emitPrims(planFixturePrims(cx: n.x, cy: -n.y, size: 16), svc.name, -n.y);
+    }
+    // G1: the stable equipment tag (`P-01` …) as TEXT beside the glyph.
+    final eqTag = nodeTags?[n.id];
+    if (eqTag != null && eqTag.isNotEmpty) {
+      g(0, 'TEXT');
+      g(8, svc.name);
+      g(10, n.x + 12);
+      g(20, -n.y - 14);
+      g(40, 12);
+      g(1, eqTag);
     }
   }
 
@@ -267,6 +333,11 @@ String _professionalDxf({
   required DrawingChrome? chrome,
   required double metersPerPixel,
   required VectorPlanUnderlay? underlay,
+  required Map<String, String>? edgeElevationLabels,
+  required ReferenceGrid? grid,
+  required Map<String, String>? edgeTags,
+  required Map<String, String>? nodeTags,
+  required double? gravitySlope,
 }) {
   final b = StringBuffer();
   void g(int code, Object value) {
@@ -340,6 +411,8 @@ String _professionalDxf({
     (kDxfLayerFrame, 7, 'CONTINUOUS'),
     // A1: the grey floor-plan underlay layer, declared only when present.
     if (underlay != null) (kDxfLayerUnderlay, kDxfUnderlayAci, 'CONTINUOUS'),
+    // N4: the grey setting-out grid layer (chain linetype), only when present.
+    if (grid != null && !grid.isEmpty) (kDxfLayerGrid, 8, 'DASHDOT'),
     // `dxfChrome` draws on its own toggleable layers — declare them too.
     if (hasChrome) ...const [
       ('title', 7, 'CONTINUOUS'),
@@ -356,6 +429,52 @@ String _professionalDxf({
   // network entities land above it.
   if (underlay != null) {
     b.write(dxfUnderlayEntities(underlay, unitsPerSheetPx: mmPerPx));
+  }
+
+  // N4: the reference setting-out grid — chain column/row LINEs + bubble
+  // CIRCLE/TEXT on the grey grid layer, spanning the drawing extent (mm).
+  if (grid != null && !grid.isEmpty && maxX.isFinite) {
+    final bubbleR = span / 80;
+    for (final ax in grid.columns) {
+      final gx = ax.position * mmPerPx;
+      g(0, 'LINE');
+      g(8, kDxfLayerGrid);
+      g(10, gx);
+      g(20, minY);
+      g(11, gx);
+      g(21, maxY);
+      g(0, 'CIRCLE');
+      g(8, kDxfLayerGrid);
+      g(10, gx);
+      g(20, maxY + bubbleR);
+      g(40, bubbleR);
+      g(0, 'TEXT');
+      g(8, kDxfLayerGrid);
+      g(10, gx - bubbleR / 2);
+      g(20, maxY + bubbleR / 2);
+      g(40, bubbleR);
+      g(1, ax.label);
+    }
+    for (final ay in grid.rows) {
+      final gy = -ay.position * mmPerPx;
+      g(0, 'LINE');
+      g(8, kDxfLayerGrid);
+      g(10, minX);
+      g(20, gy);
+      g(11, maxX);
+      g(21, gy);
+      g(0, 'CIRCLE');
+      g(8, kDxfLayerGrid);
+      g(10, minX - bubbleR);
+      g(20, gy);
+      g(40, bubbleR);
+      g(0, 'TEXT');
+      g(8, kDxfLayerGrid);
+      g(10, minX - bubbleR - bubbleR / 2);
+      g(20, gy - bubbleR / 2);
+      g(40, bubbleR);
+      g(1, ay.label);
+    }
   }
 
   // A5 helpers: node symbols + flow arrows over the plan-symbol library, in the
@@ -433,24 +552,48 @@ String _professionalDxf({
       g(11, cx);
       g(21, cy);
       if (s != null) {
-        // A7 label discipline: rotated to the edge bearing on the ANNO layer,
-        // offset to the upper side, dropped on unresolvable collision.
-        final p = placeEdgeLabel(
+        // N5: append the centreline-elevation token to the size label.
+        final elev = edgeElevationLabels?[e.id];
+        // G5: the laid fall (`1:100`) for a gravity RUN, from the real ctx
+        // gradient (never hardcoded).
+        final slope = (e.service.regime == FlowRegime.gravity &&
+                gravitySlope != null)
+            ? gravitySlopeLabel(gravitySlope)
+            : null;
+        final size = [
+          _sizeLabel(e, s),
+          if (elev != null && elev.isNotEmpty) elev,
+          if (slope != null) slope,
+        ].join(' - ');
+        // N13: prepend the stable element tag (`CW-F2 - DN50 - CL +2.70`).
+        final tag = edgeTags?[e.id];
+        final labelText = tag != null && tag.isNotEmpty ? '$tag - $size' : size;
+        // A7/N3 label discipline: rotated to the edge bearing on the ANNO layer,
+        // offset to the upper side; a dense tag ESCAPES + is tied back with a
+        // leader (never dropped, never fused) — see `placeEdgeLabelLeadered`.
+        final p = placeEdgeLabelLeadered(
             ax: ax,
             ay: ay,
             bx: cx,
             by: cy,
-            text: _sizeLabel(e, s),
+            text: labelText,
             textSize: textH,
             placed: placedLabels);
-        if (p != null) {
-          g(0, 'TEXT');
+        g(0, 'TEXT');
+        g(8, kDxfLayerAnno);
+        g(10, p.x);
+        g(20, p.y);
+        g(40, textH);
+        g(1, labelText);
+        g(50, p.angleDeg.toStringAsFixed(1));
+        final lead = p.leaderAnchor;
+        if (lead != null) {
+          g(0, 'LINE');
           g(8, kDxfLayerAnno);
-          g(10, p.x);
-          g(20, p.y);
-          g(40, textH);
-          g(1, _sizeLabel(e, s));
-          g(50, p.angleDeg.toStringAsFixed(1));
+          g(10, lead.x);
+          g(20, lead.y);
+          g(11, p.x);
+          g(21, p.y);
         }
       }
       // A5 flow arrow on a sized, oriented, long-enough run.
@@ -465,7 +608,8 @@ String _professionalDxf({
     } else {
       // Riser/drop: a marker circle at whichever endpoint is on this floor
       // (the legacy 8 px marker, scaled to real millimetres), now tagged with
-      // its UP/DN sense on the ANNO layer (A5).
+      // its UP/DN sense on the ANNO layer (A5) + its stable element tag (N13).
+      final riserTag = edgeTags?[e.id];
       for (final n in [a, c]) {
         if (!onFloor(n)) continue;
         g(0, 'CIRCLE');
@@ -484,6 +628,17 @@ String _professionalDxf({
           g(20, -n.y * mmPerPx);
           g(40, textH);
           g(1, sense);
+        }
+        // N13: the riser stack tag (`CW-R1`) below the marker on the ANNO
+        // layer, so the plan DXF carries the same riser id the single-line +
+        // BOM do.
+        if (riserTag != null && riserTag.isNotEmpty) {
+          g(0, 'TEXT');
+          g(8, kDxfLayerAnno);
+          g(10, n.x * mmPerPx + 12 * mmPerPx);
+          g(20, -n.y * mmPerPx - textH * 1.4);
+          g(40, textH);
+          g(1, riserTag);
         }
       }
     }
@@ -510,6 +665,62 @@ String _professionalDxf({
           planFixturePrims(cx: n.x * mmPerPx, cy: cyMm, size: 16 * mmPerPx),
           layer,
           cyMm);
+    }
+    // G1: the stable equipment tag (`P-01` …) as real-mm TEXT on the ANNO
+    // layer beside the glyph.
+    final eqTag = nodeTags?[n.id];
+    if (eqTag != null && eqTag.isNotEmpty) {
+      g(0, 'TEXT');
+      g(8, kDxfLayerAnno);
+      g(10, n.x * mmPerPx + 12 * mmPerPx);
+      g(20, cyMm - textH * 1.4);
+      g(40, textH);
+      g(1, eqTag);
+    }
+  }
+
+  // N4: per-riser TIE dimensions — each riser node's offset to its nearest
+  // column + row axis, as a LINE + real-millimetre TEXT on the annotation layer
+  // (this path is always calibrated, so the dimension is honest).
+  if (grid != null && !grid.isEmpty) {
+    final riserNodeIds = <String>{};
+    for (final e in net.edges) {
+      if (e.kind == EdgeKind.run) continue;
+      for (final id in [e.fromId, e.toId]) {
+        final n = net.nodeById(id);
+        if (n != null && onFloor(n)) riserNodeIds.add(id);
+      }
+    }
+    void tieDim(double fromXpx, double fromYpx, double toXpx, double toYpx,
+        String label) {
+      final ax = fromXpx * mmPerPx, ay = -fromYpx * mmPerPx;
+      final bx = toXpx * mmPerPx, by = -toYpx * mmPerPx;
+      g(0, 'LINE');
+      g(8, kDxfLayerAnno);
+      g(10, ax);
+      g(20, ay);
+      g(11, bx);
+      g(21, by);
+      g(0, 'TEXT');
+      g(8, kDxfLayerAnno);
+      g(10, (ax + bx) / 2);
+      g(20, (ay + by) / 2);
+      g(40, textH * 0.8);
+      g(1, label);
+    }
+
+    for (final id in riserNodeIds) {
+      final n = net.nodeById(id)!;
+      final col = nearestAxis(grid.columns, n.x);
+      if (col != null) {
+        final off = formatTieOffsetMm((n.x - col.position).abs(), metersPerPixel);
+        if (off != null) tieDim(col.position, n.y, n.x, n.y, off);
+      }
+      final row = nearestAxis(grid.rows, n.y);
+      if (row != null) {
+        final off = formatTieOffsetMm((n.y - row.position).abs(), metersPerPixel);
+        if (off != null) tieDim(n.x, row.position, n.x, n.y, off);
+      }
     }
   }
 

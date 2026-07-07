@@ -99,6 +99,8 @@ class ActiveDisciplineController extends Notifier<DisciplineLayer> {
     if (!vis.contains(layer)) {
       ref.read(layerVisibilityProvider.notifier).show(layer);
     }
+    // F1: the layer you now EDIT can't remain a locked reference layer.
+    ref.read(lockedDisciplinesProvider.notifier).unlock(layer);
   }
 }
 
@@ -132,3 +134,82 @@ class LayerVisibilityController extends Notifier<Set<DisciplineLayer>> {
     }
   }
 }
+
+/// F1 — reference-layer LOCK. A locked discipline still RENDERS exactly as
+/// before (faded when it isn't the active layer), but its elements are excluded
+/// from ALL canvas hit-testing / selection / drag / marquee — so a drafter
+/// routing one trade can never accidentally grab, move or delete another
+/// trade's faded coordination geometry. The ACTIVE layer can never be locked
+/// (you edit it): [toggle] refuses to lock the active layer, and making a layer
+/// active [unlock]s it. Default: nothing locked ⇒ every element hittable
+/// (byte-identical to before). Transient UI state — not persisted to `.mechx`.
+final lockedDisciplinesProvider =
+    NotifierProvider<LockedDisciplinesController, Set<DisciplineLayer>>(
+  LockedDisciplinesController.new,
+);
+
+class LockedDisciplinesController extends Notifier<Set<DisciplineLayer>> {
+  @override
+  Set<DisciplineLayer> build() => const {};
+
+  bool isLocked(DisciplineLayer layer) => state.contains(layer);
+
+  /// Toggle a layer's lock. The ACTIVE layer can't be locked (it's the one you
+  /// edit), so locking the active layer is a no-op; unlocking always works.
+  void toggle(DisciplineLayer layer) {
+    if (state.contains(layer)) {
+      state = {...state}..remove(layer);
+    } else {
+      if (layer == ref.read(activeDisciplineProvider)) return;
+      state = {...state, layer};
+    }
+  }
+
+  /// Drop a layer's lock — called when it becomes the active/edited layer so
+  /// the lock never blocks editing the very layer you switched to.
+  void unlock(DisciplineLayer layer) {
+    if (!state.contains(layer)) return;
+    state = {...state}..remove(layer);
+  }
+}
+
+/// F4 — per-SERVICE view filter WITHIN a discipline layer. Plumbing folds five
+/// services (cold/hot water, drainage, vent, rainwater) onto one layer and HVAC
+/// three (supply/return/exhaust air); this hides individual services so a
+/// drafter can isolate, say, cold water on a dense corridor. A hidden service is
+/// omitted from the canvas RENDER and hit-test ONLY — a pure VIEW filter, so the
+/// riser / sizing / reports still read the full model. Transient (NOT persisted
+/// to `.mechx`). Default empty ⇒ every service shown ⇒ byte-identical.
+final hiddenServicesProvider =
+    NotifierProvider<HiddenServicesController, Set<ServiceType>>(
+  HiddenServicesController.new,
+);
+
+class HiddenServicesController extends Notifier<Set<ServiceType>> {
+  @override
+  Set<ServiceType> build() => const {};
+
+  bool isHidden(ServiceType s) => state.contains(s);
+
+  void toggle(ServiceType s) {
+    if (state.contains(s)) {
+      state = {...state}..remove(s);
+    } else {
+      state = {...state, s};
+    }
+  }
+}
+
+/// The services whose elements are currently INERT to canvas interaction — the
+/// union of every LOCKED discipline's services (F1) and the individually HIDDEN
+/// services (F4). An element carrying one of these services is excluded from
+/// hit-testing / selection / drag / marquee. Empty by default ⇒ byte-identical.
+final inertServicesProvider = Provider<Set<ServiceType>>((ref) {
+  final locked = ref.watch(lockedDisciplinesProvider);
+  final hidden = ref.watch(hiddenServicesProvider);
+  final out = <ServiceType>{...hidden};
+  for (final l in locked) {
+    out.addAll(servicesFor(l));
+  }
+  return out;
+});

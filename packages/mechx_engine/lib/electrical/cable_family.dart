@@ -58,3 +58,22 @@ String defaultCableFamily(LoadKind? kind) => switch (kind) {
         'NYM',
       _ => 'NYY',
     };
+
+/// A DISTINCT construction description per cable family — the legend meaning a
+/// drawing's KETERANGAN carries next to the family code. Fixes the N24 defect
+/// where the electrical single-line legend printed the identical text
+/// "Cable construction" against BOTH `NYY` and `NYM` (indistinguishable to a
+/// reviewer): each family now names its own voltage rating / insulation /
+/// typical use, ASCII-safe for the vector renderers. `BC` (bare copper) covers
+/// the large-earth conductor the schedule tokens. An unknown family degrades to
+/// a generic label (never blank). A drafting-office description, not an
+/// engineering value — no `// VERIFY`.
+String cableFamilyDescription(String family) => switch (family) {
+      'NYY' => 'Power cable, PVC 0.6/1 kV (feeders / sub-mains)',
+      'NYM' => 'Sheathed cable, PVC 300/500 V (final circuits)',
+      'NYA' => 'Single-core, PVC 450/750 V (in conduit)',
+      'NYAF' => 'Flexible single-core, PVC (panel wiring)',
+      'FRC' => 'Fire-resistant cable, 90 C class (life-safety)',
+      'BC' => 'Bare copper conductor (earthing)',
+      _ => 'Cable construction ($family)',
+    };

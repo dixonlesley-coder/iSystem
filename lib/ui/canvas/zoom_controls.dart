@@ -1,9 +1,11 @@
 import 'package:flutter/widgets.dart';
 
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_tooltip.dart';
 
 /// The on-canvas zoom cluster (+ / − / fit) shared by BOTH the mechanical and
 /// electrical canvases, so the two workspaces present one zoom affordance. A
@@ -26,6 +28,7 @@ class ZoomControls extends StatelessWidget {
   Widget build(BuildContext context) {
     // Liquid-Glass zoom cluster — a translucent blurred pill floating over the
     // canvas (iOS map-style), lifted by the card shadow.
+    final strings = context.strings;
     return GlassSurface(
       borderRadius: MechXRadii.control,
       blurSigma: MechXGlass.blurSigmaLight,
@@ -33,11 +36,39 @@ class ZoomControls extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _IconBtn(glyph: '+', onTap: onIn),
+          // L5/M4: each glyph is otherwise unlabeled icon-only chrome — a hover
+          // tooltip names the action for a sighted mouse user; L4: the same
+          // caption names the button for a screen reader. The accessible label
+          // is put on the button's own focus-ring node (with the glyph excluded
+          // from semantics), NOT on a second Semantics node here — the inner
+          // MechXFocusRing already emits the button node, so wrapping it in
+          // another labelled Semantics would double-announce (name + glyph).
+          MechXTooltip(
+            message: strings(StringKey.tooltipZoomIn),
+            child: _IconBtn(
+              glyph: '+',
+              onTap: onIn,
+              semanticLabel: strings(StringKey.tooltipZoomIn),
+            ),
+          ),
           _Sep(),
-          _IconBtn(glyph: '-', onTap: onOut),
+          MechXTooltip(
+            message: strings(StringKey.tooltipZoomOut),
+            child: _IconBtn(
+              glyph: '-',
+              onTap: onOut,
+              semanticLabel: strings(StringKey.tooltipZoomOut),
+            ),
+          ),
           _Sep(),
-          _IconBtn(glyph: 'fit', onTap: onFit),
+          MechXTooltip(
+            message: strings(StringKey.tooltipZoomFit),
+            child: _IconBtn(
+              glyph: 'fit',
+              onTap: onFit,
+              semanticLabel: strings(StringKey.tooltipZoomFit),
+            ),
+          ),
         ],
       ),
     );
@@ -53,7 +84,15 @@ class _Sep extends StatelessWidget {
 class _IconBtn extends StatefulWidget {
   final String glyph;
   final VoidCallback onTap;
-  const _IconBtn({required this.glyph, required this.onTap});
+
+  /// L4 (a11y): the button's accessible name; the decorative glyph is hidden
+  /// from semantics so only this reads out (mirrors `_StepperGlyphButton`).
+  final String? semanticLabel;
+  const _IconBtn({
+    required this.glyph,
+    required this.onTap,
+    this.semanticLabel,
+  });
 
   @override
   State<_IconBtn> createState() => _IconBtnState();
@@ -67,6 +106,7 @@ class _IconBtnState extends State<_IconBtn> {
     final colors = context.colors;
     return MechXFocusRing(
       onActivated: widget.onTap,
+      semanticLabel: widget.semanticLabel,
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => _hover = true),
@@ -90,9 +130,14 @@ class _IconBtnState extends State<_IconBtn> {
               height: 28,
               alignment: Alignment.center,
               color: _hover ? colors.surfaceHover : const Color(0x00000000),
-              child: Text(
-                widget.glyph,
-                style: context.type.label.copyWith(color: colors.textSecondary),
+              child: ExcludeSemantics(
+                // Decorative once the button carries a real label — hide it so
+                // a screen reader announces "Zoom in", not "plus".
+                child: Text(
+                  widget.glyph,
+                  style:
+                      context.type.label.copyWith(color: colors.textSecondary),
+                ),
               ),
             ),
           ),

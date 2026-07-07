@@ -16,15 +16,30 @@ class ProjectState {
   final List<Floor> floors; // lowest first
   final Map<String, ScaleCalibration> calibrations; // by sheet id
 
+  /// J1 — sheet ids whose calibration is STALE: the sheet's plan source was
+  /// swapped (`SheetsController.replaceSheetSource`, the "Replace plan…"
+  /// revision workflow) while an existing calibration survived — it may no
+  /// longer match the revised plan's DPI/plot scale/title block. Cleared by
+  /// re-calibrating ([ProjectController.setCalibration]) or the explicit
+  /// "Scale confirmed" action ([ProjectController.confirmCalibration]).
+  /// Additive; tolerant round-trip in `.mechx` (absent ⇒ empty).
+  final Set<String> staleCalibrations;
+
   const ProjectState({
     required this.name,
     required this.floors,
     this.calibrations = const {},
+    this.staleCalibrations = const {},
   });
 
   BuildingLevels get building => BuildingLevels(floors);
 
   ScaleCalibration? calibrationFor(String sheetId) => calibrations[sheetId];
+
+  /// J1 — whether [sheetId]'s calibration needs re-verification since its
+  /// plan was last replaced.
+  bool isCalibrationStale(String sheetId) =>
+      staleCalibrations.contains(sheetId);
 
   /// Sheet ids in [candidates] that carry NO calibration yet (optionally
   /// excluding the source sheet). The SAFE default target set for "apply scale
@@ -58,11 +73,13 @@ class ProjectState {
     String? name,
     List<Floor>? floors,
     Map<String, ScaleCalibration>? calibrations,
+    Set<String>? staleCalibrations,
   }) =>
       ProjectState(
         name: name ?? this.name,
         floors: floors ?? this.floors,
         calibrations: calibrations ?? this.calibrations,
+        staleCalibrations: staleCalibrations ?? this.staleCalibrations,
       );
 }
 
@@ -125,6 +142,7 @@ class ProjectController extends Notifier<ProjectState> {
     required String name,
     required List<Floor> floors,
     required Map<String, ScaleCalibration> calibrations,
+    Set<String> staleCalibrations = const {},
   }) {
     _undo.clear();
     _redo.clear();
@@ -132,6 +150,7 @@ class ProjectController extends Notifier<ProjectState> {
       name: name,
       floors: floors.isEmpty ? state.floors : floors,
       calibrations: calibrations,
+      staleCalibrations: staleCalibrations,
     );
   }
 
@@ -210,7 +229,36 @@ class ProjectController extends Notifier<ProjectState> {
     _snapshot();
     final next = Map<String, ScaleCalibration>.from(state.calibrations)
       ..[sheetId] = calibration;
-    state = state.copyWith(calibrations: next);
+    // J1: an explicit (re-)calibration IS the re-verification — clear any
+    // stale flag the sheet was carrying.
+    final nextStale = state.staleCalibrations.contains(sheetId)
+        ? (Set<String>.from(state.staleCalibrations)..remove(sheetId))
+        : state.staleCalibrations;
+    state = state.copyWith(calibrations: next, staleCalibrations: nextStale);
+  }
+
+  /// J1 — flag [sheetId]'s calibration STALE: its plan source was just
+  /// replaced (`SheetsController.replaceSheetSource`) while an existing
+  /// calibration survived (calibration is keyed by sheet id, so it silently
+  /// carries over to the revised plan). A no-op when the sheet has no
+  /// calibration yet (already surfaced as "not calibrated") or is already
+  /// flagged. Not undoable — a bookkeeping flag alongside the (also
+  /// not-undoable) source swap itself.
+  void markCalibrationStale(String sheetId) {
+    if (!state.calibrations.containsKey(sheetId)) return;
+    if (state.staleCalibrations.contains(sheetId)) return;
+    state = state.copyWith(
+        staleCalibrations: {...state.staleCalibrations, sheetId});
+  }
+
+  /// J1 — clear [sheetId]'s stale-calibration flag WITHOUT changing its
+  /// scale: the "Scale confirmed" action for an engineer who checked the
+  /// replaced plan and confirmed the old scale still holds. Not undoable,
+  /// like [markCalibrationStale].
+  void confirmCalibration(String sheetId) {
+    if (!state.staleCalibrations.contains(sheetId)) return;
+    final next = Set<String>.from(state.staleCalibrations)..remove(sheetId);
+    state = state.copyWith(staleCalibrations: next);
   }
 
   /// Copy [fromSheetId]'s calibration onto the [toSheetIds] sheets, as ONE undo
@@ -231,16 +279,20 @@ class ProjectController extends Notifier<ProjectState> {
     if (source == null) return 0;
     final targets = toSheetIds ?? state.calibrations.keys.toSet();
     final next = Map<String, ScaleCalibration>.from(state.calibrations);
+    // J1: a freshly-stamped calibration is a re-verification too — clear any
+    // stale flag on a sheet this actually changes.
+    final nextStale = Set<String>.from(state.staleCalibrations);
     var changed = 0;
     for (final id in targets) {
       if (id == fromSheetId) continue;
       if (next[id] == source) continue; // already this scale — no change
       next[id] = source;
+      nextStale.remove(id);
       changed++;
     }
     if (changed == 0) return 0;
     _snapshot();
-    state = state.copyWith(calibrations: next);
+    state = state.copyWith(calibrations: next, staleCalibrations: nextStale);
     return changed;
   }
 }

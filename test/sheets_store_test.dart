@@ -4,8 +4,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 
 void main() {
@@ -268,6 +270,42 @@ void main() {
           'missing', const Sheet(id: 'x', name: 'X', pdfPath: '/x.pdf'));
 
       expect(c.read(sheetsControllerProvider).sheets, same(before));
+    });
+
+    // ── J1: a plan swap flags an EXISTING calibration stale ──────────────────
+    test('flags the sheet calibration STALE when one already exists', () {
+      final c = makeContainer();
+      final sheets = c.read(sheetsControllerProvider.notifier);
+      sheets.loadSheets(const [
+        Sheet(id: 'denah#0', name: 'Ground', pdfPath: '/old/denah.pdf'),
+      ]);
+      c
+          .read(projectControllerProvider.notifier)
+          .setCalibration('denah#0', const ScaleCalibration(0.02));
+
+      sheets.replaceSheetSource(
+        'denah#0',
+        const Sheet(id: 'revB#0', name: 'revB', pdfPath: '/new/denahRevB.pdf'),
+      );
+
+      final project = c.read(projectControllerProvider);
+      expect(project.isCalibrationStale('denah#0'), isTrue);
+      // The calibration VALUE itself survives — only flagged for re-check.
+      expect(project.calibrationFor('denah#0')?.metersPerPixel, 0.02);
+    });
+
+    test('does NOT flag stale when the sheet had no calibration yet', () {
+      final c = makeContainer();
+      final sheets = c.read(sheetsControllerProvider.notifier);
+      sheets.loadSheets(const [
+        Sheet(id: 'p#0', name: 'Plan', pdfPath: '/old/plan.pdf'),
+      ]);
+
+      sheets.replaceSheetSource(
+          'p#0', const Sheet(id: 'q#0', name: 'q', pdfPath: '/new/plan.pdf'));
+
+      expect(c.read(projectControllerProvider).isCalibrationStale('p#0'),
+          isFalse);
     });
   });
 

@@ -5,19 +5,24 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
 
 import '../../store/inspector_store.dart';
+import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
+import '../../store/sizing_store.dart' show sizingProvider;
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'canvas_grid.dart' show calibratedGridWorldStep;
 import 'drawing_overlay.dart' show RubberBandPainter, snapOrTeePoint;
 import 'edge_context_menu.dart';
+import 'network_layer.dart' show pipeOuterPx;
 import 'service_style.dart';
 import 'snapping.dart';
+import 'underlay_snap_service.dart';
 import 'viewport.dart';
 
 /// Interaction layer active while the Select tool is chosen: a tap picks the
@@ -63,7 +68,34 @@ class _NetworkSelectionOverlayState
   String? _pullFrom;
   Offset? _pullNow;
 
+  /// B10: the UNSNAPPED world position accumulated over a single-node drag —
+  /// the ortho snap is applied to this (a degree-1 node), never to the
+  /// already-snapped node position. Null at rest / during a group drag.
+  Offset? _nodeDragRaw;
+
   bool _onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
+
+  /// World position of the SOLE neighbour of a DEGREE-1 node — the anchor for
+  /// the ortho constraint on a plain node drag. Null when the node has 0 or
+  /// >= 2 incident edges (a junction drag stays free — snapping one edge would
+  /// un-straighten the other) or the neighbour is missing.
+  Offset? _singleNeighbourOf(Network net, String nodeId) {
+    String? otherId;
+    var count = 0;
+    for (final e in net.edges) {
+      if (e.fromId == nodeId) {
+        otherId = e.toId;
+        count++;
+      } else if (e.toId == nodeId) {
+        otherId = e.fromId;
+        count++;
+      }
+      if (count > 1) return null;
+    }
+    if (count != 1 || otherId == null) return null;
+    final other = net.nodeById(otherId);
+    return other == null ? null : Offset(other.x, other.y);
+  }
 
   Offset _toLocal(Offset global) {
     final box = context.findRenderObject() as RenderBox?;
@@ -110,7 +142,14 @@ class _NetworkSelectionOverlayState
         .drawRunFromNode(from, world,
             snapRadius: snapWorld,
             gridSnap: gridSnap,
-            gridMetersPerPixel: gridMpp);
+            gridMetersPerPixel: gridMpp,
+            // B12 — snap the pulled main's far end onto a plan wall / reference
+            // line / PDF ink ridge (between node/tee and grid precedence); the
+            // source node anchors the ortho ray so the main stays straight.
+            underlaySnap: underlaySnapFor(ref, sheetId, transform.scale,
+                orthoAnchor: (effectiveOrtho && fromNode != null)
+                    ? Offset(fromNode.x, fromNode.y)
+                    : null));
   }
 
   // ── Double-click → open in the inspector ────────────────────────────────────
@@ -216,16 +255,22 @@ class _NetworkSelectionOverlayState
     final hover = ref.watch(hoverTargetProvider);
     final calibration =
         ref.watch(projectControllerProvider).calibrationFor(sheetId);
+    // F1/F4 — services made INERT by a locked reference layer or the per-service
+    // view filter: their nodes carry no drag handle / outlet nub and never
+    // hit-test, so a faded coordination element is visible-but-inert. Empty by
+    // default ⇒ every node handled exactly as before (byte-identical).
+    final inert = ref.watch(inertServicesProvider);
 
     // On-floor node drag handles (opaque, small) sit above the translucent tap
     // layer: dragging a handle moves the node; tapping it selects it; anywhere
     // else, the tap layer selects/clears and drags fall through to canvas pan.
     // Drag-end snaps the node to a nearby node (merge) so a segment endpoint
-    // "connects" to a fitting.
+    // "connects" to a fitting. A node whose every incident edge is inert gets no
+    // handle (F1/F4).
     final snapWorld = 14 / transform.scale;
     final handles = <Widget>[
       for (final n in net.nodes)
-        if (_onFloor(n))
+        if (_onFloor(n) && !_nodeInert(net, n.id, inert))
           _dragHandle(ref, n.id, transform.worldToScreen(Offset(n.x, n.y)),
               transform.scale, snapWorld),
     ];
@@ -239,10 +284,16 @@ class _NetworkSelectionOverlayState
       for (final n in net.nodes)
         if (_onFloor(n) &&
             n.role != NodeRole.fixture &&
+            !_nodeInert(net, n.id, inert) &&
             (n.id == hoveredNodeId ||
                 selection.containsNode(n.id) ||
-                selection.nodeId == n.id))
-          _outletNub(n.id, transform.worldToScreen(Offset(n.x, n.y)), transform),
+                selection.nodeId == n.id ||
+                // B11: keep the nub mounted while ITS pull is active, so the
+                // pointer leaving the 18px nub mid-pull never unmounts it (and
+                // kills the live pan gesture).
+                _pullFrom == n.id))
+          _outletNub(n.id, transform.worldToScreen(Offset(n.x, n.y)), transform,
+              isHovered: n.id == hoveredNodeId),
     ];
 
     // A selected run's two endpoints get larger, accented resize handles — the
@@ -251,6 +302,9 @@ class _NetworkSelectionOverlayState
     if (selection.isEdge) {
       for (final e in net.edges) {
         if (e.id != selection.edgeId || e.kind != EdgeKind.run) continue;
+        // A selected run whose service was just locked/hidden loses its
+        // resize handles too (F1/F4).
+        if (inert.contains(e.service)) continue;
         for (final nid in [e.fromId, e.toId]) {
           final n = net.nodeById(nid);
           if (n == null || !_onFloor(n)) continue;
@@ -372,6 +426,11 @@ class _NetworkSelectionOverlayState
               ref.read(selectionProvider.notifier).selectNode(id);
             }
             ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+            // B10: seed the raw-drag tracker (only consumed by the single,
+            // degree-1 ortho path below).
+            final node =
+                ref.read(networkControllerProvider).network.nodeById(id);
+            _nodeDragRaw = node == null ? null : Offset(node.x, node.y);
           },
           onPanUpdate: (d) {
             final sel = ref.read(selectionProvider);
@@ -382,12 +441,25 @@ class _NetworkSelectionOverlayState
               ctrl.moveMany(sel.nodeIds, dx, dy);
               return;
             }
-            final node =
-                ref.read(networkControllerProvider).network.nodeById(id);
+            final net = ref.read(networkControllerProvider).network;
+            final node = net.nodeById(id);
             if (node == null) return;
-            ctrl.moveNode(id, node.x + dx, node.y + dy);
+            final raw =
+                (_nodeDragRaw ?? Offset(node.x, node.y)) + Offset(dx, dy);
+            _nodeDragRaw = raw;
+            // B10: a DEGREE-1 node ortho-snaps against its single neighbour
+            // (Ortho ^ Shift); a degree>=2 junction (no single anchor) or a
+            // free orphan drags freely, exactly as before.
+            final effectiveOrtho = ref.read(orthoProvider) ^
+                HardwareKeyboard.instance.isShiftPressed;
+            final anchor = _singleNeighbourOf(net, id);
+            final target = (effectiveOrtho && anchor != null)
+                ? orthoSnap(anchor, raw)
+                : raw;
+            ctrl.moveNode(id, target.dx, target.dy);
           },
           onPanEnd: (_) {
+            _nodeDragRaw = null; // B10: end the raw-drag tracking
             final sel = ref.read(selectionProvider);
             // A group move is already committed live over the pushUndoSnapshot
             // baseline (one undo step); only a single-node drag snaps/merges its
@@ -405,9 +477,17 @@ class _NetworkSelectionOverlayState
             final gridSnap = gridOrtho &&
                 gridMpp != null &&
                 calibratedGridWorldStep(gridMpp) * scale >= 6.0;
+            // B12 — a dragged node also settles onto the plan underlay (above the
+            // grid). A degree-1 node keeps its ortho anchor so the run stays
+            // straight; a junction/orphan drags free (anchor null).
+            final anchor = _singleNeighbourOf(
+                ref.read(networkControllerProvider).network, id);
             ref.read(networkControllerProvider.notifier).endNodeDragWithSnap(
                 id, snapWorld,
-                gridSnap: gridSnap, gridMetersPerPixel: gridMpp);
+                gridSnap: gridSnap,
+                gridMetersPerPixel: gridMpp,
+                underlaySnap: underlaySnapFor(ref, sheetId, scale,
+                    orthoAnchor: gridOrtho ? anchor : null));
           },
           child: const SizedBox.expand(),
         ),
@@ -418,10 +498,23 @@ class _NetworkSelectionOverlayState
   /// The small accent "outlet" nub offset up-right of a node — drag it to pull a
   /// mainline run out of the node. Reports the pull to the host state, which
   /// paints the preview line and lays the run on release.
-  Widget _outletNub(String nodeId, Offset screen, ViewportTransform transform) {
+  ///
+  /// B6: [off] clears the node's 24px move-handle hit box (r=12 in
+  /// [_dragHandle]) — the two square GestureDetector hit RECTS (not the
+  /// painted circles) previously overlapped ~6x6 screen px at off=15 (15 <
+  /// 12+9), so a drag started in that corner could trigger a pull
+  /// instead of a node move with no visual cue. off=24 clears both axes
+  /// (24 > 12+9) while keeping both hit targets at their original >=18px
+  /// diameter. [isHovered] drives a subtle non-idle scale/shadow cue (also
+  /// shown mid-pull) so the nub visibly reads as "grabbed" — never painted at
+  /// rest, so an idle canvas stays byte-identical.
+  Widget _outletNub(String nodeId, Offset screen, ViewportTransform transform,
+      {required bool isHovered}) {
     final colors = context.colors;
-    const off = 15.0; // up-right of the node, clear of the move handle
+    const off = 24.0; // up-right of the node, clear of the 24px move handle
     const r = 9.0;
+    final pulling = _pullFrom == nodeId;
+    final active = isHovered || pulling;
     return Positioned(
       key: ValueKey('outlet-$nodeId'),
       left: screen.dx + off - r,
@@ -436,7 +529,14 @@ class _NetworkSelectionOverlayState
         onEnter: (_) => ref
             .read(hoverTargetProvider.notifier)
             .set((nodeId: nodeId, edgeId: null)),
-        onExit: (_) => ref.read(hoverTargetProvider.notifier).clear(),
+        // B11: while a pull is in flight the pointer leaves the nub bounds
+        // immediately — DON'T clear the hover latch then (a rebuild would
+        // unmount the nub and kill the active pan gesture). The gesture layer
+        // re-establishes hover after release.
+        onExit: (_) {
+          if (_pullFrom != null) return;
+          ref.read(hoverTargetProvider.notifier).clear();
+        },
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onPanStart: (d) {
@@ -450,15 +550,17 @@ class _NetworkSelectionOverlayState
             _pullNow = null;
           }),
           child: Center(
-            child: Container(
-              width: 11,
-              height: 11,
+            child: AnimatedContainer(
+              duration: MechXMotion.press,
+              curve: MechXMotion.standard,
+              width: active ? 13 : 11,
+              height: active ? 13 : 11,
               decoration: BoxDecoration(
                 color: colors.accent,
                 shape: BoxShape.circle,
                 border: Border.fromBorderSide(
                     BorderSide(color: colors.onAccent, width: 1.5)),
-                boxShadow: MechXShadow.card,
+                boxShadow: pulling ? MechXShadow.popover : MechXShadow.card,
               ),
             ),
           ),
@@ -512,6 +614,22 @@ class _ResizeHandle extends ConsumerStatefulWidget {
 class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
   bool _pressing = false;
 
+  /// B10: the UNSNAPPED endpoint world position accumulated over the drag —
+  /// the ortho snap is applied to this, never to the already-snapped node
+  /// position (which would discard perpendicular motion each frame and stick
+  /// the endpoint on its starting ray). Null at rest.
+  Offset? _rawWorld;
+
+  /// World position of the run's OTHER endpoint — the anchor the ortho 45°
+  /// constraint snaps against; null if the edge/other node is gone.
+  Offset? _otherEnd(Network net) {
+    final e = net.edgeById(widget.edgeId);
+    if (e == null) return null;
+    final otherId = e.fromId == widget.nodeId ? e.toId : e.fromId;
+    final other = net.nodeById(otherId);
+    return other == null ? null : Offset(other.x, other.y);
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -522,21 +640,37 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
         onPanStart: (_) {
           setState(() => _pressing = true);
           ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
-        },
-        onPanUpdate: (d) {
           final node = ref
               .read(networkControllerProvider)
               .network
               .nodeById(widget.nodeId);
+          _rawWorld = node == null ? null : Offset(node.x, node.y);
+        },
+        onPanUpdate: (d) {
+          final net = ref.read(networkControllerProvider).network;
+          final node = net.nodeById(widget.nodeId);
           if (node == null) return;
+          final raw = (_rawWorld ?? Offset(node.x, node.y)) +
+              Offset(d.delta.dx / widget.scale, d.delta.dy / widget.scale);
+          _rawWorld = raw;
+          // B10: apply the effective-ortho 45° snap (Ortho ^ Shift) against the
+          // run's other endpoint, so stretching an endpoint keeps the run
+          // straight (matches the nub-pull preview/release).
+          final effectiveOrtho = ref.read(orthoProvider) ^
+              HardwareKeyboard.instance.isShiftPressed;
+          final anchor = _otherEnd(net);
+          final target = (effectiveOrtho && anchor != null)
+              ? orthoSnap(anchor, raw)
+              : raw;
           ref.read(networkControllerProvider.notifier).moveNode(
                 widget.nodeId,
-                node.x + d.delta.dx / widget.scale,
-                node.y + d.delta.dy / widget.scale,
+                target.dx,
+                target.dy,
               );
         },
         onPanEnd: (_) {
           setState(() => _pressing = false);
+          _rawWorld = null;
           // G2 — the resized endpoint also honours the magnetic grid (lowest
           // precedence) when ortho is on, the node's sheet is calibrated, AND
           // the minor grid is visible at this zoom.
@@ -553,9 +687,19 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
           final gridSnap = gridOrtho &&
               gridMpp != null &&
               calibratedGridWorldStep(gridMpp) * widget.scale >= 6.0;
+          // B12 — the resized endpoint also snaps onto the plan underlay (above
+          // the grid); the run's OTHER endpoint anchors the ortho ray so the run
+          // stays straight when Ortho is on.
+          final anchor = _otherEnd(
+              ref.read(networkControllerProvider).network);
           ref.read(networkControllerProvider.notifier).endNodeDragWithSnap(
               widget.nodeId, widget.snapWorld,
-              gridSnap: gridSnap, gridMetersPerPixel: gridMpp);
+              gridSnap: gridSnap,
+              gridMetersPerPixel: gridMpp,
+              underlaySnap: node == null
+                  ? null
+                  : underlaySnapFor(ref, node.sheetId, widget.scale,
+                      orthoAnchor: gridOrtho ? anchor : null));
           // Keep the (still-present) edge selected after a snap/merge.
           if (ref
               .read(networkControllerProvider)
@@ -565,7 +709,10 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
             ref.read(selectionProvider.notifier).selectEdge(widget.edgeId);
           }
         },
-        onPanCancel: () => setState(() => _pressing = false),
+        onPanCancel: () {
+          _rawWorld = null;
+          setState(() => _pressing = false);
+        },
         child: Center(
           child: AnimatedScale(
             scale: _pressing ? 0.85 : 1.0,
@@ -597,14 +744,35 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
 bool _isOnFloor(NetNode n, String sheetId, int floorIndex) =>
     n.sheetId == sheetId && n.floorIndex == floorIndex;
 
-/// Nearest node id on this floor within the node hit radius, or null.
+/// F1/F4 — whether a node is INERT to canvas interaction: it has at least one
+/// incident edge AND every incident edge's service is in [inert] (a locked
+/// reference layer's service or an individually hidden one). A node touched by
+/// any active/visible edge, or a free (unwired) node, is NOT inert — so a
+/// coordination pipe becomes visible-but-inert without stranding loose
+/// equipment. Empty [inert] ⇒ always false (byte-identical, zero extra cost).
+bool _nodeInert(Network net, String nodeId, Set<ServiceType> inert) {
+  if (inert.isEmpty) return false;
+  var touched = false;
+  for (final e in net.edges) {
+    if (e.fromId != nodeId && e.toId != nodeId) continue;
+    touched = true;
+    if (!inert.contains(e.service)) return false;
+  }
+  return touched;
+}
+
+/// Nearest node id on this floor within the node hit radius, or null. [inert]
+/// services (F1 locked layer / F4 hidden) are skipped so a faded coordination
+/// element can't be clicked.
 String? _nodeAt(Network net, ViewportTransform transform, Offset world,
-    String sheetId, int floorIndex) {
+    String sheetId, int floorIndex,
+    {Set<ServiceType> inertServices = const {}}) {
   final nodeHitR = 13 / transform.scale; // ≈13 screen px
   String? node;
   var best = nodeHitR * nodeHitR;
   for (final n in net.nodes) {
     if (!_isOnFloor(n, sheetId, floorIndex)) continue;
+    if (_nodeInert(net, n.id, inertServices)) continue;
     final dx = n.x - world.dx;
     final dy = n.y - world.dy;
     final d2 = dx * dx + dy * dy;
@@ -618,12 +786,25 @@ String? _nodeAt(Network net, ViewportTransform transform, Offset world,
 
 /// Nearest edge id within the edge hit radius (runs by segment distance,
 /// risers by their endpoint marker), or null.
+///
+/// B5: a RUN's clickable corridor tracks the true-width rendered pipe/duct
+/// body ([pipeOuterPx] — the SAME formula the painter draws, via [sizing] +
+/// [metersPerPixel]) instead of staying a fixed ~8px hairline once a
+/// calibrated duct/pipe renders up to 120 screen px wide — `max(8px,
+/// renderedHalfWidth + 4px)` so a fat duct is clickable across its visible
+/// body. An unsized/uncalibrated run still resolves to the original 8px band
+/// (byte-identical). Riser endpoint-marker hit-testing is unaffected.
 String? _edgeAt(Network net, ViewportTransform transform, Offset world,
-    String sheetId, int floorIndex) {
-  final edgeHitR = 8 / transform.scale;
+    String sheetId, int floorIndex,
+    {Map<String, EdgeSizing>? sizing,
+    double? metersPerPixel,
+    Set<ServiceType> inertServices = const {}}) {
+  final riserHitR = 8 / transform.scale;
   String? edge;
-  var best = edgeHitR;
+  var bestDist = double.infinity;
   for (final e in net.edges) {
+    // F1/F4 — a locked-layer / hidden-service edge is inert to clicks.
+    if (inertServices.contains(e.service)) continue;
     final a = net.nodeById(e.fromId);
     final b = net.nodeById(e.toId);
     if (a == null || b == null) continue;
@@ -632,17 +813,20 @@ String? _edgeAt(Network net, ViewportTransform transform, Offset world,
           !_isOnFloor(b, sheetId, floorIndex)) {
         continue;
       }
+      final outer = pipeOuterPx(sizing?[e.id], e.service,
+          scale: transform.scale, metersPerPixel: metersPerPixel);
+      final edgeHitR = math.max(8.0, outer / 2 + 4.0) / transform.scale;
       final d = _distToSegment(world, Offset(a.x, a.y), Offset(b.x, b.y));
-      if (d <= best) {
-        best = d;
+      if (d <= edgeHitR && d < bestDist) {
+        bestDist = d;
         edge = e.id;
       }
     } else {
       for (final n in [a, b]) {
         if (!_isOnFloor(n, sheetId, floorIndex)) continue;
         final d = (Offset(n.x, n.y) - world).distance;
-        if (d <= best) {
-          best = d;
+        if (d <= riserHitR && d < bestDist) {
+          bestDist = d;
           edge = e.id;
         }
       }
@@ -695,6 +879,19 @@ class _SelectionGestureLayerState
   String get _sheetId => widget.sheetId;
   int get _floor => widget.floorIndex;
 
+  /// B5: the live sizing map + this sheet's calibration, read fresh at each
+  /// gesture (not watched) so `_edgeAt`'s hit corridor matches what the
+  /// painter currently draws without adding a rebuild dependency here.
+  Map<String, EdgeSizing> get _sizing => ref.read(sizingProvider);
+  double? get _mpp => ref
+      .read(projectControllerProvider)
+      .calibrationFor(_sheetId)
+      ?.metersPerPixel;
+
+  /// F1/F4 — the services currently inert to canvas interaction (locked layer /
+  /// hidden service), read fresh at each gesture. Empty ⇒ byte-identical.
+  Set<ServiceType> get _inert => ref.read(inertServicesProvider);
+
   @override
   Widget build(BuildContext context) {
     final transform = ref.watch(sheetsControllerProvider).viewportFor(_sheetId) ??
@@ -708,9 +905,11 @@ class _SelectionGestureLayerState
       onHover: (e) {
         final net = ref.read(networkControllerProvider).network;
         final world = transform.screenToWorld(e.localPosition);
-        final node = _nodeAt(net, transform, world, _sheetId, _floor);
+        final node = _nodeAt(net, transform, world, _sheetId, _floor,
+            inertServices: _inert);
         final edge = node == null
-            ? _edgeAt(net, transform, world, _sheetId, _floor)
+            ? _edgeAt(net, transform, world, _sheetId, _floor,
+                sizing: _sizing, metersPerPixel: _mpp, inertServices: _inert)
             : null;
         ref.read(hoverTargetProvider.notifier).set(
             node == null && edge == null
@@ -725,7 +924,8 @@ class _SelectionGestureLayerState
         final sel = ref.read(selectionProvider.notifier);
         final shift = HardwareKeyboard.instance.isShiftPressed;
         final world = transform.screenToWorld(details.localPosition);
-        final node = _nodeAt(net, transform, world, _sheetId, _floor);
+        final node = _nodeAt(net, transform, world, _sheetId, _floor,
+            inertServices: _inert);
         if (node != null) {
           if (shift) {
             sel.toggleNode(node);
@@ -735,7 +935,8 @@ class _SelectionGestureLayerState
           }
           return;
         }
-        final edge = _edgeAt(net, transform, world, _sheetId, _floor);
+        final edge = _edgeAt(net, transform, world, _sheetId, _floor,
+            sizing: _sizing, metersPerPixel: _mpp, inertServices: _inert);
         if (edge != null) {
           if (shift) {
             sel.toggleEdge(edge);
@@ -755,15 +956,23 @@ class _SelectionGestureLayerState
         final net = ref.read(networkControllerProvider).network;
         final sel = ref.read(selectionProvider.notifier);
         final world = transform.screenToWorld(details.localPosition);
-        final nodeId = _nodeAt(net, transform, world, _sheetId, _floor);
+        final nodeId = _nodeAt(net, transform, world, _sheetId, _floor,
+            inertServices: _inert);
         if (nodeId != null) {
           // ANY node gets a menu: fitting rows for a bare junction, the face
-          // ladder for an air terminal, Select similar + Delete for all.
-          sel.selectNode(nodeId);
+          // ladder for an air terminal, Select similar + Delete for all. F2:
+          // right-clicking a node that's part of a MULTI-selection keeps the
+          // whole set alive (mirroring E1 for edges) so the menu can rotate /
+          // mirror / delete the group; an unselected node collapses to just it.
+          final current = ref.read(selectionProvider);
+          if (!(current.containsNode(nodeId) && current.isMulti)) {
+            sel.selectNode(nodeId);
+          }
           showNodeContextMenu(context, ref, nodeId, details.globalPosition);
           return;
         }
-        final edge = _edgeAt(net, transform, world, _sheetId, _floor);
+        final edge = _edgeAt(net, transform, world, _sheetId, _floor,
+            sizing: _sizing, metersPerPixel: _mpp, inertServices: _inert);
         if (edge == null) {
           sel.clear();
           showCanvasContextMenu(
@@ -795,9 +1004,11 @@ class _SelectionGestureLayerState
       onPanStart: (details) {
         final net = ref.read(networkControllerProvider).network;
         final world = transform.screenToWorld(details.localPosition);
-        final nodeHit = _nodeAt(net, transform, world, _sheetId, _floor);
+        final nodeHit = _nodeAt(net, transform, world, _sheetId, _floor,
+            inertServices: _inert);
         final edgeHit = nodeHit == null
-            ? _edgeAt(net, transform, world, _sheetId, _floor)
+            ? _edgeAt(net, transform, world, _sheetId, _floor,
+                sizing: _sizing, metersPerPixel: _mpp, inertServices: _inert)
             : null;
         final shift = HardwareKeyboard.instance.isShiftPressed;
         // G5: a plain (no-Shift) left-drag starting on a RUN's BODY moves that
@@ -899,15 +1110,23 @@ class _SelectionGestureLayerState
         final a = transform.screenToWorld(start);
         final b = transform.screenToWorld(now);
         final rect = Rect.fromPoints(a, b);
+        final inert = _inert;
         final nodeIds = <String>{};
         for (final n in net.nodes) {
           if (!_isOnFloor(n, _sheetId, _floor)) continue;
+          // F1/F4 — a rubber-band never grabs a locked-layer / hidden-service
+          // node (parity with tap-select).
+          if (_nodeInert(net, n.id, inert)) continue;
           if (rect.contains(Offset(n.x, n.y))) nodeIds.add(n.id);
         }
         // A run edge is captured when BOTH endpoints fall inside the rect.
         final edgeIds = <String>{};
         for (final e in net.edges) {
           if (e.kind != EdgeKind.run) continue;
+          // F1/F4 — a rubber-band never grabs a locked-layer / hidden-service
+          // run, even when both endpoints are shared with visible edges and
+          // thus land in nodeIds (parity with _edgeAt tap-select).
+          if (inert.contains(e.service)) continue;
           if (nodeIds.contains(e.fromId) && nodeIds.contains(e.toId)) {
             edgeIds.add(e.id);
           }

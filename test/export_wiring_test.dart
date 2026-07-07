@@ -10,19 +10,27 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/document_control_store.dart';
 import 'package:mechx/store/electrical_store.dart';
+import 'package:mechx/store/equipment_spec_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx/ui/electrical/electrical_export.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
 import 'package:mechx/ui/schematic/schematic_export.dart';
+import 'package:mechx_engine/electrical/model.dart' show ElectricalProject;
+import 'package:mechx_engine/electrical/sources.dart'
+    show ElectricalSources, GeneratorSource;
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart' show buildCalcReportBlocks;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart'
     show buildElectricalSld;
 import 'package:mechx_engine/report/equipment_schedule.dart'
     show
+        EquipmentCategory,
         buildEquipmentScheduleBlocks,
         buildEquipmentScheduleRows,
         equipmentScheduleToCsv;
@@ -90,7 +98,11 @@ void main() {
       (tester) async {
     final (ref, _) = await harness(tester);
     final chrome = issuableChrome(ref, sheetId: 's1', floorIndex: 0);
-    expect(chrome.drawingNumber, isNull);
+    // N19: the drawing NUMBER is always DERIVED (never blank) — with no rail
+    // position (this bare harness loads no sheets) it falls back to index 1 ⇒
+    // the mechanical plan band M-101. Every OTHER unset field stays null so its
+    // title-block row is omitted.
+    expect(chrome.drawingNumber, 'M-101');
     expect(chrome.revisionNumber, isNull);
     expect(chrome.clientName, isNull);
     expect(chrome.drawnBy, isNull);
@@ -170,8 +182,10 @@ void main() {
       'buildLiveRiserSheet carries the B1 canvas-parity extras (equipment '
       'detail suffix + KETERANGAN notes + detail callouts)', (tester) async {
     final (ref, container) = await harness(tester);
-    // A roof tank with a REAL stored capacity feeding a ground-floor main —
-    // the exported sheet must carry at least what the Auto canvas draws.
+    // A roof tank with a REAL stored capacity feeding a ground-floor main that
+    // ALSO carries a water meter + a PRV — the exported sheet must carry at
+    // least what the Auto canvas draws, and the G7-gated valve callouts only
+    // ride when the drawn network actually has those devices.
     const net = Network(nodes: [
       NetNode(
         id: 'rt',
@@ -184,6 +198,20 @@ void main() {
         tankCapacityLitres: 5000,
       ),
       NetNode(id: 'm', sheetId: 's1', x: 0, y: 100, floorIndex: 0),
+      NetNode(
+          id: 'wm',
+          sheetId: 's1',
+          x: 40,
+          y: 100,
+          floorIndex: 0,
+          component: NodeComponent.waterMeter),
+      NetNode(
+          id: 'prv',
+          sheetId: 's1',
+          x: 80,
+          y: 100,
+          floorIndex: 0,
+          component: NodeComponent.prv),
     ], edges: [
       NetEdge(
           id: 'r1',
@@ -191,6 +219,9 @@ void main() {
           toId: 'm',
           service: ServiceType.coldWater,
           kind: EdgeKind.riser),
+      NetEdge(id: 'em', fromId: 'm', toId: 'wm', service: ServiceType.coldWater),
+      NetEdge(
+          id: 'ep', fromId: 'm', toId: 'prv', service: ServiceType.coldWater),
     ]);
     container.read(networkControllerProvider.notifier).loadNetwork(net);
     final sheet = buildLiveRiserSheet(ref, null);
@@ -201,7 +232,7 @@ void main() {
     // The KETERANGAN system-notes block echoes the live feed strategy.
     expect(labels, contains('KETERANGAN'));
     expect(labels, contains('Feed:'));
-    // The H101 detail callouts ride the export (detailCallouts: true).
+    // The G7-gated H101 detail callouts ride the export when the devices exist.
     expect(labels, contains('DETAIL WATER METER'));
     expect(labels, contains('DETAIL PRV SET'));
     expect(labels, contains('ROOF TANK 5 m3'));
@@ -259,6 +290,7 @@ void main() {
         service: ServiceType.coldWater,
         kind: EdgeKind.run,
         diameterMm: 25,
+        tag: 'CW-F1',
         totalLength: const Length(5.0),
         segmentCount: 1,
         floorIndex: 0,
@@ -267,6 +299,7 @@ void main() {
         service: ServiceType.coldWater,
         kind: EdgeKind.run,
         diameterMm: 25,
+        tag: 'CW-F2',
         totalLength: const Length(3.0),
         segmentCount: 1,
         floorIndex: 1,
@@ -275,6 +308,7 @@ void main() {
         service: ServiceType.coldWater,
         kind: EdgeKind.riser,
         diameterMm: 50,
+        tag: 'CW-R1',
         totalLength: Length(3.5),
         segmentCount: 1,
       ),
@@ -294,16 +328,18 @@ void main() {
     ];
 
     final lines = bomCsvWithCutPlan(bom, cutPlan).trim().split('\n');
+    // N13: a tag column sits right after kind (run → CW-F<floor>, riser → CW-R1).
     expect(
         lines.first,
-        'service,kind,floor,nominal_dn_mm,length_m,segments,'
+        'service,kind,tag,floor,nominal_dn_mm,length_m,segments,'
         'stock_length_m,bars_purchased,waste_pct');
     // First DN25 run row carries the plan; the 1-based floor is 1.
-    expect(lines[1], 'coldWater,run,1,25,5.00,1,4.0,3,25.0');
+    expect(lines[1], 'coldWater,run,CW-F1,1,25,5.00,1,4.0,3,25.0');
     // Second DN25 row (same group) leaves the plan columns EMPTY (sum-safe).
-    expect(lines[2], 'coldWater,run,2,25,3.00,1,,,');
-    // The riser: null floor → empty, and no plan entry → empty plan columns.
-    expect(lines[3], 'coldWater,riser,,50,3.50,1,,,');
+    expect(lines[2], 'coldWater,run,CW-F2,2,25,3.00,1,,,');
+    // The riser: its stack tag CW-R1, null floor → empty, and no plan entry →
+    // empty plan columns.
+    expect(lines[3], 'coldWater,riser,CW-R1,,50,3.50,1,,,');
   });
 
   // ── D1: the typeset-PDF report seams (Wave 4) ──────────────────────────────
@@ -437,5 +473,111 @@ void main() {
     expect(lines.first, 'tag,category,service,duty,size,model_spec,qty');
     // Header + one line per scheduled row.
     expect(lines.length, rows.length + 1);
+  });
+
+  // ── J3: equipment-schedule AHU tags are STABLE across a room deletion ───────
+  testWidgets(
+      'J3: deleting a middle room never renumbers another room\'s AHU tag',
+      (tester) async {
+    final (ref, container) = await harness(tester);
+    // Calibrate a sheet so every room's air sizing resolves (100 px = 1 m).
+    const sheetId = 's1';
+    container
+        .read(projectControllerProvider.notifier)
+        .setCalibration(sheetId, const ScaleCalibration(0.01));
+    final roomsCtrl = container.read(roomAreasProvider.notifier);
+    // Three sized rooms (ids r0, r1, r2 → 'Room 1/2/3').
+    for (var i = 0; i < 3; i++) {
+      roomsCtrl.add(
+          sheetId: sheetId, floorIndex: 0, ax: 0, ay: 0, bx: 500, by: 500);
+    }
+    final rooms = container.read(roomAreasProvider);
+    expect(rooms, hasLength(3));
+
+    // Rev A: capture each room's AHU tag, keyed by its (stable) name.
+    Map<String, String> ahuTags() => {
+          for (final f
+              in gatherEquipmentScheduleData(ref).fans.where((f) => f.airHandling))
+            f.service: f.tag!,
+        };
+    final revA = ahuTags();
+    expect(revA, {'Room 1': 'AHU-01', 'Room 2': 'AHU-02', 'Room 3': 'AHU-03'});
+
+    // Delete the MIDDLE room (Room 2 / id r1) and regenerate.
+    roomsCtrl.removeById(rooms[1].id);
+    final revB = ahuTags();
+
+    // The surviving rooms keep their exact tags — Room 3 stays AHU-03 (the old
+    // positional counter would have silently renumbered it to AHU-02).
+    expect(revB['Room 1'], revA['Room 1']);
+    expect(revB['Room 3'], revA['Room 3']);
+    expect(revB, {'Room 1': 'AHU-01', 'Room 3': 'AHU-03'});
+  });
+
+  // ── N23: the entered model/spec threads through by TAG ─────────────────────
+  testWidgets(
+      'N23: gatherEquipmentScheduleData threads an entered model/spec through '
+      'to its schedule row by the equipment tag', (tester) async {
+    final (ref, container) = await harness(tester);
+    // Calibrate a sheet so the room's AHU sizing resolves (100 px = 1 m) and
+    // synthesises the stable tag "AHU-01".
+    const sheetId = 's1';
+    container
+        .read(projectControllerProvider.notifier)
+        .setCalibration(sheetId, const ScaleCalibration(0.01));
+    container.read(roomAreasProvider.notifier).add(
+        sheetId: sheetId, floorIndex: 0, ax: 0, ay: 0, bx: 500, by: 500);
+
+    // No spec entered yet ⇒ the row still carries the engine's own '—'.
+    final before = buildEquipmentScheduleRows(gatherEquipmentScheduleData(ref))
+        .firstWhere((r) => r.tag == 'AHU-01');
+    expect(before.modelSpec, '—');
+
+    // Enter a spec keyed by that exact tag.
+    container
+        .read(equipmentModelSpecProvider.notifier)
+        .setSpec('AHU-01', 'Daikin FXAQ25AVM');
+
+    final data = gatherEquipmentScheduleData(ref);
+    final item = data.fans.firstWhere((f) => f.tag == 'AHU-01');
+    expect(item.modelSpec, 'Daikin FXAQ25AVM');
+    final row =
+        buildEquipmentScheduleRows(data).firstWhere((r) => r.tag == 'AHU-01');
+    expect(row.modelSpec, 'Daikin FXAQ25AVM');
+
+    // Clearing the field (empty string) removes the override — back to '—'.
+    container.read(equipmentModelSpecProvider.notifier).setSpec('AHU-01', '');
+    final cleared =
+        buildEquipmentScheduleRows(gatherEquipmentScheduleData(ref))
+            .firstWhere((r) => r.tag == 'AHU-01');
+    expect(cleared.modelSpec, '—');
+  });
+
+  // ── N22 (app half): source apparatus reaches the gathered schedule data ────
+  testWidgets(
+      'N22 app half: the electrical project (transformer/genset/capacitor '
+      'bank) is threaded into EquipmentScheduleData so the schedule can '
+      'tabulate the source apparatus', (tester) async {
+    final (ref, container) = await harness(tester);
+    final project = ElectricalProject(
+      transformerKva: ApparentPower.kilovoltAmperes(630),
+      capacitorBankKvar: 50,
+      sources: ElectricalSources(
+        generator: GeneratorSource(kva: ApparentPower.kilovoltAmperes(40)),
+      ),
+    );
+    container.read(electricalProjectProvider.notifier).setProject(project);
+
+    final data = gatherEquipmentScheduleData(ref);
+    expect(data.electricalProject, same(project));
+
+    final rows = buildEquipmentScheduleRows(data);
+    final tx = rows.firstWhere((r) => r.category == EquipmentCategory.transformer);
+    expect(tx.duty, contains('630'));
+    final gen = rows.firstWhere((r) => r.category == EquipmentCategory.generator);
+    expect(gen.duty, contains('40'));
+    final cb =
+        rows.firstWhere((r) => r.category == EquipmentCategory.capacitorBank);
+    expect(cb.duty, contains('50'));
   });
 }

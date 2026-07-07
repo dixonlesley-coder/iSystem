@@ -37,20 +37,44 @@ class HeatmapLayer extends ConsumerWidget {
     final transform = ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
         const ViewportTransform();
 
-    final nodes = <FieldNode>[
+    // Legend endpoints stay the raw node residual range (byte-identical), a
+    // cheap O(nodes) pass. The expensive IDW sampling is cached in the provider.
+    final values = <double>[
       for (final n in net.nodes)
         if (n.sheetId == sheetId && n.floorIndex == floorIndex)
-          if (residual[n.id] != null)
-            FieldNode(n.x, n.y, residual[n.id]!.inKiloPascals),
+          if (residual[n.id] != null) residual[n.id]!.inKiloPascals,
     ];
-    if (nodes.isEmpty) return const SizedBox.shrink();
+    if (values.isEmpty) return const SizedBox.shrink();
 
-    var minKpa = nodes.first.value;
-    var maxKpa = nodes.first.value;
-    for (final n in nodes) {
-      if (n.value < minKpa) minKpa = n.value;
-      if (n.value > maxKpa) maxKpa = n.value;
+    var minKpa = values.first;
+    var maxKpa = values.first;
+    for (final v in values) {
+      if (v < minKpa) minKpa = v;
+      if (v > maxKpa) maxKpa = v;
     }
+    // I2: the absolute PASS anchor — the SNI target residual the solve holds —
+    // so the colours (and the legend tick) read against the requirement, not
+    // just this view's own min/max.
+    final targetKpa = ref.watch(targetResidualProvider).inKiloPascals;
+
+    // K3: the sampled field is memoized on the solve + sheet + sample grid, so a
+    // pure pan/zoom (only [transform] changes) reuses this cached object and the
+    // painter just redraws its cells — no per-frame re-sampling.
+    final field = ref.watch(heatmapFieldProvider((
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      width: contentSize.width,
+      height: contentSize.height,
+    )));
+    if (field == null) return const SizedBox.shrink();
+
+    // E4: a (near-)uniform residual field used to wash the whole sheet in the
+    // mid-ramp amber (a pale tan at the overlay alpha), reading as a stained
+    // page rather than a deliberate overlay. When there's essentially one value
+    // everywhere, paint a subtle NEUTRAL tint instead — the legend carries the
+    // honest PASS/LOW verdict, so nothing is hidden.
+    final uniform = (maxKpa - minKpa).abs() < 1.0;
+    final uniformColor = uniform ? _uniformTint(context.colors) : null;
 
     return IgnorePointer(
       child: Stack(
@@ -58,9 +82,9 @@ class HeatmapLayer extends ConsumerWidget {
           Positioned.fill(
             child: CustomPaint(
               painter: _HeatmapPainter(
-                nodes: nodes,
+                field: field,
                 transform: transform,
-                contentSize: contentSize,
+                uniformColor: uniformColor,
               ),
             ),
           ),
@@ -69,13 +93,20 @@ class HeatmapLayer extends ConsumerWidget {
           Positioned(
             right: MechXSpacing.md,
             bottom: MechXSpacing.md,
-            child: HeatmapLegend(minKpa: minKpa, maxKpa: maxKpa),
+            child: HeatmapLegend(
+                minKpa: minKpa, maxKpa: maxKpa, targetKpa: targetKpa),
           ),
         ],
       ),
     );
   }
 }
+
+/// E4: the calm neutral overlay tint for a (near-)uniform residual field — a
+/// muted blue-slate blended from the theme's accent + muted-text so it reads as
+/// a deliberate flat data layer in both light and dark, painted at a low alpha.
+Color _uniformTint(MechXColors colors) =>
+    Color.lerp(colors.accent, colors.textMuted, 0.55)!.withAlpha(46);
 
 /// A small, self-explaining legend so the heatmap colours are readable: a
 /// red→amber→teal ramp from the lowest to the highest residual pressure.
@@ -87,8 +118,17 @@ class HeatmapLegend extends StatelessWidget {
   final double minKpa;
   final double maxKpa;
 
+  /// I2: the absolute pass threshold — the SNI target residual the solve holds
+  /// at the critical fixture. Marked on the gradient (a threshold tick) so the
+  /// colours read against the code requirement, and used for the uniform
+  /// state's PASS/LOW verdict.
+  final double targetKpa;
+
   const HeatmapLegend(
-      {super.key, required this.minKpa, required this.maxKpa});
+      {super.key,
+      required this.minKpa,
+      required this.maxKpa,
+      required this.targetKpa});
 
   @override
   Widget build(BuildContext context) {
@@ -97,6 +137,15 @@ class HeatmapLegend extends StatelessWidget {
     final uniform = (maxKpa - minKpa).abs() < 1.0;
 
     String bar(double kpa) => '${kpa.toStringAsFixed(0)} kPa';
+
+    // A residual passes when it meets the target the solve holds (a small
+    // tolerance so a value pinned exactly at the target reads PASS).
+    final pass = minKpa >= targetKpa - 0.5;
+    // Fractional position of the threshold along the min→max ramp; clamped so
+    // an all-pass (target below min) tick pins left, an all-fail pins right.
+    final span = maxKpa - minKpa;
+    final targetFrac =
+        span.abs() < 1e-9 ? 0.0 : ((targetKpa - minKpa) / span).clamp(0.0, 1.0);
 
     return Container(
       padding: const EdgeInsets.symmetric(
@@ -116,27 +165,61 @@ class HeatmapLegend extends StatelessWidget {
             Text('Residual pressure',
                 style: type.caption.copyWith(color: colors.textSecondary)),
             const SizedBox(height: MechXSpacing.xs),
-            // The ramp bar stretches to the widest line (title / label row).
-            Container(
+            // The ramp bar stretches to the widest line (title / label row). A
+            // thin ink tick marks the absolute target residual on the gradient
+            // (I2) so the colours read against the requirement — omitted only in
+            // the uniform state (no meaningful position; the verdict line below
+            // carries the anchor instead).
+            SizedBox(
               height: 8,
-              decoration: const BoxDecoration(
-                borderRadius: BorderRadius.all(Radius.circular(4)),
-                gradient: LinearGradient(
-                  colors: [_kRampLow, _kRampMid, _kRampHigh],
-                ),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        borderRadius: BorderRadius.all(Radius.circular(4)),
+                        gradient: LinearGradient(
+                          colors: [_kRampLow, _kRampMid, _kRampHigh],
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (!uniform)
+                    Positioned.fill(
+                      child: Align(
+                        alignment: Alignment(2 * targetFrac - 1, 0),
+                        child: Container(
+                          width: 2,
+                          color: colors.textPrimary,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
             const SizedBox(height: MechXSpacing.xxs),
             // Show the numeric kPa endpoints — whole, never truncated. When the
             // field is (near-)uniform both ends read the same value, so a single
             // "Uniform NN kPa" line reads honestly instead of the identical
-            // "Low 31 / High 31" pair (which looked like a bug).
+            // "Low 31 / High 31" pair (which looked like a bug); it carries the
+            // PASS/LOW verdict against the target (E4).
             if (uniform)
-              Text('Uniform ${bar(minKpa)}',
-                  maxLines: 1,
-                  softWrap: false,
-                  style: type.mono.copyWith(color: colors.textMuted))
-            else
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('Uniform ${bar(minKpa)}',
+                      maxLines: 1,
+                      softWrap: false,
+                      style: type.mono.copyWith(color: colors.textMuted)),
+                  const SizedBox(width: MechXSpacing.xs),
+                  Text(pass ? 'PASS' : 'LOW',
+                      maxLines: 1,
+                      softWrap: false,
+                      style: type.mono.copyWith(
+                          color: pass ? colors.success : colors.danger)),
+                ],
+              )
+            else ...[
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -152,6 +235,13 @@ class HeatmapLegend extends StatelessWidget {
                       style: type.mono.copyWith(color: colors.textMuted)),
                 ],
               ),
+              const SizedBox(height: MechXSpacing.xxs),
+              // The tick's meaning, labelled (the absolute code anchor).
+              Text('Min ${bar(targetKpa)}',
+                  maxLines: 1,
+                  softWrap: false,
+                  style: type.mono.copyWith(color: colors.textSecondary)),
+            ],
           ],
         ),
       ),
@@ -160,32 +250,38 @@ class HeatmapLegend extends StatelessWidget {
 }
 
 class _HeatmapPainter extends CustomPainter {
-  final List<FieldNode> nodes;
+  /// The pre-sampled residual field (cached in [heatmapFieldProvider]). The
+  /// painter only maps its cells to screen — it never re-samples (K3).
+  final ScalarField field;
   final ViewportTransform transform;
-  final Size contentSize;
+
+  /// E4: when the field is (near-)uniform, every cell is filled with this flat
+  /// neutral tint (already carrying its alpha) instead of the mid-ramp amber
+  /// wash. Null ⇒ the normal per-cell red→amber→teal ramp.
+  final Color? uniformColor;
 
   _HeatmapPainter({
-    required this.nodes,
+    required this.field,
     required this.transform,
-    required this.contentSize,
+    this.uniformColor,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    // ~28 cells across the longer edge.
-    final resolution = (contentSize.longestSide / 28).clamp(1.0, 1e9);
-    final field = sampleField(
-      nodes: nodes,
-      bounds: FieldBounds(0, 0, contentSize.width, contentSize.height),
-      resolution: resolution,
-    );
     final min = field.min;
     final max = field.max;
+    final resolution = field.cellSize;
     final cell = resolution * transform.scale;
 
     for (var row = 0; row < field.rows; row++) {
       for (var col = 0; col < field.cols; col++) {
-        final t = normalize(field.valueAt(col, row), min, max);
+        final Color color;
+        if (uniformColor != null) {
+          color = uniformColor!;
+        } else {
+          final t = normalize(field.valueAt(col, row), min, max);
+          color = _ramp(t).withAlpha(105);
+        }
         final origin = transform.worldToScreen(
           Offset(field.centerX(col) - resolution / 2,
               field.centerY(row) - resolution / 2),
@@ -193,7 +289,7 @@ class _HeatmapPainter extends CustomPainter {
         canvas.drawRect(
           // +0.5 overlap to avoid seams between cells.
           Rect.fromLTWH(origin.dx, origin.dy, cell + 0.5, cell + 0.5),
-          Paint()..color = _ramp(t).withAlpha(105),
+          Paint()..color = color,
         );
       }
     }
@@ -207,7 +303,10 @@ class _HeatmapPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_HeatmapPainter old) =>
-      old.nodes != nodes ||
+      // A pure pan/zoom keeps the SAME cached field (identity) → repaint to
+      // redraw cells at the new offset/scale, but no re-sample. A new solve
+      // yields a new field object → repaint.
+      !identical(old.field, field) ||
       old.transform != transform ||
-      old.contentSize != contentSize;
+      old.uniformColor != uniformColor;
 }

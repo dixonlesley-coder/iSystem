@@ -19,6 +19,7 @@ import '../../store/calibration_store.dart';
 import '../../store/command_store.dart';
 import '../../store/electrical_store.dart';
 import '../shell/nav_rail.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_focus_ring.dart';
@@ -60,7 +61,7 @@ class WorkflowStepper extends ConsumerWidget {
     for (var i = 0; i < stages.length; i++) {
       final s = stages[i];
       children.add(_StageChip(
-        label: s.label,
+        label: s.label(context.strings),
         done: state.isDone(s),
         active: s == active,
         onTap: () => _goTo(ref, s),

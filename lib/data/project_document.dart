@@ -17,6 +17,7 @@ import 'package:mechx_engine/units.dart';
 
 import '../store/annotation_store.dart';
 import '../store/models/sheet.dart';
+import '../store/reference_line_store.dart';
 import '../ui/canvas/viewport.dart';
 
 /// Thrown by [ProjectDocument.decode]/[ProjectDocument.fromJson] when a file is
@@ -48,6 +49,68 @@ T? _enumOrNull<T extends Enum>(List<T> values, Object? name) {
     if (v.name == name) return v;
   }
   return null;
+}
+
+/// I4 — the AUDIT metadata attached to an ACKNOWLEDGED advisory: who accepted an
+/// unverified `secondarySource` standard (or other advisory), the app-stamped
+/// date, and an optional one-line justification. [key] is the `DesignIssue.key`
+/// the ack applies to (the stable, locale-independent discriminator).
+///
+/// Additive & tolerant: [author]/[note]/[date] may each be empty — an ack loaded
+/// from an OLDER `.mechx` (a bare key string under `acknowledgedIssueKeys`) is
+/// rehydrated with all three blank, so an existing sign-off record stays valid
+/// (the acknowledgement still relaxes its advisory; only the audit fields are
+/// absent until re-acknowledged). The date is stamped by the app at ack time —
+/// the engine never reads the clock.
+class IssueAck {
+  final String key;
+  final String author;
+  final String note;
+  final String date;
+
+  const IssueAck({
+    required this.key,
+    this.author = '',
+    this.note = '',
+    this.date = '',
+  });
+
+  /// Encoded compactly — only the non-empty audit fields are written, so a
+  /// metadata-less (legacy) ack round-trips as just its `key`.
+  Map<String, dynamic> toJson() => {
+        'key': key,
+        if (author.isNotEmpty) 'author': author,
+        if (note.isNotEmpty) 'note': note,
+        if (date.isNotEmpty) 'date': date,
+      };
+
+  /// Decode one entry. Accepts either a rich object (`{key, author, note,
+  /// date}`) or — for the pre-I4 shape — a bare key String (metadata blank).
+  static IssueAck? fromJson(Object? raw) {
+    if (raw is String) return IssueAck(key: raw);
+    if (raw is Map) {
+      final k = raw['key'];
+      if (k is! String || k.isEmpty) return null;
+      return IssueAck(
+        key: k,
+        author: raw['author'] is String ? raw['author'] as String : '',
+        note: raw['note'] is String ? raw['note'] as String : '',
+        date: raw['date'] is String ? raw['date'] as String : '',
+      );
+    }
+    return null;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is IssueAck &&
+      other.key == key &&
+      other.author == author &&
+      other.note == note &&
+      other.date == date;
+
+  @override
+  int get hashCode => Object.hash(key, author, note, date);
 }
 
 /// Persisted design inputs that are NOT part of the drawn network but still
@@ -163,14 +226,29 @@ class DesignSettings {
   /// that never saved a block is byte-identical to before.
   final List<SavedAssembly> savedAssemblies;
 
-  /// H1 — the design-issue keys the engineer has ACKNOWLEDGED (see
+  /// H1 + I4 — the advisories the engineer has ACKNOWLEDGED (see
   /// `design_issues_store.dart` `DesignIssue.key`): advisory/`secondarySource`
-  /// items accepted so they no longer block a PASS compliance verdict. Errors
-  /// and warnings are never acknowledgeable, so this can only ever relax an
-  /// advisory. Defaults empty — a project that has acknowledged nothing loads
+  /// items accepted so they no longer block a PASS compliance verdict, each now
+  /// carrying its AUDIT metadata ([IssueAck]: author, date, justification).
+  /// Errors and warnings are never acknowledgeable, so this can only ever relax
+  /// an advisory. Defaults empty — a project that has acknowledged nothing loads
   /// byte-identical to before, and compliance still can't PASS until something
-  /// is acknowledged.
-  final List<String> acknowledgedIssueKeys;
+  /// is acknowledged. Tolerant on load: a pre-I4 `.mechx` (a bare
+  /// `acknowledgedIssueKeys` string list) rehydrates each key with empty audit
+  /// fields.
+  final List<IssueAck> acknowledgedIssues;
+
+  /// N23 — editable per-equipment "Model / spec" free text, keyed by the
+  /// STABLE equipment tag the schedule already assigns (e.g. `"P-01"`,
+  /// `"AHU-03"`) → a datasheet model/spec string the engineer types once so
+  /// every exported equipment schedule (Markdown / CSV / PDF) carries it
+  /// instead of the engine's `'—'` placeholder (`report/equipment_schedule.dart`
+  /// `PumpScheduleItem.modelSpec` / `FanScheduleItem.modelSpec`). Keyed by tag
+  /// rather than row identity — the tag is the one handle that survives a
+  /// re-solve (duties change, the procured pump doesn't). Defaults to empty —
+  /// a project that has never entered a spec is byte-identical to before this
+  /// feature.
+  final Map<String, String> equipmentModelSpecs;
 
   const DesignSettings({
     this.occupancy = Occupancy.private,
@@ -203,7 +281,8 @@ class DesignSettings {
     this.approvedBy,
     this.revisions = const [],
     this.savedAssemblies = const [],
-    this.acknowledgedIssueKeys = const [],
+    this.acknowledgedIssues = const [],
+    this.equipmentModelSpecs = const {},
   });
 
   Map<String, dynamic> toJson() => {
@@ -254,10 +333,17 @@ class DesignSettings {
         // untouched project stays byte-identical).
         if (savedAssemblies.isNotEmpty)
           'savedAssemblies': [for (final a in savedAssemblies) a.toJson()],
-        // Acknowledged advisory keys (H1; additive — encoded only when non-empty
-        // so an untouched project stays byte-identical).
-        if (acknowledgedIssueKeys.isNotEmpty)
-          'acknowledgedIssueKeys': acknowledgedIssueKeys,
+        // Acknowledged advisories + their I4 audit metadata (H1; additive —
+        // encoded only when non-empty so an untouched project stays
+        // byte-identical). The new `acknowledgedIssues` list of {key, author,
+        // note, date} supersedes the pre-I4 bare-string `acknowledgedIssueKeys`
+        // (still READ on load for backward compatibility, see [fromJson]).
+        if (acknowledgedIssues.isNotEmpty)
+          'acknowledgedIssues': [for (final a in acknowledgedIssues) a.toJson()],
+        // Equipment-schedule model/spec overrides (N23; additive — encoded only
+        // when non-empty so an untouched project stays byte-identical).
+        if (equipmentModelSpecs.isNotEmpty)
+          'equipmentModelSpecs': equipmentModelSpecs,
       };
 
   /// Tolerant decode: every field falls back to its default on an
@@ -324,15 +410,27 @@ class DesignSettings {
             json['approvedBy'] is String ? json['approvedBy'] as String : null,
         revisions: _revisionsFromJson(json['revisions']),
         savedAssemblies: _savedAssembliesFromJson(json['savedAssemblies']),
-        acknowledgedIssueKeys:
-            _stringListFromJson(json['acknowledgedIssueKeys']),
+        acknowledgedIssues: _acknowledgedIssuesFromJson(json),
+        equipmentModelSpecs:
+            _equipmentModelSpecsFromJson(json['equipmentModelSpecs']),
       );
 
-  /// Tolerantly read a list of strings: a non-list (or absent) value yields an
-  /// empty list; non-string entries are dropped.
-  static List<String> _stringListFromJson(Object? raw) {
+  /// I4 — tolerantly read the acknowledged-advisory list. Prefers the rich
+  /// `acknowledgedIssues` (objects carrying audit metadata); falls back to the
+  /// pre-I4 `acknowledgedIssueKeys` (a bare string list) so an older `.mechx`
+  /// still loads its acknowledgements (with blank author/note/date). Each entry
+  /// that fails to decode ([IssueAck.fromJson] ⇒ null) is dropped rather than
+  /// failing the whole load.
+  static List<IssueAck> _acknowledgedIssuesFromJson(Map<dynamic, dynamic> json) {
+    final rich = json['acknowledgedIssues'];
+    final raw = rich is List ? rich : json['acknowledgedIssueKeys'];
     if (raw is! List) return const [];
-    return [for (final e in raw) if (e is String) e];
+    final out = <IssueAck>[];
+    for (final e in raw) {
+      final a = IssueAck.fromJson(e);
+      if (a != null) out.add(a);
+    }
+    return out;
   }
 
   /// Clamp the multi-zone diversity factor into (0,1]; absent/invalid ⇒ 0.9.
@@ -396,6 +494,18 @@ class DesignSettings {
     final out = <String, double>{};
     raw.forEach((k, v) {
       if (k is String && v is num && v > 0) out[k] = v.toDouble();
+    });
+    return out;
+  }
+
+  /// Tolerantly read the N23 equipment `tag → model/spec` map: a non-map (or
+  /// absent) value, a non-string key, a non-string value, or a blank value is
+  /// dropped (mirrors [_priceListFromJson]'s shape for a string-valued map).
+  static Map<String, String> _equipmentModelSpecsFromJson(Object? raw) {
+    if (raw is! Map) return const {};
+    final out = <String, String>{};
+    raw.forEach((k, v) {
+      if (k is String && v is String && v.trim().isNotEmpty) out[k] = v;
     });
     return out;
   }
@@ -550,6 +660,12 @@ class ProjectDocument {
   final String projectName;
   final List<Floor> floors;
   final Map<String, ScaleCalibration> calibrations;
+
+  /// J1 — sheet ids whose calibration is flagged STALE (a plan replace kept
+  /// the old scale, unverified against the revised drawing). Additive;
+  /// tolerant on load (absent ⇒ empty), no version bump.
+  final Set<String> staleCalibrations;
+
   final List<Sheet> sheets;
   final Network network;
 
@@ -575,6 +691,12 @@ class ProjectDocument {
   /// ACH → airflow). An annotation, not part of the network; empty by default.
   final List<RoomArea> rooms;
 
+  /// Traced reference lines on the calibrated sheets (B12) — a construction
+  /// line the snapping layer can use as a snap surface on a raster (PDF) sheet
+  /// with no importable vector geometry. An annotation, not part of the
+  /// network; empty by default.
+  final List<ReferenceLine> referenceLines;
+
   /// Optional electrical sub-model (panels + earthing system). Added in v2;
   /// null for a v1 file or a project with no electrical design yet.
   final ElectricalProject? electrical;
@@ -593,6 +715,7 @@ class ProjectDocument {
     required this.projectName,
     required this.floors,
     required this.calibrations,
+    this.staleCalibrations = const {},
     required this.sheets,
     required this.network,
     this.viewports = const {},
@@ -602,6 +725,7 @@ class ProjectDocument {
     this.measurements = const [],
     this.tanks = const [],
     this.rooms = const [],
+    this.referenceLines = const [],
     this.assets = const {},
   });
 
@@ -613,6 +737,7 @@ class ProjectDocument {
         projectName: projectName,
         floors: floors,
         calibrations: calibrations,
+        staleCalibrations: staleCalibrations,
         sheets: sheets,
         network: network,
         viewports: viewports,
@@ -622,6 +747,7 @@ class ProjectDocument {
         measurements: measurements,
         tanks: tanks,
         rooms: rooms,
+        referenceLines: referenceLines,
         assets: assets ?? this.assets,
       );
 
@@ -635,6 +761,10 @@ class ProjectDocument {
           'calibrations': {
             for (final e in calibrations.entries) e.key: e.value.metersPerPixel,
           },
+          // J1: only written when non-empty ⇒ a project with no stale flags
+          // stays byte-identical to before this field existed.
+          if (staleCalibrations.isNotEmpty)
+            'staleCalibrations': staleCalibrations.toList(),
         },
         'sheets': [
           for (final s in sheets)
@@ -664,6 +794,7 @@ class ProjectDocument {
         'measurements': [for (final m in measurements) m.toJson()],
         'tanks': [for (final t in tanks) t.toJson()],
         'rooms': [for (final r in rooms) r.toJson()],
+        'referenceLines': [for (final r in referenceLines) r.toJson()],
         if (electrical != null) 'electrical': electrical!.toJson(),
         // Embedded source plans (base64), only when present ⇒ path-only projects
         // stay byte-identical.
@@ -701,6 +832,11 @@ class ProjectDocument {
     final calibrations = <String, ScaleCalibration>{
       for (final e in (project['calibrations'] as Map).entries)
         e.key as String: ScaleCalibration((e.value as num).toDouble()),
+    };
+    // J1: tolerant — absent on an older file ⇒ no stale flags.
+    final staleCalibrations = <String>{
+      for (final id in (project['staleCalibrations'] as List? ?? const []))
+        id as String,
     };
     final sheets = [
       for (final s in json['sheets'] as List)
@@ -766,6 +902,11 @@ class ProjectDocument {
     final rooms = <RoomArea>[
       for (final r in (json['rooms'] as List? ?? const [])) ?RoomArea.fromJson(r),
     ];
+    // Traced reference lines (B12; additive, absent on an older file ⇒ empty).
+    final referenceLines = <ReferenceLine>[
+      for (final r in (json['referenceLines'] as List? ?? const []))
+        ?ReferenceLine.fromJson(r),
+    ];
     // Embedded source plans (additive; absent ⇒ empty ⇒ paths used as-is).
     final assets = <String, String>{
       for (final e in (json['assets'] as Map? ?? const {}).entries)
@@ -777,6 +918,7 @@ class ProjectDocument {
       projectName: project['name'] as String? ?? 'Untitled project',
       floors: floors,
       calibrations: calibrations,
+      staleCalibrations: staleCalibrations,
       sheets: sheets,
       network: Network(nodes: nodes, edges: edges),
       viewports: viewports,
@@ -786,6 +928,7 @@ class ProjectDocument {
       measurements: measurements,
       tanks: tanks,
       rooms: rooms,
+      referenceLines: referenceLines,
       assets: assets,
     );
   }

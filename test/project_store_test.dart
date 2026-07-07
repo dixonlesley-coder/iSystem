@@ -71,6 +71,66 @@ void main() {
     expect(s.calibrationFor('s2'), isNull);
   });
 
+  // ── J1: stale-calibration flag (plan replaced — re-verify scale) ───────────
+
+  test('markCalibrationStale is a no-op when the sheet has no calibration', () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    n.markCalibrationStale('s1');
+    expect(c.read(projectControllerProvider).isCalibrationStale('s1'), isFalse);
+  });
+
+  test('markCalibrationStale flags a CALIBRATED sheet stale', () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    n.setCalibration('s1', const ScaleCalibration(0.02));
+    n.markCalibrationStale('s1');
+    final s = c.read(projectControllerProvider);
+    expect(s.isCalibrationStale('s1'), isTrue);
+    // The calibration value itself is untouched — only flagged.
+    expect(s.calibrationFor('s1')?.metersPerPixel, 0.02);
+  });
+
+  test('re-calibrating (setCalibration) clears the stale flag', () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    n.setCalibration('s1', const ScaleCalibration(0.02));
+    n.markCalibrationStale('s1');
+    expect(c.read(projectControllerProvider).isCalibrationStale('s1'), isTrue);
+
+    n.setCalibration('s1', const ScaleCalibration(0.03));
+    final s = c.read(projectControllerProvider);
+    expect(s.isCalibrationStale('s1'), isFalse);
+    expect(s.calibrationFor('s1')?.metersPerPixel, 0.03);
+  });
+
+  test('confirmCalibration clears the stale flag WITHOUT touching the scale',
+      () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    n.setCalibration('s1', const ScaleCalibration(0.02));
+    n.markCalibrationStale('s1');
+
+    n.confirmCalibration('s1');
+    final s = c.read(projectControllerProvider);
+    expect(s.isCalibrationStale('s1'), isFalse);
+    expect(s.calibrationFor('s1')?.metersPerPixel, 0.02); // unchanged
+  });
+
+  test('applyCalibrationToAllSheets also clears stale flags on sheets it changes',
+      () {
+    final c = makeContainer();
+    final n = c.read(projectControllerProvider.notifier);
+    n.setCalibration('s1', const ScaleCalibration(0.02));
+    n.setCalibration('s2', const ScaleCalibration(0.05));
+    n.markCalibrationStale('s2');
+
+    n.applyCalibrationToAllSheets('s1', toSheetIds: {'s2'});
+    final s = c.read(projectControllerProvider);
+    expect(s.calibrationFor('s2')?.metersPerPixel, 0.02);
+    expect(s.isCalibrationStale('s2'), isFalse);
+  });
+
   test('floor + calibration edits are undoable / redoable', () {
     final c = makeContainer();
     final n = c.read(projectControllerProvider.notifier);

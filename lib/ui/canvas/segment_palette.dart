@@ -34,6 +34,44 @@ class PaletteItem {
   final NodeComponent? component;
 
   const PaletteItem(this.kind, {this.service, this.component});
+
+  // VALUE equality (F5): the armed-placement provider compares the currently
+  // armed item against each card's item to draw the armed tint; a non-const
+  // component card rebuilds a fresh instance each frame, so identity equality
+  // would never match.
+  @override
+  bool operator ==(Object other) =>
+      other is PaletteItem &&
+      other.kind == kind &&
+      other.service == service &&
+      other.component == component;
+
+  @override
+  int get hashCode => Object.hash(kind, service, component);
+}
+
+/// F5 — the palette card ARMED for click-to-place-repeatedly. Non-null means
+/// each canvas click drops another instance of this item (through the SAME
+/// merge/snap add-actions a drag uses, in `drop_overlay.dart`); null is normal
+/// single-drag placement. Esc / a canvas right-click / re-clicking the armed
+/// card / picking another card disarms. Transient UI state — never persisted.
+///
+/// (Kept in the UI layer beside [PaletteItem], its payload type, rather than in
+/// the pure `network_store`: routing a UI type through the engine-typed store
+/// would invert the store↔UI layering.)
+final armedPlacementProvider =
+    NotifierProvider<ArmedPlacementController, PaletteItem?>(
+  ArmedPlacementController.new,
+);
+
+class ArmedPlacementController extends Notifier<PaletteItem?> {
+  @override
+  PaletteItem? build() => null;
+
+  /// Toggle: arming the already-armed item disarms it; a different item re-arms.
+  void toggle(PaletteItem item) => state = (state == item) ? null : item;
+
+  void disarm() => state = null;
 }
 
 /// The mechanical node palette — a full, grouped, draggable node palette built
@@ -48,6 +86,11 @@ class SegmentPalette extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
+
+    // F5 — the card ARMED for click-to-place-repeatedly (null = none). A card is
+    // armed by a plain CLICK (a drag still drags, unchanged); the armed card
+    // shows an accent ring, and each canvas click drops another instance.
+    final armedItem = ref.watch(armedPlacementProvider);
 
     // Scope the equipment groups to the active discipline on the Layout canvas.
     // On the Schematic view (no layer concept) everything is offered.
@@ -94,19 +137,50 @@ class SegmentPalette extends ConsumerWidget {
       }
     }
 
-    Widget componentCard(NodeComponent c) => Padding(
-          padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
-          child: PaletteCard<PaletteItem>(
+    // F5 — wrap a palette card so a plain CLICK arms/disarms it for
+    // click-to-place-repeatedly (a drag is untouched — tap and drag are
+    // distinct gesture recognizers). The armed card gains an accent ring.
+    Widget armable(PaletteItem item, Widget card) => GestureDetector(
+          onTap: () {
+            ref.read(armedPlacementProvider.notifier).toggle(item);
+            // Placement is a Select-mode canvas gesture — make sure a draw tool
+            // isn't holding the clicks when we arm.
+            if (ref.read(armedPlacementProvider) != null) {
+              ref
+                  .read(networkControllerProvider.notifier)
+                  .setTool(DrawTool.select);
+            }
+          },
+          child: armedItem == item
+              ? DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: MechXRadii.control,
+                    border: Border.all(color: colors.accent, width: 1.5),
+                    color: colors.accentMuted,
+                  ),
+                  child: card,
+                )
+              : card,
+        );
+
+    Widget componentCard(NodeComponent c) {
+      final item = PaletteItem(PaletteItemKind.component, component: c);
+      return Padding(
+        padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+        child: armable(
+          item,
+          PaletteCard<PaletteItem>(
             label: c.label,
             swatch: colors.textSecondary,
-            data: PaletteItem(PaletteItemKind.component, component: c),
+            data: item,
             fillWidth: true,
-            onActivate: () =>
-                dropAtCentre(PaletteItem(PaletteItemKind.component, component: c)),
-            leading:
-                ComponentSymbol(component: c, color: colors.textSecondary, size: 16),
+            onActivate: () => dropAtCentre(item),
+            leading: ComponentSymbol(
+                component: c, color: colors.textSecondary, size: 16),
           ),
-        );
+        ),
+      );
+    }
 
     // Accessory groups (valves, meters, dampers) collapse by default so the
     // palette reads as a short list of primary equipment instead of a long
@@ -131,19 +205,23 @@ class SegmentPalette extends ConsumerWidget {
         // ── Start here: the riser (the mainline's origin) ──────────────────
         const MechXSectionLabel('Mainline start'),
         const SizedBox(height: MechXSpacing.xs),
-        PaletteCard<PaletteItem>(
-          label: 'Riser node',
-          swatch: context.colors.accent,
-          data: const PaletteItem(PaletteItemKind.component,
+        armable(
+          const PaletteItem(PaletteItemKind.component,
               component: NodeComponent.riser),
-          fillWidth: true,
-          onActivate: () => dropAtCentre(const PaletteItem(
-              PaletteItemKind.component,
-              component: NodeComponent.riser)),
-          leading: ComponentSymbol(
-              component: NodeComponent.riser,
-              color: context.colors.accent,
-              size: 16),
+          PaletteCard<PaletteItem>(
+            label: 'Riser node',
+            swatch: context.colors.accent,
+            data: const PaletteItem(PaletteItemKind.component,
+                component: NodeComponent.riser),
+            fillWidth: true,
+            onActivate: () => dropAtCentre(const PaletteItem(
+                PaletteItemKind.component,
+                component: NodeComponent.riser)),
+            leading: ComponentSymbol(
+                component: NodeComponent.riser,
+                color: context.colors.accent,
+                size: 16),
+          ),
         ),
 
         // ── Nodes (generic endpoints) ──────────────────────────────────────
@@ -152,28 +230,36 @@ class SegmentPalette extends ConsumerWidget {
         const SizedBox(height: MechXSpacing.xs),
         Padding(
           padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
-          child: PaletteCard<PaletteItem>(
-            label: 'Fitting',
-            swatch: colors.textSecondary,
-            data: const PaletteItem(PaletteItemKind.fitting),
-            fillWidth: true,
-            onActivate: () =>
-                dropAtCentre(const PaletteItem(PaletteItemKind.fitting)),
-            leading: SegmentSymbol(
-                kind: PaletteItemKind.fitting, color: colors.textSecondary,
-                size: 16),
+          child: armable(
+            const PaletteItem(PaletteItemKind.fitting),
+            PaletteCard<PaletteItem>(
+              label: 'Fitting',
+              swatch: colors.textSecondary,
+              data: const PaletteItem(PaletteItemKind.fitting),
+              fillWidth: true,
+              onActivate: () =>
+                  dropAtCentre(const PaletteItem(PaletteItemKind.fitting)),
+              leading: SegmentSymbol(
+                  kind: PaletteItemKind.fitting,
+                  color: colors.textSecondary,
+                  size: 16),
+            ),
           ),
         ),
-        PaletteCard<PaletteItem>(
-          label: 'Terminal',
-          swatch: colors.textSecondary,
-          data: const PaletteItem(PaletteItemKind.terminal),
-          fillWidth: true,
-          onActivate: () =>
-              dropAtCentre(const PaletteItem(PaletteItemKind.terminal)),
-          leading: SegmentSymbol(
-              kind: PaletteItemKind.terminal, color: colors.textSecondary,
-              size: 16),
+        armable(
+          const PaletteItem(PaletteItemKind.terminal),
+          PaletteCard<PaletteItem>(
+            label: 'Terminal',
+            swatch: colors.textSecondary,
+            data: const PaletteItem(PaletteItemKind.terminal),
+            fillWidth: true,
+            onActivate: () =>
+                dropAtCentre(const PaletteItem(PaletteItemKind.terminal)),
+            leading: SegmentSymbol(
+                kind: PaletteItemKind.terminal,
+                color: colors.textSecondary,
+                size: 16),
+          ),
         ),
 
         // ── Water-supply equipment (Water layer) ───────────────────────────

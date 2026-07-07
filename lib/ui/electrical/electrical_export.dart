@@ -21,14 +21,17 @@ import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
 import 'package:mechx_engine/report/electrical_pdf_export.dart';
+import 'package:mechx_engine/report/electrical_plan_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/standards/puil.dart';
 
+import '../../data/plan_underlay.dart';
 import '../../store/app_state.dart';
 import '../../store/document_control_store.dart';
 import '../../store/electrical_store.dart';
 import '../inspector/project_panel.dart' show reportStringsFor, runExportGuarded;
 import '../../store/project_store.dart';
+import '../../store/sheets_store.dart';
 import '../strings/app_strings.dart';
 
 /// The status-pill message when a power one-line export is requested but the
@@ -43,13 +46,21 @@ const String kNoEnergySourcesMessage =
 /// title-block rows are omitted) plus today's date — the app formats the clock,
 /// the engine never reads it. Sheet counters default 1 of 1 (the single-sheet
 /// drawings); the paginated schedule export re-stamps them per page.
+///
+/// N19: the drawing NUMBER is DERIVED per drawing type — the per-panel/board
+/// detail single-line `E-201`, the building overview `E-301`, the floor-by-floor
+/// riser `E-401`, the power one-line `E-501` — via [series], so three different
+/// electrical drawings never all read `E-201`. The manual `documentNumber`
+/// remains the verbatim override.
 DrawingChrome electricalExportChrome(WidgetRef ref,
-    {int sheetIndex = 1, int sheetTotal = 1}) {
+    {int sheetIndex = 1,
+    int sheetTotal = 1,
+    DrawingSeries series = DrawingSeries.electricalDetail}) {
   final doc = ref.read(documentControlProvider);
   return DrawingChrome(
     sheetIndex: sheetIndex,
     sheetTotal: sheetTotal,
-    drawingNumber: doc.documentNumber,
+    drawingNumber: sheetDrawingNumber(base: doc.documentNumber, series: series),
     revisionNumber: doc.revisionTag,
     clientName: doc.clientName,
     drawnBy: doc.preparedBy,
@@ -65,7 +76,12 @@ DrawingChrome electricalExportChrome(WidgetRef ref,
 /// breaking-capacity rating at that board (its sibling `prospectiveFaultkA` is
 /// the raw fault MAGNITUDE the device must cover — never shown as a rating).
 /// Only positive finite ratings are forwarded, so a panel the study could not
-/// resolve simply carries no kA on the sheet — nothing is fabricated.
+/// resolve simply carries no kA in THIS map — but the engine
+/// (`buildElectricalSld`) then backstops an unmapped panel with the busbar-
+/// withstand prospective fault it already carries (the store always sizes with
+/// a 16 kA / 0.1 s default), so every device still prints a kA (N9). This map
+/// stays the PREFERRED source (the chosen device Icu rating) when the study
+/// resolves it; nothing is fabricated in either path.
 Map<String, double> breakerIcuKaByPanel(WidgetRef ref) {
   final fault = ref.read(electricalAdvancedProvider).fault;
   return {
@@ -152,7 +168,8 @@ Future<void> exportElectricalOverviewPdf(WidgetRef ref) => runExportGuarded(
           overview: true,
           sourceChain: true,
           title: 'iSystem electrical single-line (overview)',
-          chrome: electricalExportChrome(ref),
+          chrome: electricalExportChrome(ref,
+              series: DrawingSeries.electricalOverview),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final path = await FilePicker.saveFile(
@@ -182,7 +199,8 @@ Future<void> exportElectricalOverviewDxf(WidgetRef ref) => runExportGuarded(
             result: result,
             overview: true,
             sourceChain: true,
-            chrome: electricalExportChrome(ref));
+            chrome: electricalExportChrome(ref,
+                series: DrawingSeries.electricalOverview));
         return _save(dxf,
             name: project.name,
             suffix: 'overview-sld',
@@ -209,7 +227,8 @@ Future<void> exportElectricalRiserPdf(WidgetRef ref) => runExportGuarded(
         final bytes = electricalSldToPdf(
           sheet: sheet,
           title: 'iSystem electrical building riser',
-          chrome: electricalExportChrome(ref),
+          chrome:
+              electricalExportChrome(ref, series: DrawingSeries.electricalRiser),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final path = await FilePicker.saveFile(
@@ -237,7 +256,9 @@ Future<void> exportElectricalRiserDxf(WidgetRef ref) => runExportGuarded(
         final sheet = buildElectricalRiser(
             project: project, result: result, building: building);
         final dxf = electricalSldToDxf(
-            sheet: sheet, chrome: electricalExportChrome(ref));
+            sheet: sheet,
+            chrome: electricalExportChrome(ref,
+                series: DrawingSeries.electricalRiser));
         return _save(dxf,
             name: project.name,
             suffix: 'riser',
@@ -305,7 +326,8 @@ Future<void> exportPowerOneLineDxf(WidgetRef ref) => runExportGuarded(
         final dxf = electricalSldToDxf(
           sheet: buildPowerOneLineSheet(oneLine),
           diagramTitle: 'POWER ONE-LINE DIAGRAM',
-          chrome: electricalExportChrome(ref),
+          chrome: electricalExportChrome(ref,
+              series: DrawingSeries.electricalPowerOneLine),
         );
         return _save(dxf,
             name: project.name,
@@ -336,7 +358,8 @@ Future<void> exportPowerOneLinePdf(WidgetRef ref) => runExportGuarded(
           sheet: buildPowerOneLineSheet(oneLine),
           title: 'iSystem power one-line',
           diagramTitle: 'POWER ONE-LINE DIAGRAM',
-          chrome: electricalExportChrome(ref),
+          chrome: electricalExportChrome(ref,
+              series: DrawingSeries.electricalPowerOneLine),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final path = await FilePicker.saveFile(
@@ -350,6 +373,93 @@ Future<void> exportPowerOneLinePdf(WidgetRef ref) => runExportGuarded(
         final full = path.endsWith('.pdf') ? path : '$path.pdf';
         await File(full).writeAsBytes(bytes);
         return true;
+      },
+    );
+
+/// H1 — export the PLAN-ACCURATE electrical layout (denah instalasi listrik) for
+/// the CURRENT sheet/floor as a vector PDF: panels + loads drawn at their real
+/// placed sheet-pixel positions over the floor-plan underlay, feeder/drop routes
+/// with §10 cable lengths, and a corner "Unplaced" note for anything not placed
+/// on this sheet. The electrical analogue of the mechanical `exportDrawingPdf`.
+Future<void> exportElectricalPlanPdf(WidgetRef ref) => runExportGuarded(
+      ref,
+      name: 'electrical layout plan',
+      write: () async {
+        final sheets = ref.read(sheetsControllerProvider);
+        final sheet = sheets.current;
+        if (sheet == null) return false;
+        final project = ref.read(electricalProjectProvider);
+        final result = ref.read(electricalResultProvider);
+        final mech = ref.read(projectControllerProvider);
+        final floorIndex = sheets.floorFor(sheet.id, mech.building.levelCount);
+        final data = buildElectricalPlanData(
+          project: project,
+          result: result,
+          sheetId: sheet.id,
+          floorIndex: floorIndex,
+          calibrations: mech.calibrations,
+          building: mech.building,
+        );
+        final bytes = electricalPlanToPdf(
+          data: data,
+          projectName: project.name.isEmpty ? 'electrical' : project.name,
+          sheetName: sheet.name,
+          dateString: DateTime.now().toIso8601String().split('T').first,
+          chrome:
+              electricalExportChrome(ref, series: DrawingSeries.electricalLayout),
+          metersPerPixel: mech.calibrationFor(sheet.id)?.metersPerPixel,
+          underlay: await buildPlanUnderlay(sheet),
+        );
+        final base = project.name.isEmpty ? 'electrical' : project.name;
+        final path = await FilePicker.saveFile(
+          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleElectricalPlanPdf),
+          fileName: '$base-${sheet.name}-layout.pdf',
+          type: FileType.custom,
+          allowedExtensions: const ['pdf'],
+        );
+        if (path == null) return false;
+        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+        await File(full).writeAsBytes(bytes);
+        return true;
+      },
+    );
+
+/// H1 — export the plan-accurate electrical layout for the current sheet/floor
+/// as a DXF drawing (E-* class layers). The DXF is vector-only; the floor-plan
+/// underlay rides the PDF variant (matching the mechanical exporters).
+Future<void> exportElectricalPlanDxf(WidgetRef ref) => runExportGuarded(
+      ref,
+      name: 'electrical layout plan',
+      write: () async {
+        final sheets = ref.read(sheetsControllerProvider);
+        final sheet = sheets.current;
+        if (sheet == null) return false;
+        final project = ref.read(electricalProjectProvider);
+        final result = ref.read(electricalResultProvider);
+        final mech = ref.read(projectControllerProvider);
+        final floorIndex = sheets.floorFor(sheet.id, mech.building.levelCount);
+        final data = buildElectricalPlanData(
+          project: project,
+          result: result,
+          sheetId: sheet.id,
+          floorIndex: floorIndex,
+          calibrations: mech.calibrations,
+          building: mech.building,
+        );
+        final dxf = electricalPlanToDxf(
+          data: data,
+          projectName: project.name.isEmpty ? 'electrical' : project.name,
+          sheetName: sheet.name,
+          chrome:
+              electricalExportChrome(ref, series: DrawingSeries.electricalLayout),
+        );
+        return _save(dxf,
+            name: project.name,
+            suffix: '${sheet.name}-layout',
+            ext: 'dxf',
+            title: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleElectricalPlanDxf));
       },
     );
 

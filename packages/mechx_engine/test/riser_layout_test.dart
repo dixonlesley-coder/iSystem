@@ -115,4 +115,15 @@ void main() {
       expect(cwOnly['cwB'], 1.0);
     });
   });
+
+  group('fflLabel (E6 — one shared elevation notation)', () {
+    test('formats the finished-floor-level datum with FFL + two decimals', () {
+      // The industry FFL notation the export gutter and the live canvas now
+      // share: the abbreviation, a leading '+', and exactly two decimals.
+      expect(fflLabel(0), 'FFL +0.00');
+      expect(fflLabel(4), 'FFL +4.00');
+      expect(fflLabel(7.5), 'FFL +7.50'); // one-decimal input still prints two
+      expect(fflLabel(12.345), 'FFL +12.35'); // rounds to two decimals
+    });
+  });
 }

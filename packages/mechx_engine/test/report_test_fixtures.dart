@@ -108,16 +108,22 @@ CalcReportData richMechData() {
     rainfallMmPerHr: 200,
     runoffCoefficient: 0.9,
     bom: const [
+      // N13: a run line carries the service-code floor tag; a riser line the
+      // per-service stack tag (the identifier shared with the plan + riser).
       BomLine(
           service: ServiceType.coldWater,
           kind: EdgeKind.run,
           diameterMm: 50,
+          material: 'PPR',
+          tag: 'CW-F1',
           totalLength: Length(12.5),
           segmentCount: 3),
       BomLine(
           service: ServiceType.duct,
           kind: EdgeKind.riser,
           diameterMm: 250,
+          material: 'PU',
+          tag: 'SA-R1',
           totalLength: Length(6.0),
           segmentCount: 2),
     ],

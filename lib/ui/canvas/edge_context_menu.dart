@@ -129,6 +129,55 @@ void showCanvasContextMenu(
   overlay.insert(entry);
 }
 
+/// The multi-selection TRANSFORM rows (rotate / mirror about the selection's
+/// bounding-box centre) plus a trailing divider — shown when 2+ elements are
+/// picked. Each runs the matching [NetworkController] intent over the WHOLE
+/// selection in ONE undo step (a transform leaves the node ids unchanged, so
+/// the selection stays alive), then closes the menu. Reachable identically from
+/// the edge + node menus, so a picked group — including a just-pasted or
+/// stamped-assembly set (both leave their new elements as the multi-selection) —
+/// can be turned or flipped in place. The selection is re-read at TAP time (not
+/// captured at build), so the row always acts on the live set.
+List<Widget> transformMenuRows(WidgetRef ref, VoidCallback close) {
+  final ctrl = ref.read(networkControllerProvider.notifier);
+  return [
+    const MechXMenuHeader('Transform'),
+    MechXMenuRow(
+      label: 'Rotate 90 CW',
+      onTap: () {
+        final sel = ref.read(selectionProvider);
+        ctrl.rotateSelection(sel.nodeIds, sel.edgeIds, clockwise: true);
+        close();
+      },
+    ),
+    MechXMenuRow(
+      label: 'Rotate 90 CCW',
+      onTap: () {
+        final sel = ref.read(selectionProvider);
+        ctrl.rotateSelection(sel.nodeIds, sel.edgeIds, clockwise: false);
+        close();
+      },
+    ),
+    MechXMenuRow(
+      label: 'Mirror horizontal',
+      onTap: () {
+        final sel = ref.read(selectionProvider);
+        ctrl.mirrorSelection(sel.nodeIds, sel.edgeIds, horizontal: true);
+        close();
+      },
+    ),
+    MechXMenuRow(
+      label: 'Mirror vertical',
+      onTap: () {
+        final sel = ref.read(selectionProvider);
+        ctrl.mirrorSelection(sel.nodeIds, sel.edgeIds, horizontal: false);
+        close();
+      },
+    ),
+    const MechXMenuDivider(),
+  ];
+}
+
 class _NodeMenuLayer extends ConsumerWidget {
   final Offset anchor;
   final String nodeId;
@@ -157,6 +206,13 @@ class _NodeMenuLayer extends ConsumerWidget {
     final ctrl = ref.read(networkControllerProvider.notifier);
     final sel = ref.read(selectionProvider.notifier);
 
+    // When this node is part of a MULTI-selection (kept alive by the
+    // selection-overlay's right-click, mirroring the edge menu's E1 rule), the
+    // menu batches: rotate/mirror the whole picked group + Delete N — and the
+    // single-node Fitting/Face pickers stand down (they'd edit just this one).
+    final selection = ref.watch(selectionProvider);
+    final isMulti = selection.isMulti;
+
     // A bare junction (no component, main role) gets the Fitting picker; an
     // air terminal (a diffuser/grille component, or any node carrying airflow)
     // gets the face-size ladder — the same picker the inspector offers.
@@ -169,7 +225,8 @@ class _NodeMenuLayer extends ConsumerWidget {
         node.component == NodeComponent.linearDiffuser;
 
     final children = <Widget>[
-      if (isBareJunction) ...[
+      if (isMulti) ...transformMenuRows(ref, onDismiss),
+      if (!isMulti && isBareJunction) ...[
         const MechXMenuHeader('Fitting'),
         for (final f in JunctionFitting.values)
           MechXMenuRow(
@@ -183,7 +240,7 @@ class _NodeMenuLayer extends ConsumerWidget {
           ),
         const MechXMenuDivider(),
       ],
-      if (isAirTerminal) ...[
+      if (!isMulti && isAirTerminal) ...[
         const MechXMenuHeader('Face size'),
         MechXMenuRow(
           label: 'Auto',
@@ -216,15 +273,27 @@ class _NodeMenuLayer extends ConsumerWidget {
         },
       ),
       const MechXMenuDivider(),
-      MechXMenuRow(
-        label: 'Delete node',
-        danger: true,
-        onTap: () {
-          ctrl.deleteNode(nodeId);
-          sel.clear();
-          onDismiss();
-        },
-      ),
+      if (isMulti)
+        MechXMenuRow(
+          label: 'Delete ${selection.nodeIds.length + selection.edgeIds.length} selected',
+          danger: true,
+          onTap: () {
+            final s = ref.read(selectionProvider);
+            ctrl.deleteMany(s.nodeIds, s.edgeIds);
+            sel.clear();
+            onDismiss();
+          },
+        )
+      else
+        MechXMenuRow(
+          label: 'Delete node',
+          danger: true,
+          onTap: () {
+            ctrl.deleteNode(nodeId);
+            sel.clear();
+            onDismiss();
+          },
+        ),
     ];
 
     return Stack(
@@ -606,6 +675,12 @@ class _EdgeMenuPanel extends ConsumerWidget {
           close();
         },
       ));
+    }
+    // F2: with a group picked (2+ elements, kept alive by E1's right-click),
+    // offer rotate/mirror about the selection's bounding-box centre — the same
+    // intents the just-pasted / stamped-assembly set can be turned/flipped with.
+    if (selection.isMulti) {
+      children.addAll(transformMenuRows(ref, close));
     }
     children.add(MechXMenuRow(
       label: 'Select similar',

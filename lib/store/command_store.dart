@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../ui/strings/app_strings.dart';
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sheets_store.dart';
@@ -70,13 +71,16 @@ class RecentCommandsController extends Notifier<List<String>> {
 enum WorkflowStage { calibrate, floors, draw, size, report }
 
 extension WorkflowStageInfo on WorkflowStage {
-  /// Short label drawn in the stepper.
-  String get label => switch (this) {
-        WorkflowStage.calibrate => 'Calibrate',
-        WorkflowStage.floors => 'Floors',
-        WorkflowStage.draw => 'Draw',
-        WorkflowStage.size => 'Size',
-        WorkflowStage.report => 'Report',
+  /// Short label drawn in the stepper, localized via [strings]. A3: the
+  /// "floors" stage is labelled "Building" (matching StringKey.navBuilding /
+  /// ShellSection.building — the ONE term used everywhere floor/height editing
+  /// is reached) rather than "Floors", which never appears in the nav rail.
+  String label(MechXStringsData strings) => switch (this) {
+        WorkflowStage.calibrate => strings(StringKey.workflowStageCalibrate),
+        WorkflowStage.floors => strings(StringKey.workflowStageBuilding),
+        WorkflowStage.draw => strings(StringKey.workflowStageDraw),
+        WorkflowStage.size => strings(StringKey.workflowStageSize),
+        WorkflowStage.report => strings(StringKey.workflowStageReport),
       };
 }
 
@@ -170,14 +174,16 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   // `floors.length > 1` marked Floors DONE before the user touched anything —
   // the map lied on first contact (A2). "Floors" is honest only once the
   // engineer has genuinely engaged with the levels: opened the Building screen
-  // this session ([buildingVisitedProvider]), changed the stack away from the
-  // seed (a template, or an added / renamed / re-heighted floor), OR moved past
-  // floors in the workflow by drawing a network (you cannot meaningfully draw
-  // without accepting the building) — the [hasNetwork] clause keeps the
-  // "active" pointer from wedging backward on Floors for a legitimate
-  // default-floor project that finished everything but never opened Building.
+  // this session ([buildingVisitedProvider]) or changed the stack away from the
+  // seed (a template, or an added / renamed / re-heighted floor). Drawing a
+  // network is deliberately EXCLUDED (A4): §10 makes the floor stack the sole
+  // source of truth for every riser's vertical length, so a network existing
+  // must never tick Floors done on its own — that let an engineer draw first
+  // and get a green Floors checkmark while running on the untouched default
+  // heights, unreviewed. Dropping the clause instead sends the "active"
+  // pointer back to Floors (a distinct highlighted state, not the done tick)
+  // until Building is actually opened, even once drawing has moved ahead.
   final floorsSet = ref.watch(buildingVisitedProvider) ||
-      hasNetwork ||
       !listEquals(project.floors, _kDefaultFloorStack);
 
   return WorkflowState({

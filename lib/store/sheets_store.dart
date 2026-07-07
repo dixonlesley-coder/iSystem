@@ -34,6 +34,14 @@ class SheetsState {
   Sheet? get current =>
       sheets.isEmpty ? null : sheets[currentIndex.clamp(0, sheets.length - 1)];
 
+  /// The sheet with [sheetId], or null when it isn't loaded.
+  Sheet? sheetById(String sheetId) {
+    for (final s in sheets) {
+      if (s.id == sheetId) return s;
+    }
+    return null;
+  }
+
   /// Stored viewport for [sheetId], or `null` if it hasn't been framed yet
   /// (the canvas will fit-to-view on first show).
   ViewportTransform? viewportFor(String sheetId) => viewports[sheetId];
@@ -156,6 +164,69 @@ class SheetsController extends Notifier<SheetsState> {
   void addSheet(Sheet sheet) =>
       state = state.copyWith(sheets: [...state.sheets, sheet]);
 
+  /// F6: reuse an ALREADY-imported plan on another building floor — create a new
+  /// rail entry that SHARES [sheetId]'s source (pdf/dxf/dwg path + page + natural
+  /// size) and a COPY of its calibration, mapped to [floorIndex], with NO
+  /// re-import and NO re-calibration (the repetitive-tower "typical floor"
+  /// workflow). The new sheet gets a fresh unique id and its own name, so it is
+  /// an ordinary independent sheet: the shared-source relationship is plain
+  /// DUPLICATION, not a live link — a later recalibration or plan-replace on
+  /// either sheet leaves the other untouched. It is selected on creation.
+  ///
+  /// Additive / NOT undoable, like [addSheet] / [addSheets] (the new sheet
+  /// references no drawn node yet). The copied calibration is stamped via
+  /// [ProjectController.setCalibration] (an undoable project edit — so a single
+  /// Ctrl+Z clears just the copied scale, leaving the new sheet uncalibrated;
+  /// the sheet itself, like every sheet-add here, is not undoable).
+  ///
+  /// Portability is unaffected: the `.mechx` embed dedupes by source path
+  /// (`gatherSheetAssets`), so two sheets sharing one plan store that plan ONCE.
+  /// Returns the new sheet id, or null when [sheetId] is unknown.
+  String? duplicateSheetToFloor(String sheetId, int floorIndex) {
+    final source = state.sheetById(sheetId);
+    if (source == null) return null;
+    // Fresh unique id — mirrors [addSheets]' collision-avoidance so a second
+    // duplicate onto the same floor never reuses the id.
+    final used = state.sheets.map((s) => s.id).toSet();
+    final base = '$sheetId-f${floorIndex + 1}';
+    var id = base;
+    var n = 2;
+    while (used.contains(id)) {
+      id = '$base-$n';
+      n++;
+    }
+    // Name after the target floor so the rail reads at a glance.
+    final floors = ref.read(projectControllerProvider).floors;
+    final floorName = (floorIndex >= 0 && floorIndex < floors.length)
+        ? floors[floorIndex].name
+        : 'Floor ${floorIndex + 1}';
+    final duplicate = Sheet(
+      id: id,
+      name: '${source.name} - $floorName',
+      pdfPath: source.pdfPath,
+      dxfPath: source.dxfPath,
+      dwgPath: source.dwgPath,
+      pageIndex: source.pageIndex,
+      sizePx: source.sizePx,
+    );
+    final sheets = [...state.sheets, duplicate];
+    final sheetFloors = Map<String, int>.from(state.sheetFloors)
+      ..[id] = floorIndex;
+    state = state.copyWith(
+      sheets: sheets,
+      currentIndex: sheets.length - 1,
+      sheetFloors: sheetFloors,
+    );
+    // Copy the source's calibration onto the new sheet — a COPY (ScaleCalibration
+    // is immutable, so a shared reference can never couple the two). A no-op when
+    // the source is uncalibrated (the new sheet then reads "not calibrated").
+    final cal = ref.read(projectControllerProvider).calibrationFor(sheetId);
+    if (cal != null) {
+      ref.read(projectControllerProvider.notifier).setCalibration(id, cal);
+    }
+    return id;
+  }
+
   /// Append every sheet in [incoming] to the current set in ONE action (A6
   /// multi-file add), remapping any id that would collide with a live sheet — or
   /// a sibling earlier in this same batch — to a fresh unique one (`<id>-1`,
@@ -207,6 +278,13 @@ class SheetsController extends Notifier<SheetsState> {
   /// [source], so a PDF→DXF swap clears the stale pdfPath. No-op when [sheetId]
   /// is gone or the source is already identical. Not undoable — a source swap,
   /// like [loadSheets].
+  ///
+  /// J1: the swapped-in plan can silently carry the OLD calibration (keyed by
+  /// sheet id) even though a revised drawing may have a different DPI/plot
+  /// scale/title block — so this flags the sheet's calibration STALE via
+  /// [ProjectController.markCalibrationStale] (a no-op when the sheet has no
+  /// calibration yet), surfaced as a Design Issue + a warning-state rail dot
+  /// until the engineer re-calibrates or explicitly confirms the old scale.
   void replaceSheetSource(String sheetId, Sheet source) {
     final idx = state.sheets.indexWhere((s) => s.id == sheetId);
     if (idx < 0) return;
@@ -224,6 +302,7 @@ class SheetsController extends Notifier<SheetsState> {
     final sheets = [...state.sheets];
     sheets[idx] = replaced;
     state = state.copyWith(sheets: sheets);
+    ref.read(projectControllerProvider.notifier).markCalibrationStale(sheetId);
   }
 
   /// Remove the sheet with [sheetId] from the project AND prune every drawn node

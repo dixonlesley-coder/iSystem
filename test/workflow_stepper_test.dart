@@ -36,7 +36,7 @@ void main() {
     expect(find.byType(WorkflowStepper), findsOneWidget);
     for (final label in const [
       'Calibrate',
-      'Floors',
+      'Building',
       'Draw',
       'Size',
       'Report',
@@ -50,7 +50,7 @@ void main() {
     }
   });
 
-  testWidgets('tapping the Floors stage navigates to the Building screen',
+  testWidgets('tapping the Building stage navigates to the Building screen',
       (tester) async {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
@@ -64,10 +64,11 @@ void main() {
     expect(container.read(shellSectionProvider), ShellSection.design);
 
     await tester.tap(find.descendant(
-        of: find.byType(WorkflowStepper), matching: find.text('Floors')));
+        of: find.byType(WorkflowStepper), matching: find.text('Building')));
     await tester.pump();
 
-    // Floors lives in the Building screen — the stepper jumped there.
+    // The "Building" stage (formerly "Floors") lives in the Building screen —
+    // the stepper jumped there (A3: one term everywhere).
     expect(container.read(shellSectionProvider), ShellSection.building);
   });
 

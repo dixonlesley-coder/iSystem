@@ -37,6 +37,15 @@ int Scale(int source, double scale_factor) {
   return static_cast<int>(source * scale_factor);
 }
 
+// M1: the smallest LOGICAL window size the app is designed to remain usable at.
+// Below this the fixed-px chrome (nav rail + sheet rail + right inspector) plus
+// a usable canvas overflow with no reflow, so the native window enforces a floor
+// via WM_GETMINMAXINFO — the OS itself can't shrink the frame smaller (e.g. a
+// Windows 11 Snap Layout that would otherwise clip the rails). Scaled to physical
+// pixels by the window's current monitor DPI at handle time.
+constexpr int kMinWindowLogicalWidth = 1024;
+constexpr int kMinWindowLogicalHeight = 700;
+
 // Dynamically loads the |EnableNonClientDpiScaling| from the User32 module.
 // This API is only needed for PerMonitor V1 awareness mode.
 void EnableFullDpiSupportIfAvailable(HWND hwnd) {
@@ -51,6 +60,110 @@ void EnableFullDpiSupportIfAvailable(HWND hwnd) {
     enable_non_client_dpi_scaling(hwnd);
   }
   FreeLibrary(user32_module);
+}
+
+// --- M3: window placement persistence -------------------------------------
+//
+// Remember the window's position, size, and maximized state across launches.
+// The placement is written on close and restored on the next launch, into the
+// same per-user app-data dir the Dart side uses for settings/recovery
+// (%APPDATA%\iSystem). Every step is best-effort and defensive.
+
+// A tiny, versioned on-disk record of the window geometry. Fixed-size + a magic
+// so a truncated / foreign / older file is rejected by a simple size + magic
+// check (never partially parsed, never crashing).
+struct SavedPlacementFile {
+  DWORD magic;
+  DWORD version;
+  LONG left;
+  LONG top;
+  LONG right;
+  LONG bottom;
+  DWORD show_cmd;  // SW_SHOWNORMAL or SW_SHOWMAXIMIZED
+};
+
+constexpr DWORD kPlacementMagic = 0x4D584957;  // 'WIXM'
+constexpr DWORD kPlacementVersion = 1;
+
+// %APPDATA%\iSystem\window_placement.dat, or an empty string when APPDATA is
+// unavailable (then save/restore no-op). Reads the SAME env var the Dart
+// appSupportDir() does, so the file lands beside settings.json / recovery\.
+std::wstring PlacementFilePath() {
+  wchar_t buffer[MAX_PATH];
+  DWORD len = GetEnvironmentVariableW(L"APPDATA", buffer, MAX_PATH);
+  if (len == 0 || len >= MAX_PATH) {
+    return std::wstring();
+  }
+  return std::wstring(buffer, len) + L"\\iSystem\\window_placement.dat";
+}
+
+// Ensure %APPDATA%\iSystem exists (the Dart side creates it lazily on its first
+// write, which may not have happened by the first close).
+void EnsurePlacementDir() {
+  wchar_t buffer[MAX_PATH];
+  DWORD len = GetEnvironmentVariableW(L"APPDATA", buffer, MAX_PATH);
+  if (len == 0 || len >= MAX_PATH) {
+    return;
+  }
+  std::wstring dir = std::wstring(buffer, len) + L"\\iSystem";
+  CreateDirectoryW(dir.c_str(), nullptr);  // ignores ERROR_ALREADY_EXISTS
+}
+
+void WritePlacementFile(const SavedPlacementFile& record) {
+  const std::wstring path = PlacementFilePath();
+  if (path.empty()) {
+    return;
+  }
+  EnsurePlacementDir();
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  DWORD record_size = sizeof(record);
+  DWORD written = 0;
+  WriteFile(file, &record, record_size, &written, nullptr);
+  CloseHandle(file);
+}
+
+bool ReadPlacementFile(SavedPlacementFile* out) {
+  const std::wstring path = PlacementFilePath();
+  if (path.empty()) {
+    return false;
+  }
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    return false;
+  }
+  SavedPlacementFile record{};
+  DWORD record_size = sizeof(record);
+  DWORD read = 0;
+  BOOL ok = ReadFile(file, &record, record_size, &read, nullptr);
+  CloseHandle(file);
+  if (!ok || read != record_size || record.magic != kPlacementMagic ||
+      record.version != kPlacementVersion) {
+    return false;
+  }
+  *out = record;
+  return true;
+}
+
+// Reject a saved rect that no longer intersects any connected monitor's work
+// area (e.g. the second monitor it lived on was unplugged), so the window can
+// never open where the user can't see or reach it.
+bool RectIsVisible(const RECT& rect) {
+  HMONITOR monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONULL);
+  if (monitor == nullptr) {
+    return false;
+  }
+  MONITORINFO info;
+  info.cbSize = sizeof(info);
+  if (!GetMonitorInfo(monitor, &info)) {
+    return false;
+  }
+  RECT intersection;
+  return IntersectRect(&intersection, &rect, &info.rcWork) != 0;
 }
 
 }  // namespace
@@ -146,10 +259,20 @@ bool Win32Window::Create(const std::wstring& title,
 
   UpdateTheme(window);
 
+  // M3: load any saved placement now (into members). It is applied in |Show|,
+  // not here, so the window is never shown before its first frame is ready.
+  RestoreWindowPlacement();
+
   return OnCreate();
 }
 
 bool Win32Window::Show() {
+  // M3: restore the saved geometry + show state (normal / maximized) in one
+  // call at first-frame time. The window was created hidden, so applying the
+  // placement here shows it directly at the remembered position with no flash.
+  if (has_saved_placement_) {
+    return SetWindowPlacement(window_handle_, &saved_placement_) != 0;
+  }
   return ShowWindow(window_handle_, SW_SHOWNORMAL);
 }
 
@@ -180,12 +303,31 @@ Win32Window::MessageHandler(HWND hwnd,
                             LPARAM const lparam) noexcept {
   switch (message) {
     case WM_DESTROY:
+      // M3: capture the window placement before the handle is torn down, so the
+      // next launch reopens where the user left it. Fires on every destroy path
+      // (the X, Alt+F4, programmatic close), not just WM_CLOSE.
+      SaveWindowPlacement();
       window_handle_ = nullptr;
       Destroy();
       if (quit_on_close_) {
         PostQuitMessage(0);
       }
       return 0;
+
+    case WM_GETMINMAXINFO: {
+      // M1: clamp the minimum track size to kMinWindowLogicalWidth/Height,
+      // converted to physical pixels using this window's monitor DPI so the
+      // floor is correct at 100/125/150 % Windows scaling. (During creation
+      // this can arrive before the child view exists; the client-area sizing
+      // in WM_SIZE still applies, so no special-casing is needed here.)
+      auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
+      HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+      const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+      const double scale_factor = dpi / 96.0;
+      info->ptMinTrackSize.x = Scale(kMinWindowLogicalWidth, scale_factor);
+      info->ptMinTrackSize.y = Scale(kMinWindowLogicalHeight, scale_factor);
+      return 0;
+    }
 
     case WM_DPICHANGED: {
       auto newRectSize = reinterpret_cast<RECT*>(lparam);
@@ -285,4 +427,52 @@ void Win32Window::UpdateTheme(HWND const window) {
     DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE,
                           &enable_dark_mode, sizeof(enable_dark_mode));
   }
+}
+
+void Win32Window::SaveWindowPlacement() {
+  if (window_handle_ == nullptr) {
+    return;
+  }
+  WINDOWPLACEMENT placement{};
+  placement.length = sizeof(WINDOWPLACEMENT);
+  if (!GetWindowPlacement(window_handle_, &placement)) {
+    return;
+  }
+  // Persist maximized when the window is (or restores to) maximized; NEVER
+  // persist minimized — the window should re-open normal or maximized, not
+  // hidden. GetWindowPlacement gives the restored (normal) rect regardless of
+  // the current show state, which is exactly what we want to remember.
+  const bool maximized = placement.showCmd == SW_SHOWMAXIMIZED ||
+                         (placement.flags & WPF_RESTORETOMAXIMIZED) != 0;
+  const RECT& rect = placement.rcNormalPosition;
+  SavedPlacementFile record{};
+  record.magic = kPlacementMagic;
+  record.version = kPlacementVersion;
+  record.left = rect.left;
+  record.top = rect.top;
+  record.right = rect.right;
+  record.bottom = rect.bottom;
+  record.show_cmd = maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+  WritePlacementFile(record);
+}
+
+void Win32Window::RestoreWindowPlacement() {
+  SavedPlacementFile record{};
+  if (!ReadPlacementFile(&record)) {
+    return;  // no / corrupt / older file — keep the default placement.
+  }
+  const RECT rect = {record.left, record.top, record.right, record.bottom};
+  if (!RectIsVisible(rect)) {
+    return;  // saved on a monitor that's no longer connected — ignore it.
+  }
+  WINDOWPLACEMENT placement{};
+  placement.length = sizeof(WINDOWPLACEMENT);
+  placement.flags = 0;
+  placement.showCmd =
+      record.show_cmd == SW_SHOWMAXIMIZED ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+  placement.ptMinPosition = {-1, -1};
+  placement.ptMaxPosition = {-1, -1};
+  placement.rcNormalPosition = rect;
+  saved_placement_ = placement;
+  has_saved_placement_ = true;
 }

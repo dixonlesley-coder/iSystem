@@ -794,7 +794,12 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
         .read(networkControllerProvider.notifier)
         .connectRiser(r.fromId, r.toId, r.service);
     if (added != null) {
-      ref.read(statusMessageProvider.notifier).showStatus('Riser added');
+      // B4: this IS a real, sized network edge committed from the read-only Auto
+      // view — signal that it is reversible so the click is never a silent,
+      // unrecoverable mutation (paired with the on-hover "Click to add" hint).
+      ref
+          .read(statusMessageProvider.notifier)
+          .showStatus('Riser added — Ctrl+Z to undo');
     }
   }
 
@@ -923,6 +928,10 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
                   detailByNode: detailByNode,
                   supplyPump: pump,
                   showDetails: widget.showDetails,
+                  // G2: the hot-water recirculation loop exists when the engine
+                  // sizes one (the provider is non-null) — draw the HWR return.
+                  hotWaterRecirc:
+                      ref.watch(hotWaterRecircProvider) != null,
                 ),
               ),
             ),
@@ -1041,6 +1050,36 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
                   ],
                 ),
               ),
+            // B4: hovering a dashed inferred connector — the ONE interactive
+            // element in this otherwise read-only view — surfaces an explicit
+            // "Click to add this riser" hint (top-centre), so committing a real
+            // sized edge is a deliberate, confirmed action instead of a silent
+            // mutation while the engineer believes the view is read-only.
+            if (_hoverInferred)
+              Positioned(
+                top: MechXSpacing.sm,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: MechXSpacing.sm,
+                          vertical: MechXSpacing.xs),
+                      decoration: BoxDecoration(
+                        color: colors.accent,
+                        borderRadius: MechXRadii.control,
+                        boxShadow: MechXShadow.popover,
+                      ),
+                      child: Text(
+                        'Click to add this riser',
+                        style: context.type.label
+                            .copyWith(color: colors.onAccent),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
           ],
         );
       },
@@ -1077,8 +1116,25 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   Offset _lastPanPoint = Offset.zero;
   double _lastScale = 1.0;
 
-  // In-flight horizontal riser drag.
+  // In-flight horizontal riser drag (the grabbed riser).
   String? _draggingRiser;
+
+  // D5: batch horizontal move — each selected riser's node x at drag start, plus
+  // the cursor world-x at start, so the whole selection moves by ONE shared
+  // delta (relative offsets preserved). Null when no drag is in flight.
+  Map<String, double>? _dragBaseX;
+  double _dragBaseCursorX = 0;
+
+  // D5: the in-flight marquee (screen-space), drawn by an empty-canvas left-drag
+  // to rubber-band-select several risers. Null when not marqueeing.
+  Offset? _marqueeStart;
+  Offset? _marqueeCurrent;
+
+  // B3: the floor band a palette drag would drop the riser BASE on — tracked
+  // live from the DragTarget so the painter highlights the real target band
+  // (redirected down one for a top-band hover), replacing the old whole-canvas
+  // tint as the only drop feedback. Null when no card is over the canvas.
+  int? _dragBandFloor;
 
   // F3: the undo snapshot is DEFERRED from pointer-down to the FIRST move of
   // an actual riser drag (the onPanStart semantics the Layout / electrical
@@ -1186,12 +1242,43 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       final w = _current.screenToWorld(event.localPosition);
       final hit = _riserAt(w, 16 / _current.scale);
       if (hit != null) {
-        _draggingRiser = hit;
-        ref.read(selectionProvider.notifier).selectEdge(hit);
-        // The snapshot waits for the first real movement (F3).
-        _dragSnapshotPending = true;
+        // D5: shift toggles into the multi-selection; a plain click on a riser
+        // NOT already in the selection replaces it (a click on one already in a
+        // multi-selection keeps the set, so a group drag works).
+        final shift = HardwareKeyboard.instance.isShiftPressed;
+        final selNotifier = ref.read(selectionProvider.notifier);
+        if (shift) {
+          selNotifier.toggleEdge(hit);
+        } else if (!ref.read(selectionProvider).containsEdge(hit)) {
+          selNotifier.selectEdge(hit);
+        }
+        if (ref.read(selectionProvider).containsEdge(hit)) {
+          _draggingRiser = hit;
+          _beginRiserDrag(w.dx);
+          // The snapshot waits for the first real movement (F3).
+          _dragSnapshotPending = true;
+        }
+      } else {
+        // D5: empty-canvas left-drag draws a marquee (rubber-band multi-select).
+        _marqueeStart = event.localPosition;
+        _marqueeCurrent = event.localPosition;
       }
     }
+  }
+
+  /// D5: snapshot each selected riser's node x (+ the cursor world-x) so the
+  /// group moves by one shared delta.
+  void _beginRiserDrag(double cursorWorldX) {
+    final net = ref.read(networkControllerProvider).network;
+    final base = <String, double>{};
+    for (final id in ref.read(selectionProvider).edgeIds) {
+      final e = net.edgeById(id);
+      if (e == null || e.kind != EdgeKind.riser) continue;
+      final a = net.nodeById(e.fromId);
+      if (a != null) base[id] = a.x;
+    }
+    _dragBaseX = base;
+    _dragBaseCursorX = cursorWorldX;
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -1207,26 +1294,81 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       if (_dragSnapshotPending) {
         _dragSnapshotPending = false;
         ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+        // K1: throttle the heavy chain during the live riser drag.
+        ref.read(dragSessionProvider.notifier).beginDrag();
       }
       final w = _current.screenToWorld(event.localPosition);
-      ref
-          .read(networkControllerProvider.notifier)
-          .moveRiserHorizontal(dragging, w.dx);
+      final ctrl = ref.read(networkControllerProvider.notifier);
+      final base = _dragBaseX;
+      if (base != null && base.isNotEmpty) {
+        // D5: move the WHOLE selection by one shared delta (relative x offsets
+        // between risers preserved), one undo step.
+        final delta = w.dx - _dragBaseCursorX;
+        base.forEach((id, x0) => ctrl.moveRiserHorizontal(id, x0 + delta));
+      } else {
+        ctrl.moveRiserHorizontal(dragging, w.dx);
+      }
+      return;
+    }
+    if (_marqueeStart != null) {
+      setState(() => _marqueeCurrent = event.localPosition);
     }
   }
 
   void _onPointerUp(PointerUpEvent event) {
     _panning = false;
+    // K1: close the throttle session on riser-drag release (final refresh).
+    if (_draggingRiser != null) {
+      ref.read(dragSessionProvider.notifier).endDrag();
+    }
     _draggingRiser = null;
+    _dragBaseX = null;
     _dragSnapshotPending = false;
+    // D5: finalize the marquee → select every riser its box crosses.
+    final start = _marqueeStart;
+    final current = _marqueeCurrent;
+    if (start != null && current != null) {
+      final rect = Rect.fromPoints(start, current);
+      if (rect.width > 4 || rect.height > 4) _selectRisersInRect(rect);
+      setState(() {
+        _marqueeStart = null;
+        _marqueeCurrent = null;
+      });
+    }
+  }
+
+  /// D5: union of the risers whose on-screen vertical leg crosses the marquee
+  /// [rect] (shift extends the current selection, else replaces it).
+  void _selectRisersInRect(Rect rect) {
+    final net = ref.read(networkControllerProvider).network;
+    final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    final vt = _current;
+    final hit = <String>{};
+    for (final e in net.edges) {
+      if (e.kind != EdgeKind.riser) continue;
+      final a = net.nodeById(e.fromId);
+      final b = net.nodeById(e.toId);
+      if (a == null || b == null) continue;
+      final yA = _bandCentreWorldY(a.floorIndex, levelCount);
+      final yB = _bandCentreWorldY(b.floorIndex, levelCount);
+      final p1 = vt.worldToScreen(Offset(a.x, math.min(yA, yB)));
+      final p2 = vt.worldToScreen(Offset(a.x, math.max(yA, yB)));
+      if (Rect.fromPoints(p1, p2).inflate(3).overlaps(rect)) hit.add(e.id);
+    }
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+    if (shift) {
+      ref.read(selectionProvider.notifier).addMulti(const {}, hit);
+    } else {
+      ref.read(selectionProvider.notifier).setMulti(const {}, hit);
+    }
   }
 
   void _onScaleStart(ScaleStartDetails details) => _lastScale = 1.0;
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
-    // Single-pointer pan only when NOT dragging a riser (the Listener handles
-    // the riser drag); trackpad pinch always zooms.
-    if (_draggingRiser != null) return;
+    // Single-pointer pan only when NOT dragging a riser or drawing a marquee
+    // (the Listener handles both); trackpad pinch always zooms.
+    if (_draggingRiser != null || _marqueeStart != null) return;
     var vt = _current;
     if (details.pointerCount > 1 && details.focalPointDelta != Offset.zero) {
       vt = vt.panned(details.focalPointDelta);
@@ -1276,6 +1418,13 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
         widget.onToggleHelp();
         return KeyEventResult.handled;
       }
+      if (_marqueeStart != null) {
+        setState(() {
+          _marqueeStart = null;
+          _marqueeCurrent = null;
+        });
+        return KeyEventResult.handled;
+      }
       if (ref.read(selectionProvider).hasSelection) {
         ref.read(selectionProvider.notifier).clear();
         return KeyEventResult.handled;
@@ -1298,32 +1447,58 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
 
   // ── Palette drop ────────────────────────────────────────────────────────────
 
-  void _onDrop(Offset localScreen) {
-    final box = context.findRenderObject() as RenderBox?;
-    if (box == null) return;
+  /// The floor index a drop at [localScreen] would place the riser's BASE on:
+  /// the band under the cursor, redirected DOWN one when the cursor is on the
+  /// topmost band (a riser always spans to the floor above, so the top band
+  /// can't host a base). Null when there are < 2 floors or the point is out of
+  /// range. B3: shared by the drag-preview highlight and the actual drop so the
+  /// highlight shows exactly where the base will land.
+  ({int floorIndex, bool redirected})? _dropTarget(Offset localScreen) {
+    final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    if (levelCount < 2) return null;
     final w = _current.screenToWorld(localScreen);
-    final building = ref.read(projectControllerProvider).building;
-    final levelCount = building.levelCount;
-    if (levelCount < 2) return;
-
-    // Which floor band the drop landed in.
     final invertedRaw = (w.dy / _bandWorldH).floor();
     final inverted = invertedRaw.clamp(0, levelCount - 1);
     var floorIndex = (levelCount - 1) - inverted;
-    // A riser spans to the floor ABOVE — if the drop is on the top floor, drop
-    // it on the floor below so it still spans a real elevation delta.
-    if (floorIndex + 1 >= levelCount) floorIndex = levelCount - 2;
-    if (floorIndex < 0) return;
+    final redirected = floorIndex + 1 >= levelCount;
+    if (redirected) floorIndex = levelCount - 2;
+    if (floorIndex < 0) return null;
+    return (floorIndex: floorIndex, redirected: redirected);
+  }
+
+  void _onDrop(Offset localScreen) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final building = ref.read(projectControllerProvider).building;
+    final target = _dropTarget(localScreen);
+    if (target == null) return;
+    final floorIndex = target.floorIndex;
+    final w = _current.screenToWorld(localScreen);
 
     final sheetId = _sheetIdForFloor(floorIndex);
     final id = ref.read(networkControllerProvider.notifier).placeRiserAt(
           sheetId,
           floorIndex,
           w.dx,
-          levelCount,
+          building.levelCount,
           service: widget.service,
         );
-    if (id != null) ref.read(selectionProvider.notifier).selectEdge(id);
+    if (id != null) {
+      ref.read(selectionProvider.notifier).selectEdge(id);
+      // B3: a drop on the TOP band has no floor above it, so the riser's base
+      // was placed on the floor BELOW (it still spans a real elevation delta up
+      // to the top). Say so — a top-band drop otherwise draws a connection one
+      // floor off the target, indistinguishable from a correct drop.
+      if (target.redirected &&
+          floorIndex + 1 < building.levelCount &&
+          floorIndex < building.levelCount) {
+        final lower = building.floors[floorIndex].name;
+        final upper = building.floors[floorIndex + 1].name;
+        ref
+            .read(statusMessageProvider.notifier)
+            .showStatus('Riser to $upper — base on $lower below');
+      }
+    }
   }
 
   /// The sheet id mapped to [floorIndex] (so the riser's lower node sits on the
@@ -1380,9 +1555,13 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                       building: building,
                       colors: colors,
                       transform: vt,
-                      selectedEdgeId: selection.edgeId,
+                      selectedEdgeIds: selection.edgeIds,
                       bandWorldH: _bandWorldH,
                       worldWidth: _worldWidth,
+                      highlightFloor: _dragBandFloor,
+                      marquee: (_marqueeStart != null && _marqueeCurrent != null)
+                          ? Rect.fromPoints(_marqueeStart!, _marqueeCurrent!)
+                          : null,
                     ),
                   ),
                 );
@@ -1404,8 +1583,28 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
               Positioned.fill(
                 child: DragTarget<_RiserDragData>(
                   hitTestBehavior: HitTestBehavior.translucent,
+                  // B3: track the target band live so the painter can highlight
+                  // exactly where the riser base will land (redirected down one
+                  // on the top band) — honest drop feedback, not a blanket tint.
+                  onMove: (details) {
+                    final box = context.findRenderObject() as RenderBox?;
+                    if (box == null) return;
+                    final t = _dropTarget(box.globalToLocal(details.offset));
+                    final f = t?.floorIndex;
+                    if (f != _dragBandFloor) {
+                      setState(() => _dragBandFloor = f);
+                    }
+                  },
+                  onLeave: (_) {
+                    if (_dragBandFloor != null) {
+                      setState(() => _dragBandFloor = null);
+                    }
+                  },
                   onAcceptWithDetails: (details) {
                     final box = context.findRenderObject() as RenderBox?;
+                    if (_dragBandFloor != null) {
+                      setState(() => _dragBandFloor = null);
+                    }
                     if (box == null) return;
                     _onDrop(box.globalToLocal(details.offset));
                   },
@@ -1800,6 +1999,7 @@ class _AutoSchematicPainter extends CustomPainter {
     this.detailByNode = const {},
     this.supplyPump,
     this.showDetails = true,
+    this.hotWaterRecirc = false,
   });
 
   final Network network;
@@ -1810,6 +2010,12 @@ class _AutoSchematicPainter extends CustomPainter {
   /// The system supply-pump duty (one trunk pump) — used for the plant-detail
   /// callout's BOOSTER PUMP kW caption. Null ⇒ no kW caption (no fabricated duty).
   final PumpDuty? supplyPump;
+
+  /// G2: true when the engine's hot-water RECIRCULATION loop exists (the
+  /// `hotWaterRecircProvider` result is non-null). When set — and the network
+  /// carries hot-water risers — the supply riser gains a thinner dashed `HWR`
+  /// return leg + a recirc-pump glyph. False / no hot-water riser ⇒ nothing.
+  final bool hotWaterRecirc;
 
   /// Draw the H101-style DETAIL callouts (plant detail + valve assemblies) and
   /// the per-floor branch fan-out. Toolbar-toggleable, default on.
@@ -1862,12 +2068,88 @@ class _AutoSchematicPainter extends CustomPainter {
     // accumulates its own placed rects so run tags don't stack on each other.
     final occupied = _floorLabelRects(size);
     _paintEdges(canvas, nodePos, occupied);
+    // G2: the hot-water recirculation return leg rides alongside the supply
+    // riser — a structural element (drawn whenever the recirc loop exists),
+    // not a toggleable detail callout.
+    if (hotWaterRecirc) _paintHotWaterReturn(canvas, nodePos);
     _paintNodes(canvas, nodePos);
     if (showDetails) {
       _paintFloorFanOut(canvas, size);
       _paintPlantDetail(canvas, size);
       _paintValveCallouts(canvas, size);
       _paintStackDetails(canvas, size, nodePos);
+    }
+  }
+
+  /// G2: draw the hot-water RECIRCULATION return leg(s) — a thinner dashed
+  /// `HWR` return riser alongside each hot-water supply riser, a down arrow
+  /// (return flow), and a recirc-pump glyph at the loop base. Mirrors the export
+  /// builder's `_emitHotWaterReturn`.
+  void _paintHotWaterReturn(Canvas canvas, Map<String, Offset> nodePos) {
+    if (!(focus == null || focus == ServiceType.hotWater)) return;
+    final hwRisers = network.edges
+        .where((e) =>
+            e.service == ServiceType.hotWater &&
+            e.kind == EdgeKind.riser &&
+            nodePos[e.fromId] != null &&
+            nodePos[e.toId] != null)
+        .toList();
+    if (hwRisers.isEmpty) return;
+    final color = serviceColor(ServiceType.hotWater);
+    const off = 12.0;
+    final dashPaint = Paint()
+      ..color = color
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    for (final e in hwRisers) {
+      final from = nodePos[e.fromId]!;
+      final to = nodePos[e.toId]!;
+      final midX = (from.dx + to.dx) / 2;
+      final legX = midX + off;
+      final yTop = math.min(from.dy, to.dy);
+      final yBot = math.max(from.dy, to.dy);
+      _dashedLine(canvas, Offset(legX, yTop), Offset(legX, yBot), dashPaint);
+      _dashedLine(canvas, Offset(midX, yTop), Offset(legX, yTop), dashPaint);
+      // A down arrow — recirculation flow returns to the heater.
+      _drawArrow(canvas, Offset(legX, (yTop + yBot) / 2), false, color);
+      _drawText(
+        canvas,
+        'HWR',
+        Offset(legX + 5, (yTop + yBot) / 2 - MechXSpacing.sm),
+        fontSize: 9,
+        color: color,
+        fontWeight: FontWeight.w600,
+      );
+    }
+    // The recirc pump glyph at the loop base — the lowest hot-water node.
+    NetNode? lowest;
+    for (final e in hwRisers) {
+      for (final id in [e.fromId, e.toId]) {
+        final n = network.nodeById(id);
+        if (n == null) continue;
+        if (lowest == null || n.floorIndex < lowest.floorIndex) lowest = n;
+      }
+    }
+    final lp = lowest == null ? null : nodePos[lowest.id];
+    if (lp != null) {
+      final px = lp.dx + off;
+      const box = 18.0;
+      canvas.drawCircle(
+          Offset(px, lp.dy), box * 0.62, Paint()..color = colors.canvas);
+      canvas.save();
+      canvas.translate(px - box / 2, lp.dy - box / 2);
+      paintComponentSymbol(
+          canvas, const Size(box, box), NodeComponent.pump, color);
+      canvas.restore();
+      _drawText(
+        canvas,
+        'HWR PUMP',
+        Offset(px + box / 2 + 3, lp.dy - 4),
+        fontSize: 8,
+        color: colors.textMuted,
+        fontWeight: FontWeight.w500,
+      );
     }
   }
 
@@ -1879,7 +2161,9 @@ class _AutoSchematicPainter extends CustomPainter {
       final top = _bandTopY(i, size.height);
       final floor = building.floors[i];
       final elevM = building.elevationOf(i).meters;
-      final label = '${floor.name}  +${elevM.toStringAsFixed(1)} m';
+      // E6: the SAME FFL notation the export gutter uses (one shared formatter),
+      // so the working canvas and the issued sheet read the elevation identically.
+      final label = '${floor.name}  ${fflLabel(elevM)}';
       final tp = TextPainter(
         text: TextSpan(
           text: label,
@@ -1975,7 +2259,8 @@ class _AutoSchematicPainter extends CustomPainter {
 
       final floor = building.floors[i];
       final elevM = building.elevationOf(i).meters;
-      final label = '${floor.name}  +${elevM.toStringAsFixed(1)} m';
+      // E6: shared FFL formatter — same term + precision as the exported gutter.
+      final label = '${floor.name}  ${fflLabel(elevM)}';
 
       // Keep the floor label clear of the top-left (?) guide button: on a
       // compressed surface the topmost band's label would otherwise paint under
@@ -2420,6 +2705,14 @@ class _AutoSchematicPainter extends CustomPainter {
       focus == ServiceType.coldWater ||
       focus == ServiceType.hotWater;
 
+  /// G4: whether a drainage/vent reference detail should draw for the active
+  /// focus (the combined view or a drainage/vent/rainwater filter).
+  bool get _drainageFocus =>
+      focus == null ||
+      focus == ServiceType.drainage ||
+      focus == ServiceType.vent ||
+      focus == ServiceType.rainwater;
+
   /// Capacity (m3, ASCII) of the first node with [component], or null.
   String? _tankM3(NodeComponent component) {
     for (final n in network.nodes) {
@@ -2450,23 +2743,23 @@ class _AutoSchematicPainter extends CustomPainter {
     if (!hasRoof && !hasGround && !hasPump) return;
 
     final color = serviceColor(ServiceType.coldWater);
-    const boxW = 210.0;
-    const boxH = 120.0;
+    const boxW = 250.0;
+    const boxH = 150.0;
     const pad = MechXSpacing.md;
     // Guard a too-narrow / too-short viewport.
     if (size.width < boxW + 2 * pad || size.height < boxH + 2 * pad) return;
-    final rect =
-        Rect.fromLTWH(size.width - boxW - pad, pad, boxW, boxH);
+    final rect = Rect.fromLTWH(size.width - boxW - pad, pad, boxW, boxH);
     _detailBox(canvas, rect, 'PUMP-SET DETAIL', titleColor: colors.textMuted);
 
+    final cx = rect.left + boxW / 2;
     const glyph = 22.0;
-    final leftX = rect.left + 14;
-    var y = rect.top + 22;
+    var y = rect.top + 24;
 
-    // ROOF TANK row.
+    // ROOF TANK row (centred) with its capacity + GRAVITASI down-leg label.
+    double? roofBottom;
     if (hasRoof) {
       canvas.save();
-      canvas.translate(leftX, y);
+      canvas.translate(cx - glyph / 2, y);
       paintComponentSymbol(
           canvas, const Size(glyph, glyph), NodeComponent.roofTank, color);
       canvas.restore();
@@ -2474,58 +2767,111 @@ class _AutoSchematicPainter extends CustomPainter {
       _drawText(
         canvas,
         m3 != null ? 'ROOF TANK $m3 m3' : 'ROOF TANK',
-        Offset(leftX + glyph + 8, y + glyph / 2 - 6),
+        Offset(cx + glyph / 2 + 8, y + glyph / 2 - 6),
         fontSize: 9,
         color: colors.textSecondary,
         fontWeight: FontWeight.w500,
-        maxWidth: boxW - (glyph + 28),
+        maxWidth: rect.right - (cx + glyph / 2 + 12),
       );
-      // GRAVITASI leg label on the down-leg below the roof tank (downfeed feed).
       if (downfeed) {
         _drawText(
           canvas,
           'GRAVITASI',
-          Offset(leftX + glyph / 2 + 4, y + glyph + 1),
+          Offset(cx - glyph / 2 - 4, y + glyph + 1),
           fontSize: 8,
           color: color,
           fontWeight: FontWeight.w600,
         );
       }
-      y += glyph + 18;
+      roofBottom = y + glyph;
+      y += glyph + 26;
     }
 
-    // A short vertical connecting leg down to the pump (when both present).
-    if (hasRoof && hasPump) {
+    // PUMP row with the suction / discharge VALVE TRAIN (G3): the pump centred,
+    // flanked by its real train — suction (GV · STR · FJ) left, discharge (CV ·
+    // GV · FJ) right — the safety-critical assembly drawn, not a bare icon.
+    if (hasPump) {
+      final pumpC = _hasComponent(NodeComponent.boosterSet)
+          ? NodeComponent.boosterSet
+          : NodeComponent.pump;
+      final trainCy = y + glyph / 2;
+      if (roofBottom != null) {
+        canvas.drawLine(
+          Offset(cx, roofBottom),
+          Offset(cx, trainCy - glyph / 2),
+          Paint()
+            ..color = color
+            ..strokeWidth = 1
+            ..style = PaintingStyle.stroke,
+        );
+      }
+      const train = <(String, String)>[
+        ('GV', 'GV'),
+        ('STR', 'STR'),
+        ('FJ', 'FJ'),
+        ('PUMP', ''),
+        ('CV', 'CV'),
+        ('GV', 'GV'),
+        ('FJ', 'FJ'),
+      ];
+      const gap = 32.0;
+      const gl = 16.0;
+      final firstCx = cx - (train.length - 1) / 2 * gap;
       canvas.drawLine(
-        Offset(leftX + glyph / 2, rect.top + 22 + glyph),
-        Offset(leftX + glyph / 2, y),
+        Offset(firstCx - gl / 2, trainCy),
+        Offset(firstCx + (train.length - 1) * gap + gl / 2, trainCy),
         Paint()
           ..color = color
           ..strokeWidth = 1
           ..style = PaintingStyle.stroke,
       );
-    }
-
-    // BOOSTER PUMP row.
-    if (hasPump) {
-      final pumpC = _hasComponent(NodeComponent.boosterSet)
-          ? NodeComponent.boosterSet
-          : NodeComponent.pump;
-      canvas.save();
-      canvas.translate(leftX, y);
-      paintComponentSymbol(canvas, const Size(glyph, glyph), pumpC, color);
-      canvas.restore();
+      for (var i = 0; i < train.length; i++) {
+        final (token, abbrev) = train[i];
+        final gx = firstCx + i * gap;
+        // Halo so the glyph reads over the run line.
+        canvas.drawCircle(
+            Offset(gx, trainCy), gl * 0.62, Paint()..color = colors.canvas);
+        if (token == 'PUMP') {
+          canvas.save();
+          canvas.translate(gx - (gl + 3) / 2, trainCy - (gl + 3) / 2);
+          paintComponentSymbol(canvas, Size(gl + 3, gl + 3), pumpC, color);
+          canvas.restore();
+        } else if (token == 'FJ') {
+          _paintFlexJoint(
+              canvas,
+              Rect.fromCenter(
+                  center: Offset(gx, trainCy), width: gl, height: gl),
+              color);
+        } else {
+          canvas.save();
+          canvas.translate(gx - gl / 2, trainCy - gl / 2);
+          paintComponentSymbol(
+              canvas, const Size(gl, gl), _trainComponent(token), color);
+          canvas.restore();
+        }
+        if (abbrev.isNotEmpty) {
+          _drawText(
+            canvas,
+            abbrev,
+            Offset(gx, trainCy + gl / 2 + 2),
+            fontSize: 8,
+            color: colors.textMuted,
+            fontWeight: FontWeight.w500,
+            centered: true,
+          );
+        }
+      }
       final kw = supplyPump != null
           ? '${supplyPump!.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW'
           : null;
       _drawText(
         canvas,
         kw != null ? 'BOOSTER PUMP $kw' : 'BOOSTER PUMP',
-        Offset(leftX + glyph + 8, y + glyph / 2 - 6),
+        Offset(cx, trainCy + gl / 2 + 16),
         fontSize: 9,
         color: colors.textSecondary,
         fontWeight: FontWeight.w500,
-        maxWidth: boxW - (glyph + 28),
+        centered: true,
       );
       // TRANSFER (ground -> roof lift) when a ground tank exists; else BOOSTER
       // (pump-up) on upfeed.
@@ -2534,67 +2880,113 @@ class _AutoSchematicPainter extends CustomPainter {
         _drawText(
           canvas,
           leg,
-          Offset(leftX + glyph / 2 + 4, y + glyph + 1),
+          Offset(cx, trainCy + gl / 2 + 30),
           fontSize: 8,
           color: color,
           fontWeight: FontWeight.w600,
+          centered: true,
         );
       }
     }
   }
 
-  /// (2) VALVE-ASSEMBLY CALLOUTS — a row of two compact bordered detail boxes at
-  /// the BOTTOM-CENTRE (clear of the bottom-left legend + bottom-right title /
-  /// notes): a WATER METER set and a PRV set. Generic reference details (always
-  /// drawn when Details is on), each a row of valve glyphs + ASCII abbrevs. The
-  /// glyph is schematic; the abbrev names the real device (no exact-glyph claim).
+  /// The [NodeComponent] for a pump-set valve-train token (GV / STR / CV).
+  NodeComponent _trainComponent(String token) => switch (token) {
+        'GV' => NodeComponent.gateValve,
+        'STR' => NodeComponent.strainer,
+        'CV' => NodeComponent.checkValve,
+        _ => NodeComponent.gateValve,
+      };
+
+  /// A FLEXIBLE-JOINT glyph (two flanges + a bellows "W") in [r] — the canvas
+  /// counterpart of `planFlexibleJointPrims`, for the pump-set valve train (G3).
+  void _paintFlexJoint(Canvas canvas, Rect r, Color color) {
+    final p = Paint()
+      ..color = color
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    double fx(double f) => r.left + f * r.width;
+    double fy(double f) => r.top + f * r.height;
+    void ln(double x1, double y1, double x2, double y2) =>
+        canvas.drawLine(Offset(fx(x1), fy(y1)), Offset(fx(x2), fy(y2)), p);
+    ln(0.18, 0.28, 0.18, 0.72);
+    ln(0.82, 0.28, 0.82, 0.72);
+    ln(0.18, 0.50, 0.35, 0.32);
+    ln(0.35, 0.32, 0.50, 0.68);
+    ln(0.50, 0.68, 0.65, 0.32);
+    ln(0.65, 0.32, 0.82, 0.50);
+  }
+
+  /// (2) VALVE-ASSEMBLY CALLOUTS — compact bordered detail boxes at the
+  /// BOTTOM-CENTRE (clear of the bottom-left legend + bottom-right title /
+  /// notes): a WATER METER set and a PRV set, each a row of valve glyphs + ASCII
+  /// abbrevs. Each is drawn ONLY when the network actually carries that
+  /// assembly's key device (G7, mirroring the plant detail's has()-gating) — the
+  /// meter box when a waterMeter node exists, the PRV box when a prv node exists
+  /// — so a project without either shows neither (no boilerplate detail passing
+  /// as an as-designed assembly). The glyph is schematic; the abbrev names the
+  /// real device (no exact-glyph claim). The present boxes are centred as a
+  /// group so a lone detail still reads balanced.
   void _paintValveCallouts(Canvas canvas, Size size) {
-    if (!_waterFocus) return;
-    final color = serviceColor(ServiceType.coldWater);
+    final cwColor = serviceColor(ServiceType.coldWater);
+    final drColor = serviceColor(ServiceType.drainage);
     const boxW = 156.0;
     const boxH = 64.0;
     const gapBetween = MechXSpacing.md;
-    final totalW = boxW * 2 + gapBetween;
+    final topFloor = building.levelCount - 1;
+
+    // Each box is drawn ONLY when the network carries its key device (G7/G4):
+    // WATER METER / PRV SET (clean water), FLOOR DRAIN / VTR (drainage/vent). The
+    // combined view shows every applicable box in one centred row.
+    final details = <(String, List<(NodeComponent, String)>, Color)>[
+      if (_waterFocus && _hasComponent(NodeComponent.waterMeter))
+        ('DETAIL WATER METER', const [
+          (NodeComponent.gateValve, 'GV'),
+          (NodeComponent.waterMeter, 'WM'),
+          (NodeComponent.gateValve, 'GV'),
+          (NodeComponent.gateValve, 'U'),
+        ], cwColor),
+      if (_waterFocus && _hasComponent(NodeComponent.prv))
+        ('DETAIL PRV SET', const [
+          (NodeComponent.gateValve, 'GV'),
+          (NodeComponent.strainer, 'STR'),
+          (NodeComponent.prv, 'PRV'),
+          (NodeComponent.gateValve, 'GV'),
+        ], cwColor),
+      if (_drainageFocus && _hasComponent(NodeComponent.floorDrain))
+        ('DETAIL FLOOR DRAIN', const [
+          (NodeComponent.floorDrain, 'FD'),
+          (NodeComponent.cleanout, 'CO'),
+        ], drColor),
+      if (_drainageFocus &&
+          ventTopTerminalIds(network, topFloor: topFloor).isNotEmpty)
+        ('DETAIL VTR', const [
+          (NodeComponent.airVent, 'VTR'),
+        ], drColor),
+    ];
+    if (details.isEmpty) return;
+
+    final totalW = details.length * boxW + (details.length - 1) * gapBetween;
     // Width guard: only draw when there's room clear of the corner overlays.
     if (size.width < totalW + 320 || size.height < boxH + 2 * MechXSpacing.md) {
       return;
     }
-    final left = (size.width - totalW) / 2;
+    var left = (size.width - totalW) / 2;
     final top = size.height - boxH - MechXSpacing.md;
-
-    // Box A — DETAIL WATER METER.
-    final rectA = Rect.fromLTWH(left, top, boxW, boxH);
-    _detailBox(canvas, rectA, 'DETAIL WATER METER', titleColor: color);
-    _drawDetailGlyphRow(
-      canvas,
-      Offset(rectA.left + 12, rectA.top + 24),
-      const [
-        (NodeComponent.gateValve, 'GV'),
-        (NodeComponent.waterMeter, 'WM'),
-        (NodeComponent.gateValve, 'GV'),
-        (NodeComponent.gateValve, 'U'),
-      ],
-      color,
-      glyph: 15,
-      gap: 32,
-    );
-
-    // Box B — DETAIL PRV SET.
-    final rectB = Rect.fromLTWH(left + boxW + gapBetween, top, boxW, boxH);
-    _detailBox(canvas, rectB, 'DETAIL PRV SET', titleColor: color);
-    _drawDetailGlyphRow(
-      canvas,
-      Offset(rectB.left + 8, rectB.top + 24),
-      const [
-        (NodeComponent.gateValve, 'GV'),
-        (NodeComponent.strainer, 'STR'),
-        (NodeComponent.prv, 'PRV'),
-        (NodeComponent.gateValve, 'GV'),
-      ],
-      color,
-      glyph: 15,
-      gap: 32,
-    );
+    for (final (title, items, c) in details) {
+      final rect = Rect.fromLTWH(left, top, boxW, boxH);
+      _detailBox(canvas, rect, title, titleColor: c);
+      _drawDetailGlyphRow(
+        canvas,
+        Offset(rect.left + 12, rect.top + 24),
+        items,
+        c,
+        glyph: 15,
+        gap: 32,
+      );
+      left += boxW + gapBetween;
+    }
   }
 
   /// (B2) STACK DETAIL — the drainage/vent riser conventions, all data-gated on
@@ -2663,6 +3055,86 @@ class _AutoSchematicPainter extends CustomPainter {
         );
       }
     }
+    // G4: the DRAINAGE TERMINUS — where the soil/waste leaves the building. A
+    // generic disposal glyph + 'KE SALURAN PEMBUANGAN'; the destination is NEVER
+    // invented (no 'KE STP' / 'KE RIOL KOTA' the model can't confirm).
+    if (focus == null ||
+        focus == ServiceType.drainage ||
+        focus == ServiceType.rainwater) {
+      final exitId = _drainageExitNodeId(network);
+      final p = exitId == null ? null : nodePos[exitId];
+      if (p != null) {
+        final c = Offset(p.dx, p.dy + 22);
+        _paintSewerTerminus(canvas, c, drainColor);
+        _drawText(
+          canvas,
+          'KE SALURAN PEMBUANGAN',
+          Offset(c.dx + 12, c.dy - 4),
+          fontSize: 8,
+          color: drainColor,
+          fontWeight: FontWeight.w600,
+        );
+      }
+    }
+  }
+
+  /// The DRAINAGE EXIT node (G4) — the lowest drainage-connected node,
+  /// preferring a genuine outlet (a plain main, not a fixture/cleanout branch)
+  /// and, among equals, a leaf. Null when there's no drainage. Mirrors the
+  /// export builder's `_drainageExitNodeId`.
+  String? _drainageExitNodeId(Network net) {
+    final touching = <String>{};
+    for (final e in net.edges) {
+      if (e.service != ServiceType.drainage) continue;
+      touching
+        ..add(e.fromId)
+        ..add(e.toId);
+    }
+    final nodes = <NetNode>[
+      for (final id in touching)
+        if (net.nodeById(id) != null) net.nodeById(id)!,
+    ];
+    if (nodes.isEmpty) return null;
+    int drainDegree(String id) => net.edges
+        .where((e) =>
+            e.service == ServiceType.drainage &&
+            (e.fromId == id || e.toId == id))
+        .length;
+    bool poorExit(NetNode n) =>
+        n.role == NodeRole.fixture || n.component == NodeComponent.cleanout;
+    nodes.sort((a, b) {
+      final byFloor = a.floorIndex.compareTo(b.floorIndex);
+      if (byFloor != 0) return byFloor;
+      final byExit = (poorExit(a) ? 1 : 0).compareTo(poorExit(b) ? 1 : 0);
+      if (byExit != 0) return byExit;
+      final byDeg = drainDegree(a.id).compareTo(drainDegree(b.id));
+      if (byDeg != 0) return byDeg;
+      final byX = a.x.compareTo(b.x);
+      return byX != 0 ? byX : a.id.compareTo(b.id);
+    });
+    return nodes.first.id;
+  }
+
+  /// A SEWER / DISCHARGE TERMINUS glyph centred on [c] — the canvas counterpart
+  /// of `planSewerTerminusPrims` (a down arrow into a hatched ground line).
+  void _paintSewerTerminus(Canvas canvas, Offset c, Color color,
+      {double size = 18}) {
+    final p = Paint()
+      ..color = color
+      ..strokeWidth = 1.4
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    double fx(double f) => c.dx + (f - 0.5) * size;
+    double fy(double f) => c.dy + (f - 0.5) * size;
+    void ln(double x1, double y1, double x2, double y2) =>
+        canvas.drawLine(Offset(fx(x1), fy(y1)), Offset(fx(x2), fy(y2)), p);
+    ln(0.50, 0.10, 0.50, 0.58);
+    ln(0.50, 0.58, 0.38, 0.42);
+    ln(0.50, 0.58, 0.62, 0.42);
+    ln(0.16, 0.66, 0.84, 0.66);
+    ln(0.30, 0.66, 0.20, 0.82);
+    ln(0.50, 0.66, 0.40, 0.82);
+    ln(0.70, 0.66, 0.60, 0.82);
   }
 
   /// (5) PER-FLOOR BRANCH FAN-OUT — under each floor band, a compact column of
@@ -2683,11 +3155,19 @@ class _AutoSchematicPainter extends CustomPainter {
     const stubX = MechXSpacing.sm;
     const rowPitch = 11.0;
     const gutterW = 150.0;
+    // E1: the fixed top-left (?) guide button (x:16-42, y:8-34 screen) has no
+    // world awareness, so on the TOPMOST band (whose top is y=0) the fan-out
+    // stubs would paint under it and be clipped (goldens 09/10 showed a bare
+    // "e"/half-eaten "Supply diffuser"). Reserve the corner: start any fan-out
+    // row that would fall within the button's height just below it — mirroring
+    // the FFL-label offset in _paintBands.
+    const buttonBottom = MechXSpacing.sm + 26;
     for (final fan in fans) {
       if (fan.floorIndex < 0 || fan.floorIndex >= n) continue;
       final top = _bandTopY(fan.floorIndex, size.height);
       // Start below the FFL label (which sits at top + xs, ~12px tall).
       var y = top + 20;
+      if (y < buttonBottom + MechXSpacing.xs) y = buttonBottom + MechXSpacing.xs;
       final color =
           focus != null ? serviceColor(focus!) : colors.textSecondary;
       for (final label in fan.labels) {
@@ -2766,7 +3246,8 @@ class _AutoSchematicPainter extends CustomPainter {
       old.riserTagsById != riserTagsById ||
       old.detailByNode != detailByNode ||
       old.supplyPump != supplyPump ||
-      old.showDetails != showDetails;
+      old.showDetails != showDetails ||
+      old.hotWaterRecirc != hotWaterRecirc;
 }
 
 // ---------------------------------------------------------------------------
@@ -2780,9 +3261,11 @@ class _EditSchematicPainter extends CustomPainter {
     required this.building,
     required this.colors,
     required this.transform,
-    required this.selectedEdgeId,
+    required this.selectedEdgeIds,
     required this.bandWorldH,
     required this.worldWidth,
+    this.highlightFloor,
+    this.marquee,
   });
 
   final Network network;
@@ -2790,9 +3273,19 @@ class _EditSchematicPainter extends CustomPainter {
   final BuildingLevels building;
   final MechXColors colors;
   final ViewportTransform transform;
-  final String? selectedEdgeId;
+
+  /// D5: the multi-selected riser edges (highlighted); a single-select is a set
+  /// of one.
+  final Set<String> selectedEdgeIds;
   final double bandWorldH;
   final double worldWidth;
+
+  /// B3: the floor band to highlight as the live drop target (the riser base
+  /// lands here). Null when no palette card is being dragged over the canvas.
+  final int? highlightFloor;
+
+  /// D5: the in-flight marquee rectangle (screen space), or null.
+  final Rect? marquee;
 
   double _bandCentreWorldY(int floorIndex) {
     final inverted = (building.levelCount - 1) - floorIndex;
@@ -2808,6 +3301,19 @@ class _EditSchematicPainter extends CustomPainter {
     _paintBands(canvas, size);
     _paintEdges(canvas);
     _paintNodes(canvas);
+    // D5: the rubber-band marquee, same translucent-accent language as the
+    // Layout / electrical canvases.
+    final m = marquee;
+    if (m != null) {
+      canvas.drawRect(m, Paint()..color = colors.accent.withAlpha(28));
+      canvas.drawRect(
+        m,
+        Paint()
+          ..color = colors.accent
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
+      );
+    }
   }
 
   void _paintBands(Canvas canvas, Size size) {
@@ -2823,6 +3329,15 @@ class _EditSchematicPainter extends CustomPainter {
       final inverted = (n - 1) - i;
       final bandTopWorldY = inverted * bandWorldH;
       final bandBotWorldY = bandTopWorldY + bandWorldH;
+      // B3: a translucent fill on the band a drag would drop the riser base on
+      // (the drop preview) — obvious BEFORE releasing, and on the top-band case
+      // it lights the real (redirected-down) base band rather than misleading.
+      if (i == highlightFloor) {
+        final tl = transform.worldToScreen(Offset(0, bandTopWorldY));
+        final br = transform.worldToScreen(Offset(worldWidth, bandBotWorldY));
+        canvas.drawRect(Rect.fromPoints(tl, br),
+            Paint()..color = colors.accent.withAlpha(30));
+      }
       // Floor surface line at the bottom of the band.
       final leftS = transform.worldToScreen(Offset(0, bandBotWorldY));
       final rightS = transform.worldToScreen(Offset(worldWidth, bandBotWorldY));
@@ -2830,7 +3345,8 @@ class _EditSchematicPainter extends CustomPainter {
 
       final floor = building.floors[i];
       final elevM = building.elevationOf(i).meters;
-      final label = '${floor.name}  +${elevM.toStringAsFixed(1)} m';
+      // E6: shared FFL formatter — same term + precision as the exported gutter.
+      final label = '${floor.name}  ${fflLabel(elevM)}';
       final labelAt = transform.worldToScreen(
           Offset(8, bandBotWorldY - bandWorldH + 8 / transform.scale));
       _drawText(
@@ -2855,7 +3371,7 @@ class _EditSchematicPainter extends CustomPainter {
       final b = network.nodeById(edge.toId);
       if (a == null || b == null) continue;
       final color = serviceColor(edge.service);
-      final selected = edge.id == selectedEdgeId;
+      final selected = selectedEdgeIds.contains(edge.id);
 
       final fromS = transform.worldToScreen(_worldOf(a));
       final toS = transform.worldToScreen(_worldOf(b));
@@ -2918,7 +3434,17 @@ class _EditSchematicPainter extends CustomPainter {
           fontWeight: FontWeight.w600,
         );
       } else {
-        canvas.drawLine(fromS, toS, linePaint);
+        // D3: a plain run/main is INERT in Edit mode (only risers select / size
+        // here — _riserAt filters to EdgeKind.riser). Render it visibly PASSIVE
+        // — a thin, dimmed, DASHED ghost, like the inferred connectors — so only
+        // the interactive risers carry solid full-opacity service ink and
+        // nothing inert reads as actionable (was near-identical to a riser).
+        final ghost = Paint()
+          ..color = color.withAlpha(90)
+          ..strokeWidth = 1.5
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round;
+        _dashedLine(canvas, fromS, toS, ghost);
         final s = sizing[edge.id];
         if (s != null) {
           final mid = Offset((fromS.dx + toS.dx) / 2, (fromS.dy + toS.dy) / 2);
@@ -2927,12 +3453,29 @@ class _EditSchematicPainter extends CustomPainter {
             _sizeLabel(s),
             mid + const Offset(0, -14),
             fontSize: 10,
-            color: color,
+            color: color.withAlpha(120),
             fontWeight: FontWeight.w500,
             centered: true,
           );
         }
       }
+    }
+  }
+
+  /// Draw a dashed segment from [a] to [b] (D3: the passive-run ghost). A tiny
+  /// local copy of the Auto painter's dash helper — kept here so the Edit
+  /// painter stays self-contained.
+  void _dashedLine(Canvas canvas, Offset a, Offset b, Paint paint,
+      {double dash = 6, double gap = 4}) {
+    final total = (b - a).distance;
+    if (total <= 0) return;
+    final dir = (b - a) / total;
+    var d = 0.0;
+    while (d < total) {
+      final start = a + dir * d;
+      final end = a + dir * math.min(d + dash, total);
+      canvas.drawLine(start, end, paint);
+      d += dash + gap;
     }
   }
 
@@ -3065,7 +3608,10 @@ class _EditSchematicPainter extends CustomPainter {
       old.building != building ||
       old.colors != colors ||
       old.transform != transform ||
-      old.selectedEdgeId != selectedEdgeId;
+      old.selectedEdgeIds.length != selectedEdgeIds.length ||
+      !old.selectedEdgeIds.containsAll(selectedEdgeIds) ||
+      old.highlightFloor != highlightFloor ||
+      old.marquee != marquee;
 }
 
 // ---------------------------------------------------------------------------
@@ -3285,7 +3831,7 @@ class _TitleBlock extends ConsumerWidget {
 }
 
 /// The system-NOTES (KETERANGAN) card for the Auto single-line — a compact
-/// floating-glass card that echoes the project inputs that actually exist:
+/// card that echoes the project inputs that actually exist:
 ///   • the FEED strategy (gravity downfeed vs upfeed / booster);
 ///   • each TANK present, with its real capacity (m3, from the node);
 ///   • the OCCUPANCY class; and
@@ -3296,6 +3842,16 @@ class _TitleBlock extends ConsumerWidget {
 /// HONESTY: every line is a direct echo of a real provider / node value. A datum
 /// that doesn't exist (no tank, no pump on downfeed) is simply not drawn. Only
 /// rendered when a network exists (the parent early-returns 'No network').
+///
+/// D8: this and the PUMP-SET / valve `_detailBox` callouts are the SAME
+/// conceptual thing — a toggleable drafting reference annotation on the
+/// issuable single-line (this one gated by the 'Notes' chip, those by
+/// 'Details') — but used to render in two unrelated visual systems (this a
+/// Liquid-Glass `GlassSurface` with a popover shadow and a large card radius,
+/// those flat canvas-painted boxes). Liquid Glass is reserved for persistent
+/// NAVIGATION/CONTROL chrome (golden rule 8) — a drafting annotation is
+/// DIAGRAM CONTENT, so this card now matches `_detailBox`'s flat, opaque,
+/// hairline-bordered treatment instead.
 class _SystemNotes extends ConsumerWidget {
   final ServiceType? focus;
   final Network network;
@@ -3353,12 +3909,20 @@ class _SystemNotes extends ConsumerWidget {
           'Peak design flow: ${pump.flow.inLitersPerSecond.toStringAsFixed(1)} L/s');
     }
 
+    // D8: the SAME flat/opaque/hairline treatment `_detailBox` paints for the
+    // PUMP-SET / valve callouts — a small radius (4, not `MechXRadii.card`'s
+    // larger one), `colors.canvas` fill, a 1px `colors.border` stroke, no
+    // blur/shadow — so this reference annotation reads as the SAME drafting
+    // chrome family as the other 'Details'-gated callouts beside it, instead
+    // of a mismatched Liquid-Glass popover.
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 240),
-      child: GlassSurface(
-        borderRadius: MechXRadii.card,
-        shadow: MechXShadow.popover,
-        edge: Border.all(color: colors.glassEdge),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: colors.canvas,
+          borderRadius: const BorderRadius.all(Radius.circular(4)),
+          border: Border.all(color: colors.border),
+        ),
         child: Padding(
           padding: const EdgeInsets.all(MechXSpacing.sm),
           child: Column(

@@ -12,8 +12,11 @@
 library;
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 
+import '../../store/app_state.dart';
+import '../../store/electrical_store.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -120,14 +123,19 @@ const List<_Group> _groups = [
 ];
 
 /// The scrollable palette column.
-class ElectricalPalette extends StatefulWidget {
-  const ElectricalPalette({super.key});
+///
+/// [enabled] gates interactivity (D6): on the read-only Building-riser / Power
+/// one-line tabs the palette has no drop target, so it renders dimmed + inert
+/// (no drag, no keyboard activation) with a one-line hint replacing the header.
+class ElectricalPalette extends ConsumerStatefulWidget {
+  final bool enabled;
+  const ElectricalPalette({super.key, this.enabled = true});
 
   @override
-  State<ElectricalPalette> createState() => _ElectricalPaletteState();
+  ConsumerState<ElectricalPalette> createState() => _ElectricalPaletteState();
 }
 
-class _ElectricalPaletteState extends State<ElectricalPalette> {
+class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
   // Owned so the themed scroll indicator (J1) can be dragged, not just shown.
   final ScrollController _scrollController = ScrollController();
 
@@ -137,9 +145,62 @@ class _ElectricalPaletteState extends State<ElectricalPalette> {
     super.dispose();
   }
 
+  /// L1 — the keyboard alternative to dragging a card onto a panel: adds the
+  /// load as a new way on the currently selected panel (either workspace's
+  /// selection provider — the standalone single-line's inspector target, or
+  /// the unified Layout electrical layer's marker selection), falling back to
+  /// the project's first panel when nothing is selected. A dropped feeder
+  /// becomes a general load (mirrors the canvas drop-target rule — a feeder
+  /// only starts a NEW sub-panel when dropped on blank canvas, which a
+  /// keyboard activation never does). No-op when the project has no panel at
+  /// all — there's nothing to add a way to.
+  void _addLoad(_Card card) {
+    final project = ref.read(electricalProjectProvider);
+    if (project.panels.isEmpty) return;
+
+    final inspectorTarget = ref.read(electricalInspectorTargetProvider);
+    final layoutSelection = ref.read(electricalSelectionProvider);
+    String? panelId;
+    if (inspectorTarget is ElectricalPanelTarget) {
+      panelId = inspectorTarget.panelId;
+    } else if (inspectorTarget is ElectricalCircuitTarget) {
+      panelId = inspectorTarget.panelId;
+    } else {
+      panelId = layoutSelection?.panelId;
+    }
+    final panel = (panelId == null
+            ? null
+            : project.panels.where((p) => p.id == panelId).firstOrNull) ??
+        project.panels.first;
+
+    // Guard the machine-owned MEP board the same way the canvas drop target
+    // does — a hand-added way there would be silently wiped on the next plan
+    // re-sync.
+    if (panel.id == kMepEquipmentPanelId) {
+      ref.read(statusMessageProvider.notifier).showStatus(
+            'MEP Equipment is auto-generated from the plan — '
+            'add ways to another panel.',
+          );
+      return;
+    }
+
+    final load = card.load;
+    ref.read(electricalProjectProvider.notifier).addCircuit(
+          panel.id,
+          kind: load.kind == LoadKind.feeder ? LoadKind.general : load.kind,
+          phases: load.phases,
+          loadW: load.loadW > 0 ? load.loadW : null,
+          motorKw: load.motorKw,
+        );
+    ref.read(statusMessageProvider.notifier).showStatus(
+        'Added ${context.strings(card.label)} to ${panel.name}');
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    final type = context.type;
+    final enabled = widget.enabled;
     return GlassSurface(
       // Floats over the electrical canvas; its left edge faces the diagram.
       edge: Border(
@@ -156,12 +217,26 @@ class _ElectricalPaletteState extends State<ElectricalPalette> {
               MechXSpacing.md,
               MechXSpacing.xs,
             ),
-            child: MechXSectionLabel(
-                context.strings(StringKey.electricalPaletteLoads)),
+            // D6: on a read-only projection the header is a plain hint (no drop
+            // target here); otherwise the "Loads" section label.
+            child: enabled
+                ? MechXSectionLabel(
+                    context.strings(StringKey.electricalPaletteLoads))
+                : Text(
+                    context.strings(StringKey.electricalPaletteReadOnly),
+                    style: type.caption.copyWith(color: colors.textMuted),
+                  ),
           ),
           const SizedBox(height: MechXSpacing.sm),
           Expanded(
-            child: MechXScrollbar(
+            // D6: dim + inert (no drag / no keyboard activation) when disabled.
+            child: IgnorePointer(
+              ignoring: !enabled,
+              child: ExcludeFocus(
+                excluding: !enabled,
+                child: Opacity(
+                  opacity: enabled ? 1.0 : 0.4,
+                  child: MechXScrollbar(
               controller: _scrollController,
               child: SingleChildScrollView(
               controller: _scrollController,
@@ -196,6 +271,11 @@ class _ElectricalPaletteState extends State<ElectricalPalette> {
                               : colors.accent,
                           data: c.load,
                           fillWidth: true,
+                          // L1: a keyboard alternative to dragging — Enter/Space
+                          // on a focused card adds the way to the selected (or
+                          // first) panel, mirroring the mechanical
+                          // SegmentPalette's dropAtCentre. Null when read-only.
+                          onActivate: enabled ? () => _addLoad(c) : null,
                           // Show the load's industry-standard symbol so the
                           // palette matches how it'll appear on the plan.
                           leading: LoadSymbol(
@@ -211,6 +291,9 @@ class _ElectricalPaletteState extends State<ElectricalPalette> {
                 ],
               ),
             ),
+            ),
+                ),
+              ),
             ),
           ),
         ],

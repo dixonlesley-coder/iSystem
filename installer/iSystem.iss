@@ -80,6 +80,24 @@ Name: "{autodesktop}\iSystem"; Filename: "{app}\{#AppExeName}"; Tasks: desktopic
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+; M2 (Windows-desktop citizenship): associate the `.mechx` project extension with
+; iSystem so Explorer double-click / "Open with" / the taskbar jump list open the
+; project directly. Default-on (a document app should just open its own files),
+; but the engineer can uncheck it during setup.
+Name: "associatemechx"; Description: "Associate .mechx project files with iSystem"; GroupDescription: "File associations:"
+
+[Registry]
+; M2: register the `.mechx` file type + its "open" verb, guarded by the
+; `associatemechx` task. HKA (HKEY_AUTO) resolves to HKLM on an elevated
+; per-machine install and HKCU on a per-user install — matching this installer's
+; PrivilegesRequiredOverridesAllowed setting — so the association lands in the
+; right hive either way. The ProgId's open command passes the double-clicked file
+; path as "%1"; windows/runner forwards it to the Dart entrypoint, which auto-
+; opens it (see lib/main.dart / project_io.dart launchProjectPathFromArgs).
+Root: HKA; Subkey: "Software\Classes\.mechx"; ValueType: string; ValueName: ""; ValueData: "iSystem.Project"; Flags: uninsdeletevalue; Tasks: associatemechx
+Root: HKA; Subkey: "Software\Classes\iSystem.Project"; ValueType: string; ValueName: ""; ValueData: "iSystem Project"; Flags: uninsdeletekey; Tasks: associatemechx
+Root: HKA; Subkey: "Software\Classes\iSystem.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExeName},0"; Tasks: associatemechx
+Root: HKA; Subkey: "Software\Classes\iSystem.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"" ""%1"""; Tasks: associatemechx
 
 [Run]
 ; Relaunch iSystem after the update, on BOTH paths:

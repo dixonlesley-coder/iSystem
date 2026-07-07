@@ -23,10 +23,12 @@ import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 
+import '../data/project_document.dart' show IssueAck;
 import '../ui/strings/app_strings.dart';
 import '../ui/strings/plural.dart';
 import 'air_warnings_store.dart';
 import 'app_state.dart';
+import 'document_control_store.dart';
 import 'electrical_store.dart';
 import 'models/sheet.dart';
 import 'network_store.dart';
@@ -62,12 +64,20 @@ class IssueLocation {
   /// Electrical target: the specific circuit (way) when known. Null otherwise.
   final String? circuitId;
 
+  /// I6 — a NON-spatial target: the Document control inspector section (not a
+  /// sheet, node or panel). When true the Review row jumps to the DESIGN Layout
+  /// view and expands the Document control section rather than selecting a
+  /// drawn element. Additive: defaults false so every existing location is
+  /// unchanged.
+  final bool documentControl;
+
   const IssueLocation(
     this.sheetId, {
     this.nodeId,
     this.edgeId,
     this.panelId,
     this.circuitId,
+    this.documentControl = false,
   });
 
   @override
@@ -77,11 +87,12 @@ class IssueLocation {
       other.nodeId == nodeId &&
       other.edgeId == edgeId &&
       other.panelId == panelId &&
-      other.circuitId == circuitId;
+      other.circuitId == circuitId &&
+      other.documentControl == documentControl;
 
   @override
   int get hashCode =>
-      Object.hash(sheetId, nodeId, edgeId, panelId, circuitId);
+      Object.hash(sheetId, nodeId, edgeId, panelId, circuitId, documentControl);
 }
 
 /// One aggregated design issue: a [severity], a short [title] + [message], and
@@ -189,6 +200,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final overCapacity = ref.watch(airOverCapacityProvider);
   final drainAdvisories = ref.watch(drainageAdvisoryProvider);
   final legionellaReturnTempC = ref.watch(hotWaterLegionellaProvider);
+  final docControl = ref.watch(documentControlProvider);
 
   // Wave 5a (H1) — every user-facing title/message resolves through the active
   // locale; kinds + engine-sourced messages (velocity/drainage/electrical
@@ -360,6 +372,25 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     }
   }
 
+  // ── 3b. Stale calibration since the last plan swap (warning, locatable) ────
+  // "Replace plan…" swaps a sheet's PDF/DXF/DWG source in place but keeps the
+  // sheet id — so its calibration (keyed by id) silently survives even when
+  // the revised drawing has a different DPI/plot scale/title block. Flagged by
+  // `SheetsController.replaceSheetSource` via
+  // `ProjectController.markCalibrationStale`; cleared by re-calibrating or the
+  // Scale inspector's explicit "Scale confirmed" action (J1).
+  for (final s in sheets.sheets) {
+    if (!project.staleCalibrations.contains(s.id)) continue;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'sheet-calibration-stale:${s.id}',
+      title: str(StringKey.issueCalibrationStaleTitle),
+      message:
+          str.format(StringKey.issueCalibrationStaleMessage, {'name': s.name}),
+      locate: IssueLocation(s.id),
+    ));
+  }
+
   // ── 3c. Sheet→floor pile-up (warning, locatable) ────────────────────────────
   // More sheets than floors — or an explicit double-mapping — pile multiple
   // plans onto ONE building floor: `floorFor` silently clamps the overflow to
@@ -445,6 +476,47 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       locate:
           node == null ? null : IssueLocation(node.sheetId, nodeId: d.nodeId),
     ));
+  }
+
+  // ── 3d. Downfeed pressure zone over the SNI max fixture static (I1, warning) ─
+  // A pressure zone whose lowest fixture would exceed the SNI max fixture static
+  // pressure needs a PRV / break-tank to split it. Derived from the building
+  // height (zoneStaticsProvider) REGARDLESS of feed strategy — an over-pressure
+  // zone is an SNI 8153:2015 safety concern the Review sign-off must reflect,
+  // yet it previously only showed inline in the downfeed inspector (and not at
+  // all on upfeed). Read-only: never resizes. Each over-limit zone is its own
+  // warning, best-effort locatable to a sheet mapped onto its bottom floor. Its
+  // generic title rolls up into its own compliance row (which then blocks PASS).
+  final zoneStatics = ref.watch(zoneStaticsProvider);
+  if (zoneStatics.any((z) => !z.withinLimit)) {
+    final maxFixKpa =
+        const SniProfile().maxFixtureStaticPressure.value.inKiloPascals;
+    final floors = project.building.floors;
+    // First sheet mapped onto each building floor (for the locate jump).
+    final sheetForFloor = <int, String>{};
+    for (final s in sheets.sheets) {
+      sheetForFloor.putIfAbsent(sheets.floorFor(s.id, levelCount), () => s.id);
+    }
+    for (final z in zoneStatics) {
+      if (z.withinLimit) continue;
+      final bottomIdx = z.zone.bottomFloorIndex.clamp(0, floors.length - 1);
+      final topIdx = z.zone.topFloorIndex.clamp(0, floors.length - 1);
+      warnings.add(DesignIssue(
+        severity: IssueSeverity.warning,
+        kind:
+            'pressure-zone:${z.zone.bottomFloorIndex}-${z.zone.topFloorIndex}',
+        title: str(StringKey.issuePressureZoneTitle),
+        message: str.format(StringKey.issuePressureZoneMessage, {
+          'bottom': floors[bottomIdx].name,
+          'top': floors[topIdx].name,
+          'kpa': z.bottomStatic.inKiloPascals.toStringAsFixed(0),
+          'limit': maxFixKpa.toStringAsFixed(0),
+        }),
+        locate: sheetForFloor[z.zone.bottomFloorIndex] == null
+            ? null
+            : IssueLocation(sheetForFloor[z.zone.bottomFloorIndex]!),
+      ));
+    }
   }
 
   // ── 4. Drainage advisories: too-flat slope / over-long branch (info) ────────
@@ -567,6 +639,28 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
+  // ── 5d. Document-control revision inconsistency (I6, info, locatable) ───────
+  // The title-block Revision tag (stamped on every issued sheet/report) and the
+  // Revision-history table are two independently-typed fields. When the history
+  // carries entries but the title-block Revision is left blank, every issued
+  // sheet stamps NO revision while the printed history lists changes — the
+  // document-control inconsistency a tender reviewer flags. Read-only fan-in (it
+  // never mutates document control); locatable to the Document control section.
+  // A per-row revision-letter cross-check is deferred (a `Revision` row carries
+  // no letter), so this surfaces the one letter-free, false-positive-free case.
+  {
+    final tag = docControl.revisionTag?.trim() ?? '';
+    if (docControl.revisions.isNotEmpty && tag.isEmpty) {
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
+        kind: 'revision-tag-missing',
+        title: str(StringKey.issueRevisionTagMissingTitle),
+        message: str(StringKey.issueRevisionTagMissingMessage),
+        locate: const IssueLocation('', documentControl: true),
+      ));
+    }
+  }
+
   // ── 6. Unverified // VERIFY standards (info, not locatable) ─────────────────
   // Only values genuinely PENDING official confirmation (secondarySource) are
   // surfaced here. A notAnSniClause value is a confirmed general-practice/design
@@ -621,43 +715,62 @@ final designIssueCriticalCountProvider = Provider<int>((ref) => ref
     .where((i) => i.severity == IssueSeverity.critical)
     .length);
 
-/// H1 — the set of ACKNOWLEDGED advisory issue keys (see [DesignIssue.key]). An
-/// acknowledgement records that the engineer has seen and accepted an advisory
-/// (an unverified `secondarySource` standard, a drainage/Legionella note) so it
-/// no longer blocks a PASS verdict — errors and warnings are NOT acknowledgeable
-/// and always block. Persisted additively with the project via
-/// `DesignSettings.acknowledgedIssueKeys` (round-trips in `.mechx`; empty ⇒
-/// byte-identical, and compliance behaves exactly as before). Machine-agnostic:
-/// the keys travel with the file so a colleague opening it sees the same
-/// sign-off state.
+/// H1 + I4 — the ACKNOWLEDGED advisories, keyed by [DesignIssue.key], each
+/// carrying its AUDIT record ([IssueAck]: author initials, app-stamped date,
+/// optional justification). An acknowledgement records that the engineer has
+/// seen and accepted an advisory (an unverified `secondarySource` standard, a
+/// drainage/Legionella note) so it no longer blocks a PASS verdict — errors and
+/// warnings are NOT acknowledgeable and always block. Persisted additively with
+/// the project via `DesignSettings.acknowledgedIssues` (round-trips in `.mechx`;
+/// empty ⇒ byte-identical, and compliance behaves exactly as before).
+/// Machine-agnostic: the record travels with the file so a colleague opening it
+/// sees the same sign-off state AND who signed it off, when, and why. The map
+/// KEYS are the acknowledged issue keys — every reader that only needs the "is
+/// this acknowledged?" question uses `.containsKey`.
 final acknowledgedIssuesProvider =
-    NotifierProvider<AcknowledgedIssuesController, Set<String>>(
+    NotifierProvider<AcknowledgedIssuesController, Map<String, IssueAck>>(
   AcknowledgedIssuesController.new,
 );
 
-class AcknowledgedIssuesController extends Notifier<Set<String>> {
+class AcknowledgedIssuesController extends Notifier<Map<String, IssueAck>> {
   @override
-  Set<String> build() => const {};
+  Map<String, IssueAck> build() => const {};
 
-  /// Replace the whole set (used by `applyDocument` on load).
-  void set(Set<String> keys) => state = Set.unmodifiable(keys);
+  /// Replace the whole map (used by `applyDocument` on load).
+  void set(Map<String, IssueAck> acks) => state = Map.unmodifiable(acks);
 
-  /// Acknowledge one advisory by its [DesignIssue.key].
-  void acknowledge(String key) => state = Set.unmodifiable({...state, key});
+  /// Acknowledge one advisory by its [DesignIssue.key], recording who accepted
+  /// it ([author]), an optional one-line [note], and the app-stamped [date]
+  /// (the engine never reads the clock; the caller passes today's date).
+  void acknowledge(String key,
+          {String author = '', String note = '', String date = ''}) =>
+      state = Map.unmodifiable({
+        ...state,
+        key: IssueAck(key: key, author: author, note: note, date: date),
+      });
 
   /// Withdraw an acknowledgement (the row blocks again).
   void unacknowledge(String key) =>
-      state = Set.unmodifiable({...state}..remove(key));
+      state = Map.unmodifiable({...state}..remove(key));
 
   /// Toggle the acknowledgement of [key].
-  void toggle(String key) =>
-      state.contains(key) ? unacknowledge(key) : acknowledge(key);
+  void toggle(String key,
+          {String author = '', String note = '', String date = ''}) =>
+      state.containsKey(key)
+          ? unacknowledge(key)
+          : acknowledge(key, author: author, note: note, date: date);
 
   /// Acknowledge every currently-OPEN acknowledgeable issue at once (the Review
-  /// "Acknowledge all advisories" affordance). [keys] is the set of
-  /// acknowledgeable issue keys the caller derived from [designIssuesProvider].
-  void acknowledgeAll(Iterable<String> keys) =>
-      state = Set.unmodifiable({...state, ...keys});
+  /// "Acknowledge all advisories" affordance), stamping them with ONE audit
+  /// record ([author]/[note]/[date]). [keys] is the set of acknowledgeable issue
+  /// keys the caller derived from [designIssuesProvider].
+  void acknowledgeAll(Iterable<String> keys,
+          {String author = '', String note = '', String date = ''}) =>
+      state = Map.unmodifiable({
+        ...state,
+        for (final k in keys)
+          k: IssueAck(key: k, author: author, note: note, date: date),
+      });
 
   void clear() => state = const {};
 }
@@ -670,7 +783,7 @@ final openDesignIssueCountProvider = Provider<int>((ref) {
   final issues = ref.watch(designIssuesProvider);
   final ack = ref.watch(acknowledgedIssuesProvider);
   return issues
-      .where((i) => !(i.isAcknowledgeable && ack.contains(i.key)))
+      .where((i) => !(i.isAcknowledgeable && ack.containsKey(i.key)))
       .length;
 });
 

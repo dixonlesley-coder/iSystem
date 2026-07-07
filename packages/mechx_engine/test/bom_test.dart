@@ -377,7 +377,8 @@ void main() {
     test('fittingsToCsv has a header and one row per line', () {
       final csv = fittingsToCsv(buildFittings(net: _net, sizing: _sizing));
       final lines = csv.trim().split('\n');
-      expect(lines.first, 'service,fitting,nominal_dn_mm,count');
+      // N18: neutral column name (was nominal_dn_mm).
+      expect(lines.first, 'service,fitting,nominal_size_mm,count');
       expect(lines.length, greaterThan(1));
     });
   });
@@ -392,17 +393,187 @@ void main() {
       );
       final csv = bomToCsv(bom);
       final lines = csv.trim().split('\n');
-      expect(lines.first, 'service,kind,nominal_dn_mm,length_m,segments');
+      // N14: neutral nominal_size_mm + a material column (coldWater default PPR).
+      // N13: a tag column right after kind (run → service code, riser → CW-R1).
+      expect(lines.first,
+          'service,kind,tag,nominal_size_mm,material,length_m,segments');
       expect(lines.length, bom.length + 1);
-      // run line: coldWater,run,25,8.75,2
-      expect(lines, contains('coldWater,run,25,8.75,2'));
-      // riser line: coldWater,riser,50,3.50,1
-      expect(lines, contains('coldWater,riser,50,3.50,1'));
+      // run line: coldWater,run,CW,25,PPR,8.75,2 (ungrouped run → bare code).
+      expect(lines, contains('coldWater,run,CW,25,PPR,8.75,2'));
+      // riser line: coldWater,riser,CW-R1,50,PPR,3.50,1 (the riser stack tag).
+      expect(lines, contains('coldWater,riser,CW-R1,50,PPR,3.50,1'));
     });
 
     test('empty bom → header only', () {
       expect(bomToCsv(const []).trim(),
-          'service,kind,nominal_dn_mm,length_m,segments');
+          'service,kind,tag,nominal_size_mm,material,length_m,segments');
+    });
+  });
+
+  // ── I5: manual-override provenance ─────────────────────────────────────────
+  group('buildBom — I5 manual override flag', () {
+    // e1 carries a manual size override; e2/e3 do not.
+    const e1over = NetEdge(
+      id: 'e1',
+      fromId: 'n0',
+      toId: 'n1',
+      service: ServiceType.coldWater,
+      kind: EdgeKind.run,
+      sizeOverride: Diameter(0.025),
+    );
+    const netOver = Network(
+      nodes: [_n0, _n1, _n2, _n3],
+      edges: [e1over, _e2, _e3],
+    );
+
+    test('a line with any overridden edge is flagged manual; the rest are not',
+        () {
+      final bom = buildBom(
+        net: netOver,
+        sizing: _sizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      // The DN25 run line merges e1 (override) + e2 (auto) → manual (any).
+      expect(_lineWhere(bom, ServiceType.coldWater, EdgeKind.run, 25).manual,
+          isTrue);
+      // The DN50 riser line (e3) was auto-sized → not manual.
+      expect(_lineWhere(bom, ServiceType.coldWater, EdgeKind.riser, 50).manual,
+          isFalse);
+    });
+
+    test('bomToCsv appends a manual column with a * token only for overrides',
+        () {
+      final bom = buildBom(
+        net: netOver,
+        sizing: _sizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      final lines = bomToCsv(bom).trim().split('\n');
+      // The conditional column is present and trails the header.
+      expect(lines.first, endsWith(',manual'));
+      // The run line carries the marker; the riser line's cell is empty.
+      expect(lines.any((l) => l.startsWith('coldWater,run,') && l.endsWith(',*')),
+          isTrue);
+      expect(
+          lines.any((l) => l.startsWith('coldWater,riser,') && l.endsWith(',')),
+          isTrue);
+    });
+
+    test('an all-auto BOM stays byte-identical (no manual column, all false)',
+        () {
+      final bom = buildBom(
+        net: _net,
+        sizing: _sizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      expect(bom.every((l) => !l.manual), isTrue);
+      expect(bomToCsv(bom).split('\n').first.contains('manual'), isFalse);
+    });
+  });
+
+  // ── N14/N18: material + one size notation ──────────────────────────────────
+  group('material + duct notation', () {
+    const dNet = Network(
+      nodes: [
+        NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'b', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+      ],
+      edges: [
+        NetEdge(id: 'duct', fromId: 'a', toId: 'b', service: ServiceType.duct),
+      ],
+    );
+
+    test('a round AC supply duct resolves PU material and a Ø size label', () {
+      const sizing = <String, EdgeSizing>{
+        'duct': EdgeSizing(
+          edgeId: 'duct',
+          service: ServiceType.duct,
+          flow: FlowRate(0.1),
+          diameter: Diameter(0.2), // 200 mm
+          velocity: Velocity(3.0),
+        ),
+      };
+      final bom = buildBom(
+        net: dNet,
+        sizing: sizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      final line = bom.single;
+      expect(line.material, 'PU'); // supply-air default duct product
+      expect(line.sizeLabel, 'Ø200'); // round air → Ø (report notation)
+      expect(line.csvSize, '200'); // bare mm in the CSV
+      // N13: ungrouped run tag = the bare service code (supply air → SA).
+      expect(line.tag, 'SA');
+      expect(bomToCsv(bom), contains('duct,run,SA,200,PU,'));
+    });
+
+    test('a rectangular duct prints W x H (size label + CSV + grouping)', () {
+      const sizing = <String, EdgeSizing>{
+        'duct': EdgeSizing(
+          edgeId: 'duct',
+          service: ServiceType.duct,
+          flow: FlowRate(0.1),
+          diameter: Diameter(0.2),
+          velocity: Velocity(3.0),
+          width: Length(0.3), // 300 mm
+          height: Length(0.2), // 200 mm
+        ),
+      };
+      final bom = buildBom(
+        net: dNet,
+        sizing: sizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      final line = bom.single;
+      expect(line.widthMm, 300);
+      expect(line.heightMm, 200);
+      expect(line.sizeLabel, '300x200');
+      expect(line.csvSize, '300x200');
+      expect(bomToCsv(bom), contains('duct,run,SA,300x200,PU,'));
+    });
+
+    test('same DN, different material splits into two priced lines', () {
+      const twoServices = Network(
+        nodes: [
+          NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          NetNode(id: 'b', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+          NetNode(id: 'c', sheetId: 's1', x: 200, y: 0, floorIndex: 0),
+        ],
+        edges: [
+          // coldWater (PPR) + drainage (PVC), both DN50 → two lines.
+          NetEdge(id: 'cw', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
+          NetEdge(id: 'dr', fromId: 'b', toId: 'c', service: ServiceType.drainage),
+        ],
+      );
+      const sizing = <String, EdgeSizing>{
+        'cw': EdgeSizing(
+          edgeId: 'cw',
+          service: ServiceType.coldWater,
+          flow: FlowRate(0.001),
+          diameter: Diameter(0.05),
+          velocity: Velocity(1.0),
+        ),
+        'dr': EdgeSizing(
+          edgeId: 'dr',
+          service: ServiceType.drainage,
+          flow: FlowRate(0.001),
+          diameter: Diameter(0.05),
+          velocity: Velocity(1.0),
+        ),
+      };
+      final bom = buildBom(
+        net: twoServices,
+        sizing: sizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      final materials = bom.map((l) => l.material).toSet();
+      expect(materials, {'PPR', 'PVC'});
     });
   });
 
@@ -525,15 +696,17 @@ void main() {
         groupByFloor: true,
       );
       final lines = bomToCsv(bom).trim().split('\n');
+      // N13: the tag column sits right after kind, before the floor column.
       expect(lines.first,
-          'service,kind,floor,nominal_dn_mm,length_m,segments');
-      // Floor 0 → human 1, floor 1 → human 2, riser → empty.
-      expect(lines, contains('coldWater,run,1,25,5.00,1'));
-      expect(lines, contains('coldWater,run,2,25,3.00,1'));
-      expect(lines, contains('coldWater,riser,,50,3.50,1'));
+          'service,kind,tag,floor,nominal_size_mm,material,length_m,segments');
+      // Floor 0 → human 1 (tag CW-F1), floor 1 → human 2 (CW-F2), riser → the
+      // stack tag CW-R1 with an empty floor cell (all PPR).
+      expect(lines, contains('coldWater,run,CW-F1,1,25,PPR,5.00,1'));
+      expect(lines, contains('coldWater,run,CW-F2,2,25,PPR,3.00,1'));
+      expect(lines, contains('coldWater,riser,CW-R1,,50,PPR,3.50,1'));
     });
 
-    test('bomToCsv stays byte-identical (no floor column) for the default build',
+    test('bomToCsv keeps no floor column for the default (un-grouped) build',
         () {
       final bom = buildBom(
         net: twoFloorNet,
@@ -542,7 +715,41 @@ void main() {
         building: _building,
       );
       expect(bomToCsv(bom).split('\n').first,
-          'service,kind,nominal_dn_mm,length_m,segments');
+          'service,kind,tag,nominal_size_mm,material,length_m,segments');
+    });
+
+    // ── N13: the stable element tag on each BomLine ─────────────────────────
+    test('BomLine.tag carries the riser stack tag + the run floor tag', () {
+      final grouped = buildBom(
+        net: twoFloorNet,
+        sizing: twoFloorSizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+        groupByFloor: true,
+      );
+      // Runs (floor-grouped): service code + 1-based floor.
+      expect(
+          grouped
+              .singleWhere((l) => l.kind == EdgeKind.run && l.floorIndex == 0)
+              .tag,
+          'CW-F1');
+      expect(
+          grouped
+              .singleWhere((l) => l.kind == EdgeKind.run && l.floorIndex == 1)
+              .tag,
+          'CW-F2');
+      // Riser: its per-service stack tag (same as riserTags), never a floor tag.
+      expect(grouped.singleWhere((l) => l.kind == EdgeKind.riser).tag, 'CW-R1');
+
+      // Ungrouped: a run line carries the bare service code (no single floor).
+      final ungrouped = buildBom(
+        net: twoFloorNet,
+        sizing: twoFloorSizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      expect(ungrouped.singleWhere((l) => l.kind == EdgeKind.run).tag, 'CW');
+      expect(ungrouped.singleWhere((l) => l.kind == EdgeKind.riser).tag, 'CW-R1');
     });
   });
 }

@@ -65,6 +65,43 @@ void main() {
       expect(net.edges.length, 2);
     });
 
+    test('B1: switching sheet mid-run does not plant a phantom cross-sheet node',
+        () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setTool(DrawTool.drawRun);
+      // First click on sheet s1 / floor 0 pends the start there.
+      n.placeRunPoint('s1', 0, const Offset(10, 10));
+      var s = c.read(networkControllerProvider);
+      expect(s.pendingPoint, const Offset(10, 10));
+      expect(s.pendingSheetId, 's1');
+      expect(s.pendingFloorIndex, 0);
+
+      // The engineer clicks the sheet rail → the next click lands on a DIFFERENT
+      // sheet/floor. Pre-fix this committed an edge with a phantom node at the
+      // STALE (10,10) offset planted on s2. Now it must refuse the cross-sheet
+      // edge and restart the run here.
+      n.placeRunPoint('s2', 1, const Offset(200, 200));
+      s = c.read(networkControllerProvider);
+      expect(s.network.edges, isEmpty, reason: 'no cross-sheet edge committed');
+      expect(s.network.nodes, isEmpty, reason: 'no phantom node planted');
+      expect(s.pendingPoint, const Offset(200, 200),
+          reason: 'the run restarted at this click on the new sheet');
+      expect(s.pendingSheetId, 's2');
+      expect(s.pendingFloorIndex, 1);
+
+      // A second click on the SAME new sheet now draws a clean run, both nodes on
+      // s2 / floor 1 — none at the stale s1 coordinates.
+      n.placeRunPoint('s2', 1, const Offset(300, 200));
+      final net = c.read(networkControllerProvider).network;
+      expect(net.edges.length, 1);
+      expect(net.nodes.length, 2);
+      expect(net.nodes.every((nd) => nd.sheetId == 's2' && nd.floorIndex == 1),
+          isTrue);
+      expect(net.nodes.any((nd) => nd.x == 10 && nd.y == 10), isFalse,
+          reason: 'the stale start offset never became a node');
+    });
+
     test('snapping reuses a nearby node', () {
       final c = makeContainer();
       final n = c.read(networkControllerProvider.notifier);
@@ -312,12 +349,127 @@ void main() {
       expect(runsBefore, 2);
     });
 
-    test('duplicateFloor is a no-op when the source floor has no runs', () {
+    test('duplicateFloor is a no-op when the source floor has no content', () {
       final c = makeContainer();
       final n = c.read(networkControllerProvider.notifier);
       n.duplicateFloor(
           fromSheetId: 's1', fromFloor: 0, toSheetId: 's2', toFloor: 1);
       expect(c.read(networkControllerProvider).network.nodes, isEmpty);
+    });
+
+    test('J4: duplicateFloor also copies free-standing equipment nodes', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // A run on s1/floor 0 …
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(100, 0));
+      n.setTool(DrawTool.select);
+      // … PLUS a loose fire extinguisher + hose reel placed before any pipe was
+      // routed to them (zero incident edges).
+      n.addComponentNode(
+          's1', 0, const Offset(40, 60), NodeComponent.fireExtinguisher);
+      n.addComponentNode('s1', 0, const Offset(80, 60), NodeComponent.hoseReel);
+
+      final before = c.read(networkControllerProvider).network;
+      expect(before.nodes.where((nd) => nd.sheetId == 's1').length, 4);
+
+      n.duplicateFloor(
+          fromSheetId: 's1', fromFloor: 0, toSheetId: 's2', toFloor: 1);
+      final after = c.read(networkControllerProvider).network;
+      final s2 = after.nodes.where((nd) => nd.sheetId == 's2').toList();
+      // 2 run-wired nodes + the 2 loose equipment nodes all carried across.
+      expect(s2.length, 4);
+      expect(s2.every((nd) => nd.floorIndex == 1), isTrue);
+      expect(
+          s2.where((nd) => nd.component == NodeComponent.fireExtinguisher).length,
+          1,
+          reason: 'the loose extinguisher was copied, not silently dropped');
+      expect(s2.where((nd) => nd.component == NodeComponent.hoseReel).length, 1);
+      // The one run edge is copied; the loose nodes add none.
+      final s2NodeIds = s2.map((nd) => nd.id).toSet();
+      final s2Edges = after.edges.where(
+          (e) => s2NodeIds.contains(e.fromId) && s2NodeIds.contains(e.toId));
+      expect(s2Edges.length, 1);
+    });
+
+    test('J4: duplicateFloor copies loose equipment even with no runs', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.addComponentNode(
+          's1', 0, const Offset(40, 60), NodeComponent.fireExtinguisher);
+      n.duplicateFloor(
+          fromSheetId: 's1', fromFloor: 0, toSheetId: 's2', toFloor: 1);
+      final after = c.read(networkControllerProvider).network;
+      final s2 = after.nodes.where((nd) => nd.sheetId == 's2').toList();
+      expect(s2.length, 1);
+      expect(s2.single.component, NodeComponent.fireExtinguisher);
+      expect(s2.single.floorIndex, 1);
+    });
+
+    test('F3: duplicateFloorToTargets is ONE undo step for the whole range',
+        () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // Two runs on s1/floor 0: 3 nodes, 2 run edges.
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(100, 0));
+      n.placeRunPoint('s1', 0, const Offset(200, 0));
+      n.setTool(DrawTool.select);
+      final before = c.read(networkControllerProvider).network;
+      final beforeNodes = before.nodes.length; // 3
+      final beforeEdges = before.edges.length; // 2
+
+      // Batch-duplicate onto THREE target floors in one action.
+      n.duplicateFloorToTargets(
+        fromSheetId: 's1',
+        fromFloor: 0,
+        targets: const [
+          (sheetId: 's2', floor: 1),
+          (sheetId: 's3', floor: 2),
+          (sheetId: 's4', floor: 3),
+        ],
+      );
+      final after = c.read(networkControllerProvider).network;
+      // 3 targets × (3 nodes + 2 edges).
+      expect(after.nodes.length, beforeNodes + 3 * 3);
+      expect(after.edges.length, beforeEdges + 3 * 2);
+      for (final s in const ['s2', 's3', 's4']) {
+        expect(after.nodes.where((nd) => nd.sheetId == s).length, 3,
+            reason: 'each target floor got its own copy of the 3 nodes');
+      }
+
+      // ONE undo (via the global timeline) restores the ENTIRE pre-duplicate
+      // state — proving the whole range collapsed to a single history entry.
+      c.read(historyProvider.notifier).undo();
+      final undone = c.read(networkControllerProvider).network;
+      expect(undone.nodes.length, beforeNodes);
+      expect(undone.edges.length, beforeEdges);
+      expect(undone.nodes.where((nd) => nd.sheetId != 's1'), isEmpty,
+          reason: "a single undo removed all three floors' copies");
+    });
+
+    test('F3: duplicateFloorToTargets skips a source==target pair', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(100, 0));
+      n.setTool(DrawTool.select);
+      final before = c.read(networkControllerProvider).network.nodes.length;
+      // The source pair is a no-op; only s2 receives a copy.
+      n.duplicateFloorToTargets(
+        fromSheetId: 's1',
+        fromFloor: 0,
+        targets: const [
+          (sheetId: 's1', floor: 0),
+          (sheetId: 's2', floor: 1),
+        ],
+      );
+      final after = c.read(networkControllerProvider).network;
+      expect(after.nodes.where((nd) => nd.sheetId == 's1').length, before);
+      expect(after.nodes.where((nd) => nd.sheetId == 's2').length, before);
     });
 
     test('node drag moves the node and is a single undo step', () {

@@ -5,6 +5,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'glass_surface.dart';
 import 'mechx_focus_ring.dart';
+import 'mechx_tooltip.dart';
 
 /// A small floating "(?)" affordance + its gesture-help popover, lifted from the
 /// electrical canvas so the mechanical Layout canvas can advertise the same
@@ -27,31 +28,46 @@ class CanvasGuideButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      // Keyboard-activatable (Enter/Space) — the bespoke help buttons this
-      // shared widget replaced carried a focus ring; keep that a11y here so the
-      // Layout / electrical / Riser guides can all be reached without the mouse.
-      // The ring only paints when focused, so the idle button is byte-identical.
-      child: MechXFocusRing(
-        onActivated: onToggle,
-        child: GestureDetector(
-          onTap: onToggle,
-          child: AnimatedContainer(
-            duration: MechXMotion.hover,
-            curve: MechXMotion.standard,
-            width: 26,
-            height: 26,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: open ? colors.accent : colors.surface,
-              shape: BoxShape.circle,
-              border: Border.all(color: open ? colors.accent : colors.border),
-            ),
-            child: Text(
-              '?',
-              style: context.type.label.copyWith(
-                color: open ? const Color(0xFFFFFFFF) : colors.textSecondary,
+    // L5/M4: the "?" is otherwise unlabeled icon-only chrome — a hover
+    // tooltip names it for a sighted mouse user (the button is already
+    // keyboard-focusable + Enter/Space-activatable below). L4: the accessible
+    // name is put on the button's own focus-ring node (with the glyph excluded
+    // from semantics), NOT on a second Semantics node here — the inner
+    // MechXFocusRing already emits the button node, so a labelled Semantics
+    // wrapper would double-announce (name + "?" glyph).
+    return MechXTooltip(
+      message: context.strings(StringKey.canvasGuideTitle),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        // Keyboard-activatable (Enter/Space) — the bespoke help buttons this
+        // shared widget replaced carried a focus ring; keep that a11y here so the
+        // Layout / electrical / Riser guides can all be reached without the mouse.
+        // The ring only paints when focused, so the idle button is byte-identical.
+        child: MechXFocusRing(
+          onActivated: onToggle,
+          semanticLabel: context.strings(StringKey.canvasGuideTitle),
+          child: GestureDetector(
+            onTap: onToggle,
+            child: AnimatedContainer(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
+              width: 26,
+              height: 26,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: open ? colors.accent : colors.surface,
+                shape: BoxShape.circle,
+                border: Border.all(color: open ? colors.accent : colors.border),
+              ),
+              child: ExcludeSemantics(
+                // Decorative once the button carries a real label — hide it so
+                // a screen reader announces the guide name, not "question mark".
+                child: Text(
+                  '?',
+                  style: context.type.label.copyWith(
+                    color: open ? const Color(0xFFFFFFFF) : colors.textSecondary,
+                  ),
+                ),
               ),
             ),
           ),

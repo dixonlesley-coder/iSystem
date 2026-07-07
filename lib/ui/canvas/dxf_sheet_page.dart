@@ -50,6 +50,13 @@ class DxfSheetPage extends StatefulWidget {
   /// Test seam: prime the cache so a widget test can render without disk I/O.
   static void cacheForTest(String path, DxfDrawing? drawing) =>
       _cache[path] = drawing;
+
+  /// The parsed drawing for [path] the painter uses, loading + caching it on
+  /// first access (null when the file is missing / empty / unparseable). The
+  /// B12 underlay snap index is built from THIS same cached drawing, so the snap
+  /// surface always matches the painted linework — no re-parse. Pure disk read;
+  /// safe to call off the paint path.
+  static DxfDrawing? cachedDrawing(String path) => _load(path);
 }
 
 class _DxfSheetPageState extends State<DxfSheetPage> {

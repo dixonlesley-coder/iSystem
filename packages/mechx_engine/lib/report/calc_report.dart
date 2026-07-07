@@ -20,12 +20,14 @@ import '../sizing/fire_sprinkler.dart';
 import '../sizing/fire_sprinkler_hydraulic.dart';
 import '../sizing/fire_standpipe.dart';
 import '../sizing/hot_water.dart';
+import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../sizing/operating_point.dart';
 import '../sizing/pump.dart';
 import '../standards/sni.dart';
 import '../units.dart';
 import 'report_blocks.dart';
 import 'report_strings.dart';
+import 'riser_tags.dart' show elementTags;
 
 /// All inputs the calc report renders. Systems that aren't present are null /
 /// empty and their sections are skipped.
@@ -81,6 +83,11 @@ class CalcReportData {
   final List<BomLine> bom;
   final List<FittingLine> fittings;
 
+  /// Per-run/riser sizing schedule (tag / size / FU / flow / velocity / length).
+  /// Empty ⇒ the section is skipped (legacy output byte-identical). Built via
+  /// [buildRunSchedule] by the app / dev tool from the live network + sizing.
+  final List<RunScheduleRow> runSchedule;
+
   /// Building occupancy class for the Design Basis register (UBAP fixture loads
   /// / demand). Null ⇒ the line is omitted (legacy output byte-identical).
   final Occupancy? occupancy;
@@ -116,9 +123,110 @@ class CalcReportData {
     this.runoffCoefficient = 1.0,
     this.bom = const [],
     this.fittings = const [],
+    this.runSchedule = const [],
     this.occupancy,
     this.revisions = const [],
   });
+}
+
+/// One row of the per-run/riser sizing schedule (N16): the design basis behind a
+/// single drawn segment's size, tabulated from its [EdgeSizing] so a reviewer can
+/// check "why DN32 not DN25?" against flow + velocity from the issued set. Pure
+/// data — [buildRunSchedule] reads it off the already-solved sizing.
+class RunScheduleRow {
+  final ServiceType service;
+  final EdgeKind kind;
+
+  /// The stable, cross-artifact element tag (N13) — the riser stack tag
+  /// (`CW-R1`) for a riser, `<code>-F<floor>` for a run — matching the plan,
+  /// riser single-line and BOM so a scheduled row traces to a drawn element.
+  final String tag;
+
+  /// Set-wide size notation (Ø round duct / W×H rect duct / DN pipe).
+  final String sizeLabel;
+
+  /// Accumulated fixture units carried by the segment (water UBAP / drainage
+  /// DFU) when supplied; null ⇒ not applicable / not threaded (air terminals) —
+  /// rendered as a dash, never guessed.
+  final double? fixtureUnits;
+
+  /// Design flow (L/s). For air services this is the airflow.
+  final double flowLps;
+
+  /// Flow velocity (m/s); <= 0 when the sizing path computes none.
+  final double velocityMs;
+
+  /// Physical length (m) from the §10 geometry.
+  final double lengthM;
+
+  const RunScheduleRow({
+    required this.service,
+    required this.kind,
+    required this.tag,
+    required this.sizeLabel,
+    required this.fixtureUnits,
+    required this.flowLps,
+    required this.velocityMs,
+    required this.lengthM,
+  });
+}
+
+/// The set-wide size notation for a solved [EdgeSizing] (N18): a rectangular
+/// duct as `W x H` (mm), a round air duct as `Ø<mm>`, a pipe as `DN<mm>`.
+String _edgeSizeLabel(EdgeSizing s) {
+  if (s.isRectangular) {
+    return '${s.width!.inMillimeters.round()}x${s.height!.inMillimeters.round()}';
+  }
+  final mm = s.diameter.inMillimeters.round();
+  return s.service.isAir ? 'Ø$mm' : 'DN$mm';
+}
+
+/// Build the per-run/riser sizing schedule from the already-solved [sizing] +
+/// per-edge [edgeLengths] (§10 metres). One row per sized edge, ordered by
+/// service then kind then the network's drawn edge order (deterministic). Each
+/// row's tag is the SHARED stable element tag ([elementTags], N13) — the riser
+/// stack tag (`CW-R1`) for a riser, `<code>-F<floor>` for a run — so a schedule
+/// row reads the same identifier the plan, riser single-line and BOM carry (a
+/// reviewer can find "why DN32 not DN25?" for the exact run drawn on the plan).
+/// [edgeFixtureUnits] (edgeId → accumulated UBAP/DFU) fills the FU column when
+/// the caller supplies it; omitted edges show no FU. Pure — tabulates existing
+/// data, adds no sizing.
+List<RunScheduleRow> buildRunSchedule({
+  required Network net,
+  required Map<String, EdgeSizing> sizing,
+  required Map<String, Length> edgeLengths,
+  Map<String, double> edgeFixtureUnits = const {},
+}) {
+  final drawnIndex = <String, int>{
+    for (var i = 0; i < net.edges.length; i++) net.edges[i].id: i,
+  };
+  final ordered = [
+    for (final e in net.edges)
+      if (sizing.containsKey(e.id)) e,
+  ]..sort((a, b) {
+      final svc = a.service.index.compareTo(b.service.index);
+      if (svc != 0) return svc;
+      final knd = a.kind.index.compareTo(b.kind.index);
+      if (knd != 0) return knd;
+      return drawnIndex[a.id]!.compareTo(drawnIndex[b.id]!);
+    });
+
+  final tags = elementTags(net);
+  final rows = <RunScheduleRow>[];
+  for (final e in ordered) {
+    final s = sizing[e.id]!;
+    rows.add(RunScheduleRow(
+      service: e.service,
+      kind: e.kind,
+      tag: tags[e.id] ?? '',
+      sizeLabel: _edgeSizeLabel(s),
+      fixtureUnits: edgeFixtureUnits[e.id],
+      flowLps: s.flow.inLitersPerSecond,
+      velocityMs: s.velocity.metersPerSecond,
+      lengthM: edgeLengths[e.id]?.meters ?? 0.0,
+    ));
+  }
+  return rows;
 }
 
 String _occupancyLabel(Occupancy o, ReportStrings s) => switch (o) {
@@ -235,8 +343,10 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
     RptHeading(1,
         strings.format(RptStringKey.calcTitle, {'name': d.projectName})),
     RptParagraph(strings.format(RptStringKey.calcGenerated, {'date': d.date})),
+    // N25: the standards line is a governed statement (report_strings), not the
+    // raw revision blob's "superseded" admission — {rev} is no longer echoed.
     RptParagraph(strings.format(RptStringKey.calcStandardsBasis,
-        {'name': d.standardsName, 'rev': d.standardsRevision})),
+        {'name': d.standardsName})),
 
     // ── Design basis / inputs & assumptions ───────────────────────────────────
     RptHeading(2, strings(RptStringKey.headingDesignBasis)),
@@ -410,7 +520,10 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               'bar': ra.remoteHeadPressure.inBar.toStringAsFixed(2),
               'minbar': ra.minOperatingPressure.inBar.toStringAsFixed(2),
               'fric': ra.branchLineFrictionHead.meters.toStringAsFixed(1),
-              'verdict': ra.verdict,
+              // I7 — localized off the boolean, not the engine's English getter.
+              'verdict': ra.meetsMinimumPressure
+                  ? strings(RptStringKey.fireRemoteAreaVerdictOk)
+                  : strings(RptStringKey.fireRemoteAreaVerdictUnder),
             })
           ),
         if (st != null)
@@ -436,7 +549,10 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               'churn': fp.churn.head.meters.toStringAsFixed(0),
               'overload': fp.overload.head.meters.toStringAsFixed(0),
               'motor': fp.selectedMotor.inKiloWatts.toStringAsFixed(1),
-              'verdict': fp.verdict,
+              // I7 — localized off the boolean, not the engine's English getter.
+              'verdict': fp.oversized
+                  ? strings(RptStringKey.firePumpVerdictOversized)
+                  : strings(RptStringKey.firePumpVerdictWithin),
             })
           ),
         if (fp != null)
@@ -520,7 +636,11 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
         [
           strings(RptStringKey.tblService),
           strings(RptStringKey.tblType),
+          // N13: the stable element tag (riser stack tag / run floor tag) so a
+          // BOM line traces to the drawn run/riser on the plan + riser + report.
+          strings(RptStringKey.tblTag),
           strings(RptStringKey.tblSize),
+          strings(RptStringKey.tblMaterial),
           strings(RptStringKey.tblLengthM),
           strings(RptStringKey.tblSegments),
         ],
@@ -531,13 +651,31 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               line.kind == EdgeKind.riser
                   ? strings(RptStringKey.bomRiser)
                   : strings(RptStringKey.bomRun),
-              line.service.isAir ? 'Ø${line.diameterMm}' : 'DN${line.diameterMm}',
+              line.tag,
+              // N18: one size notation — Ø round duct / W×H rect / DN pipe. I5:
+              // a `*` marks a size that came from a MANUAL override, resolved by
+              // the footnote below.
+              line.manual ? '${line.sizeLabel} *' : line.sizeLabel,
+              line.material,
               line.totalLength.meters.toStringAsFixed(1),
               '${line.segmentCount}',
             ],
         ],
-        mdSeparator: '|---|---|---|---:|---:|',
+        mdSeparator: '|---|---|---|---|---|---:|---:|',
       ));
+    // I5 — a footnote resolving the `*` marker when any BOM line is a manual
+    // override, so a reviewer/auditor sees from the deliverable alone that a
+    // human overrode a code-derived size. Localized inline (the shared report
+    // string table is outside this change's scope); the marker is mid-sentence
+    // so it renders literally in both the Markdown and PDF outputs. A paragraph
+    // (trailing blank line) keeps clean spacing before the next section. Absent
+    // when nothing was overridden ⇒ byte-identical.
+    if (d.bom.any((l) => l.manual)) {
+      blocks.add(RptParagraph(switch (strings.locale) {
+        ReportLocale.en => 'Sizes marked * were manually overridden.',
+        ReportLocale.id => 'Ukuran bertanda * diatur secara manual.',
+      }));
+    }
   }
   if (d.fittings.isNotEmpty) {
     blocks
@@ -554,11 +692,50 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
             [
               _service(f.service, strings),
               f.type.name,
-              'DN${f.diameterMm}',
+              // N18: air fittings quote Ø, piped fittings DN (no more DN-for-air).
+              f.service.isAir ? 'Ø${f.diameterMm}' : 'DN${f.diameterMm}',
               '${f.count}'
             ],
         ],
         mdSeparator: '|---|---|---|---:|',
+      ));
+  }
+
+  // ── Run / riser sizing schedule (per-edge basis) ────────────────────────────
+  if (d.runSchedule.isNotEmpty) {
+    blocks
+      ..add(RptHeading(2, strings(RptStringKey.headingRunSchedule)))
+      ..add(RptTable(
+        [
+          strings(RptStringKey.tblService),
+          strings(RptStringKey.tblType),
+          strings(RptStringKey.tblTag),
+          strings(RptStringKey.tblSize),
+          strings(RptStringKey.tblFixtureUnits),
+          strings(RptStringKey.tblFlowLps),
+          strings(RptStringKey.tblVelocityMs),
+          strings(RptStringKey.tblLengthM),
+        ],
+        [
+          for (final r in d.runSchedule)
+            [
+              _service(r.service, strings),
+              r.kind == EdgeKind.riser
+                  ? strings(RptStringKey.bomRiser)
+                  : strings(RptStringKey.bomRun),
+              r.tag,
+              r.sizeLabel,
+              r.fixtureUnits == null
+                  ? '—'
+                  : r.fixtureUnits!.toStringAsFixed(1),
+              // Flow L/s is the basis only for pressurized water + air; gravity
+              // drains size by DFU, so a ~0 L/s reads as a dash, not "0.00".
+              r.flowLps >= 0.005 ? r.flowLps.toStringAsFixed(2) : '—',
+              r.velocityMs > 0 ? r.velocityMs.toStringAsFixed(2) : '—',
+              r.lengthM.toStringAsFixed(1),
+            ],
+        ],
+        mdSeparator: '|---|---|---|---|---:|---:|---:|---:|',
       ));
   }
 

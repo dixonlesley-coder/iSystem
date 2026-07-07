@@ -46,6 +46,24 @@ void main() {
     tester.takeException();
   });
 
+  testWidgets(
+      'A3: the first-run orientation card names the step "Building", not '
+      '"Floors" (one term with the stepper + nav rail)', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+
+    // The orientation card shows by default on a fresh EMPTY launch.
+    expect(find.text('Welcome to iSystem'), findsOneWidget);
+    // "Building" is the ONE term — matching the nav-rail destination
+    // (StringKey.navBuilding) and the status-bar stepper (A3) — that hosts
+    // floor/height editing; "Floors" never appears anywhere in the app.
+    expect(find.textContaining('Building'), findsWidgets);
+    expect(find.textContaining('Floors'), findsNothing);
+
+    tester.takeException(); // the same pre-existing overflow as above
+  });
+
   testWidgets('the seeded demo sheets list in the rail', (tester) async {
     await _pumpSeededApp(tester);
 
