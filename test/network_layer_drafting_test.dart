@@ -1,4 +1,4 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/widgets.dart' hide Velocity;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/network_store.dart';
@@ -10,6 +10,7 @@ import 'package:mechx/ui/canvas/service_style.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/riser_tags.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
 import 'package:mechx_engine/units.dart';
 
 /// On-canvas drafting upgrade (CAD review E1 linetypes / E2 labels / E3 flow
@@ -241,5 +242,131 @@ void main() {
       ),
     );
     expect(tester.takeException(), isNull);
+  });
+
+  // ── B16: true-diameter pipes + world-proportional glyphs ────────────────────
+  group('B16 true-diameter render + world-proportional glyphs', () {
+    EdgeSizing sized(double mm) => EdgeSizing(
+          edgeId: 'e',
+          service: ServiceType.coldWater,
+          flow: const FlowRate(0.01),
+          diameter: Diameter.mm(mm),
+          velocity: const Velocity(1.5),
+        );
+
+    test(
+        'a sized DN100 pipe strokes wider at zoom 2 than zoom 1, and wider than '
+        'a DN15', () {
+      const mpp = 0.01;
+      final dn100z1 = pipeOuterPx(sized(100), ServiceType.coldWater,
+          scale: 1, metersPerPixel: mpp);
+      final dn100z2 = pipeOuterPx(sized(100), ServiceType.coldWater,
+          scale: 2, metersPerPixel: mpp);
+      final dn15z2 = pipeOuterPx(sized(15), ServiceType.coldWater,
+          scale: 2, metersPerPixel: mpp);
+      expect(dn100z2, greaterThan(dn100z1),
+          reason: 'the true-width pipe grows with zoom');
+      expect(dn100z2, greaterThan(dn15z2),
+          reason: 'a larger DN renders wider than a small one at the same zoom');
+    });
+
+    test('an unsized/uncalibrated pipe keeps a fixed stroke across zoom', () {
+      final z1 = pipeOuterPx(null, ServiceType.coldWater,
+          scale: 1, metersPerPixel: null);
+      final z4 = pipeOuterPx(null, ServiceType.coldWater,
+          scale: 4, metersPerPixel: null);
+      expect(z4, z1, reason: 'no calibration ⇒ zoom-independent fixed stroke');
+    });
+
+    test('the node/riser glyph radius tracks zoom with the screen floor respected',
+        () {
+      const mpp = 0.01;
+      // A thin / unsized pipe keeps the compact 7px riser floor.
+      final unsized = pipeOuterPx(null, ServiceType.coldWater,
+          scale: 1, metersPerPixel: null);
+      expect(glyphRadiusPx(unsized, 7.0), 7.0);
+      // A large sized riser grows with zoom and exceeds the floor when zoomed in.
+      final r1 = glyphRadiusPx(
+          pipeOuterPx(sized(200), ServiceType.coldWater,
+              scale: 1, metersPerPixel: mpp),
+          7.0);
+      final r2 = glyphRadiusPx(
+          pipeOuterPx(sized(200), ServiceType.coldWater,
+              scale: 2, metersPerPixel: mpp),
+          7.0);
+      expect(r2, greaterThan(r1), reason: 'the glyph grows with the pipe/zoom');
+      expect(r2, greaterThan(7.0), reason: 'zoomed-in glyph exceeds the floor');
+    });
+  });
+
+  // B15: the riser marker is a circle-with-chevrons; a node where a riser both
+  // rises AND drops (a pass-through) exercises the "both chevrons" path. Rendered
+  // on the middle floor of a 3-floor cold-water stack, calibrated so the B16
+  // world-proportional marker branch runs too.
+  Network threeFloorRiser() => const Network(
+        nodes: [
+          NetNode(id: 'cw0', sheetId: 's1', x: 120, y: 120, floorIndex: 0),
+          NetNode(id: 'cw1', sheetId: 's1', x: 120, y: 120, floorIndex: 1),
+          NetNode(id: 'cw2', sheetId: 's1', x: 120, y: 120, floorIndex: 2),
+          NetNode(
+            id: 'tap',
+            sheetId: 's1',
+            x: 360,
+            y: 120,
+            floorIndex: 1,
+            role: NodeRole.fixture,
+          ),
+        ],
+        edges: [
+          NetEdge(
+            id: 'rLow',
+            fromId: 'cw0',
+            toId: 'cw1',
+            service: ServiceType.coldWater,
+            kind: EdgeKind.riser,
+          ),
+          NetEdge(
+            id: 'rHigh',
+            fromId: 'cw1',
+            toId: 'cw2',
+            service: ServiceType.coldWater,
+            kind: EdgeKind.riser,
+          ),
+          NetEdge(
+            id: 'branch',
+            fromId: 'cw1',
+            toId: 'tap',
+            service: ServiceType.coldWater,
+          ),
+        ],
+      );
+
+  testWidgets(
+      'NetworkLayer paints the circle-with-chevrons riser marker for an up / '
+      'down / pass-through node without throwing (B15)', (tester) async {
+    for (final floor in [0, 1, 2]) {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      c.read(networkControllerProvider.notifier).loadNetwork(threeFloorRiser());
+      c
+          .read(projectControllerProvider.notifier)
+          .setCalibration('s1', const ScaleCalibration(0.01));
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: c,
+          child: Directionality(
+            textDirection: TextDirection.ltr,
+            child: SizedBox(
+              width: 500,
+              height: 400,
+              child: NetworkLayer(sheetId: 's1', floorIndex: floor),
+            ),
+          ),
+        ),
+      );
+      expect(tester.takeException(), isNull,
+          reason: 'riser marker on floor $floor');
+    }
   });
 }

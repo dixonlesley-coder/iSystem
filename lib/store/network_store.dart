@@ -14,6 +14,7 @@ import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../ui/canvas/canvas_grid.dart' show nearestGridIntersection;
+import '../ui/canvas/snapping.dart' show orthoElbow;
 import 'annotation_store.dart' show RoomArea;
 import 'history_store.dart';
 import 'selection_store.dart';
@@ -211,6 +212,7 @@ class NetworkController extends Notifier<DrawingState> {
     bool gridSnap = false,
     double? gridMetersPerPixel,
     Offset? Function(Offset world)? underlaySnap,
+    bool ortho = false,
   }) {
     if (state.tool != DrawTool.drawRun) return;
     if (state.pendingPoint == null) {
@@ -271,7 +273,14 @@ class NetworkController extends Notifier<DrawingState> {
       );
       return;
     }
-    edges.add(NetEdge(id: _id('e'), fromId: aId, toId: bId, service: state.service));
+    // B13: with ortho on, a snap to a node/tee/underlay candidate OFF the
+    // constrained ray would tilt the segment. Instead reach it as an L — the
+    // leading edge runs to a BEND on the ray, a short correcting leg closes onto
+    // the target — all in this one committed edit (one undo step).
+    final aNode = nodes.firstWhere((n) => n.id == aId);
+    final connectTo = _autoElbowEndpoint(nodes, edges, sheetId, floorIndex,
+        Offset(aNode.x, aNode.y), world, bId, state.service, ortho: ortho);
+    edges.add(NetEdge(id: _id('e'), fromId: aId, toId: connectTo, service: state.service));
     _commit(
       Network(nodes: nodes, edges: edges),
       pendingPoint: world, // chain from here
@@ -1566,6 +1575,7 @@ class NetworkController extends Notifier<DrawingState> {
     bool gridSnap = false,
     double? gridMetersPerPixel,
     Offset? Function(Offset world)? underlaySnap,
+    bool ortho = false,
   }) {
     final from = state.network.nodeById(fromId);
     if (from == null) return null;
@@ -1582,10 +1592,52 @@ class NetworkController extends Notifier<DrawingState> {
         underlaySnap: underlaySnap);
     if (farId == fromId) return null; // collapsed onto the source — nothing laid
 
+    // B13: auto-elbow an off-ray connection so a nub-pulled main stays straight
+    // (the source node anchors the constrained ray; one undo step).
+    final connectTo = _autoElbowEndpoint(nodes, edges, sheetId, floorIndex,
+        Offset(from.x, from.y), world, farId, svc, ortho: ortho);
     final edgeId = _id('e');
-    edges.add(NetEdge(id: edgeId, fromId: fromId, toId: farId, service: svc));
+    edges.add(NetEdge(id: edgeId, fromId: fromId, toId: connectTo, service: svc));
     _commit(Network(nodes: nodes, edges: edges));
     return edgeId;
+  }
+
+  /// B13 — the CAD auto-elbow. When [ortho] is on and the resolved far endpoint
+  /// [farId] lies off the constrained 45°-multiple ray from [startPos] toward
+  /// [through] beyond the epsilon, insert a BEND junction so the run reaches
+  /// [farId] as TWO axis/45-aligned segments: the caller's LEADING edge runs
+  /// [startPos]→bend (the dominant leg along the constraint) and this method
+  /// adds the short bend→[farId] correcting leg (carrying [service]). Returns
+  /// the id the leading edge should connect to — the bend when one was inserted,
+  /// else [farId] unchanged (ortho off, missing node, or an on-ray target that
+  /// absorbs straight). Mutates [nodes]/[edges] so the whole L commits in the
+  /// caller's single [_commit] (one undo step). The geometry mirrors the live
+  /// preview's `orthoElbow` — the same shared helper decides the bend.
+  String _autoElbowEndpoint(
+    List<NetNode> nodes,
+    List<NetEdge> edges,
+    String sheetId,
+    int floorIndex,
+    Offset startPos,
+    Offset through,
+    String farId,
+    ServiceType service, {
+    required bool ortho,
+  }) {
+    if (!ortho) return farId;
+    final far = nodes.where((n) => n.id == farId).firstOrNull;
+    if (far == null) return farId;
+    final bend = orthoElbow(startPos, through, Offset(far.x, far.y));
+    if (bend == null) return farId; // on-ray / absorbed — single straight segment
+    final bId = _id('n');
+    nodes.add(NetNode(
+        id: bId,
+        sheetId: sheetId,
+        x: bend.dx,
+        y: bend.dy,
+        floorIndex: floorIndex));
+    edges.add(NetEdge(id: _id('e'), fromId: bId, toId: farId, service: service));
+    return bId;
   }
 
   /// Resolve a drawn run's far endpoint to a node id, MUTATING [nodes]/[edges]:
@@ -1694,6 +1746,7 @@ class NetworkController extends Notifier<DrawingState> {
     bool gridSnap = false,
     double? gridMetersPerPixel,
     Offset? Function(Offset world)? underlaySnap,
+    Offset? orthoAnchor,
   }) {
     final dragged = state.network.nodeById(nodeId);
     if (dragged == null) {
@@ -1732,6 +1785,32 @@ class NetworkController extends Notifier<DrawingState> {
           gridMetersPerPixel: gridMetersPerPixel,
           underlaySnap: underlaySnap);
       return;
+    }
+
+    // B13: an endpoint resized under ortho onto an OFF-ray node would tilt the
+    // run. Instead of merging the endpoint onto that node (which drags the whole
+    // segment askew), keep the dominant leg straight: reposition this endpoint
+    // to the BEND on the constrained ray and add a short correcting leg to the
+    // target — the two axis/45-aligned segments, one undo step.
+    if (orthoAnchor != null) {
+      final tnode = state.network.nodeById(targetId);
+      if (tnode != null) {
+        final bend = orthoElbow(orthoAnchor, Offset(dragged.x, dragged.y),
+            Offset(tnode.x, tnode.y));
+        if (bend != null) {
+          final svc = _serviceOf(nodeId) ?? state.service;
+          final nodes = [
+            for (final n in state.network.nodes)
+              if (n.id == nodeId) n.copyWith(x: bend.dx, y: bend.dy) else n,
+          ];
+          final edges = [
+            ...state.network.edges,
+            NetEdge(id: _id('e'), fromId: nodeId, toId: targetId, service: svc),
+          ];
+          _commitDragEnd(Network(nodes: nodes, edges: edges));
+          return;
+        }
+      }
     }
 
     final target = targetId;

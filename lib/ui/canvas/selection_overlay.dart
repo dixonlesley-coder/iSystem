@@ -143,6 +143,9 @@ class _NetworkSelectionOverlayState
             snapRadius: snapWorld,
             gridSnap: gridSnap,
             gridMetersPerPixel: gridMpp,
+            // B13 — auto-elbow an off-ray snap target so the pulled main lands as
+            // an L rather than askew (source node anchors the ray).
+            ortho: effectiveOrtho && fromNode != null,
             // B12 — snap the pulled main's far end onto a plan wall / reference
             // line / PDF ink ridge (between node/tee and grid precedence); the
             // source node anchors the ortho ray so the main stays straight.
@@ -328,6 +331,7 @@ class _NetworkSelectionOverlayState
     Offset? pullPendingWorld;
     Offset? pullHoverWorld;
     Offset? pullSnapScreen;
+    Offset? pullBend;
     var pullColor = context.colors.accent;
     if (pullNode != null && _pullNow != null) {
       pullPendingWorld = Offset(pullNode.x, pullNode.y);
@@ -348,6 +352,15 @@ class _NetworkSelectionOverlayState
       pullColor = serviceColor(incident ?? drawing.service);
       final pt = snapOrTeePoint(net, sheetId, floorIndex, w, snapWorld);
       pullSnapScreen = pt == null ? null : transform.worldToScreen(pt);
+      // B13 — preview the auto-elbow L when ortho reaches an off-ray snap target
+      // (matches the drawRunFromNode commit).
+      if (effectiveOrtho && pt != null) {
+        final b = orthoElbow(pullPendingWorld, w, pt);
+        if (b != null) {
+          pullBend = b;
+          pullHoverWorld = pt; // close the L at the latched target
+        }
+      }
     }
 
     // Translucent (not opaque) so a tap selects, but drag-pan and scroll-zoom
@@ -372,6 +385,7 @@ class _NetworkSelectionOverlayState
                 painter: RubberBandPainter(
                   pending: pullPendingWorld,
                   hover: pullHoverWorld,
+                  bend: pullBend,
                   snapScreen: pullSnapScreen,
                   transform: transform,
                   calibration: calibration,
@@ -495,37 +509,36 @@ class _NetworkSelectionOverlayState
     );
   }
 
-  /// The small accent "outlet" nub offset up-right of a node — drag it to pull a
-  /// mainline run out of the node. Reports the pull to the host state, which
-  /// paints the preview line and lays the run on release.
+  /// The small accent "outlet" grip that sits ON the node (the CAD endpoint-grip
+  /// convention) — drag it to pull a mainline run out of the node. Reports the
+  /// pull to the host state, which paints the preview line and lays the run on
+  /// release.
   ///
-  /// B6: [off] clears the node's 24px move-handle hit box (r=12 in
-  /// [_dragHandle]) — the two square GestureDetector hit RECTS (not the
-  /// painted circles) previously overlapped ~6x6 screen px at off=15 (15 <
-  /// 12+9), so a drag started in that corner could trigger a pull
-  /// instead of a node move with no visual cue. off=24 clears both axes
-  /// (24 > 12+9) while keeping both hit targets at their original >=18px
-  /// diameter. [isHovered] drives a subtle non-idle scale/shadow cue (also
-  /// shown mid-pull) so the nub visibly reads as "grabbed" — never painted at
-  /// rest, so an idle canvas stays byte-identical.
+  /// B14: the grip is CONCENTRIC with the node, layered ABOVE the 24px move
+  /// handle (r=12 in [_dragHandle]). Hit disambiguation is by radius — this nub
+  /// is a small inner box (r=7 ⇒ a ~7 screen-px pull zone) that, being LAST in
+  /// the Stack, wins the pointer at the node centre (a pull); a drag started
+  /// outside that inner box misses it and falls through to the move handle
+  /// behind it (a move). The precise (pull) cursor shows on inner hover while the
+  /// surrounding ring keeps the handle's move cursor. [isHovered] drives a subtle
+  /// non-idle scale/shadow cue (also shown mid-pull) so the grip visibly reads as
+  /// "grabbed" — never painted at rest, so an idle canvas stays byte-identical.
   Widget _outletNub(String nodeId, Offset screen, ViewportTransform transform,
       {required bool isHovered}) {
     final colors = context.colors;
-    const off = 24.0; // up-right of the node, clear of the 24px move handle
-    const r = 9.0;
+    const r = 7.0; // inner pull zone: ~7 screen px, inside the 12px move handle
     final pulling = _pullFrom == nodeId;
     final active = isHovered || pulling;
     return Positioned(
       key: ValueKey('outlet-$nodeId'),
-      left: screen.dx + off - r,
-      top: screen.dy - off - r,
+      left: screen.dx - r,
+      top: screen.dy - r,
       width: r * 2,
       height: r * 2,
       child: MouseRegion(
         cursor: SystemMouseCursors.precise,
-        // Keep this node's hover latched while the pointer is over the nub, so
-        // the gated nub (C7) doesn't vanish as you move OFF the node's drag
-        // handle to reach for it (the nub sits up-right of the node).
+        // Keep this node's hover latched while the pointer is over the grip, so
+        // the gated nub (C7) doesn't vanish as the pointer sits on the node.
         onEnter: (_) => ref
             .read(hoverTargetProvider.notifier)
             .set((nodeId: nodeId, edgeId: null)),
@@ -539,6 +552,19 @@ class _NetworkSelectionOverlayState
         },
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
+          // B14: the grip is CONCENTRIC with (and opaque ABOVE) the node's move
+          // handle, so once the node is selected the grip owns the pointer at the
+          // node centre — it must therefore carry the handle's TAP behaviour too
+          // (select + the manual double-click-to-open path), or a second click on
+          // a selected node would land on the grip and never reach the handle.
+          onTap: () {
+            ref.read(selectionProvider.notifier).selectNode(nodeId);
+            registerElementTap(screen, nodeId: nodeId);
+          },
+          onSecondaryTapUp: (d) {
+            ref.read(selectionProvider.notifier).selectNode(nodeId);
+            showNodeContextMenu(context, ref, nodeId, d.globalPosition);
+          },
           onPanStart: (d) {
             _startPull(nodeId);
             _updatePull(d.globalPosition);
@@ -696,6 +722,10 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
               widget.nodeId, widget.snapWorld,
               gridSnap: gridSnap,
               gridMetersPerPixel: gridMpp,
+              // B13 — resizing an endpoint onto an off-ray node keeps the run
+              // straight: bend on the ray + a short correcting leg (the other
+              // endpoint anchors the ray), rather than merging askew.
+              orthoAnchor: gridOrtho ? anchor : null,
               underlaySnap: node == null
                   ? null
                   : underlaySnapFor(ref, node.sheetId, widget.scale,

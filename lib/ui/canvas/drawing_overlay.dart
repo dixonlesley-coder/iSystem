@@ -114,6 +114,22 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
       }
     }
 
+    // B13 — once a snap candidate is latched under ortho, preview the CAD L: the
+    // rubber band runs pending→bend (dominant leg on the constrained ray) then
+    // bend→target (short correcting leg), matching what the commit will draw. An
+    // on-ray target (within epsilon) yields no bend ⇒ the existing straight band.
+    Offset? previewBend;
+    if (effectiveOrtho &&
+        pending != null &&
+        ringPt != null &&
+        previewHover != null) {
+      final b = orthoElbow(pending, previewHover, ringPt);
+      if (b != null) {
+        previewBend = b;
+        endHover = ringPt; // the L closes AT the latched target
+      }
+    }
+
     return MouseRegion(
       cursor: SystemMouseCursors.precise,
       onHover: (e) {
@@ -154,6 +170,10 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
                         sheet, refLines, transform.scale,
                         enabled: snapToPlan,
                         orthoAnchor: effOrtho ? pending : null),
+                // B13 — with ortho on, reach an off-ray snap target as an L
+                // (bend on the ray + short correcting leg) rather than a tilted
+                // segment; matches the live preview below.
+                ortho: effOrtho && pending != null,
               );
             case DrawTool.drawRiser:
               // C6: consume the placement result — a single-floor building has
@@ -188,6 +208,7 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
           painter: RubberBandPainter(
             pending: pending,
             hover: endHover,
+            bend: previewBend,
             snapScreen:
                 ringPt != null ? transform.worldToScreen(ringPt) : null,
             transform: transform,
@@ -264,6 +285,11 @@ Offset _closestPointOnSegment(Offset p, Offset a, Offset b) {
 class RubberBandPainter extends CustomPainter {
   final Offset? pending;
   final Offset? hover;
+
+  /// B13 — the auto-elbow bend (world). When set the band draws as an L:
+  /// pending→bend (dominant leg) then bend→hover (correcting leg), so the
+  /// preview matches the commit when ortho reaches an off-ray snap target.
+  final Offset? bend;
   final Offset? snapScreen;
   final ViewportTransform transform;
   final ScaleCalibration? calibration;
@@ -278,6 +304,7 @@ class RubberBandPainter extends CustomPainter {
     required this.calibration,
     required this.color,
     required this.active,
+    this.bend,
   });
 
   /// The live run length: calibrated metres, or an honest 'set scale' nudge
@@ -316,19 +343,27 @@ class RubberBandPainter extends CustomPainter {
     canvas.drawCircle(a, 3.5, Paint()..color = color);
     if (hover != null) {
       final b = transform.worldToScreen(hover!);
-      canvas.drawLine(
-        a,
-        b,
-        Paint()
-          ..color = color.withAlpha(150)
-          ..strokeWidth = 1.5
-          ..style = PaintingStyle.stroke,
-      );
+      final line = Paint()
+        ..color = color.withAlpha(150)
+        ..strokeWidth = 1.5
+        ..style = PaintingStyle.stroke;
+      // B13 — draw the L (pending→bend→hover) when an elbow was resolved, else
+      // the single straight band.
+      final bendScreen = bend == null ? null : transform.worldToScreen(bend!);
+      if (bendScreen != null) {
+        canvas.drawLine(a, bendScreen, line);
+        canvas.drawLine(bendScreen, b, line);
+      } else {
+        canvas.drawLine(a, b, line);
+      }
 
-      // Live length chip at the segment midpoint (the Measure tool's idiom,
-      // in the service colour so it reads as part of the run being drawn).
-      final dx = hover!.dx - pending!.dx;
-      final dy = hover!.dy - pending!.dy;
+      // Live length chip at the DOMINANT-leg midpoint (the Measure tool's idiom,
+      // in the service colour so it reads as part of the run being drawn). With
+      // an elbow the dominant leg is pending→bend; else the whole segment.
+      final legEnd = bendScreen ?? b;
+      final legEndWorld = bend ?? hover!;
+      final dx = legEndWorld.dx - pending!.dx;
+      final dy = legEndWorld.dy - pending!.dy;
       final tp = TextPainter(
         text: TextSpan(
           text: _label(math.sqrt(dx * dx + dy * dy)),
@@ -341,7 +376,7 @@ class RubberBandPainter extends CustomPainter {
         ),
         textDirection: TextDirection.ltr,
       )..layout();
-      final mid = Offset((a.dx + b.dx) / 2, (a.dy + b.dy) / 2);
+      final mid = Offset((a.dx + legEnd.dx) / 2, (a.dy + legEnd.dy) / 2);
       final rect = Rect.fromCenter(
         center: mid.translate(0, -14),
         width: tp.width + 10,
@@ -359,6 +394,7 @@ class RubberBandPainter extends CustomPainter {
   bool shouldRepaint(RubberBandPainter old) =>
       old.pending != pending ||
       old.hover != hover ||
+      old.bend != bend ||
       old.snapScreen != snapScreen ||
       old.transform != transform ||
       old.calibration != calibration ||

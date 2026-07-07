@@ -130,13 +130,16 @@ List<SldPrim> planComponentPrims(
       cir(0.50, 0.54, 0.26);
       rect(0.40, 0.12, 0.60, 0.24);
     case NodeComponent.riser:
-      // A junction dot with a double-headed vertical arrow.
-      cir(0.50, 0.50, 0.10);
-      ln(0.50, 0.12, 0.50, 0.88);
-      ln(0.50, 0.12, 0.40, 0.28);
-      ln(0.50, 0.12, 0.60, 0.28);
-      ln(0.50, 0.88, 0.40, 0.72);
-      ln(0.50, 0.88, 0.60, 0.72);
+      // B15 — the drafting-standard riser mark: a circle containing up + down
+      // chevron arrows, converged with the on-canvas riser marker so plan and
+      // print share one convention.
+      cir(0.50, 0.50, 0.42);
+      // Up chevron ("^") in the top half.
+      ln(0.34, 0.44, 0.50, 0.26);
+      ln(0.50, 0.26, 0.66, 0.44);
+      // Down chevron ("v") in the bottom half.
+      ln(0.34, 0.56, 0.50, 0.74);
+      ln(0.50, 0.74, 0.66, 0.56);
     case NodeComponent.waterMeter:
       // A gauge: circle + a needle.
       cir(0.50, 0.50, 0.30);

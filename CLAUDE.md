@@ -332,6 +332,14 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   reference line > ink > grid, gated by a default-ON 'Snap to plan' toggle beside Ortho.
   Gate: engine 1341 / app 899 / analyze clean; goldens 01/02/03 shifted (new DRAW chip+toggle).
   Residual: the legacy `sheet_canvas.dart` host lacks only the trace-tool overlay.
+  **Drafting-feel batch 2 (user-reported B13–B16) HAS ALSO LANDED** (2026-07-07, see the §15
+  row): the CAD auto-elbow (off-ray snap targets reached as two exact 45° legs via a bend
+  junction, at draw/nub/resize commit, L-shaped live preview, one undo step), the pull grip
+  centred ON the endpoint with a concentric pull/move hit contract + full tap parity, the
+  riser marker as the drafting-standard circle-with-chevrons (canvas + plan exports, one
+  convention), and true-diameter zoom rendering (glyphs/halos size off the widest incident
+  pipe via `glyphRadiusPx`; unsized byte-identical). Gate: engine 1371 / app 1025; goldens
+  01/02/03 re-captured. B17–B30 (the queued CAD-muscle-memory set) follow as batch 3.
   **The Wave 2 remainder HAS ALSO LANDED** (2026-07-06, see the §15 row): K1 drag-session
   throttle (no heavy re-solve per drag frame; at-rest byte-identical), K3 heatmap field
   memoization, K2 isolate-offloaded Open, K4 threshold-gated isolate autosave encode with a
