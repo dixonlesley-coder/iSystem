@@ -186,6 +186,16 @@ double pipeOuterPx(EdgeSizing? s, ServiceType svc,
   return math.max(clamped, math.min(truePx, 120.0));
 }
 
+/// B16 — the on-screen RADIUS (px) of a node / fitting / riser glyph, grown
+/// world-proportionally with the widest incident pipe's rendered width
+/// [outerPx] (from [pipeOuterPx]) but never below a screen [floor] so a thin or
+/// unsized pipe keeps today's compact marker. Shared by the node glyph, the
+/// riser marker and the selection/hover halos so they scale together — and,
+/// because it reads the same [pipeOuterPx] the B5 hit corridor uses, the
+/// clickable target tracks the drawn glyph automatically.
+double glyphRadiusPx(double outerPx, double floor) =>
+    math.max(floor, outerPx * 0.5);
+
 class _NetworkPainter extends CustomPainter {
   final Network net;
   final String sheetId;
@@ -331,6 +341,12 @@ class _NetworkPainter extends CustomPainter {
     // or be dropped. Deterministic (edge-list order).
     final placedLabels = <Rect>[];
 
+    // B16 — per node, the widest incident pipe's rendered outer width (px),
+    // computed in the visible-services pre-pass so a node's glyph size is
+    // independent of edge iteration order. Drives world-proportional node /
+    // riser glyph + halo sizes below.
+    final nodeMaxOuter = <String, double>{};
+
     // E6 — one label convention across plan and riser. Compute the deterministic
     // per-riser tags (CW-R1 …) ONCE per paint (shared with the schematic view's
     // engine helper), and whether MULTIPLE distinct services are visible on this
@@ -357,6 +373,10 @@ class _NetworkPainter extends CustomPainter {
         continue;
       }
       visibleServices.add(e.service);
+      // B16 — accumulate the widest incident pipe per node (runs + risers).
+      final outer = _pipeOuterPx(sizing[e.id], e.service);
+      if (outer > (nodeMaxOuter[a.id] ?? 0.0)) nodeMaxOuter[a.id] = outer;
+      if (outer > (nodeMaxOuter[b.id] ?? 0.0)) nodeMaxOuter[b.id] = outer;
     }
     final multiService = visibleServices.length > 1;
 
@@ -501,20 +521,27 @@ class _NetworkPainter extends CustomPainter {
           }
         }
       } else {
-        final lowFloor = math.min(a.floorIndex, b.floorIndex);
         final tag = riserTagById[e.id];
         for (final n in [a, b]) {
           if (_onThisFloor(n)) {
             final mp = transform.worldToScreen(Offset(n.x, n.y));
+            // B16 — the riser glyph + its halos grow with the widest incident
+            // pipe (floored so a thin riser keeps the compact marker).
+            final markerR = glyphRadiusPx(nodeMaxOuter[n.id] ?? 0.0, 7.0);
             if (_edgeHovered(e.id)) {
-              canvas.drawCircle(mp, 13,
+              canvas.drawCircle(mp, math.max(13.0, markerR + 5),
                   Paint()..color = _kSelection.withAlpha(45));
             }
             if (_edgeSelected(e.id)) {
-              canvas.drawCircle(mp, 11,
+              canvas.drawCircle(mp, math.max(11.0, markerR + 3),
                   Paint()..color = _kSelection.withAlpha(90));
             }
-            _riserMarker(canvas, mp, color, up: n.floorIndex == lowFloor);
+            // B15 — a circle with chevron arrows: up if a riser rises from here,
+            // down if it drops, both when it passes through (from the riser
+            // floor deltas of this service at this node).
+            final sense = _riserSenseAt(n, e.service);
+            _riserMarker(canvas, mp, color,
+                up: sense.up, down: sense.down, radius: markerR);
             // E6 — the engine's per-service riser id (CW-R1) beside the marker,
             // in the service colour, closing the plan↔riser cross-reference.
             // Gated to the active layer (like the size labels) so a ghosted
@@ -547,16 +574,26 @@ class _NetworkPainter extends CustomPainter {
       final layer = _nodeLayer(n);
       if (!layer.visible) continue;
       final p = transform.worldToScreen(Offset(n.x, n.y));
+      // B16 — the glyph radius grows with the widest incident pipe, floored to
+      // the role's current compact size so a thin/unsized node is unchanged; the
+      // hover/selection halos ride on it (only exceeding today's fixed sizes
+      // when the glyph itself does).
+      final incidentOuter = nodeMaxOuter[n.id] ?? 0.0;
+      final glyphR = n.component != null
+          ? glyphRadiusPx(incidentOuter, 9.0)
+          : glyphRadiusPx(incidentOuter, n.role == NodeRole.main ? 3.0 : 4.5);
       // Hover pre-highlight (E7) — a wider, fainter ring under the selection ring.
       if (_nodeHovered(n.id)) {
-        canvas.drawCircle(p, 11, Paint()..color = _kSelection.withAlpha(45));
+        canvas.drawCircle(p, math.max(11.0, glyphR + 2),
+            Paint()..color = _kSelection.withAlpha(45));
       }
       final selected = _nodeSelected(n.id);
       if (selected) {
-        canvas.drawCircle(p, 9, Paint()..color = _kSelection.withAlpha(70));
+        final ringR = math.max(9.0, glyphR);
+        canvas.drawCircle(p, ringR, Paint()..color = _kSelection.withAlpha(70));
         canvas.drawCircle(
           p,
-          9,
+          ringR,
           Paint()
             ..color = _kSelection
             ..strokeWidth = 1.5
@@ -564,7 +601,7 @@ class _NetworkPainter extends CustomPainter {
         );
       }
       if (n.component != null) {
-        _componentGlyph(canvas, p, n.component!, layer.opacity);
+        _componentGlyph(canvas, p, n.component!, layer.opacity, glyphR);
         // G1: the stable equipment tag (P-01 / TK-01 / AHU-01 …) beside the
         // glyph — the plan↔schedule cross-reference. Active layer only (like the
         // size + riser labels), collision-aware against the run labels already
@@ -576,15 +613,16 @@ class _NetworkPainter extends CustomPainter {
       } else if (n.role != NodeRole.main || joints[n.id] == null) {
         // A plain junction that carries a fitting glyph (drawn above) no longer
         // needs the bare dot; a free main node (no pipes yet) still gets it.
-        _nodeGlyph(canvas, p, n.role, layer.opacity);
+        _nodeGlyph(canvas, p, n.role, layer.opacity, incidentOuter);
       }
       // Air-terminal ring: out-of-band face velocity (warning) takes precedence
-      // over the not-yet-sized advisory.
+      // over the not-yet-sized advisory. B16 — the ring rides the glyph size.
       if (layer.opacity >= 1.0) {
+        final termR = math.max(12.0, glyphR + 3);
         if (warningIds.contains(n.id)) {
           canvas.drawCircle(
             p,
-            12,
+            termR,
             Paint()
               ..color = _kWarn
               ..strokeWidth = 2
@@ -593,7 +631,7 @@ class _NetworkPainter extends CustomPainter {
         } else if (unsizedIds.contains(n.id)) {
           canvas.drawCircle(
             p,
-            12,
+            termR,
             Paint()
               ..color = _kUnsized
               ..strokeWidth = 1.5
@@ -951,10 +989,9 @@ class _NetworkPainter extends CustomPainter {
   /// Draws an equipment node as its schematic symbol on a light chip so it
   /// stands out from plain junctions. [opacity] fades it on a coordination layer.
   void _componentGlyph(
-      Canvas canvas, Offset p, NodeComponent c, double opacity) {
+      Canvas canvas, Offset p, NodeComponent c, double opacity, double r) {
     final dark = _fade(const Color(0xFF15171B), opacity);
     final light = _fade(const Color(0xFFFFFFFF), opacity);
-    const r = 9.0;
     final box = Rect.fromCenter(center: p, width: r * 2, height: r * 2);
     // A rounded white chip with a hairline, then the symbol centred in it.
     canvas.drawRRect(
@@ -969,19 +1006,23 @@ class _NetworkPainter extends CustomPainter {
     );
     canvas.save();
     canvas.translate(box.left, box.top);
-    paintComponentSymbol(canvas, const Size(r * 2, r * 2), c, dark, stroke: 1.2);
+    paintComponentSymbol(canvas, Size(r * 2, r * 2), c, dark, stroke: 1.2);
     canvas.restore();
   }
 
   /// Draws a node glyph by role: plant = filled square (tank/pump), fixture =
   /// hollow ring, main/junction = small filled dot. [opacity] fades it on a
-  /// coordination (inactive) layer.
-  void _nodeGlyph(Canvas canvas, Offset p, NodeRole role, double opacity) {
+  /// coordination (inactive) layer. B16 — the glyph radius grows with the widest
+  /// incident pipe [incidentOuter] (px), floored to the role's compact size so a
+  /// thin/unsized node is unchanged.
+  void _nodeGlyph(Canvas canvas, Offset p, NodeRole role, double opacity,
+      double incidentOuter) {
     final dark = _fade(const Color(0xFF15171B), opacity);
     final light = _fade(const Color(0xFFFFFFFF), opacity);
     switch (role) {
       case NodeRole.plant:
-        final r = Rect.fromCenter(center: p, width: 9, height: 9);
+        final half = glyphRadiusPx(incidentOuter, 4.5);
+        final r = Rect.fromCenter(center: p, width: half * 2, height: half * 2);
         canvas.drawRect(r, Paint()..color = dark);
         canvas.drawRect(
           r,
@@ -991,20 +1032,22 @@ class _NetworkPainter extends CustomPainter {
             ..style = PaintingStyle.stroke,
         );
       case NodeRole.fixture:
-        canvas.drawCircle(p, 4.5, Paint()..color = dark);
+        final rr = glyphRadiusPx(incidentOuter, 4.5);
+        canvas.drawCircle(p, rr, Paint()..color = dark);
         canvas.drawCircle(
           p,
-          4.5,
+          rr,
           Paint()
             ..color = light
             ..strokeWidth = 1.5
             ..style = PaintingStyle.stroke,
         );
       case NodeRole.main:
-        canvas.drawCircle(p, 3, Paint()..color = dark);
+        final rr = glyphRadiusPx(incidentOuter, 3.0);
+        canvas.drawCircle(p, rr, Paint()..color = dark);
         canvas.drawCircle(
           p,
-          3,
+          rr,
           Paint()
             ..color = light
             ..strokeWidth = 1
@@ -1013,28 +1056,73 @@ class _NetworkPainter extends CustomPainter {
     }
   }
 
-  void _riserMarker(Canvas canvas, Offset p, Color color, {required bool up}) {
-    canvas.drawCircle(p, 7, Paint()..color = color.withAlpha(38));
+  /// B15 — the vertical sense of the risers of [svc] meeting at [n]: `up` when a
+  /// riser rises to a higher floor from here, `down` when one drops, both when a
+  /// riser passes through. Falls back to both when indeterminate so the marker
+  /// never reads as a bare circle (never fabricates a wrong single direction).
+  ({bool up, bool down}) _riserSenseAt(NetNode n, ServiceType svc) {
+    var up = false;
+    var down = false;
+    for (final e in net.edges) {
+      if (e.kind != EdgeKind.riser || e.service != svc) continue;
+      if (e.fromId != n.id && e.toId != n.id) continue;
+      final other = net.nodeById(e.fromId == n.id ? e.toId : e.fromId);
+      if (other == null) continue;
+      if (other.floorIndex > n.floorIndex) {
+        up = true;
+      } else if (other.floorIndex < n.floorIndex) {
+        down = true;
+      }
+    }
+    if (!up && !down) return (up: true, down: true);
+    return (up: up, down: down);
+  }
+
+  /// B15/B16 — the riser marker: a service-coloured circle containing chevron
+  /// arrow(s) (up when a riser rises from here, down when it drops, both when it
+  /// passes through). Pure Path chevrons — no text glyph, so it never renders as
+  /// a missing-glyph box. The [radius] grows with the incident pipe (B16),
+  /// floored so a thin riser keeps the compact marker.
+  void _riserMarker(Canvas canvas, Offset p, Color color,
+      {required bool up, required bool down, double radius = 7}) {
+    canvas.drawCircle(p, radius, Paint()..color = color.withAlpha(38));
     canvas.drawCircle(
       p,
-      7,
+      radius,
       Paint()
         ..color = color
         ..strokeWidth = 1.5
         ..style = PaintingStyle.stroke,
     );
-    final path = Path();
-    if (up) {
-      path.moveTo(p.dx, p.dy - 4);
-      path.lineTo(p.dx - 3, p.dy + 2);
-      path.lineTo(p.dx + 3, p.dy + 2);
+    final chevron = Paint()
+      ..color = color
+      ..strokeWidth = math.max(1.4, radius * 0.22)
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+    final half = radius * 0.42;
+    if (up && down) {
+      // Two stacked chevrons: rise in the top half, drop in the bottom half.
+      _riserChevron(canvas, p + Offset(0, -radius * 0.30), half,
+          up: true, paint: chevron);
+      _riserChevron(canvas, p + Offset(0, radius * 0.30), half,
+          up: false, paint: chevron);
     } else {
-      path.moveTo(p.dx, p.dy + 4);
-      path.lineTo(p.dx - 3, p.dy - 2);
-      path.lineTo(p.dx + 3, p.dy - 2);
+      _riserChevron(canvas, p, half, up: up, paint: chevron);
     }
-    path.close();
-    canvas.drawPath(path, Paint()..color = color);
+  }
+
+  /// One chevron ("^" when [up], "v" otherwise) centred on [c] with arm
+  /// half-width [half], as a pure open path (tofu-safe).
+  void _riserChevron(Canvas canvas, Offset c, double half,
+      {required bool up, required Paint paint}) {
+    final tipY = up ? c.dy - half : c.dy + half;
+    final baseY = up ? c.dy + half : c.dy - half;
+    final path = Path()
+      ..moveTo(c.dx - half, baseY)
+      ..lineTo(c.dx, tipY)
+      ..lineTo(c.dx + half, baseY);
+    canvas.drawPath(path, paint);
   }
 
   /// The per-service riser id (e.g. `CW-R1`) drawn just to the right of a riser

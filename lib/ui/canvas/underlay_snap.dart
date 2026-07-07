@@ -23,9 +23,10 @@ import 'package:mechx_engine/geometry/dxf_drawing.dart';
 
 /// The kind of geometric feature a snap latched onto, in precedence order:
 /// an [endpoint] (segment end / shared corner) beats an [intersection] (two
-/// segments crossing) beats a point [onSegment] (nearest along a wall), when
-/// two candidates sit at the same distance.
-enum UnderlaySnapKind { endpoint, intersection, onSegment }
+/// segments crossing) beats a [perpendicular] foot (the 90° drop from the draw
+/// anchor onto a wall's interior — B24) beats a point [onSegment] (nearest along
+/// a wall), when two candidates sit at the same distance.
+enum UnderlaySnapKind { endpoint, intersection, perpendicular, onSegment }
 
 /// One snap result in sheet-px space: the snapped [x]/[y], what [kind] of
 /// feature it is, and its Euclidean [distance] from the query point.
@@ -290,7 +291,15 @@ class UnderlaySnapIndex {
   /// The best snap within [radius] px of (`px`,`py`), or null if nothing is in
   /// range (or the index is empty). [radius] is the standard 14-screen-px pick
   /// tolerance divided by the current zoom.
-  UnderlaySnapCandidate? query(double px, double py, double radius) {
+  ///
+  /// When [anchorX]/[anchorY] are supplied (the draw run's current pending/anchor
+  /// point, B24) each nearby wall also offers a **perpendicular foot** candidate —
+  /// the 90° drop from the anchor onto the wall's INTERIOR (true foot only,
+  /// t∈(0,1); a clamped-to-endpoint foot is dropped since it isn't perpendicular)
+  /// — considered only when that foot lands within [radius] of the cursor. Omit
+  /// the anchor (the default) ⇒ no perpendicular candidates ⇒ byte-identical.
+  UnderlaySnapCandidate? query(double px, double py, double radius,
+      {double? anchorX, double? anchorY}) {
     if (isEmpty || radius <= 0) return null;
 
     // Gather segments in every cell overlapping the query's bounding box.
@@ -344,6 +353,17 @@ class UnderlaySnapIndex {
       if (dn * dn <= r2 + _tieEps) {
         consider(nx, ny, UnderlaySnapKind.onSegment, dn);
       }
+      // Perpendicular foot from the draw anchor onto this wall's interior.
+      if (anchorX != null && anchorY != null && len2 > _eps) {
+        final tp = ((anchorX - ax) * dx + (anchorY - ay) * dy) / len2;
+        if (tp > 0 && tp < 1) {
+          final fx = ax + tp * dx, fy = ay + tp * dy;
+          final df = _dist(px, py, fx, fy);
+          if (df * df <= r2 + _tieEps) {
+            consider(fx, fy, UnderlaySnapKind.perpendicular, df);
+          }
+        }
+      }
     }
 
     // Pairwise intersections among the neighbourhood set.
@@ -377,8 +397,10 @@ class UnderlaySnapIndex {
         return 0;
       case UnderlaySnapKind.intersection:
         return 1;
-      case UnderlaySnapKind.onSegment:
+      case UnderlaySnapKind.perpendicular:
         return 2;
+      case UnderlaySnapKind.onSegment:
+        return 3;
     }
   }
 

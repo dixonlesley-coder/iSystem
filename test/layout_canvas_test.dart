@@ -864,9 +864,8 @@ void main() {
   });
 
   testWidgets(
-      'B6: a drag started at the NUB centre pulls a mainline, a drag '
-      'started at the NODE centre moves the node — the two hit boxes no '
-      'longer overlap', (tester) async {
+      'B14: a drag dead-centre on the node pulls a mainline (inner grip), a '
+      'drag at r~12 moves the node — the concentric hit contract', (tester) async {
     final c = await _boot(tester);
 
     final ctrl = c.read(networkControllerProvider.notifier);
@@ -886,10 +885,16 @@ void main() {
     }
 
     final before = worldOf(id);
+    final vt = c.read(sheetsControllerProvider).viewportFor(sheet.id) ??
+        const ViewportTransform();
+    final canvasRect = tester.getRect(find.byType(CanvasView));
+    final nodeCentre = canvasRect.topLeft + vt.worldToScreen(before);
 
-    // 1) A drag STARTING AT THE NUB'S CENTRE pulls a new mainline — the
-    // source node itself never moves.
-    final g1 = await tester.startGesture(tester.getCenter(nub));
+    // 1) A drag DEAD-CENTRE on the node hits the inner grip (concentric, above
+    // the move handle) → pulls a new mainline; the source node never moves.
+    expect(tester.getCenter(nub), offsetMoreOrLessEquals(nodeCentre, epsilon: 1.0),
+        reason: 'the grip sits ON the node, not offset beside it');
+    final g1 = await tester.startGesture(nodeCentre);
     await tester.pump();
     await g1.moveBy(const Offset(80, 0));
     await tester.pump();
@@ -900,17 +905,14 @@ void main() {
     expect(
         afterPull.edges.where((e) => e.fromId == id || e.toId == id).length,
         1,
-        reason: 'the nub drag must lay exactly one new run');
+        reason: 'a dead-centre drag must lay exactly one new run (a pull)');
     expect(worldOf(id), before,
-        reason: 'a pull from the nub must never move the source node');
+        reason: 'a pull must never move the source node');
 
-    // 2) A drag STARTING AT THE NODE'S OWN CENTRE moves the node instead —
-    // no second run is laid.
-    final vt = c.read(sheetsControllerProvider).viewportFor(sheet.id) ??
-        const ViewportTransform();
-    final canvasRect = tester.getRect(find.byType(CanvasView));
-    final nodeCentre = canvasRect.topLeft + vt.worldToScreen(before);
-    final g2 = await tester.startGesture(nodeCentre);
+    // 2) A drag at r~11 from the centre misses the inner grip (r=7) and falls
+    // through to the move handle (r=12) → moves the node, laying no second run.
+    final offCentre = nodeCentre + const Offset(0, 11);
+    final g2 = await tester.startGesture(offCentre);
     await tester.pump();
     // Driven in steps so the gesture arena settles on the node's drag handle
     // (tap+pan) before moving — matches the B10 junction-drag test's pattern.
@@ -926,8 +928,8 @@ void main() {
     expect(
         afterMove.edges.where((e) => e.fromId == id || e.toId == id).length,
         1,
-        reason: 'the node drag must not lay a second run');
+        reason: 'a drag at r~12 must not lay a second run (it is a move)');
     expect(worldOf(id), isNot(before),
-        reason: 'a drag started at the node centre must move the node');
+        reason: 'a drag at r~12 falls through to the move handle');
   });
 }

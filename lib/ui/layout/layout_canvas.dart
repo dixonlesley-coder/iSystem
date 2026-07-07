@@ -39,6 +39,7 @@ import '../../store/sample_project.dart';
 import '../../store/selection_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/sheets_store.dart';
+import '../../store/smart_input_store.dart';
 import '../../store/snap_settings_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/calibration_overlay.dart';
@@ -382,6 +383,23 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         HardwareKeyboard.instance.isMetaPressed;
     final shift = HardwareKeyboard.instance.isShiftPressed;
 
+    // B17 — while drawing a run with ortho on (Shift off), Tab cycles the
+    // two-click route leg order (Auto -> L(H,V) -> L(V,H) -> Z). Consume it so
+    // it never traverses focus. Safe even while the smart input bar holds key
+    // focus: Tab is not a text-editing key, so cycling can't corrupt the field.
+    if (key == LogicalKeyboardKey.tab &&
+        !mod &&
+        !shift &&
+        ref.read(activeDisciplineProvider).isMechanical) {
+      final draw = ref.read(networkControllerProvider);
+      if (draw.tool == DrawTool.drawRun &&
+          draw.pendingPoint != null &&
+          ref.read(orthoProvider)) {
+        ref.read(orthoRouteKindProvider.notifier).cycle();
+        return KeyEventResult.handled;
+      }
+    }
+
     // A focused text field owns its editing keys (B4): Backspace/Delete and
     // the select-all/clipboard/undo combos must edit the FIELD, not the
     // drawing. This ancestor Focus sits BELOW the app-root
@@ -600,6 +618,7 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       }
       if (ref.read(networkControllerProvider).pendingPoint != null) {
         ref.read(networkControllerProvider.notifier).cancelPending();
+        ref.read(orthoRouteKindProvider.notifier).reset();
         return KeyEventResult.handled;
       }
       // Step out of any active canvas MODE back to Select — Esc must always

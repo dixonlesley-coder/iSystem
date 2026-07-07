@@ -116,6 +116,163 @@ void main() {
       expect(net.edges.length, 2);
     });
 
+    // ── B13: CAD auto-elbow when an ortho draw snaps to an off-ray node ──────
+    // True when segment a→b is axis-aligned or a clean 45° diagonal (a multiple
+    // of 45°), within a tight world-px tolerance.
+    bool isAxis45(Offset a, Offset b) {
+      final dx = (b.dx - a.dx).abs();
+      final dy = (b.dy - a.dy).abs();
+      const tol = 1e-6;
+      return dx < tol || dy < tol || (dx - dy).abs() < tol;
+    }
+
+    Offset nodePos(Network net, String id) {
+      final p = net.nodeById(id)!;
+      return Offset(p.x, p.y);
+    }
+
+    test('B13: an ortho run snapping to an OFF-ray node auto-elbows into two '
+        '45-aligned segments and connects', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // A pre-existing target node 8 px OFF the horizontal ray from (0,0).
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 't', sheetId: 's1', x: 300, y: 8, floorIndex: 0),
+      ]));
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0)); // pending start
+      // The UI has already ortho-snapped the click onto the horizontal ray at
+      // (300,0); it lands within the 12-px snap radius of 't' at (300,8).
+      n.placeRunPoint('s1', 0, const Offset(300, 0), ortho: true);
+
+      final net = c.read(networkControllerProvider).network;
+      expect(net.edges.length, 2, reason: 'leading leg + short correcting leg');
+      // A bend node was inserted on the ray at (300,0); the start stayed at (0,0)
+      // and the target 't' is untouched — three nodes total.
+      expect(net.nodes.length, 3);
+      final bend = net.nodes.firstWhere(
+          (nd) => nd.id != 't' && (Offset(nd.x, nd.y) - const Offset(300, 0)).distance < 1e-6);
+      expect(bend, isNotNull);
+      // Both segments are on exact 45-multiples.
+      for (final e in net.edges) {
+        expect(isAxis45(nodePos(net, e.fromId), nodePos(net, e.toId)), isTrue,
+            reason: 'edge ${e.fromId}->${e.toId} must be axis/45-aligned');
+      }
+      // The run actually reaches the target node.
+      expect(net.edges.any((e) => e.fromId == 't' || e.toId == 't'), isTrue);
+      // Both legs carry the drawn service.
+      expect(net.edges.every((e) => e.service == ServiceType.coldWater), isTrue);
+    });
+
+    test('B13: an off-ray offset within the epsilon absorbs into ONE segment '
+        '(no micro-elbow)', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // Target only 0.5 px off the ray — below the ~0.75 px absorb epsilon.
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 't', sheetId: 's1', x: 300, y: 0.5, floorIndex: 0),
+      ]));
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(300, 0), ortho: true);
+
+      final net = c.read(networkControllerProvider).network;
+      expect(net.edges.length, 1, reason: 'sub-epsilon offset draws straight');
+      expect(net.nodes.length, 2, reason: 'no bend node inserted');
+      expect(net.edges.single.fromId == 't' || net.edges.single.toId == 't',
+          isTrue);
+    });
+
+    test('B13: with ortho OFF (Shift), an off-ray snap keeps today\'s single '
+        'askew segment', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 't', sheetId: 's1', x: 300, y: 8, floorIndex: 0),
+      ]));
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(300, 0)); // ortho defaults false
+
+      final net = c.read(networkControllerProvider).network;
+      expect(net.edges.length, 1);
+      final e = net.edges.single;
+      expect(isAxis45(nodePos(net, e.fromId), nodePos(net, e.toId)), isFalse,
+          reason: 'free drawing keeps the raw askew segment');
+      expect(e.fromId == 't' || e.toId == 't', isTrue);
+    });
+
+    test('B13: the whole auto-elbow commit is ONE undo step', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 't', sheetId: 's1', x: 300, y: 8, floorIndex: 0),
+      ]));
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(0, 0));
+      n.placeRunPoint('s1', 0, const Offset(300, 0), ortho: true);
+      expect(c.read(networkControllerProvider).network.edges.length, 2);
+
+      n.undo();
+      final net = c.read(networkControllerProvider).network;
+      expect(net.edges, isEmpty, reason: 'one undo removes bend + both edges');
+      expect(net.nodes.length, 1, reason: 'only the pre-existing target remains');
+    });
+
+    test('B13: drawRunFromNode (nub pull) auto-elbows to an off-ray node', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 's', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 't', sheetId: 's1', x: 300, y: 8, floorIndex: 0),
+      ]));
+      // The UI ortho-snapped the pull onto the horizontal ray at (300,0).
+      n.drawRunFromNode('s', const Offset(300, 0),
+          service: ServiceType.coldWater, ortho: true);
+
+      final net = c.read(networkControllerProvider).network;
+      expect(net.edges.length, 2);
+      expect(net.nodes.length, 3, reason: 'source + bend + target');
+      for (final e in net.edges) {
+        expect(isAxis45(nodePos(net, e.fromId), nodePos(net, e.toId)), isTrue);
+      }
+      expect(net.edges.any((e) => e.fromId == 't' || e.toId == 't'), isTrue);
+      expect(net.edges.any((e) => e.fromId == 's' || e.toId == 's'), isTrue);
+    });
+
+    test('B13: an endpoint resized onto an off-ray node under ortho bends '
+        'instead of tilting, in one undo step', () {
+      final c = makeContainer();
+      final n = c.read(networkControllerProvider.notifier);
+      // Run a(0,0)->d(300,0) already ortho-dragged onto the horizontal ray;
+      // an off-ray node t(300,8) sits within the merge radius of d.
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'd', sheetId: 's1', x: 300, y: 0, floorIndex: 0),
+        NetNode(id: 't', sheetId: 's1', x: 300, y: 8, floorIndex: 0),
+      ], edges: [
+        NetEdge(id: 'e', fromId: 'a', toId: 'd', service: ServiceType.coldWater),
+      ]));
+      n.pushUndoSnapshot();
+      // Release: the other endpoint 'a' anchors the ortho ray.
+      n.endNodeDragWithSnap('d', 12, orthoAnchor: const Offset(0, 0));
+
+      final net = c.read(networkControllerProvider).network;
+      // 'd' survives as the bend (NOT merged away): a->d stays, d->t added.
+      expect(net.nodeById('d'), isNotNull, reason: 'endpoint kept as the bend');
+      expect(net.edges.length, 2);
+      expect(nodePos(net, 'd'), const Offset(300, 0));
+      for (final e in net.edges) {
+        expect(isAxis45(nodePos(net, e.fromId), nodePos(net, e.toId)), isTrue);
+      }
+      expect(net.edges.any((e) => e.fromId == 't' || e.toId == 't'), isTrue);
+
+      n.undo();
+      final back = c.read(networkControllerProvider).network;
+      expect(back.edges.length, 1, reason: 'one undo restores the pre-drag run');
+      expect(back.edges.single.id, 'e');
+    });
+
     test('riser adds a riser edge to the floor above', () {
       final c = makeContainer();
       final n = c.read(networkControllerProvider.notifier);
