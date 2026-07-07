@@ -320,6 +320,52 @@ PDF sheets are raster (pdfrx) and have no geometry at all.
   reference-line snaps, above the magnetic grid; one 'Snap to plan' toggle governs all three.
 
 
+### B13. Ortho draws still commit askew runs when the endpoint snaps to an off-ray node
+**HIGH** · effort M · friction · lens: user-reported (2026-07-07, product owner, with screenshot)
+
+At draw commit the node/tee snap (network_store.dart:1610-1662 `_snapOrCreate`) runs AFTER the
+ortho constraint and may return a node up to 14 screen-px OFF the constrained ray — the
+connection wins and the 'horizontal' segment tilts by those pixels. Visible in the field
+screenshot: a ~290-px mid segment off-horizontal by several px.
+
+- **Direction:** keep the connection AND the geometry — when effective-ortho is on and the
+  committed endpoint (node / tee / underlay candidate) lies off the constrained ray beyond a
+  small epsilon, auto-insert an intermediate BEND node so the run reaches it as two
+  axis/45-aligned segments (dominant-axis-first), one undo step, preview shows the L live.
+  Apply at placeRunPoint's commit, the nub pull, and endpoint-resize release.
+
+### B14. The pull nub floats beside the endpoint instead of sitting on it
+**MEDIUM** · effort S · friction · lens: user-reported (2026-07-07, product owner)
+
+The outlet nub renders 15 px up-right of the node. The drafter expects the grip AT the line
+end (the CAD endpoint-grip convention).
+
+- **Direction:** centre the nub ON the node for run endpoints, drawn above the move handle
+  with a smaller inner hit radius (inner = pull, outer = move), pull cursor on inner hover;
+  update the B6 hit-separation test to the new concentric contract.
+
+### B15. The riser marker should be the drafting-standard circle-with-arrows symbol
+**MEDIUM** · effort S · clarity · lens: user-reported (2026-07-07, product owner)
+
+The on-canvas riser marker is a rounded pill with an arrow glyph; the drafting convention (and
+the plan exports' own UP/DN circles) is a CIRCLE containing up/down arrows.
+
+- **Direction:** custom-paint the riser node as a circle with chevron arrows (up, down, or
+  both per direction), one symbol language with plan_symbols' exported riser marker; scales
+  per B16.
+
+### B16. Nodes and pipes should render at true diameter and scale with zoom
+**HIGH** · effort M · gap · lens: user-reported (2026-07-07, product owner)
+
+Pipes draw at a fixed screen stroke and nodes at fixed screen sizes; ducts already render
+true-width. The drafter expects pipe linework and fittings to reflect the sized diameter and
+grow/shrink with zoom like real objects.
+
+- **Direction:** pipe stroke = max(minScreenPx, sizedDiameterWorld × zoom) via the calibrated
+  scale (DN → m → sheet-px), node/fitting/riser glyphs sized in world units proportional to
+  the incident pipe diameter with a minimum screen floor; reuse the B5 renderedWidth source so
+  hit corridors stay in sync; plan exports already carry true widths where sized.
+
 ## Theme C — Inspector and information architecture
 
 The right-hand column: selection-first behaviour, disclosure discipline, and whether every model field the app acts on is actually editable somewhere.
