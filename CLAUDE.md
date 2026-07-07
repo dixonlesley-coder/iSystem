@@ -669,11 +669,12 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.12.0`** (the unconnected-element design checks — loose pipe/duct ends,
-  orphans, unfed panels, surfaced as locatable Review warnings — plus a golden-review
-  readability batch, atop the v1.11.0 Apple-design-review baseline; `pubspec.yaml` is
-  the version source of truth, `1.12.0+18`; each release = bump → merge to the default
-  branch → `release.yml` `workflow_dispatch` with `publish=true`).
+  is `v1.13.0`** (the ENTIRE WORKFLOW-GOLDENS-REVIEW campaign — all 7 waves — atop the
+  v1.12.0 baseline; `pubspec.yaml` is the version source of truth, `1.13.0+19`; each
+  release = bump → merge to the default branch → `release.yml` `workflow_dispatch` with
+  `publish=true`). The prior `v1.12.0` shipped the unconnected-element design checks
+  (loose pipe/duct ends, orphans, unfed panels, surfaced as locatable Review warnings)
+  plus a golden-review readability batch, atop the v1.11.0 Apple-design-review baseline.
   **Wave 4b (electrical drawings export) landed**: pure-engine
   `report/electrical_calc_report.dart` (Markdown over the sized system + power one-line
   + verify items) and `report/electrical_dxf_export.dart` (R12 DXF single-line —
