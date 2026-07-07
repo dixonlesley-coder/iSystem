@@ -685,8 +685,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.13.0`** (the ENTIRE WORKFLOW-GOLDENS-REVIEW campaign — all 7 waves — atop the
-  v1.12.0 baseline; `pubspec.yaml` is the version source of truth, `1.13.0+19`; each
+  is `v1.14.0`** (the three drafting-feel batches — the user-reported B10–B16 fixes incl.
+  the auto-elbow, on-endpoint grip, riser circle-arrows, true-diameter zoom rendering, and
+  the B17–B30 CAD-muscle-memory set — atop the v1.13.0 all-7-waves campaign baseline;
+  `pubspec.yaml` is the version source of truth, `1.14.0+20`; each
   release = bump → merge to the default branch → `release.yml` `workflow_dispatch` with
   `publish=true`). The prior `v1.12.0` shipped the unconnected-element design checks
   (loose pipe/duct ends, orphans, unfed panels, surfaced as locatable Review warnings)
