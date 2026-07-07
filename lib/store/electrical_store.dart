@@ -385,8 +385,16 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     // microtask does the initial sync (state can't be set during build()).
     ref.listen(
         mepAutoFeedCircuitsProvider, (_, next) => syncMepEquipment(next));
-    Future.microtask(
-        () => syncMepEquipment(ref.read(mepAutoFeedCircuitsProvider)));
+    // The microtask can outlive the container (app quit / test teardown
+    // disposing mid-flight) — reading a disposed container throws a StateError
+    // on a platform-timing-dependent race (caught by the Windows release gate),
+    // so it must no-op once this notifier is disposed.
+    var disposed = false;
+    ref.onDispose(() => disposed = true);
+    Future.microtask(() {
+      if (disposed) return;
+      syncMepEquipment(ref.read(mepAutoFeedCircuitsProvider));
+    });
     // A2 — a fresh project is EMPTY: the fictional sample switchboard must
     // never leak into a real `.mechx` / BOM / quotation. The sample stays one
     // explicit click away ([resetToSample], the empty-state action).
