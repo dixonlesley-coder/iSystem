@@ -637,7 +637,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   acoustic-PVC/HDPE + `standards/duct_products.dart` BJLS auto-thickness + PU)
   backs the mechanical canvas. **Wave 4 (UI) — the two canvas editors landed**
   (one shared direct-manipulation language): the **mechanical drag-drop canvas**
-  (`ui/canvas/segment_palette.dart` + `drop_overlay.dart` + `edge_context_menu.dart`)
+  (`ui/canvas/segment_palette.dart` [its equipment groups scope to the active layer,
+  and the **Drains** group [roof/floor drain, cleanout] further gates to the GRAVITY
+  drainage-family service — drainage/vent/rainwater — so it's hidden while a cold/hot-water
+  run is selected] + `drop_overlay.dart` + `edge_context_menu.dart`)
   — drag pipe-segment/fitting/terminal/duct cards onto the calibrated canvas,
   drag edge endpoints to resize+snap to fittings (`endNodeDragWithSnap`), right-
   click to set **nominal size in inches** (NPS ladder → additive `NetEdge.sizeOverride`,
