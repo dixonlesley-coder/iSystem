@@ -1481,12 +1481,14 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
               ),
               const SizedBox(height: MechXSpacing.lg),
 
-              // ── Sheet + Scale (E10) ───────────────────────────────────────
+              // ── Scale (E10) ───────────────────────────────────────────────
               // Setup lives under Building, above the draw→size→report flow —
               // calibration is the gating step the banner demands, so it sits
               // near the top (was buried dead-last, below Document control) and
-              // is collapsible with a calibration-aware default.
-              _sheetMappingSection(context),
+              // is collapsible with a calibration-aware default. (Sheet→floor
+              // mapping is NOT here: it lives on the sheet itself — the rail
+              // tile's `F#` stamp + its right-click "Assign floor…" — and on the
+              // Building page, so a third control here was redundant.)
               _scaleSection(context),
 
               // ── Draw ──────────────────────────────────────────────────────
@@ -1499,11 +1501,10 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
               // ── Rooms (only shown when the sheet has designated rooms) ─────
               const _RoomsSection(),
 
-              // ── Sizing ────────────────────────────────────────────────────
-              const _SizingSection(),
-              const SizedBox(height: MechXSpacing.lg),
-
               // ── Network results ───────────────────────────────────────────
+              // (Occupancy / rainfall / runoff design INPUTS moved to the
+              // Building setup page; the Show/Hide-sizes canvas toggle lives
+              // atop Results now.)
               const _ResultsSection(),
               const SizedBox(height: MechXSpacing.lg),
 
@@ -1525,58 +1526,6 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  /// The Sheet → floor mapping section (E10). Moved up under Building and
-  /// wrapped in a collapsible [DisclosureSection]. Shrinks to nothing when no
-  /// sheet is loaded (no gap ⇒ byte-identical there).
-  Widget _sheetMappingSection(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    final building = ref.watch(projectControllerProvider).building;
-    final currentSheet = ref.watch(sheetsControllerProvider).current;
-    if (currentSheet == null) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: MechXSpacing.lg),
-      child: DisclosureSection(
-        name: context.strings(StringKey.inspectorSheet),
-        child: Builder(builder: (context) {
-          final sheetsState = ref.watch(sheetsControllerProvider);
-          final floor =
-              sheetsState.floorFor(currentSheet.id, building.levelCount);
-          final floorName = building.floors[floor].name;
-          final last = building.levelCount - 1;
-          void mapTo(int f) => ref
-              .read(sheetsControllerProvider.notifier)
-              .setSheetFloor(currentSheet.id, f.clamp(0, last));
-          return Row(
-            children: [
-              Expanded(
-                child: Text(context.strings(StringKey.inspectorMapsToFloor),
-                    style: type.caption.copyWith(color: colors.textMuted)),
-              ),
-              // Type-in (or ±1) floor mapping (D5): the display keeps the level
-              // NAME; typing a 1-based level number remaps the sheet, clamped to
-              // 1..levelCount.
-              SteppedValueField(
-                display: floorName,
-                editSeed: '${floor + 1}',
-                label: context.strings(StringKey.inspectorMapsToFloor),
-                gap: MechXSpacing.xs,
-                valueColor: colors.textSecondary,
-                min: 1,
-                max: building.levelCount.toDouble(),
-                onDecrement: floor > 0 ? () => mapTo(floor - 1) : null,
-                onIncrement: floor < last ? () => mapTo(floor + 1) : null,
-                onSubmit: (v) {
-                  if (v != null) mapTo(v.round() - 1);
-                },
-              ),
-            ],
-          );
-        }),
       ),
     );
   }
@@ -3185,116 +3134,6 @@ class _RoomsSection extends ConsumerWidget {
   }
 }
 
-class _SizingSection extends ConsumerWidget {
-  const _SizingSection();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final colors = context.colors;
-    final type = context.type;
-    final show = ref.watch(showSizingProvider);
-    final sized = ref.watch(sizingProvider);
-
-    return DisclosureSection(
-      // E5: this section holds occupancy/rainfall/runoff design INPUTS, not
-      // results — name it for what the engineer sets here.
-      name: 'Design inputs',
-      child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            MechXButton(
-              label: show ? 'Hide sizes' : 'Show sizes',
-              primary: show,
-              onPressed: () => ref.read(showSizingProvider.notifier).toggle(),
-            ),
-            const Spacer(),
-            Text(
-              '${sized.length} sized',
-              style: type.caption.copyWith(color: colors.textMuted),
-            ),
-          ],
-        ),
-        const SizedBox(height: MechXSpacing.sm),
-        Text('Occupancy',
-            style: type.caption.copyWith(color: colors.textMuted)),
-        const SizedBox(height: MechXSpacing.xs),
-        Wrap(
-          spacing: MechXSpacing.xs,
-          runSpacing: MechXSpacing.xs,
-          children: [
-            for (final o in Occupancy.values)
-              _Pill(
-                label: _occupancyLabel(o),
-                selected: ref.watch(occupancyProvider) == o,
-                onTap: () => ref.read(occupancyProvider.notifier).set(o),
-              ),
-          ],
-        ),
-        const SizedBox(height: MechXSpacing.sm),
-        Row(
-          children: [
-            Expanded(
-              child: Text('Rainfall (storm)',
-                  style: type.caption.copyWith(color: colors.textMuted)),
-            ),
-            SteppedValueField(
-              display: '${ref.watch(rainfallIntensityProvider).round()} mm/hr',
-              editSeed: '${ref.watch(rainfallIntensityProvider).round()}',
-              label: 'Rainfall (storm)',
-              gap: MechXSpacing.xs,
-              min: 50,
-              max: 600,
-              onDecrement: () =>
-                  ref.read(rainfallIntensityProvider.notifier).nudge(-25),
-              onIncrement: () =>
-                  ref.read(rainfallIntensityProvider.notifier).nudge(25),
-              onSubmit: (v) {
-                if (v != null) {
-                  ref.read(rainfallIntensityProvider.notifier).set(v);
-                }
-              },
-            ),
-          ],
-        ),
-        const SizedBox(height: MechXSpacing.sm),
-        Row(
-          children: [
-            Expanded(
-              child: Text('Runoff coefficient',
-                  style: type.caption.copyWith(color: colors.textMuted)),
-            ),
-            SteppedValueField(
-              display: ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
-              editSeed: ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
-              label: 'Runoff coefficient',
-              gap: MechXSpacing.xs,
-              min: 0.5,
-              max: 1.0,
-              onDecrement: () =>
-                  ref.read(runoffCoefficientProvider.notifier).nudge(-0.05),
-              onIncrement: () =>
-                  ref.read(runoffCoefficientProvider.notifier).nudge(0.05),
-              onSubmit: (v) {
-                if (v != null) {
-                  ref.read(runoffCoefficientProvider.notifier).set(v);
-                }
-              },
-            ),
-          ],
-        ),
-      ],
-    ),
-    );
-  }
-}
-
-String _occupancyLabel(Occupancy o) => switch (o) {
-      Occupancy.private => 'Residential',
-      Occupancy.public => 'Office / public',
-      Occupancy.assembly => 'Assembly / mall',
-    };
 
 class _ResultsSection extends ConsumerWidget {
   const _ResultsSection();
@@ -3302,6 +3141,7 @@ class _ResultsSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final show = ref.watch(showHeatmapProvider);
+    final showSizes = ref.watch(showSizingProvider);
     final strategy = ref.watch(feedStrategyProvider);
     final stratCtrl = ref.read(feedStrategyProvider.notifier);
     final solution = ref.watch(solveProvider);
@@ -3393,13 +3233,22 @@ class _ResultsSection extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: MechXSpacing.sm),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: MechXButton(
-            label: show ? 'Hide heatmap' : 'Show heatmap',
-            primary: show,
-            onPressed: () => ref.read(showHeatmapProvider.notifier).toggle(),
-          ),
+        // Canvas view toggles: show the auto-sized labels + the pressure heatmap.
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            MechXButton(
+              label: showSizes ? 'Hide sizes' : 'Show sizes',
+              primary: showSizes,
+              onPressed: () => ref.read(showSizingProvider.notifier).toggle(),
+            ),
+            MechXButton(
+              label: show ? 'Hide heatmap' : 'Show heatmap',
+              primary: show,
+              onPressed: () => ref.read(showHeatmapProvider.notifier).toggle(),
+            ),
+          ],
         ),
         if (headlineCard != null) ...[
           const SizedBox(height: MechXSpacing.sm),

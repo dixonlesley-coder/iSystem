@@ -42,11 +42,11 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
-    // The major sections are now DisclosureSections (Draw, Design inputs,
-    // Results, Fire, HVAC always render as headers; Tanks/Rooms only with
-    // content). Their uppercase labels survive whether the section is expanded
-    // (content-bearing) or collapsed (data-gated empty) — the header replaces
-    // the old MechXSectionLabel but keeps the same text.
+    // The major sections are now DisclosureSections (Draw, Results, Fire, HVAC
+    // always render as headers; Tanks/Rooms only with content; the design INPUTS
+    // moved to the Building page). Their uppercase labels survive whether the
+    // section is expanded (content-bearing) or collapsed (data-gated empty) —
+    // the header replaces the old MechXSectionLabel but keeps the same text.
     expect(find.byType(DisclosureSection), findsWidgets);
     expect(find.text('DRAW'), findsOneWidget);
     // E5: the plumbing-results section is 'Results' (was 'Network').

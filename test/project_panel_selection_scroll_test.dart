@@ -10,6 +10,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/store/inspector_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/store/sheets_store.dart';
@@ -53,6 +54,12 @@ void main() {
     // Select the first node (the panel is at rest/top; this jump — if any —
     // is a no-op).
     container.read(selectionProvider.notifier).selectNode(ids[0]);
+    await tester.pump();
+
+    // Expand the tall Draw palette so the panel genuinely overflows the
+    // viewport (two project sections were later removed from the inspector, so a
+    // bare 2-fitting network no longer overflows on its own).
+    container.read(sectionVisibilityProvider.notifier).set('Draw', true);
     await tester.pump();
 
     // Scroll the inspector away from the top, as if the engineer had

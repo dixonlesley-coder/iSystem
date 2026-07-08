@@ -105,10 +105,23 @@ class SegmentPalette extends ConsumerWidget {
     // Equipment groups scope to the SYSTEM layer they belong to (and the
     // Schematic view, which has no layer concept, shows everything).
     final showAll = !onLayout;
-    // Plumbing is one layer (water + sanitary + storm), so its water plant AND
-    // drains both show when it's active.
+    // Plumbing is one layer (water + sanitary + storm), so its water plant shows
+    // whenever plumbing is active.
     final showWater = showAll || active == DisciplineLayer.plumbing;
-    final showDrains = showAll || active == DisciplineLayer.plumbing;
+    // Drains (roof/floor drain, cleanout) belong to the GRAVITY drainage family
+    // (drainage / vent / rainwater), not pressurized water — within the one
+    // plumbing layer, gate them on the ACTIVE draw service's regime so they don't
+    // clutter the palette while a cold/hot-water run is selected. (The Schematic
+    // view has no service concept ⇒ showAll still shows them.)
+    final drawService = ref.watch(networkControllerProvider).service;
+    final showDrains = showAll ||
+        (active == DisciplineLayer.plumbing &&
+            drawService.regime == FlowRegime.gravity);
+    // Clean-water outlets are a PRESSURIZED-water (cold/hot) placement — the
+    // mirror of drains — so they show only while a water run is selected.
+    final showWaterOutlet = showAll ||
+        (active == DisciplineLayer.plumbing &&
+            drawService.regime == FlowRegime.pressurized);
     final showFire = showAll || active == DisciplineLayer.fire;
     final showAir = showAll || active == DisciplineLayer.hvac;
 
@@ -283,6 +296,12 @@ class SegmentPalette extends ConsumerWidget {
             NodeComponent.airVent,
           ]),
         ],
+
+        // ── Clean-water outlets (pressurized water service) ─────────────────
+        if (showWaterOutlet)
+          equipmentGroup('Water outlets', const [
+            NodeComponent.waterOutlet,
+          ]),
 
         // ── Drains (Sanitary + Storm layers) ───────────────────────────────
         if (showDrains)

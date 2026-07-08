@@ -1,8 +1,11 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/standards/sni.dart' show Occupancy;
 import 'package:mechx_engine/units.dart';
 
+import '../../store/app_state.dart'
+    show occupancyProvider, rainfallIntensityProvider, runoffCoefficientProvider;
 import '../../store/models/sheet.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
@@ -13,7 +16,9 @@ import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_segment.dart';
 import '../widgets/mechx_text_field.dart';
+import '../widgets/section_label.dart';
 import '../widgets/stepped_value_field.dart';
 
 /// The dedicated **Building** page — the floor/level model on its own screen
@@ -81,6 +86,14 @@ class BuildingScreen extends ConsumerWidget {
           onAddOnTop: ctrl.addFloorsOnTop,
           onAddBasement: ctrl.addBasement,
         ),
+
+        // Project design inputs (occupancy / storm rainfall + runoff) — the
+        // building-wide sizing parameters. They live here on the setup page
+        // rather than in the per-selection canvas inspector.
+        const SizedBox(height: MechXSpacing.lg),
+        const MechXSectionLabel('Design inputs'),
+        const SizedBox(height: MechXSpacing.sm),
+        const _DesignInputsCard(),
       ],
     );
   }
@@ -286,6 +299,112 @@ class _AddLevelsRowState extends State<_AddLevelsRow> {
           MechXButton(
             label: 'Add basement',
             onPressed: () => widget.onAddBasement(_count, _height),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The project design-input card (moved off the canvas inspector): occupancy
+/// class (fixture demand), storm rainfall intensity + runoff coefficient (storm
+/// sizing). These are building-wide sizing parameters, so they belong on the
+/// setup page beside the floor stack rather than in the per-selection inspector.
+class _DesignInputsCard extends ConsumerWidget {
+  const _DesignInputsCard();
+
+  static String _occupancyLabel(Occupancy o) => switch (o) {
+        Occupancy.private => 'Residential',
+        Occupancy.public => 'Office / public',
+        Occupancy.assembly => 'Assembly / mall',
+      };
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final occ = ref.watch(occupancyProvider);
+    final rain = ref.watch(rainfallIntensityProvider);
+    final runoff = ref.watch(runoffCoefficientProvider);
+    Text label(String s) =>
+        Text(s, style: type.body.copyWith(color: colors.textSecondary));
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(MechXSpacing.md),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Occupancy',
+              style: type.caption.copyWith(color: colors.textMuted)),
+          const SizedBox(height: MechXSpacing.xs),
+          Wrap(
+            spacing: MechXSpacing.xs,
+            runSpacing: MechXSpacing.xs,
+            children: [
+              for (final o in Occupancy.values)
+                MechXSegment(
+                  label: _occupancyLabel(o),
+                  selected: occ == o,
+                  onTap: () => ref.read(occupancyProvider.notifier).set(o),
+                ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.md),
+          Row(
+            children: [
+              Expanded(child: label('Rainfall (storm)')),
+              SteppedValueField(
+                display: '${rain.round()} mm/hr',
+                editSeed: '${rain.round()}',
+                label: 'Rainfall (storm)',
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 50,
+                max: 600,
+                onDecrement: () =>
+                    ref.read(rainfallIntensityProvider.notifier).nudge(-25),
+                onIncrement: () =>
+                    ref.read(rainfallIntensityProvider.notifier).nudge(25),
+                onSubmit: (v) {
+                  if (v != null) {
+                    ref.read(rainfallIntensityProvider.notifier).set(v);
+                  }
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(child: label('Runoff coefficient')),
+              SteppedValueField(
+                display: runoff.toStringAsFixed(2),
+                editSeed: runoff.toStringAsFixed(2),
+                label: 'Runoff coefficient',
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0.5,
+                max: 1.0,
+                onDecrement: () =>
+                    ref.read(runoffCoefficientProvider.notifier).nudge(-0.05),
+                onIncrement: () =>
+                    ref.read(runoffCoefficientProvider.notifier).nudge(0.05),
+                onSubmit: (v) {
+                  if (v != null) {
+                    ref.read(runoffCoefficientProvider.notifier).set(v);
+                  }
+                },
+              ),
+            ],
           ),
         ],
       ),

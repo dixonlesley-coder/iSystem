@@ -2,10 +2,12 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/store/app_state.dart' show occupancyProvider;
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx/ui/widgets/stepped_value_field.dart';
+import 'package:mechx_engine/standards/sni.dart' show Occupancy;
 
 import 'test_util.dart';
 
@@ -54,6 +56,29 @@ void main() {
     await tester.pump();
     expect(container.read(projectControllerProvider).floors.length, 4);
     expect(find.text('Level 3'), findsOneWidget);
+  });
+
+  testWidgets('the Building page hosts the project design inputs (moved off '
+      'the canvas inspector)', (tester) async {
+    await _openBuilding(tester);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+
+    // The design-input controls now live here (the section header is uppercase).
+    expect(find.text('DESIGN INPUTS'), findsOneWidget);
+    expect(find.text('Occupancy'), findsOneWidget);
+    expect(find.text('Rainfall (storm)'), findsOneWidget);
+    expect(find.text('Runoff coefficient'), findsOneWidget);
+
+    // Occupancy segments drive the provider (default is private/Residential).
+    expect(container.read(occupancyProvider), Occupancy.private);
+    await tester.ensureVisible(find.text('Office / public'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Office / public'));
+    await tester.pump();
+    expect(container.read(occupancyProvider), Occupancy.public);
   });
 
   testWidgets('Add basement adds a below-ground level (ground stays 0.0)',

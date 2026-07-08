@@ -160,6 +160,14 @@ List<SldPrim> planComponentPrims(
       ln(0.50, 0.10, 0.38, 0.30);
       ln(0.50, 0.10, 0.62, 0.30);
       ln(0.50, 0.10, 0.50, 0.44);
+    case NodeComponent.waterOutlet:
+      // A clean-water outlet: a tap/faucet (body + handle + spout) delivering a
+      // water drop (a small circle here, since plan prims are stroke-only).
+      ln(0.16, 0.30, 0.60, 0.30);
+      ln(0.60, 0.30, 0.60, 0.46);
+      ln(0.34, 0.30, 0.34, 0.16);
+      ln(0.24, 0.16, 0.44, 0.16);
+      cir(0.60, 0.66, 0.14);
     case NodeComponent.sprinklerHead:
       // A pendent sprinkler: a small circle + a downward deflector bar.
       cir(0.50, 0.40, 0.16);

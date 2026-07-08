@@ -227,8 +227,10 @@ non-focus-stealing ancestor `Focus` that catches Ctrl/Cmd+K [bubbles up, canvas 
 + Esc; no persistence).
 **Inspector clarity — collapsible sections + promoted headline results** (`ui/inspector/
 disclosure_header.dart` + `result_card.dart` + `store/inspector_store.dart`
-`sectionVisibilityProvider`): the dense `ProjectPanel`'s seven major sections (Draw / Tanks /
-Rooms / Sizing / Network / Fire / HVAC) are wrapped in a reusable `DisclosureSection` — a tappable
+`sectionVisibilityProvider`): the dense `ProjectPanel`'s major sections (Draw / Tanks / Rooms /
+Results / Fire / HVAC — the sheet→floor control was dropped as redundant with the sheet rail, and
+the design INPUTS [occupancy/rainfall/runoff] moved to the Building setup page, leaving only the
+Show/Hide-sizes canvas toggle atop Results) are wrapped in a reusable `DisclosureSection` — a tappable
 header (replacing the section's `MechXSectionLabel`) with a custom-painted chevron that discloses
 its body only when expanded. Expansion is TRANSIENT UI state in `sectionVisibilityProvider` (a
 `Map<String,bool>` keyed by section name, read via the memoized `sectionExpandedProvider` family) —
@@ -637,7 +639,12 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   acoustic-PVC/HDPE + `standards/duct_products.dart` BJLS auto-thickness + PU)
   backs the mechanical canvas. **Wave 4 (UI) — the two canvas editors landed**
   (one shared direct-manipulation language): the **mechanical drag-drop canvas**
-  (`ui/canvas/segment_palette.dart` + `drop_overlay.dart` + `edge_context_menu.dart`)
+  (`ui/canvas/segment_palette.dart` [its equipment groups scope to the active layer;
+  within plumbing the **Drains** group [roof/floor drain, cleanout] gates to the GRAVITY
+  drainage-family service — drainage/vent/rainwater — and the mirrored **Water outlets**
+  group [`NodeComponent.waterOutlet`, a clean-water tap/faucet marker with a readable
+  faucet+drop glyph] gates to the PRESSURIZED water service — cold/hot] + `drop_overlay.dart`
+  + `edge_context_menu.dart`)
   — drag pipe-segment/fitting/terminal/duct cards onto the calibrated canvas,
   drag edge endpoints to resize+snap to fittings (`endNodeDragWithSnap`), right-
   click to set **nominal size in inches** (NPS ladder → additive `NetEdge.sizeOverride`,

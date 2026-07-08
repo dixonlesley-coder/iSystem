@@ -211,6 +211,18 @@ void paintComponentSymbol(
         ..moveTo(cx, h * 0.10)
         ..lineTo(cx, h * 0.44);
       canvas.drawPath(up, p);
+    case NodeComponent.waterOutlet:
+      // A clean-water OUTLET: a wall tap/faucet (body + handle + down spout)
+      // delivering a filled water DROP — the unmistakable potable-water cue.
+      canvas.drawLine(Offset(w * 0.16, h * 0.30), Offset(w * 0.60, h * 0.30), p);
+      canvas.drawLine(Offset(w * 0.60, h * 0.30), Offset(w * 0.60, h * 0.46), p);
+      canvas.drawLine(Offset(w * 0.34, h * 0.30), Offset(w * 0.34, h * 0.16), p);
+      canvas.drawLine(Offset(w * 0.24, h * 0.16), Offset(w * 0.44, h * 0.16), p);
+      final drop = Path()
+        ..moveTo(w * 0.60, h * 0.52) // tip, just below the spout
+        ..quadraticBezierTo(w * 0.78, h * 0.66, w * 0.60, h * 0.82) // right lobe
+        ..quadraticBezierTo(w * 0.42, h * 0.66, w * 0.60, h * 0.52); // left lobe
+      canvas.drawPath(drop, fill);
     case NodeComponent.sprinklerHead:
       // A pendent sprinkler: a small circle with a downward deflector bar.
       canvas.drawCircle(Offset(cx, h * 0.40), w * 0.16, p);
