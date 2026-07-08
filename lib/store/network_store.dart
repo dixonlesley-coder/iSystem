@@ -465,7 +465,9 @@ class NetworkController extends Notifier<DrawingState> {
   /// null the stack was REPLACED wholesale (e.g. a template): every node's
   /// `floorIndex` is simply CLAMPED into `[0, levelCount)` — a node above the
   /// new top drops to the new top floor; a stack that only grew leaves
-  /// everything unchanged.
+  /// everything unchanged. When [insertedCount] floors were INSERTED at
+  /// [insertedIndex] (e.g. basements at index 0) every node at/above that slot
+  /// shifts UP by [insertedCount] first, so it keeps its own physical floor.
   ///
   /// No-op — changes nothing, byte-identical — when no node's `floorIndex`
   /// actually changes (an empty network, or a stack that only grew).
@@ -479,6 +481,8 @@ class NetworkController extends Notifier<DrawingState> {
   void remapNodesForFloorChange({
     required int levelCount,
     int? removedIndex,
+    int? insertedIndex,
+    int insertedCount = 0,
     bool record = true,
   }) {
     if (levelCount < 1) return;
@@ -487,6 +491,12 @@ class NetworkController extends Notifier<DrawingState> {
     final nodes = <NetNode>[];
     for (final n in state.network.nodes) {
       var fi = n.floorIndex;
+      // [insertedCount] floors inserted at [insertedIndex] push every node
+      // AT/ABOVE that slot up, so a node keeps its own physical floor (adding a
+      // basement at index 0 shifts the whole drawing up by that many levels).
+      if (insertedIndex != null && insertedCount > 0 && fi >= insertedIndex) {
+        fi += insertedCount;
+      }
       // A node above a removed floor shifts down one index to keep its own
       // physical floor; a node on/below the removed floor keeps its index.
       if (removedIndex != null && fi > removedIndex) fi -= 1;

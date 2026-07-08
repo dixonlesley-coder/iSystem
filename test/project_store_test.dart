@@ -432,4 +432,103 @@ void main() {
     expect(n.canUndo, isFalse);
     expect(c.read(projectControllerProvider).name, 'Opened');
   });
+
+  group('basements', () {
+    test('addBasement keeps ground at 0.0, reads the basement negative, and '
+        'shifts drawn nodes up to keep their physical floor', () {
+      final c = makeContainer();
+      final proj = c.read(projectControllerProvider.notifier);
+      final net = c.read(networkControllerProvider.notifier);
+      // Default 3-floor building [Ground, Level 1, Level 2]. A node on Ground.
+      net.loadNetwork(const Network(nodes: [
+        NetNode(id: 'g', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+      ]));
+
+      proj.addBasement(1, 3.0);
+
+      final s = c.read(projectControllerProvider);
+      expect(s.floors.length, 4);
+      expect(s.groundIndex, 1);
+      expect(s.floors.first.name, 'Basement 1');
+      // Ground still reads 0.0; the basement is negative; the node followed
+      // Ground UP to index 1 (its own physical slab).
+      expect(s.building.elevationOf(1).meters, 0.0, reason: 'ground datum');
+      expect(s.building.elevationOf(0).meters, closeTo(-3.0, 1e-9));
+      expect(c.read(networkControllerProvider).network.nodes.single.floorIndex, 1,
+          reason: 'the ground node moved up with its floor');
+    });
+
+    test('addBasement(2) numbers the deepest largest and stacks below ground', () {
+      final c = makeContainer();
+      final proj = c.read(projectControllerProvider.notifier);
+      proj.addBasement(2, 3.0);
+      final s = c.read(projectControllerProvider);
+      // Lowest first: [Basement 2, Basement 1, Ground, Level 1, Level 2].
+      expect(s.floors[0].name, 'Basement 2');
+      expect(s.floors[1].name, 'Basement 1');
+      expect(s.floors[2].name, 'Ground');
+      expect(s.groundIndex, 2);
+      expect(s.building.elevationOf(2).meters, 0.0);
+      expect(s.building.elevationOf(0).meters, closeTo(-6.0, 1e-9));
+    });
+
+    test('addBasement is ONE structural undo step (floors + datum + nodes)', () {
+      final c = makeContainer();
+      final proj = c.read(projectControllerProvider.notifier);
+      final net = c.read(networkControllerProvider.notifier);
+      final hist = c.read(historyProvider.notifier);
+      net.loadNetwork(const Network(nodes: [
+        NetNode(id: 'g', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+      ]));
+
+      proj.addBasement(1, 3.0);
+      expect(c.read(projectControllerProvider).groundIndex, 1);
+      expect(c.read(networkControllerProvider).network.nodes.single.floorIndex, 1);
+
+      hist.undo();
+      final s = c.read(projectControllerProvider);
+      expect(s.floors.length, 3);
+      expect(s.groundIndex, 0);
+      expect(c.read(networkControllerProvider).network.nodes.single.floorIndex, 0);
+      expect(hist.canUndo, isFalse);
+    });
+
+    test('removeFloor(basement) slides the datum back down one slot', () {
+      final c = makeContainer();
+      final proj = c.read(projectControllerProvider.notifier);
+      proj.addBasement(2, 3.0); // groundIndex 2
+      proj.removeFloor(0); // drop the deepest basement
+      final s = c.read(projectControllerProvider);
+      expect(s.groundIndex, 1, reason: 'ground stays the same physical floor');
+      expect(s.floors[s.groundIndex].name, 'Ground');
+      expect(s.building.elevationOf(s.groundIndex).meters, 0.0);
+    });
+
+    test('addFloorsOnTop leaves the ground datum + existing nodes untouched', () {
+      final c = makeContainer();
+      final proj = c.read(projectControllerProvider.notifier);
+      final net = c.read(networkControllerProvider.notifier);
+      proj.addBasement(1, 3.0); // groundIndex 1, 4 floors
+      net.loadNetwork(const Network(nodes: [
+        NetNode(id: 'top', sheetId: 's1', x: 0, y: 0, floorIndex: 3),
+      ]));
+
+      proj.addFloorsOnTop(2, 3.5);
+      final s = c.read(projectControllerProvider);
+      expect(s.floors.length, 6);
+      expect(s.groundIndex, 1, reason: 'top add never moves the datum');
+      expect(c.read(networkControllerProvider).network.nodes.single.floorIndex, 3,
+          reason: 'growing upward strands nothing');
+    });
+
+    test('setFloors (template) resets the datum to the bottom', () {
+      final c = makeContainer();
+      final proj = c.read(projectControllerProvider.notifier);
+      proj.addBasement(1, 3.0);
+      expect(c.read(projectControllerProvider).groundIndex, 1);
+      proj.setFloors(const [Floor('G', Length(3)), Floor('L1', Length(3))]);
+      expect(c.read(projectControllerProvider).groundIndex, 0,
+          reason: 'a wholesale replace is a fresh, all-above-ground building');
+    });
+  });
 }

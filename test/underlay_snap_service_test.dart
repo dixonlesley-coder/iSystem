@@ -54,6 +54,10 @@ void main() {
           svc.snap(pdfSheet, lines, const Offset(20, 22), 8, enabled: true);
       expect(hit, isNotNull);
       expect(hit!.source, UnderlaySource.referenceLine);
+      // The hit carries the traced line it latched onto, for the UI highlight.
+      expect(hit.segments, hasLength(1));
+      expect(hit.segments.first.$1, const Offset(10, 20));
+      expect(hit.segments.first.$2, const Offset(30, 20));
     });
 
     test('ink LOSES to a reference line (both in range)', () {
@@ -80,6 +84,8 @@ void main() {
       expect(hit!.source, UnderlaySource.ink);
       // Snapped onto the stripe centreline (≈ x=20).
       expect(hit.point.dx, closeTo(20, 2));
+      // A PDF-ink ridge has no straight source segment ⇒ nothing to highlight.
+      expect(hit.segments, isEmpty);
     });
 
     test('DXF vector BEATS a reference line at the same place', () {

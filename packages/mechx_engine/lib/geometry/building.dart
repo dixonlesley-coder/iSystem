@@ -45,9 +45,21 @@ class BuildingLevels {
   /// Lowest level first.
   final List<Floor> floors;
 
-  const BuildingLevels(this.floors);
+  /// Index of the GROUND floor — the elevation DATUM whose surface reads 0.0.
+  /// Floors below it (basements) have NEGATIVE elevation, floors above it
+  /// positive. Default 0 (the lowest floor is ground) ⇒ elevations measured from
+  /// the bottom of the stack, exactly as before basements existed — so every
+  /// no-basement building is byte-identical. Clamped into `[0, levelCount)` on
+  /// read; a constant offset from the raw bottom-sum, so it changes only the
+  /// DATUM, never any elevation DELTA (and therefore never a riser length).
+  final int groundIndex;
+
+  const BuildingLevels(this.floors, {this.groundIndex = 0});
 
   int get levelCount => floors.length;
+
+  /// The datum floor index, clamped into `[0, levelCount)`.
+  int get _ground => floors.isEmpty ? 0 : groundIndex.clamp(0, floors.length - 1);
 
   /// Clamp a possibly-out-of-range floor [index] into `[0, levelCount)`.
   ///
@@ -67,14 +79,25 @@ class BuildingLevels {
     return index < 0 ? 0 : (index > maxIndex ? maxIndex : index);
   }
 
-  /// Elevation of the floor surface at [index] above the base (floor 0 = 0).
-  /// [index] is clamped into range ([_safeFloorIndex]) so an out-of-range node
-  /// can never crash the solve.
+  /// Elevation of the floor surface at [index] RELATIVE TO THE GROUND floor
+  /// ([groundIndex]): ground = 0.0, basements below it are negative, floors above
+  /// positive. A constant offset from the raw bottom-sum, so every elevation
+  /// DELTA (hence every riser length + solve head) is unchanged; only the datum
+  /// moves. With the default `groundIndex == 0` this is the plain bottom-sum
+  /// (byte-identical). [index] is clamped into range ([_safeFloorIndex]) so an
+  /// out-of-range node can never crash the solve.
   Length elevationOf(int index) {
-    final top = _safeFloorIndex(index);
+    final i = _safeFloorIndex(index);
+    final g = _ground;
     var sum = 0.0;
-    for (var i = 0; i < top; i++) {
-      sum += floors[i].height.meters;
+    if (i >= g) {
+      for (var k = g; k < i; k++) {
+        sum += floors[k].height.meters;
+      }
+    } else {
+      for (var k = i; k < g; k++) {
+        sum -= floors[k].height.meters;
+      }
     }
     return Length(sum);
   }
@@ -107,11 +130,17 @@ class BuildingLevels {
         (elevationOf(toIndex).meters - elevationOf(fromIndex).meters).abs(),
       );
 
-  /// Total building height (sum of all floor heights) — also the roof level.
+  /// Total building height (sum of all floor heights, basements included) — the
+  /// physical height of the whole stack, independent of the datum.
   Length get totalHeight =>
       Length(floors.fold(0.0, (sum, f) => sum + f.height.meters));
 
-  /// Roof elevation = top of the topmost floor (where a roof tank sits, before
-  /// any tank stand). Alias of [totalHeight].
-  Length get roofElevation => totalHeight;
+  /// Roof elevation (where a roof tank sits, before any tank stand) — the top
+  /// floor surface plus its own height, in the GROUND-relative frame. With no
+  /// basements (ground = floor 0) this equals [totalHeight] (byte-identical);
+  /// with basements it excludes the below-ground heights (the roof's height
+  /// above ground).
+  Length get roofElevation => floors.isEmpty
+      ? const Length(0)
+      : Length(elevationOf(floors.length - 1).meters + floors.last.height.meters);
 }

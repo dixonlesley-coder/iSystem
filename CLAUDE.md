@@ -158,7 +158,13 @@ normal ODA MSI install is found with zero config; the bundled copy is fetched at
 release-build time via `release.yml` from an `ODA_ZIP_URL` secret / `vendor-oda`
 repo release asset, absent ⇒ no-op)
 + multi-sheet rail; per-sheet scale calibration; per-floor
-heights + role-aware elevations; draw runs/risers for 10 services (cold/hot
+heights + role-aware elevations (a **ground-relative datum** — `BuildingLevels.groundIndex`:
+ground reads 0.0, **BASEMENTS negative**, upper floors positive; a constant offset that leaves
+every elevation DELTA / riser length unchanged, default `groundIndex == 0` ⇒ byte-identical.
+Basements are added on the Building page's ONE consolidated add control — `N levels @ H m` with
+**Add on top** / **Add basement** — via `ProjectController.addBasement`/`addFloorsOnTop`, which
+shift the datum + drawn nodes in one structural undo step; `groundIndex` round-trips additively in
+`.mechx`); draw runs/risers for 10 services (cold/hot
 water, drainage, vent, rainwater, supply/return/exhaust air, sprinkler,
 hydrant); **select / edit / delete / drag** nodes & edges, **multi-floor
 duplicate**, ortho snap, keyboard (Delete, Esc, Ctrl+Z/Y); auto-sizing per
@@ -332,6 +338,15 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   reference line > ink > grid, gated by a default-ON 'Snap to plan' toggle beside Ortho.
   Gate: engine 1341 / app 899 / analyze clean; goldens 01/02/03 shifted (new DRAW chip+toggle).
   Residual: the legacy `sheet_canvas.dart` host lacks only the trace-tool overlay.
+  **Snap-to-plan now HIGHLIGHTS the feature it's snapping to (user-reported) HAS ALSO LANDED**
+  (2026-07-08, see the §15 row): the underlay snap carries its SOURCE geometry —
+  `UnderlaySnapCandidate.segment`/`segment2` (the wall/line, plus the 2nd crossing wall at an
+  intersection) → `UnderlaySnapHit.segments` → `_EndSnap.segments` — and the draw rubber-band
+  (`RubberBandPainter.snapSegmentsScreen`) paints that wall/line in the service accent (like the
+  B25 parallel-reference highlight) UNDER the OSNAP marker, so while drawing you see WHICH plan
+  part is being latched (a PDF-ink ridge carries no segment ⇒ marker only). Gesture-time only
+  (mounted during an active DrawRun hover) ⇒ goldens byte-identical. Gate: engine 1377 / app 1106
+  / analyze clean.
   **Drafting-feel batch 2 (user-reported B13–B16) HAS ALSO LANDED** (2026-07-07, see the §15
   row): the CAD auto-elbow (off-ray snap targets reached as two exact 45° legs via a bend
   junction, at draw/nub/resize commit, L-shaped live preview, one undo step), the pull grip
@@ -348,6 +363,17 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   window/crossing marquee, the match-properties brush (atomic `setEdgeProperties` after a
   review-caught undo fix), and hover measurement chips. All gesture-time only — goldens
   byte-identical. Gate: engine 1371 / app 1093 / analyze clean.
+  **Drafting-feel follow-up — a free run endpoint's grip STRETCHES (extend/trim), doesn't pull
+  (user-reported) HAS ALSO LANDED** (2026-07-08, see the §15 row): a bare `main` node at the
+  loose END of a run used to mount the concentric outlet nub (B14), so grabbing the point and
+  dragging pulled a NEW mainline out instead of moving the endpoint. Now `_isFreeRunEndpoint`
+  (a component-free `main` with exactly one incident edge, a `run`) flips that grip's drag to
+  MOVE the node — extend/trim, reusing the single-node move path (degree-1 ortho vs the sole
+  neighbour, `endNodeDragWithSnap` merge/grid/underlay on release); tap-select / double-click /
+  right-click unchanged, cursor becomes `move`. Risers, junctions (degree ≥ 2), lone dropped
+  fittings (degree 0, the bootstrap pull point) and plant/valve nodes keep the pull nub; branch
+  a real loose end via the Run tool's tee-in. Gate: engine 1371 / app 1096 / analyze clean;
+  goldens byte-identical (the grip mounts only on hover/selection).
   **The Wave 2 remainder HAS ALSO LANDED** (2026-07-06, see the §15 row): K1 drag-session
   throttle (no heavy re-solve per drag frame; at-rest byte-identical), K3 heatmap field
   memoization, K2 isolate-offloaded Open, K4 threshold-gated isolate autosave encode with a

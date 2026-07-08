@@ -34,10 +34,14 @@ void main() {
     expect(find.text('Ground'), findsOneWidget);
     expect(find.text('Level 2'), findsOneWidget);
     expect(find.text('Floor-to-floor height'), findsNWidgets(3));
-    expect(find.text('+  Add level'), findsOneWidget);
+    // ONE consolidated add control with two direction buttons (the redundant
+    // standalone "+ Add level" is gone).
+    expect(find.text('+  Add level'), findsNothing);
+    expect(find.text('Add on top'), findsOneWidget);
+    expect(find.text('Add basement'), findsOneWidget);
   });
 
-  testWidgets('Add level appends a floor', (tester) async {
+  testWidgets('Add on top appends a floor (count defaults to 1)', (tester) async {
     await _openBuilding(tester);
 
     final container = ProviderScope.containerOf(
@@ -46,10 +50,30 @@ void main() {
     );
     expect(container.read(projectControllerProvider).floors.length, 3);
 
-    await tester.tap(find.text('+  Add level'));
+    await tester.tap(find.text('Add on top'));
     await tester.pump();
     expect(container.read(projectControllerProvider).floors.length, 4);
     expect(find.text('Level 3'), findsOneWidget);
+  });
+
+  testWidgets('Add basement adds a below-ground level (ground stays 0.0)',
+      (tester) async {
+    await _openBuilding(tester);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+
+    await tester.tap(find.text('Add basement'));
+    await tester.pump();
+
+    final s = container.read(projectControllerProvider);
+    expect(s.floors.length, 4);
+    expect(s.groundIndex, 1);
+    expect(find.text('Basement 1'), findsOneWidget);
+    // Ground still reads 0.0; the new basement reads negative (default 3.5 m).
+    expect(s.building.elevationOf(s.groundIndex).meters, 0.0);
+    expect(find.text('elev -3.5 m'), findsOneWidget);
   });
 
   testWidgets('assigning a floor plan maps that sheet to the level',
@@ -122,11 +146,11 @@ void main() {
     expect(container.read(projectControllerProvider).floors.length, 3);
 
     // The Add row's count stepper is the 4th SteppedValueField (after the 3
-    // floor-card height fields). Bump the count to 2, then tap "Add levels".
+    // floor-card height fields). Bump the count to 2, then tap "Add on top".
     final countField = find.byType(SteppedValueField).at(3);
     await tester.tap(find.descendant(of: countField, matching: find.text('+')));
     await tester.pump();
-    await tester.tap(find.text('Add levels'));
+    await tester.tap(find.text('Add on top'));
     await tester.pump();
 
     expect(container.read(projectControllerProvider).floors.length, 5);

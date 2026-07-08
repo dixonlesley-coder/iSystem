@@ -25,14 +25,23 @@ class ProjectState {
   /// Additive; tolerant round-trip in `.mechx` (absent ⇒ empty).
   final Set<String> staleCalibrations;
 
+  /// Index of the GROUND floor in [floors] — the elevation datum (its surface
+  /// reads 0.0; basements below it are negative, upper floors positive). Default
+  /// 0 (the lowest floor is ground) ⇒ elevations measured from the bottom, as
+  /// before basements existed. Kept in `[0, floors.length)`; round-trips
+  /// additively in `.mechx` (absent ⇒ 0, byte-identical).
+  final int groundIndex;
+
   const ProjectState({
     required this.name,
     required this.floors,
     this.calibrations = const {},
     this.staleCalibrations = const {},
+    this.groundIndex = 0,
   });
 
-  BuildingLevels get building => BuildingLevels(floors);
+  BuildingLevels get building =>
+      BuildingLevels(floors, groundIndex: groundIndex);
 
   ScaleCalibration? calibrationFor(String sheetId) => calibrations[sheetId];
 
@@ -74,12 +83,14 @@ class ProjectState {
     List<Floor>? floors,
     Map<String, ScaleCalibration>? calibrations,
     Set<String>? staleCalibrations,
+    int? groundIndex,
   }) =>
       ProjectState(
         name: name ?? this.name,
         floors: floors ?? this.floors,
         calibrations: calibrations ?? this.calibrations,
         staleCalibrations: staleCalibrations ?? this.staleCalibrations,
+        groundIndex: groundIndex ?? this.groundIndex,
       );
 }
 
@@ -143,14 +154,17 @@ class ProjectController extends Notifier<ProjectState> {
     required List<Floor> floors,
     required Map<String, ScaleCalibration> calibrations,
     Set<String> staleCalibrations = const {},
+    int groundIndex = 0,
   }) {
     _undo.clear();
     _redo.clear();
+    final f = floors.isEmpty ? state.floors : floors;
     state = ProjectState(
       name: name,
-      floors: floors.isEmpty ? state.floors : floors,
+      floors: f,
       calibrations: calibrations,
       staleCalibrations: staleCalibrations,
+      groundIndex: groundIndex.clamp(0, f.length - 1),
     );
   }
 
@@ -158,6 +172,57 @@ class ProjectController extends Notifier<ProjectState> {
     _snapshot();
     final next = Floor('Level ${state.floors.length}', const Length(3.5));
     state = state.copyWith(floors: [...state.floors, next]);
+  }
+
+  /// Add [count] typical levels on TOP of the stack in ONE structural undo step
+  /// (the consolidated "Add on top"). The ground datum is unchanged and no drawn
+  /// node moves — the stack only grows upward. New levels are numbered from the
+  /// current top-above-ground ("Level N"). No-op for count <= 0.
+  void addFloorsOnTop(int count, double heightM) {
+    if (count <= 0) return;
+    final h = Length(heightM.clamp(_minHeight, _maxHeight).toDouble());
+    // Level number above ground: Ground is "Level 0", so the next number is the
+    // count of floors from ground up (== floors.length − groundIndex). With no
+    // basement this is floors.length (byte-identical to the old bulk-add name).
+    final base = state.floors.length - state.groundIndex;
+    final added = [
+      for (var k = 0; k < count; k++) Floor('Level ${base + k}', h),
+    ];
+    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
+    state = state.copyWith(floors: [...state.floors, ...added]);
+    ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
+          levelCount: state.floors.length,
+          record: false,
+        );
+  }
+
+  /// Add [count] BASEMENT levels below the ground floor in ONE structural undo
+  /// step: [count] new floors are inserted at the BOTTOM of the stack, the
+  /// ground datum shifts up by [count] (so the ground keeps reading elevation
+  /// 0.0 and the new levels read NEGATIVE), and every drawn node shifts up
+  /// [count] floors to stay on its own physical level. Named "Basement N",
+  /// counting DOWN from the ground (the deepest gets the largest N). No-op for
+  /// count <= 0.
+  void addBasement(int count, double heightM) {
+    if (count <= 0) return;
+    final h = Length(heightM.clamp(_minHeight, _maxHeight).toDouble());
+    final existing = state.groundIndex; // basements already below ground
+    // Lowest first: the deepest new basement (largest number) leads the list.
+    final added = [
+      for (var k = 0; k < count; k++)
+        Floor('Basement ${existing + count - k}', h),
+    ];
+    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
+    state = state.copyWith(
+      floors: [...added, ...state.floors],
+      groundIndex: state.groundIndex + count,
+    );
+    ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
+          levelCount: state.floors.length,
+          insertedIndex: 0,
+          insertedCount: count,
+          record: false,
+        );
   }
 
   /// Replace the whole floor stack in ONE undo step (used by project templates /
@@ -174,7 +239,10 @@ class ProjectController extends Notifier<ProjectState> {
   void setFloors(List<Floor> floors) {
     if (floors.isEmpty) return;
     ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
-    state = state.copyWith(floors: List<Floor>.from(floors));
+    // A wholesale replace (template / sample / opened doc) is a fresh building —
+    // reset the ground datum to the bottom (no basements). Callers that keep a
+    // basement stack use [addFloorsOnTop] / [addBasement] instead.
+    state = state.copyWith(floors: List<Floor>.from(floors), groundIndex: 0);
     ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
           levelCount: state.floors.length,
           record: false,
@@ -193,7 +261,14 @@ class ProjectController extends Notifier<ProjectState> {
     }
     ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
     final floors = [...state.floors]..removeAt(index);
-    state = state.copyWith(floors: floors);
+    // Removing a BELOW-ground floor slides the datum down one slot so the same
+    // physical floor stays "ground"; removing ground-or-above leaves the datum
+    // pinned (then clamped into the shrunk range).
+    final nextGround = (index < state.groundIndex
+            ? state.groundIndex - 1
+            : state.groundIndex)
+        .clamp(0, floors.length - 1);
+    state = state.copyWith(floors: floors, groundIndex: nextGround);
     ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
           levelCount: state.floors.length,
           removedIndex: index,

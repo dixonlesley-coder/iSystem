@@ -56,8 +56,26 @@ class UnderlaySnapHit {
   final UnderlaySource source;
   final double distance;
   final SnapKind kind;
+
+  /// The SOURCE geometry the snap latched onto (world/sheet-px), so the UI can
+  /// HIGHLIGHT which plan part is being snapped to: one wall/line for most
+  /// features, two crossing walls at an intersection, empty for a PDF-ink ridge
+  /// (no straight segment).
+  final List<(Offset, Offset)> segments;
+
   const UnderlaySnapHit(this.point, this.source, this.distance,
-      {this.kind = SnapKind.refline});
+      {this.kind = SnapKind.refline, this.segments = const []});
+}
+
+/// The world/sheet-px segments a [UnderlaySnapCandidate] latched onto (0, 1, or
+/// 2), for the caller's highlight.
+List<(Offset, Offset)> _segmentsOf(UnderlaySnapCandidate c) {
+  final out = <(Offset, Offset)>[];
+  final s = c.segment;
+  if (s != null) out.add((Offset(s.x1, s.y1), Offset(s.x2, s.y2)));
+  final s2 = c.segment2;
+  if (s2 != null) out.add((Offset(s2.x1, s2.y1), Offset(s2.x2, s2.y2)));
+  return out;
 }
 
 /// Map an underlay [source] + its geometric [uk] to the shared [SnapKind] marker
@@ -203,7 +221,8 @@ class UnderlaySnapService {
         final p = Offset(c.x, c.y);
         if (onRay(p)) {
           return UnderlaySnapHit(p, UnderlaySource.vector, c.distance,
-              kind: snapKindForUnderlay(UnderlaySource.vector, c.kind));
+              kind: snapKindForUnderlay(UnderlaySource.vector, c.kind),
+              segments: _segmentsOf(c));
         }
       }
     }
@@ -217,7 +236,8 @@ class UnderlaySnapService {
         final p = Offset(c.x, c.y);
         if (onRay(p)) {
           return UnderlaySnapHit(p, UnderlaySource.referenceLine, c.distance,
-              kind: snapKindForUnderlay(UnderlaySource.referenceLine, c.kind));
+              kind: snapKindForUnderlay(UnderlaySource.referenceLine, c.kind),
+              segments: _segmentsOf(c));
         }
       }
     }
