@@ -711,12 +711,17 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.14.0`** (the three drafting-feel batches — the user-reported B10–B16 fixes incl.
-  the auto-elbow, on-endpoint grip, riser circle-arrows, true-diameter zoom rendering, and
-  the B17–B30 CAD-muscle-memory set — atop the v1.13.0 all-7-waves campaign baseline;
-  `pubspec.yaml` is the version source of truth, `1.14.0+20`; each
-  release = bump → merge to the default branch → `release.yml` `workflow_dispatch` with
-  `publish=true`). The prior `v1.12.0` shipped the unconnected-element design checks
+  is `v1.15.0`** (basements + drafting feel: the free-run-endpoint stretch grip
+  [grab a loose run end to extend/trim instead of pulling a new main], **basement levels**
+  [the Building page's consolidated Add-on-top / Add-basement control + the
+  `BuildingLevels.groundIndex` ground-relative datum, default 0 ⇒ byte-identical], and the
+  snap-to-plan feature highlight [the rubber-band paints the wall/line it's latching onto];
+  atop the v1.14.0 drafting-feel baseline; `pubspec.yaml` is the version source of truth,
+  `1.15.0+21`; each release = bump → merge to the default branch (`main`) →
+  `release.yml` `workflow_dispatch` with `publish=true`). The prior `v1.14.0` shipped the
+  three drafting-feel batches (the user-reported B10–B16 fixes incl. the auto-elbow,
+  on-endpoint grip, riser circle-arrows, true-diameter zoom rendering, and the B17–B30
+  CAD-muscle-memory set) atop the v1.13.0 all-7-waves campaign baseline. The prior `v1.12.0` shipped the unconnected-element design checks
   (loose pipe/duct ends, orphans, unfed panels, surfaced as locatable Review warnings)
   plus a golden-review readability batch, atop the v1.11.0 Apple-design-review baseline.
   **Wave 4b (electrical drawings export) landed**: pure-engine
