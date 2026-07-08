@@ -1501,11 +1501,10 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
               // ── Rooms (only shown when the sheet has designated rooms) ─────
               const _RoomsSection(),
 
-              // ── Sizing ────────────────────────────────────────────────────
-              const _SizingSection(),
-              const SizedBox(height: MechXSpacing.lg),
-
               // ── Network results ───────────────────────────────────────────
+              // (Occupancy / rainfall / runoff design INPUTS moved to the
+              // Building setup page; the Show/Hide-sizes canvas toggle lives
+              // atop Results now.)
               const _ResultsSection(),
               const SizedBox(height: MechXSpacing.lg),
 
@@ -3135,116 +3134,6 @@ class _RoomsSection extends ConsumerWidget {
   }
 }
 
-class _SizingSection extends ConsumerWidget {
-  const _SizingSection();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final colors = context.colors;
-    final type = context.type;
-    final show = ref.watch(showSizingProvider);
-    final sized = ref.watch(sizingProvider);
-
-    return DisclosureSection(
-      // E5: this section holds occupancy/rainfall/runoff design INPUTS, not
-      // results — name it for what the engineer sets here.
-      name: 'Design inputs',
-      child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            MechXButton(
-              label: show ? 'Hide sizes' : 'Show sizes',
-              primary: show,
-              onPressed: () => ref.read(showSizingProvider.notifier).toggle(),
-            ),
-            const Spacer(),
-            Text(
-              '${sized.length} sized',
-              style: type.caption.copyWith(color: colors.textMuted),
-            ),
-          ],
-        ),
-        const SizedBox(height: MechXSpacing.sm),
-        Text('Occupancy',
-            style: type.caption.copyWith(color: colors.textMuted)),
-        const SizedBox(height: MechXSpacing.xs),
-        Wrap(
-          spacing: MechXSpacing.xs,
-          runSpacing: MechXSpacing.xs,
-          children: [
-            for (final o in Occupancy.values)
-              _Pill(
-                label: _occupancyLabel(o),
-                selected: ref.watch(occupancyProvider) == o,
-                onTap: () => ref.read(occupancyProvider.notifier).set(o),
-              ),
-          ],
-        ),
-        const SizedBox(height: MechXSpacing.sm),
-        Row(
-          children: [
-            Expanded(
-              child: Text('Rainfall (storm)',
-                  style: type.caption.copyWith(color: colors.textMuted)),
-            ),
-            SteppedValueField(
-              display: '${ref.watch(rainfallIntensityProvider).round()} mm/hr',
-              editSeed: '${ref.watch(rainfallIntensityProvider).round()}',
-              label: 'Rainfall (storm)',
-              gap: MechXSpacing.xs,
-              min: 50,
-              max: 600,
-              onDecrement: () =>
-                  ref.read(rainfallIntensityProvider.notifier).nudge(-25),
-              onIncrement: () =>
-                  ref.read(rainfallIntensityProvider.notifier).nudge(25),
-              onSubmit: (v) {
-                if (v != null) {
-                  ref.read(rainfallIntensityProvider.notifier).set(v);
-                }
-              },
-            ),
-          ],
-        ),
-        const SizedBox(height: MechXSpacing.sm),
-        Row(
-          children: [
-            Expanded(
-              child: Text('Runoff coefficient',
-                  style: type.caption.copyWith(color: colors.textMuted)),
-            ),
-            SteppedValueField(
-              display: ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
-              editSeed: ref.watch(runoffCoefficientProvider).toStringAsFixed(2),
-              label: 'Runoff coefficient',
-              gap: MechXSpacing.xs,
-              min: 0.5,
-              max: 1.0,
-              onDecrement: () =>
-                  ref.read(runoffCoefficientProvider.notifier).nudge(-0.05),
-              onIncrement: () =>
-                  ref.read(runoffCoefficientProvider.notifier).nudge(0.05),
-              onSubmit: (v) {
-                if (v != null) {
-                  ref.read(runoffCoefficientProvider.notifier).set(v);
-                }
-              },
-            ),
-          ],
-        ),
-      ],
-    ),
-    );
-  }
-}
-
-String _occupancyLabel(Occupancy o) => switch (o) {
-      Occupancy.private => 'Residential',
-      Occupancy.public => 'Office / public',
-      Occupancy.assembly => 'Assembly / mall',
-    };
 
 class _ResultsSection extends ConsumerWidget {
   const _ResultsSection();
@@ -3252,6 +3141,7 @@ class _ResultsSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final show = ref.watch(showHeatmapProvider);
+    final showSizes = ref.watch(showSizingProvider);
     final strategy = ref.watch(feedStrategyProvider);
     final stratCtrl = ref.read(feedStrategyProvider.notifier);
     final solution = ref.watch(solveProvider);
@@ -3343,13 +3233,22 @@ class _ResultsSection extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: MechXSpacing.sm),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: MechXButton(
-            label: show ? 'Hide heatmap' : 'Show heatmap',
-            primary: show,
-            onPressed: () => ref.read(showHeatmapProvider.notifier).toggle(),
-          ),
+        // Canvas view toggles: show the auto-sized labels + the pressure heatmap.
+        Wrap(
+          spacing: MechXSpacing.xs,
+          runSpacing: MechXSpacing.xs,
+          children: [
+            MechXButton(
+              label: showSizes ? 'Hide sizes' : 'Show sizes',
+              primary: showSizes,
+              onPressed: () => ref.read(showSizingProvider.notifier).toggle(),
+            ),
+            MechXButton(
+              label: show ? 'Hide heatmap' : 'Show heatmap',
+              primary: show,
+              onPressed: () => ref.read(showHeatmapProvider.notifier).toggle(),
+            ),
+          ],
         ),
         if (headlineCard != null) ...[
           const SizedBox(height: MechXSpacing.sm),

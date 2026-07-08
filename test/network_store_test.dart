@@ -1516,11 +1516,11 @@ void main() {
     await tester.tapAt(globalPos);
     await tester.pump();
     expect(container.read(inspectorCollapsedProvider), isFalse);
-    // A cold-water node's relevant section is 'Design inputs' (E5 rename of the
-    // former 'Sizing' section).
+    // A cold-water node's relevant section is 'Results' (the plumbing sizing
+    // surface; the design INPUTS moved to the Building setup page).
     expect(
         container.read(
-            sectionExpandedProvider(const SectionKey('Design inputs', false))),
+            sectionExpandedProvider(const SectionKey('Results', false))),
         isTrue);
   });
 

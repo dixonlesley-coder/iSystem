@@ -227,8 +227,10 @@ non-focus-stealing ancestor `Focus` that catches Ctrl/Cmd+K [bubbles up, canvas 
 + Esc; no persistence).
 **Inspector clarity — collapsible sections + promoted headline results** (`ui/inspector/
 disclosure_header.dart` + `result_card.dart` + `store/inspector_store.dart`
-`sectionVisibilityProvider`): the dense `ProjectPanel`'s seven major sections (Draw / Tanks /
-Rooms / Sizing / Network / Fire / HVAC) are wrapped in a reusable `DisclosureSection` — a tappable
+`sectionVisibilityProvider`): the dense `ProjectPanel`'s major sections (Draw / Tanks / Rooms /
+Results / Fire / HVAC — the sheet→floor control was dropped as redundant with the sheet rail, and
+the design INPUTS [occupancy/rainfall/runoff] moved to the Building setup page, leaving only the
+Show/Hide-sizes canvas toggle atop Results) are wrapped in a reusable `DisclosureSection` — a tappable
 header (replacing the section's `MechXSectionLabel`) with a custom-painted chevron that discloses
 its body only when expanded. Expansion is TRANSIENT UI state in `sectionVisibilityProvider` (a
 `Map<String,bool>` keyed by section name, read via the memoized `sectionExpandedProvider` family) —
