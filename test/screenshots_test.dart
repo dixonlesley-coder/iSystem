@@ -76,6 +76,14 @@ void main() {
     net.placeRunPoint('s1', 0, const Offset(1380, 360));
     net.setTool(DrawTool.drawRiser);
     net.placeRiser('s1', 0, const Offset(360, 360), 3);
+    // A clean-water outlet on a short branch off the main — exercises the new
+    // readable faucet/drop icon so the golden confirms it renders on-canvas
+    // (connected, so it's a real outlet rather than an orphaned marker).
+    net.addComponentNode(
+        's1', 0, const Offset(700, 640), NodeComponent.waterOutlet);
+    net.setTool(DrawTool.drawRun);
+    net.placeRunPoint('s1', 0, const Offset(700, 360)); // tee into the main
+    net.placeRunPoint('s1', 0, const Offset(700, 640)); // snap onto the outlet
     net.setTool(DrawTool.select);
     container.read(showSizingProvider.notifier).toggle();
     await tester.pump(const Duration(milliseconds: 250));

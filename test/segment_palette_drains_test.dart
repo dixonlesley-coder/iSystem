@@ -65,6 +65,28 @@ void main() {
         reason: 'the group defaults expanded, so its cards show');
   });
 
+  testWidgets('the Water outlets group mirrors Drains — shown for water only',
+      (tester) async {
+    // Cold water (pressurized) shows Water outlets, hides Drains.
+    final c1 = ProviderContainer();
+    addTearDown(c1.dispose);
+    await tester.pumpWidget(_host(c1));
+    await tester.pump();
+    expect(find.text('WATER OUTLETS'), findsOneWidget);
+    expect(find.text('Water outlet'), findsOneWidget,
+        reason: 'the single-item group defaults expanded');
+    expect(find.text('DRAINS'), findsNothing);
+
+    // Drainage (gravity) is the mirror: Drains shown, Water outlets hidden.
+    final c2 = ProviderContainer();
+    addTearDown(c2.dispose);
+    c2.read(networkControllerProvider.notifier).setService(ServiceType.drainage);
+    await tester.pumpWidget(_host(c2));
+    await tester.pump();
+    expect(find.text('WATER OUTLETS'), findsNothing);
+    expect(find.text('DRAINS'), findsOneWidget);
+  });
+
   testWidgets('rainwater + vent also show Drains; hot water hides them',
       (tester) async {
     for (final (service, shown) in <(ServiceType, bool)>[

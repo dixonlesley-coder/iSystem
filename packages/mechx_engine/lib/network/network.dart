@@ -126,6 +126,9 @@ enum NodeComponent {
   strainer,
   expansionTank,
   airVent,
+  // A clean-water OUTLET (role: fixture) — a placement marker for where a
+  // potable-water outlet / tap / fixture connection is delivered.
+  waterOutlet,
   // Fire protection (role: fixture — points on the sprinkler/hydrant services;
   // the FDC is an inline main inlet).
   sprinklerHead,
@@ -173,6 +176,8 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.fireExtinguisher ||
         NodeComponent.hydrantBox ||
         NodeComponent.hoseReel ||
+        // A clean-water outlet is a delivery endpoint on the supply → fixture.
+        NodeComponent.waterOutlet ||
         // HVAC air terminals carry the airflow demand → fixture.
         NodeComponent.supplyDiffuser ||
         NodeComponent.returnGrille ||
@@ -211,6 +216,7 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.strainer => 'Strainer',
         NodeComponent.expansionTank => 'Expansion tank',
         NodeComponent.airVent => 'Air vent',
+        NodeComponent.waterOutlet => 'Water outlet',
         NodeComponent.sprinklerHead => 'Sprinkler head',
         NodeComponent.fireExtinguisher => 'Fire extinguisher',
         NodeComponent.hydrantBox => 'Hydrant box',

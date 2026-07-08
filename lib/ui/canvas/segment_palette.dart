@@ -117,6 +117,11 @@ class SegmentPalette extends ConsumerWidget {
     final showDrains = showAll ||
         (active == DisciplineLayer.plumbing &&
             drawService.regime == FlowRegime.gravity);
+    // Clean-water outlets are a PRESSURIZED-water (cold/hot) placement — the
+    // mirror of drains — so they show only while a water run is selected.
+    final showWaterOutlet = showAll ||
+        (active == DisciplineLayer.plumbing &&
+            drawService.regime == FlowRegime.pressurized);
     final showFire = showAll || active == DisciplineLayer.fire;
     final showAir = showAll || active == DisciplineLayer.hvac;
 
@@ -291,6 +296,12 @@ class SegmentPalette extends ConsumerWidget {
             NodeComponent.airVent,
           ]),
         ],
+
+        // ── Clean-water outlets (pressurized water service) ─────────────────
+        if (showWaterOutlet)
+          equipmentGroup('Water outlets', const [
+            NodeComponent.waterOutlet,
+          ]),
 
         // ── Drains (Sanitary + Storm layers) ───────────────────────────────
         if (showDrains)
