@@ -149,6 +149,90 @@ void main() {
     });
   });
 
+  group('free run endpoint stretches (extend/trim) instead of pulling', () {
+    // A horizontal run a(50,100)->m(250,100); 'm' is the free end (degree-1
+    // bare main). Dragging its on-node grip must MOVE 'm' (extend/trim the run),
+    // NOT pull a new mainline out (which would keep 'm' put and add a node+edge).
+    ProviderContainer bootFreeEnd() {
+      final c = _boot();
+      c.read(networkControllerProvider.notifier).loadNetwork(const Network(
+        nodes: [
+          NetNode(id: 'a', sheetId: 's1', x: 50, y: 100, floorIndex: 0),
+          NetNode(id: 'm', sheetId: 's1', x: 250, y: 100, floorIndex: 0),
+        ],
+        edges: [
+          NetEdge(id: 'e1', fromId: 'a', toId: 'm', service: _cw),
+        ],
+      ));
+      return c;
+    }
+
+    testWidgets('dragging the free end AWAY extends the run (no new edge)',
+        (tester) async {
+      setDesktopSurface(tester);
+      final c = bootFreeEnd();
+      // Select 'm' so the on-node grip is mounted at the endpoint.
+      c.read(selectionProvider.notifier).selectNode('m');
+      await tester.pumpWidget(
+          _host(c, const NetworkSelectionOverlay(sheetId: 's1', floorIndex: 0)));
+      await tester.pump();
+
+      // Grab the endpoint (250,100) and drag it out along the run's axis. (The
+      // exact px lands short of the raw offset by the gesture pan-slop, so assert
+      // direction + magnitude, not an exact coordinate.)
+      await tester.dragFrom(const Offset(250, 100), const Offset(100, 0));
+      await tester.pump();
+
+      final net = c.read(networkControllerProvider).network;
+      expect(net.edges.length, 1, reason: 'stretch must not spawn a new run');
+      expect(net.nodes.length, 2, reason: 'no new junction node');
+      final m = net.nodeById('m')!;
+      expect(m.x, greaterThan(300), reason: 'the endpoint itself moved OUT');
+      expect(m.y, closeTo(100, 0.5), reason: 'ortho keeps the run straight');
+    });
+
+    testWidgets('dragging the free end BACK trims the run', (tester) async {
+      setDesktopSurface(tester);
+      final c = bootFreeEnd();
+      c.read(selectionProvider.notifier).selectNode('m');
+      await tester.pumpWidget(
+          _host(c, const NetworkSelectionOverlay(sheetId: 's1', floorIndex: 0)));
+      await tester.pump();
+
+      await tester.dragFrom(const Offset(250, 100), const Offset(-90, 0));
+      await tester.pump();
+
+      final net = c.read(networkControllerProvider).network;
+      expect(net.edges.length, 1);
+      final m = net.nodeById('m')!;
+      expect(m.x, lessThan(220), reason: 'the run trimmed shorter');
+      expect(m.x, greaterThan(60), reason: 'but the endpoint did not merge onto a');
+      expect(m.y, closeTo(100, 0.5));
+    });
+
+    testWidgets('a lone dropped fitting (degree 0) still PULLS a new run',
+        (tester) async {
+      setDesktopSurface(tester);
+      final c = _boot();
+      // A bare main junction with no incident edges — the bootstrap pull point.
+      c.read(networkControllerProvider.notifier).loadNetwork(const Network(
+        nodes: [NetNode(id: 'f', sheetId: 's1', x: 100, y: 100, floorIndex: 0)],
+      ));
+      c.read(selectionProvider.notifier).selectNode('f');
+      await tester.pumpWidget(
+          _host(c, const NetworkSelectionOverlay(sheetId: 's1', floorIndex: 0)));
+      await tester.pump();
+
+      await tester.dragFrom(const Offset(100, 100), const Offset(120, 0));
+      await tester.pump();
+
+      final net = c.read(networkControllerProvider).network;
+      expect(net.edges.length, 1, reason: 'a degree-0 grip still pulls a run');
+      final f = net.nodeById('f')!;
+      expect(f.x, closeTo(100, 0.5), reason: 'the source node stays put');
+    });
+  });
+
   group('B26 window vs crossing marquee', () {
     ProviderContainer bootMarqueeNet() {
       final c = _boot();

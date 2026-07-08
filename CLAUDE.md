@@ -348,6 +348,17 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   window/crossing marquee, the match-properties brush (atomic `setEdgeProperties` after a
   review-caught undo fix), and hover measurement chips. All gesture-time only — goldens
   byte-identical. Gate: engine 1371 / app 1093 / analyze clean.
+  **Drafting-feel follow-up — a free run endpoint's grip STRETCHES (extend/trim), doesn't pull
+  (user-reported) HAS ALSO LANDED** (2026-07-08, see the §15 row): a bare `main` node at the
+  loose END of a run used to mount the concentric outlet nub (B14), so grabbing the point and
+  dragging pulled a NEW mainline out instead of moving the endpoint. Now `_isFreeRunEndpoint`
+  (a component-free `main` with exactly one incident edge, a `run`) flips that grip's drag to
+  MOVE the node — extend/trim, reusing the single-node move path (degree-1 ortho vs the sole
+  neighbour, `endNodeDragWithSnap` merge/grid/underlay on release); tap-select / double-click /
+  right-click unchanged, cursor becomes `move`. Risers, junctions (degree ≥ 2), lone dropped
+  fittings (degree 0, the bootstrap pull point) and plant/valve nodes keep the pull nub; branch
+  a real loose end via the Run tool's tee-in. Gate: engine 1371 / app 1096 / analyze clean;
+  goldens byte-identical (the grip mounts only on hover/selection).
   **The Wave 2 remainder HAS ALSO LANDED** (2026-07-06, see the §15 row): K1 drag-session
   throttle (no heavy re-solve per drag frame; at-rest byte-identical), K3 heatmap field
   memoization, K2 isolate-offloaded Open, K4 threshold-gated isolate autosave encode with a

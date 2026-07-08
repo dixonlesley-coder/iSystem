@@ -63,7 +63,10 @@ class CanvasGestureActiveController extends Notifier<bool> {
 /// **outlet nub**: dragging a line out of it LAYS A MAINLINE RUN to where you
 /// release (snapping to a node, tapping into an existing main, or a fresh
 /// junction) — so mains are drawn by pulling out of a riser, not by dropping
-/// pre-made segments.
+/// pre-made segments. The one exception is a **free run endpoint** (a bare
+/// `main` node at the loose end of a single run): there the on-node grip
+/// STRETCHES instead — grabbing the point drags it to EXTEND/TRIM the run (the
+/// CAD stretch-grip convention) rather than pulling a new branch out of it.
 class NetworkSelectionOverlay extends ConsumerStatefulWidget {
   final String sheetId;
   final int floorIndex;
@@ -134,6 +137,82 @@ class _NetworkSelectionOverlayState
     if (count != 1 || otherId == null) return null;
     final other = net.nodeById(otherId);
     return other == null ? null : Offset(other.x, other.y);
+  }
+
+  /// Whether [nodeId] is the FREE END of exactly one run — a bare `main` node
+  /// (no equipment component) with a single incident edge, and that edge is a
+  /// run ([EdgeKind.run]). Dragging such a loose endpoint should EXTEND/TRIM the
+  /// run (MOVE the node) rather than pull a NEW mainline out of it, so its grip
+  /// stretches instead of spawning a branch. A riser end (its incident edge is a
+  /// riser), a mid-run / branch junction (degree >= 2), a lone dropped fitting
+  /// (degree 0, still a bootstrap pull point), and any plant / equipment / valve
+  /// node all fall through to the normal pull nub.
+  bool _isFreeRunEndpoint(Network net, String nodeId) {
+    final node = net.nodeById(nodeId);
+    if (node == null || node.role != NodeRole.main || node.component != null) {
+      return false;
+    }
+    EdgeKind? kind;
+    var count = 0;
+    for (final e in net.edges) {
+      if (e.fromId == nodeId || e.toId == nodeId) {
+        if (++count > 1) return false;
+        kind = e.kind;
+      }
+    }
+    return count == 1 && kind == EdgeKind.run;
+  }
+
+  // ── Free-run-endpoint STRETCH (extend/trim) ─────────────────────────────────
+  // The on-node grip of a free run endpoint moves the node instead of pulling a
+  // new run. These mirror [_dragHandle]'s single-node path (degree-1 ortho
+  // against the sole neighbour so the run stays straight; snap/merge onto a
+  // nearby fitting + the magnetic grid / plan underlay on release) but are driven
+  // by the grip so grabbing a loose end drags it to extend/trim.
+
+  void _beginEndpointStretch(String id) {
+    ref.read(canvasGestureActiveProvider.notifier).set(true);
+    ref.read(selectionProvider.notifier).selectNode(id);
+    ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+    final node = ref.read(networkControllerProvider).network.nodeById(id);
+    _nodeDragRaw = node == null ? null : Offset(node.x, node.y);
+  }
+
+  void _updateEndpointStretch(String id, double dxWorld, double dyWorld) {
+    final net = ref.read(networkControllerProvider).network;
+    final node = net.nodeById(id);
+    if (node == null) return;
+    final raw = (_nodeDragRaw ?? Offset(node.x, node.y)) + Offset(dxWorld, dyWorld);
+    _nodeDragRaw = raw;
+    // A degree-1 endpoint ortho-snaps (Ortho ^ Shift) against its single
+    // neighbour, so a stretch keeps the run straight (extend/trim along axis).
+    final effectiveOrtho =
+        ref.read(orthoProvider) ^ HardwareKeyboard.instance.isShiftPressed;
+    final anchor = _singleNeighbourOf(net, id);
+    final target =
+        (effectiveOrtho && anchor != null) ? orthoSnap(anchor, raw) : raw;
+    ref.read(networkControllerProvider.notifier).moveNode(id, target.dx, target.dy);
+  }
+
+  void _endEndpointStretch(String id, double scale, double snapWorld) {
+    ref.read(canvasGestureActiveProvider.notifier).set(false);
+    _nodeDragRaw = null;
+    final gridOrtho =
+        ref.read(orthoProvider) ^ HardwareKeyboard.instance.isShiftPressed;
+    final gridMpp = ref
+        .read(projectControllerProvider)
+        .calibrationFor(sheetId)
+        ?.metersPerPixel;
+    final gridSnap = gridOrtho &&
+        gridMpp != null &&
+        calibratedGridWorldStep(gridMpp) * scale >= 6.0;
+    final anchor =
+        _singleNeighbourOf(ref.read(networkControllerProvider).network, id);
+    ref.read(networkControllerProvider.notifier).endNodeDragWithSnap(id, snapWorld,
+        gridSnap: gridSnap,
+        gridMetersPerPixel: gridMpp,
+        underlaySnap: underlaySnapFor(ref, sheetId, scale,
+            orthoAnchor: gridOrtho ? anchor : null));
   }
 
   Offset _toLocal(Offset global) {
@@ -353,7 +432,10 @@ class _NetworkSelectionOverlayState
                 // kills the live pan gesture).
                 _pullFrom == n.id))
           _outletNub(n.id, transform.worldToScreen(Offset(n.x, n.y)), transform,
-              isHovered: n.id == hoveredNodeId),
+              isHovered: n.id == hoveredNodeId,
+              // A free run endpoint's grip stretches (extend/trim) rather than
+              // pulling a new mainline out.
+              stretch: _isFreeRunEndpoint(net, n.id)),
     ];
 
     // A selected run's two endpoints get larger, accented resize handles — the
@@ -680,8 +762,12 @@ class _NetworkSelectionOverlayState
   /// surrounding ring keeps the handle's move cursor. [isHovered] drives a subtle
   /// non-idle scale/shadow cue (also shown mid-pull) so the grip visibly reads as
   /// "grabbed" — never painted at rest, so an idle canvas stays byte-identical.
+  ///
+  /// [stretch] flips the grip's DRAG action from "pull a new mainline out" to
+  /// "MOVE this node" (extend/trim the run) — used for a free run endpoint (see
+  /// [_isFreeRunEndpoint]); tap-to-select and the right-click menu are unchanged.
   Widget _outletNub(String nodeId, Offset screen, ViewportTransform transform,
-      {required bool isHovered}) {
+      {required bool isHovered, bool stretch = false}) {
     final colors = context.colors;
     const r = 7.0; // inner pull zone: ~7 screen px, inside the 12px move handle
     final pulling = _pullFrom == nodeId;
@@ -693,7 +779,9 @@ class _NetworkSelectionOverlayState
       width: r * 2,
       height: r * 2,
       child: MouseRegion(
-        cursor: SystemMouseCursors.precise,
+        // A stretch grip reads as "grab & move" (extend/trim); the pull nub
+        // keeps the precise cross-hair of "pull a new line out".
+        cursor: stretch ? SystemMouseCursors.move : SystemMouseCursors.precise,
         // Keep this node's hover latched while the pointer is over the grip, so
         // the gated nub (C7) doesn't vanish as the pointer sits on the node.
         onEnter: (_) => ref
@@ -704,7 +792,10 @@ class _NetworkSelectionOverlayState
         // unmount the nub and kill the active pan gesture). The gesture layer
         // re-establishes hover after release.
         onExit: (_) {
-          if (_pullFrom != null) return;
+          // Keep the hover latch while a pull OR a stretch (_nodeDragRaw set) is
+          // live, so leaving the small grip mid-drag doesn't clear the halo /
+          // rebuild it away.
+          if (_pullFrom != null || _nodeDragRaw != null) return;
           ref.read(hoverTargetProvider.notifier).clear();
         },
         child: GestureDetector(
@@ -722,19 +813,34 @@ class _NetworkSelectionOverlayState
             ref.read(selectionProvider.notifier).selectNode(nodeId);
             showNodeContextMenu(context, ref, nodeId, d.globalPosition);
           },
-          onPanStart: (d) {
-            _startPull(nodeId);
-            _updatePull(d.globalPosition);
-          },
-          onPanUpdate: (d) => _updatePull(d.globalPosition),
-          onPanEnd: (_) => _endPull(transform),
-          onPanCancel: () {
-            ref.read(canvasGestureActiveProvider.notifier).set(false);
-            setState(() {
-              _pullFrom = null;
-              _pullNow = null;
-            });
-          },
+          // A free run endpoint (stretch) MOVES its node to extend/trim the run;
+          // every other node PULLS a new mainline out of the grip.
+          onPanStart: stretch
+              ? (_) => _beginEndpointStretch(nodeId)
+              : (d) {
+                  _startPull(nodeId);
+                  _updatePull(d.globalPosition);
+                },
+          onPanUpdate: stretch
+              ? (d) => _updateEndpointStretch(nodeId,
+                  d.delta.dx / transform.scale, d.delta.dy / transform.scale)
+              : (d) => _updatePull(d.globalPosition),
+          onPanEnd: stretch
+              ? (_) => _endEndpointStretch(
+                  nodeId, transform.scale, 14 / transform.scale)
+              : (_) => _endPull(transform),
+          onPanCancel: stretch
+              ? () {
+                  ref.read(canvasGestureActiveProvider.notifier).set(false);
+                  _nodeDragRaw = null;
+                }
+              : () {
+                  ref.read(canvasGestureActiveProvider.notifier).set(false);
+                  setState(() {
+                    _pullFrom = null;
+                    _pullNow = null;
+                  });
+                },
           child: Center(
             child: AnimatedContainer(
               duration: MechXMotion.press,
