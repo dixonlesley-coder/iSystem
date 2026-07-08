@@ -338,6 +338,15 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   reference line > ink > grid, gated by a default-ON 'Snap to plan' toggle beside Ortho.
   Gate: engine 1341 / app 899 / analyze clean; goldens 01/02/03 shifted (new DRAW chip+toggle).
   Residual: the legacy `sheet_canvas.dart` host lacks only the trace-tool overlay.
+  **Snap-to-plan now HIGHLIGHTS the feature it's snapping to (user-reported) HAS ALSO LANDED**
+  (2026-07-08, see the §15 row): the underlay snap carries its SOURCE geometry —
+  `UnderlaySnapCandidate.segment`/`segment2` (the wall/line, plus the 2nd crossing wall at an
+  intersection) → `UnderlaySnapHit.segments` → `_EndSnap.segments` — and the draw rubber-band
+  (`RubberBandPainter.snapSegmentsScreen`) paints that wall/line in the service accent (like the
+  B25 parallel-reference highlight) UNDER the OSNAP marker, so while drawing you see WHICH plan
+  part is being latched (a PDF-ink ridge carries no segment ⇒ marker only). Gesture-time only
+  (mounted during an active DrawRun hover) ⇒ goldens byte-identical. Gate: engine 1377 / app 1106
+  / analyze clean.
   **Drafting-feel batch 2 (user-reported B13–B16) HAS ALSO LANDED** (2026-07-07, see the §15
   row): the CAD auto-elbow (off-ray snap targets reached as two exact 45° legs via a bend
   junction, at draw/nub/resize commit, L-shaped live preview, one undo step), the pull grip

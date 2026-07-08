@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -159,7 +160,9 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
       if (sheet != null) {
         final u = underlaySvc.snap(sheet, refLines, raw, pickWorld,
             enabled: snapToPlan, orthoAnchor: orthoAnchor, anchor: pending);
-        if (u != null) return _EndSnap(u.point, u.kind);
+        if (u != null) {
+          return _EndSnap(u.point, u.kind, segments: u.segments);
+        }
       }
       // 4) Alignment guide against existing nodes (B23) — low precedence.
       final nodeOffsets = <Offset>[
@@ -235,6 +238,13 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
     // Only mark a snap when a real feature latched (kind != null).
     final ringPt = (end != null && end.kind != null) ? end.point : null;
     final ringKind = end?.kind ?? SnapKind.refline;
+    // The plan wall/line(s) under the latched snap, mapped to screen so the
+    // preview can highlight which part of the plan is being snapped to.
+    final snapSegmentsScreen = <(Offset, Offset)>[
+      if (ringPt != null && end != null)
+        for (final (a, b) in end.segments)
+          (transform.worldToScreen(a), transform.worldToScreen(b)),
+    ];
 
     if (routeActive && _routePts != null && _routePts!.length >= 2) {
       routeScreen = [for (final p in _routePts!) transform.worldToScreen(p)];
@@ -406,6 +416,7 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
             bend: previewBend,
             snapScreen: ringPt != null ? transform.worldToScreen(ringPt) : null,
             snapKind: ringKind,
+            snapSegmentsScreen: snapSegmentsScreen,
             routeScreen: routeScreen,
             routeLabel: routeLabel,
             guide: guideScreen,
@@ -444,7 +455,13 @@ class _EndSnap {
   /// The OSNAP feature latched, or null when nothing snapped (a raw point).
   final SnapKind? kind;
   final AlignGuide? guide;
-  const _EndSnap(this.point, this.kind, {this.guide});
+
+  /// The plan geometry this snap latched onto (world-space wall/line segments,
+  /// 0–2), so the preview can HIGHLIGHT which part of the plan is being snapped
+  /// to. Empty for a network/grid/ink snap with no straight source segment.
+  final List<(Offset, Offset)> segments;
+
+  const _EndSnap(this.point, this.kind, {this.guide, this.segments = const []});
 }
 
 /// A live B25 parallel-lock: the projected track plus the reference segment it
@@ -633,6 +650,12 @@ class RubberBandPainter extends CustomPainter {
   /// marker.
   final SnapKind snapKind;
 
+  /// The plan wall/line(s) the snap latched onto, in SCREEN space (0–2), drawn
+  /// highlighted so the user sees WHICH part of the plan is being snapped to.
+  /// Empty ⇒ nothing extra drawn (byte-identical for callers that don't pass it,
+  /// e.g. the outlet-nub pull).
+  final List<(Offset, Offset)> snapSegmentsScreen;
+
   /// B17 — the multi-leg ortho route in screen space (>=2 points). When set the
   /// band draws the route polyline instead of a single segment / elbow.
   final List<Offset>? routeScreen;
@@ -667,6 +690,7 @@ class RubberBandPainter extends CustomPainter {
     required this.active,
     this.bend,
     this.snapKind = SnapKind.refline,
+    this.snapSegmentsScreen = const [],
     this.routeScreen,
     this.routeLabel,
     this.guide,
@@ -712,6 +736,19 @@ class RubberBandPainter extends CustomPainter {
             Paint()
               ..color = color.withAlpha(160)
               ..strokeWidth = 1.2);
+      }
+    }
+
+    // Highlight the plan wall/line the snap latched onto (under the marker), so
+    // it's obvious WHICH part of the plan is being snapped to — same accent
+    // treatment as the B25 parallel-reference highlight.
+    if (snapSegmentsScreen.isNotEmpty) {
+      final hp = Paint()
+        ..color = color.withAlpha(90)
+        ..strokeWidth = 2.5
+        ..strokeCap = StrokeCap.round;
+      for (final (a, b) in snapSegmentsScreen) {
+        canvas.drawLine(a, b, hp);
       }
     }
 
@@ -876,6 +913,7 @@ class RubberBandPainter extends CustomPainter {
       old.bend != bend ||
       old.snapScreen != snapScreen ||
       old.snapKind != snapKind ||
+      !listEquals(old.snapSegmentsScreen, snapSegmentsScreen) ||
       old.routeScreen != routeScreen ||
       old.routeLabel != routeLabel ||
       old.guide != guide ||

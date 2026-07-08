@@ -79,6 +79,29 @@ void main() {
       expect(c.distance, closeTo(2, 1e-9));
     });
 
+    test('a candidate carries the SOURCE wall it latched onto (for highlight)',
+        () {
+      final idx = UnderlaySnapIndex.fromSegments(
+        const [UnderlaySegment(0, 0, 100, 0)],
+      );
+      final c = idx.query(50, 10, 20)!;
+      expect(c.segment, isNotNull);
+      expect(c.segment!.x1, 0);
+      expect(c.segment!.x2, 100);
+      expect(c.segment2, isNull, reason: 'a single wall snap carries one segment');
+    });
+
+    test('an intersection carries BOTH crossing walls', () {
+      final idx = UnderlaySnapIndex.fromSegments(const [
+        UnderlaySegment(0, 0, 100, 0),
+        UnderlaySegment(50, -50, 50, 50),
+      ]);
+      final c = idx.query(50, 0, 20)!;
+      expect(c.kind, UnderlaySnapKind.intersection);
+      expect(c.segment, isNotNull);
+      expect(c.segment2, isNotNull);
+    });
+
     test('bucket-boundary: nearest point in a cell the cursor is not in', () {
       // Vertical wall at x=100; bucketSize 32 puts it in cell x=3. Cursor at
       // x=95 sits in cell x=2, but its query radius spans into cell x=3.

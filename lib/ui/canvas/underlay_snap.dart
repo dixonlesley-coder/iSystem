@@ -29,17 +29,27 @@ import 'package:mechx_engine/geometry/dxf_drawing.dart';
 enum UnderlaySnapKind { endpoint, intersection, perpendicular, onSegment }
 
 /// One snap result in sheet-px space: the snapped [x]/[y], what [kind] of
-/// feature it is, and its Euclidean [distance] from the query point.
+/// feature it is, its Euclidean [distance] from the query point, and the
+/// SOURCE geometry it latched onto — [segment] (the wall/line, present for
+/// endpoint / on-segment / perpendicular / a plain line snap) plus [segment2]
+/// (the second crossing wall at an [UnderlaySnapKind.intersection]). The caller
+/// highlights those segments so the user sees WHICH plan part is being snapped
+/// to. Both are null for a source with no straight segment (never happens here,
+/// but keeps the field honest).
 class UnderlaySnapCandidate {
   final double x;
   final double y;
   final UnderlaySnapKind kind;
   final double distance;
+  final UnderlaySegment? segment;
+  final UnderlaySegment? segment2;
   const UnderlaySnapCandidate({
     required this.x,
     required this.y,
     required this.kind,
     required this.distance,
+    this.segment,
+    this.segment2,
   });
 
   @override
@@ -323,24 +333,27 @@ class UnderlaySnapIndex {
 
     final r2 = radius * radius;
     UnderlaySnapCandidate? best;
-    void consider(double x, double y, UnderlaySnapKind kind, double dist) {
+    void consider(double x, double y, UnderlaySnapKind kind, double dist,
+        {UnderlaySegment? s1, UnderlaySegment? s2}) {
       if (dist > radius + _tieEps) return;
       if (best == null || _better(dist, kind, best!)) {
-        best = UnderlaySnapCandidate(x: x, y: y, kind: kind, distance: dist);
+        best = UnderlaySnapCandidate(
+            x: x, y: y, kind: kind, distance: dist, segment: s1, segment2: s2);
       }
     }
 
     final idx = nearby.toList(growable: false);
     for (final i in idx) {
       final ax = _x1[i], ay = _y1[i], bx = _x2[i], by = _y2[i];
+      final seg = UnderlaySegment(ax, ay, bx, by);
       // Endpoints.
       final da = _dist(px, py, ax, ay);
       if (da * da <= r2 + _tieEps) {
-        consider(ax, ay, UnderlaySnapKind.endpoint, da);
+        consider(ax, ay, UnderlaySnapKind.endpoint, da, s1: seg);
       }
       final db = _dist(px, py, bx, by);
       if (db * db <= r2 + _tieEps) {
-        consider(bx, by, UnderlaySnapKind.endpoint, db);
+        consider(bx, by, UnderlaySnapKind.endpoint, db, s1: seg);
       }
       // Nearest point along the segment.
       final dx = bx - ax, dy = by - ay;
@@ -351,7 +364,7 @@ class UnderlaySnapIndex {
       final nx = ax + t * dx, ny = ay + t * dy;
       final dn = _dist(px, py, nx, ny);
       if (dn * dn <= r2 + _tieEps) {
-        consider(nx, ny, UnderlaySnapKind.onSegment, dn);
+        consider(nx, ny, UnderlaySnapKind.onSegment, dn, s1: seg);
       }
       // Perpendicular foot from the draw anchor onto this wall's interior.
       if (anchorX != null && anchorY != null && len2 > _eps) {
@@ -360,7 +373,7 @@ class UnderlaySnapIndex {
           final fx = ax + tp * dx, fy = ay + tp * dy;
           final df = _dist(px, py, fx, fy);
           if (df * df <= r2 + _tieEps) {
-            consider(fx, fy, UnderlaySnapKind.perpendicular, df);
+            consider(fx, fy, UnderlaySnapKind.perpendicular, df, s1: seg);
           }
         }
       }
@@ -376,7 +389,9 @@ class UnderlaySnapIndex {
         if (p == null) continue;
         final d = _dist(px, py, p[0], p[1]);
         if (d * d <= r2 + _tieEps) {
-          consider(p[0], p[1], UnderlaySnapKind.intersection, d);
+          consider(p[0], p[1], UnderlaySnapKind.intersection, d,
+              s1: UnderlaySegment(_x1[i], _y1[i], _x2[i], _y2[i]),
+              s2: UnderlaySegment(_x1[j], _y1[j], _x2[j], _y2[j]));
         }
       }
     }
