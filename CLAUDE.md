@@ -158,7 +158,13 @@ normal ODA MSI install is found with zero config; the bundled copy is fetched at
 release-build time via `release.yml` from an `ODA_ZIP_URL` secret / `vendor-oda`
 repo release asset, absent ⇒ no-op)
 + multi-sheet rail; per-sheet scale calibration; per-floor
-heights + role-aware elevations; draw runs/risers for 10 services (cold/hot
+heights + role-aware elevations (a **ground-relative datum** — `BuildingLevels.groundIndex`:
+ground reads 0.0, **BASEMENTS negative**, upper floors positive; a constant offset that leaves
+every elevation DELTA / riser length unchanged, default `groundIndex == 0` ⇒ byte-identical.
+Basements are added on the Building page's ONE consolidated add control — `N levels @ H m` with
+**Add on top** / **Add basement** — via `ProjectController.addBasement`/`addFloorsOnTop`, which
+shift the datum + drawn nodes in one structural undo step; `groundIndex` round-trips additively in
+`.mechx`); draw runs/risers for 10 services (cold/hot
 water, drainage, vent, rainwater, supply/return/exhaust air, sprinkler,
 hydrant); **select / edit / delete / drag** nodes & edges, **multi-floor
 duplicate**, ortho snap, keyboard (Delete, Esc, Ctrl+Z/Y); auto-sizing per

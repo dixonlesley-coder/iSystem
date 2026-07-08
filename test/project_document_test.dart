@@ -156,6 +156,39 @@ void main() {
     expect(decoded.sheetFloors['p#0'], 1);
   });
 
+  test('groundIndex (basements) round-trips; absent ⇒ 0; a bad index clamps', () {
+    const doc = ProjectDocument(
+      projectName: 'B',
+      floors: [
+        Floor('Basement 1', Length(3)),
+        Floor('Ground', Length(4)),
+        Floor('L1', Length(3.5)),
+      ],
+      groundIndex: 1,
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    final decoded = ProjectDocument.decode(doc.encode());
+    expect(decoded.groundIndex, 1);
+
+    // A no-basement doc omits the key entirely (byte-identical to before).
+    const flat = ProjectDocument(
+      projectName: 'F',
+      floors: [Floor('G', Length(3))],
+      calibrations: {},
+      sheets: [],
+      network: Network(),
+    );
+    expect(flat.toJson()['project'].containsKey('ground_index'), isFalse);
+    expect(ProjectDocument.decode(flat.encode()).groundIndex, 0);
+
+    // A corrupt out-of-range index clamps into the floor stack, never throws.
+    final bad = Map<String, dynamic>.from(doc.toJson());
+    (bad['project'] as Map)['ground_index'] = 99;
+    expect(ProjectDocument.fromJson(bad).groundIndex, 2);
+  });
+
   test('design settings round-trip (occupancy, feed, ducts, rainfall, fire, theme)',
       () {
     const doc = ProjectDocument(

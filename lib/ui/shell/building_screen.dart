@@ -74,25 +74,12 @@ class BuildingScreen extends ConsumerWidget {
           const SizedBox(height: MechXSpacing.sm),
         ],
         const SizedBox(height: MechXSpacing.xs),
-        Row(
-          children: [
-            MechXButton(label: '+  Add level', onPressed: ctrl.addFloor),
-            const SizedBox(width: MechXSpacing.sm),
-            // Bulk add — a whole tower of identical typical floors in one undo
-            // step (D4) via a single setFloors call.
-            Expanded(
-              child: _AddLevelsRow(
-                onAdd: (count, heightM) {
-                  final base = project.floors.length;
-                  ctrl.setFloors([
-                    ...project.floors,
-                    for (var k = 0; k < count; k++)
-                      Floor('Level ${base + k}', Length(heightM)),
-                  ]);
-                },
-              ),
-            ),
-          ],
+        // ONE add control (the old standalone "+ Add level" was redundant with
+        // the count=1 case here): add N identical levels either ON TOP or as
+        // BASEMENTS below ground, each in one undo step.
+        _AddLevelsRow(
+          onAddOnTop: ctrl.addFloorsOnTop,
+          onAddBasement: ctrl.addBasement,
         ),
       ],
     );
@@ -225,12 +212,16 @@ class _LevelCard extends StatelessWidget {
   }
 }
 
-/// Bulk-add row (D4): "Add N levels @ H m" — a whole tower of identical typical
-/// floors added on top in ONE undo step (a single `setFloors` call). N and H are
-/// shared type-in steppers; the button appends N floors at height H.
+/// The consolidated add-levels control: "Add N levels @ H m", either **on top**
+/// (typical floors) or as **basements** below ground — each a whole tower of
+/// identical floors in ONE undo step. N and H are shared type-in steppers; the
+/// two buttons choose the direction. (This subsumes the old standalone single
+/// "+ Add level", which was just the count=1 case.)
 class _AddLevelsRow extends StatefulWidget {
-  final void Function(int count, double heightM) onAdd;
-  const _AddLevelsRow({required this.onAdd});
+  final void Function(int count, double heightM) onAddOnTop;
+  final void Function(int count, double heightM) onAddBasement;
+  const _AddLevelsRow(
+      {required this.onAddOnTop, required this.onAddBasement});
 
   @override
   State<_AddLevelsRow> createState() => _AddLevelsRowState();
@@ -289,8 +280,12 @@ class _AddLevelsRowState extends State<_AddLevelsRow> {
                 () => _height = v == null ? _height : v.clamp(0.5, 20.0)),
           ),
           MechXButton(
-            label: 'Add levels',
-            onPressed: () => widget.onAdd(_count, _height),
+            label: 'Add on top',
+            onPressed: () => widget.onAddOnTop(_count, _height),
+          ),
+          MechXButton(
+            label: 'Add basement',
+            onPressed: () => widget.onAddBasement(_count, _height),
           ),
         ],
       ),

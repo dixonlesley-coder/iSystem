@@ -659,6 +659,13 @@ class ProjectDocument {
   final int version;
   final String projectName;
   final List<Floor> floors;
+
+  /// Index of the GROUND floor in [floors] — the elevation datum (basements
+  /// below it read negative). Additive; tolerant on load (absent ⇒ 0, i.e. the
+  /// lowest floor is ground, byte-identical to pre-basement files). No version
+  /// bump.
+  final int groundIndex;
+
   final Map<String, ScaleCalibration> calibrations;
 
   /// J1 — sheet ids whose calibration is flagged STALE (a plan replace kept
@@ -714,6 +721,7 @@ class ProjectDocument {
     this.version = currentVersion,
     required this.projectName,
     required this.floors,
+    this.groundIndex = 0,
     required this.calibrations,
     this.staleCalibrations = const {},
     required this.sheets,
@@ -736,6 +744,7 @@ class ProjectDocument {
         version: version,
         projectName: projectName,
         floors: floors,
+        groundIndex: groundIndex,
         calibrations: calibrations,
         staleCalibrations: staleCalibrations,
         sheets: sheets,
@@ -758,6 +767,9 @@ class ProjectDocument {
           'floors': [
             for (final f in floors) {'name': f.name, 'height_m': f.height.meters},
           ],
+          // Only written when there ARE basements ⇒ a ground-datum project stays
+          // byte-identical to before this field existed.
+          if (groundIndex != 0) 'ground_index': groundIndex,
           'calibrations': {
             for (final e in calibrations.entries) e.key: e.value.metersPerPixel,
           },
@@ -829,6 +841,12 @@ class ProjectDocument {
           Length((f['height_m'] as num).toDouble()),
         ),
     ];
+    // Tolerant — absent on an older / no-basement file ⇒ ground at the bottom.
+    // Clamped so a corrupt index can never point past the floor stack.
+    final groundIndex = floors.isEmpty
+        ? 0
+        : ((project['ground_index'] as num?)?.toInt() ?? 0)
+            .clamp(0, floors.length - 1);
     final calibrations = <String, ScaleCalibration>{
       for (final e in (project['calibrations'] as Map).entries)
         e.key as String: ScaleCalibration((e.value as num).toDouble()),
@@ -917,6 +935,7 @@ class ProjectDocument {
       version: version,
       projectName: project['name'] as String? ?? 'Untitled project',
       floors: floors,
+      groundIndex: groundIndex,
       calibrations: calibrations,
       staleCalibrations: staleCalibrations,
       sheets: sheets,
