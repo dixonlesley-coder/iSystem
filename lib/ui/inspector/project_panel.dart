@@ -1481,12 +1481,14 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
               ),
               const SizedBox(height: MechXSpacing.lg),
 
-              // ── Sheet + Scale (E10) ───────────────────────────────────────
+              // ── Scale (E10) ───────────────────────────────────────────────
               // Setup lives under Building, above the draw→size→report flow —
               // calibration is the gating step the banner demands, so it sits
               // near the top (was buried dead-last, below Document control) and
-              // is collapsible with a calibration-aware default.
-              _sheetMappingSection(context),
+              // is collapsible with a calibration-aware default. (Sheet→floor
+              // mapping is NOT here: it lives on the sheet itself — the rail
+              // tile's `F#` stamp + its right-click "Assign floor…" — and on the
+              // Building page, so a third control here was redundant.)
               _scaleSection(context),
 
               // ── Draw ──────────────────────────────────────────────────────
@@ -1525,58 +1527,6 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  /// The Sheet → floor mapping section (E10). Moved up under Building and
-  /// wrapped in a collapsible [DisclosureSection]. Shrinks to nothing when no
-  /// sheet is loaded (no gap ⇒ byte-identical there).
-  Widget _sheetMappingSection(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    final building = ref.watch(projectControllerProvider).building;
-    final currentSheet = ref.watch(sheetsControllerProvider).current;
-    if (currentSheet == null) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: MechXSpacing.lg),
-      child: DisclosureSection(
-        name: context.strings(StringKey.inspectorSheet),
-        child: Builder(builder: (context) {
-          final sheetsState = ref.watch(sheetsControllerProvider);
-          final floor =
-              sheetsState.floorFor(currentSheet.id, building.levelCount);
-          final floorName = building.floors[floor].name;
-          final last = building.levelCount - 1;
-          void mapTo(int f) => ref
-              .read(sheetsControllerProvider.notifier)
-              .setSheetFloor(currentSheet.id, f.clamp(0, last));
-          return Row(
-            children: [
-              Expanded(
-                child: Text(context.strings(StringKey.inspectorMapsToFloor),
-                    style: type.caption.copyWith(color: colors.textMuted)),
-              ),
-              // Type-in (or ±1) floor mapping (D5): the display keeps the level
-              // NAME; typing a 1-based level number remaps the sheet, clamped to
-              // 1..levelCount.
-              SteppedValueField(
-                display: floorName,
-                editSeed: '${floor + 1}',
-                label: context.strings(StringKey.inspectorMapsToFloor),
-                gap: MechXSpacing.xs,
-                valueColor: colors.textSecondary,
-                min: 1,
-                max: building.levelCount.toDouble(),
-                onDecrement: floor > 0 ? () => mapTo(floor - 1) : null,
-                onIncrement: floor < last ? () => mapTo(floor + 1) : null,
-                onSubmit: (v) {
-                  if (v != null) mapTo(v.round() - 1);
-                },
-              ),
-            ],
-          );
-        }),
       ),
     );
   }
