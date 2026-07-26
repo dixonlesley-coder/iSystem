@@ -1,12 +1,15 @@
 import 'dart:io';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/data/autosave.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/command_store.dart';
 import 'package:mechx/store/electrical_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx/ui/shell/nav_rail.dart';
 
 import 'test_util.dart';
@@ -139,5 +142,135 @@ void main() {
     });
     expect(File(path).existsSync(), isTrue,
         reason: 'Ctrl+S must reach saveProject with no canvas focused');
+  });
+
+  testWidgets('Ctrl+N starts a new project from any screen', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    final c = _containerOf(tester);
+
+    // A clean project with a remembered home file: Ctrl+N must forget the file
+    // (the next Save prompts for a location) without any confirm dialog.
+    c.read(currentProjectPathProvider.notifier).set('/tmp/never-written.mechx');
+    c.read(projectControllerProvider.notifier).setName('Tower B');
+    // Record the renamed state as the clean baseline, so the fresh dirty check
+    // in newProject's guard passes without an (unanswerable) confirm dialog.
+    c.read(lastSavedSignatureProvider.notifier).set(buildDocument(c.read).encode());
+    c.read(projectDirtyProvider.notifier).set(false);
+    c.read(shellSectionProvider.notifier).set(ShellSection.review);
+    await tester.pump();
+
+    await tester.runAsync(() async {
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      // newProject clears the recovery slots on the real filesystem.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await tester.pump();
+
+    expect(c.read(currentProjectPathProvider), isNull);
+    expect(c.read(projectControllerProvider).name, 'Untitled project');
+  });
+
+  testWidgets('Ctrl+1..8 jump to the nav destinations in rail order',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    final c = _containerOf(tester);
+
+    await _pressCtrl(tester, LogicalKeyboardKey.digit5);
+    expect(c.read(shellSectionProvider), ShellSection.review);
+
+    await _pressCtrl(tester, LogicalKeyboardKey.digit2);
+    expect(c.read(shellSectionProvider), ShellSection.design);
+    expect(c.read(workspaceViewProvider), WorkspaceView.schematic);
+
+    await _pressCtrl(tester, LogicalKeyboardKey.digit1);
+    expect(c.read(workspaceViewProvider), WorkspaceView.plan);
+
+    // Ctrl+, is the second way to Preferences (the macOS convention).
+    await _pressCtrl(tester, LogicalKeyboardKey.comma);
+    expect(c.read(shellSectionProvider), ShellSection.preferences);
+  });
+
+  testWidgets('F1 opens the keyboard-shortcuts sheet and Esc closes it — on a '
+      'hub screen, where nothing holds focus', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    final c = _containerOf(tester);
+
+    c.read(shellSectionProvider.notifier).set(ShellSection.projects);
+    await tester.pump();
+    expect(c.read(shortcutsSheetOpenProvider), isFalse);
+    expect(find.text('Keyboard shortcuts'), findsNothing);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.f1);
+    await tester.pump();
+    expect(c.read(shortcutsSheetOpenProvider), isTrue);
+    // The sheet documents the global bindings AND the canvas ones (its title
+    // plus its own F1 row both read "Keyboard shortcuts").
+    expect(find.text('Keyboard shortcuts'), findsWidgets);
+    expect(find.text('Ctrl N'), findsOneWidget);
+    expect(find.text('Ctrl Shift S'), findsOneWidget);
+    expect(find.text('Hold Space'), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    expect(c.read(shortcutsSheetOpenProvider), isFalse);
+  });
+
+  testWidgets('the two overlays never stack: F1 closes the palette, Ctrl+K '
+      'closes the sheet', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    final c = _containerOf(tester);
+
+    await _pressCtrl(tester, LogicalKeyboardKey.keyK);
+    expect(c.read(commandPaletteOpenProvider), isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.f1);
+    await tester.pump();
+    expect(c.read(commandPaletteOpenProvider), isFalse);
+    expect(c.read(shortcutsSheetOpenProvider), isTrue);
+
+    await _pressCtrl(tester, LogicalKeyboardKey.keyK);
+    expect(c.read(shortcutsSheetOpenProvider), isFalse);
+    expect(c.read(commandPaletteOpenProvider), isTrue);
+  });
+
+  testWidgets('Ctrl+Z undoes from a hub screen, but stands down while a text '
+      'field is focused', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    final c = _containerOf(tester);
+
+    // One undoable edit on the project (a rename), recorded on the global
+    // timeline — with no canvas anywhere near the focus.
+    c.read(shellSectionProvider.notifier).set(ShellSection.projects);
+    await tester.pump();
+    c.read(projectControllerProvider.notifier).setName('Menara Satu');
+    await tester.pump();
+    expect(c.read(projectControllerProvider).name, 'Menara Satu');
+
+    // While the project-name FIELD holds focus the combo belongs to the field.
+    tester
+        .widget<EditableText>(find.byType(EditableText).first)
+        .focusNode
+        .requestFocus();
+    await tester.pump();
+    await _pressCtrl(tester, LogicalKeyboardKey.keyZ);
+    expect(c.read(projectControllerProvider).name, 'Menara Satu',
+        reason: 'Ctrl+Z inside a text field must not touch the project');
+
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pump();
+    await _pressCtrl(tester, LogicalKeyboardKey.keyZ);
+    expect(c.read(projectControllerProvider).name, isNot('Menara Satu'),
+        reason: 'Ctrl+Z with nothing focused must reach the global timeline');
   });
 }

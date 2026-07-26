@@ -12,6 +12,7 @@ import '../store/app_state.dart';
 import '../store/command_store.dart';
 import '../store/design_issues_store.dart';
 import '../store/electrical_store.dart';
+import '../store/history_store.dart';
 import '../store/layer_store.dart';
 import '../store/project_store.dart';
 import '../store/sheets_store.dart';
@@ -19,6 +20,7 @@ import '../store/sizing_store.dart';
 import '../update/update_banner.dart';
 import '../update/version_label.dart';
 import 'ai/copilot_panel.dart';
+import 'canvas/text_entry_guard.dart';
 import 'commercial/commercial_hub.dart';
 import 'electrical/electrical_inspector.dart';
 import 'electrical/electrical_palette.dart';
@@ -35,6 +37,8 @@ import 'shell/workflow_stepper.dart';
 import 'shell/preferences_screen.dart';
 import 'shell/project_io.dart';
 import 'shell/projects_screen.dart';
+import 'shell/shell_shortcuts.dart';
+import 'shell/shortcuts_sheet.dart';
 import 'sheets/sheet_rail.dart';
 import 'strings/app_strings.dart';
 import 'theme/design_tokens.dart';
@@ -75,49 +79,127 @@ class _AppShellState extends ConsumerState<AppShell> {
     super.dispose();
   }
 
-  /// Handles ONLY the four global combos (Ctrl/Cmd+K, S, Shift+S, O).
+  /// Dispatches the app-wide accelerators — the "normal controls" every desktop
+  /// authoring tool answers to: Ctrl/Cmd+N/O/S/Shift+S/I/P (file), Ctrl+Z /
+  /// Ctrl+Y / Ctrl+Shift+Z (edit), Ctrl+K / Ctrl+Shift+P / F1 (find + help) and
+  /// Ctrl+1..8 / Ctrl+, (go to a destination). WHICH key means what is the pure,
+  /// unit-tested table in `shell_shortcuts.dart`; this method only runs it.
+  ///
   /// Returns true when consumed so the focus system doesn't double-dispatch
   /// the event to a focused canvas/field; everything else returns false and
   /// flows through the normal focus chain untouched.
   bool _onHardwareKey(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
-    final key = event.logicalKey;
-    final mod = HardwareKeyboard.instance.isControlPressed ||
-        HardwareKeyboard.instance.isMetaPressed;
-    if (!mod) return false;
+    // The shortcuts sheet carries no text field, so nothing inside it holds
+    // focus and the bubble-phase Esc listener would never see the key on a hub
+    // screen (the I1 dead spot). Close it here instead — pre-focus, but ONLY
+    // while it is open, so Esc otherwise reaches the canvases untouched.
+    final closingSheet = event.logicalKey == LogicalKeyboardKey.escape &&
+        ref.read(shortcutsSheetOpenProvider);
+    final command = closingSheet
+        ? null
+        : matchShellShortcut(
+            event.logicalKey,
+            mod: HardwareKeyboard.instance.isControlPressed ||
+                HardwareKeyboard.instance.isMetaPressed,
+            shift: HardwareKeyboard.instance.isShiftPressed,
+            alt: HardwareKeyboard.instance.isAltPressed,
+          );
+    if (!closingSheet && command == null) return false;
     // This handler is pre-focus and process-global, so it must stand down when
     // a modal route (a dialog / file picker) is on top of the shell — otherwise
     // Ctrl+O could stack a second confirm dialog over the first, or Ctrl+K
     // would toggle the palette behind the barrier. Only act when the shell's
     // own route is the current one.
     if (!(ModalRoute.of(context)?.isCurrent ?? true)) return false;
-    if (key == LogicalKeyboardKey.keyK) {
-      ref.read(commandPaletteOpenProvider.notifier).toggle();
+    if (closingSheet) {
+      ref.read(shortcutsSheetOpenProvider.notifier).close();
       return true;
     }
-    // Document-app save/open conventions: Ctrl/Cmd+S saves in place (Shift
-    // forces Save-As), Ctrl/Cmd+O opens — matching every desktop authoring
-    // tool a CAD engineer is trained on. Open guards unsaved work, so it needs
-    // the shell context to host the confirm dialog.
-    if (key == LogicalKeyboardKey.keyS) {
-      saveProject(ref, saveAs: HardwareKeyboard.instance.isShiftPressed);
-      return true;
+    // A focused text field owns its own editing keys: Ctrl+Z/Y inside a field
+    // must undo the FIELD (the framework's DefaultTextEditingShortcuts), never
+    // the drawing. Everything else stays live while typing, as it does in every
+    // desktop editor.
+    if (command!.deferToTextField && isTextEntryFocused()) return false;
+    _run(command);
+    return true;
+  }
+
+  /// Run one resolved [ShellCommand] through the EXISTING controllers — the
+  /// same entry points the top bar / nav rail / command palette use, so an
+  /// accelerator can never diverge from its clicked equivalent.
+  void _run(ShellCommand command) {
+    void goDesign(WorkspaceView view) {
+      ref.read(workspaceViewProvider.notifier).set(view);
+      ref.read(shellSectionProvider.notifier).set(ShellSection.design);
     }
-    if (key == LogicalKeyboardKey.keyO) {
-      openProject(context, ref);
-      return true;
+
+    switch (command) {
+      // — File — Document-app conventions: Ctrl/Cmd+S saves in place (Shift
+      // forces Save-As), Ctrl/Cmd+O opens. New / Open / Import guard unsaved
+      // work, so they need the shell context to host the confirm dialog.
+      case ShellCommand.newProject:
+        newProject(context, ref);
+      case ShellCommand.openProject:
+        openProject(context, ref);
+      case ShellCommand.save:
+        saveProject(ref);
+      case ShellCommand.saveAs:
+        saveProject(ref, saveAs: true);
+      case ShellCommand.importPlan:
+        importPlan(context, ref);
+      // The closest thing this app has to "print": the annotated plan PDF of
+      // the current sheet (title block + real lengths). Guarded like every
+      // other export — with no calibrated sheet it explains itself instead of
+      // writing an empty drawing.
+      case ShellCommand.printPlan:
+        exportAnnotatedPlanPdf(ref);
+      // — Edit — the ONE global timeline, so Ctrl+Z reverts the genuinely most
+      // recent edit across mechanical / electrical / annotation domains.
+      case ShellCommand.undo:
+        ref.read(historyProvider.notifier).undo();
+      case ShellCommand.redo:
+        ref.read(historyProvider.notifier).redo();
+      // — Find / help — both overlays render nothing when closed; opening one
+      // closes the other so two scrims can never stack.
+      case ShellCommand.commandPalette:
+        ref.read(shortcutsSheetOpenProvider.notifier).close();
+        ref.read(commandPaletteOpenProvider.notifier).toggle();
+      case ShellCommand.shortcutsHelp:
+        ref.read(commandPaletteOpenProvider.notifier).close();
+        ref.read(shortcutsSheetOpenProvider.notifier).toggle();
+      // — Go to — the nav-rail destinations, in rail order.
+      case ShellCommand.goLayout:
+        goDesign(WorkspaceView.plan);
+      case ShellCommand.goRiser:
+        goDesign(WorkspaceView.schematic);
+      case ShellCommand.goElectrical:
+        goDesign(WorkspaceView.electrical);
+      case ShellCommand.goBuilding:
+        ref.read(shellSectionProvider.notifier).set(ShellSection.building);
+      case ShellCommand.goReview:
+        ref.read(shellSectionProvider.notifier).set(ShellSection.review);
+      case ShellCommand.goCommercial:
+        ref.read(shellSectionProvider.notifier).set(ShellSection.commercial);
+      case ShellCommand.goProjects:
+        ref.read(shellSectionProvider.notifier).set(ShellSection.projects);
+      case ShellCommand.goPreferences:
+        ref.read(shellSectionProvider.notifier).set(ShellSection.preferences);
     }
-    return false;
   }
 
   /// Bubble-phase Esc handler (kept as a non-focus-stealing ancestor [Focus]):
-  /// closes the command palette when it's open. The global combos moved to
-  /// [_onHardwareKey] — they must not also be handled here, or one keypress
+  /// closes the command palette when it's open (the palette autofocuses its
+  /// filter field, so Esc always reaches here; the field-less shortcuts sheet
+  /// is closed pre-focus in [_onHardwareKey] instead). The global combos moved
+  /// to [_onHardwareKey] — they must not also be handled here, or one keypress
   /// would dispatch twice.
   KeyEventResult _onKey(KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    if (event.logicalKey == LogicalKeyboardKey.escape &&
-        ref.read(commandPaletteOpenProvider)) {
+    if (event.logicalKey != LogicalKeyboardKey.escape) {
+      return KeyEventResult.ignored;
+    }
+    if (ref.read(commandPaletteOpenProvider)) {
       ref.read(commandPaletteOpenProvider.notifier).close();
       return KeyEventResult.handled;
     }
@@ -185,6 +267,7 @@ class _AppShellState extends ConsumerState<AppShell> {
           ),
           const UpdateBannerOverlay(),
           const CommandPaletteOverlay(),
+          const ShortcutsSheetOverlay(),
           const CopilotOverlay(),
         ],
       ),

@@ -96,28 +96,35 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
 
   return [
     // — Switch the DESIGN workspace view —
+    // The Ctrl+1..8 accelerators mirror the nav-rail order (see
+    // `shell_shortcuts.dart`); shown here as keycaps so the palette advertises
+    // them rather than leaving them invisible.
     _Command(
       id: 'view.layout',
       title: 'Go to Layout',
       subtitle: 'Design view',
+      shortcut: 'Ctrl+1',
       run: () => openDesign(WorkspaceView.plan),
     ),
     _Command(
       id: 'view.riser',
       title: 'Go to Riser',
       subtitle: 'Vertical riser / elevation editor',
+      shortcut: 'Ctrl+2',
       run: () => openDesign(WorkspaceView.schematic),
     ),
     _Command(
       id: 'view.electrical',
       title: 'Go to Electrical',
       subtitle: 'Design view',
+      shortcut: 'Ctrl+3',
       run: () => openDesign(WorkspaceView.electrical),
     ),
     _Command(
       id: 'view.review',
       title: 'Go to Review',
       subtitle: 'Show issues + summaries',
+      shortcut: 'Ctrl+5',
       run: () => shell.set(ShellSection.review),
     ),
     _Command(
@@ -130,18 +137,35 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       id: 'view.commercial',
       title: 'Go to Commercial',
       subtitle: 'BOM + quotation',
+      shortcut: 'Ctrl+6',
       run: () => shell.set(ShellSection.commercial),
     ),
     _Command(
       id: 'view.building',
       title: 'Go to Building',
       subtitle: 'Floors + occupancy',
+      shortcut: 'Ctrl+4',
       run: () => shell.set(ShellSection.building),
+    ),
+    _Command(
+      id: 'view.projects',
+      title: 'Go to Projects',
+      subtitle: 'Project hub + exports',
+      shortcut: 'Ctrl+7',
+      run: () => shell.set(ShellSection.projects),
     ),
     _Command(
       id: 'view.preferences',
       title: 'Go to Preferences',
+      shortcut: 'Ctrl+8',
       run: () => shell.set(ShellSection.preferences),
+    ),
+    _Command(
+      id: 'help.shortcuts',
+      title: 'Keyboard shortcuts',
+      subtitle: 'Every binding, on one sheet',
+      shortcut: 'F1',
+      run: () => ref.read(shortcutsSheetOpenProvider.notifier).open(),
     ),
     // — Toggle a discipline layer on the Layout canvas —
     for (final layer in DisciplineLayer.values)
@@ -349,6 +373,7 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       id: 'export.planPdf',
       title: 'Export annotated plan (PDF)',
       subtitle: 'Current sheet — with lengths + title block',
+      shortcut: 'Ctrl+P',
       run: () => exportAnnotatedPlanPdf(ref),
     ),
     _Command(
@@ -362,12 +387,14 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       id: 'project.new',
       title: 'New project',
       subtitle: 'Start a blank project (guards unsaved work)',
+      shortcut: 'Ctrl+N',
       run: () => newProject(context, ref),
     ),
     _Command(
       id: 'project.import',
       title: 'Import plan',
       subtitle: 'Add a PDF / DXF / DWG floor plan',
+      shortcut: 'Ctrl+I',
       run: () => importPlan(context, ref),
     ),
     _Command(
