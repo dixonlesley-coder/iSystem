@@ -225,6 +225,30 @@ providers, Up/Down/Enter/Esc; `ui/shell/workflow_stepper.dart` is a compact stat
 with custom-painted marks. App-shell wiring is minimal: `AppShell` is a `ConsumerWidget` in a
 non-focus-stealing ancestor `Focus` that catches Ctrl/Cmd+K [bubbles up, canvas keeps focus]
 + Esc; no persistence).
+**Standard desktop accelerators + the F1 shortcuts sheet** (`ui/shell/shell_shortcuts.dart` —
+a PURE, unit-tested accelerator TABLE: `matchShellShortcut(key, {mod, shift, alt})` → a
+`ShellCommand`, with `app_shell.dart`'s pre-focus `HardwareKeyboard` handler reduced to a dispatch
+`switch` that runs the SAME entry points the top bar / nav rail / palette use, so an accelerator
+can never diverge from its clicked equivalent). Bindings: **Ctrl/Cmd+N** new · **O** open ·
+**S** / **Shift+S** save / save-as · **I** import plan · **P** export the annotated plan PDF
+(the app's "print", `runExportGuarded`) · **Z** / **Y** / **Shift+Z** undo/redo on the ONE
+`historyProvider` timeline (now global, so undo works on the hub screens where nothing holds
+focus) · **K** / **Shift+P** command palette · **1..8** (+ numpad) the nav-rail destinations in
+rail order [Layout · Riser · Electrical · Building · Review · Commercial · Projects ·
+Preferences] · **,** Preferences · bare **F1** the shortcuts sheet. Two rules are part of the
+table: **Alt NEVER matches** (Windows AltGr reports as Ctrl+Alt — swallowing it would eat real
+characters on an ID/EU layout) and `ShellCommand.deferToTextField` marks undo/redo as combos a
+focused field owns (the shell stands down via the shared `isTextEntryFocused()` so
+`DefaultTextEditingShortcuts` edits the FIELD). Deliberately NOT claimed globally: the canvas
+zoom family (Ctrl +/-/0), the selection combos (Ctrl+A/C/V, Delete) and Esc — they stay with the
+focused canvas — and Ctrl+Q (not a Windows quit convention; Alt+F4 / the close button already
+route through `_ExitGuard`). `ui/shell/shortcuts_sheet.dart` `ShortcutsSheetOverlay` is the F1
+cheat sheet (gated on `shortcutsSheetOpenProvider`, renders nothing when closed ⇒ goldens
+byte-identical): the global bindings beside the CANVAS ones (tools V/R/E/M/K/B, ortho O, service
+1-9, Shift+R/M, hold-Space pan, F fit…), so the whole keyboard is learnable in one place; Esc
+closes it pre-focus (it has no text field, so the bubble listener never sees the key on a hub
+screen) and opening either overlay closes the other. The palette carries matching keycaps + a
+'Keyboard shortcuts' command.
 **Inspector clarity — collapsible sections + promoted headline results** (`ui/inspector/
 disclosure_header.dart` + `result_card.dart` + `store/inspector_store.dart`
 `sectionVisibilityProvider`): the dense `ProjectPanel`'s major sections (Draw / Tanks / Rooms /

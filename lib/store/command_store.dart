@@ -41,6 +41,23 @@ class CommandPaletteController extends Notifier<bool> {
   void toggle() => state = !state;
 }
 
+/// Whether the Keyboard-shortcuts reference sheet (F1) is open. Like the
+/// palette it is a non-layout overlay that renders nothing when closed, so a
+/// fresh launch and the golden screenshots are unchanged.
+final shortcutsSheetOpenProvider =
+    NotifierProvider<ShortcutsSheetController, bool>(
+  ShortcutsSheetController.new,
+);
+
+class ShortcutsSheetController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void open() => state = true;
+  void close() => state = false;
+  void toggle() => state = !state;
+}
+
 /// The stable ids of recently-run palette commands, most-recent first, capped
 /// at [RecentCommandsController.max]. Session-transient by design (a fresh
 /// launch starts empty), so the palette-closed goldens are unaffected — this
