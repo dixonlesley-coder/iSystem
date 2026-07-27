@@ -742,15 +742,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.18.0`** (the W7 editable SUPPLY node [source kind PLN/genset/solar + declared
-  connection capacity, one-tap editor], the BATTERY + SOLAR PV source-spine nodes, and
-  the genset `backs NN% of load` coverage label; atop the v1.17.0 electrical
+  is `v1.19.0`** (the honest LV service: no fabricated TRAFO/MVMDP/LVMDP source spine
+  on an undeclared low-voltage service, the VA connection-capacity field, and the
+  judge-only `feeder-below-fed-demand` warning found by the whole-building simulation;
+  atop the v1.18.0 supply-node baseline [the W7 editable SUPPLY node with source kind
+  PLN/genset/solar + declared connection capacity, the BATTERY + SOLAR PV source-spine
+  nodes, and the genset `backs NN% of load` coverage label] and the v1.17.0 electrical
   panel-design-workflow baseline [the five-wave drop/auto-size/connect/balance campaign
   W0–W5, the W6 in-place value ladders in the electrical right-click menus
   (Breaker/Cable/Phase/Family + panel System, engine-sourced rungs, '(set)'/Auto
   override idiom, both hosts converged onto the shared menu widgets), and the standard
   desktop accelerators + F1 shortcuts sheet]; `pubspec.yaml` is the version source of
-  truth, `1.18.0+24`; each release = bump → merge to the default branch (`main`) →
+  truth, `1.19.0+25`; each release = bump → merge to the default branch (`main`) →
   `release.yml` `workflow_dispatch` with `publish=true`). The prior `v1.16.0` shipped
   palette/inspector polish (the Draw palette's Drains group gated to the gravity
   drainage service, the clean-water OUTLET node, the removal of the redundant inspector
