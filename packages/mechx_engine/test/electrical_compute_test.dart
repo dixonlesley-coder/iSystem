@@ -413,4 +413,142 @@ void main() {
       );
     });
   });
+
+  group('feeder-below-fed-demand warning (judge-only, no resize)', () {
+    // A 3φ sub-board with ONE dominant single-phase way: the worst phase
+    // carries nearly the whole board, so the board's demand current (worst
+    // phase) far exceeds the balanced current the parent's feeder way is
+    // sized from — the exact contradiction the schedule would print.
+    const imbalanced = ElectricalProject(
+      id: 'imb',
+      name: 'Imbalanced',
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'MDP',
+          circuits: [
+            ElectricalCircuit(
+              id: 'f1',
+              name: 'Feeder PP',
+              loadKind: LoadKind.feeder,
+              feedsPanelId: 'PP',
+              length: Length(10),
+            ),
+          ],
+        ),
+        ElectricalPanel(
+          id: 'PP',
+          name: 'PP',
+          sourceType: PanelSource.feeder,
+          circuits: [
+            ElectricalCircuit(
+              id: 'big',
+              name: 'Big 1ph',
+              loadKind: LoadKind.general,
+              loadW: 6000,
+              phases: 1,
+              length: Length(10),
+            ),
+            ElectricalCircuit(
+              id: 's1',
+              name: 'Small A',
+              loadKind: LoadKind.general,
+              loadW: 200,
+              phases: 1,
+              length: Length(10),
+            ),
+            ElectricalCircuit(
+              id: 's2',
+              name: 'Small B',
+              loadKind: LoadKind.general,
+              loadW: 200,
+              phases: 1,
+              length: Length(10),
+            ),
+          ],
+        ),
+      ],
+    );
+
+    test('an imbalanced fed board whose worst phase exceeds the feeder rating '
+        'raises the warning on the parent, locatable to the feeder way', () {
+      final r = computeSystem(p, imbalanced);
+      // Premise, derived from the engine's own results: the fed board's
+      // worst-phase demand current really is above the feeder's rating.
+      final feeder = r.panels['MDP']!.circuits
+          .firstWhere((c) => c.circuitId == 'f1');
+      final childDemandA = r.panels['PP']!.demandCurrent.amperes;
+      expect(childDemandA, greaterThan(feeder.breaker.ratingA.amperes));
+
+      final w = r.panels['MDP']!.warnings
+          .where((w) => w.code == 'feeder-below-fed-demand');
+      expect(w, hasLength(1));
+      expect(w.single.severity, WarningSeverity.warning);
+      expect(w.single.panelId, 'MDP');
+      expect(w.single.circuitId, 'f1');
+      // The system list carries it too (the Review fan-in reads that).
+      expect(
+        r.warnings.where((w) => w.code == 'feeder-below-fed-demand'),
+        hasLength(1),
+      );
+    });
+
+    test('a balanced fed board raises no such warning', () {
+      const balanced = ElectricalProject(
+        id: 'bal',
+        name: 'Balanced',
+        panels: [
+          ElectricalPanel(
+            id: 'MDP',
+            name: 'MDP',
+            circuits: [
+              ElectricalCircuit(
+                id: 'f1',
+                name: 'Feeder PP',
+                loadKind: LoadKind.feeder,
+                feedsPanelId: 'PP',
+                length: Length(10),
+              ),
+            ],
+          ),
+          ElectricalPanel(
+            id: 'PP',
+            name: 'PP',
+            sourceType: PanelSource.feeder,
+            circuits: [
+              ElectricalCircuit(
+                id: 'e1',
+                name: 'Even A',
+                loadKind: LoadKind.general,
+                loadW: 2000,
+                phases: 1,
+                length: Length(10),
+              ),
+              ElectricalCircuit(
+                id: 'e2',
+                name: 'Even B',
+                loadKind: LoadKind.general,
+                loadW: 2000,
+                phases: 1,
+                length: Length(10),
+              ),
+              ElectricalCircuit(
+                id: 'e3',
+                name: 'Even C',
+                loadKind: LoadKind.general,
+                loadW: 2000,
+                phases: 1,
+                length: Length(10),
+              ),
+            ],
+          ),
+        ],
+      );
+      final r = computeSystem(p, balanced);
+      expect(
+        r.warnings.where((w) => w.code == 'feeder-below-fed-demand'),
+        isEmpty,
+      );
+    });
+  });
 }

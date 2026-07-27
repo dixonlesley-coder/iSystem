@@ -1683,18 +1683,18 @@ class ElectricalSourcesInspector extends ConsumerWidget {
                       ),
                     ),
                     ElectricalField(
-                      label: 'Connection capacity (kVA)',
+                      label: 'Connection capacity (VA)',
                       child: ElectricalNumInput(
-                        value:
-                            project.supplyCapacityVa?.inKilovoltAmperes ?? 0,
+                        value: project.supplyCapacityVa?.voltAmperes ?? 0,
                         onChanged: (v) => ctrl.setSupplyCapacityVa(
-                          v > 0 ? ApparentPower.kilovoltAmperes(v) : null,
+                          v > 0 ? ApparentPower(v) : null,
                         ),
                       ),
                     ),
                     Text(
-                      'The declared connection (daya tersambung) or plant '
-                      'rating - labels the supply node; 0 = not printed.',
+                      'The declared connection (daya tersambung) in VA - '
+                      'e.g. 2200 / 33000 / 197000 - labels the supply node; '
+                      '0 = not printed.',
                       style: type.caption.copyWith(color: colors.textMuted),
                     ),
                     const SizedBox(height: MechXSpacing.sm),

@@ -136,9 +136,12 @@ void main() {
       // each way row gained a length/'—' cell. Line count is unchanged (no new
       // rows). The unified-report pin below already reflects this column (it was
       // re-baselined with the column present); this standalone pin was the last
-      // to catch up.
-      expect(md.split('\n').length, 87);
-      expect(fnv1a32(md), 0xe8363417);
+      // to catch up. Re-baselined 2026-07-27: the fixture's SP-1 is imbalanced
+      // and its feeder rounds below SP-1's worst-phase demand, so the new
+      // judge-only `feeder-below-fed-demand` warning adds one bullet to the MDP
+      // panel section AND one to the system Warnings section (+2 lines).
+      expect(md.split('\n').length, 89);
+      expect(fnv1a32(md), 0x732e7c07);
     });
   });
 
@@ -208,8 +211,10 @@ void main() {
       // standards line, ASCII Unverified heading). Re-baselined again 2026-07-06
       // (Wave 7 N13): the embedded mechanical BOM table gained the shared-element
       // Tag column (run `CW-F1`, duct riser `SA-R1`). Line count is unchanged.
-      expect(md.split('\n').length, 228);
-      expect(fnv1a32(md), 0x681c9890);
+      // Re-baselined 2026-07-27: the electrical body gained the two
+      // `feeder-below-fed-demand` warning lines (see the standalone pin above).
+      expect(md.split('\n').length, 230);
+      expect(fnv1a32(md), 0x9a4ae608);
     });
   });
 

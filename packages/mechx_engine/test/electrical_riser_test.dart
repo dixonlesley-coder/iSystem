@@ -186,18 +186,45 @@ void main() {
     expect(sheet.prims.whereType<SldRect>().length, 1);
   });
 
-  test('sourceChain=true prepends a source spine above the top band', () {
+  test('sourceChain=true prepends a source spine above the top band — the '
+      'honest LV head here (nothing declares an MV service)', () {
     final sheet = buildElectricalRiser(
         project: project,
         result: result,
         building: building,
         sourceChain: true);
-    // The spine draws single-line SYMBOLS: the PLN supply circle + the two
-    // transformer winding circles ⇒ at least 3 source circles (not boxes).
+    final joined =
+        sheet.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+    // An undeclared (LV) service draws the plain PLN head — never a
+    // fabricated MV station / transformer chain.
+    expect(joined, contains('PLN'));
+    expect(joined, isNot(contains('MV STATION')));
+    expect(joined, isNot(contains('TRANSFORMER')));
+    expect(
+        sheet.prims
+            .whereType<SldCircle>()
+            .where((c) => c.role == SldRole.source),
+        isEmpty);
+    expect(sheet.legend.map((e) => e.code), contains('Source'));
+  });
+
+  test('sourceChain=true with a DECLARED transformer draws the MV spine '
+      'symbols above the top band', () {
+    final mv = ElectricalProject(
+      id: project.id,
+      name: project.name,
+      transformerKva: const ApparentPower(400000),
+      panels: project.panels,
+    );
+    final mr = computeSystem(profile, mv);
+    final sheet = buildElectricalRiser(
+        project: mv, result: mr, building: building, sourceChain: true);
+    // The spine draws single-line SYMBOLS: the two transformer winding
+    // circles ⇒ at least 2 source circles (not boxes).
     final sourceCircles = sheet.prims
         .whereType<SldCircle>()
         .where((c) => c.role == SldRole.source);
-    expect(sourceCircles.length, greaterThanOrEqualTo(2)); // the transformer windings
+    expect(sourceCircles.length, greaterThanOrEqualTo(2));
     final joined =
         sheet.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
     expect(joined, contains('PLN MV STATION'));

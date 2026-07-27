@@ -742,15 +742,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.18.0`** (the W7 editable SUPPLY node [source kind PLN/genset/solar + declared
-  connection capacity, one-tap editor], the BATTERY + SOLAR PV source-spine nodes, and
-  the genset `backs NN% of load` coverage label; atop the v1.17.0 electrical
+  is `v1.19.0`** (the honest LV service: no fabricated TRAFO/MVMDP/LVMDP source spine
+  on an undeclared low-voltage service, the VA connection-capacity field, and the
+  judge-only `feeder-below-fed-demand` warning found by the whole-building simulation;
+  atop the v1.18.0 supply-node baseline [the W7 editable SUPPLY node with source kind
+  PLN/genset/solar + declared connection capacity, the BATTERY + SOLAR PV source-spine
+  nodes, and the genset `backs NN% of load` coverage label] and the v1.17.0 electrical
   panel-design-workflow baseline [the five-wave drop/auto-size/connect/balance campaign
   W0–W5, the W6 in-place value ladders in the electrical right-click menus
   (Breaker/Cable/Phase/Family + panel System, engine-sourced rungs, '(set)'/Auto
   override idiom, both hosts converged onto the shared menu widgets), and the standard
   desktop accelerators + F1 shortcuts sheet]; `pubspec.yaml` is the version source of
-  truth, `1.18.0+24`; each release = bump → merge to the default branch (`main`) →
+  truth, `1.19.0+25`; each release = bump → merge to the default branch (`main`) →
   `release.yml` `workflow_dispatch` with `publish=true`). The prior `v1.16.0` shipped
   palette/inspector polish (the Draw palette's Drains group gated to the gravity
   drainage service, the clean-water OUTLET node, the removal of the redundant inspector
@@ -1185,6 +1188,24 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   prints `backs NN% of load` — sized/declared kVA vs solved demand kVA, capped at 100, omitted with no
   demand — in both builders (canvas + overview + riser + PDF/DXF). Engine +6 / app +1 tests; goldens
   byte-identical (golden fixture carries no sources).
+  **Honest LV service on the source spine (user-reported) + a `feeder-below-fed-demand` check:** the
+  MVMDP → TRAFO → LVMDP chain now draws ONLY for a DECLARED MV service (`_isMvService` = explicit
+  `transformerKva` OR `dualTransformer`) in BOTH spine builders (the canvas horizontal chain + the
+  overview/riser vertical one); an LV (TR) direct service — the default, incl. any project with only
+  demand — draws the supply head alone (plain `PLN [capacity]`, never 'MV STATION'), with
+  genset/capacitor/solar/battery on a stacked drop off the head, the earthing designation at the
+  service entrance, and a short outgoing lead into the root board. Distributed sources no longer imply
+  an MV station and no trafo kVA is fabricated from demand; declared-MV projects render
+  byte-identical. The Sources editor's connection-capacity field is now **VA** (daya tersambung is
+  quoted in VA; the old kVA field stored 33 MVA when 33000 was typed). `computeSystem` gained a
+  JUDGE-ONLY `feeder-below-fed-demand` warning (never resizes): a feeder way sizes on the fed board's
+  diversified demand W at a balanced pf while the fed board's incomer sizes on its WORST-PHASE
+  current, so an imbalanced fed board could carry a feeder breaker below its own printed demand
+  (25 A feeder vs a 27.1 A / 24.3%-imbalance board in the whole-building sim that found it) — surfaced
+  on the parent's feeder way (locatable), fanning into Review via the generic `electrical:<code>`
+  kind. Goldens 05/08/11 re-captured (the sample project is an LV service ⇒ head-only spine).
+  Recorded follow-ups: riser feeder-branch label collision when boards share a floor band; the
+  device-kA fallback prints 25kA on domestic boards (wants a service-size-derived fault level).
   **Feedback loop + states landed (UI-only, goldens 01–07 shift):** silent/empty/
   colour-only states now give explicit feedback. The `IssuesCard` renders a positive
   **"No design issues found"** success card (custom-painted check) instead of
