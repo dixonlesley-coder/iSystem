@@ -31,7 +31,14 @@ import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/electrical/panel_templates.dart'
     show kPanelTemplates, panelTemplateById;
 import 'package:mechx_engine/electrical/sources.dart'
-    show GeneratorMode, GeneratorSource, GeneratorTransfer;
+    show
+        BatteryChemistry,
+        BatteryChemistryInfo,
+        BatterySource,
+        GeneratorMode,
+        GeneratorSource,
+        GeneratorTransfer,
+        SolarSource;
 import 'package:mechx_engine/electrical/spd.dart' show SpdTypeLabel;
 import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
@@ -1610,6 +1617,8 @@ class ElectricalSourcesInspector extends ConsumerWidget {
     final project = ref.watch(electricalProjectProvider);
     final ctrl = ref.read(electricalProjectProvider.notifier);
     final gen = project.sources?.generator;
+    final solar = project.sources?.solar;
+    final battery = project.sources?.battery;
 
     String genModeLabel(GeneratorMode m) => switch (m) {
           GeneratorMode.standby =>
@@ -1658,6 +1667,39 @@ class ElectricalSourcesInspector extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    // ── Supply (the head node of the source spine) ────────
+                    Text(
+                      'Supply',
+                      style: type.label.copyWith(color: colors.textPrimary),
+                    ),
+                    const SizedBox(height: MechXSpacing.sm),
+                    ElectricalField(
+                      label: 'Source',
+                      child: ElectricalEnumPicker<SupplyKind>(
+                        value: project.supplyKind,
+                        options: SupplyKind.values,
+                        label: (k) => k.label,
+                        onChanged: ctrl.setSupplyKind,
+                      ),
+                    ),
+                    ElectricalField(
+                      label: 'Connection capacity (kVA)',
+                      child: ElectricalNumInput(
+                        value:
+                            project.supplyCapacityVa?.inKilovoltAmperes ?? 0,
+                        onChanged: (v) => ctrl.setSupplyCapacityVa(
+                          v > 0 ? ApparentPower.kilovoltAmperes(v) : null,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      'The declared connection (daya tersambung) or plant '
+                      'rating - labels the supply node; 0 = not printed.',
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                    const SizedBox(height: MechXSpacing.sm),
+                    Container(height: 1, color: colors.border),
+                    const SizedBox(height: MechXSpacing.md),
                     // ── Genset ────────────────────────────────────────────
                     Text(
                       context.strings(StringKey.electricalGenset),
@@ -1699,6 +1741,87 @@ class ElectricalSourcesInspector extends ConsumerWidget {
                           options: GeneratorTransfer.values,
                           label: genTransferLabel,
                           onChanged: ctrl.setGeneratorTransfer,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: MechXSpacing.sm),
+                    Container(height: 1, color: colors.border),
+                    const SizedBox(height: MechXSpacing.md),
+                    // ── Solar PV ─────────────────────────────────────────
+                    Text(
+                      'Solar PV',
+                      style: type.label.copyWith(color: colors.textPrimary),
+                    ),
+                    const SizedBox(height: MechXSpacing.sm),
+                    ElectricalToggleRow(
+                      label: 'Solar PV present',
+                      value: solar != null,
+                      onChanged: (on) => ctrl.setSolar(
+                          on ? const SolarSource(panels: 20) : null),
+                    ),
+                    if (solar != null) ...[
+                      ElectricalField(
+                        label: 'Panels',
+                        child: ElectricalNumInput(
+                          value: solar.panels.toDouble(),
+                          min: 1,
+                          onChanged: (v) => ctrl.setSolar(SolarSource(
+                            panelWp: solar.panelWp,
+                            panels: v.round().clamp(1, 100000),
+                            dcAcRatio: solar.dcAcRatio,
+                          )),
+                        ),
+                      ),
+                      ElectricalField(
+                        label: 'Panel rating (Wp)',
+                        child: ElectricalNumInput(
+                          value: solar.panelWp.toDouble(),
+                          min: 1,
+                          onChanged: (v) => ctrl.setSolar(SolarSource(
+                            panelWp: v.round().clamp(1, 2000),
+                            panels: solar.panels,
+                            dcAcRatio: solar.dcAcRatio,
+                          )),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: MechXSpacing.sm),
+                    Container(height: 1, color: colors.border),
+                    const SizedBox(height: MechXSpacing.md),
+                    // ── Battery ──────────────────────────────────────────
+                    Text(
+                      'Battery',
+                      style: type.label.copyWith(color: colors.textPrimary),
+                    ),
+                    const SizedBox(height: MechXSpacing.sm),
+                    ElectricalToggleRow(
+                      label: 'Battery present',
+                      value: battery != null,
+                      onChanged: (on) => ctrl.setBattery(
+                          on ? const BatterySource(autonomyHours: 2) : null),
+                    ),
+                    if (battery != null) ...[
+                      ElectricalField(
+                        label: 'Chemistry',
+                        child: ElectricalEnumPicker<BatteryChemistry>(
+                          value: battery.chemistry,
+                          options: BatteryChemistry.values,
+                          label: (c) => c.label,
+                          onChanged: (c) => ctrl.setBattery(BatterySource(
+                            chemistry: c,
+                            autonomyHours: battery.autonomyHours,
+                          )),
+                        ),
+                      ),
+                      ElectricalField(
+                        label: 'Autonomy (h)',
+                        child: ElectricalNumInput(
+                          value: battery.autonomyHours,
+                          min: 0.1,
+                          onChanged: (v) => ctrl.setBattery(BatterySource(
+                            chemistry: battery.chemistry,
+                            autonomyHours: v <= 0 ? battery.autonomyHours : v,
+                          )),
                         ),
                       ),
                     ],

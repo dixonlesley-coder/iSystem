@@ -1319,6 +1319,38 @@ void main() {
       expect(proj().transformerKva, isNull);
     });
 
+    test('W7 — solar / battery set-clear + supply kind / capacity', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      ElectricalProject proj() => c.read(electricalProjectProvider);
+
+      // Solar + battery coexist; clearing one keeps the other.
+      ctrl.setSolar(const SolarSource(panels: 20));
+      ctrl.setBattery(const BatterySource(autonomyHours: 2));
+      expect(proj().sources!.solar!.panels, 20);
+      expect(proj().sources!.battery!.autonomyHours, 2);
+      ctrl.setSolar(null);
+      expect(proj().sources!.solar, isNull);
+      expect(proj().sources!.battery, isNotNull);
+      // Clearing the last source collapses the map.
+      ctrl.setBattery(null);
+      expect(proj().sources, isNull);
+
+      // Supply kind + declared capacity; PLN default, 0 clears the capacity.
+      expect(proj().supplyKind, SupplyKind.pln);
+      ctrl.setSupplyKind(SupplyKind.generator);
+      expect(proj().supplyKind, SupplyKind.generator);
+      ctrl.setSupplyCapacityVa(ApparentPower.kilovoltAmperes(197));
+      expect(proj().supplyCapacityVa!.inKilovoltAmperes, 197);
+      // An unrelated sources edit preserves the supply head fields.
+      ctrl.setBattery(const BatterySource(autonomyHours: 4));
+      expect(proj().supplyKind, SupplyKind.generator);
+      expect(proj().supplyCapacityVa!.inKilovoltAmperes, 197);
+      ctrl.setSupplyCapacityVa(null);
+      expect(proj().supplyCapacityVa, isNull);
+    });
+
     test('an unrelated edit preserves the source-spine fields', () {
       final c = ProviderContainer();
       addTearDown(c.dispose);

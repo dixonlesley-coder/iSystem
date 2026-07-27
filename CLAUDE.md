@@ -1172,6 +1172,20 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   its own feed-chooser page) were replaced by the shared widgets; both hosts wire the new params, so the two
   surfaces can never offer different rows. Menus closed at rest ⇒ goldens byte-identical
   (`test/electrical_context_menu_edit_test.dart`, 6 tests).
+  **W7 — editable SUPPLY node + BATTERY/SOLAR nodes + genset backup % (user-reported):** additive
+  `ElectricalProject.supplyKind` (`SupplyKind {pln, generator, solar}`, default pln ⇒ byte-identical) +
+  `supplyCapacityVa` (declared daya tersambung, null ⇒ not printed) re-label the source-spine HEAD via the
+  shared `_supplyHeadLabel` in BOTH spine builders (drawing inputs only, tolerant JSON, `_withProject`-carried,
+  `setSupplyKind`/`setSupplyCapacityVa`); a single TAP on the canvas supply chain (or bare PLN head) opens the
+  Sources editor, which gained Supply (kind + capacity), Solar PV and Battery sections over new
+  `setSolar`/`setBattery` intents (`_sourcesWith` replaces/clears any sub-source, collapses to null when
+  emptied). New `_emitBattery` (IEC plate pairs) + `_emitPvArray` glyphs (pure prims, no new `SldPrim`
+  subtype) hang BATTERY/SOLAR PV nodes off the LV bus below the genset/capacitor slots (coordinate-preserving
+  cursor ⇒ absent sources byte-identical); the battery kWh is sized on the SAME `sizeBattery(demand × PF)`
+  basis as `buildPowerOneLine` (zero demand ⇒ bare 'BATTERY'), solar prints installed kWp. The GENSET node
+  prints `backs NN% of load` — sized/declared kVA vs solved demand kVA, capped at 100, omitted with no
+  demand — in both builders (canvas + overview + riser + PDF/DXF). Engine +6 / app +1 tests; goldens
+  byte-identical (golden fixture carries no sources).
   **Feedback loop + states landed (UI-only, goldens 01–07 shift):** silent/empty/
   colour-only states now give explicit feedback. The `IssuesCard` renders a positive
   **"No design issues found"** success card (custom-painted check) instead of

@@ -1069,6 +1069,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
             width: bandW,
             height: bandH,
             child: _ScaledTap(
+              // The supply chain is the project's SUPPLY NODE — one tap opens
+              // its editor (source kind / capacity / genset / solar /
+              // battery), the same surface the toolbar Sources button opens.
+              onTap: widget.onRequestSources,
               onDoubleTap: widget.onRequestSources,
               child: CustomPaint(
                 painter: _SourceSpinePainter(
@@ -1098,6 +1102,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
             width: kGridSrcW * scale,
             height: kGridSrcH * scale,
             child: _ScaledTap(
+              // One tap = the supply node's editor (add a genset / solar /
+              // battery, set the source kind + capacity); double-tap keeps
+              // the historic Service & Earthing shortcut.
+              onTap: widget.onRequestSources,
               onDoubleTap: widget.onRequestService,
               child: _ScaledChild(
                 scale: scale,

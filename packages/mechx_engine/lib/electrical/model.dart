@@ -611,6 +611,22 @@ class ElectricalPanel {
 /// Where a panel takes its supply from.
 enum PanelSource { utility, feeder }
 
+/// The building's PRIMARY supply kind — what actually feeds the service
+/// entrance. PLN grid is the Indonesian default; a generator plant (prime
+/// power / off-grid site) or a solar PV plant are the alternatives. A
+/// drawing/reporting discriminator on [ElectricalProject.supplyKind], never a
+/// sizing input.
+enum SupplyKind { pln, generator, solar }
+
+extension SupplyKindInfo on SupplyKind {
+  /// Human label (drafting acronyms, identical EN/ID).
+  String get label => switch (this) {
+        SupplyKind.pln => 'PLN',
+        SupplyKind.generator => 'Genset',
+        SupplyKind.solar => 'Solar PV',
+      };
+}
+
 /// A whole project (building) — the panels and the installation earthing system.
 class ElectricalProject {
   final String id;
@@ -686,6 +702,19 @@ class ElectricalProject {
   /// not an SNI/PUIL clause. Additive.
   final ApparentPower? transformerKva;
 
+  /// The PRIMARY supply feeding the building — PLN grid (the default), an
+  /// on-site generator plant (prime power / off-grid), or a solar PV plant.
+  /// A drawing/reporting input: it re-labels the source-spine SUPPLY head
+  /// node, it never feeds a sizing path. Additive (default [SupplyKind.pln]
+  /// ⇒ byte-identical).
+  final SupplyKind supplyKind;
+
+  /// Declared supply connection capacity (VA) — the PLN subscribed power
+  /// (daya tersambung) or the primary plant rating. Labels the supply head
+  /// node verbatim when set; null ⇒ no capacity printed (never derived).
+  /// A drawing input only. Additive (default null ⇒ byte-identical).
+  final ApparentPower? supplyCapacityVa;
+
   const ElectricalProject({
     this.id = '',
     this.name = '',
@@ -705,6 +734,8 @@ class ElectricalProject {
     this.busbarClearingTimeS,
     this.capacitorBankKvar,
     this.transformerKva,
+    this.supplyKind = SupplyKind.pln,
+    this.supplyCapacityVa,
   });
 
   /// Serialize to a plain JSON map. Enums by `.name`; the panels recurse;
@@ -731,6 +762,9 @@ class ElectricalProject {
           'busbarClearingTimeS': busbarClearingTimeS,
         if (capacitorBankKvar != null) 'capacitorBankKvar': capacitorBankKvar,
         if (transformerKva != null) 'transformerKva': transformerKva!.voltAmperes,
+        if (supplyKind != SupplyKind.pln) 'supplyKind': supplyKind.name,
+        if (supplyCapacityVa != null)
+          'supplyCapacityVa': supplyCapacityVa!.voltAmperes,
         'panels': [for (final p in panels) p.toJson()],
       };
 
@@ -768,6 +802,11 @@ class ElectricalProject {
         transformerKva: json['transformerKva'] == null
             ? null
             : ApparentPower((json['transformerKva'] as num).toDouble()),
+        supplyKind:
+            _enumOr(SupplyKind.values, json['supplyKind'], SupplyKind.pln),
+        supplyCapacityVa: json['supplyCapacityVa'] == null
+            ? null
+            : ApparentPower((json['supplyCapacityVa'] as num).toDouble()),
         panels: [
           for (final p in (json['panels'] as List? ?? const []))
             ElectricalPanel.fromJson(p as Map<String, dynamic>),
