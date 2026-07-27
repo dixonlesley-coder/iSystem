@@ -93,6 +93,39 @@ abstract final class MechXMotion {
   /// they replace so adoption is byte-identical.
   static const double hoverLift = 1.03;
   static const double pressScale = 0.98;
+
+  /// The REDUCED-MOTION gate. **Every animated duration in the app must pass
+  /// through this** so the operating system's "reduce motion" accessibility
+  /// setting is honoured: when it is on, the app snaps to its end state instead
+  /// of animating (Apple HIG treats reduced motion as a first-class input, and
+  /// Flutter surfaces it as `MediaQuery.disableAnimations`).
+  ///
+  /// Usage — never pass a raw token to an animated widget:
+  /// ```dart
+  /// AnimatedOpacity(
+  ///   duration: MechXMotion.resolve(context, MechXMotion.appear),
+  ///   ...
+  /// )
+  /// ```
+  ///
+  /// Uses the `maybe` lookup so a widget pumped without a [MediaQuery] ancestor
+  /// (bare unit tests, painter harnesses) gets the base duration rather than
+  /// throwing. Behaviour is unchanged for everyone who has not enabled the
+  /// setting.
+  ///
+  /// ONE CAVEAT — `AnimatedSize` must not receive the [Duration.zero] this can
+  /// return: `RenderAnimatedSize` starts its controller from `performLayout`,
+  /// and a zero-duration `forward()` notifies synchronously, re-dirtying the
+  /// render object mid-layout (a framework assert). At an `AnimatedSize` site,
+  /// branch on the resolved value and render the child unwrapped when it is
+  /// zero — no animation is exactly what reduced motion asked for, and the
+  /// resting layout is identical either way. Every other implicitly-animated
+  /// widget (`AnimatedOpacity`, `AnimatedContainer`, `AnimatedRotation`,
+  /// `AnimatedSwitcher`, `AnimatedDefaultTextStyle`, …) takes zero happily.
+  static Duration resolve(BuildContext context, Duration base) =>
+      (MediaQuery.maybeDisableAnimationsOf(context) ?? false)
+          ? Duration.zero
+          : base;
 }
 
 /// Liquid-Glass material constants — the translucent, blurred "glass" used by
@@ -260,6 +293,20 @@ class MechXTypography {
 
   static const String fontFamily = 'Roboto';
   static const String monoFamily = 'Roboto Mono';
+
+  /// Returns [base] with TABULAR (fixed-advance) figures.
+  ///
+  /// Use for **any number that updates while it is visible** — live readouts,
+  /// solved totals, stepper values, zoom %, stat tiles, schedule/BOM numeric
+  /// columns. With proportional figures a `1` is narrower than a `0`, so a
+  /// recomputing value makes its row shuffle sideways; `tnum` fixes every digit
+  /// to one advance width, so the digits change but the layout never moves.
+  /// (Roboto ships the feature — the gap is adoption, not the font. [mono]
+  /// already carries it; this is the helper for the proportional styles.)
+  ///
+  /// Static numbers (labels, one-shot captions) do not need it.
+  static TextStyle tabular(TextStyle base) =>
+      base.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
 
   static const MechXTypography standard = MechXTypography(
     display: TextStyle(fontFamily: fontFamily, fontSize: 28, height: 1.16, fontWeight: FontWeight.w700, letterSpacing: -0.5),

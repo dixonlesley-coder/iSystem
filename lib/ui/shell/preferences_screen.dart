@@ -11,11 +11,25 @@ import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_segment.dart';
 import '../widgets/mechx_text_field.dart';
+import '../widgets/section_label.dart';
 
 /// Preferences. Surfaces the real app-wide settings that exist today (the
-/// light/dark appearance + the UI language); more design defaults move here in
-/// a later wave.
+/// light/dark appearance, the UI language, and the AI copilot backend); more
+/// design defaults move here in a later wave.
+///
+/// **P1 — one control idiom.** Every "pick a setting value" row on this page is
+/// the canonical [MechXSegment] radio group (the same segments the Layout layer
+/// switcher uses): all options visible, the current one selected, a tap
+/// selects. The page used to mix three idioms for the identical pattern — a
+/// button naming the ACTION ("Switch to Light"), a button naming the OTHER
+/// value ("Bahasa Indonesia"), and one filled pill beside two bare text links.
+///
+/// **P2 — page rhythm.** The rows are grouped under the shared
+/// [MechXSectionLabel] headings instead of floating in a void, and the inert
+/// software-update line is a muted footnote of the first group rather than a
+/// full card competing with the real settings.
 class PreferencesScreen extends ConsumerWidget {
   const PreferencesScreen({super.key});
 
@@ -23,44 +37,116 @@ class PreferencesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final strings = context.strings;
     final brightness = ref.watch(brightnessProvider);
-    final isDark = brightness == Brightness.dark;
     final locale = ref.watch(localeProvider);
-    final otherLocale = locale == AppLocale.en ? AppLocale.id : AppLocale.en;
     final update = ref.watch(updateControllerProvider);
 
     return HubScaffold(
       title: strings(StringKey.prefsTitle),
       lead: strings(StringKey.prefsLead),
       children: [
+        // (EN literals for the two section headings — Preferences has no
+        // StringKey for them and app_strings is owned elsewhere this wave; the
+        // page already carries EN literals throughout.)
+        const MechXSectionLabel('Appearance & language'),
+        const SizedBox(height: MechXSpacing.sm),
         _SettingCard(
           title: strings(StringKey.prefsAppearance),
-          value: isDark ? strings(StringKey.prefsDark) : strings(StringKey.prefsLight),
-          action: MechXButton(
-            label: isDark
-                ? strings(StringKey.prefsSwitchToLight)
-                : strings(StringKey.prefsSwitchToDark),
-            onPressed: () => ref.read(brightnessProvider.notifier).toggle(),
+          control: _SegmentGroup(
+            children: [
+              for (final b in const [Brightness.dark, Brightness.light])
+                MechXSegment(
+                  label: b == Brightness.dark
+                      ? strings(StringKey.prefsDark)
+                      : strings(StringKey.prefsLight),
+                  selected: brightness == b,
+                  // Idempotent: `set` (not `toggle`), so re-tapping the current
+                  // value is a no-op rather than flipping the theme.
+                  onTap: () => ref.read(brightnessProvider.notifier).set(b),
+                ),
+            ],
           ),
         ),
         const SizedBox(height: MechXSpacing.sm),
         _SettingCard(
           title: strings(StringKey.prefsLanguage),
-          value: locale.displayName,
-          action: MechXButton(
-            // Show the language we'd switch TO, so the action reads clearly.
-            label: otherLocale.displayName,
-            onPressed: () => ref.read(localeProvider.notifier).set(otherLocale),
+          control: _SegmentGroup(
+            children: [
+              for (final l in AppLocale.values)
+                MechXSegment(
+                  // The endonym names each language in itself, so either
+                  // option is readable whichever locale is active.
+                  label: l.displayName,
+                  selected: locale == l,
+                  onTap: () => ref.read(localeProvider.notifier).set(l),
+                ),
+            ],
           ),
         ),
         const SizedBox(height: MechXSpacing.sm),
-        _SettingCard(
-          title: 'Software update',
-          value: _updateStatusText(update),
+        _UpdateFootnote(
+          text: _updateStatusText(update),
           action: _updateAction(ref, update),
         ),
+        const SizedBox(height: MechXSpacing.lg),
+        const MechXSectionLabel('AI copilot'),
         const SizedBox(height: MechXSpacing.sm),
         const _ApiKeyCard(),
       ],
+    );
+  }
+}
+
+/// The option row of a setting: the canonical segments, wrapping (right-
+/// aligned) when the page is narrow so a long option label never clips.
+class _SegmentGroup extends StatelessWidget {
+  final List<Widget> children;
+
+  /// Trailing by default (the setting rows put the title left, the options
+  /// right); the AI card's inline rows pass `start` so the segments line up
+  /// with the model dropdown beneath them.
+  final WrapAlignment alignment;
+  const _SegmentGroup({
+    required this.children,
+    this.alignment = WrapAlignment.end,
+  });
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+        alignment: alignment,
+        spacing: MechXSpacing.xs,
+        runSpacing: MechXSpacing.xs,
+        children: children,
+      );
+}
+
+/// The software-update status as a quiet one-line footnote of the appearance
+/// group (P2). It is informational in every normal build — in a packaged
+/// release it still carries its real action (check / restart & update), which
+/// sits at the end of the line; in a non-release build [action] is an empty box
+/// and the line is pure text.
+class _UpdateFootnote extends StatelessWidget {
+  final String text;
+  final Widget action;
+  const _UpdateFootnote({required this.text, required this.action});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Padding(
+      // Align with the card titles above (which sit inside `md` padding).
+      padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.md),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Software update — $text',
+              style: type.caption.copyWith(color: colors.textMuted),
+            ),
+          ),
+          action,
+        ],
+      ),
     );
   }
 }
@@ -114,7 +200,9 @@ class _ApiKeyCardState extends ConsumerState<_ApiKeyCard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('AI copilot',
+                    // The section heading above already says "AI COPILOT" —
+                    // this row names what it actually holds.
+                    Text('API key',
                         style: type.body.copyWith(color: colors.textPrimary)),
                     const SizedBox(height: 2),
                     Text(
@@ -150,17 +238,18 @@ class _ApiKeyCardState extends ConsumerState<_ApiKeyCard> {
               ),
               const SizedBox(width: MechXSpacing.sm),
               Expanded(
-                child: Wrap(
-                  spacing: MechXSpacing.xs,
-                  runSpacing: MechXSpacing.xs,
+                child: _SegmentGroup(
+                  alignment: WrapAlignment.start,
                   children: [
                     for (final p in AiProviderKind.values)
-                      MechXButton(
+                      MechXSegment(
                         label: _providerLabel(p),
-                        primary: provider == p,
-                        tertiary: provider != p,
-                        onPressed:
-                            provider == p ? null : () => _switchProvider(p),
+                        selected: provider == p,
+                        // Re-tapping the active provider must NOT re-seed the
+                        // model — it would silently discard a hand-picked one.
+                        onTap: () {
+                          if (provider != p) _switchProvider(p);
+                        },
                       ),
                   ],
                 ),
@@ -434,20 +523,20 @@ Widget _updateAction(WidgetRef ref, UpdateStatus s) {
   );
 }
 
-/// A single settings row: a title + current value on the left, an action on the
-/// right, in a bordered card. Mirrors the existing Appearance card styling so
-/// both settings read consistently. Hovering the card gently lifts its border +
-/// fill (a coordination affordance), eased on the `hover` idiom; the action's
-/// own hover/press/focus feedback lives in [MechXButton].
+/// A single settings row: the setting's name on the left, its option segments
+/// on the right, in a bordered card. The separate "current value" caption the
+/// card used to carry is gone — the SELECTED segment states the current value,
+/// so nothing says it twice. Hovering the card gently lifts its border + fill
+/// (a coordination affordance), eased on the `hover` idiom and gated by
+/// [MechXMotion.resolve] so an OS reduced-motion setting snaps it; each
+/// segment's own hover/press/focus feedback lives in [MechXSegment].
 class _SettingCard extends StatefulWidget {
   final String title;
-  final String value;
-  final Widget action;
+  final Widget control;
 
   const _SettingCard({
     required this.title,
-    required this.value,
-    required this.action,
+    required this.control,
   });
 
   @override
@@ -466,7 +555,7 @@ class _SettingCardState extends State<_SettingCard> {
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: AnimatedContainer(
-        duration: MechXMotion.hover,
+        duration: MechXMotion.resolve(context, MechXMotion.hover),
         curve: MechXMotion.standard,
         width: double.infinity,
         padding: const EdgeInsets.all(MechXSpacing.md),
@@ -481,19 +570,19 @@ class _SettingCardState extends State<_SettingCard> {
         child: Row(
           children: [
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(widget.title,
-                      style:
-                          type.subtitle.copyWith(color: colors.textPrimary)),
-                  const SizedBox(height: MechXSpacing.xxs),
-                  Text(widget.value,
-                      style: type.caption.copyWith(color: colors.textMuted)),
-                ],
+              child: Text(widget.title,
+                  style: type.subtitle.copyWith(color: colors.textPrimary)),
+            ),
+            const SizedBox(width: MechXSpacing.md),
+            // Expanded + Align (not a loose Flexible): the control needs a
+            // full-width box to align its options to the card's right edge —
+            // a shrink-wrapped box would leave them stranded mid-row.
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: widget.control,
               ),
             ),
-            widget.action,
           ],
         ),
       ),

@@ -236,9 +236,13 @@ class _RowView extends StatelessWidget {
       );
     }
 
-    // Numeric cells use the mono / tabular face so right-aligned columns line up.
+    // Numeric cells use the mono face routed through the shared tabular-figure
+    // token so right-aligned Qty/price columns line up and never shuffle as a
+    // recompute changes digits (M2 — one source for `tnum`, not an inline
+    // FontFeature literal).
     final base = column.numeric
-        ? type.mono.copyWith(fontSize: type.body.fontSize)
+        ? MechXTypography.tabular(
+            type.mono.copyWith(fontSize: type.body.fontSize))
         : type.body;
 
     return Text(
@@ -248,8 +252,6 @@ class _RowView extends StatelessWidget {
         color: cell.color ?? colors.textPrimary,
         fontWeight: emphasized ? FontWeight.w700 : null,
         fontSize: emphasized ? (base.fontSize ?? 14.5) + 1 : null,
-        fontFeatures:
-            column.numeric ? const [FontFeature.tabularFigures()] : null,
       ),
     );
   }

@@ -145,3 +145,18 @@ Golden policy: agents run `flutter analyze` + their targeted tests only; golden 
 happens ONCE in W3 (concurrent `--update-goldens` runs corrupt each other). Guardrails hold
 throughout: custom design system only, opaque content / glass chrome split, ASCII + Roboto on
 canvas, EN default byte-identical for i18n edits, `.mechx` untouched.
+
+## Status — LANDED (2026-07-27)
+
+All findings above shipped (C1–C4, L1–L2, R1–R2, E1–E2, V1, M1–M2, B1–B3, P1–P2). Orchestrator
+review caught and fixed three seams the wave split could not: (1) `RiserSystemSummary` (R1) was
+built in `schematic_view.dart` but its mount point `_RiserInspectorColumn` lives in
+`app_shell.dart` (Wave-1's file) — mounted by the reviewer; (2) `calibration_test` tapped the
+Calibrate button mid-C3-ease after seeding — the test now settles first; (3) the golden harness
+captured 01 mid-Draw-default-collapse (the easing box pushed the sections below out of the
+clipped column) — the harness settles 200 ms past the seed before capture 01, and the
+`single_line_symbols_test` goldens (09/10, outside `screenshots_test.dart`) are regenerated
+alongside. Known accepted rough edge: the disabled level-delete `×` absorbs pointer events
+across its 40 px hit box (visually dimmed; `deferToChild` when disabled is a possible refinement).
+Gate: engine 1471 / app 1230 / analyze clean; goldens 01–05, 07–10, 12, 13, 15 + the three
+design captures regenerated and visually verified.

@@ -60,6 +60,7 @@ import '../widgets/mechx_button.dart';
 import '../widgets/mechx_empty_state_card.dart';
 import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_segment.dart';
+import '../widgets/section_label.dart';
 import 'riser_tags.dart';
 import 'schematic_export.dart';
 
@@ -2047,7 +2048,14 @@ class _AutoSchematicPainter extends CustomPainter {
   static const double _edgeStroke = 2.0;
   static const double _gridStrokeWidth = 0.5;
   static const double _labelFontSize = 10.0;
-  static const double _floorLabelFontSize = 11.0;
+
+  /// R2: the floor gutter is the diagram's PRIMARY orientation datum
+  /// ("Level 1  FFL +4.00"), so it wears the `MechXTypography.label` scale
+  /// (13 px / w500) in `textSecondary` — not the 11 px `textMuted` grey that
+  /// was near-invisible on the dark canvas. Kept as a constant so
+  /// [_floorLabelRects] (the label-collision seed) stays mirrored to
+  /// [_paintBands].
+  static const double _floorLabelFontSize = 13.0;
 
   double _bandTopY(int floorIndex, double totalHeight) {
     final n = building.levelCount;
@@ -2278,7 +2286,10 @@ class _AutoSchematicPainter extends CustomPainter {
         label,
         Offset(labelX, labelY),
         fontSize: _floorLabelFontSize,
-        color: colors.textMuted,
+        // R2: textSecondary at the label scale — legible on the near-black
+        // canvas in dark mode (and its light-mode tier reads equally on paper
+        // white); textMuted stays for tertiary detail stubs only.
+        color: colors.textSecondary,
         fontWeight: FontWeight.w500,
         maxWidth: size.width / 2,
       );
@@ -3165,8 +3176,9 @@ class _AutoSchematicPainter extends CustomPainter {
     for (final fan in fans) {
       if (fan.floorIndex < 0 || fan.floorIndex >= n) continue;
       final top = _bandTopY(fan.floorIndex, size.height);
-      // Start below the FFL label (which sits at top + xs, ~12px tall).
-      var y = top + 20;
+      // Start below the FFL label (which sits at top + xs and is ~15px tall
+      // at the R2 13px label scale), keeping an xs breathing gap.
+      var y = top + 24;
       if (y < buttonBottom + MechXSpacing.xs) y = buttonBottom + MechXSpacing.xs;
       final color =
           focus != null ? serviceColor(focus!) : colors.textSecondary;
@@ -3349,13 +3361,16 @@ class _EditSchematicPainter extends CustomPainter {
       final label = '${floor.name}  ${fflLabel(elevM)}';
       final labelAt = transform.worldToScreen(
           Offset(8, bandBotWorldY - bandWorldH + 8 / transform.scale));
+      // R2: ONE floor-gutter idiom across Auto + Edit — the label scale
+      // (13 px / w500) in textSecondary, so the primary orientation datum is
+      // legible on the dark canvas instead of a dim 12 px textMuted grey.
       _drawText(
         canvas,
         label,
         labelAt,
-        fontSize: 12,
-        color: colors.textMuted,
-        fontWeight: FontWeight.w600,
+        fontSize: 13,
+        color: colors.textSecondary,
+        fontWeight: FontWeight.w500,
         maxWidth: size.width / 2,
       );
     }
@@ -3929,10 +3944,15 @@ class _SystemNotes extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // R2: the card heading joins the body in the textSecondary tier
+              // (the body rows below are already caption/textSecondary — the
+              // textMuted heading was the near-invisible bit on the dark
+              // canvas); the w600 weight alone keeps the heading/body
+              // hierarchy.
               Text(
                 context.strings(StringKey.schematicNotes),
                 style: type.caption.copyWith(
-                    color: colors.textMuted, fontWeight: FontWeight.w600),
+                    color: colors.textSecondary, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: MechXSpacing.xs),
               for (final line in lines)
@@ -3947,6 +3967,139 @@ class _SystemNotes extends ConsumerWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// R1: the riser inspector's read-only SYSTEM summary
+// ---------------------------------------------------------------------------
+
+/// R1 — a data-gated, read-only "System" summary section for the Riser
+/// workspace's right inspector column (mounted by `_RiserInspectorColumn` in
+/// `app_shell.dart` between the FEED STRATEGY section and the help text).
+///
+/// A PROJECTION of state the Riser view already derives — honest by
+/// construction, nothing computed anew:
+///
+///   * **Services** present on the current diagram focus — the Auto view's
+///     system filter ([SchematicViewState.autoFocus]); Edit mode draws every
+///     service, so the summary reads unfiltered there.
+///   * **Riser count + stack tags** (`CW-R1` …) from the SAME pure [riserTags]
+///     helper the Auto painter labels risers with. Co-linear riser edges share
+///     one stack tag, so the count is vertical STACKS (how a drafter counts
+///     risers), not edges.
+///   * **Total riser length** — the sum over riser edges of the §10
+///     TRUE-ELEVATION delta of their endpoints ([nodeElevation]), exactly the
+///     per-riser length the Edit painter prints beside each riser. NEVER a
+///     pixel distance (geometry-is-truth).
+///
+/// Renders NOTHING when the focused diagram has no edges, so a first launch
+/// (and the empty inspector golden state) stays byte-identical; each row
+/// renders only when its datum exists (no risers ⇒ no riser rows — never a
+/// fabricated `0`). Numeric values wear [MechXTypography.tabular] so a live
+/// re-solve changes digits without making the column wobble.
+///
+/// Styling matches the column's flat section idiom ([MechXSectionLabel] +
+/// quiet key/value rows) in both light and dark [MechXColors] palettes.
+class RiserSystemSummary extends ConsumerWidget {
+  const RiserSystemSummary({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final network = ref.watch(networkControllerProvider).network;
+    final building = ref.watch(projectControllerProvider).building;
+    final vs = ref.watch(schematicViewProvider);
+    // The Auto diagram is focus-filtered; Edit always draws the whole network.
+    final focus = vs.mode == SchematicMode.auto ? vs.autoFocus : null;
+
+    final edges = [
+      for (final e in network.edges)
+        if (focus == null || e.service == focus) e,
+    ];
+    // Data gate: nothing on the diagram ⇒ nothing to summarize (and no stray
+    // section header / gap in the column).
+    if (edges.isEmpty) return const SizedBox.shrink();
+
+    // Services present, in the canonical ServiceType order (deterministic).
+    final present = edges.map((e) => e.service).toSet();
+    final services = [
+      for (final s in ServiceType.values)
+        if (present.contains(s)) serviceLabel(s),
+    ].join(' · ');
+
+    // One tag per vertical riser stack. `riserTags` builds its map in a
+    // deterministic service-then-x order, so the de-duped values keep that
+    // reading order (CW-R1 · CW-R2 · HW-R1 …).
+    final tags =
+        riserTags(network, focus).values.toSet().toList(growable: false);
+
+    // Total riser length = Σ |elevation delta| over the focused riser edges —
+    // the same derivation the Edit painter labels each riser with (§10).
+    var riserEdgeCount = 0;
+    var totalRiserM = 0.0;
+    for (final e in edges) {
+      if (e.kind != EdgeKind.riser) continue;
+      final a = network.nodeById(e.fromId);
+      final b = network.nodeById(e.toId);
+      if (a == null || b == null) continue;
+      riserEdgeCount++;
+      totalRiserM += (nodeElevation(b, building).meters -
+              nodeElevation(a, building).meters)
+          .abs();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const MechXSectionLabel('System'),
+        const SizedBox(height: MechXSpacing.xs),
+        _kv(context, 'Services', services, maxLines: 2),
+        if (tags.isNotEmpty)
+          _kv(context, 'Risers', '${tags.length}', numeric: true),
+        if (tags.isNotEmpty)
+          _kv(context, 'Tags', tags.join(' · '), maxLines: 2),
+        if (riserEdgeCount > 0)
+          _kv(context, 'Riser length', '${totalRiserM.toStringAsFixed(1)} m',
+              numeric: true),
+        // Trailing gap carried INSIDE the card so the empty (shrunk) state
+        // leaves the host column's own spacing untouched.
+        const SizedBox(height: MechXSpacing.lg),
+      ],
+    );
+  }
+
+  /// One quiet key/value row — the inspector `_kv` idiom (caption/textMuted
+  /// key, right-aligned caption/textSecondary value). The VALUE wins the row
+  /// (it may wrap to [maxLines] before eliding); [numeric] values take
+  /// [MechXTypography.tabular] fixed-advance figures.
+  Widget _kv(BuildContext context, String key, String value,
+      {bool numeric = false, int maxLines = 1}) {
+    final colors = context.colors;
+    final type = context.type;
+    final base = numeric ? MechXTypography.tabular(type.caption) : type.caption;
+    final valueStyle = base.copyWith(color: colors.textSecondary);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text(key,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: type.caption.copyWith(color: colors.textMuted)),
+          ),
+          const SizedBox(width: MechXSpacing.xs),
+          Flexible(
+            child: Text(value,
+                maxLines: maxLines,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+                style: valueStyle),
+          ),
+        ],
       ),
     );
   }

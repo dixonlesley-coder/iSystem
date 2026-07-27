@@ -46,7 +46,12 @@ enum StringKey {
   commercialColMatch,
   commercialMatched,
   commercialUnmatched,
-  commercialBomLead, // {lines} {unmatched}
+  commercialBomLead, // {lines} {unmatched} — both pre-pluralized phrases
+  // The BOM-line noun for `pluralCount` at the call sites feeding the
+  // templates above/below (EN 'line'/'lines'; ID has no plural inflection so
+  // both resolve to 'baris').
+  commercialLineOne,
+  commercialLineMany,
 
   // Commercial workspace — pricelist.
   commercialPricelistTitle,
@@ -57,7 +62,7 @@ enum StringKey {
   // Commercial workspace — quotation.
   commercialQuotationTitle,
   commercialAllPriced,
-  commercialUnpricedExcluded, // {n}
+  commercialUnpricedExcluded, // {n} — a pre-pluralized phrase ('3 lines')
   commercialLabourRate, // {cur}
   commercialColAmount, // {cur}
   commercialLabourHours, // {hours}
@@ -820,9 +825,13 @@ const Map<StringKey, String> _en = {
   StringKey.commercialColMatch: 'Match',
   StringKey.commercialMatched: 'matched',
   StringKey.commercialUnmatched: 'unmatched',
+  // {lines}/{unmatched} arrive pre-pluralized via `pluralCount` ('27 lines',
+  // '1 line') — the template stays verb-neutral so both counts read naturally.
   StringKey.commercialBomLead:
-      '{lines} line(s) from the sized electrical model, matched '
-          'to the parts catalogue. {unmatched} line(s) have no catalogue match.',
+      '{lines} from the sized electrical model, matched '
+          'to the parts catalogue. {unmatched} with no catalogue match.',
+  StringKey.commercialLineOne: 'line',
+  StringKey.commercialLineMany: 'lines',
 
   // Commercial workspace — pricelist.
   StringKey.commercialPricelistTitle: 'Pricelist',
@@ -835,8 +844,9 @@ const Map<StringKey, String> _en = {
   // Commercial workspace — quotation.
   StringKey.commercialQuotationTitle: 'Quotation',
   StringKey.commercialAllPriced: 'All catalogue-matched lines are priced.',
+  // {n} arrives pre-pluralized ('3 lines' / '1 line'), so no verb to disagree.
   StringKey.commercialUnpricedExcluded:
-      '{n} line(s) are unpriced and excluded from the material subtotal.',
+      '{n} unpriced, excluded from the material subtotal.',
   StringKey.commercialLabourRate: 'Labour rate ({cur} / h)',
   StringKey.commercialColAmount: 'Amount ({cur})',
   StringKey.commercialLabourHours: 'Labour ({hours} h)',
@@ -1681,9 +1691,12 @@ const Map<StringKey, String> _id = {
   StringKey.commercialColMatch: 'Kecocokan',
   StringKey.commercialMatched: 'cocok',
   StringKey.commercialUnmatched: 'tidak cocok',
+  // {lines}/{unmatched} tiba sudah berhitung ('27 baris') via `pluralCount`.
   StringKey.commercialBomLead:
-      '{lines} baris dari model kelistrikan terhitung, dicocokkan ke katalog '
-          'komponen. {unmatched} baris tanpa kecocokan katalog.',
+      '{lines} dari model kelistrikan terhitung, dicocokkan ke katalog '
+          'komponen. {unmatched} tanpa kecocokan katalog.',
+  StringKey.commercialLineOne: 'baris',
+  StringKey.commercialLineMany: 'baris',
 
   // Commercial workspace — pricelist.
   StringKey.commercialPricelistTitle: 'Daftar Harga',
@@ -1696,8 +1709,9 @@ const Map<StringKey, String> _id = {
   // Commercial workspace — quotation.
   StringKey.commercialQuotationTitle: 'Penawaran',
   StringKey.commercialAllPriced: 'Semua baris yang cocok katalog telah diberi harga.',
+  // {n} tiba sudah berhitung ('3 baris') via `pluralCount`.
   StringKey.commercialUnpricedExcluded:
-      '{n} baris belum diberi harga dan dikecualikan dari subtotal material.',
+      '{n} belum diberi harga dan dikecualikan dari subtotal material.',
   StringKey.commercialLabourRate: 'Tarif tenaga kerja ({cur} / jam)',
   StringKey.commercialColAmount: 'Jumlah ({cur})',
   StringKey.commercialLabourHours: 'Tenaga kerja ({hours} jam)',

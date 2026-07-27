@@ -292,6 +292,28 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
+- **Design-craft campaign (2026-07-27) — LANDED** (`DESIGN-CRAFT-REVIEW.md`, root): a
+  design-skills pass over EVERY page (incl. fresh captures of the never-golden-covered Building
+  + Preferences via the committed `test/design_captures_test.dart` → `test/goldens_design/`,
+  tagged golden+sim). Cross-cutting: `MechXMotion.resolve(context, duration)` — the
+  REDUCED-MOTION gate every animated duration must pass through (OS `disableAnimations` ⇒
+  `Duration.zero`; `AnimatedSize` must branch on zero instead — framework assert, documented on
+  the helper), and `MechXTypography.tabular(style)` — layout-stable `tnum` figures for ANY
+  number that updates while visible (adopted across inspector readouts, stat tiles, schedules,
+  steppers). DisclosureSection bodies now EASE (AnimatedSize, `fast`) instead of snapping; the
+  status pill fades/settles in. Per-page: inspector values never truncate mid-number (the value
+  wins the row; BOM leaders shorten instead), the Riser inspector gained the data-gated
+  `RiserSystemSummary` card (services/risers/tags/Σ riser length — a projection, no new
+  physics) + legible floor labels, the electrical canvas fits-to-content on first open
+  (LOD-honest extents; any explicit transform forfeits the one-shot), Review's stat tiles are
+  one consistent grid, Commercial's `line(s)` dev-speak died (pre-pluralized `pluralCount`
+  phrases, EN+ID), Building's add-level control is a labelled form with ≥40px hit targets, and
+  Preferences converged on ONE `MechXSegment` radio idiom (Dark/Light · EN/ID ·
+  Anthropic/OpenAI/GLM) under two section labels. Motion frequency-gate rejections are recorded
+  in the review doc (command palette, tool switching, zoom, drag stay unanimated). Test-harness
+  rule learned: seeding/toggling now animates section sizes, so widget tests settle before
+  tapping inspector content and the golden harness settles 200ms past the seed.
+
 - **Workflow + goldens two-lens review + export-readiness audit (2026-07-06) — the CURRENT plan
   of record (7 waves: the original 6 + the additional export-ready Wave 7)**:
   `WORKFLOW-GOLDENS-REVIEW.md` (root) is a fresh,

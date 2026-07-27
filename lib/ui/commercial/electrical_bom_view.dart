@@ -25,15 +25,26 @@ class ElectricalBomView extends ConsumerWidget {
 
     final unmatched = bom.lines.where((l) => l.sku == null).length;
 
+    // The template mechanism does plain {name} substitution (no plural
+    // logic), so the counts are pre-pluralized HERE with `pluralCount` and the
+    // template takes the whole phrase ('27 lines' / '1 line') — never the
+    // dev-speak 'line(s)'. The noun comes from the string table so ID reads
+    // 'baris' naturally (no plural inflection).
+    final s = context.strings;
+    String lineCount(int n) => pluralCount(
+        n, s(StringKey.commercialLineOne), s(StringKey.commercialLineMany));
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(context.strings(StringKey.commercialBomTitle),
+        Text(s(StringKey.commercialBomTitle),
             style: type.title.copyWith(color: colors.textPrimary)),
         const SizedBox(height: MechXSpacing.xxs),
         Text(
-          context.strings.format(StringKey.commercialBomLead,
-              {'lines': bom.lines.length, 'unmatched': unmatched}),
+          s.format(StringKey.commercialBomLead, {
+            'lines': lineCount(bom.lines.length),
+            'unmatched': lineCount(unmatched),
+          }),
           style: type.caption.copyWith(color: colors.textMuted),
         ),
         const SizedBox(height: MechXSpacing.sm),

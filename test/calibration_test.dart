@@ -155,7 +155,10 @@ void main() {
       listen: false,
     );
     seedDemoSheets(container);
-    await tester.pump();
+    // Seeding grows the inspector sections; their DisclosureSection bodies
+    // ease size changes (C3), so settle before locating the button — a tap
+    // mid-slide lands where the button was a frame ago.
+    await tester.pumpAndSettle();
 
     await tester.ensureVisible(find.text('Calibrate scale'));
     await tester.tap(find.text('Calibrate scale'));

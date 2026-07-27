@@ -34,6 +34,25 @@ class DisclosureSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final expanded =
         ref.watch(sectionExpandedProvider(SectionKey(name, defaultExpanded)));
+    // Disclose the body only when expanded. Sized-out (not faded) when
+    // collapsed so the panel stays compact and the canvas dominates.
+    final body = expanded
+        ? Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: MechXSpacing.sm),
+              child,
+            ],
+          )
+        : const SizedBox.shrink();
+    // C3: the SIZE change eases rather than snapping, so toggling one section
+    // no longer teleports every row beneath it (purpose:
+    // preventing-a-jarring-change; a tens-of-times-a-day surface, so the short
+    // `fast` tier). At rest the animation is idle, the box is exactly the
+    // child's size and `RenderAnimatedSize` applies no clip layer — so resting
+    // frames are pixel-identical to the un-animated column.
+    final duration = MechXMotion.resolve(context, MechXMotion.fast);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -44,12 +63,23 @@ class DisclosureSection extends ConsumerWidget {
               .read(sectionVisibilityProvider.notifier)
               .toggle(name, defaultExpanded),
         ),
-        // Disclose the body only when expanded. Sized-out (not faded) when
-        // collapsed so the panel stays compact and the canvas dominates.
-        if (expanded) ...[
-          const SizedBox(height: MechXSpacing.sm),
-          child,
-        ],
+        // Under OS reduced motion the gate returns Duration.zero, and
+        // `AnimatedSize` cannot take that — `RenderAnimatedSize` starts its
+        // controller from `performLayout`, and a zero-duration `forward()`
+        // notifies synchronously, re-dirtying the render object mid-layout
+        // (framework assert). So drop the wrapper entirely instead: no
+        // animation is exactly what was asked for, and the resting layout is
+        // identical either way.
+        if (duration == Duration.zero)
+          body
+        else
+          AnimatedSize(
+            duration: duration,
+            curve: MechXMotion.standard,
+            alignment: Alignment.topCenter,
+            clipBehavior: Clip.hardEdge,
+            child: body,
+          ),
       ],
     );
   }
@@ -106,7 +136,9 @@ class _DisclosureHeaderBarState extends State<_DisclosureHeaderBar> {
                 // continuous motion. Reuses the proven golden-stable painter.
                 AnimatedRotation(
                   turns: widget.expanded ? 0.25 : 0.0,
-                  duration: MechXMotion.appear,
+                  // C1: through the reduced-motion gate — with the OS setting
+                  // on, the chevron snaps to its new orientation.
+                  duration: MechXMotion.resolve(context, MechXMotion.appear),
                   curve: MechXMotion.standard,
                   child: CustomPaint(
                     size: const Size(14, 14),
