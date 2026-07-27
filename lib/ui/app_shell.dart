@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/geo_length.dart';
 
 import '../data/autosave.dart';
 import '../data/project_assets.dart';
@@ -392,6 +393,22 @@ class _DesignWorkspace extends ConsumerWidget {
   }
 }
 
+/// The layout PLACEMENT caption for a placed load/panel, e.g. 'Sheet 2 ·
+/// Level 2' — the same numbered-rail index (`sheet_rail.dart`'s `${index +
+/// 1}`) and floor-name fallback (`'Floor ${i + 1}'`) the sheet rail itself
+/// uses, so the inspector names a sheet exactly as the rest of the app does.
+/// Null when [pos]'s sheet no longer resolves (a stale/removed sheet id).
+String? _layoutPlacementLabel(WidgetRef ref, LayoutPos pos) {
+  final sheets = ref.watch(sheetsControllerProvider).sheets;
+  final index = sheets.indexWhere((s) => s.id == pos.sheetId);
+  if (index < 0) return null;
+  final floors = ref.watch(projectControllerProvider).floors;
+  final floorName = pos.floorIndex >= 0 && pos.floorIndex < floors.length
+      ? floors[pos.floorIndex].name
+      : 'Floor ${pos.floorIndex + 1}';
+  return 'Sheet ${index + 1} · $floorName';
+}
+
 /// Builds the INLINE electrical editor body for the current
 /// [electricalInspectorTargetProvider] target (a circuit / panel / the
 /// project-wide Service / Sources / Advanced sections), or null when nothing is
@@ -400,7 +417,11 @@ class _DesignWorkspace extends ConsumerWidget {
 /// so both are selection-first. A stale target (its panel / circuit deleted) is
 /// cleared next frame and returns null. Transparent — floats on the column's
 /// Liquid-Glass.
-Widget? buildElectricalInlineEditor(WidgetRef ref, VoidCallback clear) {
+Widget? buildElectricalInlineEditor(
+  BuildContext context,
+  WidgetRef ref,
+  VoidCallback clear,
+) {
   final target = ref.watch(electricalInspectorTargetProvider);
   if (target == null) return null;
   final project = ref.watch(electricalProjectProvider);
@@ -423,6 +444,22 @@ Widget? buildElectricalInlineEditor(WidgetRef ref, VoidCallback clear) {
           .fault
           .panels[panel.id]
           ?.incomerKa;
+      // §10 — the run length actually in force + its basis, off the SAME
+      // shared calibration/building geometry `electricalResultProvider` itself
+      // threads into the solve, so the inspector's "from layout"/"manual" line
+      // can never disagree with the solved figures above it.
+      final geo = ref.watch(projectControllerProvider);
+      final panelById = {for (final p in project.panels) p.id: p};
+      final resolved = resolveCircuitLengthDetailed(
+        circuit,
+        panel,
+        calibrationBySheet: geo.calibrations,
+        building: geo.building,
+        panelById: panelById,
+      );
+      final loadPos = circuit.loadPos;
+      final placementLabel =
+          loadPos != null ? _layoutPlacementLabel(ref, loadPos) : null;
       editor = ElectricalCircuitInspector(
         key: ValueKey('${target.panelId}/${target.circuitId}'),
         panel: panel,
@@ -432,18 +469,54 @@ Widget? buildElectricalInlineEditor(WidgetRef ref, VoidCallback clear) {
         inline: true,
         circuitResult: circuitResult,
         breakerIcuKa: icuKa,
+        lengthSource: resolved.source,
+        effectiveLength: resolved.length,
+        placementLabel: placementLabel,
+        onUnplace: loadPos == null
+            ? null
+            : () => unplaceCircuitLoad(ref, panel.id, circuit.id),
+        panelSystem: panel.system,
       );
     }
   } else if (target is ElectricalPanelTarget) {
     final panel =
         project.panels.where((p) => p.id == target.panelId).firstOrNull;
     if (panel != null) {
+      final result = ref.watch(electricalResultProvider);
+      final panelResult = result.panels[panel.id];
+      final enclosureResult =
+          ref.watch(electricalAdvancedProvider).enclosure[panel.id];
+      // Boards this one could be fed FROM — every other panel a re-parent onto
+      // wouldn't loop (the shared `feederRefusalReason` rule the canvas's own
+      // context menu uses too, so the two entry points can never disagree on
+      // the candidate set).
+      final feedCandidates = [
+        for (final p in project.panels)
+          if (p.id != panel.id &&
+              ctrl.feederRefusalReason(p.id, panel.id) == null)
+            (id: p.id, label: p.tag ?? p.name),
+      ];
       editor = ElectricalPanelInspector(
         key: ValueKey('panel/${target.panelId}'),
         panel: panel,
         controller: ctrl,
         onClose: clear,
         inline: true,
+        panelResult: panelResult,
+        enclosureResult: enclosureResult,
+        fedFromLabel: feedingPanelLabel(project, panel.id),
+        feedCandidates: feedCandidates,
+        onFeedFrom: (fromId) => feedPanelFrom(ref, fromId, panel.id),
+        onDisconnectFeeder: panel.fedByCircuitId == null
+            ? null
+            : () {
+                ctrl.disconnectFeeder(panel.id);
+                ref
+                    .read(statusMessageProvider.notifier)
+                    .showStatus('Feeder disconnected.');
+              },
+        onApplyTemplate: () => applyTemplateTo(context, ref, panel.id),
+        onPinPhases: () => pinPanelPhasesTo(ref, panel.id),
       );
     }
   } else if (target is ElectricalServiceTarget) {
@@ -477,7 +550,7 @@ class _ElectricalInspectorColumn extends ConsumerWidget {
     final type = context.type;
     void clear() =>
         ref.read(electricalInspectorTargetProvider.notifier).clear();
-    final editor = buildElectricalInlineEditor(ref, clear);
+    final editor = buildElectricalInlineEditor(context, ref, clear);
     if (editor != null) {
       return SizedBox(width: ProjectPanel.width, child: editor);
     }
@@ -518,7 +591,7 @@ class _ElectricalWorkspaceInspectorColumn extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     void clear() =>
         ref.read(electricalInspectorTargetProvider.notifier).clear();
-    final editor = buildElectricalInlineEditor(ref, clear);
+    final editor = buildElectricalInlineEditor(context, ref, clear);
 
     // D6: the Loads palette is interactive only on the Single-line tab; on the
     // read-only Building-riser / Power one-line projections it renders inert.

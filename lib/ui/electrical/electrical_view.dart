@@ -27,6 +27,8 @@ import 'package:mechx_engine/electrical/metering.dart'
     show MeteringKind, MeteringKindLabel;
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/electrical/panel_templates.dart'
+    show kPanelTemplates, panelTemplateById;
 import 'package:mechx_engine/electrical/sources.dart'
     show GeneratorMode, GeneratorSource, GeneratorTransfer;
 import 'package:mechx_engine/electrical/spd.dart' show SpdTypeLabel;
@@ -34,6 +36,7 @@ import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/app_state.dart';
 import '../../store/electrical_feed.dart';
 import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
@@ -53,6 +56,7 @@ import 'electrical_canvas.dart';
 import 'electrical_controls.dart';
 import 'electrical_export.dart';
 import 'electrical_format.dart';
+import 'electrical_inspector.dart' show feedChooserItems;
 import 'panel_geometry.dart';
 import 'power_oneline_view.dart';
 import 'sld_sheet_painter.dart';
@@ -475,6 +479,14 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
 
   Widget _buildCircuitMenu() {
     final ref0 = _circuitMenu!;
+    final panel = ref
+        .read(electricalProjectProvider)
+        .panels
+        .where((p) => p.id == ref0.panelId)
+        .firstOrNull;
+    final circuit =
+        panel?.circuits.where((c) => c.id == ref0.circuitId).firstOrNull;
+    final hasLoadPos = circuit?.loadPos != null;
     return Positioned(
       left: _menuAt.dx,
       top: _menuAt.dy,
@@ -494,6 +506,13 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             _controller.duplicateCircuit(ref0.panelId, ref0.circuitId);
             setState(() => _circuitMenu = null);
           }),
+          // Only offered for a way that IS placed — an unplaced load has
+          // nothing to un-place (mirrors `ElectricalCircuitMenu`'s own gate).
+          if (hasLoadPos)
+            ElectricalMenuAction('Remove from layout', () {
+              unplaceCircuitLoad(ref, ref0.panelId, ref0.circuitId);
+              setState(() => _circuitMenu = null);
+            }),
           ElectricalMenuAction(context.strings(StringKey.electricalMenuDelete),
               () {
             _controller.deleteCircuit(ref0.panelId, ref0.circuitId);
@@ -512,6 +531,41 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
       return const SizedBox.shrink();
     }
+    // Boards this one could be fed FROM — every other panel a re-parent onto
+    // wouldn't loop (the shared `feederRefusalReason` rule, so the menu and
+    // the inline panel inspector can never disagree on the candidate set).
+    final feedCandidates = [
+      for (final p in project.panels)
+        if (p.id != panel.id &&
+            _controller.feederRefusalReason(p.id, panel.id) == null)
+          (id: p.id, label: p.tag ?? p.name),
+    ];
+    final fedFromLabel = feedingPanelLabel(project, panel.id);
+
+    if (menu.feedChooser) {
+      return Positioned(
+        left: _menuAt.dx,
+        top: _menuAt.dy,
+        child: ElectricalMenu(
+          items: [
+            ElectricalMenuAction(
+              'Back',
+              () => setState(() => _panelMenu = _PanelMenuState(panel.id)),
+              muted: true,
+            ),
+            ...feedChooserItems(
+              candidates: feedCandidates,
+              currentLabel: fedFromLabel,
+              onPick: (fromId) {
+                feedPanelFrom(ref, fromId, panel.id);
+                setState(() => _panelMenu = null);
+              },
+            ),
+          ],
+        ),
+      );
+    }
+
     return Positioned(
       left: _menuAt.dx,
       top: _menuAt.dy,
@@ -567,6 +621,19 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             _controller.duplicatePanel(panel.id);
             setState(() => _panelMenu = null);
           }),
+          // Re-parent the board onto a different source — sits directly above
+          // Disconnect, the two feeder actions together (mirrors the shared
+          // `ElectricalPanelMenu`'s own row order).
+          if (feedCandidates.isNotEmpty)
+            ElectricalMenuAction(
+              'Feed from…',
+              () => setState(
+                  () => _panelMenu = _PanelMenuState(panel.id, feedChooser: true)),
+            ),
+          ElectricalMenuAction('Pin phases', () {
+            pinPanelPhasesTo(ref, panel.id);
+            setState(() => _panelMenu = null);
+          }),
           if (panel.fedByCircuitId != null)
             ElectricalMenuAction(
                 context.strings(StringKey.electricalMenuDisconnectFeeder), () {
@@ -587,7 +654,240 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
 
 class _PanelMenuState {
   final String panelId;
-  const _PanelMenuState(this.panelId);
+
+  /// True while the menu shows its "Feed from…" chooser PAGE instead of the
+  /// normal action list (mirrors `ElectricalPanelMenu`'s own `_feedChooser`
+  /// toggle in `electrical_inspector.dart` — the canvas's context menu is a
+  /// separate widget, so it keeps its own copy of the same two-page idiom).
+  final bool feedChooser;
+
+  const _PanelMenuState(this.panelId, {this.feedChooser = false});
+}
+
+// ── Panel inspector wiring helpers ───────────────────────────────────────────
+
+/// The designation (tag, else name) of the board feeding [panelId] — scans
+/// every panel's circuits for a feeder targeting it. Mirrors the store's own
+/// `reparentedFromLabel` resolution in
+/// [ElectricalProjectController.connectFeeder] so the panel inspector's "Fed
+/// from" caption can never disagree with what a reconnect would report moved.
+/// Null when [panelId] carries no incoming feeder (utility-fed).
+String? feedingPanelLabel(ElectricalProject project, String panelId) {
+  for (final p in project.panels) {
+    for (final c in p.circuits) {
+      if (c.feedsPanelId == panelId) return p.tag ?? p.name;
+    }
+  }
+  return null;
+}
+
+/// Reconnect [panelId] to be fed from [fromPanelId] and toast the outcome —
+/// `Fed from <label>.`, or, when this re-parented an already-fed board,
+/// `Fed from <label> (was <old>).` The caller is expected to have already filtered
+/// [fromPanelId] through `feederRefusalReason` (a refused id still toasts the
+/// store's plain-language reason rather than silently doing nothing). Shared
+/// by the canvas's own right-click "Feed from…" chooser and the panel
+/// inspector's inline one, so the two entry points can never report a
+/// different result for the same reconnect.
+void feedPanelFrom(WidgetRef ref, String fromPanelId, String panelId) {
+  final project = ref.read(electricalProjectProvider);
+  final from = project.panels.where((p) => p.id == fromPanelId).firstOrNull;
+  final label = from?.tag ?? from?.name ?? fromPanelId;
+  final res = ref
+      .read(electricalProjectProvider.notifier)
+      .connectFeeder(fromPanelId, panelId);
+  final status = ref.read(statusMessageProvider.notifier);
+  if (!res.connected) {
+    status.showStatus(res.reason ?? 'Could not connect feeder.');
+    return;
+  }
+  status.showStatus(res.reparentedFromLabel != null
+      ? 'Fed from $label (was ${res.reparentedFromLabel}).'
+      : 'Fed from $label.');
+}
+
+/// Populate an EMPTY board from a preset: opens [showApplyTemplateDialog],
+/// applies the choice through [ElectricalProjectController.applyPanelTemplate]
+/// and toasts the result. A cancelled/dismissed picker is a no-op.
+Future<void> applyTemplateTo(
+  BuildContext context,
+  WidgetRef ref,
+  String panelId,
+) async {
+  final id = await showApplyTemplateDialog(context);
+  if (id == null || !context.mounted) return;
+  ref.read(electricalProjectProvider.notifier).applyPanelTemplate(panelId, id);
+  final t = panelTemplateById(id);
+  ref
+      .read(statusMessageProvider.notifier)
+      .showStatus('Applied the ${t?.label ?? id} template.');
+}
+
+/// Pin every SINGLE-PHASE way on [panelId] to the line the last solve gave it
+/// (three-phase ways are skipped — pinning a line is meaningless for a way
+/// that already spans all three) and toast the count. A panel with no solved
+/// result, or none of whose ways are single-phase, is a no-op.
+void pinPanelPhasesTo(WidgetRef ref, String panelId) {
+  final panelResult = ref.read(electricalResultProvider).panels[panelId];
+  if (panelResult == null) return;
+  final assignment = <String, PhaseLine>{
+    for (final c in panelResult.circuits)
+      if (!c.threePhase)
+        c.circuitId: switch (c.phase) {
+          PhaseAssignment.l1 => PhaseLine.l1,
+          PhaseAssignment.l2 => PhaseLine.l2,
+          PhaseAssignment.l3 => PhaseLine.l3,
+          PhaseAssignment.threePhase => PhaseLine.l1,
+        },
+  };
+  if (assignment.isEmpty) return;
+  ref
+      .read(electricalProjectProvider.notifier)
+      .pinPanelPhases(panelId, assignment);
+  ref.read(statusMessageProvider.notifier).showStatus(
+      'Phases pinned for ${pluralCount(assignment.length, 'way', 'ways')}.');
+}
+
+/// Un-place a way's load from the calibrated layout — hands its run length
+/// back to the manual field — as ONE undo step (a snapshot pushed before the
+/// otherwise non-recording `setLoadPos`). Shared by the canvas's own circuit
+/// context menu ("Remove from layout") and the inline circuit inspector's
+/// identical action.
+void unplaceCircuitLoad(WidgetRef ref, String panelId, String circuitId) {
+  final ctrl = ref.read(electricalProjectProvider.notifier);
+  ctrl.pushUndoSnapshot();
+  ctrl.setLoadPos(panelId, circuitId, null);
+  ref
+      .read(statusMessageProvider.notifier)
+      .showStatus('Removed from layout — manual length applies.');
+}
+
+/// Pick a preset to populate an EMPTY board with — the panel inspector's
+/// "Apply template…" action. Resolves to the chosen template id, or null when
+/// cancelled/dismissed. The same themed [showGeneralDialog] chooser idiom
+/// `sheet_rail.dart` uses for its floor/rename pickers (no Material).
+Future<String?> showApplyTemplateDialog(BuildContext context) {
+  final theme = MechXTheme.of(context);
+  return showGeneralDialog<String>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Apply template',
+    barrierColor: theme.colors.scrim,
+    transitionDuration: MechXMotion.appear,
+    pageBuilder: (ctx, _, _) => MechXTheme(
+      data: theme,
+      child: const Center(child: _ApplyTemplateDialog()),
+    ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(
+        parent: anim,
+        curve: MechXMotion.standard,
+        reverseCurve: MechXMotion.standard,
+      );
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
+class _ApplyTemplateDialog extends StatelessWidget {
+  const _ApplyTemplateDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Container(
+      width: 360,
+      padding: const EdgeInsets.all(MechXSpacing.lg),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        boxShadow: MechXShadow.popover,
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text('Apply template',
+                    style: type.title.copyWith(color: colors.textPrimary)),
+              ),
+              MechXButton(
+                label: 'Cancel',
+                tertiary: true,
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.xs),
+          Text(
+            'Fill this empty board with a typical way list.',
+            style: type.caption.copyWith(color: colors.textMuted),
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          for (final t in kPanelTemplates)
+            _TemplateRow(
+              label: t.label,
+              onTap: () => Navigator.of(context).pop(t.id),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One tappable template row in [_ApplyTemplateDialog].
+class _TemplateRow extends StatefulWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _TemplateRow({required this.label, required this.onTap});
+
+  @override
+  State<_TemplateRow> createState() => _TemplateRowState();
+}
+
+class _TemplateRowState extends State<_TemplateRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedContainer(
+          duration: MechXMotion.hover,
+          curve: MechXMotion.standard,
+          margin: const EdgeInsets.only(bottom: MechXSpacing.xxs),
+          padding: const EdgeInsets.symmetric(
+            horizontal: MechXSpacing.sm,
+            vertical: MechXSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            color: _hover ? colors.surfaceHover : const Color(0x00000000),
+            borderRadius: MechXRadii.control,
+            border: Border.all(color: colors.border),
+          ),
+          child: Text(widget.label,
+              style: type.body.copyWith(color: colors.textPrimary)),
+        ),
+      ),
+    );
+  }
 }
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────

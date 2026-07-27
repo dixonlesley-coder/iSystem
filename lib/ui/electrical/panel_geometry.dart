@@ -83,10 +83,39 @@ double scheduleSheetHeight(ElectricalPanelResult panel) {
 /// at the top.
 double panelDetailWidth() => kScheduleSheetWidth * kScheduleScale;
 
+/// The three zoom-driven detail tiers a panel card renders at.
+///
+/// [micro] is the far-zoomed-out plan-reading tier — a chip carrying only the
+/// board's identity, its connected kW and a proportional R/S/T bar, so a large
+/// distribution tree stays legible (and cheap) when the whole building is on
+/// screen. [summary] is the compact stats card, [schedule] the real engine board
+/// schedule. The canvas maps zoom → tier; this file only supplies the geometry.
+enum PanelLod { micro, summary, schedule }
+
+/// Micro-tier card size — a fixed chip (identity + kW + phase bar), independent
+/// of the way count (a 20-way board and a 1-way board read the same at this
+/// zoom; the difference is only legible once the summary stats appear). The
+/// height holds the two text lines + the phase bar + the card's padding and
+/// border with a few px of slack, so the chip never clips its own three facts.
+const double kPanelMicroW = 176;
+const double kPanelMicroH = 72;
+
+/// Card WIDTH at an explicit [PanelLod] — the uniform schedule width at
+/// [PanelLod.schedule], the way-count summary width at [PanelLod.summary], the
+/// fixed chip width at [PanelLod.micro].
+double panelCardWidthLod(ElectricalPanelResult panel, PanelLod lod) =>
+    switch (lod) {
+      PanelLod.micro => kPanelMicroW,
+      PanelLod.summary => panelCardWidth(panel.circuits.length),
+      PanelLod.schedule => panelDetailWidth(),
+    };
+
 /// Card WIDTH at the active LOD: the uniform schedule width when [detail], else
-/// the way-count summary width.
+/// the way-count summary width. The pre-micro two-tier API, kept so the callers
+/// that only distinguish "schedule vs not" (the minimap, the golden harness)
+/// compile unchanged; it delegates to [panelCardWidthLod].
 double panelCardWidthAt(ElectricalPanelResult panel, bool detail) =>
-    detail ? panelDetailWidth() : panelCardWidth(panel.circuits.length);
+    panelCardWidthLod(panel, detail ? PanelLod.schedule : PanelLod.summary);
 
 /// Centre x of way column [i].
 double wayColumnX(int i) => kLeft + i * kWayW + kWayW / 2;
@@ -135,10 +164,16 @@ double panelCardHeight(ElectricalPanelResult panel) =>
     panelGeometry(panel).height;
 
 /// Compact summary-body band (header [kPanelChrome] excluded) used when a panel
-/// is COLLAPSED (zoomed out): just the kW / demand / incomer / system / ways +
-/// phase-balance rows — no schematic band, so the card is a tidy block instead
-/// of a tall card of empty space.
-const double kPanelSummaryBodyH = 104;
+/// is COLLAPSED (zoomed out): the kW / demand / incomer / bus / system / ways /
+/// placed stats + the phase-balance row — no schematic band, so the card is a
+/// tidy block instead of a tall card of empty space.
+///
+/// Sized so the full stat set still fits on the NARROWEST card
+/// ([kMinPanelWidth], a one-way board), where the stats wrap to three rows. It
+/// grew 104 -> 136 when the busbar + "n/m placed" stats joined: the band is a
+/// reserved height, so under-sizing it clips real numbers rather than making
+/// the card honest.
+const double kPanelSummaryBodyH = 136;
 
 /// The detail-LOD card HEIGHT — the schedule sheet height at [kScheduleScale].
 /// Because the card width is also the sheet width at the SAME scale
@@ -149,14 +184,23 @@ const double kPanelSummaryBodyH = 104;
 double panelScheduleHeight(ElectricalPanelResult panel) =>
     scheduleSheetHeight(panel) * kScheduleScale;
 
-/// Card footprint at the active LOD: the BOARD SCHEDULE height (grows with the
-/// way count) when [detail] — the card has no separate header band there, the
-/// engine schedule draws its own — else the compact summary band (header +
-/// summary body). Threaded through the canvas so the card height, the
+/// Card footprint HEIGHT at an explicit [PanelLod]: the BOARD SCHEDULE height
+/// (grows with the way count) at [PanelLod.schedule] — the card has no separate
+/// header band there, the engine schedule draws its own — the compact summary
+/// band (header + summary body) at [PanelLod.summary], and the fixed chip height
+/// at [PanelLod.micro]. Threaded through the canvas so the card height, the
 /// merged-node connector and the feeder endpoints all agree at every zoom.
-double panelFootprint(ElectricalPanelResult panel, bool detail) => detail
-    ? panelScheduleHeight(panel)
-    : kPanelChrome + kPanelSummaryBodyH;
+double panelFootprintLod(ElectricalPanelResult panel, PanelLod lod) =>
+    switch (lod) {
+      PanelLod.micro => kPanelMicroH,
+      PanelLod.summary => kPanelChrome + kPanelSummaryBodyH,
+      PanelLod.schedule => panelScheduleHeight(panel),
+    };
+
+/// Card footprint at the active LOD (the pre-micro two-tier API — see
+/// [panelCardWidthAt]); delegates to [panelFootprintLod].
+double panelFootprint(ElectricalPanelResult panel, bool detail) =>
+    panelFootprintLod(panel, detail ? PanelLod.schedule : PanelLod.summary);
 
 /// Resolve each panel's world position: a saved `x,y` wins, else the
 /// deterministic tidy-tree [autoLayout]. The single shared resolver used by the
@@ -234,11 +278,13 @@ Map<String, Offset> autoLayout(
   }
 
   // The breadth (vertical) extent per panel = its board-schedule height + gap,
-  // so siblings stacked top-to-bottom never collide.
+  // so siblings stacked top-to-bottom never collide. PINNED to the SCHEDULE
+  // footprint (the tallest tier) on purpose: world positions must not change
+  // with zoom, so neither the summary nor the micro tier may feed this.
   double extentOf(String id) {
     final r = result.panels[id];
     if (r == null) return 160.0 + 60;
-    return panelFootprint(r, true) + 70;
+    return panelFootprintLod(r, PanelLod.schedule) + 70;
   }
 
   // Depth column pitch (horizontal): the widest card + a feeder gap, so a child
