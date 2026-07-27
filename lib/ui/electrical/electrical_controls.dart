@@ -567,24 +567,47 @@ class ElectricalMenuAction {
 /// danger row variant.
 class ElectricalMenu extends StatelessWidget {
   final List<ElectricalMenuAction> items;
-  const ElectricalMenu({super.key, required this.items});
+
+  /// Quiet caption line at the top of the menu (e.g. a ladder page's
+  /// "minimum section" note). Null ⇒ no note row — byte-identical.
+  final String? note;
+
+  /// When true the body scrolls inside a capped height — the value LADDER
+  /// pages need it (a full breaker ladder is taller than the viewport), the
+  /// same idiom as the mechanical size-ladder menu.
+  final bool scrollable;
+
+  const ElectricalMenu({
+    super.key,
+    required this.items,
+    this.note,
+    this.scrollable = false,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final menu = MechXContextMenu(
+      scrollable: scrollable,
+      children: [
+        if (note != null) MechXMenuNote(note!),
+        for (final item in items)
+          MechXMenuRow(
+            label: item.label,
+            onTap: item.onTap,
+            danger: item.danger,
+            selected: item.selected,
+            muted: item.muted,
+          ),
+      ],
+    );
     return SizedBox(
       width: 188,
-      child: MechXContextMenu(
-        children: [
-          for (final item in items)
-            MechXMenuRow(
-              label: item.label,
-              onTap: item.onTap,
-              danger: item.danger,
-              selected: item.selected,
-              muted: item.muted,
-            ),
-        ],
-      ),
+      child: scrollable
+          ? ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 400),
+              child: menu,
+            )
+          : menu,
     );
   }
 }

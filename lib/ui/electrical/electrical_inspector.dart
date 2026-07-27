@@ -22,6 +22,7 @@ import 'package:mechx_engine/electrical/panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, PhaseAssignment;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart'
     show breakerScheduleLabel, cableLabel;
+import 'package:mechx_engine/standards/puil.dart' show BreakerClass, PuilProfile;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
@@ -88,12 +89,41 @@ List<ElectricalMenuAction> feedChooserItems({
 
 // ── Context menus ─────────────────────────────────────────────────────────────
 
-/// Circuit right-click menu: Edit / Duplicate / Remove from layout / Delete.
-class ElectricalCircuitMenu extends StatelessWidget {
+/// The cable-family ladder both the circuit inspector's picker and the circuit
+/// menu's Family page offer — ONE list so the two entry points can never
+/// diverge (the `null` "panel default" row is composed by each surface).
+const List<String> kCableFamilies = ['NYY', 'NYM', 'NYA', 'NYAF', 'FRC'];
+
+/// Circuit right-click menu: Edit / Duplicate / Remove from layout / Delete,
+/// plus four in-place VALUE rows (Breaker / Cable / Phase / Family) that each
+/// open a ladder PAGE — the same second-page idiom as the panel menu's
+/// "Feed from…" chooser, mirroring the mechanical canvas's right-click size
+/// ladder. Ladder values come from the engine's own PUIL profile tables
+/// (never a hardcoded copy); a manual override is marked '(set)' and 'Auto
+/// (sized)' hands the field back to the sizer. The value rows render only
+/// when the host resolves [circuit] — an unwired host gets exactly the
+/// previous action-only menu.
+class ElectricalCircuitMenu extends StatefulWidget {
   final ElectricalEditTarget target;
   final ElectricalProjectController controller;
   final VoidCallback onEdit;
   final VoidCallback onDone;
+
+  /// The way's MODEL row, when the host resolves it — enables the in-place
+  /// value rows (overrides + family read straight off the model). Null ⇒ the
+  /// menu renders exactly its previous action-only form.
+  final ElectricalCircuit? circuit;
+
+  /// The way's SOLVED result — labels the value rows with the engine-sized
+  /// figures (the same numbers the board schedule prints). Null ⇒ the rows
+  /// render from the model alone with 'auto' placeholders (nothing
+  /// fabricated).
+  final ElectricalCircuitResult? circuitResult;
+
+  /// The board's electrical system — the positive-evidence gate for the
+  /// Phase row (only a single-phase way on a KNOWN three-phase board has
+  /// another line to move to). Null ⇒ no Phase row.
+  final ElectricalSystem? panelSystem;
 
   /// True when this way's LOAD is placed on the calibrated layout
   /// (`ElectricalCircuit.loadPos != null`) — the host knows the circuit, so it
@@ -122,6 +152,9 @@ class ElectricalCircuitMenu extends StatelessWidget {
     required this.controller,
     required this.onEdit,
     required this.onDone,
+    this.circuit,
+    this.circuitResult,
+    this.panelSystem,
     this.hasLoadPos = false,
     this.onUnplace,
     this.onShowOnLayout,
@@ -129,11 +162,264 @@ class ElectricalCircuitMenu extends StatelessWidget {
   });
 
   @override
+  State<ElectricalCircuitMenu> createState() => _ElectricalCircuitMenuState();
+}
+
+/// Which page the circuit menu is showing — root actions, or one of the four
+/// value ladders (the panel menu's "Feed from…" two-page idiom, generalised).
+enum _CircuitMenuPage { root, breaker, cable, phase, family }
+
+class _ElectricalCircuitMenuState extends State<ElectricalCircuitMenu> {
+  _CircuitMenuPage _page = _CircuitMenuPage.root;
+
+  /// The engine profile whose tables the ladders list — the SAME ladder
+  /// `selectBreaker`/`sizeCable` walk, so a menu pick is always a value the
+  /// sizer itself could have chosen.
+  static const _profile = PuilProfile();
+
+  ElectricalCircuit? get _circuit => widget.circuit;
+  ElectricalCircuitResult? get _result => widget.circuitResult;
+
+  // ── Row gating ──────────────────────────────────────────────────────────────
+
+  bool get _isSpare => _circuit?.loadKind == LoadKind.spare;
+  bool get _isFeeder => _circuit?.loadKind == LoadKind.feeder;
+
+  /// True only where the way is KNOWN to be single-phase — the same
+  /// positive-evidence rule as the inspector's phase-pin picker (an unset
+  /// `phases` with no solved result may well be three-phase, so no row).
+  bool get _knownSinglePhase =>
+      _circuit != null &&
+      (_circuit!.phases == 1 ||
+          (_circuit!.phases == null && _result != null && !_result!.threePhase));
+
+  /// Breaker applies to every way (a spare still reserves a device); cable /
+  /// family need a conductor run (not a spare); phase needs a single-phase way
+  /// on a KNOWN three-phase board, and never a feeder (its line assignment
+  /// follows the fed board, not a pin).
+  bool get _showBreakerRow => _circuit != null;
+  bool get _showCableRow => _circuit != null && !_isSpare;
+  bool get _showFamilyRow => _circuit != null && !_isSpare;
+  bool get _showPhaseRow =>
+      !_isSpare &&
+      !_isFeeder &&
+      widget.panelSystem == ElectricalSystem.threePhase &&
+      _knownSinglePhase;
+
+  // ── Value formatting ────────────────────────────────────────────────────────
+
+  static String _num(double v) =>
+      v == v.roundToDouble() ? v.round().toString() : v.toString();
+
+  static String _cls(double ratingA) =>
+      _profile.breakerClassFor(ratingA) == BreakerClass.mcb ? 'MCB' : 'MCCB';
+
+  String get _breakerValue {
+    final ov = _circuit?.breakerOverrideA;
+    if (ov != null) return '${_cls(ov.amperes)} ${_num(ov.amperes)}A (set)';
+    final r = _result?.breaker.ratingA.amperes;
+    if (r != null) return '${_cls(r)} ${_num(r)}A';
+    return 'auto';
+  }
+
+  String get _cableValue {
+    final ov = _circuit?.cableOverrideMm2;
+    if (ov != null) return '${_num(ov)} mm2 (set)';
+    final r = _result?.cable.csaMm2;
+    if (r != null) return '${_num(r)} mm2';
+    return 'auto';
+  }
+
+  /// The solved line as a pinnable [PhaseLine] (null for a 3-phase result).
+  PhaseLine? get _solvedLine => switch (_result?.phase) {
+        PhaseAssignment.l1 => PhaseLine.l1,
+        PhaseAssignment.l2 => PhaseLine.l2,
+        PhaseAssignment.l3 => PhaseLine.l3,
+        _ => null,
+      };
+
+  String get _phaseValue {
+    final ov = _circuit?.phaseOverride;
+    if (ov != null) return '${phaseLineLetter(ov)} (set)';
+    final solved = _solvedLine;
+    if (solved != null) return phaseLineLetter(solved);
+    return 'Auto';
+  }
+
+  String get _familyValue => _circuit?.cableType ?? 'default';
+
+  // ── Pick handlers (each ONE store mutation = one undo step, then close) ────
+
+  void _setCircuit({
+    Current? breakerOverrideA,
+    bool clearBreakerOverrideA = false,
+    double? cableOverrideMm2,
+    bool clearCableOverrideMm2 = false,
+    PhaseLine? phaseOverride,
+    bool clearPhaseOverride = false,
+    String? cableType,
+    bool clearCableType = false,
+  }) {
+    widget.controller.setCircuit(
+      widget.target.panelId,
+      widget.target.circuitId,
+      breakerOverrideA: breakerOverrideA,
+      clearBreakerOverrideA: clearBreakerOverrideA,
+      cableOverrideMm2: cableOverrideMm2,
+      clearCableOverrideMm2: clearCableOverrideMm2,
+      phaseOverride: phaseOverride,
+      clearPhaseOverride: clearPhaseOverride,
+      cableType: cableType,
+      clearCableType: clearCableType,
+    );
+    widget.onDone();
+  }
+
+  ElectricalMenuAction _back() => ElectricalMenuAction(
+        'Back',
+        () => setState(() => _page = _CircuitMenuPage.root),
+        muted: true,
+      );
+
+  // ── Ladder pages ────────────────────────────────────────────────────────────
+
+  Widget _breakerPage() {
+    final c = _circuit!;
+    final effective = c.breakerOverrideA?.amperes ?? _result?.breaker.ratingA.amperes;
+    return ElectricalMenu(
+      scrollable: true,
+      items: [
+        _back(),
+        ElectricalMenuAction(
+          'Auto (sized)',
+          () => _setCircuit(clearBreakerOverrideA: true),
+          selected: c.breakerOverrideA == null,
+        ),
+        for (final r in _profile.standardBreakerRatingsA)
+          ElectricalMenuAction(
+            '${_cls(r)} ${_num(r)}A',
+            () => _setCircuit(breakerOverrideA: Current(r)),
+            selected: effective != null && (r - effective).abs() < 0.5,
+          ),
+      ],
+    );
+  }
+
+  Widget _cablePage() {
+    final c = _circuit!;
+    final effective = c.cableOverrideMm2 ?? _result?.cable.csaMm2;
+    return ElectricalMenu(
+      scrollable: true,
+      // The override is a FLOOR, exactly as the inspector's 'Min cable (mm2)'
+      // field labels it — the sizer may still go larger for ampacity/Vd.
+      note: 'Minimum section - auto-sizing may pick larger.',
+      items: [
+        _back(),
+        ElectricalMenuAction(
+          'Auto (sized)',
+          () => _setCircuit(clearCableOverrideMm2: true),
+          selected: c.cableOverrideMm2 == null,
+        ),
+        for (final s in _profile.standardSectionsMm2)
+          ElectricalMenuAction(
+            '${_num(s)} mm2',
+            () => _setCircuit(cableOverrideMm2: s),
+            selected: effective != null && (s - effective).abs() < 0.01,
+          ),
+      ],
+    );
+  }
+
+  Widget _phasePage() {
+    final c = _circuit!;
+    final effective = c.phaseOverride ?? _solvedLine;
+    return ElectricalMenu(
+      items: [
+        _back(),
+        ElectricalMenuAction(
+          'Auto (balanced)',
+          () => _setCircuit(clearPhaseOverride: true),
+          selected: c.phaseOverride == null,
+        ),
+        for (final line in const [PhaseLine.l1, PhaseLine.l2, PhaseLine.l3])
+          ElectricalMenuAction(
+            phaseLineLetter(line),
+            () => _setCircuit(phaseOverride: line),
+            selected: effective == line,
+          ),
+      ],
+    );
+  }
+
+  Widget _familyPage() {
+    final c = _circuit!;
+    return ElectricalMenu(
+      items: [
+        _back(),
+        ElectricalMenuAction(
+          context.strings(StringKey.electricalCablePanelDefault),
+          () => _setCircuit(clearCableType: true),
+          selected: c.cableType == null,
+        ),
+        for (final f in kCableFamilies)
+          ElectricalMenuAction(
+            f,
+            () => _setCircuit(cableType: f),
+            selected: c.cableType == f,
+          ),
+      ],
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // A ladder page needs the model row; if the circuit vanished mid-menu
+    // (deleted elsewhere), fall back to the root page rather than crash.
+    if (_circuit != null) {
+      switch (_page) {
+        case _CircuitMenuPage.breaker:
+          return _breakerPage();
+        case _CircuitMenuPage.cable:
+          return _cablePage();
+        case _CircuitMenuPage.phase:
+          return _phasePage();
+        case _CircuitMenuPage.family:
+          return _familyPage();
+        case _CircuitMenuPage.root:
+          break;
+      }
+    }
+
+    final target = widget.target;
+    final controller = widget.controller;
+    final onDone = widget.onDone;
     return ElectricalMenu(
       items: [
         ElectricalMenuAction(
-            context.strings(StringKey.electricalMenuEdit), onEdit),
+            context.strings(StringKey.electricalMenuEdit), widget.onEdit),
+        // In-place VALUE rows — each opens its ladder page. Only rendered
+        // when the host resolved the model row (else the menu is exactly its
+        // previous action-only form).
+        if (_showBreakerRow)
+          ElectricalMenuAction(
+            'Breaker · $_breakerValue',
+            () => setState(() => _page = _CircuitMenuPage.breaker),
+          ),
+        if (_showCableRow)
+          ElectricalMenuAction(
+            'Cable · $_cableValue',
+            () => setState(() => _page = _CircuitMenuPage.cable),
+          ),
+        if (_showPhaseRow)
+          ElectricalMenuAction(
+            'Phase · $_phaseValue',
+            () => setState(() => _page = _CircuitMenuPage.phase),
+          ),
+        if (_showFamilyRow)
+          ElectricalMenuAction(
+            'Family · $_familyValue',
+            () => setState(() => _page = _CircuitMenuPage.family),
+          ),
         ElectricalMenuAction(context.strings(StringKey.electricalMenuDuplicate),
             () {
           controller.duplicateCircuit(target.panelId, target.circuitId);
@@ -141,21 +427,21 @@ class ElectricalCircuitMenu extends StatelessWidget {
         }),
         // Only offered for a way that IS placed — un-placing an unplaced load
         // would be a no-op row that lies about the model.
-        if (hasLoadPos && onUnplace != null)
+        if (widget.hasLoadPos && widget.onUnplace != null)
           ElectricalMenuAction('Remove from layout', () {
-            onUnplace!();
+            widget.onUnplace!();
             onDone();
           }),
         // Cross-view navigation — the host decides which (if either) applies,
         // so at most one of these ever renders in practice.
-        if (onShowOnLayout != null)
+        if (widget.onShowOnLayout != null)
           ElectricalMenuAction(
               context.strings(StringKey.electricalShowOnLayout),
-              onShowOnLayout!),
-        if (onShowInSingleLine != null)
+              widget.onShowOnLayout!),
+        if (widget.onShowInSingleLine != null)
           ElectricalMenuAction(
               context.strings(StringKey.electricalShowInSingleLine),
-              onShowInSingleLine!),
+              widget.onShowInSingleLine!),
         ElectricalMenuAction(context.strings(StringKey.electricalMenuDelete),
             () {
           controller.deleteCircuit(target.panelId, target.circuitId);
@@ -228,8 +514,21 @@ class _ElectricalPanelMenuState extends State<ElectricalPanelMenu> {
   /// has to be anchored).
   bool _feedChooser = false;
 
+  /// True while the menu shows the 1ph/3ph SYSTEM chooser page (the same
+  /// paging idiom as the feeder chooser).
+  bool _systemChooser = false;
+
   bool get _canChooseFeed =>
       widget.onFeedFrom != null && widget.feedCandidates.isNotEmpty;
+
+  /// The board's current system in the schedule's ASCII notation
+  /// (`3ph 400 V`) — the honest live voltage, not the convention the chooser
+  /// would snap to.
+  String get _systemValue {
+    final p = widget.panel;
+    final ph = p.system == ElectricalSystem.singlePhase ? '1ph' : '3ph';
+    return '$ph ${p.voltage.volts.round()} V';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -257,11 +556,47 @@ class _ElectricalPanelMenuState extends State<ElectricalPanelMenu> {
       );
     }
 
+    if (_systemChooser) {
+      return ElectricalMenu(
+        items: [
+          ElectricalMenuAction(
+            'Back',
+            () => setState(() => _systemChooser = false),
+            muted: true,
+          ),
+          ElectricalMenuAction(
+            '1ph 220 V',
+            () {
+              controller.setPanelSystem(panel.id, ElectricalSystem.singlePhase);
+              onDone();
+            },
+            selected: panel.system == ElectricalSystem.singlePhase,
+          ),
+          ElectricalMenuAction(
+            '3ph 400 V',
+            () {
+              controller.setPanelSystem(panel.id, ElectricalSystem.threePhase);
+              onDone();
+            },
+            selected: panel.system == ElectricalSystem.threePhase,
+          ),
+        ],
+      );
+    }
+
     return ElectricalMenu(
       items: [
         ElectricalMenuAction(
             context.strings(StringKey.electricalPanelProperties),
             widget.onProperties),
+        // In-place SYSTEM change (1ph 220 V / 3ph 400 V via `setPanelSystem`'s
+        // voltage snap) — not on the machine-owned MEP board, whose supply is
+        // derived from the plan, not chosen here.
+        if (panel.id != kMepEquipmentPanelId)
+          ElectricalMenuAction(
+            'System · $_systemValue',
+            () => setState(() => _systemChooser = true),
+          ),
         ElectricalMenuAction(
             context.strings(StringKey.electricalMenuOpenPanel), widget.onOpen),
         // Cross-view navigation — the host decides which (if either) applies,
@@ -306,11 +641,12 @@ class _ElectricalPanelMenuState extends State<ElectricalPanelMenu> {
         // Disconnect, the two feeder actions together.
         if (_canChooseFeed)
           ElectricalMenuAction(
-            'Feed from…',
+            context.strings(StringKey.electricalFeedFromEllipsis),
             () => setState(() => _feedChooser = true),
           ),
         if (widget.onPinPhases != null)
-          ElectricalMenuAction('Pin phases', () {
+          ElectricalMenuAction(context.strings(StringKey.electricalPinPhases),
+              () {
             widget.onPinPhases!();
             onDone();
           }),
@@ -397,14 +733,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
     this.panelSystem,
   });
 
-  static const _cableTypes = <String?>[
-    null,
-    'NYY',
-    'NYM',
-    'NYA',
-    'NYAF',
-    'FRC',
-  ];
+  static const _cableTypes = <String?>[null, ...kCableFamilies];
 
   bool get _isMotor =>
       circuit.loadKind == LoadKind.motor || circuit.loadKind == LoadKind.pump;

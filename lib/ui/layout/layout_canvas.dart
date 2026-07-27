@@ -326,13 +326,21 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
 
   Widget _buildCircuitMenu() {
     final t = _circuitMenu!;
-    final circuit = ref
+    final panel = ref
         .read(electricalProjectProvider)
         .panels
         .where((p) => p.id == t.panelId)
-        .firstOrNull
+        .firstOrNull;
+    final circuit =
+        panel?.circuits.where((c) => c.id == t.circuitId).firstOrNull;
+    // The way's SOLVED figures label the menu's in-place value rows with the
+    // same numbers the board schedule prints (nothing fabricated when the
+    // solve doesn't carry this way).
+    final circuitResult = ref
+        .read(electricalResultProvider)
+        .panels[t.panelId]
         ?.circuits
-        .where((c) => c.id == t.circuitId)
+        .where((c) => c.circuitId == t.circuitId)
         .firstOrNull;
     return Positioned(
       left: _menuAt.dx,
@@ -342,6 +350,9 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         child: ElectricalCircuitMenu(
           target: t,
           controller: _ctrl,
+          circuit: circuit,
+          circuitResult: circuitResult,
+          panelSystem: panel?.system,
           // C1: Edit routes to the shared inline inspector column.
           onEdit: () => onEditCircuit(t.panelId, t.circuitId),
           // A placed load can be handed back to its manual length — the SAME

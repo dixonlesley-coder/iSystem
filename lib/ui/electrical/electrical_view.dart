@@ -59,7 +59,11 @@ import 'electrical_canvas.dart';
 import 'electrical_controls.dart';
 import 'electrical_export.dart';
 import 'electrical_format.dart';
-import 'electrical_inspector.dart' show feedChooserItems;
+import 'electrical_inspector.dart'
+    show
+        ElectricalCircuitMenu,
+        ElectricalEditTarget,
+        ElectricalPanelMenu;
 import 'panel_geometry.dart';
 import 'power_oneline_view.dart';
 import 'sld_sheet_painter.dart';
@@ -518,49 +522,43 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         .firstOrNull;
     final circuit =
         panel?.circuits.where((c) => c.id == ref0.circuitId).firstOrNull;
-    final hasLoadPos = circuit?.loadPos != null;
     final loadPos = circuit?.loadPos;
+    // The way's SOLVED figures label the shared menu's in-place value rows
+    // with the same numbers the board schedule prints.
+    final circuitResult = ref
+        .read(electricalResultProvider)
+        .panels[ref0.panelId]
+        ?.circuits
+        .where((c) => c.circuitId == ref0.circuitId)
+        .firstOrNull;
+    // The SHARED context menu (the same widget the Layout canvas mounts), so
+    // the two surfaces can never offer different rows for the same way.
     return Positioned(
       left: _menuAt.dx,
       top: _menuAt.dy,
-      child: ElectricalMenu(
-        items: [
-          ElectricalMenuAction(
-            context.strings(StringKey.electricalMenuEdit),
-            () {
-              ref
-                  .read(electricalInspectorTargetProvider.notifier)
-                  .editCircuit(ref0.panelId, ref0.circuitId);
-              setState(() => _circuitMenu = null);
-            },
-          ),
-          ElectricalMenuAction(context.strings(StringKey.electricalMenuDuplicate),
-              () {
-            _controller.duplicateCircuit(ref0.panelId, ref0.circuitId);
-            setState(() => _circuitMenu = null);
-          }),
-          // Only offered for a way that IS placed — an unplaced load has
-          // nothing to un-place (mirrors `ElectricalCircuitMenu`'s own gate).
-          if (hasLoadPos)
-            ElectricalMenuAction('Remove from layout', () {
-              unplaceCircuitLoad(ref, context, ref0.panelId, ref0.circuitId);
-              setState(() => _circuitMenu = null);
-            }),
-          // Cross-view jump to the Layout electrical layer — only when the
-          // load is actually PLACED (an unplaced load has nowhere to jump to,
-          // so the row is simply omitted rather than a dead action).
-          if (loadPos != null)
-            ElectricalMenuAction(
-              context.strings(StringKey.electricalShowOnLayout),
-              () => _showOnLayout(loadPos, ref0.panelId,
-                  circuitId: ref0.circuitId),
-            ),
-          ElectricalMenuAction(context.strings(StringKey.electricalMenuDelete),
-              () {
-            _controller.deleteCircuit(ref0.panelId, ref0.circuitId);
-            setState(() => _circuitMenu = null);
-          }, danger: true),
-        ],
+      child: ElectricalCircuitMenu(
+        target: ElectricalEditTarget(ref0.panelId, ref0.circuitId),
+        controller: _controller,
+        circuit: circuit,
+        circuitResult: circuitResult,
+        panelSystem: panel?.system,
+        onEdit: () {
+          ref
+              .read(electricalInspectorTargetProvider.notifier)
+              .editCircuit(ref0.panelId, ref0.circuitId);
+          setState(() => _circuitMenu = null);
+        },
+        hasLoadPos: loadPos != null,
+        onUnplace: () =>
+            unplaceCircuitLoad(ref, context, ref0.panelId, ref0.circuitId),
+        // Cross-view jump to the Layout electrical layer — only when the
+        // load is actually PLACED (an unplaced load has nowhere to jump to,
+        // so the row is simply omitted rather than a dead action).
+        onShowOnLayout: loadPos != null
+            ? () =>
+                _showOnLayout(loadPos, ref0.panelId, circuitId: ref0.circuitId)
+            : null,
+        onDone: () => setState(() => _circuitMenu = null),
       ),
     );
   }
@@ -582,121 +580,43 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             _controller.feederRefusalReason(p.id, panel.id) == null)
           (id: p.id, label: p.tag ?? p.name),
     ];
-    final fedFromLabel = feedingPanelLabel(project, panel.id);
-
-    if (menu.feedChooser) {
-      return Positioned(
-        left: _menuAt.dx,
-        top: _menuAt.dy,
-        child: ElectricalMenu(
-          items: [
-            ElectricalMenuAction(
-              'Back',
-              () => setState(() => _panelMenu = _PanelMenuState(panel.id)),
-              muted: true,
-            ),
-            ...feedChooserItems(
-              candidates: feedCandidates,
-              currentLabel: fedFromLabel,
-              onPick: (fromId) {
-                feedPanelFrom(ref, context, fromId, panel.id);
-                setState(() => _panelMenu = null);
-              },
-            ),
-          ],
-        ),
-      );
-    }
-
+    // The SHARED panel menu (the same widget the Layout canvas mounts) — its
+    // own feeder/system chooser pages replace the old inline copies, so the
+    // two surfaces can never offer different rows for the same board.
     return Positioned(
       left: _menuAt.dx,
       top: _menuAt.dy,
-      child: ElectricalMenu(
-        items: [
-          ElectricalMenuAction(
-              context.strings(StringKey.electricalPanelProperties), () {
+      child: ElectricalPanelMenu(
+        panel: panel,
+        controller: _controller,
+        onProperties: () {
+          ref
+              .read(electricalInspectorTargetProvider.notifier)
+              .editPanel(panel.id);
+          setState(() => _panelMenu = null);
+        },
+        onOpen: () {
+          final first = panel.circuits
+              .where((c) => c.loadKind != LoadKind.feeder)
+              .firstOrNull;
+          if (first != null) {
             ref
                 .read(electricalInspectorTargetProvider.notifier)
-                .editPanel(panel.id);
-            setState(() => _panelMenu = null);
-          }),
-          ElectricalMenuAction(
-              context.strings(StringKey.electricalMenuOpenPanel), () {
-            final first = panel.circuits
-                .where((c) => c.loadKind != LoadKind.feeder)
-                .firstOrNull;
-            if (first != null) {
-              ref
-                  .read(electricalInspectorTargetProvider.notifier)
-                  .editCircuit(panel.id, first.id);
-            }
-            setState(() => _panelMenu = null);
-          }),
-          // Cross-view jump to the Layout electrical layer — only when the
-          // panel is actually PLACED (an unplaced panel has nowhere to jump
-          // to, so the row is simply omitted rather than a dead action).
-          if (panel.layoutPos != null)
-            ElectricalMenuAction(
-              context.strings(StringKey.electricalShowOnLayout),
-              () => _showOnLayout(panel.layoutPos!, panel.id),
-            ),
-          ElectricalMenuAction(
-            context.strings(panel.essential
-                ? StringKey.electricalMenuUnmarkEssential
-                : StringKey.electricalMenuMarkEssential),
-            () {
-              _controller.setPanelEssential(panel.id, !panel.essential);
-              setState(() => _panelMenu = null);
-            },
-          ),
-          ElectricalMenuAction(
-            context.strings(panel.upsBacked
-                ? StringKey.electricalMenuUnmarkCritical
-                : StringKey.electricalMenuMarkCritical),
-            () {
-              _controller.setPanelUpsBacked(panel.id, !panel.upsBacked);
-              setState(() => _panelMenu = null);
-            },
-          ),
-          ElectricalMenuAction(
-              context.strings(panel.submeter
-                  ? StringKey.electricalMenuRemoveSubmeter
-                  : StringKey.electricalMenuAddSubmeter), () {
-            _controller.setPanelSubmeter(panel.id, !panel.submeter);
-            setState(() => _panelMenu = null);
-          }),
-          // Duplicate the whole board (fresh ids, undoable one step — I5).
-          ElectricalMenuAction(
-              context.strings(StringKey.electricalMenuDuplicatePanel), () {
-            _controller.duplicatePanel(panel.id);
-            setState(() => _panelMenu = null);
-          }),
-          // Re-parent the board onto a different source — sits directly above
-          // Disconnect, the two feeder actions together (mirrors the shared
-          // `ElectricalPanelMenu`'s own row order).
-          if (feedCandidates.isNotEmpty)
-            ElectricalMenuAction(
-              context.strings(StringKey.electricalFeedFromEllipsis),
-              () => setState(
-                  () => _panelMenu = _PanelMenuState(panel.id, feedChooser: true)),
-            ),
-          ElectricalMenuAction(
-              context.strings(StringKey.electricalPinPhases), () {
-            pinPanelPhasesTo(ref, context, panel.id);
-            setState(() => _panelMenu = null);
-          }),
-          if (panel.fedByCircuitId != null)
-            ElectricalMenuAction(
-                context.strings(StringKey.electricalMenuDisconnectFeeder), () {
-              _controller.disconnectFeeder(panel.id);
-              setState(() => _panelMenu = null);
-            }),
-          ElectricalMenuAction(
-              context.strings(StringKey.electricalMenuDeletePanel), () {
-            _controller.deletePanel(panel.id);
-            setState(() => _panelMenu = null);
-          }, danger: true),
-        ],
+                .editCircuit(panel.id, first.id);
+          }
+          setState(() => _panelMenu = null);
+        },
+        feedCandidates: feedCandidates,
+        fedFromLabel: feedingPanelLabel(project, panel.id),
+        onFeedFrom: (fromId) => feedPanelFrom(ref, context, fromId, panel.id),
+        onPinPhases: () => pinPanelPhasesTo(ref, context, panel.id),
+        // Cross-view jump to the Layout electrical layer — only when the
+        // panel is actually PLACED (an unplaced panel has nowhere to jump
+        // to, so the row is simply omitted rather than a dead action).
+        onShowOnLayout: panel.layoutPos != null
+            ? () => _showOnLayout(panel.layoutPos!, panel.id)
+            : null,
+        onDone: () => setState(() => _panelMenu = null),
       ),
     );
   }
@@ -705,14 +625,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
 
 class _PanelMenuState {
   final String panelId;
-
-  /// True while the menu shows its "Feed from…" chooser PAGE instead of the
-  /// normal action list (mirrors `ElectricalPanelMenu`'s own `_feedChooser`
-  /// toggle in `electrical_inspector.dart` — the canvas's context menu is a
-  /// separate widget, so it keeps its own copy of the same two-page idiom).
-  final bool feedChooser;
-
-  const _PanelMenuState(this.panelId, {this.feedChooser = false});
+  const _PanelMenuState(this.panelId);
 }
 
 // ── Panel inspector wiring helpers ───────────────────────────────────────────
