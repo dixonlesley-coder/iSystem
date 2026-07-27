@@ -1,10 +1,24 @@
 /// The electrical SINGLE-LINE spatial canvas — a faithful Flutter port of
 /// PanelMaker's `BuildingSingleLine.tsx`. Panels are boxes on a pannable /
 /// zoomable canvas, wired by feeder lines, with a **zoom-driven
-/// level-of-detail across ONE honest tier boundary** ([kLodThreshold]): a
-/// compact summary card when zoomed out, the full engine board schedule when
-/// zoomed in. (The old mid-detail hand-painted busbar was an unreachable middle
-/// tier and has been removed — I7.) A summary card carries an explicit expand
+/// level-of-detail across THREE honest bands** ([PanelLod]), separated by two
+/// thresholds:
+///
+///  • below [kMicroThreshold] — **micro**: a plan-reading chip (designation,
+///    connected kW, a proportional R/S/T bar). No badges, no stats, no merged
+///    loads node, no outlet handle, no expand chevron — at that zoom none of
+///    them are legible OR grabbable, so offering them would be a lie. Selection,
+///    tap-select and double-click-to-edit still work.
+///  • [kMicroThreshold] … [kLodThreshold] — **summary**: the compact stats card
+///    (kW / demand / incomer / bus / system / ways / placed) + its merged
+///    "N loads" node, with the outlet handle and expand chevron live.
+///  • at/above [kLodThreshold] — **schedule**: the full engine board schedule
+///    (the same geometry the PDF / DXF export draws; the way rows ARE the
+///    loads).
+///
+/// (The old mid-detail hand-painted busbar was an unreachable middle tier and
+/// was removed — I7; the micro band added here is a genuinely reachable tier,
+/// with its own honest content.) A summary card carries an explicit expand
 /// chevron (frames its board schedule); a tap on empty schedule chrome zooms
 /// back out to the summary.
 ///
@@ -35,6 +49,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/electrical/panel_templates.dart'
+    show panelTemplateById;
 import 'package:mechx_engine/electrical/results.dart' show BreakerResult;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
@@ -45,6 +61,7 @@ import '../../store/history_store.dart';
 import '../canvas/canvas_grid.dart';
 import '../canvas/text_entry_guard.dart';
 import '../canvas/viewport.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'electrical_export.dart' show breakerIcuKaByPanel;
@@ -58,6 +75,56 @@ import 'sld_sheet_painter.dart';
 /// schematic; below it, a compact summary card (PanelMaker `transform[2] >=
 /// 0.72`).
 const double kLodThreshold = 0.72;
+
+/// The lower LOD boundary — below this zoom a panel collapses to the MICRO chip
+/// (identity + kW + phase bar). Chosen so the summary card's smallest text
+/// (9 px caption) is still ~3 px on screen at the boundary: below it the stats
+/// are unreadable and the 26-screen-px outlet band would have to eat a third of
+/// the card, so the micro tier honestly drops both.
+const double kMicroThreshold = 0.30;
+
+/// The panel LOD for a canvas [scale] — the ONE mapping every call site uses so
+/// the painted card, the hit-test rect and the feeder endpoints can never
+/// disagree about which tier is on screen.
+PanelLod panelLodFor(double scale) => scale < kMicroThreshold
+    ? PanelLod.micro
+    : (scale < kLodThreshold ? PanelLod.summary : PanelLod.schedule);
+
+/// Every panel id that some circuit, on some board, actually FEEDS — the honest
+/// answer to "is this board connected?".
+///
+/// Read from the live feeder ways rather than the target's own
+/// `fedByCircuitId` back-pointer: the back-pointer is a convenience mirror that
+/// a sanitised / hand-edited / partially-migrated project can desync from the
+/// ways, and a board with no incoming way is NOT fed however its own field
+/// reads. The canvas badge, the body-drop gate and the re-feed hint all share
+/// this one source.
+Set<String> fedPanelIds(ElectricalProject project) => {
+      for (final p in project.panels)
+        for (final c in p.circuits)
+          if (c.feedsPanelId != null) c.feedsPanelId!,
+    };
+
+/// Screen-px grab width the outlet band guarantees at ANY zoom (the band's
+/// LOGICAL width is this divided by the current scale, capped at a third of the
+/// card so it never eats the schedule's way-row tap targets).
+const double kOutletBandScreenPx = 26;
+
+/// Diameter of the visual outlet dot; half of it overhangs the card's right
+/// edge (painted through the card Stack's `Clip.none`, while the HIT area stays
+/// wholly inside the card so no RenderBox rejects it).
+const double kOutletDotSize = 22;
+
+/// How far the outlet dot's paint overhangs the card edge.
+const double kOutletDotOverhang = kOutletDotSize / 2;
+
+/// The outlet band's LOGICAL (world-px) width on a [cardWidth]-wide card at
+/// [scale] — at least [kOutletBandScreenPx] on screen, never more than a third
+/// of the card.
+double outletBandWidth(double cardWidth, double scale) => math.min(
+      cardWidth / 3,
+      math.max(kOutletBandScreenPx, kOutletBandScreenPx / math.max(scale, 0.01)),
+    );
 
 /// The zoom the "focus this panel" gesture ([ElectricalCanvasState.focusPanelSchedule])
 /// frames a board at — a comfortable schedule-reading scale, well above
@@ -152,6 +219,15 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   Offset _feederCursor = Offset.zero;
   String? _feederHoverPanel;
 
+  // The hover target's VERDICT, resolved once per hover CHANGE (not per paint
+  // frame) from the store's pure [feederRefusalReason] — so the ring the user
+  // sees is the exact rule the drop will apply.
+  bool _feederHoverRefused = false;
+
+  /// True when dropping on the hover target would RE-PARENT it (it is already
+  /// fed) — drives the small "re-feed" pill beside the cursor.
+  bool _feederHoverReparent = false;
+
   // The selected WAY within a panel (a schedule row) — drives the row highlight
   // + the Delete key (I5). Panel selection is the separate [_selectedPanels] set
   // (D2 multi-select) so shift-click / marquee can select several boards; at
@@ -231,12 +307,127 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
 
   void _endPanelDrag() {
     final map = _panelDragWorld;
-    if (map != null) {
-      map.forEach((id, w) =>
-          _ctrl.setPanelPosition(id, _snapGrid(w.dx), _snapGrid(w.dy)));
-    }
     _panelDragWorld = null;
+    if (map == null) return;
+    map.forEach((id, w) =>
+        _ctrl.setPanelPosition(id, _snapGrid(w.dx), _snapGrid(w.dy)));
+    _tryBodyDropConnect(map);
   }
+
+  /// BODY-DROP CONNECT — dropping an UNFED board on top of another board wires
+  /// it as that board's sub-panel, the direct-manipulation counterpart of
+  /// dragging the outlet handle.
+  ///
+  /// Deliberately narrow so it can never surprise: it fires only for a SINGLE
+  /// panel drag, only when the dragged board is genuinely unfed (and is not the
+  /// machine-owned MEP board), only when the released card actually OVERLAPS
+  /// another board's card, and only when the store's own
+  /// [ElectricalProjectController.feederRefusalReason] says the feeder is legal.
+  /// Any gate missed ⇒ today's plain move, silently.
+  ///
+  /// The drag already pushed its undo snapshot at [_beginPanelDrag], so the
+  /// connect + the tidy reposition compose with `record: false` — move + connect
+  /// is ONE undo step.
+  void _tryBodyDropConnect(Map<String, Offset> moved) {
+    if (moved.length != 1 || !mounted) return;
+    final draggedId = moved.keys.first;
+    if (draggedId == kMepEquipmentPanelId) return;
+    final project = ref.read(electricalProjectProvider);
+    final result = ref.read(electricalResultProvider);
+    if (fedPanelIds(project).contains(draggedId)) return;
+    final dragged = result.panels[draggedId];
+    if (dragged == null) return;
+
+    final lod = panelLodFor(_current.scale);
+    // Below the micro boundary a card is a chip — too coarse a target for an
+    // implicit topology edit, so the gesture is simply unavailable there.
+    if (lod == PanelLod.micro) return;
+
+    final positions = _positions(project, result);
+    Rect worldRect(String id) {
+      final p = result.panels[id]!;
+      final at = positions[id] ?? Offset.zero;
+      return Rect.fromLTWH(at.dx, at.dy, panelCardWidthLod(p, lod),
+          panelFootprintLod(p, lod));
+    }
+
+    final draggedRect = worldRect(draggedId);
+    String? targetId;
+    for (final id in result.order) {
+      if (id == draggedId || result.panels[id] == null) continue;
+      if (!worldRect(id).overlaps(draggedRect)) continue;
+      if (_ctrl.feederRefusalReason(id, draggedId) != null) continue;
+      targetId = id;
+      break;
+    }
+    if (targetId == null) return;
+
+    _ctrl.connectFeeder(targetId, draggedId, record: false);
+    final slot = _freeSlotRightOf(targetId, draggedId, positions, result);
+    _ctrl.setPanelPosition(draggedId, slot.dx, slot.dy);
+    final labels = _panelLabels(ref.read(electricalProjectProvider));
+    ref.read(statusMessageProvider.notifier).showStatus(
+          context.strings.format(StringKey.electricalFedFromTemplate, {
+            'child': labels[draggedId] ?? 'Panel',
+            'parent': labels[targetId] ?? 'panel',
+          }),
+        );
+  }
+
+  /// A tidy, grid-snapped world slot immediately to the RIGHT of [targetId] for
+  /// a freshly-parented / freshly-created board, nudged DOWN past any sibling
+  /// already sitting there so boards never land on top of each other.
+  ///
+  /// The column pitch uses the SCHEDULE footprint (the widest/tallest tier), so
+  /// the slot is stable whatever zoom the gesture happened at — world positions
+  /// must never depend on the LOD.
+  Offset _freeSlotRightOf(
+    String targetId,
+    String? skipId,
+    Map<String, Offset> positions,
+    ElectricalSystemResult result,
+  ) {
+    final target = result.panels[targetId];
+    final at = positions[targetId] ?? Offset.zero;
+    final targetW = target == null
+        ? kMinPanelWidth
+        : panelCardWidthLod(target, PanelLod.schedule);
+    final x = _snapGrid(at.dx + targetW + 60);
+    var y = _snapGrid(at.dy);
+    // The height to keep clear: the moving board's own (when it exists yet),
+    // else a representative card.
+    final moving = skipId == null ? null : result.panels[skipId];
+    final ownH = moving == null
+        ? 160.0
+        : panelFootprintLod(moving, PanelLod.schedule);
+    // Push down past anything already occupying the column.
+    var guard = 0;
+    bool clashes(double candidateY) {
+      for (final entry in positions.entries) {
+        if (entry.key == targetId || entry.key == skipId) continue;
+        final p = result.panels[entry.key];
+        if (p == null) continue;
+        final r = Rect.fromLTWH(
+          entry.value.dx,
+          entry.value.dy,
+          panelCardWidthLod(p, PanelLod.schedule),
+          panelFootprintLod(p, PanelLod.schedule),
+        );
+        if (r.overlaps(Rect.fromLTWH(x, candidateY, targetW, ownH))) return true;
+      }
+      return false;
+    }
+
+    while (clashes(y) && guard++ < 64) {
+      y = _snapGrid(y + ownH + 40);
+    }
+    return Offset(x, y);
+  }
+
+  /// id → the board's human designation (tag, else name) for status copy.
+  Map<String, String> _panelLabels(ElectricalProject project) => {
+        for (final p in project.panels) p.id: p.tag ?? p.name,
+      };
 
   /// Frame the content on the first layout — computed SYNCHRONOUSLY (assigning
   /// the field, not via setState) so even a single-frame render is framed, not
@@ -261,6 +452,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   /// Propagated essential-board id set (recomputed each build); drives the red
   /// essential colouring on cards + feeders.
   Set<String> _essential = const {};
+
+  /// Panels some way actually feeds (recomputed each build) — see [fedPanelIds].
+  Set<String> _fedPanels = const {};
 
   ViewportTransform get _current =>
       _transform ?? const ViewportTransform(scale: 0.8);
@@ -347,14 +541,55 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     // feeder drag owns its own gesture, so a hit on a panel leaves the drag to
     // pan / move it). Middle-drag still pans; pinch still zooms.
     if (event.buttons & kPrimaryButton != 0) {
+      // A feeder drag already owns the pointer — arming a marquee under it made
+      // the release both connect a feeder AND rubber-band-select whatever the
+      // band swept (the two gestures raced).
+      if (_feederFrom != null) return;
       final project = ref.read(electricalProjectProvider);
       final result = ref.read(electricalResultProvider);
       final positions = _positions(project, result);
+      // The outlet band (and the dot half that overhangs the card edge) belongs
+      // to the feeder gesture, so a down there must never arm a marquee — even
+      // where it falls outside the card rect [_panelAt] tests.
+      if (_outletBandAt(event.localPosition, positions, result.panels) != null) {
+        return;
+      }
       if (_panelAt(event.localPosition, positions, result.panels) == null) {
         _marqueeStart = event.localPosition;
         _marqueeCurrent = event.localPosition;
       }
     }
+  }
+
+  /// Which panel's OUTLET BAND (if any) contains the screen point [local] —
+  /// the right-edge grab strip, widened outward by the half-dot that visually
+  /// overhangs the card edge. Shares the exact positions/footprint geometry the
+  /// cards are laid out with, so the guard can't drift from the widget.
+  /// Null at the micro LOD (no outlet handle is mounted there).
+  String? _outletBandAt(
+    Offset local,
+    Map<String, Offset> positions,
+    Map<String, ElectricalPanelResult> panels,
+  ) {
+    final vt = _current;
+    final lod = panelLodFor(vt.scale);
+    if (lod == PanelLod.micro) return null;
+    for (final entry in positions.entries) {
+      final panel = panels[entry.key];
+      if (panel == null) continue;
+      final w = panelCardWidthLod(panel, lod);
+      final h = panelFootprintLod(panel, lod);
+      final band = outletBandWidth(w, vt.scale);
+      final tl = vt.worldToScreen(entry.value);
+      final rect = Rect.fromLTWH(
+        tl.dx + (w - band) * vt.scale,
+        tl.dy,
+        (band + kOutletDotOverhang) * vt.scale,
+        h * vt.scale,
+      );
+      if (rect.contains(local)) return entry.key;
+    }
+    return null;
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -390,13 +625,13 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     final result = ref.read(electricalResultProvider);
     final positions = _positions(project, result);
     final vt = _current;
-    final detail = vt.scale >= kLodThreshold;
+    final lod = panelLodFor(vt.scale);
     final hit = <String>{};
     positions.forEach((id, world) {
       final panel = result.panels[id];
       if (panel == null) return;
-      final w = panelCardWidthAt(panel, detail);
-      final h = panelFootprint(panel, detail);
+      final w = panelCardWidthLod(panel, lod);
+      final h = panelFootprintLod(panel, lod);
       final tl = vt.worldToScreen(world);
       final r = Rect.fromLTWH(tl.dx, tl.dy, w * vt.scale, h * vt.scale);
       if (r.overlaps(rect)) hit.add(id);
@@ -521,6 +756,13 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       _feederFrom = fromId;
       _feederCursor = box?.globalToLocal(globalPos) ?? globalPos;
       _feederHoverPanel = null;
+      _feederHoverRefused = false;
+      _feederHoverReparent = false;
+      // Defensive: the pointer-down guard already declines to arm a marquee
+      // over the outlet band, but a marquee started a frame earlier (or from a
+      // host that re-dispatches) must not survive into the feeder gesture.
+      _marqueeStart = null;
+      _marqueeCurrent = null;
     });
   }
 
@@ -531,14 +773,24 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   ) {
     final box = context.findRenderObject() as RenderBox?;
     final local = box?.globalToLocal(globalPos) ?? globalPos;
+    final hover = _panelAt(local, positions, panels, exclude: _feederFrom);
+    // Resolve the verdict once per hover CHANGE — the painter must never run a
+    // topology query per frame.
+    var refused = _feederHoverRefused;
+    var reparent = _feederHoverReparent;
+    if (hover != _feederHoverPanel) {
+      final from = _feederFrom;
+      refused = hover != null &&
+          from != null &&
+          _ctrl.feederRefusalReason(from, hover) != null;
+      reparent = hover != null &&
+          fedPanelIds(ref.read(electricalProjectProvider)).contains(hover);
+    }
     setState(() {
       _feederCursor = local;
-      _feederHoverPanel = _panelAt(
-        local,
-        positions,
-        panels,
-        exclude: _feederFrom,
-      );
+      _feederHoverPanel = hover;
+      _feederHoverRefused = refused;
+      _feederHoverReparent = reparent;
     });
   }
 
@@ -546,16 +798,33 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     final from = _feederFrom;
     final to = _feederHoverPanel;
     if (from != null && to != null && from != to) {
+      // Read the designations BEFORE the commit — the connect appends a way but
+      // never renames a board, so either side is equivalent; taking them first
+      // keeps the copy honest even if the target vanished mid-drag.
+      final labels = _panelLabels(ref.read(electricalProjectProvider));
       final res = _ctrl.connectFeeder(from, to);
-      if (!res.connected && res.reason != null && mounted) {
-        // Route through the shared status pill (status bar) like the rest of
-        // the app — one feedback primitive, no bespoke per-canvas toast.
-        ref.read(statusMessageProvider.notifier).showStatus(res.reason!);
+      if (mounted) {
+        final status = ref.read(statusMessageProvider.notifier);
+        if (!res.connected) {
+          // Route refusals through the shared status pill (status bar) like the
+          // rest of the app — one feedback primitive, no bespoke per-canvas
+          // toast.
+          if (res.reason != null) status.showStatus(res.reason!);
+        } else {
+          final child = labels[to] ?? 'Panel';
+          final parent = labels[from] ?? 'panel';
+          final was = res.reparentedFromLabel;
+          status.showStatus(was == null
+              ? '$child fed from $parent'
+              : '$child re-fed from $parent (was $was)');
+        }
       }
     }
     setState(() {
       _feederFrom = null;
       _feederHoverPanel = null;
+      _feederHoverRefused = false;
+      _feederHoverReparent = false;
     });
   }
 
@@ -567,13 +836,13 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     String? exclude,
   }) {
     final vt = _current;
+    final lod = panelLodFor(vt.scale);
     for (final entry in positions.entries) {
       if (entry.key == exclude) continue;
       final panel = panels[entry.key];
       if (panel == null) continue;
-      final detail = vt.scale >= kLodThreshold;
-      final w = panelCardWidthAt(panel, detail);
-      final h = panelFootprint(panel, detail);
+      final w = panelCardWidthLod(panel, lod);
+      final h = panelFootprintLod(panel, lod);
       final tl = vt.worldToScreen(entry.value);
       final rect = Rect.fromLTWH(tl.dx, tl.dy, w * vt.scale, h * vt.scale);
       if (rect.contains(local)) return entry.key;
@@ -600,6 +869,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     // emergency sub-tree — drive the red border + feeder colour, the riser
     // convention folded in from the removed Overview tab.
     _essential = essentialPanelIds(project, result);
+    // The honest "is this board connected?" set — every panel some way actually
+    // feeds (never the target's own back-pointer, which a desynced project can
+    // contradict). Drives the fed / not-connected badge.
+    _fedPanels = fedPanelIds(project);
 
     return Focus(
       focusNode: _focus,
@@ -622,10 +895,11 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               final vt = _current;
               // Compute LOD from the RESOLVED viewport (after the initial fit),
               // so the board schedule tracks the real zoom from the first frame.
-              // ONE tier boundary now (I7): summary card below [kLodThreshold],
-              // the real engine board schedule at/above it (the way rows ARE the
+              // THREE bands (see the library doc): the micro chip below
+              // [kMicroThreshold], the summary card up to [kLodThreshold], the
+              // real engine board schedule at/above it (the way rows ARE the
               // loads, feeders branch right to sub-panels).
-              final detail = vt.scale >= kLodThreshold;
+              final lod = panelLodFor(vt.scale);
               // Publish the live viewport for the minimap (I8). Deferred to after
               // the frame — the minimap's ValueListenableBuilder is a SIBLING (not
               // a descendant of this LayoutBuilder), so notifying it mid-build
@@ -652,16 +926,19 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                           positions: positions,
                           transform: vt,
                           rootId: rootId,
-                          detail: detail,
+                          lod: lod,
                           gridLine: colors.gridLine,
                           background: colors.canvas,
                           feederFrom: _feederFrom,
                           feederCursor: _feederCursor,
                           feederHover: _feederHoverPanel,
+                          feederHoverRefused: _feederHoverRefused,
+                          feederHoverReparent: _feederHoverReparent,
                           accent: colors.accent,
                           onAccent: colors.onAccent,
                           essential: _essential,
                           essentialColor: colors.danger,
+                          dangerColor: colors.danger,
                         ),
                       ),
                     ),
@@ -688,7 +965,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                         panel,
                         positions[panel.panelId] ?? Offset.zero,
                         vt,
-                        detail,
+                        lod,
                         project,
                         result,
                         rootId,
@@ -722,20 +999,22 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     );
   }
 
-  /// The card footprint at the current LOD (full schematic when zoomed in, the
-  /// compact summary band when zoomed out) — so loads sit a fixed gap below the
-  /// ACTUAL card height, not a reserved schematic band of empty space.
+  /// The card footprint at the current LOD (full schedule when zoomed in, the
+  /// compact summary band in the middle, the micro chip when zoomed far out) —
+  /// so loads sit a fixed gap below the ACTUAL card height, not a reserved band
+  /// of empty space.
   double cardFootprint(ElectricalPanelResult panel) =>
-      panelFootprint(panel, currentScale >= kLodThreshold);
+      panelFootprintLod(panel, panelLodFor(currentScale));
 
-  /// Build the panel card + its PLN head (root only). Below [kLodThreshold] the
-  /// card is a summary + a merged "N loads" node; at/above it the card is the
-  /// engine board schedule (the way rows ARE the loads). One tier boundary (I7).
+  /// Build the panel card + its PLN head (root only). Below [kMicroThreshold]
+  /// the card is a micro chip; below [kLodThreshold] a summary + a merged
+  /// "N loads" node; at/above it the card is the engine board schedule (the way
+  /// rows ARE the loads).
   List<Widget> _panelWidgets(
     ElectricalPanelResult panel,
     Offset world,
     ViewportTransform vt,
-    bool detail,
+    PanelLod lod,
     ElectricalProject project,
     ElectricalSystemResult result,
     String? rootId,
@@ -745,13 +1024,15 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   ) {
     final scale = vt.scale;
     final tl = vt.worldToScreen(world);
-    final w = panelCardWidthAt(panel, detail);
-    final cardH = panelFootprint(panel, detail);
+    final w = panelCardWidthLod(panel, lod);
+    final cardH = panelFootprintLod(panel, lod);
     final modelPanel = project.panels
         .where((p) => p.id == panel.panelId)
         .firstOrNull;
     final isRoot = panel.panelId == rootId;
-    final fed = modelPanel?.fedByCircuitId != null;
+    // Honest connectivity: a board is fed when some way FEEDS it, not when its
+    // own back-pointer says so (see [fedPanelIds]).
+    final fed = _fedPanels.contains(panel.panelId);
     final unfed = !isRoot && !fed;
 
     final widgets = <Widget>[];
@@ -830,18 +1111,14 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       }
     }
 
-    // The panel card. Also a DROP TARGET for a load node dragged off another
-    // panel — re-parenting that circuit here.
+    // The panel card.
     widgets.add(
       Positioned(
         left: tl.dx,
         top: tl.dy,
         width: w * scale,
         height: cardH * scale,
-        child: DragTarget<_LoadRef>(
-          onAcceptWithDetails: (d) => _ctrl.moveCircuit(
-              d.data.fromPanelId, d.data.circuitId, panel.panelId),
-          builder: (ctx, cand, rej) => _PanelDraggable(
+        child: _PanelDraggable(
           // D2: route the body drag through the state so a grabbed panel that is
           // part of a multi-selection moves the WHOLE selection in one undo step.
           onDragStart: () => _beginPanelDrag(panel.panelId, positions),
@@ -853,7 +1130,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
             height: cardH,
             child: _PanelCardNode(
               panel: panel,
-              detail: detail,
+              lod: lod,
+              scale: scale,
+              cardWidth: w,
               project: project,
               result: result,
               breakerIcuKaByPanelId: icuKaByPanel,
@@ -883,42 +1162,24 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               onWayDoubleTap: (cid) => widget.onEditCircuit(panel.panelId, cid),
               onWayMenu: (cid, gp) =>
                   widget.onCircuitMenu(panel.panelId, cid, gp),
-              onDropLoad: (load) {
-                // Reject a drop onto the machine-owned MEP board — it is rebuilt
-                // from the plan, so a hand-added way would silently vanish (G2).
-                if (panel.panelId == kMepEquipmentPanelId) {
-                  ref.read(statusMessageProvider.notifier).showStatus(
-                        'MEP Equipment is auto-generated from the plan — '
-                        'add ways to another panel.',
-                      );
-                  return;
-                }
-                _ctrl.addCircuit(
-                  panel.panelId,
-                  kind: load.kind == LoadKind.feeder
-                      ? LoadKind.general
-                      : load.kind,
-                  phases: load.phases,
-                  loadW: load.loadW > 0 ? load.loadW : null,
-                  motorKw: load.motorKw,
-                );
-              },
+              onDropLoad: (load) => _dropLoadOnPanel(panel, load, positions),
               onOutletDragStart: (gp) => _onFeederDragStart(panel.panelId, gp),
               onOutletDragUpdate: (gp) =>
                   _onFeederDragUpdate(gp, positions, panels),
               onOutletDragEnd: _onFeederDragEnd,
             ),
           ),
-          ),
         ),
       ),
     );
 
-    // Loads below the panel. Zoomed OUT (summary view) they MERGE into one
-    // compact node so the panel reads as a tidy block instead of fanning every
-    // load out below it; they break out into the individual load nodes only
-    // when zoomed in (detail). Double-tap the merged node to zoom in + expand.
-    if (!detail) {
+    // Loads beside the panel. In the SUMMARY band they MERGE into one compact
+    // node so the panel reads as a tidy block instead of fanning every load out
+    // beside it; they break out into the schedule's way rows when zoomed in. At
+    // the MICRO tier the node is dropped entirely (its "N loads" caption is
+    // unreadable there, and the chip is the whole point of that band).
+    // Double-tap the merged node to zoom in + expand.
+    if (lod == PanelLod.summary) {
       final loadCount = panel.circuits
           .where((c) =>
               c.loadKind != LoadKind.feeder && c.loadKind != LoadKind.spare)
@@ -961,6 +1222,96 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     // At the board-schedule LOD (detail) the way rows ARE the loads — no
     // separate hanging load nodes (the old mid-detail tier was removed, I7).
     return widgets;
+  }
+
+  /// A palette card dropped ON a panel card.
+  ///
+  /// Two outcomes, and both now REPORT WHAT THEY SIZED instead of silently
+  /// mutating the board:
+  ///  • a FEEDER / template card mints a real fed SUB-PANEL beside the parent
+  ///    (`addFedPanelAt`, one undo step, template applied) — it used to be
+  ///    downgraded to a plain "general" way, which quietly threw away the whole
+  ///    point of dragging a sub-panel onto a board;
+  ///  • any other card adds a way and toasts the sizing the engine just
+  ///    produced for it (breaker · cable · Vd), read back from the freshly
+  ///    recomputed result so the number is the real one, not a guess.
+  void _dropLoadOnPanel(
+    ElectricalPanelResult panel,
+    PaletteLoad load,
+    Map<String, Offset> positions,
+  ) {
+    // Reject a drop onto the machine-owned MEP board — it is rebuilt from the
+    // plan, so a hand-added way would silently vanish (G2).
+    if (panel.panelId == kMepEquipmentPanelId) {
+      ref.read(statusMessageProvider.notifier).showStatus(
+            context.strings(StringKey.electricalMepEquipmentHint),
+          );
+      return;
+    }
+    final status = ref.read(statusMessageProvider.notifier);
+    final parentLabel = panel.tag ?? panel.name;
+
+    if (load.kind == LoadKind.feeder) {
+      final result = ref.read(electricalResultProvider);
+      final slot = _freeSlotRightOf(panel.panelId, null, positions, result);
+      final newId = _ctrl.addFedPanelAt(
+        fromPanelId: panel.panelId,
+        x: slot.dx,
+        y: slot.dy,
+        phases: load.phases,
+        templateId: load.panelTemplateId,
+      );
+      final fresh = ref.read(electricalProjectProvider);
+      final added = fresh.panels.where((p) => p.id == newId).firstOrNull;
+      final name = added == null ? 'Sub-panel' : (added.tag ?? added.name);
+      final ways = added?.circuits.length ?? 0;
+      if (ways > 0) {
+        status.showStatus(context.strings.format(
+          StringKey.electricalFedFromWaysTemplate,
+          {
+            'name': name,
+            'parentLabel': parentLabel,
+            'ways': ways.toString(),
+          },
+        ));
+      } else {
+        status.showStatus(context.strings.format(
+          StringKey.electricalFedFromTemplate,
+          {
+            'child': name,
+            'parent': parentLabel,
+          },
+        ));
+      }
+      return;
+    }
+
+    final circuitId = _ctrl.addCircuit(
+      panel.panelId,
+      kind: load.kind,
+      phases: load.phases,
+      loadW: load.loadW > 0 ? load.loadW : null,
+      motorKw: load.motorKw,
+    );
+    // The result provider recomputes synchronously, so the way is already sized.
+    final sized = ref
+        .read(electricalResultProvider)
+        .panels[panel.panelId]
+        ?.circuits
+        .where((c) => c.circuitId == circuitId)
+        .firstOrNull;
+    if (sized == null) return;
+    final poles = sized.threePhase ? 3 : 1;
+    status.showStatus(context.strings.format(
+      StringKey.electricalCircuitAddedTemplate,
+      {
+        'name': sized.name,
+        'parent': parentLabel,
+        'breaker': breakerScheduleLabel(sized.breaker, poles),
+        'csa': fmtNum(sized.cable.csaMm2),
+        'vd': sized.voltageDrop.dropPercent.toStringAsFixed(1),
+      },
+    ));
   }
 
   // Helpers exposed to the host view's zoom controls.
@@ -1040,9 +1391,13 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     final pos = _positions(project, result)[panelId];
     final panel = result.panels[panelId];
     if (pos == null || panel == null || _viewportSize.isEmpty) return;
-    const s = kLodThreshold - 0.12; // below the tier boundary → summary card
-    final w = panelCardWidthAt(panel, false);
-    final h = panelFootprint(panel, false);
+    // Below the schedule boundary but comfortably ABOVE the micro one, so the
+    // collapse lands on the summary card — never on the micro chip.
+    const s = kLodThreshold - 0.12;
+    assert(s > kMicroThreshold && s < kLodThreshold,
+        'collapseToSummary must land inside the SUMMARY band');
+    final w = panelCardWidthLod(panel, PanelLod.summary);
+    final h = panelFootprintLod(panel, PanelLod.summary);
     final worldCentre = Offset(pos.dx + w / 2, pos.dy + h / 2);
     _setTransform(ViewportTransform(
       scale: s,
@@ -1068,14 +1423,6 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   Set<String> get selectedPanelIds => _selectedPanels;
 }
 
-/// Drag payload for re-parenting a load: which circuit, off which panel.
-@immutable
-class _LoadRef {
-  final String fromPanelId;
-  final String circuitId;
-  const _LoadRef(this.fromPanelId, this.circuitId);
-}
-
 // ════════════════════════════════════════════════════════════════════════════
 // Painter — grid + wiring (feeders, buses, drop lines) in screen space.
 // ════════════════════════════════════════════════════════════════════════════
@@ -1086,16 +1433,31 @@ class _CanvasPainter extends CustomPainter {
   final Map<String, Offset> positions;
   final ViewportTransform transform;
   final String? rootId;
-  final bool detail;
+
+  /// The active detail band (micro / summary / schedule) — every card rect the
+  /// painter derives (feeder endpoints, the merged-node connector, the hover
+  /// ring) reads its geometry from this, so the wiring lands on the card the
+  /// user is actually looking at.
+  final PanelLod lod;
   final Color gridLine;
   final Color background;
   final String? feederFrom;
   final Offset feederCursor;
   final String? feederHover;
+
+  /// Verdict for [feederHover], resolved by the host on each hover CHANGE from
+  /// the store's own refusal rule (never recomputed per frame).
+  final bool feederHoverRefused;
+
+  /// True when dropping on [feederHover] would RE-PARENT an already-fed board.
+  final bool feederHoverReparent;
   final Color accent;
   final Color onAccent;
   final Set<String> essential;
   final Color essentialColor;
+
+  /// Refusal tint for the hover ring (a would-be-illegal feeder target).
+  final Color dangerColor;
 
   _CanvasPainter({
     required this.project,
@@ -1103,16 +1465,19 @@ class _CanvasPainter extends CustomPainter {
     required this.positions,
     required this.transform,
     required this.rootId,
-    required this.detail,
+    required this.lod,
     required this.gridLine,
     required this.background,
     required this.feederFrom,
     required this.feederCursor,
     required this.feederHover,
+    required this.feederHoverRefused,
+    required this.feederHoverReparent,
     required this.accent,
     required this.onAccent,
     required this.essential,
     required this.essentialColor,
+    required this.dangerColor,
   });
 
   @override
@@ -1131,13 +1496,14 @@ class _CanvasPainter extends CustomPainter {
         final toPos = positions[fed];
         final fromPos = positions[p.id];
         if (fromPanel == null || toPos == null || fromPos == null) continue;
-        final fromCardH = panelFootprint(fromPanel, detail);
-        final fromW = panelCardWidthAt(fromPanel, detail);
+        final fromCardH = panelFootprintLod(fromPanel, lod);
+        final fromW = panelCardWidthLod(fromPanel, lod);
         final start = transform.worldToScreen(
           Offset(fromPos.dx + fromW, fromPos.dy + fromCardH / 2),
         );
         final toPanel = result.panels[fed];
-        final toH = toPanel == null ? 160.0 : panelFootprint(toPanel, detail);
+        final toH =
+            toPanel == null ? 160.0 : panelFootprintLod(toPanel, lod);
         final end = transform.worldToScreen(
           Offset(toPos.dx, toPos.dy + toH / 2),
         );
@@ -1164,9 +1530,10 @@ class _CanvasPainter extends CustomPainter {
     }
 
     // The connector from each summary card's right edge to its merged "N loads"
-    // node. Only in the summary view — at the board-schedule LOD the schedule
-    // lists every way itself, so the connector would be redundant.
-    if (!detail) {
+    // node. ONLY in the summary band — the schedule lists every way itself (so
+    // the connector would be redundant), and the micro tier carries no merged
+    // node at all (so the connector would point at nothing).
+    if (lod == PanelLod.summary) {
       for (final id in result.order) {
         final panel = result.panels[id];
         final pos = positions[id];
@@ -1177,25 +1544,69 @@ class _CanvasPainter extends CustomPainter {
 
     // In-flight feeder rubber-band.
     if (feederFrom != null) {
+      // The hover TARGET ring — the drop verdict, shown on the board itself
+      // rather than left for the user to discover on release. Accent = this
+      // connect is legal; danger = the store would refuse it (self-feed /
+      // loop). Same rounded translucent language as the marquee.
+      _paintHoverRing(canvas);
       final fromPos = positions[feederFrom];
       final fromPanel = result.panels[feederFrom];
       if (fromPos != null && fromPanel != null) {
-        final w = panelCardWidthAt(fromPanel, detail);
-        final h = panelFootprint(fromPanel, detail);
+        final w = panelCardWidthLod(fromPanel, lod);
+        final h = panelFootprintLod(fromPanel, lod);
         final anchor = transform.worldToScreen(
           Offset(fromPos.dx + w, fromPos.dy + h / 2),
         );
+        final bandColour = feederHover != null && feederHoverRefused
+            ? dangerColor
+            : accent;
         canvas.drawLine(
           anchor,
           feederCursor,
           Paint()
-            ..color = accent
+            ..color = bandColour
             ..strokeWidth = 2.5
             ..strokeCap = StrokeCap.round,
         );
-        canvas.drawCircle(feederCursor, 5, Paint()..color = accent);
+        canvas.drawCircle(feederCursor, 5, Paint()..color = bandColour);
+      }
+      // Dropping on an already-fed board MOVES it under the new parent — say so
+      // before the release, not after.
+      if (feederHover != null && !feederHoverRefused && feederHoverReparent) {
+        _label(canvas, feederCursor + const Offset(0, -18), 're-feed',
+            transform.scale, color: onAccent);
       }
     }
+  }
+
+  /// The rounded ring + translucent wash over the panel the feeder drag is
+  /// hovering, tinted by the pre-resolved [feederHoverRefused] verdict.
+  void _paintHoverRing(Canvas canvas) {
+    final id = feederHover;
+    if (id == null) return;
+    final panel = result.panels[id];
+    final pos = positions[id];
+    if (panel == null || pos == null) return;
+    final tl = transform.worldToScreen(pos);
+    final rect = Rect.fromLTWH(
+      tl.dx,
+      tl.dy,
+      panelCardWidthLod(panel, lod) * transform.scale,
+      panelFootprintLod(panel, lod) * transform.scale,
+    );
+    final colour = feederHoverRefused ? dangerColor : accent;
+    final rr = RRect.fromRectAndRadius(
+      rect.inflate(2),
+      Radius.circular(8 * transform.scale),
+    );
+    canvas.drawRRect(rr, Paint()..color = colour.withAlpha(28));
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..color = colour
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
   }
 
   void _grid(Canvas canvas, Size size) =>
@@ -1211,6 +1622,23 @@ class _CanvasPainter extends CustomPainter {
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
+    // Anchors within ONE GRID CELL of each other are treated as aligned: the
+    // two mid-height anchors of different-height cards often sit a few px
+    // apart, and the mid-channel jog that would join them reads as a rendering
+    // glitch, not routing (user-reported). Snap to the parent's row so the run
+    // stays glued to the visible outlet grip; a genuine row difference (more
+    // than a grid cell) keeps the orthogonal channel below.
+    if ((a.dy - b.dy).abs() <= kGrid * transform.scale) {
+      final landing = Offset(b.dx, a.dy);
+      canvas.drawPath(
+        Path()
+          ..moveTo(a.dx, a.dy)
+          ..lineTo(landing.dx, landing.dy),
+        paint,
+      );
+      canvas.drawCircle(landing, 3, Paint()..color = col);
+      return;
+    }
     final midX = (a.dx + b.dx) / 2;
     final path = Path()
       ..moveTo(a.dx, a.dy)
@@ -1227,8 +1655,8 @@ class _CanvasPainter extends CustomPainter {
   /// lists every way itself, so per-way stems would be redundant).
   void _loadDrops(Canvas canvas, ElectricalPanelResult panel, Offset world) {
     final s = transform.scale;
-    final cardH = panelFootprint(panel, false);
-    final w = panelCardWidth(panel.circuits.length);
+    final cardH = panelFootprintLod(panel, PanelLod.summary);
+    final w = panelCardWidthLod(panel, PanelLod.summary);
     final rightEdge = world.dx + w;
     final loadLeft = world.dx + w + kLoadGapX;
     final hasLoads = panel.circuits.any((c) =>
@@ -1282,10 +1710,14 @@ class _CanvasPainter extends CustomPainter {
       old.project != project ||
       old.result != result ||
       old.transform != transform ||
-      old.detail != detail ||
+      old.lod != lod ||
       old.feederFrom != feederFrom ||
       old.feederCursor != feederCursor ||
+      // feederHover (+ its two pre-resolved verdict flags) now genuinely PAINT
+      // — the hover ring / band tint / re-feed pill — so they belong here.
       old.feederHover != feederHover ||
+      old.feederHoverRefused != feederHoverRefused ||
+      old.feederHoverReparent != feederHoverReparent ||
       old.essential.length != essential.length ||
       !old.essential.containsAll(essential);
 }
@@ -1566,15 +1998,23 @@ class _RowSelectionPainter extends CustomPainter {
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// Panel card node (summary + detail share the same header chrome).
+// Panel card node (micro chip / summary card / board schedule).
 // ════════════════════════════════════════════════════════════════════════════
 
 class _PanelCardNode extends StatefulWidget {
   final ElectricalPanelResult panel;
 
-  /// At/above the LOD threshold: render the real engine board schedule in the
-  /// card body (the one tier boundary — I7). Below it: the summary body.
-  final bool detail;
+  /// Which detail band to render: the micro chip, the summary card (header +
+  /// stats), or the real engine board schedule.
+  final PanelLod lod;
+
+  /// The live canvas zoom. The card is laid out in WORLD px inside a
+  /// [_ScaledChild], so anything that must keep a fixed SCREEN size (the outlet
+  /// grab band) divides by this.
+  final double scale;
+
+  /// The card's world-px width at [lod] — the outlet band is capped against it.
+  final double cardWidth;
   final ElectricalProject project;
   final ElectricalSystemResult result;
 
@@ -1613,7 +2053,9 @@ class _PanelCardNode extends StatefulWidget {
 
   const _PanelCardNode({
     required this.panel,
-    required this.detail,
+    required this.lod,
+    required this.scale,
+    required this.cardWidth,
     required this.project,
     required this.result,
     required this.breakerIcuKaByPanelId,
@@ -1662,10 +2104,13 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
         ? colors.danger
         : colors.border;
 
-    // The card reserves the full schematic height at BOTH LOD levels (header
-    // chrome of kPanelChrome + the schematic band), so the load nodes sit a
-    // fixed distance below regardless of zoom and the card never grows over
-    // them when it switches to the detail schematic.
+    final micro = widget.lod == PanelLod.micro;
+    final detail = widget.lod == PanelLod.schedule;
+
+    // The card reserves the full band height for its LOD (see
+    // [panelFootprintLod]), so the merged loads node sits a fixed distance to
+    // its right regardless of zoom and the card never grows over it when the
+    // tier changes.
     final card = AnimatedContainer(
       duration: MechXMotion.hover,
       curve: MechXMotion.standard,
@@ -1681,11 +2126,11 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Header chrome — a fixed band (kPanelChrome). DROPPED at the
-          // board-schedule LOD, where the engine schedule draws its OWN header
-          // (name [tag] + incomer line), so the card chrome would just repeat
-          // the panel name.
-          if (!widget.detail)
+          // Header chrome — a fixed band (kPanelChrome). Only in the SUMMARY
+          // band: at the board-schedule LOD the engine schedule draws its OWN
+          // header (name [tag] + incomer line) so the card chrome would just
+          // repeat the panel name, and at MICRO the chip IS the identity.
+          if (widget.lod == PanelLod.summary)
             SizedBox(
               height: kPanelChrome,
               child: Padding(
@@ -1694,34 +2139,53 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
               ),
             ),
           Expanded(
-            // Cross-fade the summary ↔ board-schedule body across the one tier
-            // boundary instead of an instant swap.
+            // Cross-fade between the bodies across a tier boundary instead of
+            // an instant swap — EXCEPT across the MICRO boundary, where the
+            // switcher is re-keyed so the old body is discarded outright. A
+            // cross-fade lays both bodies out in the SAME box, and the chip's
+            // box (64 px tall) cannot hold the summary card's stats: the
+            // outgoing card would spend the whole transition overflowing. A
+            // tier that different swaps rather than fades.
             child: AnimatedSwitcher(
+              key: ValueKey(micro),
               duration: MechXMotion.appear,
               switchInCurve: MechXMotion.standard,
               switchOutCurve: MechXMotion.standard,
-              child: widget.detail
+              child: micro
                   ? KeyedSubtree(
-                      key: const ValueKey('schedule'),
-                      child: _PanelScheduleBody(
+                      key: const ValueKey('micro'),
+                      child: _PanelMicroBody(
                         panel: panel,
-                        project: widget.project,
-                        result: widget.result,
-                        breakerIcuKaByPanelId: widget.breakerIcuKaByPanelId,
-                        selectedCircuitId: widget.selectedCircuitId,
-                        onSelectWay: widget.onSelectWay,
-                        // Header-band tap selects the whole board — reuses the
-                        // card's select intent (G6).
-                        onSelectPanel: widget.onTap,
-                        onWayDoubleTap: widget.onWayDoubleTap,
-                        onWayMenu: widget.onWayMenu,
+                        onTap: widget.onTap,
+                        onDoubleTap: widget.onDoubleTap,
+                        onMenu: widget.onMenu,
                       ),
                     )
-                  : Padding(
-                      key: const ValueKey('summary'),
-                      padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-                      child: _PanelSummaryBody(panel: panel),
-                    ),
+                  : detail
+                      ? KeyedSubtree(
+                          key: const ValueKey('schedule'),
+                          child: _PanelScheduleBody(
+                            panel: panel,
+                            project: widget.project,
+                            result: widget.result,
+                            breakerIcuKaByPanelId: widget.breakerIcuKaByPanelId,
+                            selectedCircuitId: widget.selectedCircuitId,
+                            onSelectWay: widget.onSelectWay,
+                            // Header-band tap selects the whole board — reuses
+                            // the card's select intent (G6).
+                            onSelectPanel: widget.onTap,
+                            onWayDoubleTap: widget.onWayDoubleTap,
+                            onWayMenu: widget.onWayMenu,
+                          ),
+                        )
+                      : Padding(
+                          key: const ValueKey('summary'),
+                          padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+                          child: _PanelSummaryBody(
+                            panel: panel,
+                            modelPanel: _modelPanel,
+                          ),
+                        ),
             ),
           ),
         ],
@@ -1751,27 +2215,41 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
             clipBehavior: Clip.none,
             children: [
               Positioned.fill(child: card),
-              // The round outlet handle (drag → feeder) — on the RIGHT edge,
-              // vertically centred, since the tree flows left-to-right and
-              // feeders exit a panel's right side toward its sub-panels.
-              Positioned(
-                right: -13,
-                top: 0,
-                bottom: 0,
-                child: Center(
+              // The outlet GRAB BAND (drag → feeder) — the full-height strip
+              // down the card's RIGHT edge, since the tree flows left-to-right
+              // and feeders exit a panel's right side toward its sub-panels.
+              //
+              // The band is what you GRAB and it lies wholly INSIDE the card:
+              // the old mount hung the 26-px dot half outside (`right: -13`),
+              // and a RenderBox rejects a hit outside its own bounds, so half
+              // the visible handle was dead — a drag started there fell through
+              // to the canvas and armed a marquee instead. The dot still paints
+              // half-out (through this Stack's `Clip.none`); only the hit area
+              // moved. Not mounted at MICRO — a 26-screen-px band would be a
+              // third of the chip, and there is nothing legible to aim at.
+              if (!micro)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: outletBandWidth(widget.cardWidth, widget.scale),
                   child: _OutletHandle(
                     onDragStart: widget.onOutletDragStart,
                     onDragUpdate: widget.onOutletDragUpdate,
                     onDragEnd: widget.onOutletDragEnd,
                   ),
                 ),
-              ),
             ],
           ),
         );
       },
     );
   }
+
+  /// This board's MODEL record (the editable inputs beside the solved result).
+  ElectricalPanel? get _modelPanel => widget.project.panels
+      .where((p) => p.id == widget.panel.panelId)
+      .firstOrNull;
 
   Widget _header(BuildContext context) {
     final colors = context.colors;
@@ -1887,6 +2365,17 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
     if (widget.essential) {
       badges.add(_Badge(label: 'essential', color: colors.warning, subtle: true));
     }
+    // The engine's own phase-imbalance verdict, surfaced ON the board it applies
+    // to instead of only in the Review list — an unbalanced 3-phase board is a
+    // re-phasing job, and the card is where the engineer is looking. Driven by
+    // the WARNING (not a hand-picked threshold), so the badge and the issue list
+    // can never disagree about what counts as imbalanced.
+    if (widget.panel.warnings.any((w) => w.code == 'phase-imbalance')) {
+      badges.add(_Badge(
+        label: 'imbalance ${widget.panel.imbalancePercent.round()}%',
+        color: colors.warning,
+      ));
+    }
     if (widget.upsBacked) {
       badges.add(_Badge(label: 'UPS', color: colors.accent, subtle: true));
     }
@@ -1902,13 +2391,25 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
 
 class _PanelSummaryBody extends StatelessWidget {
   final ElectricalPanelResult panel;
-  const _PanelSummaryBody({required this.panel});
+
+  /// The board's MODEL record beside the solved result — the source of the
+  /// PLACED count (a way is placed when it carries a `loadPos` on the plan).
+  /// Null when the result outlives its model for a frame.
+  final ElectricalPanel? modelPanel;
+
+  const _PanelSummaryBody({required this.panel, this.modelPanel});
 
   @override
   Widget build(BuildContext context) {
     final spares = panel.circuits
         .where((c) => c.loadKind == LoadKind.spare)
         .length;
+    // How much of this board is actually SET OUT on the plan — the ways whose
+    // load carries a layout position size their cable off real geometry, the
+    // rest off the unmeasured-stub default. A board reading "2/9 placed" is
+    // telling the engineer seven of its printed lengths are still assumptions.
+    final ways = modelPanel?.circuits ?? const <ElectricalCircuit>[];
+    final placed = ways.where((c) => c.loadPos != null).length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -1925,6 +2426,9 @@ class _PanelSummaryBody extends StatelessWidget {
                   '${_cls(panel.incomer.breaker)} ${fmtAmp0(panel.incomer.breaker.ratingA.amperes)}/${panel.incomer.poles}P',
               label: 'incomer',
             ),
+            // The sized busbar — the one incomer-side number the summary was
+            // missing (it drives the enclosure and the copper order).
+            _Stat(value: fmtBusbar(panel.busbar), label: 'bus'),
             _Stat(
               value:
                   '${panel.system == ElectricalSystem.threePhase ? '3' : '1'}φ',
@@ -1936,6 +2440,8 @@ class _PanelSummaryBody extends StatelessWidget {
                   : '${panel.circuits.length}',
               label: 'ways',
             ),
+            if (ways.isNotEmpty)
+              _Stat(value: '$placed/${ways.length}', label: 'placed'),
           ],
         ),
         if (panel.system == ElectricalSystem.threePhase)
@@ -1946,6 +2452,138 @@ class _PanelSummaryBody extends StatelessWidget {
 
   String _cls(BreakerResult b) =>
       b.deviceClass.name.toUpperCase() == 'MCCB' ? 'MCCB' : 'MCB';
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Micro chip body — the far-zoomed-out tier.
+// ════════════════════════════════════════════════════════════════════════════
+
+/// The MICRO body: designation, connected kW, and a proportional R/S/T bar.
+///
+/// Three facts, chosen because they are the only ones that survive the zoom:
+/// WHICH board this is, HOW BIG it is, and whether its phases are anywhere near
+/// even. Everything the summary card adds (badges, the incomer/bus/ways stats,
+/// the merged loads node, the outlet handle, the expand chevron) is dropped —
+/// at this scale it is neither readable nor grabbable, and drawing an
+/// ungrabbable handle would be a lie. Selection, tap-select and
+/// double-click-to-edit still work, so the chip stays a real object.
+class _PanelMicroBody extends StatelessWidget {
+  final ElectricalPanelResult panel;
+  final VoidCallback onTap;
+  final VoidCallback onDoubleTap;
+  final ValueChanged<Offset> onMenu;
+
+  const _PanelMicroBody({
+    required this.panel,
+    required this.onTap,
+    required this.onDoubleTap,
+    required this.onMenu,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Listener(
+      onPointerDown: (e) {
+        if (e.buttons == kSecondaryButton) onMenu(e.position);
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        onDoubleTap: onDoubleTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                panel.tag ?? panel.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: type.label.copyWith(
+                  color: colors.textPrimary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                fmtKw(panel.connectedW),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: type.caption.copyWith(color: colors.textSecondary),
+              ),
+              const SizedBox(height: 5),
+              SizedBox(
+                height: 5,
+                child: _MicroPhaseBar(
+                  balance: panel.phaseBalance,
+                  threePhase: panel.system == ElectricalSystem.threePhase,
+                  singleColour: colors.accent,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The micro chip's phase bar: three R/S/T segments whose WIDTHS are
+/// proportional to the balanced line currents, so an unbalanced board is
+/// visible as a lopsided bar at a zoom where no number is readable. All-zero
+/// (an empty board) falls back to equal thirds rather than dividing by zero, and
+/// a single-phase board draws ONE accent bar — it has no lines to compare.
+class _MicroPhaseBar extends StatelessWidget {
+  final PhaseBalanceResult balance;
+  final bool threePhase;
+  final Color singleColour;
+
+  const _MicroPhaseBar({
+    required this.balance,
+    required this.threePhase,
+    required this.singleColour,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (!threePhase) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: singleColour,
+          borderRadius: const BorderRadius.all(Radius.circular(2)),
+        ),
+        child: const SizedBox.expand(),
+      );
+    }
+    final total = balance.l1 + balance.l2 + balance.l3;
+    final flex = total <= 0
+        ? const [1, 1, 1]
+        : [
+            math.max(1, (balance.l1 / total * 100).round()),
+            math.max(1, (balance.l2 / total * 100).round()),
+            math.max(1, (balance.l3 / total * 100).round()),
+          ];
+    const colours = [kRailR, kRailS, kRailT];
+    return ClipRRect(
+      borderRadius: const BorderRadius.all(Radius.circular(2)),
+      child: Row(
+        children: [
+          for (var i = 0; i < 3; i++)
+            Expanded(
+              flex: flex[i],
+              child: ColoredBox(
+                color: colours[i],
+                child: const SizedBox.expand(),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _PhaseStrip extends StatelessWidget {
@@ -2341,9 +2979,18 @@ class _GridSourceNode extends StatelessWidget {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Outlet handle (round dot the user drags to create a feeder).
+// Outlet handle — the right-edge grab BAND the user drags to create a feeder.
 // ════════════════════════════════════════════════════════════════════════════
 
+/// The feeder grab band: it FILLS the strip it is given (which the card sizes to
+/// at least [kOutletBandScreenPx] on screen at any zoom, capped at a third of
+/// the card), so the whole strip is grabbable and the whole strip is INSIDE the
+/// card — no out-of-bounds half that a RenderBox silently rejects.
+///
+/// The visible dot is a separate, smaller affordance drawn centred on the card's
+/// right EDGE (half of it overhanging, painted through the card Stack's
+/// `Clip.none`) — the classic node-graph outlet look, without pretending the
+/// grab target is only that dot.
 class _OutletHandle extends StatelessWidget {
   final ValueChanged<Offset> onDragStart;
   final ValueChanged<Offset> onDragUpdate;
@@ -2365,28 +3012,34 @@ class _OutletHandle extends StatelessWidget {
         onPanStart: (d) => onDragStart(d.globalPosition),
         onPanUpdate: (d) => onDragUpdate(d.globalPosition),
         onPanEnd: (_) => onDragEnd(),
-        child: Container(
-          width: 26,
-          height: 26,
-          decoration: BoxDecoration(
-            color: colors.accent,
-            shape: BoxShape.circle,
-            border: Border.all(color: colors.surface, width: 3),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x40000000),
-                blurRadius: 4,
-                offset: Offset(0, 1),
-              ),
-            ],
-          ),
-          child: Center(
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: Transform.translate(
+            offset: const Offset(kOutletDotOverhang, 0),
             child: Container(
-              width: 6,
-              height: 6,
-              decoration: const BoxDecoration(
-                color: Color(0xFFFFFFFF),
+              width: kOutletDotSize,
+              height: kOutletDotSize,
+              decoration: BoxDecoration(
+                color: colors.accent,
                 shape: BoxShape.circle,
+                border: Border.all(color: colors.surface, width: 3),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x40000000),
+                    blurRadius: 4,
+                    offset: Offset(0, 1),
+                  ),
+                ],
+              ),
+              child: Center(
+                child: Container(
+                  width: 6,
+                  height: 6,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFFFFFF),
+                    shape: BoxShape.circle,
+                  ),
+                ),
               ),
             ),
           ),
@@ -2431,11 +3084,25 @@ class _PanelDraggable extends StatelessWidget {
 
 // ════════════════════════════════════════════════════════════════════════════
 // Scaled-child wrapper — lays the node out at its NATURAL (world-px) size then
-// scales it visually, regardless of the (already-scaled) `Positioned` box. An
-// `OverflowBox` frees the child from the tight scaled constraints (the same
-// trick `CanvasView` uses) so a node never over-constrains and overflows.
+// scales it visually to fill the (already-scaled) `Positioned` box.
 // ════════════════════════════════════════════════════════════════════════════
 
+/// Lays [child] out at its natural world-px size ([width] x [height]) and scales
+/// it to fill the box it is given (which the caller sizes to `width * scale` x
+/// `height * scale`, so both axes scale by exactly `scale` — the paint is
+/// identical to a `Transform.scale`).
+///
+/// Implemented with a [FittedBox] rather than `Transform.scale` + `OverflowBox`
+/// because HIT TESTING has to survive the scale. `RenderBox.hitTest` refuses any
+/// position outside the box's OWN size, and an `OverflowBox` under tight
+/// constraints is sized to the SCALED box (e.g. 168 px) while its child is laid
+/// out at the natural size (e.g. 280 px) — so every pointer landing on the
+/// painted right-hand ~40 % of a zoomed-out node was silently dropped before it
+/// reached the child. That is what made the outlet handle feel half-dead and
+/// what leaked those drags to the canvas marquee. [FittedBox] carries a real
+/// paint transform that `hitTestChildren` inverts, so the whole painted node is
+/// live at every zoom. `clipBehavior` stays [Clip.none] (the default) so a node
+/// may still paint outside its box.
 class _ScaledChild extends StatelessWidget {
   final double scale;
   final double width;
@@ -2451,17 +3118,10 @@ class _ScaledChild extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Transform.scale(
-      scale: scale,
+    return FittedBox(
+      fit: BoxFit.fill,
       alignment: Alignment.topLeft,
-      child: OverflowBox(
-        alignment: Alignment.topLeft,
-        minWidth: 0,
-        maxWidth: double.infinity,
-        minHeight: 0,
-        maxHeight: double.infinity,
-        child: SizedBox(width: width, height: height, child: child),
-      ),
+      child: SizedBox(width: width, height: height, child: child),
     );
   }
 }
@@ -2572,6 +3232,13 @@ class _CanvasDropTargetState extends State<_CanvasDropTarget> {
         final y = (world.dy / kGrid).round() * kGrid.toDouble();
         if (load.kind == LoadKind.feeder) {
           final n = widget.nextPanelOrdinal;
+          // A TEMPLATE card (Lighting / Power / Mixed panel) carries its preset
+          // through to the new board — dropping one on blank canvas used to
+          // create an EMPTY panel, silently discarding the whole reason the
+          // engineer picked that card over the plain sub-panel one.
+          final template = load.panelTemplateId == null
+              ? null
+              : panelTemplateById(load.panelTemplateId!);
           widget.controller.addPanelAt(
             name: 'Sub-panel $n',
             tag: 'SP-$n',
@@ -2581,8 +3248,17 @@ class _CanvasDropTargetState extends State<_CanvasDropTarget> {
                 ? ElectricalSystem.singlePhase
                 : ElectricalSystem.threePhase,
             voltage: load.phases == 1 ? const Voltage(220) : const Voltage(400),
+            templateId: load.panelTemplateId,
           );
-          widget.onToast('Panel added — not fed yet.');
+          widget.onToast(template == null
+              ? context.strings(StringKey.electricalPanelAddedNotFed)
+              : context.strings.format(
+                  StringKey.electricalPanelAddedTemplateTemplate,
+                  {
+                    'n': n.toString(),
+                    'template': template.label,
+                  },
+                ));
         } else {
           widget.controller.addFloatingLoad(
             kind: load.kind,
@@ -2592,7 +3268,7 @@ class _CanvasDropTargetState extends State<_CanvasDropTarget> {
             loadW: load.loadW > 0 ? load.loadW : null,
             motorKw: load.motorKw,
           );
-          widget.onToast('Load dropped — wire it to a panel.');
+          widget.onToast(context.strings(StringKey.electricalLoadDropped));
         }
         _clearDrag();
       },

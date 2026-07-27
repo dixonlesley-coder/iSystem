@@ -21,12 +21,15 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
+import 'package:mechx_engine/electrical/geo_length.dart' show LayoutPos;
 import 'package:mechx_engine/electrical/lightning.dart' show LpsLevelLabel;
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/metering.dart'
     show MeteringKind, MeteringKindLabel;
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/electrical/panel_templates.dart'
+    show kPanelTemplates, panelTemplateById;
 import 'package:mechx_engine/electrical/sources.dart'
     show GeneratorMode, GeneratorSource, GeneratorTransfer;
 import 'package:mechx_engine/electrical/spd.dart' show SpdTypeLabel;
@@ -34,10 +37,13 @@ import 'package:mechx_engine/electrical/supply_design.dart' show SupplyLevel;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/app_state.dart';
 import '../../store/electrical_feed.dart';
 import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
+import '../../store/layer_store.dart';
 import '../../store/project_store.dart';
+import '../../store/sheets_store.dart';
 import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
 import '../strings/plural.dart';
@@ -53,6 +59,11 @@ import 'electrical_canvas.dart';
 import 'electrical_controls.dart';
 import 'electrical_export.dart';
 import 'electrical_format.dart';
+import 'electrical_inspector.dart'
+    show
+        ElectricalCircuitMenu,
+        ElectricalEditTarget,
+        ElectricalPanelMenu;
 import 'panel_geometry.dart';
 import 'power_oneline_view.dart';
 import 'sld_sheet_painter.dart';
@@ -471,35 +482,83 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     });
   }
 
+  /// Jump [panelId] (optionally its specific [circuitId] way) from the
+  /// single-line canvas to the unified Layout canvas's electrical layer —
+  /// sets the current sheet to where the target is PLACED (mirrors the
+  /// Review→Electrical locate's own sheet-selection mechanism,
+  /// `issues_card.dart`'s `locate()`), makes Electrical the active discipline
+  /// layer, selects the panel/circuit in [electricalSelectionProvider], and
+  /// switches the workspace to the Layout/plan view. One tap, no toast — the
+  /// view change is the feedback. Callers only offer the row when [pos]
+  /// resolves (a placed panel/circuit) — an unplaced target never gets a dead
+  /// action.
+  void _showOnLayout(LayoutPos pos, String panelId, {String? circuitId}) {
+    setState(() {
+      _panelMenu = null;
+      _circuitMenu = null;
+    });
+    ref.read(sheetsControllerProvider.notifier).selectSheetById(pos.sheetId);
+    ref
+        .read(activeDisciplineProvider.notifier)
+        .set(DisciplineLayer.electrical);
+    if (circuitId != null) {
+      ref
+          .read(electricalSelectionProvider.notifier)
+          .selectCircuit(panelId, circuitId);
+    } else {
+      ref.read(electricalSelectionProvider.notifier).selectPanel(panelId);
+    }
+    ref.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
+  }
+
   // ── Overlays ────────────────────────────────────────────────────────────────
 
   Widget _buildCircuitMenu() {
     final ref0 = _circuitMenu!;
+    final panel = ref
+        .read(electricalProjectProvider)
+        .panels
+        .where((p) => p.id == ref0.panelId)
+        .firstOrNull;
+    final circuit =
+        panel?.circuits.where((c) => c.id == ref0.circuitId).firstOrNull;
+    final loadPos = circuit?.loadPos;
+    // The way's SOLVED figures label the shared menu's in-place value rows
+    // with the same numbers the board schedule prints.
+    final circuitResult = ref
+        .read(electricalResultProvider)
+        .panels[ref0.panelId]
+        ?.circuits
+        .where((c) => c.circuitId == ref0.circuitId)
+        .firstOrNull;
+    // The SHARED context menu (the same widget the Layout canvas mounts), so
+    // the two surfaces can never offer different rows for the same way.
     return Positioned(
       left: _menuAt.dx,
       top: _menuAt.dy,
-      child: ElectricalMenu(
-        items: [
-          ElectricalMenuAction(
-            context.strings(StringKey.electricalMenuEdit),
-            () {
-              ref
-                  .read(electricalInspectorTargetProvider.notifier)
-                  .editCircuit(ref0.panelId, ref0.circuitId);
-              setState(() => _circuitMenu = null);
-            },
-          ),
-          ElectricalMenuAction(context.strings(StringKey.electricalMenuDuplicate),
-              () {
-            _controller.duplicateCircuit(ref0.panelId, ref0.circuitId);
-            setState(() => _circuitMenu = null);
-          }),
-          ElectricalMenuAction(context.strings(StringKey.electricalMenuDelete),
-              () {
-            _controller.deleteCircuit(ref0.panelId, ref0.circuitId);
-            setState(() => _circuitMenu = null);
-          }, danger: true),
-        ],
+      child: ElectricalCircuitMenu(
+        target: ElectricalEditTarget(ref0.panelId, ref0.circuitId),
+        controller: _controller,
+        circuit: circuit,
+        circuitResult: circuitResult,
+        panelSystem: panel?.system,
+        onEdit: () {
+          ref
+              .read(electricalInspectorTargetProvider.notifier)
+              .editCircuit(ref0.panelId, ref0.circuitId);
+          setState(() => _circuitMenu = null);
+        },
+        hasLoadPos: loadPos != null,
+        onUnplace: () =>
+            unplaceCircuitLoad(ref, context, ref0.panelId, ref0.circuitId),
+        // Cross-view jump to the Layout electrical layer — only when the
+        // load is actually PLACED (an unplaced load has nowhere to jump to,
+        // so the row is simply omitted rather than a dead action).
+        onShowOnLayout: loadPos != null
+            ? () =>
+                _showOnLayout(loadPos, ref0.panelId, circuitId: ref0.circuitId)
+            : null,
+        onDone: () => setState(() => _circuitMenu = null),
       ),
     );
   }
@@ -512,73 +571,52 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
       return const SizedBox.shrink();
     }
+    // Boards this one could be fed FROM — every other panel a re-parent onto
+    // wouldn't loop (the shared `feederRefusalReason` rule, so the menu and
+    // the inline panel inspector can never disagree on the candidate set).
+    final feedCandidates = [
+      for (final p in project.panels)
+        if (p.id != panel.id &&
+            _controller.feederRefusalReason(p.id, panel.id) == null)
+          (id: p.id, label: p.tag ?? p.name),
+    ];
+    // The SHARED panel menu (the same widget the Layout canvas mounts) — its
+    // own feeder/system chooser pages replace the old inline copies, so the
+    // two surfaces can never offer different rows for the same board.
     return Positioned(
       left: _menuAt.dx,
       top: _menuAt.dy,
-      child: ElectricalMenu(
-        items: [
-          ElectricalMenuAction(
-              context.strings(StringKey.electricalPanelProperties), () {
+      child: ElectricalPanelMenu(
+        panel: panel,
+        controller: _controller,
+        onProperties: () {
+          ref
+              .read(electricalInspectorTargetProvider.notifier)
+              .editPanel(panel.id);
+          setState(() => _panelMenu = null);
+        },
+        onOpen: () {
+          final first = panel.circuits
+              .where((c) => c.loadKind != LoadKind.feeder)
+              .firstOrNull;
+          if (first != null) {
             ref
                 .read(electricalInspectorTargetProvider.notifier)
-                .editPanel(panel.id);
-            setState(() => _panelMenu = null);
-          }),
-          ElectricalMenuAction(
-              context.strings(StringKey.electricalMenuOpenPanel), () {
-            final first = panel.circuits
-                .where((c) => c.loadKind != LoadKind.feeder)
-                .firstOrNull;
-            if (first != null) {
-              ref
-                  .read(electricalInspectorTargetProvider.notifier)
-                  .editCircuit(panel.id, first.id);
-            }
-            setState(() => _panelMenu = null);
-          }),
-          ElectricalMenuAction(
-            context.strings(panel.essential
-                ? StringKey.electricalMenuUnmarkEssential
-                : StringKey.electricalMenuMarkEssential),
-            () {
-              _controller.setPanelEssential(panel.id, !panel.essential);
-              setState(() => _panelMenu = null);
-            },
-          ),
-          ElectricalMenuAction(
-            context.strings(panel.upsBacked
-                ? StringKey.electricalMenuUnmarkCritical
-                : StringKey.electricalMenuMarkCritical),
-            () {
-              _controller.setPanelUpsBacked(panel.id, !panel.upsBacked);
-              setState(() => _panelMenu = null);
-            },
-          ),
-          ElectricalMenuAction(
-              context.strings(panel.submeter
-                  ? StringKey.electricalMenuRemoveSubmeter
-                  : StringKey.electricalMenuAddSubmeter), () {
-            _controller.setPanelSubmeter(panel.id, !panel.submeter);
-            setState(() => _panelMenu = null);
-          }),
-          // Duplicate the whole board (fresh ids, undoable one step — I5).
-          ElectricalMenuAction(
-              context.strings(StringKey.electricalMenuDuplicatePanel), () {
-            _controller.duplicatePanel(panel.id);
-            setState(() => _panelMenu = null);
-          }),
-          if (panel.fedByCircuitId != null)
-            ElectricalMenuAction(
-                context.strings(StringKey.electricalMenuDisconnectFeeder), () {
-              _controller.disconnectFeeder(panel.id);
-              setState(() => _panelMenu = null);
-            }),
-          ElectricalMenuAction(
-              context.strings(StringKey.electricalMenuDeletePanel), () {
-            _controller.deletePanel(panel.id);
-            setState(() => _panelMenu = null);
-          }, danger: true),
-        ],
+                .editCircuit(panel.id, first.id);
+          }
+          setState(() => _panelMenu = null);
+        },
+        feedCandidates: feedCandidates,
+        fedFromLabel: feedingPanelLabel(project, panel.id),
+        onFeedFrom: (fromId) => feedPanelFrom(ref, context, fromId, panel.id),
+        onPinPhases: () => pinPanelPhasesTo(ref, context, panel.id),
+        // Cross-view jump to the Layout electrical layer — only when the
+        // panel is actually PLACED (an unplaced panel has nowhere to jump
+        // to, so the row is simply omitted rather than a dead action).
+        onShowOnLayout: panel.layoutPos != null
+            ? () => _showOnLayout(panel.layoutPos!, panel.id)
+            : null,
+        onDone: () => setState(() => _panelMenu = null),
       ),
     );
   }
@@ -588,6 +626,252 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
 class _PanelMenuState {
   final String panelId;
   const _PanelMenuState(this.panelId);
+}
+
+// ── Panel inspector wiring helpers ───────────────────────────────────────────
+
+/// The designation (tag, else name) of the board feeding [panelId] — scans
+/// every panel's circuits for a feeder targeting it. Mirrors the store's own
+/// `reparentedFromLabel` resolution in
+/// [ElectricalProjectController.connectFeeder] so the panel inspector's "Fed
+/// from" caption can never disagree with what a reconnect would report moved.
+/// Null when [panelId] carries no incoming feeder (utility-fed).
+String? feedingPanelLabel(ElectricalProject project, String panelId) {
+  for (final p in project.panels) {
+    for (final c in p.circuits) {
+      if (c.feedsPanelId == panelId) return p.tag ?? p.name;
+    }
+  }
+  return null;
+}
+
+/// Reconnect [panelId] to be fed from [fromPanelId] and toast the outcome —
+/// `Fed from <label>.`, or, when this re-parented an already-fed board,
+/// `Fed from <label> (was <old>).` The caller is expected to have already filtered
+/// [fromPanelId] through `feederRefusalReason` (a refused id still toasts the
+/// store's plain-language reason rather than silently doing nothing). Shared
+/// by the canvas's own right-click "Feed from…" chooser and the panel
+/// inspector's inline one, so the two entry points can never report a
+/// different result for the same reconnect.
+void feedPanelFrom(
+  WidgetRef ref,
+  BuildContext context,
+  String fromPanelId,
+  String panelId,
+) {
+  final project = ref.read(electricalProjectProvider);
+  final from = project.panels.where((p) => p.id == fromPanelId).firstOrNull;
+  final label = from?.tag ?? from?.name ?? fromPanelId;
+  final res = ref
+      .read(electricalProjectProvider.notifier)
+      .connectFeeder(fromPanelId, panelId);
+  final status = ref.read(statusMessageProvider.notifier);
+  if (!res.connected) {
+    status.showStatus(res.reason ?? 'Could not connect feeder.');
+    return;
+  }
+  final fedFrom = context.strings(StringKey.electricalFedFromFieldLabel);
+  status.showStatus(res.reparentedFromLabel != null
+      ? '$fedFrom $label (was ${res.reparentedFromLabel}).'
+      : '$fedFrom $label.');
+}
+
+/// Populate an EMPTY board from a preset: opens [showApplyTemplateDialog],
+/// applies the choice through [ElectricalProjectController.applyPanelTemplate]
+/// and toasts the result. A cancelled/dismissed picker is a no-op.
+Future<void> applyTemplateTo(
+  BuildContext context,
+  WidgetRef ref,
+  String panelId,
+) async {
+  final id = await showApplyTemplateDialog(context);
+  if (id == null || !context.mounted) return;
+  ref.read(electricalProjectProvider.notifier).applyPanelTemplate(panelId, id);
+  final t = panelTemplateById(id);
+  ref
+      .read(statusMessageProvider.notifier)
+      .showStatus(context.strings.format(
+        StringKey.electricalAppliedTemplateTemplate,
+        {'template': t?.label ?? id},
+      ));
+}
+
+/// Pin every SINGLE-PHASE way on [panelId] to the line the last solve gave it
+/// (three-phase ways are skipped — pinning a line is meaningless for a way
+/// that already spans all three) and toast the count. A panel with no solved
+/// result, or none of whose ways are single-phase, is a no-op.
+void pinPanelPhasesTo(WidgetRef ref, BuildContext context, String panelId) {
+  final panelResult = ref.read(electricalResultProvider).panels[panelId];
+  if (panelResult == null) return;
+  final assignment = <String, PhaseLine>{
+    for (final c in panelResult.circuits)
+      if (!c.threePhase)
+        c.circuitId: switch (c.phase) {
+          PhaseAssignment.l1 => PhaseLine.l1,
+          PhaseAssignment.l2 => PhaseLine.l2,
+          PhaseAssignment.l3 => PhaseLine.l3,
+          PhaseAssignment.threePhase => PhaseLine.l1,
+        },
+  };
+  if (assignment.isEmpty) return;
+  ref
+      .read(electricalProjectProvider.notifier)
+      .pinPanelPhases(panelId, assignment);
+  ref.read(statusMessageProvider.notifier).showStatus(
+      context.strings.format(
+        StringKey.electricalPhasesPinnedTemplate,
+        {'count': pluralCount(assignment.length, 'way', 'ways')},
+      ));
+}
+
+/// Un-place a way's load from the calibrated layout — hands its run length
+/// back to the manual field — as ONE undo step (a snapshot pushed before the
+/// otherwise non-recording `setLoadPos`). Shared by the canvas's own circuit
+/// context menu ("Remove from layout") and the inline circuit inspector's
+/// identical action.
+void unplaceCircuitLoad(
+  WidgetRef ref,
+  BuildContext context,
+  String panelId,
+  String circuitId,
+) {
+  final ctrl = ref.read(electricalProjectProvider.notifier);
+  ctrl.pushUndoSnapshot();
+  ctrl.setLoadPos(panelId, circuitId, null);
+  ref
+      .read(statusMessageProvider.notifier)
+      .showStatus(context
+          .strings(StringKey.electricalRemovedFromLayout));
+}
+
+/// Pick a preset to populate an EMPTY board with — the panel inspector's
+/// "Apply template…" action. Resolves to the chosen template id, or null when
+/// cancelled/dismissed. The same themed [showGeneralDialog] chooser idiom
+/// `sheet_rail.dart` uses for its floor/rename pickers (no Material).
+Future<String?> showApplyTemplateDialog(BuildContext context) {
+  final theme = MechXTheme.of(context);
+  return showGeneralDialog<String>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel:
+        context.strings(StringKey.electricalApplyTemplateBarrier),
+    barrierColor: theme.colors.scrim,
+    transitionDuration: MechXMotion.appear,
+    pageBuilder: (ctx, _, _) => MechXTheme(
+      data: theme,
+      child: const Center(child: _ApplyTemplateDialog()),
+    ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(
+        parent: anim,
+        curve: MechXMotion.standard,
+        reverseCurve: MechXMotion.standard,
+      );
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
+class _ApplyTemplateDialog extends StatelessWidget {
+  const _ApplyTemplateDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Container(
+      width: 360,
+      padding: const EdgeInsets.all(MechXSpacing.lg),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        boxShadow: MechXShadow.popover,
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                    context.strings(StringKey.electricalApplyTemplateEllipsis),
+                    style: type.title.copyWith(color: colors.textPrimary)),
+              ),
+              MechXButton(
+                label: 'Cancel',
+                tertiary: true,
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.xs),
+          Text(
+            'Fill this empty board with a typical way list.',
+            style: type.caption.copyWith(color: colors.textMuted),
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          for (final t in kPanelTemplates)
+            _TemplateRow(
+              label: t.label,
+              onTap: () => Navigator.of(context).pop(t.id),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One tappable template row in [_ApplyTemplateDialog].
+class _TemplateRow extends StatefulWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _TemplateRow({required this.label, required this.onTap});
+
+  @override
+  State<_TemplateRow> createState() => _TemplateRowState();
+}
+
+class _TemplateRowState extends State<_TemplateRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedContainer(
+          duration: MechXMotion.hover,
+          curve: MechXMotion.standard,
+          margin: const EdgeInsets.only(bottom: MechXSpacing.xxs),
+          padding: const EdgeInsets.symmetric(
+            horizontal: MechXSpacing.sm,
+            vertical: MechXSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            color: _hover ? colors.surfaceHover : const Color(0x00000000),
+            borderRadius: MechXRadii.control,
+            border: Border.all(color: colors.border),
+          ),
+          child: Text(widget.label,
+              style: type.body.copyWith(color: colors.textPrimary)),
+        ),
+      ),
+    );
+  }
 }
 
 // ── Toolbar ───────────────────────────────────────────────────────────────────

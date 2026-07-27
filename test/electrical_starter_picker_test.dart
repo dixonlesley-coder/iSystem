@@ -73,12 +73,18 @@ void main() {
     await tester.pump();
 
     // The starter picker lives under the collapsed "Advanced" disclosure
-    // (MechXSectionLabel renders the name upper-cased).
+    // (MechXSectionLabel renders the name upper-cased). Both it and the picker
+    // below it can sit past the fold of the inspector's scrolling column, so
+    // scroll each into view before driving it.
+    await tester.ensureVisible(find.text('ADVANCED'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('ADVANCED'));
     await tester.pumpAndSettle();
 
     // Pick VFD.
     expect(find.text('VFD'), findsOneWidget);
+    await tester.ensureVisible(find.text('VFD'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('VFD'));
     await tester.pump();
 

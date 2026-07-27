@@ -742,16 +742,21 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.16.0`** (palette/inspector polish: the Draw palette's Drains group gated to the
-  gravity drainage service [hidden while drawing cold/hot water], a new clean-water OUTLET
-  node [faucet/drop glyph, 'Water outlets' palette group gated to pressurized water], the
-  removal of the redundant inspector SHEET→floor control, and the move of DESIGN INPUTS
-  [occupancy/rainfall/runoff] to the Building setup page; atop the v1.15.0 basements +
-  drafting-feel baseline [the free-run-endpoint stretch grip, basement levels + the
-  `BuildingLevels.groundIndex` ground-relative datum, and the snap-to-plan feature highlight];
-  `pubspec.yaml` is the version source of truth,
-  `1.16.0+22`; each release = bump → merge to the default branch (`main`) →
-  `release.yml` `workflow_dispatch` with `publish=true`). The prior `v1.14.0` shipped the
+  is `v1.17.0`** (the electrical panel-design workflow: the five-wave drop/auto-size/
+  connect/balance campaign [W0 engine phasing/topology/templates → W1 store operations →
+  W2+W3 canvas drop creation + multi-surface edit → W4 layout/single-line sync → W5
+  cross-view actions + i18n] plus the W6 in-place value ladders in the electrical
+  right-click menus [Breaker/Cable/Phase/Family + panel System, engine-sourced rungs,
+  '(set)'/Auto override idiom, both hosts converged onto the shared menu widgets] and
+  the standard desktop accelerators + F1 shortcuts sheet; atop the v1.16.0
+  palette/inspector-polish baseline [Drains gating, clean-water outlet, inspector
+  declutter]; `pubspec.yaml` is the version source of truth,
+  `1.17.0+23`; each release = bump → merge to the default branch (`main`) →
+  `release.yml` `workflow_dispatch` with `publish=true`). The prior `v1.16.0` shipped
+  palette/inspector polish (the Draw palette's Drains group gated to the gravity
+  drainage service, the clean-water OUTLET node, the removal of the redundant inspector
+  SHEET→floor control, and the move of DESIGN INPUTS to the Building setup page) atop
+  the v1.15.0 basements + drafting-feel baseline. The prior `v1.14.0` shipped the
   three drafting-feel batches (the user-reported B10–B16 fixes incl. the auto-elbow,
   on-endpoint grip, riser circle-arrows, true-diameter zoom rendering, and the B17–B30
   CAD-muscle-memory set) atop the v1.13.0 all-7-waves campaign baseline. The prior `v1.12.0` shipped the unconnected-element design checks
@@ -1150,6 +1155,23 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `MechXFocusRing` Enter/Space) so a focused palette card drops at the current sheet's
   centre (`SegmentPalette.dropAtCentre`, same store add-actions). No engine / `.mechx`
   change.
+  **Electrical panel design workflow — drop/auto-size/connect/balance across both surfaces landed:** the panel WORKFLOW adds end-to-end panel creation from Layout + single-line canvases via five coordinated waves. **W0 engine (phasing, topology, templates)** — `balancePhases` prior-seeding + phase-stability reassign (defaults byte-identical); `ElectricalCircuit.copyWith` clear-flags for `feedsPanelId`/`breakerOverrideA`/`cableOverrideMm2`/`groupingCountOverride`/`phaseOverride`/`laying`; `panel_templates.dart` presets (lighting/power/mixed + 20%/2-way headroom); `resolveCircuitLengthDetailed` (manual vs geographic source honesty); `MepEquipmentLoad.loadPos`; `sanitizeFeederTopology`. **W1 store (operations + cell assignment)** — `connectFeeder` atomic RE-PARENT (default; `reparent:false` keeps refusal) + shared pure `feederRefusalReason`; `setCircuit` extended (breaker/cable/grouping/phase-pin/laying overrides + clear); `pinPanelPhases` w/ session 1.0 A stickiness cache; creation intents return ids; `kDefaultCircuitLength` 10 m; name de-dup; `addPanelAt(templateId)`/`applyPanelTemplate`/`addFedPanelAt` (fed+populated, one undo); delete/load hygiene via `sanitizeFeederTopology` (Wave-4 '' sentinel CLOSED); `syncMepEquipment` auto-feeds from single unfed root; `electricalResultProvider` phase-stability memoization. **W2+W3 UI (canvas drop creation + multi-surface edit)** — outlet connect-grip as full right-edge band w/ screen-constant hit (fixed the old Transform+OverflowBox pointer-dead zone via FittedBox); feeder drop-target tint (accept/refuse via `feederRefusalReason`); body-drop connects UNFED board to parent; sized-drop toasts ('Lighting 2 -> LP-1: MCB 10A · 1.5 mm2 · Vd 1.2%'); summary card adds busbar + n/m-placed + phase-imbalance badge; fed-badge re-sourced; **new micro LOD** <0.30 zoom (name + kW + proportional R/S/T bar; `PanelLod {micro,summary,schedule}`); circuit/panel inspector result blocks (Ib/cable/Vd%+cumulative/R-S-T/effective-length basis + phase-pin picker + set/Clear override fields); palette Capacitor bank + template panel cards; auto-straighten near-aligned feeder runs. **W4 layout/single-line sync (drop → place → riser)** — drop-on-marker creates PLACED way (no unplaced orphan); shared nearest-within-snap; `nextSubPanelOrdinal` at mint; selected-marker outlet grip draws feeder ON PLAN (geo length immediate); menus share Feed-from/Pin-phases/Un-place; tray lists UNPLACED ways + empty-stub remove. **W5 polish** — cross-view 'Show on layout'/'Show in single-line' actions; EN+ID i18n sweep (EN byte-identical). Gate: every wave clean analysis + engine `dart test` + app `flutter test`; goldens 05/06/08/10/11 re-captured + visually verified; engine **1377→1444** tests; app **~1106→1208+**. Out-of-scope residuals: R-S-T pole-order schedule grouping (circuit order kept), occupancy-keyed `PuilDiversityLibrary` wiring (model persisted, UI dark), root-selection convergence (3 extant), way-row dragging (store-only).
+  **W6 — in-place value ladders in the electrical right-click menus (user-reported follow-on):** the SHARED
+  `ElectricalCircuitMenu` is now stateful with four VALUE rows between Edit and Duplicate — `Breaker · MCB 16A` /
+  `Cable · 2.5 mm2` / `Phase · S` / `Family · NYY` — each a one-tap LADDER PAGE (the panel menu's "Feed from…"
+  paging idiom; `ElectricalMenu` gained additive `note`+`scrollable`, the mechanical size-ladder scroll idiom).
+  Ladders come from the ENGINE tables (`PuilProfile.standardBreakerRatingsA` labelled MCB/MCCB via
+  `breakerClassFor`; `standardSectionsMm2` with a "minimum — sizer may pick larger" note; the shared
+  `kCableFamilies` const the inspector's picker also derives from), picks write the existing `setCircuit`
+  override/clear fields (one undo step each), the EFFECTIVE value is row-marked (override, else the solved
+  result figure) and '(set)' marks an active override. Honesty gates: value rows only when the host resolves
+  the model row (`circuit`/`circuitResult`/`panelSystem` params; null result ⇒ 'auto', nothing fabricated);
+  Phase only for a KNOWN 1ph way on a KNOWN 3ph board, never a feeder; spare ways breaker-only.
+  `ElectricalPanelMenu` gained `System · 3ph 400 V` → a 1ph 220 V / 3ph 400 V page (`setPanelSystem` voltage
+  snap), gated OFF the MEP board. HOST CONVERGENCE: `electrical_view.dart`'s drifted inline menu copies (incl.
+  its own feed-chooser page) were replaced by the shared widgets; both hosts wire the new params, so the two
+  surfaces can never offer different rows. Menus closed at rest ⇒ goldens byte-identical
+  (`test/electrical_context_menu_edit_test.dart`, 6 tests).
   **Feedback loop + states landed (UI-only, goldens 01–07 shift):** silent/empty/
   colour-only states now give explicit feedback. The `IssuesCard` renders a positive
   **"No design issues found"** success card (custom-painted check) instead of

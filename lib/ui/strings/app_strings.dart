@@ -729,6 +729,56 @@ enum StringKey {
 
   // B22 — the a11y field name for the on-canvas run-length inline stepper.
   a11yFieldRunLength,
+
+  // Electrical workflow campaign — toasts, menu items, labels, palette cards.
+  electricalFedFromTemplate, // {child} {parent} → '{child} fed from {parent}'
+  electricalReFedFromTemplate, // {child} {parent} {was} → '{child} re-fed from {parent} (was {was})'
+  electricalFedFromWaysTemplate, // {name} {parentLabel} {ways} → '{name} fed from {parentLabel} — {ways} ways from the template'
+  electricalFedFromLabel, // {parentLabel}
+  electricalPanelAddedNotFed,
+  electricalPanelAddedTemplateTemplate, // {n} {template}
+  electricalLoadDropped,
+  electricalFedFromDotTemplate, // {label}
+  electricalFedFromWasDotTemplate, // {label} {was}
+  electricalAppliedTemplateTemplate, // {template}
+  electricalPhasesPinnedTemplate, // {count} {ways}
+  electricalRemovedFromLayout,
+  electricalFeederDisconnected,
+  electricalCreatedSubpanelTemplate, // {templateDesc} {name}
+  electricalLabelRemovedTemplate, // {label}
+  electricalCouldNotConnectFeeder,
+  electricalShowOnLayout,
+  electricalShowInSingleLine,
+  electricalFeedFromEllipsis,
+  electricalPinPhases,
+  electricalBack,
+  electricalApplyTemplateEllipsis,
+  electricalRemoveFromLayout,
+  electricalFeederOutletHint,
+  electricalFedFromFieldLabel,
+  electricalUtilitySupply,
+  electricalPlacementFieldLabel,
+  electricalFromLayoutHint,
+  electricalPlacedTemplate, // {placementLabel}
+  electricalPlaced,
+  electricalNotPlacedHint,
+  electricalPinPhaseFieldLabel,
+  electricalFeedFromChooserTitle,
+  electricalCapacitorBank,
+  electricalLightingPanel,
+  electricalPowerPanel,
+  electricalMixedPanel,
+  electricalApplyTemplateBarrier,
+  electricalMepEquipmentHint,
+  electricalCircuitAddedTemplate, // {name} {parent} {breaker} {csa} {vd}
+  electricalPanelPlacedWithWaysTemplate, // {panel} {count}
+  electricalPanelFedWithWaysTemplate, // {panel} {parent} {count}
+  electricalPanelPlacedTemplate, // {panel}
+  electricalPinPhasesHint,
+  electricalApplyTemplateHint,
+  electricalMepEquipmentGuard,
+  electricalPopulated,
+  electricalAddedLoadTemplate, // {load} {panel}
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -1528,6 +1578,65 @@ const Map<StringKey, String> _en = {
   StringKey.edgeMenuMatchProperties: 'Match properties',
   StringKey.matchPropertiesArmedHint: 'Matching {service} · click a run · Esc exits',
   StringKey.a11yFieldRunLength: 'Run length',
+
+  // Electrical workflow campaign — toasts, menu items, labels, palette cards.
+  StringKey.electricalFedFromTemplate: '{child} fed from {parent}',
+  StringKey.electricalReFedFromTemplate: '{child} re-fed from {parent} (was {was})',
+  StringKey.electricalFedFromWaysTemplate:
+      '{name} fed from {parentLabel} — {ways} ways from the template',
+  StringKey.electricalFedFromLabel: '{parentLabel}',
+  StringKey.electricalPanelAddedNotFed: 'Panel added — not fed yet.',
+  StringKey.electricalPanelAddedTemplateTemplate:
+      'SP-{n} added from the {template} template — not fed yet.',
+  StringKey.electricalLoadDropped: 'Load dropped — wire it to a panel.',
+  StringKey.electricalFedFromDotTemplate: 'Fed from {label}.',
+  StringKey.electricalFedFromWasDotTemplate: 'Fed from {label} (was {was}).',
+  StringKey.electricalAppliedTemplateTemplate: 'Applied the {template} template.',
+  StringKey.electricalPhasesPinnedTemplate: 'Phases pinned for {count} {ways}.',
+  StringKey.electricalRemovedFromLayout: 'Removed from layout — manual length applies.',
+  StringKey.electricalFeederDisconnected: 'Feeder disconnected.',
+  StringKey.electricalCreatedSubpanelTemplate: 'Created {templateDesc}sub-panel on {panel}',
+  StringKey.electricalLabelRemovedTemplate: '{label} removed.',
+  StringKey.electricalCouldNotConnectFeeder: 'Could not connect feeder.',
+  StringKey.electricalShowOnLayout: 'Show on layout',
+  StringKey.electricalShowInSingleLine: 'Show in single-line',
+  StringKey.electricalFeedFromEllipsis: 'Feed from…',
+  StringKey.electricalPinPhases: 'Pin phases',
+  StringKey.electricalBack: 'Back',
+  StringKey.electricalApplyTemplateEllipsis: 'Apply template…',
+  StringKey.electricalRemoveFromLayout: 'Remove from layout',
+  StringKey.electricalFeederOutletHint: 'Feeder outlet — drag onto a board to feed it',
+  StringKey.electricalFedFromFieldLabel: 'Fed from',
+  StringKey.electricalUtilitySupply: 'Utility supply',
+  StringKey.electricalPlacementFieldLabel: 'Placement',
+  StringKey.electricalFromLayoutHint: 'From layout — remove from layout to edit',
+  StringKey.electricalPlacedTemplate: 'Placed — {placementLabel}',
+  StringKey.electricalPlaced: 'Placed',
+  StringKey.electricalNotPlacedHint: 'Not placed — drag it from the Layout tray',
+  StringKey.electricalPinPhaseFieldLabel: 'Pin phase',
+  StringKey.electricalFeedFromChooserTitle: 'Feed from',
+  StringKey.electricalCapacitorBank: 'Capacitor bank',
+  StringKey.electricalLightingPanel: 'Lighting panel',
+  StringKey.electricalPowerPanel: 'Power panel',
+  StringKey.electricalMixedPanel: 'Mixed panel',
+  StringKey.electricalApplyTemplateBarrier: 'Apply template',
+  StringKey.electricalMepEquipmentHint:
+      'MEP Equipment is auto-generated from the plan — add ways to another panel.',
+  StringKey.electricalCircuitAddedTemplate:
+      '{name} -> {parent}: {breaker} · {csa} mm2 · Vd {vd}%',
+  StringKey.electricalPanelPlacedWithWaysTemplate:
+      '{panel} placed — {count} ways from the template',
+  StringKey.electricalPanelFedWithWaysTemplate:
+      '{panel} fed from {parent} — {count} ways from the template',
+  StringKey.electricalPanelPlacedTemplate: '{panel} placed',
+  StringKey.electricalPinPhasesHint:
+      'Fix every way to its current R/S/T line',
+  StringKey.electricalApplyTemplateHint:
+      'Fill this empty board with a typical way list',
+  StringKey.electricalMepEquipmentGuard:
+      'MEP Equipment is auto-generated from the plan — add ways to another panel.',
+  StringKey.electricalPopulated: 'populated ',
+  StringKey.electricalAddedLoadTemplate: 'Added {load} to {panel}',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -2341,6 +2450,65 @@ const Map<StringKey, String> _id = {
   StringKey.edgeMenuMatchProperties: 'Samakan properti',
   StringKey.matchPropertiesArmedHint: 'Menyamakan {service} · klik jalur · Esc keluar',
   StringKey.a11yFieldRunLength: 'Panjang jalur',
+
+  // Electrical workflow campaign — toasts, menu items, labels, palette cards.
+  StringKey.electricalFedFromTemplate: '{child} disuplai dari {parent}',
+  StringKey.electricalReFedFromTemplate: '{child} disuplai ulang dari {parent} (sebelumnya {was})',
+  StringKey.electricalFedFromWaysTemplate:
+      '{name} disuplai dari {parentLabel} — {ways} jalur dari templat',
+  StringKey.electricalFedFromLabel: '{parentLabel}',
+  StringKey.electricalPanelAddedNotFed: 'Panel ditambahkan — belum disuplai.',
+  StringKey.electricalPanelAddedTemplateTemplate:
+      'SP-{n} ditambahkan dari templat {template} — belum disuplai.',
+  StringKey.electricalLoadDropped: 'Beban jatuh — sambungkan ke panel.',
+  StringKey.electricalFedFromDotTemplate: 'Disuplai dari {label}.',
+  StringKey.electricalFedFromWasDotTemplate: 'Disuplai dari {label} (sebelumnya {was}).',
+  StringKey.electricalAppliedTemplateTemplate: 'Templat {template} diterapkan.',
+  StringKey.electricalPhasesPinnedTemplate: 'Fase terkunci untuk {count} {ways}.',
+  StringKey.electricalRemovedFromLayout: 'Dihapus dari tata letak — panjang manual berlaku.',
+  StringKey.electricalFeederDisconnected: 'Penyuplai terputus.',
+  StringKey.electricalCreatedSubpanelTemplate: 'Dibuat {templateDesc}sub-panel di {panel}',
+  StringKey.electricalLabelRemovedTemplate: '{label} dihapus.',
+  StringKey.electricalCouldNotConnectFeeder: 'Tidak dapat menghubungkan penyuplai.',
+  StringKey.electricalShowOnLayout: 'Tampilkan di tata letak',
+  StringKey.electricalShowInSingleLine: 'Tampilkan di garis tunggal',
+  StringKey.electricalFeedFromEllipsis: 'Disuplai dari…',
+  StringKey.electricalPinPhases: 'Kunci fase',
+  StringKey.electricalBack: 'Kembali',
+  StringKey.electricalApplyTemplateEllipsis: 'Terapkan templat…',
+  StringKey.electricalRemoveFromLayout: 'Hapus dari tata letak',
+  StringKey.electricalFeederOutletHint: 'Outlet penyuplai — seret ke panel untuk menyuplainy',
+  StringKey.electricalFedFromFieldLabel: 'Disuplai dari',
+  StringKey.electricalUtilitySupply: 'Suplai utilitas',
+  StringKey.electricalPlacementFieldLabel: 'Penempatan',
+  StringKey.electricalFromLayoutHint: 'Dari tata letak — hapus dari tata letak untuk mengedit',
+  StringKey.electricalPlacedTemplate: 'Ditempatkan — {placementLabel}',
+  StringKey.electricalPlaced: 'Ditempatkan',
+  StringKey.electricalNotPlacedHint: 'Belum ditempatkan — seret dari nampan Tata Letak',
+  StringKey.electricalPinPhaseFieldLabel: 'Kunci fase',
+  StringKey.electricalFeedFromChooserTitle: 'Disuplai dari',
+  StringKey.electricalCapacitorBank: 'Bank kapasitor',
+  StringKey.electricalLightingPanel: 'Panel pencahayaan',
+  StringKey.electricalPowerPanel: 'Panel daya',
+  StringKey.electricalMixedPanel: 'Panel campuran',
+  StringKey.electricalApplyTemplateBarrier: 'Terapkan templat',
+  StringKey.electricalMepEquipmentHint:
+      'Peralatan MEP dibuat otomatis dari denah — tambah jalur ke panel lain.',
+  StringKey.electricalCircuitAddedTemplate:
+      '{name} -> {parent}: {breaker} · {csa} mm2 · Vd {vd}%',
+  StringKey.electricalPanelPlacedWithWaysTemplate:
+      '{panel} ditempatkan — {count} jalur dari templat',
+  StringKey.electricalPanelFedWithWaysTemplate:
+      '{panel} disuplai dari {parent} — {count} jalur dari templat',
+  StringKey.electricalPanelPlacedTemplate: '{panel} ditempatkan',
+  StringKey.electricalPinPhasesHint:
+      'Kunci setiap jalur ke garis R/S/T aktualnya',
+  StringKey.electricalApplyTemplateHint:
+      'Isi papan kosong ini dengan daftar jalur khas',
+  StringKey.electricalMepEquipmentGuard:
+      'Peralatan MEP dibuat otomatis dari denah — tambah jalur ke panel lain.',
+  StringKey.electricalPopulated: 'terisi ',
+  StringKey.electricalAddedLoadTemplate: 'Ditambahkan {load} ke {panel}',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

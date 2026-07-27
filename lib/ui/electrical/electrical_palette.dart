@@ -40,13 +40,16 @@ class PaletteLoad {
   /// Default motor rating (kW), for motor/pump kinds.
   final double? motorKw;
 
-  const PaletteLoad(this.kind, {this.phases, this.loadW = 0, this.motorKw});
+  /// Panel template ID for feeder-kind cards (lighting/power/mixed).
+  final String? panelTemplateId;
+
+  const PaletteLoad(this.kind, {this.phases, this.loadW = 0, this.motorKw, this.panelTemplateId});
 }
 
 /// A palette card descriptor (its label is a [StringKey] so the palette is
-/// localised — I6).
+/// localised — I6; new cards may use plain EN strings).
 class _Card {
-  final StringKey label;
+  final Object label;  // StringKey or String (plain EN for new cards)
   final PaletteLoad load;
   const _Card(this.label, this.load);
 }
@@ -103,6 +106,10 @@ const List<_Group> _groups = [
       StringKey.electricalLoadCustom3,
       PaletteLoad(LoadKind.general, phases: 3, loadW: 7500),
     ),
+    _Card(
+      StringKey.electricalCapacitorBank,
+      PaletteLoad(LoadKind.capacitor, phases: 3, loadW: 0),
+    ),
   ]),
   _Group(StringKey.electricalPaletteMotorsPumps, [
     _Card(StringKey.electricalLoadMotorDol,
@@ -119,6 +126,12 @@ const List<_Group> _groups = [
   _Group(StringKey.electricalPaletteDistribution, [
     _Card(StringKey.electricalLoadSpareMcb, PaletteLoad(LoadKind.spare)),
     _Card(StringKey.electricalLoadSubPanel, PaletteLoad(LoadKind.feeder)),
+    _Card(StringKey.electricalLightingPanel,
+        PaletteLoad(LoadKind.feeder, panelTemplateId: 'lighting')),
+    _Card(StringKey.electricalPowerPanel,
+        PaletteLoad(LoadKind.feeder, panelTemplateId: 'power')),
+    _Card(StringKey.electricalMixedPanel,
+        PaletteLoad(LoadKind.feeder, panelTemplateId: 'mixed')),
   ]),
 ];
 
@@ -149,11 +162,11 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
   /// load as a new way on the currently selected panel (either workspace's
   /// selection provider — the standalone single-line's inspector target, or
   /// the unified Layout electrical layer's marker selection), falling back to
-  /// the project's first panel when nothing is selected. A dropped feeder
-  /// becomes a general load (mirrors the canvas drop-target rule — a feeder
-  /// only starts a NEW sub-panel when dropped on blank canvas, which a
-  /// keyboard activation never does). No-op when the project has no panel at
-  /// all — there's nothing to add a way to.
+  /// the project's first panel when nothing is selected. When a feeder-kind
+  /// card is activated AND a panel is explicitly selected, creates a fed
+  /// sub-panel via addFedPanelAt instead. When no panel is selected, a feeder
+  /// degrades to a general load. No-op when the project has no panel at all —
+  /// there's nothing to add a way to.
   void _addLoad(_Card card) {
     final project = ref.read(electricalProjectProvider);
     if (project.panels.isEmpty) return;
@@ -168,6 +181,7 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
     } else {
       panelId = layoutSelection?.panelId;
     }
+    final selectedPanelId = panelId;
     final panel = (panelId == null
             ? null
             : project.panels.where((p) => p.id == panelId).firstOrNull) ??
@@ -178,22 +192,51 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
     // re-sync.
     if (panel.id == kMepEquipmentPanelId) {
       ref.read(statusMessageProvider.notifier).showStatus(
-            'MEP Equipment is auto-generated from the plan — '
-            'add ways to another panel.',
+            context.strings(StringKey.electricalMepEquipmentHint),
           );
       return;
     }
 
     final load = card.load;
-    ref.read(electricalProjectProvider.notifier).addCircuit(
-          panel.id,
-          kind: load.kind == LoadKind.feeder ? LoadKind.general : load.kind,
-          phases: load.phases,
-          loadW: load.loadW > 0 ? load.loadW : null,
-          motorKw: load.motorKw,
-        );
-    ref.read(statusMessageProvider.notifier).showStatus(
-        'Added ${context.strings(card.label)} to ${panel.name}');
+    final cardLabel = card.label is String
+        ? card.label as String
+        : context.strings(card.label as StringKey);
+
+    // If this is a feeder card and a panel is explicitly selected, create
+    // a fed sub-panel with the optional template.
+    if (load.kind == LoadKind.feeder && selectedPanelId != null) {
+      ref.read(electricalProjectProvider.notifier).addFedPanelAt(
+        fromPanelId: selectedPanelId,
+        x: 80,
+        y: 80,
+        templateId: load.panelTemplateId,
+      );
+      final templateDesc =
+          load.panelTemplateId != null
+              ? context.strings(StringKey.electricalPopulated)
+              : '';
+      ref.read(statusMessageProvider.notifier).showStatus(
+        context.strings.format(
+          StringKey.electricalCreatedSubpanelTemplate,
+          {'templateDesc': templateDesc, 'panel': panel.name},
+        ),
+      );
+    } else {
+      // Non-feeder cards or feeder with no panel selected: add as a way
+      // (feeder degrades to general load when no panel is selected).
+      ref.read(electricalProjectProvider.notifier).addCircuit(
+            panel.id,
+            kind: load.kind == LoadKind.feeder ? LoadKind.general : load.kind,
+            phases: load.phases,
+            loadW: load.loadW > 0 ? load.loadW : null,
+            motorKw: load.motorKw,
+          );
+      ref.read(statusMessageProvider.notifier).showStatus(
+          context.strings.format(
+            StringKey.electricalAddedLoadTemplate,
+            {'load': cardLabel, 'panel': panel.name},
+          ));
+    }
   }
 
   @override
@@ -265,7 +308,9 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
                       Padding(
                         padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
                         child: PaletteCard<PaletteLoad>(
-                          label: context.strings(c.label),
+                          label: c.label is String
+                              ? c.label as String
+                              : context.strings(c.label as StringKey),
                           swatch: c.load.kind == LoadKind.feeder
                               ? colors.success
                               : colors.accent,

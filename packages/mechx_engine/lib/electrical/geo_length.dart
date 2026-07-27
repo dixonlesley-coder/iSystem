@@ -185,9 +185,53 @@ Length resolveCircuitLength(
   required BuildingLevels building,
   MountingHeights mounting = const MountingHeights(),
   Map<String, ElectricalPanel> panelById = const {},
+}) =>
+    resolveCircuitLengthDetailed(
+      circuit,
+      panel,
+      calibrationBySheet: calibrationBySheet,
+      building: building,
+      mounting: mounting,
+      panelById: panelById,
+    ).length;
+
+/// Which basis produced a circuit's effective cable length.
+enum CircuitLengthSource {
+  /// The engineer's typed-in [ElectricalCircuit.length] — used whenever either
+  /// end is unplaced, the origin sheet is uncalibrated, or the derived geo
+  /// length comes back zero (see [resolveCircuitLengthDetailed]).
+  manual,
+
+  /// A real length derived from the calibrated layout + §10 elevations via
+  /// [electricalCableLength].
+  geo,
+}
+
+/// [resolveCircuitLength], but also reporting WHICH basis won — a length-source
+/// honesty helper so a caller (e.g. a report or an inspector) can tell a
+/// geometry-derived run apart from a manual/fallback one instead of just
+/// seeing a number.
+///
+/// Same resolution logic as [resolveCircuitLength] — implemented ONCE here;
+/// [resolveCircuitLength] is a thin wrapper that returns just the `.length`.
+/// `source` is [CircuitLengthSource.geo] only when a real geo length was
+/// actually derived (both ends placed, origin sheet calibrated, and the
+/// derived length is > 0); every fallback path reports
+/// [CircuitLengthSource.manual].
+///
+/// Pure; reads only inputs + the supplied calibration/[building].
+({Length length, CircuitLengthSource source}) resolveCircuitLengthDetailed(
+  ElectricalCircuit circuit,
+  ElectricalPanel panel, {
+  required Map<String, ScaleCalibration> calibrationBySheet,
+  required BuildingLevels building,
+  MountingHeights mounting = const MountingHeights(),
+  Map<String, ElectricalPanel> panelById = const {},
 }) {
   final from = panel.layoutPos;
-  if (from == null) return circuit.length;
+  if (from == null) {
+    return (length: circuit.length, source: CircuitLengthSource.manual);
+  }
 
   // Resolve the load end: the fed sub-panel for a feeder, else the load pos.
   final LayoutPos? to;
@@ -196,7 +240,9 @@ Length resolveCircuitLength(
   } else {
     to = circuit.loadPos;
   }
-  if (to == null) return circuit.length;
+  if (to == null) {
+    return (length: circuit.length, source: CircuitLengthSource.manual);
+  }
 
   final geo = electricalCableLength(
     from,
@@ -207,6 +253,8 @@ Length resolveCircuitLength(
   );
   // An uncalibrated from-sheet yields 0; keep the manual length in that case so
   // an unplaceable run is never silently zeroed.
-  if (geo.meters <= 0) return circuit.length;
-  return geo;
+  if (geo.meters <= 0) {
+    return (length: circuit.length, source: CircuitLengthSource.manual);
+  }
+  return (length: geo, source: CircuitLengthSource.geo);
 }

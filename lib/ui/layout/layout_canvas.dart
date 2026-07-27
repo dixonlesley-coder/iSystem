@@ -29,6 +29,7 @@ import 'package:mechx_engine/electrical/load_kind.dart';
 import '../../data/app_settings.dart';
 import '../../store/annotation_store.dart';
 import '../../store/calibration_store.dart';
+import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/history_store.dart';
 import '../../store/inspector_store.dart';
@@ -64,6 +65,14 @@ import '../canvas/sheet_canvas.dart' show sheetContentBuilderProvider;
 import '../canvas/viewport.dart';
 import '../canvas/zoom_controls.dart';
 import '../electrical/electrical_inspector.dart';
+// The panel/circuit menu ACTION helpers, deliberately shared with the standalone
+// electrical workspace so the Layout menus can never drift from it.
+import '../electrical/electrical_view.dart'
+    show
+        feedingPanelLabel,
+        feedPanelFrom,
+        pinPanelPhasesTo,
+        unplaceCircuitLoad;
 import 'service_legend_chip.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
@@ -300,23 +309,64 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     });
   }
 
-  Widget _buildCircuitMenu() => Positioned(
-        left: _menuAt.dx,
-        top: _menuAt.dy,
-        child: _EntranceScaleFade(
-          alignment: Alignment.topLeft,
-          child: ElectricalCircuitMenu(
-            target: _circuitMenu!,
-            controller: _ctrl,
-            // C1: Edit routes to the shared inline inspector column.
-            onEdit: () {
-              final t = _circuitMenu!;
-              onEditCircuit(t.panelId, t.circuitId);
-            },
-            onDone: () => setState(() => _circuitMenu = null),
-          ),
+  /// Jump [panelId] (optionally its specific [circuitId] way) from the
+  /// Layout canvas's electrical layer to the standalone single-line
+  /// workspace: switches the workspace view, then hands the panel/circuit id
+  /// to [electricalFocusProvider] — the SAME Review→Electrical locate seam
+  /// `electrical_view.dart` already consumes (forces the Single-line tab,
+  /// frames the board, and rings the exact way when a circuit id is given).
+  /// One tap, no toast — the view change is the feedback.
+  void _showInSingleLine(String panelId, {String? circuitId}) {
+    _closeMenus();
+    ref.read(workspaceViewProvider.notifier).set(WorkspaceView.electrical);
+    ref
+        .read(electricalFocusProvider.notifier)
+        .request(panelId, circuitId: circuitId);
+  }
+
+  Widget _buildCircuitMenu() {
+    final t = _circuitMenu!;
+    final panel = ref
+        .read(electricalProjectProvider)
+        .panels
+        .where((p) => p.id == t.panelId)
+        .firstOrNull;
+    final circuit =
+        panel?.circuits.where((c) => c.id == t.circuitId).firstOrNull;
+    // The way's SOLVED figures label the menu's in-place value rows with the
+    // same numbers the board schedule prints (nothing fabricated when the
+    // solve doesn't carry this way).
+    final circuitResult = ref
+        .read(electricalResultProvider)
+        .panels[t.panelId]
+        ?.circuits
+        .where((c) => c.circuitId == t.circuitId)
+        .firstOrNull;
+    return Positioned(
+      left: _menuAt.dx,
+      top: _menuAt.dy,
+      child: _EntranceScaleFade(
+        alignment: Alignment.topLeft,
+        child: ElectricalCircuitMenu(
+          target: t,
+          controller: _ctrl,
+          circuit: circuit,
+          circuitResult: circuitResult,
+          panelSystem: panel?.system,
+          // C1: Edit routes to the shared inline inspector column.
+          onEdit: () => onEditCircuit(t.panelId, t.circuitId),
+          // A placed load can be handed back to its manual length — the SAME
+          // shared action the standalone electrical workspace's menu and the
+          // inline circuit inspector run (one undo step + one toast).
+          hasLoadPos: circuit?.loadPos != null,
+          onUnplace: () => unplaceCircuitLoad(ref, context, t.panelId, t.circuitId),
+          onShowInSingleLine: () =>
+              _showInSingleLine(t.panelId, circuitId: t.circuitId),
+          onDone: () => setState(() => _circuitMenu = null),
         ),
-      );
+      ),
+    );
+  }
 
   Widget _buildPanelMenu() {
     final menu = _panelMenu!;
@@ -327,6 +377,16 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _closeOverlays());
       return const SizedBox.shrink();
     }
+    // Boards this one could be fed FROM — filtered through the SAME pure
+    // `feederRefusalReason` the commit applies, so the menu can never offer a
+    // source the connect would refuse. 'Feed from…' is the non-drag path for
+    // exactly the connection the marker's outlet grip makes.
+    final feedCandidates = [
+      for (final p in project.panels)
+        if (p.id != panel.id &&
+            _ctrl.feederRefusalReason(p.id, panel.id) == null)
+          (id: p.id, label: p.tag ?? p.name),
+    ];
     return Positioned(
       left: _menuAt.dx,
       top: _menuAt.dy,
@@ -347,6 +407,11 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
               _closeMenus();
             }
           },
+          feedCandidates: feedCandidates,
+          fedFromLabel: feedingPanelLabel(project, panel.id),
+          onFeedFrom: (fromId) => feedPanelFrom(ref, context, fromId, panel.id),
+          onPinPhases: () => pinPanelPhasesTo(ref, context, panel.id),
+          onShowInSingleLine: () => _showInSingleLine(panel.id),
           onDone: () => setState(() => _panelMenu = null),
         ),
       ),
