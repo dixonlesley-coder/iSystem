@@ -1037,13 +1037,14 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
 
     final widgets = <Widget>[];
 
-    // To the LEFT of the service-root board: the SOURCE CHAIN (PLN -> MV ->
-    // transformer -> LV main + genset / capacitor) drawn as real single-line
-    // SYMBOLS, flowing left-to-right INTO the root board (matching the canvas's
-    // left-to-right flow) when the project carries any sources / dual-tx /
-    // explicit transformer / capacitor. Otherwise the bare PLN grid head (so a
-    // default project is byte-identical). Double-click either to open the
-    // Sources / Service editor.
+    // To the LEFT of the service-root board: the SOURCE CHAIN drawn as real
+    // single-line SYMBOLS, flowing left-to-right INTO the root board (matching
+    // the canvas's left-to-right flow). A DECLARED MV service (explicit
+    // transformer kVA / dual-tx) draws PLN -> MVMDP -> TRAFO -> LVMDP; an LV
+    // direct service draws only the honest supply head (+ genset / capacitor /
+    // solar / battery / earth). A bare project shows the PLN grid head
+    // (byte-identical). Double-click either to open the Sources / Service
+    // editor.
     if (isRoot) {
       final spine = buildElectricalSourceSpine(
           project: project, result: result, horizontal: true);

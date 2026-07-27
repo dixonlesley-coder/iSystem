@@ -671,13 +671,16 @@ SldSheet buildElectricalPanelDetail({
       breakerIcuKaByPanelId: breakerIcuKaByPanelId,
     );
 
-/// The utility SOURCE-SPINE only (PLN MV -> [MV main] -> TRANSFORMER -> LV main,
-/// + optional GENSET / CAPACITOR BANK), as a standalone `SldSheet` for painting
-/// a read-only spine strip ABOVE the root panel on the interactive single-line
-/// canvas — ONE source-spine geometry shared with the overview / riser / export
-/// (the `_buildSourceSpine` body). `isEmpty` is true when there is no demand AND
-/// no sources / dual-tx / explicit transformer, so a bare project shows nothing
-/// new on the canvas (the existing PLN head stays).
+/// The utility SOURCE-SPINE only, as a standalone `SldSheet` for painting a
+/// read-only spine strip beside the root panel on the interactive single-line
+/// canvas — ONE source-spine geometry shared with the overview / riser /
+/// export (the `_buildSourceSpine` body). On a DECLARED MV service (explicit
+/// transformer kVA or dual-tx) the chain is PLN MV -> MV main -> TRANSFORMER
+/// -> LV main; on an LV (TR) direct service it is the SUPPLY HEAD only — no
+/// fabricated substation. Optional GENSET / CAPACITOR / SOLAR / BATTERY hang
+/// off either. `isEmpty` is true when there is no demand AND no
+/// sources / service fields, so a bare project shows nothing new on the
+/// canvas (the existing PLN head stays).
 /// [horizontal] lays the chain out LEFT-TO-RIGHT (PLN -> MV -> transformer -> LV
 /// main, genset/capacitor dropping BELOW the LV bus) for the left-to-right
 /// interactive single-line canvas — the source sits to the LEFT of the root
@@ -691,7 +694,9 @@ SldSheet buildElectricalSourceSpine({
   final hasSource = project.sources != null ||
       project.dualTransformer ||
       project.transformerKva != null ||
-      project.capacitorBankKvar != null;
+      project.capacitorBankKvar != null ||
+      project.supplyKind != SupplyKind.pln ||
+      project.supplyCapacityVa != null;
   final hasDemand = result.supply.demandVa.inKilovoltAmperes > 0;
   if (!hasSource && !hasDemand) {
     return const SldSheet(
@@ -750,7 +755,7 @@ SldSheet buildElectricalSourceSpine({
     // The spine always draws the system-earthing mark (the earth symbol was
     // drawn ⇒ the 'Earth' legend entry is included).
     legend: const [
-      SldLegendEntry('Source', 'Utility / MV supply chain'),
+      SldLegendEntry('Source', 'Utility supply chain'),
       SldLegendEntry('Earth', 'System earthing point'),
     ],
     supplyNote: '',
@@ -1027,16 +1032,31 @@ void _emitPvArray(List<SldPrim> out, double cx, double cy, SldRole role) {
   out.add(SldLine(cx, y - 7, cx, y, role: role)); // top lead
 }
 
+/// True when the project's service is a DECLARED medium-voltage (TM)
+/// connection with a customer substation — an explicit transformer rating or
+/// the dual-transformer flag. Everything else is a low-voltage (TR) direct
+/// service: PLN metering at 220/380 V with NO customer MV station, no
+/// customer transformer and no separate utility-side LV main, so the spine
+/// must never fabricate them (a house on a 33 kVA daya tersambung has no
+/// TRAFO to draw). Distributed sources (genset / solar / battery /
+/// capacitor) do NOT imply an MV service — they hang off the LV side of
+/// whichever service exists.
+bool _isMvService(ElectricalProject project) =>
+    project.transformerKva != null || project.dualTransformer;
+
 /// The SUPPLY-head node name for the project's primary supply kind, with the
 /// declared connection capacity appended when set (`PLN MV STATION 197 kVA` /
 /// compact `PLN 197 kVA`). PLN with no capacity keeps today's exact labels ⇒
-/// byte-identical defaults.
-String _supplyHeadLabel(ElectricalProject project, {required bool compact}) {
+/// byte-identical defaults. [mv] marks a declared MV service — only then is
+/// the PLN head an "MV STATION"; an LV direct service reads plain `PLN`.
+String _supplyHeadLabel(ElectricalProject project,
+    {required bool compact, bool mv = true}) {
   final cap = project.supplyCapacityVa == null
       ? ''
       : ' ${_num(project.supplyCapacityVa!.inKilovoltAmperes)} kVA';
   return switch (project.supplyKind) {
-    SupplyKind.pln => compact ? 'PLN$cap' : 'PLN MV STATION$cap',
+    SupplyKind.pln =>
+      compact || !mv ? 'PLN$cap' : 'PLN MV STATION$cap',
     SupplyKind.generator => compact ? 'GENSET$cap' : 'GENSET SUPPLY$cap',
     SupplyKind.solar => compact ? 'PV$cap' : 'SOLAR PV SUPPLY$cap',
   };
@@ -1085,16 +1105,21 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
 }
 
 /// Synthesize the utility source spine drawn ABOVE the panel tree (overview) or
-/// the top floor band (riser): PLN MV STATION -> (MV main, when a dual-tx /
-/// sources project) -> TRANSFORMER <kVA> -> PANEL UTAMA TEGANGAN RENDAH (LV
-/// main), with an optional GENSET UNIT + CAPACITOR BANK hanging off the LV bus.
-/// All nodes are `SldRole.source`. Returns the prims, the spine HEIGHT (to push
-/// the tree/floors down by), and the feed anchor (the LV-main bus bottom-centre)
-/// the roots connect up to.
+/// the top floor band (riser). On a DECLARED MV service (`_isMvService`):
+/// PLN MV STATION -> PANEL UTAMA TEGANGAN MENENGAH -> TRANSFORMER <kVA> ->
+/// PANEL UTAMA TEGANGAN RENDAH, with optional GENSET / CAPACITOR / SOLAR /
+/// BATTERY hanging off the LV bus. On an LV (TR) direct service — the default
+/// — the chain is the SUPPLY HEAD ONLY (no fabricated substation): the side
+/// sources drop from a short right-hand trunk off the head, and the earthing
+/// mark hangs at the service entrance. All nodes are `SldRole.source`.
+/// Returns the prims, the spine HEIGHT (to push the tree/floors down by), and
+/// the feed anchor (the bottom-centre of the last chain node) the roots
+/// connect up to.
 ///
-/// Sizing is DERIVED from existing sizers only (no invented physics): the
-/// transformer + genset kVA snap to the genset ladder (`selectGeneratorKva`)
-/// against the building demand VA — all `// VERIFY`.
+/// Sizing is DERIVED from existing sizers only (no invented physics): on an
+/// MV service with no explicit rating (dual-tx), the transformer + genset kVA
+/// snap to the genset ladder (`selectGeneratorKva`) against the building
+/// demand VA — all `// VERIFY`.
 ({List<SldPrim> prims, double height, double feedX, double feedY})
     _buildSourceSpine(
   ElectricalProject project,
@@ -1104,30 +1129,32 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
   final prims = <SldPrim>[];
   final nodeX = centreX - _ovW / 2;
   final demandVa = result.supply.demandVa;
+  final isMv = _isMvService(project);
 
-  // Whole-spine kVA: an EXPLICIT transformer rating wins; else the smallest
-  // standard rating covering the building demand VA (genset ladder, // VERIFY).
-  // Blank when neither is known.
+  // MV-chain transformer kVA: an EXPLICIT rating wins; else (dual-tx with no
+  // rating) the smallest standard rating covering the building demand VA
+  // (genset ladder, // VERIFY). Blank when neither is known.
   final txKva = project.transformerKva?.inKilovoltAmperes ??
       (demandVa.inKilovoltAmperes > 0
           ? selectGeneratorKva(demandVa).inKilovoltAmperes
           : 0.0);
   final txLabel = txKva > 0 ? 'TRANSFORMER ${_num(txKva)} kVA' : 'TRANSFORMER';
 
-  // The vertical spine, top -> bottom. MV main is drawn only for a dual-tx /
-  // sources / explicit-transformer project (else the PLN node feeds the LV main
-  // directly).
-  final hasMv = project.dualTransformer ||
-      project.sources != null ||
-      project.transformerKva != null;
-  // Each spine element carries its SYMBOL kind so it draws as a real single-line
-  // device, not a labelled box.
+  // The vertical spine, top -> bottom. The MV station chain exists ONLY on a
+  // declared MV service — an LV direct service is just its supply head.
+  // Each spine element carries its SYMBOL kind so it draws as a real
+  // single-line device, not a labelled box.
   final spine = <({String name, String? sub, String kind})>[
-    (name: _supplyHeadLabel(project, compact: false), sub: null, kind: 'supply'),
-    if (hasMv)
+    (
+      name: _supplyHeadLabel(project, compact: false, mv: isMv),
+      sub: null,
+      kind: 'supply'
+    ),
+    if (isMv) ...[
       (name: 'PANEL UTAMA TEGANGAN MENENGAH', sub: 'MV main', kind: 'bus'),
-    (name: txLabel, sub: null, kind: 'transformer'),
-    (name: 'PANEL UTAMA TEGANGAN RENDAH', sub: 'LV main', kind: 'bus'),
+      (name: txLabel, sub: null, kind: 'transformer'),
+      (name: 'PANEL UTAMA TEGANGAN RENDAH', sub: 'LV main', kind: 'bus'),
+    ],
   ];
 
   const role = SldRole.source;
@@ -1147,9 +1174,12 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
         prims.add(SldLabel(centreX + 22, midY + 3, node.name,
             size: 8.5, bold: true, role: role));
       case 'supply':
-        // The MV incoming isolator (bowtie).
+        // The incoming isolator (bowtie). On an LV head-only chain the label
+        // moves ABOVE the symbol — the side-source trunk leaves at mid-height
+        // to the right, exactly where the MV label used to sit.
         _emitBowtie(prims, centreX, midY, 11, role);
-        prims.add(SldLabel(centreX + 22, midY + 3, node.name,
+        prims.add(SldLabel(centreX + 22, isMv ? midY + 3 : midY - 14,
+            node.name,
             size: 8.5, bold: true, role: role));
       case 'bus':
       default:
@@ -1164,95 +1194,189 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
     prevBottom = y + _ovH;
     y += _ovH + _ovHGap;
   }
-  final lvBottom = y - _ovHGap; // bottom of the LV-main bus band
+  final lvBottom = y - _ovHGap; // bottom of the last chain band
 
-  // GENSET + CAPACITOR BANK hang off the LV-main bus to the right.
   final lvMidY = lvBottom - _ovH / 2;
   final sideX = nodeX + _ovW + 60;
-  if (project.sources?.generator != null) {
-    final gen = project.sources!.generator!;
-    final backupVa = ApparentPower(demandVa.voltAmperes * gen.backupFraction);
-    final genKva = (gen.kva ?? selectGeneratorKva(backupVa)).inKilovoltAmperes;
-    final gy = lvMidY - _ovH - 8;
-    final gcy = gy + _ovH / 2;
-    _emitGenerator(prims, sideX + 14, gcy, 13, SldRole.source);
-    prims.add(SldLabel(sideX + 34, gcy - 2, 'GENSET ${_num(genKva)} kVA',
-        size: 8.5, bold: true, role: SldRole.source));
-    prims.add(SldLabel(sideX + 34, gcy + 12, gen.mode.label,
-        size: 7.5, role: SldRole.source));
-    // What fraction of the building's diversified demand this set can carry —
-    // the honest coverage figure (capped at 100%), printed only when a demand
-    // exists to compare against.
-    final pct = _gensetBackupPctLabel(genKva, demandVa);
-    if (pct != null) {
-      prims.add(SldLabel(sideX + 34, gcy + 24, pct,
+  var stackBottom = lvBottom;
+  if (isMv) {
+    // MV: GENSET + CAPACITOR BANK hang off the LV-main bus to the right
+    // (historic coordinates — declared-MV projects are byte-identical).
+    if (project.sources?.generator != null) {
+      final gen = project.sources!.generator!;
+      final backupVa = ApparentPower(demandVa.voltAmperes * gen.backupFraction);
+      final genKva = (gen.kva ?? selectGeneratorKva(backupVa)).inKilovoltAmperes;
+      final gy = lvMidY - _ovH - 8;
+      final gcy = gy + _ovH / 2;
+      _emitGenerator(prims, sideX + 14, gcy, 13, SldRole.source);
+      prims.add(SldLabel(sideX + 34, gcy - 2, 'GENSET ${_num(genKva)} kVA',
+          size: 8.5, bold: true, role: SldRole.source));
+      prims.add(SldLabel(sideX + 34, gcy + 12, gen.mode.label,
           size: 7.5, role: SldRole.source));
+      // What fraction of the building's diversified demand this set can carry —
+      // the honest coverage figure (capped at 100%), printed only when a demand
+      // exists to compare against.
+      final pct = _gensetBackupPctLabel(genKva, demandVa);
+      if (pct != null) {
+        prims.add(SldLabel(sideX + 34, gcy + 24, pct,
+            size: 7.5, role: SldRole.source));
+      }
+      prims.add(SldLine(nodeX + _ovW, gcy, sideX + 1, gcy,
+          weight: SldWeight.medium, role: SldRole.source));
     }
-    prims.add(SldLine(nodeX + _ovW, gcy, sideX + 1, gcy,
-        weight: SldWeight.medium, role: SldRole.source));
-  }
-  // CAPACITOR BANK: drawn when a real bank is specified (kvar set) OR — kept as
-  // the historic proxy — whenever any distributed sources exist. The real field
-  // labels its kvar verbatim; the proxy stays the generic "PF correction".
-  if (project.capacitorBankKvar != null || project.sources != null) {
-    final cy = lvMidY + 8 + _ovH / 2;
-    final kvar = project.capacitorBankKvar;
-    final capSub =
-        (kvar != null && kvar > 0) ? '${_num(kvar)} kvar' : 'PF correction';
-    _emitCapacitor(prims, sideX + 14, cy, SldRole.source);
-    prims.add(SldLabel(sideX + 34, cy - 2, 'CAPACITOR BANK',
-        size: 8.5, bold: true, role: SldRole.source));
-    prims.add(SldLabel(sideX + 34, cy + 12, capSub,
-        size: 7.5, role: SldRole.source));
-    prims.add(SldLine(nodeX + _ovW, cy, sideX + 14, cy,
-        weight: SldWeight.medium, role: SldRole.source));
-  }
-  // SOLAR PV array + BATTERY bank stack BELOW the capacitor slot (new side
-  // nodes — absent sources leave every existing coordinate untouched).
-  var sideY = lvMidY + 8 + _ovH / 2 + 54;
-  if (project.sources?.solar != null) {
-    final (head, sub) = _solarNodeLabels(project);
-    _emitPvArray(prims, sideX + 14, sideY, SldRole.source);
-    prims.add(SldLabel(sideX + 34, sideY - 2, head,
-        size: 8.5, bold: true, role: SldRole.source));
-    prims.add(SldLabel(sideX + 34, sideY + 12, sub,
-        size: 7.5, role: SldRole.source));
-    prims.add(SldLine(nodeX + _ovW, sideY, sideX + 3, sideY,
-        weight: SldWeight.medium, role: SldRole.source));
-    sideY += 54;
-  }
-  if (project.sources?.battery != null) {
-    final (head, sub) = _batteryNodeLabels(project, demandVa);
-    _emitBattery(prims, sideX + 14, sideY, SldRole.source);
-    prims.add(SldLabel(sideX + 34, sideY - 2, head,
-        size: 8.5, bold: true, role: SldRole.source));
-    prims.add(SldLabel(sideX + 34, sideY + 12, sub,
-        size: 7.5, role: SldRole.source));
-    prims.add(SldLine(nodeX + _ovW, sideY, sideX + 5, sideY,
-        weight: SldWeight.medium, role: SldRole.source));
+    // CAPACITOR BANK: drawn when a real bank is specified (kvar set) OR — kept
+    // as the historic proxy — whenever any distributed sources exist. The real
+    // field labels its kvar verbatim; the proxy stays the generic
+    // "PF correction".
+    if (project.capacitorBankKvar != null || project.sources != null) {
+      final cy = lvMidY + 8 + _ovH / 2;
+      final kvar = project.capacitorBankKvar;
+      final capSub =
+          (kvar != null && kvar > 0) ? '${_num(kvar)} kvar' : 'PF correction';
+      _emitCapacitor(prims, sideX + 14, cy, SldRole.source);
+      prims.add(SldLabel(sideX + 34, cy - 2, 'CAPACITOR BANK',
+          size: 8.5, bold: true, role: SldRole.source));
+      prims.add(SldLabel(sideX + 34, cy + 12, capSub,
+          size: 7.5, role: SldRole.source));
+      prims.add(SldLine(nodeX + _ovW, cy, sideX + 14, cy,
+          weight: SldWeight.medium, role: SldRole.source));
+    }
+    // SOLAR PV array + BATTERY bank stack BELOW the capacitor slot (new side
+    // nodes — absent sources leave every existing coordinate untouched).
+    var sideY = lvMidY + 8 + _ovH / 2 + 54;
+    if (project.sources?.solar != null) {
+      final (head, sub) = _solarNodeLabels(project);
+      _emitPvArray(prims, sideX + 14, sideY, SldRole.source);
+      prims.add(SldLabel(sideX + 34, sideY - 2, head,
+          size: 8.5, bold: true, role: SldRole.source));
+      prims.add(SldLabel(sideX + 34, sideY + 12, sub,
+          size: 7.5, role: SldRole.source));
+      prims.add(SldLine(nodeX + _ovW, sideY, sideX + 3, sideY,
+          weight: SldWeight.medium, role: SldRole.source));
+      sideY += 54;
+    }
+    if (project.sources?.battery != null) {
+      final (head, sub) = _batteryNodeLabels(project, demandVa);
+      _emitBattery(prims, sideX + 14, sideY, SldRole.source);
+      prims.add(SldLabel(sideX + 34, sideY - 2, head,
+          size: 8.5, bold: true, role: SldRole.source));
+      prims.add(SldLabel(sideX + 34, sideY + 12, sub,
+          size: 7.5, role: SldRole.source));
+      prims.add(SldLine(nodeX + _ovW, sideY, sideX + 5, sideY,
+          weight: SldWeight.medium, role: SldRole.source));
+    }
+  } else {
+    // LV: no LV-main box to hang off — the side sources drop from a short
+    // right-hand trunk at the supply head (clear of the feeder tree that
+    // leaves the head's bottom-centre). Node order: genset, capacitor,
+    // solar, battery; each glyph carries its top/bottom lead offsets so the
+    // drop connectors meet the symbols exactly.
+    final dropX = sideX + 14;
+    final hasCap =
+        project.capacitorBankKvar != null || project.sources != null;
+    final anySide = project.sources?.generator != null ||
+        hasCap ||
+        project.sources?.solar != null ||
+        project.sources?.battery != null;
+    if (anySide) {
+      prims.add(SldLine(centreX + 12, lvMidY, dropX, lvMidY,
+          weight: SldWeight.medium, role: SldRole.source));
+      var prevDropBottom = lvMidY;
+      var cy = lvMidY + 58;
+      void connectTo(double topOff, double bottomOff) {
+        prims.add(SldLine(dropX, prevDropBottom, dropX, cy - topOff,
+            weight: SldWeight.medium, role: SldRole.source));
+        prevDropBottom = cy + bottomOff;
+      }
+
+      if (project.sources?.generator != null) {
+        final gen = project.sources!.generator!;
+        final backupVa =
+            ApparentPower(demandVa.voltAmperes * gen.backupFraction);
+        final genKva =
+            (gen.kva ?? selectGeneratorKva(backupVa)).inKilovoltAmperes;
+        connectTo(13, 13);
+        _emitGenerator(prims, dropX, cy, 13, SldRole.source);
+        prims.add(SldLabel(dropX + 20, cy - 2, 'GENSET ${_num(genKva)} kVA',
+            size: 8.5, bold: true, role: SldRole.source));
+        prims.add(SldLabel(dropX + 20, cy + 12, gen.mode.label,
+            size: 7.5, role: SldRole.source));
+        final pct = _gensetBackupPctLabel(genKva, demandVa);
+        if (pct != null) {
+          prims.add(SldLabel(dropX + 20, cy + 24, pct,
+              size: 7.5, role: SldRole.source));
+        }
+        stackBottom = cy + 13;
+        cy += 58;
+      }
+      if (hasCap) {
+        final kvar = project.capacitorBankKvar;
+        final capSub =
+            (kvar != null && kvar > 0) ? '${_num(kvar)} kvar' : 'PF correction';
+        connectTo(11, 11);
+        _emitCapacitor(prims, dropX, cy, SldRole.source);
+        prims.add(SldLabel(dropX + 20, cy - 2, 'CAPACITOR BANK',
+            size: 8.5, bold: true, role: SldRole.source));
+        prims.add(SldLabel(dropX + 20, cy + 12, capSub,
+            size: 7.5, role: SldRole.source));
+        stackBottom = cy + 11;
+        cy += 58;
+      }
+      if (project.sources?.solar != null) {
+        final (head, sub) = _solarNodeLabels(project);
+        connectTo(14, 7);
+        _emitPvArray(prims, dropX, cy, SldRole.source);
+        prims.add(SldLabel(dropX + 20, cy - 2, head,
+            size: 8.5, bold: true, role: SldRole.source));
+        prims.add(SldLabel(dropX + 20, cy + 12, sub,
+            size: 7.5, role: SldRole.source));
+        stackBottom = cy + 7;
+        cy += 58;
+      }
+      if (project.sources?.battery != null) {
+        final (head, sub) = _batteryNodeLabels(project, demandVa);
+        connectTo(13, 13);
+        _emitBattery(prims, dropX, cy, SldRole.source);
+        prims.add(SldLabel(dropX + 20, cy - 2, head,
+            size: 8.5, bold: true, role: SldRole.source));
+        prims.add(SldLabel(dropX + 20, cy + 12, sub,
+            size: 7.5, role: SldRole.source));
+        stackBottom = cy + 13;
+      }
+    }
   }
 
-  // System-earthing mark at the LV-main / transformer-secondary — the IEC earth
-  // symbol hung to the LEFT of the LV-main bus (the genset / capacitor take the
-  // right side), labelled with the installation earthing-system designation.
-  final earthX = nodeX - 34;
-  prims.add(SldLine(nodeX, lvMidY, earthX, lvMidY,
+  // System-earthing mark — at the LV-main / transformer-secondary on an MV
+  // service, at the SERVICE ENTRANCE (the supply head) on an LV one — the IEC
+  // earth symbol hung to the LEFT (the side sources take the right side),
+  // labelled with the installation earthing-system designation.
+  final earthX = isMv ? nodeX - 34 : centreX - 60;
+  prims.add(SldLine(isMv ? nodeX : centreX - 12, lvMidY, earthX, lvMidY,
       weight: SldWeight.medium, role: SldRole.source));
   _emitEarth(prims, earthX, lvMidY, SldRole.source);
   prims.add(SldLabel(earthX - 16, lvMidY + 30, project.earthingSystem.label,
       size: 7.5, bold: true, role: SldRole.source));
 
-  return (prims: prims, height: lvBottom, feedX: centreX, feedY: lvBottom);
+  return (
+    prims: prims,
+    height: math.max(lvBottom, stackBottom),
+    feedX: centreX,
+    feedY: lvBottom
+  );
 }
 
 /// HORIZONTAL (left-to-right) source chain for the interactive single-line
-/// canvas: PLN supply -> [MV bus] -> two-winding transformer -> LV-main bus,
-/// flowing rightward, with the GENSET / CAPACITOR BANK dropping BELOW the LV bus
-/// (so they never collide with the root board placed to the right). The feed
-/// anchor is the LV-main board (at the baseline) — the root board connects to
-/// it. Uses the compact Indonesian board codes (PLN / MVMDP / LVMDP) since a
-/// horizontal chain has no room for the full names; the transformer is the
-/// Δ-Y (DyN) two-winding symbol, panels are boxes — matching the EL10011003 DXF.
+/// canvas. On a DECLARED MV service (`_isMvService`): PLN supply -> MVMDP ->
+/// two-winding transformer -> LVMDP, flowing rightward. On an LV (TR) direct
+/// service — the default — the chain is the SUPPLY HEAD ONLY with a short
+/// outgoing lead (no fabricated TRAFO / MVMDP / LVMDP: a house metered at
+/// 220/380 V has no customer substation to draw). The GENSET / CAPACITOR /
+/// SOLAR / BATTERY drop BELOW the last chain node (so they never collide with
+/// the root board placed to the right). The feed anchor is that node at the
+/// baseline — the root board connects to it. Uses the compact Indonesian
+/// board codes (PLN / MVMDP / LVMDP) since a horizontal chain has no room for
+/// the full names; the transformer is the Δ-Y (DyN) two-winding symbol,
+/// panels are boxes — matching the EL10011003 DXF.
 ({List<SldPrim> prims, double height, double feedX, double feedY})
     _buildSourceSpineH(
   ElectricalProject project,
@@ -1261,19 +1385,19 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
   final prims = <SldPrim>[];
   const role = SldRole.source;
   final demandVa = result.supply.demandVa;
+  final isMv = _isMvService(project);
   final txKva = project.transformerKva?.inKilovoltAmperes ??
       (demandVa.inKilovoltAmperes > 0
           ? selectGeneratorKva(demandVa).inKilovoltAmperes
           : 0.0);
   final txLabel = txKva > 0 ? 'TRAFO ${_num(txKva)} kVA' : 'TRAFO';
-  final hasMv = project.dualTransformer ||
-      project.sources != null ||
-      project.transformerKva != null;
   final chain = <({String name, String kind})>[
     (name: _supplyHeadLabel(project, compact: true), kind: 'supply'),
-    if (hasMv) (name: 'MVMDP', kind: 'bus'),
-    (name: txLabel, kind: 'transformer'),
-    (name: 'LVMDP', kind: 'bus'),
+    if (isMv) ...[
+      (name: 'MVMDP', kind: 'bus'),
+      (name: txLabel, kind: 'transformer'),
+      (name: 'LVMDP', kind: 'bus'),
+    ],
   ];
 
   const pitchX = 132.0;
@@ -1296,9 +1420,12 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
         prims.add(SldLabel(x - 30, yMid + 28, node.name,
             size: 8, bold: true, role: role));
       case 'supply':
-        // MV incoming isolator (bowtie), with the PLN label below.
+        // Incoming isolator (bowtie). On the MV chain the label sits below;
+        // on the LV head-only chain it moves ABOVE the symbol — the side-
+        // source drop line leaves straight down from the head, exactly where
+        // the below-label used to sit.
         _emitBowtie(prims, x, yMid, 11, role);
-        prims.add(SldLabel(x - 10, yMid + 26, node.name,
+        prims.add(SldLabel(x - 10, isMv ? yMid + 26 : yMid - 20, node.name,
             size: 8.5, bold: true, role: role));
       case 'bus':
       default:
@@ -1308,7 +1435,13 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
     prevCx = x;
     x += pitchX;
   }
-  final lvX = x - pitchX; // the LV-main board (feed-out to the root)
+  final lvX = x - pitchX; // the last chain node (feed-out to the root)
+  if (!isMv) {
+    // A short outgoing service lead so the lone head visibly feeds the root
+    // board the canvas places to the right of the chain.
+    prims.add(SldLine(lvX + 12, yMid, lvX + 46, yMid,
+        weight: SldWeight.medium, role: role));
+  }
 
   // GENSET + CAPACITOR (+ SOLAR PV + BATTERY) drop BELOW the LV bus, STACKED
   // vertically on the bus x with their labels to the LEFT (clear of the root
@@ -1317,7 +1450,9 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
   // the new solar/battery nodes simply extend the stack.
   final hasGen = project.sources?.generator != null;
   var nextCy = yMid + 64; // the next side-node centre y
-  var prevBottom = yMid + 17; // the LV-bus box bottom (drop-line start)
+  // Drop-line start: the LV-bus box bottom on the MV chain, the bowtie's
+  // lower edge on the LV head-only chain.
+  var prevBottom = isMv ? yMid + 17 : yMid + 10;
   if (hasGen) {
     final gen = project.sources!.generator!;
     final backupVa = ApparentPower(demandVa.voltAmperes * gen.backupFraction);
@@ -1374,17 +1509,26 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
     prims.add(SldLabel(lvX - 104, bcy + 11, sub, size: 7, role: role));
   }
 
-  // System-earthing mark at the transformer secondary — the IEC earth symbol
-  // dropping BELOW the secondary winding (clear of the genset / capacitor that
-  // hang under the LV bus to the right), labelled with the installation
-  // earthing-system designation. Placed at the transformer only when one is
-  // drawn (it always is, so this mirrors the vertical spine).
+  // System-earthing mark — at the transformer secondary on an MV chain (the
+  // IEC earth symbol dropping BELOW the secondary winding, clear of the
+  // genset / capacitor that hang under the LV bus to the right); on the LV
+  // head-only chain it hangs to the LEFT of the supply head (the service
+  // entrance — the side sources take the space below). Labelled with the
+  // installation earthing-system designation.
   if (txSecondaryX != null) {
     const eTop = yMid + 40; // below the TRAFO label at yMid+28
     prims.add(SldLine(txSecondaryX, yMid + 11, txSecondaryX, eTop,
         weight: SldWeight.medium, role: role));
     _emitEarth(prims, txSecondaryX, eTop, role);
     prims.add(SldLabel(txSecondaryX + 12, eTop + 8, project.earthingSystem.label,
+        size: 7, bold: true, role: role));
+  } else {
+    const headX = 0.0; // the supply head is the first chain node, at x = 0
+    const earthX = headX - 44;
+    prims.add(const SldLine(headX - 11, yMid, earthX, yMid,
+        weight: SldWeight.medium, role: role));
+    _emitEarth(prims, earthX, yMid, role);
+    prims.add(SldLabel(earthX - 16, yMid + 30, project.earthingSystem.label,
         size: 7, bold: true, role: role));
   }
 

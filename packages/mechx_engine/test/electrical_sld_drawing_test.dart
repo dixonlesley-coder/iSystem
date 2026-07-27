@@ -2,7 +2,8 @@ import 'dart:convert';
 
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
-import 'package:mechx_engine/electrical/earthing.dart' show EarthingSystem;
+import 'package:mechx_engine/electrical/earthing.dart'
+    show EarthingSystem, EarthingSystemInfo;
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
@@ -515,10 +516,64 @@ void main() {
       expect(spine.isEmpty, isFalse);
       final joined =
           spine.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
-      expect(joined, contains('PANEL UTAMA TEGANGAN RENDAH'));
+      // A capacitor does NOT declare an MV service: the bank hangs off the
+      // honest LV supply head — no fabricated LV-main board or transformer.
+      expect(joined, contains('PLN'));
       expect(joined, contains('CAPACITOR BANK'));
+      expect(joined, isNot(contains('PANEL UTAMA')));
+      expect(joined, isNot(contains('TRANSFORMER')));
       // It carries the Source legend entry.
       expect(spine.legend.map((e) => e.code), contains('Source'));
+    });
+
+    test('an LV direct service (nothing declared but the daya tersambung) '
+        'never fabricates TRAFO / MVMDP / LVMDP — head-only chain with the '
+        'earth mark at the service entrance', () {
+      // The exact situation of a house on a PLN LV meter: demand exists, the
+      // declared connection is 33000 VA, and no transformer was ever entered.
+      const lv = ElectricalProject(
+        id: 'lv', name: 'House',
+        supplyCapacityVa: ApparentPower(33000),
+        panels: basePanels,
+      );
+      final r = computeSystem(profile, lv);
+      for (final horizontal in [false, true]) {
+        final spine = buildElectricalSourceSpine(
+            project: lv, result: r, horizontal: horizontal);
+        expect(spine.isEmpty, isFalse);
+        final joined =
+            spine.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+        // The declared daya tersambung prints on the head (33000 VA = 33 kVA)
+        // and the head is plain PLN — never an "MV STATION".
+        expect(joined, contains('PLN 33 kVA'));
+        expect(joined, isNot(contains('MV STATION')));
+        expect(joined, isNot(contains('TRAFO')));
+        expect(joined, isNot(contains('TRANSFORMER')));
+        expect(joined, isNot(contains('MVMDP')));
+        expect(joined, isNot(contains('LVMDP')));
+        expect(joined, isNot(contains('PANEL UTAMA')));
+        // The earthing designation still marks the service entrance.
+        expect(joined, contains(lv.earthingSystem.label));
+      }
+    });
+
+    test('a dual-transformer project is a DECLARED MV service: the full chain '
+        'draws with the transformer kVA auto-sized from demand (ladder)', () {
+      const dual = ElectricalProject(
+          id: 'd', name: 'Dual', dualTransformer: true, panels: basePanels);
+      final r = computeSystem(profile, dual);
+      final kva = selectGeneratorKva(r.supply.demandVa).inKilovoltAmperes;
+      final kvaText =
+          kva == kva.roundToDouble() ? '${kva.toInt()}' : kva.toStringAsFixed(1);
+      final joined = buildElectricalSourceSpine(project: dual, result: r)
+          .prims
+          .whereType<SldLabel>()
+          .map((t) => t.text)
+          .join('\n');
+      expect(joined, contains('PLN MV STATION'));
+      expect(joined, contains('PANEL UTAMA TEGANGAN MENENGAH'));
+      expect(joined, contains('TRANSFORMER $kvaText kVA'));
+      expect(joined, contains('PANEL UTAMA TEGANGAN RENDAH'));
     });
   });
 
@@ -543,14 +598,16 @@ void main() {
     String labels(SldSheet s) =>
         s.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
 
-    test('the default supply head keeps the historic PLN labels (vertical + '
-        'compact) and prints no battery / solar / backup-%', () {
+    test('the default supply head reads plain PLN on an LV service, PLN MV '
+        'STATION only on a declared MV one, and prints no battery / solar / '
+        'backup-%', () {
       const p = ElectricalProject(
           id: 's', name: 'S', capacitorBankKvar: 50, panels: basePanels);
       final r = computeSystem(profile, p);
       final v = labels(
           buildElectricalOverview(project: p, result: r, sourceChain: true));
-      expect(v, contains('PLN MV STATION'));
+      expect(v, contains('PLN'));
+      expect(v, isNot(contains('MV STATION'))); // LV: no fabricated MV head
       final h = labels(buildElectricalSourceSpine(
           project: p, result: r, horizontal: true));
       expect(h, contains('PLN'));
@@ -559,6 +616,17 @@ void main() {
         expect(j, isNot(contains('SOLAR PV')));
         expect(j, isNot(contains('backs')));
       }
+      // A DECLARED MV service keeps the historic MV-station head.
+      const mv = ElectricalProject(
+          id: 's', name: 'S',
+          transformerKva: ApparentPower(400000),
+          panels: basePanels);
+      final mr = computeSystem(profile, mv);
+      expect(
+        labels(
+            buildElectricalOverview(project: mv, result: mr, sourceChain: true)),
+        contains('PLN MV STATION'),
+      );
     });
 
     test('supplyKind + supplyCapacityVa re-label the supply head node', () {
@@ -849,24 +917,51 @@ void main() {
       expect(pb, equals(pa));
     });
 
-    test('sourceChain=true prepends source-role nodes + a TEGANGAN spine', () {
+    test('sourceChain=true on an UNDECLARED (LV) service prepends only the '
+        'honest supply head — no fabricated TRAFO / TEGANGAN chain', () {
       final src = buildElectricalOverview(
           project: ov, result: ovResult, sourceChain: true);
-      // The spine draws real single-line SYMBOLS, not boxes: the PLN supply
-      // circle + the transformer's TWO winding circles ⇒ ≥ 3 source circles.
+      final joined =
+          src.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+      expect(joined, contains('PLN'));
+      expect(joined, isNot(contains('MV STATION')));
+      expect(joined, isNot(contains('TRANSFORMER')));
+      expect(joined, isNot(contains('TEGANGAN')));
+      // No transformer winding circles: the LV head is a bowtie + earth,
+      // all pure lines — no source-role circles at all.
+      expect(
+          src.prims
+              .whereType<SldCircle>()
+              .where((c) => c.role == SldRole.source),
+          isEmpty);
+      // The legend still gains the Source entry, and the head added prims.
+      expect(src.legend.map((e) => e.code), contains('Source'));
+      final base = buildElectricalOverview(project: ov, result: ovResult);
+      expect(src.prims.length, greaterThan(base.prims.length));
+    });
+
+    test('sourceChain=true on a DECLARED MV service draws the full TEGANGAN '
+        'spine with real single-line symbols', () {
+      final mv = ElectricalProject(
+        id: 'ov', name: 'Tower',
+        transformerKva: const ApparentPower(630000),
+        panels: ov.panels,
+      );
+      final mr = computeSystem(profile, mv);
+      final src = buildElectricalOverview(
+          project: mv, result: mr, sourceChain: true);
+      // The spine draws real single-line SYMBOLS, not boxes: the
+      // transformer's TWO winding circles ⇒ ≥ 2 source circles.
       final sourceCircles = src.prims
           .whereType<SldCircle>()
           .where((c) => c.role == SldRole.source);
-      expect(sourceCircles.length, greaterThanOrEqualTo(2)); // the transformer windings
+      expect(sourceCircles.length, greaterThanOrEqualTo(2));
       final joined =
           src.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
       expect(joined, contains('PLN MV STATION'));
+      expect(joined, contains('TEGANGAN MENENGAH'));
       expect(joined, contains('TEGANGAN RENDAH'));
-      // The legend gains the Source entry.
-      expect(src.legend.map((e) => e.code), contains('Source'));
-      // More prims than the default (the spine added rects + connectors).
-      final base = buildElectricalOverview(project: ov, result: ovResult);
-      expect(src.prims.length, greaterThan(base.prims.length));
+      expect(joined, contains('TRANSFORMER 630 kVA'));
     });
 
     test('a genset in sources adds a GENSET source node', () {
@@ -895,8 +990,10 @@ void main() {
           s.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
       expect(joined, contains('GENSET'));
       expect(joined, contains('CAPACITOR BANK'));
-      // dualTransformer is false but sources != null ⇒ the MV main is drawn.
-      expect(joined, contains('TEGANGAN MENENGAH'));
+      // Distributed sources do NOT declare an MV service: no fabricated MV
+      // main / transformer — the genset + capacitor hang off the LV head.
+      expect(joined, isNot(contains('TEGANGAN MENENGAH')));
+      expect(joined, isNot(contains('TRANSFORMER')));
     });
   });
 

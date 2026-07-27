@@ -1392,6 +1392,46 @@ ElectricalSystemResult computeSystem(
     );
   }
 
+  // JUDGE-ONLY feeder-vs-fed-board check: a feeder way's design current is the
+  // fed board's diversified demand W converted at a balanced power factor, but
+  // the fed board's own incomer (and the current the feeder REALLY carries on
+  // its worst phase) is the WORST-PHASE line current — on an imbalanced fed
+  // board those diverge, and the feeder breaker can end up rated below what
+  // the board actually draws (nuisance trip under full demand, and the two
+  // printed figures contradict on the schedule). Never resizes — the honest
+  // fix is rebalancing the fed board's phases (or a breaker override).
+  for (final id in postOrder.reversed) {
+    final parent = byId[id];
+    final pr = results[id];
+    if (parent == null || pr == null) continue;
+    for (final c in parent.circuits) {
+      final childId = c.feedsPanelId;
+      if (childId == null) continue;
+      final childResult = results[childId];
+      final feederResult =
+          pr.circuits.where((r) => r.circuitId == c.id).firstOrNull;
+      if (childResult == null || feederResult == null) continue;
+      final childDemandA = childResult.demandCurrent.amperes;
+      final feederRatingA = feederResult.breaker.ratingA.amperes;
+      if (childDemandA <= 0 || feederRatingA + 1e-9 >= childDemandA) continue;
+      final imbalance = childResult.phaseBalance.imbalancePercent;
+      final cause = imbalance > 0
+          ? ' (phase imbalance $imbalance% — rebalance that board\'s '
+              'single-phase ways or raise the feeder rating)'
+          : ' — raise the feeder rating';
+      pr.warnings.add(ElectricalWarning(
+        code: 'feeder-below-fed-demand',
+        severity: WarningSeverity.warning,
+        message:
+            '${c.name}: the feeder breaker is ${_num(feederRatingA)} A but '
+            '${childResult.name} draws ${_num(childDemandA)} A on its '
+            'worst-loaded phase$cause.',
+        panelId: id,
+        circuitId: c.id,
+      ));
+    }
+  }
+
   // Collect every panel's warnings into the system list (after augmentation).
   for (final id in postOrder.reversed) {
     final pr = results[id];
