@@ -29,6 +29,7 @@ import 'package:mechx_engine/electrical/load_kind.dart';
 import '../../data/app_settings.dart';
 import '../../store/annotation_store.dart';
 import '../../store/calibration_store.dart';
+import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/history_store.dart';
 import '../../store/inspector_store.dart';
@@ -308,6 +309,21 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     });
   }
 
+  /// Jump [panelId] (optionally its specific [circuitId] way) from the
+  /// Layout canvas's electrical layer to the standalone single-line
+  /// workspace: switches the workspace view, then hands the panel/circuit id
+  /// to [electricalFocusProvider] — the SAME Review→Electrical locate seam
+  /// `electrical_view.dart` already consumes (forces the Single-line tab,
+  /// frames the board, and rings the exact way when a circuit id is given).
+  /// One tap, no toast — the view change is the feedback.
+  void _showInSingleLine(String panelId, {String? circuitId}) {
+    _closeMenus();
+    ref.read(workspaceViewProvider.notifier).set(WorkspaceView.electrical);
+    ref
+        .read(electricalFocusProvider.notifier)
+        .request(panelId, circuitId: circuitId);
+  }
+
   Widget _buildCircuitMenu() {
     final t = _circuitMenu!;
     final circuit = ref
@@ -332,7 +348,9 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
           // shared action the standalone electrical workspace's menu and the
           // inline circuit inspector run (one undo step + one toast).
           hasLoadPos: circuit?.loadPos != null,
-          onUnplace: () => unplaceCircuitLoad(ref, t.panelId, t.circuitId),
+          onUnplace: () => unplaceCircuitLoad(ref, context, t.panelId, t.circuitId),
+          onShowInSingleLine: () =>
+              _showInSingleLine(t.panelId, circuitId: t.circuitId),
           onDone: () => setState(() => _circuitMenu = null),
         ),
       ),
@@ -380,8 +398,9 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
           },
           feedCandidates: feedCandidates,
           fedFromLabel: feedingPanelLabel(project, panel.id),
-          onFeedFrom: (fromId) => feedPanelFrom(ref, fromId, panel.id),
-          onPinPhases: () => pinPanelPhasesTo(ref, panel.id),
+          onFeedFrom: (fromId) => feedPanelFrom(ref, context, fromId, panel.id),
+          onPinPhases: () => pinPanelPhasesTo(ref, context, panel.id),
+          onShowInSingleLine: () => _showInSingleLine(panel.id),
           onDone: () => setState(() => _panelMenu = null),
         ),
       ),

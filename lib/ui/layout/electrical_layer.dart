@@ -48,6 +48,7 @@ import '../electrical/electrical_layout_view.dart'
         LayoutPanelMenu,
         LayoutCircuitMenu;
 import '../electrical/electrical_palette.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
@@ -115,6 +116,7 @@ const double _kFeederGripGapPx = 3;
 /// for the new way (nothing is fabricated).
 void _toastSizedDrop(
   WidgetRef ref,
+  BuildContext context,
   String panelId,
   String circuitId,
   String parentLabel,
@@ -128,18 +130,28 @@ void _toastSizedDrop(
   if (sized == null) return;
   final poles = sized.threePhase ? 3 : 1;
   ref.read(statusMessageProvider.notifier).showStatus(
-        '${sized.name} -> $parentLabel: '
-        '${breakerScheduleLabel(sized.breaker, poles)}'
-        ' · ${fmtNum(sized.cable.csaMm2)} mm2'
-        ' · Vd ${sized.voltageDrop.dropPercent.toStringAsFixed(1)}%',
-      );
+      context.strings.format(
+        StringKey.electricalCircuitAddedTemplate,
+        {
+          'name': sized.name,
+          'parent': parentLabel,
+          'breaker': breakerScheduleLabel(sized.breaker, poles),
+          'csa': fmtNum(sized.cable.csaMm2),
+          'vd': sized.voltageDrop.dropPercent.toStringAsFixed(1),
+        },
+      ));
 }
 
 /// Toast a newly minted board: `fed from <parent>` when a source board was named
 /// (the single-line canvas's own feeder-card wording), else a plain `placed` —
 /// a blank-plan drop is utility-fed, so claiming a parent would be a lie. Any
 /// template ways that arrived with it are counted.
-void _toastNewPanel(WidgetRef ref, String newPanelId, {String? fedFrom}) {
+void _toastNewPanel(
+  WidgetRef ref,
+  BuildContext context,
+  String newPanelId, {
+  String? fedFrom,
+}) {
   final added = ref
       .read(electricalProjectProvider)
       .panels
@@ -147,10 +159,38 @@ void _toastNewPanel(WidgetRef ref, String newPanelId, {String? fedFrom}) {
       .firstOrNull;
   final name = added == null ? 'Sub-panel' : (added.tag ?? added.name);
   final ways = added?.circuits.where((c) => c.loadKind != LoadKind.feeder).length ?? 0;
-  final head = fedFrom == null ? '$name placed' : '$name fed from $fedFrom';
-  ref
-      .read(statusMessageProvider.notifier)
-      .showStatus(ways > 0 ? '$head — $ways ways from the template' : head);
+
+  if (ways > 0) {
+    if (fedFrom == null) {
+      ref.read(statusMessageProvider.notifier).showStatus(
+        context.strings.format(
+          StringKey.electricalPanelPlacedWithWaysTemplate,
+          {'panel': name, 'count': ways.toString()},
+        ),
+      );
+    } else {
+      ref.read(statusMessageProvider.notifier).showStatus(
+        context.strings.format(
+          StringKey.electricalPanelFedWithWaysTemplate,
+          {'panel': name, 'parent': fedFrom, 'count': ways.toString()},
+        ),
+      );
+    }
+  } else if (fedFrom == null) {
+    ref.read(statusMessageProvider.notifier).showStatus(
+      context.strings.format(
+        StringKey.electricalPanelPlacedTemplate,
+        {'panel': name},
+      ),
+    );
+  } else {
+    ref.read(statusMessageProvider.notifier).showStatus(
+      context.strings.format(
+        StringKey.electricalFedFromTemplate,
+        {'child': name, 'parent': fedFrom},
+      ),
+    );
+  }
 }
 
 /// The electrical layer painted over the shared sheet at [transform].
@@ -359,7 +399,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
               onTap: () => selectionCtrl.selectPanel(panel.id),
               onDoubleTap: () => onEditPanel(panel.id),
               onMenu: (gp) => onPanelMenu(panel.id, gp),
-              onDropLoad: (load) => _dropOnMarker(ref, ctrl, panel, load),
+              onDropLoad: (load) => _dropOnMarker(ref, context, ctrl, panel, load),
             ),
           ),
         ),
@@ -453,6 +493,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
   /// toast the single-line canvas gives.
   void _dropOnMarker(
     WidgetRef ref,
+    BuildContext context,
     ElectricalProjectController ctrl,
     ElectricalPanel panel,
     PaletteLoad load,
@@ -462,8 +503,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
     // `_dropLoadOnPanel` refuses it for the same reason).
     if (panel.id == kMepEquipmentPanelId) {
       ref.read(statusMessageProvider.notifier).showStatus(
-            'MEP Equipment is auto-generated from the plan — '
-            'add ways to another panel.',
+            context.strings(StringKey.electricalMepEquipmentGuard),
           );
       return;
     }
@@ -486,7 +526,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
         templateId: load.panelTemplateId,
       );
       ctrl.setPanelLayoutPos(newId, pos);
-      _toastNewPanel(ref, newId, fedFrom: parentLabel);
+      _toastNewPanel(ref, context, newId, fedFrom: parentLabel);
       return;
     }
 
@@ -498,7 +538,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
       loadW: load.loadW > 0 ? load.loadW : null,
       motorKw: load.motorKw,
     );
-    _toastSizedDrop(ref, panel.id, circuitId, parentLabel);
+    _toastSizedDrop(ref, context, panel.id, circuitId, parentLabel);
   }
 
   /// A spot on THIS sheet/floor just to the RIGHT of [panel]'s marker for a node
@@ -1243,7 +1283,7 @@ class _SheetDropTargetState extends ConsumerState<_SheetDropTarget> {
       );
       // Non-recording placement paired with that commit ⇒ still ONE undo step.
       widget.controller.setPanelLayoutPos(newId, pos);
-      _toastNewPanel(ref, newId);
+      _toastNewPanel(ref, context, newId);
       return;
     }
 
@@ -1276,7 +1316,7 @@ class _SheetDropTargetState extends ConsumerState<_SheetDropTarget> {
       loadW: load.loadW > 0 ? load.loadW : null,
       motorKw: load.motorKw,
     );
-    _toastSizedDrop(ref, nearest.id, circuitId, parent.tag ?? parent.name);
+    _toastSizedDrop(ref, context, nearest.id, circuitId, parent.tag ?? parent.name);
   }
 }
 
@@ -1463,9 +1503,17 @@ class _FeederGripLayerState extends ConsumerState<_FeederGripLayer> {
         if (res.reason != null) status.showStatus(res.reason!);
       } else {
         final was = res.reparentedFromLabel;
-        status.showStatus(was == null
-            ? '$child fed from $parent'
-            : '$child re-fed from $parent (was $was)');
+        if (was == null) {
+          status.showStatus(context.strings.format(
+            StringKey.electricalFedFromTemplate,
+            {'child': child, 'parent': parent},
+          ));
+        } else {
+          status.showStatus(context.strings.format(
+            StringKey.electricalReFedFromTemplate,
+            {'child': child, 'parent': parent, 'was': was},
+          ));
+        }
       }
     }
     setState(() {
@@ -1557,7 +1605,7 @@ class _FeederGrip extends StatelessWidget {
     final colors = context.colors;
     return Semantics(
       button: true,
-      label: 'Feeder outlet — drag onto a board to feed it',
+      label: context.strings(StringKey.electricalFeederOutletHint),
       child: MouseRegion(
         cursor: SystemMouseCursors.precise,
         child: GestureDetector(

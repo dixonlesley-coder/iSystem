@@ -104,6 +104,18 @@ class ElectricalCircuitMenu extends StatelessWidget {
   /// handing the run length back to the manual field. Null ⇒ no row.
   final VoidCallback? onUnplace;
 
+  /// Jump this way's LOAD to the unified Layout canvas's electrical layer —
+  /// offered by the standalone single-line workspace, only when the load
+  /// actually carries a placement (an unplaced load has nowhere to jump to).
+  /// Null ⇒ no row.
+  final VoidCallback? onShowOnLayout;
+
+  /// Jump this circuit to the standalone single-line workspace (framing its
+  /// board and selecting the way) — offered by the Layout canvas's context
+  /// menu, since that view is the plan projection of the same model.
+  /// Null ⇒ no row.
+  final VoidCallback? onShowInSingleLine;
+
   const ElectricalCircuitMenu({
     super.key,
     required this.target,
@@ -112,6 +124,8 @@ class ElectricalCircuitMenu extends StatelessWidget {
     required this.onDone,
     this.hasLoadPos = false,
     this.onUnplace,
+    this.onShowOnLayout,
+    this.onShowInSingleLine,
   });
 
   @override
@@ -132,6 +146,16 @@ class ElectricalCircuitMenu extends StatelessWidget {
             onUnplace!();
             onDone();
           }),
+        // Cross-view navigation — the host decides which (if either) applies,
+        // so at most one of these ever renders in practice.
+        if (onShowOnLayout != null)
+          ElectricalMenuAction(
+              context.strings(StringKey.electricalShowOnLayout),
+              onShowOnLayout!),
+        if (onShowInSingleLine != null)
+          ElectricalMenuAction(
+              context.strings(StringKey.electricalShowInSingleLine),
+              onShowInSingleLine!),
         ElectricalMenuAction(context.strings(StringKey.electricalMenuDelete),
             () {
           controller.deleteCircuit(target.panelId, target.circuitId);
@@ -168,6 +192,17 @@ class ElectricalPanelMenu extends StatefulWidget {
   /// '(current)' + inert in the chooser. Null ⇒ nothing is marked.
   final String? fedFromLabel;
 
+  /// Jump this panel to the unified Layout canvas's electrical layer —
+  /// offered by the standalone single-line workspace, only when the panel
+  /// actually carries a placement (an unplaced panel has nowhere to jump to).
+  /// Null ⇒ no row.
+  final VoidCallback? onShowOnLayout;
+
+  /// Jump this panel to the standalone single-line workspace (framing its
+  /// board schedule) — offered by the Layout canvas's context menu, since that
+  /// view is the plan projection of the same model. Null ⇒ no row.
+  final VoidCallback? onShowInSingleLine;
+
   const ElectricalPanelMenu({
     super.key,
     required this.panel,
@@ -179,6 +214,8 @@ class ElectricalPanelMenu extends StatefulWidget {
     this.onFeedFrom,
     this.onPinPhases,
     this.fedFromLabel,
+    this.onShowOnLayout,
+    this.onShowInSingleLine,
   });
 
   @override
@@ -227,6 +264,13 @@ class _ElectricalPanelMenuState extends State<ElectricalPanelMenu> {
             widget.onProperties),
         ElectricalMenuAction(
             context.strings(StringKey.electricalMenuOpenPanel), widget.onOpen),
+        // Cross-view navigation — the host decides which (if either) applies,
+        // so at most one of these ever renders in practice.
+        if (widget.onShowOnLayout != null)
+          ElectricalMenuAction('Show on layout', widget.onShowOnLayout!),
+        if (widget.onShowInSingleLine != null)
+          ElectricalMenuAction(
+              'Show in single-line', widget.onShowInSingleLine!),
         ElectricalMenuAction(
           context.strings(panel.essential
               ? StringKey.electricalMenuUnmarkEssential
@@ -1169,12 +1213,13 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
                         _canChooseFeed ||
                         widget.onDisconnectFeeder != null)
                       ElectricalField(
-                        label: 'Fed from',
+                        label: context.strings(StringKey.electricalFedFromFieldLabel),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Text(
-                              widget.fedFromLabel ?? 'Utility supply',
+                              widget.fedFromLabel ??
+                                  context.strings(StringKey.electricalUtilitySupply),
                               style:
                                   type.body.copyWith(color: colors.textPrimary),
                             ),
@@ -1188,7 +1233,8 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
                                 children: [
                                   if (_canChooseFeed)
                                     MechXButton(
-                                      label: 'Feed from…',
+                                      label: context
+                                          .strings(StringKey.electricalFeedFromEllipsis),
                                       onPressed: () => setState(
                                           () => _feedChooser = !_feedChooser),
                                     ),
@@ -1205,7 +1251,7 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
                             if (_feedChooser && _canChooseFeed) ...[
                               const SizedBox(height: MechXSpacing.xs),
                               ElectricalChooserCard(
-                                title: 'Feed from',
+                                title: context.strings(StringKey.electricalFeedFromChooserTitle),
                                 items: feedChooserItems(
                                   candidates: widget.feedCandidates,
                                   currentLabel: widget.fedFromLabel,
@@ -1251,12 +1297,13 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
                             Align(
                               alignment: Alignment.centerLeft,
                               child: MechXButton(
-                                label: 'Apply template…',
+                                label: context.strings(
+                                    StringKey.electricalApplyTemplateEllipsis),
                                 onPressed: widget.onApplyTemplate,
                               ),
                             ),
-                            const ElectricalHint(
-                                'Fill this empty board with a typical way list'),
+                            ElectricalHint(context.strings(
+                                StringKey.electricalApplyTemplateHint)),
                           ],
                         ),
                       ),
@@ -1270,12 +1317,13 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
                             Align(
                               alignment: Alignment.centerLeft,
                               child: MechXButton(
-                                label: 'Pin phases',
+                                label: context
+                                    .strings(StringKey.electricalPinPhases),
                                 onPressed: widget.onPinPhases,
                               ),
                             ),
-                            const ElectricalHint(
-                                'Fix every way to its current R/S/T line'),
+                            ElectricalHint(context.strings(
+                                StringKey.electricalPinPhasesHint)),
                           ],
                         ),
                       ),

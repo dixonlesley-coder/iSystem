@@ -61,6 +61,7 @@ import '../../store/history_store.dart';
 import '../canvas/canvas_grid.dart';
 import '../canvas/text_entry_guard.dart';
 import '../canvas/viewport.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'electrical_export.dart' show breakerIcuKaByPanel;
@@ -366,8 +367,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     _ctrl.setPanelPosition(draggedId, slot.dx, slot.dy);
     final labels = _panelLabels(ref.read(electricalProjectProvider));
     ref.read(statusMessageProvider.notifier).showStatus(
-          '${labels[draggedId] ?? 'Panel'} fed from '
-          '${labels[targetId] ?? 'panel'}',
+          context.strings.format(StringKey.electricalFedFromTemplate, {
+            'child': labels[draggedId] ?? 'Panel',
+            'parent': labels[targetId] ?? 'panel',
+          }),
         );
   }
 
@@ -1241,8 +1244,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     // plan, so a hand-added way would silently vanish (G2).
     if (panel.panelId == kMepEquipmentPanelId) {
       ref.read(statusMessageProvider.notifier).showStatus(
-            'MEP Equipment is auto-generated from the plan — '
-            'add ways to another panel.',
+            context.strings(StringKey.electricalMepEquipmentHint),
           );
       return;
     }
@@ -1263,9 +1265,24 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       final added = fresh.panels.where((p) => p.id == newId).firstOrNull;
       final name = added == null ? 'Sub-panel' : (added.tag ?? added.name);
       final ways = added?.circuits.length ?? 0;
-      status.showStatus(ways > 0
-          ? '$name fed from $parentLabel — $ways ways from the template'
-          : '$name fed from $parentLabel');
+      if (ways > 0) {
+        status.showStatus(context.strings.format(
+          StringKey.electricalFedFromWaysTemplate,
+          {
+            'name': name,
+            'parentLabel': parentLabel,
+            'ways': ways.toString(),
+          },
+        ));
+      } else {
+        status.showStatus(context.strings.format(
+          StringKey.electricalFedFromTemplate,
+          {
+            'child': name,
+            'parent': parentLabel,
+          },
+        ));
+      }
       return;
     }
 
@@ -1285,12 +1302,16 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         .firstOrNull;
     if (sized == null) return;
     final poles = sized.threePhase ? 3 : 1;
-    status.showStatus(
-      '${sized.name} -> $parentLabel: '
-      '${breakerScheduleLabel(sized.breaker, poles)}'
-      ' · ${fmtNum(sized.cable.csaMm2)} mm2'
-      ' · Vd ${sized.voltageDrop.dropPercent.toStringAsFixed(1)}%',
-    );
+    status.showStatus(context.strings.format(
+      StringKey.electricalCircuitAddedTemplate,
+      {
+        'name': sized.name,
+        'parent': parentLabel,
+        'breaker': breakerScheduleLabel(sized.breaker, poles),
+        'csa': fmtNum(sized.cable.csaMm2),
+        'vd': sized.voltageDrop.dropPercent.toStringAsFixed(1),
+      },
+    ));
   }
 
   // Helpers exposed to the host view's zoom controls.
@@ -3230,9 +3251,14 @@ class _CanvasDropTargetState extends State<_CanvasDropTarget> {
             templateId: load.panelTemplateId,
           );
           widget.onToast(template == null
-              ? 'Panel added — not fed yet.'
-              : 'SP-$n added from the ${template.label} template — '
-                  'not fed yet.');
+              ? context.strings(StringKey.electricalPanelAddedNotFed)
+              : context.strings.format(
+                  StringKey.electricalPanelAddedTemplateTemplate,
+                  {
+                    'n': n.toString(),
+                    'template': template.label,
+                  },
+                ));
         } else {
           widget.controller.addFloatingLoad(
             kind: load.kind,
@@ -3242,7 +3268,7 @@ class _CanvasDropTargetState extends State<_CanvasDropTarget> {
             loadW: load.loadW > 0 ? load.loadW : null,
             motorKw: load.motorKw,
           );
-          widget.onToast('Load dropped — wire it to a panel.');
+          widget.onToast(context.strings(StringKey.electricalLoadDropped));
         }
         _clearDrag();
       },

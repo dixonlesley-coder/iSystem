@@ -474,7 +474,7 @@ Widget? buildElectricalInlineEditor(
         placementLabel: placementLabel,
         onUnplace: loadPos == null
             ? null
-            : () => unplaceCircuitLoad(ref, panel.id, circuit.id),
+            : () => unplaceCircuitLoad(ref, context, panel.id, circuit.id),
         panelSystem: panel.system,
       );
     }
@@ -506,17 +506,18 @@ Widget? buildElectricalInlineEditor(
         enclosureResult: enclosureResult,
         fedFromLabel: feedingPanelLabel(project, panel.id),
         feedCandidates: feedCandidates,
-        onFeedFrom: (fromId) => feedPanelFrom(ref, fromId, panel.id),
+        onFeedFrom: (fromId) => feedPanelFrom(ref, context, fromId, panel.id),
         onDisconnectFeeder: panel.fedByCircuitId == null
             ? null
             : () {
                 ctrl.disconnectFeeder(panel.id);
                 ref
                     .read(statusMessageProvider.notifier)
-                    .showStatus('Feeder disconnected.');
+                    .showStatus(context
+                        .strings(StringKey.electricalFeederDisconnected));
               },
         onApplyTemplate: () => applyTemplateTo(context, ref, panel.id),
-        onPinPhases: () => pinPanelPhasesTo(ref, panel.id),
+        onPinPhases: () => pinPanelPhasesTo(ref, context, panel.id),
       );
     }
   } else if (target is ElectricalServiceTarget) {

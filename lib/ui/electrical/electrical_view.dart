@@ -21,6 +21,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
+import 'package:mechx_engine/electrical/geo_length.dart' show LayoutPos;
 import 'package:mechx_engine/electrical/lightning.dart' show LpsLevelLabel;
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/metering.dart'
@@ -40,7 +41,9 @@ import '../../store/app_state.dart';
 import '../../store/electrical_feed.dart';
 import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
+import '../../store/layer_store.dart';
 import '../../store/project_store.dart';
+import '../../store/sheets_store.dart';
 import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
 import '../strings/plural.dart';
@@ -475,6 +478,35 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     });
   }
 
+  /// Jump [panelId] (optionally its specific [circuitId] way) from the
+  /// single-line canvas to the unified Layout canvas's electrical layer —
+  /// sets the current sheet to where the target is PLACED (mirrors the
+  /// Review→Electrical locate's own sheet-selection mechanism,
+  /// `issues_card.dart`'s `locate()`), makes Electrical the active discipline
+  /// layer, selects the panel/circuit in [electricalSelectionProvider], and
+  /// switches the workspace to the Layout/plan view. One tap, no toast — the
+  /// view change is the feedback. Callers only offer the row when [pos]
+  /// resolves (a placed panel/circuit) — an unplaced target never gets a dead
+  /// action.
+  void _showOnLayout(LayoutPos pos, String panelId, {String? circuitId}) {
+    setState(() {
+      _panelMenu = null;
+      _circuitMenu = null;
+    });
+    ref.read(sheetsControllerProvider.notifier).selectSheetById(pos.sheetId);
+    ref
+        .read(activeDisciplineProvider.notifier)
+        .set(DisciplineLayer.electrical);
+    if (circuitId != null) {
+      ref
+          .read(electricalSelectionProvider.notifier)
+          .selectCircuit(panelId, circuitId);
+    } else {
+      ref.read(electricalSelectionProvider.notifier).selectPanel(panelId);
+    }
+    ref.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
+  }
+
   // ── Overlays ────────────────────────────────────────────────────────────────
 
   Widget _buildCircuitMenu() {
@@ -487,6 +519,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     final circuit =
         panel?.circuits.where((c) => c.id == ref0.circuitId).firstOrNull;
     final hasLoadPos = circuit?.loadPos != null;
+    final loadPos = circuit?.loadPos;
     return Positioned(
       left: _menuAt.dx,
       top: _menuAt.dy,
@@ -510,9 +543,18 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           // nothing to un-place (mirrors `ElectricalCircuitMenu`'s own gate).
           if (hasLoadPos)
             ElectricalMenuAction('Remove from layout', () {
-              unplaceCircuitLoad(ref, ref0.panelId, ref0.circuitId);
+              unplaceCircuitLoad(ref, context, ref0.panelId, ref0.circuitId);
               setState(() => _circuitMenu = null);
             }),
+          // Cross-view jump to the Layout electrical layer — only when the
+          // load is actually PLACED (an unplaced load has nowhere to jump to,
+          // so the row is simply omitted rather than a dead action).
+          if (loadPos != null)
+            ElectricalMenuAction(
+              context.strings(StringKey.electricalShowOnLayout),
+              () => _showOnLayout(loadPos, ref0.panelId,
+                  circuitId: ref0.circuitId),
+            ),
           ElectricalMenuAction(context.strings(StringKey.electricalMenuDelete),
               () {
             _controller.deleteCircuit(ref0.panelId, ref0.circuitId);
@@ -557,7 +599,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               candidates: feedCandidates,
               currentLabel: fedFromLabel,
               onPick: (fromId) {
-                feedPanelFrom(ref, fromId, panel.id);
+                feedPanelFrom(ref, context, fromId, panel.id);
                 setState(() => _panelMenu = null);
               },
             ),
@@ -590,6 +632,14 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
             }
             setState(() => _panelMenu = null);
           }),
+          // Cross-view jump to the Layout electrical layer — only when the
+          // panel is actually PLACED (an unplaced panel has nowhere to jump
+          // to, so the row is simply omitted rather than a dead action).
+          if (panel.layoutPos != null)
+            ElectricalMenuAction(
+              context.strings(StringKey.electricalShowOnLayout),
+              () => _showOnLayout(panel.layoutPos!, panel.id),
+            ),
           ElectricalMenuAction(
             context.strings(panel.essential
                 ? StringKey.electricalMenuUnmarkEssential
@@ -626,12 +676,13 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           // `ElectricalPanelMenu`'s own row order).
           if (feedCandidates.isNotEmpty)
             ElectricalMenuAction(
-              'Feed from…',
+              context.strings(StringKey.electricalFeedFromEllipsis),
               () => setState(
                   () => _panelMenu = _PanelMenuState(panel.id, feedChooser: true)),
             ),
-          ElectricalMenuAction('Pin phases', () {
-            pinPanelPhasesTo(ref, panel.id);
+          ElectricalMenuAction(
+              context.strings(StringKey.electricalPinPhases), () {
+            pinPanelPhasesTo(ref, context, panel.id);
             setState(() => _panelMenu = null);
           }),
           if (panel.fedByCircuitId != null)
@@ -689,7 +740,12 @@ String? feedingPanelLabel(ElectricalProject project, String panelId) {
 /// by the canvas's own right-click "Feed from…" chooser and the panel
 /// inspector's inline one, so the two entry points can never report a
 /// different result for the same reconnect.
-void feedPanelFrom(WidgetRef ref, String fromPanelId, String panelId) {
+void feedPanelFrom(
+  WidgetRef ref,
+  BuildContext context,
+  String fromPanelId,
+  String panelId,
+) {
   final project = ref.read(electricalProjectProvider);
   final from = project.panels.where((p) => p.id == fromPanelId).firstOrNull;
   final label = from?.tag ?? from?.name ?? fromPanelId;
@@ -701,9 +757,10 @@ void feedPanelFrom(WidgetRef ref, String fromPanelId, String panelId) {
     status.showStatus(res.reason ?? 'Could not connect feeder.');
     return;
   }
+  final fedFrom = context.strings(StringKey.electricalFedFromFieldLabel);
   status.showStatus(res.reparentedFromLabel != null
-      ? 'Fed from $label (was ${res.reparentedFromLabel}).'
-      : 'Fed from $label.');
+      ? '$fedFrom $label (was ${res.reparentedFromLabel}).'
+      : '$fedFrom $label.');
 }
 
 /// Populate an EMPTY board from a preset: opens [showApplyTemplateDialog],
@@ -720,14 +777,17 @@ Future<void> applyTemplateTo(
   final t = panelTemplateById(id);
   ref
       .read(statusMessageProvider.notifier)
-      .showStatus('Applied the ${t?.label ?? id} template.');
+      .showStatus(context.strings.format(
+        StringKey.electricalAppliedTemplateTemplate,
+        {'template': t?.label ?? id},
+      ));
 }
 
 /// Pin every SINGLE-PHASE way on [panelId] to the line the last solve gave it
 /// (three-phase ways are skipped — pinning a line is meaningless for a way
 /// that already spans all three) and toast the count. A panel with no solved
 /// result, or none of whose ways are single-phase, is a no-op.
-void pinPanelPhasesTo(WidgetRef ref, String panelId) {
+void pinPanelPhasesTo(WidgetRef ref, BuildContext context, String panelId) {
   final panelResult = ref.read(electricalResultProvider).panels[panelId];
   if (panelResult == null) return;
   final assignment = <String, PhaseLine>{
@@ -745,7 +805,10 @@ void pinPanelPhasesTo(WidgetRef ref, String panelId) {
       .read(electricalProjectProvider.notifier)
       .pinPanelPhases(panelId, assignment);
   ref.read(statusMessageProvider.notifier).showStatus(
-      'Phases pinned for ${pluralCount(assignment.length, 'way', 'ways')}.');
+      context.strings.format(
+        StringKey.electricalPhasesPinnedTemplate,
+        {'count': pluralCount(assignment.length, 'way', 'ways')},
+      ));
 }
 
 /// Un-place a way's load from the calibrated layout — hands its run length
@@ -753,13 +816,19 @@ void pinPanelPhasesTo(WidgetRef ref, String panelId) {
 /// otherwise non-recording `setLoadPos`). Shared by the canvas's own circuit
 /// context menu ("Remove from layout") and the inline circuit inspector's
 /// identical action.
-void unplaceCircuitLoad(WidgetRef ref, String panelId, String circuitId) {
+void unplaceCircuitLoad(
+  WidgetRef ref,
+  BuildContext context,
+  String panelId,
+  String circuitId,
+) {
   final ctrl = ref.read(electricalProjectProvider.notifier);
   ctrl.pushUndoSnapshot();
   ctrl.setLoadPos(panelId, circuitId, null);
   ref
       .read(statusMessageProvider.notifier)
-      .showStatus('Removed from layout — manual length applies.');
+      .showStatus(context
+          .strings(StringKey.electricalRemovedFromLayout));
 }
 
 /// Pick a preset to populate an EMPTY board with — the panel inspector's
@@ -771,7 +840,8 @@ Future<String?> showApplyTemplateDialog(BuildContext context) {
   return showGeneralDialog<String>(
     context: context,
     barrierDismissible: true,
-    barrierLabel: 'Apply template',
+    barrierLabel:
+        context.strings(StringKey.electricalApplyTemplateBarrier),
     barrierColor: theme.colors.scrim,
     transitionDuration: MechXMotion.appear,
     pageBuilder: (ctx, _, _) => MechXTheme(
@@ -818,7 +888,8 @@ class _ApplyTemplateDialog extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text('Apply template',
+                child: Text(
+                    context.strings(StringKey.electricalApplyTemplateEllipsis),
                     style: type.title.copyWith(color: colors.textPrimary)),
               ),
               MechXButton(

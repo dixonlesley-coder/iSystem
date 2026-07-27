@@ -107,7 +107,7 @@ const List<_Group> _groups = [
       PaletteLoad(LoadKind.general, phases: 3, loadW: 7500),
     ),
     _Card(
-      'Capacitor bank',
+      StringKey.electricalCapacitorBank,
       PaletteLoad(LoadKind.capacitor, phases: 3, loadW: 0),
     ),
   ]),
@@ -126,9 +126,12 @@ const List<_Group> _groups = [
   _Group(StringKey.electricalPaletteDistribution, [
     _Card(StringKey.electricalLoadSpareMcb, PaletteLoad(LoadKind.spare)),
     _Card(StringKey.electricalLoadSubPanel, PaletteLoad(LoadKind.feeder)),
-    _Card('Lighting panel', PaletteLoad(LoadKind.feeder, panelTemplateId: 'lighting')),
-    _Card('Power panel', PaletteLoad(LoadKind.feeder, panelTemplateId: 'power')),
-    _Card('Mixed panel', PaletteLoad(LoadKind.feeder, panelTemplateId: 'mixed')),
+    _Card(StringKey.electricalLightingPanel,
+        PaletteLoad(LoadKind.feeder, panelTemplateId: 'lighting')),
+    _Card(StringKey.electricalPowerPanel,
+        PaletteLoad(LoadKind.feeder, panelTemplateId: 'power')),
+    _Card(StringKey.electricalMixedPanel,
+        PaletteLoad(LoadKind.feeder, panelTemplateId: 'mixed')),
   ]),
 ];
 
@@ -189,8 +192,7 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
     // re-sync.
     if (panel.id == kMepEquipmentPanelId) {
       ref.read(statusMessageProvider.notifier).showStatus(
-            'MEP Equipment is auto-generated from the plan — '
-            'add ways to another panel.',
+            context.strings(StringKey.electricalMepEquipmentHint),
           );
       return;
     }
@@ -209,9 +211,15 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
         y: 80,
         templateId: load.panelTemplateId,
       );
-      final templateDesc = load.panelTemplateId != null ? 'populated ' : '';
+      final templateDesc =
+          load.panelTemplateId != null
+              ? context.strings(StringKey.electricalPopulated)
+              : '';
       ref.read(statusMessageProvider.notifier).showStatus(
-        'Created ${templateDesc}sub-panel on ${panel.name}',
+        context.strings.format(
+          StringKey.electricalCreatedSubpanelTemplate,
+          {'templateDesc': templateDesc, 'panel': panel.name},
+        ),
       );
     } else {
       // Non-feeder cards or feeder with no panel selected: add as a way
@@ -224,7 +232,10 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
             motorKw: load.motorKw,
           );
       ref.read(statusMessageProvider.notifier).showStatus(
-          'Added $cardLabel to ${panel.name}');
+          context.strings.format(
+            StringKey.electricalAddedLoadTemplate,
+            {'load': cardLabel, 'panel': panel.name},
+          ));
     }
   }
 
