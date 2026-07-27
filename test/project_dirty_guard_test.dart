@@ -93,8 +93,21 @@ void main() {
       dir = Directory.systemTemp.createTempSync('mechx_recovery_test');
       path = '${dir.path}/recovery.mechx';
     });
-    tearDown(() {
-      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    tearDown(() async {
+      // The K4 mid-tick-dispose test can leave the off-thread encode's isolate
+      // still holding the recovery file for a few ms after the container is
+      // torn down. On Windows, deleting an open file is a sharing violation
+      // (errno 32) — retry briefly, then give up quietly: the directory is a
+      // unique systemTemp scratch, so a leaked one is harmless while a throw
+      // here fails the whole test on a timing artifact.
+      for (var attempt = 0; attempt < 5; attempt++) {
+        try {
+          if (dir.existsSync()) dir.deleteSync(recursive: true);
+          return;
+        } on FileSystemException {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
     });
 
     test('a virgin project writes no recovery (no phantom)', () async {
