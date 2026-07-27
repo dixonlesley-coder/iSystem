@@ -25,10 +25,15 @@ import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BreakerResult;
 import '../electrical/sources.dart'
-    show GeneratorModeInfo, selectGeneratorKva;
+    show
+        BatteryChemistryInfo,
+        GeneratorModeInfo,
+        kGeneratorPf,
+        selectGeneratorKva,
+        sizeBattery;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart' show BreakerCurve, BreakerClass;
-import '../units.dart' show ApparentPower;
+import '../units.dart' show ApparentPower, Power;
 import 'number_format.dart' show groupThousands;
 import 'sld_sheet.dart';
 
@@ -995,6 +1000,90 @@ void _emitCapacitor(List<SldPrim> out, double cx, double cy, SldRole role) {
   out.add(SldLine(cx, cy + 3, cx, cy + 11, role: role)); // bottom lead
 }
 
+/// BATTERY (IEC 60617): a long/short plate PAIR (the classic cell) doubled to
+/// mark a bank, with leads — pure [SldLine] prims so every renderer draws it
+/// identically (golden rule 5). Centred on ([cx],[cy]).
+void _emitBattery(List<SldPrim> out, double cx, double cy, SldRole role) {
+  const long = 9.0, short = 4.0; // half plate widths
+  // Two cells: long/short, long/short, 4 px pitch, centred on cy.
+  const ys = [-6.0, -2.0, 2.0, 6.0];
+  for (var i = 0; i < ys.length; i++) {
+    final half = i.isEven ? long : short;
+    out.add(SldLine(cx - half, cy + ys[i], cx + half, cy + ys[i],
+        weight: i.isEven ? SldWeight.medium : SldWeight.thin, role: role));
+  }
+  out.add(SldLine(cx, cy - 13, cx, cy - 6, role: role)); // top lead
+  out.add(SldLine(cx, cy + 6, cx, cy + 13, role: role)); // bottom lead
+}
+
+/// SOLAR PV ARRAY: a small cell rectangle with its two internal division lines
+/// (the panel-grid convention) + a lead — pure prims, no new subtype.
+void _emitPvArray(List<SldPrim> out, double cx, double cy, SldRole role) {
+  const w = 22.0, h = 14.0;
+  final x = cx - w / 2, y = cy - h / 2;
+  out.add(SldRect(x, y, w, h, role: role));
+  out.add(SldLine(x + w / 3, y, x + w / 3, y + h, role: role));
+  out.add(SldLine(x + 2 * w / 3, y, x + 2 * w / 3, y + h, role: role));
+  out.add(SldLine(cx, y - 7, cx, y, role: role)); // top lead
+}
+
+/// The SUPPLY-head node name for the project's primary supply kind, with the
+/// declared connection capacity appended when set (`PLN MV STATION 197 kVA` /
+/// compact `PLN 197 kVA`). PLN with no capacity keeps today's exact labels ⇒
+/// byte-identical defaults.
+String _supplyHeadLabel(ElectricalProject project, {required bool compact}) {
+  final cap = project.supplyCapacityVa == null
+      ? ''
+      : ' ${_num(project.supplyCapacityVa!.inKilovoltAmperes)} kVA';
+  return switch (project.supplyKind) {
+    SupplyKind.pln => compact ? 'PLN$cap' : 'PLN MV STATION$cap',
+    SupplyKind.generator => compact ? 'GENSET$cap' : 'GENSET SUPPLY$cap',
+    SupplyKind.solar => compact ? 'PV$cap' : 'SOLAR PV SUPPLY$cap',
+  };
+}
+
+/// `backs NN% of load` — the declared/sized genset kVA against the building
+/// demand kVA, capped at 100 (an oversized set still backs the whole load, it
+/// does not back 250% of it). Null when there is no demand or no rating — no
+/// honest ratio to print, so nothing is printed.
+String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
+  final demandKva = demandVa.inKilovoltAmperes;
+  if (demandKva <= 0 || genKva <= 0) return null;
+  final pct = math.min(100.0, genKva / demandKva * 100).round();
+  return 'backs $pct% of load';
+}
+
+/// The BATTERY node labels: headline (+ sized bank kWh when the demand gives an
+/// honest critical load — the SAME `sizeBattery` basis the power one-line uses)
+/// and the chemistry/autonomy sub-line. Zero demand ⇒ headline stays 'BATTERY'
+/// (a bank size derived from nothing would be fabricated).
+(String, String) _batteryNodeLabels(
+    ElectricalProject project, ApparentPower demandVa) {
+  final batt = project.sources!.battery!;
+  var head = 'BATTERY';
+  if (demandVa.voltAmperes > 0) {
+    final sized = sizeBattery(
+      Power(demandVa.voltAmperes * kGeneratorPf),
+      autonomyHours: batt.autonomyHours,
+      chemistry: batt.chemistry,
+    );
+    head = 'BATTERY ${_num(sized.installedKwh.inKilowattHours)} kWh';
+  }
+  final sub = '${batt.chemistry.label} · ${_num(batt.autonomyHours)} h autonomy';
+  return (head, sub);
+}
+
+/// The SOLAR PV node labels: headline with the installed array kWp (input
+/// arithmetic: panels × Wp) and the panel-count sub-line.
+(String, String) _solarNodeLabels(ElectricalProject project) {
+  final solar = project.sources!.solar!;
+  final kwp = solar.panels * solar.panelWp / 1000;
+  return (
+    'SOLAR PV ${_num(kwp)} kWp',
+    '${solar.panels} x ${solar.panelWp} Wp',
+  );
+}
+
 /// Synthesize the utility source spine drawn ABOVE the panel tree (overview) or
 /// the top floor band (riser): PLN MV STATION -> (MV main, when a dual-tx /
 /// sources project) -> TRANSFORMER <kVA> -> PANEL UTAMA TEGANGAN RENDAH (LV
@@ -1034,7 +1123,7 @@ void _emitCapacitor(List<SldPrim> out, double cx, double cy, SldRole role) {
   // Each spine element carries its SYMBOL kind so it draws as a real single-line
   // device, not a labelled box.
   final spine = <({String name, String? sub, String kind})>[
-    (name: 'PLN MV STATION', sub: null, kind: 'supply'),
+    (name: _supplyHeadLabel(project, compact: false), sub: null, kind: 'supply'),
     if (hasMv)
       (name: 'PANEL UTAMA TEGANGAN MENENGAH', sub: 'MV main', kind: 'bus'),
     (name: txLabel, sub: null, kind: 'transformer'),
@@ -1091,6 +1180,14 @@ void _emitCapacitor(List<SldPrim> out, double cx, double cy, SldRole role) {
         size: 8.5, bold: true, role: SldRole.source));
     prims.add(SldLabel(sideX + 34, gcy + 12, gen.mode.label,
         size: 7.5, role: SldRole.source));
+    // What fraction of the building's diversified demand this set can carry —
+    // the honest coverage figure (capped at 100%), printed only when a demand
+    // exists to compare against.
+    final pct = _gensetBackupPctLabel(genKva, demandVa);
+    if (pct != null) {
+      prims.add(SldLabel(sideX + 34, gcy + 24, pct,
+          size: 7.5, role: SldRole.source));
+    }
     prims.add(SldLine(nodeX + _ovW, gcy, sideX + 1, gcy,
         weight: SldWeight.medium, role: SldRole.source));
   }
@@ -1108,6 +1205,30 @@ void _emitCapacitor(List<SldPrim> out, double cx, double cy, SldRole role) {
     prims.add(SldLabel(sideX + 34, cy + 12, capSub,
         size: 7.5, role: SldRole.source));
     prims.add(SldLine(nodeX + _ovW, cy, sideX + 14, cy,
+        weight: SldWeight.medium, role: SldRole.source));
+  }
+  // SOLAR PV array + BATTERY bank stack BELOW the capacitor slot (new side
+  // nodes — absent sources leave every existing coordinate untouched).
+  var sideY = lvMidY + 8 + _ovH / 2 + 54;
+  if (project.sources?.solar != null) {
+    final (head, sub) = _solarNodeLabels(project);
+    _emitPvArray(prims, sideX + 14, sideY, SldRole.source);
+    prims.add(SldLabel(sideX + 34, sideY - 2, head,
+        size: 8.5, bold: true, role: SldRole.source));
+    prims.add(SldLabel(sideX + 34, sideY + 12, sub,
+        size: 7.5, role: SldRole.source));
+    prims.add(SldLine(nodeX + _ovW, sideY, sideX + 3, sideY,
+        weight: SldWeight.medium, role: SldRole.source));
+    sideY += 54;
+  }
+  if (project.sources?.battery != null) {
+    final (head, sub) = _batteryNodeLabels(project, demandVa);
+    _emitBattery(prims, sideX + 14, sideY, SldRole.source);
+    prims.add(SldLabel(sideX + 34, sideY - 2, head,
+        size: 8.5, bold: true, role: SldRole.source));
+    prims.add(SldLabel(sideX + 34, sideY + 12, sub,
+        size: 7.5, role: SldRole.source));
+    prims.add(SldLine(nodeX + _ovW, sideY, sideX + 5, sideY,
         weight: SldWeight.medium, role: SldRole.source));
   }
 
@@ -1149,7 +1270,7 @@ void _emitCapacitor(List<SldPrim> out, double cx, double cy, SldRole role) {
       project.sources != null ||
       project.transformerKva != null;
   final chain = <({String name, String kind})>[
-    (name: 'PLN', kind: 'supply'),
+    (name: _supplyHeadLabel(project, compact: true), kind: 'supply'),
     if (hasMv) (name: 'MVMDP', kind: 'bus'),
     (name: txLabel, kind: 'transformer'),
     (name: 'LVMDP', kind: 'bus'),
@@ -1189,34 +1310,68 @@ void _emitCapacitor(List<SldPrim> out, double cx, double cy, SldRole role) {
   }
   final lvX = x - pitchX; // the LV-main board (feed-out to the root)
 
-  // GENSET + CAPACITOR drop BELOW the LV bus, STACKED vertically on the bus x
-  // with their labels to the RIGHT (clear of the root board, no label overlap).
+  // GENSET + CAPACITOR (+ SOLAR PV + BATTERY) drop BELOW the LV bus, STACKED
+  // vertically on the bus x with their labels to the LEFT (clear of the root
+  // board placed to the right). A running cursor keeps the historic 58-px
+  // pitch, so the pre-existing genset/capacitor coordinates are unchanged and
+  // the new solar/battery nodes simply extend the stack.
   final hasGen = project.sources?.generator != null;
+  var nextCy = yMid + 64; // the next side-node centre y
+  var prevBottom = yMid + 17; // the LV-bus box bottom (drop-line start)
   if (hasGen) {
     final gen = project.sources!.generator!;
     final backupVa = ApparentPower(demandVa.voltAmperes * gen.backupFraction);
     final genKva = (gen.kva ?? selectGeneratorKva(backupVa)).inKilovoltAmperes;
-    const gcy = yMid + 64;
-    prims.add(SldLine(lvX, yMid + 17, lvX, gcy - 13,
+    final gcy = nextCy;
+    prims.add(SldLine(lvX, prevBottom, lvX, gcy - 13,
         weight: SldWeight.medium, role: role));
     _emitGenerator(prims, lvX, gcy, 13, role);
-    // Labels to the LEFT (ending left of the bus x) so they stay clear of the
-    // root board placed to the right.
     prims.add(SldLabel(lvX - 104, gcy - 1, 'GENSET ${_num(genKva)} kVA',
         size: 7.5, bold: true, role: role));
     prims.add(SldLabel(lvX - 104, gcy + 11, gen.mode.label, size: 7, role: role));
+    // The honest coverage figure — this set against the building's diversified
+    // demand, capped at 100%; printed only when a demand exists.
+    final pct = _gensetBackupPctLabel(genKva, demandVa);
+    if (pct != null) {
+      prims.add(SldLabel(lvX - 104, gcy + 23, pct, size: 7, role: role));
+    }
+    prevBottom = gcy + 13;
+    nextCy += 58;
   }
   if (project.capacitorBankKvar != null || project.sources != null) {
     final kvar = project.capacitorBankKvar;
     final capSub =
         (kvar != null && kvar > 0) ? '${_num(kvar)} kvar' : 'PF correction';
-    final ccy = hasGen ? yMid + 122 : yMid + 64;
-    final dropFrom = hasGen ? yMid + 77 : yMid + 17;
-    prims.add(SldLine(lvX, dropFrom, lvX, ccy - 11,
+    final ccy = nextCy;
+    prims.add(SldLine(lvX, prevBottom, lvX, ccy - 11,
         weight: SldWeight.medium, role: role));
     _emitCapacitor(prims, lvX, ccy, role);
     prims.add(SldLabel(lvX - 96, ccy + 2, 'CAP $capSub',
         size: 7.5, bold: true, role: role));
+    prevBottom = ccy + 11;
+    nextCy += 58;
+  }
+  if (project.sources?.solar != null) {
+    final (head, sub) = _solarNodeLabels(project);
+    final scy = nextCy;
+    prims.add(SldLine(lvX, prevBottom, lvX, scy - 14,
+        weight: SldWeight.medium, role: role));
+    _emitPvArray(prims, lvX, scy, role);
+    prims.add(SldLabel(lvX - 104, scy - 1, head,
+        size: 7.5, bold: true, role: role));
+    prims.add(SldLabel(lvX - 104, scy + 11, sub, size: 7, role: role));
+    prevBottom = scy + 7;
+    nextCy += 58;
+  }
+  if (project.sources?.battery != null) {
+    final (head, sub) = _batteryNodeLabels(project, demandVa);
+    final bcy = nextCy;
+    prims.add(SldLine(lvX, prevBottom, lvX, bcy - 13,
+        weight: SldWeight.medium, role: role));
+    _emitBattery(prims, lvX, bcy, role);
+    prims.add(SldLabel(lvX - 104, bcy - 1, head,
+        size: 7.5, bold: true, role: role));
+    prims.add(SldLabel(lvX - 104, bcy + 11, sub, size: 7, role: role));
   }
 
   // System-earthing mark at the transformer secondary — the IEC earth symbol

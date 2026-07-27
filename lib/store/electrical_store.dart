@@ -566,35 +566,64 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   // never feed a sizing path) — // VERIFY engineer-supplied values.
 
   /// Rebuild [ElectricalSources] off the current project, replacing only the
-  /// generator (or clearing it). When the result has no generator / solar /
-  /// battery and no hybrid flag, collapses to null so an emptied editor leaves
-  /// no phantom `sources` map.
+  /// supplied sub-sources (or clearing them). When the result has no generator
+  /// / solar / battery and no hybrid flag, collapses to null so an emptied
+  /// editor leaves no phantom `sources` map.
   ElectricalSources? _sourcesWith({
     GeneratorSource? generator,
     bool clearGenerator = false,
+    SolarSource? solar,
+    bool clearSolar = false,
+    BatterySource? battery,
+    bool clearBattery = false,
   }) {
     final cur = state.sources;
     final gen = clearGenerator ? null : (generator ?? cur?.generator);
-    final solar = cur?.solar;
-    final battery = cur?.battery;
+    final sol = clearSolar ? null : (solar ?? cur?.solar);
+    final batt = clearBattery ? null : (battery ?? cur?.battery);
     final hybrid = cur?.hybridInverter;
-    if (gen == null && solar == null && battery == null && hybrid == null) {
+    if (gen == null && sol == null && batt == null && hybrid == null) {
       return null;
     }
     return ElectricalSources(
       generator: gen,
-      solar: solar,
-      battery: battery,
+      solar: sol,
+      battery: batt,
       hybridInverter: hybrid,
     );
   }
 
+  /// Commit a rebuilt sources map (null collapses to a cleared field).
+  void _commitSources(ElectricalSources? next) => _commit(next == null
+      ? _withProject(clearSources: true)
+      : _withProject(sources: next));
+
   /// Set (or clear) the standby/prime generator on the source spine.
-  void setGenerator(GeneratorSource? gen) {
-    final next = _sourcesWith(generator: gen, clearGenerator: gen == null);
-    _commit(next == null
-        ? _withProject(clearSources: true)
-        : _withProject(sources: next));
+  void setGenerator(GeneratorSource? gen) => _commitSources(
+      _sourcesWith(generator: gen, clearGenerator: gen == null));
+
+  /// Set (or clear) the grid-tied / hybrid solar PV array on the source spine.
+  void setSolar(SolarSource? solar) =>
+      _commitSources(_sourcesWith(solar: solar, clearSolar: solar == null));
+
+  /// Set (or clear) the backup battery bank on the source spine.
+  void setBattery(BatterySource? battery) => _commitSources(
+      _sourcesWith(battery: battery, clearBattery: battery == null));
+
+  /// Set the building's PRIMARY supply kind (PLN grid / generator plant /
+  /// solar plant) — re-labels the source-spine supply head, never a sizing
+  /// input. No-op when unchanged.
+  void setSupplyKind(SupplyKind kind) {
+    if (state.supplyKind == kind) return;
+    _commit(_withProject(supplyKind: kind));
+  }
+
+  /// Set the declared supply connection capacity (daya tersambung / plant
+  /// rating). Null / non-positive ⇒ clear (no capacity printed).
+  void setSupplyCapacityVa(ApparentPower? capacity) {
+    _commit((capacity == null || capacity.voltAmperes <= 0)
+        ? _withProject(clearSupplyCapacityVa: true)
+        : _withProject(supplyCapacityVa: capacity));
   }
 
   /// Set the genset rating (kVA). Null ⇒ auto-size from demand (the ladder
@@ -671,6 +700,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     bool clearCapacitorBankKvar = false,
     ApparentPower? transformerKva,
     bool clearTransformerKva = false,
+    SupplyKind? supplyKind,
+    ApparentPower? supplyCapacityVa,
+    bool clearSupplyCapacityVa = false,
   }) =>
       ElectricalProject(
         id: state.id,
@@ -699,6 +731,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         transformerKva: clearTransformerKva
             ? null
             : (transformerKva ?? state.transformerKva),
+        supplyKind: supplyKind ?? state.supplyKind,
+        supplyCapacityVa: clearSupplyCapacityVa
+            ? null
+            : (supplyCapacityVa ?? state.supplyCapacityVa),
       );
 
   /// Load the built-in sample project (a user action — undoable, so one

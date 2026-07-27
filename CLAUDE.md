@@ -742,16 +742,15 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.17.0`** (the electrical panel-design workflow: the five-wave drop/auto-size/
-  connect/balance campaign [W0 engine phasing/topology/templates → W1 store operations →
-  W2+W3 canvas drop creation + multi-surface edit → W4 layout/single-line sync → W5
-  cross-view actions + i18n] plus the W6 in-place value ladders in the electrical
-  right-click menus [Breaker/Cable/Phase/Family + panel System, engine-sourced rungs,
-  '(set)'/Auto override idiom, both hosts converged onto the shared menu widgets] and
-  the standard desktop accelerators + F1 shortcuts sheet; atop the v1.16.0
-  palette/inspector-polish baseline [Drains gating, clean-water outlet, inspector
-  declutter]; `pubspec.yaml` is the version source of truth,
-  `1.17.0+23`; each release = bump → merge to the default branch (`main`) →
+  is `v1.18.0`** (the W7 editable SUPPLY node [source kind PLN/genset/solar + declared
+  connection capacity, one-tap editor], the BATTERY + SOLAR PV source-spine nodes, and
+  the genset `backs NN% of load` coverage label; atop the v1.17.0 electrical
+  panel-design-workflow baseline [the five-wave drop/auto-size/connect/balance campaign
+  W0–W5, the W6 in-place value ladders in the electrical right-click menus
+  (Breaker/Cable/Phase/Family + panel System, engine-sourced rungs, '(set)'/Auto
+  override idiom, both hosts converged onto the shared menu widgets), and the standard
+  desktop accelerators + F1 shortcuts sheet]; `pubspec.yaml` is the version source of
+  truth, `1.18.0+24`; each release = bump → merge to the default branch (`main`) →
   `release.yml` `workflow_dispatch` with `publish=true`). The prior `v1.16.0` shipped
   palette/inspector polish (the Draw palette's Drains group gated to the gravity
   drainage service, the clean-water OUTLET node, the removal of the redundant inspector
@@ -1172,6 +1171,20 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   its own feed-chooser page) were replaced by the shared widgets; both hosts wire the new params, so the two
   surfaces can never offer different rows. Menus closed at rest ⇒ goldens byte-identical
   (`test/electrical_context_menu_edit_test.dart`, 6 tests).
+  **W7 — editable SUPPLY node + BATTERY/SOLAR nodes + genset backup % (user-reported):** additive
+  `ElectricalProject.supplyKind` (`SupplyKind {pln, generator, solar}`, default pln ⇒ byte-identical) +
+  `supplyCapacityVa` (declared daya tersambung, null ⇒ not printed) re-label the source-spine HEAD via the
+  shared `_supplyHeadLabel` in BOTH spine builders (drawing inputs only, tolerant JSON, `_withProject`-carried,
+  `setSupplyKind`/`setSupplyCapacityVa`); a single TAP on the canvas supply chain (or bare PLN head) opens the
+  Sources editor, which gained Supply (kind + capacity), Solar PV and Battery sections over new
+  `setSolar`/`setBattery` intents (`_sourcesWith` replaces/clears any sub-source, collapses to null when
+  emptied). New `_emitBattery` (IEC plate pairs) + `_emitPvArray` glyphs (pure prims, no new `SldPrim`
+  subtype) hang BATTERY/SOLAR PV nodes off the LV bus below the genset/capacitor slots (coordinate-preserving
+  cursor ⇒ absent sources byte-identical); the battery kWh is sized on the SAME `sizeBattery(demand × PF)`
+  basis as `buildPowerOneLine` (zero demand ⇒ bare 'BATTERY'), solar prints installed kWp. The GENSET node
+  prints `backs NN% of load` — sized/declared kVA vs solved demand kVA, capped at 100, omitted with no
+  demand — in both builders (canvas + overview + riser + PDF/DXF). Engine +6 / app +1 tests; goldens
+  byte-identical (golden fixture carries no sources).
   **Feedback loop + states landed (UI-only, goldens 01–07 shift):** silent/empty/
   colour-only states now give explicit feedback. The `IssuesCard` renders a positive
   **"No design issues found"** success card (custom-painted check) instead of

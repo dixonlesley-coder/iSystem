@@ -522,6 +522,176 @@ void main() {
     });
   });
 
+  group('W7 — supply head / battery + solar nodes / genset backup %', () {
+    const basePanels = <ElectricalPanel>[
+      ElectricalPanel(
+        id: 'LVMDP',
+        name: 'LVMDP',
+        circuits: [
+          ElectricalCircuit(
+              id: 'c1', name: 'Load', loadKind: LoadKind.general,
+              loadW: 30000, length: Length(10)),
+        ],
+      ),
+    ];
+
+    // Mirrors the drawing file's private `_num` (whole → int, else 1 dp) so
+    // expected labels are derived, not hand-typed magic strings.
+    String num_(double v) =>
+        v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+
+    String labels(SldSheet s) =>
+        s.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+
+    test('the default supply head keeps the historic PLN labels (vertical + '
+        'compact) and prints no battery / solar / backup-%', () {
+      const p = ElectricalProject(
+          id: 's', name: 'S', capacitorBankKvar: 50, panels: basePanels);
+      final r = computeSystem(profile, p);
+      final v = labels(
+          buildElectricalOverview(project: p, result: r, sourceChain: true));
+      expect(v, contains('PLN MV STATION'));
+      final h = labels(buildElectricalSourceSpine(
+          project: p, result: r, horizontal: true));
+      expect(h, contains('PLN'));
+      for (final j in [v, h]) {
+        expect(j, isNot(contains('BATTERY')));
+        expect(j, isNot(contains('SOLAR PV')));
+        expect(j, isNot(contains('backs')));
+      }
+    });
+
+    test('supplyKind + supplyCapacityVa re-label the supply head node', () {
+      const p = ElectricalProject(
+        id: 's', name: 'S',
+        supplyKind: SupplyKind.generator,
+        supplyCapacityVa: ApparentPower(250000),
+        panels: basePanels,
+      );
+      final r = computeSystem(profile, p);
+      final v = labels(
+          buildElectricalOverview(project: p, result: r, sourceChain: true));
+      expect(v, contains('GENSET SUPPLY 250 kVA'));
+      final h = labels(buildElectricalSourceSpine(
+          project: p, result: r, horizontal: true));
+      expect(h, contains('GENSET 250 kVA'));
+
+      const sol = ElectricalProject(
+        id: 's', name: 'S',
+        supplyKind: SupplyKind.solar,
+        panels: basePanels,
+      );
+      final sr = computeSystem(profile, sol);
+      expect(
+        labels(buildElectricalOverview(
+            project: sol, result: sr, sourceChain: true)),
+        contains('SOLAR PV SUPPLY'),
+      );
+    });
+
+    test('the genset node prints the honest backup coverage %, capped at 100',
+        () {
+      // A deliberately small 5 kVA set against the real solved demand.
+      const small = ElectricalProject(
+        id: 's', name: 'S',
+        sources: ElectricalSources(
+            generator: GeneratorSource(kva: ApparentPower(5000))),
+        panels: basePanels,
+      );
+      final r = computeSystem(profile, small);
+      final demandKva = r.supply.demandVa.inKilovoltAmperes;
+      expect(demandKva, greaterThan(5)); // the premise: undersized set
+      final pct = (5 / demandKva * 100).round();
+      final v = labels(
+          buildElectricalOverview(project: small, result: r, sourceChain: true));
+      expect(v, contains('backs $pct% of load'));
+      final h = labels(buildElectricalSourceSpine(
+          project: small, result: r, horizontal: true));
+      expect(h, contains('backs $pct% of load'));
+
+      // An oversized set backs the whole load — never "250% of load".
+      const big = ElectricalProject(
+        id: 's', name: 'S',
+        sources: ElectricalSources(
+            generator: GeneratorSource(kva: ApparentPower(500000))),
+        panels: basePanels,
+      );
+      final br = computeSystem(profile, big);
+      expect(
+        labels(buildElectricalOverview(
+            project: big, result: br, sourceChain: true)),
+        contains('backs 100% of load'),
+      );
+    });
+
+    test('a battery source draws a BATTERY node sized on the power one-line '
+        'basis (demand at the genset PF)', () {
+      const p = ElectricalProject(
+        id: 's', name: 'S',
+        sources:
+            ElectricalSources(battery: BatterySource(autonomyHours: 2)),
+        panels: basePanels,
+      );
+      final r = computeSystem(profile, p);
+      // The SAME sizing call `buildPowerOneLine` makes, so the two surfaces
+      // can never print different bank sizes.
+      final sized = sizeBattery(
+        Power(r.supply.demandVa.voltAmperes * kGeneratorPf),
+        autonomyHours: 2,
+      );
+      final expected =
+          'BATTERY ${num_(sized.installedKwh.inKilowattHours)} kWh';
+      final v = labels(
+          buildElectricalOverview(project: p, result: r, sourceChain: true));
+      expect(v, contains(expected));
+      expect(v, contains('LiFePO4 · 2 h autonomy'));
+      final h = labels(buildElectricalSourceSpine(
+          project: p, result: r, horizontal: true));
+      expect(h, contains(expected));
+    });
+
+    test('a solar source draws a SOLAR PV node with the installed kWp', () {
+      const p = ElectricalProject(
+        id: 's', name: 'S',
+        sources: ElectricalSources(solar: SolarSource(panels: 20)),
+        panels: basePanels,
+      );
+      final r = computeSystem(profile, p);
+      final v = labels(
+          buildElectricalOverview(project: p, result: r, sourceChain: true));
+      expect(v, contains('SOLAR PV 11 kWp')); // 20 x 550 Wp = 11 kWp
+      expect(v, contains('20 x 550 Wp'));
+      final h = labels(buildElectricalSourceSpine(
+          project: p, result: r, horizontal: true));
+      expect(h, contains('SOLAR PV 11 kWp'));
+    });
+
+    test('supplyKind / supplyCapacityVa round-trip in JSON; defaults are '
+        'omitted so an old file is byte-identical', () {
+      const p = ElectricalProject(
+        id: 's', name: 'S',
+        supplyKind: SupplyKind.solar,
+        supplyCapacityVa: ApparentPower(41500),
+      );
+      final decoded = ElectricalProject.fromJson(
+          jsonDecode(jsonEncode(p.toJson())) as Map<String, dynamic>);
+      expect(decoded.supplyKind, SupplyKind.solar);
+      expect(decoded.supplyCapacityVa!.voltAmperes, 41500);
+
+      // Defaults: keys absent from the JSON, and tolerant decode.
+      const d = ElectricalProject(id: 'd', name: 'D');
+      final json = d.toJson();
+      expect(json.containsKey('supplyKind'), isFalse);
+      expect(json.containsKey('supplyCapacityVa'), isFalse);
+      final legacy = ElectricalProject.fromJson({'id': 'x', 'name': 'X'});
+      expect(legacy.supplyKind, SupplyKind.pln);
+      expect(legacy.supplyCapacityVa, isNull);
+      final unknown = ElectricalProject.fromJson(
+          {'id': 'x', 'name': 'X', 'supplyKind': 'fusion'});
+      expect(unknown.supplyKind, SupplyKind.pln);
+    });
+  });
+
   group('buildElectricalOverview (zoomed-out building single-line)', () {
     // LV main feeds a normal sub-board (LP-1) and an EMERGENCY sub-board that
     // carries a life-safety load → the essential colour must propagate.
