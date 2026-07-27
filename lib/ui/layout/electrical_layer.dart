@@ -25,8 +25,11 @@ import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/report/electrical_sld_drawing.dart'
+    show breakerScheduleLabel;
 import 'package:mechx_engine/units.dart';
 
+import '../../store/app_state.dart';
 import '../../store/electrical_store.dart';
 import '../../store/project_store.dart';
 import '../canvas/viewport.dart';
@@ -58,6 +61,97 @@ const double kElectricalFadedAlpha = 0.34;
 /// the mechanical [DropOverlay] preview affordance (its ring is 14px on small
 /// nodes; panels are larger, so a slightly wider radius reads right).
 const double _kElecSnapScreenPx = 18;
+
+/// Screen-px diameter of the feeder OUTLET grip mounted on the right edge of the
+/// SELECTED placed panel marker (drag it onto another board to feed it). Kept
+/// screen-constant so it stays grabbable at any zoom — like the single-line
+/// canvas's own outlet handle.
+const double _kFeederGripScreenPx = 20;
+
+/// Gap (screen px) between the marker's right edge and the grip, so the grip
+/// sits fully OUTSIDE the marker's own hit rect and can never steal the marker's
+/// move-pan.
+const double _kFeederGripGapPx = 3;
+
+/// The nearest PLACED panel on [sheetId]/[floorIndex] whose position is within
+/// the drop snap radius of [world], or null.
+///
+/// ONE helper for both the drag-preview RING and the drop COMMIT: the ring used
+/// to promise an [_kElecSnapScreenPx] radius while the commit attached to the
+/// nearest panel at ANY distance, so a load dropped on blank plan far from every
+/// board silently joined one. Now the ring and the drop read the same rule, and
+/// beyond the radius the honest floating-load fallback applies.
+({String id, Offset world})? _nearestPanelWithinSnap(
+  ElectricalProject project, {
+  required String sheetId,
+  required int floorIndex,
+  required Offset world,
+  required double scale,
+}) {
+  final snapWorld = _kElecSnapScreenPx / (scale <= 0 ? 1.0 : scale);
+  var bestD2 = snapWorld * snapWorld;
+  String? bestId;
+  Offset? bestPos;
+  for (final p in project.panels) {
+    final pos = p.layoutPos;
+    if (pos == null || pos.sheetId != sheetId || pos.floorIndex != floorIndex) {
+      continue;
+    }
+    final dx = pos.x - world.dx;
+    final dy = pos.y - world.dy;
+    final d2 = dx * dx + dy * dy;
+    if (d2 <= bestD2) {
+      bestD2 = d2;
+      bestId = p.id;
+      bestPos = Offset(pos.x, pos.y);
+    }
+  }
+  return bestId == null ? null : (id: bestId, world: bestPos!);
+}
+
+/// Toast the SIZED outcome of a way just added by a drop — the same sentence the
+/// electrical single-line canvas's `_dropLoadOnPanel` shows, so the two drop
+/// surfaces report a drop identically. Silent when the solve carries no record
+/// for the new way (nothing is fabricated).
+void _toastSizedDrop(
+  WidgetRef ref,
+  String panelId,
+  String circuitId,
+  String parentLabel,
+) {
+  final sized = ref
+      .read(electricalResultProvider)
+      .panels[panelId]
+      ?.circuits
+      .where((c) => c.circuitId == circuitId)
+      .firstOrNull;
+  if (sized == null) return;
+  final poles = sized.threePhase ? 3 : 1;
+  ref.read(statusMessageProvider.notifier).showStatus(
+        '${sized.name} -> $parentLabel: '
+        '${breakerScheduleLabel(sized.breaker, poles)}'
+        ' · ${fmtNum(sized.cable.csaMm2)} mm2'
+        ' · Vd ${sized.voltageDrop.dropPercent.toStringAsFixed(1)}%',
+      );
+}
+
+/// Toast a newly minted board: `fed from <parent>` when a source board was named
+/// (the single-line canvas's own feeder-card wording), else a plain `placed` —
+/// a blank-plan drop is utility-fed, so claiming a parent would be a lie. Any
+/// template ways that arrived with it are counted.
+void _toastNewPanel(WidgetRef ref, String newPanelId, {String? fedFrom}) {
+  final added = ref
+      .read(electricalProjectProvider)
+      .panels
+      .where((p) => p.id == newPanelId)
+      .firstOrNull;
+  final name = added == null ? 'Sub-panel' : (added.tag ?? added.name);
+  final ways = added?.circuits.where((c) => c.loadKind != LoadKind.feeder).length ?? 0;
+  final head = fedFrom == null ? '$name placed' : '$name fed from $fedFrom';
+  ref
+      .read(statusMessageProvider.notifier)
+      .showStatus(ways > 0 ? '$head — $ways ways from the template' : head);
+}
 
 /// The electrical layer painted over the shared sheet at [transform].
 ///
@@ -186,6 +280,19 @@ class ElectricalLayoutLayer extends ConsumerWidget {
           ...nodeWidgets
         else
           IgnorePointer(child: Stack(children: nodeWidgets)),
+        // The feeder OUTLET grip on the SELECTED placed board (+ its in-flight
+        // rubber band / hover verdict ring). Mounted ONLY while a whole PANEL is
+        // selected, so an idle canvas with nothing selected is byte-identical;
+        // the rubber band + rings exist only for the duration of a drag.
+        if (interactive && selection != null && !selection.isCircuit)
+          Positioned.fill(
+            child: _FeederGripLayer(
+              transform: vt,
+              sheetId: sheetId,
+              floorIndex: floorIndex,
+              panelId: selection.panelId,
+            ),
+          ),
         if (interactive)
           // J5: pin the tray to the TOP-RIGHT only (no `bottom`), so the glass
           // slab sizes to its content instead of stretching to full canvas
@@ -252,15 +359,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
               onTap: () => selectionCtrl.selectPanel(panel.id),
               onDoubleTap: () => onEditPanel(panel.id),
               onMenu: (gp) => onPanelMenu(panel.id, gp),
-              onDropLoad: (load) => ctrl.addCircuit(
-                panel.id,
-                kind: load.kind == LoadKind.feeder
-                    ? LoadKind.general
-                    : load.kind,
-                phases: load.phases,
-                loadW: load.loadW > 0 ? load.loadW : null,
-                motorKw: load.motorKw,
-              ),
+              onDropLoad: (load) => _dropOnMarker(ref, ctrl, panel, load),
             ),
           ),
         ),
@@ -342,6 +441,94 @@ class ElectricalLayoutLayer extends ConsumerWidget {
       ));
     }
     return widgets;
+  }
+
+  /// A drop of [load] ONTO a placed panel MARKER.
+  ///
+  /// The bug this fixes: the marker's drop used to call `addCircuit`, which
+  /// creates a way with NO `loadPos` — so aiming a palette card straight at a
+  /// board produced an invisible orphan that only reappeared in the "Not on this
+  /// sheet" tray. The way is now created ALREADY PLACED beside the marker (and a
+  /// sub-board card mints a real fed board, placed), with the same sized-result
+  /// toast the single-line canvas gives.
+  void _dropOnMarker(
+    WidgetRef ref,
+    ElectricalProjectController ctrl,
+    ElectricalPanel panel,
+    PaletteLoad load,
+  ) {
+    // The machine-owned MEP board is rebuilt from the plan, so a hand-added way
+    // there would silently vanish on the next sync (the single-line canvas's
+    // `_dropLoadOnPanel` refuses it for the same reason).
+    if (panel.id == kMepEquipmentPanelId) {
+      ref.read(statusMessageProvider.notifier).showStatus(
+            'MEP Equipment is auto-generated from the plan — '
+            'add ways to another panel.',
+          );
+      return;
+    }
+    final project = ref.read(electricalProjectProvider);
+    final parentLabel = panel.tag ?? panel.name;
+    final pos = _besideMarker(project, panel);
+
+    if (load.kind == LoadKind.feeder) {
+      // A sub-board card dropped ON a board: mint it ALREADY FED from that board
+      // (`addFedPanelAt`, one commit) and then place it beside the marker with
+      // the deliberately NON-recording `setPanelLayoutPos` — so the pair is ONE
+      // undo step and the result is one visible board, fed and placed, instead
+      // of a stranded tray entry.
+      final ordinal = nextSubPanelOrdinal(project.panels);
+      final newId = ctrl.addFedPanelAt(
+        fromPanelId: panel.id,
+        x: 80 + ordinal * 40,
+        y: 80 + ordinal * 40,
+        phases: load.phases,
+        templateId: load.panelTemplateId,
+      );
+      ctrl.setPanelLayoutPos(newId, pos);
+      _toastNewPanel(ref, newId, fedFrom: parentLabel);
+      return;
+    }
+
+    final circuitId = ctrl.addLoadAtLayout(
+      panel.id,
+      kind: load.kind,
+      pos: pos,
+      phases: load.phases,
+      loadW: load.loadW > 0 ? load.loadW : null,
+      motorKw: load.motorKw,
+    );
+    _toastSizedDrop(ref, panel.id, circuitId, parentLabel);
+  }
+
+  /// A spot on THIS sheet/floor just to the RIGHT of [panel]'s marker for a node
+  /// dropped ON that marker — offset by one full marker width so the new icon
+  /// never covers the board it belongs to, and stepped DOWN past anything
+  /// already parked there so repeat drops fan out instead of stacking.
+  LayoutPos _besideMarker(ElectricalProject project, ElectricalPanel panel) {
+    final anchor = panel.layoutPos!;
+    final taken = <Offset>[];
+    for (final p in project.panels) {
+      final lp = p.layoutPos;
+      if (lp != null && lp.sheetId == sheetId && lp.floorIndex == floorIndex) {
+        taken.add(Offset(lp.x, lp.y));
+      }
+      for (final c in p.circuits) {
+        final cp = c.loadPos;
+        if (cp != null && cp.sheetId == sheetId && cp.floorIndex == floorIndex) {
+          taken.add(Offset(cp.x, cp.y));
+        }
+      }
+    }
+    final x = anchor.x + kLayoutPanelW;
+    var y = anchor.y;
+    for (var i = 0; i < 24; i++) {
+      final here = Offset(x, y);
+      if (!taken.any((t) => (t - here).distance < kLayoutLoadH)) break;
+      y += kLayoutLoadH * 1.4;
+    }
+    return LayoutPos(
+        sheetId: sheetId, floorIndex: floorIndex, x: x, y: y);
   }
 
   /// The id of another placed load on [panel] (this sheet/floor) whose marker the
@@ -929,29 +1116,17 @@ class _SheetDropTargetState extends ConsumerState<_SheetDropTarget> {
 
   /// The nearest placed panel (this sheet/floor) within the snap radius of
   /// [world] in SCREEN space, or null — so the ring marks the panel a load drop
-  /// will attach to.
+  /// will attach to. Shares [_nearestPanelWithinSnap] with the drop COMMIT, so
+  /// the ring and the drop can never disagree.
   Offset? _nearestPanelScreen(Offset world) {
-    final project = ref.read(electricalProjectProvider);
-    final snapWorld = _kElecSnapScreenPx / widget.transform.scale;
-    final r2 = snapWorld * snapWorld;
-    Offset? best;
-    var bestD2 = r2;
-    for (final p in project.panels) {
-      final pos = p.layoutPos;
-      if (pos == null ||
-          pos.sheetId != widget.sheetId ||
-          pos.floorIndex != widget.floorIndex) {
-        continue;
-      }
-      final dx = pos.x - world.dx;
-      final dy = pos.y - world.dy;
-      final d2 = dx * dx + dy * dy;
-      if (d2 <= bestD2) {
-        bestD2 = d2;
-        best = Offset(pos.x, pos.y);
-      }
-    }
-    return best == null ? null : widget.transform.worldToScreen(best);
+    final hit = _nearestPanelWithinSnap(
+      ref.read(electricalProjectProvider),
+      sheetId: widget.sheetId,
+      floorIndex: widget.floorIndex,
+      world: world,
+      scale: widget.transform.scale,
+    );
+    return hit == null ? null : widget.transform.worldToScreen(hit.world);
   }
 
   @override
@@ -1047,8 +1222,12 @@ class _SheetDropTargetState extends ConsumerState<_SheetDropTarget> {
     final project = ref.read(electricalProjectProvider);
 
     if (load.kind == LoadKind.feeder) {
-      final n = project.panels.length + 1;
-      widget.controller.addPanelAt(
+      // The designation comes from the SHARED `nextSubPanelOrdinal` mint (max+1
+      // across the existing 'Sub-panel N' / 'SP-N' names and tags), not from
+      // `panels.length + 1` — deleting SP-2 of three used to re-mint SP-2 and
+      // collide with a designation an issued schedule already carried.
+      final n = nextSubPanelOrdinal(project.panels);
+      final newId = widget.controller.addPanelAt(
         name: 'Sub-panel $n',
         tag: 'SP-$n',
         x: 80 + n * 40,
@@ -1058,16 +1237,27 @@ class _SheetDropTargetState extends ConsumerState<_SheetDropTarget> {
             : ElectricalSystem.threePhase,
         voltage:
             load.phases == 1 ? const Voltage(220) : const Voltage(400),
+        // A template card (lighting / power / mixed board) arrives populated —
+        // inside `addPanelAt`'s SINGLE commit, so it stays one undo step.
+        templateId: load.panelTemplateId,
       );
-      final added = ref.read(electricalProjectProvider).panels.last;
-      widget.controller.setPanelLayoutPos(added.id, pos);
+      // Non-recording placement paired with that commit ⇒ still ONE undo step.
+      widget.controller.setPanelLayoutPos(newId, pos);
+      _toastNewPanel(ref, newId);
       return;
     }
 
-    final nearest = _nearestPanel(project, world);
+    final nearest = _nearestPanelWithinSnap(
+      project,
+      sheetId: widget.sheetId,
+      floorIndex: widget.floorIndex,
+      world: world,
+      scale: widget.transform.scale,
+    );
     if (nearest == null) {
-      // No board placed yet — drop a floating LOAD (rendered as its icon), not
-      // a generic panel. It stays a utility-fed stub until wired to a feeder.
+      // Nothing within the ring's own radius — drop a floating LOAD (rendered as
+      // its icon), not a generic panel. It stays a utility-fed stub until wired
+      // to a feeder.
       widget.controller.addFloatingLoadAtLayout(
         kind: load.kind,
         pos: pos,
@@ -1077,33 +1267,16 @@ class _SheetDropTargetState extends ConsumerState<_SheetDropTarget> {
       );
       return;
     }
-    widget.controller.addLoadAtLayout(
-      nearest,
+    final parent = project.panels.firstWhere((p) => p.id == nearest.id);
+    final circuitId = widget.controller.addLoadAtLayout(
+      nearest.id,
       kind: load.kind,
       pos: pos,
       phases: load.phases,
       loadW: load.loadW > 0 ? load.loadW : null,
       motorKw: load.motorKw,
     );
-  }
-
-  String? _nearestPanel(ElectricalProject project, Offset world) {
-    String? best;
-    var bestD = double.infinity;
-    for (final p in project.panels) {
-      final pos = p.layoutPos;
-      if (pos == null ||
-          pos.sheetId != widget.sheetId ||
-          pos.floorIndex != widget.floorIndex) {
-        continue;
-      }
-      final d = (Offset(pos.x, pos.y) - world).distanceSquared;
-      if (d < bestD) {
-        bestD = d;
-        best = p.id;
-      }
-    }
-    return best;
+    _toastSizedDrop(ref, nearest.id, circuitId, parent.tag ?? parent.name);
   }
 }
 
@@ -1162,6 +1335,321 @@ class _ElecDropPreviewPainter extends CustomPainter {
       old.color != color;
 }
 
+// ── Feeder outlet grip (selected board → the board it will feed) ─────────────
+
+/// The right-edge outlet GRIP of the selected placed board, plus the in-flight
+/// feeder rubber band it draws.
+///
+/// This is the LAYOUT counterpart of the single-line canvas's outlet handle —
+/// the plan had no way to create a feeder at all, so a board placed on the plan
+/// could only be wired by leaving for the single-line view. Direction matches
+/// that canvas: the grip drags FROM the selected board TO the board it will
+/// FEED, i.e. `connectFeeder(selected, target)`.
+///
+/// It is mounted as a `Positioned.fill` SIBLING of the markers (a `Stack` only
+/// hit-tests where its children render), and the grip itself sits fully OUTSIDE
+/// the marker's rect — so it can never steal the marker's own move-pan.
+class _FeederGripLayer extends ConsumerStatefulWidget {
+  final ViewportTransform transform;
+  final String sheetId;
+  final int floorIndex;
+
+  /// The SELECTED board the grip hangs off.
+  final String panelId;
+
+  const _FeederGripLayer({
+    required this.transform,
+    required this.sheetId,
+    required this.floorIndex,
+    required this.panelId,
+  });
+
+  @override
+  ConsumerState<_FeederGripLayer> createState() => _FeederGripLayerState();
+}
+
+class _FeederGripLayerState extends ConsumerState<_FeederGripLayer> {
+  /// The board the in-flight feeder is dragged FROM — null when idle, which is
+  /// also what keeps every rubber-band / ring pixel drag-gated.
+  String? _from;
+  Offset _cursor = Offset.zero;
+  String? _hover;
+
+  /// The hover target's VERDICT, resolved once per hover CHANGE from the store's
+  /// pure `feederRefusalReason` — so the ring shows the exact rule the release
+  /// will apply (never a per-frame topology query).
+  bool _hoverRefused = false;
+
+  Offset _toLocal(Offset global) {
+    final box = context.findRenderObject() as RenderBox?;
+    return box?.globalToLocal(global) ?? global;
+  }
+
+  bool _onSheet(LayoutPos? pos) =>
+      pos != null &&
+      pos.sheetId == widget.sheetId &&
+      pos.floorIndex == widget.floorIndex;
+
+  /// The screen rect of a placed panel's MARKER (the same geometry `_panelNodes`
+  /// lays the marker out with).
+  Rect _markerRect(LayoutPos pos) {
+    final vt = widget.transform;
+    final c = vt.worldToScreen(Offset(pos.x, pos.y));
+    return Rect.fromCenter(
+      center: c,
+      width: kLayoutPanelW * vt.scale,
+      height: kLayoutPanelH * vt.scale,
+    );
+  }
+
+  /// The placed board whose marker contains the screen point [local].
+  String? _panelAt(Offset local, {String? exclude}) {
+    for (final p in ref.read(electricalProjectProvider).panels) {
+      if (p.id == exclude) continue;
+      final pos = p.layoutPos;
+      if (!_onSheet(pos)) continue;
+      if (_markerRect(pos!).contains(local)) return p.id;
+    }
+    return null;
+  }
+
+  void _onDragStart(Offset global) {
+    setState(() {
+      _from = widget.panelId;
+      _cursor = _toLocal(global);
+      _hover = null;
+      _hoverRefused = false;
+    });
+  }
+
+  void _onDragUpdate(Offset global) {
+    final local = _toLocal(global);
+    final hover = _panelAt(local, exclude: _from);
+    var refused = _hoverRefused;
+    if (hover != _hover) {
+      final from = _from;
+      refused = hover != null &&
+          from != null &&
+          ref
+                  .read(electricalProjectProvider.notifier)
+                  .feederRefusalReason(from, hover) !=
+              null;
+    }
+    setState(() {
+      _cursor = local;
+      _hover = hover;
+      _hoverRefused = refused;
+    });
+  }
+
+  void _onDragEnd() {
+    final from = _from;
+    final to = _hover;
+    if (from != null && to != null && from != to) {
+      // Read the designations BEFORE the commit — the connect appends a way but
+      // never renames a board, so the copy stays honest either way.
+      final project = ref.read(electricalProjectProvider);
+      String label(String id) {
+        final p = project.panels.where((p) => p.id == id).firstOrNull;
+        return p == null ? 'Panel' : (p.tag ?? p.name);
+      }
+
+      final child = label(to);
+      final parent = label(from);
+      final res =
+          ref.read(electricalProjectProvider.notifier).connectFeeder(from, to);
+      final status = ref.read(statusMessageProvider.notifier);
+      if (!res.connected) {
+        if (res.reason != null) status.showStatus(res.reason!);
+      } else {
+        final was = res.reparentedFromLabel;
+        status.showStatus(was == null
+            ? '$child fed from $parent'
+            : '$child re-fed from $parent (was $was)');
+      }
+    }
+    setState(() {
+      _from = null;
+      _hover = null;
+      _hoverRefused = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final project = ref.watch(electricalProjectProvider);
+    // While a drag is in flight the grip stays anchored to its SOURCE board.
+    final anchorId = _from ?? widget.panelId;
+    final panel = project.panels.where((p) => p.id == anchorId).firstOrNull;
+    if (panel == null || !_onSheet(panel.layoutPos)) {
+      return const SizedBox.shrink();
+    }
+    final rect = _markerRect(panel.layoutPos!);
+    final anchor = Offset(rect.right, rect.center.dy);
+
+    Rect? hoverRect;
+    if (_hover != null) {
+      final hp = project.panels.where((p) => p.id == _hover).firstOrNull;
+      if (hp != null && _onSheet(hp.layoutPos)) {
+        hoverRect = _markerRect(hp.layoutPos!);
+      }
+    }
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        // KEYED: the rubber band appears at index 0 the moment a drag starts,
+        // and without keys the Stack would match that new `Positioned` to the
+        // GRIP's `Positioned` (same runtimeType), rebuilding the grip's element
+        // and destroying its live gesture recognizer mid-drag.
+        if (_from != null)
+          Positioned.fill(
+            key: const ValueKey('electrical-feeder-band'),
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: _FeederDragPainter(
+                  anchor: anchor,
+                  cursor: _cursor,
+                  hoverRect: hoverRect,
+                  refused: _hoverRefused,
+                  accent: colors.accent,
+                  danger: colors.danger,
+                ),
+              ),
+            ),
+          ),
+        Positioned(
+          key: const ValueKey('electrical-feeder-grip'),
+          left: anchor.dx + _kFeederGripGapPx,
+          top: anchor.dy - _kFeederGripScreenPx / 2,
+          width: _kFeederGripScreenPx,
+          height: _kFeederGripScreenPx,
+          child: _FeederGrip(
+            active: _from != null,
+            onDragStart: _onDragStart,
+            onDragUpdate: _onDragUpdate,
+            onDragEnd: _onDragEnd,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The circular outlet dot the user drags to create a feeder. Screen-constant
+/// size, so it stays grabbable at any zoom.
+class _FeederGrip extends StatelessWidget {
+  final bool active;
+  final ValueChanged<Offset> onDragStart;
+  final ValueChanged<Offset> onDragUpdate;
+  final VoidCallback onDragEnd;
+
+  const _FeederGrip({
+    required this.active,
+    required this.onDragStart,
+    required this.onDragUpdate,
+    required this.onDragEnd,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Semantics(
+      button: true,
+      label: 'Feeder outlet — drag onto a board to feed it',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.precise,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanStart: (d) => onDragStart(d.globalPosition),
+          onPanUpdate: (d) => onDragUpdate(d.globalPosition),
+          onPanEnd: (_) => onDragEnd(),
+          child: Center(
+            child: Container(
+              width: _kFeederGripScreenPx * 0.8,
+              height: _kFeederGripScreenPx * 0.8,
+              decoration: BoxDecoration(
+                color: colors.accent,
+                shape: BoxShape.circle,
+                border: Border.all(color: colors.surface, width: 2),
+                boxShadow: MechXShadow.card,
+              ),
+              child: Center(
+                child: Container(
+                  width: 5,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: colors.onAccent,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The in-flight feeder rubber band + the hovered board's verdict ring. Painted
+/// only while a grip drag is live, so it never affects the at-rest canvas —
+/// same discipline as [_ElecDropPreviewPainter].
+class _FeederDragPainter extends CustomPainter {
+  final Offset anchor;
+  final Offset cursor;
+  final Rect? hoverRect;
+  final bool refused;
+  final Color accent;
+  final Color danger;
+
+  _FeederDragPainter({
+    required this.anchor,
+    required this.cursor,
+    required this.hoverRect,
+    required this.refused,
+    required this.accent,
+    required this.danger,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final colour = (hoverRect != null && refused) ? danger : accent;
+    canvas.drawLine(
+      anchor,
+      cursor,
+      Paint()
+        ..color = colour
+        ..strokeWidth = 2.5
+        ..strokeCap = StrokeCap.round,
+    );
+    canvas.drawCircle(cursor, 5, Paint()..color = colour);
+
+    final hr = hoverRect;
+    if (hr != null) {
+      final rr = RRect.fromRectAndRadius(hr.inflate(3), MechXRadii.card.topLeft);
+      canvas.drawRRect(rr, Paint()..color = colour.withAlpha(28));
+      canvas.drawRRect(
+        rr,
+        Paint()
+          ..color = colour
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_FeederDragPainter old) =>
+      old.anchor != anchor ||
+      old.cursor != cursor ||
+      old.hoverRect != hoverRect ||
+      old.refused != refused ||
+      old.accent != accent ||
+      old.danger != danger;
+}
+
 // ── Unplaced tray ────────────────────────────────────────────────────────────
 
 /// J5: the tray sizes to its content but never taller than this — so a handful
@@ -1169,7 +1657,7 @@ class _ElecDropPreviewPainter extends CustomPainter {
 /// themed scroll indicator) rather than running the full height of the canvas.
 const double _kTrayMaxHeight = 360;
 
-class _UnplacedTray extends StatelessWidget {
+class _UnplacedTray extends ConsumerWidget {
   final ElectricalProject project;
   final ElectricalSystemResult result;
   final String sheetId;
@@ -1180,7 +1668,7 @@ class _UnplacedTray extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
 
@@ -1188,13 +1676,17 @@ class _UnplacedTray extends StatelessWidget {
       for (final p in project.panels)
         if (p.layoutPos == null) p,
     ];
+    // Loads of EVERY board, not just the placed ones: a way on an unplaced board
+    // is just as unplaced, and hiding it made the tray claim the sheet held
+    // everything when it didn't. Dragging one out places the LOAD — its board
+    // stays in the tray, which is the honest model (a load can sit on the plan
+    // while the board it belongs to hasn't been located yet).
     final unplacedLoads = <_TrayLoad>[];
     for (final p in project.panels) {
-      if (p.layoutPos == null) continue;
       for (final c in p.circuits) {
         if (c.loadKind == LoadKind.feeder) continue;
         if (c.loadPos == null) {
-          unplacedLoads.add(_TrayLoad(p.id, c));
+          unplacedLoads.add(_TrayLoad(p.id, p.tag ?? p.name, c));
         }
       }
     }
@@ -1243,10 +1735,23 @@ class _UnplacedTray extends StatelessWidget {
                         onPlaced: (pos, ctrl) => ctrl
                           ..pushUndoSnapshot()
                           ..setPanelLayoutPos(p.id, pos),
+                        // A board with NO ways and no placement is a dead stub
+                        // (an aborted drop / a deleted-out board). Offer to
+                        // remove it, so the tray can be cleaned up instead of
+                        // accumulating boards that will never be drawn. Boards
+                        // that still carry ways are NOT removable here — that
+                        // would be a destructive edit hidden on a chip.
+                        onRemove: p.circuits.isEmpty &&
+                                p.id != kMepEquipmentPanelId
+                            ? () => _removeStub(ref, p)
+                            : null,
                       ),
                     for (final t in unplacedLoads)
                       _TrayItem(
-                        label: t.circuit.name,
+                        // Prefixed with its board's designation — with loads of
+                        // UNPLACED boards listed too, a bare way name ('Lighting')
+                        // no longer says which board it belongs to.
+                        label: '${t.panelLabel} · ${t.circuit.name}',
                         kind: _TrayKind.load,
                         onPlaced: (pos, ctrl) => ctrl
                           ..pushUndoSnapshot()
@@ -1264,22 +1769,40 @@ class _UnplacedTray extends StatelessWidget {
   }
 }
 
+/// Delete an empty, unplaced stub board and say so. One [deletePanel] commit ⇒
+/// one undo step (its feeder ways, if any, are swept inside the same commit).
+void _removeStub(WidgetRef ref, ElectricalPanel panel) {
+  final label = panel.tag ?? panel.name;
+  ref.read(electricalProjectProvider.notifier).deletePanel(panel.id);
+  ref.read(statusMessageProvider.notifier).showStatus('$label removed.');
+}
+
 enum _TrayKind { panel, load }
 
 class _TrayLoad {
   final String panelId;
+
+  /// The owning board's designation (tag, else name) — shown on the chip so a
+  /// way of an unplaced board still names its parent.
+  final String panelLabel;
   final ElectricalCircuit circuit;
-  const _TrayLoad(this.panelId, this.circuit);
+  const _TrayLoad(this.panelId, this.panelLabel, this.circuit);
 }
 
 class _TrayItem extends StatelessWidget {
   final String label;
   final _TrayKind kind;
   final void Function(LayoutPos pos, ElectricalProjectController ctrl) onPlaced;
+
+  /// Remove this entry from the project entirely (empty stub boards only).
+  /// Null ⇒ no remove affordance, which is the case for everything real.
+  final VoidCallback? onRemove;
+
   const _TrayItem({
     required this.label,
     required this.kind,
     required this.onPlaced,
+    this.onRemove,
   });
 
   @override
@@ -1290,19 +1813,25 @@ class _TrayItem extends StatelessWidget {
       child: Draggable<_TrayPayload>(
         data: _TrayPayload(onPlaced),
         dragAnchorStrategy: pointerDragAnchorStrategy,
-        feedback: _chip(context, dragging: true),
-        childWhenDragging: Opacity(opacity: 0.4, child: chip),
+        // The drag AVATAR never carries the remove affordance (it isn't
+        // tappable), so it stays the plain chip.
+        feedback: _chip(context, dragging: true, withRemove: false),
+        childWhenDragging:
+            Opacity(opacity: 0.4, child: _chip(context, dragging: false,
+                withRemove: false)),
         child: MouseRegion(cursor: SystemMouseCursors.grab, child: chip),
       ),
     );
   }
 
-  Widget _chip(BuildContext context, {required bool dragging}) {
+  Widget _chip(BuildContext context,
+      {required bool dragging, bool withRemove = true}) {
     final colors = context.colors;
     final type = context.type;
     final dot = kind == _TrayKind.panel ? colors.accent : colors.success;
+    final remove = withRemove ? onRemove : null;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      padding: EdgeInsets.fromLTRB(8, 5, remove == null ? 8 : 3, 5),
       decoration: BoxDecoration(
         color: dragging ? colors.surfaceHover : colors.background,
         borderRadius: MechXRadii.control,
@@ -1323,6 +1852,28 @@ class _TrayItem extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: type.label.copyWith(color: colors.textSecondary)),
           ),
+          if (remove != null) ...[
+            const SizedBox(width: 4),
+            Semantics(
+              button: true,
+              label: 'Remove $label',
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: remove,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: Center(
+                      child: Text('×',
+                          style: type.label.copyWith(color: colors.textMuted)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
