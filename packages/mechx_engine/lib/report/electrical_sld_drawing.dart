@@ -1786,6 +1786,164 @@ String _fanOutLabel(String name, {int maxLen = 14}) {
   return '${name.substring(0, cut).trimRight()}$ellipsis';
 }
 
+// ── Feeder-annotation collision avoidance (riser only) ──────────────────────
+// Several boards packed into ONE floor band sit squarely under the branch a
+// feeder annotation rides on, so the default anchor (just right of the child's
+// box, on the branch) printed straight over a sibling board. The placer below
+// keeps that DEFAULT anchor whenever it is clear — a riser whose bands hold one
+// board each is unchanged — and otherwise walks an escape ladder until the tag
+// clears every board box and every already-placed tag, leadering back to the
+// branch it names. A tag is drawing CONTENT: it is never dropped.
+
+/// Text size of a feeder annotation (the size the tag has always been drawn at).
+const double _riserFeederLabelSize = 6.5;
+
+/// A single per-size character advance used to size a feeder annotation's
+/// collision box (width = chars x size x this).
+/// VERIFY: a representative average glyph advance for the drawing font — a
+/// drafting collision metric, not a standard. Public so the collision unit test
+/// sizes its boxes with the SAME constant the builder uses.
+const double kElectricalRiserLabelCharW = 0.6;
+
+/// A slot pulled more than this far (drawing units) off the default anchor gets
+/// a thin leader back to the branch it annotates. // VERIFY: a drafting
+/// declutter heuristic, not a standard.
+const double _kRiserLeaderThreshold = 14;
+
+/// Vertical pitch of the right-of-channel annotation column and how many stacked
+/// slots it offers — the escape budget for one floor band's displaced tags.
+const double _kRiserLabelStackH = 10;
+const int _kRiserStackSlots = 12;
+
+/// Overlap penalty for a slot reaching into the floor-name GUTTER column, so the
+/// ladder always steps past it (an area, to stay comparable with real overlaps).
+const double _kRiserGutterPenalty = 1e9;
+
+/// The collision-box width of [text] drawn at [size].
+double _riserLabelWidth(String text, double size) =>
+    text.length * size * kElectricalRiserLabelCharW;
+
+/// An axis-aligned box in drawing space (a label's baseline is its [maxY], the
+/// text rising to [minY]).
+class _RiserBox {
+  final double minX, minY, maxX, maxY;
+  const _RiserBox(this.minX, this.minY, this.maxX, this.maxY);
+
+  /// Overlap AREA with [o] (0 when disjoint) — used to rank the least-bad slot.
+  double overlap(_RiserBox o) {
+    final dx = math.min(maxX, o.maxX) - math.max(minX, o.minX);
+    final dy = math.min(maxY, o.maxY) - math.max(minY, o.minY);
+    return (dx <= 0 || dy <= 0) ? 0 : dx * dy;
+  }
+}
+
+/// Greedy placer for the riser's feeder annotations: it knows every board box
+/// (fixed) plus every tag it has already reserved, and hands each tag either its
+/// default anchor (when clear) or the first ladder slot that clears them all —
+/// else the least-overlapping one. Deterministic given a stable feeder order.
+class _RiserLabelPlacer {
+  final List<_RiserBox> _fixed;
+  final List<_RiserBox> _placed = <_RiserBox>[];
+  _RiserLabelPlacer(this._fixed);
+
+  _RiserBox _boxFor((double, double) slot, String text, double size) =>
+      _RiserBox(slot.$1, slot.$2 - size,
+          slot.$1 + _riserLabelWidth(text, size), slot.$2);
+
+  /// Total overlap AREA of a tag box at [slot] against every board box and every
+  /// reserved tag (plus the gutter penalty).
+  double _overlapAt((double, double) slot, String text, double size) {
+    final r = _boxFor(slot, text, size);
+    var total = slot.$1 < _riserGutterW ? _kRiserGutterPenalty : 0.0;
+    for (final b in _fixed) {
+      total += b.overlap(r);
+    }
+    for (final b in _placed) {
+      total += b.overlap(r);
+    }
+    return total;
+  }
+
+  /// Reserve [slot] when nothing collides with it; true ⇒ the tag keeps it.
+  bool reserveIfClear((double, double) slot, String text, double size) {
+    if (_overlapAt(slot, text, size) > 0) return false;
+    _placed.add(_boxFor(slot, text, size));
+    return true;
+  }
+
+  /// Walk [ladder] (default first) and reserve the first slot that clears every
+  /// board box and reserved tag; when NONE clears, the least-overlapping slot is
+  /// reserved anyway (a feeder spec is never dropped) and `cleared` is false so
+  /// the caller always leaders it back to its branch.
+  ({(double, double) slot, bool cleared}) escape(
+      List<(double, double)> ladder, String text, double size) {
+    var best = ladder.first;
+    var bestOverlap = double.infinity;
+    var cleared = false;
+    for (final slot in ladder) {
+      final total = _overlapAt(slot, text, size);
+      if (total <= 0) {
+        best = slot;
+        cleared = true;
+        break;
+      }
+      if (total < bestOverlap) {
+        bestOverlap = total;
+        best = slot;
+      }
+    }
+    _placed.add(_boxFor(best, text, size));
+    return (slot: best, cleared: cleared);
+  }
+}
+
+/// One drawn feeder run + the annotation slot chosen for it.
+class _RiserFeeder {
+  final SldRole role;
+  final double px, py; // parent box right edge / its centre-line
+  final double cx, cy; // child box right edge / the branch line
+  final double bandRight; // rightmost board edge on the CHILD's band
+  final String? label;
+  (double, double) slot = (0, 0);
+  bool cleared = true; // false ⇒ nothing cleared; always leadered
+  _RiserFeeder({
+    required this.role,
+    required this.px,
+    required this.py,
+    required this.cx,
+    required this.cy,
+    required this.bandRight,
+    required this.label,
+  });
+
+  /// The legacy anchor: on the branch, just right of the child's box.
+  (double, double) defaultSlot(double channelX) =>
+      (math.min(cx, channelX) + 6, cy - 4);
+
+  /// Escape ladder (default first, so an un-collided tag never moves):
+  ///   1. the clear span of the branch between the band's RIGHTMOST board edge
+  ///      and the channel — above, then below the branch line — offered only
+  ///      when the tag actually FITS inside that span;
+  ///   2. a right-of-channel annotation column, stacked around the branch height
+  ///      (down, then up, growing) so several tags off ONE band never fuse.
+  /// Nothing is drawn beyond the channel, so (2) always clears within its slot
+  /// budget for a realistic band.
+  List<(double, double)> ladder(double channelX, double size) {
+    final w = _riserLabelWidth(label!, size);
+    final spanFits = bandRight + 8 + w <= channelX - 4;
+    return [
+      defaultSlot(channelX),
+      if (spanFits) (bandRight + 8, cy - 4),
+      if (spanFits) (bandRight + 8, cy + 12),
+      for (var k = 0; k < _kRiserStackSlots; k++)
+        (
+          channelX + 10,
+          cy - 4 + (k.isOdd ? 1 : -1) * ((k + 1) ~/ 2) * _kRiserLabelStackH,
+        ),
+    ];
+  }
+}
+
 /// Build the FLOOR-BY-FLOOR electrical riser: every panel placed on its building
 /// FLOOR (by true elevation — highest floor at the TOP of the y-down sheet),
 /// laid left-to-right within its floor band; feeders draw as a vertical riser in
@@ -1800,6 +1958,11 @@ String _fanOutLabel(String name, {int maxLen = 14}) {
 /// When [sourceChain] is true a PLN/MV/transformer/LV-main source spine is
 /// prepended ABOVE the top floor band. [mounting] is accepted for signature
 /// parity with the mechanical riser; it is unused here.
+///
+/// Each feeder's cable/breaker annotation keeps its default anchor (on the
+/// branch, just right of the child's box) whenever that is clear; when boards
+/// share a band it escapes past them (see [_RiserFeeder.ladder]) and is leadered
+/// back to its branch, so a tag never prints over a sibling board.
 SldSheet buildElectricalRiser({
   required ElectricalProject project,
   required ElectricalSystemResult result,
@@ -1892,30 +2055,92 @@ SldSheet buildElectricalRiser({
 
   // ── Feeders: vertical riser in a right-hand channel + horizontal branches ───
   final channelX = sheetMaxX + 40;
+  // The rightmost board edge per band bounds the clear span of that band's
+  // branches (a displaced annotation's first escape).
+  final bandRightEdge = <int, double>{};
+  for (final entry in byFloor.entries) {
+    var right = _riserGutterW + _riserPanelGap;
+    for (final id in entry.value) {
+      right = math.max(right, panelX[id]! + _ovW);
+    }
+    bandRightEdge[entry.key] = right;
+  }
+  // One record per drawn feeder, in the deterministic parent-map order.
+  final feeders = <_RiserFeeder>[];
   for (final entry in parentOf.entries) {
     final child = entry.key;
     final parent = entry.value;
     if (!panelX.containsKey(child) || !panelX.containsKey(parent)) continue;
-    final role =
-        essential.contains(child) ? SldRole.essential : SldRole.normal;
-    final px = panelX[parent]! + _ovW; // parent right edge
-    final py = panelY[parent]! + _ovH / 2;
     final cxx = panelX[child]! + _ovW; // child right edge
-    final cyy = panelY[child]! + _ovH / 2;
+    feeders.add(_RiserFeeder(
+      role: essential.contains(child) ? SldRole.essential : SldRole.normal,
+      px: panelX[parent]! + _ovW, // parent right edge
+      py: panelY[parent]! + _ovH / 2,
+      cx: cxx,
+      cy: panelY[child]! + _ovH / 2,
+      bandRight: bandRightEdge[floorOf(child)] ?? cxx,
+      // Feeder annotation (cable + breaker); null when the feeding circuit
+      // can't resolve ⇒ that run is left unlabelled (never fabricated).
+      label: _feederConnLabel(feederCircuitOf, feederResultOf, child),
+    ));
+  }
+  // Pass 1 — every annotation whose DEFAULT anchor is clear keeps it (so a riser
+  // whose bands hold one board each is unchanged); pass 2 walks the escape
+  // ladder for the rest, stacking them without mutual overlap.
+  final placer = _RiserLabelPlacer([
+    for (final id in panelX.keys)
+      _RiserBox(panelX[id]!, panelY[id]!, panelX[id]! + _ovW,
+          panelY[id]! + _ovH),
+  ]);
+  final needsEscape = <_RiserFeeder>[];
+  for (final f in feeders) {
+    if (f.label == null) continue;
+    f.slot = f.defaultSlot(channelX);
+    if (!placer.reserveIfClear(f.slot, f.label!, _riserFeederLabelSize)) {
+      needsEscape.add(f);
+    }
+  }
+  for (final f in needsEscape) {
+    final r = placer.escape(
+        f.ladder(channelX, _riserFeederLabelSize), f.label!,
+        _riserFeederLabelSize);
+    f.slot = r.slot;
+    f.cleared = r.cleared;
+  }
+  // The right edge of the widest DISPLACED annotation — folded into the sheet
+  // bounds below so an escaped tag is never clipped. Labels otherwise don't
+  // drive the bounds, so a riser with no displacement keeps its exact extents.
+  var displacedMaxX = double.negativeInfinity;
+  for (final f in feeders) {
     // parent right -> channel; channel vertical riser (length ∝ elevation
     // delta); channel -> child right.
-    prims.add(SldLine(px, py, channelX, py, weight: SldWeight.medium, role: role));
-    prims.add(SldLine(channelX, py, channelX, cyy,
-        weight: SldWeight.medium, role: role));
-    prims.add(SldLine(channelX, cyy, cxx, cyy,
-        weight: SldWeight.medium, role: role));
-    // Feeder annotation (cable + breaker) along the horizontal branch into the
-    // child, just above the line; omitted when the feeding circuit can't resolve.
-    final lbl = _feederConnLabel(feederCircuitOf, feederResultOf, child);
-    if (lbl != null) {
-      prims.add(SldLabel(math.min(cxx, channelX) + 6, cyy - 4, lbl,
-          size: 6.5, role: role));
+    prims.add(
+        SldLine(f.px, f.py, channelX, f.py, weight: SldWeight.medium, role: f.role));
+    prims.add(SldLine(channelX, f.py, channelX, f.cy,
+        weight: SldWeight.medium, role: f.role));
+    prims.add(SldLine(channelX, f.cy, f.cx, f.cy,
+        weight: SldWeight.medium, role: f.role));
+    final lbl = f.label;
+    if (lbl == null) continue;
+    final (lx, ly) = f.slot;
+    final def = f.defaultSlot(channelX);
+    final dx = lx - def.$1, dy = ly - def.$2;
+    if (dx != 0 || dy != 0) {
+      displacedMaxX = math.max(
+          displacedMaxX, lx + _riserLabelWidth(lbl, _riserFeederLabelSize));
     }
+    // A tag pulled well off its anchor — or one no slot could fully clear —
+    // gets a thin leader from the nearest point on ITS branch, so it still
+    // reads as this feeder's spec.
+    if (!f.cleared ||
+        math.sqrt(dx * dx + dy * dy) > _kRiserLeaderThreshold) {
+      final bx = math.min(math.max(lx, math.min(f.cx, channelX)),
+          math.max(f.cx, channelX));
+      prims.add(
+          SldLine(bx, f.cy, lx, ly, weight: SldWeight.thin, role: f.role));
+    }
+    prims.add(
+        SldLabel(lx, ly, lbl, size: _riserFeederLabelSize, role: f.role));
   }
   sheetMaxX = math.max(sheetMaxX, channelX);
 
@@ -2020,6 +2245,9 @@ SldSheet buildElectricalRiser({
         maxX = math.max(maxX, pr.cx + pr.r);
     }
   }
+  // A DISPLACED feeder annotation escapes past the channel — widen the sheet so
+  // it can't be clipped (no displacement ⇒ -infinity ⇒ the bounds are unchanged).
+  maxX = math.max(maxX, displacedMaxX);
   if (!minY.isFinite) {
     minY = 0;
     maxY = 1;

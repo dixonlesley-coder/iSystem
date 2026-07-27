@@ -19,7 +19,8 @@ import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/earthing.dart';
-import 'package:mechx_engine/electrical/fault.dart' show defaultLvUtilityFaultKa;
+import 'package:mechx_engine/electrical/fault.dart'
+    show defaultLvUtilityFaultKa, estimatedServiceFaultLevelA;
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
@@ -398,9 +399,16 @@ final electricalResultProvider = Provider<ElectricalSystemResult>(
       // Fold 1 — busbar short-circuit withstand: floor each bus to survive the
       // prospective fault for the clearing time, not merely to carry the load
       // current. The fault level + clearing time are project settings (Service &
-      // Earthing inspector); when unset they fall back to the app defaults
-      // (16 kA / 0.1 s), so an untouched project sizes byte-identically.
+      // Earthing inspector). Fault-level fallback chain: an explicit
+      // [project.originFaultLevelA] always wins; else, when a service size is
+      // declared (transformer kVA or connection capacity/daya tersambung),
+      // [estimatedServiceFaultLevelA] derives a size-appropriate estimate (so a
+      // small domestic board no longer specifies against the same flat figure
+      // as a real substation); else the app default (16 kA) — so a project that
+      // declares nothing stays byte-identical. Clearing time keeps its own
+      // separate fallback (0.1 s) regardless of which fault-level tier applies.
       originFaultLevel: project.originFaultLevelA ??
+          estimatedServiceFaultLevelA(project) ??
           const Current(defaultLvUtilityFaultKa * 1000),
       busbarClearingTimeS:
           project.busbarClearingTimeS ?? _liveBusbarClearingTimeS,

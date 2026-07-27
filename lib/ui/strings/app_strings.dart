@@ -881,8 +881,10 @@ const Map<StringKey, String> _en = {
   StringKey.electricalOriginFaultLevel: 'Origin fault level (kA)',
   StringKey.electricalOriginFaultLevelNote:
       'Prospective 3-phase fault at the supply origin. Drives '
-          'Fold-1 busbar short-circuit withstand sizing. Default '
-          '16 kA. VERIFY against the PLN / upstream let-through.',
+          'Fold-1 busbar short-circuit withstand sizing. Default is '
+          'estimated from the declared service size (daya tersambung / '
+          'transformer kVA) when one is set, else 16 kA. VERIFY against '
+          'the PLN / upstream let-through.',
   StringKey.electricalBusbarClearingTime: 'Busbar clearing time (s)',
   StringKey.electricalBusbarClearingTimeNote:
       'Protective-device clearing time for the withstand '
@@ -1741,7 +1743,9 @@ const Map<StringKey, String> _id = {
   StringKey.electricalOriginFaultLevelNote:
       'Gangguan 3-fasa prospektif di titik asal suplai. Menjadi dasar '
           'pengukuran ketahanan hubung-singkat busbar Fold-1. Default '
-          '16 kA. VERIFIKASI terhadap let-through PLN / hulu.',
+          'diperkirakan dari ukuran daya yang dideklarasikan (daya '
+          'tersambung / kVA trafo) jika ada, jika tidak 16 kA. VERIFIKASI '
+          'terhadap let-through PLN / hulu.',
   StringKey.electricalBusbarClearingTime: 'Waktu pemutusan busbar (s)',
   StringKey.electricalBusbarClearingTimeNote:
       'Waktu pemutusan perangkat proteksi untuk pemeriksaan ketahanan '

@@ -295,4 +295,144 @@ void main() {
       expect(z.xOhm / z.rOhm, closeTo(7, 1e-9));
     });
   });
+
+  group('(e) estimatedServiceFaultLevelA — service-size-derived fault level',
+      () {
+    // A bare one-panel project; the estimate reads ONLY the project-level
+    // service declarations, so the panel content is irrelevant here.
+    const mdp = ElectricalPanel(
+      id: 'MDP',
+      name: 'Main',
+      system: ElectricalSystem.threePhase,
+      voltage: Voltage(400),
+      circuits: [
+        ElectricalCircuit(
+          id: 'c1',
+          name: 'Sockets',
+          loadKind: LoadKind.socket,
+          loadW: 3000,
+          cosPhi: 0.9,
+          length: Length(10),
+        ),
+      ],
+    );
+
+    test('declared transformer ⇒ Isc = S/(√3·U·Zpu)', () {
+      // 630 kVA at the representative 5 % p.u., referred to 400 V:
+      //   √3·400·0.05 = 1.732050808·400·0.05 = 34.641016151
+      //   Isc = 630000 / 34.641016151 = 18186.5335 A → rounded to 0.1 A.
+      const project = ElectricalProject(
+        id: 'e1',
+        name: 'Tx',
+        panels: [mdp],
+        transformerKva: ApparentPower(630000),
+      );
+      expect(estimatedServiceFaultLevelA(project)!.amperes, 18186.5);
+    });
+
+    test('a huge transformer clamps at the 50 kA ceiling', () {
+      // 5000 kVA: 5000000 / 34.641016151 = 144337.6 A — far past any LV device
+      // ladder, so the estimate is clamped to maxEstimatedServiceFaultKa.
+      const project = ElectricalProject(
+        id: 'e2',
+        name: 'BigTx',
+        panels: [mdp],
+        transformerKva: ApparentPower(5000000),
+      );
+      expect(estimatedServiceFaultLevelA(project)!.amperes, 50000);
+      expect(maxEstimatedServiceFaultKa, 50);
+    });
+
+    test('LV connection-capacity rungs are monotone and banded', () {
+      Current? forVa(double va) => estimatedServiceFaultLevelA(
+            ElectricalProject(
+              id: 'e3',
+              name: 'Daya',
+              panels: const [mdp],
+              supplyCapacityVa: ApparentPower(va),
+            ),
+          );
+      // 5500 VA — a domestic PLN step, inside the ≤ 16500 VA small band ⇒ 6 kA
+      // (the breaking capacity domestic MCBs are actually built to).
+      expect(forVa(5500)!.amperes, 6000);
+      // 16500 VA — the band ceiling itself is INCLUSIVE ⇒ still 6 kA.
+      expect(forVa(16500)!.amperes, 6000);
+      // 33000 VA — a commercial 3φ daya step above the small band, still within
+      // the PLN TR ceiling ⇒ the 10 kA rung.
+      expect(forVa(33000)!.amperes, 10000);
+      // 197000 VA — the top PLN TR step, inclusive ⇒ still 10 kA.
+      expect(forVa(197000)!.amperes, 10000);
+      // 250000 VA — beyond the TR ceiling with NO declared transformer ⇒ no
+      // better claim than the flat default.
+      expect(forVa(250000)!.amperes, 16000);
+      expect(defaultLvUtilityFaultKa, 16);
+      // Monotone non-decreasing across the bands.
+      final rungs = [5500.0, 16500.0, 33000.0, 197000.0, 250000.0]
+          .map((va) => forVa(va)!.amperes)
+          .toList();
+      for (var i = 1; i < rungs.length; i++) {
+        expect(rungs[i], greaterThanOrEqualTo(rungs[i - 1]));
+      }
+    });
+
+    test('nothing declared ⇒ null (the caller keeps its flat default)', () {
+      const project = ElectricalProject(id: 'e4', name: 'Bare', panels: [mdp]);
+      expect(estimatedServiceFaultLevelA(project), isNull);
+    });
+
+    test('dualTransformer alone ⇒ null (it carries no rating)', () {
+      const project = ElectricalProject(
+        id: 'e5',
+        name: 'Dual',
+        panels: [mdp],
+        dualTransformer: true,
+      );
+      expect(estimatedServiceFaultLevelA(project), isNull);
+    });
+
+    test('a declared transformer WINS over a declared capacity', () {
+      const project = ElectricalProject(
+        id: 'e6',
+        name: 'Both',
+        panels: [mdp],
+        transformerKva: ApparentPower(630000),
+        supplyCapacityVa: ApparentPower(5500),
+      );
+      // The transformer branch (18186.5 A), not the 6 kA capacity rung.
+      expect(estimatedServiceFaultLevelA(project)!.amperes, 18186.5);
+    });
+
+    test('a non-positive declaration falls through to the next step', () {
+      const project = ElectricalProject(
+        id: 'e7',
+        name: 'Zero',
+        panels: [mdp],
+        transformerKva: ApparentPower(0),
+        supplyCapacityVa: ApparentPower(5500),
+      );
+      expect(estimatedServiceFaultLevelA(project)!.amperes, 6000);
+    });
+
+    test('the estimate lowers the printed device kA on a domestic board', () {
+      // This is the defect the estimate closes: at the flat 16 kA default the
+      // MCB ladder [6,10,15,25] has to reach 25 kA; at the 6 kA domestic rung
+      // the first rung already covers it.
+      const project = ElectricalProject(
+        id: 'e8',
+        name: 'House',
+        panels: [mdp],
+        earthingSystem: EarthingSystem.tnCs,
+        supplyCapacityVa: ApparentPower(5500),
+      );
+      final sys = computeSystem(p, project);
+      final flat = faultStudy(sys, project, p); // 16 kA default
+      expect(flat.panels['MDP']!.incomerKa, 25);
+
+      final sized = faultStudy(sys, project, p,
+          originFaultLevel: estimatedServiceFaultLevelA(project)!);
+      expect(sized.originFaultkA, 6.0);
+      expect(sized.panels['MDP']!.incomerKa, 6);
+      expect(sized.panels['MDP']!.incomerAdequate, isTrue);
+    });
+  });
 }

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/geo_length.dart' show LayoutPos;
 import 'package:mechx_engine/electrical/load_kind.dart';
@@ -7,6 +9,25 @@ import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
+
+/// An axis-aligned box in drawing space. A LABEL's box is sized with the SAME
+/// per-size character advance the builder uses ([kElectricalRiserLabelCharW]):
+/// the baseline is the box's BOTTOM edge, the text rising one `size` above it.
+class _Box {
+  final double minX, minY, maxX, maxY;
+  const _Box(this.minX, this.minY, this.maxX, this.maxY);
+
+  factory _Box.ofLabel(SldLabel l) => _Box(l.x, l.y - l.size,
+      l.x + l.text.length * l.size * kElectricalRiserLabelCharW, l.y);
+
+  factory _Box.ofRect(SldRect r) => _Box(r.x, r.y, r.x + r.w, r.y + r.h);
+
+  /// True only when the two boxes share a POSITIVE area — touching edges is not
+  /// an overlap (the same test the builder's placer applies).
+  bool overlaps(_Box o) =>
+      math.min(maxX, o.maxX) - math.max(minX, o.minX) > 0 &&
+      math.min(maxY, o.maxY) - math.max(minY, o.minY) > 0;
+}
 
 void main() {
   const profile = PuilProfile();
@@ -339,5 +360,223 @@ void main() {
     // The total budget (name + ellipsis) stays within the old 14-char width
     // so the on-canvas column layout is unaffected.
     expect(namePart.length + 3, lessThanOrEqualTo(14));
+  });
+
+  // ── Feeder-annotation collision (recorded follow-up) ───────────────────────
+  // A feeder's cable/breaker tag used to be pinned at the CHILD board's right
+  // edge on its horizontal branch. When several boards share one floor band the
+  // band packs them left-to-right, so that branch crosses the siblings and the
+  // tag printed straight over a sibling board's box.
+  group('feeder annotations never overprint a board on a shared band', () {
+    // FOUR boards forced onto ONE band (all floorIndex 0): an MDP feeding three
+    // sub-boards ⇒ three feeder branches that all run the width of the band.
+    const dense = ElectricalProject(
+      id: 'dense',
+      name: 'Dense band',
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'MDP',
+          layoutPos: LayoutPos(sheetId: 's', floorIndex: 0, x: 10, y: 10),
+          circuits: [
+            ElectricalCircuit(
+                id: 'f1', name: 'Feeder PP-PUMP', loadKind: LoadKind.feeder,
+                feedsPanelId: 'P1', length: Length(12)),
+            ElectricalCircuit(
+                id: 'f2', name: 'Feeder PP-LIGHT', loadKind: LoadKind.feeder,
+                feedsPanelId: 'P2', length: Length(18)),
+            ElectricalCircuit(
+                id: 'f3', name: 'Feeder PP-SOCKET', loadKind: LoadKind.feeder,
+                feedsPanelId: 'P3', length: Length(24)),
+          ],
+        ),
+        ElectricalPanel(
+          id: 'P1', name: 'PP-PUMP', sourceType: PanelSource.feeder,
+          layoutPos: LayoutPos(sheetId: 's', floorIndex: 0, x: 40, y: 10),
+          circuits: [
+            ElectricalCircuit(
+                id: 'c1', name: 'Pump', loadKind: LoadKind.motor,
+                motorKw: 5.5, length: Length(8)),
+          ],
+        ),
+        ElectricalPanel(
+          id: 'P2', name: 'PP-LIGHT', sourceType: PanelSource.feeder,
+          layoutPos: LayoutPos(sheetId: 's', floorIndex: 0, x: 70, y: 10),
+          circuits: [
+            ElectricalCircuit(
+                id: 'c2', name: 'Lighting', loadKind: LoadKind.lighting,
+                isLighting: true, loadW: 1800, length: Length(14)),
+          ],
+        ),
+        ElectricalPanel(
+          id: 'P3', name: 'PP-SOCKET', sourceType: PanelSource.feeder,
+          layoutPos: LayoutPos(sheetId: 's', floorIndex: 0, x: 100, y: 10),
+          circuits: [
+            ElectricalCircuit(
+                id: 'c3', name: 'Sockets', loadKind: LoadKind.general,
+                loadW: 3000, length: Length(16)),
+          ],
+        ),
+      ],
+    );
+    final denseResult = computeSystem(profile, dense);
+    final sheet = buildElectricalRiser(
+        project: dense, result: denseResult, building: building);
+
+    // A feeder annotation is the only label carrying both a cable size and the
+    // ` mm2 · ` separator (see `_feederConnLabel`).
+    List<SldLabel> feederLabels(SldSheet s) => s.prims
+        .whereType<SldLabel>()
+        .where((l) => l.text.contains(' mm2 ') && l.text.contains('·'))
+        .toList();
+
+    // The floor gutter's own labels (floor name + FFL) — a displaced tag must
+    // not escape into that column either.
+    List<SldLabel> gutterLabels(SldSheet s) => s.prims
+        .whereType<SldLabel>()
+        .where((l) =>
+            l.text.startsWith('FFL ') ||
+            building.floors.any((f) => f.name == l.text))
+        .toList();
+
+    test('no annotation is dropped: still one per fed board', () {
+      // MDP + 3 sub-boards ⇒ 3 feeders, every one resolvable ⇒ 3 tags.
+      expect(feederLabels(sheet).length, dense.panels.length - 1);
+    });
+
+    test('every annotation box clears every board box, every other annotation '
+        'and the floor gutter', () {
+      final labels = feederLabels(sheet);
+      final boxes = [for (final l in labels) _Box.ofLabel(l)];
+      final rects = [
+        for (final r in sheet.prims.whereType<SldRect>()) _Box.ofRect(r)
+      ];
+      expect(rects.length, dense.panels.length);
+      for (var i = 0; i < labels.length; i++) {
+        for (final r in rects) {
+          expect(boxes[i].overlaps(r), isFalse,
+              reason: 'tag "${labels[i].text}" at ${labels[i].x},'
+                  '${labels[i].y} overprints a board box');
+        }
+        for (var j = 0; j < labels.length; j++) {
+          if (i == j) continue;
+          expect(boxes[i].overlaps(boxes[j]), isFalse,
+              reason: 'tags "${labels[i].text}" + "${labels[j].text}" fuse');
+        }
+        for (final g in gutterLabels(sheet)) {
+          expect(boxes[i].overlaps(_Box.ofLabel(g)), isFalse,
+              reason: 'tag "${labels[i].text}" reaches the gutter');
+        }
+      }
+    });
+
+    test('a displaced annotation is leadered back to ITS branch; the tag that '
+        'never collided keeps the legacy anchor', () {
+      final labels = feederLabels(sheet);
+      // The legacy anchor of a fed board: its box right edge + 6, on the branch
+      // (the box centre-line) less 4. Boards are 168 x 46 packed from x = 174
+      // (gutter 150 + gap 24) at a 192 pitch, band 0 top y = 300 (two bands
+      // above it at 150 each) ⇒ branch y = 300 + 23 = 323, anchors y = 319 and
+      // x in {540, 732, 924} for the boards at x = 366 / 558 / 750.
+      final anchors = {
+        for (final r in sheet.prims.whereType<SldRect>())
+          (r.x + r.w + 6, r.y + r.h / 2 - 4)
+      };
+      final kept =
+          labels.where((l) => anchors.contains((l.x, l.y))).toList();
+      final moved =
+          labels.where((l) => !anchors.contains((l.x, l.y))).toList();
+      // The RIGHTMOST board has nothing beyond it, so its own tag never
+      // collided and must be untouched; the two behind it had to escape.
+      expect(kept.length, 1, reason: 'kept: ${kept.map((l) => l.text)}');
+      expect(kept.single.x, 924.0);
+      expect(kept.single.y, 319.0);
+      expect(moved, isNotEmpty);
+
+      // Every moved tag gets a THIN leader ending exactly on it, starting on a
+      // board's branch line (a box centre-line).
+      final branchYs = {
+        for (final r in sheet.prims.whereType<SldRect>()) r.y + r.h / 2
+      };
+      for (final l in moved) {
+        final leaders = sheet.prims.whereType<SldLine>().where((s) =>
+            s.weight == SldWeight.thin && s.x2 == l.x && s.y2 == l.y);
+        expect(leaders, hasLength(1), reason: 'no leader for "${l.text}"');
+        expect(branchYs, contains(leaders.first.y1), reason: l.text);
+      }
+      // A displaced tag escapes past the feeder channel, so the sheet widens to
+      // hold it (it is never clipped).
+      for (final l in moved) {
+        expect(_Box.ofLabel(l).maxX, lessThanOrEqualTo(sheet.maxX),
+            reason: l.text);
+      }
+    });
+
+    test('a single-board-per-band riser keeps EXACTLY the legacy anchors '
+        '(byte-identity guard)', () {
+      // MDP (band 0) -> LP-1 (band 1) -> LP-2 (band 2): one board per band, so
+      // no branch ever crosses a sibling and nothing may move.
+      const chain = ElectricalProject(
+        id: 'chain',
+        name: 'One per band',
+        panels: [
+          ElectricalPanel(
+            id: 'MDP',
+            name: 'MDP',
+            layoutPos: LayoutPos(sheetId: 's', floorIndex: 0, x: 10, y: 10),
+            circuits: [
+              ElectricalCircuit(
+                  id: 'fa', name: 'Feeder LP-1', loadKind: LoadKind.feeder,
+                  feedsPanelId: 'A', length: Length(12)),
+            ],
+          ),
+          ElectricalPanel(
+            id: 'A', name: 'LP-1', sourceType: PanelSource.feeder,
+            layoutPos: LayoutPos(sheetId: 's', floorIndex: 1, x: 10, y: 10),
+            circuits: [
+              ElectricalCircuit(
+                  id: 'fb', name: 'Feeder LP-2', loadKind: LoadKind.feeder,
+                  feedsPanelId: 'B', length: Length(9)),
+            ],
+          ),
+          ElectricalPanel(
+            id: 'B', name: 'LP-2', sourceType: PanelSource.feeder,
+            layoutPos: LayoutPos(sheetId: 's', floorIndex: 2, x: 10, y: 10),
+            circuits: [
+              ElectricalCircuit(
+                  id: 'cb', name: 'Sockets', loadKind: LoadKind.general,
+                  loadW: 1200, length: Length(11)),
+            ],
+          ),
+        ],
+      );
+      final r = computeSystem(profile, chain);
+      final s = buildElectricalRiser(
+          project: chain, result: r, building: building);
+      final labels = feederLabels(s);
+      expect(labels.length, chain.panels.length - 1);
+      final anchors = {
+        for (final rc in s.prims.whereType<SldRect>())
+          (rc.x + rc.w + 6, rc.y + rc.h / 2 - 4)
+      };
+      for (final l in labels) {
+        expect(anchors.contains((l.x, l.y)), isTrue,
+            reason: '"${l.text}" moved to ${l.x},${l.y}');
+        expect(l.size, 6.5);
+      }
+      // Hand-derived: the sole board of each band sits at x = 174 (gutter 150 +
+      // gap 24), box 168 wide ⇒ right edge 342 ⇒ anchor x 342 + 6 = 348; the
+      // TOP band starts at y 0 and the branch is the box centre-line 46 / 2 =
+      // 23 ⇒ anchor y = 23 - 4 = 19.
+      expect(labels.any((l) => l.x == 348.0 && l.y == 19.0), isTrue);
+      // Nothing was displaced ⇒ no leader ends on any annotation.
+      for (final l in labels) {
+        expect(
+            s.prims.whereType<SldLine>().any((ln) =>
+                ln.weight == SldWeight.thin && ln.x2 == l.x && ln.y2 == l.y),
+            isFalse,
+            reason: 'unexpected leader for "${l.text}"');
+      }
+    });
   });
 }

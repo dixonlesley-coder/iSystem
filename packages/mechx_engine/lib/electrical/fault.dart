@@ -58,6 +58,57 @@ import 'panel_results.dart'
 // VERIFY — secondarySource (IEC 60909 typical urban LV; not a PUIL clause).
 const double defaultLvUtilityFaultKa = 16;
 
+/// Nominal LV line-to-line voltage (V) the service-size fault estimate
+/// ([estimatedServiceFaultLevelA]) is referred to — the Indonesian 3-phase LV
+/// nominal (the same 400 V the panels carry).
+// VERIFY — secondarySource (SNI IEC 60038:2013 nominal 400 V; see puil.dart).
+const double serviceFaultLineVoltageV = 400;
+
+/// Representative per-unit short-circuit impedance (p.u. on its OWN rating) of
+/// an MV/LV distribution transformer, used to estimate the LV-side prospective
+/// fault when a customer transformer rating is declared but its nameplate Z% is
+/// not modelled. 4–6 % covers the common 100…2000 kVA distribution range, so 5 %
+/// is the representative middle; the REAL nameplate Z% governs (a 4 % unit
+/// delivers ~25 % MORE fault current than this estimate).
+// VERIFY — secondarySource (representative distribution-transformer impedance;
+// the transformer test certificate governs. Not a PUIL/SNI clause).
+const double representativeTransformerZpu = 0.05;
+
+/// Upper clamp (kA) on the service-size fault estimate — the top of the device
+/// ladder a specifier realistically lands on for an LV board (see
+/// [breakingCapacityKa]). Above it the simplified estimate stops being useful
+/// and a real IEC 60909 study is required, so it is capped rather than printed.
+// VERIFY — notAnSniClause (a modelling clamp, not a standard value).
+const double maxEstimatedServiceFaultKa = 50;
+
+/// Declared LV connection capacity ("daya tersambung", VA) at or below which a
+/// service is a small / domestic one. 16 500 VA is the first PLN 3-phase daya
+/// step above the single-phase ladder (see `supply_design.dart` `plnDayaVa3ph`),
+/// so it separates house / shop boards from real commercial services.
+// VERIFY — notAnSniClause (a banding choice over the published PLN daya steps).
+const double smallServiceCapacityCeilingVa = 16500;
+
+/// Prospective fault (kA) assumed at a small / domestic service entrance. Matches
+/// the 4.5 / 6 kA breaking capacity domestic MCBs are actually built to (IEC
+/// 60898) — the service main fuse plus the long PLN service drop keep the fault
+/// well below the substation figure.
+// VERIFY — notAnSniClause (general LV distribution practice, not a PUIL clause).
+const double smallServiceFaultKa = 6;
+
+/// Top of the PLN low-voltage (TR) connected-power ladder (VA) — above this a
+/// building is served at MV through its own transformer (see `supply_design.dart`
+/// `plnDayaVa3ph` / `lvSupplyLimitKva`).
+// VERIFY — secondarySource (PLN TR tariff ceiling; confirm the current schedule).
+const double plnLvServiceCeilingVa = 197000;
+
+/// Prospective fault (kA) assumed at a larger LV (direct TR) service entrance,
+/// up to [plnLvServiceCeilingVa]. A commercial LV service sits closer to the
+/// distribution substation than a house, but still below the transformer-terminal
+/// figure, so 10 kA (the next IEC 60898 breaking-capacity rung) is the
+/// conservative working value.
+// VERIFY — notAnSniClause (general LV distribution practice, not a PUIL clause).
+const double lvServiceFaultKa = 10;
+
 /// Nominal line-to-earth (phase) voltage U0 for the LV network (V).
 // VERIFY — secondarySource (IEC harmonised 230 V; confirm against PUIL).
 const double u0PhaseVoltageV = 230;
@@ -167,6 +218,101 @@ const List<String> faultStudyVerifyItems = [
   'Ics vs Icu service/ultimate breaking-capacity check (IEC 60947-2)',
   'PE adiabatic-k table (IEC 60364-5-54 Table 54.3)',
 ];
+
+// ───────────────────────────────────────────────────────────────────────────
+// Service-size-derived prospective fault level.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// The unverified-value labels [estimatedServiceFaultLevelA] relies on, ready
+/// for a report / honesty surface to pick up. Deliberately NOT appended to
+/// [faultStudyVerifyItems] this pass (that would change every existing study's
+/// printed verify section) — surfacing it via `SniProfile.verifyChecklist` /
+/// `AdvancedStudy.verifyItems` is the RECORDED FOLLOW-UP.
+const List<String> serviceFaultEstimateVerifyItems = [
+  'representative transformer impedance (5 % p.u.) behind the service-size '
+      'fault estimate — the nameplate Z% governs',
+  // ASCII in the printed label: a report PDF encodes WinAnsi, which has no
+  // '≤' / '⇒' (they would garble to '?' — the Wave-7 separator defect).
+  'service-entrance prospective-fault rungs by declared connection capacity '
+      '(up to 16.5 kVA: 6 kA / up to 197 kVA: 10 kA / above: 16 kA)',
+  'service-size fault estimate clamp (50 kA) and its 400 V LV reference voltage',
+];
+
+/// Estimate the prospective 3-phase symmetrical fault current at the SERVICE
+/// ENTRANCE from the declared service SIZE, so a domestic board is no longer
+/// specified against the same flat [defaultLvUtilityFaultKa] as a 1000 kVA
+/// substation (a small house board printing a 25 kA device token is the defect
+/// this closes). Pure — reads [project] only, no side effects.
+///
+/// Resolution order:
+///
+/// 1. **[ElectricalProject.transformerKva] declared** — a customer MV/LV
+///    transformer feeds the installation, so the LV-side fault is dominated by
+///    the transformer's own impedance. The standard simplified estimate is
+///
+///        Isc = S / (√3·U_LL·Zpu)
+///
+///    with S the transformer rating (VA), U_LL = [serviceFaultLineVoltageV] and
+///    Zpu = [representativeTransformerZpu]. Worked example, a 630 kVA unit at
+///    5 %: 630000 / (1.732050808·400·0.05) = 630000 / 34.641016 = 18186.5 A.
+///    The utility impedance UPSTREAM of the transformer and the substation-to-
+///    board cable are deliberately ignored — both only REDUCE the fault, so the
+///    estimate stays conservative. Clamped to [maxEstimatedServiceFaultKa].
+///
+/// 2. **[ElectricalProject.supplyCapacityVa] declared** (an LV direct service —
+///    daya tersambung, no customer transformer): a conservative service-entrance
+///    RUNG off the declared capacity, monotone non-decreasing —
+///    ≤ [smallServiceCapacityCeilingVa] ⇒ [smallServiceFaultKa];
+///    ≤ [plnLvServiceCeilingVa] ⇒ [lvServiceFaultKa];
+///    above the PLN TR ceiling with no declared transformer ⇒
+///    [defaultLvUtilityFaultKa] (no better claim available).
+///
+/// 3. **Nothing declared** ⇒ `null`. [ElectricalProject.dualTransformer] alone
+///    carries no rating to compute from, so it does NOT count as declared.
+///
+/// A declared value that is zero or negative is treated as undeclared (it falls
+/// through to the next step). The returned current is rounded to 0.1 A.
+///
+/// CALLER CONTRACT: `null` means "no better claim than the existing default" —
+/// the caller MUST keep its existing flat [defaultLvUtilityFaultKa] (16 kA), so
+/// an untouched project stays byte-identical. An explicit
+/// [ElectricalProject.originFaultLevelA] always WINS: the caller checks it first
+/// and only falls back to this estimate when it is null.
+///
+/// PROVENANCE: every figure is `// VERIFY` (see the constants above) —
+/// secondary-source distribution practice, none of it an SNI/PUIL clause. The
+/// debt is carried in [serviceFaultEstimateVerifyItems] pending the follow-up
+/// that wires it into the honesty surfaces.
+Current? estimatedServiceFaultLevelA(ElectricalProject project) {
+  // 1. Customer transformer declared ⇒ transformer-impedance-limited fault.
+  final txVa = project.transformerKva?.voltAmperes;
+  if (txVa != null && txVa > 0) {
+    final iscA = txVa /
+        (math.sqrt(3) *
+            serviceFaultLineVoltageV *
+            representativeTransformerZpu);
+    return Current(_round(
+      math.min(iscA, maxEstimatedServiceFaultKa * 1000.0),
+      1,
+    ));
+  }
+
+  // 2. LV direct service ⇒ a rung off the declared connection capacity.
+  final capacityVa = project.supplyCapacityVa?.voltAmperes;
+  if (capacityVa != null && capacityVa > 0) {
+    if (capacityVa <= smallServiceCapacityCeilingVa) {
+      return Current.kiloamperes(smallServiceFaultKa);
+    }
+    if (capacityVa <= plnLvServiceCeilingVa) {
+      return Current.kiloamperes(lvServiceFaultKa);
+    }
+    return Current.kiloamperes(defaultLvUtilityFaultKa);
+  }
+
+  // 3. Nothing declared (dualTransformer alone has no rating) ⇒ no claim; the
+  //    caller keeps its flat default.
+  return null;
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // Impedance helpers.
