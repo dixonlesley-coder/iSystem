@@ -1601,6 +1601,23 @@ class _CanvasPainter extends CustomPainter {
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
+    // Anchors within ONE GRID CELL of each other are treated as aligned: the
+    // two mid-height anchors of different-height cards often sit a few px
+    // apart, and the mid-channel jog that would join them reads as a rendering
+    // glitch, not routing (user-reported). Snap to the parent's row so the run
+    // stays glued to the visible outlet grip; a genuine row difference (more
+    // than a grid cell) keeps the orthogonal channel below.
+    if ((a.dy - b.dy).abs() <= kGrid * transform.scale) {
+      final landing = Offset(b.dx, a.dy);
+      canvas.drawPath(
+        Path()
+          ..moveTo(a.dx, a.dy)
+          ..lineTo(landing.dx, landing.dy),
+        paint,
+      );
+      canvas.drawCircle(landing, 3, Paint()..color = col);
+      return;
+    }
     final midX = (a.dx + b.dx) / 2;
     final path = Path()
       ..moveTo(a.dx, a.dy)
