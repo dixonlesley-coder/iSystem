@@ -742,16 +742,21 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.16.0`** (palette/inspector polish: the Draw palette's Drains group gated to the
-  gravity drainage service [hidden while drawing cold/hot water], a new clean-water OUTLET
-  node [faucet/drop glyph, 'Water outlets' palette group gated to pressurized water], the
-  removal of the redundant inspector SHEET→floor control, and the move of DESIGN INPUTS
-  [occupancy/rainfall/runoff] to the Building setup page; atop the v1.15.0 basements +
-  drafting-feel baseline [the free-run-endpoint stretch grip, basement levels + the
-  `BuildingLevels.groundIndex` ground-relative datum, and the snap-to-plan feature highlight];
-  `pubspec.yaml` is the version source of truth,
-  `1.16.0+22`; each release = bump → merge to the default branch (`main`) →
-  `release.yml` `workflow_dispatch` with `publish=true`). The prior `v1.14.0` shipped the
+  is `v1.17.0`** (the electrical panel-design workflow: the five-wave drop/auto-size/
+  connect/balance campaign [W0 engine phasing/topology/templates → W1 store operations →
+  W2+W3 canvas drop creation + multi-surface edit → W4 layout/single-line sync → W5
+  cross-view actions + i18n] plus the W6 in-place value ladders in the electrical
+  right-click menus [Breaker/Cable/Phase/Family + panel System, engine-sourced rungs,
+  '(set)'/Auto override idiom, both hosts converged onto the shared menu widgets] and
+  the standard desktop accelerators + F1 shortcuts sheet; atop the v1.16.0
+  palette/inspector-polish baseline [Drains gating, clean-water outlet, inspector
+  declutter]; `pubspec.yaml` is the version source of truth,
+  `1.17.0+23`; each release = bump → merge to the default branch (`main`) →
+  `release.yml` `workflow_dispatch` with `publish=true`). The prior `v1.16.0` shipped
+  palette/inspector polish (the Draw palette's Drains group gated to the gravity
+  drainage service, the clean-water OUTLET node, the removal of the redundant inspector
+  SHEET→floor control, and the move of DESIGN INPUTS to the Building setup page) atop
+  the v1.15.0 basements + drafting-feel baseline. The prior `v1.14.0` shipped the
   three drafting-feel batches (the user-reported B10–B16 fixes incl. the auto-elbow,
   on-endpoint grip, riser circle-arrows, true-diameter zoom rendering, and the B17–B30
   CAD-muscle-memory set) atop the v1.13.0 all-7-waves campaign baseline. The prior `v1.12.0` shipped the unconnected-element design checks
