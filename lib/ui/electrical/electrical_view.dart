@@ -2091,7 +2091,11 @@ class _PanelAdvancedRow extends StatelessWidget {
           Expanded(
             child: Text(
               bits.join(' · '),
-              style: type.caption.copyWith(color: colors.textSecondary),
+              // E2 — the per-panel kA / enclosure / CT figures update live
+              // with the solve; tabular figures keep the row steady as digits
+              // change.
+              style: MechXTypography.tabular(type.caption)
+                  .copyWith(color: colors.textSecondary),
             ),
           ),
         ],

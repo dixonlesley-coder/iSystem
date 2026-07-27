@@ -21,6 +21,11 @@ import '../widgets/mechx_text_field.dart';
 import '../widgets/section_label.dart';
 import '../widgets/stepped_value_field.dart';
 
+/// The minimum tappable square for this page's glyph-only controls (B2). The
+/// GLYPH keeps its compact size; only the hit region grows, so aiming at a
+/// 26 px `×` in a dense list stops being a test of mouse precision.
+const double _kGlyphHitTarget = 40;
+
 /// The dedicated **Building** page — the floor/level model on its own screen
 /// (lifted out of the right inspector so the canvas isn't crowded). Each level
 /// shows its true elevation and lets you rename it and set its floor-to-floor
@@ -60,6 +65,9 @@ class BuildingScreen extends ConsumerWidget {
         ]),
         const SizedBox(height: MechXSpacing.lg),
         // Top floor first, matching how a building reads on an elevation.
+        // The cards sit on a tight `xs` gap: each carries its own border, so
+        // they still read as separate levels, and the stack reads as ONE list
+        // (the `lg` gaps below still separate the page's groups).
         for (var i = project.floors.length - 1; i >= 0; i--) ...[
           _LevelCard(
             floor: project.floors[i],
@@ -76,7 +84,7 @@ class BuildingScreen extends ConsumerWidget {
                 ? () => ctrl.removeFloor(i)
                 : null,
           ),
-          const SizedBox(height: MechXSpacing.sm),
+          const SizedBox(height: MechXSpacing.xs),
         ],
         const SizedBox(height: MechXSpacing.xs),
         // ONE add control (the old standalone "+ Add level" was redundant with
@@ -158,13 +166,20 @@ class _LevelCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: MechXSpacing.sm),
+              // B3: the elevation restates itself every time a height below it
+              // changes — tabular figures keep the row from shuffling.
               Text('elev ${elevation.meters.toStringAsFixed(1)} m',
-                  style: type.caption.copyWith(color: colors.textMuted)),
-              const SizedBox(width: MechXSpacing.xs),
+                  style: MechXTypography.tabular(type.caption)
+                      .copyWith(color: colors.textMuted)),
+              const SizedBox(width: MechXSpacing.xxs),
               _GlyphButton(glyph: '×', onTap: onRemove, danger: true),
             ],
           ),
-          const SizedBox(height: MechXSpacing.sm),
+          // `xxs`, not `sm`: the header row is taller now that the remove
+          // control carries a full-size hit target (B2), so the optical gap
+          // below it reads the same at a smaller value — and the card (and
+          // with it the whole page) keeps its height.
+          const SizedBox(height: MechXSpacing.xxs),
           // Floor-to-floor height — the §10 source of truth for riser length.
           // A shared type-in stepper (D4): click the value to type, or ±0.1 m
           // with hold-repeat; commit via setFloorHeight.
@@ -225,11 +240,16 @@ class _LevelCard extends StatelessWidget {
   }
 }
 
-/// The consolidated add-levels control: "Add N levels @ H m", either **on top**
-/// (typical floors) or as **basements** below ground — each a whole tower of
-/// identical floors in ONE undo step. N and H are shared type-in steppers; the
-/// two buttons choose the direction. (This subsumes the old standalone single
-/// "+ Add level", which was just the count=1 case.)
+/// The consolidated add-levels control: add N levels of height H, either **on
+/// top** (typical floors) or as **basements** below ground — each a whole tower
+/// of identical floors in ONE undo step. N and H are shared type-in steppers;
+/// the two buttons choose the direction. (This subsumes the old standalone
+/// single "+ Add level", which was just the count=1 case.)
+///
+/// B1: it reads as a small FORM — two labelled fields, then the two actions —
+/// rather than the old one-line math expression ("− 1 + levels @ − 3.5 m +
+/// [Add on top] [Add basement]") that ran the controls together. Same intents,
+/// same values, same one-undo behaviour.
 class _AddLevelsRow extends StatefulWidget {
   final void Function(int count, double heightM) onAddOnTop;
   final void Function(int count, double heightM) onAddBasement;
@@ -247,10 +267,8 @@ class _AddLevelsRowState extends State<_AddLevelsRow> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final type = context.type;
-    Text label(String s) =>
-        Text(s, style: type.body.copyWith(color: colors.textSecondary));
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.symmetric(
           horizontal: MechXSpacing.md, vertical: MechXSpacing.sm),
       decoration: BoxDecoration(
@@ -258,50 +276,98 @@ class _AddLevelsRowState extends State<_AddLevelsRow> {
         borderRadius: MechXRadii.card,
         border: Border.all(color: colors.border),
       ),
+      // The two named inputs, then — after a gap that separates inputs from
+      // actions — the two direction buttons, sitting on the same baseline as
+      // the steppers they act on. Kept to ONE run at every supported window
+      // width: a second run would push the actions under the status bar on a
+      // three-level project.
       child: Wrap(
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: MechXSpacing.sm,
-        runSpacing: MechXSpacing.xs,
+        crossAxisAlignment: WrapCrossAlignment.end,
+        spacing: MechXSpacing.lg,
+        runSpacing: MechXSpacing.sm,
         children: [
-          SteppedValueField(
-            display: '$_count',
-            editSeed: '$_count',
-            label: context.strings(StringKey.a11yFieldNumberOfLevels),
-            gap: MechXSpacing.xs,
-            min: 1,
-            max: 50,
-            onDecrement: () =>
-                setState(() => _count = (_count - 1).clamp(1, 50)),
-            onIncrement: () =>
-                setState(() => _count = (_count + 1).clamp(1, 50)),
-            onSubmit: (v) => setState(
-                () => _count = v == null ? _count : v.round().clamp(1, 50)),
+          _StepperField(
+            label: 'Levels',
+            child: SteppedValueField(
+              display: '$_count',
+              editSeed: '$_count',
+              label: context.strings(StringKey.a11yFieldNumberOfLevels),
+              gap: MechXSpacing.xs,
+              valueWidth: 32,
+              valueAlign: TextAlign.center,
+              valueColor: colors.textPrimary,
+              min: 1,
+              max: 50,
+              onDecrement: () =>
+                  setState(() => _count = (_count - 1).clamp(1, 50)),
+              onIncrement: () =>
+                  setState(() => _count = (_count + 1).clamp(1, 50)),
+              onSubmit: (v) => setState(
+                  () => _count = v == null ? _count : v.round().clamp(1, 50)),
+            ),
           ),
-          label('levels @'),
-          SteppedValueField(
-            display: '${_height.toStringAsFixed(1)} m',
-            editSeed: _height.toStringAsFixed(1),
-            label: context.strings(StringKey.a11yFieldFloorHeight),
-            gap: MechXSpacing.xs,
-            min: 0.5,
-            max: 20.0,
-            onDecrement: () => setState(
-                () => _height = (_height - 0.5).clamp(0.5, 20.0)),
-            onIncrement: () => setState(
-                () => _height = (_height + 0.5).clamp(0.5, 20.0)),
-            onSubmit: (v) => setState(
-                () => _height = v == null ? _height : v.clamp(0.5, 20.0)),
+          _StepperField(
+            label: 'Height',
+            child: SteppedValueField(
+              display: '${_height.toStringAsFixed(1)} m',
+              editSeed: _height.toStringAsFixed(1),
+              label: context.strings(StringKey.a11yFieldFloorHeight),
+              gap: MechXSpacing.xs,
+              valueWidth: 56,
+              valueAlign: TextAlign.center,
+              valueColor: colors.textPrimary,
+              min: 0.5,
+              max: 20.0,
+              onDecrement: () =>
+                  setState(() => _height = (_height - 0.5).clamp(0.5, 20.0)),
+              onIncrement: () =>
+                  setState(() => _height = (_height + 0.5).clamp(0.5, 20.0)),
+              onSubmit: (v) => setState(
+                  () => _height = v == null ? _height : v.clamp(0.5, 20.0)),
+            ),
           ),
-          MechXButton(
-            label: 'Add on top',
-            onPressed: () => widget.onAddOnTop(_count, _height),
-          ),
-          MechXButton(
-            label: 'Add basement',
-            onPressed: () => widget.onAddBasement(_count, _height),
+          // The direction the new levels go. Paired in their own Wrap so the
+          // two actions always stay together on a narrow page.
+          Wrap(
+            spacing: MechXSpacing.sm,
+            runSpacing: MechXSpacing.xs,
+            children: [
+              MechXButton(
+                label: 'Add on top',
+                onPressed: () => widget.onAddOnTop(_count, _height),
+              ),
+              MechXButton(
+                label: 'Add basement',
+                onPressed: () => widget.onAddBasement(_count, _height),
+              ),
+            ],
           ),
         ],
       ),
+    );
+  }
+}
+
+/// A labelled numeric field: a quiet caption naming its stepper, so a form of
+/// several steppers reads as named inputs instead of a run of bare numbers
+/// joined by operator-ish connective text ("1 levels @ 3.5 m").
+class _StepperField extends StatelessWidget {
+  final String label;
+  final Widget child;
+  const _StepperField({required this.label, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: type.caption.copyWith(color: colors.textMuted)),
+        const SizedBox(height: MechXSpacing.xs),
+        child,
+      ],
     );
   }
 }
@@ -414,6 +480,11 @@ class _DesignInputsCard extends ConsumerWidget {
 
 /// A compact square ghost button drawing a single glyph (−/+/×). Mirrors the
 /// inspector's affordance so the page reads as the same app.
+///
+/// B2: the GLYPH stays 26 px (the visual is unchanged), but the tappable region
+/// is a [_kGlyphHitTarget]-square box around it, so removing a level no longer
+/// demands pixel-accurate aim. The hit box is laid out as an ordinary row
+/// child, so it can never overlap a neighbouring control's own hit area.
 class _GlyphButton extends StatefulWidget {
   final String glyph;
   final VoidCallback? onTap;
@@ -440,10 +511,10 @@ class _GlyphButtonState extends State<_GlyphButton> {
             : (_hover ? colors.textPrimary : colors.textSecondary);
     final glyph = AnimatedScale(
       scale: _down && enabled ? 0.9 : 1.0,
-      duration: MechXMotion.press,
+      duration: MechXMotion.resolve(context, MechXMotion.press),
       curve: MechXMotion.standard,
       child: AnimatedContainer(
-        duration: MechXMotion.hover,
+        duration: MechXMotion.resolve(context, MechXMotion.hover),
         curve: MechXMotion.standard,
         width: 26,
         height: 26,
@@ -467,15 +538,24 @@ class _GlyphButtonState extends State<_GlyphButton> {
         _hover = false;
         _down = false;
       }),
-      child: MechXFocusRing(
-        enabled: enabled,
-        onActivated: widget.onTap,
-        child: GestureDetector(
-          onTap: widget.onTap,
-          onTapDown: enabled ? (_) => setState(() => _down = true) : null,
-          onTapUp: enabled ? (_) => setState(() => _down = false) : null,
-          onTapCancel: enabled ? () => setState(() => _down = false) : null,
-          child: glyph,
+      child: GestureDetector(
+        // The enlarged, opaque hit area (B2). The focus RING stays wrapped
+        // around the 26 px glyph so it still hugs the visual control.
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        onTapDown: enabled ? (_) => setState(() => _down = true) : null,
+        onTapUp: enabled ? (_) => setState(() => _down = false) : null,
+        onTapCancel: enabled ? () => setState(() => _down = false) : null,
+        child: SizedBox(
+          width: _kGlyphHitTarget,
+          height: _kGlyphHitTarget,
+          child: Center(
+            child: MechXFocusRing(
+              enabled: enabled,
+              onActivated: widget.onTap,
+              child: glyph,
+            ),
+          ),
         ),
       ),
     );

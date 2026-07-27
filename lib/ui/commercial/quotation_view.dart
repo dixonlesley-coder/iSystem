@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/commercial_store.dart';
 import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_text_field.dart';
@@ -33,8 +34,15 @@ class QuotationView extends ConsumerWidget {
         const SizedBox(height: MechXSpacing.xxs),
         Text(
           q.unpricedCount > 0
-              ? context.strings.format(StringKey.commercialUnpricedExcluded,
-                  {'n': q.unpricedCount})
+              // Pre-pluralized at the call site (`pluralCount` → '3 lines' /
+              // '1 line'); the template does plain substitution, no plural
+              // logic — so no 'line(s)' dev-speak.
+              ? context.strings.format(StringKey.commercialUnpricedExcluded, {
+                  'n': pluralCount(
+                      q.unpricedCount,
+                      context.strings(StringKey.commercialLineOne),
+                      context.strings(StringKey.commercialLineMany)),
+                })
               : context.strings(StringKey.commercialAllPriced),
           style: type.caption.copyWith(color: colors.textMuted),
         ),

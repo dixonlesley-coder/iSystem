@@ -22,14 +22,17 @@ void main() {
   test('format substitutes {name} placeholders (EN and ID)', () {
     const en = MechXStringsData(AppLocale.en);
     const id = MechXStringsData(AppLocale.id);
-    final enText =
-        en.format(StringKey.commercialBomLead, {'lines': 12, 'unmatched': 3});
-    expect(enText, contains('12 line(s)'));
-    expect(enText, contains('3 line(s) have no catalogue match'));
+    // The call sites pre-pluralize the counts with `pluralCount` ('12 lines',
+    // '1 line') — the templates take the whole phrase; no '(s)' dev-speak.
+    final enText = en.format(StringKey.commercialBomLead,
+        {'lines': '12 lines', 'unmatched': '3 lines'});
+    expect(enText, contains('12 lines from the sized electrical model'));
+    expect(enText, contains('3 lines with no catalogue match'));
+    expect(enText, isNot(contains('(s)')));
     expect(enText, isNot(contains('{'))); // every placeholder substituted
-    final idText =
-        id.format(StringKey.commercialBomLead, {'lines': 12, 'unmatched': 3});
-    expect(idText, contains('12'));
+    final idText = id.format(StringKey.commercialBomLead,
+        {'lines': '12 baris', 'unmatched': '3 baris'});
+    expect(idText, contains('12 baris'));
     expect(idText, isNot(contains('{')));
   });
 

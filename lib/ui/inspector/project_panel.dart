@@ -1725,7 +1725,8 @@ Future<_ScaleApplyChoice?> _confirmScaleApply(BuildContext context, int count) {
     barrierDismissible: true,
     barrierLabel: 'Apply scale',
     barrierColor: theme.colors.scrim,
-    transitionDuration: MechXMotion.appear,
+    // C1: the fade/scale entrance collapses to zero under OS reduced motion.
+    transitionDuration: MechXMotion.resolve(context, MechXMotion.appear),
     pageBuilder: (ctx, _, _) => MechXTheme(
       data: theme,
       child: Center(
@@ -1907,7 +1908,8 @@ class _BuildingSummaryState extends State<_BuildingSummary> {
         child: GestureDetector(
           onTap: widget.onOpen,
           child: AnimatedContainer(
-            duration: MechXMotion.hover,
+            // C1: hover motion collapses to zero under OS reduced motion.
+            duration: MechXMotion.resolve(context, MechXMotion.hover),
             curve: MechXMotion.standard,
             padding: const EdgeInsets.all(MechXSpacing.sm),
             decoration: BoxDecoration(
@@ -1921,8 +1923,9 @@ class _BuildingSummaryState extends State<_BuildingSummary> {
                   child: Text(widget.summary,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style:
-                          type.body.copyWith(color: colors.textSecondary)),
+                      // L2: '11.0 m · 3 levels' updates in place with edits.
+                      style: MechXTypography.tabular(
+                          type.body.copyWith(color: colors.textSecondary))),
                 ),
                 const SizedBox(width: MechXSpacing.xs),
                 Text('Edit',
@@ -1958,10 +1961,11 @@ class _GlyphButtonState extends State<_GlyphButton> {
         : (_hover ? colors.textPrimary : colors.textSecondary);
     final glyph = AnimatedScale(
       scale: _down && enabled ? 0.9 : 1.0,
-      duration: MechXMotion.press,
+      // C1: press/hover motion collapses to zero under OS reduced motion.
+      duration: MechXMotion.resolve(context, MechXMotion.press),
       curve: MechXMotion.standard,
       child: AnimatedContainer(
-        duration: MechXMotion.hover,
+        duration: MechXMotion.resolve(context, MechXMotion.hover),
         curve: MechXMotion.standard,
         width: 24,
         height: 24,
@@ -2560,7 +2564,8 @@ class _MasterRow extends StatelessWidget {
             children: [
               AnimatedRotation(
                 turns: expanded ? 0.25 : 0.0,
-                duration: MechXMotion.appear,
+                // C1: collapses to an instant flip under OS reduced motion.
+                duration: MechXMotion.resolve(context, MechXMotion.appear),
                 curve: MechXMotion.standard,
                 child: CustomPaint(
                   size: const Size(12, 12),
@@ -2572,7 +2577,9 @@ class _MasterRow extends StatelessWidget {
                 child: Text(title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: type.body.copyWith(color: colors.textPrimary)),
+                    // L2: the title carries live dims while a footprint drags.
+                    style: MechXTypography.tabular(
+                        type.body.copyWith(color: colors.textPrimary))),
               ),
               if (warning) ...[
                 const SizedBox(width: MechXSpacing.xs),
@@ -2584,7 +2591,10 @@ class _MasterRow extends StatelessWidget {
               ],
               const SizedBox(width: MechXSpacing.sm),
               Text(headline,
-                  style: type.caption.copyWith(color: colors.accent)),
+                  // L2: capacity/CFM recompute live — tabular digits keep the
+                  // headline from wobbling sideways.
+                  style: MechXTypography.tabular(
+                      type.caption.copyWith(color: colors.accent))),
             ],
           ),
         ),
@@ -2891,8 +2901,9 @@ class _RoomsSection extends ConsumerWidget {
                         ),
                         const SizedBox(width: MechXSpacing.sm),
                         Text(dims(r),
-                            style: type.caption
-                                .copyWith(color: colors.textMuted)),
+                            // L2: live dims while the footprint drags.
+                            style: MechXTypography.tabular(type.caption
+                                .copyWith(color: colors.textMuted))),
                       ],
                     ),
                     const SizedBox(height: MechXSpacing.sm),
@@ -2916,15 +2927,17 @@ class _RoomsSection extends ConsumerWidget {
                         verdictColor: colors.success,
                       ),
                       const SizedBox(height: MechXSpacing.xs),
+                      // L2: these figures re-size live with the footprint —
+                      // tabular digits stop the rows shuffling as they change.
                       Text(duct(s),
-                          style:
-                              type.caption.copyWith(color: colors.textMuted)),
+                          style: MechXTypography.tabular(
+                              type.caption.copyWith(color: colors.textMuted))),
                       Text('Supply ${bank(s.supply)}',
-                          style:
-                              type.caption.copyWith(color: colors.textMuted)),
+                          style: MechXTypography.tabular(
+                              type.caption.copyWith(color: colors.textMuted))),
                       Text('Return ${bank(s.return_)}',
-                          style:
-                              type.caption.copyWith(color: colors.textMuted)),
+                          style: MechXTypography.tabular(
+                              type.caption.copyWith(color: colors.textMuted))),
                       const SizedBox(height: MechXSpacing.xs),
                       ResultCard(
                         headline:
@@ -2964,7 +2977,9 @@ class _RoomsSection extends ConsumerWidget {
                           // to read as distinct.
                           'Cooling load ${load!.btuPerHr.round()} BTU/h · '
                           '${load.pk.toStringAsFixed(1)} PK (load)',
-                          style: type.caption.copyWith(color: colors.textMuted),
+                          // L2: recomputes live with the room footprint.
+                          style: MechXTypography.tabular(
+                              type.caption.copyWith(color: colors.textMuted)),
                         ),
                         Text('Feeds the electrical panel at the kW above.',
                             style: type.caption
@@ -3105,8 +3120,9 @@ class _RoomsSection extends ConsumerWidget {
                         const Spacer(),
                         if (s != null)
                           Text('${s.supply.count} + 1',
-                              style: type.caption
-                                  .copyWith(color: colors.textMuted)),
+                              // L2: the diffuser count tracks the live sizing.
+                              style: MechXTypography.tabular(type.caption
+                                  .copyWith(color: colors.textMuted))),
                       ],
                     ),
                     const SizedBox(height: MechXSpacing.sm),
@@ -3135,6 +3151,53 @@ class _RoomsSection extends ConsumerWidget {
 }
 
 
+/// One key/value row of a results list (Results / Fire / HVAC sections).
+///
+/// L1: the numeric VALUE always wins the space fight — it is laid out at its
+/// intrinsic width and never truncated ('319 kPa' must never become '319 …');
+/// the LABEL is the only child that yields (it soft-wraps to two lines, then
+/// ellipsizes). First baselines align so a wrapped label still reads against
+/// its value. L2: the value wears [MechXTypography.standard.mono], which
+/// already carries tabular figures, so a live re-solve never makes the row
+/// wobble sideways.
+Widget _kvRow(BuildContext context, String key, String value) {
+  final colors = context.colors;
+  final type = context.type;
+  return Padding(
+    padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
+    child: LayoutBuilder(builder: (context, constraints) {
+      // The value may take the WHOLE row (the label then wraps/ellipsizes to
+      // nothing), but is capped at the row width so a pathologically wide
+      // value soft-wraps instead of overflowing the panel — data is shown in
+      // full either way.
+      final valueMax = constraints.hasBoundedWidth
+          ? (constraints.maxWidth - MechXSpacing.xs).clamp(0.0, double.infinity)
+          : double.infinity;
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Expanded(
+            child: Text(key,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: type.caption.copyWith(color: colors.textMuted)),
+          ),
+          const SizedBox(width: MechXSpacing.xs),
+          // Deliberately NOT Flexible: the value's intrinsic width is
+          // honoured in full, so only the label shrinks in the space fight.
+          ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: valueMax),
+            child: Text(value,
+                textAlign: TextAlign.right,
+                style: type.mono.copyWith(color: colors.textSecondary)),
+          ),
+        ],
+      );
+    }),
+  );
+}
+
 class _ResultsSection extends ConsumerWidget {
   const _ResultsSection();
 
@@ -3160,6 +3223,23 @@ class _ResultsSection extends ConsumerWidget {
     final zonesOk = zoneStatics.every((z) => z.withinLimit);
     final totalLength =
         bom.fold<double>(0, (sum, line) => sum + line.totalLength.meters);
+
+    // L1: keep the BOM row leader short enough that it never fights the
+    // quantity for space. When every listed line shares ONE service the
+    // service word is redundant ('15 DN riser'); with several services a
+    // compact service word — the trailing 'water'/'air' dropped, never a
+    // mid-word abbreviation — keeps rows distinct ('15 DN · Cold riser').
+    final bomServiceCount = {for (final l in bom) l.service}.length;
+    String bomLeader(BomLine line) {
+      final size =
+          '${line.diameterMm}${line.service.regime == FlowRegime.air ? ' Ø' : ' DN'}';
+      final kindWord = line.kind == EdgeKind.riser ? 'riser' : 'run';
+      if (bomServiceCount <= 1) return '$size $kindWord';
+      final service = serviceLabel(line.service)
+          .replaceAll(' water', '')
+          .replaceAll(' air', '');
+      return '$size · $service $kindWord';
+    }
 
     // The promoted headline result for this feed strategy: the single number an
     // engineer scans for (pump motor kW upfeed; worst PRV-zone status downfeed),
@@ -3265,12 +3345,12 @@ class _ResultsSection extends ConsumerWidget {
           if (strategy == FeedStrategy.upfeed) ...[
             // 'Motor' kW is promoted to the ResultCard above; keep only the
             // distinct supporting figure here (H8 — no headline/kv duplication).
-            _kv(context, 'Pump head',
+            _kvRow(context, 'Pump head',
                 solution == null ? '—' : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m'),
           ] else ...[
-            _kv(context, 'Top residual',
+            _kvRow(context, 'Top residual',
                 downfeed == null ? '—' : '${downfeed.minResidual.inKiloPascals.toStringAsFixed(0)} kPa'),
-            _kv(
+            _kvRow(
               context,
               'Booster',
               downfeed == null
@@ -3279,7 +3359,7 @@ class _ResultsSection extends ConsumerWidget {
                       ? 'gravity OK'
                       : '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m',
             ),
-            _kv(
+            _kvRow(
               context,
               'PRV zones',
               zoneStatics.isEmpty
@@ -3289,33 +3369,31 @@ class _ResultsSection extends ConsumerWidget {
             ),
           ],
           if (strategy == FeedStrategy.upfeed)
-            _kv(context, 'Pressure zones', '${zones.length}'),
+            _kvRow(context, 'Pressure zones', '${zones.length}'),
           if (hwr != null)
-            _kv(context, 'HW recirc',
+            _kvRow(context, 'HW recirc',
                 '${hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2)} L/s · ${hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
-          _kv(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
+          _kvRow(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
           if (bom.isNotEmpty) ...[
             const SizedBox(height: MechXSpacing.xs),
             // Cap the per-line listing so a big BOM doesn't push the whole panel
             // off-screen; the overflow is summarised, never silently dropped (the
             // full breakdown is in the CSV export below). (H6/H8.)
             for (final line in bom.take(_kBomInlineCap))
-              _kv(
+              _kvRow(
                 context,
-                '${line.diameterMm}${line.service.regime == FlowRegime.air ? ' Ø' : ' DN'}'
-                    ' · ${serviceLabel(line.service)}'
-                    ' ${line.kind == EdgeKind.riser ? 'riser' : 'run'}',
+                bomLeader(line),
                 '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
               ),
             if (bom.length > _kBomInlineCap)
-              _kv(
+              _kvRow(
                 context,
                 '+${bom.length - _kBomInlineCap} more line'
                     '${bom.length - _kBomInlineCap == 1 ? '' : 's'}',
                 'see CSV',
               ),
             if (fittings.isNotEmpty)
-              _kv(context, 'Fittings (est.)',
+              _kvRow(context, 'Fittings (est.)',
                   '${fittings.fold<int>(0, (s, f) => s + f.count)}'),
             const SizedBox(height: MechXSpacing.sm),
             Align(
@@ -3377,31 +3455,6 @@ class _ResultsSection extends ConsumerWidget {
         },
       );
 
-  Widget _kv(BuildContext context, String key, String value) {
-    final colors = context.colors;
-    final type = context.type;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(key,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: type.caption.copyWith(color: colors.textMuted)),
-          ),
-          const SizedBox(width: MechXSpacing.xs),
-          Flexible(
-            child: Text(value,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-                style: type.mono.copyWith(color: colors.textSecondary)),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _FireSection extends ConsumerWidget {
@@ -3423,27 +3476,9 @@ class _FireSection extends ConsumerWidget {
             e.service == ServiceType.fireSprinkler ||
             e.service == ServiceType.fireHydrant);
 
-    Widget kv(String key, String value) => Padding(
-          padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(key,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: type.caption.copyWith(color: colors.textMuted)),
-              ),
-              const SizedBox(width: MechXSpacing.xs),
-              Flexible(
-                child: Text(value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                    style: type.mono.copyWith(color: colors.textSecondary)),
-              ),
-            ],
-          ),
-        );
+    // The shared value-wins row (L1) — the label yields, the figure never
+    // truncates.
+    Widget kv(String key, String value) => _kvRow(context, key, value);
 
     // The one INPUT the whole fire design derives from — previously settable
     // only through the New-from-template dialog (a results panel with an
@@ -3754,7 +3789,9 @@ class _SelectionSection extends ConsumerWidget {
         Text(
           '$n ${n == 1 ? 'node' : 'nodes'} / $m ${m == 1 ? 'edge' : 'edges'} '
           'selected',
-          style: type.caption.copyWith(color: colors.textMuted),
+          // L2: the counts change live while marquee-selecting.
+          style: MechXTypography.tabular(
+              type.caption.copyWith(color: colors.textMuted)),
         ),
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
@@ -3977,7 +4014,9 @@ class _SelectionSection extends ConsumerWidget {
       children: [
         Text('Node · floor ${node.floorIndex + 1} · elev '
             '${elev.toStringAsFixed(1)} m',
-            style: context.type.caption.copyWith(color: context.colors.textMuted)),
+            // L2: floor/elevation update in place as the node is edited.
+            style: MechXTypography.tabular(context.type.caption
+                .copyWith(color: context.colors.textMuted))),
         // I2 — the pressure-solve PROBE. Whenever the solve has a residual for
         // this node, surface its actual residual pressure so a fixture can be
         // spot-checked against the SNI target the heatmap colour alone can't
@@ -4001,11 +4040,12 @@ class _SelectionSection extends ConsumerWidget {
             padding: const EdgeInsets.only(top: MechXSpacing.xxs),
             child: Text(
               'Residual ${kpa.toStringAsFixed(0)} kPa$verdict',
-              style: context.type.caption.copyWith(
+              // L2: the probe re-reads every solve — tabular kPa digits.
+              style: MechXTypography.tabular(context.type.caption.copyWith(
                 color: !isFixture
                     ? context.colors.textSecondary
                     : (pass ? context.colors.success : context.colors.danger),
-              ),
+              )),
             ),
           );
         }),
@@ -4377,7 +4417,9 @@ class _SelectionSection extends ConsumerWidget {
       children: [
         Text('$kind · ${len.toStringAsFixed(2)} m · $sizeStr'
             '${edge.sizeOverride != null ? ' (set)' : ''}',
-            style: context.type.caption.copyWith(color: context.colors.textMuted)),
+            // L2: length/size track the drag live — tabular digits.
+            style: MechXTypography.tabular(context.type.caption
+                .copyWith(color: context.colors.textMuted))),
         // E3: the editable controls (size / material / service) lead; the
         // read-only procurement takeoff is demoted into the "Details" disclosure
         // below. These use the SAME setters the right-click menu does — the
@@ -4405,11 +4447,12 @@ class _SelectionSection extends ConsumerWidget {
                 '${sizing.velocity.metersPerSecond.toStringAsFixed(1)} m/s';
             return Text(
               'Air velocity: $msg',
-              style: context.type.caption.copyWith(
+              // L2: the m/s readout tracks the live sizing.
+              style: MechXTypography.tabular(context.type.caption.copyWith(
                 color: (check != null && check.isWarning)
                     ? context.colors.danger
                     : context.colors.textSecondary,
-              ),
+              )),
             );
           }),
         ],
@@ -4426,11 +4469,12 @@ class _SelectionSection extends ConsumerWidget {
               padding: const EdgeInsets.only(top: MechXSpacing.xxs),
               child: Text(
                 'Velocity: ${check.message}',
-                style: context.type.caption.copyWith(
+                // L2: the m/s readout tracks the live sizing.
+                style: MechXTypography.tabular(context.type.caption.copyWith(
                   color: check.isWarning
                       ? context.colors.danger
                       : context.colors.textSecondary,
-                ),
+                )),
               ),
             );
           }),
@@ -4517,8 +4561,9 @@ class _SelectionSection extends ConsumerWidget {
                     '${takeoff.sheets == 1 ? '' : 's'} '
                     '@ ${takeoff.sheetAreaM2.toStringAsFixed(2)} m2 · '
                     '${takeoff.thicknessMm.toStringAsFixed(takeoff.product == DuctProduct.pu ? 0 : 2)} mm',
-                    style: context.type.caption
-                        .copyWith(color: context.colors.textSecondary),
+                    // L2: recomputes with the live edge length.
+                    style: MechXTypography.tabular(context.type.caption
+                        .copyWith(color: context.colors.textSecondary)),
                   ),
                 ],
                 if (accessories != null) ...[
@@ -4528,8 +4573,9 @@ class _SelectionSection extends ConsumerWidget {
                     'covering angle · ${accessories.gasketM.toStringAsFixed(1)} m gasket'
                     ' · ${accessories.hangers} hanger'
                     '${accessories.hangers == 1 ? '' : 's'} · ${accessories.bolts} bolts',
-                    style: context.type.caption
-                        .copyWith(color: context.colors.textSecondary),
+                    // L2: recomputes with the live edge length.
+                    style: MechXTypography.tabular(context.type.caption
+                        .copyWith(color: context.colors.textSecondary)),
                   ),
                 ],
               ],
@@ -4664,27 +4710,9 @@ class _HvacSection extends ConsumerWidget {
     final fan = ref.watch(ductFanProvider);
     final balance = ref.watch(airBalanceProvider);
 
-    Widget kv(String k, String v) => Padding(
-          padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(k,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: type.caption.copyWith(color: colors.textMuted)),
-              ),
-              const SizedBox(width: MechXSpacing.xs),
-              Flexible(
-                child: Text(v,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                    style: type.mono.copyWith(color: colors.textSecondary)),
-              ),
-            ],
-          ),
-        );
+    // The shared value-wins row (L1) — the label yields, the figure never
+    // truncates.
+    Widget kv(String k, String v) => _kvRow(context, k, v);
 
     return DisclosureSection(
       name: 'HVAC · ducting',

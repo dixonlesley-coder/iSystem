@@ -99,6 +99,11 @@ void main() {
     // rebuilds to its collapsed null form before anything is captured.
     container.read(statusMessageProvider.notifier).clear();
     await tester.pump();
+    // The first solve also default-collapses the DRAW section, whose body now
+    // EASES shut (C3 AnimatedSize, 140ms) — settle past it so the capture is
+    // the at-rest inspector, not a mid-collapse frame that pushes the
+    // sections below out of the clipped column.
+    await tester.pump(const Duration(milliseconds: 200));
 
     final app = find.byType(MechXApp);
 

@@ -62,23 +62,25 @@ class ReviewHub extends ConsumerWidget {
         // ElectricalWarning fans into the unified IssuesCard below (grouped by
         // severity, locatable) and the compliance card's 'Electrical circuit
         // sizing' row. Panels-sized + BOM line items stay unique.
+        //
+        // ONE stat grid (V1): all five figures in a single HubStatRow call so
+        // they render as one consistent tile system (the cut-plan trio simply
+        // joins the grid when a plan exists) instead of two differently-sized
+        // rows.
         HubStatRow(
           stats: [
             (s(StringKey.reviewStatPanelsSized), '$panels'),
             (s(StringKey.reviewStatBomLineItems), '${bom.length}'),
-          ],
-        ),
-        if (cutPlan.isNotEmpty) ...[
-          const SizedBox(height: MechXSpacing.md),
-          HubStatRow(
-            stats: [
+            if (cutPlan.isNotEmpty) ...[
               (s(StringKey.reviewStatStockPipes), '$totalBars'),
               (s(StringKey.reviewStatPipeRequired),
                   '${required.toStringAsFixed(1)} m'),
               (s(StringKey.reviewStatOffcutWaste),
                   '${wastePct.toStringAsFixed(0)}%'),
             ],
-          ),
+          ],
+        ),
+        if (cutPlan.isNotEmpty) ...[
           const SizedBox(height: MechXSpacing.md),
           _CutPlanCard(),
         ],

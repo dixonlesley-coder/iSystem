@@ -207,6 +207,14 @@ class ElectricalCanvas extends ConsumerStatefulWidget {
 class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   ViewportTransform? _transform;
   Size _viewportSize = Size.zero;
+
+  /// E1 — whether the ONE-SHOT initial fit has been consumed (or forfeited).
+  /// Set by [_ensureInitialTransform] when it frames the first layout that
+  /// actually has content, and by ANY external transform set ([_setTransform]
+  /// — a user zoom / pan, the fit button, or an explicit focus like
+  /// [focusPanelSchedule]) so an explicit transform always wins and the
+  /// initial fit can never fight it.
+  bool _didInitialFit = false;
   final FocusNode _focus = FocusNode(debugLabel: 'electrical-canvas');
 
   // Middle-button pan tracking.
@@ -429,15 +437,27 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         for (final p in project.panels) p.id: p.tag ?? p.name,
       };
 
-  /// Frame the content on the first layout — computed SYNCHRONOUSLY (assigning
-  /// the field, not via setState) so even a single-frame render is framed, not
-  /// clipped at the origin. After this the user owns the viewport.
+  /// E1 — frame the content on the FIRST layout that actually has content:
+  /// the same fit routine as the zoom cluster's fit button ([fitView]),
+  /// computed SYNCHRONOUSLY (assigning the field, not via setState) so even a
+  /// single-frame render is framed, not clipped at the origin. No animation —
+  /// this is framing, not motion.
+  ///
+  /// ONE-SHOT: an empty project keeps the default framing WITHOUT consuming
+  /// the shot ([_didInitialFit] stays false), so a project loaded or created
+  /// later still gets its fit on the first frame it has >= 1 panel. Any
+  /// explicit transform before then — a user zoom / pan, or an external focus
+  /// such as [focusPanelSchedule] — forfeits the shot via [_setTransform]:
+  /// after that the user / caller owns the viewport.
   void _ensureInitialTransform(Map<String, Offset> positions) {
-    if (_transform != null || _viewportSize.isEmpty || positions.isEmpty) {
+    if (_didInitialFit || _viewportSize.isEmpty || positions.isEmpty) {
       return;
     }
     final t = _fitTransform(positions);
-    if (t != null) _transform = t;
+    if (t != null) {
+      _transform = t;
+      _didInitialFit = true;
+    }
   }
 
   @override
@@ -460,6 +480,11 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       _transform ?? const ViewportTransform(scale: 0.8);
 
   void _setTransform(ViewportTransform next) {
+    // Any explicit transform — user zoom / pan, the fit button, an external
+    // focus (focusPanelSchedule / focusIssue / collapseToSummary / centreOn) —
+    // forfeits the pending one-shot initial fit: an explicit transform always
+    // wins (E1).
+    _didInitialFit = true;
     if (next == _transform) return;
     setState(() => _transform = next);
   }
@@ -497,12 +522,28 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     var maxX = -double.infinity, maxY = -double.infinity;
     positions.forEach((id, p) {
       final panel = panels[id];
-      final w = panel == null
-          ? 280.0
-          : math.max(panelCardWidth(panel.circuits.length), panelDetailWidth());
-      final h = panel == null
-          ? 160.0
-          : panelCardHeight(panel) + kPanelChrome + kLoadDropGap + kLoadNodeH;
+      // Frame what actually RENDERS (E1): at the summary tier the card hangs
+      // its merged "N loads" node to the RIGHT (kLoadGapX + kLoadW past the
+      // card edge); at the schedule tier the card is the uniform sheet width
+      // and grows TALL with its way count. Take the max over the real tiers so
+      // whatever zoom the fit lands on, no board (or its loads node) runs off
+      // the framed region. (The old pre-LOD formula reserved a phantom
+      // below-card loads band and under-framed tall board schedules.)
+      double w, h;
+      if (panel == null) {
+        w = kMinPanelWidth;
+        h = 160.0;
+      } else {
+        final hasLoads = panel.circuits.any((c) =>
+            c.loadKind != LoadKind.feeder && c.loadKind != LoadKind.spare);
+        final summaryW = panelCardWidthLod(panel, PanelLod.summary) +
+            (hasLoads ? kLoadGapX + kLoadW : 0.0);
+        w = math.max(summaryW, panelCardWidthLod(panel, PanelLod.schedule));
+        h = math.max(
+          panelFootprintLod(panel, PanelLod.summary),
+          panelFootprintLod(panel, PanelLod.schedule),
+        );
+      }
       // The root carries the source chain to its left (else the PLN head above).
       final leftExtent = id == rootId ? spineW : 0.0;
       minX = math.min(minX, p.dx - leftExtent);
@@ -1687,12 +1728,15 @@ class _CanvasPainter extends CustomPainter {
     final tp = TextPainter(
       text: TextSpan(
         text: text,
-        style: TextStyle(
+        // E2 — feeder labels carry live figures (cable CSA, breaker rating)
+        // that re-solve as the board changes; tabular figures so the pill
+        // doesn't wobble as digits change.
+        style: MechXTypography.tabular(TextStyle(
           fontFamily: 'Roboto',
           fontSize: 9 * s,
           color: color ?? onAccent,
           fontWeight: FontWeight.w600,
-        ),
+        )),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -2522,7 +2566,10 @@ class _PanelMicroBody extends StatelessWidget {
                 fmtKw(panel.connectedW),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: type.caption.copyWith(color: colors.textSecondary),
+                // E2 — the connected kW tracks the live solve (same figure as
+                // the summary card's 'load' stat, at the micro tier).
+                style: MechXTypography.tabular(type.caption)
+                    .copyWith(color: colors.textSecondary),
               ),
               const SizedBox(height: 5),
               SizedBox(
@@ -2626,7 +2673,9 @@ class _PhaseStrip extends StatelessWidget {
         const SizedBox(width: 3),
         Text(
           fmtAmp0(amps),
-          style: type.caption.copyWith(
+          // E2 — the per-line amps track the live solve; tabular figures so
+          // the R/S/T row doesn't wobble as the balance shifts.
+          style: MechXTypography.tabular(type.caption).copyWith(
             color: context.colors.textSecondary,
             fontWeight: FontWeight.w600,
           ),
@@ -2664,7 +2713,10 @@ class _Stat extends StatelessWidget {
           value,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: type.label.copyWith(
+          // E2 — these stats (load / demand / n-of-m placed) recompute live
+          // with the solve; tabular figures keep the row from wobbling as
+          // digits change.
+          style: MechXTypography.tabular(type.label).copyWith(
             color: colors.textPrimary,
             fontWeight: FontWeight.w700,
           ),
@@ -2699,12 +2751,15 @@ class _Badge extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: TextStyle(
+        // E2 — the imbalance badge carries a live percentage; tabular figures
+        // keep the pill width steady as the number changes (a no-op for the
+        // letter-only badges).
+        style: MechXTypography.tabular(TextStyle(
           fontFamily: 'Roboto',
           fontSize: 9,
           fontWeight: FontWeight.w600,
           color: subtle ? color : const Color(0xFFFFFFFF),
-        ),
+        )),
       ),
     );
   }

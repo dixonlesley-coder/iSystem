@@ -677,6 +677,7 @@ class _RiserInspectorColumn extends ConsumerWidget {
                   .set(FeedStrategy.downfeed),
             ),
             const SizedBox(height: MechXSpacing.lg),
+            const RiserSystemSummary(),
             Text(
               'Place, move and size risers on the canvas — switch Auto '
               '(read-only diagram) and Edit on the toolbar above.',
@@ -774,7 +775,7 @@ class _RiserSummaryCardState extends State<_RiserSummaryCard> {
         child: GestureDetector(
           onTap: widget.onOpen,
           child: AnimatedContainer(
-            duration: MechXMotion.hover,
+            duration: MechXMotion.resolve(context, MechXMotion.hover),
             curve: MechXMotion.standard,
             padding: const EdgeInsets.all(MechXSpacing.sm),
             decoration: BoxDecoration(
@@ -987,7 +988,7 @@ class _PaletteHintButtonState extends State<_PaletteHintButton> {
           child: GestureDetector(
             onTap: widget.onTap,
             child: AnimatedContainer(
-              duration: MechXMotion.hover,
+              duration: MechXMotion.resolve(context, MechXMotion.hover),
               curve: MechXMotion.standard,
               padding: const EdgeInsets.symmetric(
                 horizontal: MechXSpacing.sm,
@@ -1051,7 +1052,7 @@ class _ThemeToggleButtonState extends State<_ThemeToggleButton> {
             child: GestureDetector(
               onTap: widget.onTap,
               child: AnimatedContainer(
-                duration: MechXMotion.hover,
+                duration: MechXMotion.resolve(context, MechXMotion.hover),
                 curve: MechXMotion.standard,
                 padding: const EdgeInsets.symmetric(
                   horizontal: MechXSpacing.sm,
@@ -1272,10 +1273,31 @@ class _StatusBar extends ConsumerWidget {
 
 /// The transient save/open/export confirmation in the status bar. Reads the
 /// [statusMessageProvider] (null at rest), rendering nothing when there is no
-/// message and a quiet success-tinted pill — cross-fading in/out — when there
+/// message and a quiet success-tinted pill — bridged in and out — when there
 /// is. The pill mirrors the zoom read-out's soft idiom (a tint, no border).
+///
+/// C4: the pill used to pop straight in and out. It now ENTERS with a fade plus
+/// a 2 px upward settle (`appear`) and LEAVES on a shorter fade (`dismiss`), so
+/// a confirmation registers as an arrival rather than a flicker. Both durations
+/// go through [MechXMotion.resolve], so the OS reduced-motion setting collapses
+/// them to an instant swap. Occasional-tier surface (a handful of times a day),
+/// hence real — but still sub-quarter-second — motion.
 class _StatusConfirmation extends ConsumerWidget {
   const _StatusConfirmation();
+
+  /// Fade + a small rise, shared by the entering and leaving child (the leaving
+  /// one runs the same curve in reverse over the shorter `reverseDuration`, so
+  /// it sinks back the 2 px as it fades).
+  static Widget _bridge(Widget child, Animation<double> animation) {
+    return AnimatedBuilder(
+      animation: animation,
+      child: FadeTransition(opacity: animation, child: child),
+      builder: (context, inner) => Transform.translate(
+        offset: Offset(0, 2 * (1 - animation.value)),
+        child: inner,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1283,9 +1305,11 @@ class _StatusConfirmation extends ConsumerWidget {
     final type = context.type;
     final message = ref.watch(statusMessageProvider);
     return AnimatedSwitcher(
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
+      reverseDuration: MechXMotion.resolve(context, MechXMotion.dismiss),
       switchInCurve: MechXMotion.standard,
       switchOutCurve: MechXMotion.standard,
+      transitionBuilder: _bridge,
       child: message == null
           ? const SizedBox.shrink()
           : Padding(
@@ -1419,6 +1443,11 @@ class _BusyIndicator extends ConsumerWidget {
 /// A small custom-painted indeterminate spinner arc — a Roboto-safe, Material-
 /// free progress cue. Spins a repeating [AnimationController]; mounted only by
 /// [_BusyIndicator] while busy, so there is no ticker (and no repaint) at rest.
+///
+/// Deliberately NOT routed through [MechXMotion.resolve] (C1): this is an
+/// indeterminate PROGRESS indicator, not decorative motion — it is the only cue
+/// that a slow operation is still alive, and reduced-motion guidance exempts
+/// that class of feedback. (A zero duration would also assert on `repeat()`.)
 class _BusySpinner extends StatefulWidget {
   final Color color;
   const _BusySpinner({required this.color});
@@ -1485,16 +1514,25 @@ class _AnimatedBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // C1: both durations go through the reduced-motion gate.
+    final appear = MechXMotion.resolve(context, MechXMotion.appear);
+    final content = AnimatedSwitcher(
+      duration: appear,
+      switchInCurve: MechXMotion.standard,
+      switchOutCurve: MechXMotion.standard,
+      child: child ?? const SizedBox(width: double.infinity),
+    );
+    // `AnimatedSize` cannot take Duration.zero (RenderAnimatedSize starts its
+    // controller from performLayout, and a zero-duration forward() notifies
+    // synchronously, re-dirtying the render object mid-layout). Under OS
+    // reduced motion, drop the size animation entirely — which is precisely
+    // what the setting asks for; the resting layout is identical either way.
+    if (appear == Duration.zero) return content;
     return AnimatedSize(
-      duration: MechXMotion.appear,
+      duration: appear,
       curve: MechXMotion.standard,
       alignment: Alignment.topCenter,
-      child: AnimatedSwitcher(
-        duration: MechXMotion.appear,
-        switchInCurve: MechXMotion.standard,
-        switchOutCurve: MechXMotion.standard,
-        child: child ?? const SizedBox(width: double.infinity),
-      ),
+      child: content,
     );
   }
 }
@@ -1751,7 +1789,7 @@ class _DismissLinkState extends State<_DismissLink> {
               vertical: MechXSpacing.xxs,
             ),
             child: AnimatedDefaultTextStyle(
-              duration: MechXMotion.hover,
+              duration: MechXMotion.resolve(context, MechXMotion.hover),
               curve: MechXMotion.standard,
               style: type.label.copyWith(color: fg),
               child: Text(widget.label),
