@@ -581,7 +581,15 @@ void main() {
       expect(fed.sourceType, PanelSource.feeder);
     });
 
-    test('connectFeeder refuses self / second-parent / cycle', () {
+    // CONTRACT CHANGE (W1.A): an already-fed target is no longer a refusal —
+    // `connectFeeder` now RE-PARENTS by default (drag a feeder onto a fed board
+    // and it moves under the new parent), so only the three refusals no
+    // re-parent can rescue remain: self-feed, unknown panel, loop. The
+    // strict connect-only-if-unfed behaviour is still available via
+    // `reparent: false`, asserted below and covered in depth (atomicity, the
+    // reparentedFromLabel caption, single-undo) in electrical_store_workflow_test.
+    test('connectFeeder refuses self / unknown / cycle; an already-fed target '
+        're-parents (reparent: false keeps the old refusal)', () {
       final c = ProviderContainer();
       addTearDown(c.dispose);
       seedSample(c);
@@ -590,15 +598,30 @@ void main() {
       // Self-feed.
       expect(ctrl.connectFeeder('mdp', 'mdp').connected, isFalse);
 
-      // lp1 is already fed by the MDP feeder in the sample → second parent.
+      // An unknown panel.
+      expect(ctrl.connectFeeder('mdp', 'nope').connected, isFalse);
+
+      // lp1 is already fed by the MDP feeder in the sample. `reparent: false`
+      // is the pre-W1 contract — still refused, same reason.
       ctrl.addPanelAt(name: 'Other', tag: 'OT', x: 0, y: 0);
       final other = c.read(electricalProjectProvider).panels.last;
-      final hasParent = ctrl.connectFeeder(other.id, 'lp1');
-      expect(hasParent.connected, isFalse);
-      expect(hasParent.reason, contains('already fed'));
+      final strict = ctrl.connectFeeder(other.id, 'lp1', reparent: false);
+      expect(strict.connected, isFalse);
+      expect(strict.reason, contains('already fed'));
 
-      // Cycle: lp1 -> mdp would loop (mdp already feeds lp1).
-      final cycle = ctrl.connectFeeder('lp1', 'mdp');
+      // The DEFAULT re-parents instead: lp1 moves off the MDP onto `other`,
+      // and the MDP's old feeder way is gone (no two-parent state).
+      final moved = ctrl.connectFeeder(other.id, 'lp1');
+      expect(moved.connected, isTrue);
+      expect(moved.reparentedFromLabel, 'MDP'); // the old parent's tag
+      final mdp = c.read(electricalProjectProvider).panels
+          .firstWhere((p) => p.id == 'mdp');
+      expect(mdp.circuits.where((w) => w.feedsPanelId == 'lp1'), isEmpty);
+
+      // Cycle: lp1 -> mdp would loop (lp1 now feeds nothing, but `other` feeds
+      // lp1, so re-target the check at the live tree) — mdp feeds nothing now,
+      // so use the live parent: other -> lp1 means lp1 -> other would loop.
+      final cycle = ctrl.connectFeeder('lp1', other.id);
       expect(cycle.connected, isFalse);
       expect(cycle.reason, contains('loop'));
     });

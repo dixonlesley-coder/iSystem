@@ -9,6 +9,7 @@
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/load_list.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -145,6 +146,12 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
       source: _sourceFor(c),
       mechanicalPower: Power(watts),
       phases: _phasesFor(c),
+      loadPos: LayoutPos(
+        sheetId: n.sheetId,
+        floorIndex: n.floorIndex,
+        x: n.x,
+        y: n.y,
+      ),
     ));
   }
   return loads;

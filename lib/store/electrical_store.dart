@@ -25,7 +25,9 @@ import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/electrical/panel_templates.dart';
 import 'package:mechx_engine/electrical/sources.dart';
+import 'package:mechx_engine/electrical/topology.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -40,11 +42,64 @@ import 'project_store.dart';
 class ConnectFeederResult {
   final bool connected;
   final String? reason;
-  const ConnectFeederResult.connected()
+
+  /// The designation (tag, else name) of the panel that PREVIOUSLY fed the
+  /// target, set ONLY when this connection re-parented an already-fed board
+  /// (`connectFeeder(..., reparent: true)`, the default). Null on a plain
+  /// connect of an unfed panel and on every refusal — so a UI can say
+  /// "moved from MDP" honestly, and stay silent when nothing moved.
+  final String? reparentedFromLabel;
+
+  const ConnectFeederResult.connected({this.reparentedFromLabel})
       : connected = true,
         reason = null;
-  const ConnectFeederResult.refused(String this.reason) : connected = false;
+  const ConnectFeederResult.refused(String this.reason)
+      : connected = false,
+        reparentedFromLabel = null;
 }
+
+/// The creation-time default run length for a freshly added way (10 m).
+///
+/// A just-dropped circuit has no geometry yet, so it needs *a* length to size
+/// on; once its load (or, for a feeder, the fed sub-panel) is PLACED on the
+/// calibrated layout the engine resolves the REAL run from geometry
+/// (`resolveCircuitLength`, §10) and this default stops being read. 10 m is a
+/// deliberately short "unmeasured stub" figure so an unplaced way never quietly
+/// inflates a voltage-drop or cable-quantity total — the engineer types the real
+/// length, or places the load. Not a standards value (nothing to `// VERIFY`).
+const Length kDefaultCircuitLength = Length(10);
+
+/// The phase-assignment SPREAD GAIN (A) a re-solve must beat before a circuit is
+/// moved off the line the previous solve gave it (see [PhasePriorCache]). Below
+/// this, an installed board keeps its labelled phases.
+const double kPhaseStickinessA = 1.0;
+
+/// A session-only memo of the last solve's phase assignment
+/// (`panelId → (circuitId → line)`), fed back into the next `computeSystem` as
+/// its `priorAssignments` so an unchanged board re-solves to the phases already
+/// labelled on site instead of re-shuffling every time a neighbouring way is
+/// edited.
+///
+/// SESSION-ONLY BY DESIGN: this is SOLVER OUTPUT, and solver output is never
+/// persisted to `.mechx` (the file holds inputs; the result is always
+/// re-derived). Persisting it would freeze one machine's balancing run into the
+/// document and make the file's phases depend on the order edits happened in.
+/// The DURABLE story is [ElectricalProjectController.pinPanelPhases], which
+/// writes a real `phaseOverride` INPUT on each way — that is what survives a
+/// save/reload and what an issued schedule is built from. This cache only stops
+/// mid-session churn.
+///
+/// Mutable-by-design holder behind a plain [Provider] so the result provider can
+/// `ref.read` (never `watch`) it — writing the cache must not invalidate the
+/// provider that wrote it.
+class PhasePriorCache {
+  Map<String, Map<String, PhaseAssignment>> prior = const {};
+}
+
+/// The per-container [PhasePriorCache]. One instance per [ProviderContainer]
+/// (so a fresh app/test container starts from no prior — no cross-project or
+/// cross-test leakage).
+final phasePriorCacheProvider = Provider<PhasePriorCache>((_) => PhasePriorCache());
 
 /// The fixed id of the machine-owned "MEP Equipment" panel — the board
 /// auto-synced from the motorised equipment placed on the plan
@@ -330,7 +385,12 @@ final electricalResultProvider = Provider<ElectricalSystemResult>(
   (ref) {
     final geo = ref.watch(projectControllerProvider);
     final project = ref.watch(electricalProjectProvider);
-    return computeSystem(
+    // PHASE STABILITY: seed the balancer with the LAST solve's assignment and
+    // only let it re-label a way for a spread gain above [kPhaseStickinessA].
+    // Read (never watch) — the cache is written below by this very build, and
+    // watching it would loop.
+    final cache = ref.read(phasePriorCacheProvider);
+    final result = computeSystem(
       const PuilProfile(),
       project,
       calibrationBySheet: geo.calibrations,
@@ -344,7 +404,15 @@ final electricalResultProvider = Provider<ElectricalSystemResult>(
           const Current(defaultLvUtilityFaultKa * 1000),
       busbarClearingTimeS:
           project.busbarClearingTimeS ?? _liveBusbarClearingTimeS,
+      priorAssignments: cache.prior,
+      phaseReassignThresholdA: kPhaseStickinessA,
     );
+    // Record THIS solve's assignment as the next one's prior.
+    cache.prior = {
+      for (final e in result.panels.entries)
+        e.key: {for (final c in e.value.circuits) c.circuitId: c.phase},
+    };
+    return result;
   },
 );
 
@@ -448,10 +516,20 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// document is a fresh baseline, so BOTH local stacks clear — the caller
   /// (`applyDocument`) resets the global timeline to match, like the other
   /// domain controllers clearing their stacks on load. Never records undo.
+  ///
+  /// The incoming panel list is passed through [sanitizeFeederTopology] so a
+  /// document written by an older build (or hand-edited) can't load with a
+  /// dangling feeder / mismatched incomer back-pointer. The sanitizer is
+  /// IDENTITY-PRESERVING on clean input, so a healthy file loads byte-identical
+  /// (and notifies exactly once).
   void setProject(ElectricalProject project) {
     _undo.clear();
     _redo.clear();
     state = project;
+    final panels = sanitizeFeederTopology(project.panels);
+    if (!identical(panels, project.panels)) {
+      state = _withProject(panels: panels);
+    }
   }
 
   /// Rename the project.
@@ -679,22 +757,25 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     );
   }
 
-  /// Append a fresh-id circuit of [kind] to [panelId], with standards-derived
-  /// defaults (cos φ / demand factor / curve from [loadDefaults]) and a sensible
-  /// default load so the engine sizes it immediately.
-  void addCircuit(
-    String panelId, {
+  /// Mint one fresh-id circuit of [kind] with the standards-derived creation
+  /// defaults (cos φ / demand factor from [loadDefaults], the kind's sensible
+  /// power, [kDefaultCircuitLength]). The ONE creation shape shared by
+  /// [addCircuit], [addLoadAtLayout], [addFloatingLoadAtLayout] and the template
+  /// path, so those can never drift apart. [name] is used verbatim — callers
+  /// resolve (and de-duplicate) it first.
+  ElectricalCircuit _newCircuit({
     required LoadKind kind,
-    String? name,
+    required String name,
     int? phases,
     double? loadW,
     double? motorKw,
+    LayoutPos? loadPos,
   }) {
     final d = loadDefaults[kind];
     final isMotor = kind == LoadKind.motor || kind == LoadKind.pump;
-    final circuit = ElectricalCircuit(
+    return ElectricalCircuit(
       id: _freshId('c'),
-      name: name ?? (d?.label ?? 'Circuit'),
+      name: name,
       loadKind: kind,
       cosPhi: d?.cosPhi ?? 0.85,
       demandFactor: d?.demandFactor ?? 1,
@@ -707,13 +788,58 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       loadW: isMotor || kind == LoadKind.spare || kind == LoadKind.feeder
           ? 0
           : (loadW ?? 2000),
-      length: const Length(20),
+      length: kDefaultCircuitLength,
+      loadPos: loadPos,
+    );
+  }
+
+  /// The default (kind-label) name for a new way of [kind].
+  String _defaultCircuitName(LoadKind kind) =>
+      loadDefaults[kind]?.label ?? 'Circuit';
+
+  /// Append a fresh-id circuit of [kind] to [panelId], with standards-derived
+  /// defaults (cos φ / demand factor / curve from [loadDefaults]) and a sensible
+  /// default load so the engine sizes it immediately.
+  ///
+  /// Returns the new circuit's id, so a caller can select / open / place the way
+  /// it just created without re-scanning the panel. (The id is minted even when
+  /// [panelId] is unknown — the append then silently no-ops, the pre-existing
+  /// contract.)
+  ///
+  /// A DEFAULT (kind-label) name that already exists on the board is suffixed
+  /// ' 2', ' 3', … (first free ordinal) so a schedule never carries two
+  /// identical way names. An explicit [name] is used VERBATIM — the engineer
+  /// typed it.
+  String addCircuit(
+    String panelId, {
+    required LoadKind kind,
+    String? name,
+    int? phases,
+    double? loadW,
+    double? motorKw,
+  }) {
+    final existing =
+        state.panels.where((p) => p.id == panelId).firstOrNull?.circuits ??
+            const <ElectricalCircuit>[];
+    final circuit = _newCircuit(
+      kind: kind,
+      name: name ?? _dedupedCircuitName(existing, _defaultCircuitName(kind)),
+      phases: phases,
+      loadW: loadW,
+      motorKw: motorKw,
     );
     _replacePanel(panelId, (p) => p.copyWith(circuits: [...p.circuits, circuit]));
+    return circuit.id;
   }
 
   /// Field-wise edit of one circuit — only the supplied fields change. Pass the
-  /// `clear*` flags to null an optional field.
+  /// `clear*` flags to null an optional field (the house idiom: a plain `null`
+  /// argument means "keep", so nulling needs an explicit flag).
+  ///
+  /// The manual-OVERRIDE fields (breaker rating, cable section, grouping count,
+  /// pinned phase, laying) each carry a value + a `clear*` partner, so the
+  /// inspector can hand an override back to the auto-sizer without a
+  /// delete-and-recreate.
   void setCircuit(
     String panelId,
     String circuitId, {
@@ -733,6 +859,16 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     bool clearCableType = false,
     StarterType? starterType,
     bool clearStarterType = false,
+    Current? breakerOverrideA,
+    bool clearBreakerOverrideA = false,
+    double? cableOverrideMm2,
+    bool clearCableOverrideMm2 = false,
+    int? groupingCountOverride,
+    bool clearGroupingCountOverride = false,
+    PhaseLine? phaseOverride,
+    bool clearPhaseOverride = false,
+    String? laying,
+    bool clearLaying = false,
   }) {
     _replaceCircuit(
       panelId,
@@ -754,23 +890,67 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         clearCableType: clearCableType,
         starterType: starterType,
         clearStarterType: clearStarterType,
+        breakerOverrideA: breakerOverrideA,
+        clearBreakerOverrideA: clearBreakerOverrideA,
+        cableOverrideMm2: cableOverrideMm2,
+        clearCableOverrideMm2: clearCableOverrideMm2,
+        groupingCountOverride: groupingCountOverride,
+        clearGroupingCountOverride: clearGroupingCountOverride,
+        phaseOverride: phaseOverride,
+        clearPhaseOverride: clearPhaseOverride,
+        laying: laying,
+        clearLaying: clearLaying,
       ),
     );
   }
 
-  /// Delete one circuit from a panel.
-  void deleteCircuit(String panelId, String circuitId) {
-    _replacePanel(
-      panelId,
-      (p) => p.copyWith(circuits: [
+  /// Bulk-pin the phase LINE of several ways on one panel (`circuitId → line`)
+  /// in ONE undo step — the durable counterpart to the session-only
+  /// [PhasePriorCache]: a pinned way carries a real `phaseOverride` INPUT, so it
+  /// survives save/reload and is excluded from auto-balancing entirely. Ways not
+  /// listed are untouched; an empty map (or a map naming no way on the board) is
+  /// a strict no-op.
+  void pinPanelPhases(String panelId, Map<String, PhaseLine> assignment) {
+    if (assignment.isEmpty) return;
+    _replacePanel(panelId, (p) {
+      if (!p.circuits.any((c) => assignment.containsKey(c.id))) return p;
+      return p.copyWith(circuits: [
         for (final c in p.circuits)
-          if (c.id != circuitId) c,
-      ]),
-    );
+          if (assignment.containsKey(c.id))
+            c.copyWith(phaseOverride: assignment[c.id])
+          else
+            c,
+      ]);
+    });
+  }
+
+  /// Delete one circuit from a panel.
+  ///
+  /// DELETE HYGIENE: deleting a FEEDER way orphans the board it fed, so the
+  /// surviving panels run through [sanitizeFeederTopology] INSIDE the same
+  /// commit — the child's stale `fedByCircuitId` back-pointer is cleared and it
+  /// becomes utility-fed again, as ONE undo step. No-op (and no phantom undo
+  /// entry) when either id is unknown.
+  void deleteCircuit(String panelId, String circuitId) {
+    final panel = state.panels.where((p) => p.id == panelId).firstOrNull;
+    if (panel == null || !panel.circuits.any((c) => c.id == circuitId)) return;
+    final panels = <ElectricalPanel>[
+      for (final p in state.panels)
+        if (p.id == panelId)
+          p.copyWith(circuits: [
+            for (final c in p.circuits)
+              if (c.id != circuitId) c,
+          ])
+        else
+          p,
+    ];
+    _commit(_withProject(panels: sanitizeFeederTopology(panels)));
   }
 
   /// Duplicate one circuit (fresh id, "(copy)" name), inserted just after it.
-  /// A duplicated feeder drops its `feedsPanelId` (a feeder targets one panel).
+  /// A duplicated feeder drops its `feedsPanelId` (a feeder targets exactly one
+  /// panel), so the copy is a genuine NON-feeder rather than a `''`-targeted
+  /// stub the topology sanitizer would have to sweep away.
   void duplicateCircuit(String panelId, String circuitId) {
     _replacePanel(panelId, (p) {
       final out = <ElectricalCircuit>[];
@@ -780,7 +960,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           out.add(c.copyWith(
             id: _freshId('c'),
             name: '${c.name} (copy)',
-            feedsPanelId: c.feedsPanelId == null ? null : '',
+            clearFeedsPanelId: true,
           ));
         }
       }
@@ -890,12 +1070,16 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   }
 
   /// Delete a panel by id.
+  ///
+  /// DELETE HYGIENE: the parent's feeder way now points at a board that no
+  /// longer exists, so the survivors run through [sanitizeFeederTopology] INSIDE
+  /// the same commit — the dangling feeder is dropped as ONE undo step.
   void deletePanel(String id) {
     _commit(_withProject(
-      panels: [
+      panels: sanitizeFeederTopology([
         for (final p in state.panels)
           if (p.id != id) p,
-      ],
+      ]),
     ));
   }
 
@@ -915,8 +1099,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       for (final c in src.circuits)
         c.copyWith(
           id: _freshId('c'),
-          // Drop a feeder's target (mirrors duplicateCircuit's sentinel).
-          feedsPanelId: c.feedsPanelId == null ? null : '',
+          // Drop a feeder's target (mirrors duplicateCircuit) — a genuine
+          // non-feeder, not a `''`-targeted stub.
+          clearFeedsPanelId: true,
         ),
     ];
     final copy = src.copyWith(
@@ -1022,20 +1207,30 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   }
 
   /// Delete SEVERAL panels in ONE undo step (D2 — the multi-select Delete). The
-  /// feeder ways that fed a deleted panel are left dangling exactly as
-  /// [deletePanel] leaves them (single-panel parity). Empty ⇒ no-op.
+  /// feeder ways that fed a deleted panel are swept by [sanitizeFeederTopology]
+  /// inside the SAME commit, exactly as [deletePanel] does (single-panel
+  /// parity). Empty ⇒ no-op.
   void deletePanels(Iterable<String> ids) {
     final set = ids.toSet();
     if (set.isEmpty) return;
-    _commit(_withProject(panels: [
-      for (final p in state.panels)
-        if (!set.contains(p.id)) p,
-    ]));
+    _commit(_withProject(
+      panels: sanitizeFeederTopology([
+        for (final p in state.panels)
+          if (!set.contains(p.id)) p,
+      ]),
+    ));
   }
 
   /// Add a new panel at a canvas position. When [fedByCircuitId] is given it is
   /// a fed sub-board; otherwise a utility-fed board.
-  void addPanelAt({
+  ///
+  /// When [templateId] names a built-in [kPanelTemplates] preset, that
+  /// template's circuits + headroom are applied to the new board INSIDE the same
+  /// single commit — so "drop a lighting panel" is ONE undo step, not one per
+  /// way. An unknown id is ignored (an empty board is added).
+  ///
+  /// Returns the new panel's id.
+  String addPanelAt({
     required String name,
     required double x,
     required double y,
@@ -1043,9 +1238,11 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     ElectricalSystem system = ElectricalSystem.threePhase,
     Voltage voltage = const Voltage(400),
     String? fedByCircuitId,
+    String? templateId,
   }) {
-    final panel = ElectricalPanel(
-      id: _freshId('panel'),
+    final id = _freshId('panel');
+    var panel = ElectricalPanel(
+      id: id,
       name: name,
       tag: tag,
       system: system,
@@ -1056,54 +1253,218 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       x: x,
       y: y,
     );
+    panel = _withTemplate(panel, templateId);
     _commit(_withProject(panels: [...state.panels, panel]));
+    return id;
+  }
+
+  /// [panel] with [templateId]'s circuits appended and its suggested headroom
+  /// applied (only when the panel has none of its own — an explicit headroom the
+  /// engineer set always wins). A null / unknown id returns [panel] unchanged.
+  ///
+  /// Template names are MACHINE-supplied presets, so they de-duplicate like a
+  /// default name: applying the same template twice yields "Lighting — zone 1"
+  /// then "Lighting — zone 1 2" rather than two identical schedule rows.
+  ElectricalPanel _withTemplate(ElectricalPanel panel, String? templateId) {
+    if (templateId == null) return panel;
+    final t = panelTemplateById(templateId);
+    if (t == null) return panel;
+    final circuits = [...panel.circuits];
+    for (final tc in t.circuits) {
+      circuits.add(_newCircuit(
+        kind: tc.kind,
+        name: _dedupedCircuitName(circuits, tc.name),
+        phases: tc.phases,
+        loadW: tc.loadW,
+        motorKw: tc.motorKw,
+      ));
+    }
+    return panel.copyWith(
+      circuits: circuits,
+      headroom: panel.headroom ?? t.headroom,
+    );
+  }
+
+  /// Append a built-in sub-panel template ([kPanelTemplates]) to an EXISTING
+  /// board: its circuits are created with the same defaults [addCircuit] uses
+  /// (loadDefaults cos φ / demand factor, [kDefaultCircuitLength], de-duplicated
+  /// names) and its suggested headroom is applied when the panel has none — all
+  /// in ONE undo step.
+  ///
+  /// No-op for an unknown [panelId] / [templateId], and for the machine-owned
+  /// MEP Equipment board (a user way there would survive, but the board is a
+  /// derived projection of the plan — templates belong on real boards).
+  void applyPanelTemplate(String panelId, String templateId) {
+    if (panelId == kMepEquipmentPanelId) return;
+    if (panelTemplateById(templateId) == null) return;
+    _replacePanel(panelId, (p) => _withTemplate(p, templateId));
+  }
+
+  /// Mint a NEW sub-panel at a canvas position ALREADY FED from [fromPanelId] —
+  /// the one-gesture "add a fed board here" flow (board + feeder way +
+  /// back-pointer + optional template) as ONE undo step, instead of
+  /// add-panel-then-connect-feeder (two steps, and a moment of orphaned board).
+  ///
+  /// Naming follows the shared [nextSubPanelOrdinal] mint ('Sub-panel N' /
+  /// 'SP-N'), so a designation is never reused. System/voltage follow the same
+  /// convention as [addPanelAt]'s defaults: [phases] `1` ⇒ 1-phase 220 V,
+  /// anything else (including null) ⇒ 3-phase 400 V.
+  ///
+  /// REFUSAL: when [fromPanelId] names no panel there is nothing to feed from,
+  /// so this degrades cleanly to plain [addPanelAt] behaviour — the board is
+  /// still created (utility-fed, with its template) and its id returned, rather
+  /// than the gesture silently doing nothing.
+  ///
+  /// Returns the new panel's id.
+  String addFedPanelAt({
+    required String fromPanelId,
+    required double x,
+    required double y,
+    int? phases,
+    String? templateId,
+  }) {
+    final from = state.panels.where((p) => p.id == fromPanelId).firstOrNull;
+    final ordinal = nextSubPanelOrdinal(state.panels);
+    final single = phases == 1;
+    final id = _freshId('panel');
+    final feederId = _freshId('c');
+    var panel = ElectricalPanel(
+      id: id,
+      name: 'Sub-panel $ordinal',
+      tag: 'SP-$ordinal',
+      system: single
+          ? ElectricalSystem.singlePhase
+          : ElectricalSystem.threePhase,
+      voltage: single ? const Voltage(220) : const Voltage(400),
+      sourceType: from == null ? PanelSource.utility : PanelSource.feeder,
+      fedByCircuitId: from == null ? null : feederId,
+      x: x,
+      y: y,
+    );
+    panel = _withTemplate(panel, templateId);
+    final feeder = ElectricalCircuit(
+      id: feederId,
+      name: 'Feeder to ${panel.tag ?? panel.name}',
+      loadKind: LoadKind.feeder,
+      feedsPanelId: id,
+      length: kDefaultCircuitLength,
+    );
+    _commit(_withProject(panels: [
+      for (final p in state.panels)
+        if (from != null && p.id == fromPanelId)
+          p.copyWith(circuits: [...p.circuits, feeder])
+        else
+          p,
+      panel,
+    ]));
+    return id;
+  }
+
+  /// Why a feeder [fromPanelId] → [toPanelId] cannot be made, or null when it
+  /// CAN (under the default re-parent semantics of [connectFeeder]).
+  ///
+  /// A PURE QUERY — it never mutates. The three hard refusals are the ones no
+  /// re-parent can rescue: a panel feeding itself, an unknown panel, and a
+  /// feeder loop. "Already fed" is deliberately NOT a refusal here: the default
+  /// [connectFeeder] re-parents. Exposed so a canvas can tint a hover target and
+  /// filter a context menu using the SAME rule the commit will apply.
+  String? feederRefusalReason(String fromPanelId, String toPanelId) {
+    if (fromPanelId == toPanelId) return 'A panel cannot feed itself.';
+    final from = state.panels.where((p) => p.id == fromPanelId).firstOrNull;
+    final to = state.panels.where((p) => p.id == toPanelId).firstOrNull;
+    if (from == null || to == null) return 'Panel not found.';
+    // A cycle results if the source is reachable downstream of the target.
+    if (_isDescendant(target: fromPanelId, of: toPanelId)) {
+      return 'That would create a feeder loop (the target already feeds this panel).';
+    }
+    return null;
   }
 
   /// Connect [fromPanelId] → [toPanelId] as a feeder: append a feeder way on the
-  /// source panel and point the target's incomer at it. Mirrors PanelMaker's
-  /// `connectPanelAsFeeder` refusal logic (no self-feed, no second parent, no
-  /// cycle) and returns a [ConnectFeederResult] explaining a refusal.
-  ConnectFeederResult connectFeeder(String fromPanelId, String toPanelId) {
-    if (fromPanelId == toPanelId) {
-      return const ConnectFeederResult.refused('A panel cannot feed itself.');
-    }
-    final from = state.panels.where((p) => p.id == fromPanelId).firstOrNull;
-    final to = state.panels.where((p) => p.id == toPanelId).firstOrNull;
-    if (from == null || to == null) {
-      return const ConnectFeederResult.refused('Panel not found.');
-    }
-    if (to.fedByCircuitId != null) {
+  /// source panel and point the target's incomer at it. Refusals (self-feed,
+  /// unknown panel, loop) come from the shared [feederRefusalReason] so the
+  /// hover/menu preview can never disagree with the commit.
+  ///
+  /// RE-PARENT is the default: dragging a feeder onto an already-fed board MOVES
+  /// it under the new parent instead of refusing. Every circuit on ANY panel
+  /// targeting [toPanelId] is removed first (robust against a pre-existing
+  /// desync where more than one way claims the same child), then the fresh
+  /// feeder + back-pointer are written — all inside ONE commit, so a single
+  /// Ctrl+Z restores the old parent. The result carries
+  /// [ConnectFeederResult.reparentedFromLabel] naming the board it was moved
+  /// off. Pass `reparent: false` for a strict connect-only-if-unfed (the
+  /// pre-W1 behaviour, refusing with "already fed").
+  ///
+  /// [record] mirrors [_replacePanel]'s flag: false mutates state WITHOUT
+  /// pushing an undo snapshot or a timeline entry, for a gesture that already
+  /// called [pushUndoSnapshot] at its start (so a drag-composed connect can't
+  /// double-snapshot).
+  ConnectFeederResult connectFeeder(
+    String fromPanelId,
+    String toPanelId, {
+    bool reparent = true,
+    bool record = true,
+  }) {
+    final refusal = feederRefusalReason(fromPanelId, toPanelId);
+    if (refusal != null) return ConnectFeederResult.refused(refusal);
+    // feederRefusalReason proved both ids resolve.
+    final to = state.panels.firstWhere((p) => p.id == toPanelId);
+    if (!reparent && to.fedByCircuitId != null) {
       return ConnectFeederResult.refused(
           '${to.tag ?? to.name} is already fed by another panel. '
           'Disconnect it first.');
     }
-    // A cycle results if the source is reachable downstream of the target.
-    if (_isDescendant(target: fromPanelId, of: toPanelId)) {
-      return const ConnectFeederResult.refused(
-          'That would create a feeder loop (the target already feeds this panel).');
+
+    // The board currently feeding the target (for the "moved from …" caption).
+    // Prefer the panel owning the recorded back-pointer; fall back to the first
+    // panel actually carrying a way that targets it, so a desynced file still
+    // reports something true. A way already on [fromPanelId] is not a re-parent.
+    String? reparentedFromLabel;
+    for (final p in state.panels) {
+      if (p.id == fromPanelId) continue;
+      for (final c in p.circuits) {
+        if (c.feedsPanelId != toPanelId) continue;
+        if (reparentedFromLabel == null || c.id == to.fedByCircuitId) {
+          reparentedFromLabel = p.tag ?? p.name;
+        }
+      }
     }
+
     final feederId = _freshId('c');
     final feeder = ElectricalCircuit(
       id: feederId,
       name: 'Feeder to ${to.tag ?? to.name}',
       loadKind: LoadKind.feeder,
       feedsPanelId: toPanelId,
-      length: const Length(20),
+      length: kDefaultCircuitLength,
     );
+    // Strip EVERY way targeting the child, on every board, then wire the new
+    // one — one atomic list rebuild, so there is no torn two-parent state.
+    List<ElectricalCircuit> stripped(ElectricalPanel p) => [
+          for (final c in p.circuits)
+            if (c.feedsPanelId != toPanelId) c,
+        ];
     final panels = [
       for (final p in state.panels)
         if (p.id == fromPanelId)
-          p.copyWith(circuits: [...p.circuits, feeder])
+          p.copyWith(circuits: [...stripped(p), feeder])
         else if (p.id == toPanelId)
           p.copyWith(
+            circuits: stripped(p),
             sourceType: PanelSource.feeder,
             fedByCircuitId: feederId,
           )
         else
-          p,
+          p.copyWith(circuits: stripped(p)),
     ];
-    _commit(_withProject(panels: panels));
-    return const ConnectFeederResult.connected();
+    final next = _withProject(panels: panels);
+    if (record) {
+      _commit(next);
+    } else {
+      state = next;
+    }
+    return ConnectFeederResult.connected(
+        reparentedFromLabel: reparentedFromLabel);
   }
 
   /// True when [target] is reachable by following feeders downstream from [of]
@@ -1151,7 +1512,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Add a floating load (a final circuit) as a one-way sub-panel placed at a
   /// canvas position. Mirrors PanelMaker's drop-on-blank-canvas: a standalone
   /// load becomes its own (utility-fed) tiny board until wired to a feeder.
-  void addFloatingLoad({
+  ///
+  /// Returns the ids of the stub board and its single way, so the caller can
+  /// select / open what it just dropped.
+  ({String panelId, String circuitId}) addFloatingLoad({
     required LoadKind kind,
     required double x,
     required double y,
@@ -1164,6 +1528,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     final panelId = _freshId('panel');
     final isMotor = kind == LoadKind.motor || kind == LoadKind.pump;
     final threePhase = phases == 3;
+    // NOTE: built inline rather than via [_newCircuit] because this site's
+    // zero-load rule predates the shared helper and omits the `feeder` kind
+    // (unreachable — the palette's Sub-panel card routes to `addPanelAt`).
+    // Preserved verbatim so the blank-canvas drop stays byte-identical.
     final circuit = ElectricalCircuit(
       id: _freshId('c'),
       name: name ?? (d?.label ?? 'Load'),
@@ -1174,7 +1542,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       phases: phases,
       motorKw: isMotor ? (motorKw ?? 3.0) : null,
       loadW: isMotor || kind == LoadKind.spare ? 0 : (loadW ?? 2000),
-      length: const Length(20),
+      length: kDefaultCircuitLength,
     );
     final panel = ElectricalPanel(
       id: panelId,
@@ -1190,6 +1558,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       circuits: [circuit],
     );
     _commit(_withProject(panels: [...state.panels, panel]));
+    return (panelId: panelId, circuitId: circuit.id);
   }
 
   // ── Geo-layout intents (Wave 6) ────────────────────────────────────────────
@@ -1226,9 +1595,12 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
 
   /// Add a new way to [panelId] already PLACED on the layout at [pos] — the
   /// drag-a-palette-card-onto-the-sheet-near-a-panel gesture. Same standards
-  /// defaults as [addCircuit]; the circuit is created with its `loadPos` so its
-  /// run length is geo-derived immediately.
-  void addLoadAtLayout(
+  /// defaults as [addCircuit] (including the default-name de-duplication); the
+  /// circuit is created with its `loadPos` so its run length is geo-derived
+  /// immediately and [kDefaultCircuitLength] is never read.
+  ///
+  /// Returns the new circuit's id (see [addCircuit] on the unknown-panel case).
+  String addLoadAtLayout(
     String panelId, {
     required LoadKind kind,
     required LayoutPos pos,
@@ -1237,24 +1609,19 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     double? loadW,
     double? motorKw,
   }) {
-    final d = loadDefaults[kind];
-    final isMotor = kind == LoadKind.motor || kind == LoadKind.pump;
-    final circuit = ElectricalCircuit(
-      id: _freshId('c'),
-      name: name ?? (d?.label ?? 'Circuit'),
-      loadKind: kind,
-      cosPhi: d?.cosPhi ?? 0.85,
-      demandFactor: d?.demandFactor ?? 1,
-      isLighting: kind == LoadKind.lighting,
+    final existing =
+        state.panels.where((p) => p.id == panelId).firstOrNull?.circuits ??
+            const <ElectricalCircuit>[];
+    final circuit = _newCircuit(
+      kind: kind,
+      name: name ?? _dedupedCircuitName(existing, _defaultCircuitName(kind)),
       phases: phases,
-      motorKw: isMotor ? (motorKw ?? 3.0) : null,
-      loadW: isMotor || kind == LoadKind.spare || kind == LoadKind.feeder
-          ? 0
-          : (loadW ?? 2000),
-      length: const Length(20),
+      loadW: loadW,
+      motorKw: motorKw,
       loadPos: pos,
     );
     _replacePanel(panelId, (p) => p.copyWith(circuits: [...p.circuits, circuit]));
+    return circuit.id;
   }
 
   /// Drop a load onto blank plan with NO panel to attach to: it becomes a
@@ -1262,7 +1629,15 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// as its load icon on the sheet, NOT a generic panel. The stub board has no
   /// `layoutPos` (only the circuit's `loadPos` is placed), so the layer draws
   /// just the load symbol; wire it to a feeder later to fold it into a board.
-  void addFloatingLoadAtLayout({
+  ///
+  /// The stub board's single-line `x`/`y` are left NULL on purpose: those are
+  /// abstract SCHEMATIC-canvas world pixels, a different space from the geo
+  /// [LayoutPos] sheet pixels (`model.dart` — "the two never alias"). Copying
+  /// the sheet pixels across used to fling the board to a nonsense schematic
+  /// coordinate; null lets the single-line canvas auto-lay it out instead.
+  ///
+  /// Returns the ids of the stub board and its single way.
+  ({String panelId, String circuitId}) addFloatingLoadAtLayout({
     required LoadKind kind,
     required LayoutPos pos,
     String? name,
@@ -1271,36 +1646,28 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     double? motorKw,
   }) {
     final d = loadDefaults[kind];
-    final isMotor = kind == LoadKind.motor || kind == LoadKind.pump;
     final threePhase = phases == 3;
-    final circuit = ElectricalCircuit(
-      id: _freshId('c'),
+    final panelId = _freshId('panel');
+    final circuit = _newCircuit(
+      kind: kind,
       name: name ?? (d?.label ?? 'Load'),
-      loadKind: kind,
-      cosPhi: d?.cosPhi ?? 0.85,
-      demandFactor: d?.demandFactor ?? 1,
-      isLighting: kind == LoadKind.lighting,
       phases: phases,
-      motorKw: isMotor ? (motorKw ?? 3.0) : null,
-      loadW: isMotor || kind == LoadKind.spare || kind == LoadKind.feeder
-          ? 0
-          : (loadW ?? 2000),
-      length: const Length(20),
+      loadW: loadW,
+      motorKw: motorKw,
       loadPos: pos,
     );
     final panel = ElectricalPanel(
-      id: _freshId('panel'),
+      id: panelId,
       name: name ?? (d?.label ?? 'Load'),
       tag: null,
       system: threePhase
           ? ElectricalSystem.threePhase
           : ElectricalSystem.singlePhase,
       voltage: threePhase ? const Voltage(400) : const Voltage(220),
-      x: pos.x,
-      y: pos.y,
       circuits: [circuit],
     );
     _commit(_withProject(panels: [...state.panels, panel]));
+    return (panelId: panelId, circuitId: circuit.id);
   }
 
   /// Monotonic id source for new panels / circuits (deterministic per process,
@@ -1378,21 +1745,96 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     final others =
         state.panels.where((p) => p.id != kMepEquipmentPanelId).toList();
     if (merged.isEmpty) {
-      // Nothing left to distribute — remove the (now-empty) panel.
+      // Nothing left to distribute — remove the (now-empty) panel. Sweep the
+      // survivors so the feeder that fed it (auto-wired below, or hand-drawn)
+      // doesn't survive as a dangling way pointing at a board that is gone.
       if (existing == null) return;
-      state = _withProject(panels: others);
+      state = _withProject(panels: sanitizeFeederTopology(others));
       return;
     }
-    final panel = existing == null
-        ? ElectricalPanel(
-            id: kMepEquipmentPanelId,
-            name: 'MEP Equipment',
-            tag: 'MEP',
-            voltage: const Voltage(400),
-            circuits: merged,
-          )
-        : existing.copyWith(circuits: merged);
-    state = _withProject(panels: [...others, panel]);
+    if (existing != null) {
+      // UPSERT — never touch feeding. The board's own sourceType /
+      // fedByCircuitId ride through `copyWith`, and the parent's feeder way
+      // lives on ANOTHER panel (untouched in `others`), so a hand-rewired MEP
+      // feed survives every re-sync.
+      state = _withProject(
+          panels: [...others, existing.copyWith(circuits: merged)]);
+      return;
+    }
+
+    // FIRST CREATION of the MEP board. A board with no incomer is an orphan the
+    // connectivity check flags, so wire it into the distribution tree when — and
+    // only when — the answer is unambiguous: exactly ONE existing board is
+    // itself unfed (the engine's connectivity semantics: "unfed" = not the
+    // target of any circuit's feedsPanelId). Zero roots (empty project) or two+
+    // roots leave it utility-fed for the engineer to wire deliberately.
+    final fed = <String>{
+      for (final p in others)
+        for (final c in p.circuits)
+          if (c.feedsPanelId != null) c.feedsPanelId!,
+    };
+    final roots = [
+      for (final p in others)
+        if (!fed.contains(p.id)) p,
+    ];
+    if (roots.length != 1) {
+      state = _withProject(panels: [
+        ...others,
+        ElectricalPanel(
+          id: kMepEquipmentPanelId,
+          name: 'MEP Equipment',
+          tag: 'MEP',
+          voltage: const Voltage(400),
+          circuits: merged,
+        ),
+      ]);
+      return;
+    }
+    final root = roots.single;
+    final feederId = _freshId('c');
+    state = _withProject(panels: [
+      for (final p in others)
+        if (p.id == root.id)
+          p.copyWith(circuits: [
+            ...p.circuits,
+            ElectricalCircuit(
+              id: feederId,
+              name: 'Feeder to MEP Equipment',
+              loadKind: LoadKind.feeder,
+              feedsPanelId: kMepEquipmentPanelId,
+              length: kDefaultCircuitLength,
+            ),
+          ])
+        else
+          p,
+      ElectricalPanel(
+        id: kMepEquipmentPanelId,
+        name: 'MEP Equipment',
+        tag: 'MEP',
+        voltage: const Voltage(400),
+        sourceType: PanelSource.feeder,
+        fedByCircuitId: feederId,
+        circuits: merged,
+      ),
+    ]);
+  }
+}
+
+/// The first FREE variant of the machine-supplied way name [base] among
+/// [existing]: `base` itself when nothing on the board carries it, else
+/// `base 2`, `base 3`, … (the first unused ordinal).
+///
+/// Applied ONLY to names the app itself supplies — a default kind label
+/// ("Sockets") or a template's preset name ("Lighting — zone 1") — so a board
+/// never ends up with two identical rows on an issued schedule. A name the
+/// ENGINEER typed is used verbatim: de-duplicating it would silently rename
+/// their input.
+String _dedupedCircuitName(Iterable<ElectricalCircuit> existing, String base) {
+  final taken = {for (final c in existing) c.name};
+  if (!taken.contains(base)) return base;
+  for (var n = 2;; n++) {
+    final candidate = '$base $n';
+    if (!taken.contains(candidate)) return candidate;
   }
 }
 
