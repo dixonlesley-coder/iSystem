@@ -23,6 +23,7 @@ import 'dart:math' as math;
 import '../sizing/fan.dart' show FanDuty;
 import '../sizing/pump.dart' show PumpDuty;
 import '../units.dart';
+import 'geo_length.dart' show LayoutPos;
 import 'load_kind.dart' show LoadKind;
 import 'model.dart' show CircuitRole, ElectricalCircuit;
 import 'sizing.dart' show loadCurrent;
@@ -139,6 +140,14 @@ class MepEquipmentLoad {
   /// [electricalInputPower] is null.
   final double motorEfficiency;
 
+  /// Where this equipment's load sits on the shared calibrated PDF layout, when
+  /// placed. Passed straight through to the derived circuit's
+  /// [ElectricalCircuit.loadPos] so a placed piece of MEP equipment's cable
+  /// length can be geo-derived (`resolveCircuitLength`) instead of the manual
+  /// [equipmentToCircuit]/[buildEquipmentCircuits] `lengthM`. Null (default) =
+  /// unplaced ⇒ the produced circuit carries no `loadPos` ⇒ byte-identical.
+  final LayoutPos? loadPos;
+
   const MepEquipmentLoad({
     required this.id,
     required this.name,
@@ -148,6 +157,7 @@ class MepEquipmentLoad {
     this.phases = 3,
     this.cosPhi = defaultMotorCosPhi,
     this.motorEfficiency = defaultMotorEfficiency,
+    this.loadPos,
   });
 
   /// True when supplied three-phase.
@@ -164,6 +174,7 @@ class MepEquipmentLoad {
     int phases = 3,
     double cosPhi = defaultMotorCosPhi,
     double motorEfficiency = defaultMotorEfficiency,
+    LayoutPos? loadPos,
   }) =>
       MepEquipmentLoad(
         id: id,
@@ -174,6 +185,7 @@ class MepEquipmentLoad {
         phases: phases,
         cosPhi: cosPhi,
         motorEfficiency: motorEfficiency,
+        loadPos: loadPos,
       );
 
   /// Build a load descriptor from an already-sized [FanDuty]. Pulls the selected
@@ -186,6 +198,7 @@ class MepEquipmentLoad {
     int phases = 3,
     double cosPhi = defaultMotorCosPhi,
     double motorEfficiency = defaultMotorEfficiency,
+    LayoutPos? loadPos,
   }) =>
       MepEquipmentLoad(
         id: id,
@@ -196,6 +209,7 @@ class MepEquipmentLoad {
         phases: phases,
         cosPhi: cosPhi,
         motorEfficiency: motorEfficiency,
+        loadPos: loadPos,
       );
 
   /// The electrical input power that drives the load current: the known
@@ -238,7 +252,11 @@ String equipmentCircuitId(MepEquipmentLoad e) => 'mep-${e.id}';
 ///   * `sourceEquipmentId` = `e.id` (re-imports update in place),
 ///   * `flaOverrideA` = [equipmentFullLoadCurrent] (A4 sizes off MechX's derived
 ///     current verbatim — see `compute.dart`, where `flaOverrideA` wins),
-///   * `lifeSafety` set for a fire pump (no RCD; fire-resistant cable).
+///   * `lifeSafety` set for a fire pump (no RCD; fire-resistant cable),
+///   * `loadPos` = `e.loadPos` verbatim (null when the equipment is unplaced,
+///     so the circuit sizes off the manual [lengthM] exactly as today —
+///     `resolveCircuitLength` only geo-derives when both the fed panel and
+///     this load are placed).
 ElectricalCircuit equipmentToCircuit(
   MepEquipmentLoad e, {
   required Voltage panelVoltage,
@@ -260,6 +278,7 @@ ElectricalCircuit equipmentToCircuit(
     lifeSafety: e.source.isLifeSafety,
     sourceEquipmentId: e.id,
     flaOverrideA: fla,
+    loadPos: e.loadPos,
   );
 }
 

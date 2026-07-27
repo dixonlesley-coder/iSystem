@@ -195,12 +195,18 @@ class ElectricalCircuit {
     String? cableType,
     bool clearCableType = false,
     String? laying,
+    bool clearLaying = false,
     double? cableOverrideMm2,
+    bool clearCableOverrideMm2 = false,
     Current? breakerOverrideA,
+    bool clearBreakerOverrideA = false,
     int? groupingCountOverride,
+    bool clearGroupingCountOverride = false,
     PhaseLine? phaseOverride,
+    bool clearPhaseOverride = false,
     bool? busbarBreakBefore,
     String? feedsPanelId,
+    bool clearFeedsPanelId = false,
     String? sourceEquipmentId,
     Current? flaOverrideA,
     StarterType? starterType,
@@ -223,14 +229,21 @@ class ElectricalCircuit {
         phases: clearPhases ? null : (phases ?? this.phases),
         lifeSafety: lifeSafety ?? this.lifeSafety,
         cableType: clearCableType ? null : (cableType ?? this.cableType),
-        laying: laying ?? this.laying,
-        cableOverrideMm2: cableOverrideMm2 ?? this.cableOverrideMm2,
-        breakerOverrideA: breakerOverrideA ?? this.breakerOverrideA,
-        groupingCountOverride:
-            groupingCountOverride ?? this.groupingCountOverride,
-        phaseOverride: phaseOverride ?? this.phaseOverride,
+        laying: clearLaying ? null : (laying ?? this.laying),
+        cableOverrideMm2: clearCableOverrideMm2
+            ? null
+            : (cableOverrideMm2 ?? this.cableOverrideMm2),
+        breakerOverrideA: clearBreakerOverrideA
+            ? null
+            : (breakerOverrideA ?? this.breakerOverrideA),
+        groupingCountOverride: clearGroupingCountOverride
+            ? null
+            : (groupingCountOverride ?? this.groupingCountOverride),
+        phaseOverride:
+            clearPhaseOverride ? null : (phaseOverride ?? this.phaseOverride),
         busbarBreakBefore: busbarBreakBefore ?? this.busbarBreakBefore,
-        feedsPanelId: feedsPanelId ?? this.feedsPanelId,
+        feedsPanelId:
+            clearFeedsPanelId ? null : (feedsPanelId ?? this.feedsPanelId),
         sourceEquipmentId: sourceEquipmentId ?? this.sourceEquipmentId,
         flaOverrideA: flaOverrideA ?? this.flaOverrideA,
         starterType:
@@ -297,7 +310,11 @@ class ElectricalCircuit {
         groupingCountOverride: (json['groupingCountOverride'] as num?)?.toInt(),
         phaseOverride: _enumOrNull(PhaseLine.values, json['phaseOverride']),
         busbarBreakBefore: json['busbarBreakBefore'] == true,
-        feedsPanelId: json['feedsPanelId'] as String?,
+        // Legacy files persisted duplicateCircuit's old '' sentinel for "no
+        // feeder target" — normalize it to null (isFeeder relies on non-null).
+        feedsPanelId: (json['feedsPanelId'] as String?)?.isEmpty == true
+            ? null
+            : json['feedsPanelId'] as String?,
         sourceEquipmentId: json['sourceEquipmentId'] as String?,
         flaOverrideA: json['flaOverrideA'] == null
             ? null

@@ -4,12 +4,17 @@
 ///
 /// Ported from PanelMaker `engine/{enclosure,enclosureThermal}.ts` +
 /// `standards/{enclosure,enclosureThermal}.ts`. The DIN-module count is
-/// ESTIMATED from the panel result (the post-processing pass does not see the
-/// PanelMaker per-device control-gear widths): ≈ breaker poles per outgoing way
-/// (1-phase = 1, 3-phase = 3), plus the RCD module width on RCD-protected ways,
-/// plus the incomer's poles. Rows pack 24 modules; width/height/depth follow the
-/// DIN geometry; sheet thickness steps with the largest dimension; ventilation
-/// and temperature rise follow IEC 60890 / IEC 61439-1 §9.3.2.
+/// ESTIMATED from the panel result via [deviceModules] (the post-processing
+/// pass does not see the PanelMaker per-device control-gear widths): an
+/// MCB-family device (incomer or outgoing way) is narrow, sized by pole count
+/// (1-phase = 1 module, 3-phase = 3) plus a 2-module RCD header on an
+/// RCD-protected way; an MCCB-family device is a wide moulded-case frame,
+/// sized by its rating band instead of its pole count. A reserved spare way
+/// adds 1 module (a blank filler still needs its own rail space). Rows pack
+/// 24 modules; the WIDTH follows the widest ACTUAL row (capped at one 24-module
+/// row), not always a full row; height/depth follow the DIN geometry; sheet
+/// thickness steps with the largest dimension; ventilation and temperature
+/// rise follow IEC 60890 / IEC 61439-1 §9.3.2.
 ///
 /// This is a NEW pure function constructing only the result type in this file.
 /// First-pass engineering estimates — verify against the actual device losses,
@@ -20,6 +25,7 @@ library;
 
 import 'dart:math' as math;
 
+import '../standards/puil.dart' show BreakerClass;
 import '../units.dart' show Power;
 import 'panel_results.dart' show ElectricalPanelResult;
 
@@ -61,6 +67,20 @@ const double enclosureDepthFloorMm = 400;
 /// header width).
 // VERIFY (notAnSniClause): a 2-module RCD/RCBO header width.
 const int rcdModules = 2;
+
+/// Representative MCCB (moulded-case) frame widths (mm), banded by rating,
+/// converted to 18 mm DIN module-equivalents in [deviceModules]. An MCCB is a
+/// wide control-gear frame sized by its rating band — NOT by pole count like
+/// an MCB — so `maxRatingA` is checked ascending and the first band the rating
+/// fits is used.
+// VERIFY (notAnSniClause): representative moulded-case frame widths (90/105/140
+// mm at ≤125 A / ≤250 A / above), not a specific manufacturer's certified
+// drawing.
+const List<({double maxRatingA, double frameWidthMm})> mccbFrameBands = [
+  (maxRatingA: 125, frameWidthMm: 90),
+  (maxRatingA: 250, frameWidthMm: 105),
+  (maxRatingA: double.infinity, frameWidthMm: 140),
+];
 
 /// Surface heat-transfer coefficient `k` for a painted sheet-steel enclosure
 /// wall under natural convection + radiation (W per m² per K).
@@ -139,19 +159,67 @@ double _effectiveAreaM2(double wMm, double hMm, double dMm) {
   return front + top + bottom + left + right;
 }
 
+/// Estimated DIN-module width of one outgoing/incoming device.
+///
+/// MCB-family devices (and anything not identified as MCCB) are narrow,
+/// modelled by pole count (1-phase = 1 module … 3-phase = 3; an incomer's own
+/// pole count for an incomer) plus a 2-module RCD/RCBO header when the way is
+/// RCD-protected — today's behaviour. MCCB-family devices are wide
+/// moulded-case frames: their width comes from their rating band
+/// ([mccbFrameBands]), converted to 18 mm module-equivalents and rounded up —
+/// their pole count does not drive the width. `deviceClass` is matched
+/// case-insensitively against `'MCCB'`; anything else (including a null/empty
+/// string) is treated as the narrow MCB-like default. A null/omitted
+/// `ratingA` for an MCCB falls back to the smallest (≤125 A) frame band.
+int deviceModules({
+  required String deviceClass,
+  required int poles,
+  double? ratingA,
+  bool rcdRequired = false,
+}) {
+  if (deviceClass.toUpperCase() == 'MCCB') {
+    final rating = ratingA ?? 0;
+    for (final band in mccbFrameBands) {
+      if (rating <= band.maxRatingA) {
+        return (band.frameWidthMm / dinModuleWidthMm).ceil();
+      }
+    }
+    return (mccbFrameBands.last.frameWidthMm / dinModuleWidthMm).ceil();
+  }
+  return poles + (rcdRequired ? rcdModules : 0);
+}
+
+/// Map a breaker's [BreakerClass] to the catalogue-style label ('MCB'/'MCCB')
+/// [deviceModules] matches against — mirrors the schedule-label convention in
+/// `report/electrical_sld_drawing.dart`'s `_classCode` / `bom.dart`'s
+/// `_classStr` (kept local rather than shared to stay file-disjoint).
+String _classCode(BreakerClass c) => c == BreakerClass.mccb ? 'MCCB' : 'MCB';
+
 /// Estimate the total DIN-module count for a panel result.
 ///
 /// Post-processing estimate (PanelMaker counts real per-device control-gear
-/// widths; this pass only sees the result): incomer poles + Σ(per-way poles +
-/// RCD modules when the way is RCD-protected). A spare way still occupies its
-/// breaker poles. Floating-point pole-widths are summed then ceiled.
+/// widths; this pass only sees the result): [deviceModules] applied to the
+/// incomer (poles = the incomer's own pole count) + each outgoing way (poles =
+/// 3 for a three-phase way, else 1; its RCD status carried through) + 1
+/// module per reserved spare way ([ElectricalPanelResult.spareWaysReserved]
+/// — a spare way still needs its own blank filler / reserved rail space).
 int estimatePanelModules(ElectricalPanelResult panel) {
-  double modules = panel.incomer.poles.toDouble();
+  final incomer = panel.incomer;
+  var modules = deviceModules(
+    deviceClass: _classCode(incomer.breaker.deviceClass),
+    poles: incomer.poles,
+    ratingA: incomer.breaker.ratingA.amperes,
+  );
   for (final c in panel.circuits) {
-    modules += c.threePhase ? 3 : 1;
-    if (c.rcd.required) modules += rcdModules;
+    modules += deviceModules(
+      deviceClass: _classCode(c.breaker.deviceClass),
+      poles: c.threePhase ? 3 : 1,
+      ratingA: c.breaker.ratingA.amperes,
+      rcdRequired: c.rcd.required,
+    );
   }
-  return math.max(1, modules.ceil());
+  modules += panel.spareWaysReserved;
+  return math.max(1, modules);
 }
 
 // ---------------------------------------------------------------------------
@@ -207,10 +275,14 @@ class EnclosureResult {
 ///
 /// The DIN-module count is estimated from the result via
 /// [estimatePanelModules]. Geometry:
-///   rows   = ceil(modules / 24)
-///   width  = roundUp(24·18 + 2·150, 50)       (a full 24-way row + side margins)
-///   height = roundUp(rows·150 + 200, 50)
-///   depth  = hasFloorGear ? 400 : 200
+///   rows         = ceil(modules / 24)
+///   widthModules = min(modules, 24)      (the widest ACTUAL row — capped at
+///                                          one 24-way row, so a small board
+///                                          isn't sized for a full row it
+///                                          doesn't have)
+///   width        = roundUp(widthModules·18 + 2·150, 50)
+///   height       = roundUp(rows·150 + 200, 50)
+///   depth        = hasFloorGear ? 400 : 200
 /// Sheet thickness steps with the largest dimension; ventilation from [heat];
 /// the IEC 60890 power-balance temperature rise = heat / (A_eff · k) is checked
 /// against [maxInternalTempRiseK].
@@ -221,9 +293,10 @@ EnclosureResult estimateEnclosure(
 }) {
   final modules = estimatePanelModules(panel);
   final rows = math.max(1, (modules / modulesPerRow).ceil());
+  final widthModules = math.min(modules, modulesPerRow);
 
   final widthMm = _roundUpTo(
-    modulesPerRow * dinModuleWidthMm + 2 * enclosureSideMarginMm,
+    widthModules * dinModuleWidthMm + 2 * enclosureSideMarginMm,
     50,
   );
   final heightMm = _roundUpTo(rows * dinRowPitchMm + enclosureVerticalMarginMm, 50);
@@ -248,8 +321,9 @@ EnclosureResult estimateEnclosure(
     withinTempLimit: tempRiseK <= maxInternalTempRiseK,
     ip: recommendedIp().code,
     verifyItems: const [
-      'DIN-module count is ESTIMATED from breaker poles + RCD modules — verify '
-          'against the actual mounted device widths.',
+      'DIN-module count is ESTIMATED from breaker poles/MCCB frame width + RCD '
+          'modules + reserved spare ways — verify against the actual mounted '
+          'device widths.',
       'Enclosure geometry (DIN pitch, margins, depth) — verify against the '
           'enclosure manufacturer data.',
       'Sheet thickness, ventilation thresholds + IEC 60890 temp-rise (5.5 W/m²K, '

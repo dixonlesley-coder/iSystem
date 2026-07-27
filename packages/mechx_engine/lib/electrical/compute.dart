@@ -115,15 +115,41 @@ PhaseAssignment _lineAssign(PhaseLine line) => switch (line) {
       PhaseLine.l3 => PhaseAssignment.l3,
     };
 
+/// A prior assignment read back as a LINE, or null when there is none for [id]
+/// or the recorded value is `threePhase` (a three-phase way loads all three
+/// lines — it is never placed by the search, so such an entry is ignored).
+PhaseLine? _priorLine(Map<String, PhaseAssignment> prior, String id) =>
+    switch (prior[id]) {
+      PhaseAssignment.l1 => PhaseLine.l1,
+      PhaseAssignment.l2 => PhaseLine.l2,
+      PhaseAssignment.l3 => PhaseLine.l3,
+      _ => null,
+    };
+
 /// Distribute single-phase circuits across L1/L2/L3 (greedy LPT + local-search
 /// refinement) while three-phase circuits load all phases equally, then report
 /// per-phase line current and the imbalance percentage. Pinned circuits keep
 /// their line and are excluded from balancing. Ported from `phase.ts
 /// balancePhases`.
+///
+/// PHASE-ASSIGNMENT STABILITY (additive; the defaults reproduce the port
+/// exactly). [prior] is a previous solve's `circuitId → PhaseAssignment` map:
+/// an unpinned single-phase circuit listed there is SEEDED onto its prior line
+/// instead of entering the descending-current greedy, and the local search only
+/// moves a circuit OFF its prior line when the move improves the spread by MORE
+/// than [reassignThresholdA] amperes (strictly). A pin still wins over a prior
+/// entry, a move back TO the prior line is always free, and a circuit with no
+/// prior entry keeps the plain strict-improvement rule. So a re-solve of an
+/// unchanged board reproduces its labelled phases, while a genuinely better
+/// balance (gain > the threshold) is still taken. With the defaults (`prior`
+/// empty, threshold 0) the seeding is empty and every acceptance test reduces
+/// to `spread() < before - 1e-9` — step-for-step the original algorithm.
 PhaseBalance balancePhases(
   List<_PhaseCircuit> circuits,
-  ElectricalSystem system,
-) {
+  ElectricalSystem system, {
+  Map<String, PhaseAssignment> prior = const {},
+  double reassignThresholdA = 0,
+}) {
   final phases = <PhaseLine, double>{
     PhaseLine.l1: 0,
     PhaseLine.l2: 0,
@@ -169,8 +195,22 @@ PhaseBalance balancePhases(
       .toList()
     ..sort((a, b) => b.currentA.compareTo(a.currentA));
 
-  // Greedy least-loaded assignment.
+  // Prior-line SEED: a circuit the caller already placed keeps that line as its
+  // starting point, so an unchanged board re-solves to the labels on site.
+  // Empty [prior] ⇒ nothing is seeded and the greedy below sees every single.
+  final seeded = <String, PhaseLine>{};
   for (final c in singles) {
+    final line = _priorLine(prior, c.id);
+    if (line == null) continue;
+    seeded[c.id] = line;
+    phases[line] = phases[line]! + c.currentA;
+    assignment[c.id] = _lineAssign(line);
+  }
+
+  // Greedy least-loaded assignment (of the un-seeded singles — with no prior
+  // that is every single, i.e. the original loop).
+  for (final c in singles) {
+    if (seeded.containsKey(c.id)) continue;
     var minLine = PhaseLine.l1;
     for (final p in keys) {
       if (phases[p]! < phases[minLine]!) minLine = p;
@@ -190,6 +230,16 @@ PhaseBalance balancePhases(
     return vals.reduce(math.max) - vals.reduce(math.min);
   }
 
+  // The spread improvement (A) a move must beat before it is accepted: the
+  // caller's `reassignThresholdA` when it takes the circuit OFF the line a prior
+  // solve recorded for it, else 0 (no prior line, already away from it, or a
+  // move back onto it). 0 ⇒ the plain strict-improvement rule.
+  double reassignCost(String id, PhaseLine from, PhaseLine to) {
+    final p = seeded[id];
+    if (p == null || from != p || to == p) return 0;
+    return reassignThresholdA;
+  }
+
   // Local-search refinement: relocate / swap movable singles while the spread
   // shrinks. Only unpinned singles move.
   for (var pass = 0; pass < 40; pass++) {
@@ -199,9 +249,10 @@ PhaseBalance balancePhases(
       for (final to in keys) {
         if (to == from) continue;
         final before = spread();
+        final cost = reassignCost(c.id, from, to);
         phases[from] = phases[from]! - c.currentA;
         phases[to] = phases[to]! + c.currentA;
-        if (spread() < before - 1e-9) {
+        if (spread() < before - cost - 1e-9) {
           assignment[c.id] = _lineAssign(to);
           improved = true;
         } else {
@@ -216,9 +267,13 @@ PhaseBalance balancePhases(
         final pb = fromAssign(assignment[b.id]!);
         if (a.id == b.id || pa == pb) continue;
         final before = spread();
+        // A swap moves BOTH ways, so it must clear the larger of the two
+        // re-assignment costs (0 for a pair with no prior lines).
+        final cost = math.max(
+            reassignCost(a.id, pa, pb), reassignCost(b.id, pb, pa));
         phases[pa] = phases[pa]! + b.currentA - a.currentA;
         phases[pb] = phases[pb]! + a.currentA - b.currentA;
-        if (spread() < before - 1e-9) {
+        if (spread() < before - cost - 1e-9) {
           assignment[a.id] = _lineAssign(pb);
           assignment[b.id] = _lineAssign(pa);
           improved = true;
@@ -400,6 +455,18 @@ class ComputePanelOptions {
   /// (byte-identical). Additive.
   final DiversityLibrary? diversityLibrary;
 
+  /// A previous solve's phase assignment for THIS panel (`circuitId → line`).
+  /// Listed single-phase ways are seeded onto their prior line and only leave it
+  /// for a gain above [phaseReassignThresholdA], so re-solving an unchanged
+  /// board keeps the phases already labelled in the field. Empty (the default)
+  /// ⇒ the balancer derives the assignment from scratch ⇒ byte-identical.
+  final Map<String, PhaseAssignment> priorAssignment;
+
+  /// How much the phase spread (A) must improve before a way is moved OFF the
+  /// line [priorAssignment] recorded for it. 0 (the default) keeps the plain
+  /// strict-improvement rule. A stability preference, not a standards value.
+  final double phaseReassignThresholdA;
+
   const ComputePanelOptions({
     this.feederLoadW = const {},
     this.panelSystems = const {},
@@ -411,6 +478,8 @@ class ComputePanelOptions {
     this.building,
     this.panelById = const {},
     this.diversityLibrary,
+    this.priorAssignment = const {},
+    this.phaseReassignThresholdA = 0,
   });
 }
 
@@ -800,6 +869,8 @@ ElectricalPanelResult computePanel(
         ),
     ],
     panel.system,
+    prior: opts.priorAssignment,
+    reassignThresholdA: opts.phaseReassignThresholdA,
   );
 
   final warnings = <ElectricalWarning>[];
@@ -1041,6 +1112,12 @@ ElectricalPanelResult computePanel(
 /// FOLD 2 (harmonics triplen-neutral oversize) is ALWAYS-ON but self-guarding:
 /// a panel with no single-phase non-linear load gets factor 1.0 ⇒ its neutral
 /// bar is byte-identical to the phase bar.
+///
+/// PHASE STABILITY is opt-in: [priorAssignments] (`panelId → (circuitId → line)`,
+/// normally the previous solve's assignment) seeds each panel's balancer and,
+/// with [phaseReassignThresholdA], stops a marginal gain from re-labelling an
+/// installed board. Empty / 0 (the defaults) ⇒ every panel balances from
+/// scratch ⇒ byte-identical.
 ElectricalSystemResult computeSystem(
   ElectricalStandardsProfile profile,
   ElectricalProject project, {
@@ -1049,6 +1126,8 @@ ElectricalSystemResult computeSystem(
   Current? originFaultLevel,
   double busbarClearingTimeS = busbarDefaultClearingTimeS,
   DiversityLibrary? diversityLibrary,
+  Map<String, Map<String, PhaseAssignment>> priorAssignments = const {},
+  double phaseReassignThresholdA = 0,
 }) {
   final panels = project.panels;
   final byId = {for (final p in panels) p.id: p};
@@ -1237,6 +1316,8 @@ ElectricalSystemResult computeSystem(
         building: building,
         panelById: byId,
         diversityLibrary: diversityLibrary,
+        priorAssignment: priorAssignments[id] ?? const {},
+        phaseReassignThresholdA: phaseReassignThresholdA,
       ),
     );
   }

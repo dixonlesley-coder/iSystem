@@ -24,6 +24,8 @@ ElectricalCircuitResult _circuit({
   bool threePhase = false,
   bool rcd = false,
   LoadKind loadKind = LoadKind.general,
+  BreakerClass breakerDeviceClass = BreakerClass.mcb,
+  double breakerRatingA = 16,
 }) =>
     ElectricalCircuitResult(
       circuitId: id,
@@ -32,9 +34,9 @@ ElectricalCircuitResult _circuit({
       designCurrent: const Current(10),
       threePhase: threePhase,
       phase: threePhase ? PhaseAssignment.threePhase : PhaseAssignment.l1,
-      breaker: const BreakerResult(
-        ratingA: Current(16),
-        deviceClass: BreakerClass.mcb,
+      breaker: BreakerResult(
+        ratingA: Current(breakerRatingA),
+        deviceClass: breakerDeviceClass,
         curve: BreakerCurve.c,
       ),
       cable: CableResult(
@@ -70,6 +72,9 @@ ElectricalCircuitResult _circuit({
 ElectricalPanelResult _panel({
   required List<ElectricalCircuitResult> circuits,
   int incomerPoles = 4,
+  BreakerClass incomerDeviceClass = BreakerClass.mcb,
+  double incomerRatingA = 63,
+  int spareWaysReserved = 0,
 }) {
   const inertBusbar = BusbarResult(
     widthMm: 0,
@@ -84,9 +89,9 @@ ElectricalPanelResult _panel({
     system: ElectricalSystem.threePhase,
     circuits: circuits,
     incomer: IncomerResult(
-      breaker: const BreakerResult(
-        ratingA: Current(63),
-        deviceClass: BreakerClass.mcb,
+      breaker: BreakerResult(
+        ratingA: Current(incomerRatingA),
+        deviceClass: incomerDeviceClass,
         curve: BreakerCurve.c,
       ),
       poles: incomerPoles,
@@ -98,6 +103,7 @@ ElectricalPanelResult _panel({
     connectedW: 0,
     demandW: 0,
     demandCurrent: const Current(0),
+    spareWaysReserved: spareWaysReserved,
     phaseBalance:
         const PhaseBalanceResult(l1: 0, l2: 0, l3: 0, imbalancePercent: 0),
     warnings: const [],
@@ -195,9 +201,50 @@ void main() {
     });
   });
 
+  group('deviceModules', () {
+    test('MCB: poles only, no RCD', () {
+      expect(deviceModules(deviceClass: 'MCB', poles: 3), 3);
+    });
+
+    test('MCB: poles + 2-module RCD header', () {
+      expect(
+        deviceModules(deviceClass: 'MCB', poles: 1, rcdRequired: true),
+        1 + 2,
+      );
+    });
+
+    test('anything non-MCCB (e.g. an unrecognised label) behaves like MCB', () {
+      expect(deviceModules(deviceClass: 'RCBO', poles: 2), 2);
+    });
+
+    test('MCCB ≤125 A → 90 mm frame → ceil(90/18) = 5 modules (poles ignored)',
+        () {
+      expect(deviceModules(deviceClass: 'MCCB', poles: 4, ratingA: 125), 5);
+      // pole count plays no part in an MCCB's width:
+      expect(deviceModules(deviceClass: 'MCCB', poles: 3, ratingA: 100), 5);
+    });
+
+    test('MCCB ≤250 A → 105 mm frame → ceil(105/18) = ceil(5.8333) = 6 modules',
+        () {
+      expect(deviceModules(deviceClass: 'MCCB', poles: 4, ratingA: 200), 6);
+      // exactly on the band boundary still uses the 105 mm frame:
+      expect(deviceModules(deviceClass: 'MCCB', poles: 4, ratingA: 250), 6);
+    });
+
+    test('MCCB >250 A → 140 mm frame → ceil(140/18) = ceil(7.7778) = 8 modules',
+        () {
+      expect(deviceModules(deviceClass: 'MCCB', poles: 4, ratingA: 400), 8);
+    });
+
+    test('deviceClass match is case-insensitive', () {
+      expect(deviceModules(deviceClass: 'mccb', poles: 4, ratingA: 200), 6);
+    });
+  });
+
   group('estimatePanelModules', () {
     test('3ph incomer + 20 1ph ways + 3 RCD ways = 30 modules', () {
-      // incomer poles 4 + 20·(1 pole) + 3·(2 RCD modules) = 4 + 20 + 6 = 30
+      // incomer MCB poles 4 (no RCD) + 20·(1 pole) + 3·(2 RCD modules)
+      //   = 4 + 20 + 6 = 30
       final circuits = [
         for (var i = 0; i < 20; i++)
           _circuit(id: 'c$i', csaMm2: 2.5, cores: 3, rcd: i < 3),
@@ -205,11 +252,43 @@ void main() {
       final panel = _panel(circuits: circuits, incomerPoles: 4);
       expect(estimatePanelModules(panel), 30);
     });
+
+    test('MCCB incomer (200 A) contributes frame-band modules, not poles', () {
+      // incomer MCCB 200 A ≤ 250 → 105 mm frame → ceil(105/18) = 6 modules
+      //   (the incomer's 4 poles are NOT added — an MCCB is sized by frame,
+      //   not pole count)
+      // + 2 ways × 1 pole (MCB, no RCD) = 2
+      // total = 6 + 2 = 8
+      final circuits = [
+        _circuit(id: 'c1', csaMm2: 2.5, cores: 3),
+        _circuit(id: 'c2', csaMm2: 2.5, cores: 3),
+      ];
+      final panel = _panel(
+        circuits: circuits,
+        incomerPoles: 4,
+        incomerDeviceClass: BreakerClass.mccb,
+        incomerRatingA: 200,
+      );
+      expect(estimatePanelModules(panel), 8);
+    });
+
+    test('reserved spare ways each add 1 module', () {
+      // incomer MCB poles 4 + 2 ways × 1 pole = 4 + 2 = 6, + 3 spare ways = 9
+      final circuits = [
+        _circuit(id: 'c1', csaMm2: 2.5, cores: 3),
+        _circuit(id: 'c2', csaMm2: 2.5, cores: 3),
+      ];
+      final panel =
+          _panel(circuits: circuits, incomerPoles: 4, spareWaysReserved: 3);
+      expect(estimatePanelModules(panel), 9);
+    });
   });
 
   group('estimateEnclosure', () {
     test('30 modules + 250 W → 750×500×200, 1.5 mm, forced, over-temp', () {
       // modules = 30 → rows = ceil(30/24) = 2
+      // widthModules = min(30, 24) = 24 (a 30-way board fills, then overflows,
+      //   the first 24-module row, so the widest row is still the full row)
       // width  = roundUp(24·18 + 2·150, 50) = roundUp(732, 50) = 750
       // height = roundUp(2·150 + 200, 50) = roundUp(500, 50) = 500
       // depth  = 200 (wall) ; largest 750 → sheet (≤1000) = 1.5
@@ -236,12 +315,15 @@ void main() {
       expect(e.verifyItems, isNotEmpty);
     });
 
-    test('small panel + low heat → 750×350×200, natural, within temp', () {
+    test('small panel + low heat → 450×350×200, natural, within temp', () {
       // 1ph incomer poles 2 + 4 1ph ways = 6 modules → rows 1
-      // width 750 ; height = roundUp(1·150+200, 50) = roundUp(350,50) = 350
-      // A_eff = 0.75·0.35 + 2·(0.75·0.20) + 2·(0.35·0.20)
-      //       = 0.2625 + 0.300 + 0.140 = 0.7025 m²
-      // rise = 30 / (5.5·0.7025) = 30 / 3.86375 = 7.8 K ≤ 35 → within
+      // widthModules = min(6, 24) = 6 (the widest ACTUAL row — a 6-module
+      //   board is not sized for a full 24-module row it doesn't have)
+      // width  = roundUp(6·18 + 2·150, 50) = roundUp(408, 50) = 450
+      // height = roundUp(1·150+200, 50) = roundUp(350,50) = 350
+      // A_eff = 0.45·0.35 + 2·(0.45·0.20) + 2·(0.35·0.20)
+      //       = 0.1575 + 0.180 + 0.140 = 0.4775 m²
+      // rise = 30 / (5.5·0.4775) = 30 / 2.62625 = 11.4 K ≤ 35 → within
       // 30 W → natural (<50)
       final circuits = [
         for (var i = 0; i < 4; i++) _circuit(id: 'c$i', csaMm2: 2.5, cores: 3),
@@ -250,11 +332,11 @@ void main() {
       final e = estimateEnclosure(panel, heat: const Power(30));
       expect(e.modules, 6);
       expect(e.rows, 1);
-      expect(e.widthMm, 750);
+      expect(e.widthMm, 450);
       expect(e.heightMm, 350);
       expect(e.depthMm, 200);
       expect(e.ventilation, Ventilation.natural);
-      expect(e.tempRiseK, 7.8);
+      expect(e.tempRiseK, 11.4);
       expect(e.withinTempLimit, isTrue);
     });
 
