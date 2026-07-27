@@ -1204,8 +1204,25 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (25 A feeder vs a 27.1 A / 24.3%-imbalance board in the whole-building sim that found it) — surfaced
   on the parent's feeder way (locatable), fanning into Review via the generic `electrical:<code>`
   kind. Goldens 05/08/11 re-captured (the sample project is an LV service ⇒ head-only spine).
-  Recorded follow-ups: riser feeder-branch label collision when boards share a floor band; the
-  device-kA fallback prints 25kA on domestic boards (wants a service-size-derived fault level).
+  **Both recorded follow-ups HAVE SINCE LANDED (ultracode multi-agent batch):** (1) **riser
+  feeder-label collision pass** — `buildElectricalRiser`'s feeder annotations now go through a
+  private two-pass placer (`_RiserLabelPlacer`, the mech-riser B5 idiom: per-size char-advance
+  collision boxes via the public `kElectricalRiserLabelCharW`, an escape ladder [clear branch
+  span → a right-of-channel stacked annotation column], thin `SldLine` leaders back to the
+  branch, never drops a label); an uncollided label keeps its exact legacy anchor ⇒ goldens
+  byte-identical; sheet bounds widen only when displacement happened. (2) **service-size-derived
+  device kA** — pure `estimatedServiceFaultLevelA(project)` in `electrical/fault.dart`: a declared
+  `transformerKva` gives the transformer-impedance-limited LV fault (`Isc = S/(√3·400·0.05 pu)`,
+  capped 50 kA, `// VERIFY`), a declared `supplyCapacityVa` gives conservative service-entrance
+  rungs (≤16.5 kVA → 6 kA, ≤197 kVA → 10 kA, above → 16 kA, all `// VERIFY`), nothing declared →
+  null (caller keeps the flat 16 kA ⇒ untouched projects byte-identical). Wired as the middle
+  tier of the Fold-1 fallback chain (explicit `originFaultLevelA` → estimate → 16 kA) in
+  `electricalResultProvider`, the Service & Earthing field (shows the EFFECTIVE default), the
+  EN+ID note, AND — the review-caught seam — `computeAdvancedStudy` now resolves its `faultStudy`
+  origin through the SAME chain (new optional `originFaultLevel` param), so the schedule's device
+  kA tokens can never diverge from the bus-withstand basis: a 5500 VA house prints `MCB 6A 1ph
+  6kA` / `Icw 6.1kA` instead of 25 kA devices. `serviceFaultEstimateVerifyItems` carries the
+  provenance debt (wiring it into the report honesty surfaces is the remaining follow-up).
   **Feedback loop + states landed (UI-only, goldens 01–07 shift):** silent/empty/
   colour-only states now give explicit feedback. The `IssuesCard` renders a positive
   **"No design issues found"** success card (custom-painted check) instead of

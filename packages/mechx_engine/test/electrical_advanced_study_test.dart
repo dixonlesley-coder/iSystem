@@ -11,6 +11,8 @@ import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
+import 'package:mechx_engine/electrical/fault.dart'
+    show estimatedServiceFaultLevelA;
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/power_oneline.dart';
@@ -285,5 +287,67 @@ void main() {
     expect(mdp.submeter, isTrue);
     expect(mdp.heatW!.watts, 320);
     expect(mdp.circuits.single.starterType, StarterType.starDelta);
+  });
+
+  group('origin-fault resolution matches the Fold-1 chain (seam guard)', () {
+    // A domestic LV service: 5500 VA declared, nothing else. The service-size
+    // estimate is 6 kA (smallServiceFaultKa) — the advanced study's fault pass
+    // must run at THAT origin, not the flat 16 kA default, or the device kA
+    // the schedule prints diverges from the bus-withstand basis (the defect
+    // this guard pins closed).
+    const house = ElectricalProject(
+      id: 'h',
+      name: 'House',
+      supplyCapacityVa: ApparentPower(5500),
+      panels: [
+        ElectricalPanel(
+          id: 'PR',
+          name: 'Panel Rumah',
+          system: ElectricalSystem.singlePhase,
+          voltage: Voltage(220),
+          circuits: [
+            ElectricalCircuit(
+                id: 'c1', name: 'Sockets', loadKind: LoadKind.socket,
+                loadW: 2000, length: Length(10)),
+          ],
+        ),
+      ],
+    );
+
+    test('a declared daya tersambung drives the advanced fault study', () {
+      final sys = computeSystem(const PuilProfile(), house);
+      final study = computeAdvancedStudy(const PuilProfile(), house, sys);
+      // The origin panel's prospective fault is exactly the service estimate
+      // (6 kA; no motor infeed in this fixture), not the historic 16 kA.
+      final expected =
+          estimatedServiceFaultLevelA(house)!.amperes / 1000; // 6.0
+      expect(expected, 6.0);
+      expect(study.fault.panels['PR']!.prospectiveFaultkA, expected);
+    });
+
+    test('an explicit project setting still wins over the estimate', () {
+      final withExplicit = ElectricalProject(
+        id: house.id,
+        name: house.name,
+        supplyCapacityVa: house.supplyCapacityVa,
+        originFaultLevelA: const Current(20000),
+        panels: house.panels,
+      );
+      final sys = computeSystem(const PuilProfile(), withExplicit);
+      final study =
+          computeAdvancedStudy(const PuilProfile(), withExplicit, sys);
+      expect(study.fault.panels['PR']!.prospectiveFaultkA, 20.0);
+    });
+
+    test('nothing declared keeps the historic 16 kA (byte-identity)', () {
+      final bare = ElectricalProject(
+        id: house.id,
+        name: house.name,
+        panels: house.panels,
+      );
+      final sys = computeSystem(const PuilProfile(), bare);
+      final study = computeAdvancedStudy(const PuilProfile(), bare, sys);
+      expect(study.fault.panels['PR']!.prospectiveFaultkA, 16.0);
+    });
   });
 }

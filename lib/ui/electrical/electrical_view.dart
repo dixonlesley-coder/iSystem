@@ -21,6 +21,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
+import 'package:mechx_engine/electrical/fault.dart'
+    show defaultLvUtilityFaultKa, estimatedServiceFaultLevelA;
 import 'package:mechx_engine/electrical/geo_length.dart' show LayoutPos;
 import 'package:mechx_engine/electrical/lightning.dart' show LpsLevelLabel;
 import 'package:mechx_engine/electrical/load_kind.dart';
@@ -1480,6 +1482,16 @@ class ElectricalServiceInspector extends ConsumerWidget {
     final duties = ref.watch(mepEquipmentLoadsProvider);
     final dutyFeedOn = ref.watch(mepDutyFeedEnabledProvider);
 
+    // Same fallback chain as electricalResultProvider's originFaultLevel: an
+    // explicit setting wins, else a declared service size (transformer kVA /
+    // connection capacity) drives a size-appropriate estimate, else the flat
+    // app default — so the field shows the fault level the solve actually uses.
+    final effectiveOriginFaultLevelKa = project.originFaultLevelA != null
+        ? project.originFaultLevelA!.amperes / 1000
+        : (estimatedServiceFaultLevelA(project)?.amperes ??
+                defaultLvUtilityFaultKa * 1000) /
+            1000;
+
     return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -1534,9 +1546,7 @@ class ElectricalServiceInspector extends ConsumerWidget {
                         StringKey.electricalOriginFaultLevel,
                       ),
                       child: ElectricalNumInput(
-                        value: project.originFaultLevelA != null
-                            ? project.originFaultLevelA!.amperes / 1000
-                            : 16,
+                        value: effectiveOriginFaultLevelKa,
                         onChanged: (v) =>
                             ctrl.setOriginFaultLevel(Current(v * 1000)),
                       ),

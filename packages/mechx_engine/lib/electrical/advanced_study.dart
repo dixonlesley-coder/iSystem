@@ -38,7 +38,12 @@ import 'control/starter.dart'
 import 'diversity_library.dart' show diversityLibraryVerifyItems;
 import 'electrode.dart' show ElectrodeDesign, designElectrode;
 import 'enclosure.dart' show EnclosureResult, estimateEnclosure;
-import 'fault.dart' show FaultStudyResult, faultStudy;
+import 'fault.dart'
+    show
+        FaultStudyResult,
+        defaultLvUtilityFaultKa,
+        estimatedServiceFaultLevelA,
+        faultStudy;
 import 'harmonics.dart' show HarmonicsResult, ThdBand, estimateHarmonics;
 import 'lightning.dart' show LightningRisk, assessLightning, collectionArea;
 import 'load_kind.dart' show LoadKind;
@@ -162,6 +167,7 @@ AdvancedStudy computeAdvancedStudy(
   ElectricalProject project,
   ElectricalSystemResult sys, {
   Map<String, double> priceList = const {},
+  Current? originFaultLevel,
 }) {
   final modelById = {for (final p in project.panels) p.id: p};
 
@@ -193,7 +199,21 @@ AdvancedStudy computeAdvancedStudy(
   }
 
   // 2 ── Fault study (drives the arc-flash fault levels + breaking-capacity).
-  final fault = faultStudy(sys, project, profile);
+  // Resolved with the SAME chain the app's Fold-1 withstand uses — an explicit
+  // [originFaultLevel] argument, else the project's declared setting, else the
+  // service-size estimate, else the flat default — so the device kA the
+  // schedule prints can never diverge from the bus-withstand basis again (a
+  // domestic board used to print 25 kA devices over a 6 kA bus). A project
+  // declaring nothing resolves to the historic 16 kA ⇒ byte-identical.
+  final fault = faultStudy(
+    sys,
+    project,
+    profile,
+    originFaultLevel: originFaultLevel ??
+        project.originFaultLevelA ??
+        estimatedServiceFaultLevelA(project) ??
+        const Current(defaultLvUtilityFaultKa * 1000),
+  );
 
   // Origin / service-root panel (first root-first id that is utility-fed).
   final originPanelId = _originPanelId(sys, modelById);
