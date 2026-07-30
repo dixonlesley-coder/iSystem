@@ -3223,6 +3223,13 @@ class _ResultsSection extends ConsumerWidget {
     final zonesOk = zoneStatics.every((z) => z.withinLimit);
     final totalLength =
         bom.fold<double>(0, (sum, line) => sum + line.totalLength.meters);
+    // L1: an uncalibrated sheet has no measurable length, so a drawn run's BOM
+    // line totals an exact 0 — that must never read as a MEASURED zero. Any
+    // such line flips the totals row to an honest "measured + unmeasured"
+    // split instead of implying the whole BOM was 0.0 m.
+    bool isUnmeasured(BomLine line) =>
+        line.totalLength.meters == 0 && line.segmentCount > 0;
+    final hasUnmeasuredBomLine = bom.any(isUnmeasured);
 
     // L1: keep the BOM row leader short enough that it never fights the
     // quantity for space. When every listed line shares ONE service the
@@ -3274,7 +3281,7 @@ class _ResultsSection extends ConsumerWidget {
           headlineCard = ResultCard(
             headline: '${zones.length} zone${zones.length == 1 ? '' : 's'}'
                 ' · ${worstZone.toStringAsFixed(0)} kPa',
-            label: 'PRV zones (worst)',
+            label: 'PRV zones (worst) · zone static',
             verdict: zonesOk ? 'OK' : 'over',
             verdictColor: zonesOk ? colors.success : colors.danger,
           );
@@ -3373,7 +3380,13 @@ class _ResultsSection extends ConsumerWidget {
           if (hwr != null)
             _kvRow(context, 'HW recirc',
                 '${hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2)} L/s · ${hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
-          _kvRow(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
+          _kvRow(
+            context,
+            'BOM total',
+            hasUnmeasuredBomLine
+                ? '${totalLength.toStringAsFixed(1)} m + unmeasured'
+                : '${totalLength.toStringAsFixed(1)} m',
+          ),
           if (bom.isNotEmpty) ...[
             const SizedBox(height: MechXSpacing.xs),
             // Cap the per-line listing so a big BOM doesn't push the whole panel
@@ -3383,7 +3396,9 @@ class _ResultsSection extends ConsumerWidget {
               _kvRow(
                 context,
                 bomLeader(line),
-                '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
+                isUnmeasured(line)
+                    ? 'unmeasured ×${line.segmentCount}'
+                    : '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
               ),
             if (bom.length > _kBomInlineCap)
               _kvRow(

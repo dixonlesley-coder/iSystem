@@ -129,81 +129,11 @@ class ProjectsScreen extends ConsumerWidget {
               const SizedBox(height: MechXSpacing.md),
               // Per-artifact rows, grouped under labelled disclosures so the
               // hub reads as a scannable set of clusters instead of one flat
-              // wall of same-weight buttons.
-              DisclosureSection(
-                name: context.strings(StringKey.projectsExportGroupDrawings),
-                defaultExpanded: false,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: MechXButton(
-                        label:
-                            context.strings(StringKey.inspectorExportDrawingDxf),
-                        onPressed: () => exportDrawingDxf(ref),
-                      ),
-                    ),
-                    const SizedBox(height: MechXSpacing.xs),
-                    _ExportRow(
-                      label: context.strings(StringKey.inspectorExportDrawingPdf),
-                      hint: context
-                          .strings(StringKey.projectsExportDrawingPdfHint),
-                      onPressed: () => exportDrawingPdf(ref),
-                    ),
-                    const SizedBox(height: MechXSpacing.xs),
-                    _ExportRow(
-                      label: context
-                          .strings(StringKey.inspectorExportAnnotatedPlanPdf),
-                      hint: context.strings(
-                          StringKey.projectsExportAnnotatedPlanPdfHint),
-                      onPressed: () => exportAnnotatedPlanPdf(ref),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: MechXSpacing.sm),
-              DisclosureSection(
-                name: context.strings(StringKey.projectsExportGroupReports),
-                defaultExpanded: false,
-                child: Wrap(
-                  spacing: MechXSpacing.xs,
-                  runSpacing: MechXSpacing.xs,
-                  children: [
-                    MechXButton(
-                      label:
-                          context.strings(StringKey.inspectorExportCalcReportMd),
-                      onPressed: () => exportCalcReport(ref),
-                    ),
-                    MechXButton(
-                      label: context
-                          .strings(StringKey.inspectorExportCalcReportPdfBtn),
-                      onPressed: () => exportCalcReportPdf(ref),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: MechXSpacing.sm),
-              DisclosureSection(
-                name: context.strings(StringKey.projectsExportGroupData),
-                defaultExpanded: false,
-                child: Wrap(
-                  spacing: MechXSpacing.xs,
-                  runSpacing: MechXSpacing.xs,
-                  children: [
-                    MechXButton(
-                      label: context.strings(
-                          StringKey.inspectorExportEquipmentScheduleMd),
-                      onPressed: () => exportEquipmentSchedule(ref),
-                    ),
-                    MechXButton(
-                      label: context.strings(
-                          StringKey.inspectorExportEquipmentSchedulePdfBtn),
-                      onPressed: () => exportEquipmentSchedulePdf(ref),
-                    ),
-                  ],
-                ),
-              ),
+              // wall of same-weight buttons. P1: each group header names how
+              // many exports it holds — an inventory count derived from the
+              // group's own action list, never a hardcoded literal, so it can
+              // never drift from what's actually inside.
+              _exportGroups(context, ref),
             ],
           ),
         ),
@@ -267,6 +197,96 @@ class ProjectsScreen extends ConsumerWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// P1 — the three per-artifact export groups (Drawings / Reports / Data),
+  /// each header carrying a `(N)` count of the exports it actually holds so
+  /// a collapsed section never hides how much is inside. N is the real
+  /// length of that group's own action list — never a hardcoded literal —
+  /// so it can't drift if a group gains or loses an export.
+  Widget _exportGroups(BuildContext context, WidgetRef ref) {
+    final drawingsActions = <Widget>[
+      Align(
+        alignment: Alignment.centerLeft,
+        child: MechXButton(
+          label: context.strings(StringKey.inspectorExportDrawingDxf),
+          onPressed: () => exportDrawingDxf(ref),
+        ),
+      ),
+      _ExportRow(
+        label: context.strings(StringKey.inspectorExportDrawingPdf),
+        hint: context.strings(StringKey.projectsExportDrawingPdfHint),
+        onPressed: () => exportDrawingPdf(ref),
+      ),
+      _ExportRow(
+        label: context.strings(StringKey.inspectorExportAnnotatedPlanPdf),
+        hint: context.strings(StringKey.projectsExportAnnotatedPlanPdfHint),
+        onPressed: () => exportAnnotatedPlanPdf(ref),
+      ),
+    ];
+    final reportsActions = <Widget>[
+      MechXButton(
+        label: context.strings(StringKey.inspectorExportCalcReportMd),
+        onPressed: () => exportCalcReport(ref),
+      ),
+      MechXButton(
+        label: context.strings(StringKey.inspectorExportCalcReportPdfBtn),
+        onPressed: () => exportCalcReportPdf(ref),
+      ),
+    ];
+    final dataActions = <Widget>[
+      MechXButton(
+        label: context.strings(StringKey.inspectorExportEquipmentScheduleMd),
+        onPressed: () => exportEquipmentSchedule(ref),
+      ),
+      MechXButton(
+        label:
+            context.strings(StringKey.inspectorExportEquipmentSchedulePdfBtn),
+        onPressed: () => exportEquipmentSchedulePdf(ref),
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DisclosureSection(
+          name: '${context.strings(StringKey.projectsExportGroupDrawings)}'
+              ' (${drawingsActions.length})',
+          defaultExpanded: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < drawingsActions.length; i++) ...[
+                if (i > 0) const SizedBox(height: MechXSpacing.xs),
+                drawingsActions[i],
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        DisclosureSection(
+          name: '${context.strings(StringKey.projectsExportGroupReports)}'
+              ' (${reportsActions.length})',
+          defaultExpanded: false,
+          child: Wrap(
+            spacing: MechXSpacing.xs,
+            runSpacing: MechXSpacing.xs,
+            children: reportsActions,
+          ),
+        ),
+        const SizedBox(height: MechXSpacing.sm),
+        DisclosureSection(
+          name: '${context.strings(StringKey.projectsExportGroupData)}'
+              ' (${dataActions.length})',
+          defaultExpanded: false,
+          child: Wrap(
+            spacing: MechXSpacing.xs,
+            runSpacing: MechXSpacing.xs,
+            children: dataActions,
           ),
         ),
       ],

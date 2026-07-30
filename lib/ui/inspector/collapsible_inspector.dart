@@ -51,11 +51,25 @@ class CollapsibleInspector extends ConsumerWidget {
       // container width animates between collapsed and expanded.
       child: ClipRect(
         child: OverflowBox(
-          alignment: Alignment.centerLeft,
+          // R-4: TOP-left, not center-left. A shrink-wrapping body (e.g. the
+          // Riser inspector's SingleChildScrollView-around-a-Column) used to
+          // get vertically centered inside the full-height box, leaving dead
+          // space above its first section. `crossAxisAlignment.stretch`
+          // below does the real work (it forces the body to the full
+          // available height so it top-aligns internally); `topLeft` here is
+          // the matching anchor once stretch makes that moot in practice.
+          alignment: Alignment.topLeft,
           minWidth: 0,
           // strip + hairline border + body.
           maxWidth: expandedWidth + CollapsibleInspector.collapsedWidth + 1,
           child: Row(
+            // Stretch the strip / hairline / body to the full available
+            // height. A tall body (Layout/electrical) is unaffected — it
+            // already filled the height. A short, shrink-wrapped body now
+            // gets a tight height too, so its own top-aligned Column/
+            // SingleChildScrollView sits flush with the panel top instead of
+            // floating in the middle of unused vertical space.
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _ToggleStrip(
                 collapsed: collapsed,

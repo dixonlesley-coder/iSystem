@@ -63,11 +63,12 @@ class ReviewHub extends ConsumerWidget {
         // severity, locatable) and the compliance card's 'Electrical circuit
         // sizing' row. Panels-sized + BOM line items stay unique.
         //
-        // ONE stat grid (V1): all five figures in a single HubStatRow call so
-        // they render as one consistent tile system (the cut-plan trio simply
-        // joins the grid when a plan exists) instead of two differently-sized
-        // rows.
-        HubStatRow(
+        // ONE stat grid (V1): all five figures in a single _StatGrid call so
+        // they render as one consistent, BALANCED tile system (the cut-plan
+        // trio simply joins the grid when a plan exists) — equal-width tiles
+        // filling the row rather than wrapping a lone trailing tile onto its
+        // own line, degrading to a wrapped grid only when genuinely narrow.
+        _StatGrid(
           stats: [
             (s(StringKey.reviewStatPanelsSized), '$panels'),
             (s(StringKey.reviewStatBomLineItems), '${bom.length}'),
@@ -378,6 +379,80 @@ class _CutPlanCard extends ConsumerWidget {
         ],
       ),
     );
+  }
+}
+
+/// A balanced grid of labelled figures (V1): unlike [HubStatRow] (which
+/// floors to a fixed minimum tile width and can strand a lone trailing tile
+/// on its own row — the 4+1 wrap this replaces), [_StatGrid] first tries to
+/// fit every stat as an EQUAL-width tile filling one row, and only falls back
+/// to a wrapped multi-row grid when the hub is genuinely too narrow for that.
+/// Display-only; same tile visuals as [HubStatRow].
+class _StatGrid extends StatelessWidget {
+  final List<(String, String)> stats;
+  const _StatGrid({required this.stats});
+
+  /// A tile never narrows below this — below it we wrap instead of cramming
+  /// every stat onto one row.
+  static const double _minTileWidth = 110;
+
+  @override
+  Widget build(BuildContext context) {
+    if (stats.isEmpty) return const SizedBox.shrink();
+    final colors = context.colors;
+    final type = context.type;
+
+    Widget tile(String label, String value) => Container(
+          padding: const EdgeInsets.all(MechXSpacing.md),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: MechXRadii.card,
+            border: Border.all(color: colors.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(value,
+                  style: MechXTypography.tabular(type.display)
+                      .copyWith(color: colors.textPrimary)),
+              const SizedBox(height: MechXSpacing.xxs),
+              Text(label, style: type.caption.copyWith(color: colors.textMuted)),
+            ],
+          ),
+        );
+
+    return LayoutBuilder(builder: (context, constraints) {
+      const gutter = MechXSpacing.md;
+      final width = constraints.maxWidth.isFinite ? constraints.maxWidth : 720.0;
+
+      // Prefer one balanced row: every tile the same width, filling the row.
+      final naturalWidth = (width - (stats.length - 1) * gutter) / stats.length;
+      if (naturalWidth >= _minTileWidth) {
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var i = 0; i < stats.length; i++) ...[
+              if (i > 0) const SizedBox(width: gutter),
+              Expanded(child: tile(stats[i].$1, stats[i].$2)),
+            ],
+          ],
+        );
+      }
+
+      // Genuinely narrow: degrade to a wrapped grid at the fixed minimum.
+      final fit = ((width + gutter) / (_minTileWidth + gutter)).floor();
+      final columns = fit.clamp(1, stats.length);
+      final tileWidth =
+          ((width - (columns - 1) * gutter) / columns).floorToDouble();
+      return Wrap(
+        spacing: gutter,
+        runSpacing: gutter,
+        children: [
+          for (final (label, value) in stats)
+            SizedBox(width: tileWidth, child: tile(label, value)),
+        ],
+      );
+    });
   }
 }
 

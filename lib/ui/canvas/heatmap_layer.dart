@@ -164,6 +164,13 @@ class HeatmapLegend extends StatelessWidget {
           children: [
             Text('Residual pressure',
                 style: type.caption.copyWith(color: colors.textSecondary)),
+            // L-2a: the Results card beside this legend verdicts on ZONE
+            // STATIC, so each surface must name its own basis — this one is
+            // the residual AT FIXTURES, not the zone-wide static figure.
+            Text('residual at fixtures',
+                maxLines: 1,
+                softWrap: false,
+                style: type.micro.copyWith(color: colors.textMuted)),
             const SizedBox(height: MechXSpacing.xs),
             // The ramp bar stretches to the widest line (title / label row). A
             // thin ink tick marks the absolute target residual on the gradient

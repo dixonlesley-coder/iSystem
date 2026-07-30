@@ -819,10 +819,13 @@ class _TopBar extends ConsumerWidget {
     final fileName =
         currentPath?.split(Platform.pathSeparator).last;
 
-    // J3: the zoom pill reflects the Layout sheet's viewport — the only zoom
-    // this bar can read truthfully. On the Riser/Electrical workspaces (whose
-    // real zoom lives in their own canvases) and on non-design screens, show
-    // '—' rather than a stale, shared Layout number.
+    // J3 (revised): the zoom pill reflects the Layout sheet's viewport — the
+    // only zoom this bar can read truthfully. On the Riser/Electrical
+    // workspaces (whose real zoom lives in their own canvases, which already
+    // carry their own zoom readouts) and on non-design screens, the pill is
+    // OMITTED entirely rather than showing a literal '—': those canvases own
+    // their zoom, and an em-dash readout reads as broken chrome, not as
+    // "not applicable". Absence is the honest state.
     final section = ref.watch(shellSectionProvider);
     final view = ref.watch(workspaceViewProvider);
     final onLayout =
@@ -894,22 +897,26 @@ class _TopBar extends ConsumerWidget {
             const SizedBox(width: MechXSpacing.sm),
             // Actions sit flush-right. The zoom read-out is a quiet pill: a
             // soft tinted fill carries it, no hairline border — less visual
-            // mass than a fully-outlined chip (HIG).
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: MechXSpacing.sm,
-                vertical: MechXSpacing.xxs,
+            // mass than a fully-outlined chip (HIG). Only meaningful on
+            // Layout (see the J3 note above) — omitted entirely elsewhere.
+            if (onLayout) ...[
+              Container(
+                key: const ValueKey('zoom-pill'),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: MechXSpacing.sm,
+                  vertical: MechXSpacing.xxs,
+                ),
+                decoration: BoxDecoration(
+                  color: colors.background,
+                  borderRadius: MechXRadii.control,
+                ),
+                child: Text(
+                  zoom,
+                  style: type.mono.copyWith(color: colors.textSecondary),
+                ),
               ),
-              decoration: BoxDecoration(
-                color: colors.background,
-                borderRadius: MechXRadii.control,
-              ),
-              child: Text(
-                zoom,
-                style: type.mono.copyWith(color: colors.textSecondary),
-              ),
-            ),
-            const SizedBox(width: MechXSpacing.sm),
+              const SizedBox(width: MechXSpacing.sm),
+            ],
             MechXButton(
               label: context.strings(StringKey.shellOpen),
               onPressed: () => openProject(context, ref),

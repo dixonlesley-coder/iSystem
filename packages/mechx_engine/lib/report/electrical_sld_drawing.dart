@@ -1766,6 +1766,12 @@ const int kRiserFanMax = 4;
 const double _fanRowH = 11;
 const double _fanColH = (kRiserFanMax + 1) * _fanRowH + 6;
 
+/// Drawn size of a fan-out stub label — also the font-size term in its
+/// name-truncation budget (`kElectricalRiserLabelCharW * _fanLabelSize`),
+/// consistent with the feeder-annotation collision boxes' own font-scaled
+/// advance.
+const double _fanLabelSize = 6;
+
 /// Format a true elevation (m) as an FFL tag like `+12.50` / `-3.00`.
 String _ffl(double meters) {
   final s = meters.abs().toStringAsFixed(2);
@@ -2186,6 +2192,21 @@ SldSheet buildElectricalRiser({
     }
   }
 
+  // Per-panel horizontal budget for the load-way fan-out stub labels below the
+  // box: the clear space from the stub label's x to the NEXT panel's box left
+  // edge in the same band (or the sheet's right margin, `sheetMaxX`, for the
+  // band's last panel) — so a name only truncates as far as a neighbour
+  // actually forces, never shorter than the old fixed 14 chars. `byFloor`'s
+  // per-band lists are already in left-to-right x order (panels are placed by
+  // walking them in that order above).
+  final fanRightLimit = <String, double>{};
+  for (final ids in byFloor.values) {
+    for (var i = 0; i < ids.length; i++) {
+      fanRightLimit[ids[i]] =
+          i + 1 < ids.length ? panelX[ids[i + 1]]! : sheetMaxX;
+    }
+  }
+
   // ── Panel nodes (drawn last, over the grid) ─────────────────────────────────
   for (final id in result.order) {
     final p = result.panels[id];
@@ -2212,22 +2233,38 @@ SldSheet buildElectricalRiser({
     final shown = loadWays.length > kRiserFanMax
         ? loadWays.sublist(0, kRiserFanMax)
         : loadWays;
+    // The stub label starts at x+26; budget its TOTAL printed width (name +
+    // the ' <rating>A[ 3ph]' suffix — the suffix is drawn too, so it must
+    // count against the same box) so the label's measured width (chars x
+    // size x kElectricalRiserLabelCharW, the SAME per-char advance the
+    // feeder-annotation collision boxes use) never crosses the clear space to
+    // the next panel/fan column. The NAME portion alone is floored at the
+    // original fixed 14 chars so it's never shorter than before.
+    const fanClearanceX = 10.0;
+    final fanAvailX =
+        (fanRightLimit[id] ?? sheetMaxX) - (x + 26) - fanClearanceX;
+    const fanCharW = _fanLabelSize * kElectricalRiserLabelCharW;
+    final fanTotalBudget =
+        fanCharW <= 0 ? 14 : (fanAvailX / fanCharW).floor();
     var row = 0;
     for (final cr in shown) {
       final sy = y + _ovH + 4 + row * _fanRowH;
       prims.add(SldLine(x + 8, sy, x + 22, sy, weight: SldWeight.thin, role: role));
-      final nm = _fanOutLabel(cr.name);
       final ph = cr.threePhase ? ' 3ph' : '';
-      prims.add(SldLabel(x + 26, sy + 3,
-          '$nm ${_num(cr.breaker.ratingA.amperes)}A$ph',
-          size: 6, role: role));
+      final suffix = ' ${_num(cr.breaker.ratingA.amperes)}A$ph';
+      final fanNameBudget =
+          math.max(14, fanTotalBudget - suffix.length);
+      final nm = _fanOutLabel(cr.name, maxLen: fanNameBudget);
+      prims.add(SldLabel(x + 26, sy + 3, '$nm$suffix',
+          size: _fanLabelSize, role: role));
       row++;
     }
     if (loadWays.length > kRiserFanMax) {
       final more = loadWays.length - kRiserFanMax;
       final sy = y + _ovH + 4 + row * _fanRowH;
       prims.add(SldLine(x + 8, sy, x + 22, sy, weight: SldWeight.thin, role: role));
-      prims.add(SldLabel(x + 26, sy + 3, '+$more more', size: 6, role: role));
+      prims.add(SldLabel(x + 26, sy + 3, '+$more more',
+          size: _fanLabelSize, role: role));
     }
   }
 

@@ -817,7 +817,7 @@ const Map<StringKey, String> _en = {
   StringKey.commercialExportProposalMd: 'Export proposal (Markdown)',
 
   // Commercial workspace — electrical BOM.
-  StringKey.commercialBomTitle: 'BOM',
+  StringKey.commercialBomTitle: 'Electrical BOM',
   StringKey.commercialColQty: 'Qty',
   StringKey.commercialColPart: 'Part',
   StringKey.commercialColBrand: 'Brand',
@@ -1683,7 +1683,7 @@ const Map<StringKey, String> _id = {
   StringKey.commercialExportProposalMd: 'Ekspor proposal (Markdown)',
 
   // Commercial workspace — electrical BOM.
-  StringKey.commercialBomTitle: 'BOM',
+  StringKey.commercialBomTitle: 'BOM elektrikal',
   StringKey.commercialColQty: 'Jml',
   StringKey.commercialColPart: 'Komponen',
   StringKey.commercialColBrand: 'Merek',

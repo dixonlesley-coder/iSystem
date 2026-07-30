@@ -1241,7 +1241,16 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   + electrical feel (the `0.0 m ×5` uncalibrated-length rows, the overpainting feeder labels at
   one outlet [`…3ph h`], heatmap basis captions, the bare 'BOM' heading), B label/overflow
   robustness (chip-row overflow, live riser label collisions, LOD hysteresis), C chrome polish.
-  The phase-colour + LOD items above are its landed Wave 0.
+  The phase-colour + LOD items above are its landed Wave 0. **ALL THREE WAVES HAVE SINCE LANDED**
+  (2026-07-30, one 7-agent parallel batch — see the §15 row): staggered feeder labels (pure
+  `feederLabelAnchors`, single-feeder byte-identical), the motion-gated LOD crossfade (visual-only,
+  `panelLodFor` stays pure), the off-Layout zoom pill omitted, width-budgeted riser fan-out labels,
+  the fading riser chip strip, a deterministic live-riser label collision pass that never drops a
+  tag (seeded with gutter/fan-out/callout rects), honest `unmeasured ×N` BOM rows, basis captions
+  on both pressure surfaces, the gated empty-state caption, `Electrical BOM` naming, the balanced
+  Review stat row, grouped `×N` issue rows with per-sheet Locate links, export-group counts, and
+  the Preferences SOFTWARE UPDATE section; B-1 was already compliant. Four deviations recorded in
+  the review doc's status note.
   **The phase-imbalance warning then became actionable-only (user-reported):** a board with two
   3φ feeders and two EQUAL 1φ lighting ways was told to "Redistribute single-phase circuits" at
   22.3 % — impossible, since two equal ways cannot load three lines evenly and the ENGINE (not the

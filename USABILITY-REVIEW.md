@@ -11,6 +11,18 @@ no finding below is speculative.
 Severity: **high** = misleads or blocks the working engineer · **medium** =
 slows or confuses · **low** = polish. Status: `LANDED` / `open`.
 
+> **2026-07-30 — ALL THREE WAVES LANDED** (a 7-agent parallel batch; see the
+> §15 decisions-log row). Every finding below is `LANDED` with four noted
+> deviations: **E-2** shipped as a reduced-motion-gated crossfade (the switcher
+> existed but ran ungated; hysteresis was rejected — it would have made the
+> LOD geometry stateful), **E-3** shipped as *omit the pill off-Layout* (the
+> honest half of the either/or), **B-1** was found already compliant (a prior
+> pass had given `_GlyphButton` a 40-px hit target), and **V-2**'s grouping
+> deliberately covers every duplicate-prone kind class (loose ends, unsized
+> ducts…), not just the sheet-calibration example. Gate: engine 1497 / app
+> 1286 / analyze clean; goldens 01–15 + design captures re-captured and
+> visually verified.
+
 ---
 
 ## Wave 0 — landed with this review (the session's user reports)

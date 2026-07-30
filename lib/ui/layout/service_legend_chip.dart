@@ -119,9 +119,13 @@ class ServiceLegendChip extends ConsumerWidget {
                   _SwatchPainter(serviceColor(s), serviceDashPattern(s)),
             ),
             const SizedBox(width: MechXSpacing.sm),
+            // L-4: the swatch label carries the legend's whole informational
+            // content (which colour means which service), so it reads at the
+            // theme's CAPTION size — one legible step up from the header's
+            // dense `micro` chrome-label token — while the chip stays compact.
             Text(
               serviceLabel(s),
-              style: context.type.micro
+              style: context.type.caption
                   .copyWith(color: context.colors.textPrimary),
             ),
           ],

@@ -82,6 +82,10 @@ class PreferencesScreen extends ConsumerWidget {
             ],
           ),
         ),
+        const SizedBox(height: MechXSpacing.lg),
+        // PR1: its own section (matching the page's section-label + card
+        // idiom) rather than a caption floating between the cards above.
+        const MechXSectionLabel('Software update'),
         const SizedBox(height: MechXSpacing.sm),
         _UpdateFootnote(
           text: _updateStatusText(update),
@@ -119,11 +123,14 @@ class _SegmentGroup extends StatelessWidget {
       );
 }
 
-/// The software-update status as a quiet one-line footnote of the appearance
-/// group (P2). It is informational in every normal build — in a packaged
-/// release it still carries its real action (check / restart & update), which
-/// sits at the end of the line; in a non-release build [action] is an empty box
-/// and the line is pure text.
+/// The software-update status, in its own bordered card (PR1) — the page's
+/// standard idiom, matching [_SettingCard] and the AI copilot card below,
+/// rather than a caption floating unhoused between them. It is informational
+/// in every normal build — in a packaged release it still carries its real
+/// action (check / restart & update) trailing the sentence; in a non-release
+/// build [action] is an empty box and the row is pure text. The now-redundant
+/// 'Software update — ' prefix is dropped from the body since the section
+/// label above already says so.
 class _UpdateFootnote extends StatelessWidget {
   final String text;
   final Widget action;
@@ -133,15 +140,20 @@ class _UpdateFootnote extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return Padding(
-      // Align with the card titles above (which sit inside `md` padding).
-      padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.md),
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(MechXSpacing.md),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        border: Border.all(color: colors.border),
+      ),
       child: Row(
         children: [
           Expanded(
             child: Text(
-              'Software update — $text',
-              style: type.caption.copyWith(color: colors.textMuted),
+              text,
+              style: type.body.copyWith(color: colors.textSecondary),
             ),
           ),
           action,
