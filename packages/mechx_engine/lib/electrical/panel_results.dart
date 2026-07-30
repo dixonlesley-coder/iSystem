@@ -177,11 +177,24 @@ class PhaseBalanceResult {
   final double l3;
   final double imbalancePercent;
 
+  /// True when a DIFFERENT phase assignment would materially cut this board's
+  /// imbalance — i.e. the imbalance is something the engineer can act on (a phase
+  /// pin holding a way on a loaded line, a sticky prior assignment). False when
+  /// the imbalance is inherent to the board's own single-phase loads (two ways
+  /// can never load three lines evenly), because the balancer has already spread
+  /// them as evenly as they go.
+  ///
+  /// Only determined for a board whose imbalance is over the reporting limit; on
+  /// an already-even board it is false (there is nothing to reduce). Additive —
+  /// defaults to false.
+  final bool imbalanceReducible;
+
   const PhaseBalanceResult({
     required this.l1,
     required this.l2,
     required this.l3,
     required this.imbalancePercent,
+    this.imbalanceReducible = false,
   });
 }
 

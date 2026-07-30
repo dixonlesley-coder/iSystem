@@ -1226,6 +1226,14 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (25 A feeder vs a 27.1 A / 24.3%-imbalance board in the whole-building sim that found it) — surfaced
   on the parent's feeder way (locatable), fanning into Review via the generic `electrical:<code>`
   kind. Goldens 05/08/11 re-captured (the sample project is an LV service ⇒ head-only spine).
+  **The phase-imbalance warning then became actionable-only (user-reported):** a board with two
+  3φ feeders and two EQUAL 1φ lighting ways was told to "Redistribute single-phase circuits" at
+  22.3 % — impossible, since two equal ways cannot load three lines evenly and the ENGINE (not the
+  engineer) already placed them as evenly as they go. `phase-imbalance` is now gated on the
+  imbalance being genuinely REDUCIBLE against an achievable floor (see the Sizing-engine invariant),
+  and when it does fire it names the real action ('Unpin the N ways pinned to a phase …') plus the
+  figure that is achievable. Judge-only, no sizing change; goldens byte-identical (the sample
+  project's boards sit at 12 %, under the limit).
   **Both recorded follow-ups HAVE SINCE LANDED (ultracode multi-agent batch):** (1) **riser
   feeder-label collision pass** — `buildElectricalRiser`'s feeder annotations now go through a
   private two-pass placer (`_RiserLabelPlacer`, the mech-riser B5 idiom: per-size char-advance
@@ -1495,6 +1503,24 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   ADS nor an RCD (e.g. an RCD-exempt life-safety run). TT finals now carry
   `rcd.required = true`, so existing TT invariants (`zsOhm`/`adsOk` null, no
   `ads-disconnection`) are preserved and they no longer warn.
+- **Phase imbalance is reported only when REDUCIBLE (`electrical/compute.dart`)**:
+  the ENGINE assigns phases (`balancePhases` already spreads every unpinned
+  single-phase way as evenly as it can), so `phase-imbalance` is raised only when a
+  different assignment would actually help — over `kPhaseImbalanceWarnPercent`
+  (15 %) AND saving more than `kPhaseImbalanceReducibleMarginPercent` (1.0 pp)
+  against the achievable floor from pure `minimumPhaseSpreadA(currents)` (exact /
+  exhaustive to `kPhaseExactSearchMaxWays` = 10 ways, symmetry-reduced; the
+  balancer's own pin-free re-run above that). Three-phase ways are excluded from
+  that floor (they load all three lines equally ⇒ they cannot change the spread)
+  and PINS are released (unpinning is a real action, so a pin-forced imbalance IS
+  reducible). Two equal 1φ ways can never load three lines evenly — that imbalance
+  is inherent, and the engineer is never told to "redistribute" what no
+  re-assignment can fix. The verdict rides `PhaseBalanceResult.imbalanceReducible`
+  (additive, default false; also gates the `feeder-below-fed-demand` message's
+  "rebalance" half). JUDGE-ONLY — the balance, incomer, busbar and demand current
+  are untouched, and the percentage still prints on the schedule TOTAL footer, the
+  inspector and both reports; only the unactionable WARNING (and, since it reads
+  that warning, the canvas card's `imbalance NN%` badge) is dropped.
 - **Motor FLC includes efficiency (`electrical/compute.dart`)**: a hand-entered
   motor's `motorKw` is SHAFT power; the `motorLike` branch divides it by a file-level
   `_assumedMotorEfficiency = 0.88` (`// VERIFY` `secondarySource`, deliberately NOT in

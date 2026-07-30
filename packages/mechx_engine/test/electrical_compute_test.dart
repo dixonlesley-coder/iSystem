@@ -131,7 +131,13 @@ void main() {
       // avg = (28.9+23.2+14.5)/3 = 22.2; imbalance = (28.9-14.5)/22.2·100
       //     = 14.4/22.2·100 = 64.86 % > 15 %.
       expect(r.imbalancePercent, closeTo(64.86, 0.2));
-      expect(r.warnings.map((w) => w.code), contains('phase-imbalance'));
+      // …but NO warning: with exactly two single-phase ways (14.4 A + 8.7 A) on
+      // three lines the alternatives are 23.1/0/0 (spread 23.1) or 14.4/8.7/0
+      // (spread 14.4) — the balancer already took the better one, so the 64.9 %
+      // is inherent to these loads and "redistribute" cannot be carried out.
+      expect(r.phaseBalance.imbalanceReducible, isFalse);
+      expect(
+          r.warnings.map((w) => w.code), isNot(contains('phase-imbalance')));
     });
 
     test('incomer breaker ≥ worst-phase demand, 4-pole on 3φ', () {

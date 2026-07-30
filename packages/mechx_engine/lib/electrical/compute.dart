@@ -301,6 +301,84 @@ PhaseBalance balancePhases(
   );
 }
 
+// ── phase-imbalance ACTIONABILITY ───────────────────────────────────────────
+
+/// Imbalance (%) above which a three-phase board's phase loading is reported —
+/// and only ever reported when a different assignment could actually improve it
+/// (see [minimumPhaseSpreadA]).
+const double kPhaseImbalanceWarnPercent = 15;
+
+/// How many percentage points of imbalance a re-assignment must save before the
+/// imbalance counts as REDUCIBLE. A judge-only actionability threshold (not a
+/// standards value): below it the board is as even as its own loads allow and
+/// asking the engineer to "redistribute" would be an instruction that cannot be
+/// carried out.
+const double kPhaseImbalanceReducibleMarginPercent = 1.0;
+
+/// Boards with at most this many single-phase ways get an EXACT minimum-spread
+/// search (3^n, symmetry-reduced ⇒ 3^(n-1) walks); above it the balancer's own
+/// freest re-run is the reference.
+const int kPhaseExactSearchMaxWays = 10;
+
+double _spread3(double a, double b, double c) =>
+    math.max(a, math.max(b, c)) - math.min(a, math.min(b, c));
+
+/// The smallest line-current spread (A) ANY assignment of [currents] — the
+/// single-phase way currents of one three-phase board — could reach.
+///
+/// Three-phase ways are deliberately absent: they load all three lines equally,
+/// so they shift every sum by the same amount and cannot change the spread.
+/// Phase PINS are released here, because unpinning is an action the engineer can
+/// take, so a pin-forced imbalance counts as reducible.
+///
+/// Exhaustive (hence exact) while the way count is ≤ [exactSearchMax]: the
+/// largest way is fixed on the first line (three empty lines are interchangeable)
+/// so only 3^(n-1) assignments are walked. Above that the balancer's own greedy +
+/// relocate/swap refinement — run free of pins and prior seeding — is the
+/// reference; a board with that many single-phase ways balances to well inside
+/// the warning limit unless one load dominates, and there relocate/swap is
+/// already at the floor.
+double minimumPhaseSpreadA(
+  List<double> currents, {
+  int exactSearchMax = kPhaseExactSearchMaxWays,
+}) {
+  final ways = currents.where((c) => c > 0).toList()
+    ..sort((a, b) => b.compareTo(a));
+  if (ways.isEmpty) return 0;
+
+  if (ways.length <= exactSearchMax) {
+    final lines = [0.0, 0.0, 0.0];
+    var best = double.infinity;
+    void walk(int i) {
+      if (i == ways.length) {
+        final s = _spread3(lines[0], lines[1], lines[2]);
+        if (s < best) best = s;
+        return;
+      }
+      // Symmetry break: with three empty lines the heaviest way can sit on L1
+      // without loss of generality.
+      final lanes = i == 0 ? 1 : 3;
+      for (var p = 0; p < lanes; p++) {
+        lines[p] += ways[i];
+        walk(i + 1);
+        lines[p] -= ways[i];
+      }
+    }
+
+    walk(0);
+    return roundTo(best, 1);
+  }
+
+  final free = balancePhases(
+    [
+      for (var i = 0; i < ways.length; i++)
+        _PhaseCircuit('#$i', false, ways[i], null),
+    ],
+    ElectricalSystem.threePhase,
+  );
+  return roundTo(_spread3(free.l1, free.l2, free.l3), 1);
+}
+
 // ── busbar section splitting ────────────────────────────────────────────────
 
 /// One outgoing way's loading, for grouping ways onto busbar sections.
@@ -884,15 +962,55 @@ ElectricalPanelResult computePanel(
     ));
   }
 
-  if (panel.system == ElectricalSystem.threePhase &&
-      balance.imbalancePercent > 15) {
+  // PHASE IMBALANCE — reported only when it is actually REDUCIBLE.
+  //
+  // `balancePhases` has already spread every unpinned single-phase way as evenly
+  // as it can, so "redistribute single-phase circuits" is a real instruction ONLY
+  // when some other assignment would materially cut the imbalance — a phase PIN
+  // holding a way on an already-loaded line, or a prior-assignment seed the
+  // stability threshold refused to leave. Two single-phase ways can never load
+  // three lines evenly: that imbalance is inherent to the board's loads, and the
+  // engineer is not told to fix what no re-assignment can fix. The percentage
+  // still prints on the schedule TOTAL footer and in the panel inspector /
+  // report — only the unactionable WARNING is dropped. The floor search runs
+  // ONLY for a board already over the limit, so an even board costs nothing.
+  final overImbalanceLimit = panel.system == ElectricalSystem.threePhase &&
+      balance.imbalancePercent > kPhaseImbalanceWarnPercent;
+  var imbalanceReducible = false;
+  var bestImbalancePercent = balance.imbalancePercent;
+  if (overImbalanceLimit) {
+    // The average line current is assignment-invariant (the same total load is
+    // shared out however the ways are placed), so the achievable imbalance is
+    // the achievable SPREAD measured against the same average.
+    final avgA = (balance.l1 + balance.l2 + balance.l3) / 3;
+    final bestSpreadA = minimumPhaseSpreadA([
+      for (final cm in comps)
+        if (!cm.threePhase) cm.result.designCurrent.amperes,
+    ]);
+    bestImbalancePercent =
+        avgA > 0 ? roundTo((bestSpreadA / avgA) * 100, 1) : 0.0;
+    imbalanceReducible = bestImbalancePercent +
+            kPhaseImbalanceReducibleMarginPercent <
+        balance.imbalancePercent;
+  }
+
+  if (overImbalanceLimit && imbalanceReducible) {
+    final pinnedWays = [
+      for (var i = 0; i < comps.length; i++)
+        if (!comps[i].threePhase && branches[i].phaseOverride != null)
+          branches[i].id,
+    ].length;
+    final action = pinnedWays > 0
+        ? 'Unpin the ${pinnedWays == 1 ? 'way pinned' : '$pinnedWays ways pinned'} '
+            'to a phase so the balancer can even the load'
+        : 'Redistribute single-phase circuits';
     warnings.add(ElectricalWarning(
       code: 'phase-imbalance',
       severity: WarningSeverity.warning,
       message:
           'Phase loading is unbalanced by ${balance.imbalancePercent}% '
           '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A). '
-          'Redistribute single-phase circuits.',
+          '$action — $bestImbalancePercent% is achievable.',
       panelId: panel.id,
     ));
   }
@@ -1084,6 +1202,7 @@ ElectricalPanelResult computePanel(
       l2: balance.l2,
       l3: balance.l3,
       imbalancePercent: balance.imbalancePercent,
+      imbalanceReducible: imbalanceReducible,
     ),
     warnings: warnings,
   );
@@ -1414,11 +1533,17 @@ ElectricalSystemResult computeSystem(
       final childDemandA = childResult.demandCurrent.amperes;
       final feederRatingA = feederResult.breaker.ratingA.amperes;
       if (childDemandA <= 0 || feederRatingA + 1e-9 >= childDemandA) continue;
+      // Only offer "rebalance" when that board's imbalance is actually
+      // reducible; an imbalance inherent to its single-phase loads leaves the
+      // feeder rating (or splitting the load) as the honest fix.
       final imbalance = childResult.phaseBalance.imbalancePercent;
-      final cause = imbalance > 0
-          ? ' (phase imbalance $imbalance% — rebalance that board\'s '
-              'single-phase ways or raise the feeder rating)'
-          : ' — raise the feeder rating';
+      final cause = imbalance <= 0
+          ? ' — raise the feeder rating'
+          : childResult.phaseBalance.imbalanceReducible
+              ? ' (phase imbalance $imbalance% — rebalance that board\'s '
+                  'single-phase ways or raise the feeder rating)'
+              : ' (phase imbalance $imbalance%, inherent to that board\'s '
+                  'single-phase loads — raise the feeder rating)';
       pr.warnings.add(ElectricalWarning(
         code: 'feeder-below-fed-demand',
         severity: WarningSeverity.warning,

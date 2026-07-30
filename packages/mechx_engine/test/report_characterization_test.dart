@@ -121,8 +121,11 @@ void main() {
     test('load-bearing rows survive verbatim', () {
       // Feeder way row (the second panel is fed through it).
       expect(md, contains('| Feeder SP-1 | feeder |'));
-      // Per-panel warning bullet style.
-      expect(md, contains('- _WARN_: Phase loading is unbalanced'));
+      // Per-panel warning bullet style. (Was the phase-imbalance bullet until
+      // 2026-07-30: both fixture boards carry too few single-phase ways for ANY
+      // assignment to even them out, so that unactionable warning is no longer
+      // raised — the feeder bullet is now the panel section's load-bearing row.)
+      expect(md, contains('- _WARN_: Feeder SP-1: the feeder breaker is'));
       // Interlock bullet under its own sub-heading.
       expect(md,
           contains('### Source interlocks\n\n- _mechanical_: ATS mechanical'));
@@ -140,8 +143,15 @@ void main() {
       // and its feeder rounds below SP-1's worst-phase demand, so the new
       // judge-only `feeder-below-fed-demand` warning adds one bullet to the MDP
       // panel section AND one to the system Warnings section (+2 lines).
-      expect(md.split('\n').length, 89);
-      expect(fnv1a32(md), 0x732e7c07);
+      // Re-baselined 2026-07-30 (phase-imbalance actionability): neither fixture
+      // board can be evened out by ANY phase assignment (MDP has two
+      // single-phase ways, SP-1 exactly one, over three lines), so the
+      // unactionable `phase-imbalance` warning is no longer raised — 2 panel
+      // bullets + 2 system bullets + the now-empty MDP warning line group
+      // disappear (−5 lines), and the surviving feeder bullet names the
+      // imbalance as inherent instead of offering a rebalance.
+      expect(md.split('\n').length, 84);
+      expect(fnv1a32(md), 0x900d360f);
     });
   });
 
@@ -213,8 +223,10 @@ void main() {
       // Tag column (run `CW-F1`, duct riser `SA-R1`). Line count is unchanged.
       // Re-baselined 2026-07-27: the electrical body gained the two
       // `feeder-below-fed-demand` warning lines (see the standalone pin above).
-      expect(md.split('\n').length, 230);
-      expect(fnv1a32(md), 0x9a4ae608);
+      // Re-baselined 2026-07-30: the electrical body dropped the five
+      // unactionable phase-imbalance lines (see the standalone pin above).
+      expect(md.split('\n').length, 225);
+      expect(fnv1a32(md), 0x7c923eee);
     });
   });
 
