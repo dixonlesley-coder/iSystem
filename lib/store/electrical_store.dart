@@ -2038,6 +2038,10 @@ ElectricalProject sampleElectricalProject() {
         cosPhi: 0.85,
         lifeSafety: true,
         length: Length(40),
+        // 6 mm² floor: the ampacity pick (4 mm²) fails TN-C-S ADS on this 40 m
+        // run (loop Zs 0.568 Ω > the 0.437 Ω curve-D limit — surfaced by the
+        // fault study). A life-safety run takes the CSA fix, not an RCD.
+        cableOverrideMm2: 6,
       ),
     ],
   );
