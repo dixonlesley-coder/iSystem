@@ -72,9 +72,16 @@ import 'panel_geometry.dart';
 import 'sld_sheet_painter.dart';
 
 /// LOD threshold — at/above this zoom each panel shows its full internal
-/// schematic; below it, a compact summary card (PanelMaker `transform[2] >=
-/// 0.72`).
-const double kLodThreshold = 0.72;
+/// schematic; below it, a compact summary card.
+///
+/// Derived from LEGIBILITY, not ported: the board schedule's way rows are
+/// 7.5 world-px text, so at the old PanelMaker boundary (0.72) the schedule
+/// appeared at ~5.4 screen-px — rendered but unreadable, the worst of both
+/// tiers (user-reported: tiny illegible schedules mid-zoom). At 0.95 the rows
+/// arrive at ~7.1 px, i.e. the detail tier appears once it can actually be
+/// read; below that the summary card (12-13 px headline figures) keeps the
+/// glanceable stats + phase cells.
+const double kLodThreshold = 0.95;
 
 /// The lower LOD boundary — below this zoom a panel collapses to the MICRO chip
 /// (identity + kW + phase bar). Chosen so the summary card's smallest text
@@ -134,12 +141,9 @@ double outletBandWidth(double cardWidth, double scale) => math.min(
 /// dead mid-detail tier); this is purely the focus/deep-zoom target.
 const double kBoardScheduleThreshold = 1.35;
 
-/// Indonesian R-S-T / N / PE rail colours (hard hex, ported verbatim).
-const Color kRailR = Color(0xFFC92A2A); // L1 / R / single-phase live
-const Color kRailS = Color(0xFFE8990C); // L2 / S
-const Color kRailT = Color(0xFF1971C2); // L3 / T
-const Color kRailN = Color(0xFF4DABF7); // neutral
-const Color kRailPE = Color(0xFF2F9E44); // protective earth
+// The Indonesian R-S-T / N / PE rail colours moved to `sld_sheet_painter.dart`
+// (kRailR/S/T/N/PE — re-exported by the import above) so the engine-sheet phase
+// roles and these widgets share ONE phase palette.
 
 /// A request from the canvas back to the host view.
 typedef PanelTap = void Function(String panelId);

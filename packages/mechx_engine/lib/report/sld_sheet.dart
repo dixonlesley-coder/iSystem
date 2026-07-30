@@ -16,7 +16,14 @@ enum SldWeight { thin, medium, thick }
 /// drawings' cyan-normal / red-essential split). `source` is the utility / MV /
 /// transformer supply chain (electrical) or, on the mechanical riser, the
 /// plant / supply-tank head.
-enum SldRole { normal, essential, source }
+///
+/// `phaseR` / `phaseS` / `phaseT` mark PHASE-BEARING content (the R/S/T column
+/// headers, per-way line-current cells and phase totals on a board schedule) so
+/// every renderer can colour the three phases apart — the Indonesian
+/// panel-builder red / yellow / blue R-S-T convention. A UI/drawing legend
+/// only, deliberately NOT the PUIL/IEC conductor colours (brown/black/grey are
+/// indistinguishable on screen); it claims no wiring-colour clause.
+enum SldRole { normal, essential, source, phaseR, phaseS, phaseT }
 
 /// A drawing primitive in y-down drawing space. Sealed so renderers switch
 /// exhaustively over the small closed set.

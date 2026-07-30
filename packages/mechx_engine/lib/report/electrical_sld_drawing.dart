@@ -396,18 +396,20 @@ SldSheet buildElectricalSld({
     // on the bus; named verbatim by the header sub-line "Incomer ...").
     prims.add(SldRect(bx + 2 - _brW / 2, busTop - _brH / 2, _brW, _brH));
 
-    // Column-header band (slot 0): the BRI `Diagram Panel` table columns.
+    // Column-header band (slot 0): the BRI `Diagram Panel` table columns. The
+    // R / S / T headers carry their PHASE role so every renderer colours the
+    // three phase columns apart (red / yellow / blue — see [SldRole]).
     final headY = busTop + 6 + _rowH / 2 + 3;
-    void colHead(double x, String t) =>
-        prims.add(SldLabel(blockX + x, headY, t, size: 7, bold: true));
+    void colHead(double x, String t, {SldRole role = SldRole.normal}) =>
+        prims.add(SldLabel(blockX + x, headY, t, size: 7, bold: true, role: role));
     colHead(_colGrup, 'GRUP');
     colHead(_colDevice, 'DEVICE');
     colHead(_colPenghantar, 'PENGHANTAR');
     colHead(_colDaya, 'DAYA');
     colHead(_colKeterangan, 'KETERANGAN');
-    colHead(_colR, 'R');
-    colHead(_colS, 'S');
-    colHead(_colT, 'T');
+    colHead(_colR, 'R', role: SldRole.phaseR);
+    colHead(_colS, 'S', role: SldRole.phaseS);
+    colHead(_colT, 'T', role: SldRole.phaseT);
     // Underline under the column-header row.
     prims.add(SldLine(bx + 4, busTop + _rowH, blockX + _blockW - 8,
         busTop + _rowH));
@@ -498,16 +500,20 @@ SldSheet buildElectricalSld({
       prims.add(SldLabel(blockX + _colDaya, rowY + 3, daya, size: rowSize));
       prims.add(SldLabel(
           blockX + _colKeterangan, rowY + 3, '$keterangan$vd', size: rowSize));
-      // R/S/T loading band — the line current under the way's phase(s).
+      // R/S/T loading band — the line current under the way's phase(s), each
+      // cell carrying its phase role so the loading reads by colour at a glance.
       final (r, s, t) = _phaseLoading(c.phase, ib);
       if (r.isNotEmpty) {
-        prims.add(SldLabel(blockX + _colR, rowY + 3, r, size: rowSize));
+        prims.add(SldLabel(blockX + _colR, rowY + 3, r,
+            size: rowSize, role: SldRole.phaseR));
       }
       if (s.isNotEmpty) {
-        prims.add(SldLabel(blockX + _colS, rowY + 3, s, size: rowSize));
+        prims.add(SldLabel(blockX + _colS, rowY + 3, s,
+            size: rowSize, role: SldRole.phaseS));
       }
       if (t.isNotEmpty) {
-        prims.add(SldLabel(blockX + _colT, rowY + 3, t, size: rowSize));
+        prims.add(SldLabel(blockX + _colT, rowY + 3, t,
+            size: rowSize, role: SldRole.phaseT));
       }
       if (feeds != null) {
         feederFrom[feeds] = (x: blockX + _blockW, y: rowY);
@@ -551,11 +557,11 @@ SldSheet buildElectricalSld({
     if (p.system.isThreePhase) {
       final pb = p.phaseBalance;
       prims.add(SldLabel(blockX + _colR, footerY, _num(pb.l1),
-          size: rowSize, bold: true));
+          size: rowSize, bold: true, role: SldRole.phaseR));
       prims.add(SldLabel(blockX + _colS, footerY, _num(pb.l2),
-          size: rowSize, bold: true));
+          size: rowSize, bold: true, role: SldRole.phaseS));
       prims.add(SldLabel(blockX + _colT, footerY, _num(pb.l3),
-          size: rowSize, bold: true));
+          size: rowSize, bold: true, role: SldRole.phaseT));
     }
 
     cursorY = blockY + blockH + _gapY;

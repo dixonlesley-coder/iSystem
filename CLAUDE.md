@@ -1226,6 +1226,22 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (25 A feeder vs a 27.1 A / 24.3%-imbalance board in the whole-building sim that found it) — surfaced
   on the parent's feeder way (locatable), fanning into Review via the generic `electrical:<code>`
   kind. Goldens 05/08/11 re-captured (the sample project is an LV service ⇒ head-only spine).
+  **R/S/T phase colour-coding + a legibility-derived LOD threshold then landed (user-reported):**
+  the board schedule was monotone, so `SldRole` gained `phaseR/phaseS/phaseT` — the R/S/T column
+  headers, per-way line-current cells and TOTAL footer totals carry their phase role, and every
+  renderer colours them (canvas `paintSldPrims` → the `kRailR/S/T` rails, which MOVED into
+  `sld_sheet_painter.dart` as the ONE phase palette shared with the summary-card cells + micro
+  bar; PDF → matching print inks with S as dark amber; DXF → ACI 1/2/5). A drawing legend, NOT
+  the PUIL/IEC conductor colours — no wiring-colour claim. And `kLodThreshold` went 0.72 → 0.95,
+  now derived from legibility (the 7.5-px schedule rows arrive at ≥ ~7 px on screen) instead of
+  ported — below it the summary card keeps the glanceable stats; `kMicroThreshold` unchanged
+  (it gates interactivity, not readability). Goldens 05/11 re-captured.
+  **`USABILITY-REVIEW.md` (root) is the CURRENT usability plan of record** — an all-pages review
+  (every golden read as an image, findings code-grounded): 17 findings in three waves — A honesty
+  + electrical feel (the `0.0 m ×5` uncalibrated-length rows, the overpainting feeder labels at
+  one outlet [`…3ph h`], heatmap basis captions, the bare 'BOM' heading), B label/overflow
+  robustness (chip-row overflow, live riser label collisions, LOD hysteresis), C chrome polish.
+  The phase-colour + LOD items above are its landed Wave 0.
   **The phase-imbalance warning then became actionable-only (user-reported):** a board with two
   3φ feeders and two EQUAL 1φ lighting ways was told to "Redistribute single-phase circuits" at
   22.3 % — impossible, since two equal ways cannot load three lines evenly and the ENGINE (not the

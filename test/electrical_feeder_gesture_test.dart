@@ -151,8 +151,9 @@ Future<_Harness> _pump(WidgetTester tester, {ElectricalProject? project}) async 
   await tester.pump();
   final state =
       tester.state<ElectricalCanvasState>(find.byType(ElectricalCanvas));
-  // Frame board A at a known SUMMARY-band zoom (0.60) so the pointer math below
-  // is deterministic; every later zoom step is taken from here.
+  // Frame board A at a known SUMMARY-band zoom (kLodThreshold − 0.12, the
+  // collapse anchor) so the pointer math below is deterministic; every later
+  // zoom step is taken from here.
   state.collapseToSummary('a');
   await tester.pumpAndSettle();
   return _Harness(tester, container, state);
@@ -170,7 +171,7 @@ void main() {
       'a: dragging a board\'s outlet band onto another board feeds it — at the '
       'default summary zoom AND zoomed out near 0.4', (tester) async {
     final h = await _pump(tester);
-    expect(h.state.currentScale, closeTo(0.60, 1e-9));
+    expect(h.state.currentScale, closeTo(kLodThreshold - 0.12, 1e-9));
 
     // ── At ~0.6 ───────────────────────────────────────────────────────────────
     var from = h.outletGrab('a');
@@ -182,7 +183,7 @@ void main() {
     await _clearStatus(h);
 
     // Undo back to the unfed fixture, then repeat further zoomed out. Two
-    // zoom-out steps from 0.60 land at 0.4167 — still the summary band, but the
+    // zoom-out steps from the collapse anchor — still the summary band, but the
     // outlet band is now much WIDER in world px (it holds 26 screen px), which
     // is exactly the geometry the fix introduces.
     h.container.read(historyProvider.notifier).undo();
@@ -193,7 +194,8 @@ void main() {
     await tester.pumpAndSettle();
     h.state.zoomOut();
     await tester.pumpAndSettle();
-    expect(h.state.currentScale, closeTo(0.6 / 1.44, 1e-6));
+    expect(
+        h.state.currentScale, closeTo((kLodThreshold - 0.12) / 1.44, 1e-6));
 
     from = h.outletGrab('a');
     to = h.cardCentre('b');
@@ -255,6 +257,11 @@ void main() {
       'd: dropping on an already-fed board RE-PARENTS it (old way gone, toast '
       'says what it was, one undo restores)', (tester) async {
     final h = await _pump(tester);
+    // One step out from the collapse anchor so board C (world y = 400) is on
+    // canvas — still comfortably inside the SUMMARY band.
+    h.state.zoomOut();
+    await tester.pumpAndSettle();
+    expect(panelLodFor(h.state.currentScale), PanelLod.summary);
     h.ctrl.connectFeeder('a', 'c');
     await tester.pump();
     expect(h.parentOf('c'), 'a');

@@ -169,9 +169,11 @@ void main() {
     expect(_byType('_Badge'), findsWidgets);
     expect(tester.takeException(), isNull);
 
-    state.zoomOut(); // 0.60 / 1.2 = 0.50
+    // One step out from the collapse anchor (kLodThreshold − 0.12) — derived
+    // from the constant so retuning the tier boundary never stales this.
+    state.zoomOut();
     await tester.pumpAndSettle();
-    expect(state.currentScale, closeTo(0.5, 1e-9));
+    expect(state.currentScale, closeTo((kLodThreshold - 0.12) / 1.2, 1e-9));
     expect(panelLodFor(state.currentScale), PanelLod.summary);
     expect(_byType('_PanelSummaryBody'), findsNWidgets(2));
     expect(tester.takeException(), isNull,

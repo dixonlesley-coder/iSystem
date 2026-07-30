@@ -189,11 +189,15 @@ const String _inkMuted = '0.42 0.42 0.42';
 const String _inkRule = '0.55 0.55 0.55';
 const String _inkHairline = '0.75 0.75 0.75';
 
-// Role → stroke ink for embedded figures (mirrors electrical_pdf_export).
+// Role → stroke ink for embedded figures (mirrors electrical_pdf_export,
+// incl. the R/S/T = red/amber/blue phase-column convention).
 String _figStroke(SldRole r) => switch (r) {
       SldRole.normal => '0.12 0.12 0.12',
       SldRole.essential => '0.80 0.13 0.13',
       SldRole.source => '0.10 0.10 0.30',
+      SldRole.phaseR => '0.79 0.16 0.16',
+      SldRole.phaseS => '0.80 0.50 0.03',
+      SldRole.phaseT => '0.10 0.44 0.76',
     };
 
 double _figWeight(SldWeight w) => switch (w) {

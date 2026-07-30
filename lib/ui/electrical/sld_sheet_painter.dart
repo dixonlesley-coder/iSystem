@@ -32,6 +32,17 @@ import '../theme/mechx_theme.dart';
 /// when zoomed far out; mirrors the interactive canvas's `_label` guard).
 const double _kMinLabelPx = 4.5;
 
+/// Indonesian R-S-T / N / PE rail colours (hard hex, ported verbatim). ONE home
+/// for the phase palette: the summary-card cells, the micro R/S/T bar, the
+/// phase badges AND the engine-sheet phase roles ([SldRole.phaseR]/`phaseS`/
+/// `phaseT`) all read these, so a phase is the same hue at every LOD and in
+/// every projection.
+const Color kRailR = Color(0xFFC92A2A); // L1 / R / single-phase live
+const Color kRailS = Color(0xFFE8990C); // L2 / S
+const Color kRailT = Color(0xFF1971C2); // L3 / T
+const Color kRailN = Color(0xFF4DABF7); // neutral
+const Color kRailPE = Color(0xFF2F9E44); // protective earth
+
 /// Stroke px per [SldWeight] bucket (shared by the painter + the free function).
 double _weightPxFor(SldWeight w) => switch (w) {
       SldWeight.thin => 1.0,
@@ -77,6 +88,11 @@ void paintSldPrims(
         SldRole.normal => ink,
         SldRole.essential => essential,
         SldRole.source => source,
+        // Phase-bearing schedule content — the same rail hues the summary
+        // card / micro bar use, so R/S/T read identically at every LOD.
+        SldRole.phaseR => kRailR,
+        SldRole.phaseS => kRailS,
+        SldRole.phaseT => kRailT,
       };
   final s = transform.scale;
   for (final prim in sheet.prims) {
