@@ -1126,16 +1126,20 @@ void main() {
 
   // ── 9. documented findings (facts asserted, judgement REPORTED) ───────────
   group('9 — documented findings', () {
-    test('FINDING: a per-PANEL Icu map stamps a non-existent MCB rating', () {
-      // `buildElectricalSld(breakerIcuKaByPanelId:)` takes ONE kA per BOARD and
-      // appends it to every way's DEVICE cell. The app feeds it the fault
-      // study's `incomerKa`, which is snapped to the INCOMER's frame ladder.
-      // MDP's incomer is an MCCB ⇒ its ladder starts at 16 kA, while every one
-      // of MDP's own MCB ways needs (and can only be bought at) 10 kA.
+    test('FIXED (E1): the per-CIRCUIT kA map stamps each way its own rating',
+        () {
+      // WAS: `buildElectricalSld(breakerIcuKaByPanelId:)` took ONE kA per BOARD
+      // (the fault study's `incomerKa`, snapped to the INCOMER's frame ladder)
+      // and appended it to every way, so MDP's MCCB incomer stamped `16kA` on
+      // its own MCB ways — a rating no MCB is built to.
+      // NOW: `breakerKaByCircuitId` carries the fault study's per-way
+      // `breakerKa` (each snapped to its OWN device class ladder) and WINS per
+      // way; the panel map remains the fallback / incomer figure.
       final mdpFault = advanced.fault.panels['mdp']!;
       expect(mdpFault.prospectiveFaultkA, 10.0);
       expect(mdpFault.incomerKa, 16.0); // MCCB ladder: 16 25 36 50 70
-      expect(advanced.fault.circuits['mdp-f-lp1']!.breakerKa, 10.0);
+      expect(advanced.fault.circuits['mdp-f-lp1']!.breakerKa, 10.0); // MCB
+      expect(advanced.fault.circuits['mdp-f-pp1']!.breakerKa, 16.0); // MCCB
       expect(breakingCapacityKa[BreakerClass.mcb], isNot(contains(16.0)));
 
       final sheet = buildElectricalPanelDetail(
@@ -1146,16 +1150,30 @@ void main() {
           for (final e in advanced.fault.panels.entries)
             e.key: e.value.incomerKa,
         },
+        breakerKaByCircuitId: {
+          for (final e in advanced.fault.circuits.entries)
+            e.key: e.value.breakerKa,
+        },
       );
       final devices = sheet.prims
           .whereType<SldLabel>()
           .map((l) => l.text)
           .where((t) => t.startsWith('MCB ') || t.startsWith('MCCB '))
           .toList();
-      // The 40 A MCB feeder rows print "16kA" — a rating no MCB is built to.
-      expect(devices, contains('MCB 40A 3ph 16kA'));
-      expect(devices.where((d) => d.startsWith('MCB') && d.contains('10kA')),
+      // MCB ways now carry the MCB-ladder 10 kA; the impossible token is gone.
+      expect(devices, contains('MCB 40A 3ph 10kA'));
+      expect(devices, isNot(contains('MCB 40A 3ph 16kA')));
+      expect(devices.where((d) => d.startsWith('MCB ') && d.contains('16kA')),
           isEmpty);
+      // MCCB ways keep the MCCB-ladder 16 kA (E8b: the 1-phase feeder off this
+      // 3-phase board is a 2-POLE device, so its token reads `2P`).
+      expect(devices, contains('MCCB 160A 3ph 16kA'));
+      expect(devices, contains('MCCB 80A 2P 16kA'));
+      // The INCOMER sub-line still carries the board figure (the panel map).
+      expect(
+          sheet.prims.whereType<SldLabel>().map((l) => l.text).where(
+              (t) => t.startsWith('Incomer ') && t.contains('MCCB 250A/4P 16kA')),
+          isNotEmpty);
     });
 
     test('FINDING: the schedule conduit token contradicts the containment study',

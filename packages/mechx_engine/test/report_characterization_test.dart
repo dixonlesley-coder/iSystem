@@ -83,8 +83,12 @@ void main() {
       // ASCII. Re-baselined again 2026-07-06 (Wave 7 N13): the BOM table gained a
       // Tag column (the shared element tag) between Type and Size — the fixture's
       // run line now reads `CW-F1`, the duct riser `SA-R1`. Line count unchanged.
+      // Re-baselined 2026-07-30 (audit M12): the pump NPSH line prints the
+      // suction-side NPSH_required estimate — for the fixture's 5 L/s duty
+      // (2900·√0.005/160)^(4/3) = 1.39 m — instead of the old, physically
+      // unrelated 15 % of the 30 m total head (4.5 m). Line count unchanged.
       expect(md.split('\n').length, 94);
-      expect(fnv1a32(md), 0xa529ba98);
+      expect(fnv1a32(md), 0xccecab38);
     });
   });
 
@@ -246,8 +250,11 @@ void main() {
       // electrical body's last warning is cured by the feeder floor, dropping
       // its panel bullet group and '## Warnings' section (−6 lines), and its
       // feeder way row prints the floored 16 A device.
+      // Re-baselined 2026-07-30 (audit M12): the embedded mechanical body's
+      // pump NPSH line now carries the suction-side NPSH_required estimate
+      // (1.4 m, not 4.5 m) — see the mechanical pin above. Line count unchanged.
       expect(md.split('\n').length, 219);
-      expect(fnv1a32(md), 0xd717bb16);
+      expect(fnv1a32(md), 0x9bc6364e);
     });
   });
 

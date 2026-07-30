@@ -22,8 +22,10 @@
 ///       from the solved network here; it is supplied by the caller (back-solved
 ///       from the design duty, or a user estimate). Default: back-solve k from
 ///       the design duty so the system curve passes through (Q_design, H_design).
-///   • System curve (fan):   Δp_sys(Q) = k·Q²  (no static term — duct systems
-///     have negligible fixed pressure; the whole resistance is velocity²-driven).
+///   • System curve (fan):   Δp_sys(Q) = Δp_static + k·Q²  — Δp_static is zero
+///     for an ordinary duct system (the whole resistance is velocity²-driven)
+///     and non-zero only for a fan holding a fixed differential (stairwell
+///     pressurisation, a pressurised plenum).
 ///   • Equipment curve:      H_eq(Q) = H_shutoff − a·Q²  (pump),
 ///                            Δp_eq(Q) = Δp_shutoff − a·Q²  (fan)
 ///     — the classic falling parabola of a centrifugal machine: a shutoff
@@ -38,14 +40,36 @@
 /// With both curves quadratic in Q the intersection is closed-form, no
 /// iteration needed: setting H_static + k·Q² = H_shutoff − a·Q² gives
 ///   Q_op = √((H_shutoff − H_static) / (k + a)).
-/// The companion Newton-style guards (no real root, near-flat curves) are folded
-/// into a [stable] flag rather than throwing.
+/// The companion guards (no real root, shallow crossing) are folded into a
+/// [PumpOperatingPoint.stable] / [FanOperatingPoint.stable] flag rather than
+/// throwing.
+///
+/// ## The shallow-crossing (stability) test — M12
+/// The two curves' SLOPES at the crossing are
+///   H_sys'(Q_op) = +2k·Q_op        H_eq'(Q_op) = −2a·Q_op
+/// so they part at a slope difference
+///   Δm = H_sys' − H_eq' = 2(k + a)·Q_op.
+/// A relative disturbance ε of the operating head (a fouled strainer, a
+/// throttled branch, the tolerance band on a real machine's curve) moves the
+/// crossing by δQ = ε·H_op / Δm, so the duty's RELATIVE FLOW SENSITIVITY is the
+/// dimensionless number
+///   S = (δQ/Q_op) / ε = H_op / (Q_op·Δm) = H_op / (2(k + a)·Q_op²)
+///                     = H_op / (2·(H_shutoff − H_static))
+/// using (k + a)·Q_op² = H_shutoff − H_static at the crossing. S is "percent of
+/// flow swing per percent of head swing": a healthy match sits well under 1
+/// (the default 50/50 pump split gives S = 30/(2·22.5) = 0.667), and S blows up
+/// as H_static approaches H_shutoff — the curves then meet tangentially near
+/// zero flow and the duty hunts. [kOperatingPointFlowSensitivityLimit] is the
+/// threshold. (The previous test compared Δm against Δm/2 and so reduced to the
+/// constant `2 < 0.05` — it could never fire.)
 ///
 /// ## NPSH (pumps only) — all terms // VERIFY
 ///   NPSH_available = (P_atm − P_vapour)/(ρ·g) ± h_static_suction − h_friction_suction
-///   We model NPSH_required as a // VERIFY estimate that grows with flow
-///   (NPSH_r ∝ Q²/D⁴-ish — here a simple Q-scaled estimate). Cavitation risk is
-///   flagged CONSERVATIVELY when NPSH_available < safetyMargin × NPSH_required
+///   NPSH_required is estimated from the SUCTION side — a suction-specific-speed
+///   correlation (see [kSuctionSpecificSpeed]) with a conservative small-pump
+///   floor — NOT as a fraction of the total system head, which has no physical
+///   relation to the suction condition. Cavitation risk is flagged
+///   CONSERVATIVELY when NPSH_available < safetyMargin × NPSH_required
 ///   (default 1.5, the customary suction-margin rule of thumb).
 ///
 /// // VERIFY — the curve coefficients (shutoff fraction, droop, NPSH_required
@@ -85,12 +109,47 @@ const double kWaterVapourPressure20CPa = 2339.0;
 /// // VERIFY — general allowance, not an SNI clause. `secondarySource`.
 const double kSuctionFrictionFraction = 0.10;
 
-/// Required-NPSH estimate at the design flow as a fraction of the design head —
-/// a // VERIFY stand-in for the manufacturer's NPSH_r curve. NPSH_r grows with
-/// flow² in reality; we scale this design-point value by (Q/Q_design)².
+/// Suction specific speed used to estimate NPSH_required (M12).
 ///
-/// // VERIFY — representative, NOT a certified NPSH_r curve. `secondarySource`.
-const double kNpshRequiredHeadFraction = 0.15;
+///   N_ss = n·√Q / NPSH_r^0.75      ⇒   NPSH_r = (n·√Q / N_ss)^(4/3)
+///
+/// with `n` in rpm, `Q` in m³/s and NPSH_r in metres (the metric convention).
+/// Standard clean-water centrifugal pumps sit around 160–220 in these units; a
+/// LOW value is the conservative choice (it yields a HIGHER NPSH_r), so 160 is
+/// used. Note this keys NPSH_r to the SUCTION-side variables — speed and flow —
+/// not to the total system head the pump happens to develop.
+///
+/// // VERIFY `notAnSniClause` — a correlation, not the manufacturer's certified
+/// NPSH_r curve; replace with the selected machine's published data.
+const double kSuctionSpecificSpeed = 160.0;
+
+/// Assumed rotational speed for the NPSH_required correlation, rpm.
+///
+/// 2900 rpm is the nominal 2-pole 50 Hz speed of the small end-suction /
+/// multistage pumps this engine sizes, and is the conservative assumption (a
+/// 1450 rpm 4-pole machine needs materially less NPSH at the same flow).
+///
+/// // VERIFY `notAnSniClause` — an assumption, not a standards value.
+const double kAssumedPumpSpeedRpm = 2900.0;
+
+/// Conservative floor on the estimated NPSH_required, metres.
+///
+/// Below a few litres per second the correlation trends toward implausibly
+/// small values; listed small pumps rarely publish an NPSH_r under ~0.5 m, so
+/// the estimate never reports less than this.
+///
+/// // VERIFY `notAnSniClause` — a conservative floor, not a standards value.
+const double kMinNpshRequiredM = 0.5;
+
+/// Relative-flow-sensitivity limit above which the curve crossing is reported
+/// as ill-conditioned (shallow) — see the library doc's stability algebra.
+///
+/// `S` is the percent of flow swing per percent of head swing at the crossing;
+/// 5 means "a 1 % head disturbance moves the duty more than 5 % in flow", by
+/// which point the operating point is not usefully determined.
+///
+/// // VERIFY `notAnSniClause` — an engineering threshold, not a standards value.
+const double kOperatingPointFlowSensitivityLimit = 5.0;
 
 /// Cavitation safety margin: NPSH_available must exceed this multiple of
 /// NPSH_required or cavitation risk is flagged. 1.5 (a 0.5 m + 30 % style
@@ -98,6 +157,26 @@ const double kNpshRequiredHeadFraction = 0.15;
 ///
 /// // VERIFY — general practice, not an SNI clause. `secondarySource`.
 const double kNpshSafetyMargin = 1.5;
+
+// ── Shared crossing conditioning (internal) ───────────────────────────────────
+
+/// Relative flow sensitivity `S` of the system × equipment curve crossing, in
+/// "fraction of flow swing per fraction of head/pressure swing".
+///
+/// Derived in the library doc from the two curves' slopes at Q_op:
+///   S = H_op / (2·(H_shutoff − H_static)).
+/// Works unchanged for the fan (pressures in place of heads, H_static = the
+/// system's fixed differential, normally 0). Returns infinity when there is no
+/// positive margin between shutoff and static — the degenerate/no-root case.
+double _crossingFlowSensitivity({
+  required double operatingValue,
+  required double shutoffValue,
+  required double staticValue,
+}) {
+  final margin = shutoffValue - staticValue;
+  if (margin <= 0) return double.infinity;
+  return operatingValue / (2.0 * margin);
+}
 
 // ── Pump operating point ──────────────────────────────────────────────────────
 
@@ -131,16 +210,22 @@ class PumpOperatingPoint {
   final Head designHead;
 
   /// False when the intersection is ill-conditioned — no real root (the machine
-  /// is starved by an excessive static head), or the curves cross at a shallow
-  /// angle (flat near the operating point ⇒ the duty hunts). A stable design
-  /// wants the system and equipment curves to cross at a clear angle.
+  /// is starved by an excessive static head), or the curves cross at a SHALLOW
+  /// angle, measured as the relative flow sensitivity
+  /// `S = H_op / (2·(H_shutoff − H_static))` exceeding
+  /// [kOperatingPointFlowSensitivityLimit] (see the library doc for the slope
+  /// algebra). A stable design wants the two curves to part at a clear angle so
+  /// a small head disturbance barely moves the duty.
   final bool stable;
 
   /// Available net positive suction head at the operating flow (m).
   final Head npshAvailable;
 
   /// // VERIFY required net positive suction head estimate at the operating
-  /// flow (m). NOT a certified NPSH_r curve.
+  /// flow (m) — from the suction-specific-speed correlation
+  /// ([kSuctionSpecificSpeed], [kAssumedPumpSpeedRpm]) with the
+  /// [kMinNpshRequiredM] floor. Zero when there is no operating flow. NOT a
+  /// certified NPSH_r curve.
   final Head npshRequired;
 
   /// True when NPSH_available < [kNpshSafetyMargin] × NPSH_required — a
@@ -231,28 +316,32 @@ PumpOperatingPoint computePumpOperatingPoint({
 
   // ── Intersection (closed form) ─────────────────────────────────────────────
   // H_static + k·Q² = H_shutoff − a·Q²  ⇒  Q_op = √((H_shutoff − H_static)/(k+a)).
-  final num = hShutoff - hStatic;
+  final headMargin = hShutoff - hStatic;
   final den = k + a;
   double qOp;
   var stable = true;
-  if (num <= 0 || den <= 0) {
+  if (headMargin <= 0 || den <= 0) {
     // No real root: the machine cannot overcome the static head (or both curves
     // are flat). Operating point collapses to zero flow — clearly unstable.
     qOp = 0.0;
     stable = false;
   } else {
-    qOp = math.sqrt(num / den);
-    // Stability: a healthy match crosses at a clear angle. The crossing slope
-    // difference is d/dQ(H_sys − H_eq) = 2(k + a)·Q. Near-zero ⇒ the curves are
-    // tangent/flat and the duty hunts. Compare the head developed over the
-    // operating flow against a small fraction of the shutoff head as a
-    // dimensionless conditioning check.
-    final slopeDiff = 2.0 * den * qOp; // m per (m³/s)
-    // Reference slope: shutoff head spread over the operating flow.
-    final refSlope = (qOp > 0) ? hShutoff / qOp : 0.0;
-    if (refSlope > 0 && slopeDiff < 0.05 * refSlope) stable = false;
+    qOp = math.sqrt(headMargin / den);
   }
   final hOp = hStatic + k * qOp * qOp;
+
+  // Shallow-crossing test (M12): the duty's relative flow sensitivity at the
+  // crossing, S = H_op / (2·(H_shutoff − H_static)) — see the library doc for
+  // the slope algebra. Large S ⇒ the curves part at a shallow angle and a small
+  // head disturbance swings the flow a long way (the duty hunts).
+  if (stable) {
+    final sensitivity = _crossingFlowSensitivity(
+      operatingValue: hOp,
+      shutoffValue: hShutoff,
+      staticValue: hStatic,
+    );
+    if (sensitivity > kOperatingPointFlowSensitivityLimit) stable = false;
+  }
 
   // ── NPSH (// VERIFY estimates) ─────────────────────────────────────────────
   // NPSH_available = (P_atm − P_vapour)/(ρ·g) + h_suction_static − h_suction_fric
@@ -264,11 +353,22 @@ PumpOperatingPoint computePumpOperatingPoint({
   final hSuctionFric = kSuctionFrictionFraction * hSuctionStatic.abs();
   final npshA = atmHead - vapHead + hSuctionStatic - hSuctionFric;
 
-  // NPSH_required: a // VERIFY estimate scaled by (Q_op/Q_design)² off a
-  // design-point value (NPSH_r grows ~Q²). NOT a certified curve.
-  final npshRdesign = hd * kNpshRequiredHeadFraction;
-  final qRatio = (qd > 0) ? qOp / qd : 0.0;
-  final npshR = npshRdesign * qRatio * qRatio;
+  // NPSH_required (M12): a SUCTION-SIDE estimate from the suction-specific-speed
+  // correlation at the OPERATING flow,
+  //   NPSH_r = (n·√Q_op / N_ss)^(4/3)   (n rpm, Q m³/s, NPSH_r m)
+  // floored at kMinNpshRequiredM. It depends on speed and flow — the variables
+  // that actually set the suction condition — and NOT on the total head the
+  // pump develops (the old `0.15 × H_design` rule made a flooded-suction 60 m
+  // pump demand 9 m of NPSH_r and so flagged cavitation on a perfectly good
+  // installation). Zero flow ⇒ no meaningful cavitation question.
+  double npshR = 0.0;
+  if (qOp > 0) {
+    final correlated = math
+        .pow(kAssumedPumpSpeedRpm * math.sqrt(qOp) / kSuctionSpecificSpeed,
+            4.0 / 3.0)
+        .toDouble();
+    npshR = correlated > kMinNpshRequiredM ? correlated : kMinNpshRequiredM;
+  }
 
   final cavitation = npshR > 0 && npshA < kNpshSafetyMargin * npshR;
 
@@ -293,8 +393,17 @@ PumpOperatingPoint computePumpOperatingPoint({
 /// The fan system × equipment curve intersection. Pressures in pascals; no
 /// NPSH (cavitation is a liquid phenomenon). Curve coefficients are // VERIFY.
 class FanOperatingPoint {
-  /// System resistance coefficient k in Δp_sys = k·Q² (Pa per (m³/s)²). DESIGN
-  /// INPUT (// VERIFY) — never fitted from the duct solve here.
+  /// Fixed (flow-independent) differential the system imposes, Δp_static (Pa).
+  ///
+  /// Zero for an ordinary duct system — all of its resistance is velocity²
+  /// driven. Non-zero for a fan that must hold a fixed differential regardless
+  /// of flow (a stairwell-pressurisation fan, a fan discharging into a
+  /// pressurised plenum), which is the case that can make the curve crossing
+  /// shallow. See [stable].
+  final Pressure systemStaticPressure;
+
+  /// System resistance coefficient k in Δp_sys = Δp_static + k·Q² (Pa per
+  /// (m³/s)²). DESIGN INPUT (// VERIFY) — never fitted from the duct solve here.
   final double systemResistanceK;
 
   /// Equipment shutoff (zero-flow) static pressure, Δp_shutoff (Pa). // VERIFY.
@@ -313,11 +422,21 @@ class FanOperatingPoint {
   final FlowRate designAirflow;
   final Pressure designPressure;
 
-  /// False when the intersection is ill-conditioned (no real root or near-flat
-  /// crossing) — see [PumpOperatingPoint.stable].
+  /// False when the intersection is ill-conditioned (no real root, or a SHALLOW
+  /// crossing by the same relative-flow-sensitivity test as
+  /// [PumpOperatingPoint.stable], with Δp in place of head).
+  ///
+  /// Note the honest consequence of the modelled curves: with the ordinary
+  /// zero-static duct system curve the sensitivity reduces to
+  /// `S = k / (2(k + a)) < 0.5`, so an ordinary duct fan is ALWAYS
+  /// well-conditioned and this flag stays true — as it should. It fires for a
+  /// fan asked to hold a fixed [systemStaticPressure] close to its own shutoff
+  /// pressure (stairwell pressurisation is the classic case), and for the
+  /// degenerate no-root inputs.
   final bool stable;
 
   const FanOperatingPoint({
+    this.systemStaticPressure = const Pressure(0),
     required this.systemResistanceK,
     required this.equipmentShutoffPressure,
     required this.equipmentDroopA,
@@ -338,45 +457,68 @@ class FanOperatingPoint {
 /// Compose a [FanOperatingPoint] over a sized fan duty point.
 ///
 /// - [designAirflow] / [designPressure] — the duty the fan was sized for.
+/// - [systemStaticPressure]             — the system's FIXED differential (see
+///   [FanOperatingPoint.systemStaticPressure]). Defaults to zero, the ordinary
+///   duct system, which reproduces the previous behaviour exactly.
 /// - [systemResistanceK]                — DESIGN INPUT k (// VERIFY) for
-///   Δp_sys = k·Q². When null it is BACK-SOLVED so the system curve passes
-///   through the design point: k = Δp_design / Q_design².
+///   Δp_sys = Δp_static + k·Q². When null it is BACK-SOLVED so the system curve
+///   passes through the design point: k = (Δp_design − Δp_static) / Q_design²
+///   (clamped at 0, since a system curve cannot fall with flow).
 ///
-/// The duct system curve has no static term (Δp_sys(0) = 0): all the duct
-/// resistance is velocity²-driven. The equipment curve is pinned to the design
-/// point with a representative shutoff fraction (// VERIFY).
+/// An ordinary duct system curve has no static term (Δp_sys(0) = 0): all the
+/// duct resistance is velocity²-driven. The equipment curve is pinned to the
+/// design point with a representative shutoff fraction (// VERIFY).
 FanOperatingPoint computeFanOperatingPoint({
   required FlowRate designAirflow,
   required Pressure designPressure,
+  Pressure systemStaticPressure = const Pressure(0),
   double? systemResistanceK,
 }) {
   final qd = designAirflow.cubicMetersPerSecond;
   final pd = designPressure.pascals;
+  final pStatic = systemStaticPressure.pascals;
 
-  // System curve: Δp_sys(Q) = k·Q² (no static term). k is a DESIGN INPUT; when
-  // absent, back-solve through the design point.
-  final k = systemResistanceK ?? ((qd > 0) ? pd / (qd * qd) : 0.0);
+  // System curve: Δp_sys(Q) = Δp_static + k·Q². k is a DESIGN INPUT; when
+  // absent, back-solve through the design point (never negative).
+  final double k;
+  if (systemResistanceK != null) {
+    k = systemResistanceK;
+  } else {
+    final backSolved = (qd > 0) ? (pd - pStatic) / (qd * qd) : 0.0;
+    k = backSolved > 0 ? backSolved : 0.0;
+  }
 
   // Equipment curve pinned to the design point with a representative shutoff.
   final pShutoff = pd * kEquipmentShutoffHeadRatio;
   final a = (qd > 0) ? (pShutoff - pd) / (qd * qd) : 0.0;
 
-  // Intersection: k·Q² = Δp_shutoff − a·Q² ⇒ Q_op = √(Δp_shutoff / (k + a)).
+  // Intersection: Δp_static + k·Q² = Δp_shutoff − a·Q²
+  //             ⇒ Q_op = √((Δp_shutoff − Δp_static) / (k + a)).
+  final pressureMargin = pShutoff - pStatic;
   final den = k + a;
   double qOp;
   var stable = true;
-  if (pShutoff <= 0 || den <= 0) {
+  if (pressureMargin <= 0 || den <= 0) {
     qOp = 0.0;
     stable = false;
   } else {
-    qOp = math.sqrt(pShutoff / den);
-    final slopeDiff = 2.0 * den * qOp; // Pa per (m³/s)
-    final refSlope = (qOp > 0) ? pShutoff / qOp : 0.0;
-    if (refSlope > 0 && slopeDiff < 0.05 * refSlope) stable = false;
+    qOp = math.sqrt(pressureMargin / den);
   }
-  final pOp = k * qOp * qOp;
+  final pOp = pStatic + k * qOp * qOp;
+
+  // Shallow-crossing test (M12) — the same relative flow sensitivity as the
+  // pump, S = Δp_op / (2·(Δp_shutoff − Δp_static)); see the library doc.
+  if (stable) {
+    final sensitivity = _crossingFlowSensitivity(
+      operatingValue: pOp,
+      shutoffValue: pShutoff,
+      staticValue: pStatic,
+    );
+    if (sensitivity > kOperatingPointFlowSensitivityLimit) stable = false;
+  }
 
   return FanOperatingPoint(
+    systemStaticPressure: Pressure(pStatic),
     systemResistanceK: k,
     equipmentShutoffPressure: Pressure(pShutoff),
     equipmentDroopA: a,

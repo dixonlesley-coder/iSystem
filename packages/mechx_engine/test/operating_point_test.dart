@@ -137,9 +137,14 @@ void main() {
   //   h_suction_fric   = 0.10·|5| = 0.5 m
   //   NPSH_available = 10.32874 − 0.238430 + 5 − 0.5 = 14.59031 m
   //
-  // Default split (no system inputs): k back-solved so Q_op = Q_design = 0.0005,
-  // so q_ratio = 1. NPSH_required at design = 0.15·20 = 3.0 m, scaled ×1² = 3.0.
-  //   3.0·1.5 (safety) = 4.5 m < 14.59 m ⇒ no cavitation risk.
+  // Default split (no system inputs): k back-solved so Q_op = Q_design = 0.0005.
+  // NPSH_required is RE-DERIVED for M12 — it now comes from the SUCTION side
+  // (suction-specific-speed correlation), not from 15 % of the total head:
+  //   n·√Q_op = 2900·√0.0005 = 2900 × 0.0223606798 = 64.845971...
+  //   /N_ss    = 64.845971 / 160 = 0.405287...
+  //   ^(4/3)   = 0.2999282... m  → below the 0.5 m conservative floor,
+  //   so NPSH_required = kMinNpshRequiredM = 0.5 m.
+  //   0.5·1.5 (safety) = 0.75 m < 14.59 m ⇒ no cavitation risk (as before).
   group('computePumpOperatingPoint — NPSH flooded suction', () {
     late PumpOperatingPoint op;
     setUpAll(() {
@@ -156,11 +161,14 @@ void main() {
       expect(op.npshAvailable.meters, closeTo(expected, 1e-9));
       expect(op.npshAvailable.meters, closeTo(14.59031, 1e-4));
     });
-    test('NPSH required ≈ 3.0 m at the (design) operating flow', () {
-      // q_ratio = 1 (default split recovers design flow), so 0.15·20·1² = 3.0.
-      expect(op.npshRequired.meters, closeTo(3.0, 1e-6));
+    test('NPSH required = the 0.5 m floor at this small flow (M12)', () {
+      // (2900·√0.0005 / 160)^(4/3) = 0.29993 m, floored at 0.5 m.
+      final correlated =
+          math.pow(2900.0 * math.sqrt(0.0005) / 160.0, 4.0 / 3.0).toDouble();
+      expect(correlated, closeTo(0.29992823826993853, 1e-12));
+      expect(op.npshRequired.meters, closeTo(kMinNpshRequiredM, 1e-12));
     });
-    test('no cavitation risk (NPSH_a 14.59 ≥ 1.5·3.0 = 4.5)', () {
+    test('no cavitation risk (NPSH_a 14.59 ≥ 1.5·0.5 = 0.75)', () {
       expect(op.cavitationRisk, isFalse);
     });
   });
@@ -170,8 +178,9 @@ void main() {
   // Same duty but suction −9 m (the pump lifts the fluid 9 m):
   //   h_suction_fric = 0.10·9 = 0.9 m
   //   NPSH_available = 10.32874 − 0.238430 − 9 − 0.9 = 0.190310 m
-  //   NPSH_required (design flow, ratio 1) = 3.0 m → 1.5·3 = 4.5 m.
-  //   0.19 < 4.5 ⇒ cavitation risk flagged.
+  //   NPSH_required (M12: the 0.5 m suction-side floor at this flow, as above)
+  //   → 1.5·0.5 = 0.75 m.
+  //   0.19 < 0.75 ⇒ cavitation risk flagged (the genuine high-lift case).
   group('computePumpOperatingPoint — NPSH suction lift → cavitation', () {
     late PumpOperatingPoint op;
     setUpAll(() {
@@ -188,7 +197,7 @@ void main() {
       expect(op.npshAvailable.meters, closeTo(expected, 1e-9));
       expect(op.npshAvailable.meters, closeTo(0.19031, 1e-4));
     });
-    test('cavitation risk flagged (0.19 < 1.5·3.0 = 4.5)', () {
+    test('cavitation risk flagged (0.19 < 1.5·0.5 = 0.75)', () {
       expect(op.cavitationRisk, isTrue);
     });
   });

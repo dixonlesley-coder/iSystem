@@ -654,18 +654,20 @@ void main() {
   });
 
   group('pressure-zone over-limit fan-in (I1)', () {
-    // A tall building forces a downfeed pressure zone whose lowest fixture
-    // exceeds the SNI max fixture static pressure (392.266 kPa).
+    // M1 made computeDownfeedZones budget on the SAME ceiling→fixture span
+    // downfeedZoneStatics measures, so a MULTI-floor building can no longer
+    // produce an over-limit zone (zones are compliant by construction). The
+    // warning now fires only for a genuinely INDIVISIBLE case: one storey so
+    // tall that its own ceiling-to-fixture drop exceeds the budget — a single
+    // floor cannot be split, so the zoner emits it and the checker honestly
+    // rejects it.
     //
-    // 8 floors × 5.0 m, ρg = 9810, targetResidual = 225 000 Pa.
-    //   effective span ceiling = (392266 − 225000)/9810 ≈ 17.05 m, so
-    //   computeDownfeedZones partitions into zones [7–4] and [3–0].
-    //   For zone [3–0]: feed = ceiling(3) = 15 + 5 − 0.3 = 19.7 m,
-    //                   bottom = fixture(0) = 0 + 1.1 = 1.1 m, span = 18.6 m,
+    // One floor × 20.0 m, ρg = 9810, targetResidual = 225 000 Pa.
+    //   budget = (392266 − 225000)/9810 ≈ 17.05 m
+    //   span = ceiling(0) − fixture(0) = (20.0 − 0.3) − 1.1 = 18.6 m > 17.05
     //   bottomStatic = 225000 + 9810·18.6 = 407 466 Pa ≈ 407 kPa > 392 kPa
     //   ⇒ withinLimit is false ⇒ an over-limit pressure zone.
-    List<Floor> tallFloors() =>
-        [for (var i = 0; i < 8; i++) Floor('L$i', const Length(5.0))];
+    List<Floor> tallFloors() => [Floor('Hall', const Length(20.0))];
 
     test('an over-limit pressure zone surfaces a warning DesignIssue', () {
       final c = ProviderContainer();

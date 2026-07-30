@@ -84,9 +84,10 @@ final class DuctSizingResult {
 
   /// True when the required size exceeds the largest standard duct and the
   /// result was CLAMPED to that size — the chosen duct cannot meet the velocity
-  /// limit / friction target. Mirrors WaterSupplySizingResult.overVelocity /
-  /// RainwaterSizingResult.overCapacity: the caller should surface this as a
-  /// per-edge design issue rather than treat the size as valid.
+  /// limit and/or the friction target it was sized against. Mirrors
+  /// WaterSupplySizingResult.overVelocity / RainwaterSizingResult.overCapacity:
+  /// the caller should surface this as a per-edge design issue rather than
+  /// treat the size as valid.
   final bool overCapacity;
 
   const DuctSizingResult({
@@ -127,6 +128,20 @@ double ductFrictionPaPerMetre(FlowRate q, Diameter d, {Roughness? roughness}) {
   final f = frictionFactorSwameeJain(re, relRoughness);
   return f * (1.0 / d.meters) * (_airDensity * v.metersPerSecond * v.metersPerSecond / 2.0);
 }
+
+/// Relative tolerance used when comparing an ACHIEVED duct velocity against a
+/// velocity cap. A standard size that lands exactly ON the cap (e.g. 1.2 m³/s
+/// through 600 × 400 mm = 5.000 m/s) must not be rejected — or flagged
+/// over-capacity — by floating-point dust in the area product.
+const double _velocityCompareTolerance = 1e-9;
+
+/// True when [v] satisfies the [cap] (within [_velocityCompareTolerance]).
+/// A null [cap] means "no velocity constraint" ⇒ always true, which is what
+/// keeps the equal-friction callers that pass no cap byte-identical.
+bool _withinVelocity(Velocity v, Velocity? cap) =>
+    cap == null ||
+    v.metersPerSecond <=
+        cap.metersPerSecond * (1.0 + _velocityCompareTolerance);
 
 /// Air velocity pressure (Pa) at mean [velocity]: ρv²/2 (ρ = standard air).
 double airVelocityPressurePa(Velocity velocity) =>
@@ -195,24 +210,39 @@ DuctSizingResult sizeByVelocity({
 /// [targetPaPerMetre] Pa per metre of duct (equal-friction method).
 ///
 /// Algorithm: iterate [standardDuctDiametersMm] from smallest to largest;
-/// return the first size whose Δp/L ≤ [targetPaPerMetre].
+/// return the first size whose Δp/L ≤ [targetPaPerMetre] **and** — when a
+/// [maxVelocity] cap is supplied — whose mean velocity ≤ that cap. Both
+/// constraints relax monotonically as the duct grows, so the first size that
+/// satisfies both is the smallest adequate one.
 ///
-/// If no standard size achieves the target the result is CLAMPED to the
-/// largest standard size with [DuctSizingResult.overCapacity] = true (its
-/// friction will EXCEED [targetPaPerMetre]) — the solve never aborts; the
-/// caller surfaces the over-capacity flag as a per-edge design issue.
+/// M2 — the equal-friction method on its own says nothing about velocity: at a
+/// 1.0 Pa/m target a 1.2 m³/s duct lands on DN500 at 6.1 m/s, well past the
+/// 5 m/s design cap, with no flag anywhere. Pass [maxVelocity] (the sizing
+/// context's duct velocity limit) so the ladder keeps stepping UP until BOTH
+/// hold. [maxVelocity] defaults to null ⇒ friction-only selection, i.e. every
+/// existing caller is byte-identical.
+///
+/// If no standard size satisfies the active constraints the result is CLAMPED
+/// to the largest standard size with [DuctSizingResult.overCapacity] = true
+/// (its friction will EXCEED [targetPaPerMetre] and/or its velocity will exceed
+/// [maxVelocity]) — the solve never aborts; the caller surfaces the
+/// over-capacity flag as a per-edge design issue.
 DuctSizingResult sizeByEqualFriction({
   required FlowRate airflow,
   double targetPaPerMetre = 1.0,
+  Velocity? maxVelocity,
 }) {
   assert(airflow.cubicMetersPerSecond > 0, 'airflow must be positive');
   assert(targetPaPerMetre > 0, 'targetPaPerMetre must be positive');
+  assert(maxVelocity == null || maxVelocity.metersPerSecond > 0,
+      'maxVelocity must be positive when supplied');
 
   for (final sizeMm in standardDuctDiametersMm) {
     final d = Diameter.mm(sizeMm);
     final friction = ductFrictionPaPerMetre(airflow, d);
-    if (friction <= targetPaPerMetre) {
-      final actualVelocity = velocityFromFlow(airflow, d);
+    final actualVelocity = velocityFromFlow(airflow, d);
+    if (friction <= targetPaPerMetre &&
+        _withinVelocity(actualVelocity, maxVelocity)) {
       return DuctSizingResult(
         diameter: d,
         actualVelocity: actualVelocity,
@@ -221,8 +251,8 @@ DuctSizingResult sizeByEqualFriction({
     }
   }
 
-  // No standard size meets the target — CLAMP to the largest and flag
-  // overCapacity (rather than throw and abort the whole network solve).
+  // No standard size meets the target (and/or the velocity cap) — CLAMP to the
+  // largest and flag overCapacity (rather than throw and abort the whole solve).
   final d = Diameter.mm(standardDuctDiametersMm.last);
   return DuctSizingResult(
     diameter: d,
@@ -263,9 +293,17 @@ final class RectangularDuctResult {
   /// Friction pressure loss per metre (Pa/m), via the equivalent diameter.
   final double frictionPerMetrePa;
 
-  /// True when the required cross-section exceeds the largest standard side and
-  /// the result was CLAMPED — the chosen W×H cannot meet the velocity limit /
-  /// friction target. Mirrors [DuctSizingResult.overCapacity].
+  /// True when the chosen W×H — after clamping at the largest standard side —
+  /// cannot meet the constraint it was sized against. Mirrors
+  /// [DuctSizingResult.overCapacity].
+  ///
+  /// M6 — the velocity method judges this from the ACHIEVED velocity
+  /// ([actualVelocity] > the cap), NOT from the ideal sides. Rounding each side
+  /// UP means an ideal side past the top of the ladder can still land on a
+  /// cross-section that satisfies the cap (Q = 4.92 m³/s, aspect 1.5, cap
+  /// 5.0 m/s ⇒ ideal 1215 × 810 clamps to 1200 × 900 = 1.08 m² ⇒ 4.56 m/s,
+  /// which is compliant), and flagging it produced a red plan badge and a
+  /// Review warning on a perfectly good duct.
   final bool overCapacity;
 
   const RectangularDuctResult({
@@ -303,14 +341,15 @@ RectangularDuctResult sizeRectangularByVelocity({
         orElse: () => standardDuctSidesMm.last,
       );
 
-  // If either ideal side exceeds the largest standard side, roundUp clamps to
-  // .last and the actual velocity exceeds the limit — flag overCapacity.
-  final bool overCapacity =
-      wIdealMm > standardDuctSidesMm.last || hIdealMm > standardDuctSidesMm.last;
   final w = Length(roundUp(wIdealMm) / 1000.0);
   final h = Length(roundUp(hIdealMm) / 1000.0);
   final actualArea = w.meters * h.meters;
   final v = Velocity(airflow.cubicMetersPerSecond / actualArea);
+  // M6 — flag from the ACHIEVED velocity, not the ideal sides: when an ideal
+  // side is clamped at the top of the ladder the OTHER side is still rounded
+  // UP, so the delivered cross-section can (and often does) still satisfy the
+  // cap. Only a genuinely over-velocity duct is an over-capacity duct.
+  final bool overCapacity = !_withinVelocity(v, maxVelocity);
   final de = rectangularEquivalentDiameter(w, h);
   final friction = ductFrictionPaPerMetre(airflow, de);
 
@@ -332,18 +371,29 @@ RectangularDuctResult sizeRectangularByVelocity({
 /// candidate height H in [standardDuctSidesMm] (ascending), W = aspect·H rounded
 /// up to the next standard side; the friction is read from the circular-
 /// equivalent diameter ([rectangularEquivalentDiameter] →
-/// [ductFrictionPaPerMetre]). The first W×H whose Δp/L ≤ [targetPaPerMetre] is
-/// returned. If none qualifies the result is CLAMPED to the largest sides with
-/// [RectangularDuctResult.overCapacity] = true (friction exceeds the target),
+/// [ductFrictionPaPerMetre]). The first W×H whose Δp/L ≤ [targetPaPerMetre]
+/// **and** — when a [maxVelocity] cap is supplied — whose mean velocity ≤ that
+/// cap is returned; both constraints relax monotonically as the section grows
+/// (H ascends and W = aspect·H rounded up is non-decreasing), so the first
+/// qualifying candidate is the smallest adequate one.
+///
+/// M2 — see [sizeByEqualFriction]: equal friction alone does not bound
+/// velocity. [maxVelocity] defaults to null ⇒ friction-only selection, so every
+/// existing caller is byte-identical. If none qualifies the result is CLAMPED
+/// to the largest sides with [RectangularDuctResult.overCapacity] = true
+/// (friction exceeds the target and/or the velocity exceeds the cap),
 /// mirroring [sizeByEqualFriction].
 RectangularDuctResult sizeRectangularByEqualFriction({
   required FlowRate airflow,
   double targetPaPerMetre = 1.0,
   double aspectRatio = 1.5,
+  Velocity? maxVelocity,
 }) {
   assert(airflow.cubicMetersPerSecond > 0, 'airflow must be positive');
   assert(targetPaPerMetre > 0, 'targetPaPerMetre must be positive');
   assert(aspectRatio >= 1.0, 'aspectRatio (W/H) must be ≥ 1');
+  assert(maxVelocity == null || maxVelocity.metersPerSecond > 0,
+      'maxVelocity must be positive when supplied');
 
   double roundUp(double mm) => standardDuctSidesMm.firstWhere(
         (s) => s >= mm,
@@ -355,19 +405,20 @@ RectangularDuctResult sizeRectangularByEqualFriction({
     final w = Length(roundUp(aspectRatio * hMm) / 1000.0);
     final de = rectangularEquivalentDiameter(w, h);
     final friction = ductFrictionPaPerMetre(airflow, de);
-    if (friction <= targetPaPerMetre) {
-      final actualArea = w.meters * h.meters;
+    final actualArea = w.meters * h.meters;
+    final v = Velocity(airflow.cubicMetersPerSecond / actualArea);
+    if (friction <= targetPaPerMetre && _withinVelocity(v, maxVelocity)) {
       return RectangularDuctResult(
         width: w,
         height: h,
         equivalentDiameter: de,
-        actualVelocity: Velocity(airflow.cubicMetersPerSecond / actualArea),
+        actualVelocity: v,
         frictionPerMetrePa: friction,
       );
     }
   }
 
-  // No standard W×H meets the target — CLAMP to the largest sides.
+  // No standard W×H meets the target (and/or the cap) — CLAMP to the largest.
   final h = Length(standardDuctSidesMm.last / 1000.0);
   final w = Length(standardDuctSidesMm.last / 1000.0);
   final de = rectangularEquivalentDiameter(w, h);

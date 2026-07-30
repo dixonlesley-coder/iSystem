@@ -9,7 +9,8 @@
 library;
 
 import 'package:mechx_engine/sizing/operating_point.dart';
-import 'package:mechx_engine/sizing/pump.dart' show selectMotor;
+import 'package:mechx_engine/sizing/pump.dart'
+    show motorOversizedFor, selectMotor, standardMotorKw;
 import 'package:mechx_engine/units.dart';
 
 /// All power quantities for one fan duty point.
@@ -30,8 +31,16 @@ class FanDuty {
   /// Motor electrical input: P_input = P_shaft / η_motor.
   final Power motorInputPower;
 
-  /// Smallest standard motor whose rated output ≥ [shaftPower].
+  /// Smallest standard motor whose rated output ≥ [shaftPower] — or, when
+  /// [motorOversized] is true, the largest frame in [standardMotorKw].
   final Power selectedMotor;
+
+  /// M11 — true when [shaftPower] exceeds the largest frame in
+  /// [standardMotorKw] and [selectMotor] therefore CLAMPED: [selectedMotor] is
+  /// then SMALLER than the duty needs. The fan analogue of
+  /// `PumpDuty.motorOversized`; default false ⇒ in-range duties are
+  /// byte-identical.
+  final bool motorOversized;
 
   /// System × equipment curve operating-point analysis (intersection +
   /// stability), composed over this duty by [computeFanOperatingPoint]. Null
@@ -48,6 +57,7 @@ class FanDuty {
     required this.motorInputPower,
     required this.selectedMotor,
     this.operatingPoint,
+    this.motorOversized = false,
   });
 }
 
@@ -96,5 +106,6 @@ FanDuty sizeFan({
     motorInputPower: motorInput,
     selectedMotor: selectMotor(shaft),
     operatingPoint: operatingPoint,
+    motorOversized: motorOversizedFor(shaft),
   );
 }

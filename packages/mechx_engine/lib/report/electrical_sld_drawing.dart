@@ -18,6 +18,8 @@ import 'dart:math' as math;
 
 import '../electrical/cable_family.dart'
     show cableFamilyDescription, defaultCableFamily;
+import '../electrical/containment.dart'
+    show ConduitSpec, conduitFillSingle, sizeConduit;
 import '../electrical/control/starter.dart' show StarterType;
 import '../electrical/earthing.dart' show EarthingSystemInfo;
 import '../electrical/model.dart';
@@ -123,8 +125,15 @@ String breakerLabel(BreakerResult b, int poles) {
 /// (rating + phase first; the trip curve is secondary, surfaced via the incomer
 /// sub-line + legend). `poles` is the way's pole count (1 or 3). ASCII-safe
 /// (`ph`, not the unicode phase glyph) so it never renders as tofu.
-String breakerScheduleLabel(BreakerResult b, int poles) =>
-    '${_classCode(b.deviceClass)} ${_num(b.ratingA.amperes)}A ${poles}ph';
+///
+/// E8b: a SINGLE-PHASE FEEDER leaving a three-phase board is specified by its
+/// POLE count, not its phase count — the device is a 2-pole (L + N) breaker, the
+/// same `2P` the overview node already prints. [twoPole] switches that one case
+/// to `MCCB 80A 2P`; every ordinary single-phase FINAL way keeps `1ph`.
+String breakerScheduleLabel(BreakerResult b, int poles,
+        {bool twoPole = false}) =>
+    '${_classCode(b.deviceClass)} ${_num(b.ratingA.amperes)}A '
+    '${twoPole ? '2P' : '${poles}ph'}';
 
 /// The per-phase (R / S / T) loading strings for a way carrying line current
 /// [ib]: a single-phase way loads only its assigned line; a three-phase way
@@ -153,6 +162,17 @@ String _earthConductor(double peCsaMm2) {
 /// on tray / cable-ladder; the schedule then prints an explicit `tray` route
 /// token instead, H6). A 3-phase run (5-core) bumps up one trade size for the
 /// extra cores.
+///
+/// E2/E8c: the CSA ladder alone could name a PHYSICALLY IMPOSSIBLE conduit (a
+/// 5×70 mm² run does not go into 50 mm), so the ladder pick is now checked
+/// against the containment module's OWN geometry — `sizeConduit` (estimated
+/// cable OD vs the standard bores at the `conduitFillSingle` limit), imported,
+/// not re-derived — and RAISED to whatever that fill check demands. The result
+/// is therefore never smaller than the ladder (so a run whose ladder pick
+/// already satisfies the fill stays byte-identical) and never smaller than the
+/// physics. When the cable does not fit the largest standard conduit at all,
+/// null is returned ⇒ the row prints `tray`, agreeing with the containment
+/// study instead of contradicting it.
 int? _conduitMm(double csaMm2, bool threePhase) {
   final base = csaMm2 <= 4
       ? 20
@@ -166,9 +186,25 @@ int? _conduitMm(double csaMm2, bool threePhase) {
                       ? 50
                       : 0;
   if (base == 0) return null;
-  if (!threePhase || base >= 50) return base;
-  return switch (base) { 20 => 25, 25 => 32, 32 => 40, 40 => 50, _ => base };
+  final ladder =
+      (!threePhase || base >= 50)
+          ? base
+          : switch (base) { 20 => 25, 25 => 32, 32 => 40, 40 => 50, _ => base };
+  final fill = _conduitFromSpec(sizeConduit(csaMm2, threePhase ? 5 : 3));
+  // No standard conduit holds the cable ⇒ tray (never a fabricated size).
+  if (fill == null) return null;
+  return math.max(ladder, fill);
 }
+
+/// The conduit trade size (mm) a containment [ConduitSpec] actually issues, or
+/// null when even the largest standard conduit is over the single-cable fill
+/// limit (⇒ the run is a tray/ladder run, not a conduit run). Shared by the
+/// fill-aware fallback above and the study-fed token below so the two can never
+/// disagree about what "no conduit" means.
+int? _conduitFromSpec(ConduitSpec spec) =>
+    spec.fillPct > conduitFillSingle * 100
+        ? null
+        : spec.conduitSizeMm.round();
 
 /// A cable label like `NYM 3x2.5` — the family from the circuit's explicit
 /// [ElectricalCircuit.cableType] when set, else the conventional default for its
@@ -254,11 +290,29 @@ double? _panelIcuKa(
 /// equals the prospective fault at its board, so one figure applies to all its
 /// devices). Null / empty / a missing panel ⇒ NOTHING appended (byte-identical);
 /// the kA is NEVER fabricated here.
+///
+/// [breakerKaByCircuitId] (E1) maps a CIRCUIT id → that way's OWN device
+/// breaking capacity (the fault study's `fault.circuits[id].breakerKa`, snapped
+/// to the ladder of the way's own device class). A panel map is one figure for
+/// the whole board — the INCOMER's frame ladder — so a board with an MCCB
+/// incomer stamped `16kA` on its MCB ways, a rating no MCB is built to. When
+/// this map carries the way, it WINS for that way's DEVICE cell; the panel map
+/// stays the fallback (and still drives the INCOMER sub-line), so an existing
+/// caller that passes only the panel map is byte-identical.
+///
+/// [containmentByCircuitId] (E2/E8c) maps a CIRCUIT id → the containment
+/// study's own `ConduitSpec` for that run. When present, the PENGHANTAR cell
+/// prints the STUDY's conduit trade size (or `tray` when the cable exceeds the
+/// largest standard conduit at the study's fill limit) instead of the local CSA
+/// ladder, so the schedule and the containment take-off can never contradict
+/// each other on the same run. Absent ⇒ the (now fill-aware) ladder.
 SldSheet buildElectricalSld({
   required ElectricalProject project,
   required ElectricalSystemResult result,
   String? onlyPanelId,
   Map<String, double>? breakerIcuKaByPanelId,
+  Map<String, double>? breakerKaByCircuitId,
+  Map<String, ConduitSpec>? containmentByCircuitId,
 }) {
   final modelById = {for (final p in project.panels) p.id: p};
   final circuitById = <String, ElectricalCircuit>{
@@ -458,11 +512,18 @@ SldSheet buildElectricalSld({
       final earth = c.grounding.peCsaMm2 > 0
           ? _earthConductor(c.grounding.peCsaMm2)
           : '';
-      final conduitMm = _conduitMm(c.cable.csaMm2, c.threePhase);
-      // H6: a way whose conductor exceeds the conduit range (CSA > 70 mm2) runs
-      // on cable tray / ladder, not in conduit — print an explicit `tray` route
-      // token so EVERY row states a route method (the code's own convention;
-      // never a silent blank next to neighbours that show `· PVC NNmm`).
+      // E2: the containment STUDY's own result for this run wins when supplied
+      // (one containment source for the schedule + the take-off); else the
+      // fill-aware ladder. Both return null for a cable no standard conduit
+      // holds ⇒ `tray`.
+      final studySpec = containmentByCircuitId?[c.circuitId];
+      final conduitMm = studySpec != null
+          ? _conduitFromSpec(studySpec)
+          : _conduitMm(c.cable.csaMm2, c.threePhase);
+      // H6: a way whose conductor exceeds the conduit range runs on cable tray /
+      // ladder, not in conduit — print an explicit `tray` route token so EVERY
+      // row states a route method (the code's own convention; never a silent
+      // blank next to neighbours that show `· PVC NNmm`).
       // // VERIFY — a drawing convention (the model carries no containment field).
       final conduit = conduitMm != null ? ' · PVC ${conduitMm}mm' : ' · tray';
       // The run LENGTH the solve already used for this way (geo-derived when
@@ -489,7 +550,17 @@ SldSheet buildElectricalSld({
       // The breaker cell leads with rating + phase, then the Icu suffix (when
       // fed), then the control / starter token, then the RCD token — so the kA
       // reads as part of the breaker spec, ahead of the control / RCD notes.
-      final breakerCell = '${breakerScheduleLabel(c.breaker, poles)}$kaSuffix';
+      // E1: a per-CIRCUIT kA (the way's OWN device ladder) wins over the
+      // board-wide figure; absent ⇒ the panel figure, exactly as before.
+      final wayKa = breakerKaByCircuitId?[c.circuitId] ?? icuKa;
+      final wayKaSuffix = wayKa != null ? ' ${_num(wayKa)}kA' : '';
+      if (wayKa != null) anyIcuKa = true;
+      // E8b: a single-phase FEEDER on a three-phase board is a 2-pole device.
+      final feederTwoPole =
+          feeds != null && !c.threePhase && p.system.isThreePhase;
+      final breakerCell =
+          '${breakerScheduleLabel(c.breaker, poles, twoPole: feederTwoPole)}'
+          '$wayKaSuffix';
       final device = '$breakerCell'
           '${starter != null ? ' · ${_starterCode(starter)}' : ''}'
           '$rcd';
@@ -669,12 +740,16 @@ SldSheet buildElectricalPanelDetail({
   required ElectricalSystemResult result,
   required String panelId,
   Map<String, double>? breakerIcuKaByPanelId,
+  Map<String, double>? breakerKaByCircuitId,
+  Map<String, ConduitSpec>? containmentByCircuitId,
 }) =>
     buildElectricalSld(
       project: project,
       result: result,
       onlyPanelId: panelId,
       breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+      breakerKaByCircuitId: breakerKaByCircuitId,
+      containmentByCircuitId: containmentByCircuitId,
     );
 
 /// The utility SOURCE-SPINE only, as a standalone `SldSheet` for painting a
@@ -776,6 +851,27 @@ const double _ovH = 46;
 const double _ovHGap = 26;
 const double _ovTierH = 120;
 
+/// Text size of an OVERVIEW feeder annotation (the size it has always been
+/// drawn at) — shared with the collision pass so the boxes match the ink.
+const double _ovFeederLabelSize = 6.5;
+
+/// Vertical pitch + budget of the overview's feeder-annotation stagger ladder.
+const double _kOvLabelStackH = 9;
+const int _kOvStackSlots = 10;
+
+/// The escape ladder for one overview feeder annotation whose default anchor
+/// [def] collides: stagger vertically about the default (down, then up,
+/// growing) — the tag stays over its own mid segment and never drifts into a
+/// neighbouring tier. // VERIFY: a drafting declutter heuristic, not a standard.
+List<(double, double)> _ovLabelLadder((double, double) def) => [
+      def,
+      for (var k = 0; k < _kOvStackSlots; k++)
+        (
+          def.$1,
+          def.$2 + (k.isOdd ? -1 : 1) * ((k + 2) ~/ 2) * _kOvLabelStackH,
+        ),
+    ];
+
 /// Assumed building power factor for the per-panel compact-node kVA sub-line —
 /// mirrors `compute.dart`'s `assumedBuildingPf` but inlined to keep this pure
 /// drawing file free of the compute dependency. A representative estimate, NOT
@@ -823,18 +919,37 @@ const double _assumedPanelPf = 0.85;
 /// length) — appended only when a real length exists, never fabricated. Null
 /// when the child's feeding circuit or its sized result is unresolved (⇒ omit
 /// the label rather than guess). ASCII-safe (the bundled middle dot is allowed).
+/// [parentThreePhase] marks a single-phase feeder leaving a THREE-phase board:
+/// its device is a 2-pole (L + N) breaker, so the token reads `2P` (E8b) — the
+/// same convention the compact overview node already prints. A single-phase
+/// feeder from a single-phase board is unchanged.
 String? _feederConnLabel(
   Map<String, ElectricalCircuit> feederCircuitOf,
   Map<String, ElectricalCircuitResult> feederResultOf,
-  String child,
-) {
+  String child, {
+  bool parentThreePhase = false,
+}) {
   final cr = feederResultOf[child];
   final circ = feederCircuitOf[child];
   if (cr == null || circ == null) return null;
   final poles = cr.threePhase ? 3 : 1;
   final length = cr.lengthM > 0 ? ' · ${_num(cr.lengthM)} m' : '';
+  final twoPole = parentThreePhase && !cr.threePhase;
   return '${cableLabel(circ, cr.cable.csaMm2, cr.threePhase)} mm2 · '
-      '${breakerScheduleLabel(cr.breaker, poles)}$length';
+      '${breakerScheduleLabel(cr.breaker, poles, twoPole: twoPole)}$length';
+}
+
+/// True when [child]'s PARENT board is three-phase (so a single-phase feeder to
+/// it is a 2-pole device — see [_feederConnLabel]). Shared by the overview + the
+/// riser so both read identically.
+bool _parentIsThreePhase(
+  Map<String, String> parentOf,
+  ElectricalSystemResult result,
+  String child,
+) {
+  final par = parentOf[child];
+  final pr = par == null ? null : result.panels[par];
+  return pr?.system.isThreePhase ?? false;
 }
 
 /// The compact-node sub-line: `<In>A <poles>P · <kW>kW / <kVA>kVA` (the panel's
@@ -1645,6 +1760,58 @@ SldSheet buildElectricalOverview({
     }
   }
 
+  // ── Feeder annotations: collision-resolved BEFORE anything is emitted ───────
+  // X2: two feeders leaving ONE parent share the same mid-segment row, so their
+  // annotations printed on top of each other. The riser's placer idiom applies
+  // unchanged here: every tag keeps its DEFAULT anchor when that is clear (so a
+  // single-feeder parent — and every uncollided sheet — is byte-identical), and
+  // a colliding tag walks a bounded stagger ladder, leadering back to the branch
+  // it names. A tag is drawing CONTENT: it is never dropped.
+  final ovSlot = <String, (double, double)>{};
+  final ovLabel = <String, String>{};
+  final ovDefault = <String, (double, double)>{};
+  final ovCleared = <String, bool>{};
+  {
+    final ovPlacer = _RiserLabelPlacer([
+      for (final id in result.order)
+        if (cx.containsKey(id))
+          _RiserBox(cx[id]!, nodeY(id), cx[id]! + _ovW, nodeY(id) + _ovH),
+    ]);
+    final pending = <String>[];
+    for (final entry in children.entries) {
+      final ax = cx[entry.key]! + _ovW / 2;
+      final ay = nodeY(entry.key) + _ovH;
+      for (final child in entry.value) {
+        if (!cx.containsKey(child)) continue;
+        final lbl = _feederConnLabel(feederCircuitOf, feederResultOf, child,
+            parentThreePhase: _parentIsThreePhase(parentOf, result, child));
+        if (lbl == null) continue;
+        final zx = cx[child]! + _ovW / 2;
+        final midY = (ay + nodeY(child)) / 2;
+        final slot = (math.min(ax, zx) + 4, midY - 4);
+        ovLabel[child] = lbl;
+        ovDefault[child] = slot;
+        ovSlot[child] = slot;
+        ovCleared[child] = true;
+        if (!ovPlacer.reserveIfClear(slot, lbl, _ovFeederLabelSize)) {
+          pending.add(child);
+        }
+      }
+    }
+    for (final child in pending) {
+      final r = ovPlacer.escape(
+          _ovLabelLadder(ovDefault[child]!), ovLabel[child]!,
+          _ovFeederLabelSize);
+      ovSlot[child] = r.slot;
+      ovCleared[child] = r.cleared;
+    }
+  }
+  // The extents of any DISPLACED annotation, folded into the bounds below so an
+  // escaped tag is never clipped (no displacement ⇒ the bounds are unchanged).
+  var ovLabelMaxX = double.negativeInfinity;
+  var ovLabelMinY = double.infinity;
+  var ovLabelMaxY = double.negativeInfinity;
+
   // Feeders parent→child: drop from parent bottom, orthogonal, into child top.
   for (final entry in children.entries) {
     final ax = cx[entry.key]! + _ovW / 2;
@@ -1661,10 +1828,28 @@ SldSheet buildElectricalOverview({
       prims.add(SldLine(zx, midY, zx, zy, weight: SldWeight.medium, role: role));
       // Feeder annotation (cable + breaker) on the mid horizontal segment, just
       // above the line; omitted when the parent feeding circuit can't resolve.
-      final lbl = _feederConnLabel(feederCircuitOf, feederResultOf, child);
+      final lbl = ovLabel[child];
       if (lbl != null) {
-        prims.add(SldLabel(math.min(ax, zx) + 4, midY - 4, lbl,
-            size: 6.5, role: role));
+        final (lx, ly) = ovSlot[child]!;
+        final def = ovDefault[child]!;
+        final dx = lx - def.$1, dy = ly - def.$2;
+        if (dx != 0 || dy != 0) {
+          ovLabelMaxX = math.max(
+              ovLabelMaxX, lx + _riserLabelWidth(lbl, _ovFeederLabelSize));
+          ovLabelMinY = math.min(ovLabelMinY, ly - _ovFeederLabelSize);
+          ovLabelMaxY = math.max(ovLabelMaxY, ly);
+        }
+        // Pulled well off its anchor — or unable to fully clear — ⇒ a thin
+        // leader from the mid segment it annotates back to the tag.
+        if (!(ovCleared[child] ?? true) ||
+            math.sqrt(dx * dx + dy * dy) > _kRiserLeaderThreshold) {
+          final bx = math.min(math.max(lx, math.min(ax, zx)), math.max(ax, zx));
+          final rx = lx + _riserLabelWidth(lbl, _ovFeederLabelSize);
+          prims.add(SldLine(bx, midY, rx < bx ? rx : lx, ly,
+              weight: SldWeight.thin, role: role));
+        }
+        prims.add(
+            SldLabel(lx, ly, lbl, size: _ovFeederLabelSize, role: role));
       }
     }
   }
@@ -1728,6 +1913,11 @@ SldSheet buildElectricalOverview({
     maxX = 1;
     maxY = 1;
   }
+  // X2: a DISPLACED feeder annotation may reach past the tree — widen the sheet
+  // so it can't be clipped (no displacement ⇒ -/+infinity ⇒ bounds unchanged).
+  maxX = math.max(maxX, ovLabelMaxX);
+  minY = math.min(minY, ovLabelMinY);
+  maxY = math.max(maxY, ovLabelMaxY);
 
   final s = result.supply;
   final supplyNote = '${s.system.label}  ${_num(s.voltage.volts)}V  '
@@ -1855,8 +2045,12 @@ class _RiserBox {
 /// else the least-overlapping one. Deterministic given a stable feeder order.
 class _RiserLabelPlacer {
   final List<_RiserBox> _fixed;
+
+  /// Left margin a slot must stay clear of (the riser's floor-name gutter).
+  /// 0 ⇒ no gutter (the overview has none), so the penalty never fires.
+  final double _gutterX;
   final List<_RiserBox> _placed = <_RiserBox>[];
-  _RiserLabelPlacer(this._fixed);
+  _RiserLabelPlacer(this._fixed, {double gutterX = 0}) : _gutterX = gutterX;
 
   _RiserBox _boxFor((double, double) slot, String text, double size) =>
       _RiserBox(slot.$1, slot.$2 - size,
@@ -1866,7 +2060,7 @@ class _RiserLabelPlacer {
   /// reserved tag (plus the gutter penalty).
   double _overlapAt((double, double) slot, String text, double size) {
     final r = _boxFor(slot, text, size);
-    var total = slot.$1 < _riserGutterW ? _kRiserGutterPenalty : 0.0;
+    var total = slot.$1 < _gutterX ? _kRiserGutterPenalty : 0.0;
     for (final b in _fixed) {
       total += b.overlap(r);
     }
@@ -2093,7 +2287,8 @@ SldSheet buildElectricalRiser({
       bandRight: bandRightEdge[floorOf(child)] ?? cxx,
       // Feeder annotation (cable + breaker); null when the feeding circuit
       // can't resolve ⇒ that run is left unlabelled (never fabricated).
-      label: _feederConnLabel(feederCircuitOf, feederResultOf, child),
+      label: _feederConnLabel(feederCircuitOf, feederResultOf, child,
+          parentThreePhase: _parentIsThreePhase(parentOf, result, child)),
     ));
   }
   // Pass 1 — every annotation whose DEFAULT anchor is clear keeps it (so a riser
@@ -2103,7 +2298,7 @@ SldSheet buildElectricalRiser({
     for (final id in panelX.keys)
       _RiserBox(panelX[id]!, panelY[id]!, panelX[id]! + _ovW,
           panelY[id]! + _ovH),
-  ]);
+  ], gutterX: _riserGutterW);
   final needsEscape = <_RiserFeeder>[];
   for (final f in feeders) {
     if (f.label == null) continue;
@@ -2148,8 +2343,12 @@ SldSheet buildElectricalRiser({
         math.sqrt(dx * dx + dy * dy) > _kRiserLeaderThreshold) {
       final bx = math.min(math.max(lx, math.min(f.cx, channelX)),
           math.max(f.cx, channelX));
+      // Land the leader on the NEAR end of the text, so a tag diverted LEFT of
+      // its branch is not crossed by the leader that points at it.
+      final rx = lx + _riserLabelWidth(lbl, _riserFeederLabelSize);
+      final endX = rx < bx ? rx : lx;
       prims.add(
-          SldLine(bx, f.cy, lx, ly, weight: SldWeight.thin, role: f.role));
+          SldLine(bx, f.cy, endX, ly, weight: SldWeight.thin, role: f.role));
     }
     prims.add(
         SldLabel(lx, ly, lbl, size: _riserFeederLabelSize, role: f.role));

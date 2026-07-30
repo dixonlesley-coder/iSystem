@@ -80,7 +80,9 @@ void main() {
     test('motor selected on governing (rated) shaft → 75 kW', () {
       expect(r.selectedMotor.inKiloWatts, closeTo(75.0, 1e-9));
       expect(r.oversized, isFalse);
-      expect(r.verdict, 'Rating curve within standard range');
+      // M19 — the verdict names the MOTOR FRAME (the condition the flag really
+      // reads), not the pump curve, which is compliant by construction here.
+      expect(r.verdict, 'Motor within standard frame range');
     });
 
     // Jockey: 1 % of 100 L/s = 1 L/s; head = churn 70 m + 5 m margin = 75 m.
@@ -129,7 +131,13 @@ void main() {
     test('governing shaft exceeds the 75 kW frame → oversized', () {
       expect(r.selectedMotor.inKiloWatts, closeTo(75.0, 1e-9)); // saturated
       expect(r.oversized, isTrue);
-      expect(r.verdict, 'Oversized pump curve');
+      // M19 — reworded to name the true condition (the standard MOTOR ladder
+      // saturated) and the action, instead of blaming the pump curve.
+      expect(
+        r.verdict,
+        'Motor above standard frame range - specify a custom motor or '
+        'duty pairs',
+      );
     });
 
     test('jockey flow = 1 % of ~78.87 L/s ≈ 0.789 L/s', () {

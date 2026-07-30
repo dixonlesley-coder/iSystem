@@ -10,6 +10,20 @@
 /// The maximum height a single zone may span is therefore:
 ///   maxZoneHeight = maxStaticPressure / (ρ × g)   [metres]
 /// which is exactly [headFromPressure](maxStaticPressure).
+///
+/// ONE MEASUREMENT (M1) — the span a zone is BUDGETED on
+/// ([computeDownfeedZones]) is the same span it is CHECKED on
+/// ([downfeedZoneStatics]): the feed point is the ceiling main on the zone's TOP
+/// floor and the worst case is the fixture connection on the zone's BOTTOM
+/// floor, i.e.
+///   span = ceilingElevationOf(top) − fixtureElevationOf(bottom)
+///        = (elevationOf(top) − elevationOf(bottom))
+///          + floorHeight(top) − ceilingDrop − fixtureHeight.
+/// Budgeting on the bare floor-surface delta (as the zoner used to) silently
+/// omits that `floorHeight(top) − ceilingDrop − fixtureHeight` term, so a
+/// building with tall storeys was handed zones the module's own checker
+/// rejected. The checker is the honest measurement; the zoner now budgets
+/// against it, so a generated zone is compliant BY CONSTRUCTION.
 library;
 
 import 'package:mechx_engine/geometry/building.dart';
@@ -120,19 +134,40 @@ List<DownfeedZoneStatic> downfeedZoneStatics({
 /// Partition [building] into downfeed pressure zones so that the static head
 /// at the bottom floor of every zone does not exceed [maxStaticPressure].
 ///
+/// The span budgeted here is the SAME span [downfeedZoneStatics] measures — the
+/// ceiling main on the zone's top floor down to the fixture connection on its
+/// bottom floor, per [mounting] — so every generated zone is compliant by
+/// construction against that check (see the library note). [maxStaticPressure]
+/// is the span budget: a caller holding a PRV setpoint at each zone top passes
+/// the REMAINING allowance (max-fixture-static − setpoint).
+///
 /// Algorithm (greedy, top-down):
 /// 1. Start the first zone at the highest floor (index `levelCount − 1`).
 /// 2. Walk downward, including each floor f while
-///    `elevationOf(zoneTop) − elevationOf(f) ≤ maxZoneHeightMetres`.
+///    `ceilingElevationOf(zoneTop) − fixtureElevationOf(f) ≤ maxZoneHeightMetres`.
 /// 3. When the next floor would violate the limit, close the current zone
 ///    (its bottom = the last included floor) and open a new zone whose top is
 ///    the next (violating) floor.
 /// 4. At floor 0, always close the last zone.
 ///
+/// A zone is never split below one floor (step 2 always admits `f == zoneTop`):
+/// a single storey is physically indivisible, so when one floor's own
+/// ceiling-to-fixture drop already exceeds the budget the zone is still emitted
+/// — [downfeedZoneStatics] then reports it over-limit, which is the honest
+/// outcome (the remedy is a lower PRV setpoint / higher limit, not more zones).
+///
+/// IDENTITY — a building whose PREVIOUS zoning already passed
+/// [downfeedZoneStatics] gets exactly the same zones from this stricter budget.
+/// The new span exceeds the old floor-surface span by a constant
+/// `floorHeight(top) − ceilingDrop − fixtureHeight ≥ 0` (any storey taller than
+/// 1.4 m), so the walk cannot admit a floor the old one rejected, and "already
+/// passed" means it does not reject a floor the old one admitted.
+///
 /// Returns zones ordered **top → bottom** (index 0 = highest zone).
 List<PressureZone> computeDownfeedZones({
   required BuildingLevels building,
   required Pressure maxStaticPressure,
+  MountingHeights mounting = const MountingHeights(),
 }) {
   assert(building.levelCount > 0, 'building must have at least one floor');
 
@@ -142,10 +177,12 @@ List<PressureZone> computeDownfeedZones({
   var zoneTop = building.levelCount - 1;
 
   for (var f = building.levelCount - 1; f >= 0; f--) {
-    final span = building.elevationOf(zoneTop).meters -
-        building.elevationOf(f).meters;
+    // The measured span of the candidate zone [zoneTop … f] — identical to the
+    // one downfeedZoneStatics evaluates.
+    final span = building.ceilingElevationOf(zoneTop, mounting).meters -
+        building.fixtureElevationOf(f, mounting).meters;
 
-    if (span > maxHeight) {
+    if (span > maxHeight && f < zoneTop) {
       // Floor f would breach the limit — close the current zone at f+1 (the
       // last floor that was still within the limit) and start a new zone
       // whose top is f.

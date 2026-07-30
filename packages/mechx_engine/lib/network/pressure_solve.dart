@@ -77,10 +77,32 @@ class PressureSolution {
   /// highest and/or most distant node).
   final String criticalNodeId;
 
+  /// True when the residuals in [residualPressure] hold the design target BY
+  /// CONSTRUCTION rather than as a falsifiable outcome (M9).
+  ///
+  /// [solvePressurized] (upfeed) DEFINES the pump head as
+  /// `max over nodes of (friction + elevation + target)`, then reports
+  /// `residual(node) = requiredPumpHead − friction(node) − elevation(node)`.
+  /// Substituting the definition gives `residual(node) ≥ target` for every
+  /// node, with equality at [criticalNodeId] — the inequality is an algebraic
+  /// identity of the two formulas, not a property of the drawn network. No
+  /// input (a longer run, a smaller pipe, a taller building) can make an upfeed
+  /// residual fall below the target: the pump head simply rises to match. So a
+  /// PASS/LOW verdict read off these residuals is unfalsifiable and must not be
+  /// presented as a check — the honest label is "target held by design", with
+  /// the falsifiable question being whether a real pump can deliver
+  /// [requiredPumpHead].
+  ///
+  /// False for genuinely falsifiable results (the gravity downfeed solve: its
+  /// residuals come from a FIXED tank elevation, so friction or a high fixture
+  /// really can push them below target — see [DownfeedSolution]).
+  final bool targetHeldByDesign;
+
   const PressureSolution({
     required this.residualPressure,
     required this.requiredPumpHead,
     required this.criticalNodeId,
+    this.targetHeldByDesign = false,
   });
 }
 
@@ -220,6 +242,10 @@ PressureSolution solvePressurized({
     residualPressure: residualPressure,
     requiredPumpHead: Head(requiredPumpHead),
     criticalNodeId: criticalNodeId,
+    // The pump head above was DEFINED as the max of (friction + elevation +
+    // target), so every residual is ≥ target as an algebraic identity — the
+    // numbers are unchanged, but the consumer must not read them as a verdict.
+    targetHeldByDesign: true,
   );
 }
 
@@ -242,11 +268,24 @@ class DownfeedSolution {
   /// meets the target residual. Zero when gravity already suffices.
   final Head boosterHeadRequired;
 
+  /// Always **false** for a downfeed solve — the counterpart of
+  /// [PressureSolution.targetHeldByDesign] (M9), carried so a consumer can ask
+  /// the same question of either solve.
+  ///
+  /// These residuals are FALSIFIABLE: they are measured down from a fixed tank
+  /// elevation minus real friction, and nothing here is defined in terms of the
+  /// target — the target only appears afterwards, as the shortfall in
+  /// [boosterHeadRequired]. A high fixture or a long lossy run genuinely can
+  /// (and does) drive [minResidual] below target, so a PASS/LOW verdict on a
+  /// downfeed residual is a real check.
+  final bool targetHeldByDesign;
+
   const DownfeedSolution({
     required this.residualPressure,
     required this.criticalNodeId,
     required this.minResidual,
     required this.boosterHeadRequired,
+    this.targetHeldByDesign = false,
   });
 
   /// True when gravity alone meets the target residual everywhere.

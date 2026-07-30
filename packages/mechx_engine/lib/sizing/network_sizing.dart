@@ -96,10 +96,21 @@ class EdgeSizing {
   final Length? width;
   final Length? height;
 
-  /// True when an air duct could not meet its velocity limit / friction target
-  /// at the largest standard size and was CLAMPED (see
-  /// DuctSizingResult.overCapacity). The caller surfaces this as a per-edge
-  /// design issue. Default false ⇒ in-range ducts are byte-identical.
+  /// True when this edge's size was CLAMPED at the top of its selection table
+  /// with the constraint it was sized against still VIOLATED. One flag, three
+  /// sources — all meaning "the printed size is a table limit, not a valid
+  /// selection; the caller must surface it as a per-edge design issue":
+  ///
+  ///  • **air** — no standard duct meets the velocity limit / friction target
+  ///    (`DuctSizingResult.overCapacity` / `RectangularDuctResult.overCapacity`);
+  ///  • **storm** — the catchment exceeds the largest tabulated downpipe
+  ///    (`RainwaterSizingResult.overCapacity`, M3): the runoff must be split
+  ///    across more downpipes;
+  ///  • **water supply** — no DN in the series keeps the mean velocity within
+  ///    the supply cap (`WaterSupplySizingResult.overVelocity`, M4): the pipe
+  ///    ships over the `sniVerbatim` 2.0 m/s limit.
+  ///
+  /// Default false ⇒ in-range edges are byte-identical.
   final bool overCapacity;
 
   /// True when this is a drainage STACK (riser) edge whose own DFU-table
@@ -120,6 +131,33 @@ class EdgeSizing {
   /// a vent, a near-zero balanced ring edge). Default null ⇒ byte-identical.
   final String? flowFromId;
 
+  /// M5 — false when this GRAVITY DRAINAGE edge's full-bore Manning velocity at
+  /// the design slope falls below the self-cleansing minimum
+  /// ([drain.kSelfCleansingVelocityMps], 0.6 m/s): solids drop out of
+  /// suspension and the run silts up. The DFU path picks its diameter from a
+  /// code capacity table (never through `drainage_sizing.sizeForFlow`), so this
+  /// verdict was computed NOWHERE for a drawn sanitary network — a DN40/DN50
+  /// branch at 1:100 runs at 0.46–0.54 m/s and was labelled OK.
+  ///
+  /// `true` for everything with no self-cleansing duty to fail: pressurized and
+  /// air edges, and VENTS (they carry no flow at all). Rainwater downpipes are
+  /// also left `true` — a vertical downpipe running ≈ 1/3 full is not a
+  /// self-cleansing gravity run and its tabulated capacity carries no Manning
+  /// velocity to judge; inventing one would be a fabricated verdict.
+  ///
+  /// Default true ⇒ every edge that cannot fail this check is byte-identical.
+  final bool selfCleansingOk;
+
+  /// M17 — true when this edge belongs to a LOOPED (ring/grid) component whose
+  /// Hardy–Cross balance did NOT converge within its iteration budget
+  /// (`LoopBalanceResult.converged` false). The carried [flow] is then the
+  /// best-effort split at the last sweep: it still satisfies continuity at
+  /// every node (the corrections are divergence-free), but the loop head-loss
+  /// balance was not achieved, so the split — and every size derived from it —
+  /// is provisional. Default false ⇒ trees and settled loops are
+  /// byte-identical.
+  final bool loopUnbalanced;
+
   const EdgeSizing({
     required this.edgeId,
     required this.service,
@@ -131,13 +169,16 @@ class EdgeSizing {
     this.overCapacity = false,
     this.stackRaisedForBranch = false,
     this.flowFromId,
+    this.selfCleansingOk = true,
+    this.loopUnbalanced = false,
   });
 
   /// True when this edge is a rectangular duct (carries W×H).
   bool get isRectangular => width != null && height != null;
 
   /// A copy carrying the given flow-direction origin ([flowFromId]); all sizing
-  /// fields are preserved unchanged (this is metadata only).
+  /// fields AND every design flag are preserved unchanged (this is metadata
+  /// only).
   EdgeSizing withFlowFrom(String? fromId) => EdgeSizing(
         edgeId: edgeId,
         service: service,
@@ -149,6 +190,25 @@ class EdgeSizing {
         overCapacity: overCapacity,
         stackRaisedForBranch: stackRaisedForBranch,
         flowFromId: fromId,
+        selfCleansingOk: selfCleansingOk,
+        loopUnbalanced: loopUnbalanced,
+      );
+
+  /// A copy carrying the given [loopUnbalanced] verdict; all sizing fields and
+  /// every other flag are preserved unchanged (M17 metadata only).
+  EdgeSizing withLoopUnbalanced(bool value) => EdgeSizing(
+        edgeId: edgeId,
+        service: service,
+        flow: flow,
+        diameter: diameter,
+        velocity: velocity,
+        width: width,
+        height: height,
+        overCapacity: overCapacity,
+        stackRaisedForBranch: stackRaisedForBranch,
+        flowFromId: flowFromId,
+        selfCleansingOk: selfCleansingOk,
+        loopUnbalanced: value,
       );
 }
 
@@ -264,16 +324,23 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
         flow: flow,
         diameter: r.diameter,
         velocity: r.velocity,
+        // M4 — the largest DN in the series could not hold the mean velocity
+        // within the supply cap; the pipe ships OVER the limit. Same semantics
+        // as the air/storm clamp, so it rides the same per-edge flag.
+        overCapacity: r.overVelocity,
       );
     case FlowRegime.air:
       if (ctx.ductShape == DuctShape.rectangular) {
         // Honour the equal-friction selection for rectangular too (not just
         // round) — velocity method keeps sizeRectangularByVelocity.
+        // M2 — equal friction alone does not bound velocity, so the context's
+        // duct velocity cap is threaded into the equal-friction ladder too.
         final r = ctx.ductMethod == DuctSizingMethod.equalFriction
             ? duct.sizeRectangularByEqualFriction(
                 airflow: flow,
                 targetPaPerMetre: ctx.ductEqualFrictionPa,
                 aspectRatio: ctx.ductAspectRatio,
+                maxVelocity: ctx.maxDuctVelocity,
               )
             : duct.sizeRectangularByVelocity(
                 airflow: flow,
@@ -291,10 +358,12 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
           overCapacity: r.overCapacity,
         );
       }
+      // M2 — same cap threading for the round equal-friction ladder.
       final r = ctx.ductMethod == DuctSizingMethod.equalFriction
           ? duct.sizeByEqualFriction(
               airflow: flow,
               targetPaPerMetre: ctx.ductEqualFrictionPa,
+              maxVelocity: ctx.maxDuctVelocity,
             )
           : duct.sizeByVelocity(
               airflow: flow,
@@ -321,25 +390,78 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
         flow: flow,
         diameter: r.diameter,
         velocity: r.fullBoreVelocity,
+        // M5 — a VENT carries no flow, so it has no self-cleansing duty to
+        // fail; every other gravity run reports the sizer's own verdict.
+        selfCleansingOk:
+            edge.service == ServiceType.vent ? true : r.selfCleansing,
       );
   }
 }
 
 /// Apply a manual nominal-size [override] to an auto-computed [sizing],
 /// returning a new [EdgeSizing] that carries the same flow but the overridden
-/// circular diameter, with **velocity recomputed from the carried flow** by
-/// continuity (v = Q / A, A = π·(d/2)²). The clear width/height are dropped
-/// (the override is a single circular nominal size). Pure.
-EdgeSizing applySizeOverride(EdgeSizing sizing, Diameter override) => EdgeSizing(
-      edgeId: sizing.edgeId,
-      service: sizing.service,
-      flow: sizing.flow,
-      diameter: override,
-      // v = Q / A at the overridden diameter (continuity); see velocityFromFlow.
-      velocity: override.meters > 0
-          ? velocityFromFlow(sizing.flow, override)
-          : const Velocity(0),
+/// circular diameter. The clear width/height are dropped (the override is a
+/// single circular nominal size). Pure.
+///
+/// **Velocity** is recomputed for the overridden diameter on the same basis the
+/// auto-sizer used for that service (M18):
+///  • a VENT carries no flow ⇒ 0, as before;
+///  • DRAINAGE reports the full-bore MANNING velocity at [ctx]'s design slope
+///    and Manning n — a sanitary edge carries a placeholder `flow` of 0 (it is
+///    sized from DFU, not flow), so the continuity formula returned a
+///    meaningless 0 m/s for every drainage override and silently voided the
+///    self-cleansing verdict with it. Without a [ctx] there is no slope to
+///    compute Manning from, so the legacy continuity value is kept;
+///  • everything else keeps v = Q / A at the overridden diameter (continuity).
+///
+/// **Design flags** ([EdgeSizing.overCapacity],
+/// [EdgeSizing.stackRaisedForBranch], [EdgeSizing.loopUnbalanced]) are
+/// PRESERVED across the override — they record findings about the network and
+/// the auto-selection (an over-loaded catchment, a stack raised to match its
+/// branch, an unsettled ring), which picking a size by hand does not retract.
+/// [EdgeSizing.selfCleansingOk] is the exception: it is a property OF THE
+/// CHOSEN DIAMETER, so it is re-judged at the overridden size whenever the
+/// velocity was re-derived on the drainage basis (a larger hand-picked pipe at
+/// the same slope genuinely runs slower).
+EdgeSizing applySizeOverride(
+  EdgeSizing sizing,
+  Diameter override, {
+  SizingContext? ctx,
+}) {
+  final isDrainage = sizing.service == ServiceType.drainage;
+  final bool manningBasis = isDrainage && ctx != null && override.meters > 0;
+
+  final Velocity velocity;
+  if (override.meters <= 0) {
+    velocity = const Velocity(0);
+  } else if (sizing.service == ServiceType.vent) {
+    velocity = const Velocity(0); // a vent carries no flow
+  } else if (manningBasis) {
+    velocity = manningVelocity(
+      manningN: ctx.drainageManningN,
+      hydraulicRadius: Length(override.meters / 4.0),
+      slope: ctx.drainageSlope,
     );
+  } else {
+    // v = Q / A at the overridden diameter (continuity); see velocityFromFlow.
+    velocity = velocityFromFlow(sizing.flow, override);
+  }
+
+  return EdgeSizing(
+    edgeId: sizing.edgeId,
+    service: sizing.service,
+    flow: sizing.flow,
+    diameter: override,
+    velocity: velocity,
+    overCapacity: sizing.overCapacity,
+    stackRaisedForBranch: sizing.stackRaisedForBranch,
+    flowFromId: sizing.flowFromId,
+    selfCleansingOk: manningBasis
+        ? velocity.metersPerSecond >= drain.kSelfCleansingVelocityMps
+        : sizing.selfCleansingOk,
+    loopUnbalanced: sizing.loopUnbalanced,
+  );
+}
 
 /// Size every edge that has an accumulated [edgeFlows] entry. Edges with no
 /// flow (not reached from a root / no demand) are skipped. An edge id present
@@ -358,7 +480,7 @@ Map<String, EdgeSizing> sizeNetwork(
     final sized = sizeEdge(edge, flow, ctx);
     final override = sizeOverrides[edge.id];
     result[edge.id] =
-        override == null ? sized : applySizeOverride(sized, override);
+        override == null ? sized : applySizeOverride(sized, override, ctx: ctx);
   }
   return result;
 }
@@ -406,6 +528,9 @@ Map<String, EdgeSizing> autoSizeNetwork(
   final allFlows = <String, FlowRate>{};
   final sanitary = <String, EdgeSizing>{}; // DFU-sized drainage/vent edges
   final stormSizing = <String, EdgeSizing>{}; // rainwater downpipes
+  // M17 — edges of any looped component whose Hardy–Cross balance did NOT
+  // converge; their flow split (and every size derived from it) is provisional.
+  final loopUnbalancedEdges = <String>{};
 
   // Read-only flow orientation per edge (edgeId → the endpoint flow comes FROM).
   // Populated below where direction is confidently known; attached to the final
@@ -617,6 +742,14 @@ Map<String, EdgeSizing> autoSizeNetwork(
         for (final entry in balanced.edgeFlow.entries) {
           allFlows[entry.key] = FlowRate(entry.value.abs());
         }
+        // M17 — record a best-effort (unsettled) split instead of presenting it
+        // as balanced. Continuity still holds, so the sizes are usable; the
+        // loop head-loss balance is what was not achieved.
+        if (!balanced.converged) {
+          for (final e in componentEdges) {
+            loopUnbalancedEdges.add(e.id);
+          }
+        }
         // Orient each ring edge from the balanced flow SIGN (positive = from→to,
         // per LoopBalanceResult); a near-zero edge stays undirected (null).
         for (final e in componentEdges) {
@@ -689,6 +822,10 @@ Map<String, EdgeSizing> autoSizeNetwork(
             flow: entry.value,
             diameter: r.diameter,
             velocity: velocityFromFlow(entry.value, r.diameter),
+            // M3 — the catchment exceeds the largest tabulated downpipe: the
+            // DN200 shown is the table top, not a size that carries the flow.
+            // The runoff must be split across more downpipes.
+            overCapacity: r.overCapacity,
           );
           // Storm runoff drains TOWARD the outlet root, so it comes FROM the
           // away-from-root (roof-drain) endpoint.
@@ -749,13 +886,22 @@ Map<String, EdgeSizing> autoSizeNetwork(
   // directly (not via sizeNetwork), so apply any override to them here too.
   for (final entry in sanitary.entries) {
     final override = sizeOverrides[entry.key];
-    result[entry.key] =
-        override == null ? entry.value : applySizeOverride(entry.value, override);
+    result[entry.key] = override == null
+        ? entry.value
+        : applySizeOverride(entry.value, override, ctx: ctx);
   }
   for (final entry in stormSizing.entries) {
     final override = sizeOverrides[entry.key];
-    result[entry.key] =
-        override == null ? entry.value : applySizeOverride(entry.value, override);
+    result[entry.key] = override == null
+        ? entry.value
+        : applySizeOverride(entry.value, override, ctx: ctx);
+  }
+  // M17 — a ring/grid whose Hardy–Cross balance never settled: every edge of
+  // that component carries a PROVISIONAL split, so mark them all (after the
+  // overrides, which preserve the flag either way).
+  for (final id in loopUnbalancedEdges) {
+    final sized = result[id];
+    if (sized != null) result[id] = sized.withLoopUnbalanced(true);
   }
   // Attach the read-only flow orientation last (after overrides), so the arrow
   // record survives an override without touching any computed size/flow.
@@ -788,7 +934,8 @@ EdgeSizing _sanitaryEdgeSizing(
   SizingContext ctx, {
   bool stackRaisedForBranch = false,
 }) {
-  final v = edge.service == ServiceType.vent
+  final isVent = edge.service == ServiceType.vent;
+  final v = isVent
       ? const Velocity(0)
       : manningVelocity(
           manningN: ctx.drainageManningN,
@@ -802,6 +949,12 @@ EdgeSizing _sanitaryEdgeSizing(
     diameter: diameter,
     velocity: v,
     stackRaisedForBranch: stackRaisedForBranch,
+    // M5 — the DFU path picks its diameter from a code capacity table, so the
+    // self-cleansing verdict (the reason the reference Manning velocity above
+    // is computed at all) was never actually formed. A vent carries no flow ⇒
+    // no self-cleansing duty ⇒ true.
+    selfCleansingOk:
+        isVent || v.metersPerSecond >= drain.kSelfCleansingVelocityMps,
   );
 }
 

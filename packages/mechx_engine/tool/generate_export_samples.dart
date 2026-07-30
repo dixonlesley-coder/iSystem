@@ -12,7 +12,10 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:mechx_engine/electrical/advanced_study.dart'
+    show computeAdvancedStudy;
 import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/containment.dart' show ConduitSpec;
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/earthing.dart' show EarthingSystem;
 import 'package:mechx_engine/electrical/geo_length.dart' show LayoutPos;
@@ -760,28 +763,65 @@ void main(List<String> args) {
   // N20: every electrical sheet carries the same full title block — the
   // DRAWN/CHECKED/APPROVED sign-off block (APPROVED a blank ruled cell); the
   // paginated detail export re-stamps its own per-page SHEET counter.
+  // X3: every electrical drawing is a STANDALONE one-sheet issue in this set,
+  // so it states so — `SHEET 1 of 1` — instead of leaving the row blank. (The
+  // paginated per-panel detail supersedes this with its real per-page counter.)
   DrawingChrome elecChromeFor(DrawingSeries series) => DrawingChrome(
         drawingNumber: sheetDrawingNumber(series: series),
         revisionNumber: 'Rev. 0',
+        sheetIndex: 1,
+        sheetTotal: 1,
         clientName: 'PT Contoh Developer',
         drawnBy: 'CAD',
         checkedBy: 'MEP',
         dateString: dateString,
       );
+  // E1 / E2: the ONE study that already knows each way's own device breaking
+  // capacity and its conduit fill — fed to the board schedule so the sheet
+  // prints per-DEVICE kA (not the board incomer's frame ladder) and the SAME
+  // containment size the take-off issues (not a second, un-fill-checked CSA
+  // ladder).
+  final advanced = computeAdvancedStudy(puil, project, result,
+      originFaultLevel: const Current(16000));
+  final breakerKaByCircuitId = <String, double>{
+    for (final e in advanced.fault.circuits.entries) e.key: e.value.breakerKa,
+  };
+  final breakerIcuKaByPanelId = <String, double>{
+    for (final e in advanced.fault.panels.entries) e.key: e.value.incomerKa,
+  };
+  final containmentByCircuitId = <String, ConduitSpec>{
+    for (final c in advanced.containment.values)
+      for (final cc in c.conduits) cc.circuitId: cc.conduit,
+  };
   final elecDetailChrome = elecChromeFor(DrawingSeries.electricalDetail);
   final elecOverviewChrome = elecChromeFor(DrawingSeries.electricalOverview);
   final elecRiserChrome = elecChromeFor(DrawingSeries.electricalRiser);
 
-  // 5 — per-panel detail single-line (one page per panel).
+  // 5 — per-panel detail single-line (one page per panel), each board schedule
+  // carrying its per-WAY device kA + the containment study's own conduit size.
+  // (The sheets are built HERE — one per board, root-first, exactly as
+  // `electricalSldToPdfPaginated` does — so the per-circuit maps can be fed;
+  // `electricalSldSheetsToPdf` then stamps the same real `Sheet i of N`.)
   attempt('elec-detail.pdf', () {
-    writeBytes(
-        'elec-detail.pdf',
-        electricalSldToPdfPaginated(
+    final panelSheets = [
+      for (final id in result.order)
+        buildElectricalPanelDetail(
           project: project,
           result: result,
+          panelId: id,
+          breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+          breakerKaByCircuitId: breakerKaByCircuitId,
+          containmentByCircuitId: containmentByCircuitId,
+        ),
+    ];
+    writeBytes(
+        'elec-detail.pdf',
+        electricalSldSheetsToPdf(
+          sheets: panelSheets,
           title: projectName,
           diagramTitle: 'DIAGRAM PANEL',
           chrome: elecDetailChrome,
+          projectName: projectName,
         ));
   });
 
@@ -825,10 +865,18 @@ void main(List<String> args) {
     writeText(
         'elec-single-line.dxf',
         electricalSldToDxf(
-          project: project,
-          result: result,
+          // The SAME enriched geometry the PDF draws (per-way kA + the
+          // containment study's conduit) — PDF and DXF must never disagree.
+          sheet: buildElectricalSld(
+            project: project,
+            result: result,
+            breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+            breakerKaByCircuitId: breakerKaByCircuitId,
+            containmentByCircuitId: containmentByCircuitId,
+          ),
           diagramTitle: 'DIAGRAM PANEL',
           chrome: elecDetailChrome,
+          projectName: projectName,
         ));
   });
 
