@@ -292,6 +292,23 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
+- **Whole-product audit (2026-07-30) — `MODULE-AUDIT-REVIEW.md` (root) is the CURRENT
+  plan of record**: a four-workstream parallel audit (every mechanical engine module
+  probe-confirmed read-only; reports/exports/persistence; the 16-artifact export
+  harness + rasterized-sheet eyeballing; a complete 3-storey/7-board/38-way electrical
+  design driven through the public engine API and committed as
+  `packages/mechx_engine/test/whole_building_electrical_design_test.dart`, 52 tests
+  with 8 findings pinned as documentation tests). 38 consolidated findings in 4 themes,
+  sequenced into waves A (wrong verdicts + lost sizing flags: PRV zoner datum mismatch,
+  equal-friction velocity cap, upfeed PASS-by-construction, N−1 return grilles…),
+  B (the issued electrical deliverable: per-circuit kA tokens, containment one-source,
+  reports on the combined warning surface, BOM CSV material/override columns, the
+  selectivity floor's cable-inflation trade-off, fire-pump protection), C (platform
+  integrity: undo-cap phantom entries, un-awaited autosave write…), D (dead-feature
+  policy: operating point / detailed cooling / multi-zone / dark thresholds — wire or
+  remove). The bundled sample's fire-pump ADS defect is already FIXED (6 mm² pin +
+  `test/sample_project_health_test.dart` guarding zero error-severity findings).
+
 - **Design-craft campaign (2026-07-27) — LANDED** (`DESIGN-CRAFT-REVIEW.md`, root): a
   design-skills pass over EVERY page (incl. fresh captures of the never-golden-covered Building
   + Preferences via the committed `test/design_captures_test.dart` → `test/goldens_design/`,
