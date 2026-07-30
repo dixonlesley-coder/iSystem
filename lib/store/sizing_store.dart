@@ -133,7 +133,15 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
 
   return autoSizeNetwork(
     net,
-    SizingContext(ductShape: ducts.shape, ductMethod: ducts.method),
+    // M13 — the laid drainage slope is a real design input now
+    // (drainageSlopeProvider), not the dark const default: it sets the Manning
+    // full-bore velocity behind every gravity size AND the self-cleansing
+    // verdict. Default 0.01 ⇒ byte-identical.
+    SizingContext(
+      ductShape: ducts.shape,
+      ductMethod: ducts.method,
+      drainageSlope: ref.watch(drainageSlopeProvider),
+    ),
     leafDemand: leafDemand,
     leafFixtureUnits: kDefaultLeafFixtureUnits,
     nodeFixtureUnits: nodeFixtureUnits,
@@ -161,8 +169,10 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
 final drainageAdvisoryProvider = Provider<List<DrainageAdvisory>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
-  // The laid design slope is the same default the sizer uses (SizingContext).
-  final slope = const SizingContext().drainageSlope; // m/m // VERIFY
+  // M13 — the laid design slope the SIZER used (drainageSlopeProvider), so the
+  // advisory judges the project's real gradient instead of a const that could
+  // never trip its own threshold. // VERIFY the min-slope threshold itself.
+  final slope = ref.watch(drainageSlopeProvider); // m/m // VERIFY
   final out = <DrainageAdvisory>[];
   for (final e in net.edges) {
     if (e.service != ServiceType.drainage) continue;

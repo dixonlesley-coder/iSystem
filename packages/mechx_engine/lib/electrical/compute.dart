@@ -726,11 +726,21 @@ _CircuitComputation _computeCircuit(
           isFeeder: isFeeder,
         );
 
+  // E8a — VOLTAGE BASE. A final circuit sits on THIS panel's bus. A FEEDER
+  // terminates on the board it FEEDS, so the load it carries is drawn at the FED
+  // board's voltage and its drop is a percentage of that same voltage: a feeder
+  // to a 220 V single-phase sub-board is a 220 V run, not a 231 V one, so the
+  // cumulative origin→load chain no longer mixes two bases. With no
+  // [ComputePanelOptions.panelById] (a direct `computePanel` call) the fed panel
+  // is unknown and this panel's own voltage is used exactly as before.
+  final fedPanel =
+      c.feedsPanelId != null ? opts.panelById[c.feedsPanelId] : null;
+  final refPanel = fedPanel ?? panel;
   // Single-phase circuits on a three-phase panel run at the phase voltage (~230).
-  final phaseVoltageV = panel.system == ElectricalSystem.threePhase
-      ? roundTo(panel.voltage.volts / math.sqrt(3), 0)
-      : panel.voltage.volts;
-  final useVoltageV = threePhase ? panel.voltage.volts : phaseVoltageV;
+  final phaseVoltageV = refPanel.system == ElectricalSystem.threePhase
+      ? roundTo(refPanel.voltage.volts / math.sqrt(3), 0)
+      : refPanel.voltage.volts;
+  final useVoltageV = threePhase ? refPanel.voltage.volts : phaseVoltageV;
 
   // Design current: a source-supplied FLA wins (A5); a motor derives its
   // nameplate FLC from the SHAFT kW divided by the assumed motor efficiency
@@ -761,14 +771,42 @@ _CircuitComputation _computeCircuit(
   }
   final designCurrent = Current(roundTo(ib.amperes, 1));
 
-  final breaker = selectBreaker(
+  // E5 — a FINAL SOCKET way sizes its OWN device + conductor on the
+  // UNDIVERSIFIED connected load. `demandFactor` is a coincidence factor across
+  // ways: it belongs in the aggregation that feeds the busbar / incomer / demand
+  // (and it still does — [designCurrent], the phase balance and every demand
+  // figure keep the diversified current), but a stop-kontak way is built to
+  // carry every socket on it. Sizing the device on the diversified figure put
+  // adjacent socket ways on different rungs purely from a utilisation factor
+  // (2.8 kW → 10 A beside 3.0 kW → 16 A). Feeders (already an aggregation of the
+  // fed board's diversified demand) and every non-socket kind are unchanged, so
+  // a project without diversified socket finals is byte-identical.
+  // VERIFY — notAnSniClause: Indonesian practice puts a stop-kontak final on a
+  // uniform 16 A / 2.5 mm² make-up; no PUIL clause forbids diversifying a final
+  // circuit's own device, this is a drafting/uniformity convention.
+  final sizeOnUndiversifiedLoad = !isFeeder && c.loadKind == LoadKind.socket;
+  final Current sizingCurrent;
+  if (sizeOnUndiversifiedLoad && c.flaOverrideA == null && !motorLike) {
+    final undiversified = loadCurrent(
+      power: Power(c.loadW),
+      voltage: Voltage(useVoltageV),
+      cosPhi: c.cosPhi,
+      threePhase: threePhase,
+    );
+    // A demand factor above 1 must never size the device BELOW the load it
+    // carries, so the sizing current is never less than the design current.
+    sizingCurrent = Current(math.max(ib.amperes, undiversified.amperes));
+  } else {
+    sizingCurrent = ib;
+  }
+
+  // THE LOAD-SIZED DEVICE. Deliberately floor-free: the conductor below is sized
+  // against THIS pick, so a coordination floor can never inflate copper (E3).
+  final loadBreaker = selectBreaker(
     profile,
-    designCurrent: ib,
+    designCurrent: sizingCurrent,
     loadKind: c.loadKind,
     overrideA: c.breakerOverrideA,
-    // Feeder selectivity floor (empty for every way `computeSystem` did not
-    // flag, and always ignored when the way carries an explicit override).
-    minRatingA: opts.feederBreakerFloorA[c.id],
   );
 
   // PUIL minimums: trunk (incomer/feeder) → 4 (3φ) / 2.5; final → lighting 1.5
@@ -790,8 +828,8 @@ _CircuitComputation _computeCircuit(
 
   final cable = sizeCable(
     profile,
-    designCurrent: ib,
-    breakerRating: breaker.ratingA,
+    designCurrent: sizingCurrent,
+    breakerRating: loadBreaker.ratingA,
     deratingFactor: df,
     minSectionMm2: minSection,
     insulation: cableInsulation,
@@ -806,6 +844,37 @@ _CircuitComputation _computeCircuit(
       isLighting: c.isLighting,
     ),
   );
+
+  // E3/E4 — FEEDER SELECTIVITY FLOOR: DEVICE-ONLY, AMPACITY-CAPPED.
+  //
+  // Real practice discriminates a feeder from the board it feeds with the
+  // DEVICE (a rating band, and on an MCCB its settings) — not by inflating the
+  // conductor. So the floor is applied here, after the cable was sized on the
+  // load, and is capped at the largest rung the load-sized cable's derated Iz
+  // still protects: overload protection of the conductor (In ≤ Iz) is
+  // inviolable and always beats coordination. When the cap bites below the floor
+  // target the residual non-/partial-selectivity is REAL and stays reported by
+  // `faultStudy` (that feeder is not listed in
+  // [ElectricalSystemResult.feederFloorsApplied]).
+  //
+  // A way `computeSystem` did not flag, and any way carrying an explicit
+  // override, keeps the load-sized device verbatim ⇒ byte-identical.
+  final floorA =
+      c.breakerOverrideA != null ? null : opts.feederBreakerFloorA[c.id];
+  var breaker = loadBreaker;
+  if (floorA != null) {
+    final floored = selectBreaker(
+      profile,
+      designCurrent: sizingCurrent,
+      loadKind: c.loadKind,
+      minRatingA: floorA,
+      maxRatingA: cable.deratedIz,
+    );
+    // The cap may only hold the floor back, never pull the device below the
+    // rating the load itself demanded (the ampacity-impossible fallback is the
+    // one case where Iz < In, and it is already an error-severity finding).
+    if (floored.ratingA.amperes > breaker.ratingA.amperes) breaker = floored;
+  }
 
   final runsPerPhase = cable.runsPerPhase ?? 1;
   final vd = voltageDrop(
@@ -848,6 +917,30 @@ _CircuitComputation _computeCircuit(
       message:
           '${c.name}: life-safety circuit specified with ${c.cableType} — use '
           'fire-resistant cable (FRC/MICA) so the run survives a fire.',
+      panelId: panel.id,
+      circuitId: c.id,
+    ));
+  }
+  // E6 — a LIFE-SAFETY motor/pump way (fire pump, jockey pump, sprinkler
+  // booster) is auto-sized like any other motor: an ordinary thermal-magnetic
+  // device whose OVERLOAD element will trip a stalled or over-pumping machine.
+  // Under fire duty the machine is expected to run to destruction rather than
+  // stop, so the protection is specified differently (locked-rotor-rated,
+  // overload trip disabled / alarm-only). The engine does NOT fabricate that
+  // device — it has no data for it — so this is an INFO note carried onto the
+  // schedule, not a sizing change.
+  // VERIFY — notAnSniClause: NFPA 20 fire-pump controller practice (locked-rotor
+  // rated protection, no overload trip), NOT a PUIL/SNI clause.
+  if (c.lifeSafety &&
+      (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump)) {
+    warnings.add(ElectricalWarning(
+      code: 'fire-pump-protection',
+      severity: WarningSeverity.info,
+      message:
+          '${c.name}: life-safety motor sized with ordinary overload protection '
+          '(${_num(breaker.ratingA.amperes)} A curve ${breaker.curve.name.toUpperCase()}) '
+          '- specify overload-trip-disabled protection (fire pump runs to '
+          'destruction under fire duty - NFPA 20 practice).',
       panelId: panel.id,
       circuitId: c.id,
     ));
@@ -1025,6 +1118,28 @@ ElectricalPanelResult computePanel(
           'Phase loading is unbalanced by ${balance.imbalancePercent}% '
           '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A). '
           '$action — $bestImbalancePercent% is achievable.',
+      panelId: panel.id,
+    ));
+  }
+
+  // E7 — an imbalance over the limit that NO re-assignment can improve is still
+  // worth printing: it is a real property of the board (the incomer, busbar and
+  // feeder all size on the heavy phase) and the engineer has a genuine, but
+  // different, action — add a third single-phase leg or replace two 1φ machines
+  // with one 3φ appliance. INFO, never a warning: there is nothing wrong with
+  // the design as drawn, and "redistribute" would be an instruction that cannot
+  // be carried out. Same threshold + same reducibility test as the warning path,
+  // so exactly one of the two ever fires.
+  if (overImbalanceLimit && !imbalanceReducible) {
+    warnings.add(ElectricalWarning(
+      code: 'phase-imbalance-inherent',
+      severity: WarningSeverity.info,
+      message:
+          'Phase loading is unbalanced by ${balance.imbalancePercent}% '
+          '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A) - '
+          'inherent to the single-phase load set ($bestImbalancePercent% is the '
+          'best any assignment reaches), so no redistribution helps; consider a '
+          'third leg or a 3-phase appliance.',
       panelId: panel.id,
     ));
   }
@@ -1386,11 +1501,16 @@ ElectricalSystemResult computeSystem(
       originFaultLevel != null && originFaultLevel.amperes > 0;
   final originIscA = applyWithstand ? originFaultLevel.amperes : 0.0;
 
-  // The feeder circuit id feeding each child panel (parent way).
+  // The feeder circuit id feeding each child panel (parent way), and the panel
+  // each feeder way lives ON (so a floored feeder's result can be found again).
   final feederCircuitOf = <String, String>{}; // child panel id → feeder id
+  final feederParentOf = <String, String>{}; // feeder id → parent panel id
   for (final p in panels) {
     for (final c in p.circuits) {
-      if (c.feedsPanelId != null) feederCircuitOf[c.feedsPanelId!] = c.id;
+      if (c.feedsPanelId != null) {
+        feederCircuitOf[c.feedsPanelId!] = c.id;
+        feederParentOf[c.id] = p.id;
+      }
     }
   }
 
@@ -1626,6 +1746,22 @@ ElectricalSystemResult computeSystem(
       supplyPeMm2: profile.peConductorSizeMm2(mainCable.csaMm2),
     );
 
+    // Which flagged feeders actually REACHED their selectivity target. A floor
+    // held back by the conductor-protection cap is deliberately absent, so the
+    // residual partial/non-selectivity keeps being reported by `faultStudy`.
+    final floorsApplied = <String>{};
+    for (final entry in feederBreakerFloorA.entries) {
+      final parentId = feederParentOf[entry.key];
+      final r = results[parentId]
+          ?.circuits
+          .where((x) => x.circuitId == entry.key)
+          .firstOrNull;
+      if (r == null || r.breaker.overridden) continue;
+      if (r.breaker.ratingA.amperes + 1e-9 >= entry.value) {
+        floorsApplied.add(entry.key);
+      }
+    }
+
     return ElectricalSystemResult(
       projectId: project.id,
       panels: results,
@@ -1634,6 +1770,7 @@ ElectricalSystemResult computeSystem(
       supply: supply,
       earthing: earthing,
       warnings: warnings,
+      feederFloorsApplied: floorsApplied,
     );
   }
 
@@ -1650,6 +1787,11 @@ ElectricalSystemResult computeSystem(
   // in a second pass at a floor of `selectivityRatio × the child's incomer`.
   // Skipped for an explicitly overridden feeder — the engineer's rating stands
   // verbatim, and the residual non-selectivity remains for `faultStudy` to flag.
+  //
+  // The floor moves the DEVICE ONLY, and only as far as the load-sized cable's
+  // ampacity permits (`_computeCircuit`): the conductor is sized from the load
+  // on both passes, so nothing about the cable — or the fault impedance derived
+  // from it — differs between the two.
   final feederFloors = <String, double>{};
   for (final p in panels) {
     for (final c in p.circuits) {

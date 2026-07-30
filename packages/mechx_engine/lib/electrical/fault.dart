@@ -610,13 +610,25 @@ double _round(double v, int dp) {
 /// origin prospective fault as a conservative uplift. Default 0 ⇒ no uplift ⇒
 /// the study is BYTE-IDENTICAL to before (the regression guard). Pass
 /// [systemMotorFaultContributionA]`(sys)` to apply the engine's own estimate.
+///
+/// [engineFlooredFeederIds] lists feeder circuit ids the SIZER deliberately
+/// lifted onto its selectivity floor and which reached the full
+/// [selectivityRatio] target; the `selectivity-partial` ADVISORY is suppressed
+/// for those pairs, because landing in the 1.6×..2.5× band is exactly what the
+/// floor targets — the engine's own best trade-off, not a finding. `non-selective`
+/// is NEVER suppressed, and neither is a floor the conductor-protection cap held
+/// back (such a feeder is not in the set). Null (the default) reads the set the
+/// solve itself recorded on [ElectricalSystemResult.feederFloorsApplied], so a
+/// result built the legacy way (empty set) suppresses nothing ⇒ byte-identical.
 FaultStudyResult faultStudy(
   ElectricalSystemResult sys,
   ElectricalProject project,
   ElectricalStandardsProfile profile, {
   Current originFaultLevel = const Current(16000),
   Current estimatedMotorFaultContributionA = const Current(0),
+  Set<String>? engineFlooredFeederIds,
 }) {
+  final flooredFeeders = engineFlooredFeederIds ?? sys.feederFloorsApplied;
   final warnings = <ElectricalWarning>[];
   final panelResults = <String, PanelFaultResult>{};
   final circuitResults = <String, CircuitFaultResult>{};
@@ -867,9 +879,13 @@ FaultStudyResult faultStudy(
         panelId: parentId,
         circuitId: feederCircuitId,
       ));
-    } else if (zone == SelectivityZone.partial) {
+    } else if (zone == SelectivityZone.partial &&
+        !flooredFeeders.contains(feederCircuitId)) {
       // Overload zone discriminates but the short-circuit (instantaneous) zone
-      // may overlap on a high fault — an advisory, not an error.
+      // may overlap on a high fault — an advisory, not an error. Suppressed when
+      // the sizer itself floored this feeder onto the 1.6× target: the partial
+      // band is the deliberate outcome of that floor, so re-reporting it would
+      // guarantee an advisory on every feeder the engine correctly coordinated.
       warnings.add(ElectricalWarning(
         code: 'selectivity-partial',
         severity: WarningSeverity.info,
@@ -884,15 +900,22 @@ FaultStudyResult faultStudy(
       ));
     }
     if (!icsAdequate) {
+      // E8d — the CODE is kept verbatim (a stable acknowledgement / compliance
+      // discriminator); only the wording is clarified. "Service capacity" here
+      // is the IEC 60947-2 DEVICE rating Ics (the fault a breaker can clear and
+      // stay in service after), NOT the PLN supply/connection capacity.
       warnings.add(ElectricalWarning(
         code: 'service-capacity-inadequate',
         severity: WarningSeverity.warning,
         message:
-            '${feeder.name}: service breaking capacity Ics '
-            '(~${_fmt(_round(icu * icsFraction, 1))} kA) is below the '
-            '${_fmt(_round(upstreamFaultKa, 2))} kA prospective fault — the '
-            'device may survive one clearance (Icu) but not remain usable; '
-            'specify a 100 % Ics device.',
+            '${feeder.name}: DEVICE rated service short-circuit breaking '
+            'capacity Ics (~${_fmt(_round(icu * icsFraction, 1))} kA, '
+            '${(icsFraction * 100).round()} % of Icu ${_fmt(icu)} kA, IEC '
+            '60947-2) is below the ${_fmt(_round(upstreamFaultKa, 2))} kA '
+            'prospective fault at its bus — the breaker may survive one '
+            'clearance (Icu) but is not rated to remain in service afterwards; '
+            'specify a 100 % Ics device. (A device rating, not the PLN supply '
+            'connection capacity.)',
         panelId: parentId,
         circuitId: feederCircuitId,
       ));

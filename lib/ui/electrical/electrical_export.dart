@@ -484,6 +484,12 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) => runExportGuarded(
               powerOneLine: advanced.powerOneLine,
               verifyItems: advanced.verifyItems,
               revisions: ref.read(documentControlProvider).revisions,
+              // R1 — the issued report prints the SAME combined warning
+              // surface Review + compliance show (core sizing warnings PLUS
+              // the fault study's selectivity / breaking-capacity / withstand /
+              // TT findings), so an error-severity finding can no longer be on
+              // screen but missing from the panel builder's document.
+              allWarnings: ref.read(electricalAllWarningsProvider),
             ),
             reportStringsFor(ref));
         return _save(md,

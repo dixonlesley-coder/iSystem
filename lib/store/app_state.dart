@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/hot_water.dart' show kHotWaterFlowTempC;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/storm_sizing.dart'
     show kDefaultRunoffCoefficient;
@@ -98,6 +99,100 @@ class RunoffCoefficientController extends Notifier<double> {
 
   void set(double v) => state = v.clamp(0.5, 1.0).toDouble();
   void nudge(double delta) => set(state + delta);
+}
+
+/// M13 — the LAID drainage design slope (m/m) for horizontal gravity branches.
+///
+/// Until now every call site passed the `SizingContext` default (0.01) as a
+/// const, so the engine's own min-slope advisory (`drainage_advisory.dart`,
+/// threshold 0.005) could never fire and the slope was a DARK constant the
+/// engineer could not see or change. It is a genuine design input (a 1:100 fall
+/// is a choice, not a law), so it lives here and feeds BOTH the sizer
+/// (`SizingContext.drainageSlope` → the Manning full-bore velocity that decides
+/// the self-cleansing verdict) and the advisory layer.
+///
+/// Clamped to a physically sane band (1:1000 … 1:10). Default 0.01 (1:100) ⇒
+/// every existing project sizes byte-identically.
+final drainageSlopeProvider =
+    NotifierProvider<DrainageSlopeController, double>(
+  DrainageSlopeController.new,
+);
+
+class DrainageSlopeController extends Notifier<double> {
+  @override
+  double build() => const SizingContext().drainageSlope; // 0.01 = 1:100
+
+  void set(double v) => state = v.clamp(0.001, 0.1).toDouble();
+
+  /// Nudge in 1:N space so the steps read as drafting fractions (1:100 → 1:90).
+  void nudge(double delta) => set(state + delta);
+}
+
+/// M14 — hot-water FLOW (supply) temperature leaving the heater (°C) and the
+/// allowable loop temperature DROP ΔT (K). Both were engine defaults nobody
+/// could change (60 − 5 = 55 exactly ⇒ `returnTempC < 55` was never true), so
+/// the anti-Legionella check was dark. They are design inputs: a project that
+/// stores at 55 °C, or accepts a 10 K drop, genuinely risks a cold return.
+/// Defaults mirror the engine (60 °C / 5 K) ⇒ byte-identical.
+final hotWaterFlowTempProvider =
+    NotifierProvider<HotWaterFlowTempController, double>(
+  HotWaterFlowTempController.new,
+);
+
+class HotWaterFlowTempController extends Notifier<double> {
+  @override
+  double build() => kHotWaterFlowTempC; // 60 °C
+
+  void set(double v) => state = v.clamp(40.0, 90.0).toDouble();
+  void nudge(double delta) => set(state + delta);
+}
+
+/// Allowable hot-water recirculation loop temperature drop ΔT (K). Drives the
+/// recirc flow (Q = heatLoss / (ρ·c·ΔT)) AND the modelled return temperature.
+final hotWaterDeltaTProvider =
+    NotifierProvider<HotWaterDeltaTController, double>(
+  HotWaterDeltaTController.new,
+);
+
+class HotWaterDeltaTController extends Notifier<double> {
+  @override
+  double build() => 5.0; // K — the engine's own default ΔT
+
+  void set(double v) => state = v.clamp(1.0, 20.0).toDouble();
+  void nudge(double delta) => set(state + delta);
+}
+
+/// M15/R6 — which cooling-load basis the Rooms AC estimate uses: the
+/// area-density rule (`sizing/cooling_load.dart`, the default) or the heat-gain
+/// component breakdown (`sizing/cooling_load_detailed.dart`). The engine module
+/// existed and was tested but was reachable from NOTHING in the app while
+/// `DesignSettings.coolingLoadMethod` round-tripped in `.mechx` — implying a
+/// capability that wasn't there. This provider is that setting made real.
+enum CoolingLoadMethod {
+  /// Area × per-room-type density × ceiling correction (the fallback).
+  simple,
+
+  /// Envelope + solar + internal + ventilation heat-gain streams.
+  detailed;
+
+  /// The persisted code (`'simple'` / `'detailed'`).
+  String get code => name;
+
+  /// Tolerant decode: anything unknown ⇒ [simple].
+  static CoolingLoadMethod fromCode(Object? code) =>
+      code == 'detailed' ? CoolingLoadMethod.detailed : CoolingLoadMethod.simple;
+}
+
+final coolingLoadMethodProvider =
+    NotifierProvider<CoolingLoadMethodController, CoolingLoadMethod>(
+  CoolingLoadMethodController.new,
+);
+
+class CoolingLoadMethodController extends Notifier<CoolingLoadMethod> {
+  @override
+  CoolingLoadMethod build() => CoolingLoadMethod.simple;
+
+  void set(CoolingLoadMethod m) => state = m;
 }
 
 /// BYO Anthropic API key for the in-app Claude copilot. Empty ⇒ the copilot is

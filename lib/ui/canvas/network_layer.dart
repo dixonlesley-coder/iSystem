@@ -28,9 +28,10 @@ const Color _kSelection = Color(0xFF4C8DFF);
 /// Warning colour for an out-of-band air velocity (too high / too low).
 const Color _kWarn = Color(0xFFE8703A);
 
-/// Danger colour for an air duct clamped at the largest standard size
-/// (over capacity) — a harder limit than an out-of-band velocity, so it reads
-/// red (systemRed-tuned for the sheet) and as a distinct triangle shape.
+/// Danger colour for an edge clamped at the largest table size (over capacity —
+/// duct, storm downpipe or supply pipe) — a harder limit than an out-of-band
+/// velocity, so it reads red (systemRed-tuned for the sheet) and as a distinct
+/// triangle shape.
 const Color _kOverCapacity = Color(0xFFDB3B3B);
 
 /// Muted colour for the softer "carries air but not yet sized" advisory.
@@ -82,9 +83,13 @@ class NetworkLayer extends ConsumerWidget {
     };
     // Air elements carrying air but not yet manually sized — a softer advisory.
     final unsizedIds = ref.watch(airUnsizedProvider);
-    // Air ducts clamped at the largest standard size (over capacity) — a hard
-    // limit that takes precedence over a plain velocity warning on the badge.
-    final overCapacityIds = ref.watch(airOverCapacityProvider);
+    // Edges clamped at the largest table size (over capacity) — a hard limit
+    // that takes precedence over a plain velocity warning on the badge. Now the
+    // DISCIPLINE-NEUTRAL set (M3/M4): an air duct clamped at the largest duct, a
+    // storm downpipe past the largest tabulated catchment, or a supply run that
+    // cannot hold the SNI velocity cap at any DN. The badge shape/precedence
+    // rules are unchanged — only the source widened.
+    final overCapacityIds = ref.watch(overCapacityEdgesProvider);
     // Sheet scale (m per px) lets the painter mark a coupling joint every stock
     // pipe length along a run; null (uncalibrated) ⇒ no joint marks.
     final metersPerPixel =
@@ -247,7 +252,8 @@ class _NetworkPainter extends CustomPainter {
   /// Ids of air elements carrying air but not yet manually sized (soft advisory).
   final Set<String> unsizedIds;
 
-  /// Ids of air duct edges clamped at the largest standard size (over capacity).
+  /// Ids of edges clamped at the largest TABLE size (over capacity): an air
+  /// duct, a storm downpipe, or a supply pipe over the SNI velocity cap.
   final Set<String> overCapacityIds;
 
   _NetworkPainter({
@@ -717,8 +723,8 @@ class _NetworkPainter extends CustomPainter {
     tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
   }
 
-  /// A warning-TRIANGLE badge marking an air duct clamped at the largest
-  /// standard size (over capacity). The triangle shape (vs the round velocity
+  /// A warning-TRIANGLE badge marking an edge clamped at the largest table
+  /// size (over capacity). The triangle shape (vs the round velocity
   /// "!" dot) plus the red colour give a redundant, distinct cue that this is a
   /// hard size limit, not merely an out-of-band velocity.
   void _overCapacityBadge(Canvas canvas, Offset center) {

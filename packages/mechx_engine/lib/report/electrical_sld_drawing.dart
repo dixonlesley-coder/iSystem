@@ -210,11 +210,23 @@ int? _conduitFromSpec(ConduitSpec spec) =>
 /// [ElectricalCircuit.cableType] when set, else the conventional default for its
 /// load kind ([defaultCableFamily]: NYM for final circuits, NYY otherwise) so a
 /// drawing always names a real cable construction, never the bare conductor
-/// material. Cores = 3 for 1-phase L+N+E, 5 for 3-phase 3L+N+E.
-String cableLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase) {
+/// material.
+///
+/// G5 — [cores] is the REAL conductor count the sizing already resolved
+/// (`ElectricalCircuitResult.grounding.cores` = live cores + neutral (when the
+/// circuit has one) + PE), so a 3-phase way with NO neutral (a motor: 3L+PE)
+/// labels `4x`, one with a neutral `5x`, and a 1-phase way `3x` (L+N+PE) — the
+/// same count the containment study sizes the conduit from
+/// (`cableOuterDiameterMm(csa, grounding.cores)`), so the label can no longer
+/// contradict the containment basis printed beside it.
+///
+/// Null [cores] keeps the drawing convention (3 for 1-phase, 5 for 3-phase) for
+/// callers with no sized grounding to hand ⇒ byte-identical.
+String cableLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
+    {int? cores}) {
   final family = resolvedCableFamily(circuit);
-  final cores = threePhase ? 5 : 3;
-  return '$family ${cores}x${_num(csaMm2)}';
+  final n = (cores != null && cores > 0) ? cores : (threePhase ? 5 : 3);
+  return '$family ${n}x${_num(csaMm2)}';
 }
 
 /// The cable family a circuit's label/legend should show: its explicit
@@ -533,7 +545,8 @@ SldSheet buildElectricalSld({
       // `mm` conduit token.
       final length = c.lengthM > 0 ? ' · ${_num(c.lengthM)} m' : '';
       final cable =
-          '${cableLabel(circuit, c.cable.csaMm2, c.threePhase)} mm2$earth$conduit$length';
+          '${cableLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores)} '
+          'mm2$earth$conduit$length';
       // DAYA in WATT (integer, dot thousands separator); a feeder (loadW 0) → '-'.
       final daya = c.loadW > 0 ? _wattsId(c.loadW) : '-';
       // DEVICE: breaker label + the motor-control / starter token (DOL / VSD /
@@ -935,7 +948,7 @@ String? _feederConnLabel(
   final poles = cr.threePhase ? 3 : 1;
   final length = cr.lengthM > 0 ? ' · ${_num(cr.lengthM)} m' : '';
   final twoPole = parentThreePhase && !cr.threePhase;
-  return '${cableLabel(circ, cr.cable.csaMm2, cr.threePhase)} mm2 · '
+  return '${cableLabel(circ, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores)} mm2 · '
       '${breakerScheduleLabel(cr.breaker, poles, twoPole: twoPole)}$length';
 }
 

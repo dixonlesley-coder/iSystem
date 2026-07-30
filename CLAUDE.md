@@ -308,6 +308,16 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   policy: operating point / detailed cooling / multi-zone / dark thresholds — wire or
   remove). The bundled sample's fire-pump ADS defect is already FIXED (6 mm² pin +
   `test/sample_project_health_test.dart` guarding zero error-severity findings).
+  **ALL FOUR WAVES HAVE SINCE LANDED the same day** (two ultracode batches — see the
+  two §15 rows and the doc's status note): zones compliant by construction, equal
+  friction velocity-capped, upfeed verdicts 'held by design', all N return grilles
+  placed, per-circuit kA + containment-sourced conduit tokens + real core counts on
+  the schedule, reports on the combined warning surface, the BOM CSV on the engine
+  takeoff format, phantom undo drop-and-retry, autosave awaited, the E3/E4 floor
+  redesigned device-only + ampacity-capped (see the Sizing-engine invariant), and
+  wave-D wired real (drainage slope / HW temps / AC-load basis as Building-page
+  design inputs; dead multi-zone settings dropped). Residuals are in the doc's
+  status note; the operating-point module is fixed but deliberately still unwired.
 
 - **Design-craft campaign (2026-07-27) — LANDED** (`DESIGN-CRAFT-REVIEW.md`, root): a
   design-skills pass over EVERY page (incl. fresh captures of the never-golden-covered Building
@@ -1568,24 +1578,27 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   are untouched, and the percentage still prints on the schedule TOTAL footer, the
   inspector and both reports; only the unactionable WARNING (and, since it reads
   that warning, the canvas card's `imbalance NN%` badge) is dropped.
-- **Feeder selectivity floor (`electrical/{sizing,compute}.dart`)**: a feeder
-  way and the incomer of the board it feeds size from the SAME demand, so they
-  used to land on the same ladder rung (ratio 1.0 ⇒ `non-selective` on the
-  engine's own output). `computeSystem` is now TWO-PASS: pass 1 sizes with no
-  floor (the historic behaviour); any un-overridden feeder below
-  `selectivityRatio (1.6) ×` the fed board's incomer rating gets a
-  `feederBreakerFloorA` entry and pass 2 re-runs the whole sizing with the
-  floors threaded to `selectBreaker(minRatingA:)` (cable upsizes via the
-  existing `breakerRating:` path). An EMPTY floors map returns the pass-1
-  object — single-panel / overridden / already-selective projects are
-  byte-identical. Exactly two passes converge (a floor depends only on the
-  child's load-side incomer, invariant under a parent bump). An explicit
-  `breakerOverrideA` always wins and is never floored — the residual
-  non-selectivity is then reported by the fault study, not hidden. A floor
-  past the 1600 A ladder top clamps to the largest rung. The 1.6× basis is a
-  coarse rating-ratio rule (`// VERIFY notAnSniClause`). Corollary: an
-  auto-sized feeder now always clears the fed board's worst-phase demand, so
-  `feeder-below-fed-demand` is reachable only on an overridden feeder.
+- **Feeder selectivity floor (`electrical/{sizing,compute}.dart`) — DEVICE-ONLY,
+  AMPACITY-CAPPED** (redesigned by the MODULE-AUDIT E3/E4 wave; replaces the
+  earlier cable-inflating floor): the feeder CABLE always sizes on the LOAD (a
+  floor-free `loadBreaker` pick + the existing vd/minimum rules — copper is
+  never inflated for discrimination), then the DEVICE floors to the first rung
+  ≥ `selectivityRatio (1.6) ×` the fed board's incomer rating, CAPPED at the
+  largest rung the load-sized cable's derated Iz protects (In ≤ Iz is
+  inviolable; `selectBreaker`'s `maxRatingA` cap runs AFTER `minRatingA`).
+  `computeSystem` stays two-pass (empty floors ⇒ the pass-1 object,
+  byte-identical); `ElectricalSystemResult.feederFloorsApplied` records feeders
+  that reached the FULL 1.6× target, and `faultStudy` suppresses
+  `selectivity-partial` for exactly those (the engine's own deliberate
+  trade-off); a CAP-LIMITED floor is not listed, so its residual
+  non-/partial-selectivity is honestly reported. Overrides bypass the floor
+  entirely. The 1.6× basis stays `// VERIFY notAnSniClause`. Related policies
+  from the same wave: a final `socket` way sizes its own device+cable on the
+  UNdiversified load (aggregation keeps the demand factor, `// VERIFY` uniform
+  stop-kontak practice); a `lifeSafety` motor/pump way carries an INFO
+  `fire-pump-protection` note; an irreducible over-threshold imbalance carries
+  an INFO `phase-imbalance-inherent` note; a feeder's voltage base (Ib and
+  Vd%) is the FED panel's.
 - **ONE electrical warning surface (`electricalAllWarningsProvider`)**: the
   fault study's warnings (`non-selective` / `selectivity-partial` /
   `breaking-capacity-inadequate` / `busbar-withstand-inadequate` /

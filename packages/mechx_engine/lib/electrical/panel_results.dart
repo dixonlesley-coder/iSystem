@@ -317,6 +317,19 @@ class ElectricalSystemResult {
 
   final List<ElectricalWarning> warnings;
 
+  /// Circuit ids of the FEEDER ways whose protective device `computeSystem`
+  /// lifted onto the selectivity floor AND which reached the full
+  /// `selectivityRatio ×` the fed board's incomer.
+  ///
+  /// A pair in this set is the sizer's own deliberate coordination choice, so
+  /// `faultStudy` suppresses the `selectivity-partial` ADVISORY for it (landing
+  /// in the 1.6×..2.5× band is what the floor targets — it is not a finding).
+  /// A feeder whose floor was CAPPED by its load-sized cable's ampacity is NOT
+  /// listed: the residual partial (or non-) selectivity is real and stays
+  /// reported. `non-selective` is never suppressed. Empty (the default) ⇒
+  /// nothing is suppressed ⇒ byte-identical for legacy-constructed results.
+  final Set<String> feederFloorsApplied;
+
   const ElectricalSystemResult({
     required this.projectId,
     required this.panels,
@@ -325,5 +338,6 @@ class ElectricalSystemResult {
     required this.supply,
     required this.earthing,
     required this.warnings,
+    this.feederFloorsApplied = const {},
   });
 }

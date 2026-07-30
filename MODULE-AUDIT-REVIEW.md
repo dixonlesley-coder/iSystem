@@ -1,5 +1,26 @@
 # MODULE-AUDIT-REVIEW — the whole-product correctness & honesty audit (2026-07-30)
 
+> **STATUS (2026-07-30, same day): ALL FOUR WAVES LANDED** in two ultracode
+> batches (wave 1 engine-only: G1 zoning/pressure, G2 sizing flags, G3
+> fire/operating-point, G5 drawings; wave 2: G4 selectivity redesign, G6 app
+> honesty + wave-D wiring, G7 reports/CSV/undo/autosave) — see the two §15
+> rows. Every finding below is fixed or explicitly dispositioned. The E3/E4
+> decision landed as **device-only, ampacity-capped**: feeder copper sizes on
+> the load, the device floors toward 1.6× but never past the conductor's Iz,
+> a fully-floored pair's `selectivity-partial` is suppressed
+> (`feederFloorsApplied`), and a capped residual is REPORTED — which un-hid
+> real findings the old floor was masking (the W-SIM fixture now honestly
+> shows 6 non-selective + 2 cumulative-Vd + 1 feeder-below-fed-demand, all
+> warning-tier). Recorded residuals: E7's inherent-imbalance note is noisy on
+> 1-way boards (gate on way count if it reads badly); the schedule's FALLBACK
+> conduit ladder still assumes 5 cores (conservative); M17's non-converged
+> wiring is proven at the balance level only; `_kInkHalfThickness`/overview
+> ladder pitches are drafting heuristics (`// VERIFY`); the detailed cooling
+> basis models internal gains + ventilation only and its verify checklist is
+> not yet fanned into Review; M12's operating-point module is FIXED but still
+> unwired (the remaining wave-D product call); `SelectivityResult` lacks an
+> `upstreamPanelId` (tests use a local lookup).
+
 The plan of record for the next correctness campaign. Produced by a four-workstream
 parallel audit run AFTER the warning-label fixes landed (selectivity floor, ONE
 electrical warning surface, judge-layer honesty tiers — see the §15 rows):

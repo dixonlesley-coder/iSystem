@@ -461,9 +461,13 @@ void main() {
       expect(spec.cableOdMm, closeTo(34.7, 0.2));
       expect(spec.conduitSizeMm, 63.0);
 
+      // G5: the probe way is a MOTOR — motor-like ⇒ no neutral ⇒ the sized
+      // grounding is 3L + PE = 4 cores, so the cable cell reads `4x70` (the
+      // conduit basis is unchanged: the fallback ladder still sizes the
+      // conservative 5-core bundle).
       final sheet = _scheduleForCsa(puil, 70, threePhase: true);
       final cable = _cableCells(sheet)
-          .firstWhere((t) => t.contains('5x70 mm2'), orElse: () => '');
+          .firstWhere((t) => t.contains('4x70 mm2'), orElse: () => '');
       expect(cable, isNotEmpty, reason: 'the 70 mm2 run must be on the sheet');
       expect(cable, isNot(contains('PVC 50mm')));
       expect(cable, contains('PVC 63mm'));
@@ -475,8 +479,9 @@ void main() {
       // not shift.
       expect(sizeConduit(16, 5).conduitSizeMm, 32.0);
       final sheet = _scheduleForCsa(puil, 16, threePhase: true);
+      // G5: the motor probe has no neutral ⇒ `4x16` (see above).
       final cable = _cableCells(sheet)
-          .firstWhere((t) => t.contains('5x16 mm2'), orElse: () => '');
+          .firstWhere((t) => t.contains('4x16 mm2'), orElse: () => '');
       expect(cable, contains('PVC 40mm'));
     });
 
@@ -501,7 +506,10 @@ void main() {
         final want = spec.fillPct > conduitFillSingle * 100
             ? ' · tray'
             : ' · PVC ${spec.conduitSizeMm.round()}mm';
-        final cores = c.threePhase ? 5 : 3;
+        // G5: the schedule prints the REAL core count the sizing resolved
+        // (3L+PE for a motor, 3L+N+PE otherwise) — the same count the
+        // containment study sizes its conduit from.
+        final cores = c.grounding.cores;
         final cell = _cableCells(sheet).firstWhere(
             (t) => t.contains('${cores}x${_numText(c.cable.csaMm2)} mm2'),
             orElse: () => '');
@@ -519,8 +527,9 @@ void main() {
       expect(spec.conduitSizeMm, 63.0);
       expect(spec.fillPct, greaterThan(conduitFillSingle * 100));
       final sheet = _scheduleForCsa(puil, 150, threePhase: true);
+      // G5: the motor probe has no neutral ⇒ `4x150` (see above).
       final cable = _cableCells(sheet)
-          .firstWhere((t) => t.contains('5x150 mm2'), orElse: () => '');
+          .firstWhere((t) => t.contains('4x150 mm2'), orElse: () => '');
       expect(cable, contains(' · tray'));
     });
   });

@@ -1664,7 +1664,10 @@ class _CanvasPainter extends CustomPainter {
             .firstOrNull;
         if (cr != null) {
           final poles = cr.threePhase ? 3 : 1;
-          final label = '${cableLabel(c, cr.cable.csaMm2, cr.threePhase)} mm2'
+          // G5: the REAL core count from the sized grounding (4 for a 3ph run
+          // with no neutral), so the canvas label matches the schedule/export.
+          final label =
+              '${cableLabel(c, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores)} mm2'
               ' · ${breakerScheduleLabel(cr.breaker, poles)}';
           labels.add((
             spec: FeederLabelSpec(

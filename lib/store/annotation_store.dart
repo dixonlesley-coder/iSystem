@@ -11,13 +11,17 @@ import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart' show NodeComponent;
 import 'package:mechx_engine/sizing/cooling_load.dart';
+import 'package:mechx_engine/sizing/cooling_load_detailed.dart'
+    show DetailedCoolingLoadInputs, estimateDetailedCoolingLoad;
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show DuctShape, DuctSizingMethod;
 import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'app_state.dart' show CoolingLoadMethod, coolingLoadMethodProvider;
 import 'history_store.dart';
+import 'project_store.dart';
 
 /// A two-point dimension annotation on a sheet/floor, in sheet (world) pixels.
 @immutable
@@ -480,11 +484,41 @@ class RoomArea {
 
   /// Estimated AC cooling load (BTU/h · kW · PK + a recommended unit) for the
   /// room, or null when the sheet has no scale / the footprint is degenerate.
-  /// The per-area density comes from the ventilation profile (room-type based).
-  CoolingLoad? coolingLoad(double? metersPerPixel) {
+  ///
+  /// [method] selects the BASIS (M15):
+  ///  • [CoolingLoadMethod.simple] (default) — the area-density rule: floor area
+  ///    × the ventilation profile's per-room-type density × the ceiling
+  ///    correction. Every existing caller keeps this, byte-identical.
+  ///  • [CoolingLoadMethod.detailed] — the heat-gain component breakdown
+  ///    (`estimateDetailedCoolingLoad`): people + lighting + equipment +
+  ///    ventilation/infiltration sensible & latent, over the room's real floor
+  ///    area and ceiling. Its result is projected onto the SAME [CoolingLoad]
+  ///    shape (total BTU/h · W · PK + the standard-AC pick) so nothing
+  ///    downstream has to branch. ENVELOPE inputs (wall / roof / glass areas,
+  ///    orientation) are not modelled by a rectangular room annotation, so they
+  ///    are left at zero rather than invented — the detailed basis here is an
+  ///    INTERNAL-GAIN + ventilation estimate, and every coefficient it does use
+  ///    is a representative `// VERIFY` default
+  ///    (`detailedCoolingVerifyChecklist`).
+  CoolingLoad? coolingLoad(
+    double? metersPerPixel, {
+    CoolingLoadMethod method = CoolingLoadMethod.simple,
+  }) {
     if (metersPerPixel == null) return null;
     final area = areaM2(metersPerPixel);
     if (area <= 0 || ceilingHeightM <= 0) return null;
+    if (method == CoolingLoadMethod.detailed) {
+      final d = estimateDetailedCoolingLoad(DetailedCoolingLoadInputs(
+        floorArea: Area(area),
+        ceilingHeight: Length(ceilingHeightM),
+      ));
+      return CoolingLoad(
+        btuPerHr: d.totalBtuPerHr,
+        watts: d.totalW,
+        pk: d.totalPk,
+        recommended: d.recommended,
+      );
+    }
     final density = const SniVentilationProfile()
         .coolingLoadDensityBtuPerHrM2(roomType)
         .value;
@@ -696,6 +730,25 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
     }
   }
 }
+
+/// M15 — the AC cooling load for one room (by [RoomArea.id]) computed on the
+/// project's CHOSEN basis ([coolingLoadMethodProvider], set on the Building
+/// page): area-density or heat-gain. The ONE place the method is applied, so a
+/// consumer never has to know which basis is live; null when the room is
+/// unknown, its sheet has no scale, or the footprint is degenerate.
+///
+/// This is the wire that makes `DesignSettings.coolingLoadMethod` a real
+/// setting instead of a persisted field nothing read (R6).
+final roomCoolingLoadProvider =
+    Provider.family<CoolingLoad?, String>((ref, roomId) {
+  final room =
+      ref.watch(roomAreasProvider).where((r) => r.id == roomId).firstOrNull;
+  if (room == null) return null;
+  final mpp =
+      ref.watch(projectControllerProvider).calibrationFor(room.sheetId)
+          ?.metersPerPixel;
+  return room.coolingLoad(mpp, method: ref.watch(coolingLoadMethodProvider));
+});
 
 /// Whether the canvas room tool is active (drag to draw a room footprint).
 /// Mutually exclusive with the network draw tools, measure tool, and tank tool.

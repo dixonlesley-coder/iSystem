@@ -1560,19 +1560,38 @@ class NetworkController extends Notifier<DrawingState> {
       }
     }
 
-    // One return grille near the room centre.
-    nodes.add(NetNode(
-      id: _id('n'),
-      sheetId: room.sheetId,
-      x: loX + w * 0.5,
-      y: loY + h * 0.5,
-      floorIndex: room.floorIndex,
-      role: NodeComponent.returnGrille.role,
-      component: NodeComponent.returnGrille,
-      airflow: s.return_.airflowEach,
-      faceWidthMm: returnFace.$1,
-      faceHeightMm: returnFace.$2,
-    ));
+    // M10 — the return bank on its OWN grid, one node per sized grille.
+    // Previously exactly ONE return grille was placed carrying `airflowEach`,
+    // so whenever the engine split the return across N faces (a 400 m² hall
+    // sizes 4) the placed network carried 1/N of the room's return air into the
+    // duct solve AND the BOM — a silent 75 % under-return. The supply branch
+    // already looped its count; this mirrors it exactly.
+    //
+    // The grid formula is the supply branch's: for the overwhelmingly common
+    // count == 1 it yields cols = rows = 1 ⇒ the single cell centre
+    // (loX + w/2, loY + h/2) — the exact position placed before — so a
+    // single-return room is byte-identical.
+    final rn = s.return_.count;
+    final rCols = math.max(1, math.sqrt(rn).ceil());
+    final rRows = (rn / rCols).ceil();
+    var placedReturns = 0;
+    for (var ry = 0; ry < rRows && placedReturns < rn; ry++) {
+      for (var cx = 0; cx < rCols && placedReturns < rn; cx++) {
+        nodes.add(NetNode(
+          id: _id('n'),
+          sheetId: room.sheetId,
+          x: loX + w * (cx + 0.5) / rCols,
+          y: loY + h * (ry + 0.5) / rRows,
+          floorIndex: room.floorIndex,
+          role: NodeComponent.returnGrille.role,
+          component: NodeComponent.returnGrille,
+          airflow: s.return_.airflowEach,
+          faceWidthMm: returnFace.$1,
+          faceHeightMm: returnFace.$2,
+        ));
+        placedReturns++;
+      }
+    }
 
     _commit(Network(nodes: nodes, edges: priorEdges));
     return ids;

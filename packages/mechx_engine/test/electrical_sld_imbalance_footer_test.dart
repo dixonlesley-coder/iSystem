@@ -34,26 +34,34 @@ void main() {
     final l1 = mdp.phaseBalance.l1;
     final l2 = mdp.phaseBalance.l2;
     final l3 = mdp.phaseBalance.l3;
-    // Sample-project fixture values (Menara Contoh MDP): R=131.6A S=75.3A
+    // Sample-project fixture values (Menara Contoh MDP): R=134.4A S=75.3A
     // T=75.3A.
-    expect(l1, closeTo(131.6, 0.05));
+    //
+    // Re-derived 2026-07-30 (audit E8a): LP-1 is a SINGLE-PHASE 220 V board, and
+    // its feeder now takes the FED board's voltage as its base instead of the
+    // 3φ parent's 231 V phase voltage. The feeder carries LP-1's 11 050 W
+    // diversified demand at the feeder default cosφ 0.85, so
+    //   Ib = 11 050 / (220 × 0.85) = 59.09 A -> 59.1 A   (was 11 050 /
+    //        (231 × 0.85) = 56.28 -> 56.3 A), i.e. +2.8 A on line R.
+    // R therefore reads 131.6 + 2.8 = 134.4 A; S and T are untouched.
+    expect(l1, closeTo(134.4, 0.05));
     expect(l2, closeTo(75.3, 0.05));
     expect(l3, closeTo(75.3, 0.05));
 
     // Hand derivation of the imbalance the engine must have computed:
-    //   avg   = (131.6 + 75.3 + 75.3) / 3       = 282.2 / 3   = 94.0667 A
-    //   imbal = (max - min) / avg * 100         = (131.6 - 75.3) / 94.0667 * 100
-    //         = 56.3 / 94.0667 * 100            = 59.8656...%
-    //   rounded to 1 dp (the engine's own `roundTo(_, 1)`)   -> 59.9%
+    //   avg   = (134.4 + 75.3 + 75.3) / 3       = 285.0 / 3   = 95.0 A
+    //   imbal = (max - min) / avg * 100         = (134.4 - 75.3) / 95.0 * 100
+    //         = 59.1 / 95.0 * 100               = 62.2105...%
+    //   rounded to 1 dp (the engine's own `roundTo(_, 1)`)   -> 62.2%
     final avg = (l1 + l2 + l3) / 3;
     final handImbalance = (l1 - l3) / avg * 100; // max=l1, min=l3(==l2)
-    expect(handImbalance, closeTo(59.9, 0.05));
-    expect(mdp.imbalancePercent, closeTo(59.9, 0.05));
+    expect(handImbalance, closeTo(62.2, 0.05));
+    expect(mdp.imbalancePercent, closeTo(62.2, 0.05));
 
     final sheet =
         buildElectricalPanelDetail(project: project, result: result, panelId: 'MDP');
     final total = sheetLabels(sheet).firstWhere((t) => t.startsWith('TOTAL'));
-    expect(total, contains('imbalance 59.9%'),
+    expect(total, contains('imbalance 62.2%'),
         reason: 'the printed TOTAL footer must carry the same imbalance % '
             'the engine computed, not a re-derived or rounded-differently one');
   });

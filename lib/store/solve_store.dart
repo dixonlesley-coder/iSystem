@@ -9,6 +9,8 @@ import 'package:mechx_engine/network/zoning.dart';
 import 'package:mechx_engine/pressure_field.dart';
 import 'package:mechx_engine/sizing/air_velocity.dart';
 import 'package:mechx_engine/sizing/bom.dart';
+import 'package:mechx_engine/sizing/drainage_sizing.dart'
+    show kSelfCleansingVelocityMps;
 import 'package:mechx_engine/sizing/fan.dart';
 import 'package:mechx_engine/sizing/hot_water.dart';
 import 'package:mechx_engine/sizing/consumables.dart';
@@ -108,10 +110,26 @@ final residualByNodeProvider = Provider<Map<String, Pressure>>((ref) {
 /// at 2,0 m/s) that was previously invisible for water/drainage runs, showing
 /// only for air ducts. Reuses the SAME [VelocityCheck] verdict idiom, judged
 /// against the SNI max pipe velocity from [SniProfile] (supply 2,0 m/s / drain
-/// 3,0 m/s) — the max is the compliance gate, so the band minimum is 0 (only an
-/// over-velocity pipe warns; the too-low branch never fires and no NEW band is
-/// invented). Only edges with a positive solved velocity are included, so a vent
-/// (no flow velocity) is omitted. Read-only — it never resizes anything.
+/// 3,0 m/s).
+///
+/// The band MINIMUM differs by regime (M5):
+///  • PRESSURIZED (cold/hot water) — 0: the max is the compliance gate and no
+///    lower bound is an SNI clause, so only an over-velocity pipe warns and no
+///    NEW band is invented.
+///  • GRAVITY SANITARY DRAINAGE — [kSelfCleansingVelocityMps] (0.6 m/s), the
+///    engine's own self-cleansing floor. The drain band's 3,0 m/s ceiling is
+///    mathematically unreachable on the DFU path (the table maxes near
+///    1.1 m/s), so with a zero floor EVERY drainage branch read "OK" — a
+///    DN40/DN50 branch at 1:100 runs at 0.46–0.54 m/s and silts up. The floor
+///    is the SAME constant the sizer stamps [EdgeSizing.selfCleansingOk] from,
+///    so the inspector verdict and the engine flag can never disagree.
+///  • RAINWATER — 0. A vertical downpipe running ≈ 1/3 full is not a
+///    self-cleansing gravity run; the engine deliberately declines to form that
+///    verdict (`selfCleansingOk` stays true for rainwater), so judging it
+///    against 0.6 m/s here would fabricate a verdict the engine refused to make.
+///
+/// Only edges with a positive solved velocity are included, so a vent (no flow
+/// velocity) is omitted. Read-only — it never resizes anything.
 final waterVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
@@ -121,11 +139,14 @@ final waterVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
     if (e.service.isAir) continue;
     final s = sizing[e.id];
     if (s == null || s.velocity.metersPerSecond <= 0) continue;
-    final max = e.service.regime == FlowRegime.gravity
+    final gravity = e.service.regime == FlowRegime.gravity;
+    final max = gravity
         ? profile.maxDrainVelocity.value
         : profile.maxSupplyVelocity.value;
-    out[e.id] =
-        checkVelocityBand(s.velocity, min: const Velocity(0), max: max);
+    final min = e.service == ServiceType.drainage
+        ? const Velocity(kSelfCleansingVelocityMps)
+        : const Velocity(0);
+    out[e.id] = checkVelocityBand(s.velocity, min: min, max: max);
   }
   return out;
 });
@@ -385,6 +406,14 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
     heatLoss: heatLossFromLength(loopLength: loop),
     loopLength: loop,
     returnDiameter: minDia.isFinite ? Diameter(minDia) : Diameter.mm(20),
+    // M14 — the flow temperature and allowable loop drop are DESIGN INPUTS
+    // (Building page), not engine constants: they set the recirc flow AND the
+    // modelled return temperature the anti-Legionella check judges. The
+    // defaults (60 °C / 5 K) reproduce the engine's own values exactly, so an
+    // untouched project is byte-identical — but a project that departs (55 °C
+    // stored, or a 10 K drop) now actually trips the check.
+    flowTempC: ref.watch(hotWaterFlowTempProvider),
+    allowableDropK: ref.watch(hotWaterDeltaTProvider),
   );
 });
 

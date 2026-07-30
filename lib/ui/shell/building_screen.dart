@@ -5,7 +5,15 @@ import 'package:mechx_engine/standards/sni.dart' show Occupancy;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/app_state.dart'
-    show occupancyProvider, rainfallIntensityProvider, runoffCoefficientProvider;
+    show
+        CoolingLoadMethod,
+        coolingLoadMethodProvider,
+        drainageSlopeProvider,
+        hotWaterDeltaTProvider,
+        hotWaterFlowTempProvider,
+        occupancyProvider,
+        rainfallIntensityProvider,
+        runoffCoefficientProvider;
 import '../../store/models/sheet.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
@@ -392,6 +400,10 @@ class _DesignInputsCard extends ConsumerWidget {
     final occ = ref.watch(occupancyProvider);
     final rain = ref.watch(rainfallIntensityProvider);
     final runoff = ref.watch(runoffCoefficientProvider);
+    final slope = ref.watch(drainageSlopeProvider);
+    final hwFlow = ref.watch(hotWaterFlowTempProvider);
+    final hwDeltaT = ref.watch(hotWaterDeltaTProvider);
+    final acBasis = ref.watch(coolingLoadMethodProvider);
     Text label(String s) =>
         Text(s, style: type.body.copyWith(color: colors.textSecondary));
     return Container(
@@ -472,11 +484,133 @@ class _DesignInputsCard extends ConsumerWidget {
               ),
             ],
           ),
+          // M13 — the laid drainage gradient. Typed and displayed as the
+          // drafting fraction (1:100), which is how a plumber reads a fall;
+          // stored as m/m. Steps of 10 in N (1:100 → 1:90 → 1:80).
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(child: label(context.strings(StringKey.designInputDrainageSlope))),
+              SteppedValueField(
+                display: _slopeDisplay(slope),
+                editSeed: _slopeN(slope).toStringAsFixed(0),
+                label: context.strings(StringKey.designInputDrainageSlope),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 10,
+                max: 1000,
+                // A BIGGER N is a FLATTER fall, so "+" steepens (smaller N).
+                onDecrement: () => ref
+                    .read(drainageSlopeProvider.notifier)
+                    .set(_slopeFromN(_slopeN(slope) + 10)),
+                onIncrement: () => ref
+                    .read(drainageSlopeProvider.notifier)
+                    .set(_slopeFromN(_slopeN(slope) - 10)),
+                onSubmit: (v) {
+                  if (v != null && v > 0) {
+                    ref.read(drainageSlopeProvider.notifier).set(_slopeFromN(v));
+                  }
+                },
+              ),
+            ],
+          ),
+          // M14 — hot-water flow temperature + allowable loop drop. 60 − 5 = 55
+          // is exactly the anti-Legionella floor, so the check only speaks once
+          // the engineer departs from these defaults.
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(child: label(context.strings(StringKey.designInputHotWaterFlowTemp))),
+              SteppedValueField(
+                display: '${hwFlow.round()} C',
+                editSeed: '${hwFlow.round()}',
+                label: context.strings(StringKey.designInputHotWaterFlowTemp),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 40,
+                max: 90,
+                onDecrement: () =>
+                    ref.read(hotWaterFlowTempProvider.notifier).nudge(-1),
+                onIncrement: () =>
+                    ref.read(hotWaterFlowTempProvider.notifier).nudge(1),
+                onSubmit: (v) {
+                  if (v != null) {
+                    ref.read(hotWaterFlowTempProvider.notifier).set(v);
+                  }
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(child: label(context.strings(StringKey.designInputHotWaterDeltaT))),
+              SteppedValueField(
+                display: '${hwDeltaT.round()} K',
+                editSeed: '${hwDeltaT.round()}',
+                label: context.strings(StringKey.designInputHotWaterDeltaT),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 1,
+                max: 20,
+                onDecrement: () =>
+                    ref.read(hotWaterDeltaTProvider.notifier).nudge(-1),
+                onIncrement: () =>
+                    ref.read(hotWaterDeltaTProvider.notifier).nudge(1),
+                onSubmit: (v) {
+                  if (v != null) {
+                    ref.read(hotWaterDeltaTProvider.notifier).set(v);
+                  }
+                },
+              ),
+            ],
+          ),
+          // M15 — which basis the Rooms AC estimate uses. ONE segment idiom,
+          // matching the Occupancy radio above.
+          const SizedBox(height: MechXSpacing.md),
+          Text(context.strings(StringKey.designInputAcLoadBasis),
+              style: type.caption.copyWith(color: colors.textMuted)),
+          const SizedBox(height: MechXSpacing.xs),
+          Wrap(
+            spacing: MechXSpacing.xs,
+            runSpacing: MechXSpacing.xs,
+            children: [
+              MechXSegment(
+                label: context.strings(StringKey.designInputAcBasisArea),
+                selected: acBasis == CoolingLoadMethod.simple,
+                onTap: () => ref
+                    .read(coolingLoadMethodProvider.notifier)
+                    .set(CoolingLoadMethod.simple),
+              ),
+              MechXSegment(
+                label: context.strings(StringKey.designInputAcBasisHeatGain),
+                selected: acBasis == CoolingLoadMethod.detailed,
+                onTap: () => ref
+                    .read(coolingLoadMethodProvider.notifier)
+                    .set(CoolingLoadMethod.detailed),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
 }
+
+/// The drafting denominator N of a gradient (0.01 m/m ⇒ 100, read "1:100").
+double _slopeN(double slope) => slope > 0 ? 1.0 / slope : 100.0;
+
+/// The gradient (m/m) for a drafting denominator N, guarded against 0.
+double _slopeFromN(double n) => n <= 0 ? 0.1 : 1.0 / n;
+
+/// `1:100` — the way a fall is written on a drawing. ASCII only.
+String _slopeDisplay(double slope) => '1:${_slopeN(slope).round()}';
 
 /// A compact square ghost button drawing a single glyph (−/+/×). Mirrors the
 /// inspector's affordance so the page reads as the same app.

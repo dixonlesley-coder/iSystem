@@ -159,6 +159,11 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
     originFaultLevelA: eProject.originFaultLevelA?.amperes,
     busbarClearingTimeS: eProject.busbarClearingTimeS,
     revisions: ref.read(documentControlProvider).revisions,
+    // R1 — the ISSUED report reads the SAME combined warning surface Review and
+    // the compliance roll-up read (core sizing warnings + the advanced fault
+    // study's selectivity / breaking-capacity / withstand / TT findings). Read
+    // from `electricalAllWarningsProvider`, never either source directly.
+    allWarnings: ref.read(electricalAllWarningsProvider),
   );
 }
 
@@ -247,32 +252,41 @@ Future<String?> pickExportSave(
 /// N13: a `tag` column (right after `kind`) carries the stable element tag
 /// (`CW-R1` for a riser, `CW-F2` for a floor-grouped run) so a CSV takeoff line
 /// traces to the same run/riser on the plan, riser single-line and calc report.
+///
+/// R2 — this is the app's ONLY BOM CSV export, and it used to carry its own
+/// hand-rolled column set: it omitted the `material` column (a cutting crew
+/// could not tell PPR from PVC on the takeoff) and the I5 `manual` (`*`)
+/// override marker, and its size column was the pipe-implying `nominal_dn_mm`.
+/// It now DELEGATES the takeoff columns to the engine's own [bomToCsv] — the
+/// one source of that format, including its two CONDITIONAL columns (`floor`
+/// when any line is floor-grouped, trailing `manual` when any line is a manual
+/// override) — and appends the three cut-plan columns to each row. The two CSVs
+/// can no longer disagree about what a BOM line is.
+///
+/// Header (floor-grouped, no manual override — the normal app export):
+/// `service,kind,tag,floor,nominal_size_mm,material,length_m,segments,`
+/// `stock_length_m,bars_purchased,waste_pct`
 String bomCsvWithCutPlan(List<BomLine> bom, List<PipeCutGroup> cutPlan) {
   final planByKey = <({ServiceType service, int mm}), PipeCutGroup>{
     for (final g in cutPlan) (service: g.service, mm: g.diameterMm): g,
   };
   final emitted = <({ServiceType service, int mm})>{};
-  final buffer = StringBuffer(
-      'service,kind,tag,floor,nominal_dn_mm,length_m,segments,'
-      'stock_length_m,bars_purchased,waste_pct\n');
-  for (final line in bom) {
+  // The engine CSV: a header row + one row per BOM line, in the SAME order.
+  final base = bomToCsv(bom).split('\n');
+  final buffer = StringBuffer()
+    ..write(base.first)
+    ..write(',stock_length_m,bars_purchased,waste_pct\n');
+  for (var i = 0; i < bom.length; i++) {
+    final line = bom[i];
     final key = (service: line.service, mm: line.diameterMm);
     final g = planByKey[key];
+    // The cut plan is a per-(service, DN) property (all runs of a size share
+    // stock bars), so it is emitted ONCE per group — sum-safe — and left empty
+    // on the rest, and empty when the plan has no entry (a riser-only DN, an
+    // air duct: never invented).
     final showPlan = g != null && emitted.add(key);
     buffer
-      ..write(line.service.name)
-      ..write(',')
-      ..write(line.kind.name)
-      ..write(',')
-      ..write(line.tag)
-      ..write(',')
-      ..write(line.floorIndex == null ? '' : (line.floorIndex! + 1))
-      ..write(',')
-      ..write(line.diameterMm)
-      ..write(',')
-      ..write(line.totalLength.meters.toStringAsFixed(2))
-      ..write(',')
-      ..write(line.segmentCount)
+      ..write(base[i + 1])
       ..write(',')
       ..write(showPlan ? g.stockLengthM.toStringAsFixed(1) : '')
       ..write(',')
@@ -2852,7 +2866,11 @@ class _RoomsSection extends ConsumerWidget {
                     r.containsNode(n.sheetId, n.floorIndex, n.x, n.y))
                   n,
             ];
-            final load = r.coolingLoad(cal?.metersPerPixel);
+            // M15/R6 — read the project's CHOSEN cooling-load basis (the
+            // Building page's 'AC load basis' picker) rather than hard-coding
+            // the area-density rule here, so the displayed BTU/h + PK actually
+            // follow the setting instead of ignoring it.
+            final load = ref.watch(roomCoolingLoadProvider(r.id));
             final perUnit = (acs.isNotEmpty && load != null)
                 ? selectAc(load.btuPerHr / acs.length)
                 : null;
@@ -2939,13 +2957,19 @@ class _RoomsSection extends ConsumerWidget {
                           style: MechXTypography.tabular(
                               type.caption.copyWith(color: colors.textMuted))),
                       const SizedBox(height: MechXSpacing.xs),
+                      // M11: an equipment duty past the largest standard motor
+                      // frame is a CLAMP, not a selection — flag it.
                       ResultCard(
                         headline:
                             '${s.equipment.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW',
                         label: '${airEquipmentLabel(s.equipmentKind)} · '
-                            '${s.equipment.totalStaticPressure.pascals.round()} Pa',
-                        verdict: 'sized',
-                        verdictColor: colors.success,
+                            '${s.equipment.totalStaticPressure.pascals.round()} Pa'
+                            '${s.equipment.motorOversized ? ' · above standard frame' : ''}',
+                        verdict:
+                            s.equipment.motorOversized ? 'over frame' : 'sized',
+                        verdictColor: s.equipment.motorOversized
+                            ? colors.danger
+                            : colors.success,
                       ),
                     ],
                     // Cooling (AC) — shown only when an AC indoor unit sits in
@@ -3256,11 +3280,15 @@ class _ResultsSection extends ConsumerWidget {
     Widget? headlineCard;
     if (strategy == FeedStrategy.upfeed) {
       if (pump != null) {
+        // M11 — `selectMotor` clamps at the largest standard frame (75 kW), so
+        // a 90 kW duty used to print a clean, green '75.00 kW' everywhere. When
+        // the duty saturated the ladder the figure is NOT a selection — say so.
+        final over = pump.motorOversized;
         headlineCard = ResultCard(
           headline: '${pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW',
-          label: 'Pump motor',
-          verdict: 'sized',
-          verdictColor: colors.success,
+          label: over ? 'Pump motor · above standard frame' : 'Pump motor',
+          verdict: over ? 'over frame' : 'sized',
+          verdictColor: over ? colors.danger : colors.success,
         );
       }
     } else {
@@ -4047,17 +4075,28 @@ class _SelectionSection extends ConsumerWidget {
           // both verdicts read the same targetResidualProvider, so they must use
           // the same-unit tolerance or a sub-target residual splits PASS vs LOW.
           final pass = residual.pascals >= target.pascals - 500;
-          final verdict = isFixture
-              ? ' · ${pass ? 'PASS' : 'LOW'} (min '
-                  '${target.inKiloPascals.toStringAsFixed(0)} kPa)'
-              : '';
+          // M9 — on the UPFEED solve the pump head is DEFINED as the max of
+          // (friction + elevation + target), so residual >= target is an
+          // algebraic identity: no drawn network can make this probe read LOW.
+          // Printing a green PASS off an unfalsifiable inequality is the same
+          // lie the 'all sheets calibrated' row was. Say what is true instead —
+          // the target is held BY DESIGN, and the falsifiable question (can a
+          // real pump deliver the required head?) lives on the pump duty.
+          final held = ref.watch(solveProvider)?.targetHeldByDesign ?? false;
+          final verdict = !isFixture
+              ? ''
+              : held
+                  ? ' · target held by design (min '
+                      '${target.inKiloPascals.toStringAsFixed(0)} kPa)'
+                  : ' · ${pass ? 'PASS' : 'LOW'} (min '
+                      '${target.inKiloPascals.toStringAsFixed(0)} kPa)';
           return Padding(
             padding: const EdgeInsets.only(top: MechXSpacing.xxs),
             child: Text(
               'Residual ${kpa.toStringAsFixed(0)} kPa$verdict',
               // L2: the probe re-reads every solve — tabular kPa digits.
               style: MechXTypography.tabular(context.type.caption.copyWith(
-                color: !isFixture
+                color: !isFixture || held
                     ? context.colors.textSecondary
                     : (pass ? context.colors.success : context.colors.danger),
               )),
@@ -4494,6 +4533,18 @@ class _SelectionSection extends ConsumerWidget {
             );
           }),
         ],
+        // M16 — the drainage stack≥branch clamp, named. When the sizer raised
+        // this stack to match the largest branch entering it, its size did NOT
+        // come from its own DFU load, and an engineer checking "why DN75 not
+        // DN65?" must be able to read that here (the same note the calc
+        // report's run schedule now footnotes).
+        if (sizing != null && sizing.stackRaisedForBranch) ...[
+          const SizedBox(height: MechXSpacing.xxs),
+          Text('Stack raised to match branch — sized up to the largest branch '
+              'entering it, not from its own load.',
+              style: context.type.caption
+                  .copyWith(color: context.colors.textSecondary)),
+        ],
         // Soft advisory: this air duct carries air but isn't manually sized yet.
         if (ref.watch(airUnsizedProvider).contains(edge.id)) ...[
           const SizedBox(height: MechXSpacing.xxs),
@@ -4778,13 +4829,17 @@ class _HvacSection extends ConsumerWidget {
         else ...[
           // Promoted headline: fan total static + selected motor. Only rendered
           // once a fan exists, so the blank/golden launch is byte-identical.
+          // M11: a duty past the largest standard frame prints the clamp
+          // honestly instead of a clean, green figure.
           ResultCard(
             headline:
                 '${fan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa',
-            label:
-                'Fan static · ${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW motor',
-            verdict: 'sized',
-            verdictColor: colors.success,
+            label: 'Fan static · '
+                '${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW motor'
+                '${fan.motorOversized ? ' · above standard frame' : ''}',
+            verdict: fan.motorOversized ? 'over frame' : 'sized',
+            verdictColor:
+                fan.motorOversized ? colors.danger : colors.success,
           ),
           const SizedBox(height: MechXSpacing.xs),
           // 'Fan static' + 'Fan motor' are the ResultCard headline/label above;

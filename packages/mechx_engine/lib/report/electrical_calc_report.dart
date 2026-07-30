@@ -51,6 +51,23 @@ class ElectricalCalcReportData {
   /// caller that does not populate it gets byte-identical legacy output.
   final List<Revision> revisions;
 
+  /// R1 — the COMBINED electrical warning surface the app already shows in
+  /// Review / compliance (`electricalAllWarningsProvider`): the core
+  /// [ElectricalSystemResult.warnings] PLUS the ADVANCED fault study's findings
+  /// (`non-selective`, `selectivity-partial`, `breaking-capacity-inadequate`,
+  /// `busbar-withstand-inadequate`, `tt-no-earth-fault-protection`), deduped on
+  /// (code, panelId, circuitId).
+  ///
+  /// The issued report used to print [result].warnings ONLY, so an
+  /// error-severity breaking-capacity finding the app flagged on screen was
+  /// missing from the deliverable a panel builder receives. When this is
+  /// supplied the "System warnings" section prints THIS list, and each panel
+  /// section gains the findings carrying its own `panelId` that its own
+  /// `warnings` list doesn't already hold.
+  ///
+  /// Null ⇒ the legacy behaviour (core warnings only) ⇒ byte-identical.
+  final List<ElectricalWarning>? allWarnings;
+
   const ElectricalCalcReportData({
     required this.projectName,
     required this.date,
@@ -63,6 +80,7 @@ class ElectricalCalcReportData {
     this.originFaultLevelA,
     this.busbarClearingTimeS,
     this.revisions = const [],
+    this.allWarnings,
   });
 }
 
@@ -307,10 +325,23 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
       ));
     }
 
-    // Per-panel warnings.
-    if (p.warnings.isNotEmpty) {
+    // Per-panel warnings — the panel's own list PLUS (R1) any finding of the
+    // combined surface that carries this panel's id and isn't already in it
+    // (the advanced fault study's selectivity / breaking-capacity / withstand
+    // findings). Deduped on (code, circuitId) so a warning never prints twice.
+    final panelWarnings = <ElectricalWarning>[...p.warnings];
+    final all = data.allWarnings;
+    if (all != null) {
+      final known = {for (final w in p.warnings) (w.code, w.circuitId)};
+      for (final w in all) {
+        if (w.panelId != id) continue;
+        if (!known.add((w.code, w.circuitId))) continue;
+        panelWarnings.add(w);
+      }
+    }
+    if (panelWarnings.isNotEmpty) {
       blocks.add(RptKeyValue([
-        for (final w in p.warnings)
+        for (final w in panelWarnings)
           ('', '_${_severityTag(w.severity)}_: ${w.message}'),
       ]));
     }
@@ -355,11 +386,14 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
   }
 
   // ── System warnings ─────────────────────────────────────────────────────--
-  if (r.warnings.isNotEmpty) {
+  // R1: the COMBINED surface when the caller supplies it (core + fault study),
+  // else the core list alone (byte-identical legacy output).
+  final systemWarnings = data.allWarnings ?? r.warnings;
+  if (systemWarnings.isNotEmpty) {
     blocks
       ..add(RptHeading(2, strings(RptStringKey.headingWarnings)))
       ..add(RptKeyValue([
-        for (final w in r.warnings)
+        for (final w in systemWarnings)
           ('', '_${_severityTag(w.severity)}_: ${w.message}'),
       ]));
   }

@@ -7,6 +7,13 @@
 /// `selectivityRatio × the fed board's incomer rating`, so the sizer stops
 /// creating the condition the fault study warns about.
 ///
+/// RE-DERIVED 2026-07-30 (audit E3+E4). The floor is now DEVICE-ONLY and is
+/// CAPPED at the largest rung the LOAD-sized cable's derated Iz protects — the
+/// conductor is never inflated to chase discrimination, and where the cap bites
+/// the residual non-/partial-selectivity stays reported. The policy itself is
+/// pinned in `feeder_floor_policy_test.dart`; the groups below keep their
+/// original fixtures and simply carry the new (hand-re-derived) answers.
+///
 /// Every expected value below is hand-derived from first principles against the
 /// `PuilProfile` tables:
 ///   - breaker ladder: 6 10 16 20 25 32 40 50 63 | 80 100 125 160 200 250 315
@@ -96,15 +103,21 @@ void main() {
   });
 
   // ── (1) the two-panel case the sizer used to make non-selective ────────────
-  group('(1) a feeder on the child incomer\'s own rung is lifted 1.6×', () {
+  group('(1) a feeder on the child incomer\'s own rung lifts as far as its '
+      'cable allows', () {
     // SP: 3φ, ONE 3φ heater 35 kW at cosφ 1.0, diversity 1.
     //   Ib(s1) = 35 000 / (√3·400·1.0) = 50.518 A → 50.5 A ⇒ way breaker 63 A.
     //   The way is three-phase, so it loads L1=L2=L3 = 50.5 A ⇒ the board's
     //   demand current is 50.5 A ⇒ SP INCOMER = first rung ≥ 50.5 = 63 A.
     // MDP feeds SP through f1 (25 m, cosφ 1.0). The feeder's load is SP's
-    //   diversified demand = 35 000 W ⇒ Ib(f1) = 50.518 A ⇒ PASS 1 would pick
+    //   diversified demand = 35 000 W ⇒ Ib(f1) = 50.518 A ⇒ PASS 1 picks
     //   63 A — the SAME rung as SP's incomer (ratio 1.0 ⇒ non-selective).
-    // FLOOR = 1.6 × 63 = 100.8 A ⇒ first rung ≥ 100.8 = 125 A.
+    // FLOOR = 1.6 × 63 = 100.8 A ⇒ the target rung is 125 A.
+    // CABLE (load-sized, derating 1.00): Iz ≥ max(63, 1.25 × 50.518 = 63.15)
+    //   = 63.15 A ⇒ 10 mm² (60 A) is short, 16 mm² (80 A) carries it ⇒ Iz 80 A.
+    // CAP = 80 A ⇒ the largest rung ≤ 80 is 80 A, BELOW the 125 A target: the
+    //   device lifts 63 → 80 and stops, the cable never moves, and the residual
+    //   (80 / 63 = 1.27 < 1.6) stays a reported non-selectivity.
     const sp = ElectricalPanel(
       id: 'SP',
       name: 'Sub',
@@ -171,35 +184,44 @@ void main() {
       expect(nonSelective(63, 63), isTrue);
     });
 
-    test('the sized feeder carries the first rung ≥ 1.6× the child incomer', () {
+    test('the sized feeder lifts to the rung its own conductor protects', () {
       final feeder = _way(sys.panels['MDP']!, 'f1');
-      expect(feeder.breaker.ratingA.amperes, 125);
+      // The 125 A target is out of reach on a 16 mm² (Iz 80 A) conductor, so
+      // the device stops at 80 A rather than dragging copper up with it.
+      expect(feeder.breaker.ratingA.amperes, 80);
       expect(feeder.breaker.overridden, isFalse);
       // The floor never touches the design current — only the device.
       expect(feeder.designCurrent.amperes, closeTo(50.5, 1e-9));
+      // And In ≤ Iz still holds: the breaker still protects the cable.
+      expect(feeder.breaker.ratingA.amperes,
+          lessThanOrEqualTo(feeder.cable.deratedIz.amperes));
     });
 
-    test('the cable upsizes with the bumped In (Iz ≥ max(In, 1.25·Ib))', () {
+    test('the cable does NOT move — it is sized on the load, not the floor', () {
       // PASS 1: Iz ≥ max(63, 1.25 × 50.518 = 63.15) = 63.15 A ⇒ 16 mm² (80 A);
       //         the 3φ trunk minimum 4 mm² is already cleared.
       expect(_way(pass1Mdp, 'f1').cable.csaMm2, 16);
-      // PASS 2: Iz ≥ max(125, 63.15) = 125 A ⇒ 25 mm² (105 A) is short,
-      //         35 mm² (130 A) is the first section that carries it.
+      // PASS 2 sizes the conductor from the SAME load-based pick, so it is the
+      // identical cable. (The old policy chased the 125 A device to 35 mm².)
       final feeder = _way(sys.panels['MDP']!, 'f1');
-      expect(feeder.cable.csaMm2, 35);
-      expect(feeder.cable.deratedIz.amperes, closeTo(130, 0.1));
+      expect(feeder.cable.csaMm2, 16);
+      expect(feeder.cable.deratedIz.amperes,
+          _way(pass1Mdp, 'f1').cable.deratedIz.amperes);
+      expect(feeder.cable.deratedIz.amperes, closeTo(80, 0.1));
       expect(feeder.cable.ampacityReached, isTrue);
     });
 
-    test('the fault study no longer calls the pair non-selective', () {
+    test('the capped-back residual IS reported (never suppressed)', () {
       final fs = faultStudy(sys, project, p);
       final pair = fs.selectivity.single;
-      expect(pair.upstreamRatingA, 125);
+      expect(pair.upstreamRatingA, 80);
       expect(pair.downstreamRatingA, 63);
-      // 125 / 63 = 1.98 ⇒ inside [1.6, 2.5) ⇒ partial, not non-selective.
-      expect(pair.nonSelective, isFalse);
-      expect(pair.zone, SelectivityZone.partial);
-      expect(fs.warnings.map((w) => w.code), isNot(contains('non-selective')));
+      // 80 / 63 = 1.27 < 1.6 ⇒ still non-selective, and the sizer says so: the
+      // floor did not reach its target, so this feeder is NOT in the applied set.
+      expect(sys.feederFloorsApplied, isEmpty);
+      expect(pair.nonSelective, isTrue);
+      expect(pair.zone, SelectivityZone.nonSelective);
+      expect(fs.warnings.map((w) => w.code), contains('non-selective'));
     });
 
     test('the second pass adds no duplicate warnings', () {
@@ -396,9 +418,17 @@ void main() {
     //   → 1198.0 A ⇒ SP incomer = first rung ≥ 1198.0 = 1250 A.
     // Feeder f1 carries the same 830 kW at cosφ 1.0 ⇒ Ib = 1198.0 A ⇒ pass 1
     //   picks 1250 A, the child incomer's own rung (non-selective).
-    // FLOOR = 1.6 × 1250 = 2000 A — beyond the 1600 A ladder top, so the feeder
-    //   lifts as far as the ladder allows (1600 A) and the RESIDUAL
-    //   non-selectivity (1600 / 1250 = 1.28 < 1.6) is left for the fault study.
+    // FLOOR = 1.6 × 1250 = 2000 A — beyond the 1600 A ladder top, so the floor
+    //   itself clamps to 1600 A (never a throw).
+    // CABLE (load-sized, derating 1.00): Iz ≥ max(1250, 1.25 × 1198.0018 =
+    //   1497.5) = 1497.5 A. One run tops out at 300 mm² (500 A) and two runs at
+    //   1000 A, so it takes 3 parallel runs: 1497.5 / 3 = 499.2 A per run ⇒
+    //   300 mm² (500 A) ⇒ Iz = 3 × 500 = 1500 A.
+    // CAP = 1500 A ⇒ the largest rung ≤ 1500 is 1250 A: the clamped floor is
+    //   ALSO out of the conductor's reach, so the device does not move at all
+    //   and the residual non-selectivity (1250 / 1250 = 1.0) is left for the
+    //   fault study. (The old policy grew the cable to 4 × 240 mm² to carry a
+    //   1600 A device.)
     const sp = ElectricalPanel(
       id: 'SP',
       name: 'Sub',
@@ -447,18 +477,23 @@ void main() {
       expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 1250);
     });
 
-    test('the feeder clamps at 1600 A instead of throwing', () {
+    test('the feeder holds at the rung its load-sized conductor protects', () {
       final feeder = _way(sys.panels['MDP']!, 'f1');
-      expect(feeder.breaker.ratingA.amperes, 1600);
-      // Still a real, protected conductor: 4× 240 mm² (435 A each) ⇒ Iz 1740 A.
+      expect(feeder.breaker.ratingA.amperes, 1250);
+      // A real, protected conductor: 3× 300 mm² (500 A each) ⇒ Iz 1500 A.
+      expect(feeder.cable.csaMm2, 300);
+      expect(feeder.cable.runsPerPhase, 3);
+      expect(feeder.cable.deratedIz.amperes, closeTo(1500, 0.1));
       expect(feeder.cable.ampacityReached, isTrue);
       expect(feeder.cable.deratedIz.amperes,
           greaterThanOrEqualTo(feeder.breaker.ratingA.amperes));
+      // Nothing reached the target, so nothing is claimed as applied.
+      expect(sys.feederFloorsApplied, isEmpty);
     });
 
     test('the residual non-selectivity is reported, not swallowed', () {
       final fs = faultStudy(sys, project, p);
-      expect(fs.selectivity.single.upstreamRatingA, 1600);
+      expect(fs.selectivity.single.upstreamRatingA, 1250);
       expect(fs.selectivity.single.nonSelective, isTrue);
       expect(fs.warnings.map((w) => w.code), contains('non-selective'));
     });

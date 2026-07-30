@@ -120,6 +120,11 @@ enum RptStringKey {
   // localized key off the result's boolean (meetsMinimumPressure / oversized).
   fireRemoteAreaVerdictOk,
   fireRemoteAreaVerdictUnder,
+  // M8 — the informative case: the density/area share alone would sit under the
+  // head's minimum operating pressure, so the demand was re-derived at the floor
+  // (Q = K·√P_min). The head passes; the DEMAND is governed by that minimum, not
+  // by the density. (The old row read this as a failure, which it never was.)
+  fireRemoteAreaVerdictGoverned,
   fireStandpipeKey,
   fireStandpipeValue, // {lps} {m} {kw} {mm}
   firePumpKey, // {des}
@@ -161,6 +166,11 @@ enum RptStringKey {
   tblFixtureUnits,
   tblFlowLps,
   tblVelocityMs,
+  // M16 — the per-run schedule's footnote naming the stacks the sizer raised to
+  // match a larger branch entering them (`EdgeSizing.stackRaisedForBranch`).
+  // Emitted ONLY when at least one scheduled row carries the flag, so a project
+  // with no raised stack stays byte-identical.
+  runScheduleStackRaised, // {tags}
 
   // Service names.
   svcColdWater,
@@ -382,6 +392,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
           '_(K-factor + min head pressure — general practice, // VERIFY)_',
   RptStringKey.fireRemoteAreaVerdictOk: 'Remote head OK',
   RptStringKey.fireRemoteAreaVerdictUnder: 'Remote head under-pressure',
+  RptStringKey.fireRemoteAreaVerdictGoverned:
+      'Remote head OK - demand governed by head minimum pressure, not density',
   RptStringKey.fireStandpipeKey: 'Standpipe:',
   RptStringKey.fireStandpipeValue:
       '**{lps} L/s** · fire pump {m} m · {kw} kW · min riser {mm} mm',
@@ -392,8 +404,12 @@ const Map<RptStringKey, String> kReportStringsEn = {
       'rated {rated} L/s @ {head} m · churn {churn} m (140 %) · '
           '150 % flow @ {overload} m (65 %) · motor **{motor} kW** · '
           '**{verdict}** _(curve acceptance ratios — NFPA 20 limits, // VERIFY)_',
-  RptStringKey.firePumpVerdictOversized: 'Oversized pump curve',
-  RptStringKey.firePumpVerdictWithin: 'Rating curve within standard range',
+  // M19 — the flag behind these two is the STANDARD MOTOR ladder saturating,
+  // not a curve-acceptance failure; the wording now names the true condition
+  // (and the action) exactly as `FirePumpRatingResult.verdict` does.
+  RptStringKey.firePumpVerdictOversized:
+      'Motor above standard frame range - specify a custom motor or duty pairs',
+  RptStringKey.firePumpVerdictWithin: 'Motor within standard frame range',
   RptStringKey.fireJockeyKey: 'Jockey pump:',
   RptStringKey.fireJockeyValue:
       '{lps} L/s @ {m} m (pressure maintenance){standby}',
@@ -427,6 +443,10 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.tblFixtureUnits: 'FU',
   RptStringKey.tblFlowLps: 'Flow (L/s)',
   RptStringKey.tblVelocityMs: 'Vel (m/s)',
+  RptStringKey.runScheduleStackRaised:
+      '_Stack raised to match branch: {tags} — the stack was sized up to the '
+          'largest branch entering it (a stack is never smaller than a branch '
+          'it receives)._',
   RptStringKey.calcClosingNote:
       '_Sizes are auto-calculated to SNI velocity/demand rules. Confirm '
           'all UNVERIFIED values and review against the applicable SNI before use._',
@@ -657,6 +677,9 @@ const Map<RptStringKey, String> kReportStringsId = {
           '_(K-factor + tekanan head min — praktik umum, // VERIFY)_',
   RptStringKey.fireRemoteAreaVerdictOk: 'Head terjauh OK',
   RptStringKey.fireRemoteAreaVerdictUnder: 'Head terjauh kurang tekanan',
+  RptStringKey.fireRemoteAreaVerdictGoverned:
+      'Head terjauh OK - kebutuhan ditentukan tekanan minimum head, '
+          'bukan kerapatan',
   RptStringKey.fireStandpipeKey: 'Pipa tegak:',
   RptStringKey.fireStandpipeValue:
       '**{lps} L/s** · pompa pemadam {m} m · {kw} kW · riser min {mm} mm',
@@ -667,8 +690,10 @@ const Map<RptStringKey, String> kReportStringsId = {
       'rated {rated} L/s @ {head} m · churn {churn} m (140 %) · '
           'aliran 150 % @ {overload} m (65 %) · motor **{motor} kW** · '
           '**{verdict}** _(rasio penerimaan kurva — batas NFPA 20, // VERIFY)_',
-  RptStringKey.firePumpVerdictOversized: 'Kurva pompa kebesaran',
-  RptStringKey.firePumpVerdictWithin: 'Kurva rating dalam rentang standar',
+  RptStringKey.firePumpVerdictOversized:
+      'Motor melebihi rentang frame standar - tentukan motor khusus atau '
+          'pompa berpasangan',
+  RptStringKey.firePumpVerdictWithin: 'Motor dalam rentang frame standar',
   RptStringKey.fireJockeyKey: 'Pompa jockey:',
   RptStringKey.fireJockeyValue:
       '{lps} L/s @ {m} m (pemeliharaan tekanan){standby}',
@@ -702,6 +727,10 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.tblFixtureUnits: 'UBAP',
   RptStringKey.tblFlowLps: 'Aliran (L/s)',
   RptStringKey.tblVelocityMs: 'Kecepatan (m/s)',
+  RptStringKey.runScheduleStackRaised:
+      '_Tegak dinaikkan menyesuaikan cabang: {tags} — pipa tegak dibesarkan '
+          'mengikuti cabang terbesar yang masuk (pipa tegak tidak pernah lebih '
+          'kecil dari cabang yang diterimanya)._',
   RptStringKey.calcClosingNote:
       '_Ukuran dihitung otomatis sesuai aturan kecepatan/permintaan SNI. '
           'Konfirmasi semua nilai BELUM TERVERIFIKASI dan tinjau terhadap SNI '

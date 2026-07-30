@@ -43,7 +43,8 @@ import 'fault.dart'
         FaultStudyResult,
         defaultLvUtilityFaultKa,
         estimatedServiceFaultLevelA,
-        faultStudy;
+        faultStudy,
+        serviceFaultEstimateVerifyItems;
 import 'harmonics.dart' show HarmonicsResult, ThdBand, estimateHarmonics;
 import 'lightning.dart' show LightningRisk, assessLightning, collectionArea;
 import 'load_kind.dart' show LoadKind;
@@ -205,13 +206,24 @@ AdvancedStudy computeAdvancedStudy(
   // schedule prints can never diverge from the bus-withstand basis again (a
   // domestic board used to print 25 kA devices over a 6 kA bus). A project
   // declaring nothing resolves to the historic 16 kA ⇒ byte-identical.
+  //
+  // R5: the SERVICE-SIZE ESTIMATE governs only when nothing more authoritative
+  // was declared — no explicit argument AND no project `originFaultLevelA` —
+  // and the estimate itself resolved. Exactly then (and only then) does the
+  // estimate's provenance debt belong on the printed honesty surface below; a
+  // project that declares its fault level, or one that falls through to the
+  // flat default, adds nothing ⇒ byte-identical.
+  final serviceEstimate = estimatedServiceFaultLevelA(project);
+  final serviceEstimateGoverns = originFaultLevel == null &&
+      project.originFaultLevelA == null &&
+      serviceEstimate != null;
   final fault = faultStudy(
     sys,
     project,
     profile,
     originFaultLevel: originFaultLevel ??
         project.originFaultLevelA ??
-        estimatedServiceFaultLevelA(project) ??
+        serviceEstimate ??
         const Current(defaultLvUtilityFaultKa * 1000),
   );
 
@@ -348,6 +360,12 @@ AdvancedStudy computeAdvancedStudy(
     // actually references it (otherwise the per-circuit demand factors apply).
     if (project.panels.any((p) => p.diversityLibraryId != null))
       diversityLibraryVerifyItems,
+    // R5 — the service-size fault ESTIMATE drives the printed device kA tokens
+    // and the busbar-withstand basis whenever it governs, so its representative
+    // transformer impedance / capacity rungs / clamp must be declared in the
+    // report's "Unverified values" section rather than sitting silently behind
+    // the numbers.
+    if (serviceEstimateGoverns) serviceFaultEstimateVerifyItems,
   ]);
 
   return AdvancedStudy(

@@ -94,7 +94,14 @@ class HeatmapLayer extends ConsumerWidget {
             right: MechXSpacing.md,
             bottom: MechXSpacing.md,
             child: HeatmapLegend(
-                minKpa: minKpa, maxKpa: maxKpa, targetKpa: targetKpa),
+                minKpa: minKpa,
+                maxKpa: maxKpa,
+                targetKpa: targetKpa,
+                // M9: on the upfeed solve the residuals meet the target BY
+                // CONSTRUCTION (the pump head is defined as their max), so the
+                // legend must not print a green PASS off them.
+                targetHeldByDesign:
+                    ref.watch(solveProvider)?.targetHeldByDesign ?? false),
           ),
         ],
       ),
@@ -124,11 +131,23 @@ class HeatmapLegend extends StatelessWidget {
   /// state's PASS/LOW verdict.
   final double targetKpa;
 
+  /// M9 — true when these residuals hold [targetKpa] BY CONSTRUCTION rather
+  /// than as a falsifiable outcome ([PressureSolution.targetHeldByDesign], the
+  /// upfeed solve: the pump head is DEFINED as the max of
+  /// friction + elevation + target, so `residual >= target` is an algebraic
+  /// identity no drawn network can break). A PASS read off that is
+  /// unfalsifiable, so the verdict reads "target held by design" instead of a
+  /// green PASS. The gravity DOWNFEED solve leaves this false — its residuals
+  /// fall from a FIXED tank elevation and really can miss the target, so its
+  /// PASS/LOW is a genuine check and is unchanged.
+  final bool targetHeldByDesign;
+
   const HeatmapLegend(
       {super.key,
       required this.minKpa,
       required this.maxKpa,
-      required this.targetKpa});
+      required this.targetKpa,
+      this.targetHeldByDesign = false});
 
   @override
   Widget build(BuildContext context) {
@@ -219,11 +238,21 @@ class HeatmapLegend extends StatelessWidget {
                       softWrap: false,
                       style: type.mono.copyWith(color: colors.textMuted)),
                   const SizedBox(width: MechXSpacing.xs),
-                  Text(pass ? 'PASS' : 'LOW',
+                  // M9: an upfeed residual cannot fail this comparison, so it
+                  // gets the honest neutral statement, never a green PASS.
+                  Text(targetHeldByDesign
+                      ? 'held by design'
+                      : pass
+                          ? 'PASS'
+                          : 'LOW',
                       maxLines: 1,
                       softWrap: false,
                       style: type.mono.copyWith(
-                          color: pass ? colors.success : colors.danger)),
+                          color: targetHeldByDesign
+                              ? colors.textSecondary
+                              : pass
+                                  ? colors.success
+                                  : colors.danger)),
                 ],
               )
             else ...[

@@ -551,6 +551,19 @@ enum StringKey {
   issueAirDuctUnsizedTitle,
   issueAirTerminalUnsizedTitle,
   issueDuctOverCapacityTitle,
+  // Wave A fan-ins for the engine's widened sizing flags (M3/M4/M5/M11/M17).
+  issueStormOverCapacityTitle,
+  issueStormOverCapacityMessage,
+  issueWaterOverCapacityTitle,
+  issueWaterOverCapacityMessage,
+  issueWaterVelocityTitle, // message = the engine VelocityCheck.message
+  issueSelfCleansingTitle,
+  issueSelfCleansingMessage,
+  issueLoopUnbalancedTitle,
+  issueLoopUnbalancedMessage,
+  issueMotorOversizedTitle,
+  issuePumpMotorOversizedMessage,
+  issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
   issueCalibrationStaleTitle, // J1 — plan replaced, old scale unverified
@@ -699,6 +712,16 @@ enum StringKey {
   a11yFieldFloorToFloorHeight,
   a11yFieldNumberOfLevels,
   a11yFieldFloorHeight,
+
+  // M13/M14/M15 — the Building page's design inputs made real: the laid
+  // drainage gradient, the hot-water flow temperature + allowable loop drop,
+  // and which basis the Rooms AC estimate uses.
+  designInputDrainageSlope,
+  designInputHotWaterFlowTemp,
+  designInputHotWaterDeltaT,
+  designInputAcLoadBasis,
+  designInputAcBasisArea,
+  designInputAcBasisHeatGain,
 
   // A1 — the Layout empty-state's 'Load sample project' action (mirrors the
   // electrical workspace's `electricalLoadSampleProject`, kept as its own key
@@ -1286,7 +1309,9 @@ const Map<StringKey, String> _en = {
   //    values are BYTE-IDENTICAL to the literals they replace.
 
   // H1 — compliance roll-up categories.
-  StringKey.complianceCategoryAirVelocity: 'Air velocity',
+  // Named 'Velocity' since the water-velocity findings (M4/M5) land in the
+  // same kind-matched row as the air ones; the key name stays for stability.
+  StringKey.complianceCategoryAirVelocity: 'Velocity',
   StringKey.complianceCategorySheetCalibration: 'Sheet calibration',
   StringKey.complianceCategoryStandardsVerification: 'Standards verification',
   StringKey.complianceCategoryElectricalSizing: 'Electrical circuit sizing',
@@ -1384,6 +1409,38 @@ const Map<StringKey, String> _en = {
   StringKey.issueAirDuctUnsizedTitle: 'Air duct not manually sized',
   StringKey.issueAirTerminalUnsizedTitle: 'Air terminal not manually sized',
   StringKey.issueDuctOverCapacityTitle: 'Duct over capacity',
+  StringKey.issueStormOverCapacityTitle: 'Downpipe over capacity',
+  StringKey.issueStormOverCapacityMessage:
+      'This downpipe drains more roof catchment than the largest tabulated '
+      'downpipe can carry — it was clamped to the largest size. Split the roof '
+      'outlets across more downpipes.',
+  StringKey.issueWaterOverCapacityTitle: 'Pipe velocity over the SNI cap',
+  StringKey.issueWaterOverCapacityMessage:
+      'No diameter in the series keeps this run under the SNI max supply '
+      'velocity at the accumulated flow — it was sized at the largest table '
+      'entry and still ships over the cap. Split the flow across more risers / '
+      'branches.',
+  StringKey.issueWaterVelocityTitle: 'Pipe velocity out of band',
+  StringKey.issueSelfCleansingTitle: 'Drainage branch below self-cleansing',
+  StringKey.issueSelfCleansingMessage:
+      'At the design slope this branch runs below the 0.6 m/s self-cleansing '
+      'velocity, so solids settle out and it silts up. Laying it flatter is the '
+      'wrong direction — use a smaller pipe, or group more discharge onto it.',
+  StringKey.issueLoopUnbalancedTitle: 'Ring flow split not settled',
+  StringKey.issueLoopUnbalancedMessage:
+      'The Hardy-Cross balance for this looped main did not converge within its '
+      'iteration budget. The flow still satisfies continuity, but the split — '
+      'and every size derived from it — is provisional. Simplify the ring or '
+      'check for a near-zero-resistance leg.',
+  StringKey.issueMotorOversizedTitle: 'Duty past the largest motor frame',
+  StringKey.issuePumpMotorOversizedMessage:
+      'The pump duty exceeds the largest standard motor frame, so the printed '
+      'motor is the top of the ladder, not a selection. Specify a custom motor, '
+      'or split the duty across more pumps.',
+  StringKey.issueFanMotorOversizedMessage:
+      'The fan duty exceeds the largest standard motor frame, so the printed '
+      'motor is the top of the ladder, not a selection. Specify a custom motor, '
+      'or split the duty across more fans.',
   StringKey.issueDiffuserStrandedTitle: 'Diffuser not connected to any duct',
   StringKey.issueSheetNotCalibratedTitle: 'Sheet not calibrated',
   StringKey.issueCalibrationStaleTitle: 'Plan replaced — re-verify scale',
@@ -1570,6 +1627,12 @@ const Map<StringKey, String> _en = {
   StringKey.a11yFieldFloorToFloorHeight: 'Floor-to-floor height',
   StringKey.a11yFieldNumberOfLevels: 'Number of levels',
   StringKey.a11yFieldFloorHeight: 'Floor height',
+  StringKey.designInputDrainageSlope: 'Drainage slope',
+  StringKey.designInputHotWaterFlowTemp: 'Hot-water flow temp',
+  StringKey.designInputHotWaterDeltaT: 'Hot-water loop drop',
+  StringKey.designInputAcLoadBasis: 'AC load basis',
+  StringKey.designInputAcBasisArea: 'Area density',
+  StringKey.designInputAcBasisHeatGain: 'Heat gain',
 
   // A1 — Layout empty-state 'Load sample project'.
   StringKey.layoutLoadSampleProject: 'Load sample project',
@@ -2159,7 +2222,7 @@ const Map<StringKey, String> _id = {
   // ── Apple design review Wave 5a (H1 + H6) — trust-surface localization.
 
   // H1 — compliance roll-up categories.
-  StringKey.complianceCategoryAirVelocity: 'Kecepatan udara',
+  StringKey.complianceCategoryAirVelocity: 'Kecepatan aliran',
   StringKey.complianceCategorySheetCalibration: 'Kalibrasi lembar',
   StringKey.complianceCategoryStandardsVerification: 'Verifikasi standar',
   StringKey.complianceCategoryElectricalSizing: 'Pengukuran sirkuit listrik',
@@ -2257,6 +2320,42 @@ const Map<StringKey, String> _id = {
   StringKey.issueAirDuctUnsizedTitle: 'Saluran udara belum diukur manual',
   StringKey.issueAirTerminalUnsizedTitle: 'Terminal udara belum diukur manual',
   StringKey.issueDuctOverCapacityTitle: 'Saluran melebihi kapasitas',
+  StringKey.issueStormOverCapacityTitle: 'Pipa tegak air hujan melebihi kapasitas',
+  StringKey.issueStormOverCapacityMessage:
+      'Pipa tegak ini mengalirkan luas tangkapan atap lebih besar daripada '
+      'kapasitas pipa tegak terbesar dalam tabel — ukurannya dijepit ke ukuran '
+      'terbesar. Bagi outlet atap ke lebih banyak pipa tegak.',
+  StringKey.issueWaterOverCapacityTitle:
+      'Kecepatan pipa melebihi batas SNI',
+  StringKey.issueWaterOverCapacityMessage:
+      'Tidak ada diameter dalam seri yang menjaga jalur ini di bawah kecepatan '
+      'suplai maksimum SNI pada debit terakumulasi — jalur diukur pada entri '
+      'tabel terbesar dan tetap melebihi batas. Bagi alirannya ke lebih banyak '
+      'pipa tegak / cabang.',
+  StringKey.issueWaterVelocityTitle: 'Kecepatan pipa di luar batas',
+  StringKey.issueSelfCleansingTitle: 'Cabang drainase di bawah swa-bersih',
+  StringKey.issueSelfCleansingMessage:
+      'Pada kemiringan desain, cabang ini mengalir di bawah kecepatan '
+      'swa-bersih 0,6 m/s sehingga padatan mengendap dan salurannya tersumbat. '
+      'Memperlandai kemiringan justru salah arah — gunakan pipa lebih kecil, '
+      'atau gabungkan lebih banyak buangan ke cabang ini.',
+  StringKey.issueLoopUnbalancedTitle: 'Pembagian aliran ring belum stabil',
+  StringKey.issueLoopUnbalancedMessage:
+      'Penyeimbangan Hardy-Cross untuk jaringan ring ini tidak konvergen dalam '
+      'batas iterasinya. Alirannya masih memenuhi kontinuitas, tetapi '
+      'pembagiannya — dan setiap ukuran yang diturunkan darinya — bersifat '
+      'sementara. Sederhanakan ring atau periksa kaki dengan resistansi '
+      'mendekati nol.',
+  StringKey.issueMotorOversizedTitle:
+      'Duti melebihi rangka motor standar terbesar',
+  StringKey.issuePumpMotorOversizedMessage:
+      'Duti pompa melebihi rangka motor standar terbesar, sehingga motor yang '
+      'tercetak adalah puncak tangga standar, bukan hasil pemilihan. Tentukan '
+      'motor khusus, atau bagi dutinya ke lebih banyak pompa.',
+  StringKey.issueFanMotorOversizedMessage:
+      'Duti fan melebihi rangka motor standar terbesar, sehingga motor yang '
+      'tercetak adalah puncak tangga standar, bukan hasil pemilihan. Tentukan '
+      'motor khusus, atau bagi dutinya ke lebih banyak fan.',
   StringKey.issueDiffuserStrandedTitle:
       'Difuser tidak terhubung ke saluran mana pun',
   StringKey.issueSheetNotCalibratedTitle: 'Lembar belum dikalibrasi',
@@ -2452,6 +2551,12 @@ const Map<StringKey, String> _id = {
   StringKey.a11yFieldFloorToFloorHeight: 'Tinggi antar lantai',
   StringKey.a11yFieldNumberOfLevels: 'Jumlah lantai',
   StringKey.a11yFieldFloorHeight: 'Tinggi lantai',
+  StringKey.designInputDrainageSlope: 'Kemiringan drainase',
+  StringKey.designInputHotWaterFlowTemp: 'Suhu air panas keluar',
+  StringKey.designInputHotWaterDeltaT: 'Penurunan suhu loop',
+  StringKey.designInputAcLoadBasis: 'Dasar beban AC',
+  StringKey.designInputAcBasisArea: 'Kepadatan luas',
+  StringKey.designInputAcBasisHeatGain: 'Perolehan kalor',
 
   // A1 — Layout empty-state 'Load sample project'.
   StringKey.layoutLoadSampleProject: 'Muat proyek contoh',

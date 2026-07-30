@@ -17,6 +17,7 @@ import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'annotation_store.dart';
+import 'app_state.dart' show CoolingLoadMethod, coolingLoadMethodProvider;
 import 'fire_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
@@ -92,8 +93,9 @@ double? _acRoomWatts(
   Network net,
   List<RoomArea> rooms,
   double? Function(String sheetId) mppFor,
-  NetNode node,
-) {
+  NetNode node, {
+  CoolingLoadMethod method = CoolingLoadMethod.simple,
+}) {
   RoomArea? room;
   for (final r in rooms) {
     if (r.containsNode(node.sheetId, node.floorIndex, node.x, node.y)) {
@@ -102,7 +104,9 @@ double? _acRoomWatts(
     }
   }
   if (room == null) return null;
-  final load = room.coolingLoad(mppFor(room.sheetId));
+  // The project's AC-load basis (Building page) drives the fed circuit too, so
+  // the panel schedule and the Rooms inspector can never disagree on the PK.
+  final load = room.coolingLoad(mppFor(room.sheetId), method: method);
   if (load == null) return null;
   // Split the room load across the AC indoor units inside the same footprint.
   var count = 0;
@@ -136,8 +140,10 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
     if (c == null || !c.isElectricalLoad) continue;
     // An AC unit's load tracks its room's cooling PK when it sits in a scaled
     // room; an explicit per-node override still wins, else the component default.
-    final acWatts =
-        RoomArea.isAcComponent(c) ? _acRoomWatts(net, rooms, mppFor, n) : null;
+    final acWatts = RoomArea.isAcComponent(c)
+        ? _acRoomWatts(net, rooms, mppFor, n,
+            method: ref.watch(coolingLoadMethodProvider))
+        : null;
     final watts = n.electricalLoadW ?? acWatts ?? c.defaultMotorKw * 1000;
     if (watts <= 0) continue;
     loads.add(MepEquipmentLoad(

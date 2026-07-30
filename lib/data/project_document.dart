@@ -176,17 +176,37 @@ class DesignSettings {
   /// `cooling_load.dart`, the default) or `'detailed'` (the heat-gain component
   /// breakdown in `cooling_load_detailed.dart`). Additive — absent ⇒ `'simple'`,
   /// byte-identical to before. Tolerant on load (unknown ⇒ `'simple'`).
+  ///
+  /// M15 — this is now a REAL setting: `coolingLoadMethodProvider` drives the
+  /// Rooms AC estimate through `RoomArea.coolingLoad(method:)` and the Building
+  /// page's "AC load basis" control sets it. (It previously round-tripped while
+  /// being set and read by nothing.)
   final String coolingLoadMethod;
 
-  /// Multi-zone HVAC diversity / coincidence factor (0–1] applied to the summed
-  /// per-room airflow + cooling when one AHU serves several rooms
-  /// (`room_air.dart` `multiZoneAirSystem`). Defaults to 0.9 (`// VERIFY`).
-  final double multiZoneDiversityFactor;
+  // R6 — `multiZoneDiversityFactor` / `multiZoneExhaustStrategy` were REMOVED
+  // (2026-07-30). They round-tripped in `.mechx` but were set and read by
+  // NOTHING: no provider, no UI, no call into `room_air.dart`
+  // `multiZoneAirSystem` — a persisted field that implied a capability the app
+  // did not have. The engine module and its tests are untouched (the feature is
+  // real, just unreachable); when it is wired, re-add the settings then. Loading
+  // a `.mechx` written by an older build is unaffected: [fromJson] ignores
+  // unknown keys, so both stale keys are simply dropped on the next save.
 
-  /// Multi-zone supply/extract balance strategy: `'return_all'` (the default),
-  /// `'supply_all'`, or `'balanced'` (maps to `ExhaustStrategy`). Additive —
-  /// absent ⇒ `'return_all'`, tolerant on load.
-  final String multiZoneExhaustStrategy;
+  /// M13 — the LAID drainage design slope (m/m) for horizontal gravity branches
+  /// (`SizingContext.drainageSlope`). A real design input now (the Building
+  /// page): it sets the full-bore Manning velocity behind every gravity size and
+  /// therefore the self-cleansing verdict, and it is what the min-slope advisory
+  /// judges. Additive — absent ⇒ 0.01 (1:100), the engine default, so an older
+  /// file sizes byte-identically.
+  final double drainageSlope;
+
+  /// M14 — hot-water FLOW (supply) temperature leaving the heater (°C) and the
+  /// allowable recirculation loop DROP ΔT (K). They set the recirc flow AND the
+  /// modelled return temperature the anti-Legionella check judges. Additive —
+  /// absent ⇒ 60 °C / 5 K, the engine defaults (60 − 5 = 55 exactly, the same
+  /// no-risk baseline as before).
+  final double hotWaterFlowTempC;
+  final double hotWaterDeltaTK;
 
   /// BYO Anthropic API key for the in-app Claude copilot. Empty ⇒ the copilot is
   /// disabled (offline-graceful). Stored in the `.mechx` file; the engineer is
@@ -268,8 +288,9 @@ class DesignSettings {
     this.marginPct = 15,
     this.fixtureLibrary = const [],
     this.coolingLoadMethod = 'simple',
-    this.multiZoneDiversityFactor = 0.9,
-    this.multiZoneExhaustStrategy = 'return_all',
+    this.drainageSlope = 0.01,
+    this.hotWaterFlowTempC = 60.0,
+    this.hotWaterDeltaTK = 5.0,
     this.anthropicApiKey = '',
     this.aiModel = 'claude-sonnet-4-6',
     this.aiProvider = 'anthropic',
@@ -305,10 +326,13 @@ class DesignSettings {
         'marginPct': marginPct,
         // User fixture library (additive; absent on an older file → empty).
         'fixtureLibrary': [for (final f in fixtureLibrary) f.toJson()],
-        // Cooling-load + multi-zone HVAC settings (additive; absent → defaults).
+        // Cooling-load basis (additive; absent → 'simple').
         'coolingLoadMethod': coolingLoadMethod,
-        'multiZoneDiversityFactor': multiZoneDiversityFactor,
-        'multiZoneExhaustStrategy': multiZoneExhaustStrategy,
+        // M13/M14 design inputs (additive; absent → the engine defaults, so an
+        // untouched project sizes exactly as before).
+        'drainageSlope': drainageSlope,
+        'hotWaterFlowTempC': hotWaterFlowTempC,
+        'hotWaterDeltaTK': hotWaterDeltaTK,
         // BYO AI copilot model + provider (non-secret) round-trip; the API KEY
         // is a secret and is NO LONGER written here (B8) — it lives machine-local
         // in `app_settings.dart`, kept out of the shareable `.mechx`. A legacy
@@ -379,14 +403,16 @@ class DesignSettings {
         contingencyPct: (json['contingencyPct'] as num?)?.toDouble() ?? 5,
         marginPct: (json['marginPct'] as num?)?.toDouble() ?? 15,
         fixtureLibrary: _fixtureLibraryFromJson(json['fixtureLibrary']),
-        // Tolerant: only the known method/strategy codes are accepted.
+        // Tolerant: only the known method code is accepted.
         coolingLoadMethod:
             json['coolingLoadMethod'] == 'detailed' ? 'detailed' : 'simple',
-        multiZoneDiversityFactor:
-            _clampDiversity((json['multiZoneDiversityFactor'] as num?)
-                ?.toDouble()),
-        multiZoneExhaustStrategy: _exhaustStrategyOr(
-            json['multiZoneExhaustStrategy'], 'return_all'),
+        // M13/M14 — clamped to the same bands their providers enforce, so a
+        // hand-edited file can never feed the sizer a nonsense gradient / ΔT.
+        drainageSlope:
+            _clampOr(json['drainageSlope'], 0.001, 0.1, 0.01),
+        hotWaterFlowTempC:
+            _clampOr(json['hotWaterFlowTempC'], 40.0, 90.0, 60.0),
+        hotWaterDeltaTK: _clampOr(json['hotWaterDeltaTK'], 1.0, 20.0, 5.0),
         anthropicApiKey:
             json['anthropicApiKey'] is String ? json['anthropicApiKey'] : '',
         aiModel: json['aiModel'] is String && (json['aiModel'] as String).isNotEmpty
@@ -433,16 +459,13 @@ class DesignSettings {
     return out;
   }
 
-  /// Clamp the multi-zone diversity factor into (0,1]; absent/invalid ⇒ 0.9.
-  static double _clampDiversity(double? raw) {
-    if (raw == null || raw.isNaN || raw <= 0) return 0.9;
-    return raw > 1.0 ? 1.0 : raw;
-  }
-
-  /// Tolerantly read the multi-zone exhaust strategy code.
-  static String _exhaustStrategyOr(Object? raw, String fallback) {
-    const known = {'return_all', 'supply_all', 'balanced'};
-    return raw is String && known.contains(raw) ? raw : fallback;
+  /// Tolerantly read a numeric design input, clamping it into [lo]..[hi];
+  /// absent / non-numeric / NaN ⇒ [fallback]. The clamp mirrors the owning
+  /// provider's own band so a hand-edited file can't feed the sizer nonsense.
+  static double _clampOr(Object? raw, double lo, double hi, double fallback) {
+    final v = (raw as num?)?.toDouble();
+    if (v == null || v.isNaN) return fallback;
+    return v.clamp(lo, hi).toDouble();
   }
 
   /// Tolerantly read the fixture library: a non-list (or absent) value yields an

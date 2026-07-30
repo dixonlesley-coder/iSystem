@@ -72,23 +72,71 @@ class HistoryController extends Notifier<int> {
   }
 
   /// Undo the most recent action across all domains.
+  ///
+  /// R3 — a popped tag whose owning controller has nothing left to revert is a
+  /// PHANTOM: the domain stacks cap at 200 snapshots while this timeline holds
+  /// 1000 tags, so past 200 same-domain edits the oldest tags outlive the
+  /// snapshots behind them. Undo used to pop such a tag, revert NOTHING, and
+  /// report success (Ctrl+Z did nothing, and the tag moved to the redo stack,
+  /// where Redo no-op'd in turn). Now the stale tag is DROPPED and the next one
+  /// is tried, until a real revert happens or the timeline is exhausted — so
+  /// Undo either changes something or is honestly a no-op with an empty
+  /// timeline. The caps themselves are unchanged (they bound memory).
   void undo() {
-    if (_past.isEmpty) return;
-    final domain = _past.removeLast();
-    _revert(domain, redo: false);
-    _future.add(domain);
-    _refreshDirty();
+    var reverted = false;
+    while (_past.isNotEmpty) {
+      final domain = _past.removeLast();
+      if (!_canRevert(domain, redo: false)) continue; // phantom — drop it
+      _revert(domain, redo: false);
+      _future.add(domain);
+      reverted = true;
+      break;
+    }
+    // Even a fully-phantom pass changed the timeline (the stale tags were
+    // dropped, so `canUndo` now reads false), so publish a revision either way
+    // and let the Undo affordance disable itself.
+    if (reverted) _refreshDirty();
     state++;
   }
 
-  /// Redo the most recently undone action.
+  /// Redo the most recently undone action. Mirrors [undo]'s phantom handling.
   void redo() {
-    if (_future.isEmpty) return;
-    final domain = _future.removeLast();
-    _revert(domain, redo: true);
-    _past.add(domain);
-    _refreshDirty();
+    var reverted = false;
+    while (_future.isNotEmpty) {
+      final domain = _future.removeLast();
+      if (!_canRevert(domain, redo: true)) continue; // phantom — drop it
+      _revert(domain, redo: true);
+      _past.add(domain);
+      reverted = true;
+      break;
+    }
+    if (reverted) _refreshDirty();
     state++;
+  }
+
+  /// Whether [domain]'s owning controller actually holds a snapshot to step to.
+  /// Read-only — never mutates a stack.
+  bool _canRevert(UndoDomain domain, {required bool redo}) {
+    switch (domain) {
+      case UndoDomain.network:
+        final c = ref.read(networkControllerProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+      case UndoDomain.project:
+        final c = ref.read(projectControllerProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+      case UndoDomain.electrical:
+        final c = ref.read(electricalProjectProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+      case UndoDomain.annotation:
+        final c = ref.read(annotationHistoryProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+      case UndoDomain.structural:
+        final c = ref.read(structuralHistoryProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+      case UndoDomain.referenceLine:
+        final c = ref.read(referenceLinesProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+    }
   }
 
   /// One immediate signature re-check after undo/redo: stepping the timeline

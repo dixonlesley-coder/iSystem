@@ -122,6 +122,17 @@ ProjectDocument buildDocument(ProviderReader read) {
       ductMethod: ducts.method,
       rainfallMmPerHr: read(rainfallIntensityProvider),
       runoffCoefficientStorm: read(runoffCoefficientProvider),
+      // M13/M14/M15 — the four design inputs that used to be dark engine
+      // constants (the drainage fall, the hot-water flow temp + loop ΔT behind
+      // the Legionella check, and which cooling-load basis the Rooms AC
+      // estimate uses). They are real per-project choices now, so they must
+      // survive Save/Open like any other. Defaults mirror the engine's own
+      // (1:100 / 60 °C / 5 K / simple) ⇒ an untouched project encodes
+      // byte-identically.
+      drainageSlope: read(drainageSlopeProvider),
+      hotWaterFlowTempC: read(hotWaterFlowTempProvider),
+      hotWaterDeltaTK: read(hotWaterDeltaTProvider),
+      coolingLoadMethod: read(coolingLoadMethodProvider).code,
       fireHazard: read(fireHazardProvider),
       brightness: read(brightnessProvider),
       localeCode: read(localeProvider).name,
@@ -234,6 +245,13 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
     ..setMethod(s.ductMethod);
   read(rainfallIntensityProvider.notifier).set(s.rainfallMmPerHr);
   read(runoffCoefficientProvider.notifier).set(s.runoffCoefficientStorm);
+  // The four M13/M14/M15 design inputs (absent on an older file ⇒ the document
+  // decoder's engine-matching defaults, so an old project restores unchanged).
+  read(drainageSlopeProvider.notifier).set(s.drainageSlope);
+  read(hotWaterFlowTempProvider.notifier).set(s.hotWaterFlowTempC);
+  read(hotWaterDeltaTProvider.notifier).set(s.hotWaterDeltaTK);
+  read(coolingLoadMethodProvider.notifier)
+      .set(CoolingLoadMethod.fromCode(s.coolingLoadMethod));
   read(fireHazardProvider.notifier).set(s.fireHazard);
   read(brightnessProvider.notifier).set(s.brightness);
   read(localeProvider.notifier)
@@ -393,7 +411,13 @@ Future<void> _autosaveTick(ProviderContainer c, String? recoveryPath) async {
     }
     c.read(autosaveMirrorProvider.notifier).set(encoded);
     final projectPath = c.read(currentProjectPathProvider);
-    writeRecovery(
+    // R4: AWAIT the write. Un-awaited, the tick's future completed the instant
+    // the write was scheduled, so `tickInFlight` cleared while the file IO was
+    // still running — two slow ticks could then race the SAME `.tmp` / `.bak`
+    // siblings the atomic write uses, and any exception escaped as an unhandled
+    // async error instead of the guarded path below. Awaiting makes the
+    // documented overlap guard actually cover the write.
+    await writeRecovery(
       doc,
       path: recoveryPath ?? recoverySlotFor(projectPath),
       // Stash the source file so a Restore can re-link the file identity.

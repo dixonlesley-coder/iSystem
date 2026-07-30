@@ -18,6 +18,8 @@ import 'package:mechx_engine/network/connectivity.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/riser_tags.dart'
     show drainageStackBasesLackingCleanout;
+import 'package:mechx_engine/sizing/air_velocity.dart'
+    show VelocityBandVerdict;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
@@ -197,7 +199,13 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final sheets = ref.watch(sheetsControllerProvider);
   final velocity = ref.watch(airVelocityChecksProvider);
   final unsized = ref.watch(airUnsizedProvider);
-  final overCapacity = ref.watch(airOverCapacityProvider);
+  // M3/M4 — the discipline-neutral over-capacity set (air + storm + water),
+  // not the air-only view: a clamped downpipe / over-velocity supply pipe used
+  // to be computed and dropped.
+  final overCapacity = ref.watch(overCapacityEdgesProvider);
+  final waterVelocity = ref.watch(waterVelocityChecksProvider);
+  final selfCleansing = ref.watch(selfCleansingDefectsProvider);
+  final loopUnbalanced = ref.watch(loopUnbalancedEdgesProvider);
   final drainAdvisories = ref.watch(drainageAdvisoryProvider);
   final legionellaReturnTempC = ref.watch(hotWaterLegionellaProvider);
   final docControl = ref.watch(documentControlProvider);
@@ -305,19 +313,131 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     }
   }
 
-  // ── 2b. Duct over capacity: clamped to the largest standard size (warning) ──
-  // The auto-sizer clamps an oversize air duct to the largest standard duct
-  // and flags it instead of aborting the solve; surface each clamped edge.
+  // ── 2b. Over capacity: the printed size is a TABLE LIMIT (warning) ─────────
+  // The sizer clamps rather than aborting the solve and flags
+  // `EdgeSizing.overCapacity`. Wave 1 widened that flag past air, so this fan-in
+  // is service-aware (M3/M4): an AIR duct clamped at the largest standard duct,
+  // a STORM downpipe whose catchment exceeds the largest tabulated size, or a
+  // WATER SUPPLY run that cannot hold the SNI 2,0 m/s cap at any DN in the
+  // series. One flag, three honest messages — each naming the action that
+  // actually fixes it (split the run / split the roof outlets / split the flow).
   for (final id in overCapacity) {
+    final edge = edgeById[id];
+    if (edge == null) continue;
+    final sheetId = sheetForEdge(edge);
+    final (kind, title, message) = switch (edge.service) {
+      _ when edge.service.isAir => (
+          'duct-over-capacity',
+          str(StringKey.issueDuctOverCapacityTitle),
+          str(StringKey.issueDuctOverCapacityMessage),
+        ),
+      ServiceType.rainwater => (
+          'storm-over-capacity',
+          str(StringKey.issueStormOverCapacityTitle),
+          str(StringKey.issueStormOverCapacityMessage),
+        ),
+      _ => (
+          'water-over-capacity',
+          str(StringKey.issueWaterOverCapacityTitle),
+          str(StringKey.issueWaterOverCapacityMessage),
+        ),
+    };
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: kind,
+      title: title,
+      message: message,
+      locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
+    ));
+  }
+
+  // ── 2b-ii. Out-of-band WATER / DRAINAGE velocity (M4/M5, warning) ──────────
+  // The air twin of this fan-in has existed since Wave 3; the water/drainage
+  // one never did, so an `sniVerbatim` 2,0 m/s supply-velocity violation shipped
+  // silently (it showed only in the edge inspector, if the engineer happened to
+  // select that run).
+  //
+  // The gravity TOO-LOW case is deliberately NOT emitted here: it is exactly the
+  // self-cleansing finding below, which carries the actionable message. Emitting
+  // both would print the same physics twice on one edge (the drainage band's
+  // minimum IS the self-cleansing floor, judged on the same full-bore Manning
+  // velocity).
+  for (final entry in waterVelocity.entries) {
+    final check = entry.value;
+    if (!check.isWarning) continue;
+    final edge = edgeById[entry.key];
+    if (edge == null) continue;
+    if (edge.service.regime == FlowRegime.gravity &&
+        check.verdict == VelocityBandVerdict.tooLow) {
+      continue; // owned by the self-cleansing advisory below
+    }
+    final sheetId = sheetForEdge(edge);
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'water-velocity:${entry.key}',
+      title: str(StringKey.issueWaterVelocityTitle),
+      // Engine-sourced message (`3.4 m/s — too high (> 2.0)`) like its air twin.
+      message: check.message,
+      locate:
+          sheetId == null ? null : IssueLocation(sheetId, edgeId: entry.key),
+    ));
+  }
+
+  // ── 2b-iii. Drainage branch below the self-cleansing velocity (info) ───────
+  // `EdgeSizing.selfCleansingOk` (Wave 1) is false when the full-bore Manning
+  // velocity at the design slope falls under 0.6 m/s. An ADVISORY, not a
+  // warning: the DFU table picked a code-compliant diameter, and the honest
+  // remedies are a smaller pipe or grouped discharge — steepening past the laid
+  // slope is usually not available on a real floor.
+  for (final id in selfCleansing) {
+    final edge = edgeById[id];
+    if (edge == null) continue;
+    final sheetId = sheetForEdge(edge);
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'drainage-self-cleansing',
+      title: str(StringKey.issueSelfCleansingTitle),
+      message: str(StringKey.issueSelfCleansingMessage),
+      locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
+    ));
+  }
+
+  // ── 2b-iv. Unsettled ring: Hardy-Cross did not converge (M17, warning) ─────
+  // The carried flow still satisfies continuity at every node, but the loop
+  // head-loss balance was never achieved — so the split, and every size derived
+  // from it, is PROVISIONAL. Previously unobservable anywhere in the app.
+  for (final id in loopUnbalanced) {
     final edge = edgeById[id];
     if (edge == null) continue;
     final sheetId = sheetForEdge(edge);
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
-      kind: 'duct-over-capacity',
-      title: str(StringKey.issueDuctOverCapacityTitle),
-      message: str(StringKey.issueDuctOverCapacityMessage),
+      kind: 'loop-unbalanced',
+      title: str(StringKey.issueLoopUnbalancedTitle),
+      message: str(StringKey.issueLoopUnbalancedMessage),
       locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
+    ));
+  }
+
+  // ── 2b-v. Duty past the largest standard motor frame (M11, warning) ────────
+  // `selectMotor` CLAMPS at the 75 kW top of the standard ladder; without this
+  // the app printed a 75 kW motor for a 90 kW duty on the canvas, the schedule,
+  // the BOM and the electrical feed with no hint the frame had saturated.
+  // Non-locatable (it is a plant duty, not a drawn element).
+  if (ref.watch(pumpDutyProvider)?.motorOversized ?? false) {
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'pump-motor-oversized',
+      title: str(StringKey.issueMotorOversizedTitle),
+      message: str(StringKey.issuePumpMotorOversizedMessage),
+    ));
+  }
+  if (ref.watch(ductFanProvider)?.motorOversized ?? false) {
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'fan-motor-oversized',
+      title: str(StringKey.issueMotorOversizedTitle),
+      message: str(StringKey.issueFanMotorOversizedMessage),
     ));
   }
 
