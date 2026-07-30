@@ -292,6 +292,22 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
+- **Workflow-friction review (2026-07-30) — `WORKFLOW-FRICTION-REVIEW.md` (root) is the
+  CURRENT plan of record for task-execution UX (NOT yet fixed)**: a post-campaign review
+  of HOW THE WORK IS DONE — four parallel lenses (first-project walkthrough / daily
+  grind / mistakes+the same-day audit surfaces / goldens-as-images + cross-workspace),
+  69 raw findings adversarially verified to **56 confirmed / 13 adjusted / 0 refuted**,
+  consolidated into 10 themes (A–J) and 4 waves. Highest-conviction: the Review Locate
+  contract (mechanical Locate never sets the shell section, never centres, never
+  un-hides/unlocks its target — one function, four omissions), two silent
+  data-destroyers (`syncMepEquipment` drops hand-edited ways outside undo; floor delete
+  fuses the removed floor's drawn work in-range onto the floor above), the riser
+  cross-surface contract (far node stamped with the SOURCE sheetId ⇒ invisible on the
+  floor above; Riser-Edit writes elevation coords into plan geometry, test-pinned; tags
+  positional ⇒ renumber under drags), and H5 — six display sites stamp the hard-coded
+  1:100 fall on issued drawings while sizing honours the new slope input. Work new
+  task-flow improvements from that document rather than re-reviewing.
+
 - **Whole-product audit (2026-07-30) — `MODULE-AUDIT-REVIEW.md` (root) is the CURRENT
   plan of record**: a four-workstream parallel audit (every mechanical engine module
   probe-confirmed read-only; reports/exports/persistence; the 16-artifact export
