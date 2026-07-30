@@ -122,10 +122,16 @@ void main() {
     final sel = study.selectivity.single;
     expect(sel.upstreamCircuitId, 'f1');
     expect(sel.downstreamPanelId, 'SP');
-    // f1 feeder 63 A vs SP incomer 63 A ⇒ ratio 1.0 ⇒ non-selective zone.
-    expect(sel.upstreamRatingA, sel.downstreamRatingA);
-    expect(sel.zone, SelectivityZone.nonSelective);
-    expect(sel.nonSelective, isTrue);
+    // Re-derived 2026-07-30 (selectivity-aware feeder sizing): SP's incomer is
+    // MCB 63 A (its 30 kW motor draws 57.9 A), and `computeSystem` now floors
+    // the feeder at 1.6 × 63 = 100.8 A ⇒ the first rung ≥ that, MCCB 125 A. So
+    // the sizer's own pair is 125/63 = 1.98× ⇒ the PARTIAL zone, not
+    // non-selective. (The < 1.6× band itself is covered by the pure
+    // `classifySelectivity` / `nonSelective` group above.)
+    expect(sel.upstreamRatingA, 125);
+    expect(sel.downstreamRatingA, 63);
+    expect(sel.zone, SelectivityZone.partial);
+    expect(sel.nonSelective, isFalse);
     // At 16 kA an MCCB/MCB Icu of 25 kA covers it ⇒ Icu/Ics adequate.
     expect(sel.icuAdequate, isTrue);
   });

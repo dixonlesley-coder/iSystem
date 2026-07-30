@@ -14,9 +14,13 @@ import 'package:test/test.dart';
 /// anchor the port to the reference PanelMaker `engine/fault.ts`.
 ///
 /// Probe of the sizing (`computeSystem`) used below:
-///   - Feeder f1 (50 m): Ib 50.9 A → MCB 63 A (curve C), cable 16 mm², PE 16 mm².
-///   - SP incomer: MCB 63 A. SP motor s1 (30 kW, 10 m): MCB 63 A (curve D),
-///     cable 16 mm², PE 16 mm².
+///   - Feeder f1 (50 m): Ib 50.9 A. SP's incomer is MCB 63 A, so the feeder
+///     carries the SELECTIVITY FLOOR (2026-07-30) of 1.6 × 63 = 100.8 A ⇒ the
+///     first rung ≥ that is MCCB 125 A, and its cable grows with it: Iz ≥
+///     max(125, 1.25 × 50.9) = 125 A ⇒ 35 mm² (B1 Cu/PVC KHA 130 A), PE 16 mm².
+///   - SP incomer: MCB 63 A (sized on the board's own 57.9 A demand, load-side
+///     and therefore unaffected by the feeder floor). SP motor s1 (30 kW, 10 m):
+///     MCB 63 A (curve D), cable 16 mm², PE 16 mm².
 void main() {
   const p = PuilProfile();
 
@@ -74,24 +78,28 @@ void main() {
     test('Isc decays through the feeder cable to the sub-panel bus', () {
       // Source |Z| at the origin: z = 400/(√3·16000) = 0.0144338 Ω, split by
       // X/R = 7 ⇒ R = z/√50 = 0.00204124, X = 7R = 0.01428869.
-      // Feeder 16 mm² Cu, 50 m: R = 1.38·50/1000 = 0.069, X = 0.08·50/1000 = 0.004.
-      // SP source Z = (0.00204124+0.069, 0.01428869+0.004) = (0.0710412, 0.0182887)
-      //   |Z| = √(0.0710412² + 0.0182887²) = 0.0733576 Ω.
-      // Isc_SP = 400/(√3·0.0733576) = 3148.14 A → 3.15 kA (< 16 kA upstream).
-      expect(fs.panels['SP']!.prospectiveFaultkA, closeTo(3.15, 0.01));
+      // Feeder 35 mm² Cu (the selectivity-floored 125 A device's conductor),
+      // 50 m: R = 0.627·50/1000 = 0.03135, X = 0.08·50/1000 = 0.004.
+      // SP source Z = (0.00204124+0.03135, 0.01428869+0.004)
+      //             = (0.03339124, 0.01828869)
+      //   |Z| = √(0.03339124² + 0.01828869²) = 0.0380717 Ω.
+      // Isc_SP = 400/(√3·0.0380717) = 6065.9 A → 6.07 kA (< 16 kA upstream).
+      // (The fatter feeder that the floor demands lets MORE fault through than
+      // the old 16 mm² run — 6.07 kA instead of 3.15 kA.)
+      expect(fs.panels['SP']!.prospectiveFaultkA, closeTo(6.07, 0.01));
     });
 
     test('breaker breaking-capacity adequacy (Icu ≥ Isc)', () {
       // MDP incomer MCB 63 A vs 16 kA: MCB ladder [6,10,15,25] → 25 kA ≥ 16 ⇒ OK.
       expect(fs.panels['MDP']!.incomerKa, 25);
       expect(fs.panels['MDP']!.incomerAdequate, isTrue);
-      // SP incomer MCB 63 A vs 3.15 kA: first ladder rung ≥ 3.15 is 6 kA ⇒ OK.
-      expect(fs.panels['SP']!.incomerKa, 6);
+      // SP incomer MCB 63 A vs 6.07 kA: first ladder rung ≥ 6.07 is 10 kA ⇒ OK.
+      expect(fs.panels['SP']!.incomerKa, 10);
       expect(fs.panels['SP']!.incomerAdequate, isTrue);
-      // The SP motor breaker sees the SP bus fault (3.15 kA) ⇒ 6 kA, adequate.
+      // The SP motor breaker sees the SP bus fault (6.07 kA) ⇒ 10 kA, adequate.
       final motor = fs.circuits['s1']!;
-      expect(motor.faultkA, closeTo(3.15, 0.01));
-      expect(motor.breakerKa, 6);
+      expect(motor.faultkA, closeTo(6.07, 0.01));
+      expect(motor.breakerKa, 10);
       expect(motor.breakerAdequate, isTrue);
     });
 
@@ -99,26 +107,36 @@ void main() {
       // Loop = SP source Z + phaseZ(temp ×1.28) + peZ(temp ×1.28) over 10 m.
       // 16 mm²: R = 1.38·10/1000 = 0.0138, X = 0.0008. With ×1.28 on R:
       //   phaseZ = peZ = (0.017664, 0.0008).
-      // loopR = 0.0710412 + 0.017664 + 0.017664 = 0.1063692
-      // loopX = 0.0182887 + 0.0008 + 0.0008 = 0.0198887
-      //   Zs = √(loopR² + loopX²) = 0.10821 Ω.
+      // loopR = 0.03339124 + 0.017664 + 0.017664 = 0.06871924
+      // loopX = 0.01828869 + 0.0008 + 0.0008 = 0.01988869
+      //   Zs = √(loopR² + loopX²) = 0.071539 Ω → 0.072 (3 dp).
       final motor = fs.circuits['s1']!;
-      expect(motor.zsOhm, closeTo(0.108, 0.001));
+      expect(motor.zsOhm, closeTo(0.0715, 0.001));
       // Ia (curve D) = 20·63 = 1260 A; Zs_max = 0.95·230/1260 = 0.17341 Ω.
       expect(motor.zsMaxOhm, closeTo(0.173, 0.001));
-      // 0.108 ≤ 0.173 ⇒ disconnects in time.
+      // 0.0715 ≤ 0.173 ⇒ disconnects in time (with more margin than before).
       expect(motor.adsOk, isTrue);
     });
 
-    test('selectivity: feeder vs sub-panel incomer (both 63 A ⇒ non-selective)',
+    test('selectivity: the sizer\'s own feeder discriminates (125 A over 63 A)',
         () {
-      // 63 A < 1.6·63 = 100.8 A ⇒ no current discrimination — flagged.
+      // Re-derived 2026-07-30: `computeSystem` now floors a feeder at
+      // 1.6 × the fed board's incomer, so it no longer emits the pair this test
+      // used to pin (63 A over 63 A). 125/63 = 1.98 ⇒ inside [1.6, 2.5) ⇒ the
+      // overload zones discriminate (partial), so nothing is flagged
+      // non-selective; the raw < 1.6× rule itself is still unit-tested in
+      // `electrical_selectivity_zone_test.dart`.
       expect(fs.selectivity, hasLength(1));
       final pair = fs.selectivity.single;
       expect(pair.upstreamCircuitId, 'f1');
       expect(pair.downstreamPanelId, 'SP');
-      expect(pair.nonSelective, isTrue);
-      expect(fs.warnings.map((w) => w.code), contains('non-selective'));
+      expect(pair.upstreamRatingA, 125);
+      expect(pair.downstreamRatingA, 63);
+      expect(pair.nonSelective, isFalse);
+      expect(pair.zone, SelectivityZone.partial);
+      expect(fs.warnings.map((w) => w.code), isNot(contains('non-selective')));
+      // The partial-zone advisory takes its place.
+      expect(fs.warnings.map((w) => w.code), contains('selectivity-partial'));
     });
 
     test('verify items surface the unverified constants', () {

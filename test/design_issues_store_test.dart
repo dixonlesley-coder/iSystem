@@ -33,16 +33,17 @@ void main() {
       return c;
     }
 
-    test('uncalibrated demo sheets surface as warning issues with sheetId', () {
+    test('uncalibrated demo sheets surface as info issues with sheetId', () {
       final c = makeContainer();
-      // The seeded SheetsState has three demo sheets and no calibration set,
-      // so each should appear as a "Sheet not calibrated" warning.
+      // The seeded SheetsState has three demo sheets and no calibration set —
+      // and NOTHING drawn on them — so each appears as a blank-sheet "Sheet
+      // not calibrated" INFO advisory (nothing measurable is wrong yet).
       final issues = c.read(designIssuesProvider);
       final calibIssues =
           issues.where((i) => i.title == 'Sheet not calibrated').toList();
       expect(calibIssues, isNotEmpty);
-      expect(calibIssues.every((i) => i.severity == IssueSeverity.warning),
-          isTrue);
+      expect(
+          calibIssues.every((i) => i.severity == IssueSeverity.info), isTrue);
       // The locate target points at a real demo sheet id.
       final sheetIds =
           c.read(sheetsControllerProvider).sheets.map((s) => s.id).toSet();
@@ -213,12 +214,27 @@ void main() {
 
     test('grouping puts all warnings before any info', () {
       final c = makeContainer();
+      // A blank demo sheet only advises (info); a genuine source-less run
+      // gives a real WARNING, so both tiers are guaranteed present alongside
+      // the always-on standards-verification INFO items.
+      const nodeA = NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0);
+      const nodeB = NetNode(
+          id: 'b',
+          sheetId: 's1',
+          x: 100,
+          y: 0,
+          floorIndex: 0,
+          role: NodeRole.fixture);
+      const edge = NetEdge(
+          id: 'e1', fromId: 'a', toId: 'b', service: ServiceType.coldWater);
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [nodeA, nodeB], edges: [edge]),
+          );
       final issues = c.read(designIssuesProvider);
       final firstInfo =
           issues.indexWhere((i) => i.severity == IssueSeverity.info);
       final lastWarning =
           issues.lastIndexWhere((i) => i.severity == IssueSeverity.warning);
-      // Both kinds are present (demo sheets give warnings; standards give info).
       expect(firstInfo, greaterThanOrEqualTo(0));
       expect(lastWarning, greaterThanOrEqualTo(0));
       expect(lastWarning, lessThan(firstInfo));
@@ -248,24 +264,24 @@ void main() {
       final calib =
           issues.where((i) => i.title == 'Sheet not calibrated').toList();
       // s1 (edge-bearing) is critical; the other edge-free demo sheets stay
-      // warning.
+      // blank-sheet INFO advisories.
       final s1Issue = calib.firstWhere((i) => i.locate?.sheetId == 's1');
       expect(s1Issue.severity, IssueSeverity.critical);
-      expect(
-          calib.where((i) => i.severity == IssueSeverity.warning), isNotEmpty);
+      expect(calib.where((i) => i.severity == IssueSeverity.info), isNotEmpty);
       expect(c.read(designIssueCriticalCountProvider), greaterThanOrEqualTo(1));
     });
 
-    test('a blank uncalibrated sheet stays a warning (byte-identical)', () {
+    test('a blank uncalibrated sheet is an info advisory (not a warning)', () {
       final c = makeContainer();
       // Default empty network: no sheet bears edges, so every demo-sheet
-      // calibration issue is a plain warning and NONE is critical.
+      // calibration issue is a blank-sheet INFO advisory — nothing is
+      // measurably wrong yet — and NONE is critical.
       final calib = c
           .read(designIssuesProvider)
           .where((i) => i.title == 'Sheet not calibrated')
           .toList();
       expect(calib, isNotEmpty);
-      expect(calib.every((i) => i.severity == IssueSeverity.warning), isTrue);
+      expect(calib.every((i) => i.severity == IssueSeverity.info), isTrue);
       expect(c.read(designIssueCriticalCountProvider), 0);
     });
 

@@ -4,11 +4,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/review/review_hub.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/network/network.dart';
 
 import 'test_util.dart';
 
@@ -101,10 +103,20 @@ void main() {
 
     // Seed three uncalibrated sheets — the calibration row must flip to
     // REVIEW on the ALREADY-MOUNTED cards (pre-H2 the const-mounted cards
-    // kept the boot-time verdict until the user left and returned).
+    // kept the boot-time verdict until the user left and returned). A BLANK
+    // uncalibrated sheet is only an INFO advisory (nothing measurable is
+    // wrong yet), so a drawn edge on s1 gives it a real (failing) finding —
+    // s2/s3 stay blank/info and don't count toward the row.
     container.read(sheetsControllerProvider.notifier).loadDemoSheets();
+    const nodeA = NetNode(id: 'na', sheetId: 's1', x: 0, y: 0, floorIndex: 0);
+    const nodeB = NetNode(id: 'nb', sheetId: 's1', x: 100, y: 0, floorIndex: 0);
+    const edge = NetEdge(
+        id: 'e1', fromId: 'na', toId: 'nb', service: ServiceType.coldWater);
+    container.read(networkControllerProvider.notifier).loadNetwork(
+          const Network(nodes: [nodeA, nodeB], edges: [edge]),
+        );
     await tester.pump();
-    expect(find.text('3 uncalibrated'), findsWidgets);
+    expect(find.text('1 uncalibrated'), findsWidgets);
 
     // Fix the issue in place: calibrate every sheet → the row re-verdicts to
     // PASS without remounting the screen.
@@ -113,7 +125,7 @@ void main() {
       project.setCalibration(s.id, const ScaleCalibration(0.01));
     }
     await tester.pump();
-    expect(find.text('3 uncalibrated'), findsNothing);
+    expect(find.text('1 uncalibrated'), findsNothing);
     expect(find.text('all sheets calibrated'), findsWidgets);
   });
 }

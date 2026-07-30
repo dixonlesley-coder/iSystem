@@ -221,9 +221,15 @@ void main() {
       // Ib = 8000 / (√3·400·0.85) = 13.583 → 13.6 A  (NOT 10 000-based 16.98).
       expect(feeder.designCurrent.amperes, closeTo(13.6, 1e-9));
       expect(feeder.threePhase, isTrue);
-      // Feeder cable floored to the 3φ trunk minimum 4 mm².
+      // SELECTIVITY FLOOR (2026-07-30): the heater is 3φ (14.4 A on every line)
+      // so SP's demand current is 14.4 A ⇒ its incomer is the first rung ≥ 14.4
+      // = 16 A — the very rung the feeder's own 13.6 A would have picked (ratio
+      // 1.0 ⇒ non-selective). The feeder is therefore floored at
+      // 1.6 × 16 = 25.6 A ⇒ first rung ≥ 25.6 = 32 A.
+      expect(feeder.breaker.ratingA.amperes, 32);
+      // Cable: Iz ≥ max(In 32, 1.25 × 13.583 = 16.98) = 32 A; the 3φ trunk
+      // minimum is 4 mm², whose B1 Cu/PVC KHA is 34 A ≥ 32 ⇒ still 4 mm².
       expect(feeder.cable.csaMm2, 4);
-      expect(feeder.breaker.ratingA.amperes, 16); // ≥ 13.6
     });
 
     test('SP demand + heater current', () {
@@ -425,6 +431,16 @@ void main() {
     // carries nearly the whole board, so the board's demand current (worst
     // phase) far exceeds the balanced current the parent's feeder way is
     // sized from — the exact contradiction the schedule would print.
+    //
+    // REACHABILITY (2026-07-30, selectivity-aware feeder sizing): an AUTO-SIZED
+    // feeder can no longer land here. Its selectivity floor is
+    // 1.6 × the fed board's incomer, and that incomer is itself the first rung
+    // at or above the board's worst-phase demand — so an auto-sized feeder is
+    // always ≥ 1.6× the current this check compares against. The contradiction
+    // now only survives when the engineer OVERRIDES the feeder rating (the floor
+    // never touches an override), which is exactly where a judge-only check
+    // belongs. `f1` is therefore pinned at 16 A — the rating the sizer itself
+    // used to pick here (Ib = 6400 W / (√3·400·0.85) = 10.9 A → 16 A).
     const imbalanced = ElectricalProject(
       id: 'imb',
       name: 'Imbalanced',
@@ -439,6 +455,7 @@ void main() {
               loadKind: LoadKind.feeder,
               feedsPanelId: 'PP',
               length: Length(10),
+              breakerOverrideA: Current(16),
             ),
           ],
         ),

@@ -468,6 +468,7 @@ enum StringKey {
   complianceDetailAllWithinBand,
   complianceDetailOutOfBand, // {n}
   complianceDetailAllCalibrated,
+  complianceDetailBlankUncalibrated, // {n} — blank sheets, advisory only
   complianceDetailUncalibrated, // {n}
   complianceDetailAllVerified,
   complianceDetailAckNoneOpen, // {n}
@@ -589,6 +590,7 @@ enum StringKey {
   issueDiffuserStrandedMessage,
   issueSheetNotCalibratedCriticalMessage, // {name}
   issueSheetNotCalibratedWarningMessage, // {name}
+  issueSheetNotCalibratedInfoMessage, // {name} — blank (nothing drawn yet)
   issueCalibrationStaleMessage, // J1 — {name}
   issueMultiSheetFloorMessage, // {count} {floor} {names}
   issueNetworkIslandMessage, // {service} {nodes} = pluralCount(n,'node','nodes')
@@ -1294,6 +1296,8 @@ const Map<StringKey, String> _en = {
   StringKey.complianceDetailAllWithinBand: 'all within band',
   StringKey.complianceDetailOutOfBand: '{n} out of band',
   StringKey.complianceDetailAllCalibrated: 'all sheets calibrated',
+  StringKey.complianceDetailBlankUncalibrated:
+      '{n} blank uncalibrated (advisory)',
   StringKey.complianceDetailUncalibrated: '{n} uncalibrated',
   StringKey.complianceDetailAllVerified: 'all values verified',
   StringKey.complianceDetailAckNoneOpen: '{n} acknowledged, none open',
@@ -1445,6 +1449,9 @@ const Map<StringKey, String> _en = {
   StringKey.issueSheetNotCalibratedWarningMessage:
       '"{name}" has no scale set — its run/riser lengths cannot '
           'be measured. Calibrate the sheet to size it.',
+  StringKey.issueSheetNotCalibratedInfoMessage:
+      'Calibrate "{name}" before drawing on it — runs drawn on an '
+          'uncalibrated sheet cannot be measured.',
   StringKey.issueCalibrationStaleMessage:
       '"{name}"\'s plan was replaced but kept its OLD scale — a revised '
           'drawing (different DPI, plot scale, or title block) can silently '
@@ -2162,6 +2169,8 @@ const Map<StringKey, String> _id = {
   StringKey.complianceDetailAllWithinBand: 'semua dalam batas',
   StringKey.complianceDetailOutOfBand: '{n} di luar batas',
   StringKey.complianceDetailAllCalibrated: 'semua lembar terkalibrasi',
+  StringKey.complianceDetailBlankUncalibrated:
+      '{n} lembar kosong belum dikalibrasi (advisori)',
   StringKey.complianceDetailUncalibrated: '{n} belum dikalibrasi',
   StringKey.complianceDetailAllVerified: 'semua nilai terverifikasi',
   StringKey.complianceDetailAckNoneOpen: '{n} diakui, tidak ada yang terbuka',
@@ -2319,6 +2328,9 @@ const Map<StringKey, String> _id = {
   StringKey.issueSheetNotCalibratedWarningMessage:
       '"{name}" belum memiliki skala — panjang saluran/riser-nya tidak dapat '
           'diukur. Kalibrasi lembar untuk mengukurnya.',
+  StringKey.issueSheetNotCalibratedInfoMessage:
+      'Kalibrasi "{name}" sebelum menggambar di atasnya — saluran yang '
+          'digambar pada lembar belum terkalibrasi tidak dapat diukur.',
   StringKey.issueCalibrationStaleMessage:
       'Denah "{name}" telah diganti tetapi masih memakai skala LAMA — gambar '
           'revisi (DPI, skala cetak, atau kop gambar yang berbeda) dapat diam-'

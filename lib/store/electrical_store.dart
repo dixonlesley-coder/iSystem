@@ -436,6 +436,34 @@ final electricalAdvancedProvider = Provider<AdvancedStudy>(
   ),
 );
 
+/// THE single combined electrical-warnings surface — every other consumer
+/// (the Review fan-in, the compliance roll-up, the electrical drawer/toolbar,
+/// the Layout electrical-layer error dot) reads THIS, never
+/// `electricalResultProvider.warnings` or `electricalAdvancedProvider.fault
+/// .warnings` directly, so a safety-relevant finding can never disagree
+/// between surfaces.
+///
+/// = the core A4 sizing warnings (`electricalResultProvider.warnings` — cable
+/// ampacity, voltage drop, earthing, phase imbalance, …) FIRST, then the A8
+/// fault-study warnings (`electricalAdvancedProvider.fault.warnings` —
+/// non-selective / selectivity-partial / breaking-capacity-inadequate /
+/// busbar-withstand-inadequate / tt-no-earth-fault-protection) APPENDED,
+/// DEDUPED on the tuple (code, panelId, circuitId) keeping the FIRST (core)
+/// occurrence — the Fold-1 core pass and the fault study can both describe a
+/// busbar-withstand finding, and it must never show twice.
+final electricalAllWarningsProvider = Provider<List<ElectricalWarning>>((ref) {
+  final core = ref.watch(electricalResultProvider).warnings;
+  final fault = ref.watch(electricalAdvancedProvider).fault.warnings;
+  final seen = <(String, String?, String?)>{};
+  final out = <ElectricalWarning>[];
+  for (final w in [...core, ...fault]) {
+    final key = (w.code, w.panelId, w.circuitId);
+    if (!seen.add(key)) continue;
+    out.add(w);
+  }
+  return out;
+});
+
 @immutable
 class ElectricalProjectController extends Notifier<ElectricalProject> {
   // Local snapshot stacks (the house undo pattern — mirrors NetworkController /

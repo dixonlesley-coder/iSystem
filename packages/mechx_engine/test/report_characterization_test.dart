@@ -104,7 +104,10 @@ void main() {
         '## Earthing',
         '## Power one-line',
         '### Source interlocks',
-        '## Warnings',
+        // 2026-07-30 (selectivity-aware feeder sizing): the fixture's only
+        // warning was `feeder-below-fed-demand`, which the new feeder floor
+        // cures (see the whole-document pin), so the report has NO warnings and
+        // the '## Warnings' section is omitted entirely.
         '## Unverified values',
       ]);
     });
@@ -119,13 +122,20 @@ void main() {
     });
 
     test('load-bearing rows survive verbatim', () {
-      // Feeder way row (the second panel is fed through it).
-      expect(md, contains('| Feeder SP-1 | feeder |'));
-      // Per-panel warning bullet style. (Was the phase-imbalance bullet until
-      // 2026-07-30: both fixture boards carry too few single-phase ways for ANY
-      // assignment to even them out, so that unactionable warning is no longer
-      // raised — the feeder bullet is now the panel section's load-bearing row.)
-      expect(md, contains('- _WARN_: Feeder SP-1: the feeder breaker is'));
+      // Feeder way row, whole: SP-1's incomer is 10 A (its 1500 W AC unit draws
+      // 7.6 A), so the feeder carries the selectivity floor 1.6 × 10 = 16 A —
+      // the first rung at/above it — on the 4 mm² 3φ trunk minimum.
+      expect(
+          md,
+          contains('| Feeder SP-1 | feeder | 2.5 A | 3ph | 16 A MCB/C | 4 mm² '
+              '| 30 m |'));
+      // NO warning section: the fixture's last remaining warning
+      // (`feeder-below-fed-demand`) is exactly what the feeder floor cures, and
+      // both boards' imbalance is inherent (too few single-phase ways for any
+      // assignment to even out) so that warning is unactionable and unraised.
+      // The `- _WARN_:` bullet style therefore has no fixture left to pin here.
+      expect(md, isNot(contains('## Warnings')));
+      expect(md, isNot(contains('- _WARN_')));
       // Interlock bullet under its own sub-heading.
       expect(md,
           contains('### Source interlocks\n\n- _mechanical_: ATS mechanical'));
@@ -150,8 +160,14 @@ void main() {
       // bullets + 2 system bullets + the now-empty MDP warning line group
       // disappear (−5 lines), and the surviving feeder bullet names the
       // imbalance as inherent instead of offering a rebalance.
-      expect(md.split('\n').length, 84);
-      expect(fnv1a32(md), 0x900d360f);
+      // Re-baselined 2026-07-30 (selectivity-aware feeder sizing): the feeder to
+      // SP-1 is now floored at 1.6 × SP-1's 10 A incomer ⇒ 16 A (was 6 A), which
+      // clears SP-1's 7.6 A worst-phase demand — so the last
+      // `feeder-below-fed-demand` warning is gone and with it the MDP panel
+      // bullet group AND the whole '## Warnings' section (−6 lines). The feeder
+      // way row prints the 16 A device.
+      expect(md.split('\n').length, 78);
+      expect(fnv1a32(md), 0x669814cf);
     });
   });
 
@@ -201,7 +217,8 @@ void main() {
         '## Earthing',
         '## Power one-line',
         '### Source interlocks',
-        '## Warnings',
+        // The embedded electrical body carries no warnings (see the standalone
+        // pin above), so its '## Warnings' section is omitted.
         '## Unverified values',
         '# Revision history',
         '## Revision history',
@@ -225,8 +242,12 @@ void main() {
       // `feeder-below-fed-demand` warning lines (see the standalone pin above).
       // Re-baselined 2026-07-30: the electrical body dropped the five
       // unactionable phase-imbalance lines (see the standalone pin above).
-      expect(md.split('\n').length, 225);
-      expect(fnv1a32(md), 0x7c923eee);
+      // Re-baselined again 2026-07-30 (selectivity-aware feeder sizing): the
+      // electrical body's last warning is cured by the feeder floor, dropping
+      // its panel bullet group and '## Warnings' section (−6 lines), and its
+      // feeder way row prints the floored 16 A device.
+      expect(md.split('\n').length, 219);
+      expect(fnv1a32(md), 0xd717bb16);
     });
   });
 

@@ -72,12 +72,16 @@ ComplianceSummary buildComplianceSummaryFrom({
   // the now-localized title (which would fall out of the bucket in Bahasa).
   final velocityWarnings =
       claim((i) => i.kind.contains('velocity')).where(isFail).length;
-  // Calibration: any uncalibrated-sheet issue fails the check — a blank sheet
-  // is a warning, an edge-bearing one is escalated to critical, and BOTH must
-  // fail the 'Sheet calibration' compliance item. Both carry the stable
-  // `sheet-uncalibrated:<sheetId>` kind, so the prefix catches either.
-  final calibrationWarnings =
-      claim((i) => i.kind.startsWith('sheet-uncalibrated')).where(isFail).length;
+  // Calibration: an EDGE-BEARING uncalibrated sheet is a critical (its runs
+  // size to zero) and fails the check; a BLANK uncalibrated sheet is an
+  // info-tier advisory ("calibrate before you draw") that does NOT fail — but
+  // the PASS row must still COUNT it, or the all-clear caption would claim
+  // 'all sheets calibrated' while blank sheets sit uncalibrated. Both tiers
+  // carry the stable `sheet-uncalibrated:<sheetId>` kind.
+  final uncalibratedIssues =
+      claim((i) => i.kind.startsWith('sheet-uncalibrated'));
+  final calibrationWarnings = uncalibratedIssues.where(isFail).length;
+  final blankUncalibrated = uncalibratedIssues.length - calibrationWarnings;
   // Standards verification: unverified-standard info items. An ACKNOWLEDGED
   // value no longer counts as OPEN (H1) — the mechanism that makes a PASS
   // structurally reachable while the full tiered register still prints in the
@@ -149,10 +153,16 @@ ComplianceSummary buildComplianceSummaryFrom({
                   {'n': '$velocityWarnings'})),
       ComplianceItem(strings(StringKey.complianceCategorySheetCalibration),
           pass: calibrationWarnings == 0,
-          detail: calibrationWarnings == 0
-              ? strings(StringKey.complianceDetailAllCalibrated)
-              : strings.format(StringKey.complianceDetailUncalibrated,
-                  {'n': '$calibrationWarnings'})),
+          detail: calibrationWarnings != 0
+              ? strings.format(StringKey.complianceDetailUncalibrated,
+                  {'n': '$calibrationWarnings'})
+              // A passing row still names any blank uncalibrated sheets — an
+              // advisory doesn't block sign-off, but the sign-off must not
+              // claim 'all sheets calibrated' when they exist.
+              : blankUncalibrated != 0
+                  ? strings.format(StringKey.complianceDetailBlankUncalibrated,
+                      {'n': '$blankUncalibrated'})
+                  : strings(StringKey.complianceDetailAllCalibrated)),
       ComplianceItem(strings(StringKey.complianceCategoryStandardsVerification),
           pass: openUnverified == 0,
           detail: openUnverified == 0
@@ -216,7 +226,7 @@ final complianceSummaryProvider = Provider<ComplianceSummary>((ref) {
   final acks = ref.watch(acknowledgedIssuesProvider);
   return buildComplianceSummaryFrom(
     issues: ref.watch(designIssuesProvider),
-    electricalWarnings: ref.watch(electricalResultProvider).warnings,
+    electricalWarnings: ref.watch(electricalAllWarningsProvider),
     acknowledged: acks.keys.toSet(),
     acks: acks,
     strings: MechXStringsData(ref.watch(localeProvider)),
@@ -238,7 +248,7 @@ final complianceSummaryProvider = Provider<ComplianceSummary>((ref) {
 final complianceCheckItemsProvider = Provider<ComplianceSummary>((ref) {
   return buildComplianceSummaryFrom(
     issues: ref.watch(designIssuesProvider),
-    electricalWarnings: ref.watch(electricalResultProvider).warnings,
+    electricalWarnings: ref.watch(electricalAllWarningsProvider),
     acknowledged: ref.watch(acknowledgedIssuesProvider).keys.toSet(),
     // No `acks` ⇒ no acknowledgement-log rows.
     strings: MechXStringsData(ref.watch(localeProvider)),

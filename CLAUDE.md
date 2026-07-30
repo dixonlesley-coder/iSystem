@@ -1462,13 +1462,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   unchanged when absent). No `.mechx` change — providers derive from existing state.
 - **Air-velocity warnings (`sizing/air_velocity.dart` + `airVelocityChecksProvider`)**:
   a JUDGE-ONLY layer over the manually routed air network — it never resizes
-  anything. Duct edges use the live `EdgeSizing.velocity`; air terminals use
-  `faceVelocityFor(airflow, grossFaceArea)` from the node's chosen
-  `faceWidthMm`/`faceHeightMm`. Bands are plain constants (supply duct 3–7 m/s,
-  supply face 1.0–3.0, return/exhaust face 1.0–4.0) — general practice, NOT an SNI
-  clause (`// VERIFY`). A non-positive velocity or a terminal with no chosen face is
-  reported OK (nothing to warn about), so a project with no manual air sizing is
-  byte-identical (no badges, goldens unchanged). A separate `airUnsizedProvider`
+  anything, and it judges ONLY manually sized elements: duct edges **with a
+  chosen `sizeOverride`** (an auto-sized duct is the sizing engine's own pick —
+  re-judging it warned about the unavoidable round-up to the smallest standard
+  size, an unactionable badge, so it is excluded entirely) and air terminals
+  with a chosen `faceWidthMm`/`faceHeightMm` (via `faceVelocityFor`). A
+  manually-sized return/exhaust duct is judged against the shared EXTRACT band
+  (`checkExtractDuctVelocity`, 2–6 m/s), other air services against the supply
+  band. Bands are plain constants (supply duct 3–7 m/s, extract duct 2–6,
+  supply face 1.0–3.0, return/exhaust face 1.0–4.0) — general practice, NOT an
+  SNI clause (`// VERIFY`). A non-positive velocity or a terminal with no chosen
+  face is reported OK (nothing to warn about), so a project with no manual air
+  sizing is byte-identical (no badges, goldens unchanged). A separate `airUnsizedProvider`
   flags air ducts/terminals that carry air but have no manual size/face yet (a
   muted advisory marker, distinct from the orange out-of-band warning, which
   always takes precedence).
@@ -1546,6 +1551,39 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   are untouched, and the percentage still prints on the schedule TOTAL footer, the
   inspector and both reports; only the unactionable WARNING (and, since it reads
   that warning, the canvas card's `imbalance NN%` badge) is dropped.
+- **Feeder selectivity floor (`electrical/{sizing,compute}.dart`)**: a feeder
+  way and the incomer of the board it feeds size from the SAME demand, so they
+  used to land on the same ladder rung (ratio 1.0 ⇒ `non-selective` on the
+  engine's own output). `computeSystem` is now TWO-PASS: pass 1 sizes with no
+  floor (the historic behaviour); any un-overridden feeder below
+  `selectivityRatio (1.6) ×` the fed board's incomer rating gets a
+  `feederBreakerFloorA` entry and pass 2 re-runs the whole sizing with the
+  floors threaded to `selectBreaker(minRatingA:)` (cable upsizes via the
+  existing `breakerRating:` path). An EMPTY floors map returns the pass-1
+  object — single-panel / overridden / already-selective projects are
+  byte-identical. Exactly two passes converge (a floor depends only on the
+  child's load-side incomer, invariant under a parent bump). An explicit
+  `breakerOverrideA` always wins and is never floored — the residual
+  non-selectivity is then reported by the fault study, not hidden. A floor
+  past the 1600 A ladder top clamps to the largest rung. The 1.6× basis is a
+  coarse rating-ratio rule (`// VERIFY notAnSniClause`). Corollary: an
+  auto-sized feeder now always clears the fed board's worst-phase demand, so
+  `feeder-below-fed-demand` is reachable only on an overridden feeder.
+- **ONE electrical warning surface (`electricalAllWarningsProvider`)**: the
+  fault study's warnings (`non-selective` / `selectivity-partial` /
+  `breaking-capacity-inadequate` / `busbar-withstand-inadequate` /
+  `tt-no-earth-fault-protection`) used to be computed and shown NOWHERE. Every
+  consumer — the Review fan-in (§5b `electrical:<code>` kinds), the compliance
+  roll-up, the electrical drawer count/list, the Layout electrical error dot —
+  now reads the combined provider (core `electricalResultProvider.warnings`
+  first, then `electricalAdvancedProvider.fault.warnings`, deduped on
+  (code, panelId, circuitId) keeping the core occurrence). Never read either
+  source's warnings directly in a UI/store consumer. Related honesty tiers:
+  `harmonics-neutral-oversize` is INFO (Fold 2 already compensated — a sizing
+  note, not a defect); a BLANK uncalibrated sheet is an info advisory (kind
+  unchanged `sheet-uncalibrated:<id>`; edge-bearing stays critical), and the
+  compliance calibration row, when passing, still counts blank uncalibrated
+  sheets ('N blank uncalibrated (advisory)') instead of claiming all-calibrated.
 - **Motor FLC includes efficiency (`electrical/compute.dart`)**: a hand-entered
   motor's `motorKw` is SHAFT power; the `motorLike` branch divides it by a file-level
   `_assumedMotorEfficiency = 0.88` (`// VERIFY` `secondarySource`, deliberately NOT in

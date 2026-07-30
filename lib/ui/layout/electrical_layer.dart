@@ -260,10 +260,20 @@ class ElectricalLayoutLayer extends ConsumerWidget {
         if (onSheet(p.layoutPos)) p,
     ];
 
+    // THE combined warning surface (core sizing + fault-study, deduped) — a
+    // panel's marker shows the error border when EITHER pass flags it, so the
+    // canvas can never disagree with the Review list / compliance verdict.
+    final allWarnings = ref.watch(electricalAllWarningsProvider);
+    final errorPanelIds = <String>{
+      for (final w in allWarnings)
+        if (w.severity == WarningSeverity.error && w.panelId != null)
+          w.panelId!,
+    };
+
     final nodeWidgets = <Widget>[
       for (final p in placedPanels)
         ..._panelNodes(context, ref, ctrl, selectionCtrl, selection, p, result,
-            vt, opacity),
+            vt, opacity, errorPanelIds),
       // Floating loads — placed circuits whose stub board is NOT itself placed
       // on this sheet (drop-on-blank). Render the load icon on its own.
       for (final p in project.panels)
@@ -364,6 +374,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
     ElectricalSystemResult result,
     ViewportTransform vt,
     double opacity,
+    Set<String> errorPanelIds,
   ) {
     final pos = panel.layoutPos!;
     final pr = result.panels[panel.id];
@@ -392,6 +403,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
             child: _PanelMarker(
               panel: panel,
               result: pr,
+              hasStudyError: errorPanelIds.contains(panel.id),
               detail: detail,
               selected: selection != null &&
                   !selection.isCircuit &&
@@ -780,6 +792,13 @@ class _WiringPainter extends CustomPainter {
 class _PanelMarker extends StatefulWidget {
   final ElectricalPanel panel;
   final ElectricalPanelResult? result;
+
+  /// True when THE combined warning surface (core sizing + fault-study,
+  /// deduped — `electricalAllWarningsProvider`) carries an error-severity
+  /// finding for this panel, whether or not it also shows up in [result]'s
+  /// own (core-only) warning list — so the error border can never disagree
+  /// with the Review list / compliance verdict.
+  final bool hasStudyError;
   final bool detail;
   final bool selected;
   final VoidCallback onTap;
@@ -790,6 +809,7 @@ class _PanelMarker extends StatefulWidget {
   const _PanelMarker({
     required this.panel,
     required this.result,
+    required this.hasStudyError,
     required this.detail,
     required this.selected,
     required this.onTap,
@@ -812,8 +832,8 @@ class _PanelMarkerState extends State<_PanelMarker> {
     final type = context.type;
     final p = widget.panel;
     final r = widget.result;
-    final hasError = r != null &&
-        r.warnings.any((w) => w.severity == WarningSeverity.error);
+    final hasError = widget.hasStudyError ||
+        (r != null && r.warnings.any((w) => w.severity == WarningSeverity.error));
     final border = hasError
         ? colors.danger
         : (widget.selected || _hover || _dropHover)

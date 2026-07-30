@@ -338,13 +338,16 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
-  // ── 3. Uncalibrated sheets (warning, or CRITICAL when edges are drawn) ───────
+  // ── 3. Uncalibrated sheets (info, or CRITICAL when edges are drawn) ─────────
   // An uncalibrated sheet that already carries drawn runs is a BLOCKER: every
   // run on it sizes to ZERO length (edgeLength returns Length(0) for an
   // uncalibrated run), so the BOM / pressures / report are silently wrong. A
-  // blank uncalibrated sheet stays a plain warning. We escalate only the
-  // edge-bearing ones; the title is kept ('… calibrated') so the compliance
-  // roll-up and any title match still catch it.
+  // BLANK uncalibrated sheet (nothing drawn on it yet) has nothing measurable
+  // to be wrong — it's an honesty ADVISORY ("calibrate before you draw"), not
+  // a warning, so it drops to [IssueSeverity.info] (and no longer blocks a
+  // compliance PASS on its own). We escalate only the edge-bearing ones; the
+  // title is kept ('… calibrated') so the compliance roll-up and any title
+  // match still catch it.
   final sheetsWithEdges = <String>{
     for (final n in net.nodes)
       if (net.edgesAt(n.id).isNotEmpty) n.sheetId,
@@ -361,12 +364,12 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         locate: IssueLocation(s.id),
       ));
     } else {
-      warnings.add(DesignIssue(
-        severity: IssueSeverity.warning,
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
         kind: 'sheet-uncalibrated:${s.id}',
         title: str(StringKey.issueSheetNotCalibratedTitle),
         message: str.format(
-            StringKey.issueSheetNotCalibratedWarningMessage, {'name': s.name}),
+            StringKey.issueSheetNotCalibratedInfoMessage, {'name': s.name}),
         locate: IssueLocation(s.id),
       ));
     }
@@ -583,8 +586,8 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // sheetId is empty/unused), so the Review row jumps to the Electrical
   // workspace + focuses the panel rather than a floor plan. A system-level
   // warning with no panel is non-locatable.
-  final electrical = ref.watch(electricalResultProvider);
-  for (final w in electrical.warnings) {
+  final electricalWarnings = ref.watch(electricalAllWarningsProvider);
+  for (final w in electricalWarnings) {
     final severity = switch (w.severity) {
       WarningSeverity.error => IssueSeverity.critical,
       WarningSeverity.warning => IssueSeverity.warning,

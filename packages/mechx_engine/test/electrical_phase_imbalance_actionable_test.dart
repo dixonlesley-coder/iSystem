@@ -193,6 +193,13 @@ void main() {
     // exceeds the balanced current the parent's feeder is sized from, so the
     // feeder check fires — but no re-assignment can even out one big load, so
     // that message must not offer "rebalance" either.
+    //
+    // The feeder is PINNED at 16 A (the rating the sizer used to pick here:
+    // Ib = 6200 W / (√3·400·0.85) = 10.5 A → 16 A). Since 2026-07-30 an
+    // auto-sized feeder is floored at 1.6× the fed board's incomer — which
+    // already clears that board's worst-phase demand — so only an OVERRIDDEN
+    // feeder can still reach the `feeder-below-fed-demand` condition whose
+    // wording is under test here.
     const project = ElectricalProject(
       id: 'prj',
       name: 'Dominant 1ph load',
@@ -207,6 +214,7 @@ void main() {
               loadKind: LoadKind.feeder,
               feedsPanelId: 'PP',
               length: Length(10),
+              breakerOverrideA: Current(16),
             ),
           ],
         ),

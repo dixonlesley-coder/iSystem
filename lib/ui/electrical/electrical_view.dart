@@ -208,6 +208,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     final result = ref.watch(electricalResultProvider);
     final project = ref.watch(electricalProjectProvider);
     final advanced = ref.watch(electricalAdvancedProvider);
+    final allWarnings = ref.watch(electricalAllWarningsProvider);
 
     // The Review → Electrical jump seam: a located issue hands a panel id (and,
     // when the issue pinpoints one, a circuit/way id — H7) via
@@ -239,7 +240,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _Toolbar(
-          warningCount: result.warnings.length,
+          warningCount: allWarnings.length,
           tab: tab,
           onTab: (t) => ref.read(electricalTabProvider.notifier).set(t),
           onService: _openService,
@@ -972,8 +973,9 @@ class _Toolbar extends StatelessWidget {
                 runSpacing: MechXSpacing.xs,
                 children: [
                   MechXButton(
-                    // B2 — this count is ELECTRICAL-ONLY (result.warnings for
-                    // the electrical system). The StringKey values are now
+                    // B2 — this count is ELECTRICAL-ONLY (electricalAllWarningsProvider —
+                    // the combined core-sizing + fault-study warning surface, deduped).
+                    // The StringKey values are now
                     // SCOPED ('Electrical issues' / 'Masalah kelistrikan') so
                     // the label can't be conflated with the nav Review badge
                     // (all OPEN issues, every discipline) or the Review hub's
@@ -1906,6 +1908,7 @@ class ElectricalAdvancedInspector extends ConsumerWidget {
     final type = context.type;
     final advanced = ref.watch(electricalAdvancedProvider);
     final result = ref.watch(electricalResultProvider);
+    final allWarnings = ref.watch(electricalAllWarningsProvider);
     void onLocate(String panelId, String? circuitId) {
       // Frame the offending board/way on the single-line canvas (via the
       // workspace's electricalFocusProvider listener) and close this section.
@@ -1949,13 +1952,13 @@ class ElectricalAdvancedInspector extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (result.warnings.isNotEmpty) ...[
+                    if (allWarnings.isNotEmpty) ...[
                       Text(
-                        'Warnings (${result.warnings.length})',
+                        'Warnings (${allWarnings.length})',
                         style: type.label.copyWith(color: colors.textPrimary),
                       ),
                       const SizedBox(height: MechXSpacing.xs),
-                      for (final w in result.warnings)
+                      for (final w in allWarnings)
                         _WarningRow(warning: w, onLocate: onLocate),
                       const SizedBox(height: MechXSpacing.md),
                     ],

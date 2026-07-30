@@ -7,6 +7,15 @@
 /// recommended band (`sizing/air_velocity.dart`) and flags too-high / too-low,
 /// so the engineer is warned without the app overriding their chosen size.
 ///
+/// Only MANUALLY sized elements are judged: a duct edge with a chosen
+/// `sizeOverride` (checked against the supply-duct band, or the shared
+/// return/exhaust extract-duct band for `ServiceType.returnAir`/`exhaust`),
+/// and an air terminal with a chosen face. An AUTO-sized duct is excluded
+/// entirely — the sizing engine already picked the closest standard size to
+/// the target velocity, so re-judging its own unavoidable pick (e.g. rounding
+/// up to the smallest standard duct on a small flow) would warn about
+/// something the engineer cannot act on.
+///
 /// It reads the live sizing (already velocity-aware per edge) + the drawn
 /// network; it never mutates anything.
 library;
@@ -28,12 +37,20 @@ final airVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
   final sizing = ref.watch(sizingProvider);
   final out = <String, VelocityCheck>{};
 
-  // Duct edges — mean velocity vs the supply-duct band.
+  // Duct edges — mean velocity vs the supply-duct band, or the shared
+  // return/exhaust extract-duct band for a return-air/exhaust duct. Only
+  // MANUALLY sized ducts are judged (a chosen `sizeOverride`); an auto-sized
+  // duct is the sizing engine's own pick and is never re-judged here (see the
+  // header note).
   for (final e in net.edges) {
-    if (!e.service.isAir) continue;
+    if (!e.service.isAir || e.sizeOverride == null) continue;
     final s = sizing[e.id];
     if (s == null) continue;
-    out[e.id] = checkSupplyDuctVelocity(s.velocity);
+    final isExtract =
+        e.service == ServiceType.returnAir || e.service == ServiceType.exhaust;
+    out[e.id] = isExtract
+        ? checkExtractDuctVelocity(s.velocity)
+        : checkSupplyDuctVelocity(s.velocity);
   }
 
   // Air terminals — face velocity vs the supply/return band. Only judged once
