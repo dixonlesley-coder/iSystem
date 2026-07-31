@@ -42,6 +42,21 @@ class MechXTextField extends StatefulWidget {
   /// platform default text keyboard) so unspecified callers are unaffected.
   final TextInputType? keyboardType;
 
+  /// Take the keyboard as soon as the field is mounted (F1, additive). The
+  /// calibration card's "Known distance" field sets it so the two reference
+  /// clicks flow straight into typing the length — and, because a focused
+  /// field is what `isTextEntryFocused()` reports, the canvas's bare-digit
+  /// tool/service shortcuts stand down for free while the number is typed.
+  /// Defaults false ⇒ every existing caller is byte-identical.
+  final bool autofocus;
+
+  /// An externally owned focus node (additive). Supply it when the HOST needs
+  /// to hand the keyboard back to this field after something else took it —
+  /// the calibration card does, because every click on the canvas beneath it
+  /// (re-placing a reference marker) pulls focus to the canvas. Null ⇒ the
+  /// field owns and disposes its own node, exactly as before.
+  final FocusNode? focusNode;
+
   const MechXTextField({
     super.key,
     required this.value,
@@ -51,6 +66,8 @@ class MechXTextField extends StatefulWidget {
     this.hint,
     this.textStyle,
     this.keyboardType,
+    this.autofocus = false,
+    this.focusNode,
   });
 
   @override
@@ -60,8 +77,13 @@ class MechXTextField extends StatefulWidget {
 class _MechXTextFieldState extends State<MechXTextField> {
   late final TextEditingController _controller =
       TextEditingController(text: widget.value);
-  final FocusNode _focusNode = FocusNode();
+  /// Created (and disposed) only when the caller supplied no
+  /// [MechXTextField.focusNode] — a host-owned node is the host's to dispose.
+  FocusNode? _ownFocusNode;
   bool _focused = false;
+
+  FocusNode get _focusNode =>
+      widget.focusNode ?? (_ownFocusNode ??= FocusNode());
 
   /// Commit-on-blur bookkeeping: has the text been edited since the last commit
   /// / external value? Only consulted when [MechXTextField.onCommitted] is set.
@@ -76,6 +98,18 @@ class _MechXTextFieldState extends State<MechXTextField> {
     // — a null onKeyEvent, exactly as before).
     if (widget.onCommitted != null) {
       _focusNode.onKeyEvent = _onKeyEvent;
+    }
+    // F1 — take the keyboard on mount. Deliberately an explicit post-frame
+    // requestFocus rather than EditableText's own `autofocus`: a FocusScope
+    // ignores an autofocus candidate when it ALREADY has a focused descendant,
+    // and the field this exists for (the calibration card) mounts on a canvas
+    // that grabs focus on every pointer-down — the click that placed the second
+    // reference point. So the honest behaviour is "claim it", not "claim it if
+    // nobody else did".
+    if (widget.autofocus) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _focusNode.requestFocus();
+      });
     }
   }
 
@@ -121,6 +155,14 @@ class _MechXTextFieldState extends State<MechXTextField> {
   @override
   void didUpdateWidget(MechXTextField old) {
     super.didUpdateWidget(old);
+    // A host swapping the external node re-homes the bookkeeping (no caller
+    // does today; this keeps the additive param honest rather than silently
+    // listening to a node that is no longer in use).
+    if (old.focusNode != widget.focusNode) {
+      (old.focusNode ?? _ownFocusNode)?.removeListener(_onFocusChange);
+      _focusNode.addListener(_onFocusChange);
+      if (widget.onCommitted != null) _focusNode.onKeyEvent = _onKeyEvent;
+    }
     // Sync external value when we're not actively editing.
     if (widget.value != _controller.text && !_focusNode.hasFocus) {
       _controller.text = widget.value;
@@ -131,7 +173,8 @@ class _MechXTextFieldState extends State<MechXTextField> {
   void dispose() {
     _focusNode.removeListener(_onFocusChange);
     _controller.dispose();
-    _focusNode.dispose();
+    // Only a node this state created is ours to dispose.
+    _ownFocusNode?.dispose();
     super.dispose();
   }
 

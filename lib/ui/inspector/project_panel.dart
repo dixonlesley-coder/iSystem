@@ -114,6 +114,7 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     standardsRevision: profile.revision,
     verifyItems: profile.verifyChecklist,
     building: project.building,
+    mounting: ref.read(mountingProvider),
     feedStrategy:
         strategy == FeedStrategy.upfeed ? 'Upfeed pump' : 'Roof-tank downfeed',
     targetResidual:
@@ -792,8 +793,8 @@ DrawingChrome issuableChrome(
 /// Only RUN edges get an entry (risers carry the FFL gutter on the riser sheet);
 /// the pure exporters receive the finished strings and never read the model. The
 /// average of the two endpoint elevations is the run's representative centreline.
-Map<String, String> planEdgeElevationLabels(Network net, BuildingLevels building) {
-  const mounting = MountingHeights();
+Map<String, String> planEdgeElevationLabels(Network net, BuildingLevels building,
+    {MountingHeights mounting = const MountingHeights()}) {
   final out = <String, String>{};
   for (final e in net.edges) {
     if (e.kind != EdgeKind.run) continue;
@@ -841,7 +842,8 @@ Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
     metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
     underlay: planUnderlay is VectorPlanUnderlay ? planUnderlay : null,
     // N5: the §10 centreline-height token folded into each run's size label.
-    edgeElevationLabels: planEdgeElevationLabels(net, project.building),
+    edgeElevationLabels: planEdgeElevationLabels(net, project.building,
+        mounting: ref.read(mountingProvider)),
     // N13: the stable element tag (`CW-R1` / `CW-F2`) on each run/riser so the
     // plan DXF traces to the same element the riser + BOM + report carry.
     edgeTags: elementTags(net),
@@ -970,7 +972,8 @@ Future<bool?> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     // source) keeps the plain export.
     underlay: await buildPlanUnderlay(sheet),
     // N5: the §10 centreline-height token folded into each run's size label.
-    edgeElevationLabels: planEdgeElevationLabels(net, project.building),
+    edgeElevationLabels: planEdgeElevationLabels(net, project.building,
+        mounting: ref.read(mountingProvider)),
     // N13: the stable element tag (`CW-R1` / `CW-F2`) prepended to each label so
     // the plan traces to the same element the riser + BOM + report carry.
     edgeTags: elementTags(net),
@@ -1279,7 +1282,8 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
           ),
       };
       // N5: the §10 centreline-height token folded into each run's size label.
-      final elevationLabels = planEdgeElevationLabels(net, project.building);
+      final elevationLabels = planEdgeElevationLabels(net, project.building,
+        mounting: ref.read(mountingProvider));
       // N13: the stable element tags shared by both plan formats + the reports.
       final tags = elementTags(net);
       // N4/B12: the setting-out grid from axis-aligned traced reference lines,
@@ -3286,7 +3290,6 @@ class _ResultsSection extends ConsumerWidget {
     final show = ref.watch(showHeatmapProvider);
     final showSizes = ref.watch(showSizingProvider);
     final strategy = ref.watch(feedStrategyProvider);
-    final stratCtrl = ref.read(feedStrategyProvider.notifier);
     final solution = ref.watch(solveProvider);
     final downfeed = ref.watch(downfeedProvider);
     final pump = ref.watch(pumpDutyProvider);
@@ -3394,12 +3397,13 @@ class _ResultsSection extends ConsumerWidget {
             _Pill(
               label: 'Upfeed pump',
               selected: strategy == FeedStrategy.upfeed,
-              onTap: () => stratCtrl.set(FeedStrategy.upfeed),
+              onTap: () => setFeedStrategyUndoable(ref.read, FeedStrategy.upfeed),
             ),
             _Pill(
               label: 'Roof-tank downfeed',
               selected: strategy == FeedStrategy.downfeed,
-              onTap: () => stratCtrl.set(FeedStrategy.downfeed),
+              onTap: () =>
+                  setFeedStrategyUndoable(ref.read, FeedStrategy.downfeed),
             ),
           ],
         ),
@@ -4222,7 +4226,8 @@ class _SelectionSection extends ConsumerWidget {
               ? ''
               : held
                   ? ' · target held by design (min '
-                      '${target.inKiloPascals.toStringAsFixed(0)} kPa)'
+                      '${target.inKiloPascals.toStringAsFixed(0)} kPa) - '
+                      '${context.strings(StringKey.heatmapRealCheckPumpDuty)}'
                   : ' · ${pass ? 'PASS' : 'LOW'} (min '
                       '${target.inKiloPascals.toStringAsFixed(0)} kPa)';
           return Padding(
@@ -4532,7 +4537,7 @@ class _SelectionSection extends ConsumerWidget {
                     min: 0,
                     onDecrement: () {
                       final base = node.mountHeight?.meters ??
-                          const MountingHeights().fixtureHeight.meters;
+                          ref.read(mountingProvider).fixtureHeight.meters;
                       final next = base - 0.05;
                       // Stepping down through floor level reverts to the role
                       // default.
@@ -4541,7 +4546,7 @@ class _SelectionSection extends ConsumerWidget {
                     },
                     onIncrement: () {
                       final base = node.mountHeight?.meters ??
-                          const MountingHeights().fixtureHeight.meters;
+                          ref.read(mountingProvider).fixtureHeight.meters;
                       ctrl.setNodeMountHeight(node.id, Length(base + 0.05));
                     },
                     // The typed value is in cm (the displayed unit); store as

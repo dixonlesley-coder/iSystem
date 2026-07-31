@@ -24,6 +24,7 @@ import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../sheets/pdf_page_picker.dart';
 import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import 'confirm_discard_dialog.dart';
 import 'import_choice_dialog.dart';
 import 'nav_rail.dart';
@@ -201,9 +202,12 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
         // A5: jump to the first freshly-added sheet — the appended block starts
         // at index `existing` (the sheet count captured before the add).
         _revealImportedSheet(ref, existing);
-        ref
-            .read(statusMessageProvider.notifier)
-            .showStatus('$added ${added == 1 ? 'sheet' : 'sheets'} added');
+        ref.read(statusMessageProvider.notifier).showStatus(
+            _importStatusMessage(ref,
+                imported: added,
+                totalSheets: existing + added,
+                fromTemplate: skipDiscardGuard,
+                added: true));
         return true;
       }
       // REPLACE destroys the current sheets + orphans drawn work — guard now.
@@ -223,9 +227,11 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
     // A5: reveal the imported plan on DESIGN → Layout at the first sheet.
     _revealImportedSheet(ref, 0);
     final n = sheets.length;
-    ref
-        .read(statusMessageProvider.notifier)
-        .showStatus('$n ${n == 1 ? 'sheet' : 'sheets'} imported');
+    ref.read(statusMessageProvider.notifier).showStatus(_importStatusMessage(ref,
+        imported: n,
+        totalSheets: n,
+        fromTemplate: skipDiscardGuard,
+        added: false));
     return true;
   } catch (e) {
     // Surface the failure instead of silently keeping the old sheets.
@@ -239,6 +245,54 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
 /// The basename of a file path, tolerant of either separator (a FilePicker path
 /// may use `/` even on Windows, where [Platform.pathSeparator] is `\`).
 String _baseName(String path) => path.split(RegExp(r'[\\/]')).last;
+
+/// The status confirmation for a completed import.
+///
+/// F10 — a TEMPLATE forces this import right after seeding a 12-floor building,
+/// and the engineer typically has one or two plans to hand: the old
+/// "1 sheet imported" said nothing about floors 2-12 being left planless, and
+/// the tool that fixes it (assign / duplicate a typical floor's plan) lives on
+/// the Building page they were never sent to. When the import came from that
+/// forced template flow ([fromTemplate]) and the building has MORE floors than
+/// the project now has plans, the confirmation names the shortfall and points
+/// at the Building page. Every other import keeps its plain count — a normal
+/// Import into a tall building is a deliberate one-plan-at-a-time workflow, not
+/// a shortfall to nag about.
+String _importStatusMessage(
+  WidgetRef ref, {
+  required int imported,
+  required int totalSheets,
+  required bool fromTemplate,
+  required bool added,
+}) =>
+    importStatusMessage(
+      MechXStringsData(ref.read(localeProvider)),
+      imported: imported,
+      totalSheets: totalSheets,
+      floors: ref.read(projectControllerProvider).floors.length,
+      fromTemplate: fromTemplate,
+      added: added,
+    );
+
+/// The pure text of [_importStatusMessage] — same rule, no providers, so the
+/// F10 shortfall branch is unit-testable without an OS file picker.
+String importStatusMessage(
+  MechXStringsData strings, {
+  required int imported,
+  required int totalSheets,
+  required int floors,
+  required bool fromTemplate,
+  required bool added,
+}) {
+  if (fromTemplate && floors > totalSheets) {
+    final plans = pluralCount(totalSheets, strings(StringKey.buildingPlanOne),
+        strings(StringKey.buildingPlanMany));
+    return strings.format(StringKey.templatePlanShortfallTemplate,
+        {'floors': '$floors', 'plans': plans});
+  }
+  final noun = imported == 1 ? 'sheet' : 'sheets';
+  return '$imported $noun ${added ? 'added' : 'imported'}';
+}
 
 /// Import ONE plan file at [path] to its [Sheet]s (PDF → a sheet per page, DXF
 /// one sheet, DWG one sheet via the ODA converter). Shared by the batch add.
@@ -369,6 +423,36 @@ Future<void> replaceSheetPlan(
   }
 }
 
+/// The default project name a virgin project carries — the ONE string F9's
+/// adoption guard compares against (a project the engineer has named, or one
+/// loaded from a file, is never renamed by a save).
+const String kDefaultProjectName = 'Untitled project';
+
+/// F9 — the file STEM of a `.mechx` path (`…/Gedung-BRI.mechx` → `Gedung-BRI`),
+/// tolerant of either path separator (a FilePicker path may use `/` even on
+/// Windows). Pure, so the naming rule is unit-testable without touching disk.
+String projectNameFromPath(String path) {
+  final base = _baseName(path);
+  final lower = base.toLowerCase();
+  final stem = lower.endsWith('.mechx')
+      ? base.substring(0, base.length - '.mechx'.length)
+      : base;
+  return stem.trim();
+}
+
+/// F9 — adopt [path]'s file stem as the project name when the project still
+/// carries the untouched default. A no-op otherwise (a named project keeps its
+/// name) and for a stem that is empty or already the live name, so a repeat save
+/// records no undo step. Goes through [ProjectController.setName], so the
+/// adoption is ONE ordinary undo entry — part of the save the engineer just
+/// performed.
+void adoptFileStemAsProjectName(ProviderReader read, String path) {
+  if (read(projectControllerProvider).name != kDefaultProjectName) return;
+  final stem = projectNameFromPath(path);
+  if (stem.isEmpty || stem == kDefaultProjectName) return;
+  read(projectControllerProvider.notifier).setName(stem);
+}
+
 /// True while a [saveProject] run (including its OS Save dialog) is in flight —
 /// a second Ctrl+S meanwhile is a no-op instead of a concurrent write to the
 /// same file (the busy pill already tells the user a save is running).
@@ -392,7 +476,6 @@ Future<void> saveProject(WidgetRef ref, {bool saveAs = false}) async {
 
 Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   final project = ref.read(projectControllerProvider);
-  final doc = buildDocument(ref.read);
   // The project's identity BEFORE this save — its recovery slot is cleared too
   // (a Save-As changes the slot; the pre-save snapshot lived under the old one).
   final priorPath = ref.read(currentProjectPathProvider);
@@ -407,6 +490,16 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
     if (path == null) return;
     full = path.endsWith('.mechx') ? path : '$path.mechx';
   }
+  // F9 — the file the engineer named IS the project's name: saving as
+  // `Gedung-BRI.mechx` used to leave every title block, report head and window
+  // title reading "Untitled project", because Save seeded the dialog from the
+  // name but never adopted the chosen filename back. Adopt the stem, but ONLY
+  // while the name is still the untouched default — a project the engineer
+  // named keeps its name whatever the file is called. One undo step (part of
+  // the save), and it happens BEFORE the document is built so the name lands in
+  // the written file and in the clean baseline.
+  adoptFileStemAsProjectName(ref.read, full);
+  final doc = buildDocument(ref.read);
   // The path-only encoding is the "clean baseline" the autosave loop compares
   // against (autosave never embeds) — so a just-saved project leaves no phantom
   // recovery. The FILE on disk, however, embeds the source plans so it is
@@ -456,8 +549,11 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   // bookkeeping that only matters while the app is alive, so drop it if gone.
   if (!ref.context.mounted) return;
   ref.read(recoveryDocProvider.notifier).clear();
-  // Remember this file in the machine-local MRU / last-open list.
-  ref.read(appSettingsProvider.notifier).recordRecent(full, project.name);
+  // Remember this file in the machine-local MRU / last-open list, under the
+  // name the project carries NOW (F9 may just have adopted the file stem).
+  ref
+      .read(appSettingsProvider.notifier)
+      .recordRecent(full, ref.read(projectControllerProvider).name);
   ref
       .read(statusMessageProvider.notifier)
       .showStatus('Saved ${full.split(Platform.pathSeparator).last}');

@@ -5,6 +5,7 @@ import 'package:mechx_engine/pressure_field.dart';
 import '../../store/network_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/solve_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'viewport.dart';
@@ -153,6 +154,9 @@ class HeatmapLegend extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    // Degrades to EN with no provider ancestor (the legend is also pumped
+    // standalone in tests), so this never throws.
+    final strings = MechXStrings.of(context);
     final uniform = (maxKpa - minKpa).abs() < 1.0;
 
     String bar(double kpa) => '${kpa.toStringAsFixed(0)} kPa';
@@ -277,7 +281,24 @@ class HeatmapLegend extends StatelessWidget {
                   maxLines: 1,
                   softWrap: false,
                   style: type.mono.copyWith(color: colors.textSecondary)),
+              // G6 — a SPREAD field used to print that bare Min tick with no
+              // caveat at all: on the upfeed solve every residual clears it by
+              // construction, so an engineer reads a PASS off an unfalsifiable
+              // inequality. The caveat the uniform branch already carried now
+              // appears here too.
+              if (targetHeldByDesign)
+                Text(strings(StringKey.heatmapHeldByDesign),
+                    maxLines: 1,
+                    softWrap: false,
+                    style: type.micro.copyWith(color: colors.textSecondary)),
             ],
+            // G6 — and BOTH branches name the question that CAN fail: whether a
+            // real pump can deliver the head this solve assumed.
+            if (targetHeldByDesign)
+              Text('- ${strings(StringKey.heatmapRealCheckPumpDuty)}',
+                  maxLines: 1,
+                  softWrap: false,
+                  style: type.micro.copyWith(color: colors.textMuted)),
           ],
         ),
       ),

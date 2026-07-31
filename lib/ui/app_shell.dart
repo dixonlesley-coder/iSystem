@@ -665,16 +665,14 @@ class _RiserInspectorColumn extends ConsumerWidget {
             _TintedToggle(
               label: 'Upfeed pump',
               selected: strategy == FeedStrategy.upfeed,
-              onTap: () =>
-                  ref.read(feedStrategyProvider.notifier).set(FeedStrategy.upfeed),
+              onTap: () => setFeedStrategyUndoable(ref.read, FeedStrategy.upfeed),
             ),
             const SizedBox(height: MechXSpacing.xs),
             _TintedToggle(
               label: 'Roof-tank downfeed',
               selected: strategy == FeedStrategy.downfeed,
-              onTap: () => ref
-                  .read(feedStrategyProvider.notifier)
-                  .set(FeedStrategy.downfeed),
+              onTap: () =>
+                  setFeedStrategyUndoable(ref.read, FeedStrategy.downfeed),
             ),
             const SizedBox(height: MechXSpacing.lg),
             const RiserSystemSummary(),

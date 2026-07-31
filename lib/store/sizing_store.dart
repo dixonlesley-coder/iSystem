@@ -201,4 +201,12 @@ class ShowSizingController extends Notifier<bool> {
   bool build() => false;
 
   void toggle() => state = !state;
+
+  /// Turn the overlay ON (idempotent). F2 — the first auto-size nudge says
+  /// "sizes shown on the plan"; this is what makes that true. Deliberately not
+  /// a set(bool): nothing should be able to force the labels OFF behind the
+  /// engineer's back, and the inspector toggle still owns the off direction.
+  void show() {
+    if (!state) state = true;
+  }
 }

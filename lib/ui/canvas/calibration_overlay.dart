@@ -8,6 +8,7 @@ import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../format/scale_format.dart';
 import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
@@ -31,6 +32,30 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
   // user clicked Set scale without typing) — the user must enter a real length.
   String _distance = '';
 
+  /// F1 — the Known-distance field's focus node, owned HERE because the
+  /// keyboard has to be handed back after every tap on the canvas beneath: the
+  /// CanvasView requests focus on pointer-down, so nudging a reference marker
+  /// while the card is up would otherwise leave the next typed digit to the
+  /// canvas's tool/service shortcuts.
+  final FocusNode _distanceFocus = FocusNode();
+
+  @override
+  void dispose() {
+    _distanceFocus.dispose();
+    super.dispose();
+  }
+
+  /// Give the length field the keyboard once the current frame's taps have
+  /// settled (the canvas grabs focus on pointer-down; this runs after).
+  void _focusDistanceField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted &&
+          ref.read(calibrationControllerProvider).isEnteringDistance) {
+        _distanceFocus.requestFocus();
+      }
+    });
+  }
+
   /// Whether the sheet being calibrated is a PDF (its pixels are physical PDF
   /// points) — so the shared readout can lead with the plotted `1 : N` ratio;
   /// a normalized DXF/DWG sheet only gets the paper-unit-free `1 m = N px`.
@@ -41,9 +66,18 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
     return false;
   }
 
-  void _commit() {
+  /// The typed length in metres, or null when the field does not (yet) hold a
+  /// positive number — the ONE parse both the Set-scale enablement (G7) and the
+  /// commit consult, so the button can never be live on a value that no-ops.
+  double? get _parsedMeters {
     final meters = double.tryParse(_distance.trim());
-    if (meters == null || meters <= 0) return;
+    if (meters == null || !meters.isFinite || meters <= 0) return null;
+    return meters;
+  }
+
+  void _commit() {
+    final meters = _parsedMeters;
+    if (meters == null) return;
     final cal = ref
         .read(calibrationControllerProvider.notifier)
         .resolve(Length(meters));
@@ -52,17 +86,39 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
         .read(projectControllerProvider.notifier)
         .setCalibration(widget.sheetId, cal);
     ref.read(calibrationControllerProvider.notifier).cancel();
-    // Confirm the resolved scale and point at the next workflow step — the
-    // "Building" screen (floors + heights), naming it exactly as the nav rail
-    // does so the baton-pass and its destination share ONE name (A6). The
-    // completed stage speaks instead of leaving the engineer to notice the
-    // sheet-rail dot change on their own. One shared human formatter (D1);
-    // localized so a Bahasa user gets the baton in Bahasa too.
+    // Confirm the resolved scale and point at the next workflow step. One
+    // shared human formatter (D1); localized so a Bahasa user gets the message
+    // in Bahasa too.
     final strings = MechXStringsData(ref.read(localeProvider));
-    ref.read(statusMessageProvider.notifier).showStatus(strings.format(
-      StringKey.calibrationScaleSetNext,
-      {'scale': formatScaleReadout(cal.metersPerPixel, isPdf: _isPdfSheet())},
-    ));
+    final scale =
+        formatScaleReadout(cal.metersPerPixel, isPdf: _isPdfSheet());
+    // F4 — name calibration completeness AT the moment of action. When other
+    // loaded sheets still carry no scale, the baton must not point at Building
+    // (their runs would measure 0.0 m); it names the remaining count and the
+    // place the one-click fix lives ("Apply scale to all sheets" in the Scale
+    // inspector). With nothing left uncalibrated the original baton stands: the
+    // "Building" screen (floors + heights), named exactly as the nav rail does
+    // so the baton-pass and its destination share ONE name (A6).
+    final remaining = ref
+        .read(projectControllerProvider)
+        .uncalibratedAmong(
+          [for (final s in ref.read(sheetsControllerProvider).sheets) s.id],
+          exclude: widget.sheetId,
+        )
+        .length;
+    ref.read(statusMessageProvider.notifier).showStatus(
+          remaining == 0
+              ? strings.format(
+                  StringKey.calibrationScaleSetNext, {'scale': scale})
+              : strings.format(StringKey.calibrationScaleSetRemaining, {
+                  'scale': scale,
+                  'sheets': pluralCount(
+                    remaining,
+                    strings(StringKey.issueNounSheetOne),
+                    strings(StringKey.issueNounSheetMany),
+                  ),
+                }),
+        );
   }
 
   /// The live implied-scale read-out beneath the entry field. Renders nothing
@@ -111,13 +167,19 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
             cursor: SystemMouseCursors.precise,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTapUp: (details) => notifier.addWorldPoint(
-                transform.screenToWorld(details.localPosition),
-                // A click near an already-placed marker re-places it (a misclick
-                // fix, D3) rather than restarting — a screen-constant ~12px hit
-                // radius, converted to sheet pixels by the live zoom.
-                snapRadius: 12 / transform.scale,
-              ),
+              onTapUp: (details) {
+                notifier.addWorldPoint(
+                  transform.screenToWorld(details.localPosition),
+                  // A click near an already-placed marker re-places it (a
+                  // misclick fix, D3) rather than restarting — a
+                  // screen-constant ~12px hit radius, converted to sheet pixels
+                  // by the live zoom.
+                  snapRadius: 12 / transform.scale,
+                );
+                // F1 — the length field keeps (or regains) the keyboard for the
+                // whole distance-entry phase, including after a marker nudge.
+                _focusDistanceField();
+              },
               child: CustomPaint(
                 painter: _CalibrationPainter(
                   state: cal,
@@ -189,6 +251,13 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
                           onChanged: (v) => setState(() => _distance = v),
                           // Enter sets the scale without a mouse trip (I3).
                           onSubmitted: _commit,
+                          // F1 — the field takes the keyboard the moment the
+                          // second reference point lands, so the two clicks
+                          // flow straight into typing the length instead of
+                          // falling through to the canvas's bare-digit
+                          // tool/service shortcuts.
+                          autofocus: true,
+                          focusNode: _distanceFocus,
                         ),
                       ),
                       const SizedBox(width: MechXSpacing.sm),
@@ -206,10 +275,14 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
                     runSpacing: MechXSpacing.xs,
                     children: [
                       MechXButton(label: 'Cancel', onPressed: notifier.cancel),
+                      // G7 — the button is DISABLED until a positive length
+                      // parses. It used to be live and silently no-op (an empty
+                      // or garbled field returned from _commit with no message
+                      // at all), which read as "the app ignored my click".
                       MechXButton(
                         label: 'Set scale',
                         primary: true,
-                        onPressed: _commit,
+                        onPressed: _parsedMeters == null ? null : _commit,
                       ),
                     ],
                   ),

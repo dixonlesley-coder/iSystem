@@ -340,36 +340,78 @@ void main() {
 
   // ── M5 — self-cleansing on the DFU path ────────────────────────────────────
 
-  group('M5 · drainage self-cleansing is judged on the DFU path', () {
+  group('M5/G1 · drainage self-cleansing is judged on the DFU path', () {
     // Manning full-bore velocity at the default slope 0.01 and n = 0.010:
     //   v = (1/n)·R^(2/3)·√S  with R = D/4 and √0.01 = 0.1
     //   DN40  → R = 0.01000 → 0.01^(2/3)    = 0.0464159 → v = 0.46416 m/s
     //   DN50  → R = 0.01250 → 0.0125^(2/3)  = 0.0538609 → v = 0.53861 m/s
     //   DN100 → R = 0.02500 → 0.025^(2/3)   = 0.0854988 → v = 0.85499 m/s
-    // The self-cleansing minimum is 0.6 m/s, so DN40 and DN50 FAIL and DN100
-    // passes — exactly the band the audit measured (0.46–0.54 m/s "OK").
-    Map<String, EdgeSizing> sizeDrain(double dfu) => autoSizeNetwork(
+    // The self-cleansing minimum is 0.6 m/s, so DN40 and DN50 run BELOW it and
+    // DN100 clears it — the band the audit measured (0.46–0.54 m/s "OK").
+    //
+    // G1 — running below 0.6 m/s is only REPORTED (selfCleansingOk == false)
+    // when the chosen diameter EXCEEDS the DFU table's minimum for the load:
+    // at the minimum no smaller compliant pipe exists, so the shortfall is not
+    // actionable by pipe and the flag stays true (the slope / grouped
+    // discharge are the real levers, and they live elsewhere).
+    Map<String, EdgeSizing> sizeDrain(double dfu,
+            {Map<String, Diameter> sizeOverrides = const {}}) =>
+        autoSizeNetwork(
           _twoNode(ServiceType.drainage),
           const SizingContext(),
           leafDemand: const {ServiceType.drainage: FlowRate(0)},
           nodeDrainageUnits: {'d': dfu},
+          sizeOverrides: sizeOverrides,
         );
 
-    test('a DN40 branch at 1:100 is NOT self-cleansing (0.464 m/s)', () {
-      // Branch DFU table: dfu ≤ 1 ⇒ DN40.
+    test('a DN40 branch AT the DFU minimum is not flagged (0.464 m/s)', () {
+      // Branch DFU table: dfu ≤ 1 ⇒ DN40 — the smallest compliant pipe for
+      // this load. It genuinely runs at 0.464 m/s (< 0.6), but no smaller pipe
+      // is allowed, so there is nothing the engineer could pick instead.
       final s = sizeDrain(1.0)['e']!;
       expect(s.diameter.inMillimeters, closeTo(40, 1e-9));
       expect(s.velocity.metersPerSecond, closeTo(0.464158883361, 1e-9));
       expect(s.velocity.metersPerSecond, lessThan(kSelfCleansingVelocityMps));
-      expect(s.selfCleansingOk, isFalse);
+      expect(s.selfCleansingOk, isTrue, reason: 'at the DFU table minimum');
     });
 
-    test('a DN50 branch at 1:100 is NOT self-cleansing (0.539 m/s)', () {
-      // Branch DFU table: 1 < dfu ≤ 3 ⇒ DN50.
+    test('a DN50 branch AT the DFU minimum is not flagged (0.539 m/s)', () {
+      // Branch DFU table: 1 < dfu ≤ 3 ⇒ DN50, again the table minimum.
       final s = sizeDrain(3.0)['e']!;
       expect(s.diameter.inMillimeters, closeTo(50, 1e-9));
       expect(s.velocity.metersPerSecond, closeTo(0.538608672508, 1e-9));
+      expect(s.selfCleansingOk, isTrue, reason: 'at the DFU table minimum');
+    });
+
+    test('a hand pick ABOVE the DFU minimum that still runs slow IS flagged',
+        () {
+      // DFU 1 ⇒ the table minimum is DN40 (0.46416 m/s). Hand-picking DN50
+      // keeps the run under 0.6 m/s (0.53861 m/s) but is now the ENGINEER's
+      // oversize, not the code's: a smaller compliant pipe (DN40) exists and
+      // runs faster, so the advisory is actionable and fires.
+      final s = sizeDrain(1.0, sizeOverrides: {'e': Diameter.mm(50)})['e']!;
+      expect(s.diameter.inMillimeters, closeTo(50, 1e-9));
+      expect(s.velocity.metersPerSecond, closeTo(0.538608672508, 1e-9));
+      expect(s.velocity.metersPerSecond, lessThan(kSelfCleansingVelocityMps));
       expect(s.selfCleansingOk, isFalse);
+    });
+
+    test('a hand pick BELOW the DFU minimum keeps the verdict true', () {
+      // DFU 3 ⇒ minimum DN50; hand-picking DN40 is under the minimum (its own
+      // code violation, not a self-cleansing finding) and runs FASTER, so the
+      // self-cleansing flag stays true either way.
+      final s = sizeDrain(3.0, sizeOverrides: {'e': Diameter.mm(40)})['e']!;
+      expect(s.diameter.inMillimeters, closeTo(40, 1e-9));
+      expect(s.selfCleansingOk, isTrue);
+    });
+
+    test('an oversized hand pick that CLEARS 0.6 m/s is not flagged', () {
+      // DFU 1 ⇒ minimum DN40; DN100 exceeds it but reaches 0.85499 m/s, so
+      // there is no self-cleansing shortfall to report.
+      final s = sizeDrain(1.0, sizeOverrides: {'e': Diameter.mm(100)})['e']!;
+      expect(s.diameter.inMillimeters, closeTo(100, 1e-9));
+      expect(s.velocity.metersPerSecond, closeTo(0.854987973338, 1e-9));
+      expect(s.selfCleansingOk, isTrue);
     });
 
     test('a DN100 branch at 1:100 IS self-cleansing (0.855 m/s)', () {

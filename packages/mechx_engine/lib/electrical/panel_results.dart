@@ -330,6 +330,18 @@ class ElectricalSystemResult {
   /// nothing is suppressed ⇒ byte-identical for legacy-constructed results.
   final Set<String> feederFloorsApplied;
 
+  /// G3 — circuit ids of the FEEDER ways whose selectivity floor was LIMITED by
+  /// the conductor-protection CAP: the rung the floor targets sits above the
+  /// largest rung the way's LOAD-sized cable's derated Iz protects, so `In ≤ Iz`
+  /// (which always wins) held the device below the `selectivityRatio ×` target.
+  ///
+  /// Disjoint from [feederFloorsApplied] by construction (a capped floor never
+  /// reaches its target). Purely EXPLANATORY: it changes no sizing, and lets
+  /// `faultStudy` say WHY the residual pair cannot simply be given a bigger
+  /// breaker — the lever is the cable, not the device. Empty (the default) ⇒
+  /// every message keeps its legacy wording ⇒ byte-identical.
+  final Set<String> feederFloorsCapped;
+
   const ElectricalSystemResult({
     required this.projectId,
     required this.panels,
@@ -339,5 +351,6 @@ class ElectricalSystemResult {
     required this.earthing,
     required this.warnings,
     this.feederFloorsApplied = const {},
+    this.feederFloorsCapped = const {},
   });
 }

@@ -107,6 +107,7 @@ ProjectDocument buildDocument(ProviderReader read) {
     projectName: project.name,
     floors: project.floors,
     groundIndex: project.groundIndex,
+    mounting: project.mounting,
     calibrations: project.calibrations,
     staleCalibrations: project.staleCalibrations,
     sheets: sheets.sheets,
@@ -224,6 +225,7 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
         calibrations: doc.calibrations,
         staleCalibrations: doc.staleCalibrations,
         groundIndex: doc.groundIndex,
+        mounting: doc.mounting,
       );
   read(sheetsControllerProvider.notifier).loadSheets(
         doc.sheets,

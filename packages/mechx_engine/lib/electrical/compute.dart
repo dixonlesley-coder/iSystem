@@ -929,6 +929,14 @@ _CircuitComputation _computeCircuit(
   // overload trip disabled / alarm-only). The engine does NOT fabricate that
   // device — it has no data for it — so this is an INFO note carried onto the
   // schedule, not a sizing change.
+  //
+  // G5 — the note is a SPEC INSTRUCTION for the issued schedule, not a request
+  // for an app setting (there is no overload-trip-disabled field to set, and
+  // asking for one sent the engineer hunting for a control that does not
+  // exist). The schedule row for this way now prints the matching
+  // `· no-OL trip (fire)` KETERANGAN token
+  // (`report/electrical_sld_drawing.dart`, same `lifeSafety && motorLike`
+  // gate), so the note and the deliverable say the same thing.
   // VERIFY — notAnSniClause: NFPA 20 fire-pump controller practice (locked-rotor
   // rated protection, no overload trip), NOT a PUIL/SNI clause.
   if (c.lifeSafety &&
@@ -937,10 +945,11 @@ _CircuitComputation _computeCircuit(
       code: 'fire-pump-protection',
       severity: WarningSeverity.info,
       message:
-          '${c.name}: life-safety motor sized with ordinary overload protection '
-          '(${_num(breaker.ratingA.amperes)} A curve ${breaker.curve.name.toUpperCase()}) '
-          '- specify overload-trip-disabled protection (fire pump runs to '
-          'destruction under fire duty - NFPA 20 practice).',
+          '${c.name}: fire pump way - specify overload-trip-disabled protection '
+          'on the schedule (fire duty runs to destruction - NFPA 20 practice). '
+          'Sized here as an ordinary ${_num(breaker.ratingA.amperes)} A curve '
+          '${breaker.curve.name.toUpperCase()} device; the schedule row carries '
+          '"no-OL trip (fire)".',
       panelId: panel.id,
       circuitId: c.id,
     ));
@@ -1750,6 +1759,15 @@ ElectricalSystemResult computeSystem(
     // held back by the conductor-protection cap is deliberately absent, so the
     // residual partial/non-selectivity keeps being reported by `faultStudy`.
     final floorsApplied = <String>{};
+    // G3 — and, for the ones that did NOT reach it, whether the CONDUCTOR-
+    // PROTECTION CAP is what held them back (as opposed to the ladder simply
+    // running out of rungs). `selectBreaker` resolves the floor to the first
+    // rung ≥ the target and only then applies `maxRatingA` (the cable's derated
+    // Iz), so the cap bit exactly when that floor rung sits above Iz. Recording
+    // it here — rather than deep in `_computeCircuit` — keeps the per-circuit
+    // sizing path untouched, and reads the SAME ladder + Iz the sizer used.
+    final floorsCapped = <String>{};
+    final ladder = profile.standardBreakerRatingsA;
     for (final entry in feederBreakerFloorA.entries) {
       final parentId = feederParentOf[entry.key];
       final r = results[parentId]
@@ -1759,7 +1777,11 @@ ElectricalSystemResult computeSystem(
       if (r == null || r.breaker.overridden) continue;
       if (r.breaker.ratingA.amperes + 1e-9 >= entry.value) {
         floorsApplied.add(entry.key);
+        continue;
       }
+      final floorRung = ladder.firstWhere((x) => x + 1e-9 >= entry.value,
+          orElse: () => ladder.last);
+      if (floorRung > r.cable.deratedIz.amperes) floorsCapped.add(entry.key);
     }
 
     return ElectricalSystemResult(
@@ -1771,6 +1793,7 @@ ElectricalSystemResult computeSystem(
       earthing: earthing,
       warnings: warnings,
       feederFloorsApplied: floorsApplied,
+      feederFloorsCapped: floorsCapped,
     );
   }
 

@@ -5,7 +5,6 @@ import 'package:flutter/gestures.dart' show kDoubleTapTimeout;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mechx_engine/geometry/building.dart' show MountingHeights;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/riser_tags.dart' show fflLabel;
 import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
@@ -516,8 +515,8 @@ class _NetworkSelectionOverlayState
     if (_hoverChipDue && !gestureActive && trimArmed == null && brushArmed == null) {
       final hoveredNode = hover?.nodeId == null ? null : net.nodeById(hover!.nodeId!);
       if (hoveredNode != null && _onFloor(hoveredNode)) {
-        final elev =
-            nodeElevation(hoveredNode, project.building, const MountingHeights());
+        final elev = nodeElevation(
+            hoveredNode, project.building, ref.watch(mountingProvider));
         hoverChip = _HoverMeasurementChip(
           screen: transform.worldToScreen(Offset(hoveredNode.x, hoveredNode.y)),
           text: fflLabel(elev.meters),

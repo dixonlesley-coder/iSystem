@@ -96,6 +96,14 @@ class CalcReportData {
   /// caller that does not populate it gets byte-identical legacy output.
   final List<Revision> revisions;
 
+  /// F8 — the project's [MountingHeights] (ceiling drop / fixture height). They
+  /// shape EVERY vertical length and static lift in this report (§10 node
+  /// elevations are role-aware), so once they are a real per-project input they
+  /// must be stated in the Design Basis register like any other assumption.
+  /// Null ⇒ the two rows are omitted, so a caller that does not pass them gets
+  /// byte-identical legacy output.
+  final MountingHeights? mounting;
+
   const CalcReportData({
     required this.projectName,
     required this.date,
@@ -126,6 +134,7 @@ class CalcReportData {
     this.runSchedule = const [],
     this.occupancy,
     this.revisions = const [],
+    this.mounting,
   });
 }
 
@@ -267,6 +276,31 @@ String _service(ServiceType type, ReportStrings s) => switch (type) {
       ServiceType.fireHydrant => s(RptStringKey.svcHydrant),
     };
 
+/// F8 — the two mounting-height Design-Basis row labels, resolved against the
+/// report locale. Deliberately inline here rather than in `report_strings.dart`:
+/// they are the only two report literals this change adds, and keeping them in
+/// the file that renders them avoids touching the shared string tables. (A
+/// follow-up may migrate them to [RptStringKey] like every other row label.)
+String _mountingLabel(ReportStrings s, {required bool ceilingDrop}) =>
+    switch ((s.locale, ceilingDrop)) {
+      (ReportLocale.id, true) => 'Turun plafon:',
+      (ReportLocale.id, false) => 'Tinggi sambungan fikstur:',
+      (_, true) => 'Ceiling drop:',
+      (_, false) => 'Fixture connection height:',
+    };
+
+/// The parenthetical explaining what a mounting height drives (see
+/// [_mountingLabel] for why these live here).
+String _mountingNote(ReportStrings s, {required bool ceilingDrop}) =>
+    switch ((s.locale, ceilingDrop)) {
+      (ReportLocale.id, true) =>
+        '(pipa induk horizontal digantung sejauh ini di bawah pelat di atasnya)',
+      (ReportLocale.id, false) =>
+        '(sambungan fikstur di atas permukaan lantainya sendiri)',
+      (_, true) => '(horizontal mains hang this far below the slab above)',
+      (_, false) => '(fixture connection above its own floor surface)',
+    };
+
 /// The mechanical **Design Basis / Inputs & Assumptions** register as a
 /// key-value block — a bulleted echo of the actual project inputs (building,
 /// occupancy, feed, residual target, fire systems, rainfall) so the report
@@ -286,6 +320,21 @@ RptKeyValue mechanicalDesignBasisBlock(CalcReportData d,
         'height': d.building.totalHeight.meters.toStringAsFixed(2),
       })
     ),
+    // F8 — the mounting-height assumptions behind every vertical length /
+    // static lift in this report. Omitted entirely when the caller passes none
+    // (legacy output byte-identical).
+    if (d.mounting != null) ...[
+      (
+        _mountingLabel(strings, ceilingDrop: true),
+        '**${d.mounting!.ceilingDrop.meters.toStringAsFixed(2)} m** '
+            '${_mountingNote(strings, ceilingDrop: true)}'
+      ),
+      (
+        _mountingLabel(strings, ceilingDrop: false),
+        '**${d.mounting!.fixtureHeight.meters.toStringAsFixed(2)} m** '
+            '${_mountingNote(strings, ceilingDrop: false)}'
+      ),
+    ],
     if (d.occupancy != null)
       (
         strings(RptStringKey.dbOccupancy),

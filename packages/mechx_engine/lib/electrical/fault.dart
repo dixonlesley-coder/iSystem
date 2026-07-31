@@ -629,6 +629,12 @@ FaultStudyResult faultStudy(
   Set<String>? engineFlooredFeederIds,
 }) {
   final flooredFeeders = engineFlooredFeederIds ?? sys.feederFloorsApplied;
+  // G3 — feeders whose selectivity floor was held back by the conductor-
+  // protection cap (In ≤ Iz). Explanatory only: it changes no verdict and no
+  // severity, it changes what the residual pair's message TELLS the engineer to
+  // do. Empty (a legacy-constructed result) ⇒ every message keeps its original
+  // wording ⇒ byte-identical.
+  final cappedFeeders = sys.feederFloorsCapped;
   final warnings = <ElectricalWarning>[];
   final panelResults = <String, PanelFaultResult>{};
   final circuitResults = <String, CircuitFaultResult>{};
@@ -867,15 +873,58 @@ FaultStudyResult faultStudy(
       icsAdequate: icsAdequate,
       icwAdequate: icwAdequate,
     ));
+    // G3 — when the sizer's floor was CAPPED by this feeder's own load-sized
+    // cable, the obvious move (fit a bigger breaker) is exactly what the engine
+    // forbids: In ≤ Iz always wins. Name the cap, its two numbers, and the one
+    // lever that actually moves the device — the CABLE.
+    //
+    // One honesty guard on the advice: the 1.6× target can itself sit ABOVE the
+    // largest standard frame (a very large sub-board). Copper cannot buy a rung
+    // the ladder does not have, so that corner is told the truth instead of
+    // being sent shopping for cable that changes nothing.
+    final capped = cappedFeeders.contains(feederCircuitId);
+    final targetA = selectivityRatio * downstreamIn;
+    final ladderTopA = profile.standardBreakerRatingsA.isEmpty
+        ? double.infinity
+        : profile.standardBreakerRatingsA.last;
+    final capHead = 'the device is already at the largest rung the '
+        '${_fmt(feeder.cable.csaMm2)} mm2 feeder cable protects (Iz '
+        '${feeder.cable.deratedIz.amperes.toStringAsFixed(1)} A). ';
+    final capNote = !capped
+        ? ''
+        : targetA > ladderTopA
+            ? '$capHead'
+                'The ${_fmt(selectivityRatio)}x target (${_fmt(targetA)} A) is '
+                'itself beyond the largest standard frame '
+                '(${_fmt(ladderTopA)} A), so no cable increase reaches it - '
+                'split the load or verify against manufacturer curves.'
+            : '$capHead'
+                'To reach the ${_fmt(selectivityRatio)}x target, increase the '
+                'feeder cable (then the device can rise); verify against '
+                'manufacturer curves otherwise.';
     if (ns) {
       warnings.add(ElectricalWarning(
         code: 'non-selective',
         severity: WarningSeverity.warning,
-        message:
-            '${feeder.name} (${_fmt(upstreamIn)} A) may not discriminate with '
-            '${child.name} incomer (${_fmt(downstreamIn)} A): ratio < '
-            '${_fmt(selectivityRatio)}× — verify against the manufacturer '
-            'time-current / let-through curves.',
+        message: capped
+            ? '${feeder.name} (${_fmt(upstreamIn)} A) may not discriminate with '
+                '${child.name} incomer (${_fmt(downstreamIn)} A): $capNote'
+            : '${feeder.name} (${_fmt(upstreamIn)} A) may not discriminate with '
+                '${child.name} incomer (${_fmt(downstreamIn)} A): ratio < '
+                '${_fmt(selectivityRatio)}× — verify against the manufacturer '
+                'time-current / let-through curves.',
+        panelId: parentId,
+        circuitId: feederCircuitId,
+      ));
+    } else if (zone == SelectivityZone.partial && capped) {
+      // A capped floor that landed in the partial band is still the conductor
+      // holding the device back, not a free choice — say so rather than sending
+      // the engineer to the selectivity tables for a rung they cannot fit.
+      warnings.add(ElectricalWarning(
+        code: 'selectivity-partial',
+        severity: WarningSeverity.info,
+        message: '${feeder.name} (${_fmt(upstreamIn)} A) over ${child.name} '
+            'incomer (${_fmt(downstreamIn)} A): partial selectivity - $capNote',
         panelId: parentId,
         circuitId: feederCircuitId,
       ));

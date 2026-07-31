@@ -112,17 +112,21 @@ void main() {
     r.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
     final room = c.read(roomAreasProvider).single;
     expect(room.areaM2(0.01), closeTo(2.0, 1e-9));
-    // Defaults: office (6 ACH), 3.0 m ceiling, FCU, no override.
+    // Defaults: office (6 ACH), FCU, no override.
     expect(room.roomType, RoomType.office);
-    expect(room.ceilingHeightM, 3.0);
     expect(room.equipmentKind, AirEquipmentKind.fcu);
     expect(room.achOverride, isNull);
     expect(room.effectiveAch(), closeTo(6.0, 1e-9));
-    // volume = 2.0 x 3.0 = 6.0 m^3; Q = 6.0 x 6 / 3600 = 0.01 m^3/s = 10 L/s.
+    // F7 — the ceiling is SEEDED from the building the engineer configured, not
+    // the old hard-coded 3.0: floor 0 of the default stack is 'Ground' at 4.0 m
+    // floor-to-floor, less the project ceiling drop of 0.3 m = 3.7 m.
+    expect(room.ceilingHeightM, closeTo(3.7, 1e-9));
+    // volume = 2.0 x 3.7 = 7.4 m^3; Q = 7.4 x 6 / 3600 = 0.012333 m^3/s.
     final s = room.sizing(0.01)!;
-    expect(s.airflow.cubicMetersPerSecond, closeTo(0.01, 1e-12));
-    expect(s.airflow.inLitersPerSecond, closeTo(10.0, 1e-9));
-    expect(s.airflowCfm, closeTo(21.19, 0.01)); // 0.01 x 2118.88
+    expect(s.airflow.cubicMetersPerSecond, closeTo(2.0 * 3.7 * 6 / 3600, 1e-12));
+    expect(s.airflow.inLitersPerSecond, closeTo(2.0 * 3.7 * 6 / 3.6, 1e-9));
+    // 0.0123333 m^3/s x 2118.88 CFM per m^3/s.
+    expect(s.airflowCfm, closeTo(2.0 * 3.7 * 6 / 3600 * 2118.88, 0.01));
   });
 
   test('RoomArea edits: room type drives ACH; explicit override; Auto resets',
@@ -133,12 +137,13 @@ void main() {
     r.add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 200, by: 100);
     final id = c.read(roomAreasProvider).single.id;
 
-    // Commercial kitchen ⇒ 20 ACH ⇒ Q = 6.0 x 20 / 3600 = 0.03333 m^3/s.
+    // Commercial kitchen ⇒ 20 ACH. The volume is the F7-seeded 3.7 m ceiling
+    // over 2.0 m^2 = 7.4 m^3 ⇒ Q = 7.4 x 20 / 3600 = 0.041111 m^3/s.
     r.setRoomType(id, RoomType.commercialKitchen);
     var room = c.read(roomAreasProvider).single;
     expect(room.effectiveAch(), closeTo(20.0, 1e-9));
     expect(room.sizing(0.01)!.airflow.cubicMetersPerSecond,
-        closeTo(6.0 * 20 / 3600, 1e-12));
+        closeTo(2.0 * 3.7 * 20 / 3600, 1e-12));
 
     // Explicit override wins over the room-type default.
     r.setAch(id, 10);
@@ -289,9 +294,10 @@ void main() {
     expect(restored.roomType, RoomType.commercialKitchen);
     expect(restored.ceilingHeightM, 4.0);
 
-    // The prior undo step (setCeiling) still reverts independently.
+    // The prior undo step (setCeiling) still reverts independently — back to
+    // the F7 seed (Ground 4.0 m less the 0.3 m ceiling drop).
     hist.undo();
-    expect(c.read(roomAreasProvider).single.ceilingHeightM, 3.0);
+    expect(c.read(roomAreasProvider).single.ceilingHeightM, closeTo(3.7, 1e-9));
   });
 
   test('tank delete is undoable — restores the deleted tank + capacity', () {

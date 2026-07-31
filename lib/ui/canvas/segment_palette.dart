@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/standards/sni.dart' show PlumbingFixture;
 
 import '../../data/project_document.dart' show SavedAssembly;
 import '../../store/assemblies_store.dart';
@@ -33,7 +34,15 @@ class PaletteItem {
   /// For [PaletteItemKind.component] — which equipment node to drop.
   final NodeComponent? component;
 
-  const PaletteItem(this.kind, {this.service, this.component});
+  /// F5 — for [PaletteItemKind.terminal] — the PLUMBING FIXTURE the dropped
+  /// terminal represents, carried into the existing `addTerminal(fixture:)` /
+  /// `mergeOrAddTerminal(fixture:)` path so the node lands already typed (its
+  /// real UBAP + DFU loads) instead of silently sizing on the representative
+  /// 2.0-unit placeholder. Null ⇒ the generic, untyped Terminal card
+  /// (unchanged behaviour).
+  final PlumbingFixture? fixture;
+
+  const PaletteItem(this.kind, {this.service, this.component, this.fixture});
 
   // VALUE equality (F5): the armed-placement provider compares the currently
   // armed item against each card's item to draw the armed tint; a non-const
@@ -44,10 +53,11 @@ class PaletteItem {
       other is PaletteItem &&
       other.kind == kind &&
       other.service == service &&
-      other.component == component;
+      other.component == component &&
+      other.fixture == fixture;
 
   @override
-  int get hashCode => Object.hash(kind, service, component);
+  int get hashCode => Object.hash(kind, service, component, fixture);
 }
 
 /// F5 — the palette card ARMED for click-to-place-repeatedly. Non-null means
@@ -143,7 +153,8 @@ class SegmentPalette extends ConsumerWidget {
         case PaletteItemKind.fitting:
           ctrl.addFitting(sheet.id, floorIndex, world);
         case PaletteItemKind.terminal:
-          ctrl.addTerminal(sheet.id, floorIndex, world);
+          ctrl.addTerminal(sheet.id, floorIndex, world,
+              fixture: item.fixture);
         case PaletteItemKind.component:
           final c = item.component;
           if (c != null) ctrl.addComponentNode(sheet.id, floorIndex, world, c);
@@ -190,6 +201,31 @@ class SegmentPalette extends ConsumerWidget {
             onActivate: () => dropAtCentre(item),
             leading: ComponentSymbol(
                 component: c, color: colors.textSecondary, size: 16),
+          ),
+        ),
+      );
+    }
+
+    // F5 — a per-FIXTURE terminal card: the same terminal drop, but carrying its
+    // [PlumbingFixture] so the node lands with its real UBAP + DFU loads. The
+    // generic Terminal card above stays (an untyped placement is still valid —
+    // it is merely advised in Review).
+    Widget fixtureCard(PlumbingFixture f) {
+      final item = PaletteItem(PaletteItemKind.terminal, fixture: f);
+      return Padding(
+        padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+        child: armable(
+          item,
+          PaletteCard<PaletteItem>(
+            label: _fixtureCardLabel(f),
+            swatch: colors.textSecondary,
+            data: item,
+            fillWidth: true,
+            onActivate: () => dropAtCentre(item),
+            leading: SegmentSymbol(
+                kind: PaletteItemKind.terminal,
+                color: colors.textSecondary,
+                size: 16),
           ),
         ),
       );
@@ -274,6 +310,24 @@ class SegmentPalette extends ConsumerWidget {
                 size: 16),
           ),
         ),
+
+        // ── Plumbing fixtures (typed terminals — plumbing layer) ───────────
+        // Placed on either system: a fixture carries BOTH its supply units and
+        // its drainage units, so the group shows for the whole plumbing layer
+        // rather than gating on the active service's regime.
+        if (showWater)
+          Padding(
+            padding: const EdgeInsets.only(top: MechXSpacing.xs),
+            child: DisclosureSection(
+              name: 'Fixtures',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final f in _paletteFixtures) fixtureCard(f),
+                ],
+              ),
+            ),
+          ),
 
         // ── Water-supply equipment (Water layer) ───────────────────────────
         if (showWater) ...[
@@ -383,6 +437,37 @@ class SegmentPalette extends ConsumerWidget {
     );
   }
 }
+
+/// F5 — the fixture types offered as palette cards: the WHOLE engine
+/// [PlumbingFixture] set, so the palette can never quietly omit a fixture the
+/// sizing tables know about (a missing one would push the engineer back to the
+/// untyped Terminal card and the 2.0-unit placeholder). Ordered most-placed
+/// first.
+const List<PlumbingFixture> _paletteFixtures = [
+  PlumbingFixture.waterClosetFlushTank,
+  PlumbingFixture.waterClosetFlushValve,
+  PlumbingFixture.lavatory,
+  PlumbingFixture.shower,
+  PlumbingFixture.kitchenSink,
+  PlumbingFixture.urinalFlushTank,
+  PlumbingFixture.bathtub,
+  PlumbingFixture.hoseBibb,
+];
+
+/// The card label for a fixture. Kept local (rather than importing the
+/// inspector's `fixtureLabel`) because `project_panel.dart` already imports
+/// THIS file — reaching back would make the pair cyclic. ASCII + the bundled
+/// `·` only, per the canvas font rules.
+String _fixtureCardLabel(PlumbingFixture f) => switch (f) {
+      PlumbingFixture.waterClosetFlushValve => 'WC · valve',
+      PlumbingFixture.waterClosetFlushTank => 'WC · tank',
+      PlumbingFixture.urinalFlushTank => 'Urinal',
+      PlumbingFixture.lavatory => 'Lavatory',
+      PlumbingFixture.shower => 'Shower',
+      PlumbingFixture.bathtub => 'Bathtub',
+      PlumbingFixture.kitchenSink => 'Kitchen sink',
+      PlumbingFixture.hoseBibb => 'Hose bibb',
+    };
 
 /// A tiny "remove this saved block" affordance beside an assembly card. Custom
 /// (no Material) to match the palette's MechXTheme idiom.

@@ -11,6 +11,7 @@ import 'package:mechx_engine/standards/sni.dart';
 
 import '../ai/ai_client.dart';
 import '../ui/strings/app_strings.dart';
+import 'sizing_store.dart';
 
 /// HVAC duct preferences (shape + sizing method) driving the air code path.
 @immutable
@@ -308,6 +309,14 @@ class FirstAutoSizeNudgeController extends Notifier<bool> {
   void maybeFire(int count) {
     if (state || count <= 0) return;
     state = true;
+    // F2 — the toast said "sizes shown on the plan" while `showSizingProvider`
+    // defaulted false and nothing ever set it: the first solve's ONLY feedback
+    // named something the engineer could not see. Turning the overlay on as
+    // part of the one-shot makes the sentence true at the moment it is read.
+    // A project that never sizes never reaches here (the guard above), so a
+    // blank launch is unchanged, and the inspector toggle can still switch the
+    // labels back off.
+    ref.read(showSizingProvider.notifier).show();
     ref.read(statusMessageProvider.notifier).showStatus(
           MechXStringsData(ref.read(localeProvider))
               .format(StringKey.autoSizedRuns, {'count': '$count'}),

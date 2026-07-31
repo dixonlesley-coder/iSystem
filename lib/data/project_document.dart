@@ -689,6 +689,13 @@ class ProjectDocument {
   /// bump.
   final int groundIndex;
 
+  /// F8 — the project's mounting-height assumptions (ceiling drop / fixture
+  /// connection height). Additive; tolerant on load (absent ⇒ the engine
+  /// defaults, i.e. exactly the constants every pre-F8 project was designed
+  /// with) and written ONLY when it departs from those defaults, so an
+  /// untouched project encodes byte-identically. No version bump.
+  final MountingHeights mounting;
+
   final Map<String, ScaleCalibration> calibrations;
 
   /// J1 — sheet ids whose calibration is flagged STALE (a plan replace kept
@@ -745,6 +752,7 @@ class ProjectDocument {
     required this.projectName,
     required this.floors,
     this.groundIndex = 0,
+    this.mounting = const MountingHeights(),
     required this.calibrations,
     this.staleCalibrations = const {},
     required this.sheets,
@@ -768,6 +776,7 @@ class ProjectDocument {
         projectName: projectName,
         floors: floors,
         groundIndex: groundIndex,
+        mounting: mounting,
         calibrations: calibrations,
         staleCalibrations: staleCalibrations,
         sheets: sheets,
@@ -793,6 +802,14 @@ class ProjectDocument {
           // Only written when there ARE basements ⇒ a ground-datum project stays
           // byte-identical to before this field existed.
           if (groundIndex != 0) 'ground_index': groundIndex,
+          // F8: only written when the project departs from the engine defaults
+          // ⇒ a project that never touched them stays byte-identical.
+          if (mounting.ceilingDrop.meters !=
+              const MountingHeights().ceilingDrop.meters)
+            'ceilingDropM': mounting.ceilingDrop.meters,
+          if (mounting.fixtureHeight.meters !=
+              const MountingHeights().fixtureHeight.meters)
+            'fixtureHeightM': mounting.fixtureHeight.meters,
           'calibrations': {
             for (final e in calibrations.entries) e.key: e.value.metersPerPixel,
           },
@@ -870,6 +887,23 @@ class ProjectDocument {
         ? 0
         : ((project['ground_index'] as num?)?.toInt() ?? 0)
             .clamp(0, floors.length - 1);
+    // F8: tolerant — absent (every pre-F8 file) ⇒ the engine's own defaults, so
+    // an old project reopens with exactly the elevations it was designed with.
+    // A non-numeric / out-of-band entry falls back to the default rather than
+    // throwing or producing a nonsense elevation.
+    const defaultMounting = MountingHeights();
+    double mountM(Object? raw, double fallback, double max) {
+      final v = raw is num ? raw.toDouble() : null;
+      if (v == null || !v.isFinite || v < 0 || v > max) return fallback;
+      return v;
+    }
+
+    final mounting = MountingHeights(
+      ceilingDrop: Length(mountM(
+          project['ceilingDropM'], defaultMounting.ceilingDrop.meters, 1.5)),
+      fixtureHeight: Length(mountM(
+          project['fixtureHeightM'], defaultMounting.fixtureHeight.meters, 2.5)),
+    );
     final calibrations = <String, ScaleCalibration>{
       for (final e in (project['calibrations'] as Map).entries)
         e.key as String: ScaleCalibration((e.value as num).toDouble()),
@@ -959,6 +993,7 @@ class ProjectDocument {
       projectName: project['name'] as String? ?? 'Untitled project',
       floors: floors,
       groundIndex: groundIndex,
+      mounting: mounting,
       calibrations: calibrations,
       staleCalibrations: staleCalibrations,
       sheets: sheets,

@@ -305,16 +305,19 @@ void main() {
       expect(issues.where((i) => i.kind == 'water-over-capacity'), isEmpty);
     });
 
-    test('a drainage branch below 0.6 m/s is a locatable self-cleansing '
-        'advisory, reported ONCE', () {
+    test('a drainage branch AT the DFU minimum raises NO self-cleansing '
+        'advisory (G1 — no smaller compliant pipe exists)', () {
       final c = _container();
       _calibrate(c);
       c.read(sheetsControllerProvider.notifier).loadDemoSheets();
-      // A lavatory branch: the DFU table picks a small diameter, and at the
-      // default 1:100 laid slope with Manning n = 0.010 the full-bore velocity
-      // is v = (1/n) * R^(2/3) * S^(1/2) with R = D/4:
-      //   DN50 -> R = 0.0125 -> R^(2/3) = 0.0539 -> v = 100*0.0539*0.1 = 0.54
-      // — under the 0.6 m/s self-cleansing floor, so solids settle out.
+      // A lavatory branch (DFU 1) sizes to the branch table's minimum, DN40,
+      // and at the default 1:100 laid slope with Manning n = 0.010 the
+      // full-bore velocity is v = (1/n) * R^(2/3) * S^(1/2) with R = D/4:
+      //   DN40 -> R = 0.0100 -> R^(2/3) = 0.0464 -> v = 100*0.0464*0.1 = 0.46
+      // — under the 0.6 m/s self-cleansing floor. It is the smallest pipe the
+      // DFU table allows, so no pipe change can fix it: the engine leaves the
+      // flag true and the Review list stays quiet about it (the real levers,
+      // the laid slope and the grouped discharge, are separate inputs).
       const basin = NetNode(
         id: 'wb',
         sheetId: 's1',
@@ -336,8 +339,55 @@ void main() {
           const Network(nodes: [basin, stack], edges: [branch]));
 
       final sizing = c.read(sizingProvider)['br']!;
+      expect(sizing.diameter.inMillimeters, closeTo(40, 1e-9));
       expect(sizing.velocity.metersPerSecond, lessThan(0.6));
-      expect(sizing.selfCleansingOk, isFalse, reason: 'engine flag (M5)');
+      expect(sizing.selfCleansingOk, isTrue, reason: 'at the DFU minimum (G1)');
+      expect(c.read(selfCleansingDefectsProvider), isEmpty);
+
+      final issues = c.read(designIssuesProvider);
+      expect(issues.where((i) => i.kind == 'drainage-self-cleansing'), isEmpty);
+      // …and the gravity TOO-LOW velocity must not leak out as the other row
+      // either: the edge inspector still reports it honestly, but neither
+      // Review row can name an action here.
+      expect(issues.where((i) => i.kind.startsWith('water-velocity:')), isEmpty);
+      expect(c.read(waterVelocityChecksProvider)['br']!.verdict,
+          VelocityBandVerdict.tooLow);
+    });
+
+    test('a drainage branch hand-sized ABOVE the DFU minimum IS a locatable '
+        'self-cleansing advisory, reported ONCE', () {
+      final c = _container();
+      _calibrate(c);
+      c.read(sheetsControllerProvider.notifier).loadDemoSheets();
+      // Same lavatory branch (DFU 1 ⇒ DN40 minimum), but hand-picked at DN50:
+      //   DN50 -> R = 0.0125 -> R^(2/3) = 0.0539 -> v = 100*0.0539*0.1 = 0.54
+      // still under 0.6 m/s — and now it IS actionable by pipe (DN40 is
+      // compliant and runs faster), so the advisory fires.
+      const basin = NetNode(
+        id: 'wb',
+        sheetId: 's1',
+        x: 0,
+        y: 0,
+        floorIndex: 0,
+        role: NodeRole.fixture,
+        fixture: PlumbingFixture.lavatory,
+      );
+      const stack =
+          NetNode(id: 'st', sheetId: 's1', x: 100, y: 0, floorIndex: 0);
+      const branch = NetEdge(
+        id: 'br',
+        fromId: 'wb',
+        toId: 'st',
+        service: ServiceType.drainage,
+        sizeOverride: Diameter(0.050),
+      );
+      c.read(networkControllerProvider.notifier).loadNetwork(
+          const Network(nodes: [basin, stack], edges: [branch]));
+
+      final sizing = c.read(sizingProvider)['br']!;
+      expect(sizing.diameter.inMillimeters, closeTo(50, 1e-9));
+      expect(sizing.velocity.metersPerSecond, lessThan(0.6));
+      expect(sizing.selfCleansingOk, isFalse, reason: 'engine flag (M5/G1)');
       expect(c.read(selfCleansingDefectsProvider), contains('br'));
 
       final issues = c.read(designIssuesProvider);
@@ -346,6 +396,10 @@ void main() {
       expect(advisory.length, 1);
       expect(advisory.single.severity, IssueSeverity.info);
       expect(advisory.single.message, contains('0.6 m/s'));
+      // G1 — the copy names the levers the app actually has, and no longer
+      // advises the smaller pipe the DFU table forbids.
+      expect(advisory.single.message, contains('drainage slope'));
+      expect(advisory.single.message, isNot(contains('smaller pipe')));
       expect(advisory.single.locate!.edgeId, 'br');
 
       // The same physics must not ALSO print as a water-velocity warning: the

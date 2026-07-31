@@ -3,7 +3,8 @@
 /// state derived from project state ([workflowStageStateProvider]).
 ///
 /// Each stage is CLICKABLE — tapping it navigates straight to where that step
-/// is done (Calibrate → start calibration on the Layout canvas; Floors → the
+/// is done (Calibrate → start calibration on the Layout canvas, or Import when
+/// no plan is loaded yet — there is nothing to calibrate; Floors → the
 /// Building screen; Draw → the Layout canvas; Size → the Layout canvas; Report
 /// → the Review hub) through the existing controllers/providers (no new state).
 ///
@@ -18,7 +19,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../store/calibration_store.dart';
 import '../../store/command_store.dart';
 import '../../store/electrical_store.dart';
+import '../../store/sheets_store.dart';
 import '../shell/nav_rail.dart';
+import '../shell/project_io.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -32,11 +35,20 @@ class WorkflowStepper extends ConsumerWidget {
 
   /// Navigate to where [stage] is carried out, through the existing providers.
   /// The status bar stays put — only the workspace section / view changes.
-  void _goTo(WidgetRef ref, WorkflowStage stage) {
+  void _goTo(BuildContext context, WidgetRef ref, WorkflowStage stage) {
     switch (stage) {
       case WorkflowStage.calibrate:
         ref.read(shellSectionProvider.notifier).set(ShellSection.design);
         ref.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
+        // F12 — with no plan loaded, the Layout empty state early-returns
+        // before the calibration overlay ever mounts, so starting the mode
+        // armed something INVISIBLE: the click looked like it did nothing.
+        // Calibration needs a plan first, so send the engineer to Import (the
+        // same intent the top bar / Ctrl+I / the palette run).
+        if (ref.read(sheetsControllerProvider).sheets.isEmpty) {
+          importPlan(context, ref);
+          return;
+        }
         ref.read(calibrationControllerProvider.notifier).start();
       case WorkflowStage.floors:
         ref.read(shellSectionProvider.notifier).set(ShellSection.building);
@@ -64,7 +76,7 @@ class WorkflowStepper extends ConsumerWidget {
         label: s.label(context.strings),
         done: state.isDone(s),
         active: s == active,
-        onTap: () => _goTo(ref, s),
+        onTap: () => _goTo(context, ref, s),
       ));
       if (i != stages.length - 1) {
         children.add(_connector(context));

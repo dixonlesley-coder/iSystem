@@ -32,12 +32,22 @@ class ProjectState {
   /// additively in `.mechx` (absent ⇒ 0, byte-identical).
   final int groundIndex;
 
+  /// F8 — the project's mounting-height assumptions (how far a distribution main
+  /// hangs below the slab above; how high a fixture connection sits above its
+  /// own floor). They turn a node's floor + role into a TRUE elevation (§10), so
+  /// they shape every riser length and static lift — a real per-project input,
+  /// not a hard-coded engine constant. Defaults to the engine's own
+  /// `MountingHeights()` (0.3 / 1.1 m) ⇒ an untouched project is unchanged, and
+  /// they round-trip additively in `.mechx`.
+  final MountingHeights mounting;
+
   const ProjectState({
     required this.name,
     required this.floors,
     this.calibrations = const {},
     this.staleCalibrations = const {},
     this.groundIndex = 0,
+    this.mounting = const MountingHeights(),
   });
 
   BuildingLevels get building =>
@@ -84,6 +94,7 @@ class ProjectState {
     Map<String, ScaleCalibration>? calibrations,
     Set<String>? staleCalibrations,
     int? groundIndex,
+    MountingHeights? mounting,
   }) =>
       ProjectState(
         name: name ?? this.name,
@@ -91,12 +102,20 @@ class ProjectState {
         calibrations: calibrations ?? this.calibrations,
         staleCalibrations: staleCalibrations ?? this.staleCalibrations,
         groundIndex: groundIndex ?? this.groundIndex,
+        mounting: mounting ?? this.mounting,
       );
 }
 
 class ProjectController extends Notifier<ProjectState> {
   static const double _minHeight = 0.5;
   static const double _maxHeight = 20.0;
+  // F8 — sane bounds for the two mounting heights (a main can hang from flush
+  // with the slab to 1.5 m below it; a fixture connection sits between the
+  // floor and head height). They bound typing, not physics.
+  static const double _minCeilingDrop = 0.0;
+  static const double _maxCeilingDrop = 1.5;
+  static const double _minFixtureHeight = 0.0;
+  static const double _maxFixtureHeight = 2.5;
 
   final List<ProjectState> _undo = [];
   final List<ProjectState> _redo = [];
@@ -155,6 +174,7 @@ class ProjectController extends Notifier<ProjectState> {
     required Map<String, ScaleCalibration> calibrations,
     Set<String> staleCalibrations = const {},
     int groundIndex = 0,
+    MountingHeights mounting = const MountingHeights(),
   }) {
     _undo.clear();
     _redo.clear();
@@ -165,7 +185,32 @@ class ProjectController extends Notifier<ProjectState> {
       calibrations: calibrations,
       staleCalibrations: staleCalibrations,
       groundIndex: groundIndex.clamp(0, f.length - 1),
+      // F8 — absent on an older document ⇒ the engine defaults, so an opened
+      // pre-F8 project keeps exactly the elevations it was designed with.
+      mounting: mounting,
     );
+  }
+
+  /// F8 — set how far a horizontal distribution main hangs below the slab above
+  /// (m). Clamped to a sane build range; one undo step, like any other project
+  /// input. A no-op when the value is unchanged (so a stepper held at its limit
+  /// doesn't pile up empty undo entries).
+  void setCeilingDrop(double meters) {
+    final m = meters.clamp(_minCeilingDrop, _maxCeilingDrop).toDouble();
+    if (m == state.mounting.ceilingDrop.meters) return;
+    _snapshot();
+    state =
+        state.copyWith(mounting: state.mounting.copyWith(ceilingDrop: Length(m)));
+  }
+
+  /// F8 — set the height of a fixture connection above its own floor surface
+  /// (m). Clamped; one undo step; no-op when unchanged.
+  void setFixtureHeight(double meters) {
+    final m = meters.clamp(_minFixtureHeight, _maxFixtureHeight).toDouble();
+    if (m == state.mounting.fixtureHeight.meters) return;
+    _snapshot();
+    state = state.copyWith(
+        mounting: state.mounting.copyWith(fixtureHeight: Length(m)));
   }
 
   void addFloor() {
@@ -382,3 +427,11 @@ class ProjectController extends Notifier<ProjectState> {
 
 final projectControllerProvider =
     NotifierProvider<ProjectController, ProjectState>(ProjectController.new);
+
+/// F8 — the project's live [MountingHeights], as a provider every consumer can
+/// watch instead of constructing `const MountingHeights()` at the call site.
+/// Derived (read-only): the project state owns the value; this is the ONE place
+/// a widget/store reads it from, so the role-aware node elevations, the riser
+/// lengths and the report's design-basis rows can never disagree.
+final mountingProvider = Provider<MountingHeights>(
+    (ref) => ref.watch(projectControllerProvider).mounting);

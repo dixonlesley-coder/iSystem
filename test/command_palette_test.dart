@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/command_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
+import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -155,6 +156,12 @@ void main() {
     test('drawing an edge marks Draw + Size done; Report needs a real export',
         () {
       final c = makeContainer();
+      // F11: Size is honest only on a MEASURED network — an uncalibrated sheet
+      // sizes off 0.0 m lengths (the BOM prints `unmeasured ×N`), so calibrate
+      // first, exactly as the real workflow does.
+      c
+          .read(projectControllerProvider.notifier)
+          .setCalibration('s1', const ScaleCalibration(0.01));
       final net = c.read(networkControllerProvider.notifier);
       net.setService(ServiceType.coldWater);
       net.setTool(DrawTool.drawRun);
@@ -174,6 +181,30 @@ void main() {
       expect(
           c.read(workflowStageStateProvider).isDone(WorkflowStage.report),
           isTrue);
+    });
+
+    test(
+        'F11: sizing on an UNCALIBRATED sheet does not tick Size — the BOM '
+        'says unmeasured', () {
+      final c = makeContainer();
+      final net = c.read(networkControllerProvider.notifier);
+      net.setService(ServiceType.coldWater);
+      net.setTool(DrawTool.drawRun);
+      net.placeRunPoint('s1', 0, const Offset(100, 100));
+      net.placeRunPoint('s1', 0, const Offset(300, 100));
+      net.setTool(DrawTool.select);
+      // The solve runs (the sizing map is non-empty) — but with no scale on the
+      // sheet every horizontal length is 0.0 m, so the step is not finished.
+      expect(c.read(sizingProvider), isNotEmpty);
+      var s = c.read(workflowStageStateProvider);
+      expect(s.isDone(WorkflowStage.draw), isTrue);
+      expect(s.isDone(WorkflowStage.size), isFalse);
+      // Calibrate ⇒ the same sizing is now measured, and Size ticks.
+      c
+          .read(projectControllerProvider.notifier)
+          .setCalibration('s1', const ScaleCalibration(0.01));
+      s = c.read(workflowStageStateProvider);
+      expect(s.isDone(WorkflowStage.size), isTrue);
     });
 
     test(

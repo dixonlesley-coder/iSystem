@@ -22,6 +22,7 @@ import '../electrical/containment.dart'
     show ConduitSpec, conduitFillSingle, sizeConduit;
 import '../electrical/control/starter.dart' show StarterType;
 import '../electrical/earthing.dart' show EarthingSystemInfo;
+import '../electrical/load_kind.dart' show LoadKind;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
@@ -520,6 +521,21 @@ SldSheet buildElectricalSld({
       final keterangan = feeds != null
           ? '-> ${result.panels[feeds]?.name ?? feeds}'
           : c.name;
+      // G5 — FIRE-DUTY PROTECTION reaches the deliverable. A life-safety
+      // motor/pump way is protected differently under fire duty (locked-rotor
+      // rated, overload trip disabled / alarm-only); the engine has no data for
+      // that controller and will not fabricate one, so the schedule the panel
+      // builder works from carries the SPEC token instead. Gated on exactly the
+      // condition behind `compute.dart`'s `fire-pump-protection` INFO note
+      // (`lifeSafety && motorLike`), so the note and the sheet can never
+      // disagree; any other way is byte-identical.
+      // VERIFY — notAnSniClause: NFPA 20 fire-pump controller practice.
+      final fireDuty = circuit != null &&
+              circuit.lifeSafety &&
+              (circuit.loadKind == LoadKind.motor ||
+                  circuit.loadKind == LoadKind.pump)
+          ? ' · no-OL trip (fire)'
+          : '';
       final vd = c.voltageDrop.withinLimit ? '' : '  VD!';
       final earth = c.grounding.peCsaMm2 > 0
           ? _earthConductor(c.grounding.peCsaMm2)
@@ -583,7 +599,8 @@ SldSheet buildElectricalSld({
       prims.add(SldLabel(blockX + _colPenghantar, rowY + 3, cable, size: rowSize));
       prims.add(SldLabel(blockX + _colDaya, rowY + 3, daya, size: rowSize));
       prims.add(SldLabel(
-          blockX + _colKeterangan, rowY + 3, '$keterangan$vd', size: rowSize));
+          blockX + _colKeterangan, rowY + 3, '$keterangan$fireDuty$vd',
+          size: rowSize));
       // R/S/T loading band — the line current under the way's phase(s), each
       // cell carrying its phase role so the loading reads by colour at a glance.
       final (r, s, t) = _phaseLoading(c.phase, ib);

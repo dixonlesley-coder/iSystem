@@ -423,10 +423,20 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
 /// CHOSEN DIAMETER, so it is re-judged at the overridden size whenever the
 /// velocity was re-derived on the drainage basis (a larger hand-picked pipe at
 /// the same slope genuinely runs slower).
+///
+/// G1 — [codeMinimum] is the smallest diameter the DFU capacity table allows
+/// for this edge's load (what the auto-sizer picked). When the override is AT
+/// or BELOW it, the run is already on the smallest compliant pipe: a
+/// self-cleansing shortfall there is not actionable BY PIPE (the only levers
+/// are the laid slope and the discharge grouped onto the branch), so the flag
+/// stays true — the same gate the DFU path itself applies (see
+/// [_sanitaryEdgeSizing]). Default null ⇒ the pure velocity verdict, i.e.
+/// byte-identical for every existing caller.
 EdgeSizing applySizeOverride(
   EdgeSizing sizing,
   Diameter override, {
   SizingContext? ctx,
+  Diameter? codeMinimum,
 }) {
   final isDrainage = sizing.service == ServiceType.drainage;
   final bool manningBasis = isDrainage && ctx != null && override.meters > 0;
@@ -457,7 +467,9 @@ EdgeSizing applySizeOverride(
     stackRaisedForBranch: sizing.stackRaisedForBranch,
     flowFromId: sizing.flowFromId,
     selfCleansingOk: manningBasis
-        ? velocity.metersPerSecond >= drain.kSelfCleansingVelocityMps
+        ? (velocity.metersPerSecond >= drain.kSelfCleansingVelocityMps ||
+            (codeMinimum != null &&
+                override.meters <= codeMinimum.meters + _kDiameterEpsM))
         : sizing.selfCleansingOk,
     loopUnbalanced: sizing.loopUnbalanced,
   );
@@ -888,7 +900,11 @@ Map<String, EdgeSizing> autoSizeNetwork(
     final override = sizeOverrides[entry.key];
     result[entry.key] = override == null
         ? entry.value
-        : applySizeOverride(entry.value, override, ctx: ctx);
+        // G1 — the auto pick IS the code minimum for this edge's load, so a
+        // hand pick at or below it keeps the (unactionable-by-pipe) verdict
+        // true; only an OVERSIZED pick is judged on velocity alone.
+        : applySizeOverride(entry.value, override,
+            ctx: ctx, codeMinimum: entry.value.diameter);
   }
   for (final entry in stormSizing.entries) {
     final override = sizeOverrides[entry.key];
@@ -920,7 +936,10 @@ EdgeSizing _sizeSanitaryEdge(NetEdge edge, double dfu, SizingContext ctx) {
   final Diameter d = edge.service == ServiceType.vent
       ? drain.ventDiameterForDfu(dfu)
       : drain.drainDiameterForDfu(dfu, isStack: isStack);
-  return _sanitaryEdgeSizing(edge, d, ctx);
+  // The table pick IS the code minimum for this load, so an auto-sized sanitary
+  // run is never flagged as not-self-cleansing (G1) — there is no smaller
+  // compliant pipe to move to.
+  return _sanitaryEdgeSizing(edge, d, ctx, codeMinimum: d);
 }
 
 /// Build the [EdgeSizing] for a sanitary (drainage/vent) [edge] at an already-
@@ -933,6 +952,7 @@ EdgeSizing _sanitaryEdgeSizing(
   Diameter diameter,
   SizingContext ctx, {
   bool stackRaisedForBranch = false,
+  required Diameter codeMinimum,
 }) {
   final isVent = edge.service == ServiceType.vent;
   final v = isVent
@@ -953,10 +973,27 @@ EdgeSizing _sanitaryEdgeSizing(
     // self-cleansing verdict (the reason the reference Manning velocity above
     // is computed at all) was never actually formed. A vent carries no flow ⇒
     // no self-cleansing duty ⇒ true.
-    selfCleansingOk:
-        isVent || v.metersPerSecond >= drain.kSelfCleansingVelocityMps,
+    //
+    // G1 — …but the verdict is only raised when the CHOSEN diameter EXCEEDS
+    // [codeMinimum], the smallest diameter the capacity table allows for this
+    // load (the auto pick, or the N17-raised stack size — both are the code
+    // minimum FOR THIS EDGE). At the minimum a shortfall is unactionable by
+    // pipe: every smaller pipe is non-compliant, so the advisory could only
+    // name a remedy the code forbids. The real levers there (the laid slope,
+    // the discharge grouped onto the branch) are separate inputs, carried by
+    // the app's own advisory copy and by `drainage_advisory.dart`'s min-slope
+    // check — so a code-minimum run is reported honestly as OK-by-pipe, and a
+    // hand-picked OVERSIZED run (which genuinely runs slower for no code
+    // reason) is the case that flags.
+    selfCleansingOk: isVent ||
+        v.metersPerSecond >= drain.kSelfCleansingVelocityMps ||
+        diameter.meters <= codeMinimum.meters + _kDiameterEpsM,
   );
 }
+
+/// Floating-point slack (metres) for comparing two nominal diameters — a
+/// tolerance well under the smallest step in any nominal series (32→40 mm).
+const double _kDiameterEpsM = 1e-9;
 
 /// N17 — a drainage STACK (riser) segment must never be smaller than a
 /// horizontal branch discharging into it. Branch and stack diameters come
@@ -1031,6 +1068,10 @@ void _clampDrainageStacksToBranches({
         Diameter.mm(effective),
         ctx,
         stackRaisedForBranch: true,
+        // The N17 raise is code-MANDATED, so the raised size IS this segment's
+        // code minimum (G1): necking back down to its own DFU-table pick is
+        // exactly the violation the clamp exists to prevent.
+        codeMinimum: Diameter.mm(effective),
       );
     }
   }

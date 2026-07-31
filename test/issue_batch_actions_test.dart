@@ -1,6 +1,8 @@
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
@@ -70,5 +72,22 @@ void main() {
     final kinds =
         c.read(issueBatchActionsProvider).map((a) => a.kind).toSet();
     expect(kinds, {IssueBatchKind.calibrateAllSheets});
+  });
+
+  test('A6 — an orphan node yields a select-unconnected batch with its id', () {
+    final c = makeContainer();
+    final sheetId = c.read(sheetsControllerProvider).sheets.first.id;
+    // A lone dropped fitting (degree 0, bare main junction) is an orphan.
+    final net = c.read(networkControllerProvider.notifier);
+    net.addFitting(sheetId, 0, const Offset(100, 100));
+    final orphanId = c.read(networkControllerProvider).network.nodes.single.id;
+    final action = c
+        .read(issueBatchActionsProvider)
+        .where((a) => a.kind == IssueBatchKind.selectUnconnected)
+        .toList();
+    expect(action, hasLength(1),
+        reason: 'an orphan must surface the unconnected batch');
+    expect(action.single.nodeIds, contains(orphanId));
+    expect(action.single.enabled, isTrue);
   });
 }

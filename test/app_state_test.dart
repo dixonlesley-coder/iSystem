@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/sizing_store.dart';
 
 /// J2 — the first-auto-size session nudge. `firstAutoSizeNudgeProvider` is the
 /// guard a `ref.listen(sizingProvider, ...)` in `AppShell` calls into (see
@@ -17,6 +18,11 @@ void main() {
       expect(container.read(statusMessageProvider), isNull);
       expect(container.read(firstAutoSizeNudgeProvider), isFalse);
 
+      // F2: the toast claims "sizes shown on the plan" — before the fix the
+      // overlay defaulted OFF and nothing ever turned it on, so the sentence
+      // was false the moment it was read.
+      expect(container.read(showSizingProvider), isFalse);
+
       container.read(firstAutoSizeNudgeProvider.notifier).maybeFire(5);
 
       expect(container.read(firstAutoSizeNudgeProvider), isTrue);
@@ -24,6 +30,22 @@ void main() {
         container.read(statusMessageProvider),
         'Auto-sized 5 runs · sizes shown on the plan',
       );
+      // The sizes really ARE shown now.
+      expect(container.read(showSizingProvider), isTrue);
+    });
+
+    test('F2: the engineer can still toggle the sizes back off after the nudge',
+        () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+
+      container.read(firstAutoSizeNudgeProvider.notifier).maybeFire(4);
+      expect(container.read(showSizingProvider), isTrue);
+
+      // The inspector's Show/Hide-sizes toggle still owns the off direction —
+      // the nudge only ever turns the overlay ON, once.
+      container.read(showSizingProvider.notifier).toggle();
+      expect(container.read(showSizingProvider), isFalse);
     });
 
     test('does not re-fire on a second call, even with a different count', () {
@@ -51,6 +73,9 @@ void main() {
       container.read(firstAutoSizeNudgeProvider.notifier).maybeFire(0);
       expect(container.read(firstAutoSizeNudgeProvider), isFalse);
       expect(container.read(statusMessageProvider), isNull);
+      // F2: a project that never sizes is byte-identical — the overlay stays
+      // off, so a blank launch renders exactly as before.
+      expect(container.read(showSizingProvider), isFalse);
 
       // The guard is still armed: the next genuine call still fires.
       container.read(firstAutoSizeNudgeProvider.notifier).maybeFire(2);

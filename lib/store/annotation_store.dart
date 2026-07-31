@@ -673,9 +673,30 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
         bx: bx,
         by: by,
         name: 'Room ${_seq + 1}',
+        // F7: seed the CEILING from the building the engineer just configured —
+        // the floor's own floor-to-floor height less the project's ceiling drop
+        // — instead of a hard-coded 3.0 m. It multiplies straight into the ACH
+        // volume, the airflow, the ducts and the cooling load, so a 4.2 m
+        // warehouse level must not start life as a 3.0 m office. Still fully
+        // editable in the Rooms inspector, and LOADED rooms are untouched (the
+        // constructor default stays 3.0).
+        ceilingHeightM: _seedCeilingM(floorIndex),
       ),
     ];
     _seq++;
+  }
+
+  /// F7 — the ceiling height a new room on [floorIndex] starts at: that floor's
+  /// floor-to-floor height minus the project's [MountingHeights.ceilingDrop]
+  /// (the same drop the §10 node elevations use for a ceiling-level main), so
+  /// the room's volume matches the building model. Clamped into the same band
+  /// [setCeiling] allows, with a 2.2 m floor so a shallow/odd level can never
+  /// seed an unusably low ceiling.
+  double _seedCeilingM(int floorIndex) {
+    final project = ref.read(projectControllerProvider);
+    final drop = project.mounting.ceilingDrop.meters;
+    final floorToFloor = project.building.floorHeightOf(floorIndex).meters;
+    return (floorToFloor - drop).clamp(2.2, 12.0).toDouble();
   }
 
   void setRoomType(String id, RoomType t) =>

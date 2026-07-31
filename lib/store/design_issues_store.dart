@@ -361,7 +361,12 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // self-cleansing finding below, which carries the actionable message. Emitting
   // both would print the same physics twice on one edge (the drainage band's
   // minimum IS the self-cleansing floor, judged on the same full-bore Manning
-  // velocity).
+  // velocity). G1 — since the engine now raises `selfCleansingOk == false` only
+  // for a run sized ABOVE its DFU-table minimum, a code-minimum branch that runs
+  // slow emits NEITHER row: at the minimum no pipe change is available, so the
+  // only honest levers (the laid slope, the grouped discharge) belong to the
+  // slope input and the min-slope advisory below — not to a per-edge warning
+  // that could name no action.
   for (final entry in waterVelocity.entries) {
     final check = entry.value;
     if (!check.isWarning) continue;
@@ -392,10 +397,11 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
 
   // ── 2b-iii. Drainage branch below the self-cleansing velocity (info) ───────
   // `EdgeSizing.selfCleansingOk` (Wave 1) is false when the full-bore Manning
-  // velocity at the design slope falls under 0.6 m/s. An ADVISORY, not a
-  // warning: the DFU table picked a code-compliant diameter, and the honest
-  // remedies are a smaller pipe or grouped discharge — steepening past the laid
-  // slope is usually not available on a real floor.
+  // velocity at the design slope falls under 0.6 m/s AND the run is sized ABOVE
+  // the DFU table's minimum for its load (G1) — i.e. a smaller compliant pipe
+  // genuinely exists. An ADVISORY, not a warning: the diameter is still legal,
+  // and the honest remedies are the design slope (a Building-page input) or
+  // grouping more discharge onto the branch.
   for (final id in selfCleansing) {
     final edge = edgeById[id];
     if (edge == null) continue;
@@ -406,6 +412,53 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       title: str(StringKey.issueSelfCleansingTitle),
       message: str(StringKey.issueSelfCleansingMessage),
       locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
+    ));
+  }
+
+  // ── 2b-iii-b. Plumbing fixture placed with no fixture TYPE (F5, info) ──────
+  // A terminal dropped on a water-supply or sanitary run with no `fixture` (and
+  // no resolved custom fixture) is not sized on nothing — it is sized on the
+  // REPRESENTATIVE PLACEHOLDER the engine substitutes for an untyped leaf:
+  // `kDefaultLeafFixtureUnits` (2.0 UBAP) on cold/hot water and
+  // `kDefaultLeafDfu` (2.0 DFU) on drainage/vent. That placeholder then flows
+  // into the accumulated demand, the mains, the pump duty, the BOM and the
+  // issued report with no marker anywhere — the plumbing twin of the air side's
+  // `air-terminal-unsized` advisory, which never existed until now.
+  //
+  // Gated to the services that actually apply a placeholder: the UBAP path is
+  // cold/hot water only (the fire services size from a flow default, not
+  // fixture units) and the DFU path is drainage/vent. An advisory, not a
+  // warning: the number IS a defensible representative load, so the design is
+  // sizable — it is the SILENCE that was dishonest. Locatable to the node.
+  for (final n in net.nodes) {
+    if (n.role != NodeRole.fixture) continue;
+    if (n.fixture != null || n.customFixtureId != null) continue;
+    var onSupply = false;
+    var onSanitary = false;
+    for (final e in net.edgesAt(n.id)) {
+      switch (e.service) {
+        case ServiceType.coldWater:
+        case ServiceType.hotWater:
+          onSupply = true;
+        case ServiceType.drainage:
+        case ServiceType.vent:
+          onSanitary = true;
+        default:
+          break;
+      }
+    }
+    if (!onSupply && !onSanitary) continue;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'fixture-untyped:${n.id}',
+      title: str(StringKey.issueFixtureUntypedTitle),
+      // A fixture on BOTH systems (the normal case) leads with the supply
+      // placeholder — it is the one that drives the diversified demand and the
+      // pump duty; the drainage-only message names the DFU default instead.
+      message: onSupply
+          ? str(StringKey.issueFixtureUntypedSupplyMessage)
+          : str(StringKey.issueFixtureUntypedDrainageMessage),
+      locate: IssueLocation(n.sheetId, nodeId: n.id),
     ));
   }
 
@@ -426,22 +479,31 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
-  // ── 2b-v. Duty past the largest standard motor frame (M11, warning) ────────
+  // ── 2b-v. Duty past the largest standard motor frame (M11, info) ───────────
   // `selectMotor` CLAMPS at the 75 kW top of the standard ladder; without this
   // the app printed a 75 kW motor for a 90 kW duty on the canvas, the schedule,
   // the BOM and the electrical feed with no hint the frame had saturated.
   // Non-locatable (it is a plant duty, not a drawn element).
+  //
+  // G4 — an ADVISORY, not a warning. It is a real and honest finding, but it is
+  // NOT a design defect the app can be made to clear: a legitimately large
+  // building has a duty past the 75 kW ladder, there is no custom-motor field to
+  // fill in, and the honest verdict already rides the Results ResultCard beside
+  // the duty figure itself. As a warning it was a permanent, unlocatable and
+  // (per `DesignIssue.isAcknowledgeable`) unacknowledgeable compliance blocker —
+  // a PASS was unreachable by construction. At [info] it still prints in Review
+  // and in the reports, and the engineer can acknowledge it with a reason.
   if (ref.watch(pumpDutyProvider)?.motorOversized ?? false) {
-    warnings.add(DesignIssue(
-      severity: IssueSeverity.warning,
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
       kind: 'pump-motor-oversized',
       title: str(StringKey.issueMotorOversizedTitle),
       message: str(StringKey.issuePumpMotorOversizedMessage),
     ));
   }
   if (ref.watch(ductFanProvider)?.motorOversized ?? false) {
-    warnings.add(DesignIssue(
-      severity: IssueSeverity.warning,
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
       kind: 'fan-motor-oversized',
       title: str(StringKey.issueMotorOversizedTitle),
       message: str(StringKey.issueFanMotorOversizedMessage),
@@ -989,6 +1051,21 @@ enum IssueBatchKind {
   /// Multi-select every air element carrying air with no chosen size yet.
   selectUnsizedAir,
 
+  /// Multi-select every water/drainage run with an out-of-band velocity
+  /// warning (A6 — excludes edges already covered by the over-capacity set,
+  /// mirroring the fan-in's dedupe).
+  selectWaterVelocity,
+
+  /// Multi-select every clamped-at-table-top edge (air size cap, storm
+  /// catchment, water velocity — the discipline-neutral over-capacity set).
+  selectOverCapacity,
+
+  /// Multi-select every drainage branch flagged below self-cleansing velocity.
+  selectSelfCleansing,
+
+  /// Multi-select every unconnected element (loose run ends + orphans).
+  selectUnconnected,
+
   /// Copy a calibrated sheet's scale onto every uncalibrated sheet.
   calibrateAllSheets,
 }
@@ -1087,6 +1164,52 @@ final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
       edgeIds: unE,
     ));
   }
+
+  // A6 — the audit-wave issue classes gain the same select-all treatment.
+  final overCap = ref.watch(overCapacityEdgesProvider);
+  final waterVel = <String>{
+    for (final e in ref.watch(waterVelocityChecksProvider).entries)
+      if (e.value.isWarning &&
+          edgeIds.contains(e.key) &&
+          !overCap.contains(e.key))
+        e.key,
+  };
+  final selfClean = {
+    for (final id in ref.watch(selfCleansingDefectsProvider))
+      if (edgeIds.contains(id)) id,
+  };
+  final unconnected = <String>{
+    for (final d in networkElementDefects(net)) d.nodeId,
+  };
+  void addSelect(IssueBatchKind kind, StringKey template,
+      {Set<String> n = const {}, Set<String> e = const {}}) {
+    final c = n.length + e.length;
+    if (c == 0) return;
+    actions.add(IssueBatchAction(
+      kind: kind,
+      label: str.format(template, {
+        'c': '$c',
+        'noun': plural(c, str(StringKey.issueNounElementOne),
+            str(StringKey.issueNounElementMany)),
+      }),
+      enabled: true,
+      nodeIds: n,
+      edgeIds: e,
+    ));
+  }
+
+  addSelect(IssueBatchKind.selectWaterVelocity,
+      StringKey.issueBatchSelectWaterVelocity,
+      e: waterVel);
+  addSelect(IssueBatchKind.selectOverCapacity,
+      StringKey.issueBatchSelectOverCapacity,
+      e: overCap.intersection(edgeIds));
+  addSelect(IssueBatchKind.selectSelfCleansing,
+      StringKey.issueBatchSelectSelfCleansing,
+      e: selfClean);
+  addSelect(IssueBatchKind.selectUnconnected,
+      StringKey.issueBatchSelectUnconnected,
+      n: unconnected);
 
   // 3. Calibrate-all from the first calibrated sheet (if any).
   final uncalibrated = <String>{

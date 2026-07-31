@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
@@ -13,7 +15,8 @@ import '../../store/app_state.dart'
         hotWaterFlowTempProvider,
         occupancyProvider,
         rainfallIntensityProvider,
-        runoffCoefficientProvider;
+        runoffCoefficientProvider,
+        statusMessageProvider;
 import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -52,14 +55,14 @@ class BuildingScreen extends ConsumerWidget {
     final building = project.building;
     final sheetsState = ref.watch(sheetsControllerProvider);
 
-    // The sheet (PDF page) assigned to each level — the first sheet whose
-    // floor mapping lands on it (a floor may carry more than one sheet).
-    Sheet? sheetForFloor(int level) {
-      for (final s in sheetsState.sheets) {
-        if (sheetsState.floorFor(s.id, building.levelCount) == level) return s;
-      }
-      return null;
-    }
+    // F10 — EVERY sheet (PDF page) mapped to a level, not just the first.
+    // A floor may carry several plans (architectural + M&E, or a re-issue), and
+    // showing only the first hid exactly the pile-up this page exists to fix:
+    // one level silently holding four plans while the levels above hold none.
+    List<Sheet> sheetsForFloor(int level) => [
+          for (final s in sheetsState.sheets)
+            if (sheetsState.floorFor(s.id, building.levelCount) == level) s,
+        ];
 
     return HubScaffold(
       title: 'Building',
@@ -82,7 +85,7 @@ class BuildingScreen extends ConsumerWidget {
           _LevelCard(
             floor: project.floors[i],
             elevation: building.elevationOf(i),
-            sheet: sheetForFloor(i),
+            sheets: sheetsForFloor(i),
             onRename: (name) => ctrl.renameFloor(i, name),
             onHeightMinus: () => ctrl.nudgeFloorHeight(i, -0.1),
             onHeightPlus: () => ctrl.nudgeFloorHeight(i, 0.1),
@@ -248,7 +251,10 @@ class _DeleteLevelDialog extends StatelessWidget {
 class _LevelCard extends StatelessWidget {
   final Floor floor;
   final Length elevation;
-  final Sheet? sheet;
+
+  /// F10 — every plan mapped to this level (empty ⇒ "none"). More than one is
+  /// normal and worth SEEING: the count leads, the names follow.
+  final List<Sheet> sheets;
   final ValueChanged<String> onRename;
   final VoidCallback onHeightMinus;
   final VoidCallback onHeightPlus;
@@ -259,7 +265,7 @@ class _LevelCard extends StatelessWidget {
   const _LevelCard({
     required this.floor,
     required this.elevation,
-    required this.sheet,
+    required this.sheets,
     required this.onRename,
     required this.onHeightMinus,
     required this.onHeightPlus,
@@ -338,7 +344,8 @@ class _LevelCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: MechXSpacing.xs),
-          // The PDF page assigned to this level.
+          // The PDF page(s) assigned to this level (F10: the COUNT, then the
+          // names — a level holding three plans says so).
           Row(
             children: [
               Expanded(
@@ -347,23 +354,47 @@ class _LevelCard extends StatelessWidget {
               ),
               Flexible(
                 child: Text(
-                  sheet?.name ?? 'none',
+                  sheets.isEmpty
+                      ? context.strings(StringKey.buildingNoPlan)
+                      : pluralCount(
+                          sheets.length,
+                          context.strings(StringKey.buildingPlanOne),
+                          context.strings(StringKey.buildingPlanMany)),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.right,
-                  style: type.caption.copyWith(
-                      color: sheet == null
+                  style: MechXTypography.tabular(type.caption).copyWith(
+                      color: sheets.isEmpty
                           ? colors.textMuted
                           : colors.textSecondary),
                 ),
               ),
               const SizedBox(width: MechXSpacing.sm),
               MechXButton(
-                label: sheet == null ? 'Assign' : 'Change',
+                label: sheets.isEmpty ? 'Assign' : 'Change',
                 onPressed: onPickSheet,
               ),
             ],
           ),
+          // The names themselves, under the count — so the pile-up is visible
+          // (and identifiable) without leaving the page. One line per plan; a
+          // long sheet name ellipsizes rather than wrapping the card.
+          if (sheets.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: MechXSpacing.xxs),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final s in sheets)
+                    Text(s.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.right,
+                        style:
+                            type.micro.copyWith(color: colors.textMuted)),
+                ],
+              ),
+            ),
         ],
       ),
     );
@@ -506,8 +537,38 @@ class _StepperField extends StatelessWidget {
 /// class (fixture demand), storm rainfall intensity + runoff coefficient (storm
 /// sizing). These are building-wide sizing parameters, so they belong on the
 /// setup page beside the floor stack rather than in the per-selection inspector.
-class _DesignInputsCard extends ConsumerWidget {
+class _DesignInputsCard extends ConsumerStatefulWidget {
   const _DesignInputsCard();
+
+  @override
+  ConsumerState<_DesignInputsCard> createState() => _DesignInputsCardState();
+}
+
+class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
+  /// G7 — one confirmation per burst of edits. A stepper's hold-repeat fires
+  /// many commits a second, so the "Sizing updated" pill is DEBOUNCED: it
+  /// appears once the engineer stops moving the value, not once per tick.
+  Timer? _confirmTimer;
+  static const Duration _confirmDelay = Duration(milliseconds: 450);
+
+  @override
+  void dispose() {
+    _confirmTimer?.cancel();
+    super.dispose();
+  }
+
+  /// G7 — nothing on this page said the change LANDED: every design input here
+  /// silently re-runs the whole sizing, on another screen, with no feedback at
+  /// all. Confirm it in the status bar, once the value settles.
+  void _confirmSizingUpdated() {
+    _confirmTimer?.cancel();
+    _confirmTimer = Timer(_confirmDelay, () {
+      if (!mounted) return;
+      ref
+          .read(statusMessageProvider.notifier)
+          .showStatus(context.strings(StringKey.buildingSizingUpdated));
+    });
+  }
 
   static String _occupancyLabel(Occupancy o) => switch (o) {
         Occupancy.private => 'Residential',
@@ -516,7 +577,7 @@ class _DesignInputsCard extends ConsumerWidget {
       };
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
     final occ = ref.watch(occupancyProvider);
@@ -526,8 +587,22 @@ class _DesignInputsCard extends ConsumerWidget {
     final hwFlow = ref.watch(hotWaterFlowTempProvider);
     final hwDeltaT = ref.watch(hotWaterDeltaTProvider);
     final acBasis = ref.watch(coolingLoadMethodProvider);
+    // F8 — the project's mounting heights, edited here beside the floor stack
+    // they act on (a ceiling drop only means anything against a floor height).
+    final mounting = ref.watch(mountingProvider);
+    final projectCtrl = ref.read(projectControllerProvider.notifier);
     Text label(String s) =>
         Text(s, style: type.body.copyWith(color: colors.textSecondary));
+    // G7 — a one-line EFFECT caption under each input. These numbers silently
+    // re-run the whole sizing; the page used to state none of that, so the
+    // engineer could only learn what a field did by changing it and hunting for
+    // what moved.
+    Widget caption(String s) => Padding(
+          padding: const EdgeInsets.only(
+              top: MechXSpacing.xxs, right: MechXSpacing.xxl),
+          child: Text(s,
+              style: type.micro.copyWith(color: colors.textMuted)),
+        );
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(MechXSpacing.md),
@@ -550,10 +625,92 @@ class _DesignInputsCard extends ConsumerWidget {
                 MechXSegment(
                   label: _occupancyLabel(o),
                   selected: occ == o,
-                  onTap: () => ref.read(occupancyProvider.notifier).set(o),
+                  onTap: () {
+                    ref.read(occupancyProvider.notifier).set(o);
+                    _confirmSizingUpdated();
+                  },
                 ),
             ],
           ),
+          caption(context.strings(StringKey.buildingInputCaptionOccupancy)),
+          // F8 — the two mounting heights. They turn a floor + role into a TRUE
+          // elevation (§10), so they set every riser length and static lift in
+          // the project; they were hard-coded engine constants with no UI at
+          // all, documented as "editable per project".
+          const SizedBox(height: MechXSpacing.md),
+          Row(
+            children: [
+              Expanded(
+                  child: label(
+                      context.strings(StringKey.buildingMountingCeilingDrop))),
+              SteppedValueField(
+                display: '${mounting.ceilingDrop.meters.toStringAsFixed(2)} m',
+                editSeed: mounting.ceilingDrop.meters.toStringAsFixed(2),
+                label: context.strings(StringKey.buildingMountingCeilingDrop),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0.0,
+                max: 1.5,
+                onDecrement: () {
+                  projectCtrl
+                      .setCeilingDrop(mounting.ceilingDrop.meters - 0.05);
+                  _confirmSizingUpdated();
+                },
+                onIncrement: () {
+                  projectCtrl
+                      .setCeilingDrop(mounting.ceilingDrop.meters + 0.05);
+                  _confirmSizingUpdated();
+                },
+                onSubmit: (v) {
+                  if (v != null) {
+                    projectCtrl.setCeilingDrop(v);
+                    _confirmSizingUpdated();
+                  }
+                },
+              ),
+            ],
+          ),
+          caption(context
+              .strings(StringKey.buildingMountingCeilingDropCaption)),
+          const SizedBox(height: MechXSpacing.sm),
+          Row(
+            children: [
+              Expanded(
+                  child: label(context
+                      .strings(StringKey.buildingMountingFixtureHeight))),
+              SteppedValueField(
+                display: '${mounting.fixtureHeight.meters.toStringAsFixed(2)} m',
+                editSeed: mounting.fixtureHeight.meters.toStringAsFixed(2),
+                label: context.strings(StringKey.buildingMountingFixtureHeight),
+                gap: MechXSpacing.sm,
+                valueWidth: 96,
+                valueAlign: TextAlign.center,
+                valueColor: colors.textPrimary,
+                min: 0.0,
+                max: 2.5,
+                onDecrement: () {
+                  projectCtrl
+                      .setFixtureHeight(mounting.fixtureHeight.meters - 0.05);
+                  _confirmSizingUpdated();
+                },
+                onIncrement: () {
+                  projectCtrl
+                      .setFixtureHeight(mounting.fixtureHeight.meters + 0.05);
+                  _confirmSizingUpdated();
+                },
+                onSubmit: (v) {
+                  if (v != null) {
+                    projectCtrl.setFixtureHeight(v);
+                    _confirmSizingUpdated();
+                  }
+                },
+              ),
+            ],
+          ),
+          caption(context
+              .strings(StringKey.buildingMountingFixtureHeightCaption)),
           const SizedBox(height: MechXSpacing.md),
           Row(
             children: [
@@ -568,18 +725,24 @@ class _DesignInputsCard extends ConsumerWidget {
                 valueColor: colors.textPrimary,
                 min: 50,
                 max: 600,
-                onDecrement: () =>
-                    ref.read(rainfallIntensityProvider.notifier).nudge(-25),
-                onIncrement: () =>
-                    ref.read(rainfallIntensityProvider.notifier).nudge(25),
+                onDecrement: () {
+                  ref.read(rainfallIntensityProvider.notifier).nudge(-25);
+                  _confirmSizingUpdated();
+                },
+                onIncrement: () {
+                  ref.read(rainfallIntensityProvider.notifier).nudge(25);
+                  _confirmSizingUpdated();
+                },
                 onSubmit: (v) {
                   if (v != null) {
                     ref.read(rainfallIntensityProvider.notifier).set(v);
+                    _confirmSizingUpdated();
                   }
                 },
               ),
             ],
           ),
+          caption(context.strings(StringKey.buildingInputCaptionRainfall)),
           const SizedBox(height: MechXSpacing.sm),
           Row(
             children: [
@@ -594,18 +757,24 @@ class _DesignInputsCard extends ConsumerWidget {
                 valueColor: colors.textPrimary,
                 min: 0.5,
                 max: 1.0,
-                onDecrement: () =>
-                    ref.read(runoffCoefficientProvider.notifier).nudge(-0.05),
-                onIncrement: () =>
-                    ref.read(runoffCoefficientProvider.notifier).nudge(0.05),
+                onDecrement: () {
+                  ref.read(runoffCoefficientProvider.notifier).nudge(-0.05);
+                  _confirmSizingUpdated();
+                },
+                onIncrement: () {
+                  ref.read(runoffCoefficientProvider.notifier).nudge(0.05);
+                  _confirmSizingUpdated();
+                },
                 onSubmit: (v) {
                   if (v != null) {
                     ref.read(runoffCoefficientProvider.notifier).set(v);
+                    _confirmSizingUpdated();
                   }
                 },
               ),
             ],
           ),
+          caption(context.strings(StringKey.buildingInputCaptionRunoff)),
           // M13 — the laid drainage gradient. Typed and displayed as the
           // drafting fraction (1:100), which is how a plumber reads a fall;
           // stored as m/m. Steps of 10 in N (1:100 → 1:90 → 1:80).
@@ -624,20 +793,34 @@ class _DesignInputsCard extends ConsumerWidget {
                 min: 10,
                 max: 1000,
                 // A BIGGER N is a FLATTER fall, so "+" steepens (smaller N).
-                onDecrement: () => ref
-                    .read(drainageSlopeProvider.notifier)
-                    .set(_slopeFromN(_slopeN(slope) + 10)),
-                onIncrement: () => ref
-                    .read(drainageSlopeProvider.notifier)
-                    .set(_slopeFromN(_slopeN(slope) - 10)),
+                onDecrement: () {
+                  ref
+                      .read(drainageSlopeProvider.notifier)
+                      .set(_slopeFromN(_slopeN(slope) + 10));
+                  _confirmSizingUpdated();
+                },
+                onIncrement: () {
+                  ref
+                      .read(drainageSlopeProvider.notifier)
+                      .set(_slopeFromN(_slopeN(slope) - 10));
+                  _confirmSizingUpdated();
+                },
                 onSubmit: (v) {
                   if (v != null && v > 0) {
                     ref.read(drainageSlopeProvider.notifier).set(_slopeFromN(v));
+                    _confirmSizingUpdated();
                   }
                 },
               ),
             ],
           ),
+          caption(context.strings(StringKey.buildingInputCaptionSlope)),
+          // G7 — the stepper reads INVERTED (pressing "+" makes the printed
+          // number smaller: 1:100 -> 1:90) because the value shown is the
+          // DENOMINATOR of the fall. The semantics are right — "+" really is a
+          // steeper pipe — so the fix is to SAY so rather than to swap the
+          // buttons and make the arithmetic lie instead.
+          caption(context.strings(StringKey.buildingSlopeDirectionHint)),
           // M14 — hot-water flow temperature + allowable loop drop. 60 − 5 = 55
           // is exactly the anti-Legionella floor, so the check only speaks once
           // the engineer departs from these defaults.
@@ -655,18 +838,24 @@ class _DesignInputsCard extends ConsumerWidget {
                 valueColor: colors.textPrimary,
                 min: 40,
                 max: 90,
-                onDecrement: () =>
-                    ref.read(hotWaterFlowTempProvider.notifier).nudge(-1),
-                onIncrement: () =>
-                    ref.read(hotWaterFlowTempProvider.notifier).nudge(1),
+                onDecrement: () {
+                  ref.read(hotWaterFlowTempProvider.notifier).nudge(-1);
+                  _confirmSizingUpdated();
+                },
+                onIncrement: () {
+                  ref.read(hotWaterFlowTempProvider.notifier).nudge(1);
+                  _confirmSizingUpdated();
+                },
                 onSubmit: (v) {
                   if (v != null) {
                     ref.read(hotWaterFlowTempProvider.notifier).set(v);
+                    _confirmSizingUpdated();
                   }
                 },
               ),
             ],
           ),
+          caption(context.strings(StringKey.buildingInputCaptionHotWaterFlow)),
           const SizedBox(height: MechXSpacing.sm),
           Row(
             children: [
@@ -681,18 +870,27 @@ class _DesignInputsCard extends ConsumerWidget {
                 valueColor: colors.textPrimary,
                 min: 1,
                 max: 20,
-                onDecrement: () =>
-                    ref.read(hotWaterDeltaTProvider.notifier).nudge(-1),
-                onIncrement: () =>
-                    ref.read(hotWaterDeltaTProvider.notifier).nudge(1),
+                onDecrement: () {
+                  ref.read(hotWaterDeltaTProvider.notifier).nudge(-1);
+                  _confirmSizingUpdated();
+                },
+                onIncrement: () {
+                  ref.read(hotWaterDeltaTProvider.notifier).nudge(1);
+                  _confirmSizingUpdated();
+                },
                 onSubmit: (v) {
                   if (v != null) {
                     ref.read(hotWaterDeltaTProvider.notifier).set(v);
+                    _confirmSizingUpdated();
                   }
                 },
               ),
             ],
           ),
+          // G7 — "5 K" told the engineer nothing: the caption names the unit in
+          // plain terms (and the 55 C floor the check actually enforces).
+          caption(
+              context.strings(StringKey.buildingInputCaptionHotWaterDeltaT)),
           // M15 — which basis the Rooms AC estimate uses. ONE segment idiom,
           // matching the Occupancy radio above.
           const SizedBox(height: MechXSpacing.md),
@@ -706,19 +904,26 @@ class _DesignInputsCard extends ConsumerWidget {
               MechXSegment(
                 label: context.strings(StringKey.designInputAcBasisArea),
                 selected: acBasis == CoolingLoadMethod.simple,
-                onTap: () => ref
-                    .read(coolingLoadMethodProvider.notifier)
-                    .set(CoolingLoadMethod.simple),
+                onTap: () {
+                  ref
+                      .read(coolingLoadMethodProvider.notifier)
+                      .set(CoolingLoadMethod.simple);
+                  _confirmSizingUpdated();
+                },
               ),
               MechXSegment(
                 label: context.strings(StringKey.designInputAcBasisHeatGain),
                 selected: acBasis == CoolingLoadMethod.detailed,
-                onTap: () => ref
-                    .read(coolingLoadMethodProvider.notifier)
-                    .set(CoolingLoadMethod.detailed),
+                onTap: () {
+                  ref
+                      .read(coolingLoadMethodProvider.notifier)
+                      .set(CoolingLoadMethod.detailed);
+                  _confirmSizingUpdated();
+                },
               ),
             ],
           ),
+          caption(context.strings(StringKey.buildingInputCaptionAcBasis)),
         ],
       ),
     );

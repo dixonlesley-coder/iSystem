@@ -601,6 +601,12 @@ enum StringKey {
   issueUnfedPanelTitle,
   issueUnfedPanelMessage, // {panel} = the unfed panel's name
 
+  // F5 — a plumbing fixture placed with no fixture type: it silently sizes on
+  // the representative placeholder load (2.0 UBAP supply / 2.0 DFU drainage).
+  issueFixtureUntypedTitle,
+  issueFixtureUntypedSupplyMessage,
+  issueFixtureUntypedDrainageMessage,
+
   // I1 — downfeed pressure-zone over the SNI max fixture static pressure.
   issuePressureZoneTitle,
   issuePressureZoneMessage, // {bottom} {top} {kpa} {limit}
@@ -642,6 +648,10 @@ enum StringKey {
   issueNounSheetMany,
   issueBatchSelectVelocity, // {c} {noun}
   issueBatchSelectUnsized, // {c} {noun}
+  issueBatchSelectWaterVelocity, // {c} {noun}
+  issueBatchSelectOverCapacity, // {c} {noun}
+  issueBatchSelectSelfCleansing, // {c} {noun}
+  issueBatchSelectUnconnected, // {c} {noun}
   issueBatchCalibrateNoSource, // {n}
   issueBatchCalibrateCopy, // {n} {noun}
 
@@ -863,6 +873,50 @@ enum StringKey {
   /// The detail of the first added way — its own name + motor rating (the
   /// sized breaker/cable live on the board schedule, see [_narrateMepSync]).
   mepSyncDetailTemplate, // {name} {kw}
+
+  /// F4 — the calibration baton when OTHER loaded sheets are still
+  /// uncalibrated: naming the remaining count (and where the one-click
+  /// "apply to all" lives) instead of pointing at Building, whose runs would
+  /// still measure 0.0 m on those sheets. {sheets} is the pre-pluralized
+  /// phrase from pluralCount(n, issueNounSheetOne, issueNounSheetMany).
+  calibrationScaleSetRemaining, // {scale} {sheets}
+
+  // ── Settings changes narrate themselves + are undoable (D3) ───────────────
+  /// The two feed strategies, named the way the status message reads them.
+  settingsFeedUpfeed,
+  settingsFeedDownfeed,
+  settingsFeedStrategyChanged, // {mode}
+
+  // ── The Building page's design inputs explain their effect (G7) ───────────
+  buildingInputCaptionOccupancy,
+  buildingInputCaptionRainfall,
+  buildingInputCaptionRunoff,
+  buildingInputCaptionSlope,
+  buildingSlopeDirectionHint,
+  buildingInputCaptionHotWaterFlow,
+  buildingInputCaptionHotWaterDeltaT,
+  buildingInputCaptionAcBasis,
+  buildingSizingUpdated,
+
+  // ── Mounting heights are a project input (F8) ─────────────────────────────
+  buildingMountingCeilingDrop,
+  buildingMountingCeilingDropCaption,
+  buildingMountingFixtureHeight,
+  buildingMountingFixtureHeightCaption,
+
+  // ── Every plan mapped to a level is listed (F10) ──────────────────────────
+  /// The plan noun for `pluralCount` on the level card's plan count.
+  buildingPlanOne,
+  buildingPlanMany,
+  buildingNoPlan,
+
+  /// After a template forces an import that lands fewer plans than the
+  /// template's floors — the Building page is where that is fixed.
+  templatePlanShortfallTemplate, // {floors} {plans}
+
+  // ── The heatmap says WHICH check is falsifiable (G6) ──────────────────────
+  heatmapHeldByDesign,
+  heatmapRealCheckPumpDuty,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -1488,9 +1542,10 @@ const Map<StringKey, String> _en = {
   StringKey.issueWaterVelocityTitle: 'Pipe velocity out of band',
   StringKey.issueSelfCleansingTitle: 'Drainage branch below self-cleansing',
   StringKey.issueSelfCleansingMessage:
-      'At the design slope this branch runs below the 0.6 m/s self-cleansing '
-      'velocity, so solids settle out and it silts up. Laying it flatter is the '
-      'wrong direction — use a smaller pipe, or group more discharge onto it.',
+      'This branch runs below 0.6 m/s self-cleansing at the design slope, so '
+      'solids settle out and it silts up. It is already larger than the DFU '
+      'minimum for its load — steepen the drainage slope (Building page) or '
+      'group more discharge onto the branch.',
   StringKey.issueLoopUnbalancedTitle: 'Ring flow split not settled',
   StringKey.issueLoopUnbalancedMessage:
       'The Hardy-Cross balance for this looped main did not converge within its '
@@ -1500,12 +1555,14 @@ const Map<StringKey, String> _en = {
   StringKey.issueMotorOversizedTitle: 'Duty past the largest motor frame',
   StringKey.issuePumpMotorOversizedMessage:
       'The pump duty exceeds the largest standard motor frame, so the printed '
-      'motor is the top of the ladder, not a selection. Specify a custom motor, '
-      'or split the duty across more pumps.',
+      'motor is the top of the ladder, not a selection — the duty and the '
+      'clamped motor are on the pump result card (see Results). Split the duty '
+      'across more pumps, or procure a motor outside the standard ladder.',
   StringKey.issueFanMotorOversizedMessage:
       'The fan duty exceeds the largest standard motor frame, so the printed '
-      'motor is the top of the ladder, not a selection. Specify a custom motor, '
-      'or split the duty across more fans.',
+      'motor is the top of the ladder, not a selection — the duty and the '
+      'clamped motor are on the fan result card (see Results). Split the duty '
+      'across more fans, or procure a motor outside the standard ladder.',
   StringKey.issueDiffuserStrandedTitle: 'Diffuser not connected to any duct',
   StringKey.issueSheetNotCalibratedTitle: 'Sheet not calibrated',
   StringKey.issueCalibrationStaleTitle: 'Plan replaced — re-verify scale',
@@ -1530,6 +1587,13 @@ const Map<StringKey, String> _en = {
   StringKey.issueUnfedPanelMessage:
       '"{panel}" is neither the origin board nor fed by a feeder — it is wired '
       'to nothing. Feed it from an upstream panel.',
+  StringKey.issueFixtureUntypedTitle: 'Fixture type not set',
+  StringKey.issueFixtureUntypedSupplyMessage:
+      'Fixture type not set — sizing on the representative 2.0 UBAP default; '
+      'set the type in the inspector.',
+  StringKey.issueFixtureUntypedDrainageMessage:
+      'Fixture type not set — sizing on the representative 2.0 DFU default; '
+      'set the type in the inspector.',
   StringKey.issuePressureZoneTitle: 'Pressure zone over the fixture limit',
   StringKey.issuePressureZoneMessage:
       'The pressure zone from "{bottom}" to "{top}" reaches {kpa} kPa static at '
@@ -1616,6 +1680,12 @@ const Map<StringKey, String> _en = {
   StringKey.issueNounSheetMany: 'sheets',
   StringKey.issueBatchSelectVelocity: 'Select {c} out-of-band {noun}',
   StringKey.issueBatchSelectUnsized: 'Select {c} unsized air {noun}',
+  StringKey.issueBatchSelectWaterVelocity:
+      'Select {c} water-velocity {noun}',
+  StringKey.issueBatchSelectOverCapacity: 'Select {c} over-capacity {noun}',
+  StringKey.issueBatchSelectSelfCleansing:
+      'Select {c} below-self-cleansing {noun}',
+  StringKey.issueBatchSelectUnconnected: 'Select {c} unconnected {noun}',
   StringKey.issueBatchCalibrateNoSource:
       'Calibrate one sheet to copy scale to {n} more',
   StringKey.issueBatchCalibrateCopy: 'Copy scale to {n} uncalibrated {noun}',
@@ -1808,6 +1878,54 @@ const Map<StringKey, String> _en = {
   StringKey.mepSyncBoardRemoved:
       'MEP Equipment board removed — no equipment left',
   StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',
+  StringKey.calibrationScaleSetRemaining:
+      'Scale set: {scale} - {sheets} still uncalibrated (apply to all in the '
+          'Scale panel)',
+
+  // D3 — the feed strategy names itself when it changes (and is undoable).
+  StringKey.settingsFeedUpfeed: 'upfeed pump',
+  StringKey.settingsFeedDownfeed: 'roof-tank downfeed',
+  StringKey.settingsFeedStrategyChanged:
+      'Water feed: {mode} - pressures, zones and pump duty resized',
+
+  // G7 — the Building design inputs say what they drive.
+  StringKey.buildingInputCaptionOccupancy:
+      'Sets the fixture-unit demand behind every water pipe size',
+  StringKey.buildingInputCaptionRainfall:
+      'Drives rainwater outlet, gutter and storm-stack sizing',
+  StringKey.buildingInputCaptionRunoff:
+      'Share of rainfall that reaches the outlet (rational method)',
+  StringKey.buildingInputCaptionSlope:
+      'Drives gravity sizing and the self-cleansing check',
+  StringKey.buildingSlopeDirectionHint:
+      'Plus is steeper (1:90), minus is flatter (1:110)',
+  StringKey.buildingInputCaptionHotWaterFlow:
+      'Temperature leaving the heater, before the loop drop below',
+  StringKey.buildingInputCaptionHotWaterDeltaT:
+      'K = degrees C lost around the loop; the return must stay above 55 C',
+  StringKey.buildingInputCaptionAcBasis:
+      'Which basis the Rooms AC estimate uses for every room',
+  StringKey.buildingSizingUpdated: 'Sizing updated',
+
+  // F8 — mounting heights as a project input.
+  StringKey.buildingMountingCeilingDrop: 'Ceiling drop',
+  StringKey.buildingMountingCeilingDropCaption:
+      'How far horizontal mains hang below the slab above; sets drop lengths',
+  StringKey.buildingMountingFixtureHeight: 'Fixture height',
+  StringKey.buildingMountingFixtureHeightCaption:
+      'Height of a fixture connection above its own floor; sets the static lift',
+
+  // F10 — every plan mapped to a level, not just the first.
+  StringKey.buildingPlanOne: 'plan',
+  StringKey.buildingPlanMany: 'plans',
+  StringKey.buildingNoPlan: 'none',
+  StringKey.templatePlanShortfallTemplate:
+      'Template set {floors} floors - {plans} imported. Assign or duplicate '
+          'plans on the Building page.',
+
+  // G6 — the heatmap names the falsifiable check.
+  StringKey.heatmapHeldByDesign: 'target held by design',
+  StringKey.heatmapRealCheckPumpDuty: 'the real check is the pump duty',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -2439,8 +2557,9 @@ const Map<StringKey, String> _id = {
   StringKey.issueSelfCleansingMessage:
       'Pada kemiringan desain, cabang ini mengalir di bawah kecepatan '
       'swa-bersih 0,6 m/s sehingga padatan mengendap dan salurannya tersumbat. '
-      'Memperlandai kemiringan justru salah arah — gunakan pipa lebih kecil, '
-      'atau gabungkan lebih banyak buangan ke cabang ini.',
+      'Ukurannya sudah lebih besar dari minimum tabel DFU untuk bebannya — '
+      'pertajam kemiringan drainase (halaman Bangunan) atau gabungkan lebih '
+      'banyak buangan ke cabang ini.',
   StringKey.issueLoopUnbalancedTitle: 'Pembagian aliran ring belum stabil',
   StringKey.issueLoopUnbalancedMessage:
       'Penyeimbangan Hardy-Cross untuk jaringan ring ini tidak konvergen dalam '
@@ -2452,12 +2571,14 @@ const Map<StringKey, String> _id = {
       'Duti melebihi rangka motor standar terbesar',
   StringKey.issuePumpMotorOversizedMessage:
       'Duti pompa melebihi rangka motor standar terbesar, sehingga motor yang '
-      'tercetak adalah puncak tangga standar, bukan hasil pemilihan. Tentukan '
-      'motor khusus, atau bagi dutinya ke lebih banyak pompa.',
+      'tercetak adalah puncak tangga standar, bukan hasil pemilihan — duti dan '
+      'motor terpotong itu ada pada kartu hasil pompa (lihat Hasil). Bagi '
+      'dutinya ke lebih banyak pompa, atau adakan motor di luar tangga standar.',
   StringKey.issueFanMotorOversizedMessage:
       'Duti fan melebihi rangka motor standar terbesar, sehingga motor yang '
-      'tercetak adalah puncak tangga standar, bukan hasil pemilihan. Tentukan '
-      'motor khusus, atau bagi dutinya ke lebih banyak fan.',
+      'tercetak adalah puncak tangga standar, bukan hasil pemilihan — duti dan '
+      'motor terpotong itu ada pada kartu hasil fan (lihat Hasil). Bagi dutinya '
+      'ke lebih banyak fan, atau adakan motor di luar tangga standar.',
   StringKey.issueDiffuserStrandedTitle:
       'Difuser tidak terhubung ke saluran mana pun',
   StringKey.issueSheetNotCalibratedTitle: 'Lembar belum dikalibrasi',
@@ -2486,6 +2607,13 @@ const Map<StringKey, String> _id = {
   StringKey.issueUnfedPanelMessage:
       '"{panel}" bukan panel asal maupun disuplai oleh feeder — tidak '
       'tersambung ke apa pun. Suplai dari panel di hulunya.',
+  StringKey.issueFixtureUntypedTitle: 'Jenis fikstur belum ditetapkan',
+  StringKey.issueFixtureUntypedSupplyMessage:
+      'Jenis fikstur belum ditetapkan — diukur memakai nilai bawaan '
+      'representatif 2,0 UBAP; tetapkan jenisnya di inspektur.',
+  StringKey.issueFixtureUntypedDrainageMessage:
+      'Jenis fikstur belum ditetapkan — diukur memakai nilai bawaan '
+      'representatif 2,0 DFU; tetapkan jenisnya di inspektur.',
   StringKey.issuePressureZoneTitle: 'Zona tekanan melebihi batas fikstur',
   StringKey.issuePressureZoneMessage:
       'Zona tekanan dari "{bottom}" hingga "{top}" mencapai {kpa} kPa statik di '
@@ -2573,6 +2701,13 @@ const Map<StringKey, String> _id = {
   StringKey.issueNounSheetMany: 'lembar',
   StringKey.issueBatchSelectVelocity: 'Pilih {c} {noun} di luar batas',
   StringKey.issueBatchSelectUnsized: 'Pilih {c} {noun} udara belum terukur',
+  StringKey.issueBatchSelectWaterVelocity:
+      'Pilih {c} {noun} kecepatan air di luar batas',
+  StringKey.issueBatchSelectOverCapacity:
+      'Pilih {c} {noun} melebihi kapasitas',
+  StringKey.issueBatchSelectSelfCleansing:
+      'Pilih {c} {noun} di bawah kecepatan bilas',
+  StringKey.issueBatchSelectUnconnected: 'Pilih {c} {noun} tak tersambung',
   StringKey.issueBatchCalibrateNoSource:
       'Kalibrasi satu lembar untuk menyalin skala ke {n} lainnya',
   StringKey.issueBatchCalibrateCopy: 'Salin skala ke {n} {noun} belum dikalibrasi',
@@ -2770,6 +2905,55 @@ const Map<StringKey, String> _id = {
   StringKey.mepSyncBoardRemoved:
       'Panel Peralatan MEP dihapus — tidak ada peralatan tersisa',
   StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',
+  StringKey.calibrationScaleSetRemaining:
+      'Skala diatur: {scale} - {sheets} belum dikalibrasi (terapkan ke semua '
+          'di panel Skala)',
+
+  // D3.
+  StringKey.settingsFeedUpfeed: 'pompa dorong ke atas',
+  StringKey.settingsFeedDownfeed: 'gravitasi tangki atap',
+  StringKey.settingsFeedStrategyChanged:
+      'Pasokan air: {mode} - tekanan, zona dan duti pompa dihitung ulang',
+
+  // G7.
+  StringKey.buildingInputCaptionOccupancy:
+      'Menentukan beban unit fikstur di balik setiap ukuran pipa air',
+  StringKey.buildingInputCaptionRainfall:
+      'Menentukan ukuran talang, roof drain dan pipa tegak air hujan',
+  StringKey.buildingInputCaptionRunoff:
+      'Bagian curah hujan yang sampai ke outlet (metode rasional)',
+  StringKey.buildingInputCaptionSlope:
+      'Menentukan ukuran gravitasi dan pemeriksaan pembersihan sendiri',
+  StringKey.buildingSlopeDirectionHint:
+      'Tambah = lebih curam (1:90), kurang = lebih landai (1:110)',
+  StringKey.buildingInputCaptionHotWaterFlow:
+      'Suhu keluar pemanas, sebelum penurunan loop di bawah',
+  StringKey.buildingInputCaptionHotWaterDeltaT:
+      'K = derajat C yang hilang di loop; suhu balik harus di atas 55 C',
+  StringKey.buildingInputCaptionAcBasis:
+      'Dasar yang dipakai estimasi AC untuk setiap ruang',
+  StringKey.buildingSizingUpdated: 'Ukuran diperbarui',
+
+  // F8.
+  StringKey.buildingMountingCeilingDrop: 'Turun plafon',
+  StringKey.buildingMountingCeilingDropCaption:
+      'Jarak pipa induk digantung di bawah pelat atas; menentukan panjang turunan',
+  StringKey.buildingMountingFixtureHeight: 'Tinggi fikstur',
+  StringKey.buildingMountingFixtureHeightCaption:
+      'Tinggi sambungan fikstur di atas lantainya; menentukan angkat statis',
+
+  // F10.
+  StringKey.buildingPlanOne: 'denah',
+  StringKey.buildingPlanMany: 'denah',
+  StringKey.buildingNoPlan: 'belum ada',
+  StringKey.templatePlanShortfallTemplate:
+      'Templat menetapkan {floors} lantai - {plans} diimpor. Tetapkan atau '
+          'gandakan denah di halaman Bangunan.',
+
+  // G6.
+  StringKey.heatmapHeldByDesign: 'target ditahan oleh desain',
+  StringKey.heatmapRealCheckPumpDuty:
+      'pemeriksaan sebenarnya ada pada duti pompa',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]
