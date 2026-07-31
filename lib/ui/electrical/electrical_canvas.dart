@@ -40,6 +40,7 @@
 /// this only reads its result records + drives the store's edit intents.
 library;
 
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
@@ -56,6 +57,7 @@ import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/app_state.dart';
+import '../../store/electrical_canvas_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/history_store.dart';
 import '../canvas/canvas_grid.dart';
@@ -291,6 +293,11 @@ class ElectricalCanvas extends ConsumerStatefulWidget {
 }
 
 class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
+  /// J1 — the local per-frame mirror of
+  /// [electricalCanvasViewProvider]`.transform`. The provider is the sticky
+  /// home (a workspace / tab hop destroys this State); this field is the fast
+  /// path the gesture + paint code reads, re-seeded in [initState] and
+  /// published on every change (the `schematic_view_store` idiom).
   ViewportTransform? _transform;
   Size _viewportSize = Size.zero;
 
@@ -299,9 +306,41 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   /// actually has content, and by ANY external transform set ([_setTransform]
   /// — a user zoom / pan, the fit button, or an explicit focus like
   /// [focusPanelSchedule]) so an explicit transform always wins and the
-  /// initial fit can never fight it.
+  /// initial fit can never fight it. J1: sticky for the SESSION (mirrored into
+  /// [electricalCanvasViewProvider]), so a hop away and back restores the view
+  /// rather than re-framing it.
   bool _didInitialFit = false;
   final FocusNode _focus = FocusNode(debugLabel: 'electrical-canvas');
+
+  @override
+  void initState() {
+    super.initState();
+    // J1 — restore the sticky viewport + selection from the transient store, so
+    // a workspace / tab hop and back lands exactly where the user left off.
+    final view = ref.read(electricalCanvasViewProvider);
+    _transform = view.transform;
+    _didInitialFit = view.didInitialFit;
+    _selectedPanels = view.selectedPanels;
+    final way = view.waySelection;
+    _selection =
+        way == null ? null : _CanvasSelection.circuit(way.panelId, way.circuitId);
+  }
+
+  ElectricalCanvasViewController get _view =>
+      ref.read(electricalCanvasViewProvider.notifier);
+
+  /// J1 — publish the local selection to the sticky store. Called only from
+  /// gesture / callback paths (never during build).
+  void _publishSelection() {
+    final sel = _selection;
+    if (sel != null) {
+      _view.selectWay(sel.panelId, sel.circuitId!);
+    } else if (_selectedPanels.isEmpty) {
+      _view.clearSelection();
+    } else {
+      _view.selectPanels(_selectedPanels);
+    }
+  }
 
   // Middle-button pan tracking.
   bool _panning = false;
@@ -342,6 +381,35 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   // null when no panel body drag is in flight.
   Map<String, Offset>? _panelDragWorld;
 
+  // ── D2 parity — arrow-nudge COALESCING (mirrors `layout_canvas`) ────────────
+  // Every arrow-key nudge used to `movePanels`, i.e. one `_commit` — so walking
+  // a board ten steps across the canvas ate ten of the 200-cap undo stack and
+  // needed ten Ctrl+Z presses, while a mouse DRAG of the same boards correctly
+  // collapses to one. A nudge BURST now snapshots once on its first key
+  // ([ElectricalProjectController.pushUndoSnapshot], the same call the body
+  // drag makes) and applies every further nudge with the non-recording
+  // [ElectricalProjectController.setPanelPosition], so the whole burst is ONE
+  // undo step. The burst closes on the idle timeout, on any non-arrow key, or
+  // on unmount. At rest the timer never exists ⇒ behaviour is byte-identical.
+  Timer? _nudgeIdleTimer;
+  bool _nudgeBurstOpen = false;
+
+  /// The project the burst's LAST nudge produced. If the live project is no
+  /// longer identical to it, some other edit (or an undo) landed between two
+  /// arrow keys, so the burst must not coalesce onto its now-stale snapshot.
+  ElectricalProject? _nudgeLastProject;
+
+  /// How long a nudge burst stays open after the last arrow key.
+  static const Duration _kNudgeIdleWindow = Duration(milliseconds: 800);
+
+  /// Close the current nudge burst so the next arrow key snapshots again.
+  void _endNudgeBurst() {
+    _nudgeIdleTimer?.cancel();
+    _nudgeIdleTimer = null;
+    _nudgeBurstOpen = false;
+    _nudgeLastProject = null;
+  }
+
   void _selectPanel(String id) {
     final shift = HardwareKeyboard.instance.isShiftPressed;
     setState(() {
@@ -354,12 +422,16 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         _selectedPanels = {id};
       }
     });
+    _publishSelection();
   }
 
-  void _selectCircuit(String panelId, String circuitId) => setState(() {
-        _selection = _CanvasSelection.circuit(panelId, circuitId);
-        _selectedPanels = const {};
-      });
+  void _selectCircuit(String panelId, String circuitId) {
+    setState(() {
+      _selection = _CanvasSelection.circuit(panelId, circuitId);
+      _selectedPanels = const {};
+    });
+    _publishSelection();
+  }
 
   void _clearSelection() {
     if (_selection != null || _selectedPanels.isNotEmpty) {
@@ -367,6 +439,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         _selection = null;
         _selectedPanels = const {};
       });
+      _publishSelection();
     }
   }
 
@@ -386,6 +459,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         _selectedPanels = {panelId};
         _selection = null;
       });
+      _publishSelection();
     }
     _panelDragWorld = {
       for (final id in group) id: positions[id] ?? Offset.zero,
@@ -543,11 +617,18 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     if (t != null) {
       _transform = t;
       _didInitialFit = true;
+      // J1 — publish the framing so a hop away and back restores it (and the
+      // one-shot stays consumed for the session). Deferred to after the frame:
+      // this runs inside `build`, and a provider must not be written then.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _view.setTransform(t);
+      });
     }
   }
 
   @override
   void dispose() {
+    _nudgeIdleTimer?.cancel();
     _focus.dispose();
     super.dispose();
   }
@@ -571,6 +652,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     // forfeits the pending one-shot initial fit: an explicit transform always
     // wins (E1).
     _didInitialFit = true;
+    // J1 — the sticky store always learns the explicit transform (even when it
+    // matches the local mirror, so the consumed one-shot is recorded too).
+    _view.setTransform(next);
     if (next == _transform) return;
     setState(() => _transform = next);
   }
@@ -768,6 +852,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       _selection = null;
       _selectedPanels = shift ? {..._selectedPanels, ...hit} : hit;
     });
+    _publishSelection();
   }
 
   void _onScaleStart(ScaleStartDetails details) => _lastScale = 1.0;
@@ -794,6 +879,14 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     // never let an editing keystroke mutate the drawing.
     if (isTextEntryFocused()) return KeyEventResult.ignored;
     final key = event.logicalKey;
+    // D2 parity — ANY non-arrow key ends an open nudge burst, so the burst can
+    // never outlive the edit it snapshotted (an undo, a delete, a selection
+    // change between two nudges must not fold into the same step).
+    final isArrowKey = key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown;
+    if (_nudgeBurstOpen && !isArrowKey) _endNudgeBurst();
     // Undo / redo route through the GLOBAL timeline (history_store), matching
     // the Layout canvas — so Ctrl+Z reverts the genuinely most-recent edit
     // across domains, never silently undoing another workspace's work.
@@ -810,12 +903,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       ref.read(historyProvider.notifier).redo();
       return KeyEventResult.handled;
     }
-    // D2: arrow keys nudge the selected panel(s) by one grid step, one undo step.
-    final isArrow = key == LogicalKeyboardKey.arrowLeft ||
-        key == LogicalKeyboardKey.arrowRight ||
-        key == LogicalKeyboardKey.arrowUp ||
-        key == LogicalKeyboardKey.arrowDown;
-    if (_selectedPanels.isNotEmpty && isArrow) {
+    // D2: arrow keys nudge the selected panel(s) by one grid step; a whole
+    // BURST of them is one undo step (see [_endNudgeBurst]).
+    if (_selectedPanels.isNotEmpty && isArrowKey) {
       final dx = key == LogicalKeyboardKey.arrowLeft
           ? -kGrid.toDouble()
           : key == LogicalKeyboardKey.arrowRight
@@ -837,7 +927,25 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               _snapGrid(positions[id]!.dy + dy),
             ),
       };
-      if (targets.isNotEmpty) _ctrl.movePanels(targets);
+      if (targets.isNotEmpty) {
+        // One undo step per BURST: snapshot only when the burst OPENS, then
+        // keep it open while the arrow keys keep coming. The burst also
+        // re-opens whenever the project is no longer the one our own last
+        // nudge produced (an undo, a delete, any other edit landed between
+        // two keys), so a coalesced step can never sit on a popped snapshot.
+        final continuing =
+            _nudgeBurstOpen && identical(_nudgeLastProject, project);
+        if (!continuing) {
+          _ctrl.pushUndoSnapshot();
+          _nudgeBurstOpen = true;
+        }
+        _nudgeIdleTimer?.cancel();
+        _nudgeIdleTimer = Timer(_kNudgeIdleWindow, _endNudgeBurst);
+        // Non-recording moves (the same intent the body drag uses per frame),
+        // so the burst's snapshot is the ONE undo entry.
+        targets.forEach((id, p) => _ctrl.setPanelPosition(id, p.dx, p.dy));
+        _nudgeLastProject = ref.read(electricalProjectProvider);
+      }
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.delete ||
@@ -846,6 +954,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       if (_selectedPanels.isNotEmpty) {
         _ctrl.deletePanels(_selectedPanels);
         setState(() => _selectedPanels = const {});
+        _publishSelection();
         return KeyEventResult.handled;
       }
       final sel = _selection;
@@ -856,6 +965,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
           _ctrl.deletePanel(sel.panelId);
         }
         setState(() => _selection = null);
+        _publishSelection();
         return KeyEventResult.handled;
       }
     }
@@ -1516,6 +1626,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         _selectedPanels = const {};
       }
     });
+    _publishSelection();
   }
 
   /// Zoom back OUT to the summary card for [panelId] (I7) — frame it just below

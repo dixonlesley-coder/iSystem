@@ -19,10 +19,13 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
+import 'package:mechx_engine/electrical/sources.dart' show GeneratorSource;
+import 'package:mechx_engine/units.dart' show ApparentPower;
 
 void main() {
   /// Pump a minimal ProviderScope and capture a live [WidgetRef] — the same
@@ -88,6 +91,130 @@ void main() {
 
     // The Daftar Gambar cover sheet is written too.
     expect(files.contains('project-00-cover-sheets.pdf'), isTrue);
+  });
+
+  testWidgets(
+      'I2 — the mechanical riser is issued as PDF *and* DXF (the CAD sibling '
+      'no longer needs its own menu trip)', (tester) async {
+    final ref = await harness(tester);
+    ref.read(projectControllerProvider.notifier).setName('project');
+
+    final wrote =
+        await tester.runAsync(() => writeSubmittalPackageToDir(ref, dir.path));
+    expect(wrote, isTrue);
+
+    final files = dir
+        .listSync()
+        .whereType<File>()
+        .map((f) => f.uri.pathSegments.last)
+        .toSet();
+    expect(files, contains('project-riser-sld.pdf'));
+    expect(files, contains('project-riser-sld.dxf'));
+  });
+
+  testWidgets(
+      'I2 — a project with NO electrical panels writes no electrical set '
+      '(honest: nothing is fabricated)', (tester) async {
+    final ref = await harness(tester);
+    ref.read(projectControllerProvider.notifier).setName('project');
+
+    await tester.runAsync(() => writeSubmittalPackageToDir(ref, dir.path));
+
+    final files = dir
+        .listSync()
+        .whereType<File>()
+        .map((f) => f.uri.pathSegments.last)
+        .toSet();
+    for (final absent in [
+      'project-electrical-sld.pdf',
+      'project-electrical-overview-sld.pdf',
+      'project-electrical-overview-sld.dxf',
+      'project-electrical-riser.pdf',
+      'project-electrical-riser.dxf',
+      'project-electrical-power-one-line.pdf',
+      'project-electrical-power-one-line.dxf',
+      'project-electrical-report.md',
+    ]) {
+      expect(files, isNot(contains(absent)),
+          reason: 'no sized panels ⇒ "$absent" must not be written');
+    }
+  });
+
+  testWidgets(
+      'I2 — a project WITH sized panels bundles the whole electrical set: '
+      'detail SLD, building overview (PDF+DXF), building riser (PDF+DXF) and '
+      'the electrical calc report', (tester) async {
+    final ref = await harness(tester);
+    ref.read(projectControllerProvider.notifier).setName('project');
+    ref
+        .read(electricalProjectProvider.notifier)
+        .setProject(sampleElectricalProject());
+    await tester.pump();
+
+    final wrote =
+        await tester.runAsync(() => writeSubmittalPackageToDir(ref, dir.path));
+    expect(wrote, isTrue);
+
+    final files = dir
+        .listSync()
+        .whereType<File>()
+        .map((f) => f.uri.pathSegments.last)
+        .toSet();
+    for (final expected in [
+      // Pre-existing.
+      'project-electrical-sld.pdf',
+      // I2 additions.
+      'project-electrical-overview-sld.pdf',
+      'project-electrical-overview-sld.dxf',
+      'project-electrical-riser.pdf',
+      'project-electrical-riser.dxf',
+      'project-electrical-report.md',
+    ]) {
+      expect(files, contains(expected));
+    }
+    // Every bundled drawing is non-empty (a real render, not a stub file).
+    for (final name in files.where((f) => f.startsWith('project-electrical'))) {
+      expect(File('${dir.path}${Platform.pathSeparator}$name').lengthSync(),
+          greaterThan(0),
+          reason: '$name should carry real content');
+    }
+    // The electrical calc report is the engine's own document.
+    final md =
+        File('${dir.path}${Platform.pathSeparator}project-electrical-report.md')
+            .readAsStringSync();
+    expect(md, contains('Lighting Panel'));
+
+    // The sample project declares NO energy sources, so there is no power
+    // one-line to draw — and none is written (the same honesty gate the
+    // standalone export enforces via `kNoEnergySourcesMessage`).
+    expect(ref.read(electricalAdvancedProvider).powerOneLine, isNull);
+    expect(files, isNot(contains('project-electrical-power-one-line.pdf')));
+    expect(files, isNot(contains('project-electrical-power-one-line.dxf')));
+  });
+
+  testWidgets(
+      'I2 — declaring a genset gives the project a power one-line, and the '
+      'package then bundles it as PDF + DXF', (tester) async {
+    final ref = await harness(tester);
+    ref.read(projectControllerProvider.notifier).setName('project');
+    final ctrl = ref.read(electricalProjectProvider.notifier);
+    ctrl.setProject(sampleElectricalProject());
+    ctrl.setGenerator(
+        GeneratorSource(kva: ApparentPower.kilovoltAmperes(40)));
+    await tester.pump();
+    expect(ref.read(electricalAdvancedProvider).powerOneLine?.nodes.isNotEmpty,
+        isTrue,
+        reason: 'the fixture must actually produce a one-line to bundle');
+
+    await tester.runAsync(() => writeSubmittalPackageToDir(ref, dir.path));
+
+    final files = dir
+        .listSync()
+        .whereType<File>()
+        .map((f) => f.uri.pathSegments.last)
+        .toSet();
+    expect(files, contains('project-electrical-power-one-line.pdf'));
+    expect(files, contains('project-electrical-power-one-line.dxf'));
   });
 
   testWidgets('an empty sheet rail writes no plan PDF/DXF (no-op loop)',

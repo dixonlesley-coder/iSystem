@@ -21,8 +21,26 @@ corrections are folded into the text below; the merge analysis groups the 69
 into the themes used here. Every finding is actionable within the guardrails
 (custom design system, offline, pure engine, additive `.mechx`).
 
-**Status: PLAN OF RECORD — no findings fixed yet.** Sequenced into four waves
-at the bottom.
+**Status: CAMPAIGN COMPLETE (2026-07-31) — all four waves LANDED** in three
+ultracode batches (11 agents + orchestrator seams; see the three §15 rows).
+Every finding below is fixed or explicitly dispositioned. Batch 1: the Locate
+contract A1–A5, riser contract B1–B4, data safety C1–C3/C6, undo granularity
+D1–D2, draw scope E1, F3/F4-gate, G2, H3, H5. Batch 2: message quality
+G1/G3–G7, A6, F1/F2/F5, F7–F12, D3, plus the orchestrator's A6 chips and the
+mounting/report/undo seams. Batch 3: export surface I1/I2/I5, electrical
+parity J1/J2/J4/J6/J7 + nudge parity, canvas polish J3/J5, C4/C5, E2/E3, F6,
+I4 (store + the Paste-to-floors dialog + canvas-menu row). Recorded
+residuals/dispositions: J3's corridor radius scales with mean node spacing, so
+the sparse DEMO fixture still washes most of its small sheet (correct by
+construction; dense real projects read as a corridor); the electrical canvas
+selection stays set-valued in its own transient provider (true unification needs
+`electricalSelectionProvider` to become set-valued); `movePanels` is now
+unreferenced public API; canvas-view providers are not reset on project load
+(matches the riser-store precedent, deliberate); the G7/E2 reject-messages and
+menu rows are EN literals matching their neighbours; last-import-dir memory is
+session-scoped (persisting it is a 4-line AppSettings follow-up); C1's
+park-don't-delete means deleted equipment leaves one visibly-marked parked way
+until the engineer removes it (narrated, by design).
 
 ---
 

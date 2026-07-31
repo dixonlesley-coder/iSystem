@@ -531,16 +531,20 @@ void main() {
           .runAsync(() => writeSubmittalPackageToDir(ref, dir.path));
       expect(wrote, isTrue);
 
-      final dxf = dir
-          .listSync()
-          .whereType<File>()
-          .firstWhere((f) => f.path.endsWith('.dxf'))
-          .readAsStringSync();
-      // The issued sheet stamps the slope the SIZER used, not the hard-coded
-      // 1:100 default — the finding's "the issued sheet contradicts the signed
-      // report".
-      expect(dxf.contains('1:50'), isTrue);
-      expect(dxf.contains('1:100'), isFalse);
+      // The package now bundles several DXFs (riser SLD, electrical set); the
+      // fall token rides the PLAN drawing(s). Assert across the whole set: the
+      // issued sheets stamp the slope the SIZER used somewhere, and the
+      // hard-coded 1:100 default appears NOWHERE — the finding's "the issued
+      // sheet contradicts the signed report".
+      final dxfs = [
+        for (final f in dir.listSync().whereType<File>())
+          if (f.path.endsWith('.dxf')) f.readAsStringSync(),
+      ];
+      expect(dxfs, isNotEmpty);
+      expect(dxfs.any((d) => d.contains('1:50')), isTrue,
+          reason: 'the plan DXF must stamp the real 1:50 fall');
+      expect(dxfs.every((d) => !d.contains('1:100')), isTrue,
+          reason: 'no issued DXF may stamp the stale 1:100 default');
     });
 
     testWidgets('the canvas label formatter re-paints on a slope change',

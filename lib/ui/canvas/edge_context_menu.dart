@@ -13,6 +13,7 @@ import '../../store/ai_copilot_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
+import '../shell/duplicate_floor_dialog.dart' show showPasteToFloorsDialog;
 import '../../store/selection_store.dart';
 import '../../store/sizing_store.dart';
 import '../strings/app_strings.dart';
@@ -427,10 +428,19 @@ class _NodeMenuLayer extends ConsumerWidget {
             onDismiss();
           },
         ),
+      // E2 — the SPAN is named on the row, and the whole-building variant is a
+      // deliberate second choice rather than the silent default.
       MechXMenuRow(
-        label: 'Select similar',
+        label: 'Select similar (this floor)',
         onTap: () {
           sel.selectSimilarNodes(nodeId);
+          onDismiss();
+        },
+      ),
+      MechXMenuRow(
+        label: 'Select similar (all floors)',
+        onTap: () {
+          sel.selectSimilarNodes(nodeId, allFloors: true);
           onDismiss();
         },
       ),
@@ -533,6 +543,17 @@ class _CanvasMenuLayer extends ConsumerWidget {
                     ctrl.pasteAt(
                         sheetId: sheetId, floorIndex: floorIndex, world: world);
                     onDismiss();
+                  },
+                ),
+              // I4 — fan the clipboard out to a picked set of floors (a shaft
+              // group up the building in one gesture, one undo step).
+              if (ctrl.hasClipboard &&
+                  ref.read(projectControllerProvider).building.levelCount > 1)
+                MechXMenuRow(
+                  label: 'Paste to floors...',
+                  onTap: () {
+                    onDismiss();
+                    showPasteToFloorsDialog(context);
                   },
                 ),
               MechXMenuRow(
@@ -889,10 +910,21 @@ class _EdgeMenuPanel extends ConsumerWidget {
     if (selection.isMulti) {
       children.addAll(transformMenuRows(ref, close));
     }
+    // E2 — the SPAN is named on the row, and the whole-building variant is a
+    // deliberate second choice rather than the silent default.
     children.add(MechXMenuRow(
-      label: 'Select similar',
+      label: 'Select similar (this floor)',
       onTap: () {
         ref.read(selectionProvider.notifier).selectSimilarEdges(edge.id);
+        close();
+      },
+    ));
+    children.add(MechXMenuRow(
+      label: 'Select similar (all floors)',
+      onTap: () {
+        ref
+            .read(selectionProvider.notifier)
+            .selectSimilarEdges(edge.id, allFloors: true);
         close();
       },
     ));

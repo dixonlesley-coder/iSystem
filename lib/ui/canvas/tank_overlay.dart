@@ -1,11 +1,13 @@
 import 'package:flutter/widgets.dart';
-import 'package:flutter/gestures.dart' show kSecondaryButton, PointerDownEvent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 
 import '../../store/annotation_store.dart';
+import '../../store/app_state.dart' show statusMessageProvider;
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../strings/app_strings.dart';
+import 'armed_delete.dart';
 import 'viewport.dart';
 
 /// What a live pointer drag on the tank overlay is doing (E6): drawing a NEW
@@ -48,6 +50,9 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
   bool _cornerUsesAx = false, _cornerUsesAy = false;
   bool _snapped = false; // whether the one-per-drag undo snapshot was taken
 
+  /// C4 — the two-click, pointer-UP secondary delete.
+  final _armed = ArmedSecondaryDelete();
+
   /// Handle hit radius in SCREEN pixels (a resize grip near a corner).
   static const double _handleHitPx = 11;
 
@@ -57,6 +62,7 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
     if (!widget.active) {
       _dragStart = null;
       _dragNow = null;
+      _armed.disarm();
     }
   }
 
@@ -70,7 +76,9 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
             a,
       ];
 
-  void _onSecondary(Offset localPos) {
+  /// The tank whose centre is nearest [localPos] within the 40 px pick radius —
+  /// the delete candidate. Null when the click landed on nothing.
+  String? _deleteCandidate(Offset localPos) {
     final t = _transform;
     String? best;
     var bestD = double.infinity;
@@ -82,9 +90,31 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
         best = a.id;
       }
     }
-    if (best != null && bestD <= 40) {
-      ref.read(tankAreasProvider.notifier).removeById(best);
-      ref.read(selectedAnnotationProvider.notifier).clear(best);
+    return (best != null && bestD <= 40) ? best : null;
+  }
+
+  /// C4 — the delete completes on pointer-UP after a confirming second click
+  /// (see [ArmedSecondaryDelete]), and a status pill names the tank that went.
+  /// The removal itself is unchanged — one undoable annotation step.
+  void _onSecondaryUp(PointerUpEvent e) {
+    final outcome = _armed.pointerUp(e, _deleteCandidate(e.localPosition));
+    final id = outcome.id;
+    if (id == null) return;
+    final tank = _mine.where((t) => t.id == id).firstOrNull;
+    if (tank == null) return;
+    final strings = MechXStrings.of(context);
+    final status = ref.read(statusMessageProvider.notifier);
+    switch (outcome.action) {
+      case ArmedDeleteAction.none:
+        return;
+      case ArmedDeleteAction.armed:
+        status.showStatus(strings.format(
+            StringKey.annotationDeleteArmTemplate, {'what': tank.name}));
+      case ArmedDeleteAction.deleted:
+        ref.read(tankAreasProvider.notifier).removeById(id);
+        ref.read(selectedAnnotationProvider.notifier).clear(id);
+        status.showStatus(strings
+            .format(StringKey.annotationDeletedTemplate, {'what': tank.name}));
     }
   }
 
@@ -197,7 +227,7 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
     if (_mode == _TankDrag.draw) {
       final a = _dragStart, b = _dragNow;
       if (a != null && b != null) {
-        ref.read(tankAreasProvider.notifier).add(
+        final id = ref.read(tankAreasProvider.notifier).add(
               sheetId: widget.sheetId,
               floorIndex: widget.floorIndex,
               ax: a.dx,
@@ -205,6 +235,11 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
               bx: b.dx,
               by: b.dy,
             );
+        // F6: a just-drawn tank is SELECTED, like every drawn node — its depth /
+        // material inputs are then already framed in the inspector.
+        if (id != null) {
+          ref.read(selectedAnnotationProvider.notifier).selectTank(id);
+        }
       }
     }
     setState(() {
@@ -260,9 +295,8 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
     return MouseRegion(
       cursor: SystemMouseCursors.precise,
       child: Listener(
-        onPointerDown: (PointerDownEvent e) {
-          if (e.buttons == kSecondaryButton) _onSecondary(e.localPosition);
-        },
+        onPointerDown: _armed.pointerDown,
+        onPointerUp: _onSecondaryUp,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTapUp: (d) => _onTapUp(d.localPosition),

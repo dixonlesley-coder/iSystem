@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/duct_static.dart';
@@ -519,6 +520,22 @@ typedef HeatmapFieldKey = ({
 /// across the longer edge` resolution matches the painter's prior inline sample.
 final heatmapFieldProvider =
     Provider.family<ScalarField?, HeatmapFieldKey>((ref, key) {
+  final nodes = _heatmapFieldNodes(ref, key);
+  if (nodes == null) return null;
+  final resolution = (math.max(key.width, key.height) / 28).clamp(1.0, 1e9);
+  return sampleField(
+    nodes: nodes,
+    bounds: FieldBounds(0, 0, key.width, key.height),
+    resolution: resolution,
+  );
+});
+
+/// The solved sample points feeding the heatmap on one sheet/floor: every node
+/// that carries a residual. Null when there is no residual data at all (the
+/// caller renders nothing). Shared by [heatmapFieldProvider] and
+/// [heatmapMaskProvider] so the field and its mask can never sample different
+/// node sets.
+List<FieldNode>? _heatmapFieldNodes(Ref ref, HeatmapFieldKey key) {
   final residual = ref.watch(residualByNodeProvider);
   if (residual.isEmpty) return null;
   final net = ref.watch(sizingNetworkProvider);
@@ -528,12 +545,135 @@ final heatmapFieldProvider =
         if (residual[n.id] != null)
           FieldNode(n.x, n.y, residual[n.id]!.inKiloPascals),
   ];
-  if (nodes.isEmpty) return null;
-  final resolution = (math.max(key.width, key.height) / 28).clamp(1.0, 1e9);
-  return sampleField(
-    nodes: nodes,
-    bounds: FieldBounds(0, 0, key.width, key.height),
-    resolution: resolution,
+  return nodes.isEmpty ? null : nodes;
+}
+
+/// J3 — how far the painted heatmap corridor reaches, as a MULTIPLE of the
+/// network's own characteristic node spacing (the mean nearest-neighbour
+/// distance over the sampled nodes). Two spacings out, the interpolation is
+/// still bracketed by real solved values on at least one side; beyond that the
+/// IDW is pure extrapolation and must not be presented as measurement.
+const double kHeatmapCorridorSpacings = 2.0;
+
+/// J3 — the fraction of [kHeatmapCorridorSpacings] over which the corridor
+/// FADES to nothing (a soft edge rather than a hard cut, which would itself
+/// read as a drawn boundary). Full opacity out to the core radius, zero at
+/// `core * (1 + this)`.
+const double kHeatmapCorridorFeather = 0.6;
+
+/// J3 — the per-cell opacity MASK that keeps the heatmap wash "along the
+/// pipework". Cell (col, row) matches [heatmapFieldProvider]'s grid exactly
+/// (it is derived from that field), and carries a 0..1 multiplier the painter
+/// applies to the cell's colour alpha:
+///
+///  * 1.0 within [coreRadius] of the nearest solved node — the corridor the
+///    solve actually measured;
+///  * a linear fade to 0.0 at `coreRadius * (1 + kHeatmapCorridorFeather)`;
+///  * 0.0 beyond — empty sheet corners stay bare plan, because the solve says
+///    nothing about them.
+///
+/// The radius is derived from the drawing, not from the paper: the mean
+/// NEAREST-NEIGHBOUR distance between sampled nodes (the network's own
+/// characteristic spacing) x [kHeatmapCorridorSpacings]. A single sampled node
+/// has no spacing to measure, so it falls back to three sample cells. The floor
+/// of two cells keeps a sparse network from dissolving into speckle smaller
+/// than the sample grid itself.
+///
+/// Memoized on the same inputs as the field (K3), so pan/zoom reuses it.
+@immutable
+class HeatmapMask {
+  final int cols;
+  final int rows;
+  final double cellSize;
+  final double originX;
+  final double originY;
+
+  /// The corridor's full-opacity radius in sheet (world) pixels — surfaced for
+  /// tests and for anyone reasoning about the derivation.
+  final double coreRadius;
+
+  /// Row-major 0..1 alpha multipliers, one per grid cell.
+  final List<double> alpha;
+
+  const HeatmapMask({
+    required this.cols,
+    required this.rows,
+    required this.cellSize,
+    required this.originX,
+    required this.originY,
+    required this.coreRadius,
+    required this.alpha,
+  });
+
+  double alphaAt(int col, int row) => alpha[row * cols + col];
+
+  /// Whether every cell is fully painted (nothing is masked away) — the mask is
+  /// then a no-op and the render is exactly the pre-J3 wash.
+  bool get isOpaqueEverywhere => alpha.every((a) => a >= 1.0);
+}
+
+final heatmapMaskProvider =
+    Provider.family<HeatmapMask?, HeatmapFieldKey>((ref, key) {
+  final field = ref.watch(heatmapFieldProvider(key));
+  if (field == null) return null;
+  final nodes = _heatmapFieldNodes(ref, key);
+  if (nodes == null) return null;
+
+  // The network's characteristic spacing: mean nearest-neighbour distance.
+  var spacingSum = 0.0;
+  var spacingCount = 0;
+  for (var i = 0; i < nodes.length; i++) {
+    var nearest = double.infinity;
+    for (var j = 0; j < nodes.length; j++) {
+      if (i == j) continue;
+      final dx = nodes[i].x - nodes[j].x;
+      final dy = nodes[i].y - nodes[j].y;
+      final d = math.sqrt(dx * dx + dy * dy);
+      if (d < nearest) nearest = d;
+    }
+    if (nearest.isFinite && nearest > 0) {
+      spacingSum += nearest;
+      spacingCount++;
+    }
+  }
+  final spacing = spacingCount == 0 ? 0.0 : spacingSum / spacingCount;
+  final core = math.max(
+    field.cellSize * 2,
+    spacingCount == 0
+        ? field.cellSize * 3
+        : spacing * kHeatmapCorridorSpacings,
+  );
+  final outer = core * (1 + kHeatmapCorridorFeather);
+
+  final alpha = List<double>.filled(field.cols * field.rows, 0.0);
+  for (var row = 0; row < field.rows; row++) {
+    final cy = field.centerY(row);
+    for (var col = 0; col < field.cols; col++) {
+      final cx = field.centerX(col);
+      var nearest = double.infinity;
+      for (final n in nodes) {
+        final dx = n.x - cx;
+        final dy = n.y - cy;
+        final d2 = dx * dx + dy * dy;
+        if (d2 < nearest) nearest = d2;
+      }
+      final d = math.sqrt(nearest);
+      final a = d <= core
+          ? 1.0
+          : d >= outer
+              ? 0.0
+              : 1.0 - (d - core) / (outer - core);
+      alpha[row * field.cols + col] = a;
+    }
+  }
+  return HeatmapMask(
+    cols: field.cols,
+    rows: field.rows,
+    cellSize: field.cellSize,
+    originX: field.originX,
+    originY: field.originY,
+    coreRadius: core,
+    alpha: alpha,
   );
 });
 

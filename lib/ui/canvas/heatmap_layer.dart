@@ -69,6 +69,16 @@ class HeatmapLayer extends ConsumerWidget {
     )));
     if (field == null) return const SizedBox.shrink();
 
+    // J3: the corridor mask — the wash fades out beyond the pipework the solve
+    // actually measured, so an empty sheet corner is never coloured as if it
+    // carried a residual. Derived from (and grid-aligned with) the same field.
+    final mask = ref.watch(heatmapMaskProvider((
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      width: contentSize.width,
+      height: contentSize.height,
+    )));
+
     // E4: a (near-)uniform residual field used to wash the whole sheet in the
     // mid-ramp amber (a pale tan at the overlay alpha), reading as a stained
     // page rather than a deliberate overlay. When there's essentially one value
@@ -86,6 +96,7 @@ class HeatmapLayer extends ConsumerWidget {
                 field: field,
                 transform: transform,
                 uniformColor: uniformColor,
+                mask: mask,
               ),
             ),
           ),
@@ -317,10 +328,17 @@ class _HeatmapPainter extends CustomPainter {
   /// wash. Null ⇒ the normal per-cell red→amber→teal ramp.
   final Color? uniformColor;
 
+  /// J3 — the per-cell corridor opacity mask (grid-aligned with [field]). Null
+  /// ⇒ no masking (the pre-J3 full-sheet wash). Applied as a multiplier on the
+  /// cell colour's alpha, so a cell far from any solved node is not painted at
+  /// all: colour where there is no pipework is extrapolation, not measurement.
+  final HeatmapMask? mask;
+
   _HeatmapPainter({
     required this.field,
     required this.transform,
     this.uniformColor,
+    this.mask,
   });
 
   @override
@@ -329,9 +347,17 @@ class _HeatmapPainter extends CustomPainter {
     final max = field.max;
     final resolution = field.cellSize;
     final cell = resolution * transform.scale;
+    // Only usable when it describes THIS grid (it is derived from it, but a
+    // mismatched pair must degrade to the unmasked wash rather than misalign).
+    final m = (mask != null && mask!.cols == field.cols && mask!.rows == field.rows)
+        ? mask
+        : null;
 
     for (var row = 0; row < field.rows; row++) {
       for (var col = 0; col < field.cols; col++) {
+        final maskAlpha = m == null ? 1.0 : m.alphaAt(col, row);
+        // Nothing to say here — leave the plan bare.
+        if (maskAlpha <= 0.0) continue;
         final Color color;
         if (uniformColor != null) {
           color = uniformColor!;
@@ -339,6 +365,9 @@ class _HeatmapPainter extends CustomPainter {
           final t = normalize(field.valueAt(col, row), min, max);
           color = _ramp(t).withAlpha(105);
         }
+        final faded = maskAlpha >= 1.0
+            ? color
+            : color.withAlpha((color.a * 255 * maskAlpha).round());
         final origin = transform.worldToScreen(
           Offset(field.centerX(col) - resolution / 2,
               field.centerY(row) - resolution / 2),
@@ -346,7 +375,7 @@ class _HeatmapPainter extends CustomPainter {
         canvas.drawRect(
           // +0.5 overlap to avoid seams between cells.
           Rect.fromLTWH(origin.dx, origin.dy, cell + 0.5, cell + 0.5),
-          Paint()..color = color,
+          Paint()..color = faded,
         );
       }
     }
@@ -365,5 +394,6 @@ class _HeatmapPainter extends CustomPainter {
       // yields a new field object → repaint.
       !identical(old.field, field) ||
       old.transform != transform ||
-      old.uniformColor != uniformColor;
+      old.uniformColor != uniformColor ||
+      !identical(old.mask, mask);
 }

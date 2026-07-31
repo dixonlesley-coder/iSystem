@@ -594,8 +594,13 @@ class _ElectricalWorkspaceInspectorColumn extends ConsumerWidget {
         ref.read(electricalInspectorTargetProvider.notifier).clear();
     final editor = buildElectricalInlineEditor(context, ref, clear);
 
-    // D6: the Loads palette is interactive only on the Single-line tab; on the
-    // read-only Building-riser / Power one-line projections it renders inert.
+    // J2 (superseding D6): the Loads palette belongs to the Single-line tab —
+    // it is the only surface with a drop target. On the read-only Building-riser
+    // / Power one-line projections it used to render as twenty DIMMED, inert
+    // cards: a full column of affordances that do nothing. Those tabs now show
+    // the live electrical SYSTEM summary instead (the counterpart of the
+    // mechanical Riser's `RiserSystemSummary` above) — what the diagram in
+    // front of you actually contains, rather than what you cannot do to it.
     final tab = ref.watch(electricalTabProvider);
     return SizedBox(
       width: ProjectPanel.width,
@@ -605,8 +610,9 @@ class _ElectricalWorkspaceInspectorColumn extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(
-                child: ElectricalPalette(
-                    enabled: tab == ElectricalTab.singleLine),
+                child: tab == ElectricalTab.singleLine
+                    ? const ElectricalPalette()
+                    : const ElectricalSystemSummary(),
               ),
             ],
           ),

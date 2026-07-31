@@ -320,9 +320,14 @@ class SheetsController extends Notifier<SheetsState> {
   /// back intact on undo (no project-domain capture needed). The current index is
   /// shifted so the selection stays put when an earlier sheet is removed, and
   /// clamped into range. No-op when [sheetId] is unknown.
-  void removeSheet(String sheetId) {
+  ///
+  /// C5 — returns the COLLATERAL: how many drawn elements (nodes on the sheet
+  /// plus every edge touching them) were pruned with it, so the caller's status
+  /// pill can state what went instead of a bare "Sheet removed". 0 when the
+  /// sheet carried no drawn work, or when [sheetId] is unknown (a no-op).
+  int removeSheet(String sheetId) {
     final idx = state.sheets.indexWhere((s) => s.id == sheetId);
-    if (idx < 0) return;
+    if (idx < 0) return 0;
     final levelCount = ref.read(projectControllerProvider).building.levelCount;
     // Snapshot the effective floor of every OTHER sheet BEFORE removal — their
     // drawn nodes carry this as their frozen floorIndex. Removing a non-last
@@ -346,12 +351,16 @@ class SheetsController extends Notifier<SheetsState> {
       for (final n in net.nodes)
         if (n.sheetId == sheetId) n.id,
     };
+    var pruned = 0;
     if (orphans.isNotEmpty) {
       final nodes = net.nodes.where((n) => !orphans.contains(n.id)).toList();
       final edges = net.edges
           .where((e) =>
               !orphans.contains(e.fromId) && !orphans.contains(e.toId))
           .toList();
+      // The collateral the caller reports: the nodes that went plus the edges
+      // that went with them (an edge is a drawn element in its own right).
+      pruned = orphans.length + (net.edges.length - edges.length);
       ref
           .read(networkControllerProvider.notifier)
           .restoreNetwork(Network(nodes: nodes, edges: edges));
@@ -386,6 +395,7 @@ class SheetsController extends Notifier<SheetsState> {
             levelCount: levelCount, record: false);
       }
     });
+    return pruned;
   }
 }
 

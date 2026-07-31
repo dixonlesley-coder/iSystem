@@ -11,6 +11,8 @@ import 'package:mechx_engine/report/cover_sheet.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
+import 'package:mechx_engine/report/electrical_dxf_export.dart'
+    show SldDxfLayers, electricalSldToDxf;
 import 'package:mechx_engine/report/electrical_pdf_export.dart'
     show electricalSldToPdf;
 import 'package:mechx_engine/report/electrical_plan_export.dart';
@@ -27,7 +29,7 @@ import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
 import 'package:mechx_engine/report/riser_tags.dart' show elementTags;
 import 'package:mechx_engine/report/sld_export.dart'
-    show sldSheetToPdf, sldSheetsToPdf;
+    show sldSheetToDxf, sldSheetToPdf, sldSheetsToPdf;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
@@ -79,7 +81,8 @@ import '../canvas/service_style.dart';
 import '../electrical/electrical_export.dart' show breakerIcuKaByPanel;
 import '../../report/reference_grid_builder.dart';
 import '../format/scale_format.dart';
-import '../schematic/schematic_export.dart' show buildLiveRiserSheet;
+import '../schematic/schematic_export.dart'
+    show buildLiveRiserSheet, riserDiagramTitle;
 import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
 import '../strings/plural.dart';
@@ -252,21 +255,30 @@ Future<void> runExportGuarded(
 /// the OS picker at the shared `lastExportDirProvider` folder (so a session's
 /// exports converge on one place), normalizes the chosen path to end in [ext],
 /// and records the folder so the next dialog re-opens there. Returns null when
-/// the user cancels. Every owned export routes through this so the dir-memory is
-/// uniform; the exporters in other files should adopt it too (see the H4 note in
-/// the review).
+/// the user cancels.
+///
+/// I1 — this is now the ONE save-dialog seam: every export in the app routes
+/// through it (the electrical set, the mechanical riser set, the commercial
+/// BOM/proposal and the project Save-As included), so a revision re-opens where
+/// the last one was written instead of re-navigating the OS picker per file.
+///
+/// [initialDirectory] overrides the remembered folder for the rare dialog with a
+/// better-informed starting point (the project Save-As starts beside the file
+/// the project was loaded from). Null — the default — keeps the shared memory.
+/// The chosen folder is recorded either way, so the memory converges.
 Future<String?> pickExportSave(
   WidgetRef ref, {
   required String dialogTitle,
   required String fileName,
   required String ext,
+  String? initialDirectory,
 }) async {
   final path = await FilePicker.saveFile(
     dialogTitle: dialogTitle,
     fileName: fileName,
     type: FileType.custom,
     allowedExtensions: [ext],
-    initialDirectory: ref.read(lastExportDirProvider),
+    initialDirectory: initialDirectory ?? ref.read(lastExportDirProvider),
   );
   if (path == null) return null;
   final full = path.endsWith('.$ext') ? path : '$path.$ext';
@@ -1097,6 +1109,13 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
     revision: rev,
     date: today,
   ));
+  // I2 — the electrical DRAWINGS bundled below each get their own Daftar Gambar
+  // row (one row per DRAWING, not per format: a sheet issued as PDF + DXF is one
+  // entry, exactly like the per-sheet plans above). The power one-line is listed
+  // only when the project actually carries one to draw.
+  final powerOneLineFm = ref.read(electricalAdvancedProvider).powerOneLine;
+  final hasPowerOneLine =
+      powerOneLineFm != null && powerOneLineFm.nodes.isNotEmpty;
   if (eResultFm.order.isNotEmpty) {
     drawingList.add(DrawingListEntry(
       number: sheetDrawingNumber(
@@ -1105,6 +1124,30 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       revision: rev,
       date: today,
     ));
+    drawingList.add(DrawingListEntry(
+      number: sheetDrawingNumber(
+          base: doc.documentNumber, series: DrawingSeries.electricalOverview),
+      title: 'DIAGRAM SATU GARIS GEDUNG / BUILDING SINGLE-LINE',
+      revision: rev,
+      date: today,
+    ));
+    drawingList.add(DrawingListEntry(
+      number: sheetDrawingNumber(
+          base: doc.documentNumber, series: DrawingSeries.electricalRiser),
+      title: 'DIAGRAM RISER LISTRIK / ELECTRICAL RISER',
+      revision: rev,
+      date: today,
+    ));
+    if (hasPowerOneLine) {
+      drawingList.add(DrawingListEntry(
+        number: sheetDrawingNumber(
+            base: doc.documentNumber,
+            series: DrawingSeries.electricalPowerOneLine),
+        title: 'DIAGRAM DAYA / POWER ONE-LINE',
+        revision: rev,
+        date: today,
+      ));
+    }
   }
 
   // Cable families the electrical set actually specifies; fall back to the
@@ -1241,12 +1284,32 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
     projectName: base,
   ));
 
-  // ── Mechanical riser single-line (PDF) ──────────────────────────────────────
+  // ── Mechanical riser single-line (PDF + DXF) ────────────────────────────────
+  // I2 — the DXF rides along: the riser is the one drawing a contractor most
+  // often re-uses in CAD, and issuing it PDF-only forced a separate menu trip +
+  // dialog every revision. One sheet build, both formats, one heading source
+  // (`riserDiagramTitle`) so PDF and DXF can never disagree; the DXF lands on
+  // the M-* layer namespace (N15).
+  //
+  // N2 — the title-block PROJECT row carries the LIVE name (null when the
+  // project is genuinely unnamed, so nothing is fabricated), matching the
+  // standalone riser exports rather than stamping 'Untitled project'.
+  final titleProjectName =
+      project.name.trim().isEmpty ? null : project.name.trim();
+  final riserSheet = buildLiveRiserSheet(ref, null);
   await File(out('riser-sld.pdf')).writeAsBytes(sldSheetToPdf(
-    sheet: buildLiveRiserSheet(ref, null),
+    sheet: riserSheet,
     title: 'iSystem mechanical single-line',
-    diagramTitle: 'MECHANICAL SINGLE-LINE DIAGRAM',
+    diagramTitle: riserDiagramTitle(null),
     chrome: sldChrome(DrawingSeries.mechanicalRiser),
+    projectName: titleProjectName,
+  ));
+  await File(out('riser-sld.dxf')).writeAsString(sldSheetToDxf(
+    sheet: riserSheet,
+    diagramTitle: riserDiagramTitle(null),
+    chrome: sldChrome(DrawingSeries.mechanicalRiser),
+    projectName: titleProjectName,
+    layers: SldDxfLayers.mechanical,
   ));
 
   // ── Every sheet's annotated plan (PDF + DXF) — J2: the whole rail, not just
@@ -1368,7 +1431,19 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
     ref.read(busyProvider.notifier).clear();
   }
 
-  // ── Electrical single-line (PDF), when the project has sized panels ──────────
+  // ── The ELECTRICAL set, when the project has sized panels ───────────────────
+  //
+  // I2 — the package used to stop at the per-panel single-line PDF, so the
+  // building single-line, the floor-by-floor riser, the power one-line and the
+  // electrical calc report were each their own menu trip + save dialog on EVERY
+  // revision (the set an Indonesian kontraktor is actually handed). Each is
+  // built from the SAME pure engine builder its standalone export uses (no new
+  // render path), stamped with its own N19 drawing number by [DrawingSeries],
+  // and — where a contractor works the sheet in CAD — issued as PDF **and** DXF.
+  //
+  // Honest by construction: nothing here is written when there are no sized
+  // panels, and the power one-line is written only when the project carries the
+  // energy sources to draw one (the same gate the standalone export enforces).
   final eResult = ref.read(electricalResultProvider);
   if (eResult.order.isNotEmpty) {
     final eProject = ref.read(electricalProjectProvider);
@@ -1381,6 +1456,62 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       ),
       chrome: sldChrome(DrawingSeries.electricalDetail),
     ));
+
+    // Building single-line (overview) — the whole distribution hierarchy on one
+    // sheet, with the PLN/MV/TX/LV source spine, in both formats.
+    final overviewChrome = sldChrome(DrawingSeries.electricalOverview);
+    final overviewSheet = buildElectricalOverview(
+        project: eProject, result: eResult, sourceChain: true);
+    await File(out('electrical-overview-sld.pdf'))
+        .writeAsBytes(electricalSldToPdf(
+      sheet: overviewSheet,
+      title: 'iSystem electrical single-line (overview)',
+      chrome: overviewChrome,
+    ));
+    await File(out('electrical-overview-sld.dxf'))
+        .writeAsString(electricalSldToDxf(
+      sheet: overviewSheet,
+      chrome: overviewChrome,
+    ));
+
+    // Floor-by-floor electrical riser — built with the LIVE mechanical
+    // [BuildingLevels] (the shared §10 geometry), like its standalone sibling.
+    final eRiserChrome = sldChrome(DrawingSeries.electricalRiser);
+    final eRiserSheet = buildElectricalRiser(
+        project: eProject, result: eResult, building: project.building);
+    await File(out('electrical-riser.pdf')).writeAsBytes(electricalSldToPdf(
+      sheet: eRiserSheet,
+      title: 'iSystem electrical building riser',
+      chrome: eRiserChrome,
+    ));
+    await File(out('electrical-riser.dxf')).writeAsString(electricalSldToDxf(
+      sheet: eRiserSheet,
+      chrome: eRiserChrome,
+    ));
+
+    // Power one-line — only when energy sources exist to draw one.
+    if (hasPowerOneLine) {
+      final oneLineChrome = sldChrome(DrawingSeries.electricalPowerOneLine);
+      final oneLineSheet = buildPowerOneLineSheet(powerOneLineFm);
+      await File(out('electrical-power-one-line.pdf'))
+          .writeAsBytes(electricalSldToPdf(
+        sheet: oneLineSheet,
+        title: 'iSystem power one-line',
+        diagramTitle: 'POWER ONE-LINE DIAGRAM',
+        chrome: oneLineChrome,
+      ));
+      await File(out('electrical-power-one-line.dxf'))
+          .writeAsString(electricalSldToDxf(
+        sheet: oneLineSheet,
+        diagramTitle: 'POWER ONE-LINE DIAGRAM',
+        chrome: oneLineChrome,
+      ));
+    }
+
+    // The electrical calculation report (MD) — the panel-builder's own document,
+    // over the SAME combined warning surface Review and compliance read (R1).
+    await File(out('electrical-report.md')).writeAsString(
+        buildElectricalCalcReport(buildElectricalReportData(ref), strings));
   }
 
   return true;
@@ -3925,6 +4056,16 @@ class _SelectionSection extends ConsumerWidget {
     final showNodeEditors = allNodes && commonRole == NodeRole.fixture;
     final showApply = allEdges || showNodeEditors;
     final applyCount = allEdges ? m : n;
+    // E2 — the batch header names the floor span: a scoped select-similar is
+    // single-floor, but a marquee or the all-floors variant can span the
+    // building, and 'Apply to 14 selected' must not hide that.
+    final applyFloors = <int>{
+      for (final e in selEdges) ...[
+        if (net.nodeById(e.fromId) case final a?) a.floorIndex,
+        if (net.nodeById(e.toId) case final b?) b.floorIndex,
+      ],
+      for (final nd in selNodes) nd.floorIndex,
+    };
 
     Widget label(String text) => Text(text,
         style: type.caption.copyWith(color: colors.textMuted));
@@ -4011,7 +4152,9 @@ class _SelectionSection extends ConsumerWidget {
         // ── E1: batch property editors on a HOMOGENEOUS selection ─────────────
         if (showApply) ...[
           const SizedBox(height: MechXSpacing.lg),
-          MechXSectionLabel('Apply to $applyCount selected'),
+          MechXSectionLabel(applyFloors.length > 1
+              ? 'Apply to $applyCount selected across ${applyFloors.length} floors'
+              : 'Apply to $applyCount selected'),
           if (allEdges) ...[
             // Service (always coherent for an all-edge batch).
             const SizedBox(height: MechXSpacing.sm),

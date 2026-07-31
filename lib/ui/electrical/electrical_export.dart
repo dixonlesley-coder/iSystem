@@ -15,7 +15,6 @@ library;
 
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
@@ -29,7 +28,8 @@ import '../../data/plan_underlay.dart';
 import '../../store/app_state.dart';
 import '../../store/document_control_store.dart';
 import '../../store/electrical_store.dart';
-import '../inspector/project_panel.dart' show reportStringsFor, runExportGuarded;
+import '../inspector/project_panel.dart'
+    show pickExportSave, reportStringsFor, runExportGuarded;
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../strings/app_strings.dart';
@@ -109,7 +109,7 @@ Future<void> exportElectricalSldDxf(WidgetRef ref) => runExportGuarded(
           sheet: sheet,
           chrome: electricalExportChrome(ref),
         );
-        return _save(dxf,
+        return _save(ref, dxf,
             name: project.name,
             suffix: 'sld',
             ext: 'dxf',
@@ -139,15 +139,12 @@ Future<void> exportElectricalSldPdf(WidgetRef ref) => runExportGuarded(
           chrome: electricalExportChrome(ref),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
               StringKey.exportTitleSldPdf),
-          fileName: '$base-sld.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+            fileName: '$base-sld.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -172,15 +169,12 @@ Future<void> exportElectricalOverviewPdf(WidgetRef ref) => runExportGuarded(
               series: DrawingSeries.electricalOverview),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
               StringKey.exportTitleSldPdf),
-          fileName: '$base-overview-sld.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+            fileName: '$base-overview-sld.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -201,7 +195,7 @@ Future<void> exportElectricalOverviewDxf(WidgetRef ref) => runExportGuarded(
             sourceChain: true,
             chrome: electricalExportChrome(ref,
                 series: DrawingSeries.electricalOverview));
-        return _save(dxf,
+        return _save(ref, dxf,
             name: project.name,
             suffix: 'overview-sld',
             ext: 'dxf',
@@ -231,15 +225,12 @@ Future<void> exportElectricalRiserPdf(WidgetRef ref) => runExportGuarded(
               electricalExportChrome(ref, series: DrawingSeries.electricalRiser),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
               StringKey.exportTitleSldPdf),
-          fileName: '$base-riser.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+            fileName: '$base-riser.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -259,7 +250,7 @@ Future<void> exportElectricalRiserDxf(WidgetRef ref) => runExportGuarded(
             sheet: sheet,
             chrome: electricalExportChrome(ref,
                 series: DrawingSeries.electricalRiser));
-        return _save(dxf,
+        return _save(ref, dxf,
             name: project.name,
             suffix: 'riser',
             ext: 'dxf',
@@ -289,15 +280,12 @@ Future<void> exportElectricalPanelSchedulesPdf(WidgetRef ref) =>
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
               StringKey.exportTitlePanelSchedulesPdf),
-          fileName: '$base-panel-schedules.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+            fileName: '$base-panel-schedules.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -329,7 +317,7 @@ Future<void> exportPowerOneLineDxf(WidgetRef ref) => runExportGuarded(
           chrome: electricalExportChrome(ref,
               series: DrawingSeries.electricalPowerOneLine),
         );
-        return _save(dxf,
+        return _save(ref, dxf,
             name: project.name,
             suffix: 'power-one-line',
             ext: 'dxf',
@@ -362,15 +350,12 @@ Future<void> exportPowerOneLinePdf(WidgetRef ref) => runExportGuarded(
               series: DrawingSeries.electricalPowerOneLine),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
               StringKey.exportTitleSldPdf),
-          fileName: '$base-power-one-line.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+            fileName: '$base-power-one-line.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -387,7 +372,10 @@ Future<void> exportElectricalPlanPdf(WidgetRef ref) => runExportGuarded(
       write: () async {
         final sheets = ref.read(sheetsControllerProvider);
         final sheet = sheets.current;
-        if (sheet == null) return false;
+        // H3 tri-state: no plan sheet at all is NOTHING TO WRITE (a visible
+        // "Nothing to export - import a plan first" message), not a silent
+        // cancel — the electrical layout is drawn ON a plan sheet.
+        if (sheet == null) return null;
         final project = ref.read(electricalProjectProvider);
         final result = ref.read(electricalResultProvider);
         final mech = ref.read(projectControllerProvider);
@@ -411,15 +399,12 @@ Future<void> exportElectricalPlanPdf(WidgetRef ref) => runExportGuarded(
           underlay: await buildPlanUnderlay(sheet),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
               StringKey.exportTitleElectricalPlanPdf),
-          fileName: '$base-${sheet.name}-layout.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+            fileName: '$base-${sheet.name}-layout.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -434,7 +419,10 @@ Future<void> exportElectricalPlanDxf(WidgetRef ref) => runExportGuarded(
       write: () async {
         final sheets = ref.read(sheetsControllerProvider);
         final sheet = sheets.current;
-        if (sheet == null) return false;
+        // H3 tri-state: no plan sheet at all is NOTHING TO WRITE (a visible
+        // "Nothing to export - import a plan first" message), not a silent
+        // cancel — the electrical layout is drawn ON a plan sheet.
+        if (sheet == null) return null;
         final project = ref.read(electricalProjectProvider);
         final result = ref.read(electricalResultProvider);
         final mech = ref.read(projectControllerProvider);
@@ -454,7 +442,7 @@ Future<void> exportElectricalPlanDxf(WidgetRef ref) => runExportGuarded(
           chrome:
               electricalExportChrome(ref, series: DrawingSeries.electricalLayout),
         );
-        return _save(dxf,
+        return _save(ref, dxf,
             name: project.name,
             suffix: '${sheet.name}-layout',
             ext: 'dxf',
@@ -492,7 +480,7 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) => runExportGuarded(
               allWarnings: ref.read(electricalAllWarningsProvider),
             ),
             reportStringsFor(ref));
-        return _save(md,
+        return _save(ref, md,
             name: project.name,
             suffix: 'electrical-report',
             ext: 'md',
@@ -504,7 +492,11 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) => runExportGuarded(
 /// Pick a destination and write [content]. Returns false when the user
 /// cancelled the picker (nothing written — the guard shows no pill), true
 /// after a successful write.
+///
+/// I1 — the destination comes from the shared [pickExportSave] seam, so these
+/// text/DXF exports remember the last export folder exactly like the PDF ones.
 Future<bool> _save(
+  WidgetRef ref,
   String content, {
   required String name,
   required String suffix,
@@ -512,14 +504,9 @@ Future<bool> _save(
   required String title,
 }) async {
   final base = name.isEmpty ? 'electrical' : name;
-  final path = await FilePicker.saveFile(
-    dialogTitle: title,
-    fileName: '$base-$suffix.$ext',
-    type: FileType.custom,
-    allowedExtensions: [ext],
-  );
-  if (path == null) return false;
-  final full = path.endsWith('.$ext') ? path : '$path.$ext';
+  final full = await pickExportSave(ref,
+      dialogTitle: title, fileName: '$base-$suffix.$ext', ext: ext);
+  if (full == null) return false;
   await File(full).writeAsString(content);
   return true;
 }

@@ -2889,6 +2889,54 @@ class NetworkController extends Notifier<DrawingState> {
     return (nodeIds: allNodeIds, edgeIds: allEdgeIds);
   }
 
+  /// I4 — paste the clipboard onto SEVERAL floors at once, in ONE undo step:
+  /// the shaft group that repeats up six levels is one gesture, not six sheet
+  /// switches and six pastes.
+  ///
+  /// Each entry of [targets] is a (sheetId, floor) destination; every target
+  /// receives its own fresh-id clone of the SAME clipboard generation, landing
+  /// at the clipboard's own plan position ([offsetWorld], zero by default) —
+  /// a riser group must stack directly above itself, so the cascade offset a
+  /// repeated Ctrl+V uses would be wrong here. Duplicate targets are collapsed.
+  ///
+  /// The whole fan-out is committed once, so ONE Ctrl+Z removes every floor's
+  /// copy; the new elements across all floors become the multi-selection and are
+  /// returned. Like [pasteNCopies] this does NOT re-base the clipboard (the
+  /// fan-out is a one-shot from the originals, so a following Ctrl+V still
+  /// pastes the original block). No-op (empty result) when the clipboard is
+  /// empty or [targets] is empty.
+  ({Set<String> nodeIds, Set<String> edgeIds}) pasteToTargets(
+    List<({String sheetId, int floor})> targets, {
+    Offset offsetWorld = Offset.zero,
+  }) {
+    final clip = _clipboard;
+    if (clip == null || clip.nodes.isEmpty || targets.isEmpty) {
+      return (nodeIds: <String>{}, edgeIds: <String>{});
+    }
+    final seen = <String>{};
+    final addedNodes = <NetNode>[];
+    final addedEdges = <NetEdge>[];
+    final allNodeIds = <String>{};
+    final allEdgeIds = <String>{};
+    for (final t in targets) {
+      if (!seen.add('${t.sheetId}#${t.floor}')) continue;
+      final gen = _cloneClipboard(clip, t.sheetId, t.floor, offsetWorld);
+      addedNodes.addAll(gen.nodes);
+      addedEdges.addAll(gen.edges);
+      allNodeIds.addAll(gen.nodeIds);
+      allEdgeIds.addAll(gen.edgeIds);
+    }
+    if (addedNodes.isEmpty) {
+      return (nodeIds: <String>{}, edgeIds: <String>{});
+    }
+    _commit(Network(
+      nodes: [...state.network.nodes, ...addedNodes],
+      edges: [...state.network.edges, ...addedEdges],
+    ));
+    ref.read(selectionProvider.notifier).setMulti(allNodeIds, allEdgeIds);
+    return (nodeIds: allNodeIds, edgeIds: allEdgeIds);
+  }
+
   /// Paste the clipboard CENTRED at [world] (sheet px) on [sheetId]/
   /// [floorIndex] — the "Paste here" of the canvas context menu. Computes the
   /// offset from the clipboard nodes' centroid and delegates to [paste] (one

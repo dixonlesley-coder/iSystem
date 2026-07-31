@@ -1,11 +1,13 @@
-import 'package:flutter/gestures.dart' show kSecondaryButton, PointerDownEvent;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../store/app_state.dart' show statusMessageProvider;
 import '../../store/network_store.dart' show orthoProvider;
 import '../../store/reference_line_store.dart';
 import '../../store/sheets_store.dart';
+import '../strings/app_strings.dart';
+import 'armed_delete.dart';
 import 'snapping.dart';
 import 'underlay_snap_service.dart';
 import 'viewport.dart';
@@ -39,11 +41,17 @@ class _ReferenceLineOverlayState extends ConsumerState<ReferenceLineOverlay> {
   Offset? _pending; // first placed point (world)
   Offset? _hover; // cursor (world)
 
+  /// C4 — the two-click, pointer-UP secondary delete.
+  final _armed = ArmedSecondaryDelete();
+
   @override
   void didUpdateWidget(ReferenceLineOverlay old) {
     super.didUpdateWidget(old);
     // Abandon a half-placed line when the tool is switched off.
-    if (!widget.active) _pending = null;
+    if (!widget.active) {
+      _pending = null;
+      _armed.disarm();
+    }
   }
 
   ViewportTransform get _transform =>
@@ -79,9 +87,9 @@ class _ReferenceLineOverlayState extends ConsumerState<ReferenceLineOverlay> {
     setState(() => _pending = null);
   }
 
-  /// Secondary-click deletes the nearest reference-line endpoint/midpoint within
-  /// a screen-space threshold (so a stray right-click does nothing).
-  void _onSecondary(Offset localPos) {
+  /// The nearest reference-line endpoint/midpoint within a screen-space
+  /// threshold (so a stray right-click hits nothing) — the delete candidate.
+  String? _deleteCandidate(Offset localPos) {
     final t = _transform;
     final mine =
         ref.read(referenceLinesProvider).where((r) => r.sheetId == widget.sheetId);
@@ -97,8 +105,29 @@ class _ReferenceLineOverlayState extends ConsumerState<ReferenceLineOverlay> {
         }
       }
     }
-    if (best != null && bestD <= 14) {
-      ref.read(referenceLinesProvider.notifier).removeById(best);
+    return (best != null && bestD <= 14) ? best : null;
+  }
+
+  /// C4 — the delete completes on pointer-UP after a confirming second click
+  /// (see [ArmedSecondaryDelete]), with a status pill naming what went. The
+  /// removal itself is unchanged — one undoable step.
+  void _onSecondaryUp(PointerUpEvent e) {
+    final outcome = _armed.pointerUp(e, _deleteCandidate(e.localPosition));
+    final id = outcome.id;
+    if (id == null) return;
+    final strings = MechXStrings.of(context);
+    final what = strings(StringKey.annotationReferenceLine);
+    final status = ref.read(statusMessageProvider.notifier);
+    switch (outcome.action) {
+      case ArmedDeleteAction.none:
+        return;
+      case ArmedDeleteAction.armed:
+        status.showStatus(strings
+            .format(StringKey.annotationDeleteArmTemplate, {'what': what}));
+      case ArmedDeleteAction.deleted:
+        ref.read(referenceLinesProvider.notifier).removeById(id);
+        status.showStatus(
+            strings.format(StringKey.annotationDeletedTemplate, {'what': what}));
     }
   }
 
@@ -130,9 +159,8 @@ class _ReferenceLineOverlayState extends ConsumerState<ReferenceLineOverlay> {
         setState(() => _hover = _snapPoint(t.screenToWorld(e.localPosition), t));
       },
       child: Listener(
-        onPointerDown: (PointerDownEvent e) {
-          if (e.buttons == kSecondaryButton) _onSecondary(e.localPosition);
-        },
+        onPointerDown: _armed.pointerDown,
+        onPointerUp: _onSecondaryUp,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTapUp: _onTapUp,

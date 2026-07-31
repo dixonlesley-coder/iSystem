@@ -917,6 +917,74 @@ enum StringKey {
   // ── The heatmap says WHICH check is falsifiable (G6) ──────────────────────
   heatmapHeldByDesign,
   heatmapRealCheckPumpDuty,
+
+  // ── Import failures speak human (WORKFLOW-FRICTION I5) ────────────────────
+  /// A plan import that threw a parse/format failure, mapped per file TYPE so
+  /// the message names the likely cause AND the next action. The raw exception
+  /// text is kept verbatim in the `{detail}` parenthetical (never swallowed).
+  importFailedDxfTemplate, // {detail}
+  importFailedDwgTemplate, // {detail}
+  importFailedPdfTemplate, // {detail}
+
+  /// The unmapped fallback — an error that is not a parse/format failure
+  /// (a missing file, a permissions error): the old raw wording, kept.
+  importFailedGenericTemplate, // {what} {detail}
+
+  // ── Destructive edits confirm and name their collateral (C4/C5) ───────────
+  /// An armed-tool secondary-click ARMS the delete: the pill names the target
+  /// and asks for the second click (the app's "Tap again to discard" idiom).
+  annotationDeleteArmTemplate, // {what}
+
+  /// The confirmed delete of a drawn annotation.
+  annotationDeletedTemplate, // {what}
+
+  /// A deleted ROOM leaves its auto-placed air terminals on the plan (they keep
+  /// feeding duct sizing and the BOM), so the pill counts what stayed behind.
+  annotationRoomDeletedTemplate, // {what} {terminals}
+
+  /// The air-terminal noun for `pluralCount` in the room-delete pill.
+  annotationTerminalOne,
+  annotationTerminalMany,
+
+  /// The two annotations that carry no name of their own.
+  annotationDimension,
+  annotationReferenceLine,
+
+  /// C5 — removing a sheet PRUNES every element drawn on it; the pill counts
+  /// the collateral and states that one Ctrl+Z brings it all back.
+  sheetRemoved,
+  sheetRemovedPrunedTemplate, // {pruned}
+
+  /// The drawn-element noun for `pluralCount` in the sheet-removed pill.
+  sheetElementOne,
+  sheetElementMany,
+
+  /// J2 — the electrical SYSTEM summary shown on the read-only electrical tabs
+  /// (in place of the inert Loads palette).
+  electricalSummaryTitle,
+  electricalSummaryBoards,
+  electricalSummaryWays,
+  electricalSummaryDemand,
+  electricalSummaryEssential,
+  electricalSummaryEssentialValue, // {essential} {total}
+
+  /// J4 — the on-canvas legend chip's ELECTRICAL rows, plus the muted group
+  /// keying the visible-but-ghosted reference layers (all disciplines).
+  canvasLegendPhaseR,
+  canvasLegendPhaseS,
+  canvasLegendPhaseT,
+  canvasLegendFeeder,
+  canvasLegendEssential,
+  canvasLegendGhosted,
+
+  /// J7 — the Commercial workspace's MECHANICAL bill of materials (its title,
+  /// lead copy, columns and priced flag were the last EN-only literals there).
+  commercialMechBomTitle,
+  commercialMechBomEmpty,
+  commercialMechBomLead, // {lines} {unpriced}
+  commercialColPriced,
+  commercialPriced,
+  commercialUnpriced,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -942,10 +1010,13 @@ const Map<StringKey, String> _en = {
 
   // Commercial workspace — hub.
   StringKey.commercialHubTitle: 'Commercial',
+  // J7: the hub carries the MECHANICAL bill of materials beside the electrical
+  // one and exports them as ONE M+E+P CSV, so the lead no longer says
+  // "electrical" alone.
   StringKey.commercialHubLead:
-      'The electrical bill of materials, your pricelist and the '
-          'priced proposal. Edit prices below and the quotation updates '
-          'live.',
+      'The mechanical and electrical (M+E+P) bill of materials, your '
+          'pricelist and the priced proposal. Edit prices below and the '
+          'quotation updates live.',
   StringKey.commercialExportBomCsv: 'Export BOM (CSV)',
   StringKey.commercialExportProposalMd: 'Export proposal (Markdown)',
 
@@ -1297,7 +1368,11 @@ const Map<StringKey, String> _en = {
   StringKey.exportTitleElectricalPlanDxf: 'Export layout plan (DXF)',
   StringKey.exportTitlePowerOneLineDxf: 'Export power one-line (DXF)',
   StringKey.exportTitleElectricalReport: 'Export electrical report',
-  StringKey.exportTitleElectricalBom: 'Export electrical BOM',
+  // J7: the file this dialog saves is the UNIFIED M+E+P BOM (`-mep-bom.csv` —
+  // mechanical pipe/duct + fittings, then the electrical catalogue lines), so
+  // the title says so. The enum name stays `...ElectricalBom` because its only
+  // call site lives outside this batch's scope.
+  StringKey.exportTitleElectricalBom: 'Export MEP BOM',
   StringKey.exportTitleElectricalProposal: 'Export electrical proposal',
 
   // Electrical workspace — toolbar tabs + buttons.
@@ -1926,6 +2001,60 @@ const Map<StringKey, String> _en = {
   // G6 — the heatmap names the falsifiable check.
   StringKey.heatmapHeldByDesign: 'target held by design',
   StringKey.heatmapRealCheckPumpDuty: 'the real check is the pump duty',
+
+  // I5 — import failures speak human; the raw text rides the parenthetical.
+  StringKey.importFailedDxfTemplate:
+      "That file isn't a readable DXF - is it a DWG? Convert it or import the "
+          'original. ({detail})',
+  StringKey.importFailedDwgTemplate:
+      'That DWG could not be converted - install the ODA File Converter, or '
+          'export a DXF from your CAD program and import that. ({detail})',
+  StringKey.importFailedPdfTemplate:
+      "That PDF could not be read - it may be damaged, password-protected, or "
+          'not a drawing. ({detail})',
+  StringKey.importFailedGenericTemplate: 'Could not import {what}: {detail}',
+
+  // C4/C5 — destructive edits confirm and name their collateral.
+  StringKey.annotationDeleteArmTemplate:
+      'Right-click again to delete {what}',
+  StringKey.annotationDeletedTemplate: '{what} deleted',
+  StringKey.annotationRoomDeletedTemplate:
+      '{what} deleted - {terminals} remain',
+  StringKey.annotationTerminalOne: 'placed terminal',
+  StringKey.annotationTerminalMany: 'placed terminals',
+  StringKey.annotationDimension: 'Dimension',
+  StringKey.annotationReferenceLine: 'Reference line',
+  StringKey.sheetRemoved: 'Sheet removed - Ctrl+Z to undo',
+  StringKey.sheetRemovedPrunedTemplate:
+      'Sheet removed - {pruned} pruned - Ctrl+Z to undo',
+  StringKey.sheetElementOne: 'element',
+  StringKey.sheetElementMany: 'elements',
+
+  // J2 — electrical system summary (read-only electrical tabs).
+  StringKey.electricalSummaryTitle: 'System',
+  StringKey.electricalSummaryBoards: 'Boards',
+  StringKey.electricalSummaryWays: 'Ways',
+  StringKey.electricalSummaryDemand: 'Demand',
+  StringKey.electricalSummaryEssential: 'Essential',
+  StringKey.electricalSummaryEssentialValue: '{essential} of {total} boards',
+
+  // J4 — on-canvas legend: electrical rows + the ghosted-layer group.
+  StringKey.canvasLegendPhaseR: 'Phase R',
+  StringKey.canvasLegendPhaseS: 'Phase S',
+  StringKey.canvasLegendPhaseT: 'Phase T',
+  StringKey.canvasLegendFeeder: 'Feeder',
+  StringKey.canvasLegendEssential: 'Essential supply',
+  StringKey.canvasLegendGhosted: 'Reference layers',
+
+  // J7 — Commercial: the MECHANICAL bill of materials.
+  StringKey.commercialMechBomTitle: 'Mechanical BOM',
+  StringKey.commercialMechBomEmpty:
+      'Size a mechanical network to price its pipe, duct and fittings.',
+  // {lines}/{unpriced} arrive pre-pluralized via `pluralCount`.
+  StringKey.commercialMechBomLead: '{lines}, {unpriced} unpriced',
+  StringKey.commercialColPriced: 'Priced',
+  StringKey.commercialPriced: 'priced',
+  StringKey.commercialUnpriced: 'unpriced',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -1953,9 +2082,9 @@ const Map<StringKey, String> _id = {
   // Commercial workspace — hub.
   StringKey.commercialHubTitle: 'Komersial',
   StringKey.commercialHubLead:
-      'Daftar material kelistrikan, daftar harga Anda, dan proposal '
-          'berbiaya. Ubah harga di bawah ini dan penawaran akan diperbarui '
-          'secara langsung.',
+      'Daftar material mekanikal dan kelistrikan (M+E+P), daftar harga Anda, '
+          'dan proposal berbiaya. Ubah harga di bawah ini dan penawaran akan '
+          'diperbarui secara langsung.',
   StringKey.commercialExportBomCsv: 'Ekspor BOM (CSV)',
   StringKey.commercialExportProposalMd: 'Ekspor proposal (Markdown)',
 
@@ -2312,7 +2441,7 @@ const Map<StringKey, String> _id = {
   StringKey.exportTitleElectricalPlanDxf: 'Ekspor denah instalasi (DXF)',
   StringKey.exportTitlePowerOneLineDxf: 'Ekspor daya satu-garis (DXF)',
   StringKey.exportTitleElectricalReport: 'Ekspor laporan kelistrikan',
-  StringKey.exportTitleElectricalBom: 'Ekspor BOM kelistrikan',
+  StringKey.exportTitleElectricalBom: 'Ekspor BOM MEP',
   StringKey.exportTitleElectricalProposal: 'Ekspor proposal kelistrikan',
 
   // Electrical workspace — toolbar tabs + buttons.
@@ -2954,6 +3083,59 @@ const Map<StringKey, String> _id = {
   StringKey.heatmapHeldByDesign: 'target ditahan oleh desain',
   StringKey.heatmapRealCheckPumpDuty:
       'pemeriksaan sebenarnya ada pada duti pompa',
+
+  // I5.
+  StringKey.importFailedDxfTemplate:
+      'Berkas itu bukan DXF yang terbaca - apakah itu DWG? Konversi dulu atau '
+          'impor berkas aslinya. ({detail})',
+  StringKey.importFailedDwgTemplate:
+      'DWG itu tidak bisa dikonversi - pasang ODA File Converter, atau ekspor '
+          'DXF dari program CAD Anda lalu impor DXF itu. ({detail})',
+  StringKey.importFailedPdfTemplate:
+      'PDF itu tidak bisa dibaca - mungkin rusak, terkunci kata sandi, atau '
+          'bukan gambar. ({detail})',
+  StringKey.importFailedGenericTemplate: 'Gagal mengimpor {what}: {detail}',
+
+  // C4/C5.
+  StringKey.annotationDeleteArmTemplate:
+      'Klik kanan lagi untuk menghapus {what}',
+  StringKey.annotationDeletedTemplate: '{what} dihapus',
+  StringKey.annotationRoomDeletedTemplate:
+      '{what} dihapus - {terminals} masih ada',
+  StringKey.annotationTerminalOne: 'terminal terpasang',
+  StringKey.annotationTerminalMany: 'terminal terpasang',
+  StringKey.annotationDimension: 'Dimensi',
+  StringKey.annotationReferenceLine: 'Garis referensi',
+  StringKey.sheetRemoved: 'Lembar dihapus - Ctrl+Z untuk membatalkan',
+  StringKey.sheetRemovedPrunedTemplate:
+      'Lembar dihapus - {pruned} dipangkas - Ctrl+Z untuk membatalkan',
+  StringKey.sheetElementOne: 'elemen',
+  StringKey.sheetElementMany: 'elemen',
+
+  // J2 — ringkasan sistem kelistrikan (tab kelistrikan hanya-baca).
+  StringKey.electricalSummaryTitle: 'Sistem',
+  StringKey.electricalSummaryBoards: 'Panel',
+  StringKey.electricalSummaryWays: 'Grup',
+  StringKey.electricalSummaryDemand: 'Kebutuhan',
+  StringKey.electricalSummaryEssential: 'Esensial',
+  StringKey.electricalSummaryEssentialValue: '{essential} dari {total} panel',
+
+  // J4 — legenda kanvas: baris kelistrikan + grup lapisan referensi.
+  StringKey.canvasLegendPhaseR: 'Fasa R',
+  StringKey.canvasLegendPhaseS: 'Fasa S',
+  StringKey.canvasLegendPhaseT: 'Fasa T',
+  StringKey.canvasLegendFeeder: 'Penyulang',
+  StringKey.canvasLegendEssential: 'Suplai esensial',
+  StringKey.canvasLegendGhosted: 'Lapisan referensi',
+
+  // J7 — Komersial: daftar material MEKANIKAL.
+  StringKey.commercialMechBomTitle: 'BOM mekanikal',
+  StringKey.commercialMechBomEmpty:
+      'Hitung jaringan mekanikal untuk memberi harga pipa, duct dan fiting.',
+  StringKey.commercialMechBomLead: '{lines}, {unpriced} tanpa harga',
+  StringKey.commercialColPriced: 'Berharga',
+  StringKey.commercialPriced: 'berharga',
+  StringKey.commercialUnpriced: 'tanpa harga',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

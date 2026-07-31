@@ -529,3 +529,155 @@ class _CheckBoxPainter extends CustomPainter {
       old.fill != fill ||
       old.tick != tick;
 }
+
+
+/// I4 — "Paste selection to floors…": fan the CLIPBOARD out to a checked set
+/// of target floors in ONE [NetworkController.pasteToTargets] batch (one undo
+/// step). Reuses this file's floor-checklist idiom; a floor with no plan is
+/// disabled with the honest "no plan" note. Zero offset — a shaft group stacks
+/// on the same plan position per floor.
+Future<void> showPasteToFloorsDialog(BuildContext context) {
+  final theme = MechXTheme.of(context);
+  return showGeneralDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Paste selection to floors',
+    barrierColor: theme.colors.scrim,
+    transitionDuration: MechXMotion.appear,
+    pageBuilder: (ctx, _, _) => MechXTheme(
+      data: theme,
+      child: const Center(child: _PasteToFloorsDialog()),
+    ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(
+        parent: anim,
+        curve: MechXMotion.standard,
+        reverseCurve: MechXMotion.standard,
+      );
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
+class _PasteToFloorsDialog extends ConsumerStatefulWidget {
+  const _PasteToFloorsDialog();
+
+  @override
+  ConsumerState<_PasteToFloorsDialog> createState() =>
+      _PasteToFloorsDialogState();
+}
+
+class _PasteToFloorsDialogState extends ConsumerState<_PasteToFloorsDialog> {
+  final Set<int> _targets = <int>{};
+
+  String? _sheetForFloor(SheetsState sheets, int levelCount, int floor) {
+    for (final s in sheets.sheets) {
+      if (sheets.floorFor(s.id, levelCount) == floor) return s.id;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final project = ref.watch(projectControllerProvider);
+    final sheets = ref.watch(sheetsControllerProvider);
+    final levelCount = project.building.levelCount;
+    final floors = project.floors;
+
+    final sheetByFloor = <int, String>{};
+    for (var f = 0; f < levelCount; f++) {
+      final id = _sheetForFloor(sheets, levelCount, f);
+      if (id != null) sheetByFloor[f] = id;
+    }
+    String floorLabel(int f) =>
+        f < floors.length ? floors[floors.length - 1 - f].name : 'Floor $f';
+
+    final canApply = _targets.any(sheetByFloor.containsKey);
+
+    return Container(
+      width: 380,
+      constraints: const BoxConstraints(maxHeight: 640),
+      padding: const EdgeInsets.all(MechXSpacing.lg),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        boxShadow: MechXShadow.popover,
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Paste selection to floors',
+              style: type.title.copyWith(color: colors.textPrimary)),
+          const SizedBox(height: MechXSpacing.xs),
+          Text(
+            'The copied elements are pasted at the same plan position on '
+            'every checked floor - one undo step for the whole set.',
+            style: type.caption.copyWith(color: colors.textMuted),
+          ),
+          const SizedBox(height: MechXSpacing.md),
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var f = levelCount - 1; f >= 0; f--)
+                    _TargetRow(
+                      label: floorLabel(f),
+                      enabled: sheetByFloor.containsKey(f),
+                      checked: _targets.contains(f),
+                      note: sheetByFloor.containsKey(f) ? null : 'no plan',
+                      onToggle: () => setState(() {
+                        if (!_targets.remove(f)) _targets.add(f);
+                      }),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: MechXSpacing.md),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              MechXButton(
+                label: 'Cancel',
+                tertiary: true,
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              MechXButton(
+                label: 'Paste',
+                primary: true,
+                onPressed: canApply ? () => _apply(sheetByFloor) : null,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _apply(Map<int, String> sheetByFloor) {
+    final net = ref.read(networkControllerProvider.notifier);
+    final done = _targets.where(sheetByFloor.containsKey).toList()..sort();
+    final added = net.pasteToTargets(
+        [for (final f in done) (sheetId: sheetByFloor[f]!, floor: f)]);
+    Navigator.of(context).pop();
+    final n = added.nodeIds.length + added.edgeIds.length;
+    if (n == 0) return;
+    final floorWord = done.length == 1 ? 'floor' : 'floors';
+    ref.read(statusMessageProvider.notifier).showStatus(
+        'Pasted to ${done.length} $floorWord ($n elements) - '
+        'Ctrl+Z removes all');
+  }
+}

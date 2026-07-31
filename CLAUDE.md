@@ -292,21 +292,25 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
-- **Workflow-friction review (2026-07-30) — `WORKFLOW-FRICTION-REVIEW.md` (root) is the
-  CURRENT plan of record for task-execution UX (NOT yet fixed)**: a post-campaign review
-  of HOW THE WORK IS DONE — four parallel lenses (first-project walkthrough / daily
-  grind / mistakes+the same-day audit surfaces / goldens-as-images + cross-workspace),
-  69 raw findings adversarially verified to **56 confirmed / 13 adjusted / 0 refuted**,
-  consolidated into 10 themes (A–J) and 4 waves. Highest-conviction: the Review Locate
-  contract (mechanical Locate never sets the shell section, never centres, never
-  un-hides/unlocks its target — one function, four omissions), two silent
-  data-destroyers (`syncMepEquipment` drops hand-edited ways outside undo; floor delete
-  fuses the removed floor's drawn work in-range onto the floor above), the riser
-  cross-surface contract (far node stamped with the SOURCE sheetId ⇒ invisible on the
-  floor above; Riser-Edit writes elevation coords into plan geometry, test-pinned; tags
-  positional ⇒ renumber under drags), and H5 — six display sites stamp the hard-coded
-  1:100 fall on issued drawings while sizing honours the new slope input. Work new
-  task-flow improvements from that document rather than re-reviewing.
+- **Workflow-friction review (2026-07-30) — `WORKFLOW-FRICTION-REVIEW.md` (root),
+  a post-campaign review of HOW THE WORK IS DONE — is COMPLETE: all four waves
+  LANDED 2026-07-31** (three ultracode batches, 11 agents + orchestrator seams —
+  see the §15 rows and the doc's status note). Four parallel lenses (first-project
+  walkthrough / daily grind / mistakes+the same-day audit surfaces /
+  goldens-as-images + cross-workspace), 69 raw findings adversarially verified to
+  **56 confirmed / 13 adjusted / 0 refuted**, 10 themes (A–J), all fixed or
+  dispositioned. Headlines now IN the product: Review Locate is a real navigation
+  primitive (section + centring + layer/visibility/lock restore + tagged instance
+  links + clickable compliance rows); the riser cross-surface contract holds (far
+  node on the destination floor's sheet, diagram-only elevation drags,
+  stable-identity riser/equipment tags); the two data-destroyers are gone
+  (`syncMepEquipment` parks + narrates + re-adopts; floor delete confirms with a
+  count and takes its drawn work in one structural undo step); the six
+  drainage-fall sites read the real slope; calibration/typing/stepper honesty;
+  MountingHeights + fixture typing are first-class inputs; one remembered export
+  folder + the complete submittal set; sticky electrical canvas + summary +
+  legend + shared minimap; heatmap corridor mask; per-layer service memory;
+  paste-to-floors. Residuals/dispositions are in the doc's status note.
 
 - **Whole-product audit (2026-07-30) — `MODULE-AUDIT-REVIEW.md` (root) is the CURRENT
   plan of record**: a four-workstream parallel audit (every mechanical engine module

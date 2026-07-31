@@ -1359,7 +1359,15 @@ void main() {
     // carry look-alike labels.)
     final menu = find.byType(MechXContextMenu);
     expect(menu, findsOneWidget);
-    expect(find.descendant(of: menu, matching: find.text('Select similar')),
+    // E2 — the row now NAMES its span, and the whole-building match is its own
+    // explicit row rather than the silent default.
+    expect(
+        find.descendant(
+            of: menu, matching: find.text('Select similar (this floor)')),
+        findsOneWidget);
+    expect(
+        find.descendant(
+            of: menu, matching: find.text('Select similar (all floors)')),
         findsOneWidget);
     expect(find.descendant(of: menu, matching: find.text('Delete node')),
         findsOneWidget);

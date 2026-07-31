@@ -296,7 +296,9 @@ class TankAreaController extends Notifier<List<TankArea>> {
   List<TankArea> build() => const [];
 
   /// Add a tank from two opposite corners. Ignores a degenerate (zero-area) box.
-  void add({
+  /// F6 — returns the NEW tank's id (null when the box was rejected) so the
+  /// drawing gesture can select it straight away, exactly as a drawn node is.
+  String? add({
     required String sheetId,
     required int floorIndex,
     required double ax,
@@ -304,14 +306,15 @@ class TankAreaController extends Notifier<List<TankArea>> {
     required double bx,
     required double by,
   }) {
-    if ((ax - bx).abs() < 2 || (ay - by).abs() < 2) return;
+    if ((ax - bx).abs() < 2 || (ay - by).abs() < 2) return null;
     ref.read(annotationHistoryProvider.notifier).record();
     // E7: seed a distinct sequential name ('Tank 1', 'Tank 2', …) so a schedule
     // never lists a wall of identical 'Tank' rows; still renamable in-place.
+    final id = 't$_seq';
     state = [
       ...state,
       TankArea(
-        id: 't$_seq',
+        id: id,
         sheetId: sheetId,
         floorIndex: floorIndex,
         ax: ax,
@@ -322,6 +325,7 @@ class TankAreaController extends Notifier<List<TankArea>> {
       ),
     ];
     _seq++;
+    return id;
   }
 
   void setDepth(String id, double depthM) => _update(
@@ -649,7 +653,9 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
   List<RoomArea> build() => const [];
 
   /// Add a room from two opposite corners. Ignores a degenerate (zero-area) box.
-  void add({
+  /// F6 — returns the NEW room's id (null when the box was rejected) so the
+  /// drawing gesture can select it straight away, exactly as a drawn node is.
+  String? add({
     required String sheetId,
     required int floorIndex,
     required double ax,
@@ -657,15 +663,16 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
     required double bx,
     required double by,
   }) {
-    if ((ax - bx).abs() < 2 || (ay - by).abs() < 2) return;
+    if ((ax - bx).abs() < 2 || (ay - by).abs() < 2) return null;
     ref.read(annotationHistoryProvider.notifier).record();
     // E7: seed a distinct sequential name ('Room 1', 'Room 2', …) so an issued
     // equipment schedule never lists a wall of identical 'Room' AHU rows; still
     // renamable in-place in the Rooms inspector.
+    final id = 'r$_seq';
     state = [
       ...state,
       RoomArea(
-        id: 'r$_seq',
+        id: id,
         sheetId: sheetId,
         floorIndex: floorIndex,
         ax: ax,
@@ -684,6 +691,7 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
       ),
     ];
     _seq++;
+    return id;
   }
 
   /// F7 — the ceiling height a new room on [floorIndex] starts at: that floor's

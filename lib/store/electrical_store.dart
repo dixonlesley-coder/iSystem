@@ -34,6 +34,7 @@ import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../ui/strings/app_strings.dart';
+import '../ui/strings/plural.dart';
 import 'app_state.dart' show localeProvider, statusMessageProvider;
 import 'electrical_feed.dart';
 import 'history_store.dart';
@@ -1150,12 +1151,43 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// longer exists, so the survivors run through [sanitizeFeederTopology] INSIDE
   /// the same commit — the dangling feeder is dropped as ONE undo step.
   void deletePanel(String id) {
+    // C5 — count the sanitize cascade's collateral BEFORE mutating, so the
+    // status pill can name it: the parent's feeder way into the deleted board
+    // is dropped, and any board the deleted one fed is silently re-rooted.
+    final feederWays = [
+      for (final p in state.panels)
+        if (p.id != id)
+          for (final c in p.circuits)
+            if (c.feedsPanelId == id) c,
+    ].length;
+    final deleted = [
+      for (final p in state.panels)
+        if (p.id == id) p,
+    ];
+    final fedIds = {
+      for (final p in deleted)
+        for (final c in p.circuits)
+          if (c.feedsPanelId != null) c.feedsPanelId!,
+    };
+    final reRooted = [
+      for (final p in state.panels)
+        if (fedIds.contains(p.id)) p.name,
+    ];
     _commit(_withProject(
       panels: sanitizeFeederTopology([
         for (final p in state.panels)
           if (p.id != id) p,
       ]),
     ));
+    if (feederWays > 0 || reRooted.isNotEmpty) {
+      final parts = <String>[
+        if (feederWays > 0)
+          plural(feederWays, '$feederWays feeder way removed',
+              '$feederWays feeder ways removed'),
+        if (reRooted.isNotEmpty) '${reRooted.join(', ')} now unfed',
+      ];
+      ref.read(statusMessageProvider.notifier).showStatus(parts.join(' · '));
+    }
   }
 
   /// Duplicate a panel (I5): a fresh-id copy of the board + every circuit, a

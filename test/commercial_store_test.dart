@@ -237,7 +237,7 @@ void main() {
       var err = container.read(loadErrorProvider);
       expect(err, isNotNull);
       expect(err, contains('zero length'));
-      expect(err, contains('electrical BOM'));
+      expect(err, contains('MEP BOM'));
       // Blocked — no success pill.
       expect(container.read(statusMessageProvider), isNull);
 
