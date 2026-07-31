@@ -11,6 +11,7 @@ import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 
 import '../../store/air_warnings_store.dart';
+import '../../store/app_state.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -106,6 +107,12 @@ class NetworkLayer extends ConsumerWidget {
       }
     }
 
+    // H5 — the LAID drainage design slope the sizer + calc report actually use
+    // (`drainageSlopeProvider`, the Building-page input), NOT the dark
+    // `SizingContext` default: the on-plan `1:N` fall token must agree with the
+    // signed report and every issued sheet.
+    final drainageSlope = ref.watch(drainageSlopeProvider);
+
     // Layer filtering (unified canvas only).
     Set<DisciplineLayer> visible = DisciplineLayer.values.toSet();
     DisciplineLayer? active;
@@ -143,6 +150,7 @@ class NetworkLayer extends ConsumerWidget {
           warningIds: warningIds,
           unsizedIds: unsizedIds,
           overCapacityIds: overCapacityIds,
+          drainageSlope: drainageSlope,
         ),
       ),
     );
@@ -256,6 +264,12 @@ class _NetworkPainter extends CustomPainter {
   /// duct, a storm downpipe, or a supply pipe over the SNI velocity cap.
   final Set<String> overCapacityIds;
 
+  /// H5 — the LAID drainage design slope (m/m) the sizer + calc report use, fed
+  /// from `drainageSlopeProvider`. Drives the `1:N` fall token drawn beside a
+  /// gravity run; defaults to the `SizingContext` gradient so a painter built
+  /// without it (tests / other hosts) is byte-identical.
+  final double drainageSlope;
+
   _NetworkPainter({
     required this.net,
     required this.sheetId,
@@ -278,6 +292,7 @@ class _NetworkPainter extends CustomPainter {
     this.warningIds = const {},
     this.unsizedIds = const {},
     this.overCapacityIds = const {},
+    this.drainageSlope = 0.01,
   });
 
   bool _onThisFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
@@ -362,11 +377,10 @@ class _NetworkPainter extends CustomPainter {
     // G1: one stable equipment tag per plant/air-unit node (P-01 / TK-01 / …),
     // the SAME source the plan exporters + equipment schedule use.
     final equipmentTagById = equipmentNodeTags(net);
-    // G5: the laid gravity fall as a `1:100` token — read from the SizingContext
-    // gradient the sizer actually uses (the store builds SizingContext without
-    // overriding drainageSlope), never a hardcoded string.
-    final gravitySlopeText =
-        gravitySlopeLabel(const SizingContext().drainageSlope);
+    // G5/H5: the laid gravity fall as a `1:100` token — read from the LAID
+    // design slope the sizer + calc report actually use (`drainageSlopeProvider`
+    // → [drainageSlope]), never a hardcoded string nor the dark const default.
+    final gravitySlopeText = gravitySlopeLabel(drainageSlope);
     final visibleServices = <ServiceType>{};
     for (final e in net.edges) {
       if (!_serviceVisible(e.service)) continue;
@@ -1359,7 +1373,8 @@ class _NetworkPainter extends CustomPainter {
       !_sameSvcSet(old.hiddenServices, hiddenServices) ||
       !_sameStrSet(old.warningIds, warningIds) ||
       !_sameStrSet(old.unsizedIds, unsizedIds) ||
-      !_sameStrSet(old.overCapacityIds, overCapacityIds);
+      !_sameStrSet(old.overCapacityIds, overCapacityIds) ||
+      old.drainageSlope != drainageSlope;
 
   static bool _sameSet(Set<DisciplineLayer> a, Set<DisciplineLayer> b) =>
       a.length == b.length && a.containsAll(b);

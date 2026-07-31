@@ -79,7 +79,10 @@ class ProjectsScreen extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: MechXSpacing.sm),
-              MechXTextField(value: project.name, onChanged: ctrl.setName),
+              // D1: commit on blur / Enter — renaming the project is ONE undo
+              // step. Per-keystroke it pushed 25 entries for "Gedung BRI
+              // Cabang Jakarta", evicting real edits from the 200-entry stack.
+              MechXTextField(value: project.name, onCommitted: ctrl.setName),
             ],
           ),
         ),

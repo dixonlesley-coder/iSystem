@@ -795,11 +795,18 @@ void main() {
   });
 
   group('MEP Equipment first-sync auto-feed', () {
+    // A derived circuit exactly as `buildEquipmentCircuits` mints one: the
+    // machine-supplied NAME ('Supply pump', from the auto-feed's own name pool)
+    // and the 10 m unmeasured-stub length. Both matter to C1: a way still
+    // carrying its minted name and no override is dropped when its source
+    // disappears (a re-mint reproduces it); anything else would be PARKED, and
+    // a parked way keeps the board alive.
     ElectricalCircuit derived(String src) => ElectricalCircuit(
           id: 'mep-$src',
-          name: 'Pump $src',
+          name: 'Supply pump',
           loadKind: LoadKind.pump,
           loadW: 6000,
+          length: kDefaultCircuitLength,
           motorKw: 5.5,
           sourceEquipmentId: src,
           flaOverrideA: const Current(10),
@@ -895,7 +902,8 @@ void main() {
       );
     });
 
-    test('removing the last derived way drops the board AND its feeder way', () {
+    test('removing the last PRISTINE derived way drops the board AND its '
+        'feeder way', () {
       final c = ProviderContainer();
       addTearDown(c.dispose);
       seedSample(c);

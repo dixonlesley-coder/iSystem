@@ -37,8 +37,10 @@ import 'package:mechx_engine/standards/sni.dart';
 import '../../store/app_state.dart';
 import '../../store/electrical_store.dart' show WorkspaceView, workspaceViewProvider;
 import '../../store/history_store.dart';
+import '../../store/models/sheet.dart' show Sheet;
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
+import '../../store/schematic_layout_store.dart';
 import '../../store/schematic_view_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
@@ -1232,11 +1234,6 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   // tint as the only drop feedback. Null when no card is over the canvas.
   int? _dragBandFloor;
 
-  // F3: the undo snapshot is DEFERRED from pointer-down to the FIRST move of
-  // an actual riser drag (the onPanStart semantics the Layout / electrical
-  // canvases use) — a plain select-to-inspect click must not push a phantom
-  // undo step or clear the redo stack.
-  bool _dragSnapshotPending = false;
 
   /// World-px gap between adjacent floor bands. The vertical axis is laid out by
   /// floor index (true elevation order) at a fixed band height — the riser's
@@ -1296,6 +1293,7 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   String? _riserAt(Offset w, double tolWorld) {
     final net = ref.read(networkControllerProvider).network;
     final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    final layout = ref.read(schematicLayoutProvider);
     String? best;
     var bestD = tolWorld;
     for (final e in net.edges) {
@@ -1307,8 +1305,9 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       final yB = _bandCentreWorldY(b.floorIndex, levelCount);
       final top = math.min(yA, yB);
       final bot = math.max(yA, yB);
-      // Distance from the point to the vertical segment at x=a.x within [top,bot].
-      final dx = (w.dx - a.x).abs();
+      // B3: the DIAGRAM x (an override when the riser was dragged sideways on
+      // the elevation, else the plan x) — the same x the painter draws at.
+      final dx = (w.dx - layout.xFor(a)).abs();
       final inBand = w.dy >= top - tolWorld && w.dy <= bot + tolWorld;
       if (inBand && dx < bestD) {
         bestD = dx;
@@ -1351,8 +1350,6 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
         if (ref.read(selectionProvider).containsEdge(hit)) {
           _draggingRiser = hit;
           _beginRiserDrag(w.dx);
-          // The snapshot waits for the first real movement (F3).
-          _dragSnapshotPending = true;
         }
       } else {
         // D5: empty-canvas left-drag draws a marquee (rubber-band multi-select).
@@ -1366,12 +1363,13 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   /// group moves by one shared delta.
   void _beginRiserDrag(double cursorWorldX) {
     final net = ref.read(networkControllerProvider).network;
+    final layout = ref.read(schematicLayoutProvider);
     final base = <String, double>{};
     for (final id in ref.read(selectionProvider).edgeIds) {
       final e = net.edgeById(id);
       if (e == null || e.kind != EdgeKind.riser) continue;
       final a = net.nodeById(e.fromId);
-      if (a != null) base[id] = a.x;
+      if (a != null) base[id] = layout.xFor(a);
     }
     _dragBaseX = base;
     _dragBaseCursorX = cursorWorldX;
@@ -1385,14 +1383,11 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     }
     final dragging = _draggingRiser;
     if (dragging != null) {
-      // First movement of a genuine drag: NOW record the one undo step for the
-      // whole move (moveRiserHorizontal itself never records — live drag).
-      if (_dragSnapshotPending) {
-        _dragSnapshotPending = false;
-        ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
-        // K1: throttle the heavy chain during the live riser drag.
-        ref.read(dragSessionProvider.notifier).beginDrag();
-      }
+      // B3: this drag no longer edits the network — it moves the riser on the
+      // DIAGRAM only (`moveRiserHorizontal` writes the elevation-layout
+      // override, never the plan nodes). So there is nothing to snapshot (the
+      // old F3 deferred snapshot pushed a PHANTOM undo entry for a change the
+      // network never saw) and nothing heavy to throttle (no re-solve fires).
       final w = _current.screenToWorld(event.localPosition);
       final ctrl = ref.read(networkControllerProvider.notifier);
       final base = _dragBaseX;
@@ -1413,13 +1408,10 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
 
   void _onPointerUp(PointerUpEvent event) {
     _panning = false;
-    // K1: close the throttle session on riser-drag release (final refresh).
-    if (_draggingRiser != null) {
-      ref.read(dragSessionProvider.notifier).endDrag();
-    }
+    // B3: no throttle session to close — the riser drag is diagram-only, so it
+    // never begins one (nothing heavy re-runs while it is in flight).
     _draggingRiser = null;
     _dragBaseX = null;
-    _dragSnapshotPending = false;
     // D5: finalize the marquee → select every riser its box crosses.
     final start = _marqueeStart;
     final current = _marqueeCurrent;
@@ -1438,6 +1430,7 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   void _selectRisersInRect(Rect rect) {
     final net = ref.read(networkControllerProvider).network;
     final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    final layout = ref.read(schematicLayoutProvider);
     final vt = _current;
     final hit = <String>{};
     for (final e in net.edges) {
@@ -1447,8 +1440,9 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       if (a == null || b == null) continue;
       final yA = _bandCentreWorldY(a.floorIndex, levelCount);
       final yB = _bandCentreWorldY(b.floorIndex, levelCount);
-      final p1 = vt.worldToScreen(Offset(a.x, math.min(yA, yB)));
-      final p2 = vt.worldToScreen(Offset(a.x, math.max(yA, yB)));
+      final ax = layout.xFor(a);
+      final p1 = vt.worldToScreen(Offset(ax, math.min(yA, yB)));
+      final p2 = vt.worldToScreen(Offset(ax, math.max(yA, yB)));
       if (Rect.fromPoints(p1, p2).inflate(3).overlaps(rect)) hit.add(e.id);
     }
     final shift = HardwareKeyboard.instance.isShiftPressed;
@@ -1562,6 +1556,20 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     return (floorIndex: floorIndex, redirected: redirected);
   }
 
+  /// B2 — drop a riser from the Riser palette onto a floor band.
+  ///
+  /// The drop used to take the ELEVATION diagram's world x (and `y = 0`) as the
+  /// riser's PLAN coordinates, and to fall back to the CURRENT sheet when the
+  /// target floor had no plan assigned — producing a node whose sheetId maps to
+  /// one floor while its floorIndex says another: invisible on every sheet
+  /// forever, yet still sized into the BOM. Both halves are fixed here:
+  ///
+  ///   * an UNMAPPED floor REFUSES the drop with a status message naming the
+  ///     level to assign a plan to (nothing is drawn — a riser with no plan to
+  ///     live on is exactly the ghost this defect produced);
+  ///   * a mapped floor places the riser at that SHEET'S CENTRE — a real plan
+  ///     coordinate the engineer can find and drag — and says so, so the jump
+  ///     from the cursor to the plan centre is never a silent surprise.
   void _onDrop(Offset localScreen) {
     final box = context.findRenderObject() as RenderBox?;
     if (box == null) return;
@@ -1569,22 +1577,36 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     final target = _dropTarget(localScreen);
     if (target == null) return;
     final floorIndex = target.floorIndex;
-    final w = _current.screenToWorld(localScreen);
 
-    final sheetId = _sheetIdForFloor(floorIndex);
+    final sheet = _sheetForFloor(floorIndex);
+    if (sheet == null) {
+      final level = floorIndex < building.levelCount
+          ? building.floors[floorIndex].name
+          : '$floorIndex';
+      ref.read(statusMessageProvider.notifier).showStatus(
+          MechXStrings.of(context)
+              .format(StringKey.schematicDropNeedsPlan, {'level': level}));
+      return;
+    }
+
+    // The riser lands at the centre of the destination plan — a real sheet
+    // coordinate, not the elevation's own x with y pinned to 0.
+    final centre = Offset(sheet.sizePx.width / 2, sheet.sizePx.height / 2);
     final id = ref.read(networkControllerProvider.notifier).placeRiserAt(
-          sheetId,
+          sheet.id,
           floorIndex,
-          w.dx,
+          centre.dx,
           building.levelCount,
           service: widget.service,
+          y: centre.dy,
         );
     if (id != null) {
       ref.read(selectionProvider.notifier).selectEdge(id);
-      // B3: a drop on the TOP band has no floor above it, so the riser's base
-      // was placed on the floor BELOW (it still spans a real elevation delta up
-      // to the top). Say so — a top-band drop otherwise draws a connection one
-      // floor off the target, indistinguishable from a correct drop.
+      final strings = MechXStrings.of(context);
+      // B3 (top band): a drop on the TOP band has no floor above it, so the
+      // riser's base was placed on the floor BELOW (it still spans a real
+      // elevation delta up to the top). Say so — a top-band drop otherwise
+      // draws a connection one floor off the target.
       if (target.redirected &&
           floorIndex + 1 < building.levelCount &&
           floorIndex < building.levelCount) {
@@ -1593,22 +1615,27 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
         ref
             .read(statusMessageProvider.notifier)
             .showStatus('Riser to $upper — base on $lower below');
+      } else {
+        ref.read(statusMessageProvider.notifier).showStatus(
+              strings.format(StringKey.schematicDropCentred, {
+                'level': building.floors[floorIndex].name,
+                'sheet': sheet.name,
+              }),
+            );
       }
     }
   }
 
-  /// The sheet id mapped to [floorIndex] (so the riser's lower node sits on the
-  /// right sheet). Falls back to the current sheet, else a synthetic id.
-  String _sheetIdForFloor(int floorIndex) {
+  /// The SHEET mapped to [floorIndex], or null when that level carries no plan.
+  /// Deliberately NOT falling back to the current sheet (B2): a riser stamped
+  /// with another floor's sheet id is invisible on every plan.
+  Sheet? _sheetForFloor(int floorIndex) {
     final sheets = ref.read(sheetsControllerProvider);
+    final levelCount = ref.read(projectControllerProvider).building.levelCount;
     for (final s in sheets.sheets) {
-      if (sheets.floorFor(
-              s.id, ref.read(projectControllerProvider).building.levelCount) ==
-          floorIndex) {
-        return s.id;
-      }
+      if (sheets.floorFor(s.id, levelCount) == floorIndex) return s;
     }
-    return sheets.current?.id ?? 'elevation';
+    return null;
   }
 
   @override
@@ -1618,6 +1645,9 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     final sizing = ref.watch(sizingProvider);
     final building = ref.watch(projectControllerProvider).building;
     final selection = ref.watch(selectionProvider);
+    // B3: the diagram-only riser positions (empty unless one was dragged
+    // sideways here). Watched so a drag repaints without touching the network.
+    final schematicX = ref.watch(schematicLayoutProvider).schematicXOverrides;
 
     final canvas = Focus(
       focusNode: _focus,
@@ -1654,6 +1684,7 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                       selectedEdgeIds: selection.edgeIds,
                       bandWorldH: _bandWorldH,
                       worldWidth: _worldWidth,
+                      schematicX: schematicX,
                       highlightFloor: _dragBandFloor,
                       marquee: (_marqueeStart != null && _marqueeCurrent != null)
                           ? Rect.fromPoints(_marqueeStart!, _marqueeCurrent!)
@@ -3635,6 +3666,7 @@ class _EditSchematicPainter extends CustomPainter {
     required this.selectedEdgeIds,
     required this.bandWorldH,
     required this.worldWidth,
+    required this.schematicX,
     this.highlightFloor,
     this.marquee,
   });
@@ -3644,6 +3676,11 @@ class _EditSchematicPainter extends CustomPainter {
   final BuildingLevels building;
   final MechXColors colors;
   final ViewportTransform transform;
+
+  /// B3 — the DIAGRAM-only x per node id (empty unless a riser was dragged
+  /// sideways on this elevation). Plan geometry is never rewritten by that
+  /// gesture, so the diagram position lives here instead.
+  final Map<String, double> schematicX;
 
   /// D5: the multi-selected riser edges (highlighted); a single-select is a set
   /// of one.
@@ -3664,7 +3701,7 @@ class _EditSchematicPainter extends CustomPainter {
   }
 
   Offset _worldOf(NetNode n) =>
-      Offset(n.x, _bandCentreWorldY(n.floorIndex));
+      Offset(schematicX[n.id] ?? n.x, _bandCentreWorldY(n.floorIndex));
 
   @override
   void paint(Canvas canvas, Size size) {

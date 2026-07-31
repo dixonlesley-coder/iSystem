@@ -172,17 +172,43 @@ RiserFunction? riserFunctionFor(Network net, NetEdge edge,
 /// across floors (same x bucket) share one tag index.
 ///
 /// Risers are grouped into vertical STACKS by rounding the lower endpoint's x to
-/// a tolerance bucket, then numbered in ascending-x order per service. When
-/// [focus] is non-null only that service's risers are tagged.
+/// a tolerance bucket (that grouping is geometric, and must be — a stack IS the
+/// co-linear set). When [focus] is non-null only that service's risers are
+/// tagged.
+///
+/// B4 — the NUMBERING is NOT positional. Stacks used to be numbered in
+/// ascending-x order, so dragging one riser sideways past another (a
+/// diagram-decluttering gesture, or any plan-side endpoint drag) silently
+/// RENUMBERED `CW-R1`/`CW-R2` across the plan labels, the riser single-line, the
+/// BOM tag column and the calc report between revisions — with no diff and no
+/// warning. Stacks are now ordered by a STABLE first-assigned ordinal: the
+/// earliest position, in `net.nodes` list order, of any node the stack's risers
+/// touch. That list is INSERTION order (the store appends new nodes and never
+/// reorders; the `.mechx` round-trip preserves it), so the first-drawn stack is
+/// `R1` for life, a moved stack keeps its number, and a NEW stack takes the next
+/// one. Ties (two stacks whose earliest node index is equal — impossible for
+/// distinct nodes, defensive only) fall back to ascending x, then edge id.
+///
+/// Node IDS are deliberately NOT used as the ordering key: they are minted `n0`,
+/// `n1`, … `n10`, so their LEXICOGRAPHIC order is not the creation order
+/// (`n10` < `n2`), and an opened project keeps whatever ids it was saved with.
+/// List position is the honest, stable creation order.
 Map<String, String> riserTags(Network net, ServiceType? focus) {
   const xBucket = 12.0; // px tolerance for "same vertical stack".
   final out = <String, String>{};
+
+  // First-assigned ordinal per node: its index in the network's node list.
+  final nodeOrder = <String, int>{};
+  for (var i = 0; i < net.nodes.length; i++) {
+    nodeOrder[net.nodes[i].id] = i;
+  }
 
   final services =
       focus != null ? [focus] : ServiceType.values.toList(growable: false);
 
   for (final service in services) {
-    // Collect this service's riser edges with their lower-node x + floor.
+    // Collect this service's riser edges with their lower-node x + the stable
+    // ordinal of the EARLIEST node either endpoint occupies.
     final risers = <_RiserRef>[];
     for (final e in net.edges) {
       if (e.service != service || e.kind != EdgeKind.riser) continue;
@@ -190,27 +216,33 @@ Map<String, String> riserTags(Network net, ServiceType? focus) {
       final b = net.nodeById(e.toId);
       if (a == null || b == null) continue;
       final lower = a.floorIndex <= b.floorIndex ? a : b;
-      risers.add(_RiserRef(e.id, lower.x, lower.floorIndex));
+      final oa = nodeOrder[a.id] ?? nodeOrder.length;
+      final ob = nodeOrder[b.id] ?? nodeOrder.length;
+      risers.add(_RiserRef(e.id, lower.x, oa < ob ? oa : ob));
     }
     if (risers.isEmpty) continue;
 
-    // Deterministic order: by x then floor.
-    risers.sort((p, q) {
-      final byX = p.x.compareTo(q.x);
-      return byX != 0 ? byX : p.floorIndex.compareTo(q.floorIndex);
-    });
-
-    // Assign one index per DISTINCT x-bucket (co-linear risers share it).
-    final code = riserServiceCode(service);
-    var index = 0;
-    double? lastBucketX;
+    // Group into x-buckets (the geometric stack), then rank the buckets by the
+    // stable ordinal of their earliest-created node.
+    double bucketOf(double x) => (x / xBucket).round() * xBucket;
+    final earliestByBucket = <double, int>{};
     for (final r in risers) {
-      final bucket = (r.x / xBucket).round() * xBucket;
-      if (lastBucketX == null || (bucket - lastBucketX).abs() > 0.0001) {
-        index++;
-        lastBucketX = bucket;
-      }
-      out[r.edgeId] = '$code-R$index';
+      final b = bucketOf(r.x);
+      final seen = earliestByBucket[b];
+      if (seen == null || r.order < seen) earliestByBucket[b] = r.order;
+    }
+    final buckets = earliestByBucket.keys.toList()
+      ..sort((p, q) {
+        final byOrder = earliestByBucket[p]!.compareTo(earliestByBucket[q]!);
+        return byOrder != 0 ? byOrder : p.compareTo(q);
+      });
+    final indexOfBucket = <double, int>{
+      for (var i = 0; i < buckets.length; i++) buckets[i]: i + 1,
+    };
+
+    final code = riserServiceCode(service);
+    for (final r in risers) {
+      out[r.edgeId] = '$code-R${indexOfBucket[bucketOf(r.x)]}';
     }
   }
   return out;
@@ -219,8 +251,11 @@ Map<String, String> riserTags(Network net, ServiceType? focus) {
 class _RiserRef {
   final String edgeId;
   final double x;
-  final int floorIndex;
-  const _RiserRef(this.edgeId, this.x, this.floorIndex);
+
+  /// The stable first-assigned ordinal of this riser: the smaller of its two
+  /// endpoints' positions in the network's node list (creation order).
+  final int order;
+  const _RiserRef(this.edgeId, this.x, this.order);
 }
 
 /// The stable, cross-artifact ELEMENT TAG for [edge] (N13) — the SAME string on

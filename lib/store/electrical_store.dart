@@ -24,6 +24,7 @@ import 'package:mechx_engine/electrical/fault.dart'
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
+import 'package:mechx_engine/electrical/load_list.dart' show defaultMotorCosPhi;
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/electrical/panel_templates.dart';
@@ -32,6 +33,8 @@ import 'package:mechx_engine/electrical/topology.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../ui/strings/app_strings.dart';
+import 'app_state.dart' show localeProvider, statusMessageProvider;
 import 'electrical_feed.dart';
 import 'history_store.dart';
 import 'inspector_store.dart';
@@ -1757,19 +1760,45 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   ///     — only the machine-owned load fields (`flaOverrideA`, `loadW`, `motorKw`)
   ///     are re-derived; the user-set name / cableType / length / starterType /
   ///     phases / life-safety are PRESERVED;
-  ///   * a derived way whose source node is GONE is dropped;
+  ///   * a derived way whose source equipment is GONE is **PARKED, not deleted**
+  ///     (C1) — see below;
   ///   * a user-ADDED way on the panel (no `sourceEquipmentId`) is preserved;
-  ///   * a newly-placed piece of equipment is appended;
+  ///   * a newly-placed piece of equipment is appended — or, when a PARKED way
+  ///     for that same source is still on the board, RE-ADOPTED in place;
   ///   * the panel's own name / tag / diversity / headroom / position / flags
   ///     are preserved once the board exists.
   ///
+  /// C1 — PARK, DON'T DELETE. This sync is undo-exempt (below), so anything it
+  /// drops is unrecoverable: deleting an orphaned way took the engineer's typed
+  /// name, cable family, run length and starter with it the moment a pump was
+  /// deleted or the duty feed toggled off. Now, when the source equipment
+  /// disappears the way SURVIVES: its `sourceEquipmentId` is cleared (it becomes
+  /// a user-owned way like any hand-added one) and a neutral-ASCII
+  /// [kMepParkedSuffix] is appended to its name ONCE. A parked way takes the
+  /// "no source id" branch on every later sync, so it is never re-suffixed and
+  /// never re-parked.
+  ///
+  /// The ONE exception is a way that is still exactly as minted — no override of
+  /// any kind and a name the app itself supplied ([_isPristineDerivedWay]) — which
+  /// IS dropped, so a deleted pump does not leave a permanent zombie row on the
+  /// schedule. Losing that way costs nothing: a re-mint reproduces it verbatim.
+  ///
+  /// A parked way keeps its ORIGINAL circuit id (`mep-<sourceEquipmentId>`, the
+  /// deterministic mint id), so if the same equipment re-appears — the classic
+  /// "toggle the duty feed off and back on" — the fresh derived circuit matches
+  /// it by id and is RE-ADOPTED in place (source id restored, suffix stripped,
+  /// load fields refreshed, every hand edit kept) instead of minting a twin. That
+  /// is what keeps the park policy from double-counting the load.
+  ///
   /// An empty result with no existing panel is a strict no-op; a merge that ends
-  /// with no ways removes the panel.
+  /// with no ways at all removes the panel — but a board carrying PARKED (or
+  /// hand-added) ways survives, because those ways are the engineer's now.
   ///
   /// UNDO-EXEMPT: a DERIVED MEP-feed sync, not a user edit — it neither pushes a
   /// snapshot nor records a timeline entry, and it leaves both stacks intact (an
   /// undo to a pre-sync snapshot simply predates the synced panel; the reactive
-  /// listener re-asserts it on the next equipment change).
+  /// listener re-asserts it on the next equipment change). H1: every pass that
+  /// actually CHANGES the board narrates itself once via [_narrateMepSync].
   void syncMepEquipment(List<ElectricalCircuit> derived) {
     final existing =
         state.panels.where((p) => p.id == kMepEquipmentPanelId).firstOrNull;
@@ -1786,16 +1815,32 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
 
     final merged = <ElectricalCircuit>[];
     final refreshed = <String>{};
+    // H1 — what this pass actually did (nothing ⇒ no status message).
+    var parked = 0;
+    var removed = 0;
+    var restored = 0;
+    final added = <ElectricalCircuit>[];
     if (existing != null) {
       for (final c in existing.circuits) {
         final src = c.sourceEquipmentId;
         if (src == null) {
-          // A user-ADDED way (not machine-derived) — preserve verbatim.
+          // A user-ADDED way (or an already-PARKED one) — preserve verbatim.
           merged.add(c);
           continue;
         }
         final fresh = derivedBySource[src];
-        if (fresh == null) continue; // source equipment removed → drop the way.
+        if (fresh == null) {
+          // C1 — the source equipment is gone. A way still exactly as minted is
+          // dropped (a re-mint reproduces it); anything the engineer touched is
+          // PARKED, never deleted.
+          if (_isPristineDerivedWay(c)) {
+            removed++;
+          } else {
+            merged.add(_parkedMepWay(c));
+            parked++;
+          }
+          continue;
+        }
         // Source still present → refresh ONLY the derived load fields, keeping
         // the user's name / cableType / length / starterType / phases / flags.
         merged.add(c.copyWith(
@@ -1806,22 +1851,41 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         refreshed.add(src);
       }
     }
-    // Append any newly-placed equipment not already on the board.
+    // Append any newly-placed equipment not already on the board — or RE-ADOPT
+    // the parked way that same equipment left behind (matched on the
+    // deterministic mint id), so a source that comes back does not arrive as a
+    // second copy of its own load.
     for (final c in derived) {
       final src = c.sourceEquipmentId;
       if (src == null || refreshed.contains(src)) continue;
-      merged.add(c);
+      final parkedIndex = merged.indexWhere(
+          (m) => m.sourceEquipmentId == null && m.id == c.id);
+      if (parkedIndex >= 0) {
+        merged[parkedIndex] = _readoptedMepWay(merged[parkedIndex], c);
+        restored++;
+      } else {
+        merged.add(c);
+        added.add(c);
+      }
       refreshed.add(src);
     }
 
     final others =
         state.panels.where((p) => p.id != kMepEquipmentPanelId).toList();
     if (merged.isEmpty) {
-      // Nothing left to distribute — remove the (now-empty) panel. Sweep the
-      // survivors so the feeder that fed it (auto-wired below, or hand-drawn)
-      // doesn't survive as a dangling way pointing at a board that is gone.
+      // Nothing left on the board AT ALL — no derived way, no parked way, no
+      // hand-added way — so remove the (now-empty) panel. Sweep the survivors so
+      // the feeder that fed it (auto-wired below, or hand-drawn) doesn't survive
+      // as a dangling way pointing at a board that is gone.
       if (existing == null) return;
       state = _withProject(panels: sanitizeFeederTopology(others));
+      _narrateMepSync(
+        boardRemoved: true,
+        added: added,
+        restored: restored,
+        parked: parked,
+        removed: removed,
+      );
       return;
     }
     if (existing != null) {
@@ -1831,6 +1895,12 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       // feed survives every re-sync.
       state = _withProject(
           panels: [...others, existing.copyWith(circuits: merged)]);
+      _narrateMepSync(
+        added: added,
+        restored: restored,
+        parked: parked,
+        removed: removed,
+      );
       return;
     }
 
@@ -1860,6 +1930,13 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           circuits: merged,
         ),
       ]);
+      _narrateMepSync(
+        boardCreated: true,
+        added: added,
+        restored: restored,
+        parked: parked,
+        removed: removed,
+      );
       return;
     }
     final root = roots.single;
@@ -1889,8 +1966,198 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         circuits: merged,
       ),
     ]);
+    _narrateMepSync(
+      boardCreated: true,
+      added: added,
+      restored: restored,
+      parked: parked,
+      removed: removed,
+    );
+  }
+
+  /// H1 — narrate ONE consolidated status message for a sync pass that actually
+  /// changed the machine-owned board: the ways added (naming the first one and
+  /// its motor rating), restored from parking, parked, and removed, plus the
+  /// board being created or dropped. Silent when nothing changed — a pass that
+  /// only REFRESHES the load figures (the common case: the plan re-solves) says
+  /// nothing, so a drag can never storm the status pill.
+  ///
+  /// The detail deliberately quotes the equipment's own rating rather than the
+  /// drop toast's sized `breaker · csa`: the sized figures live in
+  /// [electricalResultProvider], which DEPENDS on this notifier, so reading it
+  /// from here is a circular provider dependency (Riverpod refuses it) — and
+  /// re-deriving a breaker/cable locally would risk a message that disagrees
+  /// with the schedule. The board schedule stays the single authority for the
+  /// sized values.
+  void _narrateMepSync({
+    bool boardCreated = false,
+    bool boardRemoved = false,
+    List<ElectricalCircuit> added = const [],
+    int restored = 0,
+    int parked = 0,
+    int removed = 0,
+  }) {
+    if (!boardCreated &&
+        !boardRemoved &&
+        added.isEmpty &&
+        restored == 0 &&
+        parked == 0 &&
+        removed == 0) {
+      return;
+    }
+    final s = MechXStringsData(ref.read(localeProvider));
+    if (boardRemoved) {
+      ref.read(statusMessageProvider.notifier).showStatus(
+            s(StringKey.mepSyncBoardRemoved),
+          );
+      return;
+    }
+
+    String noun(int n) => s(n == 1
+        ? StringKey.mepSyncWayNoun
+        : StringKey.mepSyncWayNounPlural);
+    String fragment(StringKey key, int count) =>
+        s.format(key, {'count': '$count', 'noun': noun(count)});
+
+    final parts = <String>[];
+    if (added.isNotEmpty) {
+      final head = fragment(StringKey.mepSyncAddedTemplate, added.length);
+      parts.add('$head (${_addedWayDetail(s, added.first)})');
+    }
+    if (restored > 0) {
+      parts.add(fragment(StringKey.mepSyncRestoredTemplate, restored));
+    }
+    if (parked > 0) {
+      parts.add(fragment(StringKey.mepSyncParkedTemplate, parked));
+    }
+    if (removed > 0) {
+      parts.add(fragment(StringKey.mepSyncRemovedTemplate, removed));
+    }
+    if (parts.isEmpty) return; // board created with nothing to report
+    ref.read(statusMessageProvider.notifier).showStatus(s.format(
+          boardCreated
+              ? StringKey.mepSyncBoardCreatedTemplate
+              : StringKey.mepSyncSummaryTemplate,
+          {'parts': parts.join(', ')},
+        ));
+  }
+
+  /// `<name> · <kW> kW` for a just-added way — its own machine-derived fields,
+  /// nothing re-derived. Falls back to the bare name when the way carries no
+  /// motor rating (an equipment load with only a connected wattage), so the
+  /// message never prints a fabricated `0 kW`.
+  String _addedWayDetail(MechXStringsData s, ElectricalCircuit c) {
+    final kw = c.motorKw;
+    if (kw == null || kw <= 0) return c.name;
+    return s.format(StringKey.mepSyncDetailTemplate,
+        {'name': c.name, 'kw': _fmtKw(kw)});
   }
 }
+
+/// A motor rating for the status message: `4` / `5.5` (no trailing `.0`).
+String _fmtKw(double kw) {
+  final r = kw.roundToDouble();
+  return (kw - r).abs() < 0.001 ? r.toStringAsFixed(0) : kw.toStringAsFixed(1);
+}
+
+/// The ONE marker appended to a derived way whose source equipment disappeared
+/// (C1). Neutral ASCII, appended at most once — a parked way carries no
+/// `sourceEquipmentId`, so a later sync treats it as a hand-added way and never
+/// touches its name again.
+const String kMepParkedSuffix = ' (source removed)';
+
+/// [c] without its `sourceEquipmentId` and with the parked marker on its name —
+/// the way becomes user-owned, exactly as if the engineer had added it.
+///
+/// Every other field rides through verbatim, INCLUDING `flaOverrideA`: the way
+/// keeps sizing on the last current the mechanical engine derived for it, so
+/// parking never silently resizes the schedule. (`copyWith` has no clear-flag for
+/// `sourceEquipmentId`, so the circuit is rebuilt field-wise here.)
+ElectricalCircuit _parkedMepWay(ElectricalCircuit c) => ElectricalCircuit(
+      id: c.id,
+      name: c.name.endsWith(kMepParkedSuffix)
+          ? c.name
+          : '${c.name}$kMepParkedSuffix',
+      role: c.role,
+      loadW: c.loadW,
+      points: c.points,
+      cosPhi: c.cosPhi,
+      length: c.length,
+      loadKind: c.loadKind,
+      isLighting: c.isLighting,
+      demandFactor: c.demandFactor,
+      motorKw: c.motorKw,
+      phases: c.phases,
+      lifeSafety: c.lifeSafety,
+      cableType: c.cableType,
+      laying: c.laying,
+      cableOverrideMm2: c.cableOverrideMm2,
+      breakerOverrideA: c.breakerOverrideA,
+      groupingCountOverride: c.groupingCountOverride,
+      phaseOverride: c.phaseOverride,
+      busbarBreakBefore: c.busbarBreakBefore,
+      feedsPanelId: c.feedsPanelId,
+      // sourceEquipmentId deliberately dropped — this way is the engineer's now.
+      flaOverrideA: c.flaOverrideA,
+      starterType: c.starterType,
+      loadPos: c.loadPos,
+    );
+
+/// A [parked] way re-claimed by the [fresh] derived circuit for the SAME source
+/// (matched on the deterministic mint id): the machine-owned fields come back
+/// from `fresh`, the parked marker comes off the name, and every hand edit
+/// (cable family, run length, starter, phase pin…) is kept. This is what stops a
+/// re-appearing pump from arriving as a second copy of its own load.
+ElectricalCircuit _readoptedMepWay(
+  ElectricalCircuit parked,
+  ElectricalCircuit fresh,
+) =>
+    parked.copyWith(
+      name: parked.name.endsWith(kMepParkedSuffix)
+          ? parked.name
+              .substring(0, parked.name.length - kMepParkedSuffix.length)
+          : parked.name,
+      sourceEquipmentId: fresh.sourceEquipmentId,
+      loadW: fresh.loadW,
+      motorKw: fresh.motorKw,
+      flaOverrideA: fresh.flaOverrideA,
+    );
+
+/// True when [c] is still EXACTLY as the MEP auto-feed minted it — the engineer
+/// has not renamed it and has set no override of any kind — so re-minting it
+/// would reproduce it verbatim and dropping it (when its source equipment
+/// disappears) loses nothing (C1).
+///
+/// The comparison mirrors `equipmentToCircuit` (`electrical/load_list.dart`)
+/// field by field:
+///   * name still one the app itself supplies ([mepMintedCircuitNames]);
+///   * `role`/`points`/`cosPhi`/`isLighting`/`demandFactor`/`busbarBreakBefore`
+///     at the mint values (branch / 1 / [defaultMotorCosPhi] / false / 1 / false);
+///   * `length` still the unmeasured-stub default the mint uses;
+///   * NO cableType / laying / cableOverrideMm2 / breakerOverrideA /
+///     groupingCountOverride / phaseOverride / starterType / feedsPanelId.
+///
+/// `loadW` / `motorKw` / `flaOverrideA` / `phases` / `lifeSafety` / `loadPos` are
+/// machine-DERIVED (re-derived on every sync), so they are deliberately not part
+/// of the test. Anything that fails ANY of the above is parked, never dropped —
+/// the check is deliberately conservative in the engineer's favour.
+bool _isPristineDerivedWay(ElectricalCircuit c) =>
+    mepMintedCircuitNames.contains(c.name) &&
+    c.role == CircuitRole.branch &&
+    c.points == 1 &&
+    (c.cosPhi - defaultMotorCosPhi).abs() < 1e-9 &&
+    !c.isLighting &&
+    (c.demandFactor - 1).abs() < 1e-9 &&
+    !c.busbarBreakBefore &&
+    (c.length.meters - kDefaultCircuitLength.meters).abs() < 1e-9 &&
+    c.cableType == null &&
+    c.laying == null &&
+    c.cableOverrideMm2 == null &&
+    c.breakerOverrideA == null &&
+    c.groupingCountOverride == null &&
+    c.phaseOverride == null &&
+    c.starterType == null &&
+    c.feedsPanelId == null;
 
 /// The first FREE variant of the machine-supplied way name [base] among
 /// [existing]: `base` itself when nothing on the board carries it, else

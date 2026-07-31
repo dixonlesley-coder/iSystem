@@ -198,6 +198,16 @@ enum StringKey {
   schematicPaletteHelp,
   schematicRiser,
   schematicAddFloorBanner,
+  // B2 — Riser -> Edit palette drop onto a floor with / without a plan.
+  schematicDropNeedsPlan,
+  schematicDropCentred,
+  // C2 — Building page: confirm deleting a level that carries drawn work.
+  buildingDeleteLevelTitle,
+  buildingDeleteLevelBody,
+  buildingDeleteLevelConfirm,
+  buildingDeleteLevelCancel,
+  buildingDrawnElementOne,
+  buildingDrawnElementMany,
 
   // Schematic / elevation — help popover.
   schematicElevationGuide,
@@ -535,6 +545,12 @@ enum StringKey {
   issuesCardUndo,
   issuesCardLocate,
 
+  // A5 — the grouped-row expand hook (issues_card.dart): a group of sibling
+  // findings can fold its per-instance locate links away, and a compliance-card
+  // row unfolds the group it reveals.
+  issuesCardShowLocations,
+  issuesCardHideLocations,
+
   // I4 — the inline acknowledgement form (issues_card.dart): the engineer
   // records their initials + an optional one-line reason before an advisory is
   // accepted, so the sign-off carries an accountable author + justification.
@@ -809,6 +825,44 @@ enum StringKey {
   electricalMepEquipmentGuard,
   electricalPopulated,
   electricalAddedLoadTemplate, // {load} {panel}
+
+  // ── Export honesty (WORKFLOW-FRICTION F4 / H3 / C3) ──────────────────────
+  /// F4 — the zero-length export blocker, naming the offending SHEETS and the
+  /// action. {count} elements, {sheets} the sheet-name list.
+  exportZeroLengthBlockedTemplate, // {count} {sheets} {name}
+
+  /// H3 — an export that had nothing to write (no plan sheet imported yet).
+  exportNothingToExportTemplate, // {name}
+
+  /// C3 — off-scope selection members excluded from a mutating operation.
+  selectionOffScopeDeletedTemplate, // {count}
+  selectionOffScopeAppliedTemplate, // {count}
+
+  /// C3 — the Selection editor header badge when the target is off-sheet.
+  selectionOnOtherSheetTemplate, // {sheet}
+  selectionOffSheetReadOnly,
+
+  // ── The MEP auto-feed sync narrates itself (WORKFLOW-FRICTION H1) ─────────
+  /// The way/circuit noun the count fragments below read with (EN needs both
+  /// forms; ID has no plural inflection, so both resolve to the same word).
+  mepSyncWayNoun,
+  mepSyncWayNounPlural,
+
+  /// Count fragments joined into one consolidated sync message.
+  mepSyncAddedTemplate, // {count} {noun}
+  mepSyncRestoredTemplate, // {count} {noun}
+  mepSyncParkedTemplate, // {count} {noun}
+  mepSyncRemovedTemplate, // {count} {noun}
+
+  /// The consolidated message: the fragments, plus the board create/remove
+  /// wording when the sync also created or dropped the machine-owned board.
+  mepSyncSummaryTemplate, // {parts}
+  mepSyncBoardCreatedTemplate, // {parts}
+  mepSyncBoardRemoved,
+
+  /// The detail of the first added way — its own name + motor rating (the
+  /// sized breaker/cable live on the board schedule, see [_narrateMepSync]).
+  mepSyncDetailTemplate, // {name} {kw}
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -1032,6 +1086,15 @@ const Map<StringKey, String> _en = {
   StringKey.schematicAddFloorBanner:
       'Add a second floor (Project panel) to place risers — '
           'a riser spans a floor-to-floor elevation delta.',
+  StringKey.schematicDropNeedsPlan: 'Assign a plan to {level} first',
+  StringKey.schematicDropCentred: 'Riser on {level} — placed at the centre of {sheet}',
+  StringKey.buildingDeleteLevelTitle: 'Delete {level}?',
+  StringKey.buildingDeleteLevelBody:
+      '{level} carries {count} — deleting the level deletes them too.',
+  StringKey.buildingDeleteLevelConfirm: 'Delete level',
+  StringKey.buildingDeleteLevelCancel: 'Cancel',
+  StringKey.buildingDrawnElementOne: 'drawn element',
+  StringKey.buildingDrawnElementMany: 'drawn elements',
 
   // Schematic / elevation — help popover.
   StringKey.schematicElevationGuide: 'Elevation guide',
@@ -1398,6 +1461,8 @@ const Map<StringKey, String> _en = {
   StringKey.issuesCardAcknowledge: 'Acknowledge',
   StringKey.issuesCardUndo: 'Undo',
   StringKey.issuesCardLocate: 'Locate',
+  StringKey.issuesCardShowLocations: 'Show locations',
+  StringKey.issuesCardHideLocations: 'Hide locations',
   StringKey.issuesCardAckInitials: 'Initials',
   StringKey.issuesCardAckReasonHint: 'Reason (optional)',
   StringKey.issuesCardAckCancel: 'Cancel',
@@ -1719,6 +1784,30 @@ const Map<StringKey, String> _en = {
       'MEP Equipment is auto-generated from the plan — add ways to another panel.',
   StringKey.electricalPopulated: 'populated ',
   StringKey.electricalAddedLoadTemplate: 'Added {load} to {panel}',
+  StringKey.exportZeroLengthBlockedTemplate:
+      '{count} with zero length on {sheets} — calibrate before exporting '
+      '{name}. The BOM, pressures and drawing would be wrong. '
+      'See Review > Design issues.',
+  StringKey.exportNothingToExportTemplate:
+      'Nothing to export — import a plan first ({name}).',
+  StringKey.selectionOffScopeDeletedTemplate:
+      '{count} on other sheets or hidden/locked layers were not deleted',
+  StringKey.selectionOffScopeAppliedTemplate:
+      '{count} on other sheets or hidden/locked layers were not changed',
+  StringKey.selectionOnOtherSheetTemplate: 'On sheet: {sheet}',
+  StringKey.selectionOffSheetReadOnly:
+      'Read-only here — open its sheet to edit it.',
+  StringKey.mepSyncWayNoun: 'circuit',
+  StringKey.mepSyncWayNounPlural: 'circuits',
+  StringKey.mepSyncAddedTemplate: '+{count} {noun}',
+  StringKey.mepSyncRestoredTemplate: '{count} {noun} restored',
+  StringKey.mepSyncParkedTemplate: '{count} {noun} parked',
+  StringKey.mepSyncRemovedTemplate: '{count} {noun} removed',
+  StringKey.mepSyncSummaryTemplate: 'MEP Equipment: {parts}',
+  StringKey.mepSyncBoardCreatedTemplate: 'MEP Equipment board created: {parts}',
+  StringKey.mepSyncBoardRemoved:
+      'MEP Equipment board removed — no equipment left',
+  StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -1943,6 +2032,17 @@ const Map<StringKey, String> _id = {
   StringKey.schematicAddFloorBanner:
       'Tambahkan lantai kedua (panel Proyek) untuk menempatkan riser — '
           'sebuah riser membentang sepanjang selisih elevasi antar-lantai.',
+  StringKey.schematicDropNeedsPlan: 'Tetapkan denah untuk {level} dahulu',
+  StringKey.schematicDropCentred:
+      'Riser di {level} — ditempatkan di tengah {sheet}',
+  StringKey.buildingDeleteLevelTitle: 'Hapus {level}?',
+  StringKey.buildingDeleteLevelBody:
+      '{level} memuat {count} — menghapus level ini menghapusnya juga.',
+  StringKey.buildingDeleteLevelConfirm: 'Hapus level',
+  StringKey.buildingDeleteLevelCancel: 'Batal',
+  // Bahasa Indonesia has no plural inflection — the same noun for both.
+  StringKey.buildingDrawnElementOne: 'elemen gambar',
+  StringKey.buildingDrawnElementMany: 'elemen gambar',
 
   // Schematic / elevation — help popover.
   StringKey.schematicElevationGuide: 'Panduan elevasi',
@@ -2309,6 +2409,8 @@ const Map<StringKey, String> _id = {
   StringKey.issuesCardAcknowledge: 'Akui',
   StringKey.issuesCardUndo: 'Urungkan',
   StringKey.issuesCardLocate: 'Cari lokasi',
+  StringKey.issuesCardShowLocations: 'Tampilkan lokasi',
+  StringKey.issuesCardHideLocations: 'Sembunyikan lokasi',
   StringKey.issuesCardAckInitials: 'Inisial',
   StringKey.issuesCardAckReasonHint: 'Alasan (opsional)',
   StringKey.issuesCardAckCancel: 'Batal',
@@ -2644,6 +2746,30 @@ const Map<StringKey, String> _id = {
       'Peralatan MEP dibuat otomatis dari denah — tambah jalur ke panel lain.',
   StringKey.electricalPopulated: 'terisi ',
   StringKey.electricalAddedLoadTemplate: 'Ditambahkan {load} ke {panel}',
+  StringKey.exportZeroLengthBlockedTemplate:
+      '{count} berpanjang nol pada {sheets} — kalibrasi dulu sebelum mengekspor '
+      '{name}. BOM, tekanan dan gambar akan salah. '
+      'Lihat Tinjauan > Masalah desain.',
+  StringKey.exportNothingToExportTemplate:
+      'Tidak ada yang diekspor — impor denah dulu ({name}).',
+  StringKey.selectionOffScopeDeletedTemplate:
+      '{count} pada lembar lain atau lapisan tersembunyi/terkunci tidak dihapus',
+  StringKey.selectionOffScopeAppliedTemplate:
+      '{count} pada lembar lain atau lapisan tersembunyi/terkunci tidak diubah',
+  StringKey.selectionOnOtherSheetTemplate: 'Pada lembar: {sheet}',
+  StringKey.selectionOffSheetReadOnly:
+      'Hanya-baca di sini — buka lembarnya untuk mengedit.',
+  StringKey.mepSyncWayNoun: 'jalur',
+  StringKey.mepSyncWayNounPlural: 'jalur',
+  StringKey.mepSyncAddedTemplate: '+{count} {noun}',
+  StringKey.mepSyncRestoredTemplate: '{count} {noun} dipulihkan',
+  StringKey.mepSyncParkedTemplate: '{count} {noun} diparkir',
+  StringKey.mepSyncRemovedTemplate: '{count} {noun} dihapus',
+  StringKey.mepSyncSummaryTemplate: 'Peralatan MEP: {parts}',
+  StringKey.mepSyncBoardCreatedTemplate: 'Panel Peralatan MEP dibuat: {parts}',
+  StringKey.mepSyncBoardRemoved:
+      'Panel Peralatan MEP dihapus — tidak ada peralatan tersisa',
+  StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

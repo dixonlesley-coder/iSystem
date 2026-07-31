@@ -371,6 +371,13 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         check.verdict == VelocityBandVerdict.tooLow) {
       continue; // owned by the self-cleansing advisory below
     }
+    // G2 — the OVER-CAPACITY case is owned by 2b-i above: a run clamped at the
+    // largest tabulated size is over-velocity BY CONSTRUCTION (the clamp is what
+    // pushed it there), so emitting `water-velocity:<id>` as well prints the
+    // same physics twice on one edge with the weaker advice. Mirrors the gravity
+    // dedupe directly above (that guard proved the pattern); the over-capacity
+    // row carries the actionable message ("split the flow / split the run").
+    if (overCapacity.contains(entry.key)) continue;
     final sheetId = sheetForEdge(edge);
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
@@ -942,6 +949,34 @@ final zeroLengthSizedEdgeCountProvider = Provider<int>((ref) {
 /// network.
 final exportHasZeroLengthEdgesProvider =
     Provider<bool>((ref) => ref.watch(zeroLengthSizedEdgeCountProvider) > 0);
+
+/// F4 — the SHEET IDS carrying the zero-length sized edges the export gate
+/// blocks on, in stable edge-list order (deduped). The gate used to name no
+/// sheet at all ("N drawn element(s) have zero length"), so the engineer had to
+/// go hunting; naming the offending sheets turns the blocker into an
+/// instruction. Empty ⇒ the gate is inert (byte-identical). An edge whose
+/// endpoint node is missing contributes nothing (never invents a sheet).
+final zeroLengthSheetIdsProvider = Provider<List<String>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final project = ref.watch(projectControllerProvider);
+  final sizing = ref.watch(sizingProvider);
+  final out = <String>[];
+  final seen = <String>{};
+  for (final e in net.edges) {
+    if (!sizing.containsKey(e.id)) continue;
+    final len = edgeLength(
+      e,
+      net,
+      calibrationBySheet: project.calibrations,
+      building: project.building,
+    );
+    if (len.meters > 0) continue;
+    final sheetId = net.nodeById(e.fromId)?.sheetId;
+    if (sheetId == null) continue;
+    if (seen.add(sheetId)) out.add(sheetId);
+  }
+  return List.unmodifiable(out);
+});
 
 /// A one-click batch action over a whole CLASS of issues. SAFE by construction —
 /// it only SELECTS the offending elements or applies an already-existing bulk op

@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
+import 'package:mechx/store/schematic_layout_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/ui/schematic/schematic_view.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
@@ -116,7 +117,18 @@ void main() {
       expect(len.meters, closeTo(_riser0to1LengthM, 1e-9));
     });
 
-    test('horizontal moveRiserHorizontal does NOT change the riser length', () {
+    // B3 RE-DERIVATION — this test used to PIN the defect: it asserted that
+    // dragging a riser sideways on the ELEVATION wrote that x onto the plan
+    // nodes (`a.x == 900`, `b.x == 900`). That gesture is a diagram declutter;
+    // writing it onto the plan silently relocated the riser away from its shaft
+    // on the plan canvas and in every plan export, with nothing on the elevation
+    // to show it. The contract is now the opposite — the PLAN x is UNCHANGED
+    // (still 250, the placement x) and the move lands in the transient
+    // elevation-layout override, which only the Riser -> Edit view reads. The
+    // length invariant this test also guards is untouched (and is now
+    // structurally guaranteed: no node coordinate moves at all).
+    test('horizontal moveRiserHorizontal moves the DIAGRAM, not the plan — and '
+        'never changes the riser length', () {
       final c = _container();
       final ctrl = c.read(networkControllerProvider.notifier);
       final building = c.read(projectControllerProvider).building;
@@ -127,18 +139,21 @@ void main() {
       final before = edgeLength(edge, net,
           calibrationBySheet: const {}, building: building);
 
-      // Drag the riser hard to the right.
-      ctrl.pushUndoSnapshot();
+      // Drag the riser hard to the right on the elevation.
       ctrl.moveRiserHorizontal(id, 900);
 
       net = c.read(networkControllerProvider).network;
       edge = net.edges.firstWhere((e) => e.id == id);
       final a = net.nodeById(edge.fromId)!;
       final b = net.nodeById(edge.toId)!;
-      // Both endpoints moved horizontally, floors unchanged.
-      expect(a.x, 900);
-      expect(b.x, 900);
+      // PLAN geometry untouched — floors AND x.
+      expect(a.x, 250);
+      expect(b.x, 250);
       expect({a.floorIndex, b.floorIndex}, {0, 1});
+      // The DIAGRAM position carries the move (both endpoints of the riser).
+      final layout = c.read(schematicLayoutProvider);
+      expect(layout.xFor(a), 900);
+      expect(layout.xFor(b), 900);
 
       final after = edgeLength(edge, net,
           calibrationBySheet: const {}, building: building);

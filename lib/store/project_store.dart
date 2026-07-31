@@ -251,10 +251,18 @@ class ProjectController extends Notifier<ProjectState> {
 
   /// Remove the floor at [index] in ONE undo step. The floor removal AND the
   /// drawn-node remap are a SINGLE [UndoDomain.structural] entry (see
-  /// [setFloors]), so one Ctrl+Z restores the stack and every node's floor
-  /// together. Removing a MIDDLE floor shifts higher nodes down one index to
-  /// keep their own physical floor (no silent re-elevation); nodes on/above a
-  /// removed top clamp into range. Byte-identical remap for an empty network.
+  /// [setFloors]), so one Ctrl+Z restores the stack, every node's floor AND the
+  /// work deleted with the floor together. Removing a MIDDLE floor shifts higher
+  /// nodes down one index to keep their own physical floor (no silent
+  /// re-elevation). Byte-identical remap for an empty network.
+  ///
+  /// C2 — the work drawn ON the removed floor is DELETED with it (nodes + every
+  /// edge touching them; see [NetworkController.remapNodesForFloorChange]). It
+  /// used to keep its index while the floor above slid down into that slot, so
+  /// two floors' drawn work silently FUSED at the wrong elevation — in range, so
+  /// no orphan check fired and nothing warned. Callers should count the affected
+  /// elements with [NetworkController.elementsOnFloor] and CONFIRM before
+  /// calling this (the Building page does).
   void removeFloor(int index) {
     if (index < 0 || index >= state.floors.length || state.floors.length <= 1) {
       return;

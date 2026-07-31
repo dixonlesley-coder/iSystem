@@ -66,6 +66,7 @@ import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/reference_line_store.dart';
+import '../../store/selection_scope.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
@@ -81,6 +82,7 @@ import '../format/scale_format.dart';
 import '../schematic/schematic_export.dart' show buildLiveRiserSheet;
 import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import 'disclosure_header.dart';
 import 'fixture_library_editor.dart';
 import 'result_card.dart';
@@ -173,32 +175,65 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
 /// length), it raises a dismissible warning on [loadErrorProvider] and writes
 /// NOTHING — the engineer must calibrate first, so the BOM / pressures / drawing
 /// can't be silently wrong. (2) Otherwise it awaits [write] inside try/catch:
-/// `write` returns false when the user cancelled the file picker (no pill), true
-/// after a successful write ⇒ a transient "Exported `name`" confirmation pill;
-/// any thrown error ⇒ a "Could not export `name`" warning. The success pill
+/// H3 — `write` is now TRI-STATE, because "cancelled" and "nothing to write"
+/// used to be the same `false`, making an export with no imported plan a total
+/// silent no-op (including the global **P** accelerator):
+///
+///  * `true`  — written ⇒ a transient "Exported `name`" confirmation pill;
+///  * `false` — the user CANCELLED the file picker ⇒ deliberately silent;
+///  * `null`  — there was NOTHING to write (no plan sheet imported yet) ⇒ a
+///    visible "Nothing to export — import a plan first" error.
+///
+/// Any thrown error ⇒ a "Could not export `name`" warning. The success pill
 /// reuses the same self-clearing mechanism as Save / Open / Import. Public so
 /// every export surface (the riser drawing set in `schematic_export.dart`, the
-/// electrical + commercial exports) routes through the SAME guard + feedback.
+/// electrical + commercial exports) routes through the SAME guard + feedback —
+/// a `Future<bool> Function()` is a subtype of the declared
+/// `Future<bool?> Function()`, so every existing writer keeps compiling and only
+/// the ones that genuinely mean "nothing to write" return null.
 ///
 /// The zero-length gate iterates only the MECHANICAL network, so a
 /// pure-electrical project is never blocked; a project that also carries
 /// uncalibrated mechanical runs is held back until the sheet is calibrated —
 /// conservative, and correct for any deliverable that could embed those runs.
+/// F4 — that blocker now NAMES the offending sheets (and points at the
+/// locatable Review > Design issues surface) instead of a bare `N element(s)`.
 Future<void> runExportGuarded(
   WidgetRef ref, {
   required String name,
-  required Future<bool> Function() write,
+  required Future<bool?> Function() write,
 }) async {
+  final strings = MechXStringsData(ref.read(localeProvider));
   if (ref.read(exportHasZeroLengthEdgesProvider)) {
     final n = ref.read(zeroLengthSizedEdgeCountProvider);
+    // F4 — name the SHEETS the offending runs sit on (the engineer's next
+    // action is on one of them), and kill the '(s)' dev-speak via pluralCount.
+    final sheetsState = ref.read(sheetsControllerProvider);
+    final names = [
+      for (final id in ref.read(zeroLengthSheetIdsProvider))
+        sheetsState.sheetById(id)?.name ?? id,
+    ];
     ref.read(loadErrorProvider.notifier).set(
-          '$n drawn element(s) have zero length — calibrate the sheet before '
-          'exporting $name. The BOM, pressures and drawing would be wrong.',
+          strings.format(StringKey.exportZeroLengthBlockedTemplate, {
+            'count': pluralCount(n, 'drawn element', 'drawn elements'),
+            'sheets': names.isEmpty
+                ? plural(n, 'the sheet', 'the sheets')
+                : names.join(', '),
+            'name': name,
+          }),
         );
     return;
   }
   try {
     final wrote = await write();
+    if (wrote == null) {
+      // H3 — nothing to write is a REPORTABLE state, not a silent cancel.
+      ref.read(loadErrorProvider.notifier).set(
+            strings.format(
+                StringKey.exportNothingToExportTemplate, {'name': name}),
+          );
+      return;
+    }
     if (wrote) {
       ref.read(statusMessageProvider.notifier).showStatus('Exported $name');
       // The stepper's Report stage is DONE only once a deliverable actually
@@ -781,10 +816,12 @@ Future<void> exportDrawingDxf(WidgetRef ref) => runExportGuarded(
       write: () => _writeDrawingDxf(ref),
     );
 
-Future<bool> _writeDrawingDxf(WidgetRef ref) async {
+Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
-  if (sheet == null) return false;
+  // H3 — NOTHING TO WRITE (no plan sheet imported yet) is not a user
+  // cancel: null makes the guard raise a visible error instead of a no-op.
+  if (sheet == null) return null;
   final project = ref.read(projectControllerProvider);
   final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
@@ -814,7 +851,11 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
     // glyph, and G5: the laid gravity fall (1:N) folded into gravity-run size
     // labels — the same tokens the on-canvas plan shows, now on the issued DXF.
     nodeTags: equipmentNodeTags(net),
-    gravitySlope: const SizingContext().drainageSlope,
+    // H5: the LAID design slope the sizer + the report actually used
+    // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
+    // issued sheet must not contradict the signed report (see the contract note
+    // at `plan_symbols.dart` `gravitySlopeLabel`).
+    gravitySlope: ref.read(drainageSlopeProvider),
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -833,10 +874,12 @@ Future<void> exportDrawingPdf(WidgetRef ref) => runExportGuarded(
       write: () => _writeDrawingPdf(ref),
     );
 
-Future<bool> _writeDrawingPdf(WidgetRef ref) async {
+Future<bool?> _writeDrawingPdf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
-  if (sheet == null) return false;
+  // H3 — NOTHING TO WRITE (no plan sheet imported yet) is not a user
+  // cancel: null makes the guard raise a visible error instead of a no-op.
+  if (sheet == null) return null;
   final project = ref.read(projectControllerProvider);
   final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
@@ -859,7 +902,11 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
     // glyph, and G5: the laid gravity fall (1:N) on gravity-run size labels —
     // the same tokens the on-canvas plan shows, now on the issued PDF.
     nodeTags: equipmentNodeTags(net),
-    gravitySlope: const SizingContext().drainageSlope,
+    // H5: the LAID design slope the sizer + the report actually used
+    // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
+    // issued sheet must not contradict the signed report (see the contract note
+    // at `plan_symbols.dart` `gravitySlopeLabel`).
+    gravitySlope: ref.read(drainageSlopeProvider),
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -882,10 +929,12 @@ Future<void> exportAnnotatedPlanPdf(WidgetRef ref) => runExportGuarded(
       write: () => _writeAnnotatedPlanPdf(ref),
     );
 
-Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
+Future<bool?> _writeAnnotatedPlanPdf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
-  if (sheet == null) return false;
+  // H3 — NOTHING TO WRITE (no plan sheet imported yet) is not a user
+  // cancel: null makes the guard raise a visible error instead of a no-op.
+  if (sheet == null) return null;
   final project = ref.read(projectControllerProvider);
   final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
@@ -933,7 +982,11 @@ Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     // glyph, and G5: the laid gravity fall (1:N) on gravity-run size labels —
     // the same tokens the on-canvas plan shows, now on the issued plan PDF.
     nodeTags: equipmentNodeTags(net),
-    gravitySlope: const SizingContext().drainageSlope,
+    // H5: the LAID design slope the sizer + the report actually used
+    // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
+    // issued sheet must not contradict the signed report (see the contract note
+    // at `plan_symbols.dart` `gravitySlopeLabel`).
+    gravitySlope: ref.read(drainageSlopeProvider),
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -1236,7 +1289,10 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       // G1/G5: the equipment tags + gravity fall, shared by both plan formats
       // (the same tokens the on-canvas plan shows).
       final nodeTags = equipmentNodeTags(net);
-      final gravitySlope = const SizingContext().drainageSlope;
+      // H5: the LAID design slope from `drainageSlopeProvider` (the Building
+      // page input the sizer + calc report already honour), so every bundled
+      // submittal sheet stamps the SAME fall the report signs off on.
+      final gravitySlope = ref.read(drainageSlopeProvider);
       // One file per sheet, numbered by rail position so a multi-floor bundle
       // never collides (`project-plan-1-Ground Floor.pdf`, `-2-Level 1.pdf`…).
       final suffix = 'plan-${i + 1}-${sheet.name}';
@@ -3733,6 +3789,22 @@ class _SelectionSection extends ConsumerWidget {
     }
     if (body == null) return const SizedBox.shrink();
 
+    // C3 — the selection outlives a sheet switch, so this editor could offer a
+    // full set of MUTATING controls for an element the engineer cannot see (on
+    // another floor's plan). Badge the header with the owning sheet and make the
+    // body read-only in that state: the edit belongs where the element is. Null
+    // (the normal case: the target is on the current sheet) ⇒ byte-identical.
+    final sheets = ref.watch(sheetsControllerProvider);
+    final elsewhereId = owningSheetIfElsewhere(
+      net,
+      nodeId: selection.nodeId,
+      edgeId: selection.edgeId,
+      currentSheetId: sheets.current?.id,
+    );
+    final strings = context.strings;
+    final colors = context.colors;
+    final type = context.type;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -3742,8 +3814,27 @@ class _SelectionSection extends ConsumerWidget {
             _GlyphButton(glyph: '×', onTap: selCtrl.clear),
           ],
         ),
+        if (elsewhereId != null) ...[
+          const SizedBox(height: MechXSpacing.xs),
+          Text(
+            strings.format(StringKey.selectionOnOtherSheetTemplate, {
+              'sheet': sheets.sheetById(elsewhereId)?.name ?? elsewhereId,
+            }),
+            style: type.caption.copyWith(color: colors.warning),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            strings(StringKey.selectionOffSheetReadOnly),
+            style: type.caption.copyWith(color: colors.textMuted),
+          ),
+        ],
         const SizedBox(height: MechXSpacing.sm),
-        body,
+        if (elsewhereId == null)
+          body
+        else
+          // Every mutating control in the editor stands down; the header's ×
+          // (clear selection) stays live above.
+          IgnorePointer(child: Opacity(opacity: 0.5, child: body)),
         const SizedBox(height: MechXSpacing.lg),
       ],
     );
@@ -3755,8 +3846,23 @@ class _SelectionSection extends ConsumerWidget {
     final type = context.type;
     final n = selection.nodeIds.length;
     final m = selection.edgeIds.length;
-    final edgeIds = selection.edgeIds;
-    final nodeIds = selection.nodeIds;
+
+    // C3 — the selection outlives sheet and layer switches, so the batch
+    // appliers (and Delete) below could silently rewrite elements on another
+    // floor or on a hidden/locked layer. Scope them with the SAME precondition
+    // the canvas hit-test uses: on the current sheet, on a visible + unlocked
+    // service. Off-scope members drop out of every operation here, and the
+    // header says how many were left alone. Nothing hidden/locked and one sheet
+    // ⇒ the scoped sets equal the raw selection (byte-identical).
+    final scope = scopeSelection(
+      net: net,
+      nodeIds: selection.nodeIds,
+      edgeIds: selection.edgeIds,
+      sheetId: ref.watch(sheetsControllerProvider).current?.id,
+      inertServices: ref.watch(inertServicesProvider),
+    );
+    final edgeIds = scope.edgeIds;
+    final nodeIds = scope.nodeIds;
 
     // Resolve the selected elements to drive the shared property editors (E1).
     final selEdges = <NetEdge>[
@@ -3836,6 +3942,21 @@ class _SelectionSection extends ConsumerWidget {
           style: MechXTypography.tabular(
               type.caption.copyWith(color: colors.textMuted)),
         ),
+        // C3 — name what this panel will NOT touch, rather than quietly doing
+        // less than the count above implies. Absent when nothing is off-scope.
+        if (scope.hasExcluded) ...[
+          const SizedBox(height: 2),
+          Text(
+            context.strings.format(
+              StringKey.selectionOffScopeAppliedTemplate,
+              {
+                'count': pluralCount(
+                    scope.excludedCount, 'selected element', 'selected elements')
+              },
+            ),
+            style: type.caption.copyWith(color: colors.warning),
+          ),
+        ],
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
@@ -3862,7 +3983,21 @@ class _SelectionSection extends ConsumerWidget {
             MechXButton(
               label: 'Delete',
               onPressed: () {
-                ctrl.deleteMany(selection.nodeIds, selection.edgeIds);
+                // C3 — delete only what is in scope (the canvas Delete key
+                // applies the same guard); the excluded caption above already
+                // names what survives.
+                if (scope.hasExcluded) {
+                  ref.read(statusMessageProvider.notifier).showStatus(
+                        context.strings.format(
+                          StringKey.selectionOffScopeDeletedTemplate,
+                          {
+                            'count': pluralCount(scope.excludedCount,
+                                'selected element', 'selected elements')
+                          },
+                        ),
+                      );
+                }
+                ctrl.deleteMany(scope.nodeIds, scope.edgeIds);
                 selCtrl.clear();
               },
             ),

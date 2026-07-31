@@ -41,13 +41,25 @@ class ElectricalConnectivityDefect {
 /// NOT referenced are root candidates (`panels.where((p) => !parentOf
 /// .containsKey(p.id))`). `compute.dart` allows MULTIPLE roots (a real
 /// dual-source design — a normal MDP plus a genset/emergency MDP, each fed by
-/// the source spine), so a further un-fed board is only a defect in a
-/// SINGLE-supply building. The first un-fed panel (the MDP, listed first) is THE
-/// primary root and is never a defect; any FURTHER un-fed panel is flagged
-/// [ElectricalConnectivityDefectKind.unfedPanel] — UNLESS the project models
-/// more than one supply (`dualTransformer`, distributed `sources`) or the board
-/// is `essential` (genset-backed), in which case it is a legitimate additional
-/// source-fed root.
+/// the source spine), so an extra un-fed board is not automatically a defect.
+///
+/// H2 — the legitimacy test is PER PANEL, not project-wide. An un-fed board is
+/// legitimate only when it is:
+///
+///   1. THE primary root (the first un-fed panel — the MDP, listed first);
+///   2. the SECOND LV main of a declared [ElectricalProject.dualTransformer]
+///      service — two mains are expected, so exactly ONE further root is
+///      allowed (a third is still a defect); or
+///   3. an [ElectricalPanel.essential] board WHEN a generator source is
+///      declared (`sources.generator`) — the genset spine feeds an emergency
+///      main directly, not through a feeder.
+///
+/// Everything else warns exactly as the single-supply case does. In particular a
+/// declared SOLAR or BATTERY source legitimises NOTHING: both attach to the LV
+/// bus of an existing board (see `_emitPvArray` / `_emitBattery` on the source
+/// spine), they never feed a floating distribution board. Before H2 the mere
+/// presence of ANY `sources` object (a rooftop PV, a battery) switched the whole
+/// check off project-wide, so a genuinely floating sub-panel went unreported.
 ///
 /// With a single panel there is never a defect (it is the root). A degenerate
 /// project where every panel is fed (a feeder cycle with no root — a distinct
@@ -70,32 +82,45 @@ List<ElectricalConnectivityDefect> electricalConnectivityDefects(
     }
   }
 
-  // Multiple roots are LEGITIMATE when the building models more than one supply:
-  // a dual transformer, distributed sources (a genset feeds an emergency MDP),
-  // or a panel explicitly marked essential (genset/emergency-backed) — the
-  // source spine feeds each such root, NOT a feeder. `compute.dart` itself
-  // supports multiple roots (`panels.where((p) => !parentOf.containsKey(p.id))`),
-  // so flagging every non-first root would false-positive on a real dual-source
-  // design. Only a SINGLE-supply building expects exactly one main board — there
-  // a second root is a forgotten feeder.
-  final multiSource = project.dualTransformer || project.sources != null;
+  // A declared genset is what legitimises an essential (emergency) main sitting
+  // outside the feeder tree. Solar / battery deliberately do NOT count.
+  final gensetDeclared = project.sources?.generator != null;
 
-  // THE primary root = the first panel not fed by any feeder (mirrors
-  // compute.dart's root candidates; the MDP is listed first). Never a defect.
-  String? root;
-  for (final p in panels) {
-    if (!fed.contains(p.id)) {
-      root = p.id;
+  // The un-fed boards, in list order. The FIRST is THE primary root (mirrors
+  // compute.dart's root candidates; the MDP is listed first) and is never a
+  // defect.
+  final unfed = [
+    for (final p in panels)
+      if (!fed.contains(p.id)) p,
+  ];
+  if (unfed.isEmpty) return const [];
+
+  // Pass 1 — every essential board with a declared genset is a legitimate
+  // source-fed root (rule 3), independent of position in the list.
+  final legit = <String>{unfed.first.id};
+  if (gensetDeclared) {
+    for (final p in unfed) {
+      if (p.essential) legit.add(p.id);
+    }
+  }
+
+  // Pass 2 — a dual-transformer service expects TWO LV mains, so it legitimises
+  // exactly ONE further root beyond the primary (never "any number of roots"):
+  // the allowance is spent on the first board not already legitimised above, so
+  // a THIRD floating main is still reported. A genset-backed essential main is
+  // counted separately under rule 3 — it is a different supply, not the second
+  // transformer.
+  if (project.dualTransformer) {
+    for (final p in unfed) {
+      if (legit.contains(p.id)) continue;
+      legit.add(p.id);
       break;
     }
   }
 
   final defects = <ElectricalConnectivityDefect>[];
-  for (final p in panels) {
-    if (p.id == root) continue; // the primary root, fed by the incomer/source
-    if (fed.contains(p.id)) continue; // fed by a feeder → connected
-    if (multiSource) continue; // a legit additional source-fed root
-    if (p.essential) continue; // a genset/emergency-backed root, not unfed
+  for (final p in unfed) {
+    if (legit.contains(p.id)) continue;
     defects.add(ElectricalConnectivityDefect(
       panelId: p.id,
       kind: ElectricalConnectivityDefectKind.unfedPanel,

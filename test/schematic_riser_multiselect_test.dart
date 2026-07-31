@@ -1,8 +1,18 @@
 /// D5 — the Riser Edit canvas gained the Layout marquee idiom: an empty-canvas
 /// left-drag rubber-band-selects several placed risers, and a body drag on any
-/// selected riser moves the WHOLE set horizontally in one undo step. This test
-/// pins a deterministic (identity) edit viewport, marquees two risers, drags one
-/// to move both, and checks one undo restores them.
+/// selected riser moves the WHOLE set horizontally. This test pins a
+/// deterministic (identity) edit viewport, marquees two risers and drags one to
+/// move both.
+///
+/// B3 RE-DERIVATION — the group drag used to write the elevation x onto the PLAN
+/// nodes, so this test asserted `nodeById('r1lo').x == 250` and that ONE undo
+/// restored 150. The gesture is a diagram declutter: it must not edit the
+/// drawing (it silently relocated the riser away from its shaft on the plan and
+/// in every plan export). The assertions are re-derived to the new contract:
+/// every node's PLAN x is unchanged (150 / 400), the elevation-layout override
+/// carries the moved positions (250 / 500 — the same +100 delta, relative offset
+/// preserved), and NO undo step is recorded (the network never changed, so the
+/// old snapshot was a phantom entry).
 library;
 
 import 'package:flutter/widgets.dart';
@@ -12,6 +22,7 @@ import 'package:mechx/app.dart';
 import 'package:mechx/store/electrical_store.dart' show workspaceViewProvider, WorkspaceView;
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/schematic_layout_store.dart';
 import 'package:mechx/store/schematic_view_store.dart';
 import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
@@ -56,8 +67,8 @@ const _twoRisers = Network(
 
 void main() {
   testWidgets(
-      'marquee selects both risers; a group drag moves both; one undo restores '
-      'both', (tester) async {
+      'marquee selects both risers; a group drag moves both on the DIAGRAM, '
+      'leaving the plan geometry untouched', (tester) async {
     setDesktopSurface(tester);
     await tester.pumpWidget(
       ProviderScope(
@@ -90,11 +101,17 @@ void main() {
     ));
     Offset at(double x, double y) => canvasRect.topLeft + Offset(x, y);
 
-    double xOf(String nodeId) => container
+    // The PLAN x (the drawn geometry) — must never move on this surface.
+    double planX(String nodeId) => container
         .read(networkControllerProvider)
         .network
         .nodeById(nodeId)!
         .x;
+
+    // The DIAGRAM x the elevation draws at (override, else the plan x).
+    double diagramX(String nodeId) => container
+        .read(schematicLayoutProvider)
+        .xForId(nodeId, planX(nodeId));
 
     // ── Marquee across both riser legs (start on a blank spot) ────────────────
     final m = await tester.startGesture(at(10, 200));
@@ -115,16 +132,19 @@ void main() {
     await g.up();
     await tester.pump();
 
-    // Both risers moved by the same delta (relative offset preserved).
-    expect(xOf('r1lo'), 250);
-    expect(xOf('r1hi'), 250);
-    expect(xOf('r2lo'), 500);
-    expect(xOf('r2hi'), 500);
+    // Both risers moved by the same delta ON THE DIAGRAM (relative offset
+    // preserved) — 150 -> 250 and 400 -> 500.
+    expect(diagramX('r1lo'), 250);
+    expect(diagramX('r1hi'), 250);
+    expect(diagramX('r2lo'), 500);
+    expect(diagramX('r2hi'), 500);
 
-    // ── One undo restores BOTH risers ────────────────────────────────────────
-    container.read(historyProvider.notifier).undo();
-    await tester.pump();
-    expect(xOf('r1lo'), 150);
-    expect(xOf('r2lo'), 400);
+    // ── B3: the PLAN geometry is untouched, and nothing was recorded ─────────
+    expect(planX('r1lo'), 150);
+    expect(planX('r1hi'), 150);
+    expect(planX('r2lo'), 400);
+    expect(planX('r2hi'), 400);
+    expect(container.read(historyProvider.notifier).canUndo, isFalse,
+        reason: 'a diagram-only move must not push an undo entry');
   });
 }

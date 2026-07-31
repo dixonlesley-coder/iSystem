@@ -4,11 +4,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/data/autosave.dart';
 import 'package:mechx/data/project_document.dart';
+import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/ui/electrical/electrical_palette.dart';
+import 'package:mechx_engine/electrical/control/starter.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/headroom.dart';
@@ -1470,6 +1472,13 @@ void main() {
       );
       expect(ctrl.canUndo, isFalse);
       expect(hist.canUndo, isFalse);
+
+      // C1 — the sync that loses a source is undo-exempt TOO, which is exactly
+      // why it must not destroy anything: the way is PARKED (see the park-policy
+      // group below), and there is still no undo entry to recover it with.
+      ctrl.syncMepEquipment(const []);
+      expect(ctrl.canUndo, isFalse);
+      expect(hist.canUndo, isFalse);
     });
 
     test('live-drag position intents do not record; pushUndoSnapshot pairs '
@@ -1745,8 +1754,10 @@ void main() {
   });
 
   group('syncMepEquipment UPSERT (G2 — stop wiping user edits)', () {
-    // A derived circuit exactly as `buildEquipmentCircuits` produces one: it
-    // always carries a `sourceEquipmentId` (the upsert key) + `flaOverrideA`.
+    // A derived circuit exactly as `buildEquipmentCircuits` produces one: the
+    // deterministic mint id `mep-<source>`, a `sourceEquipmentId` (the upsert
+    // key), `flaOverrideA`, and the mint's 10 m unmeasured-stub length (C1 reads
+    // that length when deciding whether a way is still exactly as minted).
     ElectricalCircuit derived(String src,
             {required String name,
             double loadW = 6000,
@@ -1757,6 +1768,7 @@ void main() {
           name: name,
           loadKind: LoadKind.pump,
           loadW: loadW,
+          length: kDefaultCircuitLength,
           motorKw: motorKw,
           sourceEquipmentId: src,
           flaOverrideA: Current(fla),
@@ -1768,15 +1780,19 @@ void main() {
         .firstWhere((p) => p.id == kMepEquipmentPanelId);
 
     test('preserves user name/cableType + a user-added way, refreshes derived '
-        'loads, and drops a circuit whose source node was deleted', () {
+        'loads, and drops a PRISTINE circuit whose source node was deleted', () {
       final c = ProviderContainer();
       addTearDown(c.dispose);
       final ctrl = c.read(electricalProjectProvider.notifier);
 
-      // First sync: two placed pieces of equipment.
+      // First sync: two placed pieces of equipment. node-2 keeps its MINTED name
+      // ('Exhaust fan' — a name the auto-feed itself supplies) and gets no edits,
+      // so when its source disappears below it is still exactly as minted and is
+      // dropped rather than parked (C1: re-minting reproduces it verbatim).
       ctrl.syncMepEquipment([
         derived('node-1', name: 'Pump A'),
-        derived('node-2', name: 'Fan B', loadW: 3500, motorKw: 3.0, fla: 6),
+        derived('node-2',
+            name: 'Exhaust fan', loadW: 3500, motorKw: 3.0, fla: 6),
       ]);
       expect(mep(c).circuits, hasLength(2));
       final node1Id =
@@ -1796,8 +1812,10 @@ void main() {
       ]);
 
       final circuits = mep(c).circuits;
-      // node-2 (removed equipment) is dropped.
+      // node-2 (removed equipment, never hand-touched) is dropped — and leaves
+      // no parked remnant behind either.
       expect(circuits.where((x) => x.sourceEquipmentId == 'node-2'), isEmpty);
+      expect(circuits.where((x) => x.name.startsWith('Exhaust fan')), isEmpty);
       final node1 = circuits.firstWhere((x) => x.sourceEquipmentId == 'node-1');
       // User-set fields SURVIVE the sync.
       expect(node1.name, 'Domestic booster');
@@ -1851,12 +1869,17 @@ void main() {
       expect(mep(c).diversityFactor, 0.7);
     });
 
-    test('a sync that removes the last derived way drops the panel entirely', () {
+    test('a sync that removes the last PRISTINE derived way drops the panel '
+        'entirely', () {
       final c = ProviderContainer();
       addTearDown(c.dispose);
       final ctrl = c.read(electricalProjectProvider.notifier);
 
-      ctrl.syncMepEquipment([derived('node-1', name: 'Pump A')]);
+      // 'Fire pump' is a name the auto-feed itself mints and nothing is edited,
+      // so the way is still exactly as minted: when its source disappears there
+      // is nothing of the engineer's to keep, the way is dropped, the board ends
+      // up carrying NO ways at all — and only then is the board itself removed.
+      ctrl.syncMepEquipment([derived('node-1', name: 'Fire pump')]);
       expect(
         c.read(electricalProjectProvider).panels
             .any((p) => p.id == kMepEquipmentPanelId),
@@ -1868,6 +1891,193 @@ void main() {
             .any((p) => p.id == kMepEquipmentPanelId),
         isFalse,
       );
+    });
+  });
+
+  // ── C1 — park, don't delete ────────────────────────────────────────────────
+  group('syncMepEquipment PARKS hand-edited ways (C1)', () {
+    ElectricalCircuit derived(String src,
+            {required String name,
+            double loadW = 6000,
+            double motorKw = 5.5,
+            double fla = 10}) =>
+        ElectricalCircuit(
+          id: 'mep-$src',
+          name: name,
+          loadKind: LoadKind.pump,
+          loadW: loadW,
+          length: kDefaultCircuitLength,
+          motorKw: motorKw,
+          sourceEquipmentId: src,
+          flaOverrideA: Current(fla),
+        );
+
+    ElectricalPanel? mep(ProviderContainer c) => c
+        .read(electricalProjectProvider)
+        .panels
+        .where((p) => p.id == kMepEquipmentPanelId)
+        .firstOrNull;
+
+    test('a hand-edited way whose source disappears is PARKED — name suffixed '
+        'once, source id cleared, every edit kept', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      ctrl.syncMepEquipment([derived('node-1', name: 'Supply pump')]);
+      final wayId = mep(c)!.circuits.single.id;
+      // Real engineering work on the derived way: a typed name, a cable family,
+      // a measured run and a starter — all of it unrecoverable if the sync
+      // deleted the way (the sync records no undo step).
+      ctrl.setCircuit(kMepEquipmentPanelId, wayId,
+          name: 'Booster P-01',
+          cableType: 'FRC',
+          length: const Length(24),
+          starterType: StarterType.starDelta);
+
+      // The pump is deleted from the plan (or the duty feed is switched off):
+      // the sync arrives with nothing for node-1.
+      ctrl.syncMepEquipment(const []);
+
+      // The board SURVIVES because it still carries the engineer's way...
+      final board = mep(c);
+      expect(board, isNotNull);
+      final parked = board!.circuits.single;
+      // ...parked: user-owned (no source id), marked ONCE, edits intact.
+      expect(parked.id, wayId, reason: 'the mint id is what re-adoption keys on');
+      expect(parked.sourceEquipmentId, isNull);
+      expect(parked.name, 'Booster P-01 (source removed)');
+      expect(parked.cableType, 'FRC');
+      expect(parked.length.meters, 24);
+      expect(parked.starterType, StarterType.starDelta);
+      // The last machine-derived current rides along, so parking never silently
+      // resizes the schedule.
+      expect(parked.flaOverrideA!.amperes, 10);
+
+      // A further sync treats it as any other hand-added way: no second suffix.
+      ctrl.syncMepEquipment(const []);
+      expect(mep(c)!.circuits.single.name, 'Booster P-01 (source removed)');
+    });
+
+    test('the source coming back RE-ADOPTS the parked way instead of minting a '
+        'twin (no duplicate load)', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      ctrl.syncMepEquipment([derived('node-1', name: 'Supply pump')]);
+      final wayId = mep(c)!.circuits.single.id;
+      ctrl.setCircuit(kMepEquipmentPanelId, wayId,
+          name: 'Booster P-01', cableType: 'FRC');
+
+      // Feed off → parked.
+      ctrl.syncMepEquipment(const []);
+      expect(mep(c)!.circuits, hasLength(1));
+      expect(mep(c)!.circuits.single.sourceEquipmentId, isNull);
+
+      // Feed back on → the SAME way is re-adopted (matched on the deterministic
+      // mint id), NOT appended a second time.
+      ctrl.syncMepEquipment(
+          [derived('node-1', name: 'Supply pump', loadW: 7100, fla: 12)]);
+      final ways = mep(c)!.circuits;
+      expect(ways, hasLength(1), reason: 'the load must not be counted twice');
+      final back = ways.single;
+      expect(back.id, wayId);
+      expect(back.sourceEquipmentId, 'node-1');
+      // The parked marker comes off; the engineer's edits stay.
+      expect(back.name, 'Booster P-01');
+      expect(back.cableType, 'FRC');
+      // Machine-owned fields are refreshed from the fresh derivation.
+      expect(back.loadW, 7100);
+      expect(back.flaOverrideA!.amperes, 12);
+    });
+
+    test('a board carrying ONLY parked ways is not dropped', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      ctrl.syncMepEquipment([derived('node-1', name: 'Supply pump')]);
+      ctrl.setCircuit(kMepEquipmentPanelId, mep(c)!.circuits.single.id,
+          name: 'Booster P-01');
+      ctrl.syncMepEquipment(const []);
+
+      // The empty-board cleanup is re-derived to the park policy: the board is
+      // removed only when NOTHING is left on it, and a parked way is something.
+      expect(mep(c), isNotNull);
+      expect(mep(c)!.circuits, hasLength(1));
+    });
+  });
+
+  // ── H1 — the sync narrates itself ──────────────────────────────────────────
+  group('syncMepEquipment narrates one consolidated status message (H1)', () {
+    ElectricalCircuit derived(String src, {required String name}) =>
+        ElectricalCircuit(
+          id: 'mep-$src',
+          name: name,
+          loadKind: LoadKind.pump,
+          loadW: 6000,
+          length: kDefaultCircuitLength,
+          motorKw: 5.5,
+          sourceEquipmentId: src,
+          flaOverrideA: const Current(10),
+        );
+
+    test('creating the board, then adding / parking ways, each report once; a '
+        'no-change pass is silent', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+      String? status() => c.read(statusMessageProvider);
+
+      // Nothing to sync and no board ⇒ strict no-op ⇒ nothing said.
+      ctrl.syncMepEquipment(const []);
+      expect(status(), isNull);
+
+      // First creation: the board is named, the way counted and identified by
+      // its own name + motor rating (the sized breaker/cable stay on the board
+      // schedule — see _narrateMepSync).
+      ctrl.syncMepEquipment([derived('node-1', name: 'Supply pump')]);
+      expect(status(),
+          'MEP Equipment board created: +1 circuit (Supply pump · 5.5 kW)');
+
+      // A pass that only REFRESHES the load figures says nothing — otherwise a
+      // drag would storm the pill.
+      c.read(statusMessageProvider.notifier).clear();
+      ctrl.syncMepEquipment([derived('node-1', name: 'Supply pump')]);
+      expect(status(), isNull);
+
+      // A second piece of equipment: one message, plural noun.
+      ctrl.syncMepEquipment([
+        derived('node-1', name: 'Supply pump'),
+        derived('node-2', name: 'Exhaust fan'),
+      ]);
+      expect(status(), 'MEP Equipment: +1 circuit (Exhaust fan · 5.5 kW)');
+
+      // Hand-edit node-2, then remove BOTH sources: node-1 is still pristine ⇒
+      // dropped, node-2 was touched ⇒ parked. One message covers both.
+      final n2 = c
+          .read(electricalProjectProvider)
+          .panels
+          .firstWhere((p) => p.id == kMepEquipmentPanelId)
+          .circuits
+          .firstWhere((x) => x.sourceEquipmentId == 'node-2');
+      ctrl.setCircuit(kMepEquipmentPanelId, n2.id, name: 'EF-02');
+      c.read(statusMessageProvider.notifier).clear();
+      ctrl.syncMepEquipment(const []);
+      expect(status(), 'MEP Equipment: 1 circuit parked, 1 circuit removed');
+    });
+
+    test('the board being dropped is narrated on its own', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(electricalProjectProvider.notifier);
+
+      ctrl.syncMepEquipment([derived('node-1', name: 'Fire pump')]);
+      c.read(statusMessageProvider.notifier).clear();
+      ctrl.syncMepEquipment(const []);
+      expect(c.read(statusMessageProvider),
+          'MEP Equipment board removed — no equipment left');
     });
   });
 

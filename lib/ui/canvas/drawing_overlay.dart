@@ -6,10 +6,10 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
-import 'package:mechx_engine/sizing/network_sizing.dart' show SizingContext;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/app_state.dart';
+import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/route_geometry.dart';
@@ -101,6 +101,14 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
     final project = ref.watch(projectControllerProvider);
     final calibration = project.calibrationFor(widget.sheetId);
     final building = project.building;
+    // H5 — the LAID drainage design slope the sizer + calc report use (the
+    // Building-page input), feeding the live invert readout below.
+    final drainageSlope = ref.watch(drainageSlopeProvider);
+    // E1 — the services currently INERT to canvas interaction (a locked
+    // discipline layer's services + the individually hidden ones). Threaded into
+    // every draw COMMIT below so a run can never latch onto a node the engineer
+    // cannot see or unpick. Empty by default ⇒ byte-identical.
+    final inertServices = ref.watch(inertServicesProvider);
     final snapWorld = 12 / transform.scale; // keep snap ≈12 screen px
     final pickWorld = 14 / transform.scale; // the standard pick radius
 
@@ -276,7 +284,10 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
           final startElev = nodeElevation(startNode, building).meters;
           final devLenM =
               calibration.lengthForPixels((endHover - pending).distance).meters;
-          final slope = const SizingContext().drainageSlope; // m/m // VERIFY
+          // H5 — the LAID design slope from `drainageSlopeProvider`, never the
+          // dark `SizingContext` default: the live invert readout must agree
+          // with the fall stamped on the issued sheet. // VERIFY the gradient.
+          final slope = drainageSlope; // m/m // VERIFY
           ilText = invertLevelLabel(startElev, devLenM, slope);
         }
       }
@@ -354,6 +365,11 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
                   gridMetersPerPixel: gridMpp,
                   underlaySnap: _endExact ? null : underlayCb,
                   ortho: true,
+                  // E1 — the draw endpoint must not latch onto a node that only
+                  // belongs to a HIDDEN or LOCKED service: the engineer cannot
+                  // see it and cannot unpick it. Same inert set the marquee and
+                  // hit-test already honour; empty ⇒ byte-identical.
+                  avoidServices: inertServices,
                 );
                 ref.read(orthoRouteKindProvider.notifier).reset();
               } else if (_endExact && _commitWorld != null) {
@@ -367,6 +383,7 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
                   snapRadius: snapWorld,
                   endSnapRadius: 0.5,
                   ortho: effOrtho && pending != null,
+                  avoidServices: inertServices, // E1
                 );
               } else {
                 if (effOrtho && pending != null) {
@@ -381,6 +398,7 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
                   gridMetersPerPixel: gridMpp,
                   underlaySnap: underlayCb,
                   ortho: effOrtho && pending != null,
+                  avoidServices: inertServices, // E1
                 );
               }
             case DrawTool.drawRiser:

@@ -401,27 +401,71 @@ String? equipmentTagPrefix(NodeComponent c) => switch (c) {
       _ => null,
     };
 
-/// Stable equipment tags keyed by NODE id (G1): a sequential `<prefix>-NN` per
-/// equipment CATEGORY, numbered in the network's node order (deterministic). A
-/// node with no equipment component gets no entry, so the map is empty for a
-/// network with no plant. This is the ONE tag source the on-canvas glyph label
-/// AND the PDF/DXF plan exporters both read (so the plan and its own canvas
-/// agree). It is NOT keyed to the equipment schedule's numbering — see the block
-/// comment above: the schedule numbers from solved providers with an `FP` fire-
-/// pump prefix + room-identity AHU numbering, so the two agree only for a
-/// single-unit / all-calibrated project.
+/// The trailing integer of a node id (`n7` → 7), or null when the id carries
+/// none. The store mints every node id as `n<seq>` with a monotonic counter that
+/// round-trips in `.mechx`, so this integer is the node's FIRST-ASSIGNED ordinal
+/// — an identity that outlives every later edit.
+int? _nodeIdOrdinal(String id) {
+  final m = RegExp(r'(\d+)$').firstMatch(id);
+  return m == null ? null : int.tryParse(m.group(1)!);
+}
+
+/// Stable equipment tags keyed by NODE id (G1 / C6): a `<prefix>-NN` per
+/// equipment CATEGORY. A node with no equipment component gets no entry, so the
+/// map is empty for a network with no plant. This is the ONE tag source the
+/// on-canvas glyph label AND the PDF/DXF plan exporters both read (so the plan
+/// and its own canvas agree). It is NOT keyed to the equipment schedule's
+/// numbering — see the block comment above.
+///
+/// C6 — the number is derived from the node's OWN IDENTITY (its id's
+/// first-assigned ordinal + 1), not from its rank among the surviving equipment
+/// nodes. The old positional counter renumbered every later unit whenever an
+/// earlier one was deleted, so `P-02` on one revision's plan was a DIFFERENT
+/// pump from `P-02` on the next — silently breaking the drawing↔schedule↔BOM
+/// trace an installer works from. This is the same first-assigned-ordinal idiom
+/// the room AHU schedule tag uses (J3): numbers may therefore carry GAPS after a
+/// deletion, which is exactly the point — each unit keeps its number for life.
+///
+/// A node id with no trailing integer (never minted by the app; hand-written
+/// fixtures and imported data only) falls back to the smallest number that
+/// prefix has not used, assigned in node order — so a tag is never fabricated as
+/// a duplicate. Two ids that would collide on the same ordinal (only possible
+/// for hand-built data) push to the next free number, in node order.
+///
 /// Pure + deterministic — never fabricates a tag for a non-equipment node.
 Map<String, String> equipmentNodeTags(Network net) {
-  final counters = <String, int>{};
   final out = <String, String>{};
+  final used = <String, Set<int>>{};
+  final unnumbered = <(String nodeId, String prefix)>[];
+
+  String format(String prefix, int n) =>
+      '$prefix-${n.toString().padLeft(2, '0')}';
+
   for (final n in net.nodes) {
     final c = n.component;
     if (c == null) continue;
     final prefix = equipmentTagPrefix(c);
     if (prefix == null) continue;
-    final next = (counters[prefix] ?? 0) + 1;
-    counters[prefix] = next;
-    out[n.id] = '$prefix-${next.toString().padLeft(2, '0')}';
+    final ordinal = _nodeIdOrdinal(n.id);
+    if (ordinal == null) {
+      unnumbered.add((n.id, prefix));
+      continue;
+    }
+    final taken = used.putIfAbsent(prefix, () => <int>{});
+    var number = ordinal + 1;
+    while (!taken.add(number)) {
+      number++;
+    }
+    out[n.id] = format(prefix, number);
+  }
+
+  for (final (nodeId, prefix) in unnumbered) {
+    final taken = used.putIfAbsent(prefix, () => <int>{});
+    var number = 1;
+    while (!taken.add(number)) {
+      number++;
+    }
+    out[nodeId] = format(prefix, number);
   }
   return out;
 }

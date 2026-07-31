@@ -15,10 +15,12 @@ import '../../store/app_state.dart'
         rainfallIntensityProvider,
         runoffCoefficientProvider;
 import '../../store/models/sheet.dart';
+import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../sheets/pdf_page_picker.dart';
 import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
@@ -89,7 +91,7 @@ class BuildingScreen extends ConsumerWidget {
                 ? null
                 : () => _pickSheetForFloor(context, ref, i),
             onRemove: project.floors.length > 1
-                ? () => ctrl.removeFloor(i)
+                ? () => _removeLevel(context, ref, i)
                 : null,
           ),
           const SizedBox(height: MechXSpacing.xs),
@@ -114,6 +116,26 @@ class BuildingScreen extends ConsumerWidget {
     );
   }
 
+  /// C2 — remove the level at [index], CONFIRMING first when it carries drawn
+  /// work. Deleting a floor deletes the runs, risers and equipment drawn on it
+  /// (they have no physical floor left to sit on), so a level that carries any
+  /// must say how much before it goes. A level with nothing drawn on it is
+  /// removed straight away — there is nothing to lose and nothing to ask.
+  ///
+  /// The whole edit (floor stack + the deleted drawing) is ONE structural undo
+  /// step, so Ctrl+Z brings both back together.
+  Future<void> _removeLevel(
+      BuildContext context, WidgetRef ref, int index) async {
+    final count =
+        ref.read(networkControllerProvider.notifier).elementsOnFloor(index);
+    if (count > 0) {
+      final level = ref.read(projectControllerProvider).floors[index].name;
+      final ok = await showDeleteLevelDialog(context, level: level, count: count);
+      if (ok != true) return;
+    }
+    ref.read(projectControllerProvider.notifier).removeFloor(index);
+  }
+
   /// Open the sheet picker for [floorIndex] and assign the chosen PDF page to
   /// this level (mapping it via the sheets store).
   Future<void> _pickSheetForFloor(
@@ -122,6 +144,103 @@ class BuildingScreen extends ConsumerWidget {
     final id = await showSheetPicker(context, sheets);
     if (id == null) return;
     ref.read(sheetsControllerProvider.notifier).setSheetFloor(id, floorIndex);
+  }
+}
+
+/// C2 — the destructive-delete guard for a level that carries drawn work.
+/// Resolves true when the engineer confirms, false / null on Cancel, a scrim tap
+/// or Esc. Same MechXTheme `showGeneralDialog` idiom as the unsaved-changes
+/// guard (no Material). Public so a widget test can drive it directly.
+Future<bool?> showDeleteLevelDialog(
+  BuildContext context, {
+  required String level,
+  required int count,
+}) {
+  final theme = MechXTheme.of(context);
+  return showGeneralDialog<bool>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Delete level',
+    barrierColor: theme.colors.scrim,
+    transitionDuration: MechXMotion.appear,
+    pageBuilder: (ctx, _, _) => MechXTheme(
+      data: theme,
+      child: Center(child: _DeleteLevelDialog(level: level, count: count)),
+    ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(
+        parent: anim,
+        curve: MechXMotion.standard,
+        reverseCurve: MechXMotion.standard,
+      );
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
+class _DeleteLevelDialog extends StatelessWidget {
+  final String level;
+  final int count;
+  const _DeleteLevelDialog({required this.level, required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final strings = MechXStrings.of(context);
+    // The count reads as a real phrase ("47 drawn elements" / "1 drawn
+    // element"), never the dev-speak "element(s)".
+    final noun = plural(count, strings(StringKey.buildingDrawnElementOne),
+        strings(StringKey.buildingDrawnElementMany));
+    return Container(
+      width: 420,
+      padding: const EdgeInsets.all(MechXSpacing.lg),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: MechXRadii.card,
+        boxShadow: MechXShadow.popover,
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            strings.format(StringKey.buildingDeleteLevelTitle, {'level': level}),
+            style: type.title.copyWith(color: colors.textPrimary),
+          ),
+          const SizedBox(height: MechXSpacing.xs),
+          Text(
+            strings.format(StringKey.buildingDeleteLevelBody,
+                {'level': level, 'count': '$count $noun'}),
+            style: type.caption.copyWith(color: colors.textMuted),
+          ),
+          const SizedBox(height: MechXSpacing.md),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              MechXButton(
+                label: strings(StringKey.buildingDeleteLevelCancel),
+                tertiary: true,
+                onPressed: () => Navigator.of(context).pop(false),
+              ),
+              const SizedBox(width: MechXSpacing.sm),
+              MechXButton(
+                label: strings(StringKey.buildingDeleteLevelConfirm),
+                primary: true,
+                onPressed: () => Navigator.of(context).pop(true),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -170,7 +289,10 @@ class _LevelCard extends StatelessWidget {
               Expanded(
                 child: MechXTextField(
                   value: floor.name,
-                  onChanged: onRename,
+                  // D1: commit on blur / Enter, so renaming a level is ONE undo
+                  // step instead of one per keystroke (which evicted real edits
+                  // from the 200-entry stack).
+                  onCommitted: onRename,
                 ),
               ),
               const SizedBox(width: MechXSpacing.sm),
