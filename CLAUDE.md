@@ -926,7 +926,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   panels stay geometrically byte-identical. New goldens `09_electrical_overview.png` +
   `10_electrical_riser.png`. The schedule was then brought to the BRI `Diagram Panel`'s ALIGNED-TABLE
   form (column-header band GRUP | DEVICE | PENGHANTAR | DAYA | KETERANGAN | R | S | T at fixed columns,
-  block width 920, a per-way `· PVC <n>mm` conduit token from the pure `_conduitMm`), and three further
+  block width 920, a per-way `· PVC <n>mm` conduit token from the pure `_conduitMm`; the R/S/T
+  phase-band labels — heads, per-way figures, TOTAL footer — are CENTRED in their ruled cells via
+  build-time `_centredInCell` arithmetic [no renderer re-measures text, so canvas/PDF/DXF agree];
+  prose columns stay left-anchored per the BRI convention), and three further
   DXF-parity gaps (verified against the client's real EL1004 `Diagram Panel BRI` DXF) then closed in
   `electrical_sld_drawing.dart`: **(a) STARTER / CONTROL token** — the way's `ElectricalCircuit.starterType`
   (resolved by the same `circuitById` lookup that feeds `cableType`) is mapped to an ASCII token by the
