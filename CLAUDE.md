@@ -1254,8 +1254,9 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (`test/electrical_context_menu_edit_test.dart`, 6 tests).
   **W7 — editable SUPPLY node + BATTERY/SOLAR nodes + genset backup % (user-reported):** additive
   `ElectricalProject.supplyKind` (`SupplyKind {pln, generator, solar}`, default pln ⇒ byte-identical) +
-  `supplyCapacityVa` (declared daya tersambung, null ⇒ not printed) re-label the source-spine HEAD via the
-  shared `_supplyHeadLabel` in BOTH spine builders (drawing inputs only, tolerant JSON, `_withProject`-carried,
+  `supplyCapacityVa` (declared daya tersambung, null ⇒ not printed; since the 2026-07-31 service-capacity
+  floor it ALSO sizes the root incomer — see the Sizing-engine invariant) re-label the source-spine HEAD via
+  the shared `_supplyHeadLabel` in BOTH spine builders (tolerant JSON, `_withProject`-carried,
   `setSupplyKind`/`setSupplyCapacityVa`); a single TAP on the canvas supply chain (or bare PLN head) opens the
   Sources editor, which gained Supply (kind + capacity), Solar PV and Battery sections over new
   `setSolar`/`setBattery` intents (`_sourcesWith` replaces/clears any sub-source, collapses to null when
@@ -1628,6 +1629,20 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `fire-pump-protection` note; an irreducible over-threshold imbalance carries
   an INFO `phase-imbalance-inherent` note; a feeder's voltage base (Ib and
   Vd%) is the FED panel's.
+- **Service-capacity floor (`electrical/compute.dart`) — the declared daya SIZES
+  the service entrance**: a declared `ElectricalProject.supplyCapacityVa` (daya
+  tersambung) is converted to its line current (3φ `VA/(√3·V_LL)`, 1φ `VA/V` —
+  PLN 33 kVA @ 400 V → 47.6 A → the 50 A rung, the matching PLN limiter) and
+  floors the SINGLE root panel's incomer + busbar sizing current
+  (`ComputePanelOptions.serviceMinCurrentA`, `max(headroom-uplifted demand,
+  service current)`; the earthing PE derivation rides the governing floor).
+  Rating the entrance board at the subscribed daya is Indonesian LV practice,
+  `// VERIFY notAnSniClause`. Per-circuit sizing is untouched; SEVERAL
+  utility-fed roots ⇒ no floor (the capacity split is unknown — never
+  fabricate); demand above the capacity keeps the larger demand-based incomer
+  and raises the judge-only `service-capacity-below-demand` warning (the
+  utility limiter would trip under full demand). Null capacity (the default)
+  ⇒ byte-identical. Seed suite: `electrical_service_capacity_test.dart`.
 - **ONE electrical warning surface (`electricalAllWarningsProvider`)**: the
   fault study's warnings (`non-selective` / `selectivity-partial` /
   `breaking-capacity-inadequate` / `busbar-withstand-inadequate` /

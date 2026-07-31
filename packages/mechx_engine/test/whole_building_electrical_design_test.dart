@@ -1015,19 +1015,25 @@ void main() {
           isEmpty);
     });
 
-    test('the MDP incomer is the headroom-uplifted worst-phase demand', () {
+    test('the MDP incomer is floored at the declared service capacity', () {
       final mdp = sys.panels['mdp']!;
       // Re-derived 2026-07-30 (audit E8a): LP-3 is a 220 V single-phase board,
       // so its feeder now converts LP-3's 5058 W demand at 220 V rather than the
       // 3φ parent's 231 V phase voltage — 5058/(220 × 0.85) = 27.05 A instead of
       // 25.75 A, i.e. +1.2 A on the worst-loaded line. MDP's worst phase reads
       // 198.2 A (was 197.0).
-      // Worst phase 198.2 A x 1.20 headroom = 237.84 A ⇒ first rung >= 237.84
-      // is 250 A ⇒ MCCB (> 63 A), 4-pole on a 3φ board.
+      // Re-derived 2026-07-31 (service-capacity floor): the project declares
+      // 197 kVA daya tersambung, and the SERVICE-ENTRANCE incomer is rated for
+      // everything the utility limiter passes —
+      //   service current 197000 / (√3 × 400) = 284.35 A
+      // which GOVERNS over the headroom-uplifted demand
+      //   198.2 A × 1.20 = 237.84 A (rung 250 A)
+      // ⇒ first rung >= 284.35 is 315 A ⇒ MCCB (> 63 A), 4-pole on a 3φ board.
       expect(mdp.demandCurrent.amperes, 198.2);
-      expect(mdp.incomer.breaker.ratingA.amperes, 250);
+      expect(mdp.incomer.breaker.ratingA.amperes, 315);
       expect(mdp.incomer.breaker.deviceClass, BreakerClass.mccb);
       expect(mdp.incomer.poles, 4);
+      // The demand-based rung the floor overrode (the pre-floor behaviour):
       expect(
         selectBreaker(profile,
                 designCurrent: const Current(237.84), loadKind: LoadKind.feeder)
@@ -1036,7 +1042,7 @@ void main() {
         250,
       );
       // The main bus is rated for the incoming device, not merely the demand.
-      expect(mdp.busbar.ampacityA.amperes, greaterThanOrEqualTo(250));
+      expect(mdp.busbar.ampacityA.amperes, greaterThanOrEqualTo(315));
       // Linear board ⇒ the neutral bar is NOT triplen-oversized.
       expect(mdp.neutralPeBars.neutralOversizeFactor, 1.0);
       expect(mdp.neutralPeBars.neutralCsaMm2, mdp.busbar.csaMm2);
@@ -1315,9 +1321,10 @@ void main() {
       expect(devices, contains('MCCB 80A 3ph 16kA'));
       expect(devices, contains('MCB 40A 2P 10kA'));
       // The INCOMER sub-line still carries the board figure (the panel map).
+      // (315 A since the service-capacity floor: 197 kVA → 284.35 A → 315.)
       expect(
           sheet.prims.whereType<SldLabel>().map((l) => l.text).where(
-              (t) => t.startsWith('Incomer ') && t.contains('MCCB 250A/4P 16kA')),
+              (t) => t.startsWith('Incomer ') && t.contains('MCCB 315A/4P 16kA')),
           isNotEmpty);
     });
 
