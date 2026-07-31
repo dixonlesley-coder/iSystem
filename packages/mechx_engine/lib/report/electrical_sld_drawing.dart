@@ -69,15 +69,17 @@ const double _colDevice = 116; // breaker (MCB 16A 1ph[ 16kA][ · RCD 30mA A])
 const double _colPenghantar = 252; // conductor + conduit + length (NYY 4x6 · 22 m)
 const double _colDaya = 474; // connected load (DAYA, W/kW)
 const double _colKeterangan = 534; // load name / -> sub-panel
-const double _colR = 754; // per-phase loading band (R/S/T line currents)
-const double _colS = 800;
-const double _colT = 846;
-
-// The ruled phase-band CELLS (a thin vertical sits 6 px left of each column;
-// the T cell ends at the grid's right edge, where the horizontal rules stop).
-const double _cellRL = _colR - 6, _cellRR = _colS - 6;
-const double _cellSL = _colS - 6, _cellSR = _colT - 6;
-const double _cellTL = _colT - 6, _cellTR = _blockW - 8;
+// The R / S / T per-phase loading band: THREE EQUAL ruled cells spanning from
+// the band's left divider to the grid's right edge (where the row rules stop).
+// Equal thirds matter — the three cells hold the same kind of figure, so an
+// odd one out (the T cell used to run to the grid edge at twice the width of
+// R and S) throws the whole band off its own column heads.
+const double _phaseBandL = 748; // divider left of the R cell
+const double _phaseBandR = _blockW - 8; // grid right edge (row-rule end)
+const double _phaseCellW = (_phaseBandR - _phaseBandL) / 3;
+const double _cellRL = _phaseBandL, _cellRR = _phaseBandL + _phaseCellW;
+const double _cellSL = _cellRR, _cellSR = _phaseBandL + 2 * _phaseCellW;
+const double _cellTL = _cellSR, _cellTR = _phaseBandR;
 
 /// CENTRE a short numeric figure in a ruled cell. Every text column is
 /// left-anchored (the BRI `Diagram Panel` convention for prose cells), but the
@@ -501,18 +503,19 @@ SldSheet buildElectricalSld({
     prims.add(SldLine(bx + 4, busTop + _rowH, blockX + _blockW - 8,
         busTop + _rowH));
     // Ruled table verticals — the BRI `Diagram Panel` schedule is a fully
-    // ruled grid, not whitespace-aligned text. One thin separator a few px
-    // left of each column, spanning the header band + every body row.
-    for (final colX in const [
-      _colDevice,
-      _colPenghantar,
-      _colDaya,
-      _colKeterangan,
-      _colR,
-      _colS,
-      _colT,
+    // ruled grid, not whitespace-aligned text. A thin separator 6 px left of
+    // each PROSE column, then the phase band's own equal-cell dividers,
+    // spanning the header band + every body row.
+    for (final ruleX in const [
+      _colDevice - 6,
+      _colPenghantar - 6,
+      _colDaya - 6,
+      _colKeterangan - 6,
+      _cellRL,
+      _cellSL,
+      _cellTL,
     ]) {
-      prims.add(SldLine(blockX + colX - 6, busTop, blockX + colX - 6, busBot));
+      prims.add(SldLine(blockX + ruleX, busTop, blockX + ruleX, busBot));
     }
 
     // One ROW per way, in ALIGNED columns: GRUP (way no) | DEVICE (breaker,

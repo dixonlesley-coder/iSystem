@@ -92,21 +92,30 @@ void main() {
   test('the board schedule is a RULED table — column verticals + row rules',
       () {
     // Single-panel detail re-origins the block to x=0, so the rule positions
-    // are exact: 7 column separators (6 px left of DEVICE / PENGHANTAR /
-    // DAYA / KETERANGAN / R / S / T) spanning header band → bus bottom, and
+    // are exact: 7 column separators spanning header band → bus bottom, and
     // one horizontal rule under each body row (MDP has 2 ways, 0 spares).
     // The columns after DEVICE shift +28 (block widened for the kA + RCD
     // tokens in the DEVICE cell — N9 / N10).
+    //   PROSE columns: 6 px left of DEVICE / PENGHANTAR / DAYA / KETERANGAN
+    //     ⇒ 110, 246, 468, 528.
+    //   PHASE band: three EQUAL cells from 748 to the grid's right edge
+    //     (_blockW 948 − 8 = 940) ⇒ width (940 − 748)/3 = 64, so the dividers
+    //     land on 748 / 812 / 876. (Was 748 / 794 / 840, which left the T cell
+    //     100 wide against R and S at 46 — the band read as mis-set.)
     final detail = buildElectricalSld(
         project: project, result: result, onlyPanelId: 'MDP');
     final lines = detail.prims.whereType<SldLine>().toList();
     const busTop = 46.0; // _headerH
     const busBot = busTop + 3 * 20.0 + 6; // (1 header + 2 way rows) · _rowH + 6
-    for (final colX in const [116.0, 252.0, 474.0, 534.0, 754.0, 800.0, 846.0]) {
+    for (final ruleX in const [110.0, 246.0, 468.0, 528.0, 748.0, 812.0, 876.0]) {
       final vert = lines.where((l) =>
-          l.x1 == colX - 6 && l.x2 == colX - 6 && l.y1 == busTop && l.y2 == busBot);
-      expect(vert.length, 1, reason: 'column separator at ${colX - 6}');
+          l.x1 == ruleX && l.x2 == ruleX && l.y1 == busTop && l.y2 == busBot);
+      expect(vert.length, 1, reason: 'column separator at $ruleX');
     }
+    // The phase cells are equal thirds — the property that keeps each figure
+    // under its own head (a regression here is exactly the reported defect).
+    expect(812.0 - 748.0, 876.0 - 812.0);
+    expect(876.0 - 812.0, 940.0 - 876.0);
     // Row rules under way 1 (y 92) and way 2 (y 112 — the TOTAL divider).
     for (final ruleY in const [92.0, 112.0]) {
       final horiz = lines.where(
