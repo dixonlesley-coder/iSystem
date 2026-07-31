@@ -811,7 +811,16 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.19.0`** (the honest LV service: no fabricated TRAFO/MVMDP/LVMDP source spine
+  is `v1.22.0`** (the two 2026-07-30/31 campaigns in one release: the MODULE-AUDIT
+  fix — all 38 findings, incl. the by-construction PRV zones, the device-only
+  ampacity-capped selectivity floor, per-circuit kA / containment-sourced conduit /
+  real core counts on the schedule, reports on the combined warning surface, and the
+  wave-D design inputs — plus the WORKFLOW-FRICTION campaign — all 4 waves, incl.
+  Locate-as-navigation, the park-don't-delete MEP sync, the riser cross-surface
+  contract, stable tags, the real drainage fall on issued drawings, one remembered
+  export folder + the complete submittal set, and the sticky electrical canvas;
+  `pubspec.yaml` now `1.22.0+28`; atop the v1.21.0/v1.20.0 usability + K4-hardening
+  baselines and the prior) — the earlier `v1.19.0` shipped (the honest LV service: no fabricated TRAFO/MVMDP/LVMDP source spine
   on an undeclared low-voltage service, the VA connection-capacity field, and the
   judge-only `feeder-below-fed-demand` warning found by the whole-building simulation;
   atop the v1.18.0 supply-node baseline [the W7 editable SUPPLY node with source kind
@@ -822,7 +831,7 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (Breaker/Cable/Phase/Family + panel System, engine-sourced rungs, '(set)'/Auto
   override idiom, both hosts converged onto the shared menu widgets), and the standard
   desktop accelerators + F1 shortcuts sheet]; `pubspec.yaml` is the version source of
-  truth, `1.19.0+25`; each release = bump → merge to the default branch (`main`) →
+  truth; each release = bump → merge to the default branch (`main`) →
   `release.yml` `workflow_dispatch` with `publish=true`). The prior `v1.16.0` shipped
   palette/inspector polish (the Draw palette's Drains group gated to the gravity
   drainage service, the clean-water OUTLET node, the removal of the redundant inspector
