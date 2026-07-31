@@ -263,7 +263,7 @@ class _CalibrateHint extends ConsumerWidget {
 
 /// A placeholder "paper" page for a sheet without a PDF (P0). Paper stays light
 /// in both themes — like a real drawing — so its ink colour is fixed.
-class PlaceholderSheetPage extends StatelessWidget {
+class PlaceholderSheetPage extends ConsumerWidget {
   final Sheet sheet;
 
   const PlaceholderSheetPage({super.key, required this.sheet});
@@ -271,8 +271,19 @@ class PlaceholderSheetPage extends StatelessWidget {
   static const Color _ink = Color(0xFF9AA1AC);
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
+    // L-3: once the engineer is drawing on this sheet, the "No plan attached"
+    // caption reads as noise half-buried under the pipework (goldens 01/06) —
+    // so it renders only while the sheet still carries no drawn elements. The
+    // sheet-name title stays always (it's the sheet identity, not onboarding
+    // copy), and the import affordance (DropOverlay, drawn separately in
+    // SheetCanvas) is untouched either way.
+    final hasDrawnElements = ref
+        .watch(networkControllerProvider)
+        .network
+        .nodes
+        .any((n) => n.sheetId == sheet.id);
     return DecoratedBox(
       decoration: BoxDecoration(
         color: colors.sheetPaper,
@@ -294,19 +305,21 @@ class PlaceholderSheetPage extends StatelessWidget {
                 letterSpacing: -0.5,
               ),
             ),
-            const SizedBox(height: 12),
-            // Plain user language (A1) — no internal milestone jargon. ASCII +
-            // Roboto so the caption renders cleanly in goldens.
-            Text(
-              'No plan attached'
-              '   ·   ${sheet.sizePx.width.round()} x ${sheet.sizePx.height.round()} px',
-              style: const TextStyle(fontFamily: 'Roboto', fontSize: 18, color: _ink),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Import a PDF or DXF floor plan to draw to scale',
-              style: TextStyle(fontFamily: 'Roboto', fontSize: 14, color: _ink),
-            ),
+            if (!hasDrawnElements) ...[
+              const SizedBox(height: 12),
+              // Plain user language (A1) — no internal milestone jargon. ASCII +
+              // Roboto so the caption renders cleanly in goldens.
+              Text(
+                'No plan attached'
+                '   ·   ${sheet.sizePx.width.round()} x ${sheet.sizePx.height.round()} px',
+                style: const TextStyle(fontFamily: 'Roboto', fontSize: 18, color: _ink),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Import a PDF or DXF floor plan to draw to scale',
+                style: TextStyle(fontFamily: 'Roboto', fontSize: 14, color: _ink),
+              ),
+            ],
           ],
         ),
       ),

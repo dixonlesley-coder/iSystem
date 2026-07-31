@@ -18,6 +18,25 @@ class MountingHeights {
     this.ceilingDrop = const Length(0.3),
     this.fixtureHeight = const Length(1.1),
   });
+
+  /// F8 — a copy with either height replaced (the app edits them one stepper at
+  /// a time, and persists them per project).
+  MountingHeights copyWith({Length? ceilingDrop, Length? fixtureHeight}) =>
+      MountingHeights(
+        ceilingDrop: ceilingDrop ?? this.ceilingDrop,
+        fixtureHeight: fixtureHeight ?? this.fixtureHeight,
+      );
+
+  /// Value equality, so a persisted/round-tripped set compares equal to the one
+  /// it was written from (and a provider watching it doesn't churn).
+  @override
+  bool operator ==(Object other) =>
+      other is MountingHeights &&
+      other.ceilingDrop.meters == ceilingDrop.meters &&
+      other.fixtureHeight.meters == fixtureHeight.meters;
+
+  @override
+  int get hashCode => Object.hash(ceilingDrop.meters, fixtureHeight.meters);
 }
 
 /// One building level with its floor-to-floor [height].

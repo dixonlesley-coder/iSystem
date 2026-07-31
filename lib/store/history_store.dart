@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart' show Network;
 
 import '../data/autosave.dart';
+import '../ui/strings/app_strings.dart';
 import 'annotation_store.dart';
 import 'app_state.dart';
 import 'electrical_store.dart';
@@ -35,6 +36,18 @@ import 'sheets_store.dart';
 /// list, so (unlike [annotation]) it keeps its own local snapshot stack right
 /// in [ReferenceLineController] (mirrors [electrical]'s local-stack pattern)
 /// rather than a shared cross-list coordinator.
+///
+/// [settings] (D3) covers the project-wide DESIGN SETTINGS that live in
+/// `app_state.dart` as bare `Notifier`s (feed strategy first) — flipping one
+/// silently rewrites the whole pressure solve, the riser tags, the PRV zones and
+/// the pump duty, from either of two workspaces, and used to sit OUTSIDE the
+/// timeline entirely (the reflexive Ctrl+Z reverted an unrelated drawing edit
+/// instead). Those controllers hold a single scalar with no snapshot stack of
+/// their own, so instead of a captured state this domain records a REGISTERED
+/// REVERT pair ([SettingsUndoEntry]) in the [settingsHistoryProvider]
+/// coordinator: the forward call registers how to undo and redo itself, and the
+/// timeline just runs them (mirrors the annotation/structural coordinators,
+/// whose stacks also live outside the controllers they revert).
 enum UndoDomain {
   network,
   project,
@@ -42,6 +55,7 @@ enum UndoDomain {
   annotation,
   structural,
   referenceLine,
+  settings,
 }
 
 /// A single, global undo/redo timeline across every domain. Domain controllers
@@ -72,23 +86,74 @@ class HistoryController extends Notifier<int> {
   }
 
   /// Undo the most recent action across all domains.
+  ///
+  /// R3 — a popped tag whose owning controller has nothing left to revert is a
+  /// PHANTOM: the domain stacks cap at 200 snapshots while this timeline holds
+  /// 1000 tags, so past 200 same-domain edits the oldest tags outlive the
+  /// snapshots behind them. Undo used to pop such a tag, revert NOTHING, and
+  /// report success (Ctrl+Z did nothing, and the tag moved to the redo stack,
+  /// where Redo no-op'd in turn). Now the stale tag is DROPPED and the next one
+  /// is tried, until a real revert happens or the timeline is exhausted — so
+  /// Undo either changes something or is honestly a no-op with an empty
+  /// timeline. The caps themselves are unchanged (they bound memory).
   void undo() {
-    if (_past.isEmpty) return;
-    final domain = _past.removeLast();
-    _revert(domain, redo: false);
-    _future.add(domain);
-    _refreshDirty();
+    var reverted = false;
+    while (_past.isNotEmpty) {
+      final domain = _past.removeLast();
+      if (!_canRevert(domain, redo: false)) continue; // phantom — drop it
+      _revert(domain, redo: false);
+      _future.add(domain);
+      reverted = true;
+      break;
+    }
+    // Even a fully-phantom pass changed the timeline (the stale tags were
+    // dropped, so `canUndo` now reads false), so publish a revision either way
+    // and let the Undo affordance disable itself.
+    if (reverted) _refreshDirty();
     state++;
   }
 
-  /// Redo the most recently undone action.
+  /// Redo the most recently undone action. Mirrors [undo]'s phantom handling.
   void redo() {
-    if (_future.isEmpty) return;
-    final domain = _future.removeLast();
-    _revert(domain, redo: true);
-    _past.add(domain);
-    _refreshDirty();
+    var reverted = false;
+    while (_future.isNotEmpty) {
+      final domain = _future.removeLast();
+      if (!_canRevert(domain, redo: true)) continue; // phantom — drop it
+      _revert(domain, redo: true);
+      _past.add(domain);
+      reverted = true;
+      break;
+    }
+    if (reverted) _refreshDirty();
     state++;
+  }
+
+  /// Whether [domain]'s owning controller actually holds a snapshot to step to.
+  /// Read-only — never mutates a stack.
+  bool _canRevert(UndoDomain domain, {required bool redo}) {
+    switch (domain) {
+      case UndoDomain.network:
+        final c = ref.read(networkControllerProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+      case UndoDomain.project:
+        final c = ref.read(projectControllerProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+      case UndoDomain.electrical:
+        final c = ref.read(electricalProjectProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+      case UndoDomain.annotation:
+        final c = ref.read(annotationHistoryProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+      case UndoDomain.structural:
+        final c = ref.read(structuralHistoryProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+      case UndoDomain.referenceLine:
+        final c = ref.read(referenceLinesProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+      case UndoDomain.settings:
+        final c = ref.read(settingsHistoryProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
+    }
   }
 
   /// One immediate signature re-check after undo/redo: stepping the timeline
@@ -118,6 +183,9 @@ class HistoryController extends Notifier<int> {
       case UndoDomain.referenceLine:
         final c = ref.read(referenceLinesProvider.notifier);
         redo ? c.redo() : c.undo();
+      case UndoDomain.settings:
+        final c = ref.read(settingsHistoryProvider.notifier);
+        redo ? c.redo() : c.undo();
     }
   }
 
@@ -131,6 +199,7 @@ class HistoryController extends Notifier<int> {
     _future.clear();
     ref.read(annotationHistoryProvider.notifier).reset();
     ref.read(structuralHistoryProvider.notifier).reset();
+    ref.read(settingsHistoryProvider.notifier).reset();
     state++;
   }
 }
@@ -264,4 +333,118 @@ class StructuralHistoryController extends Notifier<int> {
     _redo.clear();
     state++;
   }
+}
+
+/// D3 — ONE reversible design-settings change, expressed as the pair of calls
+/// that move it back and forward. The settings controllers in `app_state.dart`
+/// hold a single scalar and keep no snapshot stack, so instead of capturing a
+/// state this domain captures the two closures; the coordinator runs them.
+///
+/// [label] names WHAT moved (the feed strategy, the drainage fall…) so the
+/// caller can narrate the change in the status bar with the same words the undo
+/// timeline holds. The closures MUST write through the owning controller's
+/// plain setter — never back through a recording wrapper — or undo would record
+/// itself.
+class SettingsUndoEntry {
+  final String label;
+  final void Function() undo;
+  final void Function() redo;
+  const SettingsUndoEntry({
+    required this.label,
+    required this.undo,
+    required this.redo,
+  });
+}
+
+/// The undo coordinator for the project-wide design settings (D3). Mirrors
+/// [StructuralHistoryController]'s shape — a local stack plus ONE
+/// [UndoDomain.settings] entry on the global timeline per change — but stores
+/// registered revert callbacks rather than captured state, because the settings
+/// controllers own nothing to snapshot.
+final settingsHistoryProvider =
+    NotifierProvider<SettingsHistoryController, int>(
+  SettingsHistoryController.new,
+);
+
+class SettingsHistoryController extends Notifier<int> {
+  final List<SettingsUndoEntry> _undo = [];
+  final List<SettingsUndoEntry> _redo = [];
+
+  @override
+  int build() => 0;
+
+  bool get canUndo => _undo.isNotEmpty;
+  bool get canRedo => _redo.isNotEmpty;
+
+  /// The label of the change a Ctrl+Z would revert (null when there is none) —
+  /// so an affordance can say what it is about to undo.
+  String? get pendingUndoLabel => _undo.isEmpty ? null : _undo.last.label;
+
+  /// Register [entry] and record ONE [UndoDomain.settings] on the global
+  /// timeline. Call this BEFORE (or immediately after) performing the forward
+  /// change — the entry carries both directions, so ordering only matters to the
+  /// caller's own closures.
+  void record(SettingsUndoEntry entry) {
+    _undo.add(entry);
+    if (_undo.length > 200) _undo.removeAt(0);
+    _redo.clear();
+    ref.read(historyProvider.notifier).record(UndoDomain.settings);
+    state++;
+  }
+
+  /// Run the most recent entry's revert. Driven by [historyProvider], not
+  /// widgets directly.
+  void undo() {
+    if (_undo.isEmpty) return;
+    final entry = _undo.removeLast();
+    entry.undo();
+    _redo.add(entry);
+    state++;
+  }
+
+  /// Re-apply the most recently undone settings change.
+  void redo() {
+    if (_redo.isEmpty) return;
+    final entry = _redo.removeLast();
+    entry.redo();
+    _undo.add(entry);
+    state++;
+  }
+
+  /// Drop both stacks — a freshly opened/restored document is a new baseline
+  /// (called from [HistoryController.reset], like the other coordinators).
+  void reset() {
+    _undo.clear();
+    _redo.clear();
+    state++;
+  }
+}
+
+/// D3 — flip the water FEED STRATEGY as a first-class, undoable, self-narrating
+/// edit: it rewrites the whole pressure solve, the riser tags, the PRV zones and
+/// the pump duty, so it must sit on the same timeline as a drawing edit and say
+/// so. Every entry point that changes the strategy should call THIS instead of
+/// `feedStrategyProvider.notifier.set(...)` (the bare setter stays the
+/// non-recording write the undo/redo closures below use).
+///
+/// A no-op — recording nothing, saying nothing — when the strategy is already
+/// [next], so re-selecting the live option never pushes an empty undo step.
+void setFeedStrategyUndoable(ProviderReader read, FeedStrategy next) {
+  final previous = read(feedStrategyProvider);
+  if (previous == next) return;
+  final strings = MechXStringsData(read(localeProvider));
+  final mode = strings(next == FeedStrategy.upfeed
+      ? StringKey.settingsFeedUpfeed
+      : StringKey.settingsFeedDownfeed);
+  void apply(FeedStrategy s) => read(feedStrategyProvider.notifier).set(s);
+  apply(next);
+  read(settingsHistoryProvider.notifier).record(SettingsUndoEntry(
+    label: mode,
+    undo: () => apply(previous),
+    redo: () => apply(next),
+  ));
+  // Name what moved: the flip is invisible on the canvas until the next solve
+  // lands, and the engineer's reflex (Ctrl+Z) now genuinely reverts THIS.
+  read(statusMessageProvider.notifier).showStatus(strings
+      .format(StringKey.settingsFeedStrategyChanged, {'mode': mode}));
 }

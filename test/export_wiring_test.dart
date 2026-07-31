@@ -329,17 +329,24 @@ void main() {
 
     final lines = bomCsvWithCutPlan(bom, cutPlan).trim().split('\n');
     // N13: a tag column sits right after kind (run → CW-F<floor>, riser → CW-R1).
+    //
+    // RE-DERIVED 2026-07-30 (audit R2): the takeoff columns are now the engine's
+    // own `bomToCsv` verbatim, so the pipe-implying `nominal_dn_mm` became the
+    // neutral `nominal_size_mm` and a `material` column follows it (this
+    // fixture's hand-built lines set no material ⇒ the cell is empty, which is
+    // itself the honest rendering). The three cut-plan columns are unchanged
+    // and still trail every row. Column count 10 → 11.
     expect(
         lines.first,
-        'service,kind,tag,floor,nominal_dn_mm,length_m,segments,'
+        'service,kind,tag,floor,nominal_size_mm,material,length_m,segments,'
         'stock_length_m,bars_purchased,waste_pct');
     // First DN25 run row carries the plan; the 1-based floor is 1.
-    expect(lines[1], 'coldWater,run,CW-F1,1,25,5.00,1,4.0,3,25.0');
+    expect(lines[1], 'coldWater,run,CW-F1,1,25,,5.00,1,4.0,3,25.0');
     // Second DN25 row (same group) leaves the plan columns EMPTY (sum-safe).
-    expect(lines[2], 'coldWater,run,CW-F2,2,25,3.00,1,,,');
+    expect(lines[2], 'coldWater,run,CW-F2,2,25,,3.00,1,,,');
     // The riser: its stack tag CW-R1, null floor → empty, and no plan entry →
     // empty plan columns.
-    expect(lines[3], 'coldWater,riser,CW-R1,,50,3.50,1,,,');
+    expect(lines[3], 'coldWater,riser,CW-R1,,50,,3.50,1,,,');
   });
 
   // ── D1: the typeset-PDF report seams (Wave 4) ──────────────────────────────

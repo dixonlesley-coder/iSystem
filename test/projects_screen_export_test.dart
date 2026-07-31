@@ -65,10 +65,12 @@ void main() {
     expect(find.text('Export unified MEP report (MD)'), findsOneWidget);
     expect(find.text('Export unified MEP report (PDF)'), findsOneWidget);
 
-    // The three labelled groups exist (MechXSectionLabel renders UPPERCASE)...
-    expect(find.text('DRAWINGS'), findsOneWidget);
-    expect(find.text('REPORTS'), findsOneWidget);
-    expect(find.text('DATA'), findsOneWidget);
+    // The three labelled groups exist (MechXSectionLabel renders UPPERCASE),
+    // each header naming its own inventory count (P1) — 3 drawing exports, 2
+    // report exports, 2 data exports.
+    expect(find.text('DRAWINGS (3)'), findsOneWidget);
+    expect(find.text('REPORTS (2)'), findsOneWidget);
+    expect(find.text('DATA (2)'), findsOneWidget);
     // ...but default COLLAPSED — their buttons aren't in the tree yet.
     expect(find.text('Export drawing (DXF)'), findsNothing);
     expect(find.text('Export calc report (MD)'), findsNothing);
@@ -76,7 +78,7 @@ void main() {
 
     // Expanding Drawings reveals its three rows plus the two disambiguating
     // subtitles that tell the plain plan-PDF apart from the annotated one.
-    await tester.tap(find.text('DRAWINGS'));
+    await tester.tap(find.text('DRAWINGS (3)'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('Export drawing (DXF)'), findsOneWidget);

@@ -12,8 +12,28 @@
 ///      required flow (`Q = K·√P`, the universal sprinkler discharge law), and
 ///   2. add the branch-line friction back to the *base* of the design area so
 ///      the supply demand at the riser is honest, and
-///   3. check the remote head meets the **minimum operating pressure** for a
-///      standard spray head.
+///   3. apply the **minimum operating pressure** floor for a standard spray
+///      head, re-deriving the demand at that floor when the density share alone
+///      would sit below it.
+///
+/// ## The minimum-pressure floor (why this is not a failure verdict)
+/// The density/area split is a *lower bound* on what each head must deliver. A
+/// listed head, however, cannot discharge below its minimum operating pressure —
+/// below that pressure it does not form a spray pattern at all. So when the
+/// density share `(Q/K)²` lands under the minimum, the head does not "fail": it
+/// simply discharges MORE than the density share, at the floor pressure:
+///
+///   Q_head = K · √(P_min)        (the standard hydraulic-calculation floor)
+///
+/// and the design-area demand rises with it (`Q_head × head count`). This is
+/// exactly what a hand hydraulic calculation does, and it is the structural case
+/// at **light hazard**: 2.25 L/min/m² over 84 m² split across 5 heads
+/// (20 m² coverage) is 37.8 L/min/head ⇒ (37.8/80)² = 0.223 bar, always under
+/// the 0.5 bar floor. Reporting that as an under-pressure FAILURE was an
+/// unactionable verdict on every light-hazard project; the honest output is the
+/// uplifted per-head flow (K·√0.5 = 56.57 L/min) and the resulting higher
+/// remote-area demand, flagged via [SprinklerRemoteAreaResult.governedByMinimumPressure].
+/// Heavier hazards, whose density share already clears the floor, are untouched.
 ///
 /// ## The discharge law  Q = K·√P
 /// The K-factor relates a head's discharge `Q` to its inlet pressure `P`:
@@ -103,12 +123,23 @@ final class SprinklerRemoteAreaResult {
   /// Nominal K-factor used for the most-remote head (L/min/bar^0.5).
   final double kFactor;
 
-  /// Flow the most-remote head must deliver — its share from the density/area
-  /// split ([SprinklerDesign.flowPerSprinkler]).
+  /// Flow the most-remote head actually delivers.
+  ///
+  /// Normally its share from the density/area split
+  /// ([SprinklerDesign.flowPerSprinkler]); when that share would need less than
+  /// [minOperatingPressure] the head is re-derived at the floor,
+  /// `Q = K·√P_min`, and this carries the UPLIFTED flow (see
+  /// [governedByMinimumPressure] and [densityShareFlow]).
   final FlowRate remoteHeadFlow;
 
+  /// The un-uplifted density/area share for the most-remote head
+  /// ([SprinklerDesign.flowPerSprinkler]) — equal to [remoteHeadFlow] unless
+  /// [governedByMinimumPressure] is set.
+  final FlowRate densityShareFlow;
+
   /// Inlet pressure the most-remote head needs to discharge [remoteHeadFlow]
-  /// through K (`P = (Q/K)²`).
+  /// through K (`P = (Q/K)²`). Exactly [minOperatingPressure] when
+  /// [governedByMinimumPressure] is set.
   final Pressure remoteHeadPressure;
 
   /// Minimum operating pressure required at the most-remote head.
@@ -122,25 +153,55 @@ final class SprinklerRemoteAreaResult {
   /// to satisfy the remote head: remote-head pressure + branch friction.
   final Pressure branchBasePressure;
 
-  /// `true` when [remoteHeadPressure] ≥ [minOperatingPressure] — the remote head
-  /// is adequately pressurised by its own required flow.
+  /// Demand of the whole design area at [remoteHeadFlow] —
+  /// `remoteHeadFlow × design.sprinklerCount`.
+  ///
+  /// Equals [SprinklerDesign.requiredFlow] in the density-governed case; HIGHER
+  /// than it (the real supply demand) when [governedByMinimumPressure] is set.
+  final FlowRate remoteAreaDemand;
+
+  /// `true` when the density/area share alone would sit below
+  /// [minOperatingPressure] and the head demand was therefore re-derived at the
+  /// floor (`Q = K·√P_min`) — the design-area demand is then governed by the
+  /// HEAD MINIMUM PRESSURE, not by the density.
+  ///
+  /// This, not [meetsMinimumPressure], is the informative flag: see the library
+  /// doc for why the floor case is a design fact rather than a failure.
+  final bool governedByMinimumPressure;
+
+  /// `true` when [remoteHeadPressure] ≥ [minOperatingPressure].
+  ///
+  /// Kept for the report's pass/fail row, but note it is now true BY
+  /// CONSTRUCTION: the floor is applied by uplifting the flow, so the remote
+  /// head always sits at or above its minimum. The falsifiable information is
+  /// [governedByMinimumPressure] + the resulting [remoteAreaDemand]. It can
+  /// still read `false` only for a degenerate input (a non-finite / negative
+  /// K-factor path guarded by the assert above).
   final bool meetsMinimumPressure;
 
   const SprinklerRemoteAreaResult({
     required this.design,
     required this.kFactor,
     required this.remoteHeadFlow,
+    required this.densityShareFlow,
     required this.remoteHeadPressure,
     required this.minOperatingPressure,
     required this.branchLineFrictionHead,
     required this.branchBasePressure,
+    required this.remoteAreaDemand,
     required this.meetsMinimumPressure,
+    this.governedByMinimumPressure = false,
   });
 
   /// Human-readable verdict for the calc report / inspector.
-  String get verdict => meetsMinimumPressure
-      ? 'Remote head OK'
-      : 'Remote head under-pressure';
+  ///
+  /// (The localized report picks its own sentence off [meetsMinimumPressure];
+  /// this getter is the engine-side plain-ASCII wording.)
+  String get verdict => governedByMinimumPressure
+      ? 'Remote head OK - demand governed by head minimum pressure, not density'
+      : meetsMinimumPressure
+          ? 'Remote head OK'
+          : 'Remote head under-pressure';
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -148,16 +209,21 @@ final class SprinklerRemoteAreaResult {
 /// Run the remote-area hydraulic check for a sprinkler [design].
 ///
 /// ## Method (ORCHESTRATION over `hydraulics.dart`)
-/// 1. The most-remote head must pass its density/area share
+/// 1. The most-remote head must pass at least its density/area share
 ///    `Q = design.flowPerSprinkler`.
 /// 2. Its required inlet pressure is `P = (Q / K)²` ([headPressureForFlow]).
-/// 3. The branch-line friction to that head is Hazen–Williams head loss at the
-///    head's own flow over [branchLength] in [branchDiameter]
-///    ([headLossHazenWilliams]).
-/// 4. The branch-base pressure that must be supplied is the head pressure plus
+/// 3. **Minimum-pressure floor.** If that pressure is below
+///    [minOperatingPressure], the head cannot discharge there — the demand is
+///    RE-DERIVED at the floor, `Q = K·√P_min` ([headFlowForPressure]), and the
+///    uplifted flow (and the resulting design-area demand) is what the rest of
+///    the calculation uses. Flagged via
+///    [SprinklerRemoteAreaResult.governedByMinimumPressure].
+/// 4. The branch-line friction to that head is Hazen–Williams head loss at the
+///    head's own (possibly uplifted) flow over [branchLength] in
+///    [branchDiameter] ([headLossHazenWilliams]).
+/// 5. The branch-base pressure that must be supplied is the head pressure plus
 ///    the branch friction (as pressure).
-/// 5. The verdict compares the remote-head pressure against
-///    [minOperatingPressure].
+/// 6. The design-area demand is the per-head flow × the operating head count.
 ///
 /// ## Parameters
 /// * [design] — the density/area result whose remote head is checked.
@@ -181,10 +247,29 @@ SprinklerRemoteAreaResult remoteAreaHydraulics({
 }) {
   assert(kFactor > 0, 'K-factor must be positive');
 
-  final remoteFlow = design.flowPerSprinkler;
+  final densityShare = design.flowPerSprinkler;
 
-  // Pressure the remote head needs to discharge its share: P = (Q/K)².
-  final headPressure = headPressureForFlow(remoteFlow, kFactor);
+  // Pressure the remote head would need to discharge its density/area share
+  // alone: P = (Q/K)².
+  final densitySharePressure = headPressureForFlow(densityShare, kFactor);
+
+  // Minimum-pressure floor: a listed head cannot discharge below its minimum
+  // operating pressure, so when the density share lands under the floor the
+  // head is re-derived AT the floor (Q = K·√P_min) and discharges more than the
+  // density share. Density-governed designs take neither branch and are
+  // byte-identical to the pre-floor behaviour.
+  final governedByMinimum =
+      densitySharePressure.pascals < minOperatingPressure.pascals;
+
+  final FlowRate remoteFlow;
+  final Pressure headPressure;
+  if (governedByMinimum) {
+    remoteFlow = headFlowForPressure(minOperatingPressure, kFactor);
+    headPressure = minOperatingPressure;
+  } else {
+    remoteFlow = densityShare;
+    headPressure = densitySharePressure;
+  }
 
   // Branch-line friction at the head's own flow (Hazen–Williams primitive).
   final branchFriction = headLossHazenWilliams(
@@ -199,16 +284,24 @@ SprinklerRemoteAreaResult remoteAreaHydraulics({
     headPressure.pascals + pressureFromHead(branchFriction).pascals,
   );
 
+  // Design-area demand at the flow each head actually delivers.
+  final areaDemand = FlowRate(
+    remoteFlow.cubicMetersPerSecond * design.sprinklerCount,
+  );
+
   final meets = headPressure.pascals >= minOperatingPressure.pascals;
 
   return SprinklerRemoteAreaResult(
     design: design,
     kFactor: kFactor,
     remoteHeadFlow: remoteFlow,
+    densityShareFlow: densityShare,
     remoteHeadPressure: headPressure,
     minOperatingPressure: minOperatingPressure,
     branchLineFrictionHead: branchFriction,
     branchBasePressure: branchBase,
+    remoteAreaDemand: areaDemand,
     meetsMinimumPressure: meets,
+    governedByMinimumPressure: governedByMinimum,
   );
 }

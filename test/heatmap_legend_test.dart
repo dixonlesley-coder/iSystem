@@ -96,4 +96,44 @@ void main() {
     expect(find.text('LOW'), findsNothing);
     expect(find.text('uniform field'), findsNothing);
   });
+
+  // ── G6 (WORKFLOW-FRICTION): the caveat belongs on BOTH branches ───────────
+
+  testWidgets(
+      'a SPREAD field whose target is held by design says so, and names the '
+      'check that CAN fail', (tester) async {
+    await tester.pumpWidget(_host(
+      const HeatmapLegend(
+          minKpa: 230, maxKpa: 310, targetKpa: 225, targetHeldByDesign: true),
+    ));
+    // The Min tick keeps its label — but it no longer stands alone: on the
+    // upfeed solve every residual clears it by construction.
+    _expectRendersWhole(tester, 'Min 225 kPa');
+    _expectRendersWhole(tester, 'target held by design');
+    _expectRendersWhole(tester, '- the real check is the pump duty');
+    // It is a statement, not a verdict — no green PASS is claimed.
+    expect(find.text('PASS'), findsNothing);
+  });
+
+  testWidgets('a spread field on a genuine (downfeed) check is unchanged',
+      (tester) async {
+    await tester.pumpWidget(_host(
+      const HeatmapLegend(minKpa: 230, maxKpa: 310, targetKpa: 225),
+    ));
+    _expectRendersWhole(tester, 'Min 225 kPa');
+    expect(find.text('target held by design'), findsNothing);
+    expect(find.text('- the real check is the pump duty'), findsNothing);
+  });
+
+  testWidgets('the uniform branch keeps its verdict and gains the pointer',
+      (tester) async {
+    await tester.pumpWidget(_host(
+      const HeatmapLegend(
+          minKpa: 260, maxKpa: 260, targetKpa: 225, targetHeldByDesign: true),
+    ));
+    _expectRendersWhole(tester, 'Uniform 260 kPa');
+    expect(find.text('held by design'), findsOneWidget);
+    expect(find.text('PASS'), findsNothing);
+    _expectRendersWhole(tester, '- the real check is the pump duty');
+  });
 }

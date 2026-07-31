@@ -36,6 +36,14 @@ const Velocity kSupplyFaceVelocityMax = Velocity(3.0);
 const Velocity kReturnFaceVelocityMin = Velocity(1.0);
 const Velocity kReturnFaceVelocityMax = Velocity(4.0);
 
+/// Return / exhaust duct mean-velocity band (m/s) — ONE band shared by both
+/// return-air and exhaust-air ducts (a documented simplification: general
+/// low-pressure HVAC practice, **NOT an SNI clause**, `// VERIFY`). Extract
+/// ducts tolerate a slightly wider range than a supply duct (no throw /
+/// diffusion requirement), so the min is lower and the max a touch higher.
+const Velocity kExtractDuctVelocityMin = Velocity(2.0);
+const Velocity kExtractDuctVelocityMax = Velocity(6.0);
+
 // ── Verdict + result ──────────────────────────────────────────────────────────
 
 /// Where an air velocity sits relative to its recommended band.
@@ -105,6 +113,14 @@ VelocityCheck checkSupplyDuctVelocity(Velocity actual) => checkVelocityBand(
       actual,
       min: kSupplyDuctVelocityMin,
       max: kSupplyDuctVelocityMax,
+    );
+
+/// Check a return/exhaust duct's mean velocity against the shared extract-duct
+/// band.
+VelocityCheck checkExtractDuctVelocity(Velocity actual) => checkVelocityBand(
+      actual,
+      min: kExtractDuctVelocityMin,
+      max: kExtractDuctVelocityMax,
     );
 
 /// Mean FACE velocity (m/s) of a grille / diffuser carrying [airflow] through a

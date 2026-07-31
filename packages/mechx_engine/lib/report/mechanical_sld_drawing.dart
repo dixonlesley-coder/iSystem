@@ -71,6 +71,11 @@ const int _kEscapeSteps = 6;
 // Minimal x nudge per coincident node so two fixtures at the same world x don't
 // stack their markers/labels.
 const double _kSpreadStep = 18;
+// X1: half-thickness of the occupied strip a drawn pipe leg reserves, so a tag
+// is never printed THROUGH the run it names (the issued riser PDF showed
+// "Ground tank · 5.0 m3" struck out by its own suction pipe). A drafting
+// clearance, not a standard. // VERIFY
+const double _kInkHalfThickness = 2;
 
 /// Build the mechanical riser single-line as an [SldSheet] for [network].
 ///
@@ -212,6 +217,9 @@ SldSheet buildMechanicalRiserSld({
     final yBase = top + _bandH - 1;
     prims.add(SldLine(_gutterW, yBase, _gutterW + _drawW, yBase,
         weight: SldWeight.thin));
+    // X1: the floor datum is ink too — a riser tag whose mid-point lands on the
+    // band line used to print straight through it.
+    placer.reserveLine(_gutterW, yBase, _gutterW + _drawW, yBase);
     final name = (building != null && f < building.levelCount)
         ? building.floors[f].name
         : 'Level ${f + 1}';
@@ -245,6 +253,103 @@ SldSheet buildMechanicalRiserSld({
       placer.reserve(SldLabel(fanX + 6, y, '+${fo.groupOverflow} types',
           size: 7, role: SldRole.source));
     }
+  }
+
+  // ── Extras geometry (plant detail / reference callouts / notes) ─────────────
+  // Computed HERE (it depends only on the network + focus + band count) so the
+  // label placer can reserve those blocks before it places any movable tag;
+  // the blocks themselves are still EMITTED further down, unchanged.
+  const contentMaxX = _gutterW + _drawW + _fanColW;
+  final extrasTop = _topPad + bandCount * _bandH + 12.0;
+  bool hasComponent(NodeComponent c) =>
+      network.nodes.any((n) => n.component == c);
+  final waterFocus = focus == null ||
+      focus == ServiceType.coldWater ||
+      focus == ServiceType.hotWater;
+  // G4: the drainage/vent/rainwater view earns the SAME reference-detail
+  // treatment the clean-water view gets.
+  final drainageFocus = focus == null ||
+      focus == ServiceType.drainage ||
+      focus == ServiceType.vent ||
+      focus == ServiceType.rainwater;
+  final plantWillDraw = detailCallouts &&
+      waterFocus &&
+      (hasComponent(NodeComponent.roofTank) ||
+          hasComponent(NodeComponent.groundTank) ||
+          hasComponent(NodeComponent.pump) ||
+          hasComponent(NodeComponent.boosterSet));
+  final detailBoxes = !detailCallouts
+      ? const <(String, List<(NodeComponent, String)>)>[]
+      : <(String, List<(NodeComponent, String)>)>[
+          if (waterFocus && hasComponent(NodeComponent.waterMeter))
+            ('DETAIL WATER METER', const [
+              (NodeComponent.gateValve, 'GV'),
+              (NodeComponent.waterMeter, 'WM'),
+              (NodeComponent.gateValve, 'GV'),
+              (NodeComponent.gateValve, 'U'),
+            ]),
+          if (waterFocus && hasComponent(NodeComponent.prv))
+            ('DETAIL PRV SET', const [
+              (NodeComponent.gateValve, 'GV'),
+              (NodeComponent.strainer, 'STR'),
+              (NodeComponent.prv, 'PRV'),
+              (NodeComponent.gateValve, 'GV'),
+            ]),
+          // G4: DETAIL FLOOR DRAIN (FD trap + CO) — only when one is drawn.
+          if (drainageFocus && hasComponent(NodeComponent.floorDrain))
+            ('DETAIL FLOOR DRAIN', const [
+              (NodeComponent.floorDrain, 'FD'),
+              (NodeComponent.cleanout, 'CO'),
+            ]),
+          // G4: DETAIL VTR — only when a vent riser actually reaches the roof.
+          if (drainageFocus &&
+              ventTopTerminalIds(network, topFloor: hiFloor).isNotEmpty)
+            ('DETAIL VTR', const [
+              (NodeComponent.airVent, 'VTR'),
+            ]),
+        ];
+  final notesH = notes.isEmpty ? 0.0 : 20 + notes.length * _notesLineH + 6;
+
+  // ── X1: seed the occupied list with the sheet's non-label INK ───────────────
+  // The placer used to know only about other LABELS, so a tag could still be
+  // struck through by the pipe it names, printed over an equipment glyph, or
+  // land on top of the right-margin PUMP-SET / reference-detail / KETERANGAN
+  // blocks (all of which are emitted later in the prim list). Reserving those
+  // regions FIRST — the electrical `_RiserLabelPlacer` idiom: per-size
+  // char-advance boxes, a bounded nudge ladder, leaders, never a dropped tag —
+  // makes the movable tags divert around them. Nothing is emitted here, so the
+  // prim order (and any sheet whose tags already sat clear) is unchanged.
+  for (final n in nodes) {
+    final p = posById[n.id]!;
+    final half = (n.component != null ? _symbolSize : _nodeBox) / 2;
+    placer.reserveBox(p.dx - half, p.dy - half, p.dx + half, p.dy + half);
+  }
+  for (final e in network.edges) {
+    if (focus != null && e.service != focus) continue;
+    final a = posById[e.fromId];
+    final b = posById[e.toId];
+    if (a == null || b == null) continue;
+    placer.reserveLine(a.dx, a.dy, b.dx, a.dy);
+    if ((b.dy - a.dy).abs() > 0.5) {
+      placer.reserveLine(b.dx, a.dy, b.dx, b.dy);
+    }
+  }
+  if (plantWillDraw) {
+    placer.reserveBox(contentMaxX + 12, _topPad, contentMaxX + 12 + _plantW,
+        _topPad + _plantH);
+  }
+  if (detailBoxes.isNotEmpty) {
+    final totalW =
+        detailBoxes.length * _calloutW + (detailBoxes.length - 1) * 16;
+    var bx = _gutterW + (_drawW - totalW) / 2;
+    for (var i = 0; i < detailBoxes.length; i++) {
+      placer.reserveBox(bx, extrasTop, bx + _calloutW, extrasTop + _calloutH);
+      bx += _calloutW + 16;
+    }
+  }
+  if (notesH > 0) {
+    placer.reserveBox(contentMaxX - _notesW, extrasTop, contentMaxX,
+        extrasTop + notesH);
   }
 
   // ── B2 STACK DETAIL: cleanouts, the vent tee, VTR terminations ──────────────
@@ -428,22 +533,10 @@ SldSheet buildMechanicalRiserSld({
   // The callouts sit in a strip BELOW the floor bands (clear of every band tag)
   // and the plant detail in a right margin column, so the placer never has to
   // divert around them; the bounds grow to include whatever was drawn.
-  const contentMaxX = _gutterW + _drawW + _fanColW;
   var maxX = contentMaxX;
-  final extrasTop = _topPad + bandCount * _bandH + 12.0;
   var extrasBottom = extrasTop;
 
-  final waterFocus = focus == null ||
-      focus == ServiceType.coldWater ||
-      focus == ServiceType.hotWater;
-  // G4: the drainage/vent/rainwater view earns the SAME reference-detail
-  // treatment the clean-water view gets.
-  final drainageFocus = focus == null ||
-      focus == ServiceType.drainage ||
-      focus == ServiceType.vent ||
-      focus == ServiceType.rainwater;
   if (detailCallouts) {
-    bool has(NodeComponent c) => network.nodes.any((n) => n.component == c);
     if (waterFocus &&
         _emitPlantDetail(prims, network, contentMaxX + 12, _topPad,
             equipmentDetailByNodeId: equipmentDetailByNodeId,
@@ -457,36 +550,7 @@ SldSheet buildMechanicalRiserSld({
     // device shows neither box (honesty — no boilerplate detail masquerading as
     // an as-designed assembly). The present boxes are centred as a group so a
     // lone detail still reads balanced; the combined view shows every applicable
-    // box in one row.
-    final detailBoxes = <(String, List<(NodeComponent, String)>)>[
-      if (waterFocus && has(NodeComponent.waterMeter))
-        ('DETAIL WATER METER', const [
-          (NodeComponent.gateValve, 'GV'),
-          (NodeComponent.waterMeter, 'WM'),
-          (NodeComponent.gateValve, 'GV'),
-          (NodeComponent.gateValve, 'U'),
-        ]),
-      if (waterFocus && has(NodeComponent.prv))
-        ('DETAIL PRV SET', const [
-          (NodeComponent.gateValve, 'GV'),
-          (NodeComponent.strainer, 'STR'),
-          (NodeComponent.prv, 'PRV'),
-          (NodeComponent.gateValve, 'GV'),
-        ]),
-      // G4: DETAIL FLOOR DRAIN (FD trap + CO) — only when a floor drain is drawn.
-      if (drainageFocus && has(NodeComponent.floorDrain))
-        ('DETAIL FLOOR DRAIN', const [
-          (NodeComponent.floorDrain, 'FD'),
-          (NodeComponent.cleanout, 'CO'),
-        ]),
-      // G4: DETAIL VTR (vent-through-roof termination) — only when a vent riser
-      // actually reaches the roof (never fabricated).
-      if (drainageFocus &&
-          ventTopTerminalIds(network, topFloor: hiFloor).isNotEmpty)
-        ('DETAIL VTR', const [
-          (NodeComponent.airVent, 'VTR'),
-        ]),
-    ];
+    // box in one row. (The rects were computed + reserved above.)
     if (detailBoxes.isNotEmpty) {
       final totalW =
           detailBoxes.length * _calloutW + (detailBoxes.length - 1) * 16;
@@ -501,9 +565,8 @@ SldSheet buildMechanicalRiserSld({
   if (notes.isNotEmpty) {
     // The KETERANGAN system-notes block, bottom-RIGHT (the renderers stamp the
     // page-fixed title block below/beside it in page space).
-    final noteH = 20 + notes.length * _notesLineH + 6;
     const left = contentMaxX - _notesW;
-    prims.add(SldRect(left, extrasTop, _notesW, noteH, weight: SldWeight.thin));
+    prims.add(SldRect(left, extrasTop, _notesW, notesH, weight: SldWeight.thin));
     prims.add(SldLabel(left + 6, extrasTop + 12, 'KETERANGAN',
         size: 7, bold: true));
     var y = extrasTop + 24.0;
@@ -511,7 +574,7 @@ SldSheet buildMechanicalRiserSld({
       prims.add(SldLabel(left + 6, y, line, size: 7));
       y += _notesLineH;
     }
-    extrasBottom = math.max(extrasBottom, extrasTop + noteH);
+    extrasBottom = math.max(extrasBottom, extrasTop + notesH);
   }
 
   // ── Bounds ──────────────────────────────────────────────────────────────────
@@ -1082,6 +1145,26 @@ class _LabelPlacer {
     prims.add(label);
   }
 
+  /// Record an occupied REGION that is not a label — an equipment glyph, a pipe
+  /// run, or a bordered detail/notes block — WITHOUT emitting anything (X1). The
+  /// owning prims are still drawn at their own place in the list, so the prim
+  /// ORDER is unchanged; only a tag that would have printed over the region
+  /// moves. Zero-area regions are ignored.
+  void reserveBox(double minX, double minY, double maxX, double maxY) {
+    if (maxX <= minX || maxY <= minY) return;
+    _placed.add(_LabelRect(minX, minY, maxX, maxY));
+  }
+
+  /// Record a drawn LINE as a thin occupied strip so a label is never struck
+  /// through by the pipe / leg it sits on (X1). Only axis-aligned segments are
+  /// seeded — every run/riser leg of the L-route is one.
+  void reserveLine(double x1, double y1, double x2, double y2) {
+    reserveBox(math.min(x1, x2) - _kInkHalfThickness,
+        math.min(y1, y2) - _kInkHalfThickness,
+        math.max(x1, x2) + _kInkHalfThickness,
+        math.max(y1, y2) + _kInkHalfThickness);
+  }
+
   /// Place a MOVABLE tag at its default ([defaultX], [defaultY]) trying the
   /// [candidates] offsets (candidates[0] == the default) in order; the first
   /// slot clearing every placed box wins, else the least-overlapping. When NO
@@ -1145,7 +1228,12 @@ class _LabelPlacer {
     // cleared — gets a leader so its element stays legible / unfused.
     if (!cleared ||
         math.sqrt(best.dx * best.dx + best.dy * best.dy) > _kLeaderThreshold) {
-      prims.add(SldLine(anchorX, anchorY, lx, ly,
+      // X1: land the leader on the NEAR end of the text. A tag diverted to the
+      // LEFT of its anchor used to be leadered to its own left origin, so the
+      // leader ran straight THROUGH the tag it was pointing at.
+      final rx = lx + _labelWidth(text, size);
+      final endX = rx < anchorX ? rx : lx;
+      prims.add(SldLine(anchorX, anchorY, endX, ly,
           weight: SldWeight.thin, role: role));
     }
     prims.add(SldLabel(lx, ly, text, size: size, bold: bold, role: role));

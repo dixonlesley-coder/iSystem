@@ -58,8 +58,17 @@ class PumpDuty {
   /// P_input = P_shaft / η_motor.
   final Power motorInputPower;
 
-  /// Smallest standard motor whose rated output ≥ [shaftPower].
+  /// Smallest standard motor whose rated output ≥ [shaftPower] — or, when
+  /// [motorOversized] is true, the largest frame in [standardMotorKw].
   final Power selectedMotor;
+
+  /// M11 — true when [shaftPower] exceeds the largest frame in
+  /// [standardMotorKw] and [selectMotor] therefore CLAMPED: [selectedMotor] is
+  /// then SMALLER than the duty needs and the printed 75 kW is a table limit,
+  /// not a selection. Mirrors `FirePumpRatingResult.oversized`; the caller must
+  /// surface it (the duty is not deliverable off this standard ladder).
+  /// Default false ⇒ every in-range duty is byte-identical.
+  final bool motorOversized;
 
   /// The volumetric flow at which this duty was sized.
   final FlowRate flow;
@@ -82,6 +91,7 @@ class PumpDuty {
     required this.motorInputPower,
     required this.selectedMotor,
     this.operatingPoint,
+    this.motorOversized = false,
   });
 }
 
@@ -102,6 +112,14 @@ Power selectMotor(Power shaft) {
   // Shaft demand exceeds the table: return the largest available.
   return Power.kiloWatts(standardMotorKw.last);
 }
+
+/// M11 — true when [shaft] exceeds the largest entry in [standardMotorKw], i.e.
+/// exactly the condition under which [selectMotor] CLAMPS instead of selecting.
+/// A duty landing exactly ON the largest frame is a valid selection, so the
+/// comparison is strict. Shared by [sizePump] and `sizeFan` so both duties
+/// report the clamp identically.
+bool motorOversizedFor(Power shaft) =>
+    shaft.inKiloWatts > standardMotorKw.last;
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -175,5 +193,6 @@ PumpDuty sizePump({
     motorInputPower: motorInput,
     selectedMotor: selectedMotor,
     operatingPoint: operatingPoint,
+    motorOversized: motorOversizedFor(shaft),
   );
 }

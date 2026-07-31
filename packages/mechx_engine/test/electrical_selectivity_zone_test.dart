@@ -122,8 +122,14 @@ void main() {
     final sel = study.selectivity.single;
     expect(sel.upstreamCircuitId, 'f1');
     expect(sel.downstreamPanelId, 'SP');
-    // f1 feeder 63 A vs SP incomer 63 A ⇒ ratio 1.0 ⇒ non-selective zone.
-    expect(sel.upstreamRatingA, sel.downstreamRatingA);
+    // Re-derived 2026-07-30 (audit E3+E4 — the device-only, ampacity-capped
+    // floor): SP's incomer is MCB 63 A (its 30 kW motor draws 57.9 A) so the
+    // floor targets 1.6 × 63 = 100.8 A ⇒ rung 125 A, but the feeder's LOAD-sized
+    // conductor is 16 mm² (Iz 80 A) and copper is never inflated to chase
+    // discrimination — the largest rung it protects is 80 A. 80/63 = 1.27 < 1.6
+    // ⇒ the pair stays in the NON-SELECTIVE zone and is reported as such.
+    expect(sel.upstreamRatingA, 80);
+    expect(sel.downstreamRatingA, 63);
     expect(sel.zone, SelectivityZone.nonSelective);
     expect(sel.nonSelective, isTrue);
     // At 16 kA an MCCB/MCB Icu of 25 kA covers it ⇒ Icu/Ics adequate.
@@ -165,6 +171,21 @@ void main() {
     expect(sel.icsAdequate || sel.icuAdequate, isTrue);
     // The study must at least produce a defined zone for the pair.
     expect(SelectivityZone.values, contains(sel.zone));
+
+    // E8d — the finding reads as the DEVICE Ics check it is. The CODE is a
+    // stable acknowledgement/compliance discriminator and stays verbatim; only
+    // the wording was clarified, so a reader can no longer mistake it for a
+    // check on the PLN supply/connection capacity.
+    final ics = study.warnings
+        .where((w) => w.code == 'service-capacity-inadequate')
+        .toList();
+    expect(ics, isNotEmpty);
+    expect(ics.first.code, 'service-capacity-inadequate'); // unchanged
+    expect(ics.first.message, contains('DEVICE rated service short-circuit'));
+    expect(ics.first.message, contains('IEC 60947-2'));
+    expect(ics.first.message, contains('% of Icu'));
+    expect(ics.first.message,
+        contains('not the PLN supply connection capacity'));
   });
 
   test('fault study verify items list the simplified models', () {

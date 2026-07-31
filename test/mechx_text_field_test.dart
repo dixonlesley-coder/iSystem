@@ -45,6 +45,49 @@ void main() {
       // Live mode propagates immediately (no blur needed).
       expect(changes, ['ab']);
     });
+
+    testWidgets('F1: autofocus defaults OFF and takes the keyboard when set',
+        (tester) async {
+      setDesktopSurface(tester);
+      // Default: the field is inert until the user clicks it (every existing
+      // caller is unchanged).
+      await tester.pumpWidget(_host(MechXTextField(
+        value: '',
+        onChanged: (_) {},
+      )));
+      await tester.pump();
+      expect(
+        tester.widget<EditableText>(find.byType(EditableText)).autofocus,
+        isFalse,
+      );
+      expect(
+        tester
+            .state<EditableTextState>(find.byType(EditableText))
+            .widget
+            .focusNode
+            .hasFocus,
+        isFalse,
+      );
+
+      // With autofocus the field owns the keyboard as soon as it mounts — the
+      // whole mechanism behind F1 (typing a calibration length can no longer
+      // fall through to the canvas shortcuts).
+      await tester.pumpWidget(_host(MechXTextField(
+        key: const ValueKey('autofocused'),
+        value: '',
+        onChanged: (_) {},
+        autofocus: true,
+      )));
+      await tester.pump();
+      expect(
+        tester
+            .state<EditableTextState>(find.byType(EditableText))
+            .widget
+            .focusNode
+            .hasFocus,
+        isTrue,
+      );
+    });
   });
 
   group('MechXTextField live-mode onSubmitted (I3 — Enter fires an action)', () {

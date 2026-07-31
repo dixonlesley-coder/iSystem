@@ -314,9 +314,17 @@ void main() {
   // 14)` a circuit name with no ellipsis, producing a mid-word chop like
   // 'Power socke' / 'Lighting - Lev'. It should now cut on a word boundary and
   // append an ASCII ellipsis, and never silently drop the fact it was cut.
+  //
+  // E-4 (2026-07-30): the fixed 14-char cap itself was replaced by a budget
+  // derived from the actual clear space to the next panel / sheet margin (see
+  // `electrical_riser_fanout_width_test.dart`), so a lone panel with a wide-
+  // open band now gets a MUCH bigger budget than 14 — this fixture's name is
+  // lengthened so it still exceeds that (larger, but still finite) budget and
+  // exercises the same word-boundary + ellipsis behaviour.
   test('a long circuit name in the fan-out is truncated at a word boundary '
       'with an ellipsis, never mid-word', () {
-    const longName = 'Power socket ring - workshop';
+    const longName = 'Power socket ring circuit serving the west wing '
+        'mezzanine store annex block four';
     const longNameProject = ElectricalProject(
       id: 'ln',
       name: 'Long names',
@@ -350,16 +358,27 @@ void main() {
     // Truncated with an explicit ASCII ellipsis, and the word it was cut at
     // is never split mid-token.
     expect(label, contains('...'), reason: label);
-    expect(label, isNot(contains('workshop')), reason: label);
+    expect(label, isNot(contains('four')), reason: label);
     final namePart = label.split('...').first;
     final words = longName.split(' ');
     final wordBoundaryPrefixes = [
       for (var i = 1; i <= words.length; i++) words.sublist(0, i).join(' ')
     ];
     expect(wordBoundaryPrefixes, contains(namePart), reason: label);
-    // The total budget (name + ellipsis) stays within the old 14-char width
-    // so the on-canvas column layout is unaffected.
-    expect(namePart.length + 3, lessThanOrEqualTo(14));
+    // The total budget (name + ellipsis) stays within the SPACE-DERIVED
+    // budget (E-4) — the sole panel on its band, so the budget is the clear
+    // run from its stub-label x to the sheet's right margin, minus the same
+    // clearance/char-advance the builder uses — never the old fixed 14.
+    final rect = sheet.prims.whereType<SldRect>().single;
+    final labelX = rect.x + 26;
+    const fanClearanceX = 10.0;
+    final avail = sheet.maxX - labelX - fanClearanceX;
+    const charW = 6 * kElectricalRiserLabelCharW;
+    final budget = math.max(14, (avail / charW).floor());
+    expect(namePart.length + 3, lessThanOrEqualTo(budget));
+    // And this scenario's free space genuinely earns a bigger budget than the
+    // old fixed cap (the exact bug this fixture now documents the fix for).
+    expect(budget, greaterThan(14));
   });
 
   // ── Feeder-annotation collision (recorded follow-up) ───────────────────────

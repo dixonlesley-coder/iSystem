@@ -820,7 +820,10 @@ class ElectricalCircuitInspector extends StatelessWidget {
       // cell prints (ASCII `mm2`), read off the solved cable.
       rows.add(ElectricalResultRow(
         label: 'Cable',
-        value: '${cableLabel(circuit, c.cable.csaMm2, c.threePhase)} mm2',
+        // G5: the REAL core count from the sized grounding, matching the
+        // schedule's PENGHANTAR cell exactly.
+        value:
+            '${cableLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores)} mm2',
       ));
       final vd = c.voltageDrop;
       rows.add(ElectricalResultRow(

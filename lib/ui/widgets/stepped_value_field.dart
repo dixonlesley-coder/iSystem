@@ -41,12 +41,18 @@ class SteppedValueField extends StatefulWidget {
   /// Fired once per tap on `+`, and repeatedly while it is held. Null ⇒ disabled.
   final VoidCallback? onIncrement;
 
-  /// Commits a typed value: the parsed number clamped to [min]/[max], or `null`
-  /// when the field was left empty (the caller decides what a reset means). Not
-  /// called when the text fails to parse (the edit is cancelled instead).
+  /// Commits a typed value, or `null` when the field was left empty (the caller
+  /// decides what a reset means). NOT called when the text fails to parse or
+  /// falls outside [min]/[max] — the edit is REJECTED with an inline message
+  /// (G7) and the editor stays open on the engineer's own text.
   final ValueChanged<double?> onSubmit;
 
-  /// Optional inclusive clamp bounds applied to a typed value before [onSubmit].
+  /// Optional inclusive bounds for a TYPED value. A typed value outside them is
+  /// rejected with a message (G7 — it used to be silently clamped, so "600"
+  /// could be typed and "1000" read back with nothing said). The `−`/`+`
+  /// steppers keep their own contract: they clamp silently, because a stepper
+  /// walking into its own limit is the limit doing its job, not a rejected
+  /// input (the caller does that clamping in [onDecrement]/[onIncrement]).
   final double? min;
   final double? max;
 
@@ -105,6 +111,30 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
   bool _editing = false;
   bool _cancelled = false;
 
+  /// G7 — the rejection message for the LAST commit attempt, shown beneath the
+  /// editor while the engineer's own text stays put. Null at rest (and at every
+  /// successful commit), so the at-rest layout is byte-identical.
+  String? _error;
+
+  /// The same compact number formatting the electrical fields use, so the two
+  /// reject messages read identically ('between 0.5 and 10', not '0.5 and
+  /// 10.0').
+  static String _fmt(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toString();
+
+  /// The bounds message for a typed value outside [min]/[max]. Mirrors
+  /// ElectricalNumInput's wording when both bounds exist; a one-sided bound
+  /// names the side it violated rather than pretending there is a range.
+  String _rangeMessage() {
+    final min = widget.min;
+    final max = widget.max;
+    if (min != null && max != null) {
+      return 'Enter a value between ${_fmt(min)} and ${_fmt(max)}';
+    }
+    if (min != null) return 'Enter a value of ${_fmt(min)} or more';
+    return 'Enter a value of ${_fmt(max!)} or less';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -129,6 +159,7 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
     setState(() {
       _editing = true;
       _cancelled = false;
+      _error = null;
       _controller.text = widget.editSeed;
       _controller.selection = TextSelection(
         baseOffset: 0,
@@ -143,20 +174,36 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
   void _commit() {
     if (!_editing) return;
     final raw = _controller.text.trim();
-    setState(() => _editing = false);
     if (raw.isEmpty) {
+      setState(() {
+        _editing = false;
+        _error = null;
+      });
       widget.onSubmit(null);
       return;
     }
     final parsed = double.tryParse(raw);
-    // Unparseable OR non-finite ⇒ revert silently. double.tryParse accepts
-    // 'NaN'/'Infinity'/'1e999', and NaN slips through a `< min / > max` clamp
-    // (both comparisons are false) — it must never reach a store.
-    if (parsed == null || !parsed.isFinite) return;
-    var v = parsed;
-    if (widget.min != null && v < widget.min!) v = widget.min!;
-    if (widget.max != null && v > widget.max!) v = widget.max!;
-    widget.onSubmit(v);
+    // Unparseable OR non-finite ⇒ REJECT with a message (G7); it used to revert
+    // silently, so a typo read as "the app ate my number". double.tryParse
+    // accepts 'NaN'/'Infinity'/'1e999', and NaN slips through a `< min / > max`
+    // comparison (both are false) — it must never reach a store.
+    if (parsed == null || !parsed.isFinite) {
+      setState(() => _error = 'Enter a number');
+      return;
+    }
+    // Out of range ⇒ REJECT, don't clamp: the silent clamp changed the
+    // engineer's number behind their back (type 999 into a max-600 field and
+    // the sizing ran on 600 with nothing said).
+    if ((widget.min != null && parsed < widget.min!) ||
+        (widget.max != null && parsed > widget.max!)) {
+      setState(() => _error = _rangeMessage());
+      return;
+    }
+    setState(() {
+      _editing = false;
+      _error = null;
+    });
+    widget.onSubmit(parsed);
   }
 
   void _cancel() {
@@ -164,6 +211,7 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
     setState(() {
       _cancelled = true;
       _editing = false;
+      _error = null;
     });
   }
 
@@ -190,7 +238,11 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
           decoration: BoxDecoration(
             color: colors.background,
             borderRadius: MechXRadii.small,
-            border: Border.all(color: colors.accent, width: 1.5),
+            // A rejected commit tints the editor's own border so the message
+            // below is not the only cue.
+            border: Border.all(
+                color: _error == null ? colors.accent : colors.danger,
+                width: 1.5),
           ),
           child: EditableText(
             controller: _controller,
@@ -199,6 +251,11 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             textAlign:
                 widget.valueWidth != null ? widget.valueAlign : TextAlign.start,
+            onChanged: (_) {
+              // Clear a stale rejection as soon as the user edits again — it
+              // described the PREVIOUS attempt, not the one in progress.
+              if (_error != null) setState(() => _error = null);
+            },
             onSubmitted: (_) => _commit(),
             style: valueStyle,
             cursorColor: colors.accent,
@@ -237,7 +294,7 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
         ? strings(k)
         : '${strings(k)} ${widget.label}';
 
-    return Row(
+    final row = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         _StepperGlyphButton(
@@ -255,6 +312,31 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
           repeatInterval: widget.repeatInterval,
           semanticLabel: stepLabel(StringKey.a11yIncrease),
         ),
+      ],
+    );
+    // The Column is ALWAYS present, even with no message: swapping between a
+    // bare Row and a wrapped one would re-create the editor's element mid-edit
+    // (dropping its focus + text-input connection the instant a rejection was
+    // cleared). With no message it holds one min-sized child, so its size is
+    // the row's own — the at-rest layout, and the goldens, are unchanged.
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        row,
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(top: MechXSpacing.xxs),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 220),
+              child: Text(
+                _error!,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: type.caption.copyWith(color: colors.danger),
+              ),
+            ),
+          ),
       ],
     );
   }

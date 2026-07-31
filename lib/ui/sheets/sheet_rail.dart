@@ -11,6 +11,7 @@ import '../shell/duplicate_floor_dialog.dart';
 import '../shell/nav_rail.dart';
 import '../shell/project_io.dart';
 import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/context_menu.dart';
@@ -310,11 +311,28 @@ class _RailItemState extends ConsumerState<_RailItem> {
   }
 
   /// A6: remove this sheet — undo-safe, pruning its orphaned nodes in one step
-  /// (see [SheetsController.removeSheet]); a status pill confirms (undoable via
-  /// Ctrl+Z).
+  /// (see [SheetsController.removeSheet]).
+  ///
+  /// C5: the pill STATES THE COLLATERAL. The removal takes every element drawn
+  /// on the sheet with it; that used to happen behind a bare "Sheet removed", so
+  /// the count now rides the confirmation. Ground-truthed: the whole cascade
+  /// (sheet + pruned elements + every sibling floor shift) is captured as ONE
+  /// structural snapshot, so a single Ctrl+Z genuinely restores it — the pill
+  /// says so rather than pretending or staying silent.
   void _remove() {
-    ref.read(sheetsControllerProvider.notifier).removeSheet(widget.sheet.id);
-    ref.read(statusMessageProvider.notifier).showStatus('Sheet removed');
+    final pruned =
+        ref.read(sheetsControllerProvider.notifier).removeSheet(widget.sheet.id);
+    final strings = context.strings;
+    ref.read(statusMessageProvider.notifier).showStatus(
+          pruned == 0
+              ? strings(StringKey.sheetRemoved)
+              : strings.format(StringKey.sheetRemovedPrunedTemplate, {
+                  'pruned': pluralCount(
+                      pruned,
+                      strings(StringKey.sheetElementOne),
+                      strings(StringKey.sheetElementMany)),
+                }),
+        );
   }
 
   @override

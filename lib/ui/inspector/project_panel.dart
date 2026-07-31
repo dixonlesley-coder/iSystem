@@ -11,6 +11,8 @@ import 'package:mechx_engine/report/cover_sheet.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
+import 'package:mechx_engine/report/electrical_dxf_export.dart'
+    show SldDxfLayers, electricalSldToDxf;
 import 'package:mechx_engine/report/electrical_pdf_export.dart'
     show electricalSldToPdf;
 import 'package:mechx_engine/report/electrical_plan_export.dart';
@@ -27,7 +29,7 @@ import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
 import 'package:mechx_engine/report/riser_tags.dart' show elementTags;
 import 'package:mechx_engine/report/sld_export.dart'
-    show sldSheetToPdf, sldSheetsToPdf;
+    show sldSheetToDxf, sldSheetToPdf, sldSheetsToPdf;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
@@ -66,6 +68,7 @@ import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/reference_line_store.dart';
+import '../../store/selection_scope.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
@@ -78,9 +81,11 @@ import '../canvas/service_style.dart';
 import '../electrical/electrical_export.dart' show breakerIcuKaByPanel;
 import '../../report/reference_grid_builder.dart';
 import '../format/scale_format.dart';
-import '../schematic/schematic_export.dart' show buildLiveRiserSheet;
+import '../schematic/schematic_export.dart'
+    show buildLiveRiserSheet, riserDiagramTitle;
 import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import 'disclosure_header.dart';
 import 'fixture_library_editor.dart';
 import 'result_card.dart';
@@ -112,6 +117,7 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     standardsRevision: profile.revision,
     verifyItems: profile.verifyChecklist,
     building: project.building,
+    mounting: ref.read(mountingProvider),
     feedStrategy:
         strategy == FeedStrategy.upfeed ? 'Upfeed pump' : 'Roof-tank downfeed',
     targetResidual:
@@ -159,6 +165,11 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
     originFaultLevelA: eProject.originFaultLevelA?.amperes,
     busbarClearingTimeS: eProject.busbarClearingTimeS,
     revisions: ref.read(documentControlProvider).revisions,
+    // R1 — the ISSUED report reads the SAME combined warning surface Review and
+    // the compliance roll-up read (core sizing warnings + the advanced fault
+    // study's selectivity / breaking-capacity / withstand / TT findings). Read
+    // from `electricalAllWarningsProvider`, never either source directly.
+    allWarnings: ref.read(electricalAllWarningsProvider),
   );
 }
 
@@ -168,32 +179,65 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
 /// length), it raises a dismissible warning on [loadErrorProvider] and writes
 /// NOTHING — the engineer must calibrate first, so the BOM / pressures / drawing
 /// can't be silently wrong. (2) Otherwise it awaits [write] inside try/catch:
-/// `write` returns false when the user cancelled the file picker (no pill), true
-/// after a successful write ⇒ a transient "Exported `name`" confirmation pill;
-/// any thrown error ⇒ a "Could not export `name`" warning. The success pill
+/// H3 — `write` is now TRI-STATE, because "cancelled" and "nothing to write"
+/// used to be the same `false`, making an export with no imported plan a total
+/// silent no-op (including the global **P** accelerator):
+///
+///  * `true`  — written ⇒ a transient "Exported `name`" confirmation pill;
+///  * `false` — the user CANCELLED the file picker ⇒ deliberately silent;
+///  * `null`  — there was NOTHING to write (no plan sheet imported yet) ⇒ a
+///    visible "Nothing to export — import a plan first" error.
+///
+/// Any thrown error ⇒ a "Could not export `name`" warning. The success pill
 /// reuses the same self-clearing mechanism as Save / Open / Import. Public so
 /// every export surface (the riser drawing set in `schematic_export.dart`, the
-/// electrical + commercial exports) routes through the SAME guard + feedback.
+/// electrical + commercial exports) routes through the SAME guard + feedback —
+/// a `Future<bool> Function()` is a subtype of the declared
+/// `Future<bool?> Function()`, so every existing writer keeps compiling and only
+/// the ones that genuinely mean "nothing to write" return null.
 ///
 /// The zero-length gate iterates only the MECHANICAL network, so a
 /// pure-electrical project is never blocked; a project that also carries
 /// uncalibrated mechanical runs is held back until the sheet is calibrated —
 /// conservative, and correct for any deliverable that could embed those runs.
+/// F4 — that blocker now NAMES the offending sheets (and points at the
+/// locatable Review > Design issues surface) instead of a bare `N element(s)`.
 Future<void> runExportGuarded(
   WidgetRef ref, {
   required String name,
-  required Future<bool> Function() write,
+  required Future<bool?> Function() write,
 }) async {
+  final strings = MechXStringsData(ref.read(localeProvider));
   if (ref.read(exportHasZeroLengthEdgesProvider)) {
     final n = ref.read(zeroLengthSizedEdgeCountProvider);
+    // F4 — name the SHEETS the offending runs sit on (the engineer's next
+    // action is on one of them), and kill the '(s)' dev-speak via pluralCount.
+    final sheetsState = ref.read(sheetsControllerProvider);
+    final names = [
+      for (final id in ref.read(zeroLengthSheetIdsProvider))
+        sheetsState.sheetById(id)?.name ?? id,
+    ];
     ref.read(loadErrorProvider.notifier).set(
-          '$n drawn element(s) have zero length — calibrate the sheet before '
-          'exporting $name. The BOM, pressures and drawing would be wrong.',
+          strings.format(StringKey.exportZeroLengthBlockedTemplate, {
+            'count': pluralCount(n, 'drawn element', 'drawn elements'),
+            'sheets': names.isEmpty
+                ? plural(n, 'the sheet', 'the sheets')
+                : names.join(', '),
+            'name': name,
+          }),
         );
     return;
   }
   try {
     final wrote = await write();
+    if (wrote == null) {
+      // H3 — nothing to write is a REPORTABLE state, not a silent cancel.
+      ref.read(loadErrorProvider.notifier).set(
+            strings.format(
+                StringKey.exportNothingToExportTemplate, {'name': name}),
+          );
+      return;
+    }
     if (wrote) {
       ref.read(statusMessageProvider.notifier).showStatus('Exported $name');
       // The stepper's Report stage is DONE only once a deliverable actually
@@ -211,21 +255,30 @@ Future<void> runExportGuarded(
 /// the OS picker at the shared `lastExportDirProvider` folder (so a session's
 /// exports converge on one place), normalizes the chosen path to end in [ext],
 /// and records the folder so the next dialog re-opens there. Returns null when
-/// the user cancels. Every owned export routes through this so the dir-memory is
-/// uniform; the exporters in other files should adopt it too (see the H4 note in
-/// the review).
+/// the user cancels.
+///
+/// I1 — this is now the ONE save-dialog seam: every export in the app routes
+/// through it (the electrical set, the mechanical riser set, the commercial
+/// BOM/proposal and the project Save-As included), so a revision re-opens where
+/// the last one was written instead of re-navigating the OS picker per file.
+///
+/// [initialDirectory] overrides the remembered folder for the rare dialog with a
+/// better-informed starting point (the project Save-As starts beside the file
+/// the project was loaded from). Null — the default — keeps the shared memory.
+/// The chosen folder is recorded either way, so the memory converges.
 Future<String?> pickExportSave(
   WidgetRef ref, {
   required String dialogTitle,
   required String fileName,
   required String ext,
+  String? initialDirectory,
 }) async {
   final path = await FilePicker.saveFile(
     dialogTitle: dialogTitle,
     fileName: fileName,
     type: FileType.custom,
     allowedExtensions: [ext],
-    initialDirectory: ref.read(lastExportDirProvider),
+    initialDirectory: initialDirectory ?? ref.read(lastExportDirProvider),
   );
   if (path == null) return null;
   final full = path.endsWith('.$ext') ? path : '$path.$ext';
@@ -247,32 +300,41 @@ Future<String?> pickExportSave(
 /// N13: a `tag` column (right after `kind`) carries the stable element tag
 /// (`CW-R1` for a riser, `CW-F2` for a floor-grouped run) so a CSV takeoff line
 /// traces to the same run/riser on the plan, riser single-line and calc report.
+///
+/// R2 — this is the app's ONLY BOM CSV export, and it used to carry its own
+/// hand-rolled column set: it omitted the `material` column (a cutting crew
+/// could not tell PPR from PVC on the takeoff) and the I5 `manual` (`*`)
+/// override marker, and its size column was the pipe-implying `nominal_dn_mm`.
+/// It now DELEGATES the takeoff columns to the engine's own [bomToCsv] — the
+/// one source of that format, including its two CONDITIONAL columns (`floor`
+/// when any line is floor-grouped, trailing `manual` when any line is a manual
+/// override) — and appends the three cut-plan columns to each row. The two CSVs
+/// can no longer disagree about what a BOM line is.
+///
+/// Header (floor-grouped, no manual override — the normal app export):
+/// `service,kind,tag,floor,nominal_size_mm,material,length_m,segments,`
+/// `stock_length_m,bars_purchased,waste_pct`
 String bomCsvWithCutPlan(List<BomLine> bom, List<PipeCutGroup> cutPlan) {
   final planByKey = <({ServiceType service, int mm}), PipeCutGroup>{
     for (final g in cutPlan) (service: g.service, mm: g.diameterMm): g,
   };
   final emitted = <({ServiceType service, int mm})>{};
-  final buffer = StringBuffer(
-      'service,kind,tag,floor,nominal_dn_mm,length_m,segments,'
-      'stock_length_m,bars_purchased,waste_pct\n');
-  for (final line in bom) {
+  // The engine CSV: a header row + one row per BOM line, in the SAME order.
+  final base = bomToCsv(bom).split('\n');
+  final buffer = StringBuffer()
+    ..write(base.first)
+    ..write(',stock_length_m,bars_purchased,waste_pct\n');
+  for (var i = 0; i < bom.length; i++) {
+    final line = bom[i];
     final key = (service: line.service, mm: line.diameterMm);
     final g = planByKey[key];
+    // The cut plan is a per-(service, DN) property (all runs of a size share
+    // stock bars), so it is emitted ONCE per group — sum-safe — and left empty
+    // on the rest, and empty when the plan has no entry (a riser-only DN, an
+    // air duct: never invented).
     final showPlan = g != null && emitted.add(key);
     buffer
-      ..write(line.service.name)
-      ..write(',')
-      ..write(line.kind.name)
-      ..write(',')
-      ..write(line.tag)
-      ..write(',')
-      ..write(line.floorIndex == null ? '' : (line.floorIndex! + 1))
-      ..write(',')
-      ..write(line.diameterMm)
-      ..write(',')
-      ..write(line.totalLength.meters.toStringAsFixed(2))
-      ..write(',')
-      ..write(line.segmentCount)
+      ..write(base[i + 1])
       ..write(',')
       ..write(showPlan ? g.stockLengthM.toStringAsFixed(1) : '')
       ..write(',')
@@ -743,8 +805,8 @@ DrawingChrome issuableChrome(
 /// Only RUN edges get an entry (risers carry the FFL gutter on the riser sheet);
 /// the pure exporters receive the finished strings and never read the model. The
 /// average of the two endpoint elevations is the run's representative centreline.
-Map<String, String> planEdgeElevationLabels(Network net, BuildingLevels building) {
-  const mounting = MountingHeights();
+Map<String, String> planEdgeElevationLabels(Network net, BuildingLevels building,
+    {MountingHeights mounting = const MountingHeights()}) {
   final out = <String, String>{};
   for (final e in net.edges) {
     if (e.kind != EdgeKind.run) continue;
@@ -767,10 +829,12 @@ Future<void> exportDrawingDxf(WidgetRef ref) => runExportGuarded(
       write: () => _writeDrawingDxf(ref),
     );
 
-Future<bool> _writeDrawingDxf(WidgetRef ref) async {
+Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
-  if (sheet == null) return false;
+  // H3 — NOTHING TO WRITE (no plan sheet imported yet) is not a user
+  // cancel: null makes the guard raise a visible error instead of a no-op.
+  if (sheet == null) return null;
   final project = ref.read(projectControllerProvider);
   final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
@@ -790,7 +854,8 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
     metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
     underlay: planUnderlay is VectorPlanUnderlay ? planUnderlay : null,
     // N5: the §10 centreline-height token folded into each run's size label.
-    edgeElevationLabels: planEdgeElevationLabels(net, project.building),
+    edgeElevationLabels: planEdgeElevationLabels(net, project.building,
+        mounting: ref.read(mountingProvider)),
     // N13: the stable element tag (`CW-R1` / `CW-F2`) on each run/riser so the
     // plan DXF traces to the same element the riser + BOM + report carry.
     edgeTags: elementTags(net),
@@ -800,7 +865,11 @@ Future<bool> _writeDrawingDxf(WidgetRef ref) async {
     // glyph, and G5: the laid gravity fall (1:N) folded into gravity-run size
     // labels — the same tokens the on-canvas plan shows, now on the issued DXF.
     nodeTags: equipmentNodeTags(net),
-    gravitySlope: const SizingContext().drainageSlope,
+    // H5: the LAID design slope the sizer + the report actually used
+    // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
+    // issued sheet must not contradict the signed report (see the contract note
+    // at `plan_symbols.dart` `gravitySlopeLabel`).
+    gravitySlope: ref.read(drainageSlopeProvider),
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -819,10 +888,12 @@ Future<void> exportDrawingPdf(WidgetRef ref) => runExportGuarded(
       write: () => _writeDrawingPdf(ref),
     );
 
-Future<bool> _writeDrawingPdf(WidgetRef ref) async {
+Future<bool?> _writeDrawingPdf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
-  if (sheet == null) return false;
+  // H3 — NOTHING TO WRITE (no plan sheet imported yet) is not a user
+  // cancel: null makes the guard raise a visible error instead of a no-op.
+  if (sheet == null) return null;
   final project = ref.read(projectControllerProvider);
   final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
@@ -845,7 +916,11 @@ Future<bool> _writeDrawingPdf(WidgetRef ref) async {
     // glyph, and G5: the laid gravity fall (1:N) on gravity-run size labels —
     // the same tokens the on-canvas plan shows, now on the issued PDF.
     nodeTags: equipmentNodeTags(net),
-    gravitySlope: const SizingContext().drainageSlope,
+    // H5: the LAID design slope the sizer + the report actually used
+    // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
+    // issued sheet must not contradict the signed report (see the contract note
+    // at `plan_symbols.dart` `gravitySlopeLabel`).
+    gravitySlope: ref.read(drainageSlopeProvider),
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -868,10 +943,12 @@ Future<void> exportAnnotatedPlanPdf(WidgetRef ref) => runExportGuarded(
       write: () => _writeAnnotatedPlanPdf(ref),
     );
 
-Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
+Future<bool?> _writeAnnotatedPlanPdf(WidgetRef ref) async {
   final sheets = ref.read(sheetsControllerProvider);
   final sheet = sheets.current;
-  if (sheet == null) return false;
+  // H3 — NOTHING TO WRITE (no plan sheet imported yet) is not a user
+  // cancel: null makes the guard raise a visible error instead of a no-op.
+  if (sheet == null) return null;
   final project = ref.read(projectControllerProvider);
   final levelCount = project.building.levelCount;
   final floorIndex = sheets.floorFor(sheet.id, levelCount);
@@ -907,7 +984,8 @@ Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     // source) keeps the plain export.
     underlay: await buildPlanUnderlay(sheet),
     // N5: the §10 centreline-height token folded into each run's size label.
-    edgeElevationLabels: planEdgeElevationLabels(net, project.building),
+    edgeElevationLabels: planEdgeElevationLabels(net, project.building,
+        mounting: ref.read(mountingProvider)),
     // N13: the stable element tag (`CW-R1` / `CW-F2`) prepended to each label so
     // the plan traces to the same element the riser + BOM + report carry.
     edgeTags: elementTags(net),
@@ -919,7 +997,11 @@ Future<bool> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     // glyph, and G5: the laid gravity fall (1:N) on gravity-run size labels —
     // the same tokens the on-canvas plan shows, now on the issued plan PDF.
     nodeTags: equipmentNodeTags(net),
-    gravitySlope: const SizingContext().drainageSlope,
+    // H5: the LAID design slope the sizer + the report actually used
+    // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
+    // issued sheet must not contradict the signed report (see the contract note
+    // at `plan_symbols.dart` `gravitySlopeLabel`).
+    gravitySlope: ref.read(drainageSlopeProvider),
   );
   final full = await pickExportSave(ref,
       dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -1027,6 +1109,13 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
     revision: rev,
     date: today,
   ));
+  // I2 — the electrical DRAWINGS bundled below each get their own Daftar Gambar
+  // row (one row per DRAWING, not per format: a sheet issued as PDF + DXF is one
+  // entry, exactly like the per-sheet plans above). The power one-line is listed
+  // only when the project actually carries one to draw.
+  final powerOneLineFm = ref.read(electricalAdvancedProvider).powerOneLine;
+  final hasPowerOneLine =
+      powerOneLineFm != null && powerOneLineFm.nodes.isNotEmpty;
   if (eResultFm.order.isNotEmpty) {
     drawingList.add(DrawingListEntry(
       number: sheetDrawingNumber(
@@ -1035,6 +1124,30 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       revision: rev,
       date: today,
     ));
+    drawingList.add(DrawingListEntry(
+      number: sheetDrawingNumber(
+          base: doc.documentNumber, series: DrawingSeries.electricalOverview),
+      title: 'DIAGRAM SATU GARIS GEDUNG / BUILDING SINGLE-LINE',
+      revision: rev,
+      date: today,
+    ));
+    drawingList.add(DrawingListEntry(
+      number: sheetDrawingNumber(
+          base: doc.documentNumber, series: DrawingSeries.electricalRiser),
+      title: 'DIAGRAM RISER LISTRIK / ELECTRICAL RISER',
+      revision: rev,
+      date: today,
+    ));
+    if (hasPowerOneLine) {
+      drawingList.add(DrawingListEntry(
+        number: sheetDrawingNumber(
+            base: doc.documentNumber,
+            series: DrawingSeries.electricalPowerOneLine),
+        title: 'DIAGRAM DAYA / POWER ONE-LINE',
+        revision: rev,
+        date: today,
+      ));
+    }
   }
 
   // Cable families the electrical set actually specifies; fall back to the
@@ -1171,12 +1284,32 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
     projectName: base,
   ));
 
-  // ── Mechanical riser single-line (PDF) ──────────────────────────────────────
+  // ── Mechanical riser single-line (PDF + DXF) ────────────────────────────────
+  // I2 — the DXF rides along: the riser is the one drawing a contractor most
+  // often re-uses in CAD, and issuing it PDF-only forced a separate menu trip +
+  // dialog every revision. One sheet build, both formats, one heading source
+  // (`riserDiagramTitle`) so PDF and DXF can never disagree; the DXF lands on
+  // the M-* layer namespace (N15).
+  //
+  // N2 — the title-block PROJECT row carries the LIVE name (null when the
+  // project is genuinely unnamed, so nothing is fabricated), matching the
+  // standalone riser exports rather than stamping 'Untitled project'.
+  final titleProjectName =
+      project.name.trim().isEmpty ? null : project.name.trim();
+  final riserSheet = buildLiveRiserSheet(ref, null);
   await File(out('riser-sld.pdf')).writeAsBytes(sldSheetToPdf(
-    sheet: buildLiveRiserSheet(ref, null),
+    sheet: riserSheet,
     title: 'iSystem mechanical single-line',
-    diagramTitle: 'MECHANICAL SINGLE-LINE DIAGRAM',
+    diagramTitle: riserDiagramTitle(null),
     chrome: sldChrome(DrawingSeries.mechanicalRiser),
+    projectName: titleProjectName,
+  ));
+  await File(out('riser-sld.dxf')).writeAsString(sldSheetToDxf(
+    sheet: riserSheet,
+    diagramTitle: riserDiagramTitle(null),
+    chrome: sldChrome(DrawingSeries.mechanicalRiser),
+    projectName: titleProjectName,
+    layers: SldDxfLayers.mechanical,
   ));
 
   // ── Every sheet's annotated plan (PDF + DXF) — J2: the whole rail, not just
@@ -1212,7 +1345,8 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
           ),
       };
       // N5: the §10 centreline-height token folded into each run's size label.
-      final elevationLabels = planEdgeElevationLabels(net, project.building);
+      final elevationLabels = planEdgeElevationLabels(net, project.building,
+        mounting: ref.read(mountingProvider));
       // N13: the stable element tags shared by both plan formats + the reports.
       final tags = elementTags(net);
       // N4/B12: the setting-out grid from axis-aligned traced reference lines,
@@ -1222,7 +1356,10 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       // G1/G5: the equipment tags + gravity fall, shared by both plan formats
       // (the same tokens the on-canvas plan shows).
       final nodeTags = equipmentNodeTags(net);
-      final gravitySlope = const SizingContext().drainageSlope;
+      // H5: the LAID design slope from `drainageSlopeProvider` (the Building
+      // page input the sizer + calc report already honour), so every bundled
+      // submittal sheet stamps the SAME fall the report signs off on.
+      final gravitySlope = ref.read(drainageSlopeProvider);
       // One file per sheet, numbered by rail position so a multi-floor bundle
       // never collides (`project-plan-1-Ground Floor.pdf`, `-2-Level 1.pdf`…).
       final suffix = 'plan-${i + 1}-${sheet.name}';
@@ -1294,7 +1431,19 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
     ref.read(busyProvider.notifier).clear();
   }
 
-  // ── Electrical single-line (PDF), when the project has sized panels ──────────
+  // ── The ELECTRICAL set, when the project has sized panels ───────────────────
+  //
+  // I2 — the package used to stop at the per-panel single-line PDF, so the
+  // building single-line, the floor-by-floor riser, the power one-line and the
+  // electrical calc report were each their own menu trip + save dialog on EVERY
+  // revision (the set an Indonesian kontraktor is actually handed). Each is
+  // built from the SAME pure engine builder its standalone export uses (no new
+  // render path), stamped with its own N19 drawing number by [DrawingSeries],
+  // and — where a contractor works the sheet in CAD — issued as PDF **and** DXF.
+  //
+  // Honest by construction: nothing here is written when there are no sized
+  // panels, and the power one-line is written only when the project carries the
+  // energy sources to draw one (the same gate the standalone export enforces).
   final eResult = ref.read(electricalResultProvider);
   if (eResult.order.isNotEmpty) {
     final eProject = ref.read(electricalProjectProvider);
@@ -1307,6 +1456,62 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       ),
       chrome: sldChrome(DrawingSeries.electricalDetail),
     ));
+
+    // Building single-line (overview) — the whole distribution hierarchy on one
+    // sheet, with the PLN/MV/TX/LV source spine, in both formats.
+    final overviewChrome = sldChrome(DrawingSeries.electricalOverview);
+    final overviewSheet = buildElectricalOverview(
+        project: eProject, result: eResult, sourceChain: true);
+    await File(out('electrical-overview-sld.pdf'))
+        .writeAsBytes(electricalSldToPdf(
+      sheet: overviewSheet,
+      title: 'iSystem electrical single-line (overview)',
+      chrome: overviewChrome,
+    ));
+    await File(out('electrical-overview-sld.dxf'))
+        .writeAsString(electricalSldToDxf(
+      sheet: overviewSheet,
+      chrome: overviewChrome,
+    ));
+
+    // Floor-by-floor electrical riser — built with the LIVE mechanical
+    // [BuildingLevels] (the shared §10 geometry), like its standalone sibling.
+    final eRiserChrome = sldChrome(DrawingSeries.electricalRiser);
+    final eRiserSheet = buildElectricalRiser(
+        project: eProject, result: eResult, building: project.building);
+    await File(out('electrical-riser.pdf')).writeAsBytes(electricalSldToPdf(
+      sheet: eRiserSheet,
+      title: 'iSystem electrical building riser',
+      chrome: eRiserChrome,
+    ));
+    await File(out('electrical-riser.dxf')).writeAsString(electricalSldToDxf(
+      sheet: eRiserSheet,
+      chrome: eRiserChrome,
+    ));
+
+    // Power one-line — only when energy sources exist to draw one.
+    if (hasPowerOneLine) {
+      final oneLineChrome = sldChrome(DrawingSeries.electricalPowerOneLine);
+      final oneLineSheet = buildPowerOneLineSheet(powerOneLineFm);
+      await File(out('electrical-power-one-line.pdf'))
+          .writeAsBytes(electricalSldToPdf(
+        sheet: oneLineSheet,
+        title: 'iSystem power one-line',
+        diagramTitle: 'POWER ONE-LINE DIAGRAM',
+        chrome: oneLineChrome,
+      ));
+      await File(out('electrical-power-one-line.dxf'))
+          .writeAsString(electricalSldToDxf(
+        sheet: oneLineSheet,
+        diagramTitle: 'POWER ONE-LINE DIAGRAM',
+        chrome: oneLineChrome,
+      ));
+    }
+
+    // The electrical calculation report (MD) — the panel-builder's own document,
+    // over the SAME combined warning surface Review and compliance read (R1).
+    await File(out('electrical-report.md')).writeAsString(
+        buildElectricalCalcReport(buildElectricalReportData(ref), strings));
   }
 
   return true;
@@ -2852,7 +3057,11 @@ class _RoomsSection extends ConsumerWidget {
                     r.containsNode(n.sheetId, n.floorIndex, n.x, n.y))
                   n,
             ];
-            final load = r.coolingLoad(cal?.metersPerPixel);
+            // M15/R6 — read the project's CHOSEN cooling-load basis (the
+            // Building page's 'AC load basis' picker) rather than hard-coding
+            // the area-density rule here, so the displayed BTU/h + PK actually
+            // follow the setting instead of ignoring it.
+            final load = ref.watch(roomCoolingLoadProvider(r.id));
             final perUnit = (acs.isNotEmpty && load != null)
                 ? selectAc(load.btuPerHr / acs.length)
                 : null;
@@ -2939,13 +3148,19 @@ class _RoomsSection extends ConsumerWidget {
                           style: MechXTypography.tabular(
                               type.caption.copyWith(color: colors.textMuted))),
                       const SizedBox(height: MechXSpacing.xs),
+                      // M11: an equipment duty past the largest standard motor
+                      // frame is a CLAMP, not a selection — flag it.
                       ResultCard(
                         headline:
                             '${s.equipment.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW',
                         label: '${airEquipmentLabel(s.equipmentKind)} · '
-                            '${s.equipment.totalStaticPressure.pascals.round()} Pa',
-                        verdict: 'sized',
-                        verdictColor: colors.success,
+                            '${s.equipment.totalStaticPressure.pascals.round()} Pa'
+                            '${s.equipment.motorOversized ? ' · above standard frame' : ''}',
+                        verdict:
+                            s.equipment.motorOversized ? 'over frame' : 'sized',
+                        verdictColor: s.equipment.motorOversized
+                            ? colors.danger
+                            : colors.success,
                       ),
                     ],
                     // Cooling (AC) — shown only when an AC indoor unit sits in
@@ -3206,7 +3421,6 @@ class _ResultsSection extends ConsumerWidget {
     final show = ref.watch(showHeatmapProvider);
     final showSizes = ref.watch(showSizingProvider);
     final strategy = ref.watch(feedStrategyProvider);
-    final stratCtrl = ref.read(feedStrategyProvider.notifier);
     final solution = ref.watch(solveProvider);
     final downfeed = ref.watch(downfeedProvider);
     final pump = ref.watch(pumpDutyProvider);
@@ -3223,6 +3437,13 @@ class _ResultsSection extends ConsumerWidget {
     final zonesOk = zoneStatics.every((z) => z.withinLimit);
     final totalLength =
         bom.fold<double>(0, (sum, line) => sum + line.totalLength.meters);
+    // L1: an uncalibrated sheet has no measurable length, so a drawn run's BOM
+    // line totals an exact 0 — that must never read as a MEASURED zero. Any
+    // such line flips the totals row to an honest "measured + unmeasured"
+    // split instead of implying the whole BOM was 0.0 m.
+    bool isUnmeasured(BomLine line) =>
+        line.totalLength.meters == 0 && line.segmentCount > 0;
+    final hasUnmeasuredBomLine = bom.any(isUnmeasured);
 
     // L1: keep the BOM row leader short enough that it never fights the
     // quantity for space. When every listed line shares ONE service the
@@ -3249,11 +3470,15 @@ class _ResultsSection extends ConsumerWidget {
     Widget? headlineCard;
     if (strategy == FeedStrategy.upfeed) {
       if (pump != null) {
+        // M11 — `selectMotor` clamps at the largest standard frame (75 kW), so
+        // a 90 kW duty used to print a clean, green '75.00 kW' everywhere. When
+        // the duty saturated the ladder the figure is NOT a selection — say so.
+        final over = pump.motorOversized;
         headlineCard = ResultCard(
           headline: '${pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW',
-          label: 'Pump motor',
-          verdict: 'sized',
-          verdictColor: colors.success,
+          label: over ? 'Pump motor · above standard frame' : 'Pump motor',
+          verdict: over ? 'over frame' : 'sized',
+          verdictColor: over ? colors.danger : colors.success,
         );
       }
     } else {
@@ -3274,7 +3499,7 @@ class _ResultsSection extends ConsumerWidget {
           headlineCard = ResultCard(
             headline: '${zones.length} zone${zones.length == 1 ? '' : 's'}'
                 ' · ${worstZone.toStringAsFixed(0)} kPa',
-            label: 'PRV zones (worst)',
+            label: 'PRV zones (worst) · zone static',
             verdict: zonesOk ? 'OK' : 'over',
             verdictColor: zonesOk ? colors.success : colors.danger,
           );
@@ -3303,12 +3528,13 @@ class _ResultsSection extends ConsumerWidget {
             _Pill(
               label: 'Upfeed pump',
               selected: strategy == FeedStrategy.upfeed,
-              onTap: () => stratCtrl.set(FeedStrategy.upfeed),
+              onTap: () => setFeedStrategyUndoable(ref.read, FeedStrategy.upfeed),
             ),
             _Pill(
               label: 'Roof-tank downfeed',
               selected: strategy == FeedStrategy.downfeed,
-              onTap: () => stratCtrl.set(FeedStrategy.downfeed),
+              onTap: () =>
+                  setFeedStrategyUndoable(ref.read, FeedStrategy.downfeed),
             ),
           ],
         ),
@@ -3373,7 +3599,13 @@ class _ResultsSection extends ConsumerWidget {
           if (hwr != null)
             _kvRow(context, 'HW recirc',
                 '${hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2)} L/s · ${hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW'),
-          _kvRow(context, 'BOM total', '${totalLength.toStringAsFixed(1)} m'),
+          _kvRow(
+            context,
+            'BOM total',
+            hasUnmeasuredBomLine
+                ? '${totalLength.toStringAsFixed(1)} m + unmeasured'
+                : '${totalLength.toStringAsFixed(1)} m',
+          ),
           if (bom.isNotEmpty) ...[
             const SizedBox(height: MechXSpacing.xs),
             // Cap the per-line listing so a big BOM doesn't push the whole panel
@@ -3383,7 +3615,9 @@ class _ResultsSection extends ConsumerWidget {
               _kvRow(
                 context,
                 bomLeader(line),
-                '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
+                isUnmeasured(line)
+                    ? 'unmeasured ×${line.segmentCount}'
+                    : '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
               ),
             if (bom.length > _kBomInlineCap)
               _kvRow(
@@ -3690,6 +3924,22 @@ class _SelectionSection extends ConsumerWidget {
     }
     if (body == null) return const SizedBox.shrink();
 
+    // C3 — the selection outlives a sheet switch, so this editor could offer a
+    // full set of MUTATING controls for an element the engineer cannot see (on
+    // another floor's plan). Badge the header with the owning sheet and make the
+    // body read-only in that state: the edit belongs where the element is. Null
+    // (the normal case: the target is on the current sheet) ⇒ byte-identical.
+    final sheets = ref.watch(sheetsControllerProvider);
+    final elsewhereId = owningSheetIfElsewhere(
+      net,
+      nodeId: selection.nodeId,
+      edgeId: selection.edgeId,
+      currentSheetId: sheets.current?.id,
+    );
+    final strings = context.strings;
+    final colors = context.colors;
+    final type = context.type;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -3699,8 +3949,27 @@ class _SelectionSection extends ConsumerWidget {
             _GlyphButton(glyph: '×', onTap: selCtrl.clear),
           ],
         ),
+        if (elsewhereId != null) ...[
+          const SizedBox(height: MechXSpacing.xs),
+          Text(
+            strings.format(StringKey.selectionOnOtherSheetTemplate, {
+              'sheet': sheets.sheetById(elsewhereId)?.name ?? elsewhereId,
+            }),
+            style: type.caption.copyWith(color: colors.warning),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            strings(StringKey.selectionOffSheetReadOnly),
+            style: type.caption.copyWith(color: colors.textMuted),
+          ),
+        ],
         const SizedBox(height: MechXSpacing.sm),
-        body,
+        if (elsewhereId == null)
+          body
+        else
+          // Every mutating control in the editor stands down; the header's ×
+          // (clear selection) stays live above.
+          IgnorePointer(child: Opacity(opacity: 0.5, child: body)),
         const SizedBox(height: MechXSpacing.lg),
       ],
     );
@@ -3712,8 +3981,23 @@ class _SelectionSection extends ConsumerWidget {
     final type = context.type;
     final n = selection.nodeIds.length;
     final m = selection.edgeIds.length;
-    final edgeIds = selection.edgeIds;
-    final nodeIds = selection.nodeIds;
+
+    // C3 — the selection outlives sheet and layer switches, so the batch
+    // appliers (and Delete) below could silently rewrite elements on another
+    // floor or on a hidden/locked layer. Scope them with the SAME precondition
+    // the canvas hit-test uses: on the current sheet, on a visible + unlocked
+    // service. Off-scope members drop out of every operation here, and the
+    // header says how many were left alone. Nothing hidden/locked and one sheet
+    // ⇒ the scoped sets equal the raw selection (byte-identical).
+    final scope = scopeSelection(
+      net: net,
+      nodeIds: selection.nodeIds,
+      edgeIds: selection.edgeIds,
+      sheetId: ref.watch(sheetsControllerProvider).current?.id,
+      inertServices: ref.watch(inertServicesProvider),
+    );
+    final edgeIds = scope.edgeIds;
+    final nodeIds = scope.nodeIds;
 
     // Resolve the selected elements to drive the shared property editors (E1).
     final selEdges = <NetEdge>[
@@ -3772,6 +4056,16 @@ class _SelectionSection extends ConsumerWidget {
     final showNodeEditors = allNodes && commonRole == NodeRole.fixture;
     final showApply = allEdges || showNodeEditors;
     final applyCount = allEdges ? m : n;
+    // E2 — the batch header names the floor span: a scoped select-similar is
+    // single-floor, but a marquee or the all-floors variant can span the
+    // building, and 'Apply to 14 selected' must not hide that.
+    final applyFloors = <int>{
+      for (final e in selEdges) ...[
+        if (net.nodeById(e.fromId) case final a?) a.floorIndex,
+        if (net.nodeById(e.toId) case final b?) b.floorIndex,
+      ],
+      for (final nd in selNodes) nd.floorIndex,
+    };
 
     Widget label(String text) => Text(text,
         style: type.caption.copyWith(color: colors.textMuted));
@@ -3793,6 +4087,21 @@ class _SelectionSection extends ConsumerWidget {
           style: MechXTypography.tabular(
               type.caption.copyWith(color: colors.textMuted)),
         ),
+        // C3 — name what this panel will NOT touch, rather than quietly doing
+        // less than the count above implies. Absent when nothing is off-scope.
+        if (scope.hasExcluded) ...[
+          const SizedBox(height: 2),
+          Text(
+            context.strings.format(
+              StringKey.selectionOffScopeAppliedTemplate,
+              {
+                'count': pluralCount(
+                    scope.excludedCount, 'selected element', 'selected elements')
+              },
+            ),
+            style: type.caption.copyWith(color: colors.warning),
+          ),
+        ],
         const SizedBox(height: MechXSpacing.sm),
         Wrap(
           spacing: MechXSpacing.xs,
@@ -3819,7 +4128,21 @@ class _SelectionSection extends ConsumerWidget {
             MechXButton(
               label: 'Delete',
               onPressed: () {
-                ctrl.deleteMany(selection.nodeIds, selection.edgeIds);
+                // C3 — delete only what is in scope (the canvas Delete key
+                // applies the same guard); the excluded caption above already
+                // names what survives.
+                if (scope.hasExcluded) {
+                  ref.read(statusMessageProvider.notifier).showStatus(
+                        context.strings.format(
+                          StringKey.selectionOffScopeDeletedTemplate,
+                          {
+                            'count': pluralCount(scope.excludedCount,
+                                'selected element', 'selected elements')
+                          },
+                        ),
+                      );
+                }
+                ctrl.deleteMany(scope.nodeIds, scope.edgeIds);
                 selCtrl.clear();
               },
             ),
@@ -3829,7 +4152,9 @@ class _SelectionSection extends ConsumerWidget {
         // ── E1: batch property editors on a HOMOGENEOUS selection ─────────────
         if (showApply) ...[
           const SizedBox(height: MechXSpacing.lg),
-          MechXSectionLabel('Apply to $applyCount selected'),
+          MechXSectionLabel(applyFloors.length > 1
+              ? 'Apply to $applyCount selected across ${applyFloors.length} floors'
+              : 'Apply to $applyCount selected'),
           if (allEdges) ...[
             // Service (always coherent for an all-edge batch).
             const SizedBox(height: MechXSpacing.sm),
@@ -4032,17 +4357,29 @@ class _SelectionSection extends ConsumerWidget {
           // both verdicts read the same targetResidualProvider, so they must use
           // the same-unit tolerance or a sub-target residual splits PASS vs LOW.
           final pass = residual.pascals >= target.pascals - 500;
-          final verdict = isFixture
-              ? ' · ${pass ? 'PASS' : 'LOW'} (min '
-                  '${target.inKiloPascals.toStringAsFixed(0)} kPa)'
-              : '';
+          // M9 — on the UPFEED solve the pump head is DEFINED as the max of
+          // (friction + elevation + target), so residual >= target is an
+          // algebraic identity: no drawn network can make this probe read LOW.
+          // Printing a green PASS off an unfalsifiable inequality is the same
+          // lie the 'all sheets calibrated' row was. Say what is true instead —
+          // the target is held BY DESIGN, and the falsifiable question (can a
+          // real pump deliver the required head?) lives on the pump duty.
+          final held = ref.watch(solveProvider)?.targetHeldByDesign ?? false;
+          final verdict = !isFixture
+              ? ''
+              : held
+                  ? ' · target held by design (min '
+                      '${target.inKiloPascals.toStringAsFixed(0)} kPa) - '
+                      '${context.strings(StringKey.heatmapRealCheckPumpDuty)}'
+                  : ' · ${pass ? 'PASS' : 'LOW'} (min '
+                      '${target.inKiloPascals.toStringAsFixed(0)} kPa)';
           return Padding(
             padding: const EdgeInsets.only(top: MechXSpacing.xxs),
             child: Text(
               'Residual ${kpa.toStringAsFixed(0)} kPa$verdict',
               // L2: the probe re-reads every solve — tabular kPa digits.
               style: MechXTypography.tabular(context.type.caption.copyWith(
-                color: !isFixture
+                color: !isFixture || held
                     ? context.colors.textSecondary
                     : (pass ? context.colors.success : context.colors.danger),
               )),
@@ -4343,7 +4680,7 @@ class _SelectionSection extends ConsumerWidget {
                     min: 0,
                     onDecrement: () {
                       final base = node.mountHeight?.meters ??
-                          const MountingHeights().fixtureHeight.meters;
+                          ref.read(mountingProvider).fixtureHeight.meters;
                       final next = base - 0.05;
                       // Stepping down through floor level reverts to the role
                       // default.
@@ -4352,7 +4689,7 @@ class _SelectionSection extends ConsumerWidget {
                     },
                     onIncrement: () {
                       final base = node.mountHeight?.meters ??
-                          const MountingHeights().fixtureHeight.meters;
+                          ref.read(mountingProvider).fixtureHeight.meters;
                       ctrl.setNodeMountHeight(node.id, Length(base + 0.05));
                     },
                     // The typed value is in cm (the displayed unit); store as
@@ -4478,6 +4815,18 @@ class _SelectionSection extends ConsumerWidget {
               ),
             );
           }),
+        ],
+        // M16 — the drainage stack≥branch clamp, named. When the sizer raised
+        // this stack to match the largest branch entering it, its size did NOT
+        // come from its own DFU load, and an engineer checking "why DN75 not
+        // DN65?" must be able to read that here (the same note the calc
+        // report's run schedule now footnotes).
+        if (sizing != null && sizing.stackRaisedForBranch) ...[
+          const SizedBox(height: MechXSpacing.xxs),
+          Text('Stack raised to match branch — sized up to the largest branch '
+              'entering it, not from its own load.',
+              style: context.type.caption
+                  .copyWith(color: context.colors.textSecondary)),
         ],
         // Soft advisory: this air duct carries air but isn't manually sized yet.
         if (ref.watch(airUnsizedProvider).contains(edge.id)) ...[
@@ -4763,13 +5112,17 @@ class _HvacSection extends ConsumerWidget {
         else ...[
           // Promoted headline: fan total static + selected motor. Only rendered
           // once a fan exists, so the blank/golden launch is byte-identical.
+          // M11: a duty past the largest standard frame prints the clamp
+          // honestly instead of a clean, green figure.
           ResultCard(
             headline:
                 '${fan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa',
-            label:
-                'Fan static · ${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW motor',
-            verdict: 'sized',
-            verdictColor: colors.success,
+            label: 'Fan static · '
+                '${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW motor'
+                '${fan.motorOversized ? ' · above standard frame' : ''}',
+            verdict: fan.motorOversized ? 'over frame' : 'sized',
+            verdictColor:
+                fan.motorOversized ? colors.danger : colors.success,
           ),
           const SizedBox(height: MechXSpacing.xs),
           // 'Fan static' + 'Fan motor' are the ResultCard headline/label above;

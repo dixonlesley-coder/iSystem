@@ -37,8 +37,10 @@ import 'package:mechx_engine/standards/sni.dart';
 import '../../store/app_state.dart';
 import '../../store/electrical_store.dart' show WorkspaceView, workspaceViewProvider;
 import '../../store/history_store.dart';
+import '../../store/models/sheet.dart' show Sheet;
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
+import '../../store/schematic_layout_store.dart';
 import '../../store/schematic_view_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
@@ -457,41 +459,29 @@ class _Toolbar extends StatelessWidget {
             Container(width: 1, height: 22, color: colors.border),
             const SizedBox(width: MechXSpacing.md),
             Flexible(
-              // All ten services don't fit the toolbar, so the chip strip
-              // scrolls horizontally. A soft right-edge fade signals "more to
-              // scroll" so a chip clipped at the viewport edge reads as
-              // scrollable rather than a broken half-word (e.g. "Exhaus").
-              child: ShaderMask(
-                shaderCallback: (rect) => const LinearGradient(
-                  begin: Alignment.centerLeft,
-                  end: Alignment.centerRight,
-                  stops: [0.0, 0.93, 1.0],
-                  colors: [
-                    Color(0xFF000000),
-                    Color(0xFF000000),
-                    Color(0x00000000),
-                  ],
-                ).createShader(rect),
-                blendMode: BlendMode.dstIn,
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(context.strings(StringKey.schematicRiserService),
-                          style: context.type.caption
-                              .copyWith(color: colors.textMuted)),
-                      const SizedBox(width: MechXSpacing.sm),
-                      for (final s in ServiceType.values) ...[
-                        _ServiceChip(
-                          service: s,
-                          selected: s == service,
-                          onTap: () => onService(s),
-                        ),
-                        const SizedBox(width: MechXSpacing.xs),
-                      ],
+              // R1: all ten services don't fit the toolbar at a 1440 window, so
+              // the chip strip scrolls horizontally with a soft edge fade — but
+              // ONLY on an edge that actually has content beyond it (see
+              // [_FadeEdgeScrollStrip]). A chip clipped at the viewport edge then
+              // reads as scrollable rather than a broken half-word ("Sprinkle"),
+              // and a strip that fits renders exactly as an unmasked Row.
+              child: _FadeEdgeScrollStrip(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(context.strings(StringKey.schematicRiserService),
+                        style: context.type.caption
+                            .copyWith(color: colors.textMuted)),
+                    const SizedBox(width: MechXSpacing.sm),
+                    for (final s in ServiceType.values) ...[
+                      _ServiceChip(
+                        service: s,
+                        selected: s == service,
+                        onTap: () => onService(s),
+                      ),
+                      const SizedBox(width: MechXSpacing.xs),
                     ],
-                  ),
+                  ],
                 ),
               ),
             ),
@@ -505,6 +495,113 @@ class _Toolbar extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// R1: a horizontally scrollable strip whose EDGES fade only when there is
+/// actually content past them — the affordance that turns a chip clipped at the
+/// viewport edge ("Sprinkle…") into an honest "there's more, scroll".
+///
+/// When the content FITS, no [ShaderMask] is inserted at all, so the rendered
+/// layout is identical to a bare `SingleChildScrollView` (the fade can never tint
+/// a strip that has nothing to reveal). Overflow state is read from the scroll
+/// metrics — `extentBefore`/`extentAfter` — and applied on the next frame (a
+/// post-frame `setState`, never during layout), so a window resize that removes
+/// the overflow also removes the fade. No Material: a plain gradient
+/// [ShaderMask] in `dstIn` over theme-independent alpha (it masks the strip's own
+/// pixels, so it works in both light and dark).
+class _FadeEdgeScrollStrip extends StatefulWidget {
+  final Widget child;
+
+  const _FadeEdgeScrollStrip({required this.child});
+
+  @override
+  State<_FadeEdgeScrollStrip> createState() => _FadeEdgeScrollStripState();
+}
+
+class _FadeEdgeScrollStripState extends State<_FadeEdgeScrollStrip> {
+  final ScrollController _controller = ScrollController();
+  bool _fadeStart = false;
+  bool _fadeEnd = false;
+  bool _scheduled = false;
+
+  /// Width of the fade ramp, as a fraction of the strip's width.
+  static const double _rampFraction = 0.07;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleSync();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// Re-read the metrics on the NEXT frame (notifications can arrive mid-layout,
+  /// where `setState` is illegal). Coalesced, so a burst of scroll updates costs
+  /// one rebuild at most.
+  void _scheduleSync() {
+    if (_scheduled) return;
+    _scheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scheduled = false;
+      if (!mounted) return;
+      final start =
+          _controller.hasClients && _controller.position.extentBefore > 0.5;
+      final end =
+          _controller.hasClients && _controller.position.extentAfter > 0.5;
+      if (start == _fadeStart && end == _fadeEnd) return;
+      setState(() {
+        _fadeStart = start;
+        _fadeEnd = end;
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final strip = NotificationListener<ScrollMetricsNotification>(
+      onNotification: (_) {
+        _scheduleSync();
+        return false;
+      },
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (_) {
+          _scheduleSync();
+          return false;
+        },
+        child: SingleChildScrollView(
+          controller: _controller,
+          scrollDirection: Axis.horizontal,
+          child: widget.child,
+        ),
+      ),
+    );
+    if (!_fadeStart && !_fadeEnd) return strip;
+    final stops = <double>[
+      0.0,
+      _fadeStart ? _rampFraction : 0.0,
+      _fadeEnd ? 1.0 - _rampFraction : 1.0,
+      1.0,
+    ];
+    return ShaderMask(
+      shaderCallback: (rect) => LinearGradient(
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+        stops: stops,
+        colors: [
+          _fadeStart ? const Color(0x00000000) : const Color(0xFF000000),
+          const Color(0xFF000000),
+          const Color(0xFF000000),
+          _fadeEnd ? const Color(0x00000000) : const Color(0xFF000000),
+        ],
+      ).createShader(rect),
+      blendMode: BlendMode.dstIn,
+      child: strip,
     );
   }
 }
@@ -1137,11 +1234,6 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   // tint as the only drop feedback. Null when no card is over the canvas.
   int? _dragBandFloor;
 
-  // F3: the undo snapshot is DEFERRED from pointer-down to the FIRST move of
-  // an actual riser drag (the onPanStart semantics the Layout / electrical
-  // canvases use) — a plain select-to-inspect click must not push a phantom
-  // undo step or clear the redo stack.
-  bool _dragSnapshotPending = false;
 
   /// World-px gap between adjacent floor bands. The vertical axis is laid out by
   /// floor index (true elevation order) at a fixed band height — the riser's
@@ -1201,6 +1293,7 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   String? _riserAt(Offset w, double tolWorld) {
     final net = ref.read(networkControllerProvider).network;
     final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    final layout = ref.read(schematicLayoutProvider);
     String? best;
     var bestD = tolWorld;
     for (final e in net.edges) {
@@ -1212,8 +1305,9 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       final yB = _bandCentreWorldY(b.floorIndex, levelCount);
       final top = math.min(yA, yB);
       final bot = math.max(yA, yB);
-      // Distance from the point to the vertical segment at x=a.x within [top,bot].
-      final dx = (w.dx - a.x).abs();
+      // B3: the DIAGRAM x (an override when the riser was dragged sideways on
+      // the elevation, else the plan x) — the same x the painter draws at.
+      final dx = (w.dx - layout.xFor(a)).abs();
       final inBand = w.dy >= top - tolWorld && w.dy <= bot + tolWorld;
       if (inBand && dx < bestD) {
         bestD = dx;
@@ -1256,8 +1350,6 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
         if (ref.read(selectionProvider).containsEdge(hit)) {
           _draggingRiser = hit;
           _beginRiserDrag(w.dx);
-          // The snapshot waits for the first real movement (F3).
-          _dragSnapshotPending = true;
         }
       } else {
         // D5: empty-canvas left-drag draws a marquee (rubber-band multi-select).
@@ -1271,12 +1363,13 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   /// group moves by one shared delta.
   void _beginRiserDrag(double cursorWorldX) {
     final net = ref.read(networkControllerProvider).network;
+    final layout = ref.read(schematicLayoutProvider);
     final base = <String, double>{};
     for (final id in ref.read(selectionProvider).edgeIds) {
       final e = net.edgeById(id);
       if (e == null || e.kind != EdgeKind.riser) continue;
       final a = net.nodeById(e.fromId);
-      if (a != null) base[id] = a.x;
+      if (a != null) base[id] = layout.xFor(a);
     }
     _dragBaseX = base;
     _dragBaseCursorX = cursorWorldX;
@@ -1290,14 +1383,11 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     }
     final dragging = _draggingRiser;
     if (dragging != null) {
-      // First movement of a genuine drag: NOW record the one undo step for the
-      // whole move (moveRiserHorizontal itself never records — live drag).
-      if (_dragSnapshotPending) {
-        _dragSnapshotPending = false;
-        ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
-        // K1: throttle the heavy chain during the live riser drag.
-        ref.read(dragSessionProvider.notifier).beginDrag();
-      }
+      // B3: this drag no longer edits the network — it moves the riser on the
+      // DIAGRAM only (`moveRiserHorizontal` writes the elevation-layout
+      // override, never the plan nodes). So there is nothing to snapshot (the
+      // old F3 deferred snapshot pushed a PHANTOM undo entry for a change the
+      // network never saw) and nothing heavy to throttle (no re-solve fires).
       final w = _current.screenToWorld(event.localPosition);
       final ctrl = ref.read(networkControllerProvider.notifier);
       final base = _dragBaseX;
@@ -1318,13 +1408,10 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
 
   void _onPointerUp(PointerUpEvent event) {
     _panning = false;
-    // K1: close the throttle session on riser-drag release (final refresh).
-    if (_draggingRiser != null) {
-      ref.read(dragSessionProvider.notifier).endDrag();
-    }
+    // B3: no throttle session to close — the riser drag is diagram-only, so it
+    // never begins one (nothing heavy re-runs while it is in flight).
     _draggingRiser = null;
     _dragBaseX = null;
-    _dragSnapshotPending = false;
     // D5: finalize the marquee → select every riser its box crosses.
     final start = _marqueeStart;
     final current = _marqueeCurrent;
@@ -1343,6 +1430,7 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   void _selectRisersInRect(Rect rect) {
     final net = ref.read(networkControllerProvider).network;
     final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    final layout = ref.read(schematicLayoutProvider);
     final vt = _current;
     final hit = <String>{};
     for (final e in net.edges) {
@@ -1352,8 +1440,9 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       if (a == null || b == null) continue;
       final yA = _bandCentreWorldY(a.floorIndex, levelCount);
       final yB = _bandCentreWorldY(b.floorIndex, levelCount);
-      final p1 = vt.worldToScreen(Offset(a.x, math.min(yA, yB)));
-      final p2 = vt.worldToScreen(Offset(a.x, math.max(yA, yB)));
+      final ax = layout.xFor(a);
+      final p1 = vt.worldToScreen(Offset(ax, math.min(yA, yB)));
+      final p2 = vt.worldToScreen(Offset(ax, math.max(yA, yB)));
       if (Rect.fromPoints(p1, p2).inflate(3).overlaps(rect)) hit.add(e.id);
     }
     final shift = HardwareKeyboard.instance.isShiftPressed;
@@ -1467,6 +1556,20 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     return (floorIndex: floorIndex, redirected: redirected);
   }
 
+  /// B2 — drop a riser from the Riser palette onto a floor band.
+  ///
+  /// The drop used to take the ELEVATION diagram's world x (and `y = 0`) as the
+  /// riser's PLAN coordinates, and to fall back to the CURRENT sheet when the
+  /// target floor had no plan assigned — producing a node whose sheetId maps to
+  /// one floor while its floorIndex says another: invisible on every sheet
+  /// forever, yet still sized into the BOM. Both halves are fixed here:
+  ///
+  ///   * an UNMAPPED floor REFUSES the drop with a status message naming the
+  ///     level to assign a plan to (nothing is drawn — a riser with no plan to
+  ///     live on is exactly the ghost this defect produced);
+  ///   * a mapped floor places the riser at that SHEET'S CENTRE — a real plan
+  ///     coordinate the engineer can find and drag — and says so, so the jump
+  ///     from the cursor to the plan centre is never a silent surprise.
   void _onDrop(Offset localScreen) {
     final box = context.findRenderObject() as RenderBox?;
     if (box == null) return;
@@ -1474,22 +1577,36 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     final target = _dropTarget(localScreen);
     if (target == null) return;
     final floorIndex = target.floorIndex;
-    final w = _current.screenToWorld(localScreen);
 
-    final sheetId = _sheetIdForFloor(floorIndex);
+    final sheet = _sheetForFloor(floorIndex);
+    if (sheet == null) {
+      final level = floorIndex < building.levelCount
+          ? building.floors[floorIndex].name
+          : '$floorIndex';
+      ref.read(statusMessageProvider.notifier).showStatus(
+          MechXStrings.of(context)
+              .format(StringKey.schematicDropNeedsPlan, {'level': level}));
+      return;
+    }
+
+    // The riser lands at the centre of the destination plan — a real sheet
+    // coordinate, not the elevation's own x with y pinned to 0.
+    final centre = Offset(sheet.sizePx.width / 2, sheet.sizePx.height / 2);
     final id = ref.read(networkControllerProvider.notifier).placeRiserAt(
-          sheetId,
+          sheet.id,
           floorIndex,
-          w.dx,
+          centre.dx,
           building.levelCount,
           service: widget.service,
+          y: centre.dy,
         );
     if (id != null) {
       ref.read(selectionProvider.notifier).selectEdge(id);
-      // B3: a drop on the TOP band has no floor above it, so the riser's base
-      // was placed on the floor BELOW (it still spans a real elevation delta up
-      // to the top). Say so — a top-band drop otherwise draws a connection one
-      // floor off the target, indistinguishable from a correct drop.
+      final strings = MechXStrings.of(context);
+      // B3 (top band): a drop on the TOP band has no floor above it, so the
+      // riser's base was placed on the floor BELOW (it still spans a real
+      // elevation delta up to the top). Say so — a top-band drop otherwise
+      // draws a connection one floor off the target.
       if (target.redirected &&
           floorIndex + 1 < building.levelCount &&
           floorIndex < building.levelCount) {
@@ -1498,22 +1615,27 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
         ref
             .read(statusMessageProvider.notifier)
             .showStatus('Riser to $upper — base on $lower below');
+      } else {
+        ref.read(statusMessageProvider.notifier).showStatus(
+              strings.format(StringKey.schematicDropCentred, {
+                'level': building.floors[floorIndex].name,
+                'sheet': sheet.name,
+              }),
+            );
       }
     }
   }
 
-  /// The sheet id mapped to [floorIndex] (so the riser's lower node sits on the
-  /// right sheet). Falls back to the current sheet, else a synthetic id.
-  String _sheetIdForFloor(int floorIndex) {
+  /// The SHEET mapped to [floorIndex], or null when that level carries no plan.
+  /// Deliberately NOT falling back to the current sheet (B2): a riser stamped
+  /// with another floor's sheet id is invisible on every plan.
+  Sheet? _sheetForFloor(int floorIndex) {
     final sheets = ref.read(sheetsControllerProvider);
+    final levelCount = ref.read(projectControllerProvider).building.levelCount;
     for (final s in sheets.sheets) {
-      if (sheets.floorFor(
-              s.id, ref.read(projectControllerProvider).building.levelCount) ==
-          floorIndex) {
-        return s.id;
-      }
+      if (sheets.floorFor(s.id, levelCount) == floorIndex) return s;
     }
-    return sheets.current?.id ?? 'elevation';
+    return null;
   }
 
   @override
@@ -1523,6 +1645,9 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     final sizing = ref.watch(sizingProvider);
     final building = ref.watch(projectControllerProvider).building;
     final selection = ref.watch(selectionProvider);
+    // B3: the diagram-only riser positions (empty unless one was dragged
+    // sideways here). Watched so a drag repaints without touching the network.
+    final schematicX = ref.watch(schematicLayoutProvider).schematicXOverrides;
 
     final canvas = Focus(
       focusNode: _focus,
@@ -1559,6 +1684,7 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                       selectedEdgeIds: selection.edgeIds,
                       bandWorldH: _bandWorldH,
                       worldWidth: _worldWidth,
+                      schematicX: schematicX,
                       highlightFloor: _dragBandFloor,
                       marquee: (_marqueeStart != null && _marqueeCurrent != null)
                           ? Rect.fromPoints(_marqueeStart!, _marqueeCurrent!)
@@ -1984,6 +2110,167 @@ double _distanceToInferred(_InferredRiser r, Offset p) {
 }
 
 // ---------------------------------------------------------------------------
+// R2: pure label-collision helpers (live Auto-riser canvas)
+//
+// The Auto painter stamps three families of text on one surface: the floor
+// gutter labels ("Ground  FFL +0.00"), the per-floor fan-out stub labels
+// ("Water outlet") and the run/riser pipe tags ("15-CW-PPR-GRAVITASI").
+// Without arbitration the tags overpaint the gutter. These helpers are the
+// arbiter: a DETERMINISTIC, framework-free estimate-nudge pass —
+//
+//   1. [estimateLabelRect] boxes a label from its CHARACTER COUNT × a per-size
+//      advance (no TextPainter, so the geometry is pure and unit-testable and
+//      matches the export side's `kElectricalRiserLabelCharW` idiom);
+//   2. [runLabelNudgeCandidates] enumerates a BOUNDED, ordered candidate list —
+//      in place, then stepped ALONG the run (both ways), then flipped to the
+//      run's OTHER SIDE, then stepped along that side;
+//   3. [resolveLabelDisplacement] picks the first clear candidate, or — when
+//      every candidate still collides — the LEAST-overlapping one, so a label
+//      is nudged, never dropped and never randomly placed.
+//
+// The live canvas only: the vector EXPORT has its own placer (the engine's
+// `_RiserLabelPlacer`), which this deliberately does not touch.
+// ---------------------------------------------------------------------------
+
+/// Per-character horizontal advance of an on-canvas Roboto label, as a fraction
+/// of its font size. Mirrors the engine export placer's
+/// `kElectricalRiserLabelCharW` (0.6) so the canvas and the issued sheet reason
+/// about label width the same way. // VERIFY: a drafting declutter heuristic
+/// (uppercase tag text runs a little wide of Roboto's mixed-case average), not a
+/// standard.
+const double kSchematicLabelCharW = 0.6;
+
+/// Line height of an on-canvas Roboto label, as a fraction of its font size.
+const double kSchematicLabelLineH = 1.3;
+
+/// The estimated bounding box of [text] drawn at [anchor] in [fontSize], grown
+/// by [pad] on every side. [centered] mirrors the painter's centred-text idiom
+/// (the anchor is the label's horizontal MIDDLE); otherwise [anchor] is the
+/// top-left origin, exactly as `Canvas`/`TextPainter.paint` treats it.
+///
+/// Width = `text.length × fontSize × kSchematicLabelCharW`, height =
+/// `fontSize × kSchematicLabelLineH` — a char-count estimate, deliberately not
+/// a laid-out measurement, so the collision pass stays pure and deterministic.
+Rect estimateLabelRect(
+  String text,
+  Offset anchor,
+  double fontSize, {
+  bool centered = false,
+  double pad = 1.0,
+}) {
+  final w = text.length * fontSize * kSchematicLabelCharW;
+  final h = fontSize * kSchematicLabelLineH;
+  final left = centered ? anchor.dx - w / 2 : anchor.dx;
+  return Rect.fromLTWH(left - pad, anchor.dy - pad, w + 2 * pad, h + 2 * pad);
+}
+
+/// True when [rect] overlaps any rect in [occupied]. Zero-area rects never
+/// overlap (`Rect.overlaps` semantics), so an empty label is always "clear".
+bool rectHitsAny(Rect rect, List<Rect> occupied) =>
+    occupied.any((r) => r.overlaps(rect));
+
+/// The area of the intersection of [a] and [b] — 0 when they don't overlap.
+/// Used to rank candidate placements when none is fully clear.
+double rectOverlapArea(Rect a, Rect b) {
+  final w = math.min(a.right, b.right) - math.max(a.left, b.left);
+  final h = math.min(a.bottom, b.bottom) - math.max(a.top, b.top);
+  if (w <= 0 || h <= 0) return 0;
+  return w * h;
+}
+
+/// Total area of [rect] covered by [occupied] (double-counting overlaps between
+/// occupied rects — a ranking score, not an exact union).
+double totalOverlapArea(Rect rect, List<Rect> occupied) {
+  var sum = 0.0;
+  for (final r in occupied) {
+    sum += rectOverlapArea(rect, r);
+  }
+  return sum;
+}
+
+/// The unit vector along a run, falling back to horizontal for a degenerate
+/// (zero-length) run so a coincident-endpoint edge still gets a sane ladder.
+Offset runUnitDirection(Offset runDirection) {
+  final len = runDirection.distance;
+  if (len < 0.001) return const Offset(1, 0);
+  return Offset(runDirection.dx / len, runDirection.dy / len);
+}
+
+/// The run's left-hand normal — the unit direction rotated by -90° (in screen
+/// coordinates, where +y points DOWN, that is the run's "up" side for a
+/// left-to-right run).
+Offset runNormal(Offset runDirection) {
+  final d = runUnitDirection(runDirection);
+  return Offset(d.dy, -d.dx);
+}
+
+/// The SIGNED distance [delta] (a label's offset from its run's midpoint) sits
+/// off the run, measured along [runNormal] — positive on the run's left-hand
+/// side. Feeding this to [runLabelNudgeCandidates] makes the "other side" flip
+/// correct for a run drawn in EITHER direction.
+double signedPerpendicularOffset(Offset runDirection, Offset delta) {
+  final n = runNormal(runDirection);
+  return delta.dx * n.dx + delta.dy * n.dy;
+}
+
+/// The ORDERED, BOUNDED displacement candidates for a run label that collides.
+///
+/// [runDirection] is the run's vector (need not be normalised; a zero/degenerate
+/// vector falls back to horizontal). [perpendicularOffset] is the signed
+/// distance the label already sits off the run — its sign is flipped to reach
+/// "the run's other side", so the flip displacement is `-2 × offset` along the
+/// run's normal.
+///
+/// Order (deterministic, no randomness): in place · +1 step along · −1 step
+/// along · … ±[steps] · the other side · the other side ±1 step along · …
+/// Length is `1 + 2·steps + 1 + 2·steps` — capped by construction.
+List<Offset> runLabelNudgeCandidates({
+  required Offset runDirection,
+  required double perpendicularOffset,
+  double step = 14.0,
+  int steps = 3,
+}) {
+  final dir = runUnitDirection(runDirection);
+  final flip = runNormal(runDirection) * (-2 * perpendicularOffset);
+  final out = <Offset>[Offset.zero];
+  for (var i = 1; i <= steps; i++) {
+    out.add(dir * (step * i));
+    out.add(dir * (-step * i));
+  }
+  out.add(flip);
+  for (var i = 1; i <= steps; i++) {
+    out.add(flip + dir * (step * i));
+    out.add(flip + dir * (-step * i));
+  }
+  return out;
+}
+
+/// Resolve where to actually draw a label whose un-nudged box is [rect]:
+/// the FIRST candidate in [candidates] whose displaced rect clears [occupied],
+/// else the candidate with the SMALLEST total overlap (ties → the earliest
+/// candidate, so the result is stable). Never returns null — a label is nudged,
+/// never dropped.
+Offset resolveLabelDisplacement(
+  Rect rect,
+  List<Rect> occupied,
+  List<Offset> candidates,
+) {
+  if (candidates.isEmpty) return Offset.zero;
+  var best = candidates.first;
+  var bestScore = double.infinity;
+  for (final d in candidates) {
+    final moved = rect.shift(d);
+    if (!rectHitsAny(moved, occupied)) return d;
+    final score = totalOverlapArea(moved, occupied);
+    if (score < bestScore) {
+      bestScore = score;
+      best = d;
+    }
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------------------
 // Auto-mode painter (the prior read-only diagram)
 // ---------------------------------------------------------------------------
 
@@ -2071,10 +2358,17 @@ class _AutoSchematicPainter extends CustomPainter {
         _autoNodePositions(network, building.levelCount, size, focus: focus);
     _paintBands(canvas, size);
     if (inferRisers) _paintInferredRisers(canvas, nodePos);
-    // F6: seed the label-collision list with the per-floor FFL labels so an
-    // edge/riser tag never prints across the floor label; the edge pass then
-    // accumulates its own placed rects so run tags don't stack on each other.
+    // F6/R2: seed the label-collision list BEFORE any tag places, in the order
+    // the diagram's fixed furniture wins: the per-floor FFL gutter labels, the
+    // per-floor fan-out stub labels, and (R3) the detail-callout boxes, whose
+    // rects are all computable up front. The edge pass then accumulates its own
+    // placed rects so run tags don't stack on each other either.
     final occupied = _floorLabelRects(size);
+    if (showDetails) {
+      occupied
+        ..addAll(_fanOutLabelRects(size))
+        ..addAll(_detailCalloutRects(size));
+    }
     _paintEdges(canvas, nodePos, occupied);
     // G2: the hot-water recirculation return leg rides alongside the supply
     // riser — a structural element (drawn whenever the recirc loop exists),
@@ -2172,23 +2466,64 @@ class _AutoSchematicPainter extends CustomPainter {
       // E6: the SAME FFL notation the export gutter uses (one shared formatter),
       // so the working canvas and the issued sheet read the elevation identically.
       final label = '${floor.name}  ${fflLabel(elevM)}';
-      final tp = TextPainter(
-        text: TextSpan(
-          text: label,
-          style: const TextStyle(
-            fontFamily: 'Roboto',
-            fontSize: _floorLabelFontSize,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-        maxLines: 1,
-      )..layout(maxWidth: size.width / 2);
-      rects.add(Rect.fromLTWH(
-          MechXSpacing.sm, top + MechXSpacing.xs, tp.width, tp.height));
+      // R2: the pure char-count estimator (not a TextPainter layout) so every
+      // rect in the collision list is produced the same deterministic way.
+      rects.add(estimateLabelRect(
+        label,
+        Offset(MechXSpacing.sm, top + MechXSpacing.xs),
+        _floorLabelFontSize,
+      ));
     }
     return rects;
   }
+
+  /// R2: the estimated rects of the per-floor FAN-OUT stub labels — mirrors
+  /// [_paintFloorFanOut]'s geometry exactly (same band pitch, same reserved
+  /// (?)-button corner, same row pitch and band-overrun guard) so a run tag is
+  /// nudged clear of the gutter stubs instead of printing across them.
+  List<Rect> _fanOutLabelRects(Size size) {
+    final visible = _focusedNodeIds(network, focus);
+    final fans = floorFanOuts(
+      network,
+      visibleNodeIds: visible,
+      labelOf: (n) => _nodeLabel(n) ?? 'Fixture',
+    );
+    if (fans.isEmpty) return const [];
+    final n = building.levelCount;
+    final bandH = size.height / n;
+    const stubX = MechXSpacing.sm;
+    const rowPitch = 11.0;
+    const buttonBottom = MechXSpacing.sm + 26;
+    const fontSize = 9.0;
+    final rects = <Rect>[];
+    for (final fan in fans) {
+      if (fan.floorIndex < 0 || fan.floorIndex >= n) continue;
+      final top = _bandTopY(fan.floorIndex, size.height);
+      var y = top + 24;
+      if (y < buttonBottom + MechXSpacing.xs) y = buttonBottom + MechXSpacing.xs;
+      for (final label in fan.labels) {
+        if (y + rowPitch > top + bandH) break;
+        rects.add(
+            estimateLabelRect(label, Offset(stubX + 10, y), fontSize));
+        y += rowPitch;
+      }
+      if (fan.overflow > 0 && y + rowPitch <= top + bandH) {
+        rects.add(estimateLabelRect(
+            '+${fan.overflow} more', Offset(stubX + 10, y), fontSize));
+      }
+    }
+    return rects;
+  }
+
+  /// R3: the rects of the DETAIL CALLOUT boxes — the top-right PUMP-SET DETAIL
+  /// and the bottom-centre valve/drainage assemblies. Both are computable before
+  /// any label places (their geometry depends only on [size] + the has()-gating),
+  /// so seeding them means a run label dodges the box rather than disappearing
+  /// under it when the callout paints last.
+  List<Rect> _detailCalloutRects(Size size) => [
+        ?_plantDetailRect(size),
+        ..._valveCalloutRects(size),
+      ];
 
   /// A human label for [node] on the single-line — its equipment name
   /// ([NodeComponent.label]) or fixture type — or null for a plain junction.
@@ -2379,6 +2714,9 @@ class _AutoSchematicPainter extends CustomPainter {
         if (s != null && runLabelEdgeIds.contains(edge.id)) {
           final midX = (from.dx + to.dx) / 2;
           final midY = (from.dy + to.dy) / 2;
+          // R2: the tag sits MechXSpacing.md above the run's midpoint, so its
+          // nudge ladder runs ALONG the run first, then flips to the run's other
+          // side (below it) — both derived from the drawn geometry, never random.
           _placeText(
             canvas,
             _pipeTag(s, edge, function: fn),
@@ -2388,6 +2726,9 @@ class _AutoSchematicPainter extends CustomPainter {
             color: color,
             fontWeight: FontWeight.w500,
             centered: true,
+            runDirection: to - from,
+            perpendicularOffset: signedPerpendicularOffset(
+                to - from, const Offset(0, -MechXSpacing.md)),
           );
         }
       }
@@ -2468,10 +2809,16 @@ class _AutoSchematicPainter extends CustomPainter {
     return reps;
   }
 
-  /// F6: draw [text] at [anchor], nudging it off any rect in [occupied] (a few
-  /// vertical candidates) and SKIPPING it if every candidate still collides — so
-  /// a label never prints across a floor label or another tag. Records the rect
-  /// it lands in so later labels avoid it.
+  /// R2: draw [text] at [anchor], nudged clear of every rect in [occupied].
+  ///
+  /// The candidate ladder comes from the pure [runLabelNudgeCandidates] — in
+  /// place, then stepped ALONG the run ([runDirection]), then flipped to the
+  /// run's other side ([perpendicularOffset] is the signed distance the anchor
+  /// already sits off the run) — and [resolveLabelDisplacement] picks the first
+  /// clear one, or the least-overlapping one when the canvas is genuinely full.
+  /// A label is therefore always DRAWN (the old pass silently skipped it, so a
+  /// crowded riser lost run tags outright). Records the rect it lands in so
+  /// later labels avoid it.
   void _placeText(
     Canvas canvas,
     String text,
@@ -2482,33 +2829,31 @@ class _AutoSchematicPainter extends CustomPainter {
     FontWeight fontWeight = FontWeight.w400,
     bool centered = false,
     double? maxWidth,
+    Offset runDirection = const Offset(1, 0),
+    double perpendicularOffset = 0,
   }) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: TextStyle(
-          fontFamily: 'Roboto',
-          fontSize: fontSize,
-          color: color,
-          fontWeight: fontWeight,
-        ),
+    if (text.isEmpty) return;
+    final rect =
+        estimateLabelRect(text, anchor, fontSize, centered: centered);
+    final delta = resolveLabelDisplacement(
+      rect,
+      occupied,
+      runLabelNudgeCandidates(
+        runDirection: runDirection,
+        perpendicularOffset: perpendicularOffset,
       ),
-      textDirection: TextDirection.ltr,
-      maxLines: 1,
-      ellipsis: '…',
-    )..layout(maxWidth: maxWidth ?? 200);
-    const candidates = <double>[0, 12, -12, 24, -24];
-    for (final dy in candidates) {
-      final dx = centered ? anchor.dx - tp.width / 2 : anchor.dx;
-      final rect =
-          Rect.fromLTWH(dx - 1, anchor.dy + dy - 1, tp.width + 2, tp.height + 2);
-      if (occupied.every((r) => !r.overlaps(rect))) {
-        tp.paint(canvas, Offset(dx, anchor.dy + dy));
-        occupied.add(rect);
-        return;
-      }
-    }
-    // Every candidate collides — skip (never stamp over an existing label).
+    );
+    occupied.add(rect.shift(delta));
+    _drawText(
+      canvas,
+      text,
+      anchor + delta,
+      fontSize: fontSize,
+      color: color,
+      fontWeight: fontWeight,
+      maxWidth: maxWidth,
+      centered: centered,
+    );
   }
 
   /// A compact boxed tag (rounded rect, service-colour outline over a canvas
@@ -2538,11 +2883,15 @@ class _AutoSchematicPainter extends CustomPainter {
           width: tp.width + padX * 2,
           height: tp.height + padY * 2,
         );
-    var centre = anchor;
-    for (final dy in const <double>[0, 16, 32, 48]) {
-      centre = Offset(anchor.dx, anchor.dy + dy);
-      if (occupied.every((r) => !r.overlaps(rectAt(centre)))) break;
-    }
+    // R2: a riser tag steps DOWN the riser (its run direction is vertical), and
+    // the shared resolver falls back to the least-overlapping step rather than
+    // stamping on the last candidate regardless.
+    final delta = resolveLabelDisplacement(
+      rectAt(anchor),
+      occupied,
+      const <Offset>[Offset(0, 0), Offset(0, 16), Offset(0, 32), Offset(0, 48)],
+    );
+    final centre = anchor + delta;
     final rect = rectAt(centre);
     final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(3));
     canvas.drawRRect(rrect, Paint()..color = colors.canvas);
@@ -2745,21 +3094,35 @@ class _AutoSchematicPainter extends CustomPainter {
   /// glyph + duty, and the GRAVITASI / TRANSFER / BOOSTER leg labels. Drawn only
   /// when the network actually has a roof-tank / ground-tank / pump / booster set
   /// (else omitted entirely — honesty), and only on the clean-water view.
-  void _paintPlantDetail(Canvas canvas, Size size) {
-    if (!_waterFocus) return;
+  /// R3: the PUMP-SET DETAIL callout's rect — the SINGLE source of that box's
+  /// geometry (used both to draw it and to seed the label-collision list), or
+  /// null when the callout isn't drawn at all (wrong focus, no plant, or a
+  /// viewport too small to hold it).
+  Rect? _plantDetailRect(Size size) {
+    if (!_waterFocus) return null;
     final hasRoof = _hasComponent(NodeComponent.roofTank);
     final hasGround = _hasComponent(NodeComponent.groundTank);
     final hasPump = _hasComponent(NodeComponent.pump) ||
         _hasComponent(NodeComponent.boosterSet);
-    if (!hasRoof && !hasGround && !hasPump) return;
-
-    final color = serviceColor(ServiceType.coldWater);
+    if (!hasRoof && !hasGround && !hasPump) return null;
     const boxW = 250.0;
     const boxH = 150.0;
     const pad = MechXSpacing.md;
     // Guard a too-narrow / too-short viewport.
-    if (size.width < boxW + 2 * pad || size.height < boxH + 2 * pad) return;
-    final rect = Rect.fromLTWH(size.width - boxW - pad, pad, boxW, boxH);
+    if (size.width < boxW + 2 * pad || size.height < boxH + 2 * pad) return null;
+    return Rect.fromLTWH(size.width - boxW - pad, pad, boxW, boxH);
+  }
+
+  void _paintPlantDetail(Canvas canvas, Size size) {
+    final rect = _plantDetailRect(size);
+    if (rect == null) return;
+    final hasRoof = _hasComponent(NodeComponent.roofTank);
+    final hasGround = _hasComponent(NodeComponent.groundTank);
+    final hasPump = _hasComponent(NodeComponent.pump) ||
+        _hasComponent(NodeComponent.boosterSet);
+
+    final color = serviceColor(ServiceType.coldWater);
+    final boxW = rect.width;
     _detailBox(canvas, rect, 'PUMP-SET DETAIL', titleColor: colors.textMuted);
 
     final cx = rect.left + boxW / 2;
@@ -2929,22 +3292,39 @@ class _AutoSchematicPainter extends CustomPainter {
     ln(0.65, 0.32, 0.82, 0.50);
   }
 
-  /// (2) VALVE-ASSEMBLY CALLOUTS — compact bordered detail boxes at the
-  /// BOTTOM-CENTRE (clear of the bottom-left legend + bottom-right title /
-  /// notes): a WATER METER set and a PRV set, each a row of valve glyphs + ASCII
-  /// abbrevs. Each is drawn ONLY when the network actually carries that
-  /// assembly's key device (G7, mirroring the plant detail's has()-gating) — the
-  /// meter box when a waterMeter node exists, the PRV box when a prv node exists
-  /// — so a project without either shows neither (no boilerplate detail passing
-  /// as an as-designed assembly). The glyph is schematic; the abbrev names the
-  /// real device (no exact-glyph claim). The present boxes are centred as a
-  /// group so a lone detail still reads balanced.
-  void _paintValveCallouts(Canvas canvas, Size size) {
+  // The bottom-centre valve/drainage callout box metrics (shared by the rect
+  // builder and the painter, so the seeded rect is the drawn rect).
+  static const double _valveBoxW = 156.0;
+  static const double _valveBoxH = 64.0;
+  static const double _valveGap = MechXSpacing.md;
+
+  /// R3: the rects of the bottom-centre valve/drainage detail callouts —
+  /// [_paintValveCallouts]'s geometry, factored out so the same boxes can seed
+  /// the label-collision list (the same mechanism as the pump-set callout).
+  /// Empty when no box is drawn (nothing gated in, or no room).
+  List<Rect> _valveCalloutRects(Size size) {
+    final count = _valveCalloutDetails().length;
+    if (count == 0) return const [];
+    final totalW = count * _valveBoxW + (count - 1) * _valveGap;
+    if (size.width < totalW + 320 ||
+        size.height < _valveBoxH + 2 * MechXSpacing.md) {
+      return const [];
+    }
+    var left = (size.width - totalW) / 2;
+    final top = size.height - _valveBoxH - MechXSpacing.md;
+    final rects = <Rect>[];
+    for (var i = 0; i < count; i++) {
+      rects.add(Rect.fromLTWH(left, top, _valveBoxW, _valveBoxH));
+      left += _valveBoxW + _valveGap;
+    }
+    return rects;
+  }
+
+  /// The gated valve/drainage detail boxes (title, glyph row, colour) — one
+  /// source shared by [_valveCalloutRects] and [_paintValveCallouts].
+  List<(String, List<(NodeComponent, String)>, Color)> _valveCalloutDetails() {
     final cwColor = serviceColor(ServiceType.coldWater);
     final drColor = serviceColor(ServiceType.drainage);
-    const boxW = 156.0;
-    const boxH = 64.0;
-    const gapBetween = MechXSpacing.md;
     final topFloor = building.levelCount - 1;
 
     // Each box is drawn ONLY when the network carries its key device (G7/G4):
@@ -2976,17 +3356,28 @@ class _AutoSchematicPainter extends CustomPainter {
           (NodeComponent.airVent, 'VTR'),
         ], drColor),
     ];
-    if (details.isEmpty) return;
+    return details;
+  }
 
-    final totalW = details.length * boxW + (details.length - 1) * gapBetween;
-    // Width guard: only draw when there's room clear of the corner overlays.
-    if (size.width < totalW + 320 || size.height < boxH + 2 * MechXSpacing.md) {
-      return;
-    }
-    var left = (size.width - totalW) / 2;
-    final top = size.height - boxH - MechXSpacing.md;
-    for (final (title, items, c) in details) {
-      final rect = Rect.fromLTWH(left, top, boxW, boxH);
+  /// (2) VALVE-ASSEMBLY CALLOUTS — compact bordered detail boxes at the
+  /// BOTTOM-CENTRE (clear of the bottom-left legend + bottom-right title /
+  /// notes): a WATER METER set and a PRV set, each a row of valve glyphs + ASCII
+  /// abbrevs. Each is drawn ONLY when the network actually carries that
+  /// assembly's key device (G7, mirroring the plant detail's has()-gating) — the
+  /// meter box when a waterMeter node exists, the PRV box when a prv node exists
+  /// — so a project without either shows neither (no boilerplate detail passing
+  /// as an as-designed assembly). The glyph is schematic; the abbrev names the
+  /// real device (no exact-glyph claim). The present boxes are centred as a
+  /// group so a lone detail still reads balanced.
+  void _paintValveCallouts(Canvas canvas, Size size) {
+    final details = _valveCalloutDetails();
+    // R3: the boxes' geometry comes from the ONE shared rect builder (which also
+    // seeds the label-collision list) — empty ⇒ nothing gated in, or no room.
+    final rects = _valveCalloutRects(size);
+    if (rects.length != details.length) return;
+    for (var i = 0; i < details.length; i++) {
+      final (title, items, c) = details[i];
+      final rect = rects[i];
       _detailBox(canvas, rect, title, titleColor: c);
       _drawDetailGlyphRow(
         canvas,
@@ -2996,7 +3387,6 @@ class _AutoSchematicPainter extends CustomPainter {
         glyph: 15,
         gap: 32,
       );
-      left += boxW + gapBetween;
     }
   }
 
@@ -3276,6 +3666,7 @@ class _EditSchematicPainter extends CustomPainter {
     required this.selectedEdgeIds,
     required this.bandWorldH,
     required this.worldWidth,
+    required this.schematicX,
     this.highlightFloor,
     this.marquee,
   });
@@ -3285,6 +3676,11 @@ class _EditSchematicPainter extends CustomPainter {
   final BuildingLevels building;
   final MechXColors colors;
   final ViewportTransform transform;
+
+  /// B3 — the DIAGRAM-only x per node id (empty unless a riser was dragged
+  /// sideways on this elevation). Plan geometry is never rewritten by that
+  /// gesture, so the diagram position lives here instead.
+  final Map<String, double> schematicX;
 
   /// D5: the multi-selected riser edges (highlighted); a single-select is a set
   /// of one.
@@ -3305,7 +3701,7 @@ class _EditSchematicPainter extends CustomPainter {
   }
 
   Offset _worldOf(NetNode n) =>
-      Offset(n.x, _bandCentreWorldY(n.floorIndex));
+      Offset(schematicX[n.id] ?? n.x, _bandCentreWorldY(n.floorIndex));
 
   @override
   void paint(Canvas canvas, Size size) {

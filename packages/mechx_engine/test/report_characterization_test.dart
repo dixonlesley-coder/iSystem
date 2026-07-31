@@ -83,8 +83,19 @@ void main() {
       // ASCII. Re-baselined again 2026-07-06 (Wave 7 N13): the BOM table gained a
       // Tag column (the shared element tag) between Type and Size — the fixture's
       // run line now reads `CW-F1`, the duct riser `SA-R1`. Line count unchanged.
+      // Re-baselined 2026-07-30 (audit M12): the pump NPSH line prints the
+      // suction-side NPSH_required estimate — for the fixture's 5 L/s duty
+      // (2900·√0.005/160)^(4/3) = 1.39 m — instead of the old, physically
+      // unrelated 15 % of the 30 m total head (4.5 m). Line count unchanged.
+      // Re-baselined 2026-07-30 (audit M19): ONE line changed — the fire-pump
+      // rating row's verdict. The flag behind it is the STANDARD MOTOR ladder
+      // saturating, not a curve-acceptance failure, so the wording moved from
+      // 'Rating curve within standard range' to 'Motor within standard frame
+      // range' (and the oversized branch now names the action). Verified as the
+      // SOLE delta: replacing the new sentence with the old one in the rendered
+      // document reproduces 0xccecab38 exactly. Line count unchanged.
       expect(md.split('\n').length, 94);
-      expect(fnv1a32(md), 0xa529ba98);
+      expect(fnv1a32(md), 0x109a3516);
     });
   });
 
@@ -104,6 +115,11 @@ void main() {
         '## Earthing',
         '## Power one-line',
         '### Source interlocks',
+        // 2026-07-30 (audit E7): both fixture boards are over the 15 %
+        // imbalance limit with an IRREDUCIBLE spread (MDP has two single-phase
+        // ways, SP-1 exactly one, over three lines), so each now carries the
+        // INFO `phase-imbalance-inherent` note and the '## Warnings' section is
+        // back — with info-level content, not warnings.
         '## Warnings',
         '## Unverified values',
       ]);
@@ -119,10 +135,22 @@ void main() {
     });
 
     test('load-bearing rows survive verbatim', () {
-      // Feeder way row (the second panel is fed through it).
-      expect(md, contains('| Feeder SP-1 | feeder |'));
-      // Per-panel warning bullet style.
-      expect(md, contains('- _WARN_: Phase loading is unbalanced'));
+      // Feeder way row, whole: SP-1's incomer is 10 A (its 1500 W AC unit draws
+      // 7.6 A), so the feeder carries the selectivity floor 1.6 × 10 = 16 A —
+      // the first rung at/above it — on the 4 mm² 3φ trunk minimum.
+      expect(
+          md,
+          contains('| Feeder SP-1 | feeder | 2.5 A | 3ph | 16 A MCB/C | 4 mm² '
+              '| 30 m |'));
+      // The warning section is INFO-only: `feeder-below-fed-demand` is cured by
+      // the feeder floor, and both boards' imbalance is inherent (too few
+      // single-phase ways for any assignment to even out) so the unactionable
+      // `phase-imbalance` WARNING is still unraised — but audit E7 now prints
+      // the irreducible figure as a note. No `- _WARN_:` bullet survives.
+      expect(md, contains('## Warnings'));
+      expect(md, isNot(contains('- _WARN_')));
+      expect(md, contains('- _INFO_: Phase loading is unbalanced by '));
+      expect(md, contains('inherent to the single-phase load set'));
       // Interlock bullet under its own sub-heading.
       expect(md,
           contains('### Source interlocks\n\n- _mechanical_: ATS mechanical'));
@@ -140,8 +168,26 @@ void main() {
       // and its feeder rounds below SP-1's worst-phase demand, so the new
       // judge-only `feeder-below-fed-demand` warning adds one bullet to the MDP
       // panel section AND one to the system Warnings section (+2 lines).
-      expect(md.split('\n').length, 89);
-      expect(fnv1a32(md), 0x732e7c07);
+      // Re-baselined 2026-07-30 (phase-imbalance actionability): neither fixture
+      // board can be evened out by ANY phase assignment (MDP has two
+      // single-phase ways, SP-1 exactly one, over three lines), so the
+      // unactionable `phase-imbalance` warning is no longer raised — 2 panel
+      // bullets + 2 system bullets + the now-empty MDP warning line group
+      // disappear (−5 lines), and the surviving feeder bullet names the
+      // imbalance as inherent instead of offering a rebalance.
+      // Re-baselined 2026-07-30 (selectivity-aware feeder sizing): the feeder to
+      // SP-1 is now floored at 1.6 × SP-1's 10 A incomer ⇒ 16 A (was 6 A), which
+      // clears SP-1's 7.6 A worst-phase demand — so the last
+      // `feeder-below-fed-demand` warning is gone and with it the MDP panel
+      // bullet group AND the whole '## Warnings' section (−6 lines). The feeder
+      // way row prints the 16 A device.
+      // Re-baselined 2026-07-30 (audit E7): an irreducible over-limit imbalance
+      // is now an INFO note instead of silence, and BOTH fixture boards qualify
+      // — 2 panel bullets + their 2 bullet-group lines, the restored
+      // '## Warnings' heading + its blank line, and 2 system bullets + 1 blank
+      // line (+9 lines: 78 -> 87).
+      expect(md.split('\n').length, 87);
+      expect(fnv1a32(md), 0x775ce2e6);
     });
   });
 
@@ -191,6 +237,9 @@ void main() {
         '## Earthing',
         '## Power one-line',
         '### Source interlocks',
+        // The embedded electrical body carries the audit-E7 inherent-imbalance
+        // notes (see the standalone pin above), so its '## Warnings' section is
+        // present — info-level content only.
         '## Warnings',
         '## Unverified values',
         '# Revision history',
@@ -213,8 +262,20 @@ void main() {
       // Tag column (run `CW-F1`, duct riser `SA-R1`). Line count is unchanged.
       // Re-baselined 2026-07-27: the electrical body gained the two
       // `feeder-below-fed-demand` warning lines (see the standalone pin above).
-      expect(md.split('\n').length, 230);
-      expect(fnv1a32(md), 0x9a4ae608);
+      // Re-baselined 2026-07-30: the electrical body dropped the five
+      // unactionable phase-imbalance lines (see the standalone pin above).
+      // Re-baselined again 2026-07-30 (selectivity-aware feeder sizing): the
+      // electrical body's last warning is cured by the feeder floor, dropping
+      // its panel bullet group and '## Warnings' section (−6 lines), and its
+      // feeder way row prints the floored 16 A device.
+      // Re-baselined 2026-07-30 (audit M12): the embedded mechanical body's
+      // pump NPSH line now carries the suction-side NPSH_required estimate
+      // (1.4 m, not 4.5 m) — see the mechanical pin above. Line count unchanged.
+      // Re-baselined 2026-07-30 (audit E7): the embedded electrical body gained
+      // the same +9 lines as the standalone pin (the irreducible-imbalance INFO
+      // notes on both boards + the restored '## Warnings' section): 219 -> 228.
+      expect(md.split('\n').length, 228);
+      expect(fnv1a32(md), 0x47b44e65);
     });
   });
 

@@ -19,15 +19,19 @@
 /// Styled with MechXTheme — no Material.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/gestures.dart'
     show kMiddleMouseButton, PointerScrollEvent, PointerSignalEvent;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
+import 'package:mechx_engine/network/network.dart' show Network;
 
 import '../../data/app_settings.dart';
 import '../../store/annotation_store.dart';
+import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
@@ -37,6 +41,7 @@ import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sample_project.dart';
+import '../../store/selection_scope.dart';
 import '../../store/selection_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/sheets_store.dart';
@@ -75,6 +80,7 @@ import '../electrical/electrical_view.dart'
         unplaceCircuitLoad;
 import 'service_legend_chip.dart';
 import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../shell/project_io.dart';
@@ -133,8 +139,37 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   /// re-publishes on the next frame.
   final ValueNotifier<MinimapViewport?> _minimapViewport = ValueNotifier(null);
 
+  /// D2 — arrow-nudge COALESCING. Every arrow-key nudge used to push its own
+  /// undo entry, so walking a run 10 steps across a plan ate 10 of the 200-cap
+  /// stack and needed 10 Ctrl+Z presses to reverse — while a mouse DRAG of the
+  /// same elements correctly collapses to one. A nudge BURST now snapshots once
+  /// on its first key and coalesces every further nudge within
+  /// [_kNudgeIdleWindow] of the last one into that single undo step; the burst
+  /// closes on the idle timeout (or on unmount), so the next arrow key starts a
+  /// fresh step. Mirrors the drag-session semantics; at rest (no arrow keys) the
+  /// timer never exists, so behaviour is byte-identical.
+  Timer? _nudgeIdleTimer;
+  bool _nudgeBurstOpen = false;
+
+  /// The network the burst's LAST nudge produced. If the live network is no
+  /// longer identical to it, some other edit (or an undo) landed between two
+  /// arrow keys, so the burst must not coalesce onto its now-stale snapshot.
+  Network? _nudgeLastNetwork;
+
+  /// How long a nudge burst stays open after the last arrow key.
+  static const Duration _kNudgeIdleWindow = Duration(milliseconds: 800);
+
+  /// Close the current nudge burst so the next arrow key snapshots again.
+  void _endNudgeBurst() {
+    _nudgeIdleTimer?.cancel();
+    _nudgeIdleTimer = null;
+    _nudgeBurstOpen = false;
+    _nudgeLastNetwork = null;
+  }
+
   @override
   void dispose() {
+    _nudgeIdleTimer?.cancel();
     _minimapViewport.dispose();
     super.dispose();
   }
@@ -448,6 +483,13 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         HardwareKeyboard.instance.isMetaPressed;
     final shift = HardwareKeyboard.instance.isShiftPressed;
 
+    // D2 — any NON-arrow key ends an open nudge burst, so the burst can never
+    // outlive the edit it snapshotted (an undo, a delete, a tool switch between
+    // two nudges must not be folded into the same step). The arrow keys
+    // themselves arrive via `handleDirectionalKey` (the CanvasView hook), which
+    // keeps the burst alive.
+    if (_nudgeBurstOpen) _endNudgeBurst();
+
     // B17 — while drawing a run with ortho on (Shift off), Tab cycles the
     // two-click route leg order (Auto -> L(H,V) -> L(V,H) -> Z). Consume it so
     // it never traverses focus. Safe even while the smart input bar holds key
@@ -546,13 +588,49 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
             key == LogicalKeyboardKey.backspace)) {
       final sel = ref.read(selectionProvider);
       if (sel.isEmpty) return KeyEventResult.ignored;
+      // C3 — the selection outlives sheet + layer switches, so Delete used to
+      // fire on elements that may be on ANOTHER floor or a hidden/locked layer:
+      // a silent cross-sheet deletion of work the engineer cannot even see. One
+      // precondition now guards it (the SAME rule the canvas hit-test uses):
+      // every member must be on the current sheet and on a visible, unlocked
+      // service. Off-scope members are excluded and, when any were, the status
+      // pill says so rather than quietly doing less than asked.
+      final scope = scopeSelection(
+        net: ref.read(networkControllerProvider).network,
+        nodeIds: sel.nodeIds.isEmpty
+            ? {if (sel.nodeId != null) sel.nodeId!}
+            : sel.nodeIds,
+        edgeIds: sel.edgeIds.isEmpty
+            ? {if (sel.edgeId != null) sel.edgeId!}
+            : sel.edgeIds,
+        sheetId: ref.read(sheetsControllerProvider).current?.id,
+        inertServices: ref.read(inertServicesProvider),
+      );
+      if (scope.hasExcluded) {
+        ref.read(statusMessageProvider.notifier).showStatus(
+              MechXStringsData(ref.read(localeProvider)).format(
+                StringKey.selectionOffScopeDeletedTemplate,
+                {
+                  'count': pluralCount(scope.excludedCount, 'selected element',
+                      'selected elements'),
+                },
+              ),
+            );
+      }
+      if (scope.isEmpty) {
+        ref.read(selectionProvider.notifier).clear();
+        return KeyEventResult.handled;
+      }
+      // The three original delete intents are kept as-is (they differ: the
+      // single-edge path also prunes the junction it strands) — only their ids
+      // are now the SCOPED ones.
       final net = ref.read(networkControllerProvider.notifier);
       if (sel.isMulti) {
-        net.deleteMany(sel.nodeIds, sel.edgeIds);
-      } else if (sel.isNode) {
-        net.deleteNode(sel.nodeId!);
-      } else if (sel.isEdge) {
-        net.deleteEdge(sel.edgeId!);
+        net.deleteMany(scope.nodeIds, scope.edgeIds);
+      } else if (scope.nodeIds.isNotEmpty) {
+        net.deleteNode(scope.nodeIds.first);
+      } else {
+        net.deleteEdge(scope.edgeIds.first);
       }
       ref.read(selectionProvider.notifier).clear();
       return KeyEventResult.handled;
@@ -831,8 +909,20 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     }
     if (ids.isEmpty) return false;
     final ctrl = ref.read(networkControllerProvider.notifier);
-    ctrl.pushUndoSnapshot();
+    // D2 — one undo step per nudge BURST: snapshot only when the burst OPENS,
+    // then keep it open while the arrow keys keep coming. The burst also
+    // re-opens whenever the network is no longer the one our own last nudge
+    // produced (an undo, a delete, any other edit landed in between), so a
+    // coalesced step can never sit on a snapshot that has since been popped.
+    final continuing = _nudgeBurstOpen && identical(_nudgeLastNetwork, net);
+    if (!continuing) {
+      ctrl.pushUndoSnapshot();
+      _nudgeBurstOpen = true;
+    }
+    _nudgeIdleTimer?.cancel();
+    _nudgeIdleTimer = Timer(_kNudgeIdleWindow, _endNudgeBurst);
     ctrl.moveMany(ids, dx, dy);
+    _nudgeLastNetwork = ref.read(networkControllerProvider).network;
     return true;
   }
 }
@@ -1022,13 +1112,24 @@ class _SharedSheet extends ConsumerWidget {
     final roomMode = ref.watch(roomModeProvider);
     final refLineMode = ref.watch(refLineModeProvider);
 
-    // G3: the on-canvas tool cluster only appears when the inspector is
-    // collapsed (the canvas-focus state), so an inspector-open workspace stays
-    // byte-identical. G1: the network nodes on THIS sheet/floor are the minimap's
-    // content landmarks (content-pixel space, mapped like the sheet substrate).
+    // G3/F3: the on-canvas tool cluster appears whenever the drawing TOOLS are
+    // not otherwise reachable — the inspector collapsed (the canvas-focus state)
+    // OR its DRAW section collapsed. Those two fixes used to compose into a dead
+    // state: DRAW auto-collapses the instant the first element lands
+    // (`defaultExpanded: !networkExists`), while the cluster mounted only for a
+    // collapsed inspector, so the everyday Layout state had NO visible tool. The
+    // Draw key/default mirrors `project_panel`'s `DisclosureSection` exactly, so
+    // the two can never disagree about what "expanded" means.
+    // G1: the network nodes on THIS sheet/floor are the minimap's content
+    // landmarks (content-pixel space, mapped like the sheet substrate).
     final inspectorCollapsed = ref.watch(inspectorCollapsedProvider);
+    final net = ref.watch(networkControllerProvider).network;
+    final networkExists = net.nodes.isNotEmpty || net.edges.isNotEmpty;
+    final drawSectionExpanded =
+        ref.watch(sectionExpandedProvider(SectionKey('Draw', !networkExists)));
+    final showToolCluster = inspectorCollapsed || !drawSectionExpanded;
     final minimapMarkers = <Offset>[
-      for (final n in ref.watch(networkControllerProvider).network.nodes)
+      for (final n in net.nodes)
         if (n.sheetId == sheet.id && n.floorIndex == floorIndex)
           Offset(n.x, n.y),
     ];
@@ -1331,12 +1432,12 @@ class _SharedSheet extends ConsumerWidget {
         ),
         // On-canvas tool cluster (left edge, vertically centred) — SWITCH the
         // primary draw tools (Select / Run / Riser) + the active-layer service
-        // without the inspector (G3). Shown ONLY when the inspector is collapsed
-        // and a mechanical layer is active, so an inspector-open workspace — and
-        // every seeded golden — is byte-identical. Its tool taps route through
-        // the same `_armTool` the single-key shortcuts use (shared mutual
-        // exclusion).
-        if (mechanicalActive && !calibrating && inspectorCollapsed)
+        // without the inspector (G3/F3). Shown when a mechanical layer is active
+        // (and calibration isn't owning the click) AND the tools are not already
+        // reachable in the inspector — i.e. the inspector is collapsed OR its
+        // DRAW section is. Its tool taps route through the same `_armTool` the
+        // single-key shortcuts use (shared mutual exclusion).
+        if (mechanicalActive && !calibrating && showToolCluster)
           Positioned(
             left: MechXSpacing.md,
             top: 0,

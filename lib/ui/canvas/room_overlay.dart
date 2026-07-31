@@ -1,12 +1,17 @@
 import 'package:flutter/widgets.dart';
-import 'package:flutter/gestures.dart' show kSecondaryButton, PointerDownEvent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/network/network.dart' show NodeComponent;
 import 'package:mechx_engine/sizing/room_air.dart';
 
 import '../../store/annotation_store.dart';
+import '../../store/app_state.dart' show statusMessageProvider;
+import '../../store/network_store.dart' show networkControllerProvider;
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../strings/app_strings.dart';
+import '../strings/plural.dart';
+import 'armed_delete.dart';
 import 'viewport.dart';
 
 /// What a live pointer drag on the room overlay is doing (E6): drawing a NEW
@@ -50,6 +55,9 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
   bool _cornerUsesAx = false, _cornerUsesAy = false;
   bool _snapped = false; // whether the one-per-drag undo snapshot was taken
 
+  /// C4 — the two-click, pointer-UP secondary delete.
+  final _armed = ArmedSecondaryDelete();
+
   /// Handle hit radius in SCREEN pixels (a resize grip near a corner).
   static const double _handleHitPx = 11;
 
@@ -59,6 +67,7 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
     if (!widget.active) {
       _dragStart = null;
       _dragNow = null;
+      _armed.disarm();
     }
   }
 
@@ -72,7 +81,9 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
             a,
       ];
 
-  void _onSecondary(Offset localPos) {
+  /// The room whose centre is nearest [localPos] within the 40 px pick radius —
+  /// the delete candidate. Null when the click landed on nothing.
+  String? _deleteCandidate(Offset localPos) {
     final t = _transform;
     String? best;
     var bestD = double.infinity;
@@ -84,10 +95,61 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
         best = a.id;
       }
     }
-    if (best != null && bestD <= 40) {
-      ref.read(roomAreasProvider.notifier).removeById(best);
-      ref.read(selectedAnnotationProvider.notifier).clear(best);
+    return (best != null && bestD <= 40) ? best : null;
+  }
+
+  /// C4 — the delete completes on pointer-UP after a confirming second click
+  /// (see [ArmedSecondaryDelete]), and the pill names the room AND the
+  /// auto-placed air terminals it leaves behind (they keep feeding duct sizing
+  /// and the BOM, so their survival must not be silent). The removal itself is
+  /// unchanged — still one undoable annotation step.
+  void _onSecondaryUp(PointerUpEvent e) {
+    final outcome = _armed.pointerUp(e, _deleteCandidate(e.localPosition));
+    final id = outcome.id;
+    if (id == null) return;
+    final room = _mine.where((r) => r.id == id).firstOrNull;
+    if (room == null) return;
+    final strings = MechXStrings.of(context);
+    final status = ref.read(statusMessageProvider.notifier);
+    switch (outcome.action) {
+      case ArmedDeleteAction.none:
+        return;
+      case ArmedDeleteAction.armed:
+        status.showStatus(strings.format(
+            StringKey.annotationDeleteArmTemplate, {'what': room.name}));
+      case ArmedDeleteAction.deleted:
+        final left = _placedTerminalsIn(room);
+        ref.read(roomAreasProvider.notifier).removeById(id);
+        ref.read(selectedAnnotationProvider.notifier).clear(id);
+        status.showStatus(left == 0
+            ? strings
+                .format(StringKey.annotationDeletedTemplate, {'what': room.name})
+            : strings.format(StringKey.annotationRoomDeletedTemplate, {
+                'what': room.name,
+                'terminals': pluralCount(
+                    left,
+                    strings(StringKey.annotationTerminalOne),
+                    strings(StringKey.annotationTerminalMany)),
+              }));
     }
+  }
+
+  /// How many auto-placed supply diffusers / return grilles sit inside [room]'s
+  /// footprint — the same containment test `autoPlaceRoomTerminals` uses to
+  /// recognise its own generation, so the count names exactly what is orphaned.
+  int _placedTerminalsIn(RoomArea room) {
+    final net = ref.read(networkControllerProvider).network;
+    var n = 0;
+    for (final node in net.nodes) {
+      if (node.component != NodeComponent.supplyDiffuser &&
+          node.component != NodeComponent.returnGrille) {
+        continue;
+      }
+      if (room.containsNode(node.sheetId, node.floorIndex, node.x, node.y)) {
+        n++;
+      }
+    }
+    return n;
   }
 
   /// The room currently selected on the canvas (this sheet/floor), or null.
@@ -200,7 +262,7 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
     if (_mode == _RoomDrag.draw) {
       final a = _dragStart, b = _dragNow;
       if (a != null && b != null) {
-        ref.read(roomAreasProvider.notifier).add(
+        final id = ref.read(roomAreasProvider.notifier).add(
               sheetId: widget.sheetId,
               floorIndex: widget.floorIndex,
               ax: a.dx,
@@ -208,6 +270,12 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
               bx: b.dx,
               by: b.dy,
             );
+        // F6: a just-drawn room is SELECTED, like every drawn node — its type /
+        // ceiling / ACH inputs are then already framed in the inspector instead
+        // of being a hunt through the Rooms list.
+        if (id != null) {
+          ref.read(selectedAnnotationProvider.notifier).selectRoom(id);
+        }
       }
     }
     setState(() {
@@ -265,9 +333,8 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
     return MouseRegion(
       cursor: SystemMouseCursors.precise,
       child: Listener(
-        onPointerDown: (PointerDownEvent e) {
-          if (e.buttons == kSecondaryButton) _onSecondary(e.localPosition);
-        },
+        onPointerDown: _armed.pointerDown,
+        onPointerUp: _onSecondaryUp,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTapUp: (d) => _onTapUp(d.localPosition),

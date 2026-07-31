@@ -177,11 +177,24 @@ class PhaseBalanceResult {
   final double l3;
   final double imbalancePercent;
 
+  /// True when a DIFFERENT phase assignment would materially cut this board's
+  /// imbalance — i.e. the imbalance is something the engineer can act on (a phase
+  /// pin holding a way on a loaded line, a sticky prior assignment). False when
+  /// the imbalance is inherent to the board's own single-phase loads (two ways
+  /// can never load three lines evenly), because the balancer has already spread
+  /// them as evenly as they go.
+  ///
+  /// Only determined for a board whose imbalance is over the reporting limit; on
+  /// an already-even board it is false (there is nothing to reduce). Additive —
+  /// defaults to false.
+  final bool imbalanceReducible;
+
   const PhaseBalanceResult({
     required this.l1,
     required this.l2,
     required this.l3,
     required this.imbalancePercent,
+    this.imbalanceReducible = false,
   });
 }
 
@@ -304,6 +317,31 @@ class ElectricalSystemResult {
 
   final List<ElectricalWarning> warnings;
 
+  /// Circuit ids of the FEEDER ways whose protective device `computeSystem`
+  /// lifted onto the selectivity floor AND which reached the full
+  /// `selectivityRatio ×` the fed board's incomer.
+  ///
+  /// A pair in this set is the sizer's own deliberate coordination choice, so
+  /// `faultStudy` suppresses the `selectivity-partial` ADVISORY for it (landing
+  /// in the 1.6×..2.5× band is what the floor targets — it is not a finding).
+  /// A feeder whose floor was CAPPED by its load-sized cable's ampacity is NOT
+  /// listed: the residual partial (or non-) selectivity is real and stays
+  /// reported. `non-selective` is never suppressed. Empty (the default) ⇒
+  /// nothing is suppressed ⇒ byte-identical for legacy-constructed results.
+  final Set<String> feederFloorsApplied;
+
+  /// G3 — circuit ids of the FEEDER ways whose selectivity floor was LIMITED by
+  /// the conductor-protection CAP: the rung the floor targets sits above the
+  /// largest rung the way's LOAD-sized cable's derated Iz protects, so `In ≤ Iz`
+  /// (which always wins) held the device below the `selectivityRatio ×` target.
+  ///
+  /// Disjoint from [feederFloorsApplied] by construction (a capped floor never
+  /// reaches its target). Purely EXPLANATORY: it changes no sizing, and lets
+  /// `faultStudy` say WHY the residual pair cannot simply be given a bigger
+  /// breaker — the lever is the cable, not the device. Empty (the default) ⇒
+  /// every message keeps its legacy wording ⇒ byte-identical.
+  final Set<String> feederFloorsCapped;
+
   const ElectricalSystemResult({
     required this.projectId,
     required this.panels,
@@ -312,5 +350,7 @@ class ElectricalSystemResult {
     required this.supply,
     required this.earthing,
     required this.warnings,
+    this.feederFloorsApplied = const {},
+    this.feederFloorsCapped = const {},
   });
 }

@@ -28,8 +28,11 @@ import 'cable_family.dart';
 import 'control/starter.dart' show StarterType;
 import 'diversity_library.dart' show DiversityLibrary;
 import 'earthing.dart';
+// `fault.dart` is a pure post-processing pass that imports neither this file nor
+// anything that reaches it (puil/units/earthing/load_kind/model/panel_results
+// only), so taking `selectivityRatio` from it introduces no import cycle.
 import 'fault.dart' show Impedance, conductorImpedance, downstreamFaultA,
-    sourceImpedanceFromIsc;
+    selectivityRatio, sourceImpedanceFromIsc;
 import 'geo_length.dart';
 import 'harmonics.dart' show neutralOversizeFactor;
 import 'headroom.dart' show HeadroomSpec;
@@ -301,6 +304,84 @@ PhaseBalance balancePhases(
   );
 }
 
+// ── phase-imbalance ACTIONABILITY ───────────────────────────────────────────
+
+/// Imbalance (%) above which a three-phase board's phase loading is reported —
+/// and only ever reported when a different assignment could actually improve it
+/// (see [minimumPhaseSpreadA]).
+const double kPhaseImbalanceWarnPercent = 15;
+
+/// How many percentage points of imbalance a re-assignment must save before the
+/// imbalance counts as REDUCIBLE. A judge-only actionability threshold (not a
+/// standards value): below it the board is as even as its own loads allow and
+/// asking the engineer to "redistribute" would be an instruction that cannot be
+/// carried out.
+const double kPhaseImbalanceReducibleMarginPercent = 1.0;
+
+/// Boards with at most this many single-phase ways get an EXACT minimum-spread
+/// search (3^n, symmetry-reduced ⇒ 3^(n-1) walks); above it the balancer's own
+/// freest re-run is the reference.
+const int kPhaseExactSearchMaxWays = 10;
+
+double _spread3(double a, double b, double c) =>
+    math.max(a, math.max(b, c)) - math.min(a, math.min(b, c));
+
+/// The smallest line-current spread (A) ANY assignment of [currents] — the
+/// single-phase way currents of one three-phase board — could reach.
+///
+/// Three-phase ways are deliberately absent: they load all three lines equally,
+/// so they shift every sum by the same amount and cannot change the spread.
+/// Phase PINS are released here, because unpinning is an action the engineer can
+/// take, so a pin-forced imbalance counts as reducible.
+///
+/// Exhaustive (hence exact) while the way count is ≤ [exactSearchMax]: the
+/// largest way is fixed on the first line (three empty lines are interchangeable)
+/// so only 3^(n-1) assignments are walked. Above that the balancer's own greedy +
+/// relocate/swap refinement — run free of pins and prior seeding — is the
+/// reference; a board with that many single-phase ways balances to well inside
+/// the warning limit unless one load dominates, and there relocate/swap is
+/// already at the floor.
+double minimumPhaseSpreadA(
+  List<double> currents, {
+  int exactSearchMax = kPhaseExactSearchMaxWays,
+}) {
+  final ways = currents.where((c) => c > 0).toList()
+    ..sort((a, b) => b.compareTo(a));
+  if (ways.isEmpty) return 0;
+
+  if (ways.length <= exactSearchMax) {
+    final lines = [0.0, 0.0, 0.0];
+    var best = double.infinity;
+    void walk(int i) {
+      if (i == ways.length) {
+        final s = _spread3(lines[0], lines[1], lines[2]);
+        if (s < best) best = s;
+        return;
+      }
+      // Symmetry break: with three empty lines the heaviest way can sit on L1
+      // without loss of generality.
+      final lanes = i == 0 ? 1 : 3;
+      for (var p = 0; p < lanes; p++) {
+        lines[p] += ways[i];
+        walk(i + 1);
+        lines[p] -= ways[i];
+      }
+    }
+
+    walk(0);
+    return roundTo(best, 1);
+  }
+
+  final free = balancePhases(
+    [
+      for (var i = 0; i < ways.length; i++)
+        _PhaseCircuit('#$i', false, ways[i], null),
+    ],
+    ElectricalSystem.threePhase,
+  );
+  return roundTo(_spread3(free.l1, free.l2, free.l3), 1);
+}
+
 // ── busbar section splitting ────────────────────────────────────────────────
 
 /// One outgoing way's loading, for grouping ways onto busbar sections.
@@ -467,6 +548,13 @@ class ComputePanelOptions {
   /// strict-improvement rule. A stability preference, not a standards value.
   final double phaseReassignThresholdA;
 
+  /// SELECTIVITY FLOOR (A) for a feeder way, keyed by circuit id — derived by
+  /// `computeSystem` from the fed board's incomer rating so the upstream feeder
+  /// discriminates with it. Fed straight to [selectBreaker]'s `minRatingA`; a
+  /// way absent from the map (the default: empty) sizes on its design current
+  /// alone ⇒ byte-identical.
+  final Map<String, double> feederBreakerFloorA;
+
   const ComputePanelOptions({
     this.feederLoadW = const {},
     this.panelSystems = const {},
@@ -480,6 +568,7 @@ class ComputePanelOptions {
     this.diversityLibrary,
     this.priorAssignment = const {},
     this.phaseReassignThresholdA = 0,
+    this.feederBreakerFloorA = const {},
   });
 }
 
@@ -637,11 +726,21 @@ _CircuitComputation _computeCircuit(
           isFeeder: isFeeder,
         );
 
+  // E8a — VOLTAGE BASE. A final circuit sits on THIS panel's bus. A FEEDER
+  // terminates on the board it FEEDS, so the load it carries is drawn at the FED
+  // board's voltage and its drop is a percentage of that same voltage: a feeder
+  // to a 220 V single-phase sub-board is a 220 V run, not a 231 V one, so the
+  // cumulative origin→load chain no longer mixes two bases. With no
+  // [ComputePanelOptions.panelById] (a direct `computePanel` call) the fed panel
+  // is unknown and this panel's own voltage is used exactly as before.
+  final fedPanel =
+      c.feedsPanelId != null ? opts.panelById[c.feedsPanelId] : null;
+  final refPanel = fedPanel ?? panel;
   // Single-phase circuits on a three-phase panel run at the phase voltage (~230).
-  final phaseVoltageV = panel.system == ElectricalSystem.threePhase
-      ? roundTo(panel.voltage.volts / math.sqrt(3), 0)
-      : panel.voltage.volts;
-  final useVoltageV = threePhase ? panel.voltage.volts : phaseVoltageV;
+  final phaseVoltageV = refPanel.system == ElectricalSystem.threePhase
+      ? roundTo(refPanel.voltage.volts / math.sqrt(3), 0)
+      : refPanel.voltage.volts;
+  final useVoltageV = threePhase ? refPanel.voltage.volts : phaseVoltageV;
 
   // Design current: a source-supplied FLA wins (A5); a motor derives its
   // nameplate FLC from the SHAFT kW divided by the assumed motor efficiency
@@ -672,9 +771,40 @@ _CircuitComputation _computeCircuit(
   }
   final designCurrent = Current(roundTo(ib.amperes, 1));
 
-  final breaker = selectBreaker(
+  // E5 — a FINAL SOCKET way sizes its OWN device + conductor on the
+  // UNDIVERSIFIED connected load. `demandFactor` is a coincidence factor across
+  // ways: it belongs in the aggregation that feeds the busbar / incomer / demand
+  // (and it still does — [designCurrent], the phase balance and every demand
+  // figure keep the diversified current), but a stop-kontak way is built to
+  // carry every socket on it. Sizing the device on the diversified figure put
+  // adjacent socket ways on different rungs purely from a utilisation factor
+  // (2.8 kW → 10 A beside 3.0 kW → 16 A). Feeders (already an aggregation of the
+  // fed board's diversified demand) and every non-socket kind are unchanged, so
+  // a project without diversified socket finals is byte-identical.
+  // VERIFY — notAnSniClause: Indonesian practice puts a stop-kontak final on a
+  // uniform 16 A / 2.5 mm² make-up; no PUIL clause forbids diversifying a final
+  // circuit's own device, this is a drafting/uniformity convention.
+  final sizeOnUndiversifiedLoad = !isFeeder && c.loadKind == LoadKind.socket;
+  final Current sizingCurrent;
+  if (sizeOnUndiversifiedLoad && c.flaOverrideA == null && !motorLike) {
+    final undiversified = loadCurrent(
+      power: Power(c.loadW),
+      voltage: Voltage(useVoltageV),
+      cosPhi: c.cosPhi,
+      threePhase: threePhase,
+    );
+    // A demand factor above 1 must never size the device BELOW the load it
+    // carries, so the sizing current is never less than the design current.
+    sizingCurrent = Current(math.max(ib.amperes, undiversified.amperes));
+  } else {
+    sizingCurrent = ib;
+  }
+
+  // THE LOAD-SIZED DEVICE. Deliberately floor-free: the conductor below is sized
+  // against THIS pick, so a coordination floor can never inflate copper (E3).
+  final loadBreaker = selectBreaker(
     profile,
-    designCurrent: ib,
+    designCurrent: sizingCurrent,
     loadKind: c.loadKind,
     overrideA: c.breakerOverrideA,
   );
@@ -698,8 +828,8 @@ _CircuitComputation _computeCircuit(
 
   final cable = sizeCable(
     profile,
-    designCurrent: ib,
-    breakerRating: breaker.ratingA,
+    designCurrent: sizingCurrent,
+    breakerRating: loadBreaker.ratingA,
     deratingFactor: df,
     minSectionMm2: minSection,
     insulation: cableInsulation,
@@ -714,6 +844,37 @@ _CircuitComputation _computeCircuit(
       isLighting: c.isLighting,
     ),
   );
+
+  // E3/E4 — FEEDER SELECTIVITY FLOOR: DEVICE-ONLY, AMPACITY-CAPPED.
+  //
+  // Real practice discriminates a feeder from the board it feeds with the
+  // DEVICE (a rating band, and on an MCCB its settings) — not by inflating the
+  // conductor. So the floor is applied here, after the cable was sized on the
+  // load, and is capped at the largest rung the load-sized cable's derated Iz
+  // still protects: overload protection of the conductor (In ≤ Iz) is
+  // inviolable and always beats coordination. When the cap bites below the floor
+  // target the residual non-/partial-selectivity is REAL and stays reported by
+  // `faultStudy` (that feeder is not listed in
+  // [ElectricalSystemResult.feederFloorsApplied]).
+  //
+  // A way `computeSystem` did not flag, and any way carrying an explicit
+  // override, keeps the load-sized device verbatim ⇒ byte-identical.
+  final floorA =
+      c.breakerOverrideA != null ? null : opts.feederBreakerFloorA[c.id];
+  var breaker = loadBreaker;
+  if (floorA != null) {
+    final floored = selectBreaker(
+      profile,
+      designCurrent: sizingCurrent,
+      loadKind: c.loadKind,
+      minRatingA: floorA,
+      maxRatingA: cable.deratedIz,
+    );
+    // The cap may only hold the floor back, never pull the device below the
+    // rating the load itself demanded (the ampacity-impossible fallback is the
+    // one case where Iz < In, and it is already an error-severity finding).
+    if (floored.ratingA.amperes > breaker.ratingA.amperes) breaker = floored;
+  }
 
   final runsPerPhase = cable.runsPerPhase ?? 1;
   final vd = voltageDrop(
@@ -756,6 +917,39 @@ _CircuitComputation _computeCircuit(
       message:
           '${c.name}: life-safety circuit specified with ${c.cableType} — use '
           'fire-resistant cable (FRC/MICA) so the run survives a fire.',
+      panelId: panel.id,
+      circuitId: c.id,
+    ));
+  }
+  // E6 — a LIFE-SAFETY motor/pump way (fire pump, jockey pump, sprinkler
+  // booster) is auto-sized like any other motor: an ordinary thermal-magnetic
+  // device whose OVERLOAD element will trip a stalled or over-pumping machine.
+  // Under fire duty the machine is expected to run to destruction rather than
+  // stop, so the protection is specified differently (locked-rotor-rated,
+  // overload trip disabled / alarm-only). The engine does NOT fabricate that
+  // device — it has no data for it — so this is an INFO note carried onto the
+  // schedule, not a sizing change.
+  //
+  // G5 — the note is a SPEC INSTRUCTION for the issued schedule, not a request
+  // for an app setting (there is no overload-trip-disabled field to set, and
+  // asking for one sent the engineer hunting for a control that does not
+  // exist). The schedule row for this way now prints the matching
+  // `· no-OL trip (fire)` KETERANGAN token
+  // (`report/electrical_sld_drawing.dart`, same `lifeSafety && motorLike`
+  // gate), so the note and the deliverable say the same thing.
+  // VERIFY — notAnSniClause: NFPA 20 fire-pump controller practice (locked-rotor
+  // rated protection, no overload trip), NOT a PUIL/SNI clause.
+  if (c.lifeSafety &&
+      (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump)) {
+    warnings.add(ElectricalWarning(
+      code: 'fire-pump-protection',
+      severity: WarningSeverity.info,
+      message:
+          '${c.name}: fire pump way - specify overload-trip-disabled protection '
+          'on the schedule (fire duty runs to destruction - NFPA 20 practice). '
+          'Sized here as an ordinary ${_num(breaker.ratingA.amperes)} A curve '
+          '${breaker.curve.name.toUpperCase()} device; the schedule row carries '
+          '"no-OL trip (fire)".',
       panelId: panel.id,
       circuitId: c.id,
     ));
@@ -884,15 +1078,77 @@ ElectricalPanelResult computePanel(
     ));
   }
 
-  if (panel.system == ElectricalSystem.threePhase &&
-      balance.imbalancePercent > 15) {
+  // PHASE IMBALANCE — reported only when it is actually REDUCIBLE.
+  //
+  // `balancePhases` has already spread every unpinned single-phase way as evenly
+  // as it can, so "redistribute single-phase circuits" is a real instruction ONLY
+  // when some other assignment would materially cut the imbalance — a phase PIN
+  // holding a way on an already-loaded line, or a prior-assignment seed the
+  // stability threshold refused to leave. Two single-phase ways can never load
+  // three lines evenly: that imbalance is inherent to the board's loads, and the
+  // engineer is not told to fix what no re-assignment can fix. The percentage
+  // still prints on the schedule TOTAL footer and in the panel inspector /
+  // report — only the unactionable WARNING is dropped. The floor search runs
+  // ONLY for a board already over the limit, so an even board costs nothing.
+  final overImbalanceLimit = panel.system == ElectricalSystem.threePhase &&
+      balance.imbalancePercent > kPhaseImbalanceWarnPercent;
+  var imbalanceReducible = false;
+  var bestImbalancePercent = balance.imbalancePercent;
+  if (overImbalanceLimit) {
+    // The average line current is assignment-invariant (the same total load is
+    // shared out however the ways are placed), so the achievable imbalance is
+    // the achievable SPREAD measured against the same average.
+    final avgA = (balance.l1 + balance.l2 + balance.l3) / 3;
+    final bestSpreadA = minimumPhaseSpreadA([
+      for (final cm in comps)
+        if (!cm.threePhase) cm.result.designCurrent.amperes,
+    ]);
+    bestImbalancePercent =
+        avgA > 0 ? roundTo((bestSpreadA / avgA) * 100, 1) : 0.0;
+    imbalanceReducible = bestImbalancePercent +
+            kPhaseImbalanceReducibleMarginPercent <
+        balance.imbalancePercent;
+  }
+
+  if (overImbalanceLimit && imbalanceReducible) {
+    final pinnedWays = [
+      for (var i = 0; i < comps.length; i++)
+        if (!comps[i].threePhase && branches[i].phaseOverride != null)
+          branches[i].id,
+    ].length;
+    final action = pinnedWays > 0
+        ? 'Unpin the ${pinnedWays == 1 ? 'way pinned' : '$pinnedWays ways pinned'} '
+            'to a phase so the balancer can even the load'
+        : 'Redistribute single-phase circuits';
     warnings.add(ElectricalWarning(
       code: 'phase-imbalance',
       severity: WarningSeverity.warning,
       message:
           'Phase loading is unbalanced by ${balance.imbalancePercent}% '
           '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A). '
-          'Redistribute single-phase circuits.',
+          '$action — $bestImbalancePercent% is achievable.',
+      panelId: panel.id,
+    ));
+  }
+
+  // E7 — an imbalance over the limit that NO re-assignment can improve is still
+  // worth printing: it is a real property of the board (the incomer, busbar and
+  // feeder all size on the heavy phase) and the engineer has a genuine, but
+  // different, action — add a third single-phase leg or replace two 1φ machines
+  // with one 3φ appliance. INFO, never a warning: there is nothing wrong with
+  // the design as drawn, and "redistribute" would be an instruction that cannot
+  // be carried out. Same threshold + same reducibility test as the warning path,
+  // so exactly one of the two ever fires.
+  if (overImbalanceLimit && !imbalanceReducible) {
+    warnings.add(ElectricalWarning(
+      code: 'phase-imbalance-inherent',
+      severity: WarningSeverity.info,
+      message:
+          'Phase loading is unbalanced by ${balance.imbalancePercent}% '
+          '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A) - '
+          'inherent to the single-phase load set ($bestImbalancePercent% is the '
+          'best any assignment reaches), so no redistribution helps; consider a '
+          'third leg or a 3-phase appliance.',
       panelId: panel.id,
     ));
   }
@@ -1043,11 +1299,13 @@ ElectricalPanelResult computePanel(
     }
   }
   // Surface the harmonic neutral oversize (a recommendation that never reaches
-  // the schedule does not get built).
+  // the schedule does not get built). INFO, not a warning: the always-on FOLD 2
+  // has already oversized the neutral bar, so the condition is self-compensated
+  // — a sizing note to carry onto the schedule, with nothing left to act on.
   if (neutralPe.neutralOversizeFactor > 1) {
     warnings.add(ElectricalWarning(
       code: 'harmonics-neutral-oversize',
-      severity: WarningSeverity.warning,
+      severity: WarningSeverity.info,
       message:
           '${panel.name}: single-phase non-linear load '
           '(${(triplenFraction * 100).round()}%) raises triplen-harmonic '
@@ -1084,6 +1342,7 @@ ElectricalPanelResult computePanel(
       l2: balance.l2,
       l3: balance.l3,
       imbalancePercent: balance.imbalancePercent,
+      imbalanceReducible: imbalanceReducible,
     ),
     warnings: warnings,
   );
@@ -1131,7 +1390,9 @@ ElectricalSystemResult computeSystem(
 }) {
   final panels = project.panels;
   final byId = {for (final p in panels) p.id: p};
-  final warnings = <ElectricalWarning>[];
+  // Topology warnings raised before any sizing — pass-invariant, so they seed
+  // each sizing pass's warning list rather than accumulating across passes.
+  final baseWarnings = <ElectricalWarning>[];
 
   // child panel id -> parent panel id.
   final parentOf = <String, String>{};
@@ -1148,7 +1409,7 @@ ElectricalSystemResult computeSystem(
     final parent = byId[entry.value];
     if (child?.system == ElectricalSystem.threePhase &&
         parent?.system == ElectricalSystem.singlePhase) {
-      warnings.add(ElectricalWarning(
+      baseWarnings.add(ElectricalWarning(
         code: 'feeder-phase-mismatch',
         severity: WarningSeverity.error,
         message:
@@ -1197,7 +1458,7 @@ ElectricalSystemResult computeSystem(
     }
   }
   if (cycle) {
-    warnings.add(const ElectricalWarning(
+    baseWarnings.add(const ElectricalWarning(
       code: 'feeder-cycle',
       severity: WarningSeverity.error,
       message:
@@ -1248,239 +1509,343 @@ ElectricalSystemResult computeSystem(
   final applyWithstand =
       originFaultLevel != null && originFaultLevel.amperes > 0;
   final originIscA = applyWithstand ? originFaultLevel.amperes : 0.0;
-  final panelFaultA = <String, double>{};
-  final panelSourceZ = <String, Impedance>{};
 
-  // The feeder circuit id feeding each child panel (parent way).
+  // The feeder circuit id feeding each child panel (parent way), and the panel
+  // each feeder way lives ON (so a floored feeder's result can be found again).
   final feederCircuitOf = <String, String>{}; // child panel id → feeder id
+  final feederParentOf = <String, String>{}; // feeder id → parent panel id
   for (final p in panels) {
     for (final c in p.circuits) {
-      if (c.feedsPanelId != null) feederCircuitOf[c.feedsPanelId!] = c.id;
+      if (c.feedsPanelId != null) {
+        feederCircuitOf[c.feedsPanelId!] = c.id;
+        feederParentOf[c.id] = p.id;
+      }
     }
   }
 
-  // Size every panel (root-first is fine for the core; demand is precomputed).
-  final results = <String, ElectricalPanelResult>{};
-  for (final id in postOrder.reversed) {
-    final panel = byId[id];
-    if (panel == null) continue;
+  // ── one complete sizing + post-processing pass ─────────────────────────────
+  // Everything below (per-panel sizing, FOLD-1 fault propagation, cumulative
+  // voltage drop, the judge-only feeder check, supply summary, earthing) is a
+  // pure function of the project + [feederBreakerFloorA], so it can be re-run
+  // once with a selectivity floor applied (see the two-pass note after it).
+  ElectricalSystemResult sizeAll(Map<String, double> feederBreakerFloorA) {
+    final warnings = <ElectricalWarning>[...baseWarnings];
+    final panelFaultA = <String, double>{};
+    final panelSourceZ = <String, Impedance>{};
 
-    // Prospective fault + source impedance at this bus (FOLD 1), when enabled.
-    Current? faultLevelA;
-    if (applyWithstand) {
-      final lineVoltageV = panel.voltage.volts;
+    // Size every panel (root-first is fine for the core; demand is precomputed).
+    final results = <String, ElectricalPanelResult>{};
+    for (final id in postOrder.reversed) {
+      final panel = byId[id];
+      if (panel == null) continue;
+
+      // Prospective fault + source impedance at this bus (FOLD 1), when enabled.
+      Current? faultLevelA;
+      if (applyWithstand) {
+        final lineVoltageV = panel.voltage.volts;
+        final parentId = parentOf[id];
+        final feederId = feederCircuitOf[id];
+        final double faultA;
+        final Impedance sourceZ;
+        if (parentId == null || feederId == null) {
+          // Root / utility-fed panel — the full origin fault.
+          faultA = originIscA;
+          sourceZ = sourceImpedanceFromIsc(originIscA, lineVoltageV);
+        } else {
+          final upstreamIscA = panelFaultA[parentId] ?? originIscA;
+          final upstreamSourceZ = panelSourceZ[parentId] ??
+              sourceImpedanceFromIsc(originIscA, lineVoltageV);
+          final feederResult = results[parentId]
+              ?.circuits
+              .where((c) => c.circuitId == feederId)
+              .firstOrNull;
+          final feederModel =
+              byId[parentId]?.circuits.where((c) => c.id == feederId).firstOrNull;
+          final csa = feederResult?.cable.csaMm2 ?? 0;
+          final runs = (feederResult?.cable.runsPerPhase ?? 1) > 1
+              ? feederResult!.cable.runsPerPhase!
+              : 1;
+          final lengthM = feederModel?.length.meters ?? 0;
+          final single =
+              conductorImpedance(profile, csa, lengthM, panel.material);
+          final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
+          sourceZ = upstreamSourceZ + feederZ;
+          faultA = downstreamFaultA(lineVoltageV, sourceZ, upstreamIscA);
+        }
+        panelFaultA[id] = faultA;
+        panelSourceZ[id] = sourceZ;
+        faultLevelA = Current(faultA);
+      }
+
+      results[id] = computePanel(
+        profile,
+        panel,
+        opts: ComputePanelOptions(
+          feederLoadW: feederLoadWByPanel[id] ?? const {},
+          panelSystems: panelSystems,
+          earthingSystem: project.earthingSystem,
+          faultLevelA: faultLevelA,
+          busbarClearingTimeS: busbarClearingTimeS,
+          calibrationBySheet: calibrationBySheet,
+          building: building,
+          panelById: byId,
+          diversityLibrary: diversityLibrary,
+          priorAssignment: priorAssignments[id] ?? const {},
+          phaseReassignThresholdA: phaseReassignThresholdA,
+          feederBreakerFloorA: feederBreakerFloorA,
+        ),
+      );
+    }
+
+    // Cumulative (origin → load) voltage drop down the feeder tree, root-first.
+    final panelUpstreamDropPct = <String, double>{};
+    for (final id in postOrder.reversed) {
       final parentId = parentOf[id];
-      final feederId = feederCircuitOf[id];
-      final double faultA;
-      final Impedance sourceZ;
-      if (parentId == null || feederId == null) {
-        // Root / utility-fed panel — the full origin fault.
-        faultA = originIscA;
-        sourceZ = sourceImpedanceFromIsc(originIscA, lineVoltageV);
-      } else {
-        final upstreamIscA = panelFaultA[parentId] ?? originIscA;
-        final upstreamSourceZ = panelSourceZ[parentId] ??
-            sourceImpedanceFromIsc(originIscA, lineVoltageV);
+      var upstream = 0.0;
+      if (parentId != null) {
+        final parent = byId[parentId];
+        final feeder =
+            parent?.circuits.where((c) => c.feedsPanelId == id).firstOrNull;
         final feederResult = results[parentId]
             ?.circuits
-            .where((c) => c.circuitId == feederId)
+            .where((c) => c.circuitId == feeder?.id)
             .firstOrNull;
-        final feederModel =
-            byId[parentId]?.circuits.where((c) => c.id == feederId).firstOrNull;
-        final csa = feederResult?.cable.csaMm2 ?? 0;
-        final runs = (feederResult?.cable.runsPerPhase ?? 1) > 1
-            ? feederResult!.cable.runsPerPhase!
-            : 1;
-        final lengthM = feederModel?.length.meters ?? 0;
-        final single =
-            conductorImpedance(profile, csa, lengthM, panel.material);
-        final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
-        sourceZ = upstreamSourceZ + feederZ;
-        faultA = downstreamFaultA(lineVoltageV, sourceZ, upstreamIscA);
+        upstream = (panelUpstreamDropPct[parentId] ?? 0) +
+            (feederResult?.voltageDrop.dropPercent ?? 0);
       }
-      panelFaultA[id] = faultA;
-      panelSourceZ[id] = sourceZ;
-      faultLevelA = Current(faultA);
+      upstream = roundTo(upstream, 2);
+      panelUpstreamDropPct[id] = upstream;
+
+      final pr = results[id];
+      if (pr == null) continue;
+      // Feeder circuit ids in this panel — their cumulative drop is the sub-bus
+      // drop downstream branches already account for, so don't warn on them.
+      final feederIds = (byId[id]?.circuits ?? const <ElectricalCircuit>[])
+          .where((c) => c.feedsPanelId != null)
+          .map((c) => c.id)
+          .toSet();
+      final newCircuits = <ElectricalCircuitResult>[];
+      for (final c in pr.circuits) {
+        final cum = roundTo(upstream + c.voltageDrop.dropPercent, 2);
+        newCircuits.add(c.copyWith(cumulativeDropPercent: cum));
+        if (!feederIds.contains(c.circuitId) &&
+            cum > c.voltageDrop.limitPercent + 1e-9) {
+          final w = ElectricalWarning(
+            code: 'cumulative-voltage-drop-exceeded',
+            severity: WarningSeverity.warning,
+            message:
+                '${c.name}: cumulative voltage drop $cum% from the origin exceeds '
+                'the ${c.voltageDrop.limitPercent}% limit (this run '
+                '${c.voltageDrop.dropPercent}% + $upstream% upstream) — shorten '
+                'the run, upsize the feeder, or relocate the load.',
+            panelId: id,
+            circuitId: c.circuitId,
+          );
+          pr.warnings.add(w);
+          warnings.add(w);
+        }
+      }
+      // Replace with the cumulative-drop-annotated circuits (in place).
+      results[id] = ElectricalPanelResult(
+        panelId: pr.panelId,
+        name: pr.name,
+        tag: pr.tag,
+        system: pr.system,
+        circuits: newCircuits,
+        incomer: pr.incomer,
+        busbar: pr.busbar,
+        busbarSections: pr.busbarSections,
+        neutralPeBars: pr.neutralPeBars,
+        connectedW: pr.connectedW,
+        demandW: pr.demandW,
+        demandCurrent: pr.demandCurrent,
+        futureLoadW: pr.futureLoadW,
+        headroomApplied: pr.headroomApplied,
+        spareWaysReserved: pr.spareWaysReserved,
+        phaseBalance: pr.phaseBalance,
+        warnings: pr.warnings,
+      );
     }
 
-    results[id] = computePanel(
-      profile,
-      panel,
-      opts: ComputePanelOptions(
-        feederLoadW: feederLoadWByPanel[id] ?? const {},
-        panelSystems: panelSystems,
-        earthingSystem: project.earthingSystem,
-        faultLevelA: faultLevelA,
-        busbarClearingTimeS: busbarClearingTimeS,
-        calibrationBySheet: calibrationBySheet,
-        building: building,
-        panelById: byId,
-        diversityLibrary: diversityLibrary,
-        priorAssignment: priorAssignments[id] ?? const {},
-        phaseReassignThresholdA: phaseReassignThresholdA,
-      ),
-    );
-  }
-
-  // Cumulative (origin → load) voltage drop down the feeder tree, root-first.
-  final panelUpstreamDropPct = <String, double>{};
-  for (final id in postOrder.reversed) {
-    final parentId = parentOf[id];
-    var upstream = 0.0;
-    if (parentId != null) {
-      final parent = byId[parentId];
-      final feeder =
-          parent?.circuits.where((c) => c.feedsPanelId == id).firstOrNull;
-      final feederResult = results[parentId]
-          ?.circuits
-          .where((c) => c.circuitId == feeder?.id)
-          .firstOrNull;
-      upstream = (panelUpstreamDropPct[parentId] ?? 0) +
-          (feederResult?.voltageDrop.dropPercent ?? 0);
-    }
-    upstream = roundTo(upstream, 2);
-    panelUpstreamDropPct[id] = upstream;
-
-    final pr = results[id];
-    if (pr == null) continue;
-    // Feeder circuit ids in this panel — their cumulative drop is the sub-bus
-    // drop downstream branches already account for, so don't warn on them.
-    final feederIds = (byId[id]?.circuits ?? const <ElectricalCircuit>[])
-        .where((c) => c.feedsPanelId != null)
-        .map((c) => c.id)
-        .toSet();
-    final newCircuits = <ElectricalCircuitResult>[];
-    for (final c in pr.circuits) {
-      final cum = roundTo(upstream + c.voltageDrop.dropPercent, 2);
-      newCircuits.add(c.copyWith(cumulativeDropPercent: cum));
-      if (!feederIds.contains(c.circuitId) &&
-          cum > c.voltageDrop.limitPercent + 1e-9) {
-        final w = ElectricalWarning(
-          code: 'cumulative-voltage-drop-exceeded',
+    // JUDGE-ONLY feeder-vs-fed-board check: a feeder way's design current is the
+    // fed board's diversified demand W converted at a balanced power factor, but
+    // the fed board's own incomer (and the current the feeder REALLY carries on
+    // its worst phase) is the WORST-PHASE line current — on an imbalanced fed
+    // board those diverge, and the feeder breaker can end up rated below what
+    // the board actually draws (nuisance trip under full demand, and the two
+    // printed figures contradict on the schedule). Never resizes — the honest
+    // fix is rebalancing the fed board's phases (or a breaker override).
+    for (final id in postOrder.reversed) {
+      final parent = byId[id];
+      final pr = results[id];
+      if (parent == null || pr == null) continue;
+      for (final c in parent.circuits) {
+        final childId = c.feedsPanelId;
+        if (childId == null) continue;
+        final childResult = results[childId];
+        final feederResult =
+            pr.circuits.where((r) => r.circuitId == c.id).firstOrNull;
+        if (childResult == null || feederResult == null) continue;
+        final childDemandA = childResult.demandCurrent.amperes;
+        final feederRatingA = feederResult.breaker.ratingA.amperes;
+        if (childDemandA <= 0 || feederRatingA + 1e-9 >= childDemandA) continue;
+        // Only offer "rebalance" when that board's imbalance is actually
+        // reducible; an imbalance inherent to its single-phase loads leaves the
+        // feeder rating (or splitting the load) as the honest fix.
+        final imbalance = childResult.phaseBalance.imbalancePercent;
+        final cause = imbalance <= 0
+            ? ' — raise the feeder rating'
+            : childResult.phaseBalance.imbalanceReducible
+                ? ' (phase imbalance $imbalance% — rebalance that board\'s '
+                    'single-phase ways or raise the feeder rating)'
+                : ' (phase imbalance $imbalance%, inherent to that board\'s '
+                    'single-phase loads — raise the feeder rating)';
+        pr.warnings.add(ElectricalWarning(
+          code: 'feeder-below-fed-demand',
           severity: WarningSeverity.warning,
           message:
-              '${c.name}: cumulative voltage drop $cum% from the origin exceeds '
-              'the ${c.voltageDrop.limitPercent}% limit (this run '
-              '${c.voltageDrop.dropPercent}% + $upstream% upstream) — shorten '
-              'the run, upsize the feeder, or relocate the load.',
+              '${c.name}: the feeder breaker is ${_num(feederRatingA)} A but '
+              '${childResult.name} draws ${_num(childDemandA)} A on its '
+              'worst-loaded phase$cause.',
           panelId: id,
-          circuitId: c.circuitId,
-        );
-        pr.warnings.add(w);
+          circuitId: c.id,
+        ));
+      }
+    }
+
+    // Collect every panel's warnings into the system list (after augmentation).
+    for (final id in postOrder.reversed) {
+      final pr = results[id];
+      if (pr == null) continue;
+      for (final w in pr.warnings) {
+        // Cumulative-drop warnings were already added above; skip duplicates.
+        if (w.code == 'cumulative-voltage-drop-exceeded') continue;
         warnings.add(w);
       }
     }
-    // Replace with the cumulative-drop-annotated circuits (in place).
-    results[id] = ElectricalPanelResult(
-      panelId: pr.panelId,
-      name: pr.name,
-      tag: pr.tag,
-      system: pr.system,
-      circuits: newCircuits,
-      incomer: pr.incomer,
-      busbar: pr.busbar,
-      busbarSections: pr.busbarSections,
-      neutralPeBars: pr.neutralPeBars,
-      connectedW: pr.connectedW,
-      demandW: pr.demandW,
-      demandCurrent: pr.demandCurrent,
-      futureLoadW: pr.futureLoadW,
-      headroomApplied: pr.headroomApplied,
-      spareWaysReserved: pr.spareWaysReserved,
-      phaseBalance: pr.phaseBalance,
-      warnings: pr.warnings,
+
+    // Supply summary from the diversified demand presented by the root panel(s).
+    final rootDemandW =
+        roots.fold(0.0, (s, p) => s + (panelDemandW[p.id] ?? 0));
+    final supplySystem = roots.firstOrNull?.system ?? ElectricalSystem.threePhase;
+    final supplyVoltage = roots.firstOrNull?.voltage ?? const Voltage(400);
+    final supply = SupplySummary(
+      connectedW: roundTo(connectedLoadW, 0),
+      demandW: roundTo(rootDemandW, 0),
+      demandVa: ApparentPower(roundTo(rootDemandW / assumedBuildingPf, 0)),
+      system: supplySystem,
+      voltage: supplyVoltage,
+    );
+
+    // Earthing system designed from the main incomer's PE conductor.
+    final mainResult = roots.firstOrNull != null ? results[roots.first.id] : null;
+    final mainIb = mainResult?.demandCurrent ?? const Current(0);
+    final mainBreaker =
+        selectBreaker(profile, designCurrent: mainIb, loadKind: LoadKind.feeder);
+    final mainCable = sizeCable(
+      profile,
+      designCurrent: mainIb,
+      breakerRating: mainBreaker.ratingA,
+      deratingFactor: 1,
+      minSectionMm2: 4,
+    );
+    final earthing = computeEarthing(
+      profile,
+      system: project.earthingSystem,
+      supplyPeMm2: profile.peConductorSizeMm2(mainCable.csaMm2),
+    );
+
+    // Which flagged feeders actually REACHED their selectivity target. A floor
+    // held back by the conductor-protection cap is deliberately absent, so the
+    // residual partial/non-selectivity keeps being reported by `faultStudy`.
+    final floorsApplied = <String>{};
+    // G3 — and, for the ones that did NOT reach it, whether the CONDUCTOR-
+    // PROTECTION CAP is what held them back (as opposed to the ladder simply
+    // running out of rungs). `selectBreaker` resolves the floor to the first
+    // rung ≥ the target and only then applies `maxRatingA` (the cable's derated
+    // Iz), so the cap bit exactly when that floor rung sits above Iz. Recording
+    // it here — rather than deep in `_computeCircuit` — keeps the per-circuit
+    // sizing path untouched, and reads the SAME ladder + Iz the sizer used.
+    final floorsCapped = <String>{};
+    final ladder = profile.standardBreakerRatingsA;
+    for (final entry in feederBreakerFloorA.entries) {
+      final parentId = feederParentOf[entry.key];
+      final r = results[parentId]
+          ?.circuits
+          .where((x) => x.circuitId == entry.key)
+          .firstOrNull;
+      if (r == null || r.breaker.overridden) continue;
+      if (r.breaker.ratingA.amperes + 1e-9 >= entry.value) {
+        floorsApplied.add(entry.key);
+        continue;
+      }
+      final floorRung = ladder.firstWhere((x) => x + 1e-9 >= entry.value,
+          orElse: () => ladder.last);
+      if (floorRung > r.cable.deratedIz.amperes) floorsCapped.add(entry.key);
+    }
+
+    return ElectricalSystemResult(
+      projectId: project.id,
+      panels: results,
+      order: postOrder.reversed.toList(),
+      totalDemandW: roundTo(rootDemandW, 0),
+      supply: supply,
+      earthing: earthing,
+      warnings: warnings,
+      feederFloorsApplied: floorsApplied,
+      feederFloorsCapped: floorsCapped,
     );
   }
 
-  // JUDGE-ONLY feeder-vs-fed-board check: a feeder way's design current is the
-  // fed board's diversified demand W converted at a balanced power factor, but
-  // the fed board's own incomer (and the current the feeder REALLY carries on
-  // its worst phase) is the WORST-PHASE line current — on an imbalanced fed
-  // board those diverge, and the feeder breaker can end up rated below what
-  // the board actually draws (nuisance trip under full demand, and the two
-  // printed figures contradict on the schedule). Never resizes — the honest
-  // fix is rebalancing the fed board's phases (or a breaker override).
-  for (final id in postOrder.reversed) {
-    final parent = byId[id];
-    final pr = results[id];
-    if (parent == null || pr == null) continue;
-    for (final c in parent.circuits) {
+  // PASS 1 — size the system with no coordination floor (exactly the historic
+  // single-pass behaviour).
+  final pass1 = sizeAll(const {});
+
+  // FEEDER SELECTIVITY FLOOR. A feeder way and the incomer of the board it feeds
+  // are sized from the SAME diversified demand, so they routinely land on the
+  // same ladder rung — ratio 1.0, i.e. `nonSelective` by `fault.dart`'s
+  // [selectivityRatio] rule: a fault on the sub-board would trip the upstream
+  // feeder as readily as the board's own incomer. The sizer must not create the
+  // condition the fault study then warns about, so any such feeder is re-sized
+  // in a second pass at a floor of `selectivityRatio × the child's incomer`.
+  // Skipped for an explicitly overridden feeder — the engineer's rating stands
+  // verbatim, and the residual non-selectivity remains for `faultStudy` to flag.
+  //
+  // The floor moves the DEVICE ONLY, and only as far as the load-sized cable's
+  // ampacity permits (`_computeCircuit`): the conductor is sized from the load
+  // on both passes, so nothing about the cable — or the fault impedance derived
+  // from it — differs between the two.
+  final feederFloors = <String, double>{};
+  for (final p in panels) {
+    for (final c in p.circuits) {
       final childId = c.feedsPanelId;
-      if (childId == null) continue;
-      final childResult = results[childId];
+      if (childId == null || c.breakerOverrideA != null) continue;
+      final childResult = pass1.panels[childId];
       final feederResult =
-          pr.circuits.where((r) => r.circuitId == c.id).firstOrNull;
+          pass1.panels[p.id]?.circuits.where((r) => r.circuitId == c.id).firstOrNull;
       if (childResult == null || feederResult == null) continue;
-      final childDemandA = childResult.demandCurrent.amperes;
-      final feederRatingA = feederResult.breaker.ratingA.amperes;
-      if (childDemandA <= 0 || feederRatingA + 1e-9 >= childDemandA) continue;
-      final imbalance = childResult.phaseBalance.imbalancePercent;
-      final cause = imbalance > 0
-          ? ' (phase imbalance $imbalance% — rebalance that board\'s '
-              'single-phase ways or raise the feeder rating)'
-          : ' — raise the feeder rating';
-      pr.warnings.add(ElectricalWarning(
-        code: 'feeder-below-fed-demand',
-        severity: WarningSeverity.warning,
-        message:
-            '${c.name}: the feeder breaker is ${_num(feederRatingA)} A but '
-            '${childResult.name} draws ${_num(childDemandA)} A on its '
-            'worst-loaded phase$cause.',
-        panelId: id,
-        circuitId: c.id,
-      ));
+      // Whatever produced it (auto-sized, headroom-uplifted, or overridden) the
+      // child's incomer rating is the device the feeder must discriminate with.
+      final childIncomerA = childResult.incomer.breaker.ratingA.amperes;
+      if (childIncomerA <= 0) continue;
+      final floorA = selectivityRatio * childIncomerA;
+      if (feederResult.breaker.ratingA.amperes + 1e-9 < floorA) {
+        feederFloors[c.id] = floorA;
+      }
     }
   }
 
-  // Collect every panel's warnings into the system list (after augmentation).
-  for (final id in postOrder.reversed) {
-    final pr = results[id];
-    if (pr == null) continue;
-    for (final w in pr.warnings) {
-      // Cumulative-drop warnings were already added above; skip duplicates.
-      if (w.code == 'cumulative-voltage-drop-exceeded') continue;
-      warnings.add(w);
-    }
-  }
+  // No feeder needed lifting (every single-panel project, and any project whose
+  // feeders are overridden or already selective) ⇒ pass 1 IS the answer, handed
+  // back as-is so nothing is recomputed and the output is byte-identical.
+  if (feederFloors.isEmpty) return pass1;
 
-  // Supply summary from the diversified demand presented by the root panel(s).
-  final rootDemandW =
-      roots.fold(0.0, (s, p) => s + (panelDemandW[p.id] ?? 0));
-  final supplySystem = roots.firstOrNull?.system ?? ElectricalSystem.threePhase;
-  final supplyVoltage = roots.firstOrNull?.voltage ?? const Voltage(400);
-  final supply = SupplySummary(
-    connectedW: roundTo(connectedLoadW, 0),
-    demandW: roundTo(rootDemandW, 0),
-    demandVa: ApparentPower(roundTo(rootDemandW / assumedBuildingPf, 0)),
-    system: supplySystem,
-    voltage: supplyVoltage,
-  );
-
-  // Earthing system designed from the main incomer's PE conductor.
-  final mainResult = roots.firstOrNull != null ? results[roots.first.id] : null;
-  final mainIb = mainResult?.demandCurrent ?? const Current(0);
-  final mainBreaker =
-      selectBreaker(profile, designCurrent: mainIb, loadKind: LoadKind.feeder);
-  final mainCable = sizeCable(
-    profile,
-    designCurrent: mainIb,
-    breakerRating: mainBreaker.ratingA,
-    deratingFactor: 1,
-    minSectionMm2: 4,
-  );
-  final earthing = computeEarthing(
-    profile,
-    system: project.earthingSystem,
-    supplyPeMm2: profile.peConductorSizeMm2(mainCable.csaMm2),
-  );
-
-  return ElectricalSystemResult(
-    projectId: project.id,
-    panels: results,
-    order: postOrder.reversed.toList(),
-    totalDemandW: roundTo(rootDemandW, 0),
-    supply: supply,
-    earthing: earthing,
-    warnings: warnings,
-  );
+  // PASS 2 — exactly one more pass, and provably enough: each floor is derived
+  // from a CHILD's incomer rating, which is sized from that child's own load-side
+  // demand (its circuit design currents × its diversity/headroom) and is
+  // therefore invariant under a change to its PARENT's feeder breaker or cable.
+  // So the floors computed from pass 1 are still the correct floors in pass 2,
+  // and every flagged feeder emerges at or above `selectivityRatio ×` its child's
+  // incomer (or clamped at the ladder top, reported honestly) — a fixed point.
+  return sizeAll(feederFloors);
 }

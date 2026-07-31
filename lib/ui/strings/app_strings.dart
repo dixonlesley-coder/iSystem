@@ -198,6 +198,16 @@ enum StringKey {
   schematicPaletteHelp,
   schematicRiser,
   schematicAddFloorBanner,
+  // B2 — Riser -> Edit palette drop onto a floor with / without a plan.
+  schematicDropNeedsPlan,
+  schematicDropCentred,
+  // C2 — Building page: confirm deleting a level that carries drawn work.
+  buildingDeleteLevelTitle,
+  buildingDeleteLevelBody,
+  buildingDeleteLevelConfirm,
+  buildingDeleteLevelCancel,
+  buildingDrawnElementOne,
+  buildingDrawnElementMany,
 
   // Schematic / elevation — help popover.
   schematicElevationGuide,
@@ -468,6 +478,7 @@ enum StringKey {
   complianceDetailAllWithinBand,
   complianceDetailOutOfBand, // {n}
   complianceDetailAllCalibrated,
+  complianceDetailBlankUncalibrated, // {n} — blank sheets, advisory only
   complianceDetailUncalibrated, // {n}
   complianceDetailAllVerified,
   complianceDetailAckNoneOpen, // {n}
@@ -534,6 +545,12 @@ enum StringKey {
   issuesCardUndo,
   issuesCardLocate,
 
+  // A5 — the grouped-row expand hook (issues_card.dart): a group of sibling
+  // findings can fold its per-instance locate links away, and a compliance-card
+  // row unfolds the group it reveals.
+  issuesCardShowLocations,
+  issuesCardHideLocations,
+
   // I4 — the inline acknowledgement form (issues_card.dart): the engineer
   // records their initials + an optional one-line reason before an advisory is
   // accepted, so the sign-off carries an accountable author + justification.
@@ -550,6 +567,19 @@ enum StringKey {
   issueAirDuctUnsizedTitle,
   issueAirTerminalUnsizedTitle,
   issueDuctOverCapacityTitle,
+  // Wave A fan-ins for the engine's widened sizing flags (M3/M4/M5/M11/M17).
+  issueStormOverCapacityTitle,
+  issueStormOverCapacityMessage,
+  issueWaterOverCapacityTitle,
+  issueWaterOverCapacityMessage,
+  issueWaterVelocityTitle, // message = the engine VelocityCheck.message
+  issueSelfCleansingTitle,
+  issueSelfCleansingMessage,
+  issueLoopUnbalancedTitle,
+  issueLoopUnbalancedMessage,
+  issueMotorOversizedTitle,
+  issuePumpMotorOversizedMessage,
+  issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
   issueCalibrationStaleTitle, // J1 — plan replaced, old scale unverified
@@ -571,6 +601,12 @@ enum StringKey {
   issueUnfedPanelTitle,
   issueUnfedPanelMessage, // {panel} = the unfed panel's name
 
+  // F5 — a plumbing fixture placed with no fixture type: it silently sizes on
+  // the representative placeholder load (2.0 UBAP supply / 2.0 DFU drainage).
+  issueFixtureUntypedTitle,
+  issueFixtureUntypedSupplyMessage,
+  issueFixtureUntypedDrainageMessage,
+
   // I1 — downfeed pressure-zone over the SNI max fixture static pressure.
   issuePressureZoneTitle,
   issuePressureZoneMessage, // {bottom} {top} {kpa} {limit}
@@ -589,6 +625,7 @@ enum StringKey {
   issueDiffuserStrandedMessage,
   issueSheetNotCalibratedCriticalMessage, // {name}
   issueSheetNotCalibratedWarningMessage, // {name}
+  issueSheetNotCalibratedInfoMessage, // {name} — blank (nothing drawn yet)
   issueCalibrationStaleMessage, // J1 — {name}
   issueMultiSheetFloorMessage, // {count} {floor} {names}
   issueNetworkIslandMessage, // {service} {nodes} = pluralCount(n,'node','nodes')
@@ -611,6 +648,10 @@ enum StringKey {
   issueNounSheetMany,
   issueBatchSelectVelocity, // {c} {noun}
   issueBatchSelectUnsized, // {c} {noun}
+  issueBatchSelectWaterVelocity, // {c} {noun}
+  issueBatchSelectOverCapacity, // {c} {noun}
+  issueBatchSelectSelfCleansing, // {c} {noun}
+  issueBatchSelectUnconnected, // {c} {noun}
   issueBatchCalibrateNoSource, // {n}
   issueBatchCalibrateCopy, // {n} {noun}
 
@@ -698,6 +739,16 @@ enum StringKey {
   a11yFieldNumberOfLevels,
   a11yFieldFloorHeight,
 
+  // M13/M14/M15 — the Building page's design inputs made real: the laid
+  // drainage gradient, the hot-water flow temperature + allowable loop drop,
+  // and which basis the Rooms AC estimate uses.
+  designInputDrainageSlope,
+  designInputHotWaterFlowTemp,
+  designInputHotWaterDeltaT,
+  designInputAcLoadBasis,
+  designInputAcBasisArea,
+  designInputAcBasisHeatGain,
+
   // A1 — the Layout empty-state's 'Load sample project' action (mirrors the
   // electrical workspace's `electricalLoadSampleProject`, kept as its own key
   // since the two seed independent domains).
@@ -784,6 +835,156 @@ enum StringKey {
   electricalMepEquipmentGuard,
   electricalPopulated,
   electricalAddedLoadTemplate, // {load} {panel}
+
+  // ── Export honesty (WORKFLOW-FRICTION F4 / H3 / C3) ──────────────────────
+  /// F4 — the zero-length export blocker, naming the offending SHEETS and the
+  /// action. {count} elements, {sheets} the sheet-name list.
+  exportZeroLengthBlockedTemplate, // {count} {sheets} {name}
+
+  /// H3 — an export that had nothing to write (no plan sheet imported yet).
+  exportNothingToExportTemplate, // {name}
+
+  /// C3 — off-scope selection members excluded from a mutating operation.
+  selectionOffScopeDeletedTemplate, // {count}
+  selectionOffScopeAppliedTemplate, // {count}
+
+  /// C3 — the Selection editor header badge when the target is off-sheet.
+  selectionOnOtherSheetTemplate, // {sheet}
+  selectionOffSheetReadOnly,
+
+  // ── The MEP auto-feed sync narrates itself (WORKFLOW-FRICTION H1) ─────────
+  /// The way/circuit noun the count fragments below read with (EN needs both
+  /// forms; ID has no plural inflection, so both resolve to the same word).
+  mepSyncWayNoun,
+  mepSyncWayNounPlural,
+
+  /// Count fragments joined into one consolidated sync message.
+  mepSyncAddedTemplate, // {count} {noun}
+  mepSyncRestoredTemplate, // {count} {noun}
+  mepSyncParkedTemplate, // {count} {noun}
+  mepSyncRemovedTemplate, // {count} {noun}
+
+  /// The consolidated message: the fragments, plus the board create/remove
+  /// wording when the sync also created or dropped the machine-owned board.
+  mepSyncSummaryTemplate, // {parts}
+  mepSyncBoardCreatedTemplate, // {parts}
+  mepSyncBoardRemoved,
+
+  /// The detail of the first added way — its own name + motor rating (the
+  /// sized breaker/cable live on the board schedule, see [_narrateMepSync]).
+  mepSyncDetailTemplate, // {name} {kw}
+
+  /// F4 — the calibration baton when OTHER loaded sheets are still
+  /// uncalibrated: naming the remaining count (and where the one-click
+  /// "apply to all" lives) instead of pointing at Building, whose runs would
+  /// still measure 0.0 m on those sheets. {sheets} is the pre-pluralized
+  /// phrase from pluralCount(n, issueNounSheetOne, issueNounSheetMany).
+  calibrationScaleSetRemaining, // {scale} {sheets}
+
+  // ── Settings changes narrate themselves + are undoable (D3) ───────────────
+  /// The two feed strategies, named the way the status message reads them.
+  settingsFeedUpfeed,
+  settingsFeedDownfeed,
+  settingsFeedStrategyChanged, // {mode}
+
+  // ── The Building page's design inputs explain their effect (G7) ───────────
+  buildingInputCaptionOccupancy,
+  buildingInputCaptionRainfall,
+  buildingInputCaptionRunoff,
+  buildingInputCaptionSlope,
+  buildingSlopeDirectionHint,
+  buildingInputCaptionHotWaterFlow,
+  buildingInputCaptionHotWaterDeltaT,
+  buildingInputCaptionAcBasis,
+  buildingSizingUpdated,
+
+  // ── Mounting heights are a project input (F8) ─────────────────────────────
+  buildingMountingCeilingDrop,
+  buildingMountingCeilingDropCaption,
+  buildingMountingFixtureHeight,
+  buildingMountingFixtureHeightCaption,
+
+  // ── Every plan mapped to a level is listed (F10) ──────────────────────────
+  /// The plan noun for `pluralCount` on the level card's plan count.
+  buildingPlanOne,
+  buildingPlanMany,
+  buildingNoPlan,
+
+  /// After a template forces an import that lands fewer plans than the
+  /// template's floors — the Building page is where that is fixed.
+  templatePlanShortfallTemplate, // {floors} {plans}
+
+  // ── The heatmap says WHICH check is falsifiable (G6) ──────────────────────
+  heatmapHeldByDesign,
+  heatmapRealCheckPumpDuty,
+
+  // ── Import failures speak human (WORKFLOW-FRICTION I5) ────────────────────
+  /// A plan import that threw a parse/format failure, mapped per file TYPE so
+  /// the message names the likely cause AND the next action. The raw exception
+  /// text is kept verbatim in the `{detail}` parenthetical (never swallowed).
+  importFailedDxfTemplate, // {detail}
+  importFailedDwgTemplate, // {detail}
+  importFailedPdfTemplate, // {detail}
+
+  /// The unmapped fallback — an error that is not a parse/format failure
+  /// (a missing file, a permissions error): the old raw wording, kept.
+  importFailedGenericTemplate, // {what} {detail}
+
+  // ── Destructive edits confirm and name their collateral (C4/C5) ───────────
+  /// An armed-tool secondary-click ARMS the delete: the pill names the target
+  /// and asks for the second click (the app's "Tap again to discard" idiom).
+  annotationDeleteArmTemplate, // {what}
+
+  /// The confirmed delete of a drawn annotation.
+  annotationDeletedTemplate, // {what}
+
+  /// A deleted ROOM leaves its auto-placed air terminals on the plan (they keep
+  /// feeding duct sizing and the BOM), so the pill counts what stayed behind.
+  annotationRoomDeletedTemplate, // {what} {terminals}
+
+  /// The air-terminal noun for `pluralCount` in the room-delete pill.
+  annotationTerminalOne,
+  annotationTerminalMany,
+
+  /// The two annotations that carry no name of their own.
+  annotationDimension,
+  annotationReferenceLine,
+
+  /// C5 — removing a sheet PRUNES every element drawn on it; the pill counts
+  /// the collateral and states that one Ctrl+Z brings it all back.
+  sheetRemoved,
+  sheetRemovedPrunedTemplate, // {pruned}
+
+  /// The drawn-element noun for `pluralCount` in the sheet-removed pill.
+  sheetElementOne,
+  sheetElementMany,
+
+  /// J2 — the electrical SYSTEM summary shown on the read-only electrical tabs
+  /// (in place of the inert Loads palette).
+  electricalSummaryTitle,
+  electricalSummaryBoards,
+  electricalSummaryWays,
+  electricalSummaryDemand,
+  electricalSummaryEssential,
+  electricalSummaryEssentialValue, // {essential} {total}
+
+  /// J4 — the on-canvas legend chip's ELECTRICAL rows, plus the muted group
+  /// keying the visible-but-ghosted reference layers (all disciplines).
+  canvasLegendPhaseR,
+  canvasLegendPhaseS,
+  canvasLegendPhaseT,
+  canvasLegendFeeder,
+  canvasLegendEssential,
+  canvasLegendGhosted,
+
+  /// J7 — the Commercial workspace's MECHANICAL bill of materials (its title,
+  /// lead copy, columns and priced flag were the last EN-only literals there).
+  commercialMechBomTitle,
+  commercialMechBomEmpty,
+  commercialMechBomLead, // {lines} {unpriced}
+  commercialColPriced,
+  commercialPriced,
+  commercialUnpriced,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -809,15 +1010,18 @@ const Map<StringKey, String> _en = {
 
   // Commercial workspace — hub.
   StringKey.commercialHubTitle: 'Commercial',
+  // J7: the hub carries the MECHANICAL bill of materials beside the electrical
+  // one and exports them as ONE M+E+P CSV, so the lead no longer says
+  // "electrical" alone.
   StringKey.commercialHubLead:
-      'The electrical bill of materials, your pricelist and the '
-          'priced proposal. Edit prices below and the quotation updates '
-          'live.',
+      'The mechanical and electrical (M+E+P) bill of materials, your '
+          'pricelist and the priced proposal. Edit prices below and the '
+          'quotation updates live.',
   StringKey.commercialExportBomCsv: 'Export BOM (CSV)',
   StringKey.commercialExportProposalMd: 'Export proposal (Markdown)',
 
   // Commercial workspace — electrical BOM.
-  StringKey.commercialBomTitle: 'BOM',
+  StringKey.commercialBomTitle: 'Electrical BOM',
   StringKey.commercialColQty: 'Qty',
   StringKey.commercialColPart: 'Part',
   StringKey.commercialColBrand: 'Brand',
@@ -1007,6 +1211,15 @@ const Map<StringKey, String> _en = {
   StringKey.schematicAddFloorBanner:
       'Add a second floor (Project panel) to place risers — '
           'a riser spans a floor-to-floor elevation delta.',
+  StringKey.schematicDropNeedsPlan: 'Assign a plan to {level} first',
+  StringKey.schematicDropCentred: 'Riser on {level} — placed at the centre of {sheet}',
+  StringKey.buildingDeleteLevelTitle: 'Delete {level}?',
+  StringKey.buildingDeleteLevelBody:
+      '{level} carries {count} — deleting the level deletes them too.',
+  StringKey.buildingDeleteLevelConfirm: 'Delete level',
+  StringKey.buildingDeleteLevelCancel: 'Cancel',
+  StringKey.buildingDrawnElementOne: 'drawn element',
+  StringKey.buildingDrawnElementMany: 'drawn elements',
 
   // Schematic / elevation — help popover.
   StringKey.schematicElevationGuide: 'Elevation guide',
@@ -1155,7 +1368,11 @@ const Map<StringKey, String> _en = {
   StringKey.exportTitleElectricalPlanDxf: 'Export layout plan (DXF)',
   StringKey.exportTitlePowerOneLineDxf: 'Export power one-line (DXF)',
   StringKey.exportTitleElectricalReport: 'Export electrical report',
-  StringKey.exportTitleElectricalBom: 'Export electrical BOM',
+  // J7: the file this dialog saves is the UNIFIED M+E+P BOM (`-mep-bom.csv` —
+  // mechanical pipe/duct + fittings, then the electrical catalogue lines), so
+  // the title says so. The enum name stays `...ElectricalBom` because its only
+  // call site lives outside this batch's scope.
+  StringKey.exportTitleElectricalBom: 'Export MEP BOM',
   StringKey.exportTitleElectricalProposal: 'Export electrical proposal',
 
   // Electrical workspace — toolbar tabs + buttons.
@@ -1284,7 +1501,9 @@ const Map<StringKey, String> _en = {
   //    values are BYTE-IDENTICAL to the literals they replace.
 
   // H1 — compliance roll-up categories.
-  StringKey.complianceCategoryAirVelocity: 'Air velocity',
+  // Named 'Velocity' since the water-velocity findings (M4/M5) land in the
+  // same kind-matched row as the air ones; the key name stays for stability.
+  StringKey.complianceCategoryAirVelocity: 'Velocity',
   StringKey.complianceCategorySheetCalibration: 'Sheet calibration',
   StringKey.complianceCategoryStandardsVerification: 'Standards verification',
   StringKey.complianceCategoryElectricalSizing: 'Electrical circuit sizing',
@@ -1294,6 +1513,8 @@ const Map<StringKey, String> _en = {
   StringKey.complianceDetailAllWithinBand: 'all within band',
   StringKey.complianceDetailOutOfBand: '{n} out of band',
   StringKey.complianceDetailAllCalibrated: 'all sheets calibrated',
+  StringKey.complianceDetailBlankUncalibrated:
+      '{n} blank uncalibrated (advisory)',
   StringKey.complianceDetailUncalibrated: '{n} uncalibrated',
   StringKey.complianceDetailAllVerified: 'all values verified',
   StringKey.complianceDetailAckNoneOpen: '{n} acknowledged, none open',
@@ -1369,6 +1590,8 @@ const Map<StringKey, String> _en = {
   StringKey.issuesCardAcknowledge: 'Acknowledge',
   StringKey.issuesCardUndo: 'Undo',
   StringKey.issuesCardLocate: 'Locate',
+  StringKey.issuesCardShowLocations: 'Show locations',
+  StringKey.issuesCardHideLocations: 'Hide locations',
   StringKey.issuesCardAckInitials: 'Initials',
   StringKey.issuesCardAckReasonHint: 'Reason (optional)',
   StringKey.issuesCardAckCancel: 'Cancel',
@@ -1380,6 +1603,41 @@ const Map<StringKey, String> _en = {
   StringKey.issueAirDuctUnsizedTitle: 'Air duct not manually sized',
   StringKey.issueAirTerminalUnsizedTitle: 'Air terminal not manually sized',
   StringKey.issueDuctOverCapacityTitle: 'Duct over capacity',
+  StringKey.issueStormOverCapacityTitle: 'Downpipe over capacity',
+  StringKey.issueStormOverCapacityMessage:
+      'This downpipe drains more roof catchment than the largest tabulated '
+      'downpipe can carry — it was clamped to the largest size. Split the roof '
+      'outlets across more downpipes.',
+  StringKey.issueWaterOverCapacityTitle: 'Pipe velocity over the SNI cap',
+  StringKey.issueWaterOverCapacityMessage:
+      'No diameter in the series keeps this run under the SNI max supply '
+      'velocity at the accumulated flow — it was sized at the largest table '
+      'entry and still ships over the cap. Split the flow across more risers / '
+      'branches.',
+  StringKey.issueWaterVelocityTitle: 'Pipe velocity out of band',
+  StringKey.issueSelfCleansingTitle: 'Drainage branch below self-cleansing',
+  StringKey.issueSelfCleansingMessage:
+      'This branch runs below 0.6 m/s self-cleansing at the design slope, so '
+      'solids settle out and it silts up. It is already larger than the DFU '
+      'minimum for its load — steepen the drainage slope (Building page) or '
+      'group more discharge onto the branch.',
+  StringKey.issueLoopUnbalancedTitle: 'Ring flow split not settled',
+  StringKey.issueLoopUnbalancedMessage:
+      'The Hardy-Cross balance for this looped main did not converge within its '
+      'iteration budget. The flow still satisfies continuity, but the split — '
+      'and every size derived from it — is provisional. Simplify the ring or '
+      'check for a near-zero-resistance leg.',
+  StringKey.issueMotorOversizedTitle: 'Duty past the largest motor frame',
+  StringKey.issuePumpMotorOversizedMessage:
+      'The pump duty exceeds the largest standard motor frame, so the printed '
+      'motor is the top of the ladder, not a selection — the duty and the '
+      'clamped motor are on the pump result card (see Results). Split the duty '
+      'across more pumps, or procure a motor outside the standard ladder.',
+  StringKey.issueFanMotorOversizedMessage:
+      'The fan duty exceeds the largest standard motor frame, so the printed '
+      'motor is the top of the ladder, not a selection — the duty and the '
+      'clamped motor are on the fan result card (see Results). Split the duty '
+      'across more fans, or procure a motor outside the standard ladder.',
   StringKey.issueDiffuserStrandedTitle: 'Diffuser not connected to any duct',
   StringKey.issueSheetNotCalibratedTitle: 'Sheet not calibrated',
   StringKey.issueCalibrationStaleTitle: 'Plan replaced — re-verify scale',
@@ -1404,6 +1662,13 @@ const Map<StringKey, String> _en = {
   StringKey.issueUnfedPanelMessage:
       '"{panel}" is neither the origin board nor fed by a feeder — it is wired '
       'to nothing. Feed it from an upstream panel.',
+  StringKey.issueFixtureUntypedTitle: 'Fixture type not set',
+  StringKey.issueFixtureUntypedSupplyMessage:
+      'Fixture type not set — sizing on the representative 2.0 UBAP default; '
+      'set the type in the inspector.',
+  StringKey.issueFixtureUntypedDrainageMessage:
+      'Fixture type not set — sizing on the representative 2.0 DFU default; '
+      'set the type in the inspector.',
   StringKey.issuePressureZoneTitle: 'Pressure zone over the fixture limit',
   StringKey.issuePressureZoneMessage:
       'The pressure zone from "{bottom}" to "{top}" reaches {kpa} kPa static at '
@@ -1445,6 +1710,9 @@ const Map<StringKey, String> _en = {
   StringKey.issueSheetNotCalibratedWarningMessage:
       '"{name}" has no scale set — its run/riser lengths cannot '
           'be measured. Calibrate the sheet to size it.',
+  StringKey.issueSheetNotCalibratedInfoMessage:
+      'Calibrate "{name}" before drawing on it — runs drawn on an '
+          'uncalibrated sheet cannot be measured.',
   StringKey.issueCalibrationStaleMessage:
       '"{name}"\'s plan was replaced but kept its OLD scale — a revised '
           'drawing (different DPI, plot scale, or title block) can silently '
@@ -1487,6 +1755,12 @@ const Map<StringKey, String> _en = {
   StringKey.issueNounSheetMany: 'sheets',
   StringKey.issueBatchSelectVelocity: 'Select {c} out-of-band {noun}',
   StringKey.issueBatchSelectUnsized: 'Select {c} unsized air {noun}',
+  StringKey.issueBatchSelectWaterVelocity:
+      'Select {c} water-velocity {noun}',
+  StringKey.issueBatchSelectOverCapacity: 'Select {c} over-capacity {noun}',
+  StringKey.issueBatchSelectSelfCleansing:
+      'Select {c} below-self-cleansing {noun}',
+  StringKey.issueBatchSelectUnconnected: 'Select {c} unconnected {noun}',
   StringKey.issueBatchCalibrateNoSource:
       'Calibrate one sheet to copy scale to {n} more',
   StringKey.issueBatchCalibrateCopy: 'Copy scale to {n} uncalibrated {noun}',
@@ -1563,6 +1837,12 @@ const Map<StringKey, String> _en = {
   StringKey.a11yFieldFloorToFloorHeight: 'Floor-to-floor height',
   StringKey.a11yFieldNumberOfLevels: 'Number of levels',
   StringKey.a11yFieldFloorHeight: 'Floor height',
+  StringKey.designInputDrainageSlope: 'Drainage slope',
+  StringKey.designInputHotWaterFlowTemp: 'Hot-water flow temp',
+  StringKey.designInputHotWaterDeltaT: 'Hot-water loop drop',
+  StringKey.designInputAcLoadBasis: 'AC load basis',
+  StringKey.designInputAcBasisArea: 'Area density',
+  StringKey.designInputAcBasisHeatGain: 'Heat gain',
 
   // A1 — Layout empty-state 'Load sample project'.
   StringKey.layoutLoadSampleProject: 'Load sample project',
@@ -1649,6 +1929,132 @@ const Map<StringKey, String> _en = {
       'MEP Equipment is auto-generated from the plan — add ways to another panel.',
   StringKey.electricalPopulated: 'populated ',
   StringKey.electricalAddedLoadTemplate: 'Added {load} to {panel}',
+  StringKey.exportZeroLengthBlockedTemplate:
+      '{count} with zero length on {sheets} — calibrate before exporting '
+      '{name}. The BOM, pressures and drawing would be wrong. '
+      'See Review > Design issues.',
+  StringKey.exportNothingToExportTemplate:
+      'Nothing to export — import a plan first ({name}).',
+  StringKey.selectionOffScopeDeletedTemplate:
+      '{count} on other sheets or hidden/locked layers were not deleted',
+  StringKey.selectionOffScopeAppliedTemplate:
+      '{count} on other sheets or hidden/locked layers were not changed',
+  StringKey.selectionOnOtherSheetTemplate: 'On sheet: {sheet}',
+  StringKey.selectionOffSheetReadOnly:
+      'Read-only here — open its sheet to edit it.',
+  StringKey.mepSyncWayNoun: 'circuit',
+  StringKey.mepSyncWayNounPlural: 'circuits',
+  StringKey.mepSyncAddedTemplate: '+{count} {noun}',
+  StringKey.mepSyncRestoredTemplate: '{count} {noun} restored',
+  StringKey.mepSyncParkedTemplate: '{count} {noun} parked',
+  StringKey.mepSyncRemovedTemplate: '{count} {noun} removed',
+  StringKey.mepSyncSummaryTemplate: 'MEP Equipment: {parts}',
+  StringKey.mepSyncBoardCreatedTemplate: 'MEP Equipment board created: {parts}',
+  StringKey.mepSyncBoardRemoved:
+      'MEP Equipment board removed — no equipment left',
+  StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',
+  StringKey.calibrationScaleSetRemaining:
+      'Scale set: {scale} - {sheets} still uncalibrated (apply to all in the '
+          'Scale panel)',
+
+  // D3 — the feed strategy names itself when it changes (and is undoable).
+  StringKey.settingsFeedUpfeed: 'upfeed pump',
+  StringKey.settingsFeedDownfeed: 'roof-tank downfeed',
+  StringKey.settingsFeedStrategyChanged:
+      'Water feed: {mode} - pressures, zones and pump duty resized',
+
+  // G7 — the Building design inputs say what they drive.
+  StringKey.buildingInputCaptionOccupancy:
+      'Sets the fixture-unit demand behind every water pipe size',
+  StringKey.buildingInputCaptionRainfall:
+      'Drives rainwater outlet, gutter and storm-stack sizing',
+  StringKey.buildingInputCaptionRunoff:
+      'Share of rainfall that reaches the outlet (rational method)',
+  StringKey.buildingInputCaptionSlope:
+      'Drives gravity sizing and the self-cleansing check',
+  StringKey.buildingSlopeDirectionHint:
+      'Plus is steeper (1:90), minus is flatter (1:110)',
+  StringKey.buildingInputCaptionHotWaterFlow:
+      'Temperature leaving the heater, before the loop drop below',
+  StringKey.buildingInputCaptionHotWaterDeltaT:
+      'K = degrees C lost around the loop; the return must stay above 55 C',
+  StringKey.buildingInputCaptionAcBasis:
+      'Which basis the Rooms AC estimate uses for every room',
+  StringKey.buildingSizingUpdated: 'Sizing updated',
+
+  // F8 — mounting heights as a project input.
+  StringKey.buildingMountingCeilingDrop: 'Ceiling drop',
+  StringKey.buildingMountingCeilingDropCaption:
+      'How far horizontal mains hang below the slab above; sets drop lengths',
+  StringKey.buildingMountingFixtureHeight: 'Fixture height',
+  StringKey.buildingMountingFixtureHeightCaption:
+      'Height of a fixture connection above its own floor; sets the static lift',
+
+  // F10 — every plan mapped to a level, not just the first.
+  StringKey.buildingPlanOne: 'plan',
+  StringKey.buildingPlanMany: 'plans',
+  StringKey.buildingNoPlan: 'none',
+  StringKey.templatePlanShortfallTemplate:
+      'Template set {floors} floors - {plans} imported. Assign or duplicate '
+          'plans on the Building page.',
+
+  // G6 — the heatmap names the falsifiable check.
+  StringKey.heatmapHeldByDesign: 'target held by design',
+  StringKey.heatmapRealCheckPumpDuty: 'the real check is the pump duty',
+
+  // I5 — import failures speak human; the raw text rides the parenthetical.
+  StringKey.importFailedDxfTemplate:
+      "That file isn't a readable DXF - is it a DWG? Convert it or import the "
+          'original. ({detail})',
+  StringKey.importFailedDwgTemplate:
+      'That DWG could not be converted - install the ODA File Converter, or '
+          'export a DXF from your CAD program and import that. ({detail})',
+  StringKey.importFailedPdfTemplate:
+      "That PDF could not be read - it may be damaged, password-protected, or "
+          'not a drawing. ({detail})',
+  StringKey.importFailedGenericTemplate: 'Could not import {what}: {detail}',
+
+  // C4/C5 — destructive edits confirm and name their collateral.
+  StringKey.annotationDeleteArmTemplate:
+      'Right-click again to delete {what}',
+  StringKey.annotationDeletedTemplate: '{what} deleted',
+  StringKey.annotationRoomDeletedTemplate:
+      '{what} deleted - {terminals} remain',
+  StringKey.annotationTerminalOne: 'placed terminal',
+  StringKey.annotationTerminalMany: 'placed terminals',
+  StringKey.annotationDimension: 'Dimension',
+  StringKey.annotationReferenceLine: 'Reference line',
+  StringKey.sheetRemoved: 'Sheet removed - Ctrl+Z to undo',
+  StringKey.sheetRemovedPrunedTemplate:
+      'Sheet removed - {pruned} pruned - Ctrl+Z to undo',
+  StringKey.sheetElementOne: 'element',
+  StringKey.sheetElementMany: 'elements',
+
+  // J2 — electrical system summary (read-only electrical tabs).
+  StringKey.electricalSummaryTitle: 'System',
+  StringKey.electricalSummaryBoards: 'Boards',
+  StringKey.electricalSummaryWays: 'Ways',
+  StringKey.electricalSummaryDemand: 'Demand',
+  StringKey.electricalSummaryEssential: 'Essential',
+  StringKey.electricalSummaryEssentialValue: '{essential} of {total} boards',
+
+  // J4 — on-canvas legend: electrical rows + the ghosted-layer group.
+  StringKey.canvasLegendPhaseR: 'Phase R',
+  StringKey.canvasLegendPhaseS: 'Phase S',
+  StringKey.canvasLegendPhaseT: 'Phase T',
+  StringKey.canvasLegendFeeder: 'Feeder',
+  StringKey.canvasLegendEssential: 'Essential supply',
+  StringKey.canvasLegendGhosted: 'Reference layers',
+
+  // J7 — Commercial: the MECHANICAL bill of materials.
+  StringKey.commercialMechBomTitle: 'Mechanical BOM',
+  StringKey.commercialMechBomEmpty:
+      'Size a mechanical network to price its pipe, duct and fittings.',
+  // {lines}/{unpriced} arrive pre-pluralized via `pluralCount`.
+  StringKey.commercialMechBomLead: '{lines}, {unpriced} unpriced',
+  StringKey.commercialColPriced: 'Priced',
+  StringKey.commercialPriced: 'priced',
+  StringKey.commercialUnpriced: 'unpriced',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -1676,14 +2082,14 @@ const Map<StringKey, String> _id = {
   // Commercial workspace — hub.
   StringKey.commercialHubTitle: 'Komersial',
   StringKey.commercialHubLead:
-      'Daftar material kelistrikan, daftar harga Anda, dan proposal '
-          'berbiaya. Ubah harga di bawah ini dan penawaran akan diperbarui '
-          'secara langsung.',
+      'Daftar material mekanikal dan kelistrikan (M+E+P), daftar harga Anda, '
+          'dan proposal berbiaya. Ubah harga di bawah ini dan penawaran akan '
+          'diperbarui secara langsung.',
   StringKey.commercialExportBomCsv: 'Ekspor BOM (CSV)',
   StringKey.commercialExportProposalMd: 'Ekspor proposal (Markdown)',
 
   // Commercial workspace — electrical BOM.
-  StringKey.commercialBomTitle: 'BOM',
+  StringKey.commercialBomTitle: 'BOM elektrikal',
   StringKey.commercialColQty: 'Jml',
   StringKey.commercialColPart: 'Komponen',
   StringKey.commercialColBrand: 'Merek',
@@ -1873,6 +2279,17 @@ const Map<StringKey, String> _id = {
   StringKey.schematicAddFloorBanner:
       'Tambahkan lantai kedua (panel Proyek) untuk menempatkan riser — '
           'sebuah riser membentang sepanjang selisih elevasi antar-lantai.',
+  StringKey.schematicDropNeedsPlan: 'Tetapkan denah untuk {level} dahulu',
+  StringKey.schematicDropCentred:
+      'Riser di {level} — ditempatkan di tengah {sheet}',
+  StringKey.buildingDeleteLevelTitle: 'Hapus {level}?',
+  StringKey.buildingDeleteLevelBody:
+      '{level} memuat {count} — menghapus level ini menghapusnya juga.',
+  StringKey.buildingDeleteLevelConfirm: 'Hapus level',
+  StringKey.buildingDeleteLevelCancel: 'Batal',
+  // Bahasa Indonesia has no plural inflection — the same noun for both.
+  StringKey.buildingDrawnElementOne: 'elemen gambar',
+  StringKey.buildingDrawnElementMany: 'elemen gambar',
 
   // Schematic / elevation — help popover.
   StringKey.schematicElevationGuide: 'Panduan elevasi',
@@ -2024,7 +2441,7 @@ const Map<StringKey, String> _id = {
   StringKey.exportTitleElectricalPlanDxf: 'Ekspor denah instalasi (DXF)',
   StringKey.exportTitlePowerOneLineDxf: 'Ekspor daya satu-garis (DXF)',
   StringKey.exportTitleElectricalReport: 'Ekspor laporan kelistrikan',
-  StringKey.exportTitleElectricalBom: 'Ekspor BOM kelistrikan',
+  StringKey.exportTitleElectricalBom: 'Ekspor BOM MEP',
   StringKey.exportTitleElectricalProposal: 'Ekspor proposal kelistrikan',
 
   // Electrical workspace — toolbar tabs + buttons.
@@ -2152,7 +2569,7 @@ const Map<StringKey, String> _id = {
   // ── Apple design review Wave 5a (H1 + H6) — trust-surface localization.
 
   // H1 — compliance roll-up categories.
-  StringKey.complianceCategoryAirVelocity: 'Kecepatan udara',
+  StringKey.complianceCategoryAirVelocity: 'Kecepatan aliran',
   StringKey.complianceCategorySheetCalibration: 'Kalibrasi lembar',
   StringKey.complianceCategoryStandardsVerification: 'Verifikasi standar',
   StringKey.complianceCategoryElectricalSizing: 'Pengukuran sirkuit listrik',
@@ -2162,6 +2579,8 @@ const Map<StringKey, String> _id = {
   StringKey.complianceDetailAllWithinBand: 'semua dalam batas',
   StringKey.complianceDetailOutOfBand: '{n} di luar batas',
   StringKey.complianceDetailAllCalibrated: 'semua lembar terkalibrasi',
+  StringKey.complianceDetailBlankUncalibrated:
+      '{n} lembar kosong belum dikalibrasi (advisori)',
   StringKey.complianceDetailUncalibrated: '{n} belum dikalibrasi',
   StringKey.complianceDetailAllVerified: 'semua nilai terverifikasi',
   StringKey.complianceDetailAckNoneOpen: '{n} diakui, tidak ada yang terbuka',
@@ -2237,6 +2656,8 @@ const Map<StringKey, String> _id = {
   StringKey.issuesCardAcknowledge: 'Akui',
   StringKey.issuesCardUndo: 'Urungkan',
   StringKey.issuesCardLocate: 'Cari lokasi',
+  StringKey.issuesCardShowLocations: 'Tampilkan lokasi',
+  StringKey.issuesCardHideLocations: 'Sembunyikan lokasi',
   StringKey.issuesCardAckInitials: 'Inisial',
   StringKey.issuesCardAckReasonHint: 'Alasan (opsional)',
   StringKey.issuesCardAckCancel: 'Batal',
@@ -2248,6 +2669,45 @@ const Map<StringKey, String> _id = {
   StringKey.issueAirDuctUnsizedTitle: 'Saluran udara belum diukur manual',
   StringKey.issueAirTerminalUnsizedTitle: 'Terminal udara belum diukur manual',
   StringKey.issueDuctOverCapacityTitle: 'Saluran melebihi kapasitas',
+  StringKey.issueStormOverCapacityTitle: 'Pipa tegak air hujan melebihi kapasitas',
+  StringKey.issueStormOverCapacityMessage:
+      'Pipa tegak ini mengalirkan luas tangkapan atap lebih besar daripada '
+      'kapasitas pipa tegak terbesar dalam tabel — ukurannya dijepit ke ukuran '
+      'terbesar. Bagi outlet atap ke lebih banyak pipa tegak.',
+  StringKey.issueWaterOverCapacityTitle:
+      'Kecepatan pipa melebihi batas SNI',
+  StringKey.issueWaterOverCapacityMessage:
+      'Tidak ada diameter dalam seri yang menjaga jalur ini di bawah kecepatan '
+      'suplai maksimum SNI pada debit terakumulasi — jalur diukur pada entri '
+      'tabel terbesar dan tetap melebihi batas. Bagi alirannya ke lebih banyak '
+      'pipa tegak / cabang.',
+  StringKey.issueWaterVelocityTitle: 'Kecepatan pipa di luar batas',
+  StringKey.issueSelfCleansingTitle: 'Cabang drainase di bawah swa-bersih',
+  StringKey.issueSelfCleansingMessage:
+      'Pada kemiringan desain, cabang ini mengalir di bawah kecepatan '
+      'swa-bersih 0,6 m/s sehingga padatan mengendap dan salurannya tersumbat. '
+      'Ukurannya sudah lebih besar dari minimum tabel DFU untuk bebannya — '
+      'pertajam kemiringan drainase (halaman Bangunan) atau gabungkan lebih '
+      'banyak buangan ke cabang ini.',
+  StringKey.issueLoopUnbalancedTitle: 'Pembagian aliran ring belum stabil',
+  StringKey.issueLoopUnbalancedMessage:
+      'Penyeimbangan Hardy-Cross untuk jaringan ring ini tidak konvergen dalam '
+      'batas iterasinya. Alirannya masih memenuhi kontinuitas, tetapi '
+      'pembagiannya — dan setiap ukuran yang diturunkan darinya — bersifat '
+      'sementara. Sederhanakan ring atau periksa kaki dengan resistansi '
+      'mendekati nol.',
+  StringKey.issueMotorOversizedTitle:
+      'Duti melebihi rangka motor standar terbesar',
+  StringKey.issuePumpMotorOversizedMessage:
+      'Duti pompa melebihi rangka motor standar terbesar, sehingga motor yang '
+      'tercetak adalah puncak tangga standar, bukan hasil pemilihan — duti dan '
+      'motor terpotong itu ada pada kartu hasil pompa (lihat Hasil). Bagi '
+      'dutinya ke lebih banyak pompa, atau adakan motor di luar tangga standar.',
+  StringKey.issueFanMotorOversizedMessage:
+      'Duti fan melebihi rangka motor standar terbesar, sehingga motor yang '
+      'tercetak adalah puncak tangga standar, bukan hasil pemilihan — duti dan '
+      'motor terpotong itu ada pada kartu hasil fan (lihat Hasil). Bagi dutinya '
+      'ke lebih banyak fan, atau adakan motor di luar tangga standar.',
   StringKey.issueDiffuserStrandedTitle:
       'Difuser tidak terhubung ke saluran mana pun',
   StringKey.issueSheetNotCalibratedTitle: 'Lembar belum dikalibrasi',
@@ -2276,6 +2736,13 @@ const Map<StringKey, String> _id = {
   StringKey.issueUnfedPanelMessage:
       '"{panel}" bukan panel asal maupun disuplai oleh feeder — tidak '
       'tersambung ke apa pun. Suplai dari panel di hulunya.',
+  StringKey.issueFixtureUntypedTitle: 'Jenis fikstur belum ditetapkan',
+  StringKey.issueFixtureUntypedSupplyMessage:
+      'Jenis fikstur belum ditetapkan — diukur memakai nilai bawaan '
+      'representatif 2,0 UBAP; tetapkan jenisnya di inspektur.',
+  StringKey.issueFixtureUntypedDrainageMessage:
+      'Jenis fikstur belum ditetapkan — diukur memakai nilai bawaan '
+      'representatif 2,0 DFU; tetapkan jenisnya di inspektur.',
   StringKey.issuePressureZoneTitle: 'Zona tekanan melebihi batas fikstur',
   StringKey.issuePressureZoneMessage:
       'Zona tekanan dari "{bottom}" hingga "{top}" mencapai {kpa} kPa statik di '
@@ -2319,6 +2786,9 @@ const Map<StringKey, String> _id = {
   StringKey.issueSheetNotCalibratedWarningMessage:
       '"{name}" belum memiliki skala — panjang saluran/riser-nya tidak dapat '
           'diukur. Kalibrasi lembar untuk mengukurnya.',
+  StringKey.issueSheetNotCalibratedInfoMessage:
+      'Kalibrasi "{name}" sebelum menggambar di atasnya — saluran yang '
+          'digambar pada lembar belum terkalibrasi tidak dapat diukur.',
   StringKey.issueCalibrationStaleMessage:
       'Denah "{name}" telah diganti tetapi masih memakai skala LAMA — gambar '
           'revisi (DPI, skala cetak, atau kop gambar yang berbeda) dapat diam-'
@@ -2360,6 +2830,13 @@ const Map<StringKey, String> _id = {
   StringKey.issueNounSheetMany: 'lembar',
   StringKey.issueBatchSelectVelocity: 'Pilih {c} {noun} di luar batas',
   StringKey.issueBatchSelectUnsized: 'Pilih {c} {noun} udara belum terukur',
+  StringKey.issueBatchSelectWaterVelocity:
+      'Pilih {c} {noun} kecepatan air di luar batas',
+  StringKey.issueBatchSelectOverCapacity:
+      'Pilih {c} {noun} melebihi kapasitas',
+  StringKey.issueBatchSelectSelfCleansing:
+      'Pilih {c} {noun} di bawah kecepatan bilas',
+  StringKey.issueBatchSelectUnconnected: 'Pilih {c} {noun} tak tersambung',
   StringKey.issueBatchCalibrateNoSource:
       'Kalibrasi satu lembar untuk menyalin skala ke {n} lainnya',
   StringKey.issueBatchCalibrateCopy: 'Salin skala ke {n} {noun} belum dikalibrasi',
@@ -2440,6 +2917,12 @@ const Map<StringKey, String> _id = {
   StringKey.a11yFieldFloorToFloorHeight: 'Tinggi antar lantai',
   StringKey.a11yFieldNumberOfLevels: 'Jumlah lantai',
   StringKey.a11yFieldFloorHeight: 'Tinggi lantai',
+  StringKey.designInputDrainageSlope: 'Kemiringan drainase',
+  StringKey.designInputHotWaterFlowTemp: 'Suhu air panas keluar',
+  StringKey.designInputHotWaterDeltaT: 'Penurunan suhu loop',
+  StringKey.designInputAcLoadBasis: 'Dasar beban AC',
+  StringKey.designInputAcBasisArea: 'Kepadatan luas',
+  StringKey.designInputAcBasisHeatGain: 'Perolehan kalor',
 
   // A1 — Layout empty-state 'Load sample project'.
   StringKey.layoutLoadSampleProject: 'Muat proyek contoh',
@@ -2527,6 +3010,132 @@ const Map<StringKey, String> _id = {
       'Peralatan MEP dibuat otomatis dari denah — tambah jalur ke panel lain.',
   StringKey.electricalPopulated: 'terisi ',
   StringKey.electricalAddedLoadTemplate: 'Ditambahkan {load} ke {panel}',
+  StringKey.exportZeroLengthBlockedTemplate:
+      '{count} berpanjang nol pada {sheets} — kalibrasi dulu sebelum mengekspor '
+      '{name}. BOM, tekanan dan gambar akan salah. '
+      'Lihat Tinjauan > Masalah desain.',
+  StringKey.exportNothingToExportTemplate:
+      'Tidak ada yang diekspor — impor denah dulu ({name}).',
+  StringKey.selectionOffScopeDeletedTemplate:
+      '{count} pada lembar lain atau lapisan tersembunyi/terkunci tidak dihapus',
+  StringKey.selectionOffScopeAppliedTemplate:
+      '{count} pada lembar lain atau lapisan tersembunyi/terkunci tidak diubah',
+  StringKey.selectionOnOtherSheetTemplate: 'Pada lembar: {sheet}',
+  StringKey.selectionOffSheetReadOnly:
+      'Hanya-baca di sini — buka lembarnya untuk mengedit.',
+  StringKey.mepSyncWayNoun: 'jalur',
+  StringKey.mepSyncWayNounPlural: 'jalur',
+  StringKey.mepSyncAddedTemplate: '+{count} {noun}',
+  StringKey.mepSyncRestoredTemplate: '{count} {noun} dipulihkan',
+  StringKey.mepSyncParkedTemplate: '{count} {noun} diparkir',
+  StringKey.mepSyncRemovedTemplate: '{count} {noun} dihapus',
+  StringKey.mepSyncSummaryTemplate: 'Peralatan MEP: {parts}',
+  StringKey.mepSyncBoardCreatedTemplate: 'Panel Peralatan MEP dibuat: {parts}',
+  StringKey.mepSyncBoardRemoved:
+      'Panel Peralatan MEP dihapus — tidak ada peralatan tersisa',
+  StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',
+  StringKey.calibrationScaleSetRemaining:
+      'Skala diatur: {scale} - {sheets} belum dikalibrasi (terapkan ke semua '
+          'di panel Skala)',
+
+  // D3.
+  StringKey.settingsFeedUpfeed: 'pompa dorong ke atas',
+  StringKey.settingsFeedDownfeed: 'gravitasi tangki atap',
+  StringKey.settingsFeedStrategyChanged:
+      'Pasokan air: {mode} - tekanan, zona dan duti pompa dihitung ulang',
+
+  // G7.
+  StringKey.buildingInputCaptionOccupancy:
+      'Menentukan beban unit fikstur di balik setiap ukuran pipa air',
+  StringKey.buildingInputCaptionRainfall:
+      'Menentukan ukuran talang, roof drain dan pipa tegak air hujan',
+  StringKey.buildingInputCaptionRunoff:
+      'Bagian curah hujan yang sampai ke outlet (metode rasional)',
+  StringKey.buildingInputCaptionSlope:
+      'Menentukan ukuran gravitasi dan pemeriksaan pembersihan sendiri',
+  StringKey.buildingSlopeDirectionHint:
+      'Tambah = lebih curam (1:90), kurang = lebih landai (1:110)',
+  StringKey.buildingInputCaptionHotWaterFlow:
+      'Suhu keluar pemanas, sebelum penurunan loop di bawah',
+  StringKey.buildingInputCaptionHotWaterDeltaT:
+      'K = derajat C yang hilang di loop; suhu balik harus di atas 55 C',
+  StringKey.buildingInputCaptionAcBasis:
+      'Dasar yang dipakai estimasi AC untuk setiap ruang',
+  StringKey.buildingSizingUpdated: 'Ukuran diperbarui',
+
+  // F8.
+  StringKey.buildingMountingCeilingDrop: 'Turun plafon',
+  StringKey.buildingMountingCeilingDropCaption:
+      'Jarak pipa induk digantung di bawah pelat atas; menentukan panjang turunan',
+  StringKey.buildingMountingFixtureHeight: 'Tinggi fikstur',
+  StringKey.buildingMountingFixtureHeightCaption:
+      'Tinggi sambungan fikstur di atas lantainya; menentukan angkat statis',
+
+  // F10.
+  StringKey.buildingPlanOne: 'denah',
+  StringKey.buildingPlanMany: 'denah',
+  StringKey.buildingNoPlan: 'belum ada',
+  StringKey.templatePlanShortfallTemplate:
+      'Templat menetapkan {floors} lantai - {plans} diimpor. Tetapkan atau '
+          'gandakan denah di halaman Bangunan.',
+
+  // G6.
+  StringKey.heatmapHeldByDesign: 'target ditahan oleh desain',
+  StringKey.heatmapRealCheckPumpDuty:
+      'pemeriksaan sebenarnya ada pada duti pompa',
+
+  // I5.
+  StringKey.importFailedDxfTemplate:
+      'Berkas itu bukan DXF yang terbaca - apakah itu DWG? Konversi dulu atau '
+          'impor berkas aslinya. ({detail})',
+  StringKey.importFailedDwgTemplate:
+      'DWG itu tidak bisa dikonversi - pasang ODA File Converter, atau ekspor '
+          'DXF dari program CAD Anda lalu impor DXF itu. ({detail})',
+  StringKey.importFailedPdfTemplate:
+      'PDF itu tidak bisa dibaca - mungkin rusak, terkunci kata sandi, atau '
+          'bukan gambar. ({detail})',
+  StringKey.importFailedGenericTemplate: 'Gagal mengimpor {what}: {detail}',
+
+  // C4/C5.
+  StringKey.annotationDeleteArmTemplate:
+      'Klik kanan lagi untuk menghapus {what}',
+  StringKey.annotationDeletedTemplate: '{what} dihapus',
+  StringKey.annotationRoomDeletedTemplate:
+      '{what} dihapus - {terminals} masih ada',
+  StringKey.annotationTerminalOne: 'terminal terpasang',
+  StringKey.annotationTerminalMany: 'terminal terpasang',
+  StringKey.annotationDimension: 'Dimensi',
+  StringKey.annotationReferenceLine: 'Garis referensi',
+  StringKey.sheetRemoved: 'Lembar dihapus - Ctrl+Z untuk membatalkan',
+  StringKey.sheetRemovedPrunedTemplate:
+      'Lembar dihapus - {pruned} dipangkas - Ctrl+Z untuk membatalkan',
+  StringKey.sheetElementOne: 'elemen',
+  StringKey.sheetElementMany: 'elemen',
+
+  // J2 — ringkasan sistem kelistrikan (tab kelistrikan hanya-baca).
+  StringKey.electricalSummaryTitle: 'Sistem',
+  StringKey.electricalSummaryBoards: 'Panel',
+  StringKey.electricalSummaryWays: 'Grup',
+  StringKey.electricalSummaryDemand: 'Kebutuhan',
+  StringKey.electricalSummaryEssential: 'Esensial',
+  StringKey.electricalSummaryEssentialValue: '{essential} dari {total} panel',
+
+  // J4 — legenda kanvas: baris kelistrikan + grup lapisan referensi.
+  StringKey.canvasLegendPhaseR: 'Fasa R',
+  StringKey.canvasLegendPhaseS: 'Fasa S',
+  StringKey.canvasLegendPhaseT: 'Fasa T',
+  StringKey.canvasLegendFeeder: 'Penyulang',
+  StringKey.canvasLegendEssential: 'Suplai esensial',
+  StringKey.canvasLegendGhosted: 'Lapisan referensi',
+
+  // J7 — Komersial: daftar material MEKANIKAL.
+  StringKey.commercialMechBomTitle: 'BOM mekanikal',
+  StringKey.commercialMechBomEmpty:
+      'Hitung jaringan mekanikal untuk memberi harga pipa, duct dan fiting.',
+  StringKey.commercialMechBomLead: '{lines}, {unpriced} tanpa harga',
+  StringKey.commercialColPriced: 'Berharga',
+  StringKey.commercialPriced: 'berharga',
+  StringKey.commercialUnpriced: 'tanpa harga',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

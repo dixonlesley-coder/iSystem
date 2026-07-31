@@ -131,26 +131,37 @@ class MechanicalBomView extends ConsumerWidget {
     final colors = context.colors;
     final type = context.type;
     final est = ref.watch(mechanicalCostProvider);
+    // J7: the last EN-only literals in the Commercial workspace. The counts are
+    // pre-pluralized with `pluralCount` (the noun comes from the string table,
+    // so ID reads 'baris' with no inflection) and the template does the plain
+    // {name} substitution — never the dev-speak 'line(s)'.
+    final s = context.strings;
+    final lines = pluralCount(est.lines.length,
+        s(StringKey.commercialLineOne), s(StringKey.commercialLineMany));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Mechanical BOM',
+        Text(s(StringKey.commercialMechBomTitle),
             style: type.title.copyWith(color: colors.textPrimary)),
         const SizedBox(height: MechXSpacing.xxs),
         Text(
           est.lines.isEmpty
-              ? 'Size a mechanical network to price its pipe, duct and fittings.'
-              : '${pluralCount(est.lines.length, 'line', 'lines')}, ${est.unpricedCount} unpriced',
+              ? s(StringKey.commercialMechBomEmpty)
+              : s.format(StringKey.commercialMechBomLead, {
+                  'lines': lines,
+                  'unpriced': '${est.unpricedCount}',
+                }),
           style: type.caption.copyWith(color: colors.textMuted),
         ),
         const SizedBox(height: MechXSpacing.sm),
         CommercialTable(
-          columns: const [
-            CommercialColumn('Qty', flex: 2, numeric: true),
-            CommercialColumn('Unit', flex: 2),
-            CommercialColumn('Item', flex: 9),
-            CommercialColumn('Priced', flex: 3),
+          columns: [
+            CommercialColumn(s(StringKey.commercialColQty),
+                flex: 2, numeric: true),
+            CommercialColumn(s(StringKey.commercialColUnit), flex: 2),
+            CommercialColumn(s(StringKey.commercialColItem), flex: 9),
+            CommercialColumn(s(StringKey.commercialColPriced), flex: 3),
           ],
           rows: [
             for (final l in est.lines)
@@ -189,7 +200,9 @@ class _PricedBadge extends StatelessWidget {
         border: Border.all(color: color.withAlpha(122)),
       ),
       child: Text(
-        priced ? 'priced' : 'unpriced',
+        context.strings(priced
+            ? StringKey.commercialPriced
+            : StringKey.commercialUnpriced),
         style: type.caption.copyWith(color: color, fontWeight: FontWeight.w600),
       ),
     );

@@ -137,12 +137,13 @@ const List<_Group> _groups = [
 
 /// The scrollable palette column.
 ///
-/// [enabled] gates interactivity (D6): on the read-only Building-riser / Power
-/// one-line tabs the palette has no drop target, so it renders dimmed + inert
-/// (no drag, no keyboard activation) with a one-line hint replacing the header.
+/// J2 (superseding D6's dimmed-but-mounted treatment): the palette is only
+/// mounted where a drop target actually exists — the Single-line tab and the
+/// Layout electrical layer. The read-only Building-riser / Power one-line
+/// projections show the electrical system summary instead, so there is no
+/// "disabled palette" state to render.
 class ElectricalPalette extends ConsumerStatefulWidget {
-  final bool enabled;
-  const ElectricalPalette({super.key, this.enabled = true});
+  const ElectricalPalette({super.key});
 
   @override
   ConsumerState<ElectricalPalette> createState() => _ElectricalPaletteState();
@@ -242,8 +243,6 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final type = context.type;
-    final enabled = widget.enabled;
     return GlassSurface(
       // Floats over the electrical canvas; its left edge faces the diagram.
       edge: Border(
@@ -260,26 +259,17 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
               MechXSpacing.md,
               MechXSpacing.xs,
             ),
-            // D6: on a read-only projection the header is a plain hint (no drop
-            // target here); otherwise the "Loads" section label.
-            child: enabled
-                ? MechXSectionLabel(
-                    context.strings(StringKey.electricalPaletteLoads))
-                : Text(
-                    context.strings(StringKey.electricalPaletteReadOnly),
-                    style: type.caption.copyWith(color: colors.textMuted),
-                  ),
+            // J2: the palette is only ever mounted where a drop target exists
+            // (the Single-line tab / the Layout electrical layer), so it always
+            // shows the live "Loads" section label. The read-only projections
+            // no longer host a dimmed copy of it at all — they show the
+            // electrical system summary instead.
+            child: MechXSectionLabel(
+                context.strings(StringKey.electricalPaletteLoads)),
           ),
           const SizedBox(height: MechXSpacing.sm),
           Expanded(
-            // D6: dim + inert (no drag / no keyboard activation) when disabled.
-            child: IgnorePointer(
-              ignoring: !enabled,
-              child: ExcludeFocus(
-                excluding: !enabled,
-                child: Opacity(
-                  opacity: enabled ? 1.0 : 0.4,
-                  child: MechXScrollbar(
+            child: MechXScrollbar(
               controller: _scrollController,
               child: SingleChildScrollView(
               controller: _scrollController,
@@ -319,8 +309,8 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
                           // L1: a keyboard alternative to dragging — Enter/Space
                           // on a focused card adds the way to the selected (or
                           // first) panel, mirroring the mechanical
-                          // SegmentPalette's dropAtCentre. Null when read-only.
-                          onActivate: enabled ? () => _addLoad(c) : null,
+                          // SegmentPalette's dropAtCentre.
+                          onActivate: () => _addLoad(c),
                           // Show the load's industry-standard symbol so the
                           // palette matches how it'll appear on the plan.
                           leading: LoadSymbol(
@@ -336,9 +326,6 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
                 ],
               ),
             ),
-            ),
-                ),
-              ),
             ),
           ),
         ],

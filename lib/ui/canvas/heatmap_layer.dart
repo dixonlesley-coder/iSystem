@@ -5,6 +5,7 @@ import 'package:mechx_engine/pressure_field.dart';
 import '../../store/network_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/solve_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'viewport.dart';
@@ -68,6 +69,16 @@ class HeatmapLayer extends ConsumerWidget {
     )));
     if (field == null) return const SizedBox.shrink();
 
+    // J3: the corridor mask — the wash fades out beyond the pipework the solve
+    // actually measured, so an empty sheet corner is never coloured as if it
+    // carried a residual. Derived from (and grid-aligned with) the same field.
+    final mask = ref.watch(heatmapMaskProvider((
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      width: contentSize.width,
+      height: contentSize.height,
+    )));
+
     // E4: a (near-)uniform residual field used to wash the whole sheet in the
     // mid-ramp amber (a pale tan at the overlay alpha), reading as a stained
     // page rather than a deliberate overlay. When there's essentially one value
@@ -85,6 +96,7 @@ class HeatmapLayer extends ConsumerWidget {
                 field: field,
                 transform: transform,
                 uniformColor: uniformColor,
+                mask: mask,
               ),
             ),
           ),
@@ -94,7 +106,14 @@ class HeatmapLayer extends ConsumerWidget {
             right: MechXSpacing.md,
             bottom: MechXSpacing.md,
             child: HeatmapLegend(
-                minKpa: minKpa, maxKpa: maxKpa, targetKpa: targetKpa),
+                minKpa: minKpa,
+                maxKpa: maxKpa,
+                targetKpa: targetKpa,
+                // M9: on the upfeed solve the residuals meet the target BY
+                // CONSTRUCTION (the pump head is defined as their max), so the
+                // legend must not print a green PASS off them.
+                targetHeldByDesign:
+                    ref.watch(solveProvider)?.targetHeldByDesign ?? false),
           ),
         ],
       ),
@@ -124,16 +143,31 @@ class HeatmapLegend extends StatelessWidget {
   /// state's PASS/LOW verdict.
   final double targetKpa;
 
+  /// M9 — true when these residuals hold [targetKpa] BY CONSTRUCTION rather
+  /// than as a falsifiable outcome ([PressureSolution.targetHeldByDesign], the
+  /// upfeed solve: the pump head is DEFINED as the max of
+  /// friction + elevation + target, so `residual >= target` is an algebraic
+  /// identity no drawn network can break). A PASS read off that is
+  /// unfalsifiable, so the verdict reads "target held by design" instead of a
+  /// green PASS. The gravity DOWNFEED solve leaves this false — its residuals
+  /// fall from a FIXED tank elevation and really can miss the target, so its
+  /// PASS/LOW is a genuine check and is unchanged.
+  final bool targetHeldByDesign;
+
   const HeatmapLegend(
       {super.key,
       required this.minKpa,
       required this.maxKpa,
-      required this.targetKpa});
+      required this.targetKpa,
+      this.targetHeldByDesign = false});
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    // Degrades to EN with no provider ancestor (the legend is also pumped
+    // standalone in tests), so this never throws.
+    final strings = MechXStrings.of(context);
     final uniform = (maxKpa - minKpa).abs() < 1.0;
 
     String bar(double kpa) => '${kpa.toStringAsFixed(0)} kPa';
@@ -164,6 +198,13 @@ class HeatmapLegend extends StatelessWidget {
           children: [
             Text('Residual pressure',
                 style: type.caption.copyWith(color: colors.textSecondary)),
+            // L-2a: the Results card beside this legend verdicts on ZONE
+            // STATIC, so each surface must name its own basis — this one is
+            // the residual AT FIXTURES, not the zone-wide static figure.
+            Text('residual at fixtures',
+                maxLines: 1,
+                softWrap: false,
+                style: type.micro.copyWith(color: colors.textMuted)),
             const SizedBox(height: MechXSpacing.xs),
             // The ramp bar stretches to the widest line (title / label row). A
             // thin ink tick marks the absolute target residual on the gradient
@@ -212,11 +253,21 @@ class HeatmapLegend extends StatelessWidget {
                       softWrap: false,
                       style: type.mono.copyWith(color: colors.textMuted)),
                   const SizedBox(width: MechXSpacing.xs),
-                  Text(pass ? 'PASS' : 'LOW',
+                  // M9: an upfeed residual cannot fail this comparison, so it
+                  // gets the honest neutral statement, never a green PASS.
+                  Text(targetHeldByDesign
+                      ? 'held by design'
+                      : pass
+                          ? 'PASS'
+                          : 'LOW',
                       maxLines: 1,
                       softWrap: false,
                       style: type.mono.copyWith(
-                          color: pass ? colors.success : colors.danger)),
+                          color: targetHeldByDesign
+                              ? colors.textSecondary
+                              : pass
+                                  ? colors.success
+                                  : colors.danger)),
                 ],
               )
             else ...[
@@ -241,7 +292,24 @@ class HeatmapLegend extends StatelessWidget {
                   maxLines: 1,
                   softWrap: false,
                   style: type.mono.copyWith(color: colors.textSecondary)),
+              // G6 — a SPREAD field used to print that bare Min tick with no
+              // caveat at all: on the upfeed solve every residual clears it by
+              // construction, so an engineer reads a PASS off an unfalsifiable
+              // inequality. The caveat the uniform branch already carried now
+              // appears here too.
+              if (targetHeldByDesign)
+                Text(strings(StringKey.heatmapHeldByDesign),
+                    maxLines: 1,
+                    softWrap: false,
+                    style: type.micro.copyWith(color: colors.textSecondary)),
             ],
+            // G6 — and BOTH branches name the question that CAN fail: whether a
+            // real pump can deliver the head this solve assumed.
+            if (targetHeldByDesign)
+              Text('- ${strings(StringKey.heatmapRealCheckPumpDuty)}',
+                  maxLines: 1,
+                  softWrap: false,
+                  style: type.micro.copyWith(color: colors.textMuted)),
           ],
         ),
       ),
@@ -260,10 +328,17 @@ class _HeatmapPainter extends CustomPainter {
   /// wash. Null ⇒ the normal per-cell red→amber→teal ramp.
   final Color? uniformColor;
 
+  /// J3 — the per-cell corridor opacity mask (grid-aligned with [field]). Null
+  /// ⇒ no masking (the pre-J3 full-sheet wash). Applied as a multiplier on the
+  /// cell colour's alpha, so a cell far from any solved node is not painted at
+  /// all: colour where there is no pipework is extrapolation, not measurement.
+  final HeatmapMask? mask;
+
   _HeatmapPainter({
     required this.field,
     required this.transform,
     this.uniformColor,
+    this.mask,
   });
 
   @override
@@ -272,9 +347,17 @@ class _HeatmapPainter extends CustomPainter {
     final max = field.max;
     final resolution = field.cellSize;
     final cell = resolution * transform.scale;
+    // Only usable when it describes THIS grid (it is derived from it, but a
+    // mismatched pair must degrade to the unmasked wash rather than misalign).
+    final m = (mask != null && mask!.cols == field.cols && mask!.rows == field.rows)
+        ? mask
+        : null;
 
     for (var row = 0; row < field.rows; row++) {
       for (var col = 0; col < field.cols; col++) {
+        final maskAlpha = m == null ? 1.0 : m.alphaAt(col, row);
+        // Nothing to say here — leave the plan bare.
+        if (maskAlpha <= 0.0) continue;
         final Color color;
         if (uniformColor != null) {
           color = uniformColor!;
@@ -282,6 +365,9 @@ class _HeatmapPainter extends CustomPainter {
           final t = normalize(field.valueAt(col, row), min, max);
           color = _ramp(t).withAlpha(105);
         }
+        final faded = maskAlpha >= 1.0
+            ? color
+            : color.withAlpha((color.a * 255 * maskAlpha).round());
         final origin = transform.worldToScreen(
           Offset(field.centerX(col) - resolution / 2,
               field.centerY(row) - resolution / 2),
@@ -289,7 +375,7 @@ class _HeatmapPainter extends CustomPainter {
         canvas.drawRect(
           // +0.5 overlap to avoid seams between cells.
           Rect.fromLTWH(origin.dx, origin.dy, cell + 0.5, cell + 0.5),
-          Paint()..color = color,
+          Paint()..color = faded,
         );
       }
     }
@@ -308,5 +394,6 @@ class _HeatmapPainter extends CustomPainter {
       // yields a new field object → repaint.
       !identical(old.field, field) ||
       old.transform != transform ||
-      old.uniformColor != uniformColor;
+      old.uniformColor != uniformColor ||
+      !identical(old.mask, mask);
 }

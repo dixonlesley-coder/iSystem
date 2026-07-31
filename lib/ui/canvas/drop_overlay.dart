@@ -188,9 +188,11 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
             widget.sheetId, widget.floorIndex, pointWorld(world),
             snapRadius: snapWorld);
       case PaletteItemKind.terminal:
+        // F5 — a per-fixture palette card carries its [PlumbingFixture]; the
+        // generic Terminal card carries null (unchanged untyped placement).
         ctrl.mergeOrAddTerminal(
             widget.sheetId, widget.floorIndex, pointWorld(world),
-            snapRadius: snapWorld);
+            fixture: data.fixture, snapRadius: snapWorld);
       case PaletteItemKind.component:
         final c = data.component;
         if (c != null) {

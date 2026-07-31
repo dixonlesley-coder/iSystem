@@ -18,6 +18,8 @@ import 'package:mechx_engine/network/connectivity.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/riser_tags.dart'
     show drainageStackBasesLackingCleanout;
+import 'package:mechx_engine/sizing/air_velocity.dart'
+    show VelocityBandVerdict;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
@@ -197,7 +199,13 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final sheets = ref.watch(sheetsControllerProvider);
   final velocity = ref.watch(airVelocityChecksProvider);
   final unsized = ref.watch(airUnsizedProvider);
-  final overCapacity = ref.watch(airOverCapacityProvider);
+  // M3/M4 — the discipline-neutral over-capacity set (air + storm + water),
+  // not the air-only view: a clamped downpipe / over-velocity supply pipe used
+  // to be computed and dropped.
+  final overCapacity = ref.watch(overCapacityEdgesProvider);
+  final waterVelocity = ref.watch(waterVelocityChecksProvider);
+  final selfCleansing = ref.watch(selfCleansingDefectsProvider);
+  final loopUnbalanced = ref.watch(loopUnbalancedEdgesProvider);
   final drainAdvisories = ref.watch(drainageAdvisoryProvider);
   final legionellaReturnTempC = ref.watch(hotWaterLegionellaProvider);
   final docControl = ref.watch(documentControlProvider);
@@ -305,19 +313,200 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     }
   }
 
-  // ── 2b. Duct over capacity: clamped to the largest standard size (warning) ──
-  // The auto-sizer clamps an oversize air duct to the largest standard duct
-  // and flags it instead of aborting the solve; surface each clamped edge.
+  // ── 2b. Over capacity: the printed size is a TABLE LIMIT (warning) ─────────
+  // The sizer clamps rather than aborting the solve and flags
+  // `EdgeSizing.overCapacity`. Wave 1 widened that flag past air, so this fan-in
+  // is service-aware (M3/M4): an AIR duct clamped at the largest standard duct,
+  // a STORM downpipe whose catchment exceeds the largest tabulated size, or a
+  // WATER SUPPLY run that cannot hold the SNI 2,0 m/s cap at any DN in the
+  // series. One flag, three honest messages — each naming the action that
+  // actually fixes it (split the run / split the roof outlets / split the flow).
   for (final id in overCapacity) {
+    final edge = edgeById[id];
+    if (edge == null) continue;
+    final sheetId = sheetForEdge(edge);
+    final (kind, title, message) = switch (edge.service) {
+      _ when edge.service.isAir => (
+          'duct-over-capacity',
+          str(StringKey.issueDuctOverCapacityTitle),
+          str(StringKey.issueDuctOverCapacityMessage),
+        ),
+      ServiceType.rainwater => (
+          'storm-over-capacity',
+          str(StringKey.issueStormOverCapacityTitle),
+          str(StringKey.issueStormOverCapacityMessage),
+        ),
+      _ => (
+          'water-over-capacity',
+          str(StringKey.issueWaterOverCapacityTitle),
+          str(StringKey.issueWaterOverCapacityMessage),
+        ),
+    };
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: kind,
+      title: title,
+      message: message,
+      locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
+    ));
+  }
+
+  // ── 2b-ii. Out-of-band WATER / DRAINAGE velocity (M4/M5, warning) ──────────
+  // The air twin of this fan-in has existed since Wave 3; the water/drainage
+  // one never did, so an `sniVerbatim` 2,0 m/s supply-velocity violation shipped
+  // silently (it showed only in the edge inspector, if the engineer happened to
+  // select that run).
+  //
+  // The gravity TOO-LOW case is deliberately NOT emitted here: it is exactly the
+  // self-cleansing finding below, which carries the actionable message. Emitting
+  // both would print the same physics twice on one edge (the drainage band's
+  // minimum IS the self-cleansing floor, judged on the same full-bore Manning
+  // velocity). G1 — since the engine now raises `selfCleansingOk == false` only
+  // for a run sized ABOVE its DFU-table minimum, a code-minimum branch that runs
+  // slow emits NEITHER row: at the minimum no pipe change is available, so the
+  // only honest levers (the laid slope, the grouped discharge) belong to the
+  // slope input and the min-slope advisory below — not to a per-edge warning
+  // that could name no action.
+  for (final entry in waterVelocity.entries) {
+    final check = entry.value;
+    if (!check.isWarning) continue;
+    final edge = edgeById[entry.key];
+    if (edge == null) continue;
+    if (edge.service.regime == FlowRegime.gravity &&
+        check.verdict == VelocityBandVerdict.tooLow) {
+      continue; // owned by the self-cleansing advisory below
+    }
+    // G2 — the OVER-CAPACITY case is owned by 2b-i above: a run clamped at the
+    // largest tabulated size is over-velocity BY CONSTRUCTION (the clamp is what
+    // pushed it there), so emitting `water-velocity:<id>` as well prints the
+    // same physics twice on one edge with the weaker advice. Mirrors the gravity
+    // dedupe directly above (that guard proved the pattern); the over-capacity
+    // row carries the actionable message ("split the flow / split the run").
+    if (overCapacity.contains(entry.key)) continue;
+    final sheetId = sheetForEdge(edge);
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'water-velocity:${entry.key}',
+      title: str(StringKey.issueWaterVelocityTitle),
+      // Engine-sourced message (`3.4 m/s — too high (> 2.0)`) like its air twin.
+      message: check.message,
+      locate:
+          sheetId == null ? null : IssueLocation(sheetId, edgeId: entry.key),
+    ));
+  }
+
+  // ── 2b-iii. Drainage branch below the self-cleansing velocity (info) ───────
+  // `EdgeSizing.selfCleansingOk` (Wave 1) is false when the full-bore Manning
+  // velocity at the design slope falls under 0.6 m/s AND the run is sized ABOVE
+  // the DFU table's minimum for its load (G1) — i.e. a smaller compliant pipe
+  // genuinely exists. An ADVISORY, not a warning: the diameter is still legal,
+  // and the honest remedies are the design slope (a Building-page input) or
+  // grouping more discharge onto the branch.
+  for (final id in selfCleansing) {
+    final edge = edgeById[id];
+    if (edge == null) continue;
+    final sheetId = sheetForEdge(edge);
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'drainage-self-cleansing',
+      title: str(StringKey.issueSelfCleansingTitle),
+      message: str(StringKey.issueSelfCleansingMessage),
+      locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
+    ));
+  }
+
+  // ── 2b-iii-b. Plumbing fixture placed with no fixture TYPE (F5, info) ──────
+  // A terminal dropped on a water-supply or sanitary run with no `fixture` (and
+  // no resolved custom fixture) is not sized on nothing — it is sized on the
+  // REPRESENTATIVE PLACEHOLDER the engine substitutes for an untyped leaf:
+  // `kDefaultLeafFixtureUnits` (2.0 UBAP) on cold/hot water and
+  // `kDefaultLeafDfu` (2.0 DFU) on drainage/vent. That placeholder then flows
+  // into the accumulated demand, the mains, the pump duty, the BOM and the
+  // issued report with no marker anywhere — the plumbing twin of the air side's
+  // `air-terminal-unsized` advisory, which never existed until now.
+  //
+  // Gated to the services that actually apply a placeholder: the UBAP path is
+  // cold/hot water only (the fire services size from a flow default, not
+  // fixture units) and the DFU path is drainage/vent. An advisory, not a
+  // warning: the number IS a defensible representative load, so the design is
+  // sizable — it is the SILENCE that was dishonest. Locatable to the node.
+  for (final n in net.nodes) {
+    if (n.role != NodeRole.fixture) continue;
+    if (n.fixture != null || n.customFixtureId != null) continue;
+    var onSupply = false;
+    var onSanitary = false;
+    for (final e in net.edgesAt(n.id)) {
+      switch (e.service) {
+        case ServiceType.coldWater:
+        case ServiceType.hotWater:
+          onSupply = true;
+        case ServiceType.drainage:
+        case ServiceType.vent:
+          onSanitary = true;
+        default:
+          break;
+      }
+    }
+    if (!onSupply && !onSanitary) continue;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'fixture-untyped:${n.id}',
+      title: str(StringKey.issueFixtureUntypedTitle),
+      // A fixture on BOTH systems (the normal case) leads with the supply
+      // placeholder — it is the one that drives the diversified demand and the
+      // pump duty; the drainage-only message names the DFU default instead.
+      message: onSupply
+          ? str(StringKey.issueFixtureUntypedSupplyMessage)
+          : str(StringKey.issueFixtureUntypedDrainageMessage),
+      locate: IssueLocation(n.sheetId, nodeId: n.id),
+    ));
+  }
+
+  // ── 2b-iv. Unsettled ring: Hardy-Cross did not converge (M17, warning) ─────
+  // The carried flow still satisfies continuity at every node, but the loop
+  // head-loss balance was never achieved — so the split, and every size derived
+  // from it, is PROVISIONAL. Previously unobservable anywhere in the app.
+  for (final id in loopUnbalanced) {
     final edge = edgeById[id];
     if (edge == null) continue;
     final sheetId = sheetForEdge(edge);
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
-      kind: 'duct-over-capacity',
-      title: str(StringKey.issueDuctOverCapacityTitle),
-      message: str(StringKey.issueDuctOverCapacityMessage),
+      kind: 'loop-unbalanced',
+      title: str(StringKey.issueLoopUnbalancedTitle),
+      message: str(StringKey.issueLoopUnbalancedMessage),
       locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
+    ));
+  }
+
+  // ── 2b-v. Duty past the largest standard motor frame (M11, info) ───────────
+  // `selectMotor` CLAMPS at the 75 kW top of the standard ladder; without this
+  // the app printed a 75 kW motor for a 90 kW duty on the canvas, the schedule,
+  // the BOM and the electrical feed with no hint the frame had saturated.
+  // Non-locatable (it is a plant duty, not a drawn element).
+  //
+  // G4 — an ADVISORY, not a warning. It is a real and honest finding, but it is
+  // NOT a design defect the app can be made to clear: a legitimately large
+  // building has a duty past the 75 kW ladder, there is no custom-motor field to
+  // fill in, and the honest verdict already rides the Results ResultCard beside
+  // the duty figure itself. As a warning it was a permanent, unlocatable and
+  // (per `DesignIssue.isAcknowledgeable`) unacknowledgeable compliance blocker —
+  // a PASS was unreachable by construction. At [info] it still prints in Review
+  // and in the reports, and the engineer can acknowledge it with a reason.
+  if (ref.watch(pumpDutyProvider)?.motorOversized ?? false) {
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'pump-motor-oversized',
+      title: str(StringKey.issueMotorOversizedTitle),
+      message: str(StringKey.issuePumpMotorOversizedMessage),
+    ));
+  }
+  if (ref.watch(ductFanProvider)?.motorOversized ?? false) {
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'fan-motor-oversized',
+      title: str(StringKey.issueMotorOversizedTitle),
+      message: str(StringKey.issueFanMotorOversizedMessage),
     ));
   }
 
@@ -338,13 +527,16 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
-  // ── 3. Uncalibrated sheets (warning, or CRITICAL when edges are drawn) ───────
+  // ── 3. Uncalibrated sheets (info, or CRITICAL when edges are drawn) ─────────
   // An uncalibrated sheet that already carries drawn runs is a BLOCKER: every
   // run on it sizes to ZERO length (edgeLength returns Length(0) for an
   // uncalibrated run), so the BOM / pressures / report are silently wrong. A
-  // blank uncalibrated sheet stays a plain warning. We escalate only the
-  // edge-bearing ones; the title is kept ('… calibrated') so the compliance
-  // roll-up and any title match still catch it.
+  // BLANK uncalibrated sheet (nothing drawn on it yet) has nothing measurable
+  // to be wrong — it's an honesty ADVISORY ("calibrate before you draw"), not
+  // a warning, so it drops to [IssueSeverity.info] (and no longer blocks a
+  // compliance PASS on its own). We escalate only the edge-bearing ones; the
+  // title is kept ('… calibrated') so the compliance roll-up and any title
+  // match still catch it.
   final sheetsWithEdges = <String>{
     for (final n in net.nodes)
       if (net.edgesAt(n.id).isNotEmpty) n.sheetId,
@@ -361,12 +553,12 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         locate: IssueLocation(s.id),
       ));
     } else {
-      warnings.add(DesignIssue(
-        severity: IssueSeverity.warning,
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
         kind: 'sheet-uncalibrated:${s.id}',
         title: str(StringKey.issueSheetNotCalibratedTitle),
         message: str.format(
-            StringKey.issueSheetNotCalibratedWarningMessage, {'name': s.name}),
+            StringKey.issueSheetNotCalibratedInfoMessage, {'name': s.name}),
         locate: IssueLocation(s.id),
       ));
     }
@@ -583,8 +775,8 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // sheetId is empty/unused), so the Review row jumps to the Electrical
   // workspace + focuses the panel rather than a floor plan. A system-level
   // warning with no panel is non-locatable.
-  final electrical = ref.watch(electricalResultProvider);
-  for (final w in electrical.warnings) {
+  final electricalWarnings = ref.watch(electricalAllWarningsProvider);
+  for (final w in electricalWarnings) {
     final severity = switch (w.severity) {
       WarningSeverity.error => IssueSeverity.critical,
       WarningSeverity.warning => IssueSeverity.warning,
@@ -820,6 +1012,34 @@ final zeroLengthSizedEdgeCountProvider = Provider<int>((ref) {
 final exportHasZeroLengthEdgesProvider =
     Provider<bool>((ref) => ref.watch(zeroLengthSizedEdgeCountProvider) > 0);
 
+/// F4 — the SHEET IDS carrying the zero-length sized edges the export gate
+/// blocks on, in stable edge-list order (deduped). The gate used to name no
+/// sheet at all ("N drawn element(s) have zero length"), so the engineer had to
+/// go hunting; naming the offending sheets turns the blocker into an
+/// instruction. Empty ⇒ the gate is inert (byte-identical). An edge whose
+/// endpoint node is missing contributes nothing (never invents a sheet).
+final zeroLengthSheetIdsProvider = Provider<List<String>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final project = ref.watch(projectControllerProvider);
+  final sizing = ref.watch(sizingProvider);
+  final out = <String>[];
+  final seen = <String>{};
+  for (final e in net.edges) {
+    if (!sizing.containsKey(e.id)) continue;
+    final len = edgeLength(
+      e,
+      net,
+      calibrationBySheet: project.calibrations,
+      building: project.building,
+    );
+    if (len.meters > 0) continue;
+    final sheetId = net.nodeById(e.fromId)?.sheetId;
+    if (sheetId == null) continue;
+    if (seen.add(sheetId)) out.add(sheetId);
+  }
+  return List.unmodifiable(out);
+});
+
 /// A one-click batch action over a whole CLASS of issues. SAFE by construction —
 /// it only SELECTS the offending elements or applies an already-existing bulk op
 /// (copy one sheet's calibration to the rest). It never invents geometry or
@@ -830,6 +1050,21 @@ enum IssueBatchKind {
 
   /// Multi-select every air element carrying air with no chosen size yet.
   selectUnsizedAir,
+
+  /// Multi-select every water/drainage run with an out-of-band velocity
+  /// warning (A6 — excludes edges already covered by the over-capacity set,
+  /// mirroring the fan-in's dedupe).
+  selectWaterVelocity,
+
+  /// Multi-select every clamped-at-table-top edge (air size cap, storm
+  /// catchment, water velocity — the discipline-neutral over-capacity set).
+  selectOverCapacity,
+
+  /// Multi-select every drainage branch flagged below self-cleansing velocity.
+  selectSelfCleansing,
+
+  /// Multi-select every unconnected element (loose run ends + orphans).
+  selectUnconnected,
 
   /// Copy a calibrated sheet's scale onto every uncalibrated sheet.
   calibrateAllSheets,
@@ -929,6 +1164,52 @@ final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
       edgeIds: unE,
     ));
   }
+
+  // A6 — the audit-wave issue classes gain the same select-all treatment.
+  final overCap = ref.watch(overCapacityEdgesProvider);
+  final waterVel = <String>{
+    for (final e in ref.watch(waterVelocityChecksProvider).entries)
+      if (e.value.isWarning &&
+          edgeIds.contains(e.key) &&
+          !overCap.contains(e.key))
+        e.key,
+  };
+  final selfClean = {
+    for (final id in ref.watch(selfCleansingDefectsProvider))
+      if (edgeIds.contains(id)) id,
+  };
+  final unconnected = <String>{
+    for (final d in networkElementDefects(net)) d.nodeId,
+  };
+  void addSelect(IssueBatchKind kind, StringKey template,
+      {Set<String> n = const {}, Set<String> e = const {}}) {
+    final c = n.length + e.length;
+    if (c == 0) return;
+    actions.add(IssueBatchAction(
+      kind: kind,
+      label: str.format(template, {
+        'c': '$c',
+        'noun': plural(c, str(StringKey.issueNounElementOne),
+            str(StringKey.issueNounElementMany)),
+      }),
+      enabled: true,
+      nodeIds: n,
+      edgeIds: e,
+    ));
+  }
+
+  addSelect(IssueBatchKind.selectWaterVelocity,
+      StringKey.issueBatchSelectWaterVelocity,
+      e: waterVel);
+  addSelect(IssueBatchKind.selectOverCapacity,
+      StringKey.issueBatchSelectOverCapacity,
+      e: overCap.intersection(edgeIds));
+  addSelect(IssueBatchKind.selectSelfCleansing,
+      StringKey.issueBatchSelectSelfCleansing,
+      e: selfClean);
+  addSelect(IssueBatchKind.selectUnconnected,
+      StringKey.issueBatchSelectUnconnected,
+      n: unconnected);
 
   // 3. Calibrate-all from the first calibrated sheet (if any).
   final uncalibrated = <String>{

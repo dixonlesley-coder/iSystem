@@ -18,7 +18,9 @@ import '../ui/canvas/snapping.dart' show orthoElbow;
 import 'annotation_store.dart' show RoomArea;
 import 'history_store.dart';
 import 'route_geometry.dart';
+import 'schematic_layout_store.dart';
 import 'selection_store.dart';
+import 'sheets_store.dart';
 
 /// Active canvas tool.
 enum DrawTool { select, drawRun, drawRiser }
@@ -167,19 +169,77 @@ class NetworkController extends Notifier<DrawingState> {
         tool: state.tool,
       );
 
+  /// E1 — whether a snap/drop may ADOPT node [node], given the services the
+  /// caller is scoped away from ([avoidServices] — the hidden / locked / inert
+  /// set) and, for a DRAW endpoint, the service being drawn ([drawService]).
+  ///
+  /// Two rules, both of which used to be missing (the snap filtered on sheet +
+  /// floor only, so a cold-water run silently latched onto a duct or a drainage
+  /// node — including one on a service the engineer had hidden or locked and so
+  /// could neither see nor unpick):
+  ///
+  ///   * a node whose incident edges are ALL on an avoided service is not
+  ///     adoptable — it belongs to a network the caller is not editing;
+  ///   * a PLAIN junction (no component, `main` role) whose incident edges are
+  ///     all a DIFFERENT service is not adoptable by a draw endpoint — each
+  ///     service is its own network. Equipment / plant / fixture nodes stay
+  ///     adoptable across services on purpose: a roof tank legitimately feeds
+  ///     cold AND hot water, and a WC carries both its supply and its drain at
+  ///     one point.
+  ///
+  /// A node with NO incident edge (a free fitting just dropped from the palette,
+  /// the bootstrap pull point) is always adoptable — it belongs to no service
+  /// yet. Both defaults off ⇒ every existing caller is byte-identical.
+  bool _nodeAdoptable(
+    NetNode node,
+    List<NetEdge> edges, {
+    Set<ServiceType> avoidServices = const {},
+    ServiceType? drawService,
+  }) {
+    if (avoidServices.isEmpty && drawService == null) return true;
+    var incident = 0;
+    var allAvoided = true;
+    var anyDrawService = false;
+    for (final e in edges) {
+      if (e.fromId != node.id && e.toId != node.id) continue;
+      incident++;
+      if (!avoidServices.contains(e.service)) allAvoided = false;
+      if (e.service == drawService) anyDrawService = true;
+    }
+    if (incident == 0) return true; // bare junction — belongs to no service yet
+    if (avoidServices.isNotEmpty && allAvoided) return false;
+    if (drawService != null &&
+        !anyDrawService &&
+        node.component == null &&
+        node.role == NodeRole.main) {
+      return false; // a plain junction of another service — never latch onto it
+    }
+    return true;
+  }
+
   /// Snap to the NEAREST existing node on [sheetId]/[floorIndex] within
   /// [snapRadius] (world px), or return null if none. Adds nothing. Nearest (not
   /// first-in-list) so a drop/draw adopts the node the on-canvas snap ring
   /// highlights — the ring's promise stays honest when two nodes sit inside the
   /// radius (the ring paints the nearest).
+  ///
+  /// E1 — [avoidServices] / [drawService] scope which nodes may be adopted (see
+  /// [_nodeAdoptable]); [edges] is the edge list to read incidence from (the
+  /// caller's working copy during a draw, else the live network). Defaults ⇒
+  /// byte-identical.
   String? _snap(
     List<NetNode> nodes,
     String sheetId,
     int floorIndex,
     Offset p,
-    double snapRadius,
-  ) {
+    double snapRadius, {
+    List<NetEdge>? edges,
+    Set<ServiceType> avoidServices = const {},
+    ServiceType? drawService,
+  }) {
     final r2 = snapRadius * snapRadius;
+    final scoped = avoidServices.isNotEmpty || drawService != null;
+    final edgeList = edges ?? state.network.edges;
     String? best;
     var bestD2 = r2;
     for (final n in nodes) {
@@ -188,6 +248,11 @@ class NetworkController extends Notifier<DrawingState> {
       final dy = n.y - p.dy;
       final d2 = dx * dx + dy * dy;
       if (d2 <= bestD2) {
+        if (scoped &&
+            !_nodeAdoptable(n, edgeList,
+                avoidServices: avoidServices, drawService: drawService)) {
+          continue;
+        }
         bestD2 = d2;
         best = n.id;
       }
@@ -214,6 +279,7 @@ class NetworkController extends Notifier<DrawingState> {
     double? gridMetersPerPixel,
     Offset? Function(Offset world)? underlaySnap,
     bool ortho = false,
+    Set<ServiceType> avoidServices = const {},
   }) {
     if (state.tool != DrawTool.drawRun) return;
     if (state.pendingPoint == null) {
@@ -255,12 +321,14 @@ class NetworkController extends Notifier<DrawingState> {
         state.pendingPoint!, snapRadius, state.service,
         gridSnap: gridSnap,
         gridMetersPerPixel: gridMetersPerPixel,
-        underlaySnap: underlaySnap);
+        underlaySnap: underlaySnap,
+        avoidServices: avoidServices);
     final bId = _resolveDrawEndpoint(nodes, edges, sheetId, floorIndex, world,
         endSnapRadius ?? snapRadius, state.service,
         gridSnap: gridSnap,
         gridMetersPerPixel: gridMetersPerPixel,
-        underlaySnap: underlaySnap);
+        underlaySnap: underlaySnap,
+        avoidServices: avoidServices);
     if (aId == bId) {
       // zero-length / same node — just advance the pending point. Any split the
       // resolve did was on a LOCAL copy; discarding it leaves state untouched.
@@ -290,6 +358,24 @@ class NetworkController extends Notifier<DrawingState> {
     );
   }
 
+  /// The sheet id mapped to [floorIndex], or null when NO loaded sheet maps to
+  /// that floor. The reverse of `SheetsState.floorFor` — the same lookup the
+  /// Building page does to show a level's assigned plan. When [override] is
+  /// given (tests / a caller that already resolved the mapping) it wins, so this
+  /// never has to read the sheets store.
+  String? sheetIdForFloor(
+    int floorIndex,
+    int levelCount, {
+    String? Function(int floorIndex)? override,
+  }) {
+    if (override != null) return override(floorIndex);
+    final sheets = ref.read(sheetsControllerProvider);
+    for (final s in sheets.sheets) {
+      if (sheets.floorFor(s.id, levelCount) == floorIndex) return s.id;
+    }
+    return null;
+  }
+
   /// Drop a riser at [world] spanning to an ADJACENT floor. Normally connects to
   /// the floor ABOVE ([RiserPlacement.up]); on the TOP floor (no floor above)
   /// it connects DOWNWARD to the floor below instead ([RiserPlacement.down]) —
@@ -298,12 +384,24 @@ class NetworkController extends Notifier<DrawingState> {
   /// went, or [RiserPlacement.none] when the building has a single floor (no
   /// adjacent floor to span) so the UI can fire a status message. The riser's
   /// length is the §10 elevation delta, never a pixel distance.
+  ///
+  /// B1 — the FAR (other-floor) node lands on the sheet MAPPED TO THAT FLOOR,
+  /// not on the sheet the riser was drawn from. Every canvas overlay filters on
+  /// sheet AND floor, so a far node stamped with the SOURCE sheet id is
+  /// invisible on the floor above: the engineer cannot branch off the riser
+  /// there, draws a disconnected island instead, and meets it later as a Review
+  /// connectivity warning. When the destination floor has NO plan assigned the
+  /// far node falls back to the source sheet (today's behaviour — there is
+  /// nowhere better to put it, and it still spans the real elevation delta).
+  /// [sheetIdForFloorOverride] injects the mapping for tests / callers that
+  /// already resolved it.
   RiserPlacement placeRiser(
     String sheetId,
     int floorIndex,
     Offset world,
     int levelCount, {
     double snapRadius = 12,
+    String? Function(int floorIndex)? sheetIdForFloorOverride,
   }) {
     if (state.tool != DrawTool.drawRiser) return RiserPlacement.none;
 
@@ -331,9 +429,17 @@ class NetworkController extends Notifier<DrawingState> {
       nodes.add(NetNode(
           id: thisId, sheetId: sheetId, x: world.dx, y: world.dy, floorIndex: floorIndex));
     }
+    // B1: the far node belongs to the DESTINATION floor's plan when it has one.
+    final otherSheetId = sheetIdForFloor(otherFloor, levelCount,
+            override: sheetIdForFloorOverride) ??
+        sheetId;
     final otherId = _id('n');
     nodes.add(NetNode(
-        id: otherId, sheetId: sheetId, x: world.dx, y: world.dy, floorIndex: otherFloor));
+        id: otherId,
+        sheetId: otherSheetId,
+        x: world.dx,
+        y: world.dy,
+        floorIndex: otherFloor));
     final edge = NetEdge(
       id: _id('e'),
       fromId: thisId,
@@ -351,6 +457,10 @@ class NetworkController extends Notifier<DrawingState> {
   /// [worldX]; the riser's vertical length is the §10 floor-to-floor elevation
   /// delta (computed by `edgeLength`), NOT a pixel distance. Returns the new
   /// edge id, or null when there is no floor above. Records one undo step.
+  ///
+  /// B1 — the UPPER node lands on the sheet MAPPED to the floor above (falling
+  /// back to [sheetId] when that floor carries no plan), so a riser placed from
+  /// the elevation is visible and branchable on BOTH floors' plans.
   String? placeRiserAt(
     String sheetId,
     int floorIndex,
@@ -358,9 +468,13 @@ class NetworkController extends Notifier<DrawingState> {
     int levelCount, {
     ServiceType? service,
     double y = 0,
+    String? Function(int floorIndex)? sheetIdForFloorOverride,
   }) {
     if (floorIndex < 0 || floorIndex + 1 >= levelCount) return null;
     final svc = service ?? state.service;
+    final upperSheetId = sheetIdForFloor(floorIndex + 1, levelCount,
+            override: sheetIdForFloorOverride) ??
+        sheetId;
     final lowerId = _id('n');
     final upperId = _id('n');
     final lower = NetNode(
@@ -371,7 +485,7 @@ class NetworkController extends Notifier<DrawingState> {
         floorIndex: floorIndex);
     final upper = NetNode(
         id: upperId,
-        sheetId: sheetId,
+        sheetId: upperSheetId,
         x: worldX,
         y: y,
         floorIndex: floorIndex + 1);
@@ -422,33 +536,36 @@ class NetworkController extends Notifier<DrawingState> {
     return edgeId;
   }
 
-  /// Move BOTH endpoint nodes of a riser [edgeId] to horizontal [worldX] WITHOUT
-  /// recording undo (live drag — pair with [pushUndoSnapshot] at drag start).
-  /// Only the x changes: the floors (and so the §10 elevation delta that is the
-  /// riser's true length) are untouched, so dragging a riser sideways never
-  /// alters its length.
+  /// Move riser [edgeId] sideways in the Riser → Edit ELEVATION — a
+  /// DIAGRAM-ONLY declutter gesture (B3).
+  ///
+  /// It used to write the elevation's world x straight onto both endpoint nodes,
+  /// i.e. onto the PLAN geometry: sliding a riser along the elevation to untangle
+  /// the diagram silently relocated it away from its shaft on the plan and on
+  /// every plan export, with no warning and nothing on screen (in the elevation)
+  /// to show that anything but the diagram had changed. The elevation is a
+  /// GENERATED RENDER of the solve (golden rule 5); moving a symbol on it must
+  /// not edit the drawing.
+  ///
+  /// It now writes both endpoints' x into the transient
+  /// [schematicLayoutProvider] override map, which ONLY the elevation reads.
+  /// Plan geometry — and therefore every §10 length, the plan canvas and every
+  /// plan export — is untouched. The overrides are deliberately NOT persisted:
+  /// reopening a project re-lays the elevation out from the plan geometry, which
+  /// is the honest default for a decluttering gesture and keeps `.mechx`
+  /// unchanged.
+  ///
+  /// No-op for a missing / non-riser edge id. Records no undo step (the network
+  /// does not change).
   void moveRiserHorizontal(String edgeId, double worldX) {
     final idx = state.network.edges.indexWhere((e) => e.id == edgeId);
     if (idx < 0) return;
     final edge = state.network.edges[idx];
     if (edge.kind != EdgeKind.riser) return;
-    final nodes = [
-      for (final n in state.network.nodes)
-        if (n.id == edge.fromId || n.id == edge.toId)
-          n.copyWith(x: worldX)
-        else
-          n,
-    ];
-    state = DrawingState(
-      network: Network(nodes: nodes, edges: state.network.edges),
-      service: state.service,
-      tool: state.tool,
-      pendingPoint: state.pendingPoint,
-      pendingSheetId: state.pendingSheetId,
-      pendingFloorIndex: state.pendingFloorIndex,
-    );
-    // K1: throttle the heavy chain during a live riser drag (no-op at rest).
-    ref.read(dragSessionProvider.notifier).tickDrag();
+    ref.read(schematicLayoutProvider.notifier).setNodesX({
+      edge.fromId: worldX,
+      edge.toId: worldX,
+    });
   }
 
   /// Remap node `floorIndex` after the building floor STACK changed, in ONE
@@ -460,8 +577,9 @@ class NetworkController extends Notifier<DrawingState> {
   /// [levelCount] is the NEW floor count. When [removedIndex] is non-null a
   /// floor at that index was DELETED: nodes ABOVE it drop one index (so they
   /// stay on their own physical floor — their §10 elevation is preserved),
-  /// nodes ON the removed floor rehome to the floor now occupying that slot
-  /// (clamped to the top), nodes below are untouched. When [removedIndex] is
+  /// nodes ON the removed floor are DELETED WITH IT (C2 — they have no home;
+  /// see [elementsOnFloor]), together with every edge touching them, and nodes
+  /// below are untouched. When [removedIndex] is
   /// null the stack was REPLACED wholesale (e.g. a template): every node's
   /// `floorIndex` is simply CLAMPED into `[0, levelCount)` — a node above the
   /// new top drops to the new top floor; a stack that only grew leaves
@@ -488,8 +606,22 @@ class NetworkController extends Notifier<DrawingState> {
     if (levelCount < 1) return;
     final maxIndex = levelCount - 1;
     var changed = false;
+    // C2: a node ON the removed floor is deleted with it. It cannot keep its
+    // index (the floor above slides down INTO that slot, silently FUSING two
+    // floors' drawn work at the wrong elevation — in range, so no orphan check
+    // fires and nothing warns), and it has no physical floor left to sit on.
+    final removedNodeIds = <String>{};
+    if (removedIndex != null) {
+      for (final n in state.network.nodes) {
+        if (n.floorIndex == removedIndex) removedNodeIds.add(n.id);
+      }
+    }
     final nodes = <NetNode>[];
     for (final n in state.network.nodes) {
+      if (removedNodeIds.contains(n.id)) {
+        changed = true;
+        continue;
+      }
       var fi = n.floorIndex;
       // [insertedCount] floors inserted at [insertedIndex] push every node
       // AT/ABOVE that slot up, so a node keeps its own physical floor (adding a
@@ -498,7 +630,8 @@ class NetworkController extends Notifier<DrawingState> {
         fi += insertedCount;
       }
       // A node above a removed floor shifts down one index to keep its own
-      // physical floor; a node on/below the removed floor keeps its index.
+      // physical floor; a node below it keeps its index (nodes ON it were
+      // already dropped above).
       if (removedIndex != null && fi > removedIndex) fi -= 1;
       // Clamp into the new range (nodes on/above a removed top, or a wholesale
       // shrink).
@@ -512,8 +645,35 @@ class NetworkController extends Notifier<DrawingState> {
       }
     }
     if (!changed) return;
-    final next = Network(nodes: nodes, edges: state.network.edges);
+    // C2: drop every edge that touched a deleted node (a run wholly on the
+    // removed floor, and the riser leg that landed on it).
+    final edges = removedNodeIds.isEmpty
+        ? state.network.edges
+        : [
+            for (final e in state.network.edges)
+              if (!removedNodeIds.contains(e.fromId) &&
+                  !removedNodeIds.contains(e.toId))
+                e,
+          ];
+    final next = Network(nodes: nodes, edges: edges);
     record ? _commit(next) : _setNetworkNoRecord(next);
+  }
+
+  /// How many drawn elements live on [floorIndex] — nodes on that floor plus
+  /// every edge with an endpoint there (C2). This is exactly what
+  /// [remapNodesForFloorChange] deletes when that floor is removed, so the
+  /// confirm dialog can name a real count instead of asking blind. Read-only.
+  int elementsOnFloor(int floorIndex) {
+    final onFloor = <String>{};
+    for (final n in state.network.nodes) {
+      if (n.floorIndex == floorIndex) onFloor.add(n.id);
+    }
+    if (onFloor.isEmpty) return 0;
+    var count = onFloor.length;
+    for (final e in state.network.edges) {
+      if (onFloor.contains(e.fromId) || onFloor.contains(e.toId)) count++;
+    }
+    return count;
   }
 
   /// Shift every node on [sheetId] by [floorDelta] floors, in ONE undo step —
@@ -1217,6 +1377,7 @@ class NetworkController extends Notifier<DrawingState> {
     ServiceType? service,
     double snapRadius = 12,
     double? spanPx,
+    Set<ServiceType> avoidServices = const {},
   }) {
     final svc = service ?? state.service;
     final half = (spanPx ?? _defaultSegmentSpanPx) / 2;
@@ -1225,7 +1386,8 @@ class NetworkController extends Notifier<DrawingState> {
 
     final nodes = [...state.network.nodes];
     String resolve(Offset p) {
-      final snapped = _snap(nodes, sheetId, floorIndex, p, snapRadius);
+      final snapped = _snap(nodes, sheetId, floorIndex, p, snapRadius,
+          avoidServices: avoidServices, drawService: svc);
       if (snapped != null) return snapped;
       final id = _id('n');
       nodes.add(
@@ -1312,8 +1474,10 @@ class NetworkController extends Notifier<DrawingState> {
   /// EDGE (id + the split point on it). Both null ⇒ nothing in range (drop
   /// free). Runs only — risers are not teed into (a riser is a vertical span).
   ({String? nodeId, String? edgeId, Offset? split}) _dropTarget(
-      String sheetId, int floorIndex, Offset world, double radius) {
-    final nodeId = _snap(state.network.nodes, sheetId, floorIndex, world, radius);
+      String sheetId, int floorIndex, Offset world, double radius,
+      {Set<ServiceType> avoidServices = const {}}) {
+    final nodeId = _snap(state.network.nodes, sheetId, floorIndex, world, radius,
+        avoidServices: avoidServices);
     if (nodeId != null) {
       return (nodeId: nodeId, edgeId: null, split: null);
     }
@@ -1323,6 +1487,9 @@ class NetworkController extends Notifier<DrawingState> {
     var bestP = world;
     for (final e in state.network.edges) {
       if (e.kind == EdgeKind.riser) continue;
+      // E1: never tee into a run on a service the caller is scoped away from
+      // (a hidden or locked layer the engineer can neither see nor unpick).
+      if (avoidServices.contains(e.service)) continue;
       final a = state.network.nodeById(e.fromId);
       final b = state.network.nodeById(e.toId);
       if (a == null || b == null) continue;
@@ -1381,8 +1548,10 @@ class NetworkController extends Notifier<DrawingState> {
     int floorIndex,
     Offset world, {
     double snapRadius = 12,
+    Set<ServiceType> avoidServices = const {},
   }) {
-    final t = _dropTarget(sheetId, floorIndex, world, snapRadius);
+    final t = _dropTarget(sheetId, floorIndex, world, snapRadius,
+        avoidServices: avoidServices);
     if (t.nodeId != null) return t.nodeId!; // adopt: already a node here
     if (t.edgeId != null) {
       final node = NetNode(
@@ -1412,8 +1581,10 @@ class NetworkController extends Notifier<DrawingState> {
     Offset world, {
     PlumbingFixture? fixture,
     double snapRadius = 12,
+    Set<ServiceType> avoidServices = const {},
   }) {
-    final t = _dropTarget(sheetId, floorIndex, world, snapRadius);
+    final t = _dropTarget(sheetId, floorIndex, world, snapRadius,
+        avoidServices: avoidServices);
     if (t.nodeId != null) {
       final existing = state.network.nodeById(t.nodeId!)!;
       _replaceNode(fixture != null
@@ -1451,8 +1622,10 @@ class NetworkController extends Notifier<DrawingState> {
     Offset world,
     NodeComponent component, {
     double snapRadius = 12,
+    Set<ServiceType> avoidServices = const {},
   }) {
-    final t = _dropTarget(sheetId, floorIndex, world, snapRadius);
+    final t = _dropTarget(sheetId, floorIndex, world, snapRadius,
+        avoidServices: avoidServices);
     if (t.nodeId != null) {
       final existing = state.network.nodeById(t.nodeId!)!;
       _replaceNode(existing.copyWith(component: component, role: component.role));
@@ -1560,19 +1733,38 @@ class NetworkController extends Notifier<DrawingState> {
       }
     }
 
-    // One return grille near the room centre.
-    nodes.add(NetNode(
-      id: _id('n'),
-      sheetId: room.sheetId,
-      x: loX + w * 0.5,
-      y: loY + h * 0.5,
-      floorIndex: room.floorIndex,
-      role: NodeComponent.returnGrille.role,
-      component: NodeComponent.returnGrille,
-      airflow: s.return_.airflowEach,
-      faceWidthMm: returnFace.$1,
-      faceHeightMm: returnFace.$2,
-    ));
+    // M10 — the return bank on its OWN grid, one node per sized grille.
+    // Previously exactly ONE return grille was placed carrying `airflowEach`,
+    // so whenever the engine split the return across N faces (a 400 m² hall
+    // sizes 4) the placed network carried 1/N of the room's return air into the
+    // duct solve AND the BOM — a silent 75 % under-return. The supply branch
+    // already looped its count; this mirrors it exactly.
+    //
+    // The grid formula is the supply branch's: for the overwhelmingly common
+    // count == 1 it yields cols = rows = 1 ⇒ the single cell centre
+    // (loX + w/2, loY + h/2) — the exact position placed before — so a
+    // single-return room is byte-identical.
+    final rn = s.return_.count;
+    final rCols = math.max(1, math.sqrt(rn).ceil());
+    final rRows = (rn / rCols).ceil();
+    var placedReturns = 0;
+    for (var ry = 0; ry < rRows && placedReturns < rn; ry++) {
+      for (var cx = 0; cx < rCols && placedReturns < rn; cx++) {
+        nodes.add(NetNode(
+          id: _id('n'),
+          sheetId: room.sheetId,
+          x: loX + w * (cx + 0.5) / rCols,
+          y: loY + h * (ry + 0.5) / rRows,
+          floorIndex: room.floorIndex,
+          role: NodeComponent.returnGrille.role,
+          component: NodeComponent.returnGrille,
+          airflow: s.return_.airflowEach,
+          faceWidthMm: returnFace.$1,
+          faceHeightMm: returnFace.$2,
+        ));
+        placedReturns++;
+      }
+    }
 
     _commit(Network(nodes: nodes, edges: priorEdges));
     return ids;
@@ -1621,6 +1813,7 @@ class NetworkController extends Notifier<DrawingState> {
     double? gridMetersPerPixel,
     Offset? Function(Offset world)? underlaySnap,
     bool ortho = false,
+    Set<ServiceType> avoidServices = const {},
   }) {
     final from = state.network.nodeById(fromId);
     if (from == null) return null;
@@ -1634,7 +1827,8 @@ class NetworkController extends Notifier<DrawingState> {
         nodes, edges, sheetId, floorIndex, world, snapRadius, svc,
         gridSnap: gridSnap,
         gridMetersPerPixel: gridMetersPerPixel,
-        underlaySnap: underlaySnap);
+        underlaySnap: underlaySnap,
+        avoidServices: avoidServices);
     if (farId == fromId) return null; // collapsed onto the source — nothing laid
 
     // B13: auto-elbow an off-ray connection so a nub-pulled main stays straight
@@ -1668,6 +1862,7 @@ class NetworkController extends Notifier<DrawingState> {
     double? gridMetersPerPixel,
     Offset? Function(Offset world)? underlaySnap,
     bool ortho = true,
+    Set<ServiceType> avoidServices = const {},
   }) {
     // Drop consecutive duplicates so a degenerate route never mints a zero-leg.
     final pts = <Offset>[];
@@ -1686,7 +1881,8 @@ class NetworkController extends Notifier<DrawingState> {
         pts.first, snapRadius, service,
         gridSnap: gridSnap,
         gridMetersPerPixel: gridMetersPerPixel,
-        underlaySnap: underlaySnap);
+        underlaySnap: underlaySnap,
+        avoidServices: avoidServices);
     var addedAny = false;
     for (var i = 1; i < pts.length; i++) {
       final isLast = i == pts.length - 1;
@@ -1696,7 +1892,8 @@ class NetworkController extends Notifier<DrawingState> {
             pts[i], endSnapRadius ?? snapRadius, service,
             gridSnap: gridSnap,
             gridMetersPerPixel: gridMetersPerPixel,
-            underlaySnap: underlaySnap);
+            underlaySnap: underlaySnap,
+            avoidServices: avoidServices);
         if (resolved == prevId) continue; // collapsed onto the previous node
         final anchor = nodes.firstWhere((n) => n.id == prevId);
         toId = _autoElbowEndpoint(nodes, edges, sheetId, floorIndex,
@@ -2038,9 +2235,13 @@ class NetworkController extends Notifier<DrawingState> {
     bool gridSnap = false,
     double? gridMetersPerPixel,
     Offset? Function(Offset world)? underlaySnap,
+    Set<ServiceType> avoidServices = const {},
   }) {
-    // 1) snap to an existing node on this floor.
-    final snapped = _snap(nodes, sheetId, floorIndex, world, snapRadius);
+    // 1) snap to an existing node on this floor — scoped (E1) to nodes this
+    // service may legitimately adopt, never one belonging solely to a hidden /
+    // locked / foreign-service network.
+    final snapped = _snap(nodes, sheetId, floorIndex, world, snapRadius,
+        edges: edges, avoidServices: avoidServices, drawService: service);
     if (snapped != null) return snapped;
 
     // 2) tap into the nearest SAME-SERVICE run on this floor (split at the
@@ -2052,6 +2253,7 @@ class NetworkController extends Notifier<DrawingState> {
     for (final e in edges) {
       if (e.kind == EdgeKind.riser) continue;
       if (e.service != service) continue;
+      if (avoidServices.contains(e.service)) continue;
       final a = nodes.where((n) => n.id == e.fromId).firstOrNull;
       final b = nodes.where((n) => n.id == e.toId).firstOrNull;
       if (a == null || b == null) continue;
@@ -2128,6 +2330,7 @@ class NetworkController extends Notifier<DrawingState> {
     double? gridMetersPerPixel,
     Offset? Function(Offset world)? underlaySnap,
     Offset? orthoAnchor,
+    Set<ServiceType> avoidServices = const {},
   }) {
     final dragged = state.network.nodeById(nodeId);
     if (dragged == null) {
@@ -2144,6 +2347,13 @@ class NetworkController extends Notifier<DrawingState> {
     for (final n in state.network.nodes) {
       if (n.id == nodeId) continue;
       if (n.sheetId != dragged.sheetId || n.floorIndex != dragged.floorIndex) {
+        continue;
+      }
+      // E1: never merge onto a node that belongs solely to an avoided (hidden /
+      // locked) service — the engineer could neither see nor unpick the join.
+      if (avoidServices.isNotEmpty &&
+          !_nodeAdoptable(n, state.network.edges,
+              avoidServices: avoidServices)) {
         continue;
       }
       final dx = n.x - dragged.x;
@@ -2164,7 +2374,8 @@ class NetworkController extends Notifier<DrawingState> {
       _tapNodeIntoNearestEdge(dragged, snapRadiusWorld,
           gridSnap: gridSnap,
           gridMetersPerPixel: gridMetersPerPixel,
-          underlaySnap: underlaySnap);
+          underlaySnap: underlaySnap,
+          avoidServices: avoidServices);
       return;
     }
 
@@ -2231,6 +2442,7 @@ class NetworkController extends Notifier<DrawingState> {
     bool gridSnap = false,
     double? gridMetersPerPixel,
     Offset? Function(Offset world)? underlaySnap,
+    Set<ServiceType> avoidServices = const {},
   }) {
     final net = state.network;
 
@@ -2240,6 +2452,8 @@ class NetworkController extends Notifier<DrawingState> {
     final dp = Offset(dragged.x, dragged.y);
     for (final e in net.edges) {
       if (e.kind == EdgeKind.riser) continue; // tap onto horizontal runs only
+      // E1: never tap into a run on an avoided (hidden / locked) service.
+      if (avoidServices.contains(e.service)) continue;
       if (e.fromId == dragged.id || e.toId == dragged.id) {
         continue; // never split the dragged node's own edge
       }
@@ -2666,6 +2880,54 @@ class NetworkController extends Notifier<DrawingState> {
       addedEdges.addAll(gen.edges);
       allNodeIds.addAll(gen.nodeIds);
       allEdgeIds.addAll(gen.edgeIds);
+    }
+    _commit(Network(
+      nodes: [...state.network.nodes, ...addedNodes],
+      edges: [...state.network.edges, ...addedEdges],
+    ));
+    ref.read(selectionProvider.notifier).setMulti(allNodeIds, allEdgeIds);
+    return (nodeIds: allNodeIds, edgeIds: allEdgeIds);
+  }
+
+  /// I4 — paste the clipboard onto SEVERAL floors at once, in ONE undo step:
+  /// the shaft group that repeats up six levels is one gesture, not six sheet
+  /// switches and six pastes.
+  ///
+  /// Each entry of [targets] is a (sheetId, floor) destination; every target
+  /// receives its own fresh-id clone of the SAME clipboard generation, landing
+  /// at the clipboard's own plan position ([offsetWorld], zero by default) —
+  /// a riser group must stack directly above itself, so the cascade offset a
+  /// repeated Ctrl+V uses would be wrong here. Duplicate targets are collapsed.
+  ///
+  /// The whole fan-out is committed once, so ONE Ctrl+Z removes every floor's
+  /// copy; the new elements across all floors become the multi-selection and are
+  /// returned. Like [pasteNCopies] this does NOT re-base the clipboard (the
+  /// fan-out is a one-shot from the originals, so a following Ctrl+V still
+  /// pastes the original block). No-op (empty result) when the clipboard is
+  /// empty or [targets] is empty.
+  ({Set<String> nodeIds, Set<String> edgeIds}) pasteToTargets(
+    List<({String sheetId, int floor})> targets, {
+    Offset offsetWorld = Offset.zero,
+  }) {
+    final clip = _clipboard;
+    if (clip == null || clip.nodes.isEmpty || targets.isEmpty) {
+      return (nodeIds: <String>{}, edgeIds: <String>{});
+    }
+    final seen = <String>{};
+    final addedNodes = <NetNode>[];
+    final addedEdges = <NetEdge>[];
+    final allNodeIds = <String>{};
+    final allEdgeIds = <String>{};
+    for (final t in targets) {
+      if (!seen.add('${t.sheetId}#${t.floor}')) continue;
+      final gen = _cloneClipboard(clip, t.sheetId, t.floor, offsetWorld);
+      addedNodes.addAll(gen.nodes);
+      addedEdges.addAll(gen.edges);
+      allNodeIds.addAll(gen.nodeIds);
+      allEdgeIds.addAll(gen.edgeIds);
+    }
+    if (addedNodes.isEmpty) {
+      return (nodeIds: <String>{}, edgeIds: <String>{});
     }
     _commit(Network(
       nodes: [...state.network.nodes, ...addedNodes],

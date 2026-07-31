@@ -1,13 +1,15 @@
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
-import 'package:flutter/gestures.dart' show kSecondaryButton, PointerDownEvent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 
 import '../../store/annotation_store.dart';
+import '../../store/app_state.dart' show statusMessageProvider;
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../strings/app_strings.dart';
+import 'armed_delete.dart';
 import 'viewport.dart';
 
 /// Dimension-annotation layer for one sheet/floor. Always renders the saved
@@ -35,12 +37,18 @@ class _MeasurementOverlayState extends ConsumerState<MeasurementOverlay> {
   Offset? _pending; // first placed point (world)
   Offset? _hover; // cursor (world)
 
+  /// C4 — the two-click, pointer-UP secondary delete.
+  final _armed = ArmedSecondaryDelete();
+
   @override
   void didUpdateWidget(MeasurementOverlay old) {
     super.didUpdateWidget(old);
     // Abandon a half-placed dimension when the tool is switched off, so it
     // doesn't reappear on re-activation.
-    if (!widget.active) _pending = null;
+    if (!widget.active) {
+      _pending = null;
+      _armed.disarm();
+    }
   }
 
   ViewportTransform get _transform =>
@@ -64,9 +72,9 @@ class _MeasurementOverlayState extends ConsumerState<MeasurementOverlay> {
     setState(() => _pending = null);
   }
 
-  /// Secondary-click deletes the nearest measurement endpoint/midpoint within a
-  /// screen-space threshold (so a stray right-click does nothing).
-  void _onSecondary(Offset localPos) {
+  /// The nearest measurement endpoint/midpoint within a screen-space threshold
+  /// (so a stray right-click hits nothing) — the delete candidate.
+  String? _deleteCandidate(Offset localPos) {
     final t = _transform;
     final mine = ref
         .read(measurementsProvider)
@@ -84,8 +92,29 @@ class _MeasurementOverlayState extends ConsumerState<MeasurementOverlay> {
         }
       }
     }
-    if (best != null && bestD <= 14) {
-      ref.read(measurementsProvider.notifier).removeById(best);
+    return (best != null && bestD <= 14) ? best : null;
+  }
+
+  /// C4 — the delete completes on pointer-UP after a confirming second click
+  /// (see [ArmedSecondaryDelete]), with a status pill naming what went. The
+  /// removal itself is unchanged — one undoable annotation step.
+  void _onSecondaryUp(PointerUpEvent e) {
+    final outcome = _armed.pointerUp(e, _deleteCandidate(e.localPosition));
+    final id = outcome.id;
+    if (id == null) return;
+    final strings = MechXStrings.of(context);
+    final what = strings(StringKey.annotationDimension);
+    final status = ref.read(statusMessageProvider.notifier);
+    switch (outcome.action) {
+      case ArmedDeleteAction.none:
+        return;
+      case ArmedDeleteAction.armed:
+        status.showStatus(strings
+            .format(StringKey.annotationDeleteArmTemplate, {'what': what}));
+      case ArmedDeleteAction.deleted:
+        ref.read(measurementsProvider.notifier).removeById(id);
+        status.showStatus(
+            strings.format(StringKey.annotationDeletedTemplate, {'what': what}));
     }
   }
 
@@ -123,9 +152,8 @@ class _MeasurementOverlayState extends ConsumerState<MeasurementOverlay> {
       onHover: (e) =>
           setState(() => _hover = transform.screenToWorld(e.localPosition)),
       child: Listener(
-        onPointerDown: (PointerDownEvent e) {
-          if (e.buttons == kSecondaryButton) _onSecondary(e.localPosition);
-        },
+        onPointerDown: _armed.pointerDown,
+        onPointerUp: _onSecondaryUp,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTapUp: _onTapUp,

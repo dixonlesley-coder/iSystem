@@ -221,41 +221,106 @@ void main() {
     });
   });
 
-  group('equipmentNodeTags (G1)', () {
-    test('numbers each equipment category sequentially in node order', () {
-      const net = Network(nodes: [
+  group('equipmentNodeTags (G1 / C6)', () {
+    // C6 RE-DERIVATION — this group previously used tag-free ids ('gt', 'p1',
+    // 'bs', 'ahu') and asserted a POSITIONAL counter (`P-01` then `P-02` for the
+    // second pump-family node). The numbering is now derived from each node's
+    // own first-assigned ordinal (its id's trailing integer + 1), so the fixture
+    // is restated with the ids the store actually mints (`n0`, `n1`, …) and the
+    // expectations are hand-derived from that ordinal:
+    //   n0 (ground tank) → TK-01     (ordinal 0 + 1 = 1)
+    //   n1 (pump)        → P-02      (ordinal 1 + 1 = 2)
+    //   n2 (booster set) → P-03      (ordinal 2 + 1 = 3, same `P` prefix)
+    //   n3 (AHU)         → AHU-04    (ordinal 3 + 1 = 4)
+    // The gaps are the contract: a tag belongs to the node, not to its rank.
+    const net = Network(nodes: [
+      NetNode(
+          id: 'n0', sheetId: 's0', x: 0, y: 0, floorIndex: 0,
+          role: NodeRole.plant, component: NodeComponent.groundTank),
+      NetNode(
+          id: 'n1', sheetId: 's0', x: 1, y: 0, floorIndex: 0,
+          role: NodeRole.plant, component: NodeComponent.pump),
+      NetNode(
+          id: 'n2', sheetId: 's0', x: 2, y: 0, floorIndex: 0,
+          role: NodeRole.plant, component: NodeComponent.boosterSet),
+      NetNode(
+          id: 'n3', sheetId: 's1', x: 3, y: 0, floorIndex: 1,
+          role: NodeRole.plant, component: NodeComponent.ahu),
+      NetNode(
+          id: 'n4', sheetId: 's0', x: 4, y: 0, floorIndex: 0,
+          component: NodeComponent.gateValve),
+      NetNode(id: 'n5', sheetId: 's0', x: 5, y: 0, floorIndex: 0),
+    ], edges: []);
+
+    test('numbers each equipment node from its own first-assigned ordinal', () {
+      final tags = equipmentNodeTags(net);
+      expect(tags['n0'], 'TK-01');
+      expect(tags['n1'], 'P-02');
+      expect(tags['n2'], 'P-03');
+      expect(tags['n3'], 'AHU-04');
+      // Valves / plain junctions are not scheduled equipment → no tag.
+      expect(tags.containsKey('n4'), isFalse);
+      expect(tags.containsKey('n5'), isFalse);
+    });
+
+    test('C6 — deleting an EARLIER pump never renumbers a later one', () {
+      final before = equipmentNodeTags(net);
+      // Delete the pump (n1); the booster set (n2) must keep P-03. Under the old
+      // positional counter it would have slid down to P-02 — the same string as
+      // the DELETED pump on the previous revision's plan.
+      final pruned = Network(
+        nodes: [
+          for (final n in net.nodes)
+            if (n.id != 'n1') n,
+        ],
+        edges: const [],
+      );
+      final after = equipmentNodeTags(pruned);
+      expect(after['n2'], before['n2']);
+      expect(after['n2'], 'P-03');
+      expect(after['n0'], 'TK-01');
+      expect(after['n3'], 'AHU-04');
+      expect(after.containsKey('n1'), isFalse);
+    });
+
+    test('C6 — a node added later takes a NEW number, never a recycled one', () {
+      final grown = Network(
+        nodes: [
+          ...net.nodes,
+          const NetNode(
+              id: 'n9', sheetId: 's0', x: 9, y: 0, floorIndex: 0,
+              role: NodeRole.plant, component: NodeComponent.pump),
+        ],
+        edges: const [],
+      );
+      final tags = equipmentNodeTags(grown);
+      expect(tags['n9'], 'P-10'); // ordinal 9 + 1
+      expect(tags['n1'], 'P-02'); // untouched
+    });
+
+    test('an id with no trailing integer falls back to the first free number',
+        () {
+      // Hand-built / imported data only — the app always mints `n<seq>`.
+      const odd = Network(nodes: [
         NetNode(
-            id: 'gt', sheetId: 's0', x: 0, y: 0, floorIndex: 0,
-            role: NodeRole.plant, component: NodeComponent.groundTank),
-        NetNode(
-            id: 'p1', sheetId: 's0', x: 1, y: 0, floorIndex: 0,
+            id: 'pump-a', sheetId: 's0', x: 0, y: 0, floorIndex: 0,
             role: NodeRole.plant, component: NodeComponent.pump),
         NetNode(
-            id: 'bs', sheetId: 's0', x: 2, y: 0, floorIndex: 0,
-            role: NodeRole.plant, component: NodeComponent.boosterSet),
-        NetNode(
-            id: 'ahu', sheetId: 's1', x: 3, y: 0, floorIndex: 1,
-            role: NodeRole.plant, component: NodeComponent.ahu),
-        NetNode(
-            id: 'valve', sheetId: 's0', x: 4, y: 0, floorIndex: 0,
-            component: NodeComponent.gateValve),
-        NetNode(id: 'plain', sheetId: 's0', x: 5, y: 0, floorIndex: 0),
+            id: 'n0', sheetId: 's0', x: 1, y: 0, floorIndex: 0,
+            role: NodeRole.plant, component: NodeComponent.pump),
       ], edges: []);
-      final tags = equipmentNodeTags(net);
-      expect(tags['gt'], 'TK-01');
-      expect(tags['p1'], 'P-01'); // pump
-      expect(tags['bs'], 'P-02'); // a booster set shares the pump counter
-      expect(tags['ahu'], 'AHU-01');
-      // Valves / plain junctions are not scheduled equipment → no tag.
-      expect(tags.containsKey('valve'), isFalse);
-      expect(tags.containsKey('plain'), isFalse);
+      final tags = equipmentNodeTags(odd);
+      // n0 takes its ordinal-derived P-01 first; the unnumbered id then takes
+      // the smallest FREE number, so the two never collide.
+      expect(tags['n0'], 'P-01');
+      expect(tags['pump-a'], 'P-02');
     });
 
     test('an equipment-free network yields an empty map', () {
-      const net = Network(nodes: [
+      const bare = Network(nodes: [
         NetNode(id: 'a', sheetId: 's0', x: 0, y: 0, floorIndex: 0),
       ], edges: []);
-      expect(equipmentNodeTags(net), isEmpty);
+      expect(equipmentNodeTags(bare), isEmpty);
     });
   });
 

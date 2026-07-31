@@ -185,13 +185,34 @@ class SelectionController extends Notifier<Selection> {
   /// gesture. A pure selection change — records no undo step. No-op if the seed
   /// edge is gone. "Similar" = same [ServiceType]; deliberately not size/product
   /// (matching the whole service is the predictable, useful default).
-  void selectSimilarEdges(String edgeId) {
+  ///
+  /// E2 — SCOPE. By default the match is confined to the seed's own sheet AND
+  /// floor: a drafter picking "select similar" on a floor plan means the runs
+  /// in front of them, and a building-wide DN change made from a "14 selected"
+  /// header they never saw the span of is a silent, expensive mistake. Pass
+  /// [allFloors] `true` for the explicit whole-building variant (the second menu
+  /// row). An edge belongs to the scope when BOTH its endpoints do — a riser,
+  /// which by definition spans two floors, is therefore only ever caught by the
+  /// all-floors variant.
+  void selectSimilarEdges(String edgeId, {bool allFloors = false}) {
     final net = ref.read(networkControllerProvider).network;
     final seed = net.edgeById(edgeId);
     if (seed == null) return;
+    final anchor = net.nodeById(seed.fromId);
+    bool inScope(NetEdge e) {
+      if (allFloors || anchor == null) return true;
+      final a = net.nodeById(e.fromId);
+      final b = net.nodeById(e.toId);
+      if (a == null || b == null) return false;
+      return a.sheetId == anchor.sheetId &&
+          a.floorIndex == anchor.floorIndex &&
+          b.sheetId == anchor.sheetId &&
+          b.floorIndex == anchor.floorIndex;
+    }
+
     final ids = <String>{
       for (final e in net.edges)
-        if (e.service == seed.service) e.id,
+        if (e.service == seed.service && inScope(e)) e.id,
     };
     if (ids.isEmpty) return;
     setMulti(const {}, ids);
@@ -201,13 +222,20 @@ class SelectionController extends Notifier<Selection> {
   /// gate valves, …; a plain junction with no component matches other plain
   /// junctions). A pure selection change — no undo step. No-op if the seed node
   /// is gone.
-  void selectSimilarNodes(String nodeId) {
+  ///
+  /// E2 — scoped to the seed's own sheet+floor by default; [allFloors] `true`
+  /// is the explicit whole-building variant.
+  void selectSimilarNodes(String nodeId, {bool allFloors = false}) {
     final net = ref.read(networkControllerProvider).network;
     final seed = net.nodeById(nodeId);
     if (seed == null) return;
     final ids = <String>{
       for (final n in net.nodes)
-        if (n.component == seed.component) n.id,
+        if (n.component == seed.component &&
+            (allFloors ||
+                (n.sheetId == seed.sheetId &&
+                    n.floorIndex == seed.floorIndex)))
+          n.id,
     };
     if (ids.isEmpty) return;
     setMulti(ids, const {});

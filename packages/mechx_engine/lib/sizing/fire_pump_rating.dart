@@ -6,7 +6,8 @@
 /// duty point — the rated flow/head. A listed fire pump must additionally pass a
 /// *rating-curve* acceptance test that fixes the head at the **churn** (0 % flow)
 /// and **overload** (150 % flow) points relative to the rated head. This module
-/// derives those three points and produces a pass/over-sized verdict, plus a
+/// derives those three points, selects the motor on the governing one and
+/// reports whether that motor fits the STANDARD FRAME ladder, plus a
 /// jockey-pump recommendation and a duty/standby designation.
 ///
 /// ## The NFPA 20 acceptance curve
@@ -119,9 +120,14 @@ final class FirePumpRatingResult {
   /// Smallest standard motor covering the worst-case (overload) shaft power.
   final Power selectedMotor;
 
-  /// `true` when the selected motor is the largest standard frame and is still
-  /// below the overload shaft power — the pump/motor is off the standard
-  /// catalogue ("oversized pump curve").
+  /// `true` when [selectMotor] saturated — the largest STANDARD MOTOR frame is
+  /// still below the governing shaft power, so [selectedMotor] under-states
+  /// what this duty actually needs.
+  ///
+  /// M19 — this says nothing about the pump *curve*: the acceptance ratios are
+  /// satisfied by construction here. It is purely a MOTOR-CATALOGUE limit, and
+  /// the action is to specify a custom motor frame or to split the duty across
+  /// paired pumps. See [verdict].
   final bool oversized;
 
   /// Recommended jockey-pump flow (pressure maintenance).
@@ -151,10 +157,14 @@ final class FirePumpRatingResult {
     required this.standbyRecommended,
   });
 
-  /// Human-readable verdict for the calc report / inspector.
+  /// Human-readable verdict for the calc report / inspector (plain ASCII).
+  ///
+  /// M19 — the old wording ('Oversized pump curve') named the wrong thing: the
+  /// flag it reads is the STANDARD MOTOR ladder saturating, not a curve
+  /// acceptance failure. It now names the true condition and the action.
   String get verdict => oversized
-      ? 'Oversized pump curve'
-      : 'Rating curve within standard range';
+      ? 'Motor above standard frame range - specify a custom motor or duty pairs'
+      : 'Motor within standard frame range';
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -239,8 +249,9 @@ FirePumpRatingResult checkFirePumpRating({
   final governingShaft = Power(governingShaftW);
   final selectedMotor = selectMotor(governingShaft);
 
-  // "Oversized" when the standard catalogue cannot cover the governing shaft
-  // power (selectMotor saturated at the largest frame yet is still below it).
+  // M19: this flag means the STANDARD MOTOR ladder saturated — selectMotor
+  // returned the largest frame yet it is still below the governing shaft power.
+  // It is a motor-catalogue limit, NOT a rating-curve acceptance failure.
   final oversized =
       selectedMotor.inKiloWatts < governingShaft.inKiloWatts - 1e-9;
 

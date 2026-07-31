@@ -162,12 +162,33 @@ VoltageDropResult voltageDrop(
 /// Smallest standard breaker rating that carries the design current (Ib ≤ In).
 /// A positive [overrideA] is used verbatim (marked overridden); [maxRatingA]
 /// caps the rating to the protected cable's ampacity.
+///
+/// [minRatingA] is an optional coordination FLOOR (A): the rating returned is the
+/// first standard rung at or above `max(the design-current pick, minRatingA)`.
+/// Its caller is the feeder-selectivity floor in `computeSystem` (an upstream
+/// feeder must sit a rating band above the board it feeds); an explicit
+/// [overrideA] ALWAYS wins outright and is never floored, and a floor above the
+/// ladder top keeps the largest rung (the residual non-selectivity is then
+/// reported honestly by the fault study rather than hidden by a throw).
+/// Null (the default) ⇒ byte-identical selection.
+///
+/// ORDER OF APPLICATION — design-current pick, then [minRatingA], then
+/// [maxRatingA]. The CAP IS APPLIED LAST AND THEREFORE WINS: overload protection
+/// of the conductor (In ≤ Iz) is inviolable, so a coordination floor may never
+/// lift the device past the ampacity of the cable it protects. When the cap bites
+/// below the floor the residual non-/partial-selectivity simply remains and is
+/// reported by `faultStudy`. (No caller passed both before this rule existed, so
+/// the re-ordering leaves every single-constraint call byte-identical.)
+// VERIFY — notAnSniClause: the floor's 1.6× basis is a coarse rating-ratio rule
+// of thumb standing in for the manufacturer's selectivity tables (the same
+// caveat as `fault.dart`'s selectivity ZONE model), NOT a PUIL clause.
 BreakerResult selectBreaker(
   ElectricalStandardsProfile profile, {
   required Current designCurrent,
   required LoadKind loadKind,
   Current? maxRatingA,
   Current? overrideA,
+  double? minRatingA,
 }) {
   final curve = loadDefaults[loadKind]!.curve;
 
@@ -189,6 +210,19 @@ BreakerResult selectBreaker(
     }
   }
 
+  // Coordination floor: lift to the first rung that also clears [minRatingA];
+  // a floor beyond the ladder top clamps to the largest rung (never throws).
+  if (minRatingA != null && chosen + 1e-9 < minRatingA) {
+    chosen = ratings.last;
+    for (final r in ratings) {
+      if (r + 1e-9 >= minRatingA) {
+        chosen = r;
+        break;
+      }
+    }
+  }
+
+  // Conductor-protection CAP — applied last so it beats the floor above.
   if (maxRatingA != null && chosen > maxRatingA.amperes) {
     for (final r in ratings.reversed) {
       if (r <= maxRatingA.amperes) {

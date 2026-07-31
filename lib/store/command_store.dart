@@ -175,7 +175,8 @@ const List<Floor> _kDefaultFloorStack = [
 ///  • Floors    — the engineer has engaged with the levels (visited/edited the
 ///    Building screen, or changed the stack away from the default seed);
 ///  • Draw      — the network has at least one edge;
-///  • Size      — at least one edge is sized;
+///  • Size      — at least one edge is sized AND a sheet is calibrated (an
+///    uncalibrated solve runs on 0.0 m lengths, so it is not a finished step);
 ///  • Report    — a deliverable (report/drawing/BOM) was exported this session.
 final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   final project = ref.watch(projectControllerProvider);
@@ -207,7 +208,14 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
     WorkflowStage.calibrate: calibrated,
     WorkflowStage.floors: floorsSet,
     WorkflowStage.draw: hasNetwork,
-    WorkflowStage.size: sized,
+    // F11 — Size is honest only on a MEASURED network. Without a calibration
+    // every horizontal run is 0.0 m (§10 makes the per-sheet scale the sole
+    // source of horizontal length), so the sizing that "completed" is running
+    // on unmeasured geometry and the BOM prints `unmeasured ×N`. Ticking the
+    // stage off `sized` alone told the engineer a step was finished that the
+    // deliverable itself contradicts — the same honesty class the Floors tick
+    // was fixed for (A2).
+    WorkflowStage.size: sized && calibrated,
     WorkflowStage.report: ref.watch(reportExportedProvider),
   });
 });

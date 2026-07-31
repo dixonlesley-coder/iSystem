@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/report/mep_commercial.dart';
@@ -8,7 +7,8 @@ import 'package:mechx_engine/report/mep_commercial.dart';
 import '../../store/app_state.dart';
 import '../../store/commercial_store.dart';
 import '../../store/project_store.dart';
-import '../inspector/project_panel.dart' show runExportGuarded;
+import '../inspector/project_panel.dart'
+    show pickExportSave, runExportGuarded;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -113,7 +113,7 @@ class _ExportBar extends ConsumerWidget {
   // ..." confirmation, and an IO failure surfaces instead of no-oping.
   Future<void> _exportBomCsv(WidgetRef ref) => runExportGuarded(
         ref,
-        name: 'electrical BOM',
+        name: 'MEP BOM',
         write: () async {
           final name = ref.read(projectControllerProvider).name;
           // The unified M+E+P BOM (mechanical pipe/duct + fittings, then the
@@ -122,15 +122,12 @@ class _ExportBar extends ConsumerWidget {
             ref.read(mechanicalCostProvider),
             ref.read(electricalCostProvider),
           );
-          final path = await FilePicker.saveFile(
-            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+          final full = await pickExportSave(ref,
+              dialogTitle: MechXStringsData(ref.read(localeProvider))(
                 StringKey.exportTitleElectricalBom),
-            fileName: '$name-mep-bom.csv',
-            type: FileType.custom,
-            allowedExtensions: const ['csv'],
-          );
-          if (path == null) return false;
-          final full = path.endsWith('.csv') ? path : '$path.csv';
+              fileName: '$name-mep-bom.csv',
+              ext: 'csv');
+          if (full == null) return false;
           await File(full).writeAsString(csv);
           return true;
         },
@@ -149,15 +146,12 @@ class _ExportBar extends ConsumerWidget {
             electrical: ref.read(electricalCostProvider),
             projectName: name,
           );
-          final path = await FilePicker.saveFile(
-            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+          final full = await pickExportSave(ref,
+              dialogTitle: MechXStringsData(ref.read(localeProvider))(
                 StringKey.exportTitleElectricalProposal),
-            fileName: '$name-mep-proposal.md',
-            type: FileType.custom,
-            allowedExtensions: const ['md'],
-          );
-          if (path == null) return false;
-          final full = path.endsWith('.md') ? path : '$path.md';
+              fileName: '$name-mep-proposal.md',
+              ext: 'md');
+          if (full == null) return false;
           await File(full).writeAsString(md);
           return true;
         },

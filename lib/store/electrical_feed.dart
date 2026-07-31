@@ -17,6 +17,7 @@ import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'annotation_store.dart';
+import 'app_state.dart' show CoolingLoadMethod, coolingLoadMethodProvider;
 import 'fire_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
@@ -25,6 +26,34 @@ import 'solve_store.dart';
 /// Nominal voltage the MEP equipment panel is fed at (3-phase). The derived FLA
 /// is computed against this; equipment phases come from the descriptor.
 const Voltage mepPanelVoltage = Voltage(400);
+
+/// The machine-supplied names of the three SOLVED-DUTY equipment loads. Named
+/// constants (not inline literals) so [mepMintedCircuitNames] can enumerate
+/// exactly what the app itself mints — see that set's contract.
+const String kSupplyPumpLoadName = 'Supply / booster pump';
+const String kSupplyFanLoadName = 'Supply air fan';
+const String kFirePumpLoadName = 'Fire pump';
+
+/// Every circuit NAME the MEP auto-feed can itself mint: the placed-equipment
+/// path names a way after its [NodeComponent.label], the solved-duty path after
+/// the three constants above, and [MepLoadSource.label] is A5's own fallback.
+///
+/// Used by `syncMepEquipment` (C1) to tell an UNTOUCHED derived way from one the
+/// engineer has made their own: a way still carrying a minted name (and no
+/// override of any kind) is byte-identical to what a re-mint would produce, so
+/// dropping it when its source equipment disappears loses nothing. A way whose
+/// name is NOT in this set was renamed by hand and is PARKED instead.
+///
+/// Derived from the engine enums, so a new electrical-load component joins the
+/// set automatically — it can never silently start parking pristine ways.
+final Set<String> mepMintedCircuitNames = {
+  for (final c in NodeComponent.values)
+    if (c.isElectricalLoad) c.label,
+  for (final s in MepLoadSource.values) s.label,
+  kSupplyPumpLoadName,
+  kSupplyFanLoadName,
+  kFirePumpLoadName,
+};
 
 /// The MEP equipment the mechanical engine has sized, assembled from the live
 /// duty providers. A duty with no selected motor / zero power is skipped.
@@ -36,7 +65,7 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
     loads.add(MepEquipmentLoad.fromPumpDuty(
       pump,
       id: 'supply-pump',
-      name: 'Supply / booster pump',
+      name: kSupplyPumpLoadName,
       source: MepLoadSource.supplyPump,
     ));
   }
@@ -46,7 +75,7 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
     loads.add(MepEquipmentLoad.fromFanDuty(
       fan,
       id: 'supply-fan',
-      name: 'Supply air fan',
+      name: kSupplyFanLoadName,
       source: MepLoadSource.supplyFan,
     ));
   }
@@ -55,7 +84,7 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
   if (standpipe.pumpShaftPower.watts > 0) {
     loads.add(MepEquipmentLoad(
       id: 'fire-pump',
-      name: 'Fire pump',
+      name: kFirePumpLoadName,
       source: MepLoadSource.firePump,
       mechanicalPower: standpipe.pumpShaftPower,
     ));
@@ -92,8 +121,9 @@ double? _acRoomWatts(
   Network net,
   List<RoomArea> rooms,
   double? Function(String sheetId) mppFor,
-  NetNode node,
-) {
+  NetNode node, {
+  CoolingLoadMethod method = CoolingLoadMethod.simple,
+}) {
   RoomArea? room;
   for (final r in rooms) {
     if (r.containsNode(node.sheetId, node.floorIndex, node.x, node.y)) {
@@ -102,7 +132,9 @@ double? _acRoomWatts(
     }
   }
   if (room == null) return null;
-  final load = room.coolingLoad(mppFor(room.sheetId));
+  // The project's AC-load basis (Building page) drives the fed circuit too, so
+  // the panel schedule and the Rooms inspector can never disagree on the PK.
+  final load = room.coolingLoad(mppFor(room.sheetId), method: method);
   if (load == null) return null;
   // Split the room load across the AC indoor units inside the same footprint.
   var count = 0;
@@ -136,8 +168,10 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
     if (c == null || !c.isElectricalLoad) continue;
     // An AC unit's load tracks its room's cooling PK when it sits in a scaled
     // room; an explicit per-node override still wins, else the component default.
-    final acWatts =
-        RoomArea.isAcComponent(c) ? _acRoomWatts(net, rooms, mppFor, n) : null;
+    final acWatts = RoomArea.isAcComponent(c)
+        ? _acRoomWatts(net, rooms, mppFor, n,
+            method: ref.watch(coolingLoadMethodProvider))
+        : null;
     final watts = n.electricalLoadW ?? acWatts ?? c.defaultMotorKw * 1000;
     if (watts <= 0) continue;
     loads.add(MepEquipmentLoad(

@@ -24,8 +24,10 @@ import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../sheets/pdf_page_picker.dart';
 import '../strings/app_strings.dart';
+import '../strings/plural.dart';
 import 'confirm_discard_dialog.dart';
 import 'import_choice_dialog.dart';
+import '../inspector/project_panel.dart' show pickExportSave;
 import 'nav_rail.dart';
 
 /// Project file I/O shared by the top bar, the global Ctrl/Cmd+S/O hotkeys,
@@ -54,6 +56,103 @@ Future<bool> confirmDiscardIfDirty(BuildContext context, WidgetRef ref) async {
     case null:
       return false;
   }
+}
+
+/// The directory part of [path], or null when it carries none. Tolerant of
+/// either separator (a FilePicker path may use `/` even on Windows).
+String? _dirOf(String? path) {
+  if (path == null || path.isEmpty) return null;
+  final i = path.lastIndexOf(RegExp(r'[/\\]'));
+  return i > 0 ? path.substring(0, i) : null;
+}
+
+/// I1 — the session's last OPEN/IMPORT folder: the sibling of the export
+/// surface's `lastExportDirProvider`, seeding every file-CHOOSING dialog so a
+/// second import re-opens where the first was picked instead of the OS default.
+///
+/// Deliberately NOT a new field on the machine-local `AppSettings` (that file is
+/// shared this wave): the memory is session-scoped here and FALLS BACK to the
+/// persisted `AppSettings.lastOpenPath`'s folder, which gives cross-session
+/// continuity without touching the settings schema.
+final lastOpenDirProvider =
+    NotifierProvider<LastOpenDirController, String?>(LastOpenDirController.new);
+
+class LastOpenDirController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  /// Record the directory of a chosen FILE path (the pickers return file
+  /// paths). A path with no directory part is ignored (keeps the prior memory).
+  void rememberFile(String path) {
+    final dir = _dirOf(path);
+    if (dir != null) state = dir;
+  }
+}
+
+/// The folder an open/import dialog should start in: this session's last picked
+/// folder, else the folder of the last project opened/saved on this machine,
+/// else null (the OS default).
+String? openDialogInitialDirectory(WidgetRef ref) {
+  final session = ref.read(lastOpenDirProvider);
+  if (session != null && session.isNotEmpty) return session;
+  return _dirOf(ref.read(appSettingsProvider).lastOpenPath);
+}
+
+/// I1 — the OPEN/IMPORT counterpart of `pickExportSave`: the ONE seam every
+/// file-choosing dialog routes through, seeded from
+/// [openDialogInitialDirectory] and recording the chosen folder so the next
+/// dialog re-opens there. Returns the chosen absolute paths — an empty list on
+/// cancel (or a pick that yielded no usable path), never null.
+Future<List<String>> pickOpenPaths(
+  WidgetRef ref, {
+  required List<String> allowedExtensions,
+  bool allowMultiple = false,
+}) async {
+  final result = await FilePicker.pickFiles(
+    type: FileType.custom,
+    allowedExtensions: allowedExtensions,
+    allowMultiple: allowMultiple,
+    initialDirectory: openDialogInitialDirectory(ref),
+  );
+  if (result == null) return const [];
+  final paths = <String>[
+    for (final f in result.files)
+      if (f.path != null && f.path!.isNotEmpty) f.path!,
+  ];
+  if (paths.isNotEmpty) {
+    ref.read(lastOpenDirProvider.notifier).rememberFile(paths.first);
+  }
+  return paths;
+}
+
+/// I5 — a plan import that failed speaks HUMAN. A raw `FormatException` /
+/// `StateError` dump ("FormatException: Unexpected character") tells an engineer
+/// nothing actionable; the overwhelmingly common cause is the wrong file for the
+/// chosen type (a DWG saved with a `.dxf` name, a scanned/locked PDF), so the
+/// message names that cause AND the next action, per file TYPE.
+///
+/// The raw exception text is NEVER swallowed — it rides the `({detail})`
+/// parenthetical. An error that is not a parse/format failure (a missing file, a
+/// permissions error) keeps the old generic wording rather than asserting a
+/// cause it can't know. Pure, so the mapping is unit-testable.
+String importFailureMessage(
+  MechXStringsData strings, {
+  required String what,
+  required Object error,
+}) {
+  final detail = error is FormatException && error.message.isNotEmpty
+      ? error.message
+      : '$error';
+  final mappable = error is FormatException || error is StateError;
+  if (!mappable) {
+    return strings.format(StringKey.importFailedGenericTemplate,
+        {'what': what, 'detail': detail});
+  }
+  return switch (what) {
+    'DXF' => strings.format(StringKey.importFailedDxfTemplate, {'detail': detail}),
+    'DWG' => strings.format(StringKey.importFailedDwgTemplate, {'detail': detail}),
+    _ => strings.format(StringKey.importFailedPdfTemplate, {'detail': detail}),
+  };
 }
 
 /// File → New: after a dirty-guard, replace the live state with a virgin
@@ -137,14 +236,11 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
     if (!await confirmDiscardIfDirty(context, ref)) return false;
   }
   if (!context.mounted) return false;
-  final result = await FilePicker.pickFiles(
-    type: FileType.custom,
-    allowedExtensions: const ['pdf', 'dxf', 'dwg'],
-    allowMultiple: false,
-  );
-  if (result == null || result.files.isEmpty) return false;
-  final path = result.files.single.path;
-  if (path == null || path.isEmpty) return false;
+  // I1 — one remembered folder across every open/import dialog.
+  final picked =
+      await pickOpenPaths(ref, allowedExtensions: const ['pdf', 'dxf', 'dwg']);
+  if (picked.isEmpty) return false;
+  final path = picked.first;
 
   final lower = path.toLowerCase();
   final isDxf = lower.endsWith('.dxf');
@@ -201,9 +297,12 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
         // A5: jump to the first freshly-added sheet — the appended block starts
         // at index `existing` (the sheet count captured before the add).
         _revealImportedSheet(ref, existing);
-        ref
-            .read(statusMessageProvider.notifier)
-            .showStatus('$added ${added == 1 ? 'sheet' : 'sheets'} added');
+        ref.read(statusMessageProvider.notifier).showStatus(
+            _importStatusMessage(ref,
+                imported: added,
+                totalSheets: existing + added,
+                fromTemplate: skipDiscardGuard,
+                added: true));
         return true;
       }
       // REPLACE destroys the current sheets + orphans drawn work — guard now.
@@ -223,13 +322,20 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
     // A5: reveal the imported plan on DESIGN → Layout at the first sheet.
     _revealImportedSheet(ref, 0);
     final n = sheets.length;
-    ref
-        .read(statusMessageProvider.notifier)
-        .showStatus('$n ${n == 1 ? 'sheet' : 'sheets'} imported');
+    ref.read(statusMessageProvider.notifier).showStatus(_importStatusMessage(ref,
+        imported: n,
+        totalSheets: n,
+        fromTemplate: skipDiscardGuard,
+        added: false));
     return true;
   } catch (e) {
-    // Surface the failure instead of silently keeping the old sheets.
-    ref.read(loadErrorProvider.notifier).set('Could not import $what: $e');
+    // Surface the failure instead of silently keeping the old sheets — I5: as a
+    // human message naming the likely cause, with the raw text in a
+    // parenthetical.
+    ref.read(loadErrorProvider.notifier).set(importFailureMessage(
+        MechXStringsData(ref.read(localeProvider)),
+        what: what,
+        error: e));
     return false;
   } finally {
     ref.read(busyProvider.notifier).clear();
@@ -239,6 +345,54 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
 /// The basename of a file path, tolerant of either separator (a FilePicker path
 /// may use `/` even on Windows, where [Platform.pathSeparator] is `\`).
 String _baseName(String path) => path.split(RegExp(r'[\\/]')).last;
+
+/// The status confirmation for a completed import.
+///
+/// F10 — a TEMPLATE forces this import right after seeding a 12-floor building,
+/// and the engineer typically has one or two plans to hand: the old
+/// "1 sheet imported" said nothing about floors 2-12 being left planless, and
+/// the tool that fixes it (assign / duplicate a typical floor's plan) lives on
+/// the Building page they were never sent to. When the import came from that
+/// forced template flow ([fromTemplate]) and the building has MORE floors than
+/// the project now has plans, the confirmation names the shortfall and points
+/// at the Building page. Every other import keeps its plain count — a normal
+/// Import into a tall building is a deliberate one-plan-at-a-time workflow, not
+/// a shortfall to nag about.
+String _importStatusMessage(
+  WidgetRef ref, {
+  required int imported,
+  required int totalSheets,
+  required bool fromTemplate,
+  required bool added,
+}) =>
+    importStatusMessage(
+      MechXStringsData(ref.read(localeProvider)),
+      imported: imported,
+      totalSheets: totalSheets,
+      floors: ref.read(projectControllerProvider).floors.length,
+      fromTemplate: fromTemplate,
+      added: added,
+    );
+
+/// The pure text of [_importStatusMessage] — same rule, no providers, so the
+/// F10 shortfall branch is unit-testable without an OS file picker.
+String importStatusMessage(
+  MechXStringsData strings, {
+  required int imported,
+  required int totalSheets,
+  required int floors,
+  required bool fromTemplate,
+  required bool added,
+}) {
+  if (fromTemplate && floors > totalSheets) {
+    final plans = pluralCount(totalSheets, strings(StringKey.buildingPlanOne),
+        strings(StringKey.buildingPlanMany));
+    return strings.format(StringKey.templatePlanShortfallTemplate,
+        {'floors': '$floors', 'plans': plans});
+  }
+  final noun = imported == 1 ? 'sheet' : 'sheets';
+  return '$imported $noun ${added ? 'added' : 'imported'}';
+}
 
 /// Import ONE plan file at [path] to its [Sheet]s (PDF → a sheet per page, DXF
 /// one sheet, DWG one sheet via the ODA converter). Shared by the batch add.
@@ -263,16 +417,8 @@ Future<List<Sheet>> _importPlanFile(String path) {
 /// sheet rail); a file that fails to import is skipped and named, and a partial
 /// batch still appends whatever parsed rather than aborting the lot.
 Future<void> addSheetsFromFiles(BuildContext context, WidgetRef ref) async {
-  final result = await FilePicker.pickFiles(
-    type: FileType.custom,
-    allowedExtensions: const ['pdf', 'dxf', 'dwg'],
-    allowMultiple: true,
-  );
-  if (result == null || result.files.isEmpty) return;
-  final paths = <String>[
-    for (final f in result.files)
-      if (f.path != null && f.path!.isNotEmpty) f.path!,
-  ];
+  final paths = await pickOpenPaths(ref,
+      allowedExtensions: const ['pdf', 'dxf', 'dwg'], allowMultiple: true);
   if (paths.isEmpty) return;
 
   ref.read(busyProvider.notifier).set(
@@ -325,14 +471,10 @@ Future<void> addSheetsFromFiles(BuildContext context, WidgetRef ref) async {
 /// network are preserved); only the underlay changes.
 Future<void> replaceSheetPlan(
     BuildContext context, WidgetRef ref, String sheetId) async {
-  final result = await FilePicker.pickFiles(
-    type: FileType.custom,
-    allowedExtensions: const ['pdf', 'dxf', 'dwg'],
-    allowMultiple: false,
-  );
-  if (result == null || result.files.isEmpty) return;
-  final path = result.files.single.path;
-  if (path == null || path.isEmpty) return;
+  final picked =
+      await pickOpenPaths(ref, allowedExtensions: const ['pdf', 'dxf', 'dwg']);
+  if (picked.isEmpty) return;
+  final path = picked.first;
 
   final lower = path.toLowerCase();
   final isDxf = lower.endsWith('.dxf');
@@ -363,10 +505,44 @@ Future<void> replaceSheetPlan(
     ref.read(loadErrorProvider.notifier).clear();
     ref.read(statusMessageProvider.notifier).showStatus('Plan replaced');
   } catch (e) {
-    ref.read(loadErrorProvider.notifier).set('Could not replace plan: $e');
+    // I5 — the same human mapping as Import (this is the identical parse path).
+    ref.read(loadErrorProvider.notifier).set(importFailureMessage(
+        MechXStringsData(ref.read(localeProvider)),
+        what: what,
+        error: e));
   } finally {
     ref.read(busyProvider.notifier).clear();
   }
+}
+
+/// The default project name a virgin project carries — the ONE string F9's
+/// adoption guard compares against (a project the engineer has named, or one
+/// loaded from a file, is never renamed by a save).
+const String kDefaultProjectName = 'Untitled project';
+
+/// F9 — the file STEM of a `.mechx` path (`…/Gedung-BRI.mechx` → `Gedung-BRI`),
+/// tolerant of either path separator (a FilePicker path may use `/` even on
+/// Windows). Pure, so the naming rule is unit-testable without touching disk.
+String projectNameFromPath(String path) {
+  final base = _baseName(path);
+  final lower = base.toLowerCase();
+  final stem = lower.endsWith('.mechx')
+      ? base.substring(0, base.length - '.mechx'.length)
+      : base;
+  return stem.trim();
+}
+
+/// F9 — adopt [path]'s file stem as the project name when the project still
+/// carries the untouched default. A no-op otherwise (a named project keeps its
+/// name) and for a stem that is empty or already the live name, so a repeat save
+/// records no undo step. Goes through [ProjectController.setName], so the
+/// adoption is ONE ordinary undo entry — part of the save the engineer just
+/// performed.
+void adoptFileStemAsProjectName(ProviderReader read, String path) {
+  if (read(projectControllerProvider).name != kDefaultProjectName) return;
+  final stem = projectNameFromPath(path);
+  if (stem.isEmpty || stem == kDefaultProjectName) return;
+  read(projectControllerProvider.notifier).setName(stem);
 }
 
 /// True while a [saveProject] run (including its OS Save dialog) is in flight —
@@ -392,21 +568,32 @@ Future<void> saveProject(WidgetRef ref, {bool saveAs = false}) async {
 
 Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   final project = ref.read(projectControllerProvider);
-  final doc = buildDocument(ref.read);
   // The project's identity BEFORE this save — its recovery slot is cleared too
   // (a Save-As changes the slot; the pre-save snapshot lived under the old one).
   final priorPath = ref.read(currentProjectPathProvider);
   var full = saveAs ? null : ref.read(currentProjectPathProvider);
   if (full == null) {
-    final path = await FilePicker.saveFile(
-      dialogTitle: 'Save iSystem project',
-      fileName: '${project.name}.mechx',
-      type: FileType.custom,
-      allowedExtensions: const ['mechx'],
-    );
+    // I1 — the same remembered-folder seam every export uses. A Save-As on an
+    // already-saved project starts beside the file it came from (the better
+    // informed location); a brand-new project falls back to the shared memory.
+    final path = await pickExportSave(ref,
+        dialogTitle: 'Save iSystem project',
+        fileName: '${project.name}.mechx',
+        ext: 'mechx',
+        initialDirectory: _dirOf(priorPath));
     if (path == null) return;
-    full = path.endsWith('.mechx') ? path : '$path.mechx';
+    full = path;
   }
+  // F9 — the file the engineer named IS the project's name: saving as
+  // `Gedung-BRI.mechx` used to leave every title block, report head and window
+  // title reading "Untitled project", because Save seeded the dialog from the
+  // name but never adopted the chosen filename back. Adopt the stem, but ONLY
+  // while the name is still the untouched default — a project the engineer
+  // named keeps its name whatever the file is called. One undo step (part of
+  // the save), and it happens BEFORE the document is built so the name lands in
+  // the written file and in the clean baseline.
+  adoptFileStemAsProjectName(ref.read, full);
+  final doc = buildDocument(ref.read);
   // The path-only encoding is the "clean baseline" the autosave loop compares
   // against (autosave never embeds) — so a just-saved project leaves no phantom
   // recovery. The FILE on disk, however, embeds the source plans so it is
@@ -456,8 +643,11 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   // bookkeeping that only matters while the app is alive, so drop it if gone.
   if (!ref.context.mounted) return;
   ref.read(recoveryDocProvider.notifier).clear();
-  // Remember this file in the machine-local MRU / last-open list.
-  ref.read(appSettingsProvider.notifier).recordRecent(full, project.name);
+  // Remember this file in the machine-local MRU / last-open list, under the
+  // name the project carries NOW (F9 may just have adopted the file stem).
+  ref
+      .read(appSettingsProvider.notifier)
+      .recordRecent(full, ref.read(projectControllerProvider).name);
   ref
       .read(statusMessageProvider.notifier)
       .showStatus('Saved ${full.split(Platform.pathSeparator).last}');
@@ -469,14 +659,10 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
 Future<void> openProject(BuildContext context, WidgetRef ref) async {
   // Opening REPLACES the whole project — guard before touching anything.
   if (!await confirmDiscardIfDirty(context, ref)) return;
-  final result = await FilePicker.pickFiles(
-    type: FileType.custom,
-    allowedExtensions: const ['mechx', 'json'],
-    allowMultiple: false,
-  );
-  final path = result?.files.single.path;
-  if (path == null) return;
-  await _applyOpenedFile(ref, path);
+  final picked =
+      await pickOpenPaths(ref, allowedExtensions: const ['mechx', 'json']);
+  if (picked.isEmpty) return;
+  await _applyOpenedFile(ref, picked.first);
 }
 
 /// Open a KNOWN `.mechx` path — a recent-projects (MRU) / reopen-last entry, no

@@ -53,6 +53,8 @@ import '../../store/electrical_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../canvas/canvas_minimap.dart';
+import '../canvas/viewport.dart';
 import '../canvas/zoom_controls.dart';
 import '../strings/app_strings.dart';
 import '../strings/plural.dart';
@@ -63,6 +65,7 @@ import '../widgets/canvas_guide_popover.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_empty_state_card.dart';
 import '../widgets/mechx_segment.dart';
+import '../widgets/section_label.dart';
 import '../widgets/severity_glyph.dart';
 import 'electrical_canvas.dart';
 import 'electrical_controls.dart';
@@ -208,6 +211,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     final result = ref.watch(electricalResultProvider);
     final project = ref.watch(electricalProjectProvider);
     final advanced = ref.watch(electricalAdvancedProvider);
+    final allWarnings = ref.watch(electricalAllWarningsProvider);
 
     // The Review → Electrical jump seam: a located issue hands a panel id (and,
     // when the issue pinpoints one, a circuit/way id — H7) via
@@ -239,7 +243,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _Toolbar(
-          warningCount: result.warnings.length,
+          warningCount: allWarnings.length,
           tab: tab,
           onTab: (t) => ref.read(electricalTabProvider.notifier).set(t),
           onService: _openService,
@@ -368,7 +372,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                 bottom: MechXSpacing.md,
                 child: ValueListenableBuilder<CanvasViewport?>(
                   valueListenable: _viewport,
-                  builder: (context, vp, _) => _MiniMap(
+                  builder: (context, vp, _) => _ElectricalMiniMap(
                     project: project,
                     result: result,
                     viewport: vp,
@@ -972,8 +976,9 @@ class _Toolbar extends StatelessWidget {
                 runSpacing: MechXSpacing.xs,
                 children: [
                   MechXButton(
-                    // B2 — this count is ELECTRICAL-ONLY (result.warnings for
-                    // the electrical system). The StringKey values are now
+                    // B2 — this count is ELECTRICAL-ONLY (electricalAllWarningsProvider —
+                    // the combined core-sizing + fault-study warning surface, deduped).
+                    // The StringKey values are now
                     // SCOPED ('Electrical issues' / 'Masalah kelistrikan') so
                     // the label can't be conflated with the nav Review badge
                     // (all OPEN issues, every discipline) or the Review hub's
@@ -1218,57 +1223,46 @@ class _ExportRowState extends State<_ExportRow> {
   }
 }
 
-/// The minimap frame size (the paint box, so the widget + painter agree on the
-/// world↔minimap mapping for the tap hit-test).
-const Size _kMiniMapSize = Size(150, 100);
-
-/// The minimap-space mapping of the panel layout — the SAME `resolvePanelPositions`
-/// the canvas uses (so it tracks DRAGGED panels, not the auto-layout only, I8).
-/// Exposes `toMini` / `toWorld` so the painter draws + the widget hit-tests
-/// through one geometry.
-class _MiniMapGeometry {
-  final double minX, minY, scale, ox, oy;
-  const _MiniMapGeometry(this.minX, this.minY, this.scale, this.ox, this.oy);
-
-  static const double _padX = 80, _padY = 60;
-
-  static _MiniMapGeometry? of(Map<String, Offset> positions, Size size) {
-    if (positions.isEmpty || size.isEmpty) return null;
-    var minX = double.infinity, minY = double.infinity;
-    var maxX = -double.infinity, maxY = -double.infinity;
-    positions.forEach((id, p) {
-      minX = minX < p.dx ? minX : p.dx;
-      minY = minY < p.dy ? minY : p.dy;
-      maxX = maxX > p.dx ? maxX : p.dx;
-      maxY = maxY > p.dy ? maxY : p.dy;
-    });
-    final spanX = (maxX - minX).abs() + 200;
-    final spanY = (maxY - minY).abs() + 160;
-    final scale = (size.width / spanX).clamp(0.0, size.height / spanY) * 0.9;
-    final ox = (size.width - spanX * scale) / 2;
-    final oy = (size.height - spanY * scale) / 2;
-    return _MiniMapGeometry(minX, minY, scale, ox, oy);
+/// J6 — the electrical panel layout's padded world bounds, expressed as the
+/// shared [CanvasMinimap]'s CONTENT rectangle: the world point that maps to
+/// content (0,0) plus the content size. The minimap widget frames
+/// `0,0 .. size`, so everything handed to it (markers, viewport, taps) is
+/// translated through this one origin — the map's only geometry.
+///
+/// Pure + null for an empty layout (nothing to map). The padding matches the
+/// old private minimap's (80 px left / 120 px right, 60 / 100 top / bottom) so
+/// boards near an edge still sit inside the frame rather than on it.
+({Offset origin, Size size})? electricalMinimapContent(
+  Map<String, Offset> positions,
+) {
+  if (positions.isEmpty) return null;
+  var minX = double.infinity, minY = double.infinity;
+  var maxX = -double.infinity, maxY = -double.infinity;
+  for (final p in positions.values) {
+    minX = minX < p.dx ? minX : p.dx;
+    minY = minY < p.dy ? minY : p.dy;
+    maxX = maxX > p.dx ? maxX : p.dx;
+    maxY = maxY > p.dy ? maxY : p.dy;
   }
-
-  Offset toMini(Offset world) => Offset(
-        ox + (world.dx - minX + _padX) * scale,
-        oy + (world.dy - minY + _padY) * scale,
-      );
-
-  Offset toWorld(Offset mini) => Offset(
-        (mini.dx - ox) / scale + minX - _padX,
-        (mini.dy - oy) / scale + minY - _padY,
-      );
+  if (!minX.isFinite) return null;
+  const padX = 80.0, padY = 60.0;
+  return (
+    origin: Offset(minX - padX, minY - padY),
+    size: Size((maxX - minX).abs() + 200, (maxY - minY).abs() + 160),
+  );
 }
 
-/// A small minimap (bottom-right): every panel as a coloured rectangle, the live
-/// viewport as an outlined rectangle, and a tap pans the canvas to that point.
-class _MiniMap extends StatelessWidget {
+/// The electrical canvas's minimap (bottom-right) — J6: the SHARED
+/// [CanvasMinimap] the Layout canvas uses, not a second private implementation.
+/// This adapter only translates the electrical canvas's unbounded world space
+/// into the widget's `0,0 .. contentSize` content space (via
+/// [electricalMinimapContent]) and back again for the recenter tap.
+class _ElectricalMiniMap extends StatelessWidget {
   final ElectricalProject project;
   final ElectricalSystemResult result;
   final CanvasViewport? viewport;
   final ValueChanged<Offset> onCentre;
-  const _MiniMap({
+  const _ElectricalMiniMap({
     required this.project,
     required this.result,
     required this.viewport,
@@ -1277,86 +1271,136 @@ class _MiniMap extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
     final positions = resolvePanelPositions(project, result);
-    final geo = _MiniMapGeometry.of(positions, _kMiniMapSize);
-    return SizedBox.fromSize(
-      size: _kMiniMapSize,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: MechXRadii.control,
-          border: Border.all(color: colors.border),
-          boxShadow: MechXShadow.card,
-        ),
-        child: ClipRRect(
-          borderRadius: MechXRadii.control,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapUp: (d) {
-              if (geo == null) return;
-              onCentre(geo.toWorld(d.localPosition));
-            },
-            child: CustomPaint(
-              painter: _MiniMapPainter(
-                positions: positions,
-                viewport: viewport,
-                accent: colors.accent,
-                muted: colors.textMuted,
+    final content = electricalMinimapContent(positions);
+    // Nothing laid out ⇒ nothing to map (the empty-state card owns the canvas).
+    if (content == null) return const SizedBox.shrink();
+    final origin = content.origin;
+    final vp = viewport;
+    return CanvasMinimap(
+      contentSize: content.size,
+      markers: [for (final p in positions.values) p - origin],
+      // `screen = world*s + o` and `world = content + origin`, so the content
+      // transform carries the same scale with the origin folded into its offset.
+      viewport: vp == null || vp.size.isEmpty
+          ? null
+          : (
+              transform: ViewportTransform(
+                scale: vp.transform.scale,
+                offset: vp.transform.offset + origin * vp.transform.scale,
               ),
+              size: vp.size,
             ),
-          ),
-        ),
-      ),
+      onRecenter: (c) => onCentre(c + origin),
     );
   }
 }
 
-class _MiniMapPainter extends CustomPainter {
-  final Map<String, Offset> positions;
-  final CanvasViewport? viewport;
-  final Color accent;
-  final Color muted;
-  _MiniMapPainter({
-    required this.positions,
-    required this.viewport,
-    required this.accent,
-    required this.muted,
-  });
+// ── Read-only-tab system summary (J2) ─────────────────────────────────────────
+
+/// The electrical SYSTEM summary shown in the inspector column on the READ-ONLY
+/// electrical projections (Building riser / Power one-line) — J2.
+///
+/// Those tabs have no drop target, so the column used to show twenty dimmed,
+/// inert palette cards: a whole column of affordances that do nothing. The
+/// mechanical Riser answers the same situation with a live `RiserSystemSummary`
+/// (what the diagram in front of you actually contains); this is its electrical
+/// counterpart, and it is a PROJECTION of the solved model — boards, ways, the
+/// diversified demand and the normal / essential split — never new physics.
+///
+/// Data-gated: an empty project renders nothing (the canvas's own empty-state
+/// card owns that moment), so a blank launch is unchanged.
+class ElectricalSystemSummary extends ConsumerWidget {
+  const ElectricalSystemSummary({super.key});
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final geo = _MiniMapGeometry.of(positions, size);
-    if (geo == null) return;
-    positions.forEach((id, p) {
-      final at = geo.toMini(p);
-      canvas.drawRect(
-          Rect.fromLTWH(at.dx, at.dy, 14, 8), Paint()..color = accent);
-    });
-    // The live viewport rectangle — the world region on screen, mapped through
-    // the same minimap geometry (I8). Skipped until the canvas has a viewport.
-    final vp = viewport;
-    if (vp != null && !vp.size.isEmpty) {
-      final tl = geo.toMini(vp.transform.screenToWorld(Offset.zero));
-      final br = geo.toMini(
-          vp.transform.screenToWorld(vp.size.bottomRight(Offset.zero)));
-      final rect = Rect.fromPoints(tl, br);
-      canvas.drawRect(
-        rect,
-        Paint()
-          ..color = muted
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2,
-      );
-    }
+  Widget build(BuildContext context, WidgetRef ref) {
+    final project = ref.watch(electricalProjectProvider);
+    if (project.panels.isEmpty) return const SizedBox.shrink();
+    final result = ref.watch(electricalResultProvider);
+    final s = context.strings;
+
+    final boards = project.panels.length;
+    final ways = project.panels.fold<int>(0, (n, p) => n + p.circuits.length);
+    // The genset-backed (emergency) sub-tree — the same propagated set the
+    // single-line / riser drawings colour red, so the count can't disagree with
+    // what the diagram shows.
+    final essential = essentialPanelIds(project, result)
+        .where((id) => project.panels.any((p) => p.id == id))
+        .length;
+
+    final demandKw = result.supply.demandW / 1000;
+    final demandKva = result.supply.demandVa.inKilovoltAmperes;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(MechXSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          MechXSectionLabel(s(StringKey.electricalSummaryTitle)),
+          const SizedBox(height: MechXSpacing.xs),
+          _kv(context, s(StringKey.electricalSummaryBoards), '$boards',
+              numeric: true),
+          _kv(context, s(StringKey.electricalSummaryWays), '$ways',
+              numeric: true),
+          _kv(
+            context,
+            s(StringKey.electricalSummaryDemand),
+            '${demandKw.toStringAsFixed(1)} kW · '
+                '${demandKva.toStringAsFixed(1)} kVA',
+            numeric: true,
+          ),
+          _kv(
+            context,
+            s(StringKey.electricalSummaryEssential),
+            s.format(StringKey.electricalSummaryEssentialValue, {
+              'essential': '$essential',
+              'total': '$boards',
+            }),
+            numeric: true,
+          ),
+          const SizedBox(height: MechXSpacing.md),
+          Text(
+            s(StringKey.electricalPaletteReadOnly),
+            style: context.type.caption
+                .copyWith(color: context.colors.textMuted),
+          ),
+        ],
+      ),
+    );
   }
 
-  @override
-  bool shouldRepaint(_MiniMapPainter old) =>
-      old.positions != positions ||
-      old.viewport != viewport ||
-      old.accent != accent ||
-      old.muted != muted;
+  /// One quiet key/value row — the same inspector `_kv` idiom the mechanical
+  /// `RiserSystemSummary` uses (muted key, right-aligned value; numeric values
+  /// take fixed-advance tabular figures so they don't jitter as they update).
+  Widget _kv(BuildContext context, String key, String value,
+      {bool numeric = false}) {
+    final colors = context.colors;
+    final type = context.type;
+    final base = numeric ? MechXTypography.tabular(type.caption) : type.caption;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text(key,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: type.caption.copyWith(color: colors.textMuted)),
+          ),
+          const SizedBox(width: MechXSpacing.xs),
+          Flexible(
+            child: Text(value,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+                style: base.copyWith(color: colors.textSecondary)),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ── Empty state ───────────────────────────────────────────────────────────────
@@ -1906,6 +1950,7 @@ class ElectricalAdvancedInspector extends ConsumerWidget {
     final type = context.type;
     final advanced = ref.watch(electricalAdvancedProvider);
     final result = ref.watch(electricalResultProvider);
+    final allWarnings = ref.watch(electricalAllWarningsProvider);
     void onLocate(String panelId, String? circuitId) {
       // Frame the offending board/way on the single-line canvas (via the
       // workspace's electricalFocusProvider listener) and close this section.
@@ -1949,13 +1994,13 @@ class ElectricalAdvancedInspector extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (result.warnings.isNotEmpty) ...[
+                    if (allWarnings.isNotEmpty) ...[
                       Text(
-                        'Warnings (${result.warnings.length})',
+                        'Warnings (${allWarnings.length})',
                         style: type.label.copyWith(color: colors.textPrimary),
                       ),
                       const SizedBox(height: MechXSpacing.xs),
-                      for (final w in result.warnings)
+                      for (final w in allWarnings)
                         _WarningRow(warning: w, onLocate: onLocate),
                       const SizedBox(height: MechXSpacing.md),
                     ],

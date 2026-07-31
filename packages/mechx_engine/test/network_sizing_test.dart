@@ -667,10 +667,16 @@ void main() {
 
     // Engine-derive both candidate sizings directly and confirm sizeEdge
     // chose the equal-friction one (and that the two genuinely differ).
+    // M2 (2026-07-30) — the dispatcher now threads ctx.maxDuctVelocity into the
+    // equal-friction ladder (equal friction alone does not bound velocity), so
+    // the derivation must pass the SAME cap. Without it this fixture lands on
+    // 600 × 350 = 0.21 m² ⇒ 1.2/0.21 = 5.714 m/s, past the 5 m/s cap; with it
+    // the ladder steps one rung to 600 × 400 = 0.24 m² ⇒ 5.000 m/s.
     final ef = sizeRectangularByEqualFriction(
       airflow: const FlowRate(1.2),
       targetPaPerMetre: ctx.ductEqualFrictionPa,
       aspectRatio: ctx.ductAspectRatio,
+      maxVelocity: ctx.maxDuctVelocity,
     );
     final vel = sizeRectangularByVelocity(
       airflow: const FlowRate(1.2),

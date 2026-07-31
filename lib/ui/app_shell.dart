@@ -594,8 +594,13 @@ class _ElectricalWorkspaceInspectorColumn extends ConsumerWidget {
         ref.read(electricalInspectorTargetProvider.notifier).clear();
     final editor = buildElectricalInlineEditor(context, ref, clear);
 
-    // D6: the Loads palette is interactive only on the Single-line tab; on the
-    // read-only Building-riser / Power one-line projections it renders inert.
+    // J2 (superseding D6): the Loads palette belongs to the Single-line tab —
+    // it is the only surface with a drop target. On the read-only Building-riser
+    // / Power one-line projections it used to render as twenty DIMMED, inert
+    // cards: a full column of affordances that do nothing. Those tabs now show
+    // the live electrical SYSTEM summary instead (the counterpart of the
+    // mechanical Riser's `RiserSystemSummary` above) — what the diagram in
+    // front of you actually contains, rather than what you cannot do to it.
     final tab = ref.watch(electricalTabProvider);
     return SizedBox(
       width: ProjectPanel.width,
@@ -605,8 +610,9 @@ class _ElectricalWorkspaceInspectorColumn extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(
-                child: ElectricalPalette(
-                    enabled: tab == ElectricalTab.singleLine),
+                child: tab == ElectricalTab.singleLine
+                    ? const ElectricalPalette()
+                    : const ElectricalSystemSummary(),
               ),
             ],
           ),
@@ -665,16 +671,14 @@ class _RiserInspectorColumn extends ConsumerWidget {
             _TintedToggle(
               label: 'Upfeed pump',
               selected: strategy == FeedStrategy.upfeed,
-              onTap: () =>
-                  ref.read(feedStrategyProvider.notifier).set(FeedStrategy.upfeed),
+              onTap: () => setFeedStrategyUndoable(ref.read, FeedStrategy.upfeed),
             ),
             const SizedBox(height: MechXSpacing.xs),
             _TintedToggle(
               label: 'Roof-tank downfeed',
               selected: strategy == FeedStrategy.downfeed,
-              onTap: () => ref
-                  .read(feedStrategyProvider.notifier)
-                  .set(FeedStrategy.downfeed),
+              onTap: () =>
+                  setFeedStrategyUndoable(ref.read, FeedStrategy.downfeed),
             ),
             const SizedBox(height: MechXSpacing.lg),
             const RiserSystemSummary(),
@@ -819,10 +823,13 @@ class _TopBar extends ConsumerWidget {
     final fileName =
         currentPath?.split(Platform.pathSeparator).last;
 
-    // J3: the zoom pill reflects the Layout sheet's viewport — the only zoom
-    // this bar can read truthfully. On the Riser/Electrical workspaces (whose
-    // real zoom lives in their own canvases) and on non-design screens, show
-    // '—' rather than a stale, shared Layout number.
+    // J3 (revised): the zoom pill reflects the Layout sheet's viewport — the
+    // only zoom this bar can read truthfully. On the Riser/Electrical
+    // workspaces (whose real zoom lives in their own canvases, which already
+    // carry their own zoom readouts) and on non-design screens, the pill is
+    // OMITTED entirely rather than showing a literal '—': those canvases own
+    // their zoom, and an em-dash readout reads as broken chrome, not as
+    // "not applicable". Absence is the honest state.
     final section = ref.watch(shellSectionProvider);
     final view = ref.watch(workspaceViewProvider);
     final onLayout =
@@ -894,22 +901,26 @@ class _TopBar extends ConsumerWidget {
             const SizedBox(width: MechXSpacing.sm),
             // Actions sit flush-right. The zoom read-out is a quiet pill: a
             // soft tinted fill carries it, no hairline border — less visual
-            // mass than a fully-outlined chip (HIG).
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: MechXSpacing.sm,
-                vertical: MechXSpacing.xxs,
+            // mass than a fully-outlined chip (HIG). Only meaningful on
+            // Layout (see the J3 note above) — omitted entirely elsewhere.
+            if (onLayout) ...[
+              Container(
+                key: const ValueKey('zoom-pill'),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: MechXSpacing.sm,
+                  vertical: MechXSpacing.xxs,
+                ),
+                decoration: BoxDecoration(
+                  color: colors.background,
+                  borderRadius: MechXRadii.control,
+                ),
+                child: Text(
+                  zoom,
+                  style: type.mono.copyWith(color: colors.textSecondary),
+                ),
               ),
-              decoration: BoxDecoration(
-                color: colors.background,
-                borderRadius: MechXRadii.control,
-              ),
-              child: Text(
-                zoom,
-                style: type.mono.copyWith(color: colors.textSecondary),
-              ),
-            ),
-            const SizedBox(width: MechXSpacing.sm),
+              const SizedBox(width: MechXSpacing.sm),
+            ],
             MechXButton(
               label: context.strings(StringKey.shellOpen),
               onPressed: () => openProject(context, ref),

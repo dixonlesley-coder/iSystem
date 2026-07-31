@@ -14,9 +14,16 @@ import 'package:test/test.dart';
 /// anchor the port to the reference PanelMaker `engine/fault.ts`.
 ///
 /// Probe of the sizing (`computeSystem`) used below:
-///   - Feeder f1 (50 m): Ib 50.9 A → MCB 63 A (curve C), cable 16 mm², PE 16 mm².
-///   - SP incomer: MCB 63 A. SP motor s1 (30 kW, 10 m): MCB 63 A (curve D),
-///     cable 16 mm², PE 16 mm².
+///   - Feeder f1 (50 m): Ib = 30 000/(√3·400·0.85) = 50.943 A → 50.9 A. Its
+///     CABLE is sized on that load (audit E3, 2026-07-30 — the selectivity floor
+///     is device-only and never inflates copper): Iz ≥ max(63, 1.25 × 50.943 =
+///     63.68) = 63.68 A ⇒ 16 mm² (B1 Cu/PVC KHA 80 A), PE 16 mm².
+///     Its DEVICE would floor at 1.6 × SP's 63 A incomer = 100.8 A ⇒ rung 125 A,
+///     but the cap "In ≤ Iz = 80 A" allows only the 80 A rung, so the feeder is
+///     an MCCB 80 A and the residual non-selectivity (80/63 = 1.27) is reported.
+///   - SP incomer: MCB 63 A (sized on the board's own 57.9 A demand, load-side
+///     and therefore unaffected by the feeder floor). SP motor s1 (30 kW, 10 m):
+///     MCB 63 A (curve D), cable 16 mm², PE 16 mm².
 void main() {
   const p = PuilProfile();
 
@@ -74,10 +81,12 @@ void main() {
     test('Isc decays through the feeder cable to the sub-panel bus', () {
       // Source |Z| at the origin: z = 400/(√3·16000) = 0.0144338 Ω, split by
       // X/R = 7 ⇒ R = z/√50 = 0.00204124, X = 7R = 0.01428869.
-      // Feeder 16 mm² Cu, 50 m: R = 1.38·50/1000 = 0.069, X = 0.08·50/1000 = 0.004.
-      // SP source Z = (0.00204124+0.069, 0.01428869+0.004) = (0.0710412, 0.0182887)
-      //   |Z| = √(0.0710412² + 0.0182887²) = 0.0733576 Ω.
-      // Isc_SP = 400/(√3·0.0733576) = 3148.14 A → 3.15 kA (< 16 kA upstream).
+      // Feeder 16 mm² Cu (the LOAD-sized conductor — E3: the device floor never
+      // grows it), 50 m: R = 1.38·50/1000 = 0.069, X = 0.08·50/1000 = 0.004.
+      // SP source Z = (0.00204124+0.069, 0.01428869+0.004)
+      //             = (0.07104124, 0.01828869)
+      //   |Z| = √(0.07104124² + 0.01828869²) = 0.0733576 Ω.
+      // Isc_SP = 400/(√3·0.0733576) = 3148.1 A → 3.15 kA (< 16 kA upstream).
       expect(fs.panels['SP']!.prospectiveFaultkA, closeTo(3.15, 0.01));
     });
 
@@ -99,26 +108,36 @@ void main() {
       // Loop = SP source Z + phaseZ(temp ×1.28) + peZ(temp ×1.28) over 10 m.
       // 16 mm²: R = 1.38·10/1000 = 0.0138, X = 0.0008. With ×1.28 on R:
       //   phaseZ = peZ = (0.017664, 0.0008).
-      // loopR = 0.0710412 + 0.017664 + 0.017664 = 0.1063692
-      // loopX = 0.0182887 + 0.0008 + 0.0008 = 0.0198887
-      //   Zs = √(loopR² + loopX²) = 0.10821 Ω.
+      // loopR = 0.07104124 + 0.017664 + 0.017664 = 0.10636924
+      // loopX = 0.01828869 + 0.0008 + 0.0008 = 0.01988869
+      //   Zs = √(loopR² + loopX²) = 0.108213 Ω → 0.108 (3 dp).
       final motor = fs.circuits['s1']!;
       expect(motor.zsOhm, closeTo(0.108, 0.001));
       // Ia (curve D) = 20·63 = 1260 A; Zs_max = 0.95·230/1260 = 0.17341 Ω.
       expect(motor.zsMaxOhm, closeTo(0.173, 0.001));
-      // 0.108 ≤ 0.173 ⇒ disconnects in time.
+      // 0.108 ≤ 0.173 ⇒ still disconnects in time.
       expect(motor.adsOk, isTrue);
     });
 
-    test('selectivity: feeder vs sub-panel incomer (both 63 A ⇒ non-selective)',
-        () {
-      // 63 A < 1.6·63 = 100.8 A ⇒ no current discrimination — flagged.
+    test('selectivity: the ampacity cap holds the feeder at 80 A over 63 A', () {
+      // Re-derived 2026-07-30 (audit E3+E4): `computeSystem` floors a feeder at
+      // 1.6 × the fed board's incomer (100.8 A ⇒ rung 125 A) but caps it at the
+      // largest rung its LOAD-sized 16 mm² conductor protects (Iz 80 A) — copper
+      // is never inflated for discrimination. 80/63 = 1.27 < 1.6, so the pair
+      // stays non-selective and is REPORTED (a capped floor is never counted as
+      // applied, so nothing is suppressed for it).
       expect(fs.selectivity, hasLength(1));
       final pair = fs.selectivity.single;
       expect(pair.upstreamCircuitId, 'f1');
       expect(pair.downstreamPanelId, 'SP');
+      expect(pair.upstreamRatingA, 80);
+      expect(pair.downstreamRatingA, 63);
+      expect(sys.feederFloorsApplied, isEmpty);
       expect(pair.nonSelective, isTrue);
+      expect(pair.zone, SelectivityZone.nonSelective);
       expect(fs.warnings.map((w) => w.code), contains('non-selective'));
+      expect(fs.warnings.map((w) => w.code),
+          isNot(contains('selectivity-partial')));
     });
 
     test('verify items surface the unverified constants', () {

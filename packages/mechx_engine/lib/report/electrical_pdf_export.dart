@@ -58,23 +58,39 @@ double _weightPt(SldWeight w) => switch (w) {
     };
 
 // Role → ink. `normal` keeps the existing dark scheme (so the detail sheet, all
-// normal, is byte-identical); `essential` is red (emergency convention).
+// normal, is byte-identical); `essential` is red (emergency convention). The
+// phase roles carry the Indonesian R / S / T = red / yellow / blue schedule
+// convention (the S yellow printed as a dark amber so it stays legible on
+// paper) — the SAME hues the live canvas rails use, so screen and print agree.
+const String _phaseRRg = '0.79 0.16 0.16'; // R — red    (canvas 0xC92A2A)
+const String _phaseSRg = '0.80 0.50 0.03'; // S — amber  (canvas 0xE8990C)
+const String _phaseTRg = '0.10 0.44 0.76'; // T — blue   (canvas 0x1971C2)
+
 String _strokeRgForRole(SldRole r) => switch (r) {
       SldRole.normal => '0.12 0.12 0.12',
       SldRole.essential => '0.80 0.13 0.13',
       SldRole.source => '0.10 0.10 0.30',
+      SldRole.phaseR => _phaseRRg,
+      SldRole.phaseS => _phaseSRg,
+      SldRole.phaseT => _phaseTRg,
     };
 
 String _rectStrokeForRole(SldRole r) => switch (r) {
       SldRole.normal => '0.12 0.20 0.40',
       SldRole.essential => '0.80 0.13 0.13',
       SldRole.source => '0.10 0.10 0.30',
+      SldRole.phaseR => _phaseRRg,
+      SldRole.phaseS => _phaseSRg,
+      SldRole.phaseT => _phaseTRg,
     };
 
 String _textRgForRole(SldRole r) => switch (r) {
       SldRole.normal => '0 0 0',
       SldRole.essential => '0.70 0.10 0.10',
       SldRole.source => '0.10 0.10 0.30',
+      SldRole.phaseR => _phaseRRg,
+      SldRole.phaseS => _phaseSRg,
+      SldRole.phaseT => _phaseTRg,
     };
 
 // Page geometry shared by every sheet of the set.

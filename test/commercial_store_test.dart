@@ -186,7 +186,9 @@ void main() {
       container.read(shellSectionProvider.notifier).set(ShellSection.commercial);
       await tester.pump();
 
-      expect(find.text('BOM'), findsOneWidget);
+      // C-1: the electrical section header is now the unambiguous
+      // 'Electrical BOM' (it sits beside a literal 'Mechanical BOM').
+      expect(find.text('Electrical BOM'), findsOneWidget);
       expect(find.text('Pricelist'), findsOneWidget);
       expect(find.text('Quotation'), findsOneWidget);
       expect(find.text('Export BOM (CSV)'), findsOneWidget);
@@ -235,7 +237,7 @@ void main() {
       var err = container.read(loadErrorProvider);
       expect(err, isNotNull);
       expect(err, contains('zero length'));
-      expect(err, contains('electrical BOM'));
+      expect(err, contains('MEP BOM'));
       // Blocked — no success pill.
       expect(container.read(statusMessageProvider), isNull);
 

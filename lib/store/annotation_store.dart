@@ -11,13 +11,17 @@ import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart' show NodeComponent;
 import 'package:mechx_engine/sizing/cooling_load.dart';
+import 'package:mechx_engine/sizing/cooling_load_detailed.dart'
+    show DetailedCoolingLoadInputs, estimateDetailedCoolingLoad;
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show DuctShape, DuctSizingMethod;
 import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'app_state.dart' show CoolingLoadMethod, coolingLoadMethodProvider;
 import 'history_store.dart';
+import 'project_store.dart';
 
 /// A two-point dimension annotation on a sheet/floor, in sheet (world) pixels.
 @immutable
@@ -292,7 +296,9 @@ class TankAreaController extends Notifier<List<TankArea>> {
   List<TankArea> build() => const [];
 
   /// Add a tank from two opposite corners. Ignores a degenerate (zero-area) box.
-  void add({
+  /// F6 — returns the NEW tank's id (null when the box was rejected) so the
+  /// drawing gesture can select it straight away, exactly as a drawn node is.
+  String? add({
     required String sheetId,
     required int floorIndex,
     required double ax,
@@ -300,14 +306,15 @@ class TankAreaController extends Notifier<List<TankArea>> {
     required double bx,
     required double by,
   }) {
-    if ((ax - bx).abs() < 2 || (ay - by).abs() < 2) return;
+    if ((ax - bx).abs() < 2 || (ay - by).abs() < 2) return null;
     ref.read(annotationHistoryProvider.notifier).record();
     // E7: seed a distinct sequential name ('Tank 1', 'Tank 2', …) so a schedule
     // never lists a wall of identical 'Tank' rows; still renamable in-place.
+    final id = 't$_seq';
     state = [
       ...state,
       TankArea(
-        id: 't$_seq',
+        id: id,
         sheetId: sheetId,
         floorIndex: floorIndex,
         ax: ax,
@@ -318,6 +325,7 @@ class TankAreaController extends Notifier<List<TankArea>> {
       ),
     ];
     _seq++;
+    return id;
   }
 
   void setDepth(String id, double depthM) => _update(
@@ -480,11 +488,41 @@ class RoomArea {
 
   /// Estimated AC cooling load (BTU/h · kW · PK + a recommended unit) for the
   /// room, or null when the sheet has no scale / the footprint is degenerate.
-  /// The per-area density comes from the ventilation profile (room-type based).
-  CoolingLoad? coolingLoad(double? metersPerPixel) {
+  ///
+  /// [method] selects the BASIS (M15):
+  ///  • [CoolingLoadMethod.simple] (default) — the area-density rule: floor area
+  ///    × the ventilation profile's per-room-type density × the ceiling
+  ///    correction. Every existing caller keeps this, byte-identical.
+  ///  • [CoolingLoadMethod.detailed] — the heat-gain component breakdown
+  ///    (`estimateDetailedCoolingLoad`): people + lighting + equipment +
+  ///    ventilation/infiltration sensible & latent, over the room's real floor
+  ///    area and ceiling. Its result is projected onto the SAME [CoolingLoad]
+  ///    shape (total BTU/h · W · PK + the standard-AC pick) so nothing
+  ///    downstream has to branch. ENVELOPE inputs (wall / roof / glass areas,
+  ///    orientation) are not modelled by a rectangular room annotation, so they
+  ///    are left at zero rather than invented — the detailed basis here is an
+  ///    INTERNAL-GAIN + ventilation estimate, and every coefficient it does use
+  ///    is a representative `// VERIFY` default
+  ///    (`detailedCoolingVerifyChecklist`).
+  CoolingLoad? coolingLoad(
+    double? metersPerPixel, {
+    CoolingLoadMethod method = CoolingLoadMethod.simple,
+  }) {
     if (metersPerPixel == null) return null;
     final area = areaM2(metersPerPixel);
     if (area <= 0 || ceilingHeightM <= 0) return null;
+    if (method == CoolingLoadMethod.detailed) {
+      final d = estimateDetailedCoolingLoad(DetailedCoolingLoadInputs(
+        floorArea: Area(area),
+        ceilingHeight: Length(ceilingHeightM),
+      ));
+      return CoolingLoad(
+        btuPerHr: d.totalBtuPerHr,
+        watts: d.totalW,
+        pk: d.totalPk,
+        recommended: d.recommended,
+      );
+    }
     final density = const SniVentilationProfile()
         .coolingLoadDensityBtuPerHrM2(roomType)
         .value;
@@ -615,7 +653,9 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
   List<RoomArea> build() => const [];
 
   /// Add a room from two opposite corners. Ignores a degenerate (zero-area) box.
-  void add({
+  /// F6 — returns the NEW room's id (null when the box was rejected) so the
+  /// drawing gesture can select it straight away, exactly as a drawn node is.
+  String? add({
     required String sheetId,
     required int floorIndex,
     required double ax,
@@ -623,15 +663,16 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
     required double bx,
     required double by,
   }) {
-    if ((ax - bx).abs() < 2 || (ay - by).abs() < 2) return;
+    if ((ax - bx).abs() < 2 || (ay - by).abs() < 2) return null;
     ref.read(annotationHistoryProvider.notifier).record();
     // E7: seed a distinct sequential name ('Room 1', 'Room 2', …) so an issued
     // equipment schedule never lists a wall of identical 'Room' AHU rows; still
     // renamable in-place in the Rooms inspector.
+    final id = 'r$_seq';
     state = [
       ...state,
       RoomArea(
-        id: 'r$_seq',
+        id: id,
         sheetId: sheetId,
         floorIndex: floorIndex,
         ax: ax,
@@ -639,9 +680,31 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
         bx: bx,
         by: by,
         name: 'Room ${_seq + 1}',
+        // F7: seed the CEILING from the building the engineer just configured —
+        // the floor's own floor-to-floor height less the project's ceiling drop
+        // — instead of a hard-coded 3.0 m. It multiplies straight into the ACH
+        // volume, the airflow, the ducts and the cooling load, so a 4.2 m
+        // warehouse level must not start life as a 3.0 m office. Still fully
+        // editable in the Rooms inspector, and LOADED rooms are untouched (the
+        // constructor default stays 3.0).
+        ceilingHeightM: _seedCeilingM(floorIndex),
       ),
     ];
     _seq++;
+    return id;
+  }
+
+  /// F7 — the ceiling height a new room on [floorIndex] starts at: that floor's
+  /// floor-to-floor height minus the project's [MountingHeights.ceilingDrop]
+  /// (the same drop the §10 node elevations use for a ceiling-level main), so
+  /// the room's volume matches the building model. Clamped into the same band
+  /// [setCeiling] allows, with a 2.2 m floor so a shallow/odd level can never
+  /// seed an unusably low ceiling.
+  double _seedCeilingM(int floorIndex) {
+    final project = ref.read(projectControllerProvider);
+    final drop = project.mounting.ceilingDrop.meters;
+    final floorToFloor = project.building.floorHeightOf(floorIndex).meters;
+    return (floorToFloor - drop).clamp(2.2, 12.0).toDouble();
   }
 
   void setRoomType(String id, RoomType t) =>
@@ -696,6 +759,25 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
     }
   }
 }
+
+/// M15 — the AC cooling load for one room (by [RoomArea.id]) computed on the
+/// project's CHOSEN basis ([coolingLoadMethodProvider], set on the Building
+/// page): area-density or heat-gain. The ONE place the method is applied, so a
+/// consumer never has to know which basis is live; null when the room is
+/// unknown, its sheet has no scale, or the footprint is degenerate.
+///
+/// This is the wire that makes `DesignSettings.coolingLoadMethod` a real
+/// setting instead of a persisted field nothing read (R6).
+final roomCoolingLoadProvider =
+    Provider.family<CoolingLoad?, String>((ref, roomId) {
+  final room =
+      ref.watch(roomAreasProvider).where((r) => r.id == roomId).firstOrNull;
+  if (room == null) return null;
+  final mpp =
+      ref.watch(projectControllerProvider).calibrationFor(room.sheetId)
+          ?.metersPerPixel;
+  return room.coolingLoad(mpp, method: ref.watch(coolingLoadMethodProvider));
+});
 
 /// Whether the canvas room tool is active (drag to draw a room footprint).
 /// Mutually exclusive with the network draw tools, measure tool, and tank tool.

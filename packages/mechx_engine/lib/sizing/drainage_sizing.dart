@@ -33,6 +33,20 @@ import '../units.dart';
 // SNI 8153:2015 (Tabel beban unit alat plambing & kapasitas pipa). The values
 // here follow common UPC/IPC practice as a sound starting point.
 
+/// Minimum SELF-CLEANSING mean velocity for a gravity drain (m/s): below it
+/// solids fall out of suspension and the run silts up.
+///
+/// 0.6 m/s is the widely-accepted figure in gravity-drainage practice
+/// (BS EN 12056-2 / UPC-IPC design guidance). // VERIFY against SNI 8153:2015 —
+/// it is general practice, not a quoted SNI clause.
+///
+/// The single source for the [DrainageSizingResult.selfCleansing] verdict here
+/// AND for the DFU-path verdict `EdgeSizing.selfCleansingOk` in
+/// `network_sizing.dart` (M5: the DFU path picks its diameter from a capacity
+/// table, never through [sizeForFlow], so it used to carry no self-cleansing
+/// check at all).
+const double kSelfCleansingVelocityMps = 0.6;
+
 /// Drainage Fixture Unit load contributed by [fixture] to the sanitary system.
 /// // VERIFY against SNI 8153 Tabel.
 double drainageFixtureUnit(PlumbingFixture fixture) {
@@ -162,10 +176,10 @@ final class DrainageSizingResult {
   /// [selfCleansing].
   final Velocity fullBoreVelocity;
 
-  /// `true` when [fullBoreVelocity] ≥ 0.6 m/s, the widely-accepted minimum
-  /// self-cleansing velocity for gravity drains (solids are kept in
-  /// suspension). A result of `false` means the slope must be steepened or a
-  /// larger pipe must be avoided.
+  /// `true` when [fullBoreVelocity] ≥ [kSelfCleansingVelocityMps] (0.6 m/s),
+  /// the widely-accepted minimum self-cleansing velocity for gravity drains
+  /// (solids are kept in suspension). A result of `false` means the slope must
+  /// be steepened or a larger pipe must be avoided.
   final bool selfCleansing;
 
   /// Constructs a result directly; prefer calling [sizeForFlow].
@@ -208,7 +222,7 @@ final class DrainageSizingResult {
 ///
 /// ## Self-cleansing
 /// The returned [DrainageSizingResult.selfCleansing] flag is `true` when the
-/// full-bore velocity ≥ 0.6 m/s. At half-full the actual velocity EQUALS the
+/// full-bore velocity ≥ [kSelfCleansingVelocityMps] (0.6 m/s). At half-full the actual velocity EQUALS the
 /// full-bore value (hydraulic radius is identical, R = D/4), and between half-
 /// full and ~0.8 it is slightly higher, so a pipe that passes at full bore
 /// self-cleanses at the design fill level.
@@ -250,7 +264,8 @@ DrainageSizingResult sizeForFlow({
     hydraulicRadius: Length(selected.meters / 4.0),
     slope: slope,
   );
-  final bool selfCleansing = vFull.metersPerSecond >= 0.6;
+  final bool selfCleansing =
+      vFull.metersPerSecond >= kSelfCleansingVelocityMps;
 
   return DrainageSizingResult(
     diameter: selected,

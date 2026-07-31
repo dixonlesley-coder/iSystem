@@ -12,7 +12,6 @@ library;
 
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
@@ -32,13 +31,18 @@ import '../../store/project_store.dart';
 import '../../store/network_store.dart';
 import '../../store/sizing_store.dart';
 import '../../store/solve_store.dart';
-import '../inspector/project_panel.dart' show kDrawServices, runExportGuarded;
+import '../inspector/project_panel.dart'
+    show kDrawServices, pickExportSave, runExportGuarded;
 import '../strings/app_strings.dart';
 
 /// The title-block heading for the active system [focus] — a per-service riser
 /// title (Indonesian air-bersih convention) when one system is filtered, else
 /// the generic mechanical single-line heading. ASCII-only (renders in PDF/DXF).
-String _diagramTitle(ServiceType? focus) {
+///
+/// I2 — PUBLIC so the one-folder submittal package renders its bundled riser
+/// PDF **and** DXF under the exact heading the standalone riser exports use
+/// (one title source: the two formats can never disagree).
+String riserDiagramTitle(ServiceType? focus) {
   if (focus == null) return 'MECHANICAL SINGLE-LINE DIAGRAM';
   return switch (focus) {
     ServiceType.coldWater => 'DIAGRAM SISTEM AIR BERSIH',
@@ -218,22 +222,19 @@ Future<void> exportMechanicalRiserPdf(WidgetRef ref, ServiceType? focus) =>
         final bytes = sldSheetToPdf(
           sheet: sheet,
           title: 'iSystem mechanical single-line',
-          diagramTitle: _diagramTitle(focus),
+          diagramTitle: riserDiagramTitle(focus),
           chrome: _riserChrome(ref, index: 1, total: 1),
           // N2: the live project name stamps the title-block PROJECT row
           // (no more 'Untitled project' on the flagship riser sheet).
           projectName: project.name.isEmpty ? null : project.name,
         );
         final base = project.name.isEmpty ? 'mechanical' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
               StringKey.exportTitleSldPdf),
-          fileName: '$base-riser-sld.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+            fileName: '$base-riser-sld.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -250,7 +251,7 @@ Future<void> exportMechanicalRiserDxf(WidgetRef ref, ServiceType? focus) =>
         final project = ref.read(projectControllerProvider);
         final dxf = sldSheetToDxf(
           sheet: sheet,
-          diagramTitle: _diagramTitle(focus),
+          diagramTitle: riserDiagramTitle(focus),
           chrome: _riserChrome(ref, index: 1, total: 1),
           // N2: the live project name stamps the title-block PROJECT row.
           projectName: project.name.isEmpty ? null : project.name,
@@ -258,15 +259,12 @@ Future<void> exportMechanicalRiserDxf(WidgetRef ref, ServiceType? focus) =>
           layers: SldDxfLayers.mechanical,
         );
         final base = project.name.isEmpty ? 'mechanical' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
               StringKey.exportTitleSldDxf),
-          fileName: '$base-riser-sld.dxf',
-          type: FileType.custom,
-          allowedExtensions: const ['dxf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.dxf') ? path : '$path.dxf';
+            fileName: '$base-riser-sld.dxf',
+            ext: 'dxf');
+        if (full == null) return false;
         await File(full).writeAsString(dxf);
         return true;
       },
@@ -306,21 +304,18 @@ Future<void> exportMechanicalRiserSetPdf(
         final bytes = electricalSldSheetsToPdf(
           sheets: [for (final f in foci) buildLiveRiserSheet(ref, f)],
           title: 'iSystem mechanical riser drawing set',
-          diagramTitles: [for (final f in foci) _diagramTitle(f)],
+          diagramTitles: [for (final f in foci) riserDiagramTitle(f)],
           chrome: _riserChrome(ref, index: 1, total: foci.length),
           projectName:
               project.name.isEmpty ? 'Untitled project' : project.name,
         );
         final base = project.name.isEmpty ? 'mechanical' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
               StringKey.exportTitleRiserSetPdf),
-          fileName: '$base-riser-set.pdf',
-          type: FileType.custom,
-          allowedExtensions: const ['pdf'],
-        );
-        if (path == null) return false;
-        final full = path.endsWith('.pdf') ? path : '$path.pdf';
+            fileName: '$base-riser-set.pdf',
+            ext: 'pdf');
+        if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
       },
@@ -340,14 +335,14 @@ Future<void> exportMechanicalRiserSetDxf(
         final foci = _riserSetFoci(ref);
         final project = ref.read(projectControllerProvider);
         final base = project.name.isEmpty ? 'mechanical' : project.name;
-        final path = await FilePicker.saveFile(
-          dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleRiserSetDxf),
-          fileName: '$base-riser-set.dxf',
-          type: FileType.custom,
-          allowedExtensions: const ['dxf'],
-        );
+        final path = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleRiserSetDxf),
+            fileName: '$base-riser-set.dxf',
+            ext: 'dxf');
         if (path == null) return false;
+        // The picked path is the SERIES base name; each sheet writes beside it
+        // with its system suffix, so strip the normalized extension back off.
         final stem =
             path.endsWith('.dxf') ? path.substring(0, path.length - 4) : path;
         for (var i = 0; i < foci.length; i++) {
@@ -355,7 +350,7 @@ Future<void> exportMechanicalRiserSetDxf(
           final code = f == null ? 'ALL' : riserServiceCode(f);
           final dxf = sldSheetToDxf(
             sheet: buildLiveRiserSheet(ref, f),
-            diagramTitle: _diagramTitle(f),
+            diagramTitle: riserDiagramTitle(f),
             chrome: _riserChrome(ref, index: i + 1, total: foci.length),
             // N2: the live project name on every sheet of the set.
             projectName: project.name.isEmpty ? null : project.name,

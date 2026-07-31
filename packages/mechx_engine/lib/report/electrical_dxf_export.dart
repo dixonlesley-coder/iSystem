@@ -290,11 +290,16 @@ String electricalSldToDxf({
           : buildElectricalSld(project: project!, result: result!));
 
   // Essential prims are drawn ACI red (1); source MV-chain blue (5); normal
-  // inherits the layer colour (null). Detail sheet is all-normal ⇒ unchanged.
+  // inherits the layer colour (null). Phase-bearing schedule cells carry the
+  // Indonesian R/S/T = red/yellow/blue CAD convention (ACI 1 / 2 / 5 — yellow
+  // reads on the CAD model-space background; the PDF prints it as dark amber).
   int? colorFor(SldRole r) => switch (r) {
         SldRole.normal => null,
         SldRole.essential => 1,
         SldRole.source => 5,
+        SldRole.phaseR => 1,
+        SldRole.phaseS => 2,
+        SldRole.phaseT => 5,
       };
 
   // Class-layer routing (within the active [layers] namespace): an explicit

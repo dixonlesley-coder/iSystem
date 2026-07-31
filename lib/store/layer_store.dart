@@ -28,6 +28,8 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 
+import 'network_store.dart' show networkControllerProvider;
+
 /// A design discipline shown as a layer on the unified Layout canvas. PLUMBING
 /// is one bucket for all pipework (water + sanitary + storm); FIRE / HVAC /
 /// ELECTRICAL are their own disciplines.
@@ -88,11 +90,36 @@ final activeDisciplineProvider =
 );
 
 class ActiveDisciplineController extends Notifier<DisciplineLayer> {
+  /// E3 — the draw SERVICE each mechanical layer was last drawing with, so a
+  /// round-trip through another discipline doesn't silently reset Exhaust to
+  /// Supply. Transient session state (never persisted): a reopened project
+  /// starts from each layer's first service, exactly as before.
+  final Map<DisciplineLayer, ServiceType> _lastService = {};
+
   @override
-  DisciplineLayer build() => DisciplineLayer.plumbing;
+  DisciplineLayer build() {
+    _lastService.clear();
+    return DisciplineLayer.plumbing;
+  }
+
+  /// The service [layer] should draw with when it becomes active: the one it
+  /// was last drawing with (if still one of its own services), else its first.
+  /// Null for a layer with no `ServiceType` services (electrical).
+  ServiceType? rememberedService(DisciplineLayer layer) {
+    final scoped = servicesFor(layer);
+    if (scoped.isEmpty) return null;
+    final last = _lastService[layer];
+    return (last != null && scoped.contains(last)) ? last : scoped.first;
+  }
 
   void set(DisciplineLayer layer) {
     if (state == layer) return;
+    final previous = state;
+    // E3: bank the OUTGOING layer's current draw service before switching.
+    final drawing = ref.read(networkControllerProvider).service;
+    if (servicesFor(previous).contains(drawing)) {
+      _lastService[previous] = drawing;
+    }
     state = layer;
     // The active layer is always visible — you can't edit a hidden layer.
     final vis = ref.read(layerVisibilityProvider);
@@ -101,6 +128,17 @@ class ActiveDisciplineController extends Notifier<DisciplineLayer> {
     }
     // F1: the layer you now EDIT can't remain a locked reference layer.
     ref.read(lockedDisciplinesProvider.notifier).unlock(layer);
+    // J5: an isolate belongs to the layer whose control raised it — park the
+    // outgoing layer's hidden services and restore the incoming layer's, so a
+    // filter can never keep applying while its funnel is off-screen.
+    ref.read(hiddenServicesProvider.notifier).parkOnLayerSwitch(previous, layer);
+    // E3: restore the incoming layer's draw service. Doing it HERE (rather than
+    // leaving the inspector's out-of-scope fallback to fire) means the fallback
+    // never sees an out-of-scope service, so it never resets to `scoped.first`.
+    final next = rememberedService(layer);
+    if (next != null && ref.read(networkControllerProvider).service != next) {
+      ref.read(networkControllerProvider.notifier).setService(next);
+    }
   }
 }
 
@@ -186,8 +224,17 @@ final hiddenServicesProvider =
 );
 
 class HiddenServicesController extends Notifier<Set<ServiceType>> {
+  /// J5 — each layer's PARKED isolate: the services it had hidden when it
+  /// stopped being the active layer. Restored verbatim when that layer becomes
+  /// active again, so an isolate is never lost — but never applies while its
+  /// funnel (which only renders for the active layer) is off-screen either.
+  final Map<DisciplineLayer, Set<ServiceType>> _parked = {};
+
   @override
-  Set<ServiceType> build() => const {};
+  Set<ServiceType> build() {
+    _parked.clear();
+    return const {};
+  }
 
   bool isHidden(ServiceType s) => state.contains(s);
 
@@ -196,6 +243,40 @@ class HiddenServicesController extends Notifier<Set<ServiceType>> {
       state = {...state}..remove(s);
     } else {
       state = {...state, s};
+    }
+  }
+
+  /// The services [layer] currently has parked (empty when it has none) —
+  /// exposed so a caller can tell "no isolate" from "an isolate waiting".
+  Set<ServiceType> parkedFor(DisciplineLayer layer) =>
+      _parked[layer] ?? const {};
+
+  /// J5 — move the isolate with its layer: park every hidden service belonging
+  /// to [from] (they stop filtering the moment their control disappears) and
+  /// restore any [to] had parked earlier (AUTO-RESTORE, so switching away and
+  /// back is a round trip, not a silent loss of the drafter's isolate).
+  ///
+  /// Services that belong to neither layer are left exactly as they are.
+  void parkOnLayerSwitch(DisciplineLayer from, DisciplineLayer to) {
+    if (from == to) return;
+    final fromServices = servicesFor(from).toSet();
+    final parked = {
+      for (final s in state)
+        if (fromServices.contains(s)) s,
+    };
+    if (parked.isEmpty) {
+      _parked.remove(from);
+    } else {
+      _parked[from] = parked;
+    }
+    final restored = _parked.remove(to) ?? const <ServiceType>{};
+    final next = {
+      for (final s in state)
+        if (!fromServices.contains(s)) s,
+      ...restored,
+    };
+    if (next.length != state.length || !next.containsAll(state)) {
+      state = next;
     }
   }
 }

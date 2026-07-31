@@ -68,7 +68,7 @@ class _LayerSwitcherState extends ConsumerState<LayerSwitcher> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          for (final layer in DisciplineLayer.values)
+          for (final layer in DisciplineLayer.values) ...[
             _LayerSegment(
               layer: layer,
               active: layer == active,
@@ -78,19 +78,25 @@ class _LayerSwitcherState extends ConsumerState<LayerSwitcher> {
               onToggleVisible: () => visCtrl.toggle(layer),
               onToggleLock: () => lockCtrl.toggle(layer),
             ),
-          if (canFilter) ...[
-            const SizedBox(width: MechXSpacing.xxs),
-            _ServiceFilterToggle(
-              open: _filterOpen,
-              onTap: () => setState(() => _filterOpen = !_filterOpen),
-            ),
-            if (_filterOpen)
-              for (final s in activeServices)
-                _ServiceChip(
-                  service: s,
-                  hidden: hidden.contains(s),
-                  onTap: () => hideCtrl.toggle(s),
-                ),
+            // J5 — the funnel filters the ACTIVE layer's services, so it renders
+            // BESIDE that layer's segment. It used to trail the whole row (after
+            // Electrical), which read as an electrical control while it was
+            // filtering Plumbing.
+            if (canFilter && layer == active) ...[
+              const SizedBox(width: MechXSpacing.xxs),
+              _ServiceFilterToggle(
+                open: _filterOpen,
+                onTap: () => setState(() => _filterOpen = !_filterOpen),
+              ),
+              if (_filterOpen)
+                for (final s in activeServices)
+                  _ServiceChip(
+                    service: s,
+                    hidden: hidden.contains(s),
+                    onTap: () => hideCtrl.toggle(s),
+                  ),
+              const SizedBox(width: MechXSpacing.xxs),
+            ],
           ],
         ],
       ),

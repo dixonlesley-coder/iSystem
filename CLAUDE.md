@@ -292,6 +292,53 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Known gaps / TODO (see decisions log for detail)
 
+- **Workflow-friction review (2026-07-30) — `WORKFLOW-FRICTION-REVIEW.md` (root),
+  a post-campaign review of HOW THE WORK IS DONE — is COMPLETE: all four waves
+  LANDED 2026-07-31** (three ultracode batches, 11 agents + orchestrator seams —
+  see the §15 rows and the doc's status note). Four parallel lenses (first-project
+  walkthrough / daily grind / mistakes+the same-day audit surfaces /
+  goldens-as-images + cross-workspace), 69 raw findings adversarially verified to
+  **56 confirmed / 13 adjusted / 0 refuted**, 10 themes (A–J), all fixed or
+  dispositioned. Headlines now IN the product: Review Locate is a real navigation
+  primitive (section + centring + layer/visibility/lock restore + tagged instance
+  links + clickable compliance rows); the riser cross-surface contract holds (far
+  node on the destination floor's sheet, diagram-only elevation drags,
+  stable-identity riser/equipment tags); the two data-destroyers are gone
+  (`syncMepEquipment` parks + narrates + re-adopts; floor delete confirms with a
+  count and takes its drawn work in one structural undo step); the six
+  drainage-fall sites read the real slope; calibration/typing/stepper honesty;
+  MountingHeights + fixture typing are first-class inputs; one remembered export
+  folder + the complete submittal set; sticky electrical canvas + summary +
+  legend + shared minimap; heatmap corridor mask; per-layer service memory;
+  paste-to-floors. Residuals/dispositions are in the doc's status note.
+
+- **Whole-product audit (2026-07-30) — `MODULE-AUDIT-REVIEW.md` (root) is the CURRENT
+  plan of record**: a four-workstream parallel audit (every mechanical engine module
+  probe-confirmed read-only; reports/exports/persistence; the 16-artifact export
+  harness + rasterized-sheet eyeballing; a complete 3-storey/7-board/38-way electrical
+  design driven through the public engine API and committed as
+  `packages/mechx_engine/test/whole_building_electrical_design_test.dart`, 52 tests
+  with 8 findings pinned as documentation tests). 38 consolidated findings in 4 themes,
+  sequenced into waves A (wrong verdicts + lost sizing flags: PRV zoner datum mismatch,
+  equal-friction velocity cap, upfeed PASS-by-construction, N−1 return grilles…),
+  B (the issued electrical deliverable: per-circuit kA tokens, containment one-source,
+  reports on the combined warning surface, BOM CSV material/override columns, the
+  selectivity floor's cable-inflation trade-off, fire-pump protection), C (platform
+  integrity: undo-cap phantom entries, un-awaited autosave write…), D (dead-feature
+  policy: operating point / detailed cooling / multi-zone / dark thresholds — wire or
+  remove). The bundled sample's fire-pump ADS defect is already FIXED (6 mm² pin +
+  `test/sample_project_health_test.dart` guarding zero error-severity findings).
+  **ALL FOUR WAVES HAVE SINCE LANDED the same day** (two ultracode batches — see the
+  two §15 rows and the doc's status note): zones compliant by construction, equal
+  friction velocity-capped, upfeed verdicts 'held by design', all N return grilles
+  placed, per-circuit kA + containment-sourced conduit tokens + real core counts on
+  the schedule, reports on the combined warning surface, the BOM CSV on the engine
+  takeoff format, phantom undo drop-and-retry, autosave awaited, the E3/E4 floor
+  redesigned device-only + ampacity-capped (see the Sizing-engine invariant), and
+  wave-D wired real (drainage slope / HW temps / AC-load basis as Building-page
+  design inputs; dead multi-zone settings dropped). Residuals are in the doc's
+  status note; the operating-point module is fixed but deliberately still unwired.
+
 - **Design-craft campaign (2026-07-27) — LANDED** (`DESIGN-CRAFT-REVIEW.md`, root): a
   design-skills pass over EVERY page (incl. fresh captures of the never-golden-covered Building
   + Preferences via the committed `test/design_captures_test.dart` → `test/goldens_design/`,
@@ -1226,6 +1273,39 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (25 A feeder vs a 27.1 A / 24.3%-imbalance board in the whole-building sim that found it) — surfaced
   on the parent's feeder way (locatable), fanning into Review via the generic `electrical:<code>`
   kind. Goldens 05/08/11 re-captured (the sample project is an LV service ⇒ head-only spine).
+  **R/S/T phase colour-coding + a legibility-derived LOD threshold then landed (user-reported):**
+  the board schedule was monotone, so `SldRole` gained `phaseR/phaseS/phaseT` — the R/S/T column
+  headers, per-way line-current cells and TOTAL footer totals carry their phase role, and every
+  renderer colours them (canvas `paintSldPrims` → the `kRailR/S/T` rails, which MOVED into
+  `sld_sheet_painter.dart` as the ONE phase palette shared with the summary-card cells + micro
+  bar; PDF → matching print inks with S as dark amber; DXF → ACI 1/2/5). A drawing legend, NOT
+  the PUIL/IEC conductor colours — no wiring-colour claim. And `kLodThreshold` went 0.72 → 0.95,
+  now derived from legibility (the 7.5-px schedule rows arrive at ≥ ~7 px on screen) instead of
+  ported — below it the summary card keeps the glanceable stats; `kMicroThreshold` unchanged
+  (it gates interactivity, not readability). Goldens 05/11 re-captured.
+  **`USABILITY-REVIEW.md` (root) is the CURRENT usability plan of record** — an all-pages review
+  (every golden read as an image, findings code-grounded): 17 findings in three waves — A honesty
+  + electrical feel (the `0.0 m ×5` uncalibrated-length rows, the overpainting feeder labels at
+  one outlet [`…3ph h`], heatmap basis captions, the bare 'BOM' heading), B label/overflow
+  robustness (chip-row overflow, live riser label collisions, LOD hysteresis), C chrome polish.
+  The phase-colour + LOD items above are its landed Wave 0. **ALL THREE WAVES HAVE SINCE LANDED**
+  (2026-07-30, one 7-agent parallel batch — see the §15 row): staggered feeder labels (pure
+  `feederLabelAnchors`, single-feeder byte-identical), the motion-gated LOD crossfade (visual-only,
+  `panelLodFor` stays pure), the off-Layout zoom pill omitted, width-budgeted riser fan-out labels,
+  the fading riser chip strip, a deterministic live-riser label collision pass that never drops a
+  tag (seeded with gutter/fan-out/callout rects), honest `unmeasured ×N` BOM rows, basis captions
+  on both pressure surfaces, the gated empty-state caption, `Electrical BOM` naming, the balanced
+  Review stat row, grouped `×N` issue rows with per-sheet Locate links, export-group counts, and
+  the Preferences SOFTWARE UPDATE section; B-1 was already compliant. Four deviations recorded in
+  the review doc's status note.
+  **The phase-imbalance warning then became actionable-only (user-reported):** a board with two
+  3φ feeders and two EQUAL 1φ lighting ways was told to "Redistribute single-phase circuits" at
+  22.3 % — impossible, since two equal ways cannot load three lines evenly and the ENGINE (not the
+  engineer) already placed them as evenly as they go. `phase-imbalance` is now gated on the
+  imbalance being genuinely REDUCIBLE against an achievable floor (see the Sizing-engine invariant),
+  and when it does fire it names the real action ('Unpin the N ways pinned to a phase …') plus the
+  figure that is achievable. Judge-only, no sizing change; goldens byte-identical (the sample
+  project's boards sit at 12 %, under the limit).
   **Both recorded follow-ups HAVE SINCE LANDED (ultracode multi-agent batch):** (1) **riser
   feeder-label collision pass** — `buildElectricalRiser`'s feeder annotations now go through a
   private two-pass placer (`_RiserLabelPlacer`, the mech-riser B5 idiom: per-size char-advance
@@ -1429,13 +1509,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   unchanged when absent). No `.mechx` change — providers derive from existing state.
 - **Air-velocity warnings (`sizing/air_velocity.dart` + `airVelocityChecksProvider`)**:
   a JUDGE-ONLY layer over the manually routed air network — it never resizes
-  anything. Duct edges use the live `EdgeSizing.velocity`; air terminals use
-  `faceVelocityFor(airflow, grossFaceArea)` from the node's chosen
-  `faceWidthMm`/`faceHeightMm`. Bands are plain constants (supply duct 3–7 m/s,
-  supply face 1.0–3.0, return/exhaust face 1.0–4.0) — general practice, NOT an SNI
-  clause (`// VERIFY`). A non-positive velocity or a terminal with no chosen face is
-  reported OK (nothing to warn about), so a project with no manual air sizing is
-  byte-identical (no badges, goldens unchanged). A separate `airUnsizedProvider`
+  anything, and it judges ONLY manually sized elements: duct edges **with a
+  chosen `sizeOverride`** (an auto-sized duct is the sizing engine's own pick —
+  re-judging it warned about the unavoidable round-up to the smallest standard
+  size, an unactionable badge, so it is excluded entirely) and air terminals
+  with a chosen `faceWidthMm`/`faceHeightMm` (via `faceVelocityFor`). A
+  manually-sized return/exhaust duct is judged against the shared EXTRACT band
+  (`checkExtractDuctVelocity`, 2–6 m/s), other air services against the supply
+  band. Bands are plain constants (supply duct 3–7 m/s, extract duct 2–6,
+  supply face 1.0–3.0, return/exhaust face 1.0–4.0) — general practice, NOT an
+  SNI clause (`// VERIFY`). A non-positive velocity or a terminal with no chosen
+  face is reported OK (nothing to warn about), so a project with no manual air
+  sizing is byte-identical (no badges, goldens unchanged). A separate `airUnsizedProvider`
   flags air ducts/terminals that carry air but have no manual size/face yet (a
   muted advisory marker, distinct from the orange out-of-band warning, which
   always takes precedence).
@@ -1495,6 +1580,60 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   ADS nor an RCD (e.g. an RCD-exempt life-safety run). TT finals now carry
   `rcd.required = true`, so existing TT invariants (`zsOhm`/`adsOk` null, no
   `ads-disconnection`) are preserved and they no longer warn.
+- **Phase imbalance is reported only when REDUCIBLE (`electrical/compute.dart`)**:
+  the ENGINE assigns phases (`balancePhases` already spreads every unpinned
+  single-phase way as evenly as it can), so `phase-imbalance` is raised only when a
+  different assignment would actually help — over `kPhaseImbalanceWarnPercent`
+  (15 %) AND saving more than `kPhaseImbalanceReducibleMarginPercent` (1.0 pp)
+  against the achievable floor from pure `minimumPhaseSpreadA(currents)` (exact /
+  exhaustive to `kPhaseExactSearchMaxWays` = 10 ways, symmetry-reduced; the
+  balancer's own pin-free re-run above that). Three-phase ways are excluded from
+  that floor (they load all three lines equally ⇒ they cannot change the spread)
+  and PINS are released (unpinning is a real action, so a pin-forced imbalance IS
+  reducible). Two equal 1φ ways can never load three lines evenly — that imbalance
+  is inherent, and the engineer is never told to "redistribute" what no
+  re-assignment can fix. The verdict rides `PhaseBalanceResult.imbalanceReducible`
+  (additive, default false; also gates the `feeder-below-fed-demand` message's
+  "rebalance" half). JUDGE-ONLY — the balance, incomer, busbar and demand current
+  are untouched, and the percentage still prints on the schedule TOTAL footer, the
+  inspector and both reports; only the unactionable WARNING (and, since it reads
+  that warning, the canvas card's `imbalance NN%` badge) is dropped.
+- **Feeder selectivity floor (`electrical/{sizing,compute}.dart`) — DEVICE-ONLY,
+  AMPACITY-CAPPED** (redesigned by the MODULE-AUDIT E3/E4 wave; replaces the
+  earlier cable-inflating floor): the feeder CABLE always sizes on the LOAD (a
+  floor-free `loadBreaker` pick + the existing vd/minimum rules — copper is
+  never inflated for discrimination), then the DEVICE floors to the first rung
+  ≥ `selectivityRatio (1.6) ×` the fed board's incomer rating, CAPPED at the
+  largest rung the load-sized cable's derated Iz protects (In ≤ Iz is
+  inviolable; `selectBreaker`'s `maxRatingA` cap runs AFTER `minRatingA`).
+  `computeSystem` stays two-pass (empty floors ⇒ the pass-1 object,
+  byte-identical); `ElectricalSystemResult.feederFloorsApplied` records feeders
+  that reached the FULL 1.6× target, and `faultStudy` suppresses
+  `selectivity-partial` for exactly those (the engine's own deliberate
+  trade-off); a CAP-LIMITED floor is not listed, so its residual
+  non-/partial-selectivity is honestly reported. Overrides bypass the floor
+  entirely. The 1.6× basis stays `// VERIFY notAnSniClause`. Related policies
+  from the same wave: a final `socket` way sizes its own device+cable on the
+  UNdiversified load (aggregation keeps the demand factor, `// VERIFY` uniform
+  stop-kontak practice); a `lifeSafety` motor/pump way carries an INFO
+  `fire-pump-protection` note; an irreducible over-threshold imbalance carries
+  an INFO `phase-imbalance-inherent` note; a feeder's voltage base (Ib and
+  Vd%) is the FED panel's.
+- **ONE electrical warning surface (`electricalAllWarningsProvider`)**: the
+  fault study's warnings (`non-selective` / `selectivity-partial` /
+  `breaking-capacity-inadequate` / `busbar-withstand-inadequate` /
+  `tt-no-earth-fault-protection`) used to be computed and shown NOWHERE. Every
+  consumer — the Review fan-in (§5b `electrical:<code>` kinds), the compliance
+  roll-up, the electrical drawer count/list, the Layout electrical error dot —
+  now reads the combined provider (core `electricalResultProvider.warnings`
+  first, then `electricalAdvancedProvider.fault.warnings`, deduped on
+  (code, panelId, circuitId) keeping the core occurrence). Never read either
+  source's warnings directly in a UI/store consumer. Related honesty tiers:
+  `harmonics-neutral-oversize` is INFO (Fold 2 already compensated — a sizing
+  note, not a defect); a BLANK uncalibrated sheet is an info advisory (kind
+  unchanged `sheet-uncalibrated:<id>`; edge-bearing stays critical), and the
+  compliance calibration row, when passing, still counts blank uncalibrated
+  sheets ('N blank uncalibrated (advisory)') instead of claiming all-calibrated.
 - **Motor FLC includes efficiency (`electrical/compute.dart`)**: a hand-entered
   motor's `motorKw` is SHAFT power; the `motorLike` branch divides it by a file-level
   `_assumedMotorEfficiency = 0.88` (`// VERIFY` `secondarySource`, deliberately NOT in

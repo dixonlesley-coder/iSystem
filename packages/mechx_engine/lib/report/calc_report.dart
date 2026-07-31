@@ -96,6 +96,14 @@ class CalcReportData {
   /// caller that does not populate it gets byte-identical legacy output.
   final List<Revision> revisions;
 
+  /// F8 — the project's [MountingHeights] (ceiling drop / fixture height). They
+  /// shape EVERY vertical length and static lift in this report (§10 node
+  /// elevations are role-aware), so once they are a real per-project input they
+  /// must be stated in the Design Basis register like any other assumption.
+  /// Null ⇒ the two rows are omitted, so a caller that does not pass them gets
+  /// byte-identical legacy output.
+  final MountingHeights? mounting;
+
   const CalcReportData({
     required this.projectName,
     required this.date,
@@ -126,6 +134,7 @@ class CalcReportData {
     this.runSchedule = const [],
     this.occupancy,
     this.revisions = const [],
+    this.mounting,
   });
 }
 
@@ -159,6 +168,14 @@ class RunScheduleRow {
   /// Physical length (m) from the §10 geometry.
   final double lengthM;
 
+  /// M16 — true when this segment is a drainage STACK the sizer raised to match
+  /// the largest branch entering it ([EdgeSizing.stackRaisedForBranch]), i.e.
+  /// its size came from the stack≥branch clamp rather than from its own DFU
+  /// load. Surfaced as the schedule's footnote so a reviewer checking "why DN75
+  /// not DN65?" reads the real basis. Defaults false ⇒ a schedule with no
+  /// raised stack renders byte-identically.
+  final bool stackRaisedForBranch;
+
   const RunScheduleRow({
     required this.service,
     required this.kind,
@@ -168,6 +185,7 @@ class RunScheduleRow {
     required this.flowLps,
     required this.velocityMs,
     required this.lengthM,
+    this.stackRaisedForBranch = false,
   });
 }
 
@@ -224,6 +242,9 @@ List<RunScheduleRow> buildRunSchedule({
       flowLps: s.flow.inLitersPerSecond,
       velocityMs: s.velocity.metersPerSecond,
       lengthM: edgeLengths[e.id]?.meters ?? 0.0,
+      // M16 — carry the sizer's own "raised to match a branch" flag through to
+      // the schedule (it had no consumer anywhere before).
+      stackRaisedForBranch: s.stackRaisedForBranch,
     ));
   }
   return rows;
@@ -255,6 +276,31 @@ String _service(ServiceType type, ReportStrings s) => switch (type) {
       ServiceType.fireHydrant => s(RptStringKey.svcHydrant),
     };
 
+/// F8 — the two mounting-height Design-Basis row labels, resolved against the
+/// report locale. Deliberately inline here rather than in `report_strings.dart`:
+/// they are the only two report literals this change adds, and keeping them in
+/// the file that renders them avoids touching the shared string tables. (A
+/// follow-up may migrate them to [RptStringKey] like every other row label.)
+String _mountingLabel(ReportStrings s, {required bool ceilingDrop}) =>
+    switch ((s.locale, ceilingDrop)) {
+      (ReportLocale.id, true) => 'Turun plafon:',
+      (ReportLocale.id, false) => 'Tinggi sambungan fikstur:',
+      (_, true) => 'Ceiling drop:',
+      (_, false) => 'Fixture connection height:',
+    };
+
+/// The parenthetical explaining what a mounting height drives (see
+/// [_mountingLabel] for why these live here).
+String _mountingNote(ReportStrings s, {required bool ceilingDrop}) =>
+    switch ((s.locale, ceilingDrop)) {
+      (ReportLocale.id, true) =>
+        '(pipa induk horizontal digantung sejauh ini di bawah pelat di atasnya)',
+      (ReportLocale.id, false) =>
+        '(sambungan fikstur di atas permukaan lantainya sendiri)',
+      (_, true) => '(horizontal mains hang this far below the slab above)',
+      (_, false) => '(fixture connection above its own floor surface)',
+    };
+
 /// The mechanical **Design Basis / Inputs & Assumptions** register as a
 /// key-value block — a bulleted echo of the actual project inputs (building,
 /// occupancy, feed, residual target, fire systems, rainfall) so the report
@@ -274,6 +320,21 @@ RptKeyValue mechanicalDesignBasisBlock(CalcReportData d,
         'height': d.building.totalHeight.meters.toStringAsFixed(2),
       })
     ),
+    // F8 — the mounting-height assumptions behind every vertical length /
+    // static lift in this report. Omitted entirely when the caller passes none
+    // (legacy output byte-identical).
+    if (d.mounting != null) ...[
+      (
+        _mountingLabel(strings, ceilingDrop: true),
+        '**${d.mounting!.ceilingDrop.meters.toStringAsFixed(2)} m** '
+            '${_mountingNote(strings, ceilingDrop: true)}'
+      ),
+      (
+        _mountingLabel(strings, ceilingDrop: false),
+        '**${d.mounting!.fixtureHeight.meters.toStringAsFixed(2)} m** '
+            '${_mountingNote(strings, ceilingDrop: false)}'
+      ),
+    ],
     if (d.occupancy != null)
       (
         strings(RptStringKey.dbOccupancy),
@@ -521,9 +582,17 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               'minbar': ra.minOperatingPressure.inBar.toStringAsFixed(2),
               'fric': ra.branchLineFrictionHead.meters.toStringAsFixed(1),
               // I7 — localized off the boolean, not the engine's English getter.
-              'verdict': ra.meetsMinimumPressure
-                  ? strings(RptStringKey.fireRemoteAreaVerdictOk)
-                  : strings(RptStringKey.fireRemoteAreaVerdictUnder),
+              // M8 — the informative flag is `governedByMinimumPressure`, NOT
+              // `meetsMinimumPressure` (true by construction now that the floor
+              // is applied by UPLIFTING the head flow): the head passes, and
+              // when the floor governed, the row says so. `meetsMinimum` is
+              // kept only as the degenerate-input guard the engine's own
+              // `verdict` getter uses, so the two can never disagree.
+              'verdict': ra.governedByMinimumPressure
+                  ? strings(RptStringKey.fireRemoteAreaVerdictGoverned)
+                  : ra.meetsMinimumPressure
+                      ? strings(RptStringKey.fireRemoteAreaVerdictOk)
+                      : strings(RptStringKey.fireRemoteAreaVerdictUnder),
             })
           ),
         if (st != null)
@@ -737,6 +806,17 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
         ],
         mdSeparator: '|---|---|---|---|---:|---:|---:|---:|',
       ));
+    // M16: name the stacks whose size came from the stack≥branch clamp rather
+    // than their own DFU load. Only emitted when a row actually carries the
+    // flag, so a project with no raised stack is byte-identical.
+    final raised = [
+      for (final r in d.runSchedule)
+        if (r.stackRaisedForBranch) r.tag.isEmpty ? r.sizeLabel : r.tag,
+    ];
+    if (raised.isNotEmpty) {
+      blocks.add(RptNote(strings.format(
+          RptStringKey.runScheduleStackRaised, {'tags': raised.join(', ')})));
+    }
   }
 
   blocks

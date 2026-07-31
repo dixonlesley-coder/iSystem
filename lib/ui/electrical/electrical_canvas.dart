@@ -40,6 +40,7 @@
 /// this only reads its result records + drives the store's edit intents.
 library;
 
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
@@ -56,6 +57,7 @@ import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/app_state.dart';
+import '../../store/electrical_canvas_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/history_store.dart';
 import '../canvas/canvas_grid.dart';
@@ -72,9 +74,16 @@ import 'panel_geometry.dart';
 import 'sld_sheet_painter.dart';
 
 /// LOD threshold — at/above this zoom each panel shows its full internal
-/// schematic; below it, a compact summary card (PanelMaker `transform[2] >=
-/// 0.72`).
-const double kLodThreshold = 0.72;
+/// schematic; below it, a compact summary card.
+///
+/// Derived from LEGIBILITY, not ported: the board schedule's way rows are
+/// 7.5 world-px text, so at the old PanelMaker boundary (0.72) the schedule
+/// appeared at ~5.4 screen-px — rendered but unreadable, the worst of both
+/// tiers (user-reported: tiny illegible schedules mid-zoom). At 0.95 the rows
+/// arrive at ~7.1 px, i.e. the detail tier appears once it can actually be
+/// read; below that the summary card (12-13 px headline figures) keeps the
+/// glanceable stats + phase cells.
+const double kLodThreshold = 0.95;
 
 /// The lower LOD boundary — below this zoom a panel collapses to the MICRO chip
 /// (identity + kW + phase bar). Chosen so the summary card's smallest text
@@ -110,6 +119,88 @@ Set<String> fedPanelIds(ElectricalProject project) => {
 /// card so it never eats the schedule's way-row tap targets).
 const double kOutletBandScreenPx = 26;
 
+/// How far above its anchor row a feeder label sits (screen px, pre-scale) — the
+/// legacy single-feeder rise, kept exactly so a board that feeds ONE sub-board
+/// draws its label where it always did.
+const double kFeederLabelRise = 7;
+
+/// The screen line height ONE feeder label occupies at scale 1.0.
+///
+/// The pill is a 9-px Roboto line (≈10.5 px tall) plus 4 px of padding ⇒ ≈14.5
+/// px; 16 leaves a visible gap. Both terms scale with the canvas, so the caller
+/// multiplies this by the live scale and the ratio (and therefore the guarantee
+/// that stacked labels cannot touch) holds at every zoom.
+const double kFeederLabelLineH = 16;
+
+/// One feeder label's geometry, in SCREEN space, as handed to
+/// [feederLabelAnchors]. Carries no text/colour — this is purely the placement
+/// input, so the anchor maths stays pure and testable.
+@immutable
+class FeederLabelSpec {
+  /// Stable unique key for this feeder way (the feeding circuit's id) — how the
+  /// returned anchors are addressed.
+  final String key;
+
+  /// The FED panel's id — the deterministic tiebreak when two feeders land on
+  /// the same child row.
+  final String childId;
+
+  /// The parent's outlet anchor. Every feeder leaves a board at the SAME point,
+  /// so this is normally identical across one call — which is exactly why the
+  /// labels have to be spread.
+  final Offset start;
+
+  /// This feeder's mid-X channel — the label's horizontal anchor.
+  final double midX;
+
+  /// The fed panel's incomer row — the primary sort key, so the stack reads in
+  /// the same order as the boards it labels.
+  final double childY;
+
+  const FeederLabelSpec({
+    required this.key,
+    required this.childId,
+    required this.start,
+    required this.midX,
+    required this.childY,
+  });
+}
+
+/// Anchor offsets for every feeder label leaving ONE parent board, keyed by
+/// [FeederLabelSpec.key].
+///
+/// Every feeder exits a board at the same outlet point, so anchoring each label
+/// at `start.dy - 7` made two near-identical labels overprint into garbage
+/// (user-reported: `... MCB 16A 3ph h` — the tail of the label underneath). The
+/// labels are stacked UPWARD from that row instead, one [lineHeight] apart, in
+/// child order (topmost child highest), so no two can overlap at any zoom — the
+/// vertical separation alone guarantees it, whatever the painter later does to
+/// each label's x (e.g. shifting it clear of the outlet dot).
+///
+/// Pure + deterministic: the input order is irrelevant (specs are sorted by
+/// child y, then child id), and a board feeding exactly ONE sub-board keeps the
+/// legacy anchor exactly.
+Map<String, Offset> feederLabelAnchors(
+  Iterable<FeederLabelSpec> feeders, {
+  required double lineHeight,
+}) {
+  final sorted = feeders.toList()
+    ..sort((a, b) {
+      final byRow = a.childY.compareTo(b.childY);
+      return byRow != 0 ? byRow : a.childId.compareTo(b.childId);
+    });
+  final n = sorted.length;
+  return {
+    for (var i = 0; i < n; i++)
+      sorted[i].key: Offset(
+        sorted[i].midX,
+        // The LAST (bottom-most) child keeps the legacy row; the ones above it
+        // step up a line each, so the single-feeder case is untouched.
+        sorted[i].start.dy - kFeederLabelRise - (n - 1 - i) * lineHeight,
+      ),
+  };
+}
+
 /// Diameter of the visual outlet dot; half of it overhangs the card's right
 /// edge (painted through the card Stack's `Clip.none`, while the HIT area stays
 /// wholly inside the card so no RenderBox rejects it).
@@ -134,12 +225,9 @@ double outletBandWidth(double cardWidth, double scale) => math.min(
 /// dead mid-detail tier); this is purely the focus/deep-zoom target.
 const double kBoardScheduleThreshold = 1.35;
 
-/// Indonesian R-S-T / N / PE rail colours (hard hex, ported verbatim).
-const Color kRailR = Color(0xFFC92A2A); // L1 / R / single-phase live
-const Color kRailS = Color(0xFFE8990C); // L2 / S
-const Color kRailT = Color(0xFF1971C2); // L3 / T
-const Color kRailN = Color(0xFF4DABF7); // neutral
-const Color kRailPE = Color(0xFF2F9E44); // protective earth
+// The Indonesian R-S-T / N / PE rail colours moved to `sld_sheet_painter.dart`
+// (kRailR/S/T/N/PE — re-exported by the import above) so the engine-sheet phase
+// roles and these widgets share ONE phase palette.
 
 /// A request from the canvas back to the host view.
 typedef PanelTap = void Function(String panelId);
@@ -205,6 +293,11 @@ class ElectricalCanvas extends ConsumerStatefulWidget {
 }
 
 class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
+  /// J1 — the local per-frame mirror of
+  /// [electricalCanvasViewProvider]`.transform`. The provider is the sticky
+  /// home (a workspace / tab hop destroys this State); this field is the fast
+  /// path the gesture + paint code reads, re-seeded in [initState] and
+  /// published on every change (the `schematic_view_store` idiom).
   ViewportTransform? _transform;
   Size _viewportSize = Size.zero;
 
@@ -213,9 +306,41 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   /// actually has content, and by ANY external transform set ([_setTransform]
   /// — a user zoom / pan, the fit button, or an explicit focus like
   /// [focusPanelSchedule]) so an explicit transform always wins and the
-  /// initial fit can never fight it.
+  /// initial fit can never fight it. J1: sticky for the SESSION (mirrored into
+  /// [electricalCanvasViewProvider]), so a hop away and back restores the view
+  /// rather than re-framing it.
   bool _didInitialFit = false;
   final FocusNode _focus = FocusNode(debugLabel: 'electrical-canvas');
+
+  @override
+  void initState() {
+    super.initState();
+    // J1 — restore the sticky viewport + selection from the transient store, so
+    // a workspace / tab hop and back lands exactly where the user left off.
+    final view = ref.read(electricalCanvasViewProvider);
+    _transform = view.transform;
+    _didInitialFit = view.didInitialFit;
+    _selectedPanels = view.selectedPanels;
+    final way = view.waySelection;
+    _selection =
+        way == null ? null : _CanvasSelection.circuit(way.panelId, way.circuitId);
+  }
+
+  ElectricalCanvasViewController get _view =>
+      ref.read(electricalCanvasViewProvider.notifier);
+
+  /// J1 — publish the local selection to the sticky store. Called only from
+  /// gesture / callback paths (never during build).
+  void _publishSelection() {
+    final sel = _selection;
+    if (sel != null) {
+      _view.selectWay(sel.panelId, sel.circuitId!);
+    } else if (_selectedPanels.isEmpty) {
+      _view.clearSelection();
+    } else {
+      _view.selectPanels(_selectedPanels);
+    }
+  }
 
   // Middle-button pan tracking.
   bool _panning = false;
@@ -256,6 +381,35 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   // null when no panel body drag is in flight.
   Map<String, Offset>? _panelDragWorld;
 
+  // ── D2 parity — arrow-nudge COALESCING (mirrors `layout_canvas`) ────────────
+  // Every arrow-key nudge used to `movePanels`, i.e. one `_commit` — so walking
+  // a board ten steps across the canvas ate ten of the 200-cap undo stack and
+  // needed ten Ctrl+Z presses, while a mouse DRAG of the same boards correctly
+  // collapses to one. A nudge BURST now snapshots once on its first key
+  // ([ElectricalProjectController.pushUndoSnapshot], the same call the body
+  // drag makes) and applies every further nudge with the non-recording
+  // [ElectricalProjectController.setPanelPosition], so the whole burst is ONE
+  // undo step. The burst closes on the idle timeout, on any non-arrow key, or
+  // on unmount. At rest the timer never exists ⇒ behaviour is byte-identical.
+  Timer? _nudgeIdleTimer;
+  bool _nudgeBurstOpen = false;
+
+  /// The project the burst's LAST nudge produced. If the live project is no
+  /// longer identical to it, some other edit (or an undo) landed between two
+  /// arrow keys, so the burst must not coalesce onto its now-stale snapshot.
+  ElectricalProject? _nudgeLastProject;
+
+  /// How long a nudge burst stays open after the last arrow key.
+  static const Duration _kNudgeIdleWindow = Duration(milliseconds: 800);
+
+  /// Close the current nudge burst so the next arrow key snapshots again.
+  void _endNudgeBurst() {
+    _nudgeIdleTimer?.cancel();
+    _nudgeIdleTimer = null;
+    _nudgeBurstOpen = false;
+    _nudgeLastProject = null;
+  }
+
   void _selectPanel(String id) {
     final shift = HardwareKeyboard.instance.isShiftPressed;
     setState(() {
@@ -268,12 +422,16 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         _selectedPanels = {id};
       }
     });
+    _publishSelection();
   }
 
-  void _selectCircuit(String panelId, String circuitId) => setState(() {
-        _selection = _CanvasSelection.circuit(panelId, circuitId);
-        _selectedPanels = const {};
-      });
+  void _selectCircuit(String panelId, String circuitId) {
+    setState(() {
+      _selection = _CanvasSelection.circuit(panelId, circuitId);
+      _selectedPanels = const {};
+    });
+    _publishSelection();
+  }
 
   void _clearSelection() {
     if (_selection != null || _selectedPanels.isNotEmpty) {
@@ -281,6 +439,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         _selection = null;
         _selectedPanels = const {};
       });
+      _publishSelection();
     }
   }
 
@@ -300,6 +459,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         _selectedPanels = {panelId};
         _selection = null;
       });
+      _publishSelection();
     }
     _panelDragWorld = {
       for (final id in group) id: positions[id] ?? Offset.zero,
@@ -457,11 +617,18 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     if (t != null) {
       _transform = t;
       _didInitialFit = true;
+      // J1 — publish the framing so a hop away and back restores it (and the
+      // one-shot stays consumed for the session). Deferred to after the frame:
+      // this runs inside `build`, and a provider must not be written then.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _view.setTransform(t);
+      });
     }
   }
 
   @override
   void dispose() {
+    _nudgeIdleTimer?.cancel();
     _focus.dispose();
     super.dispose();
   }
@@ -485,6 +652,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     // forfeits the pending one-shot initial fit: an explicit transform always
     // wins (E1).
     _didInitialFit = true;
+    // J1 — the sticky store always learns the explicit transform (even when it
+    // matches the local mirror, so the consumed one-shot is recorded too).
+    _view.setTransform(next);
     if (next == _transform) return;
     setState(() => _transform = next);
   }
@@ -682,6 +852,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       _selection = null;
       _selectedPanels = shift ? {..._selectedPanels, ...hit} : hit;
     });
+    _publishSelection();
   }
 
   void _onScaleStart(ScaleStartDetails details) => _lastScale = 1.0;
@@ -708,6 +879,14 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     // never let an editing keystroke mutate the drawing.
     if (isTextEntryFocused()) return KeyEventResult.ignored;
     final key = event.logicalKey;
+    // D2 parity — ANY non-arrow key ends an open nudge burst, so the burst can
+    // never outlive the edit it snapshotted (an undo, a delete, a selection
+    // change between two nudges must not fold into the same step).
+    final isArrowKey = key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown;
+    if (_nudgeBurstOpen && !isArrowKey) _endNudgeBurst();
     // Undo / redo route through the GLOBAL timeline (history_store), matching
     // the Layout canvas — so Ctrl+Z reverts the genuinely most-recent edit
     // across domains, never silently undoing another workspace's work.
@@ -724,12 +903,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       ref.read(historyProvider.notifier).redo();
       return KeyEventResult.handled;
     }
-    // D2: arrow keys nudge the selected panel(s) by one grid step, one undo step.
-    final isArrow = key == LogicalKeyboardKey.arrowLeft ||
-        key == LogicalKeyboardKey.arrowRight ||
-        key == LogicalKeyboardKey.arrowUp ||
-        key == LogicalKeyboardKey.arrowDown;
-    if (_selectedPanels.isNotEmpty && isArrow) {
+    // D2: arrow keys nudge the selected panel(s) by one grid step; a whole
+    // BURST of them is one undo step (see [_endNudgeBurst]).
+    if (_selectedPanels.isNotEmpty && isArrowKey) {
       final dx = key == LogicalKeyboardKey.arrowLeft
           ? -kGrid.toDouble()
           : key == LogicalKeyboardKey.arrowRight
@@ -751,7 +927,25 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               _snapGrid(positions[id]!.dy + dy),
             ),
       };
-      if (targets.isNotEmpty) _ctrl.movePanels(targets);
+      if (targets.isNotEmpty) {
+        // One undo step per BURST: snapshot only when the burst OPENS, then
+        // keep it open while the arrow keys keep coming. The burst also
+        // re-opens whenever the project is no longer the one our own last
+        // nudge produced (an undo, a delete, any other edit landed between
+        // two keys), so a coalesced step can never sit on a popped snapshot.
+        final continuing =
+            _nudgeBurstOpen && identical(_nudgeLastProject, project);
+        if (!continuing) {
+          _ctrl.pushUndoSnapshot();
+          _nudgeBurstOpen = true;
+        }
+        _nudgeIdleTimer?.cancel();
+        _nudgeIdleTimer = Timer(_kNudgeIdleWindow, _endNudgeBurst);
+        // Non-recording moves (the same intent the body drag uses per frame),
+        // so the burst's snapshot is the ONE undo entry.
+        targets.forEach((id, p) => _ctrl.setPanelPosition(id, p.dx, p.dy));
+        _nudgeLastProject = ref.read(electricalProjectProvider);
+      }
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.delete ||
@@ -760,6 +954,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       if (_selectedPanels.isNotEmpty) {
         _ctrl.deletePanels(_selectedPanels);
         setState(() => _selectedPanels = const {});
+        _publishSelection();
         return KeyEventResult.handled;
       }
       final sel = _selection;
@@ -770,6 +965,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
           _ctrl.deletePanel(sel.panelId);
         }
         setState(() => _selection = null);
+        _publishSelection();
         return KeyEventResult.handled;
       }
     }
@@ -1430,6 +1626,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         _selectedPanels = const {};
       }
     });
+    _publishSelection();
   }
 
   /// Zoom back OUT to the summary card for [panelId] (I7) — frame it just below
@@ -1539,6 +1736,17 @@ class _CanvasPainter extends CustomPainter {
     // like the CAD building single-line). The whole canvas flows left-to-right:
     // bus on the left, loads + feeders branch right, sub-panels step rightward.
     for (final p in project.panels) {
+      // Every feeder leaves this board at the SAME outlet point, so its labels
+      // are collected here and anchored TOGETHER (feederLabelAnchors) after the
+      // runs are drawn — two sub-boards fed from one parent used to print two
+      // near-identical labels on one row, which read as garbage.
+      final labels = <
+          ({
+            FeederLabelSpec spec,
+            String text,
+            Color colour,
+            double minLeftX,
+          })>[];
       for (final c in p.circuits) {
         final fed = c.feedsPanelId;
         if (fed == null) continue;
@@ -1567,15 +1775,37 @@ class _CanvasPainter extends CustomPainter {
             .firstOrNull;
         if (cr != null) {
           final poles = cr.threePhase ? 3 : 1;
-          final label = '${cableLabel(c, cr.cable.csaMm2, cr.threePhase)} mm2'
+          // G5: the REAL core count from the sized grounding (4 for a 3ph run
+          // with no neutral), so the canvas label matches the schedule/export.
+          final label =
+              '${cableLabel(c, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores)} mm2'
               ' · ${breakerScheduleLabel(cr.breaker, poles)}';
-          final midX = (start.dx + end.dx) / 2;
-          // Clear the parent's outlet handle (which sits ~13 px past the right
-          // edge, scaled with the card) so the label never overlaps the dot.
-          _label(canvas, Offset(midX, start.dy - 7), label, transform.scale,
-              color: isEss ? essentialColor : onAccent,
-              minLeftX: start.dx + 26 * transform.scale);
+          labels.add((
+            spec: FeederLabelSpec(
+              key: c.id,
+              childId: fed,
+              start: start,
+              midX: (start.dx + end.dx) / 2,
+              childY: end.dy,
+            ),
+            text: label,
+            colour: isEss ? essentialColor : onAccent,
+            // Clear the parent's outlet handle (which sits ~13 px past the right
+            // edge, scaled with the card) so the label never overlaps the dot.
+            minLeftX: start.dx + kOutletBandScreenPx * transform.scale,
+          ));
         }
+      }
+      if (labels.isEmpty) continue;
+      final anchors = feederLabelAnchors(
+        labels.map((l) => l.spec),
+        lineHeight: kFeederLabelLineH * transform.scale,
+      );
+      for (final l in labels) {
+        final at = anchors[l.spec.key];
+        if (at == null) continue;
+        _label(canvas, at, l.text, transform.scale,
+            color: l.colour, minLeftX: l.minLeftX);
       }
     }
 
@@ -2165,7 +2395,8 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
     // its right regardless of zoom and the card never grows over it when the
     // tier changes.
     final card = AnimatedContainer(
-      duration: MechXMotion.hover,
+      // Through the reduced-motion gate like every other animated duration.
+      duration: MechXMotion.resolve(context, MechXMotion.hover),
       curve: MechXMotion.standard,
       decoration: BoxDecoration(
         color: colors.surface,
@@ -2199,9 +2430,17 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
             // box (64 px tall) cannot hold the summary card's stats: the
             // outgoing card would spend the whole transition overflowing. A
             // tier that different swaps rather than fades.
+            //
+            // VISUAL ONLY: `widget.lod` is the instantaneous [panelLodFor]
+            // reading (no hysteresis), so hit-testing, footprints and feeder
+            // endpoints still agree with the frame; only the dissolve is
+            // animated. The duration goes through the reduced-motion gate —
+            // [Duration.zero] makes AnimatedSwitcher swap instantly (unlike
+            // AnimatedSize, it takes zero happily), which is exactly what the
+            // setting asks for, and the RESTING frame is identical either way.
             child: AnimatedSwitcher(
               key: ValueKey(micro),
-              duration: MechXMotion.appear,
+              duration: MechXMotion.resolve(context, MechXMotion.fast),
               switchInCurve: MechXMotion.standard,
               switchOutCurve: MechXMotion.standard,
               child: micro

@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/schematic_layout_store.dart';
 import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
 import 'package:mechx/ui/schematic/schematic_view.dart';
@@ -320,9 +321,19 @@ void main() {
           ),
         );
 
+    // B3 RE-DERIVATION — this test used to assert that a riser drag on the
+    // elevation MOVED the plan node ('lo'.x != 200), recorded exactly ONE undo
+    // step and cleared redo, and that one undo restored x == 200. The drag is a
+    // diagram declutter and no longer edits the drawing at all: it writes the
+    // transient elevation-layout override, leaving the PLAN x (and every §10
+    // length and plan export) alone. So there is nothing to snapshot either —
+    // the deferred F3 snapshot would now be a PHANTOM undo entry for a change
+    // the network never saw. The click half (no phantom entry, redo survives) is
+    // unchanged; the drag half is re-derived to: plan x pinned at 200, the
+    // diagram x moved, and the primed redo entry still intact.
     testWidgets(
-        'select-to-inspect pushes NO undo step and keeps redo; the first drag '
-        'movement records exactly one', (tester) async {
+        'select-to-inspect pushes NO undo step and keeps redo; a riser drag '
+        'moves the DIAGRAM only and records nothing', (tester) async {
       await tester.pumpWidget(editHarness());
       await tester.pump();
 
@@ -356,30 +367,22 @@ void main() {
       expect(history.canUndo, isFalse);
       expect(history.canRedo, isTrue);
 
-      // DRAG: the first real movement records exactly ONE undo step for the
-      // whole move (and, as any new edit, clears redo).
+      // DRAG: the riser moves on the DIAGRAM; the plan node stays put and the
+      // timeline is untouched (no phantom entry, the primed redo survives).
       final drag = await tester.startGesture(point);
       await drag.moveBy(const Offset(40, 0));
       await drag.moveBy(const Offset(40, 0));
       await drag.up();
       await tester.pump();
 
-      final movedX = container
-          .read(networkControllerProvider)
-          .network
-          .nodeById('lo')!
-          .x;
-      expect(movedX, isNot(200));
-      expect(history.canUndo, isTrue);
-      expect(history.canRedo, isFalse);
-
-      // One undo restores the pre-drag position (single step per drag).
-      history.undo();
-      expect(
-        container.read(networkControllerProvider).network.nodeById('lo')!.x,
-        200,
-      );
+      final planX =
+          container.read(networkControllerProvider).network.nodeById('lo')!.x;
+      expect(planX, 200, reason: 'B3: the plan geometry is never rewritten');
+      expect(container.read(schematicLayoutProvider).xForId('lo', planX),
+          isNot(200),
+          reason: 'the elevation override carries the move');
       expect(history.canUndo, isFalse);
+      expect(history.canRedo, isTrue);
     });
   });
 }

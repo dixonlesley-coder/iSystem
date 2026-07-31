@@ -1,8 +1,10 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/mep_report.dart' show ComplianceItem;
 
 import '../../store/compliance_store.dart';
+import '../../store/design_issues_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/service_style.dart';
@@ -21,6 +23,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
 import '../widgets/mechx_button.dart';
+import '../widgets/mechx_focus_ring.dart';
 import '../widgets/severity_glyph.dart';
 import 'issues_card.dart';
 
@@ -63,11 +66,12 @@ class ReviewHub extends ConsumerWidget {
         // severity, locatable) and the compliance card's 'Electrical circuit
         // sizing' row. Panels-sized + BOM line items stay unique.
         //
-        // ONE stat grid (V1): all five figures in a single HubStatRow call so
-        // they render as one consistent tile system (the cut-plan trio simply
-        // joins the grid when a plan exists) instead of two differently-sized
-        // rows.
-        HubStatRow(
+        // ONE stat grid (V1): all five figures in a single _StatGrid call so
+        // they render as one consistent, BALANCED tile system (the cut-plan
+        // trio simply joins the grid when a plan exists) — equal-width tiles
+        // filling the row rather than wrapping a lone trailing tile onto its
+        // own line, degrading to a wrapped grid only when genuinely narrow.
+        _StatGrid(
           stats: [
             (s(StringKey.reviewStatPanelsSized), '$panels'),
             (s(StringKey.reviewStatBomLineItems), '${bom.length}'),
@@ -234,6 +238,9 @@ class _ComplianceCard extends ConsumerWidget {
     // WATCHED (H2): fixing an issue updates this verdict immediately, in step
     // with the live IssuesCard below.
     final summary = ref.watch(complianceCheckItemsProvider);
+    // A5 — the same live issue list the IssuesCard renders, so a category row
+    // can address the group that carries its actionable copy.
+    final issues = ref.watch(designIssuesProvider);
     final allPass = summary.allPass;
     final headlineColor = allPass ? colors.success : colors.warning;
 
@@ -274,54 +281,159 @@ class _ComplianceCard extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: MechXSpacing.sm),
-          for (final item in summary.items)
-            Padding(
-              padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2, right: MechXSpacing.sm),
-                    child: CustomPaint(
-                      size: const Size(11, 11),
-                      painter: SeverityGlyph(
-                        kind: item.pass
-                            ? SeverityGlyphKind.check
-                            : SeverityGlyphKind.warn,
-                        color: item.pass ? colors.success : colors.warning,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(item.category,
-                        style: type.caption
-                            .copyWith(color: colors.textPrimary)),
-                  ),
-                  Text(
-                    item.pass
-                        ? s(StringKey.reviewItemPass)
-                        : s(StringKey.reviewItemReview),
-                    style: type.caption.copyWith(
-                      color: item.pass ? colors.success : colors.warning,
-                    ),
-                  ),
-                  if (item.detail.isNotEmpty) ...[
-                    const SizedBox(width: MechXSpacing.sm),
-                    Flexible(
-                      child: Text(
-                        item.detail,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.end,
-                        style:
-                            type.caption.copyWith(color: colors.textMuted),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
+          // A5 — a category row is the headline verdict, and the actionable copy
+          // of the same finding sits in the IssuesCard below the fold. Each row
+          // that resolves to a real issue group is now a LINK to it (scroll +
+          // expand + highlight); a row with nothing to show stays inert text.
+          for (final (item, groupKey) in [
+            for (final item in summary.items)
+              (item, complianceRowGroupKey(item, issues, s)),
+          ])
+            _ComplianceRow(
+              item: item,
+              linked: groupKey != null,
+              onTap: () {
+                if (groupKey == null) return;
+                ref.read(issueFocusProvider.notifier).reveal(groupKey);
+              },
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// A5 — the IssuesCard group a compliance category row points at, or null when
+/// the row has nothing to reveal (a clean PASS row, or the acknowledgement-log
+/// rows). The predicates MIRROR `buildComplianceSummaryFrom`'s own claim rules
+/// (stable [DesignIssue.kind] / [DesignIssue.isVerify], remainder rows keyed by
+/// title), so a row can never link to a group it didn't count. A category that
+/// spans several groups points at the first FAILING one — the finding the row's
+/// REVIEW verdict is actually about.
+String? complianceRowGroupKey(
+    ComplianceItem item, List<DesignIssue> issues, MechXStringsData s) {
+  final category = item.category;
+  bool Function(DesignIssue) test;
+  if (category == s(StringKey.complianceCategoryAirVelocity)) {
+    test = (i) => i.kind.contains('velocity');
+  } else if (category == s(StringKey.complianceCategorySheetCalibration)) {
+    test = (i) => i.kind.startsWith('sheet-uncalibrated');
+  } else if (category == s(StringKey.complianceCategoryStandardsVerification)) {
+    test = (i) => i.isVerify;
+  } else if (category == s(StringKey.complianceCategoryElectricalSizing)) {
+    test = (i) => i.kind.startsWith('electrical:');
+  } else {
+    // Every remaining aggregated issue gets its own row, keyed by title.
+    test = (i) => i.title == category;
+  }
+  DesignIssue? match;
+  for (final i in issues) {
+    if (!test(i)) continue;
+    match ??= i;
+    if (i.severity != IssueSeverity.info) {
+      match = i;
+      break;
+    }
+  }
+  return match == null ? null : issueGroupKey(match);
+}
+
+/// A5 — one compliance category row. A [linked] row is a keyboard-reachable,
+/// hoverable link to its issue group; an unlinked row renders exactly as the
+/// plain text row it has always been (same paddings + styles), so a clean
+/// project's card is unchanged.
+class _ComplianceRow extends StatefulWidget {
+  final ComplianceItem item;
+  final VoidCallback onTap;
+  final bool linked;
+
+  const _ComplianceRow({
+    required this.item,
+    required this.onTap,
+    required this.linked,
+  });
+
+  @override
+  State<_ComplianceRow> createState() => _ComplianceRowState();
+}
+
+class _ComplianceRowState extends State<_ComplianceRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final s = context.strings;
+    final item = widget.item;
+    final row = Padding(
+      padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2, right: MechXSpacing.sm),
+            child: CustomPaint(
+              size: const Size(11, 11),
+              painter: SeverityGlyph(
+                kind: item.pass
+                    ? SeverityGlyphKind.check
+                    : SeverityGlyphKind.warn,
+                color: item.pass ? colors.success : colors.warning,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(item.category,
+                style: type.caption.copyWith(color: colors.textPrimary)),
+          ),
+          Text(
+            item.pass
+                ? s(StringKey.reviewItemPass)
+                : s(StringKey.reviewItemReview),
+            style: type.caption.copyWith(
+              color: item.pass ? colors.success : colors.warning,
+            ),
+          ),
+          if (item.detail.isNotEmpty) ...[
+            const SizedBox(width: MechXSpacing.sm),
+            Flexible(
+              child: Text(
+                item.detail,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.end,
+                style: type.caption.copyWith(color: colors.textMuted),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+    if (!widget.linked) return row;
+    return MergeSemantics(
+      child: Semantics(
+        button: true,
+        child: MechXFocusRing(
+          onActivated: widget.onTap,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            onEnter: (_) => setState(() => _hover = true),
+            onExit: (_) => setState(() => _hover = false),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.onTap,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  // Hover feedback only — at rest the row is byte-identical.
+                  color: _hover ? colors.surfaceHover : null,
+                  borderRadius: MechXRadii.control,
+                ),
+                child: row,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -378,6 +490,80 @@ class _CutPlanCard extends ConsumerWidget {
         ],
       ),
     );
+  }
+}
+
+/// A balanced grid of labelled figures (V1): unlike [HubStatRow] (which
+/// floors to a fixed minimum tile width and can strand a lone trailing tile
+/// on its own row — the 4+1 wrap this replaces), [_StatGrid] first tries to
+/// fit every stat as an EQUAL-width tile filling one row, and only falls back
+/// to a wrapped multi-row grid when the hub is genuinely too narrow for that.
+/// Display-only; same tile visuals as [HubStatRow].
+class _StatGrid extends StatelessWidget {
+  final List<(String, String)> stats;
+  const _StatGrid({required this.stats});
+
+  /// A tile never narrows below this — below it we wrap instead of cramming
+  /// every stat onto one row.
+  static const double _minTileWidth = 110;
+
+  @override
+  Widget build(BuildContext context) {
+    if (stats.isEmpty) return const SizedBox.shrink();
+    final colors = context.colors;
+    final type = context.type;
+
+    Widget tile(String label, String value) => Container(
+          padding: const EdgeInsets.all(MechXSpacing.md),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: MechXRadii.card,
+            border: Border.all(color: colors.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(value,
+                  style: MechXTypography.tabular(type.display)
+                      .copyWith(color: colors.textPrimary)),
+              const SizedBox(height: MechXSpacing.xxs),
+              Text(label, style: type.caption.copyWith(color: colors.textMuted)),
+            ],
+          ),
+        );
+
+    return LayoutBuilder(builder: (context, constraints) {
+      const gutter = MechXSpacing.md;
+      final width = constraints.maxWidth.isFinite ? constraints.maxWidth : 720.0;
+
+      // Prefer one balanced row: every tile the same width, filling the row.
+      final naturalWidth = (width - (stats.length - 1) * gutter) / stats.length;
+      if (naturalWidth >= _minTileWidth) {
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var i = 0; i < stats.length; i++) ...[
+              if (i > 0) const SizedBox(width: gutter),
+              Expanded(child: tile(stats[i].$1, stats[i].$2)),
+            ],
+          ],
+        );
+      }
+
+      // Genuinely narrow: degrade to a wrapped grid at the fixed minimum.
+      final fit = ((width + gutter) / (_minTileWidth + gutter)).floor();
+      final columns = fit.clamp(1, stats.length);
+      final tileWidth =
+          ((width - (columns - 1) * gutter) / columns).floorToDouble();
+      return Wrap(
+        spacing: gutter,
+        runSpacing: gutter,
+        children: [
+          for (final (label, value) in stats)
+            SizedBox(width: tileWidth, child: tile(label, value)),
+        ],
+      );
+    });
   }
 }
 

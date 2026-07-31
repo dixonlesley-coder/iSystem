@@ -59,16 +59,43 @@ typedef HcStep = ({HcPipe pipe, int dir});
 /// A fundamental loop: an ordered, closed list of steps.
 typedef HcLoop = List<HcStep>;
 
+/// Outcome of a [hardyCrossDetailed] balance: the iterations used and whether
+/// the largest loop correction actually fell below the tolerance.
+///
+/// M17 — the iteration COUNT alone cannot answer "did it converge?": a balance
+/// that converges on its very last permitted sweep returns exactly
+/// `maxIterations`, indistinguishable from one that gave up. The two facts are
+/// reported separately so a caller can be honest about a best-effort split
+/// instead of guessing from `iterations < maxIterations`.
+typedef HcOutcome = ({int iterations, bool converged});
+
 /// Balance the [loops] in place (correcting their shared [HcPipe.q]s) until the
 /// largest loop correction is below [tolerance]. Returns the iterations used
 /// (== [maxIterations] if it did not converge — caller may treat that as a
 /// best-effort result).
+///
+/// Thin wrapper over [hardyCrossDetailed], kept for callers that only want the
+/// count; prefer [hardyCrossDetailed] when the convergence verdict matters.
 int hardyCross(
   List<HcLoop> loops, {
   double tolerance = 1e-12,
   int maxIterations = 500,
+}) =>
+    hardyCrossDetailed(
+      loops,
+      tolerance: tolerance,
+      maxIterations: maxIterations,
+    ).iterations;
+
+/// [hardyCross] with an explicit convergence verdict (see [HcOutcome]).
+/// An empty [loops] list is a TREE — nothing to balance, so it converges
+/// trivially in 0 iterations.
+HcOutcome hardyCrossDetailed(
+  List<HcLoop> loops, {
+  double tolerance = 1e-12,
+  int maxIterations = 500,
 }) {
-  if (loops.isEmpty) return 0;
+  if (loops.isEmpty) return (iterations: 0, converged: true);
   for (var iter = 1; iter <= maxIterations; iter++) {
     var maxCorrection = 0.0;
     for (final loop in loops) {
@@ -85,9 +112,9 @@ int hardyCross(
       }
       maxCorrection = math.max(maxCorrection, dq.abs());
     }
-    if (maxCorrection < tolerance) return iter;
+    if (maxCorrection < tolerance) return (iterations: iter, converged: true);
   }
-  return maxIterations;
+  return (iterations: maxIterations, converged: false);
 }
 
 /// Result of [balanceFlows]: the signed flow per edge id (positive = from→to)
@@ -103,10 +130,21 @@ class LoopBalanceResult {
   /// Iterations the balance took (0 for a tree).
   final int iterations;
 
+  /// M17 — whether the Hardy–Cross sweeps actually settled (largest loop
+  /// correction below the tolerance) rather than exhausting `maxIterations`.
+  /// A TREE has no loops to balance and converges trivially, so this defaults
+  /// to `true` — every pre-existing construction site keeps its old meaning and
+  /// the flag can only ever be `false` for a genuinely unsettled ring/grid.
+  /// [edgeFlow] is still returned in that case (it preserves continuity at
+  /// every step, so it is a usable best-effort split) — but the caller must
+  /// SURFACE the fact rather than present the split as balanced.
+  final bool converged;
+
   const LoopBalanceResult({
     required this.edgeFlow,
     required this.loopCount,
     required this.iterations,
+    this.converged = true,
   });
 }
 
@@ -206,12 +244,16 @@ LoopBalanceResult balanceFlows({
     loops.add(loop);
   }
 
-  final iterations =
-      hardyCross(loops, tolerance: tolerance, maxIterations: maxIterations);
+  final outcome = hardyCrossDetailed(
+    loops,
+    tolerance: tolerance,
+    maxIterations: maxIterations,
+  );
   return LoopBalanceResult(
     edgeFlow: {for (final e in edges) e.id: pipes[e.id]!.q},
     loopCount: loops.length,
-    iterations: iterations,
+    iterations: outcome.iterations,
+    converged: outcome.converged,
   );
 }
 

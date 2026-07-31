@@ -7,10 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/compliance_store.dart';
 import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/mep_report.dart';
 
 ComplianceItem _item(ComplianceSummary s, String category) =>
@@ -27,7 +29,7 @@ void main() {
       );
       expect(s.allPass, isTrue);
       expect(s.date, '2026-07-02');
-      expect(_item(s, 'Air velocity').pass, isTrue);
+      expect(_item(s, 'Velocity').pass, isTrue);
       expect(_item(s, 'Sheet calibration').pass, isTrue);
       expect(_item(s, 'Standards verification').pass, isTrue);
       expect(_item(s, 'Electrical circuit sizing').pass, isTrue);
@@ -154,7 +156,7 @@ void main() {
         date: 'd',
         acknowledged: {warn.key},
       );
-      expect(_item(s, 'Air velocity').pass, isFalse);
+      expect(_item(s, 'Velocity').pass, isFalse);
       expect(_item(s, 'Electrical circuit sizing').pass, isFalse);
       expect(s.allPass, isFalse);
     });
@@ -193,12 +195,22 @@ void main() {
       final c = ProviderContainer();
       addTearDown(c.dispose);
 
-      // Uncalibrated demo sheets ⇒ the calibration row REVIEWs.
+      // A BLANK uncalibrated sheet is now only an INFO advisory (nothing
+      // measurable is wrong yet), so it no longer fails this row — draw an
+      // edge on s1 to make its calibration gap a real (failing) finding; s2/s3
+      // stay blank/info and don't count toward the failure.
       c.read(sheetsControllerProvider.notifier).loadDemoSheets();
+      const nodeA = NetNode(id: 'na', sheetId: 's1', x: 0, y: 0, floorIndex: 0);
+      const nodeB = NetNode(id: 'nb', sheetId: 's1', x: 100, y: 0, floorIndex: 0);
+      const edge = NetEdge(
+          id: 'e1', fromId: 'na', toId: 'nb', service: ServiceType.coldWater);
+      c.read(networkControllerProvider.notifier).loadNetwork(
+            const Network(nodes: [nodeA, nodeB], edges: [edge]),
+          );
       var summary = c.read(complianceSummaryProvider);
       var row = _item(summary, 'Sheet calibration');
       expect(row.pass, isFalse);
-      expect(row.detail, '3 uncalibrated');
+      expect(row.detail, '1 uncalibrated');
 
       // Fix the issue (the quick-fix path): calibrate every sheet. The
       // provider WATCHES designIssuesProvider, so the next read re-verdicts —
