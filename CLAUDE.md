@@ -811,7 +811,14 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.22.0`** (the two 2026-07-30/31 campaigns in one release: the MODULE-AUDIT
+  is `v1.23.0`** (two user-reported fixes: the declared PLN daya
+  [`supplyCapacityVa`] now SIZES the service-entrance incomer + busbar instead of
+  only labelling the supply head — with the judge-only
+  `service-capacity-below-demand` limiter warning and the multi-root /
+  null-capacity honesty gates — and the board schedule's R/S/T phase band rebuilt
+  as three EQUAL ruled cells with centred heads/figures/totals;
+  `pubspec.yaml` now `1.23.0+29`), atop
+  `v1.22.0` (the two 2026-07-30/31 campaigns in one release: the MODULE-AUDIT
   fix — all 38 findings, incl. the by-construction PRV zones, the device-only
   ampacity-capped selectivity floor, per-circuit kA / containment-sourced conduit /
   real core counts on the schedule, reports on the combined warning surface, and the
@@ -819,7 +826,7 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   Locate-as-navigation, the park-don't-delete MEP sync, the riser cross-surface
   contract, stable tags, the real drainage fall on issued drawings, one remembered
   export folder + the complete submittal set, and the sticky electrical canvas;
-  `pubspec.yaml` now `1.22.0+28`; atop the v1.21.0/v1.20.0 usability + K4-hardening
+  atop the v1.21.0/v1.20.0 usability + K4-hardening
   baselines and the prior) — the earlier `v1.19.0` shipped (the honest LV service: no fabricated TRAFO/MVMDP/LVMDP source spine
   on an undeclared low-voltage service, the VA connection-capacity field, and the
   judge-only `feeder-below-fed-demand` warning found by the whole-building simulation;
