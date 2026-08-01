@@ -811,7 +811,14 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   --exclude-tags golden` (the ubuntu `ci.yml` still enforces them); and `iscc` needs
   `MSYS_NO_PATHCONV=1` so Git-Bash doesn't mangle the `/dAppVersion=` define.
   Releases have continued through the same workflow — the **current published build
-  is `v1.22.0`** (the two 2026-07-30/31 campaigns in one release: the MODULE-AUDIT
+  is `v1.23.0`** (two user-reported fixes: the declared PLN daya
+  [`supplyCapacityVa`] now SIZES the service-entrance incomer + busbar instead of
+  only labelling the supply head — with the judge-only
+  `service-capacity-below-demand` limiter warning and the multi-root /
+  null-capacity honesty gates — and the board schedule's R/S/T phase band rebuilt
+  as three EQUAL ruled cells with centred heads/figures/totals;
+  `pubspec.yaml` now `1.23.0+29`), atop
+  `v1.22.0` (the two 2026-07-30/31 campaigns in one release: the MODULE-AUDIT
   fix — all 38 findings, incl. the by-construction PRV zones, the device-only
   ampacity-capped selectivity floor, per-circuit kA / containment-sourced conduit /
   real core counts on the schedule, reports on the combined warning surface, and the
@@ -819,7 +826,7 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   Locate-as-navigation, the park-don't-delete MEP sync, the riser cross-surface
   contract, stable tags, the real drainage fall on issued drawings, one remembered
   export folder + the complete submittal set, and the sticky electrical canvas;
-  `pubspec.yaml` now `1.22.0+28`; atop the v1.21.0/v1.20.0 usability + K4-hardening
+  atop the v1.21.0/v1.20.0 usability + K4-hardening
   baselines and the prior) — the earlier `v1.19.0` shipped (the honest LV service: no fabricated TRAFO/MVMDP/LVMDP source spine
   on an undeclared low-voltage service, the VA connection-capacity field, and the
   judge-only `feeder-below-fed-demand` warning found by the whole-building simulation;
@@ -926,7 +933,12 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   panels stay geometrically byte-identical. New goldens `09_electrical_overview.png` +
   `10_electrical_riser.png`. The schedule was then brought to the BRI `Diagram Panel`'s ALIGNED-TABLE
   form (column-header band GRUP | DEVICE | PENGHANTAR | DAYA | KETERANGAN | R | S | T at fixed columns,
-  block width 920, a per-way `· PVC <n>mm` conduit token from the pure `_conduitMm`), and three further
+  block width 920, a per-way `· PVC <n>mm` conduit token from the pure `_conduitMm`; the R/S/T
+  phase band is THREE EQUAL ruled cells — `_phaseBandL 748` → the grid's right edge `_blockW-8`,
+  split into `_phaseCellW` thirds with the verticals ON those cell edges — and its labels [heads,
+  per-way figures, TOTAL footer] are CENTRED in them via build-time `_centredInCell` arithmetic
+  [no renderer re-measures text, so canvas/PDF/DXF agree]; prose columns stay left-anchored per
+  the BRI convention), and three further
   DXF-parity gaps (verified against the client's real EL1004 `Diagram Panel BRI` DXF) then closed in
   `electrical_sld_drawing.dart`: **(a) STARTER / CONTROL token** — the way's `ElectricalCircuit.starterType`
   (resolved by the same `circuitById` lookup that feeds `cableType`) is mapped to an ASCII token by the
@@ -1254,8 +1266,9 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (`test/electrical_context_menu_edit_test.dart`, 6 tests).
   **W7 — editable SUPPLY node + BATTERY/SOLAR nodes + genset backup % (user-reported):** additive
   `ElectricalProject.supplyKind` (`SupplyKind {pln, generator, solar}`, default pln ⇒ byte-identical) +
-  `supplyCapacityVa` (declared daya tersambung, null ⇒ not printed) re-label the source-spine HEAD via the
-  shared `_supplyHeadLabel` in BOTH spine builders (drawing inputs only, tolerant JSON, `_withProject`-carried,
+  `supplyCapacityVa` (declared daya tersambung, null ⇒ not printed; since the 2026-07-31 service-capacity
+  floor it ALSO sizes the root incomer — see the Sizing-engine invariant) re-label the source-spine HEAD via
+  the shared `_supplyHeadLabel` in BOTH spine builders (tolerant JSON, `_withProject`-carried,
   `setSupplyKind`/`setSupplyCapacityVa`); a single TAP on the canvas supply chain (or bare PLN head) opens the
   Sources editor, which gained Supply (kind + capacity), Solar PV and Battery sections over new
   `setSolar`/`setBattery` intents (`_sourcesWith` replaces/clears any sub-source, collapses to null when
@@ -1628,6 +1641,20 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `fire-pump-protection` note; an irreducible over-threshold imbalance carries
   an INFO `phase-imbalance-inherent` note; a feeder's voltage base (Ib and
   Vd%) is the FED panel's.
+- **Service-capacity floor (`electrical/compute.dart`) — the declared daya SIZES
+  the service entrance**: a declared `ElectricalProject.supplyCapacityVa` (daya
+  tersambung) is converted to its line current (3φ `VA/(√3·V_LL)`, 1φ `VA/V` —
+  PLN 33 kVA @ 400 V → 47.6 A → the 50 A rung, the matching PLN limiter) and
+  floors the SINGLE root panel's incomer + busbar sizing current
+  (`ComputePanelOptions.serviceMinCurrentA`, `max(headroom-uplifted demand,
+  service current)`; the earthing PE derivation rides the governing floor).
+  Rating the entrance board at the subscribed daya is Indonesian LV practice,
+  `// VERIFY notAnSniClause`. Per-circuit sizing is untouched; SEVERAL
+  utility-fed roots ⇒ no floor (the capacity split is unknown — never
+  fabricate); demand above the capacity keeps the larger demand-based incomer
+  and raises the judge-only `service-capacity-below-demand` warning (the
+  utility limiter would trip under full demand). Null capacity (the default)
+  ⇒ byte-identical. Seed suite: `electrical_service_capacity_test.dart`.
 - **ONE electrical warning surface (`electricalAllWarningsProvider`)**: the
   fault study's warnings (`non-selective` / `selectivity-partial` /
   `breaking-capacity-inadequate` / `busbar-withstand-inadequate` /

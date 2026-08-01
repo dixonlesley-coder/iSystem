@@ -712,7 +712,10 @@ class ElectricalProject {
   /// Declared supply connection capacity (VA) — the PLN subscribed power
   /// (daya tersambung) or the primary plant rating. Labels the supply head
   /// node verbatim when set; null ⇒ no capacity printed (never derived).
-  /// A drawing input only. Additive (default null ⇒ byte-identical).
+  /// Also a SIZING input at the service entrance: `computeSystem` floors the
+  /// single root panel's incomer + busbar at the declared capacity's line
+  /// current, and `estimatedServiceFaultLevelA` reads it for the default
+  /// fault rung. Additive (default null ⇒ byte-identical).
   final ApparentPower? supplyCapacityVa;
 
   const ElectricalProject({

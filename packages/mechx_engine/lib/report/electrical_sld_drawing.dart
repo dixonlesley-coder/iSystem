@@ -69,9 +69,27 @@ const double _colDevice = 116; // breaker (MCB 16A 1ph[ 16kA][ · RCD 30mA A])
 const double _colPenghantar = 252; // conductor + conduit + length (NYY 4x6 · 22 m)
 const double _colDaya = 474; // connected load (DAYA, W/kW)
 const double _colKeterangan = 534; // load name / -> sub-panel
-const double _colR = 754; // per-phase loading band (R/S/T line currents)
-const double _colS = 800;
-const double _colT = 846;
+// The R / S / T per-phase loading band: THREE EQUAL ruled cells spanning from
+// the band's left divider to the grid's right edge (where the row rules stop).
+// Equal thirds matter — the three cells hold the same kind of figure, so an
+// odd one out (the T cell used to run to the grid edge at twice the width of
+// R and S) throws the whole band off its own column heads.
+const double _phaseBandL = 748; // divider left of the R cell
+const double _phaseBandR = _blockW - 8; // grid right edge (row-rule end)
+const double _phaseCellW = (_phaseBandR - _phaseBandL) / 3;
+const double _cellRL = _phaseBandL, _cellRR = _phaseBandL + _phaseCellW;
+const double _cellSL = _cellRR, _cellSR = _phaseBandL + 2 * _phaseCellW;
+const double _cellTL = _cellSR, _cellTR = _phaseBandR;
+
+/// CENTRE a short numeric figure in a ruled cell. Every text column is
+/// left-anchored (the BRI `Diagram Panel` convention for prose cells), but the
+/// R/S/T phase-loading band is a run of narrow ruled BOXES — a left-anchored
+/// current figure hugs its divider and reads as mis-set. Centring is done here
+/// with build-time arithmetic (estimated glyph advance ~0.5 em, within a pixel
+/// for these short digit strings) so the ONE geometry stays authoritative and
+/// every renderer (canvas / PDF / DXF) agrees — no renderer re-measures text.
+double _centredInCell(double leftX, double rightX, String text, double size) =>
+    (leftX + rightX) / 2 - text.length * size * 0.25;
 
 String _num(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
@@ -474,25 +492,30 @@ SldSheet buildElectricalSld({
     colHead(_colPenghantar, 'PENGHANTAR');
     colHead(_colDaya, 'DAYA');
     colHead(_colKeterangan, 'KETERANGAN');
-    colHead(_colR, 'R', role: SldRole.phaseR);
-    colHead(_colS, 'S', role: SldRole.phaseS);
-    colHead(_colT, 'T', role: SldRole.phaseT);
+    // The R/S/T heads sit centred over their ruled cells, like the figures.
+    colHead(_centredInCell(_cellRL, _cellRR, 'R', 7), 'R',
+        role: SldRole.phaseR);
+    colHead(_centredInCell(_cellSL, _cellSR, 'S', 7), 'S',
+        role: SldRole.phaseS);
+    colHead(_centredInCell(_cellTL, _cellTR, 'T', 7), 'T',
+        role: SldRole.phaseT);
     // Underline under the column-header row.
     prims.add(SldLine(bx + 4, busTop + _rowH, blockX + _blockW - 8,
         busTop + _rowH));
     // Ruled table verticals — the BRI `Diagram Panel` schedule is a fully
-    // ruled grid, not whitespace-aligned text. One thin separator a few px
-    // left of each column, spanning the header band + every body row.
-    for (final colX in const [
-      _colDevice,
-      _colPenghantar,
-      _colDaya,
-      _colKeterangan,
-      _colR,
-      _colS,
-      _colT,
+    // ruled grid, not whitespace-aligned text. A thin separator 6 px left of
+    // each PROSE column, then the phase band's own equal-cell dividers,
+    // spanning the header band + every body row.
+    for (final ruleX in const [
+      _colDevice - 6,
+      _colPenghantar - 6,
+      _colDaya - 6,
+      _colKeterangan - 6,
+      _cellRL,
+      _cellSL,
+      _cellTL,
     ]) {
-      prims.add(SldLine(blockX + colX - 6, busTop, blockX + colX - 6, busBot));
+      prims.add(SldLine(blockX + ruleX, busTop, blockX + ruleX, busBot));
     }
 
     // One ROW per way, in ALIGNED columns: GRUP (way no) | DEVICE (breaker,
@@ -605,15 +628,18 @@ SldSheet buildElectricalSld({
       // cell carrying its phase role so the loading reads by colour at a glance.
       final (r, s, t) = _phaseLoading(c.phase, ib);
       if (r.isNotEmpty) {
-        prims.add(SldLabel(blockX + _colR, rowY + 3, r,
+        prims.add(SldLabel(
+            blockX + _centredInCell(_cellRL, _cellRR, r, rowSize), rowY + 3, r,
             size: rowSize, role: SldRole.phaseR));
       }
       if (s.isNotEmpty) {
-        prims.add(SldLabel(blockX + _colS, rowY + 3, s,
+        prims.add(SldLabel(
+            blockX + _centredInCell(_cellSL, _cellSR, s, rowSize), rowY + 3, s,
             size: rowSize, role: SldRole.phaseS));
       }
       if (t.isNotEmpty) {
-        prims.add(SldLabel(blockX + _colT, rowY + 3, t,
+        prims.add(SldLabel(
+            blockX + _centredInCell(_cellTL, _cellTR, t, rowSize), rowY + 3, t,
             size: rowSize, role: SldRole.phaseT));
       }
       if (feeds != null) {
@@ -657,11 +683,15 @@ SldSheet buildElectricalSld({
         size: 8.5, bold: true));
     if (p.system.isThreePhase) {
       final pb = p.phaseBalance;
-      prims.add(SldLabel(blockX + _colR, footerY, _num(pb.l1),
+      final l1 = _num(pb.l1), l2 = _num(pb.l2), l3 = _num(pb.l3);
+      prims.add(SldLabel(
+          blockX + _centredInCell(_cellRL, _cellRR, l1, rowSize), footerY, l1,
           size: rowSize, bold: true, role: SldRole.phaseR));
-      prims.add(SldLabel(blockX + _colS, footerY, _num(pb.l2),
+      prims.add(SldLabel(
+          blockX + _centredInCell(_cellSL, _cellSR, l2, rowSize), footerY, l2,
           size: rowSize, bold: true, role: SldRole.phaseS));
-      prims.add(SldLabel(blockX + _colT, footerY, _num(pb.l3),
+      prims.add(SldLabel(
+          blockX + _centredInCell(_cellTL, _cellTR, l3, rowSize), footerY, l3,
           size: rowSize, bold: true, role: SldRole.phaseT));
     }
 

@@ -1747,8 +1747,10 @@ class ElectricalSourcesInspector extends ConsumerWidget {
                     ),
                     Text(
                       'The declared connection (daya tersambung) in VA - '
-                      'e.g. 2200 / 33000 / 197000 - labels the supply node; '
-                      '0 = not printed.',
+                      'e.g. 2200 / 33000 / 197000 - labels the supply node '
+                      'and rates the main board incomer + bus at the '
+                      'capacity\'s line current; 0 = not set (demand sizes '
+                      'the incomer).',
                       style: type.caption.copyWith(color: colors.textMuted),
                     ),
                     const SizedBox(height: MechXSpacing.sm),

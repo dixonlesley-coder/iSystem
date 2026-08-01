@@ -555,6 +555,18 @@ class ComputePanelOptions {
   /// alone ⇒ byte-identical.
   final Map<String, double> feederBreakerFloorA;
 
+  /// SERVICE-CAPACITY FLOOR (A) for the incomer + busbar of a SERVICE-ENTRANCE
+  /// (root) panel — the line current of the declared connection capacity
+  /// ([ElectricalProject.supplyCapacityVa], daya tersambung), derived by
+  /// `computeSystem` for the single root panel. The service board is rated to
+  /// carry everything the utility limiter will pass, so the incomer + bus size
+  /// on `max(demand-based current, this floor)`; per-circuit sizing is
+  /// untouched. Rating the entrance board at the subscribed daya is standard
+  /// Indonesian LV-service practice, not an SNI/PUIL clause. // VERIFY
+  /// Null (the default) ⇒ demand-based sizing exactly as before ⇒
+  /// byte-identical.
+  final double? serviceMinCurrentA;
+
   const ComputePanelOptions({
     this.feederLoadW = const {},
     this.panelSystems = const {},
@@ -569,6 +581,7 @@ class ComputePanelOptions {
     this.priorAssignment = const {},
     this.phaseReassignThresholdA = 0,
     this.feederBreakerFloorA = const {},
+    this.serviceMinCurrentA,
   });
 }
 
@@ -1173,8 +1186,17 @@ ElectricalPanelResult computePanel(
   final headroomMultiplier = headroom.demandMultiplier;
   final spareWaysReserved = headroom.effectiveSpareWays;
   // The line current the incomer + busbar are sized against (= demand × future
-  // multiplier). 1.0 ⇒ exactly demandCurrentA.
-  final incomerSizingCurrentA = roundTo(demandCurrentA * headroomMultiplier, 1);
+  // multiplier). 1.0 ⇒ exactly demandCurrentA. A SERVICE-ENTRANCE (root) panel
+  // additionally floors at the declared connection capacity's line current
+  // (daya tersambung, [ComputePanelOptions.serviceMinCurrentA]) — the entrance
+  // board is rated for everything the utility limiter will pass, so changing
+  // the subscribed daya re-sizes the incomer even when today's demand is small.
+  // Null / smaller floor ⇒ exactly the demand-based current ⇒ byte-identical.
+  final futureDemandCurrentA = roundTo(demandCurrentA * headroomMultiplier, 1);
+  final serviceFloorA = opts.serviceMinCurrentA ?? 0;
+  final serviceGoverns = serviceFloorA > futureDemandCurrentA;
+  final incomerSizingCurrentA =
+      serviceGoverns ? roundTo(serviceFloorA, 1) : futureDemandCurrentA;
 
   final incomerBreaker = selectBreaker(
     profile,
@@ -1186,11 +1208,14 @@ ElectricalPanelResult computePanel(
     poles: panel.system == ElectricalSystem.threePhase ? 4 : 2,
   );
   if (incomerBreaker.ratingA.amperes + 1e-9 < incomerSizingCurrentA) {
+    final basis = serviceGoverns
+        ? 'declared service capacity'
+        : '${headroomApplied ? 'future ' : ''}demand';
     warnings.add(ElectricalWarning(
       code: 'incomer-exceeds-range',
       severity: WarningSeverity.error,
       message:
-          '${panel.name}: ${headroomApplied ? 'future ' : ''}demand '
+          '${panel.name}: $basis '
           '$incomerSizingCurrentA A exceeds the largest standard breaker frame '
           '(${incomerBreaker.ratingA.amperes} A) — split the board or feed it '
           'at MV.',
@@ -1372,6 +1397,14 @@ ElectricalPanelResult computePanel(
 /// a panel with no single-phase non-linear load gets factor 1.0 ⇒ its neutral
 /// bar is byte-identical to the phase bar.
 ///
+/// SERVICE-CAPACITY FLOOR is data-driven: a declared
+/// [ElectricalProject.supplyCapacityVa] (daya tersambung) floors the single
+/// root panel's incomer + busbar (and the earthing PE derivation) at the
+/// declared capacity's line current, and raises a judge-only
+/// `service-capacity-below-demand` warning when the computed worst-phase
+/// demand exceeds what that capacity's limiter passes. Null (the default) ⇒
+/// no floor ⇒ byte-identical.
+///
 /// PHASE STABILITY is opt-in: [priorAssignments] (`panelId → (circuitId → line)`,
 /// normally the previous solve's assignment) seeds each panel's balancer and,
 /// with [phaseReassignThresholdA], stops a marginal gain from re-labelling an
@@ -1464,6 +1497,27 @@ ElectricalSystemResult computeSystem(
       message:
           'Feeder topology contains a cycle; system aggregation may be incomplete.',
     ));
+  }
+
+  // SERVICE-CAPACITY FLOOR — the declared connection capacity (daya
+  // tersambung, [ElectricalProject.supplyCapacityVa]) converted to the line
+  // current at the SERVICE-ENTRANCE board, so the root incomer + busbar are
+  // rated for everything the utility limiter will pass (3φ: VA / (√3·V_LL);
+  // 1φ: VA / V — pure arithmetic; e.g. PLN 33 kVA 3φ 400 V → 47.6 A → the
+  // 50 A rung, the matching PLN limiter). Applied ONLY when the tree has
+  // exactly ONE root — with several utility-fed boards the split of the
+  // declared capacity between them is unknown, so nothing is fabricated.
+  // Null capacity (the default) ⇒ no floor ⇒ byte-identical.
+  final serviceCapacityVa = project.supplyCapacityVa?.voltAmperes;
+  double? serviceMinCurrentA;
+  if (serviceCapacityVa != null && serviceCapacityVa > 0 && roots.length == 1) {
+    final root = roots.first;
+    final v = root.voltage.volts;
+    if (v > 0) {
+      serviceMinCurrentA = root.system == ElectricalSystem.threePhase
+          ? serviceCapacityVa / (math.sqrt(3) * v)
+          : serviceCapacityVa / v;
+    }
   }
 
   // Bottom-up diversified demand: a feeder's effective load = the child panel's
@@ -1593,6 +1647,8 @@ ElectricalSystemResult computeSystem(
           priorAssignment: priorAssignments[id] ?? const {},
           phaseReassignThresholdA: phaseReassignThresholdA,
           feederBreakerFloorA: feederBreakerFloorA,
+          serviceMinCurrentA:
+              roots.length == 1 && id == roots.first.id ? serviceMinCurrentA : null,
         ),
       );
     }
@@ -1713,6 +1769,32 @@ ElectricalSystemResult computeSystem(
       }
     }
 
+    // JUDGE-ONLY service-capacity check: the declared connection capacity
+    // (daya tersambung) is what the utility limiter passes — a root board whose
+    // worst-phase demand exceeds that current will trip the limiter under full
+    // load. Never resizes (the incomer already sizes on the larger demand);
+    // the honest fix is a bigger subscription or shedding load.
+    if (serviceMinCurrentA != null) {
+      final rootId = roots.first.id;
+      final rootResult = results[rootId];
+      if (rootResult != null &&
+          rootResult.demandCurrent.amperes > serviceMinCurrentA + 1e-9) {
+        rootResult.warnings.add(ElectricalWarning(
+          code: 'service-capacity-below-demand',
+          severity: WarningSeverity.warning,
+          message:
+              '${rootResult.name}: demand '
+              '${_num(rootResult.demandCurrent.amperes)} A on the worst-loaded '
+              'phase exceeds the declared connection capacity '
+              '${_num(serviceCapacityVa! / 1000)} kVA '
+              '(~${_num(roundTo(serviceMinCurrentA, 1))} A) — the utility '
+              'limiter would trip under full demand; raise the subscribed daya '
+              'or shed load.',
+          panelId: rootId,
+        ));
+      }
+    }
+
     // Collect every panel's warnings into the system list (after augmentation).
     for (final id in postOrder.reversed) {
       final pr = results[id];
@@ -1737,9 +1819,15 @@ ElectricalSystemResult computeSystem(
       voltage: supplyVoltage,
     );
 
-    // Earthing system designed from the main incomer's PE conductor.
+    // Earthing system designed from the main incomer's PE conductor. The
+    // service-capacity floor rides along (when it governs), so the service PE
+    // tracks the entrance device the same floor sized.
     final mainResult = roots.firstOrNull != null ? results[roots.first.id] : null;
-    final mainIb = mainResult?.demandCurrent ?? const Current(0);
+    final mainDemandIb = mainResult?.demandCurrent ?? const Current(0);
+    final mainIb =
+        serviceMinCurrentA != null && serviceMinCurrentA > mainDemandIb.amperes
+            ? Current(roundTo(serviceMinCurrentA, 1))
+            : mainDemandIb;
     final mainBreaker =
         selectBreaker(profile, designCurrent: mainIb, loadKind: LoadKind.feeder);
     final mainCable = sizeCable(
