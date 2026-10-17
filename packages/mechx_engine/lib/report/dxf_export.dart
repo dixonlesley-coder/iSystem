@@ -26,7 +26,10 @@ String _sizeLabel(NetEdge e, EdgeSizing s) {
     return '${s.width!.inMillimeters.round()}x${s.height!.inMillimeters.round()}';
   }
   final mm = s.diameter.inMillimeters.round();
-  return e.service.isAir ? 'O$mm' : 'DN$mm';
+  // R5: the real diameter sign — WinAnsi 0xD8 in the PDF (pass-through in
+  // `_pdfText`), `%%c` in the DXF (via `dxfText`). The live canvas keeps its
+  // own ASCII `O` (Roboto lacks the glyph).
+  return e.service.isAir ? '\u00D8$mm' : 'DN$mm';
 }
 
 /// The A6 line-weight band for a sized edge — rectangular ducts band on their
@@ -570,7 +573,71 @@ String _professionalDxf({
     g(21, tipy);
   }
 
-  final placedLabels = <LabelBox>[];
+  // R5: ONE placement model with the plan PDF — the shared `placePlanLabel`
+  // over a `PlanLabelLayout` seeded with every on-floor run (keyed by edge id)
+  // and every node glyph / grid bubble, so a tag stays beside its own run,
+  // splits to two lines before escaping, and never overprints another service
+  // when a clear slot exists (millimetre model space here, points in the PDF).
+  final layout = PlanLabelLayout();
+  for (final e in net.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    final a = net.nodeById(e.fromId);
+    final c = net.nodeById(e.toId);
+    if (a == null || c == null || !onFloor(a) || !onFloor(c)) continue;
+    layout.addRun(e.id, a.x * mmPerPx, -a.y * mmPerPx, c.x * mmPerPx,
+        -c.y * mmPerPx);
+  }
+  for (final n in net.nodes) {
+    if (!onFloor(n)) continue;
+    final r = (n.component != null || n.role == NodeRole.fixture ? 8.0 : 3.0) *
+        mmPerPx;
+    final x = n.x * mmPerPx, y = -n.y * mmPerPx;
+    layout.addBox((minX: x - r, minY: y - r, maxX: x + r, maxY: y + r));
+  }
+  if (grid != null && !grid.isEmpty && maxX.isFinite) {
+    final r = textH;
+    for (final ax in grid.columns) {
+      final gx = ax.position * mmPerPx;
+      layout.addBox(
+          (minX: gx - r, minY: maxY, maxX: gx + r, maxY: maxY + 2 * r));
+    }
+    for (final ay in grid.rows) {
+      final gy = -ay.position * mmPerPx;
+      layout.addBox(
+          (minX: minX - 2 * r, minY: gy - r, maxX: minX, maxY: gy + r));
+    }
+  }
+  // R5: a point feature's tag may also sit on its LEFT — the stations of the
+  // mirrored pseudo-run, tried after the right side (exactly like the PDF).
+  List<({double x, double y})> mirrorStations(
+          double px, double py, double gap, double w) =>
+      [for (final t in const [0.5, 0.75, 0.25]) (x: px - gap - w * t, y: py)];
+
+  // Emit a placed label (one TEXT per line) + its leader on the ANNO layer.
+  void emitLabel(LeaderedLabelPlacement p) {
+    for (final line in p.lines) {
+      g(0, 'TEXT');
+      g(8, kDxfLayerAnno);
+      g(10, line.x);
+      g(20, line.y);
+      g(40, textH);
+      g(1, line.text);
+      g(50, p.angleDeg.toStringAsFixed(1));
+    }
+    final lead = p.leaderAnchor;
+    final end = p.leaderEnd;
+    if (lead != null && end != null) {
+      g(0, 'LINE');
+      g(8, kDxfLayerAnno);
+      g(10, lead.x);
+      g(20, lead.y);
+      g(11, end.x);
+      g(21, end.y);
+    }
+  }
+
+  final riserLabelJobs =
+      <({double nx, double x0, double y0, String text, List<String>? split})>[];
   for (final e in net.edges) {
     final a = net.nodeById(e.fromId);
     final c = net.nodeById(e.toId);
@@ -608,40 +675,35 @@ String _professionalDxf({
                 metersPerPixel);
         // N13 + N5 + G5 through the ONE composer the plan PDF uses
         // (`CW-F2 · DN50 - 4.4 m - CL +2.70`), so PDF == DXF.
+        final lengthText = len.meters > 0 ? planLengthLabel(len) : null;
         final labelText = composePlanEdgeLabel(
           tag: edgeTags?[e.id],
           size: _sizeLabel(e, s),
-          length: len.meters > 0 ? planLengthLabel(len) : null,
+          length: lengthText,
           elevation: elev,
           slope: slope,
         )!;
-        // A7/N3 label discipline: rotated to the edge bearing on the ANNO layer,
-        // offset to the upper side; a dense tag ESCAPES + is tied back with a
-        // leader (never dropped, never fused) — see `placeEdgeLabelLeadered`.
-        final p = placeEdgeLabelLeadered(
+        // A7/N3/R5 label discipline: parallel to the run on the ANNO layer,
+        // beside it first (either side, several stations), split to two lines
+        // before escaping; an escaped tag is tied back by a capped leader —
+        // never dropped, never fused (see `placePlanLabel`).
+        final p = placePlanLabel(
             ax: ax,
             ay: ay,
             bx: cx,
             by: cy,
             text: labelText,
             textSize: textH,
-            placed: placedLabels);
-        g(0, 'TEXT');
-        g(8, kDxfLayerAnno);
-        g(10, p.x);
-        g(20, p.y);
-        g(40, textH);
-        g(1, labelText);
-        g(50, p.angleDeg.toStringAsFixed(1));
-        final lead = p.leaderAnchor;
-        if (lead != null) {
-          g(0, 'LINE');
-          g(8, kDxfLayerAnno);
-          g(10, lead.x);
-          g(20, lead.y);
-          g(11, p.x);
-          g(21, p.y);
-        }
+            layout: layout,
+            ownRunId: e.id,
+            splitLines: composePlanEdgeLabelLines(
+              tag: edgeTags?[e.id],
+              size: _sizeLabel(e, s),
+              length: lengthText,
+              elevation: elev,
+              slope: slope,
+            ));
+        emitLabel(p);
       }
       // A5 flow arrow on a sized, oriented, long-enough run.
       if (s != null && s.flowFromId != null) {
@@ -658,10 +720,18 @@ String _professionalDxf({
       // its UP/DN sense on the ANNO layer (A5) + its stable element tag (N13).
       final rs = sizing[e.id];
       final rLen = edgeLengths?[e.id];
+      final rLenText =
+          (rLen != null && rLen.meters > 0) ? planLengthLabel(rLen) : null;
       final riserLabel = composePlanEdgeLabel(
         tag: edgeTags?[e.id],
         size: rs != null ? _sizeLabel(e, rs) : null,
-        length: (rLen != null && rLen.meters > 0) ? planLengthLabel(rLen) : null,
+        length: rLenText,
+        elevation: edgeElevationLabels?[e.id],
+      );
+      final riserSplit = composePlanEdgeLabelLines(
+        tag: edgeTags?[e.id],
+        size: rs != null ? _sizeLabel(e, rs) : null,
+        length: rLenText,
         elevation: edgeElevationLabels?[e.id],
       );
       for (final n in [a, c]) {
@@ -682,18 +752,32 @@ String _professionalDxf({
           g(20, -n.y * mmPerPx);
           g(40, textH);
           g(1, sense);
+          // The UP/DN mark is occupied, so the riser tag dodges it.
+          final ux = n.x * mmPerPx + 12 * mmPerPx, uy = -n.y * mmPerPx;
+          layout.addBox((
+            minX: ux,
+            minY: uy,
+            maxX: ux + sense.length * textH * 0.55,
+            maxY: uy + textH,
+          ));
         }
         // N13: the riser stack tag (`CW-R1`) below the marker on the ANNO
         // layer, so the plan DXF carries the same riser id the single-line +
         // BOM do — now with its size + §10 length, composed exactly like the
         // plan PDF's riser label (`CW-R1 · DN32 - 4 m`; drawing-output-7).
+        // R5: placed through the SAME placer as the plan PDF's riser tag (a
+        // short pseudo-run just right of the marker), so it dodges the UP/DN
+        // mark + the runs and splits / leaders exactly like the PDF.
+        // Deferred to after the tie dimensions (the PDF's order), so the tag
+        // dodges the marker + UP/DN + tie lines/figures.
         if (riserLabel != null) {
-          g(0, 'TEXT');
-          g(8, kDxfLayerAnno);
-          g(10, n.x * mmPerPx + 12 * mmPerPx);
-          g(20, -n.y * mmPerPx - textH * 1.4);
-          g(40, textH);
-          g(1, riserLabel);
+          riserLabelJobs.add((
+            nx: n.x * mmPerPx,
+            x0: n.x * mmPerPx + 12 * mmPerPx,
+            y0: -n.y * mmPerPx,
+            text: riserLabel,
+            split: riserSplit,
+          ));
         }
       }
     }
@@ -725,12 +809,20 @@ String _professionalDxf({
     // layer beside the glyph.
     final eqTag = nodeTags?[n.id];
     if (eqTag != null && eqTag.isNotEmpty) {
-      g(0, 'TEXT');
-      g(8, kDxfLayerAnno);
-      g(10, n.x * mmPerPx + 12 * mmPerPx);
-      g(20, cyMm - textH * 1.4);
-      g(40, textH);
-      g(1, eqTag);
+      // R5: placed like the plan PDF's equipment tag (a pseudo-run just right
+      // of the glyph) so it dodges the run tags + other marks.
+      final x0 = n.x * mmPerPx + 12 * mmPerPx;
+      final w = eqTag.length * textH * 0.55;
+      emitLabel(placePlanLabel(
+          ax: x0,
+          ay: cyMm,
+          bx: x0 + w,
+          by: cyMm,
+          text: eqTag,
+          textSize: textH,
+          layout: layout,
+          anchorPoint: (x: n.x * mmPerPx, y: cyMm),
+          extraStations: mirrorStations(n.x * mmPerPx, cyMm, 12 * mmPerPx, w)));
     }
   }
 
@@ -779,6 +871,9 @@ String _professionalDxf({
       line(bx + px * gap * 3, by + py * gap * 3, bx + px * over,
           by + py * over);
       line(dax, day, dbx, dby);
+      // R5: the dimension line + figure are occupied for the deferred riser
+      // tags (placed after the ties, exactly like the plan PDF).
+      layout.addRun(null, dax, day, dbx, dby);
       final tick = textH * 0.25;
       final tkx = (ux + px) * tick / math.sqrt2;
       final tky = (uy + py) * tick / math.sqrt2;
@@ -792,6 +887,13 @@ String _professionalDxf({
       // drafting-6: the tie figure at the full minimum text height.
       g(40, textH);
       g(1, label);
+      final tx0 = (dax + dbx) / 2, ty0 = (day + dby) / 2 + textH * 0.2;
+      layout.addBox((
+        minX: tx0,
+        minY: ty0,
+        maxX: tx0 + label.length * textH * 0.55,
+        maxY: ty0 + textH,
+      ));
     }
 
     for (final id in riserNodeIds) {
@@ -807,6 +909,23 @@ String _professionalDxf({
         if (off != null) tieDim(n.x, row.position, n.x, n.y, off);
       }
     }
+  }
+
+  // R5: the deferred riser tags — the SAME placer + pseudo-run as the PDF.
+  for (final job in riserLabelJobs) {
+    final w = job.text.length * textH * 0.55;
+    emitLabel(placePlanLabel(
+        ax: job.x0,
+        ay: job.y0,
+        bx: job.x0 + w,
+        by: job.y0,
+        text: job.text,
+        textSize: textH,
+        layout: layout,
+        splitLines: job.split,
+        anchorPoint: (x: job.nx, y: job.y0),
+        extraStations:
+            mirrorStations(job.nx, job.y0, job.x0 - job.nx, w)));
   }
 
   // ── Issuable-document chrome (opt-in), anchored to the mm extent ────────────

@@ -490,71 +490,557 @@ String? gravitySlopeLabel(double slope) {
   return '1:${(1 / slope).round()}';
 }
 
-// ── N3: never-drop leadered edge-label placer ───────────────────────────────
+// ── N3 / R5: never-drop, run-hugging leadered edge-label placer ─────────────
 //
 // The shared `drawing_chrome.placeEdgeLabel` DROPS a size tag when no greedy
-// slot clears — on dense branches that silently loses labels, and two short
-// branches sharing a midpoint print nothing. This placer mirrors the riser
-// side (`mechanical_sld_drawing._LabelPlacer`): a tag is the drawing's content
-// and is NEVER dropped — when the greedy ladder can't clear, it ESCAPES
-// perpendicular in growing steps and ties the pulled-off label back to its run
-// with a LEADER, so tags never fuse into one unreadable token. Byte-identical
-// to the old placer whenever the first greedy slot clears (the common case).
+// slot clears — on dense branches that silently loses labels. The first N3
+// placer fixed the drop but escaped STRAIGHT OUT from the midpoint in growing
+// steps (up to ~170 pt), so on a real floor a tag landed far from its run on a
+// long leader that crossed other services (R5: `V-F2 · DN32 - …` leadered from
+// the sheet top). The R5 placer reads like a drafter's hand:
+//
+//   1. ALONG + BESIDE the run first — the tag stays parallel to its run, on
+//      either side, at several stations along it (mid, quarters, eighths), at
+//      the standard 0.7 × text offset; no leader.
+//   2. TWO LINES before escaping — a long label is split `tag · size` over
+//      `length - CL - fall` ([composePlanEdgeLabelLines]) so it fits beside a
+//      short run; a label much longer than its run tries the split first.
+//   3. Only then ESCAPE, one text row at a time, still parallel and still
+//      opposite a station on the run, with the leader CAPPED at
+//      [kPlanLeaderMaxFactor] × text size; among clear slots the placer prefers
+//      one whose leader crosses NO other run, then the shortest leader.
+//
+// Collision is judged on the label's real ORIENTED rectangle (a 45° tag's
+// axis-aligned bounds are a huge square, which made two diagonal tags "collide"
+// when they never touched and pushed both off), against: other placed labels,
+// the caller's occupied boxes (frame strips, title block, node glyphs, UP/DN,
+// tie text) and the other RUNS' linework (a tag never overprints another
+// service when a clear slot exists). Pure and deterministic given a stable
+// emission order. Both plan exporters (PDF + DXF) place through this ONE
+// function, so the two formats make the same choices for the same sheet.
 
-/// Perpendicular escape step (× textSize) + count for [placeEdgeLabelLeadered]
-/// when no greedy ladder slot clears — the tag is pushed further off the line
-/// in growing steps rather than dropped, then tied back with a leader. The step
-/// COUNT is generous (12) so a DENSE riser base — several branch runs + two
-/// coincident risers + the tie dimensions converging on one node (N3) — spreads
-/// its tags far enough to clear instead of settling on a least-bad overlap.
-const double _kLeaderEscapeFactor = 1.6;
-const int _kLeaderEscapeSteps = 12;
 
-/// A resolved leadered edge-label placement: the text anchor (baseline START)
-/// + the rotation in degrees CCW in the y-up output space, PLUS an optional
-/// [leaderAnchor] (the edge midpoint) — non-null when the label was pulled off
-/// the line and a thin leader should be drawn from the run to the label so it
-/// stays legible/unfused (N3).
+/// Line pitch (× text size) of a two-line label block and of the escape rows.
+const double kPlanLabelLineFactor = 1.3;
+
+/// The PREFERRED longest leader, × text size (≈ 8 text heights — ~25 mm on an
+/// A3 plot at 9 pt): a clear slot within it always wins.
+const double kPlanLeaderMaxFactor = 8.0;
+
+/// The HARD leader cap, × text size: only when nothing within
+/// [kPlanLeaderMaxFactor] is clear does a tag go further, and never beyond
+/// this (a short leader that overprints beats a cross-sheet one).
+const double kPlanLeaderHardMaxFactor = 16.0;
+
+/// Clearance (× text size) a label keeps from ANOTHER run's linework.
+const double _kRunClearFactor = 0.25;
+
+/// Gap (× text size) a label keeps from other labels / occupied boxes, so two
+/// tags never abut into one fused token (`DN752.4 m`).
+const double _kLabelGapFactor = 0.2;
+
+/// Stations along the run (fraction of its length) tried for the label centre,
+/// in preference order: midpoint, quarters, then the 3/8 / 5/8 and eighth
+/// points. The first two match the original greedy ladder (mid, quarter).
+const List<double> _kAlongStations = [
+  0.5, 0.25, 0.75, 0.375, 0.625, 0.125, 0.875
+];
+
+/// A run's linework as an obstacle segment in the output space.
+typedef LabelSegment = ({double x1, double y1, double x2, double y2});
+
+/// One positioned text line of a placed label: its [text] and the baseline
+/// START anchor ([x], [y]) in the y-up output space (rotation is the
+/// placement's `angleDeg`).
+typedef PlacedLabelLine = ({String text, double x, double y});
+
+/// The shared occupancy model the plan exporters place labels into: hard
+/// axis-aligned [boxes] (frame strips, title block, node glyphs, riser marks,
+/// UP/DN text, tie-dimension text), the ORIENTED rectangles of labels already
+/// placed, and the RUN linework segments (keyed by edge id, so a label skips
+/// only its own run). Construct one per sheet, register runs + boxes, then
+/// place each label with [placePlanLabel].
+class PlanLabelLayout {
+  /// Axis-aligned occupied boxes. Exposed (and live) so a caller can register
+  /// its own marks; a legacy caller may pass its own list.
+  final List<LabelBox> boxes;
+  final List<List<(double, double)>> _labels = [];
+  final List<({String? id, LabelSegment seg})> _runs = [];
+
+  PlanLabelLayout({List<LabelBox>? boxes}) : boxes = boxes ?? <LabelBox>[];
+
+  /// Register an occupied axis-aligned box.
+  void addBox(LabelBox b) => boxes.add(b);
+
+  /// Register a run's linework (an obstacle for every OTHER edge's label and
+  /// for leaders). [id] is the owning edge id (null ⇒ obstacle for all).
+  void addRun(String? id, double x1, double y1, double x2, double y2) =>
+      _runs.add((id: id, seg: (x1: x1, y1: y1, x2: x2, y2: y2)));
+
+  /// Number of labels placed so far.
+  int get labelCount => _labels.length;
+
+  /// True when [b] overlaps an occupied box or a placed label's oriented
+  /// rectangle — for a caller's own (axis-aligned) marks to dodge the labels.
+  bool hitsBox(LabelBox b) {
+    for (final o in boxes) {
+      if (_boxesOverlap(o, b)) return true;
+    }
+    final q = _boxQuad(b);
+    for (final l in _labels) {
+      if (_quadsOverlap(l, q)) return true;
+    }
+    return false;
+  }
+}
+
+/// A resolved leadered edge-label placement: the first line's text anchor
+/// (baseline START) + the rotation in degrees CCW in the y-up output space,
+/// every positioned [lines] entry (one or two), PLUS an optional
+/// [leaderAnchor] (the point ON the run the leader starts from) and
+/// [leaderEnd] (the nearest point of the label block) — non-null when the
+/// label was pulled off the run and a thin leader ties it back (N3/R5).
 class LeaderedLabelPlacement {
   final double x;
   final double y;
   final double angleDeg;
   final ({double x, double y})? leaderAnchor;
+  final ({double x, double y})? leaderEnd;
+  final List<PlacedLabelLine> lines;
   const LeaderedLabelPlacement({
     required this.x,
     required this.y,
     required this.angleDeg,
     this.leaderAnchor,
+    this.leaderEnd,
+    this.lines = const [],
   });
 }
 
 bool _boxesOverlap(LabelBox a, LabelBox b) =>
     a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
 
-/// Summed overlap AREA of [r] against every already-[placed] box (0 = clear) —
-/// used to pick the least-bad escape slot.
-double _totalOverlapArea(LabelBox r, List<LabelBox> placed) {
-  var total = 0.0;
-  for (final p in placed) {
-    final dx = math.min(r.maxX, p.maxX) - math.max(r.minX, p.minX);
-    final dy = math.min(r.maxY, p.maxY) - math.max(r.minY, p.minY);
-    if (dx > 0 && dy > 0) total += dx * dy;
+List<(double, double)> _boxQuad(LabelBox b) => [
+      (b.minX, b.minY),
+      (b.maxX, b.minY),
+      (b.maxX, b.maxY),
+      (b.minX, b.maxY),
+    ];
+
+LabelBox _quadBounds(List<(double, double)> q) {
+  var minX = double.infinity, minY = double.infinity;
+  var maxX = -double.infinity, maxY = -double.infinity;
+  for (final (x, y) in q) {
+    minX = math.min(minX, x);
+    minY = math.min(minY, y);
+    maxX = math.max(maxX, x);
+    maxY = math.max(maxY, y);
   }
-  return total;
+  return (minX: minX, minY: minY, maxX: maxX, maxY: maxY);
 }
 
-/// Place [text] along the edge (ax,ay)→(bx,by) in the y-up output space, rotated
-/// to the edge bearing (flipped past ±90° so it never reads upside-down), offset
-/// perpendicular by 0.7 × [textSize] on the consistent upper side. Greedy pass
-/// (midpoint upper/lower, quarter upper/lower) against [placed]; the first slot
-/// that clears wins with NO leader (byte-identical to `placeEdgeLabel`'s first
-/// candidate). When NONE clears — two short branch tags sharing a midpoint (N3)
-/// — the placer ESCAPES perpendicular from the midpoint in growing steps (up
-/// then down) until it clears, falling back to the least-overlapping escape slot
-/// if even that can't fully clear; the escaped label is ALWAYS returned with a
-/// [leaderAnchor] so the caller ties it back to the run. Never returns null: a
-/// size tag is content, never dropped. A successful placement appends its box to
-/// [placed]. Pure and deterministic given a stable emission order.
+/// Separating-axis test for two convex quads (strict: touching ≠ overlap).
+bool _quadsOverlap(List<(double, double)> a, List<(double, double)> b) {
+  for (final poly in [a, b]) {
+    for (var i = 0; i < poly.length; i++) {
+      final (x1, y1) = poly[i];
+      final (x2, y2) = poly[(i + 1) % poly.length];
+      final nx = -(y2 - y1), ny = x2 - x1;
+      if (nx == 0 && ny == 0) continue;
+      var aMin = double.infinity, aMax = -double.infinity;
+      for (final (x, y) in a) {
+        final p = x * nx + y * ny;
+        aMin = math.min(aMin, p);
+        aMax = math.max(aMax, p);
+      }
+      var bMin = double.infinity, bMax = -double.infinity;
+      for (final (x, y) in b) {
+        final p = x * nx + y * ny;
+        bMin = math.min(bMin, p);
+        bMax = math.max(bMax, p);
+      }
+      // Tolerance scaled to the axis length keeps exactly-touching boxes clear.
+      final eps = 1e-9 * (nx.abs() + ny.abs());
+      if (aMax <= bMin + eps || bMax <= aMin + eps) return false;
+    }
+  }
+  return true;
+}
+
+/// Proper (crossing) intersection of two segments — shared endpoints and
+/// collinear touches do NOT count (a leader that starts on a junction is fine).
+bool _segmentsCross(
+    double ax, double ay, double bx, double by,
+    double cx, double cy, double dx, double dy) {
+  double orient(double px, double py, double qx, double qy, double rx,
+          double ry) =>
+      (qx - px) * (ry - py) - (qy - py) * (rx - px);
+  final d1 = orient(cx, cy, dx, dy, ax, ay);
+  final d2 = orient(cx, cy, dx, dy, bx, by);
+  final d3 = orient(ax, ay, bx, by, cx, cy);
+  final d4 = orient(ax, ay, bx, by, dx, dy);
+  const eps = 1e-9;
+  return ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) &&
+      ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps));
+}
+
+/// The two-line form of a plan edge label: line 1 = `<tag> · <size>` (the
+/// element identity + size), line 2 = `<length> - <CL> - <fall>` (the set-out
+/// data). Returns null when the label would not split (nothing on one of the
+/// two lines). Pure; the joined form is [composePlanEdgeLabel].
+List<String>? composePlanEdgeLabelLines({
+  String? tag,
+  String? size,
+  String? length,
+  String? elevation,
+  String? slope,
+}) {
+  final first = composePlanEdgeLabel(tag: tag, size: size);
+  final rest = <String>[
+    for (final p in [length, elevation, slope])
+      if (p != null && p.isNotEmpty) p,
+  ];
+  if (first == null || rest.isEmpty) return null;
+  return [first, rest.join(' - ')];
+}
+
+/// Place a plan edge label for the run (ax,ay)→(bx,by) into [layout] (see the
+/// section note above): [text] is the one-line form, [splitLines] the optional
+/// two-line form ([composePlanEdgeLabelLines]); [ownRunId] names the run the
+/// label belongs to (its own linework is not an obstacle). Text width is
+/// estimated as chars × size × 0.55 (the Helvetica average). The first
+/// beside-the-run slot that clears wins with no leader — the midpoint upper
+/// slot is byte-identical to the original greedy placer. Never returns null:
+/// a size tag is content, never dropped. The placed rectangle is recorded in
+/// [layout] (and its bounds appended to `layout.boxes` when [recordBounds]).
+/// For a POINT feature labelled along a short pseudo-run beside it (a riser
+/// marker, an equipment glyph), [anchorPoint] makes an escaped tag's leader
+/// start at the feature itself, and [extraStations] (same bearing) lets the
+/// tag also sit on the feature's OTHER side when that side is clearer.
+LeaderedLabelPlacement placePlanLabel({
+  required double ax,
+  required double ay,
+  required double bx,
+  required double by,
+  required String text,
+  required double textSize,
+  required PlanLabelLayout layout,
+  List<String>? splitLines,
+  String? ownRunId,
+  bool recordBounds = false,
+  ({double x, double y})? anchorPoint,
+  List<({double x, double y})> extraStations = const [],
+}) {
+  final dx = bx - ax, dy = by - ay;
+  var angle = (dx == 0 && dy == 0) ? 0.0 : math.atan2(dy, dx);
+  if (angle > math.pi / 2 || angle <= -math.pi / 2) {
+    angle += angle > 0 ? -math.pi : math.pi;
+  }
+  final ca = math.cos(angle), sa = math.sin(angle);
+  final angleDeg = angle * 180 / math.pi;
+  final ts = textSize;
+  final lh = kPlanLabelLineFactor * ts;
+  final runLen = math.sqrt(dx * dx + dy * dy);
+  double widthOf(String s) => s.length * ts * 0.55;
+
+  // Line forms, in preference order. A label much longer than its run reads
+  // as detached from it, so the split form goes first there.
+  final single = [text];
+  final split = (splitLines != null && splitLines.length == 2) ? splitLines : null;
+  final forms = <List<String>>[
+    if (split != null && widthOf(text) > runLen * 1.15) split,
+    single,
+    if (split != null && widthOf(text) <= runLen * 1.15) split,
+  ];
+
+  // Local frame: u along the (upright) bearing, v along the upper normal.
+  (double, double) world(double cx, double cy, double u, double v) =>
+      (cx + ca * u - sa * v, cy + sa * u + ca * v);
+
+  // A candidate block: centre station (cx,cy), side (+1 upper / -1 lower),
+  // near-edge offset d from the run line.
+  ({
+    List<(double, double)> quad,
+    List<(double, double)> padded,
+    List<PlacedLabelLine> lines,
+    double v0,
+    double v1,
+    double halfW,
+  }) block(List<String> form, double cx, double cy, int side, double d) {
+    final n = form.length;
+    final h = ts + (n - 1) * lh;
+    var maxW = 0.0;
+    for (final s in form) {
+      maxW = math.max(maxW, widthOf(s));
+    }
+    final v0 = side > 0 ? d : -(d + h);
+    final v1 = side > 0 ? d + h : -d;
+    final lines = <PlacedLabelLine>[];
+    for (var i = 0; i < n; i++) {
+      final base = side > 0 ? d + h - ts - i * lh : -d - ts - i * lh;
+      final (x0, y0) = world(cx, cy, -widthOf(form[i]) / 2, base);
+      lines.add((text: form[i], x: x0, y: y0));
+    }
+    final quad = [
+      world(cx, cy, -maxW / 2, v0),
+      world(cx, cy, maxW / 2, v0),
+      world(cx, cy, maxW / 2, v1),
+      world(cx, cy, -maxW / 2, v1),
+    ];
+    // The collision footprint keeps a small gap around the text.
+    final g = _kLabelGapFactor * ts;
+    final padded = [
+      world(cx, cy, -maxW / 2 - g, v0 - g / 2),
+      world(cx, cy, maxW / 2 + g, v0 - g / 2),
+      world(cx, cy, maxW / 2 + g, v1 + g / 2),
+      world(cx, cy, -maxW / 2 - g, v1 + g / 2),
+    ];
+    return (
+      quad: quad,
+      padded: padded,
+      lines: lines,
+      v0: v0,
+      v1: v1,
+      halfW: maxW / 2
+    );
+  }
+
+  // Does an oriented block (local rect [-hw,hw]×[v0,v1] about (cx,cy)) come
+  // within the run clearance of another run's linework?
+  final clear = _kRunClearFactor * ts;
+  int runHits(double cx, double cy, double hw, double v0, double v1) {
+    var hits = 0;
+    for (final r in layout._runs) {
+      if (r.id != null && r.id == ownRunId) continue;
+      // Segment endpoints into the block's local frame.
+      (double, double) local(double x, double y) {
+        final px = x - cx, py = y - cy;
+        return (px * ca + py * sa, -px * sa + py * ca);
+      }
+
+      final (u1, w1) = local(r.seg.x1, r.seg.y1);
+      final (u2, w2) = local(r.seg.x2, r.seg.y2);
+      // Liang–Barsky clip against the inflated local rect.
+      var t0 = 0.0, t1 = 1.0;
+      final du = u2 - u1, dw = w2 - w1;
+      var inside = true;
+      for (final (p, q) in [
+        (-du, u1 - (-hw - clear)),
+        (du, (hw + clear) - u1),
+        (-dw, w1 - (v0 - clear)),
+        (dw, (v1 + clear) - w1),
+      ]) {
+        if (p == 0) {
+          if (q < 0) {
+            inside = false;
+            break;
+          }
+        } else {
+          final t = q / p;
+          if (p < 0) {
+            if (t > t1) {
+              inside = false;
+              break;
+            }
+            if (t > t0) t0 = t;
+          } else {
+            if (t < t0) {
+              inside = false;
+              break;
+            }
+            if (t < t1) t1 = t;
+          }
+        }
+      }
+      if (inside && t0 < t1) hits++;
+    }
+    return hits;
+  }
+
+  bool hitsPlaced(List<(double, double)> quad) {
+    final bounds = _quadBounds(quad);
+    for (final o in layout.boxes) {
+      if (_boxesOverlap(o, bounds) && _quadsOverlap(_boxQuad(o), quad)) {
+        return true;
+      }
+    }
+    for (final l in layout._labels) {
+      if (_quadsOverlap(l, quad)) return true;
+    }
+    return false;
+  }
+
+  double overlapArea(List<(double, double)> quad) {
+    final r = _quadBounds(quad);
+    var total = 0.0;
+    void add(LabelBox p) {
+      final ox = math.min(r.maxX, p.maxX) - math.max(r.minX, p.minX);
+      final oy = math.min(r.maxY, p.maxY) - math.max(r.minY, p.minY);
+      if (ox > 0 && oy > 0) total += ox * oy;
+    }
+
+    for (final o in layout.boxes) {
+      add(o);
+    }
+    for (final l in layout._labels) {
+      if (_quadsOverlap(l, quad)) add(_quadBounds(l));
+    }
+    return total;
+  }
+
+  LeaderedLabelPlacement commit(
+      ({
+        List<(double, double)> quad,
+        List<(double, double)> padded,
+        List<PlacedLabelLine> lines,
+        double v0,
+        double v1,
+        double halfW,
+      }) b,
+      {({double x, double y})? anchor,
+      ({double x, double y})? end}) {
+    layout._labels.add(b.quad);
+    if (recordBounds) layout.boxes.add(_quadBounds(b.quad));
+    // A drawn leader is linework too: later tags keep clear of it.
+    if (anchor != null && end != null) {
+      layout.addRun(null, anchor.x, anchor.y, end.x, end.y);
+    }
+    return LeaderedLabelPlacement(
+      x: b.lines.first.x,
+      y: b.lines.first.y,
+      angleDeg: angleDeg,
+      leaderAnchor: anchor,
+      leaderEnd: end,
+      lines: b.lines,
+    );
+  }
+
+  final du = 0.7 * ts; // the standard beside-the-run offset
+  final stations = [
+    for (final t in _kAlongStations) (ax + dx * t, ay + dy * t),
+    for (final p in extraStations) (p.x, p.y),
+  ];
+
+  // 1 + 2. Beside the run: every station, both sides, one then two lines.
+  for (final form in forms) {
+    for (final (cx, cy) in stations) {
+      for (final side in const [1, -1]) {
+        final b = block(form, cx, cy, side, du);
+        if (hitsPlaced(b.padded)) continue;
+        if (runHits(cx, cy, b.halfW, b.v0, b.v1) > 0) continue;
+        return commit(b);
+      }
+    }
+  }
+
+  // 3. Escape row by row, still parallel + opposite a station, leader capped.
+  final cap = kPlanLeaderMaxFactor * ts;
+  final hardCap = kPlanLeaderHardMaxFactor * ts;
+  ({
+    List<(double, double)> quad,
+    List<(double, double)> padded,
+    List<PlacedLabelLine> lines,
+    double v0,
+    double v1,
+    double halfW,
+  })? best;
+  ({double x, double y})? bestA, bestE;
+  // Lexicographic score: (tier, crossings, overprint, leader length).
+  var bestScore = (9, 1 << 30, double.infinity, double.infinity);
+  bool better((int, int, double, double) s) {
+    if (s.$1 != bestScore.$1) return s.$1 < bestScore.$1;
+    if (s.$2 != bestScore.$2) return s.$2 < bestScore.$2;
+    if (s.$3 != bestScore.$3) return s.$3 < bestScore.$3 - 1e-9;
+    return s.$4 < bestScore.$4 - 1e-9;
+  }
+
+  // Escape prefers the compact (two-line) form when one exists.
+  final escapeForms = [if (split != null) split, single];
+  for (final form in escapeForms) {
+    for (var k = 1; du + k * lh <= hardCap + 1e-9; k++) {
+      final d = du + k * lh;
+      for (final (cx, cy) in stations) {
+        for (final side in const [1, -1]) {
+          final b = block(form, cx, cy, side, d);
+          // The leader runs from the station on the run to the NEAREST point
+          // of the block (its near edge, clamped along the block width).
+          // A small gap keeps the leader tip off the glyphs.
+          final gap = 0.15 * ts;
+          final endV = side > 0 ? b.v0 - gap : b.v1 + gap;
+          // The leader starts at the station on the run — or, for a POINT
+          // feature ([anchorPoint]: a riser marker, an equipment glyph), at
+          // the feature itself, ending at the nearest point of the block's
+          // near edge (so it never reads as tagging a coincident run).
+          final double sx, sy, ex, ey;
+          if (anchorPoint == null) {
+            sx = cx;
+            sy = cy;
+            (ex, ey) = world(cx, cy, 0, endV);
+          } else {
+            sx = anchorPoint.x;
+            sy = anchorPoint.y;
+            final px = sx - cx, py = sy - cy;
+            final ua = px * ca + py * sa;
+            (ex, ey) = world(cx, cy, ua.clamp(-b.halfW, b.halfW), endV);
+          }
+          final len = math.sqrt((ex - sx) * (ex - sx) + (ey - sy) * (ey - sy));
+          if (len > hardCap + 1e-9) continue;
+          final placedHit = hitsPlaced(b.padded);
+          final rh = runHits(cx, cy, b.halfW, b.v0, b.v1);
+          // A leader should cross nothing: no other run, no placed label, no
+          // occupied mark (a leader through a tag reads as a strike-through).
+          var crossings = 0;
+          for (final r in layout._runs) {
+            if (r.id != null && r.id == ownRunId) continue;
+            if (_segmentsCross(sx, sy, ex, ey, r.seg.x1, r.seg.y1, r.seg.x2,
+                r.seg.y2)) {
+              crossings++;
+            }
+          }
+          final leaderSeg = [(sx, sy), (ex, ey)];
+          for (final l in layout._labels) {
+            if (_quadsOverlap(l, leaderSeg)) crossings++;
+          }
+          for (final o in layout.boxes) {
+            final lb = _quadBounds(leaderSeg);
+            if (_boxesOverlap(o, lb) && _quadsOverlap(_boxQuad(o), leaderSeg)) {
+              crossings++;
+            }
+          }
+          final isClear = !placedHit && rh == 0;
+          // Tiers: 0 clear + uncrossed within the preferred cap; 1 the same
+          // out to the hard cap; 2 clear but the leader crosses something;
+          // 3 the least-bad overprint.
+          final near = len <= cap + 1e-9;
+          final score = isClear
+              ? (crossings == 0 ? (near ? 0 : 1) : 2, crossings, 0.0, len)
+              : (3, crossings, overlapArea(b.quad) + rh * ts * ts, len);
+          if (better(score)) {
+            bestScore = score;
+            best = b;
+            bestA = (x: sx, y: sy);
+            bestE = (x: ex, y: ey);
+          }
+        }
+      }
+    }
+  }
+  if (best == null) {
+    // Degenerate (no station within the cap): first escape row at the midpoint.
+    final (cx, cy) = stations.first;
+    final b = block(escapeForms.first, cx, cy, 1, du + lh);
+    final (ex, ey) = world(cx, cy, 0, b.v0 - 0.15 * ts);
+    return commit(b,
+        anchor: anchorPoint ?? (x: cx, y: cy), end: (x: ex, y: ey));
+  }
+  return commit(best, anchor: bestA, end: bestE);
+}
+
+/// Legacy entry point (N3): place [text] for the edge (ax,ay)→(bx,by) against
+/// a plain list of occupied [placed] boxes, appending the placed label's
+/// bounds to it. Delegates to [placePlanLabel] (no run obstacles, no split
+/// form), so the midpoint-upper first slot is byte-identical to the original
+/// greedy placer and a crowded tag is never dropped (it escapes with a leader).
 LeaderedLabelPlacement placeEdgeLabelLeadered({
   required double ax,
   required double ay,
@@ -563,91 +1049,17 @@ LeaderedLabelPlacement placeEdgeLabelLeadered({
   required String text,
   required double textSize,
   required List<LabelBox> placed,
-}) {
-  final dx = bx - ax, dy = by - ay;
-  var angle = (dx == 0 && dy == 0) ? 0.0 : math.atan2(dy, dx);
-  if (angle > math.pi / 2 || angle <= -math.pi / 2) {
-    angle += angle > 0 ? -math.pi : math.pi;
-  }
-  final ca = math.cos(angle), sa = math.sin(angle);
-  final w = text.length * textSize * 0.55;
-  final mx = (ax + bx) / 2, my = (ay + by) / 2;
-  final angleDeg = angle * 180 / math.pi;
-
-  // The baseline START (anchor) of a label at ([cx],[cy]) offset perpendicular
-  // by [d] — the value the renderers feed a `Tm`/group-50 rotation.
-  (double, double) anchorFor(double cx, double cy, double d) =>
-      (cx - sa * d - ca * w / 2, cy + ca * d - sa * w / 2);
-  // Axis-aligned bounds of the rotated w × textSize text rect at that anchor.
-  LabelBox boxAt(double cx, double cy, double d) {
-    final (x0, y0) = anchorFor(cx, cy, d);
-    final xs = [
-      x0,
-      x0 + ca * w,
-      x0 - sa * textSize,
-      x0 + ca * w - sa * textSize
-    ];
-    final ys = [
-      y0,
-      y0 + sa * w,
-      y0 + ca * textSize,
-      y0 + sa * w + ca * textSize
-    ];
-    return (
-      minX: xs.reduce(math.min),
-      minY: ys.reduce(math.min),
-      maxX: xs.reduce(math.max),
-      maxY: ys.reduce(math.max),
+}) =>
+    placePlanLabel(
+      ax: ax,
+      ay: ay,
+      bx: bx,
+      by: by,
+      text: text,
+      textSize: textSize,
+      layout: PlanLabelLayout(boxes: placed),
+      recordBounds: true,
     );
-  }
-
-  final du = 0.7 * textSize; // upper offset
-  final dl = -(0.7 * textSize + textSize); // lower offset (backs off the box)
-
-  // Greedy ladder: midpoint upper, midpoint lower, quarter upper, quarter lower
-  // (the exact order — and geometry — of the old greedy placer).
-  final greedy = <(double, double, double)>[
-    (mx, my, du),
-    (mx, my, dl),
-    (ax + dx * 0.25, ay + dy * 0.25, du),
-    (ax + dx * 0.25, ay + dy * 0.25, dl),
-  ];
-  for (final (cx, cy, d) in greedy) {
-    final box = boxAt(cx, cy, d);
-    if (!placed.any((p) => _boxesOverlap(p, box))) {
-      placed.add(box);
-      final (x0, y0) = anchorFor(cx, cy, d);
-      return LeaderedLabelPlacement(x: x0, y: y0, angleDeg: angleDeg);
-    }
-  }
-
-  // Nothing cleared → escape perpendicular from the midpoint in growing steps,
-  // tracking the least-overlapping fallback. The tag is never dropped.
-  var bestD = du;
-  var bestBox = boxAt(mx, my, du);
-  var bestOverlap = double.infinity;
-  var cleared = false;
-  for (var k = 1; k <= _kLeaderEscapeSteps && !cleared; k++) {
-    final step = _kLeaderEscapeFactor * textSize * k;
-    for (final d in [du + step, dl - step]) {
-      final box = boxAt(mx, my, d);
-      final ov = _totalOverlapArea(box, placed);
-      if (ov < bestOverlap) {
-        bestOverlap = ov;
-        bestBox = box;
-        bestD = d;
-      }
-      if (ov <= 0) {
-        cleared = true;
-        break;
-      }
-    }
-  }
-  placed.add(bestBox);
-  final (x0, y0) = anchorFor(mx, my, bestD);
-  return LeaderedLabelPlacement(
-      x: x0, y: y0, angleDeg: angleDeg, leaderAnchor: (x: mx, y: my));
-}
 
 // ── N4: reference setting-out grid (first honest increment) ─────────────────
 //
@@ -796,8 +1208,8 @@ Length planSettingOutElevation(
 /// SAME figure the run's quantity includes: the leg is read from
 /// [runVerticalLeg] itself (the one source [edgeLength] uses), never
 /// re-derived here — never the misleading mean of the two ends. A level run
-/// (incl. every gravity run and a ceiling main to a ceiling diffuser) prints
-/// the bare `CL` token. Hanging heights come from [planSettingOutElevation] (so
+/// (a ceiling main to a ceiling diffuser) prints the bare `CL` token; a
+/// GRAVITY run prints none (no invert datum in the model — R5). Hanging heights come from [planSettingOutElevation] (so
 /// a roof-parked datum-less plant reads its own floor's ceiling); a hanging
 /// height outside `[0, floor height]` of its storey, or a leg taller than the
 /// storey, cannot be set out on this floor (e.g. a roof tank drawn on a lower
@@ -813,6 +1225,17 @@ Map<String, String> runCentrelineLabels(
   const eps = 0.005; // half the printed 0.01 m resolution
   for (final e in net.edges) {
     if (e.kind != EdgeKind.run) continue;
+    // R5 — GRAVITY runs (drainage / vent / rainwater) print NO `CL`. The §10
+    // model gives a gravity `main` node no below-slab / invert datum: it
+    // resolves to its OWN floor's ceiling (see `runVerticalLeg`), so the token
+    // read `CL +3.70` on an upper-floor soil branch — but Indonesian practice
+    // hangs a floor's drain branches UNDER its slab (in the ceiling void of the
+    // floor below) and sets them out by INVERT along the laid fall, neither of
+    // which the engine models. Printing the ceiling figure would be a
+    // fabricated set-out height, so the run keeps its honest tokens — size,
+    // §10 length and the real `1:N` fall from the design gradient — and the
+    // CL is omitted until gravity mains carry a real invert datum.
+    if (e.service.regime == FlowRegime.gravity) continue;
     final a = net.nodeById(e.fromId);
     final b = net.nodeById(e.toId);
     if (a == null || b == null) continue;

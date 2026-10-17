@@ -166,7 +166,11 @@ void main() {
 
     test('a gravity fixture branch carries no phantom leg', () {
       expect(l('dfd'), closeTo(2.0, 1e-9));
-      expect(runCentrelineLabels(n, one)['dfd'], 'CL +3.70');
+      // R5: a GRAVITY run prints NO `CL` — the model has no below-slab /
+      // invert datum for a drain main (it resolves to its own ceiling), so the
+      // ceiling figure would be a fabricated set-out height (see
+      // `runCentrelineLabels`). The fall token carries the gravity set-out.
+      expect(runCentrelineLabels(n, one).containsKey('dfd'), isFalse);
     });
 
     test('a hose reel still drops to its fixture height', () {
