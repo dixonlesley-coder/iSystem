@@ -11,12 +11,15 @@ import '../../store/app_state.dart'
         CoolingLoadMethod,
         coolingLoadMethodProvider,
         drainageSlopeProvider,
+        FeedStrategy,
+        feedStrategyProvider,
         hotWaterDeltaTProvider,
         hotWaterFlowTempProvider,
         occupancyProvider,
         rainfallIntensityProvider,
         runoffCoefficientProvider,
         statusMessageProvider;
+import '../../store/history_store.dart' show setFeedStrategyUndoable;
 import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -580,6 +583,7 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    final feed = ref.watch(feedStrategyProvider);
     final occ = ref.watch(occupancyProvider);
     final rain = ref.watch(rainfallIntensityProvider);
     final runoff = ref.watch(runoffCoefficientProvider);
@@ -614,6 +618,33 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 2026-10-17 — the water FEED STRATEGY is a building-wide design
+          // input: it decides the whole water solve, so it lives here (the
+          // inspectors only report it). `setFeedStrategyUndoable` records the
+          // undo step + narrates the change (D3 toast).
+          Text(context.strings(StringKey.buildingWaterSupply),
+              style: type.caption.copyWith(color: colors.textMuted)),
+          const SizedBox(height: MechXSpacing.xs),
+          Wrap(
+            spacing: MechXSpacing.xs,
+            runSpacing: MechXSpacing.xs,
+            children: [
+              MechXSegment(
+                label: context.strings(StringKey.feedUpfeedPump),
+                selected: feed == FeedStrategy.upfeed,
+                onTap: () =>
+                    setFeedStrategyUndoable(ref.read, FeedStrategy.upfeed),
+              ),
+              MechXSegment(
+                label: context.strings(StringKey.feedRoofTankDownfeed),
+                selected: feed == FeedStrategy.downfeed,
+                onTap: () =>
+                    setFeedStrategyUndoable(ref.read, FeedStrategy.downfeed),
+              ),
+            ],
+          ),
+          caption(context.strings(StringKey.buildingInputCaptionFeed)),
+          const SizedBox(height: MechXSpacing.md),
           Text('Occupancy',
               style: type.caption.copyWith(color: colors.textMuted)),
           const SizedBox(height: MechXSpacing.xs),

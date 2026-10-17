@@ -887,6 +887,16 @@ enum StringKey {
   settingsFeedDownfeed,
   settingsFeedStrategyChanged, // {mode}
 
+  // ── Feed strategy as a Building design input (2026-10-17) ────────────────
+  buildingWaterSupply,
+  feedUpfeedPump,
+  feedRoofTankDownfeed,
+  buildingInputCaptionFeed,
+  inspectorFeedLabel,
+  inspectorFeedChange,
+  inspectorFeedChangeSemantics,
+  paletteSwitchFeed,
+
   // ── The Building page's design inputs explain their effect (G7) ───────────
   buildingInputCaptionOccupancy,
   buildingInputCaptionRainfall,
@@ -1962,6 +1972,15 @@ const Map<StringKey, String> _en = {
   StringKey.settingsFeedDownfeed: 'roof-tank downfeed',
   StringKey.settingsFeedStrategyChanged:
       'Water feed: {mode} - pressures, zones and pump duty resized',
+  StringKey.buildingWaterSupply: 'Water supply',
+  StringKey.feedUpfeedPump: 'Upfeed pump',
+  StringKey.feedRoofTankDownfeed: 'Roof-tank downfeed',
+  StringKey.buildingInputCaptionFeed:
+      'Decides the whole water solve: pump duty (upfeed) or PRV zones (downfeed).',
+  StringKey.inspectorFeedLabel: 'Feed',
+  StringKey.inspectorFeedChange: 'Change',
+  StringKey.inspectorFeedChangeSemantics: 'Change feed strategy',
+  StringKey.paletteSwitchFeed: 'Switch feed strategy',
 
   // G7 — the Building design inputs say what they drive.
   StringKey.buildingInputCaptionOccupancy:
@@ -3043,6 +3062,15 @@ const Map<StringKey, String> _id = {
   StringKey.settingsFeedDownfeed: 'gravitasi tangki atap',
   StringKey.settingsFeedStrategyChanged:
       'Pasokan air: {mode} - tekanan, zona dan duti pompa dihitung ulang',
+  StringKey.buildingWaterSupply: 'Pasokan air',
+  StringKey.feedUpfeedPump: 'Pompa dorong ke atas',
+  StringKey.feedRoofTankDownfeed: 'Gravitasi tangki atap',
+  StringKey.buildingInputCaptionFeed:
+      'Menentukan seluruh perhitungan air: duti pompa (upfeed) atau zona PRV (downfeed).',
+  StringKey.inspectorFeedLabel: 'Pasokan',
+  StringKey.inspectorFeedChange: 'Ubah',
+  StringKey.inspectorFeedChangeSemantics: 'Ubah strategi pasokan',
+  StringKey.paletteSwitchFeed: 'Ganti strategi pasokan',
 
   // G7.
   StringKey.buildingInputCaptionOccupancy:

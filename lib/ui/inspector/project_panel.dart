@@ -87,6 +87,7 @@ import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
 import '../strings/plural.dart';
 import 'disclosure_header.dart';
+import 'feed_strategy_line.dart';
 import 'fixture_library_editor.dart';
 import 'result_card.dart';
 import '../theme/design_tokens.dart';
@@ -3521,24 +3522,6 @@ class _ResultsSection extends ConsumerWidget {
       child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Wrap(
-          spacing: MechXSpacing.xs,
-          runSpacing: MechXSpacing.xs,
-          children: [
-            _Pill(
-              label: 'Upfeed pump',
-              selected: strategy == FeedStrategy.upfeed,
-              onTap: () => setFeedStrategyUndoable(ref.read, FeedStrategy.upfeed),
-            ),
-            _Pill(
-              label: 'Roof-tank downfeed',
-              selected: strategy == FeedStrategy.downfeed,
-              onTap: () =>
-                  setFeedStrategyUndoable(ref.read, FeedStrategy.downfeed),
-            ),
-          ],
-        ),
-        const SizedBox(height: MechXSpacing.sm),
         // Canvas view toggles: show the auto-sized labels + the pressure heatmap.
         Wrap(
           spacing: MechXSpacing.xs,
@@ -3561,6 +3544,9 @@ class _ResultsSection extends ConsumerWidget {
           headlineCard,
         ],
         const SizedBox(height: MechXSpacing.sm),
+        // 2026-10-17: the feed strategy is a Building design input — reported
+        // read-only here, with a 'Change' link to the Building page.
+        const FeedStrategyLine(),
         // E11: honest empty state — until a network is actually drawn and
         // solved, show a muted prompt (the HVAC-section idiom) instead of
         // dash rows and a misleading 'BOM total 0.0 m'.

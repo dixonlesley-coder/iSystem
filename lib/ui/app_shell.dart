@@ -27,6 +27,7 @@ import 'electrical/electrical_inspector.dart';
 import 'electrical/electrical_palette.dart';
 import 'electrical/electrical_view.dart';
 import 'inspector/collapsible_inspector.dart';
+import 'inspector/feed_strategy_line.dart';
 import 'inspector/project_panel.dart';
 import 'layout/layout_canvas.dart';
 import 'review/review_hub.dart';
@@ -621,19 +622,16 @@ class _ElectricalWorkspaceInspectorColumn extends ConsumerWidget {
 }
 
 /// The right inspector shown on the RISER (Schematic) workspace (F1). A lean,
-/// riser-relevant column — the building context, the feed strategy that drives
-/// the riser's function tags (gravity vs booster), and a pointer to the
-/// on-canvas Auto/Edit riser tools — instead of the plan's DRAW inspector
+/// riser-relevant column — the building context, the (read-only) feed strategy
+/// that drives the riser's function tags (gravity vs booster), and the riser
+/// system summary — instead of the plan's DRAW inspector
 /// (whose tools + palette mutate the Layout canvas, invisible from here).
 class _RiserInspectorColumn extends ConsumerWidget {
   const _RiserInspectorColumn();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final colors = context.colors;
-    final type = context.type;
     final building = ref.watch(projectControllerProvider).building;
-    final strategy = ref.watch(feedStrategyProvider);
     return SizedBox(
       width: ProjectPanel.width,
       // Transparent: floats on the CollapsibleInspector's Liquid-Glass surface.
@@ -658,93 +656,14 @@ class _RiserInspectorColumn extends ConsumerWidget {
                   .read(shellSectionProvider.notifier)
                   .set(ShellSection.building),
             ),
-            const SizedBox(height: MechXSpacing.lg),
-            // Feed strategy — the input that decides each riser's function tag
-            // (gravity downfeed vs upfeed/booster) on the diagram.
-            const MechXSectionLabel('Feed strategy'),
             const SizedBox(height: MechXSpacing.xs),
-            // C5: the two feed-strategy choices are a mutually-exclusive segment,
-            // so they wear the shared TINTED selected-segment idiom (accentMuted
-            // fill + accent border) used by the draw tools / service chips — not a
-            // solid-accent fill, so a single solid accent stays reserved for the
-            // primary action.
-            _TintedToggle(
-              label: 'Upfeed pump',
-              selected: strategy == FeedStrategy.upfeed,
-              onTap: () => setFeedStrategyUndoable(ref.read, FeedStrategy.upfeed),
-            ),
-            const SizedBox(height: MechXSpacing.xs),
-            _TintedToggle(
-              label: 'Roof-tank downfeed',
-              selected: strategy == FeedStrategy.downfeed,
-              onTap: () =>
-                  setFeedStrategyUndoable(ref.read, FeedStrategy.downfeed),
-            ),
+            // 2026-10-17: the feed strategy (which decides each riser's
+            // function tag) is a Building design input — reported read-only
+            // here, with a 'Change' link to the Building page.
+            const FeedStrategyLine(),
             const SizedBox(height: MechXSpacing.lg),
             const RiserSystemSummary(),
-            Text(
-              'Place, move and size risers on the canvas — switch Auto '
-              '(read-only diagram) and Edit on the toolbar above.',
-              style: type.caption.copyWith(color: colors.textMuted),
-            ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// A tinted selected-segment toggle (C5) — the shared idiom used by the draw
-/// tools / service chips: a soft `accentMuted` fill + accent border when
-/// selected, so a single SOLID accent stays reserved for the primary action.
-/// A local mirror of the (file-private) `_TintedToggle` in `project_panel.dart`
-/// — same styling, kept in step so the riser inspector reads as one app.
-class _TintedToggle extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _TintedToggle({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: MechXFocusRing(
-        onActivated: onTap,
-        borderRadius: MechXRadii.control,
-        child: GestureDetector(
-          onTap: onTap,
-          behavior: HitTestBehavior.opaque,
-          child: Container(
-            padding: EdgeInsets.symmetric(
-              // Match the default MechXButton padding, compensating the heavier
-              // selected border so the toggle never resizes between states.
-              horizontal: MechXSpacing.sm + 4 - (selected ? 1 : 0),
-              vertical: MechXSpacing.xs + 2 - (selected ? 1 : 0),
-            ),
-            decoration: BoxDecoration(
-              color: selected ? colors.accentMuted : colors.surfaceHover,
-              borderRadius: MechXRadii.control,
-              border: Border.all(
-                color: selected ? colors.accent : const Color(0x00000000),
-                width: selected ? 2 : 1,
-              ),
-            ),
-            child: Text(
-              label,
-              style: type.label.copyWith(
-                color: selected ? colors.accent : colors.textPrimary,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-              ),
-            ),
-          ),
         ),
       ),
     );

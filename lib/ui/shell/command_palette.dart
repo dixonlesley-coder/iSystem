@@ -44,6 +44,7 @@ import '../shell/duplicate_floor_dialog.dart';
 import '../shell/nav_rail.dart';
 import '../shell/project_io.dart';
 import '../shell/templates_dialog.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../widgets/glass_surface.dart';
 import '../theme/mechx_theme.dart';
@@ -425,6 +426,18 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       subtitle: 'Pick a new file',
       shortcut: 'Ctrl+Shift+S',
       run: () => saveProject(ref, saveAs: true),
+    ),
+    // The heatmap what-if: flip upfeed <-> downfeed in one keystroke (the
+    // strategy itself is edited on the Building page's Design inputs card).
+    _Command(
+      id: 'project.feed.toggle',
+      title: context.strings(StringKey.paletteSwitchFeed),
+      run: () => setFeedStrategyUndoable(
+        ref.read,
+        ref.read(feedStrategyProvider) == FeedStrategy.upfeed
+            ? FeedStrategy.downfeed
+            : FeedStrategy.upfeed,
+      ),
     ),
     _Command(
       id: 'theme.toggle',

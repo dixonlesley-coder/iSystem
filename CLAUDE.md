@@ -253,7 +253,7 @@ screen) and opening either overlay closes the other. The palette carries matchin
 disclosure_header.dart` + `result_card.dart` + `store/inspector_store.dart`
 `sectionVisibilityProvider`): the dense `ProjectPanel`'s major sections (Draw / Tanks / Rooms /
 Results / Fire / HVAC — the sheet→floor control was dropped as redundant with the sheet rail, and
-the design INPUTS [occupancy/rainfall/runoff] moved to the Building setup page, leaving only the
+the design INPUTS [occupancy/rainfall/runoff + the water FEED STRATEGY (2026-10-17; the Layout/Riser inspectors show only a read-only `FeedStrategyLine` with a Change link, palette: Switch feed strategy)] moved to the Building setup page, leaving only the
 Show/Hide-sizes canvas toggle atop Results) are wrapped in a reusable `DisclosureSection` — a tappable
 header (replacing the section's `MechXSectionLabel`) with a custom-painted chevron that discloses
 its body only when expanded. Expansion is TRANSIENT UI state in `sectionVisibilityProvider` (a

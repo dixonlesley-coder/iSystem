@@ -3,9 +3,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/app_state.dart'
-    show occupancyProvider, statusMessageProvider;
+    show
+        FeedStrategy,
+        feedStrategyProvider,
+        occupancyProvider,
+        statusMessageProvider;
+import 'package:mechx/store/electrical_store.dart'
+    show WorkspaceView, workspaceViewProvider;
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/ui/inspector/feed_strategy_line.dart';
 import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx/ui/widgets/stepped_value_field.dart';
 import 'package:mechx_engine/geometry/building.dart' show MountingHeights;
@@ -287,5 +294,50 @@ void main() {
     expect(find.text('Roof Plan'), findsWidgets);
     // The two levels left planless say so honestly.
     expect(find.text('none'), findsNWidgets(2));
+  });
+
+  testWidgets('the water feed strategy is a Building design input (2026-10-17)',
+      (tester) async {
+    await _openBuilding(tester);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    expect(find.text('Water supply'), findsOneWidget);
+    expect(find.textContaining('Decides the whole water solve'), findsOneWidget);
+    final start = container.read(feedStrategyProvider);
+    final target = start == FeedStrategy.upfeed
+        ? 'Roof-tank downfeed'
+        : 'Upfeed pump';
+    await tester.ensureVisible(find.text(target));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(target));
+    await tester.pump();
+    expect(container.read(feedStrategyProvider), isNot(start));
+    // D3 — the undoable setter still narrates the change.
+    expect(container.read(statusMessageProvider), startsWith('Water feed:'));
+  });
+
+  testWidgets('the inspector reports the feed read-only; Change opens Building',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    // The Riser inspector carries the always-visible Feed line.
+    container.read(workspaceViewProvider.notifier).set(WorkspaceView.schematic);
+    await tester.pumpAndSettle();
+    final line = find.byType(FeedStrategyLine);
+    expect(line, findsOneWidget);
+    expect(find.descendant(of: line, matching: find.text('Feed')),
+        findsOneWidget);
+    // No inline toggles remain in the inspector.
+    expect(find.text('Feed strategy'), findsNothing);
+    await tester.tap(find.descendant(of: line, matching: find.text('Change')));
+    await tester.pump();
+    expect(container.read(shellSectionProvider), ShellSection.building);
   });
 }
