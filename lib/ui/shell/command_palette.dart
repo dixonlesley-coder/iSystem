@@ -457,6 +457,15 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       shortcut: 'Ctrl+I',
       run: () => importPlan(context, ref),
     ),
+    // The multi-file append (one plan file per floor) — the keyboard path to
+    // the sheet rail's right-click 'Add sheets from files…' row.
+    _Command(
+      id: 'project.addSheets',
+      title: context.strings(StringKey.sheetRailAddFiles),
+      subtitle: 'Append every picked PDF / DXF / DWG as new sheets',
+      aliases: const ['add sheets', 'multi file', 'append plans'],
+      run: () => addSheetsFromFiles(context, ref),
+    ),
     _Command(
       id: 'project.open',
       title: 'Open project',

@@ -5,7 +5,11 @@
 /// (add/rename/remove) are exercised in `sheets_store_test`.
 library;
 
+import 'package:file_picker/file_picker.dart';
+// ignore: implementation_imports
+import 'package:file_picker/src/platform/file_picker_platform_interface.dart';
 import 'package:flutter/gestures.dart' show kSecondaryButton;
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -106,6 +110,34 @@ void main() {
     expect(find.text('Add sheets from files…'), findsNothing);
   });
 
+  testWidgets('R4: Shift+Enter on the focused "+" tile reaches the multi-file '
+      'append (keyboard parity with the right-click row)', (tester) async {
+    setDesktopSurface(tester);
+    final previous = FilePickerPlatform.instance;
+    final spy = _SpyPicker();
+    FilePickerPlatform.instance = spy;
+    addTearDown(() => FilePickerPlatform.instance = previous);
+
+    await tester.pumpWidget(ProviderScope(child: _host(const SheetRail())));
+    final c = ProviderScope.containerOf(tester.element(find.byType(SheetRail)));
+    c.read(sheetsControllerProvider.notifier).loadSheets(
+      const [Sheet(id: 'r', name: 'RealPlan', dxfPath: '/nope.dxf')],
+    );
+    await tester.pumpAndSettle();
+    final plus = find.byKey(const ValueKey('sheet-rail-import'));
+    Focus.of(tester.element(
+            find.descendant(of: plus, matching: find.byType(CustomPaint)).last))
+        .requestFocus();
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pumpAndSettle();
+    // The MULTI-file picker opened (Import plan asks for a single file).
+    expect(spy.calls, [true]);
+  });
+
   testWidgets('the Remove row removes the sheet from the rail (A6)',
       (tester) async {
     setDesktopSurface(tester);
@@ -127,4 +159,28 @@ void main() {
     expect(c.read(sheetsControllerProvider).sheets.map((s) => s.id), ['a']);
     expect(_inRail(find.text('PlanB')), findsNothing);
   });
+}
+
+/// Records each pickFiles call's allowMultiple flag and cancels the dialog.
+class _SpyPicker extends FilePickerPlatform {
+  final calls = <bool>[];
+
+  @override
+  Future<FilePickerResult?> pickFiles({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Function(FilePickerStatus)? onFileLoading,
+    int compressionQuality = 0,
+    bool allowMultiple = false,
+    bool withData = false,
+    bool withReadStream = false,
+    bool lockParentWindow = false,
+    bool readSequential = false,
+    bool cancelUploadOnWindowBlur = true,
+  }) async {
+    calls.add(allowMultiple);
+    return null;
+  }
 }

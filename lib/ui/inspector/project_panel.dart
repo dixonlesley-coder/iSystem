@@ -631,15 +631,23 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   bool isPumpNode(NetNode n) =>
       n.component == NodeComponent.pump ||
       n.component == NodeComponent.boosterSet;
+  // Both picks need a POSITIVE service match: an unpiped pump (no incident
+  // edges yet — e.g. a fire pump dropped but not connected) is neither the
+  // domestic booster nor the fire pump, so it can never steal either row's
+  // tag; the fixed fallback applies until it is piped.
   bool onFire(NetNode n) => servicesAt(
     n.id,
   ).any((s) => s == ServiceType.fireHydrant || s == ServiceType.fireSprinkler);
+  bool onWater(NetNode n) => servicesAt(
+    n.id,
+  ).any((s) => s == ServiceType.coldWater || s == ServiceType.hotWater);
 
   // Pumps: the domestic-supply booster (upfeed) + the standpipe fire pump.
   final pumps = <PumpScheduleItem>[];
   final supplyPump = ref.read(pumpDutyProvider);
   if (supplyPump != null) {
-    final tag = tagOfFirst((n) => isPumpNode(n) && !onFire(n)) ?? 'P-01';
+    final tag =
+        tagOfFirst((n) => isPumpNode(n) && onWater(n) && !onFire(n)) ?? 'P-01';
     pumps.add(
       PumpScheduleItem(
         duty: supplyPump,

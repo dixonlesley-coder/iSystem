@@ -9,6 +9,7 @@
 //   dart run tool/generate_export_samples.dart [outDir]
 // Dev tool only — not part of the app or the test gate.
 // ignore_for_file: avoid_print, prefer_const_declarations
+import 'dart:convert' show latin1;
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -684,9 +685,7 @@ void main(List<String> args) {
 
   // 1 & 2 — annotated plan PDFs (A3, calibrated, issuable chrome).
   attempt('plan-ground.pdf', () {
-    writeBytes(
-        'plan-ground.pdf',
-        planToPdf(
+    final bytes = planToPdf(
           net: net,
           sizing: sizing,
           edgeLengths: edgeLengths,
@@ -718,12 +717,12 @@ void main(List<String> args) {
             dateString: dateString,
             legendServices: servicesOnFloor(net, 's0', 0),
           ),
-        ));
+        );
+    checkTexts['plan-ground'] = latin1.decode(bytes);
+    writeBytes('plan-ground.pdf', bytes);
   });
   attempt('plan-lantai1.pdf', () {
-    writeBytes(
-        'plan-lantai1.pdf',
-        planToPdf(
+    final bytes = planToPdf(
           net: net,
           sizing: sizing,
           edgeLengths: edgeLengths,
@@ -755,7 +754,9 @@ void main(List<String> args) {
             dateString: dateString,
             legendServices: servicesOnFloor(net, 's1', 1),
           ),
-        ));
+        );
+    checkTexts['plan-lantai1'] = latin1.decode(bytes);
+    writeBytes('plan-lantai1.pdf', bytes);
   });
 
   // 3 — plan DXF for the ground floor.
@@ -815,6 +816,8 @@ void main(List<String> args) {
       building: building,
       // N6: the §10 length-per-edge map — every run/riser tag carries metres.
       edgeLengths: edgeLengths,
+      // drafting-7: the SAME stable equipment tags the plan + schedule print.
+      nodeTags: nodeTagsMap,
       supplyNote: 'Air bersih: tangki bawah -> pompa booster -> riser upfeed',
       // Derived from the model + the solved duty, never hand-typed.
       equipmentDetailByNodeId: {
@@ -1102,17 +1105,21 @@ void main(List<String> args) {
       // Tags + services as the app's exportEquipmentSchedule assigns them.
       pumps: [
         PumpScheduleItem(
-            duty: pumpDuty, service: 'Domestic water supply', tag: 'P-01'),
+            duty: pumpDuty,
+            service: 'Domestic water supply',
+            // Keyed on the drawn unit's plan tag (as the app's tagOfFirst does).
+            tag: nodeTagsMap['cw-pump']!),
         PumpScheduleItem(
             duty: duties.firePump,
             service: 'Fire standpipe pump',
+            // Not drawn on any plan ⇒ the fixed fallback tag (app parity).
             tag: 'FP-01'),
       ],
       fans: [
         FanScheduleItem(
             duty: ahuFan,
             service: 'Office AHU',
-            tag: 'AHU-01',
+            tag: nodeTagsMap['ahu1']!,
             airHandling: true),
       ],
       electrical: result,
@@ -1145,6 +1152,7 @@ void main(List<String> args) {
       texts: checkTexts,
       project: project,
       result: result,
+      drawnUnitTags: [nodeTagsMap['cw-pump']!, nodeTagsMap['ahu1']!],
     );
     if (mismatches.isNotEmpty) {
       throw StateError('cross-artifact mismatches:\n  - '
@@ -1173,6 +1181,7 @@ List<String> crossCheckArtifacts({
   required Map<String, String> texts,
   required ElectricalProject project,
   required ElectricalSystemResult result,
+  List<String> drawnUnitTags = const [],
 }) {
   final out = <String>[];
   String text(String key) {
@@ -1195,6 +1204,21 @@ List<String> crossCheckArtifacts({
   final kw = duties.supplyPump.selectedMotor.inKiloWatts;
   if (pumpWay == null || ((pumpWay.motorKw ?? -1) - kw).abs() > 1e-9) {
     out.add('electrical booster way motorKw ${pumpWay?.motorKw} != $kw');
+  }
+
+  // 1b. drafting-7 tag parity: every scheduled tag of a DRAWN unit appears on
+  //     a plan sheet AND on the riser, so the three cross-reference one unit.
+  final planText = '${text('plan-ground')}\n${text('plan-lantai1')}';
+  for (final tag in drawnUnitTags) {
+    if (!text('equipment-schedule').contains(tag)) {
+      out.add('equipment-schedule does not list the drawn unit $tag');
+    }
+    if (!planText.contains(tag)) {
+      out.add('no plan sheet prints the scheduled tag $tag');
+    }
+    if (!text('riser-mech').contains(tag)) {
+      out.add('riser-mech does not print the scheduled tag $tag');
+    }
   }
 
   // 2. Fire pump presence: equipment schedule <=> calc-report fire section
