@@ -68,6 +68,9 @@ final solveProvider = Provider<PressureSolution?>((ref) {
     calibrationBySheet: project.calibrations,
     building: project.building,
     targetResidual: _targetResidual,
+    // water-drainage-8 — static lift + riser friction on the project's
+    // mounting heights, the same basis the drawings and report print.
+    mounting: project.mounting,
   );
 });
 
@@ -92,6 +95,9 @@ final downfeedProvider = Provider<DownfeedSolution?>((ref) {
     calibrationBySheet: project.calibrations,
     building: project.building,
     targetResidual: _targetResidual,
+    // water-drainage-8 — static lift + riser friction on the project's
+    // mounting heights, the same basis the drawings and report print.
+    mounting: project.mounting,
   );
 });
 
@@ -269,6 +275,7 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
     sizing: sizing,
     calibrationBySheet: project.calibrations,
     building: project.building,
+    mounting: project.mounting,
   );
   return (trunk: trunk, stat: s.totalStaticPressure);
 }

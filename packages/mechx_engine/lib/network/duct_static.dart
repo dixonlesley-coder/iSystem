@@ -55,6 +55,7 @@ DuctStaticSolution solveDuctStatic({
   required BuildingLevels building,
   Pressure terminalLoss = const Pressure(30),
   double fittingFactor = 1.3,
+  MountingHeights mounting = const MountingHeights(),
 }) {
   // Adjacency over THIS service only.
   final adjacency = <String, List<({NetEdge edge, String other})>>{};
@@ -88,6 +89,7 @@ DuctStaticSolution solveDuctStatic({
           net,
           calibrationBySheet: calibrationBySheet,
           building: building,
+          mounting: mounting,
         );
         edgePa = ductFrictionPaPerMetre(
               flow,

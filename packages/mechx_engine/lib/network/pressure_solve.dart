@@ -65,11 +65,13 @@ import 'network.dart';
 class PressureSolution {
   /// Residual (flowing) pressure at each reachable node id, including the
   /// source. The [criticalNodeId]'s value ≈ the requested target residual;
-  /// every other node's value is ≥ the target.
+  /// every other DELIVERY node's (fixture / outlet — see [_deliveryNodes])
+  /// value is ≥ the target. A ceiling-level main above the fixtures can read
+  /// below target (it is not a delivery point).
   final Map<String, Pressure> residualPressure;
 
-  /// Head the source pump must develop so the worst-served node still meets the
-  /// target residual: max over reachable nodes of
+  /// Head the source pump must develop so the worst-served DELIVERY node still
+  /// meets the target residual: max over reachable delivery nodes of
   /// (friction-from-source + elevation-gain + target-as-head).
   final Head requiredPumpHead;
 
@@ -106,6 +108,36 @@ class PressureSolution {
   });
 }
 
+/// The DELIVERY nodes among [reached] — the points the design residual is a
+/// requirement AT (audit 2026-10 water-drainage-5). The target residual is a
+/// fixture/outlet requirement: a ceiling-level distribution main sits ABOVE the
+/// fixtures it feeds (ceiling − fixture height ≈ 2.6 m on a 4 m storey), so
+/// demanding the target there oversized the pump / booster and mis-tagged the
+/// critical node. Preference:
+///   1. every reached [NodeRole.fixture] node other than [sourceId];
+///   2. else every reached degree-1 leaf (in the [adjacency] of this service)
+///      other than [sourceId] — a drawn run's open end is where it delivers;
+///   3. else every reached node (degenerate — keeps the old behaviour).
+/// Residuals are still REPORTED for every node (the heatmap shows mains too).
+Set<String> _deliveryNodes(
+  Network net,
+  Iterable<String> reached,
+  String sourceId,
+  Map<String, List<({NetEdge edge, String other})>> adjacency,
+) {
+  final fixtures = <String>{
+    for (final id in reached)
+      if (id != sourceId && net.nodeById(id)?.role == NodeRole.fixture) id,
+  };
+  if (fixtures.isNotEmpty) return fixtures;
+  final leaves = <String>{
+    for (final id in reached)
+      if (id != sourceId && (adjacency[id]?.length ?? 0) == 1) id,
+  };
+  if (leaves.isNotEmpty) return leaves;
+  return reached.toSet();
+}
+
 /// Internal per-node accumulation along the path from the source.
 class _NodeCost {
   final Head friction;
@@ -136,6 +168,7 @@ PressureSolution solvePressurized({
   required BuildingLevels building,
   required Pressure targetResidual,
   PipeMaterial material = PipeMaterial.pvc,
+  MountingHeights mounting = const MountingHeights(),
 }) {
   const profile = SniProfile();
   final hwC = profile.hazenWilliamsC(material);
@@ -154,11 +187,13 @@ PressureSolution solvePressurized({
 
   final sourceElevation = source == null
       ? const Length(0)
-      : nodeElevation(source, building);
+      : nodeElevation(source, building, mounting);
 
   // BFS from the source; each visited node records cumulative friction +
   // elevation gain along its (unique, tree) path back to the source.
-  final costs = <String, _NodeCost>{sourceId: const _NodeCost(Head(0), Length(0))};
+  final costs = <String, _NodeCost>{
+    sourceId: const _NodeCost(Head(0), Length(0))
+  };
   final queue = <String>[sourceId];
   var head = 0;
   while (head < queue.length) {
@@ -182,6 +217,7 @@ PressureSolution solvePressurized({
           net,
           calibrationBySheet: calibrationBySheet,
           building: building,
+          mounting: mounting,
         );
         // Per-edge C: the edge's pipe product if set, else the service-wide C.
         final edgeC = edge.pipeProduct != null
@@ -207,7 +243,7 @@ PressureSolution solvePressurized({
       final neighbour = net.nodeById(link.other);
       final neighbourElevation = neighbour == null
           ? sourceElevation
-          : nodeElevation(neighbour, building);
+          : nodeElevation(neighbour, building, mounting);
 
       costs[link.other] = _NodeCost(
         Head(currentCost.friction.meters + edgeFriction),
@@ -217,11 +253,15 @@ PressureSolution solvePressurized({
     }
   }
 
-  // requiredPumpHead = max over reachable nodes of
+  // requiredPumpHead = max over reachable DELIVERY nodes of
   //   friction-from-source + elevation-gain + target-as-head.
+  // (water-drainage-5: a ceiling main above its fixtures is not where the
+  // target residual is owed.)
+  final delivery = _deliveryNodes(net, costs.keys, sourceId, adjacency);
   var requiredPumpHead = targetHead.meters;
   var criticalNodeId = sourceId;
   costs.forEach((nodeId, cost) {
+    if (!delivery.contains(nodeId)) return;
     final required =
         cost.friction.meters + cost.elevationGain.meters + targetHead.meters;
     if (required > requiredPumpHead) {
@@ -257,8 +297,9 @@ class DownfeedSolution {
   /// tank, after friction. Can be negative where gravity cannot deliver.
   final Map<String, Pressure> residualPressure;
 
-  /// Id of the worst-served node (least residual) — excludes the tank itself;
-  /// typically the highest / most-distant fixture, nearest the tank.
+  /// Id of the worst-served DELIVERY node (least residual; fixtures, else open
+  /// leaves) — excludes the tank itself; typically the highest / most-distant
+  /// fixture, nearest the tank.
   final String criticalNodeId;
 
   /// Residual at [criticalNodeId].
@@ -318,14 +359,16 @@ DownfeedSolution solveDownfeed({
   required Pressure targetResidual,
   Head tankStaticHead = const Head(0),
   PipeMaterial material = PipeMaterial.pvc,
+  MountingHeights mounting = const MountingHeights(),
 }) {
   const profile = SniProfile();
   final hwC = profile.hazenWilliamsC(material);
   final targetHead = headFromPressure(targetResidual);
 
   final tank = net.nodeById(tankId);
-  final tankElevation =
-      tank == null ? building.roofElevation : nodeElevation(tank, building);
+  final tankElevation = tank == null
+      ? building.roofElevation
+      : nodeElevation(tank, building, mounting);
 
   // Adjacency over THIS service only.
   final adjacency = <String, List<({NetEdge edge, String other})>>{};
@@ -359,6 +402,7 @@ DownfeedSolution solveDownfeed({
           net,
           calibrationBySheet: calibrationBySheet,
           building: building,
+          mounting: mounting,
         );
         // Per-edge C: the edge's pipe product if set, else the service-wide C.
         final edgeC = edge.pipeProduct != null
@@ -384,16 +428,21 @@ DownfeedSolution solveDownfeed({
   }
 
   // residual(node) = tankStaticHead + (tankElev − nodeElev) − friction, as head.
+  // The critical node is the least-served DELIVERY node (water-drainage-5).
+  final delivery = _deliveryNodes(net, friction.keys, tankId, adjacency);
   final residualPressure = <String, Pressure>{};
   var minResidualHead = double.infinity;
   String? criticalNodeId;
   friction.forEach((nodeId, f) {
     final n = net.nodeById(nodeId);
-    final nElev = n == null ? tankElevation : nodeElevation(n, building);
+    final nElev =
+        n == null ? tankElevation : nodeElevation(n, building, mounting);
     final residualHead =
         tankStaticHead.meters + (tankElevation.meters - nElev.meters) - f;
     residualPressure[nodeId] = pressureFromHead(Head(residualHead));
-    if (nodeId != tankId && residualHead < minResidualHead) {
+    if (nodeId != tankId &&
+        delivery.contains(nodeId) &&
+        residualHead < minResidualHead) {
       minResidualHead = residualHead;
       criticalNodeId = nodeId;
     }
