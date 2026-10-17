@@ -518,7 +518,8 @@ String electricalPlanToDxf({
   final b = StringBuffer();
   void g(int code, Object v) {
     b.writeln(code);
-    b.writeln(v);
+    // drafting-5: every string value is code-page-safe ASCII (no raw `·`).
+    b.writeln(v is String ? dxfText(v) : v);
   }
 
   void line(String layer, double x1, double y1, double x2, double y2,
@@ -632,7 +633,10 @@ String electricalPlanToDxf({
   final tables = dxfTablesSection(layers: [
     for (final (name, aci) in classLayers) (name, aci, 'CONTINUOUS'),
   ]);
-  return tables + b.toString();
+  // drafting-5: a minimal HEADER declaring the R12 format.
+  return '0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n0\nENDSEC\n' +
+      tables +
+      b.toString();
 }
 
 List<(String, String)> _dxfChromeRows(DrawingChrome? chrome) {

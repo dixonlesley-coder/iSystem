@@ -388,8 +388,15 @@ void main() {
       expect(dxf, contains('LAYER\n2\nM-DETAIL\n'));
       expect(dxf, contains('8\nM-TEXT\n'));
       expect(dxf, contains('8\nM-FRAME\n'));
-      // Pipe runs keep their explicit per-service layer (e.g. cold water 'CW').
-      expect(dxf, contains('8\nCW\n'));
+      // drafting-5: pipe runs land on the SAME AIA per-service layer the plan
+      // DXF uses (cold water `P-DOM-CWS`, declared ACI 5), never the ad-hoc
+      // service code `CW` on colour 7.
+      expect(dxf, contains('8\nP-DOM-CWS\n'));
+      expect(dxf, contains('LAYER\n2\nP-DOM-CWS\n70\n0\n62\n5\n'));
+      expect(dxf, isNot(contains('8\nCW\n')));
+      // An R12 HEADER declares the format; every byte is printable ASCII.
+      expect(dxf, startsWith('0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n'));
+      expect(dxf.codeUnits.where((c) => c > 0x7e), isEmpty);
     });
 
     test('sldSheetsToPdf issues a numbered SET — page count matches the input',
@@ -1008,6 +1015,51 @@ void main() {
           downfeed: true,
           hotWaterRecirc: true));
       expect(noHw, isNot(contains('HWR')));
+    });
+  });
+
+  group('drafting-2 — rectangular duct tags', () {
+    // A supply-air trunk sized 400 x 200 mm: its circular EQUIVALENT diameter
+    // (Huebscher) is 1.30·(a·b)^0.625/(a+b)^0.25 = 1.30·(80000)^0.625/600^0.25
+    //   = 1.30·1155.4/4.949 ≈ 303.5 ⇒ ~305 mm — a round duct that does not
+    // exist. The riser must print the real 400x200, like the plan + BOM.
+    Network airNet() => Network(
+          nodes: [
+            _n('ahu', 200, 1,
+                role: NodeRole.plant, component: NodeComponent.ahu),
+            _n('m', 200, 0),
+            _n('d1', 120, 0),
+          ],
+          edges: [
+            _e('trunk', 'ahu', 'm', ServiceType.duct,
+                kind: EdgeKind.riser),
+            _e('br', 'm', 'd1', ServiceType.duct),
+          ],
+        );
+
+    test('a rectangular duct prints WxH, never its equivalent O<d>', () {
+      final sheet = buildMechanicalRiserSld(
+        network: airNet(),
+        sizing: {
+          'trunk': EdgeSizing(
+            edgeId: 'trunk',
+            service: ServiceType.duct,
+            flow: const FlowRate(0.6),
+            diameter: Diameter.mm(305),
+            velocity: const Velocity(7.5),
+            width: Length.mm(400),
+            height: Length.mm(200),
+          ),
+          'br': _sz('br', ServiceType.duct, 200),
+        },
+      );
+      final texts =
+          sheet.prims.whereType<SldLabel>().map((l) => l.text).toList();
+      expect(texts.where((t) => t.startsWith('400x200')), isNotEmpty,
+          reason: '$texts');
+      expect(texts.where((t) => t.contains('O305')), isEmpty);
+      // A ROUND duct keeps its O<mm> tag.
+      expect(texts.where((t) => t.startsWith('O200')), isNotEmpty);
     });
   });
 }

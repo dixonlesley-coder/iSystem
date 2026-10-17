@@ -572,7 +572,7 @@ String pdfNorthArrow(
 
 void _g(StringBuffer b, int code, Object value) {
   b.writeln(code);
-  b.writeln(value);
+  b.writeln(value is String ? dxfText(value) : value);
 }
 
 /// DXF chrome entities (legend / scale / north / title) placed near the
@@ -691,10 +691,44 @@ String dxfChrome(
 
 /// DXF group-1 text must avoid the control chars that would break the ASCII
 /// stream; keep it to printable ASCII.
-String _dxfText(String raw) {
+String _dxfText(String raw) => dxfText(raw);
+
+/// The ONE code-page-safe encoder for every DXF string value (drafting-5). An
+/// R12 DXF is read in the ANSI code page, so a raw UTF-8 `·` (C2 B7) displays
+/// as `Â·` in AutoCAD; every writer routes its string group values through
+/// here so the output is pure printable ASCII (no byte > 0x7E) while carrying
+/// the same information as the PDF:
+///   `·` (U+00B7)  → `-`   (the label separator)
+///   `Ø` / `ø`     → `%%c` (the AutoCAD diameter control code)
+///   `°`           → `%%d` (the AutoCAD degree control code)
+///   `²` / `³`     → `2` / `3`
+///   anything else outside printable ASCII → `?`.
+/// Printable-ASCII input is returned unchanged (byte-identical).
+String dxfText(String raw) {
+  var ascii = true;
+  for (final c in raw.codeUnits) {
+    if (c < 0x20 || c > 0x7e) {
+      ascii = false;
+      break;
+    }
+  }
+  if (ascii) return raw;
   final b = StringBuffer();
   for (final code in raw.runes) {
-    b.writeCharCode((code >= 0x20 && code <= 0x7e) ? code : 0x3f);
+    switch (code) {
+      case 0xB7:
+        b.write('-');
+      case 0xD8 || 0xF8:
+        b.write('%%c');
+      case 0xB0:
+        b.write('%%d');
+      case 0xB2:
+        b.write('2');
+      case 0xB3:
+        b.write('3');
+      default:
+        b.writeCharCode((code >= 0x20 && code <= 0x7e) ? code : 0x3f);
+    }
   }
   return b.toString();
 }
@@ -726,6 +760,10 @@ const kDxfLayerAnno = 'G-ANNO-TEXT';
 
 /// DXF sheet-frame / title-block layer.
 const kDxfLayerFrame = 'G-ANNO-TTLB';
+
+/// DXF dimension layer (setting-out tie dimensions — extension lines, the
+/// offset dimension line, its oblique ticks and the figure), ACI 8 grey.
+const kDxfLayerDims = 'G-ANNO-DIMS';
 
 /// Nearest-ACI colour index per service, in the SAME hue family as the canvas
 /// `serviceChromeColor` (the single truth, E2). ACI base palette: 1 red,

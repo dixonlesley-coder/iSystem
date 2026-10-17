@@ -190,13 +190,19 @@ void main() {
       final medium = sheet.prims
           .whereType<SldLine>()
           .where((l) => l.weight == SldWeight.medium)
-          .map((l) => '${l.x1},${l.y1},${l.x2},${l.y2}')
-          .toList();
-      expect(medium, [
+          // Undirected: a segment reads the same either way it is stroked
+          // (the trunk merge emits each piece low->high).
+          .map((l) {
+        final fwd = l.x1 < l.x2 || (l.x1 == l.x2 && l.y1 <= l.y2);
+        return fwd
+            ? '${l.x1},${l.y1},${l.x2},${l.y2}'
+            : '${l.x2},${l.y2},${l.x1},${l.y1}';
+      }).toSet();
+      expect(medium, {
         '342.0,173.0,406.0,173.0',
-        '406.0,173.0,406.0,23.0',
-        '406.0,23.0,342.0,23.0'
-      ]);
+        '406.0,23.0,406.0,173.0',
+        '342.0,23.0,406.0,23.0'
+      });
     });
   });
 
@@ -622,7 +628,9 @@ void main() {
           .toList();
       const runLabel = 'CW-F1 · DN32 - 4.4 m - CL +2.70';
       const riserLabel = 'CW-R1 · DN32 - 4 m';
-      expect(texts, containsAll([runLabel, riserLabel]));
+      // The DXF carries the SAME label through the R12 code-page-safe encoder
+      // (drafting-5: '·' -> '-', so AutoCAD never shows 'Â·').
+      expect(texts, containsAll([dxfText(runLabel), dxfText(riserLabel)]));
       expect(pdf, contains('($runLabel)'));
       expect(pdf, contains('($riserLabel)'));
     });
@@ -639,9 +647,9 @@ void main() {
       final texts = _dxfEntities(dxf)
           .where((e) => e['0']!.first == 'TEXT')
           .map((e) => e['1']!.first);
-      expect(texts, contains('CW-F1 · DN32 - 4.4 m'));
+      expect(texts, contains(dxfText('CW-F1 · DN32 - 4.4 m')));
       // No map ⇒ a riser has no honest length (it needs the elevation delta).
-      expect(texts, contains('CW-R1 · DN32'));
+      expect(texts, contains(dxfText('CW-R1 · DN32')));
     });
   });
 }

@@ -1907,7 +1907,13 @@ String _sizeLabel(EdgeSizing s) {
 /// appended (piped services only).
 String _pipeTag(EdgeSizing s, NetEdge edge, {RiserFunction? function}) {
   final mm = s.diameter.inMillimeters.round();
-  if (s.service.regime == FlowRegime.air) return 'O$mm';
+  if (s.service.regime == FlowRegime.air) {
+    // A rectangular duct's `diameter` is only its circular equivalent — print
+    // the real W x H (mirrors the engine riser export + the plan `_sizeLabel`).
+    return s.isRectangular
+        ? '${s.width!.inMillimeters.round()}x${s.height!.inMillimeters.round()}'
+        : 'O$mm';
+  }
   final base = '$mm-${_serviceCode(edge.service)}-'
       '${_pipeMaterialCode(edge.pipeProduct, edge.service)}';
   return function != null ? '$base-${function.code}' : base;

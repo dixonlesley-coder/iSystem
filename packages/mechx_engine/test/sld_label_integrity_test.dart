@@ -16,6 +16,8 @@ import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/electrical_dxf_export.dart'
+    show electricalSldToDxf;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
@@ -265,8 +267,7 @@ Network _plantNet() => Network(
         _n('gt', 60, 0,
             role: NodeRole.plant, component: NodeComponent.groundTank),
         _n('j', 150, 0),
-        _n('pump', 190, 0,
-            role: NodeRole.plant, component: NodeComponent.pump),
+        _n('pump', 190, 0, role: NodeRole.plant, component: NodeComponent.pump),
         _n('up', 190, 1),
         _n('wc', 320, 1,
             role: NodeRole.fixture,
@@ -301,7 +302,8 @@ SldSheet _plantSheet() => buildMechanicalRiserSld(
     );
 
 /// A label's collision box, sized with the builder's OWN per-char advance.
-({double minX, double minY, double maxX, double maxY}) _labelBox(SldLabel l) => (
+({double minX, double minY, double maxX, double maxY}) _labelBox(SldLabel l) =>
+    (
       minX: l.x,
       minY: l.y - l.size,
       maxX: l.x + l.text.length * l.size * kMechRiserLabelCharW,
@@ -331,10 +333,12 @@ void main() {
     test('the board really is MIXED (both device classes on one bus)', () {
       final mdp = result.panels['MDP']!;
       final classes = {for (final c in mdp.circuits) c.breaker.deviceClass};
-      expect(classes, containsAll(<BreakerClass>{
-        BreakerClass.mcb,
-        BreakerClass.mccb,
-      }));
+      expect(
+          classes,
+          containsAll(<BreakerClass>{
+            BreakerClass.mcb,
+            BreakerClass.mccb,
+          }));
     });
 
     test('an MCB way prints an MCB-ladder kA, an MCCB way its own', () {
@@ -351,8 +355,8 @@ void main() {
       expect(cells, isNotEmpty);
       var sawMcb = false, sawMccb = false;
       for (final cell in cells) {
-        final ka = double.parse(
-            RegExp(r'([\d.]+)kA').firstMatch(cell)!.group(1)!);
+        final ka =
+            double.parse(RegExp(r'([\d.]+)kA').firstMatch(cell)!.group(1)!);
         if (cell.startsWith('MCB ')) {
           sawMcb = true;
           expect(mcbLadder, contains(ka),
@@ -382,10 +386,12 @@ void main() {
       final cells = _deviceCells(sheet);
       for (final c in result.panels['MDP']!.circuits) {
         final ka = perCircuitKa[c.circuitId]!;
-        final want = '${c.breaker.deviceClass == BreakerClass.mccb ? 'MCCB' : 'MCB'} '
+        final want =
+            '${c.breaker.deviceClass == BreakerClass.mccb ? 'MCCB' : 'MCB'} '
             '${_numText(c.breaker.ratingA.amperes)}A';
         expect(
-            cells.where((t) => t.startsWith(want) && t.contains('${_numText(ka)}kA')),
+            cells.where(
+                (t) => t.startsWith(want) && t.contains('${_numText(ka)}kA')),
             isNotEmpty,
             reason: 'no DEVICE cell "$want ... ${_numText(ka)}kA"');
       }
@@ -441,8 +447,8 @@ void main() {
     test('the OVERVIEW feeder annotation uses the same 2P convention', () {
       final overview =
           buildElectricalOverview(project: _mixedProject, result: result);
-      expect(_labelTexts(overview).where((t) => t.contains(' 2P · ')),
-          isNotEmpty);
+      expect(
+          _labelTexts(overview).where((t) => t.contains(' 2P · ')), isNotEmpty);
     });
   });
 
@@ -462,9 +468,9 @@ void main() {
       expect(spec.conduitSizeMm, 63.0);
 
       // G5: the probe way is a MOTOR — motor-like ⇒ no neutral ⇒ the sized
-      // grounding is 3L + PE = 4 cores, so the cable cell reads `4x70` (the
-      // conduit basis is unchanged: the fallback ladder still sizes the
-      // conservative 5-core bundle).
+      // grounding is 3L + PE = 4 cores, PE INSIDE the cable, so the cable cell
+      // reads `4x70` (the conduit basis is unchanged: the fallback ladder
+      // still sizes the conservative 5-core bundle).
       final sheet = _scheduleForCsa(puil, 70, threePhase: true);
       final cable = _cableCells(sheet)
           .firstWhere((t) => t.contains('4x70 mm2'), orElse: () => '');
@@ -520,7 +526,8 @@ void main() {
       }
     });
 
-    test('the study map and the fallback agree on "no conduit fits" = tray', () {
+    test('the study map and the fallback agree on "no conduit fits" = tray',
+        () {
       // 5x150 mm2 exceeds even the 63 mm bore at the 53 % limit, so BOTH paths
       // print `tray` rather than one issuing a 72 %-full conduit.
       final spec = sizeConduit(150, 5);
@@ -531,6 +538,62 @@ void main() {
       final cable = _cableCells(sheet)
           .firstWhere((t) => t.contains('4x150 mm2'), orElse: () => '');
       expect(cable, contains(' · tray'));
+    });
+  });
+
+  // ── drafting-1 / reports-2 — the protective earth is specified ONCE ───────
+  group('drafting-1 — the PE is never specified twice', () {
+    // `sizeGrounding` counts the PE INSIDE `grounding.cores` (live + N + PE) —
+    // the cable the BOM procures — so the schedule prints exactly that count
+    // and NO separate `+ NYA/BC` earth conductor on top.
+    const puil = PuilProfile();
+    final result = computeSystem(puil, _mixedProject);
+    final sheet = buildElectricalPanelDetail(
+        project: _mixedProject, result: result, panelId: 'MDP');
+    final cells = _cableCells(sheet);
+
+    test('every way prints its PE-inclusive core count, no earth token', () {
+      final mdp = result.panels['MDP']!;
+      expect(mdp.circuits, isNotEmpty);
+      for (final c in mdp.circuits) {
+        final csa = _numText(c.cable.csaMm2);
+        expect(
+            cells.where((t) =>
+                RegExp('^[A-Z]+ ${c.grounding.cores}x$csa mm2( |\$)')
+                    .hasMatch(t)),
+            isNotEmpty,
+            reason: 'way ${c.circuitId}: ${c.grounding.cores} conductors incl. '
+                'PE; got $cells');
+      }
+      expect(cells.where((t) => t.contains(' + NYA ') || t.contains(' + BC ')),
+          isEmpty);
+    });
+
+    test('drafting-5: the schedule DXF is pure printable ASCII', () {
+      // The schedule cells carry the `·` separator (`... mm2 · PVC 32mm`); an
+      // R12 reader decodes raw UTF-8 C2 B7 as `Â·`.
+      expect(cells.where((t) => t.contains('\u00b7')), isNotEmpty);
+      final dxf = electricalSldToDxf(sheet: sheet);
+      expect(dxf.codeUnits.where((c) => c > 0x7e), isEmpty);
+      expect(dxf, contains(' mm2 - PVC '));
+      expect(
+          dxf, startsWith('0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n'));
+    });
+
+    test('the overview feeder label reads exactly as its schedule row', () {
+      final overview =
+          buildElectricalOverview(project: _mixedProject, result: result);
+      final feeder = result.panels['MDP']!.circuits
+          .firstWhere((c) => c.circuitId == 'f-lp1');
+      final rowCable = cells
+          .firstWhere((t) =>
+              t.contains('x${_numText(feeder.cable.csaMm2)} mm2') &&
+              t.contains('${feeder.grounding.cores}x'))
+          .split(' · ')
+          .first;
+      expect(_labelTexts(overview).where((t) => t.startsWith('$rowCable · ')),
+          isNotEmpty,
+          reason: 'overview feeder label must carry "$rowCable"');
     });
   });
 
@@ -570,12 +633,8 @@ void main() {
         final b = _labelBox(l);
         for (final g in glyphs) {
           expect(
-              _overlaps(b, (
-                minX: g.x,
-                minY: g.y,
-                maxX: g.x + g.w,
-                maxY: g.y + g.h
-              )),
+              _overlaps(
+                  b, (minX: g.x, minY: g.y, maxX: g.x + g.w, maxY: g.y + g.h)),
               isFalse,
               reason: 'label "${l.text}" is drawn over an equipment glyph');
         }

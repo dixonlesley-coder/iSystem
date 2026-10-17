@@ -123,7 +123,8 @@ String networkToDxf({
   final b = StringBuffer();
   void g(int code, Object value) {
     b.writeln(code);
-    b.writeln(value);
+    // drafting-5: every string value is code-page-safe ASCII (no raw `·`).
+    b.writeln(value is String ? dxfText(value) : value);
   }
 
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
@@ -355,7 +356,8 @@ String _professionalDxf({
   final b = StringBuffer();
   void g(int code, Object value) {
     b.writeln(code);
-    b.writeln(value);
+    // drafting-5: every string value is code-page-safe ASCII (no raw `·`).
+    b.writeln(value is String ? dxfText(value) : value);
   }
 
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
@@ -424,6 +426,9 @@ String _professionalDxf({
   // ── HEADER: millimetre drawing units, metric measurement ────────────────────
   g(0, 'SECTION');
   g(2, 'HEADER');
+  // drafting-5: declare the R12 format the file is written in.
+  g(9, r'$ACADVER');
+  g(1, 'AC1009');
   g(9, r'$INSUNITS');
   g(70, 4); // 4 = millimetres
   g(9, r'$MEASUREMENT');
@@ -441,6 +446,8 @@ String _professionalDxf({
     if (underlay != null) (kDxfLayerUnderlay, kDxfUnderlayAci, 'CONTINUOUS'),
     // N4: the grey setting-out grid layer (chain linetype), only when present.
     if (grid != null && !grid.isEmpty) (kDxfLayerGrid, 8, 'DASHDOT'),
+    // drafting-4: the tie dimensions' own layer (grey), with the grid.
+    if (grid != null && !grid.isEmpty) (kDxfLayerDims, 8, 'CONTINUOUS'),
     // `dxfChrome` draws on its own toggleable layers — declare them too.
     if (hasChrome) ...const [
       ('title', 7, 'CONTINUOUS'),
@@ -739,16 +746,43 @@ String _professionalDxf({
         String label) {
       final ax = fromXpx * mmPerPx, ay = -fromYpx * mmPerPx;
       final bx = toXpx * mmPerPx, by = -toYpx * mmPerPx;
-      g(0, 'LINE');
-      g(8, kDxfLayerAnno);
-      g(10, ax);
-      g(20, ay);
-      g(11, bx);
-      g(21, by);
+      // drafting-4: mirror the PDF — an OFFSET dimension line with extension
+      // lines + 45-degree oblique ticks on its own grey layer, never a bare
+      // line on the riser's ordinate (where it overlaid a pipe run). R12 has
+      // no DIMSTYLE table here, so the dimension is drawn as LINE entities.
+      final dx = bx - ax, dy = by - ay;
+      final len = math.sqrt(dx * dx + dy * dy);
+      final ux = len > 1e-9 ? dx / len : 1.0;
+      final uy = len > 1e-9 ? dy / len : 0.0;
+      final px = -uy, py = ux; // perpendicular (y-up world)
+      final off = textH * 1.2; // ~ the PDF's 10 pt offset at plot scale
+      void line(double x1, double y1, double x2, double y2) {
+        g(0, 'LINE');
+        g(8, kDxfLayerDims);
+        g(10, x1);
+        g(20, y1);
+        g(11, x2);
+        g(21, y2);
+      }
+
+      final dax = ax + px * off, day = ay + py * off;
+      final dbx = bx + px * off, dby = by + py * off;
+      final over = off + textH * 0.25;
+      final gap = textH * 0.25;
+      line(ax + px * gap, ay + py * gap, ax + px * over, ay + py * over);
+      line(bx + px * gap * 3, by + py * gap * 3, bx + px * over,
+          by + py * over);
+      line(dax, day, dbx, dby);
+      final tick = textH * 0.25;
+      final tkx = (ux + px) * tick / math.sqrt2;
+      final tky = (uy + py) * tick / math.sqrt2;
+      for (final (ex, ey) in [(dax, day), (dbx, dby)]) {
+        line(ex - tkx, ey - tky, ex + tkx, ey + tky);
+      }
       g(0, 'TEXT');
-      g(8, kDxfLayerAnno);
-      g(10, (ax + bx) / 2);
-      g(20, (ay + by) / 2);
+      g(8, kDxfLayerDims);
+      g(10, (dax + dbx) / 2);
+      g(20, (day + dby) / 2 + textH * 0.2);
       g(40, textH * 0.8);
       g(1, label);
     }

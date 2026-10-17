@@ -607,8 +607,8 @@ Set<String>? _focusedNodeIds(Network network, ServiceType? focus) {
   return ids;
 }
 
-/// The industry pipe tag `SIZE-SERVICE-MATERIAL[-FUNCTION][ - x.x m]`; an air
-/// duct reads `O<mm>` (ASCII, no Ø). A null sizing falls back to a service-only
+/// The industry pipe tag `SIZE-SERVICE-MATERIAL[-FUNCTION][ - x.x m]`; a round
+/// air duct reads `O<mm>` (ASCII), a rectangular one `<W>x<H>`. A null sizing falls back to a service-only
 /// tag. [length] (N6), when non-null and positive, appends the run/riser length
 /// as ` - x.x m` (a §10 metre figure — take-off / prefab data); null ⇒ no
 /// suffix.
@@ -621,7 +621,12 @@ String _pipeTag(EdgeSizing? s, NetEdge edge,
   } else {
     final mm = s.diameter.inMillimeters.round();
     if (s.service.regime == FlowRegime.air) {
-      tag = 'O$mm';
+      // A rectangular duct prints its real W x H — its `diameter` is only the
+      // circular EQUIVALENT (network_sizing), a round size that does not exist
+      // on site. Mirrors the plan exporters' `_sizeLabel` and the BOM.
+      tag = s.isRectangular
+          ? '${s.width!.inMillimeters.round()}x${s.height!.inMillimeters.round()}'
+          : 'O$mm';
     } else {
       final base = '$mm-$code-${_pipeMaterialCode(edge.pipeProduct, edge.service)}';
       tag = function != null ? '$base-${function.code}' : base;
