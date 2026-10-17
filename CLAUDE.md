@@ -194,11 +194,12 @@ BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`);
 **calibration quality-of-life** (`ProjectController.applyCalibrationToAllSheets` copies one
 sheet's scale to all others in one undo step, surfaced as an 'Apply scale to all sheets'
 button in the Scale inspector when the current sheet is calibrated; the slim sheet rail shows
-a per-sheet calibrated/uncalibrated dot);
+a per-sheet calibrated/uncalibrated dot; the current sheet's state is stated ONCE — the Layout
+breadcrumb's tappable ' · Not calibrated' / ' · 1 : N' tail, the status bar only on Riser/Electrical);
 **project templates / smart defaults** (`store/templates.dart` `kBuildingTemplates` —
 Residential highrise / Office tower / Hospital / Retail shop, each prefilling floors +
-occupancy + fire hazard + design rainfall; a **'New from template'** dialog on the Projects
-screen applies them via `ProjectController.setFloors` + the occupancy/fire/rainfall provider
+occupancy + fire hazard + design rainfall; a **'New from template'** dialog (Projects page: a quiet 'Apply building template...' button in
+the Project card) applies them via `ProjectController.setFloors` + the occupancy/fire/rainfall provider
 `.set()` methods — additive, no `.mechx` change);
 **unified Design Issues review panel** (`store/design_issues_store.dart`
 `designIssuesProvider` — a read-only fan-in that aggregates every existing design warning

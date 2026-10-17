@@ -50,3 +50,12 @@ String formatScaleReadout(double metersPerPixel, {required bool isPdf}) {
   }
   return '1 m = $pxPerMetre px';
 }
+
+/// The compact form of [formatScaleReadout] for tight chrome (the Layout
+/// breadcrumb): a PDF sheet reads just its plotted `1 : N`, any other sheet the
+/// paper-free `1 m = N px`. Same maths, the parenthetical dropped.
+String formatScaleShort(double metersPerPixel, {required bool isPdf}) {
+  if (metersPerPixel <= 0) return '—';
+  if (isPdf) return '1 : ${pdfScaleDenominatorFor(metersPerPixel).round()}';
+  return '1 m = ${pixelsPerMetreFor(metersPerPixel)} px';
+}

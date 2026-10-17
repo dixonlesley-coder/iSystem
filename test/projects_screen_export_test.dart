@@ -58,6 +58,21 @@ void main() {
   });
 
   testWidgets(
+      'Work item 4: one-sentence lead; the template prefill is a quiet button '
+      'inside the Project card, not its own card', (tester) async {
+    await _pump(tester);
+
+    expect(
+        find.text('Name your project, pick a building template, and issue '
+            'its drawings.'),
+        findsOneWidget);
+    expect(_primary(tester, 'Apply building template...'), isFalse);
+    // The old standalone card + its paragraph are gone.
+    expect(find.text('Apply a building template'), findsNothing);
+    expect(find.text('Choose template...'), findsNothing);
+  });
+
+  testWidgets(
       'A5: a leading Export deliverables group is always visible; the '
       'per-artifact rows are grouped under collapsed Drawings/Reports/Data '
       'disclosures', (tester) async {

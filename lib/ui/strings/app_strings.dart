@@ -1004,6 +1004,17 @@ enum StringKey {
   commercialColPriced,
   commercialPriced,
   commercialUnpriced,
+
+  /// Work item 4 (2026-10-17) — sheet/floor status stated once + trimmed
+  /// first-run prose: the Layout breadcrumb's calibration tail, the Projects
+  /// lead + relocated template button, and the BOM's not-measured wording.
+  layoutBreadcrumbNotCalibrated,
+  layoutBreadcrumbReverifyScale,
+  projectsLead,
+  projectsApplyTemplateButton,
+  bomNotMeasured,
+  bomCalibrateHintOne,
+  bomCalibrateHint, // {n}
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -2093,6 +2104,16 @@ const Map<StringKey, String> _en = {
   StringKey.commercialColPriced: 'Priced',
   StringKey.commercialPriced: 'priced',
   StringKey.commercialUnpriced: 'unpriced',
+
+  // Work item 4 (2026-10-17).
+  StringKey.layoutBreadcrumbNotCalibrated: 'Not calibrated',
+  StringKey.layoutBreadcrumbReverifyScale: 'Re-verify scale',
+  StringKey.projectsLead:
+      'Name your project, pick a building template, and issue its drawings.',
+  StringKey.projectsApplyTemplateButton: 'Apply building template...',
+  StringKey.bomNotMeasured: 'not measured',
+  StringKey.bomCalibrateHintOne: 'Calibrate the sheet to measure 1 run',
+  StringKey.bomCalibrateHint: 'Calibrate the sheet to measure {n} runs',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -3193,6 +3214,16 @@ const Map<StringKey, String> _id = {
   StringKey.commercialColPriced: 'Berharga',
   StringKey.commercialPriced: 'berharga',
   StringKey.commercialUnpriced: 'tanpa harga',
+
+  // Work item 4 (2026-10-17).
+  StringKey.layoutBreadcrumbNotCalibrated: 'Belum dikalibrasi',
+  StringKey.layoutBreadcrumbReverifyScale: 'Verifikasi ulang skala',
+  StringKey.projectsLead:
+      'Beri nama proyek, pilih templat bangunan, lalu terbitkan gambarnya.',
+  StringKey.projectsApplyTemplateButton: 'Terapkan templat bangunan...',
+  StringKey.bomNotMeasured: 'belum diukur',
+  StringKey.bomCalibrateHintOne: 'Kalibrasi lembar untuk mengukur 1 jalur',
+  StringKey.bomCalibrateHint: 'Kalibrasi lembar untuk mengukur {n} jalur',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

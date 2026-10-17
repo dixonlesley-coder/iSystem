@@ -6,8 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/calibration_store.dart';
 import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/project_store.dart';
+import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 
 import 'test_util.dart';
@@ -28,8 +31,9 @@ void main() {
   setUpAll(_loadFonts);
 
   testWidgets(
-      'status bar reads Uncalibrated by default and Calibrated once the '
-      'current sheet has a calibration', (tester) async {
+      'sheet calibration is stated ONCE: the Layout breadcrumb carries it '
+      '(status slot empty); the status bar carries it on Riser/Electrical',
+      (tester) async {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
@@ -39,22 +43,43 @@ void main() {
       listen: false,
     );
     // Production launches with NO sheets (A1); seed the demo sheets so there is
-    // a current sheet whose (missing) calibration the status bar reports.
+    // a current sheet whose (missing) calibration is reported.
     seedDemoSheets(container);
     await tester.pump();
 
-    // The demo current sheet (s1) is uncalibrated at launch.
-    expect(find.text('Uncalibrated'), findsOneWidget);
-    expect(find.text('Calibrated'), findsNothing);
+    // Layout: the status-bar sheet slot is an empty spacer; the breadcrumb
+    // after the layer row carries the tappable 'Not calibrated' tail.
+    expect(find.byKey(const ValueKey('status-sheet-slot')), findsNothing);
+    expect(find.text('Uncalibrated'), findsNothing);
+    expect(find.byKey(const ValueKey('breadcrumb-calibrate')), findsOneWidget);
+    expect(find.bySemanticsLabel('Calibrate scale'), findsWidgets);
 
-    // Calibrate the current sheet → the status bar must flip to Calibrated.
+    // Tapping the breadcrumb tail starts calibration like the top-centre pill.
+    await tester.tap(find.byKey(const ValueKey('breadcrumb-calibrate')));
+    await tester.pump();
+    expect(container.read(calibrationControllerProvider).isActive, isTrue);
+    container.read(calibrationControllerProvider.notifier).cancel();
+    await tester.pump();
+
+    // Calibrate the current sheet → the breadcrumb reads the quiet scale.
     container
         .read(projectControllerProvider.notifier)
         .setCalibration('s1', const ScaleCalibration(0.025));
     await tester.pump();
+    expect(find.byKey(const ValueKey('breadcrumb-calibrate')), findsNothing);
+    expect(find.byKey(const ValueKey('breadcrumb-scale')), findsOneWidget);
 
+    // Riser workspace (no sheet rail): the status bar now names the sheet.
+    container.read(workspaceViewProvider.notifier).set(WorkspaceView.schematic);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('status-sheet-slot')), findsOneWidget);
     expect(find.text('Calibrated'), findsOneWidget);
     expect(find.text('Uncalibrated'), findsNothing);
+
+    // A hub section: empty again.
+    container.read(shellSectionProvider.notifier).set(ShellSection.review);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('status-sheet-slot')), findsNothing);
   });
 
   testWidgets('theme toggle labels the action, not the current mode',

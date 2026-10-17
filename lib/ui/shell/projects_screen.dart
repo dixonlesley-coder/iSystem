@@ -50,9 +50,7 @@ class ProjectsScreen extends ConsumerWidget {
 
     return HubScaffold(
       title: 'Projects',
-      lead: 'Start a new project, reopen a recent one, and name + export the '
-          'current project here. Open and save .mechx files from the top bar; '
-          'autosave keeps a recovery snapshot between sessions.',
+      lead: context.strings(StringKey.projectsLead),
       children: [
         // ── Current project ──────────────────────────────────────────────
         Container(
@@ -88,6 +86,18 @@ class ProjectsScreen extends ConsumerWidget {
               // step. Per-keystroke it pushed 25 entries for "Gedung BRI
               // Cabang Jakarta", evicting real edits from the 200-entry stack.
               MechXTextField(value: project.name, onCommitted: ctrl.setName),
+              // Work item 4 (2026-10-17): the template prefill lives with the
+              // project it applies to — a quiet (non-primary) button here, not
+              // a separate card + explanatory paragraph. Also reachable from
+              // the command palette ('New from template').
+              const SizedBox(height: MechXSpacing.sm),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: MechXButton(
+                  label: context.strings(StringKey.projectsApplyTemplateButton),
+                  onPressed: () => showTemplatesDialog(context),
+                ),
+              ),
             ],
           ),
         ),
@@ -198,39 +208,6 @@ class ProjectsScreen extends ConsumerWidget {
             ),
           ),
         ],
-        const SizedBox(height: MechXSpacing.md),
-        // ── Apply a building template (to the CURRENT project) ────────────
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(MechXSpacing.md),
-          decoration: BoxDecoration(
-            color: colors.surface,
-            borderRadius: MechXRadii.card,
-            border: Border.all(color: colors.border),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(context.strings(StringKey.projectApplyBuildingTemplate),
-                  style: type.subtitle.copyWith(color: colors.textPrimary)),
-              const SizedBox(height: MechXSpacing.xs),
-              Text(
-                'Prefill floors, occupancy, fire hazard, and design rainfall '
-                'for a common building type on the CURRENT project (it does not '
-                'create a new one), then refine.',
-                style: type.caption.copyWith(color: colors.textMuted),
-              ),
-              const SizedBox(height: MechXSpacing.sm),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: MechXButton(
-                  label: 'Choose template...',
-                  onPressed: () => showTemplatesDialog(context),
-                ),
-              ),
-            ],
-          ),
-        ),
       ],
     );
   }

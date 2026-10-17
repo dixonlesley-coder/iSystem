@@ -39,7 +39,6 @@ class SheetRail extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(sheetsControllerProvider);
     final colors = context.colors;
-    final type = context.type;
     // A6: an "Add sheets…" footer to append more plan files, shown only for a
     // REAL project (any non-placeholder sheet). The golden/demo project seeds
     // placeholder sheets only, so the footer stays hidden there and goldens are
@@ -57,25 +56,9 @@ class SheetRail extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Terse header: a count badge (the word "Sheets" doesn't fit the
-            // slim rail; the status bar already names the active sheet).
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                MechXSpacing.xs,
-                MechXSpacing.sm,
-                MechXSpacing.xs,
-                MechXSpacing.xs,
-              ),
-              child: Text(
-                '${state.sheets.length} SHT',
-                textAlign: TextAlign.center,
-                style: type.caption.copyWith(
-                  color: colors.textMuted,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ),
-            Container(height: 1, color: colors.border),
+            // Work item 4 (2026-10-17): no 'N SHT' count header — the tiles
+            // are numbered, so the count was a second statement of the same
+            // fact (the list's own vertical padding insets the first tile).
             Expanded(
               child: ListView.builder(
                 padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xs),
@@ -398,10 +381,10 @@ class _RailItemState extends ConsumerState<_RailItem> {
                   selected: widget.selected,
                 ),
                 const SizedBox(height: MechXSpacing.xxs),
-                // Terse label, truncated to fit the slim rail.
+                // Terse label, up to two lines, truncated to fit the slim rail.
                 Text(
                   widget.sheet.name,
-                  maxLines: 1,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
                   style: type.caption.copyWith(color: labelColor),

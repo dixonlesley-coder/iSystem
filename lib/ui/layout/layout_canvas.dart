@@ -72,6 +72,7 @@ import '../canvas/zoom_controls.dart';
 import '../electrical/electrical_inspector.dart';
 // The panel/circuit menu ACTION helpers, deliberately shared with the standalone
 // electrical workspace so the Layout menus can never drift from it.
+import '../format/scale_format.dart' show formatScaleShort;
 import '../electrical/electrical_view.dart'
     show
         feedingPanelLabel,
@@ -965,16 +966,77 @@ class _LayoutTopBar extends ConsumerWidget {
           const SizedBox(width: MechXSpacing.sm),
           if (current != null)
             ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 200),
-              child: Text(
-                _floorLabel(sheets, current.id, current.name, levelCount),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-                style: type.caption.copyWith(color: colors.textMuted),
+              constraints: const BoxConstraints(maxWidth: 300),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      _floorLabel(
+                          sheets, current.id, current.name, levelCount),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                  ),
+                  _BreadcrumbScaleTail(sheet: current),
+                ],
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Work item 4 (2026-10-17): the sheet's calibration state, stated ONCE beside
+/// the floor breadcrumb (the status bar no longer repeats it on Layout).
+/// Uncalibrated -> a tappable ' · Not calibrated' (warning) that starts
+/// calibration exactly like the top-centre pill; a stale calibration -> a
+/// tappable ' · Re-verify scale' (warning); calibrated -> a quiet ' · 1 : N'.
+class _BreadcrumbScaleTail extends ConsumerWidget {
+  final Sheet sheet;
+  const _BreadcrumbScaleTail({required this.sheet});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final project = ref.watch(projectControllerProvider);
+    final calibration = project.calibrationFor(sheet.id);
+    final stale = calibration != null && project.isCalibrationStale(sheet.id);
+    if (calibration != null && !stale) {
+      return Text(
+        '  ·  ${formatScaleShort(calibration.metersPerPixel, isPdf: sheet.pdfPath != null)}',
+        key: const ValueKey('breadcrumb-scale'),
+        maxLines: 1,
+        softWrap: false,
+        style: type.caption.copyWith(color: colors.textMuted),
+      );
+    }
+    final label = context.strings(stale
+        ? StringKey.layoutBreadcrumbReverifyScale
+        : StringKey.layoutBreadcrumbNotCalibrated);
+    void start() => ref.read(calibrationControllerProvider.notifier).start();
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: start,
+        behavior: HitTestBehavior.opaque,
+        child: Semantics(
+          button: true,
+          excludeSemantics: true,
+          label: context.strings(StringKey.inspectorCalibrateScale),
+          onTap: start,
+          child: Text(
+            '  ·  $label',
+            key: const ValueKey('breadcrumb-calibrate'),
+            maxLines: 1,
+            softWrap: false,
+            style: type.caption.copyWith(color: colors.warning),
+          ),
+        ),
       ),
     );
   }

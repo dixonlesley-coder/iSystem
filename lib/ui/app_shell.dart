@@ -1066,6 +1066,16 @@ class _StatusBar extends ConsumerWidget {
         .any((i) => i.isVerify);
 
     final caption = type.caption;
+    // Work item 4 (2026-10-17): the sheet + calibration status is stated ONCE.
+    // On Layout the sheet rail + the canvas breadcrumb ('· Not calibrated' /
+    // '· 1 : N') already carry it, and the hub sections have no sheet at all,
+    // so the left slot speaks only on the Riser / Electrical workspaces (no
+    // sheet rail there). Elsewhere it is an empty spacer that keeps the
+    // workflow stepper centred.
+    final section = ref.watch(shellSectionProvider);
+    final view = ref.watch(workspaceViewProvider);
+    final showSheetStatus = section == ShellSection.design &&
+        (view == WorkspaceView.schematic || view == WorkspaceView.electrical);
 
     return GlassSurface(
       // The status bar floats over the workspace; its top edge faces content.
@@ -1077,8 +1087,13 @@ class _StatusBar extends ConsumerWidget {
         ),
         child: Row(
           children: [
-            // Left group: current sheet info (truncates first).
+            // Left group: current sheet info (truncates first) — Riser /
+            // Electrical only; an empty spacer elsewhere.
+            if (!showSheetStatus)
+              const Expanded(child: SizedBox())
+            else
             Expanded(
+              key: const ValueKey('status-sheet-slot'),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [

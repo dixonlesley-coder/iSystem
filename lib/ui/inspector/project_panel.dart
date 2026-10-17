@@ -51,6 +51,7 @@ import '../../data/plan_underlay.dart';
 import '../../store/air_warnings_store.dart';
 import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
+import '../../store/inspector_store.dart';
 import '../../store/assemblies_store.dart';
 import '../../store/calibration_store.dart';
 import '../../store/compliance_store.dart';
@@ -3257,6 +3258,10 @@ class _ResultsSection extends ConsumerWidget {
     bool isUnmeasured(BomLine line) =>
         line.totalLength.meters == 0 && line.segmentCount > 0;
     final hasUnmeasuredBomLine = bom.any(isUnmeasured);
+    final unmeasuredRunCount = bom
+        .where(isUnmeasured)
+        .fold<int>(0, (sum, line) => sum + line.segmentCount);
+    final notMeasured = context.strings(StringKey.bomNotMeasured);
 
     // L1: keep the BOM row leader short enough that it never fights the
     // quantity for space. When every listed line shares ONE service the
@@ -3401,7 +3406,7 @@ class _ResultsSection extends ConsumerWidget {
             context,
             'BOM total',
             hasUnmeasuredBomLine
-                ? '${totalLength.toStringAsFixed(1)} m + unmeasured'
+                ? '${totalLength.toStringAsFixed(1)} m + $notMeasured'
                 : '${totalLength.toStringAsFixed(1)} m',
           ),
           if (bom.isNotEmpty) ...[
@@ -3414,7 +3419,7 @@ class _ResultsSection extends ConsumerWidget {
                 context,
                 bomLeader(line),
                 isUnmeasured(line)
-                    ? 'unmeasured ×${line.segmentCount}'
+                    ? '$notMeasured ×${line.segmentCount}'
                     : '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
               ),
             if (bom.length > _kBomInlineCap)
@@ -3424,6 +3429,11 @@ class _ResultsSection extends ConsumerWidget {
                     '${bom.length - _kBomInlineCap == 1 ? '' : 's'}',
                 'see CSV',
               ),
+            // Work item 4 (2026-10-17): ONE actionable caption under the BOM
+            // rows when any line is not measured — tapping it opens the Scale
+            // section and scrolls the inspector to it.
+            if (hasUnmeasuredBomLine)
+              _CalibrateToMeasureHint(runCount: unmeasuredRunCount),
             if (fittings.isNotEmpty)
               _kvRow(context, 'Fittings (est.)',
                   '${fittings.fold<int>(0, (s, f) => s + f.count)}'),
@@ -3597,6 +3607,47 @@ class _FireSection extends ConsumerWidget {
         ),
       ],
     ),
+    );
+  }
+}
+
+/// The BOM's single 'Calibrate the sheet to measure N runs' caption: expands
+/// the Scale section and scrolls the inspector to it.
+class _CalibrateToMeasureHint extends ConsumerWidget {
+  final int runCount;
+  const _CalibrateToMeasureHint({required this.runCount});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final label = runCount == 1
+        ? context.strings(StringKey.bomCalibrateHintOne)
+        : context.strings.format(StringKey.bomCalibrateHint, {'n': runCount});
+    void reveal() {
+      ref.read(sectionVisibilityProvider.notifier).set('Scale', true);
+      ref.read(sectionRevealProvider.notifier).reveal('Scale');
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: MechXSpacing.xxs),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: MechXFocusRing(
+          onActivated: reveal,
+          child: GestureDetector(
+            key: const ValueKey('bom-calibrate-hint'),
+            onTap: reveal,
+            behavior: HitTestBehavior.opaque,
+            child: Semantics(
+              button: true,
+              child: Text(
+                label,
+                style: context.type.caption.copyWith(color: colors.warning),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

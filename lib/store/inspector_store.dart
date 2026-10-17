@@ -81,3 +81,25 @@ final sectionExpandedProvider = Provider.family<bool, SectionKey>((ref, key) {
   final map = ref.watch(sectionVisibilityProvider);
   return map[key.name] ?? key.defaultExpanded;
 });
+
+/// A one-shot request to scroll the inspector so the [DisclosureSection] named
+/// [name] is brought into view (e.g. the BOM's 'Calibrate the sheet...' hint
+/// revealing the Scale section). Each request is a fresh instance, so asking
+/// for the same section twice re-fires. Transient UI state, never persisted.
+class SectionRevealRequest {
+  final String name;
+  SectionRevealRequest(this.name);
+}
+
+final sectionRevealProvider =
+    NotifierProvider<SectionRevealController, SectionRevealRequest?>(
+  SectionRevealController.new,
+);
+
+class SectionRevealController extends Notifier<SectionRevealRequest?> {
+  @override
+  SectionRevealRequest? build() => null;
+
+  /// Expand-agnostic: callers expand via [sectionVisibilityProvider] first.
+  void reveal(String name) => state = SectionRevealRequest(name);
+}
