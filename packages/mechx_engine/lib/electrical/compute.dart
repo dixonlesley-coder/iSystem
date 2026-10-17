@@ -911,7 +911,15 @@ _CircuitComputation _computeCircuit(
     threePhase: threePhase,
     hasNeutral: hasNeutral,
     runsPerPhase: runsPerPhase,
-    cableType: c.cableType,
+    // ONE family source: the explicit construction, else the drawing
+    // convention for the load kind (`defaultCableFamily` — NYM finals, NYY
+    // otherwise) — the SAME rule the board schedule / overview / riser print,
+    // so `grounding.cableType`/`cableSpec`, the BOM line + SKU match and the
+    // canvas label can never name a different cable than the issued drawing.
+    // Labelling only: KHA/derating still key on the explicit `c.cableType`.
+    cableType: (c.cableType != null && c.cableType!.isNotEmpty)
+        ? c.cableType
+        : defaultCableFamily(c.loadKind),
   );
 
   final rcd = circuitRcd(

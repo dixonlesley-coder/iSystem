@@ -314,7 +314,16 @@ List<BomLine> _consolidate(List<BomLine> lines) {
   final order = <String>[];
   for (final line in lines) {
     final desc = _stripSuffix(line.description);
-    final key = line.sku ?? '${line.category.name}::$desc';
+    // A cable SKU names family + CSA only (`NYY-2.5`), NOT the core count or
+    // make-up, so 3-, 4- and 5-core runs of one section would merge under the
+    // first line's description. Cable lines therefore key on the SKU AND the
+    // full stripped spec (family · cores · make-up), staying separate orderable
+    // lines; every other category keeps the plain SKU key.
+    final key = line.sku == null
+        ? '${line.category.name}::$desc'
+        : line.category == PartCategory.cable
+            ? '${line.sku}::$desc'
+            : line.sku!;
     final existing = byKey[key];
     if (existing == null) {
       byKey[key] = BomLine(

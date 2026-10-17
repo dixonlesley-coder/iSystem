@@ -4,6 +4,8 @@
 //              separate `+ NYA/BC` earth conductor on top);
 //   reports-3  the schedule `VD!` honours the CUMULATIVE drop the engine warns on;
 //   reports-5  the calc report never prints a trip-curve letter on an MCCB.
+import 'package:mechx_engine/electrical/bom.dart';
+import 'package:mechx_engine/electrical/catalog.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
@@ -185,4 +187,138 @@ void main() {
       expect(lightRow, contains('A MCB/'));
     });
   });
+
+  group('reports-1 — BOM cables keep their core count + the drawing family', () {
+    // Three ways of the SAME family-agnostic section (each small enough to size
+    // at the 2.5 mm² minimum): a 3ph `general` way (3L+N+PE = 5 cores), a 3ph
+    // motor (3L+PE = 4 cores) and a 1ph pump (L+N+PE = 3 cores). Explicit NYY
+    // on all three so they share ONE SKU (`NYY-2.5`).
+    const project = ElectricalProject(
+      id: 'p-bom',
+      name: 'BOM cores',
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'MDP',
+          circuits: [
+            ElectricalCircuit(
+                id: 'g',
+                name: 'General power',
+                loadKind: LoadKind.general,
+                loadW: 3000,
+                phases: 3,
+                cableType: 'NYY',
+                length: Length(20)),
+            ElectricalCircuit(
+                id: 'm',
+                name: 'Domestic pump',
+                loadKind: LoadKind.motor,
+                motorKw: 1.5,
+                phases: 3,
+                cableType: 'NYY',
+                length: Length(12)),
+            ElectricalCircuit(
+                id: 'p',
+                name: 'Booster pump',
+                loadKind: LoadKind.pump,
+                motorKw: 1.1,
+                phases: 1,
+                cableType: 'NYY',
+                length: Length(14)),
+          ],
+        ),
+      ],
+    );
+
+    test('3-, 4- and 5-core runs of one SKU stay separate lines', () {
+      final r = computeSystem(const PuilProfile(), project);
+      final ways = {for (final c in r.panels['MDP']!.circuits) c.circuitId: c};
+      // Preconditions: one section, distinct core counts (computed).
+      expect(ways.values.map((c) => c.cable.csaMm2).toSet(), {2.5});
+      expect(ways['g']!.grounding.cores, 5);
+      expect(ways['m']!.grounding.cores, 4);
+      expect(ways['p']!.grounding.cores, 3);
+
+      final cables = buildBom(r)
+          .lines
+          .where((l) => l.category == PartCategory.cable)
+          .toList();
+      // One line per make-up, each carrying exactly ITS run length (ceil m).
+      expect(cables, hasLength(3));
+      for (final id in ['g', 'm', 'p']) {
+        final w = ways[id]!;
+        final line = cables.singleWhere(
+            (l) => l.description == 'Cable ${w.grounding.cableSpec}');
+        expect(line.sku, 'NYY-2.5');
+        expect(line.qty, w.lengthM.ceilToDouble());
+      }
+      // Σ metres conserved: 20 + 12 + 14 = 46 m, no longer all "5-core".
+      expect(cables.fold<double>(0, (s, l) => s + l.qty), 46);
+    });
+
+    test('an untyped way names the SAME family as the board schedule', () {
+      const untyped = ElectricalProject(
+        id: 'p-fam',
+        name: 'Family',
+        panels: [
+          ElectricalPanel(id: 'MDP', name: 'MDP', circuits: [
+            // 3ph general → the schedule convention says NYM.
+            ElectricalCircuit(
+                id: 'g',
+                name: 'General power',
+                loadKind: LoadKind.general,
+                loadW: 3000,
+                phases: 3,
+                length: Length(20)),
+            // 1ph feeder → the schedule convention says NYY.
+            ElectricalCircuit(
+                id: 'f',
+                name: 'Feeder to LP-1',
+                loadKind: LoadKind.feeder,
+                feedsPanelId: 'LP1',
+                length: Length(18)),
+          ]),
+          ElectricalPanel(
+            id: 'LP1',
+            name: 'LP-1',
+            system: ElectricalSystem.singlePhase,
+            voltage: Voltage(220),
+            sourceType: PanelSource.feeder,
+            fedByCircuitId: 'f',
+            circuits: [
+              ElectricalCircuit(
+                  id: 'l',
+                  name: 'Lighting',
+                  loadKind: LoadKind.lighting,
+                  isLighting: true,
+                  loadW: 1500,
+                  length: Length(18)),
+            ],
+          ),
+        ],
+      );
+      final r = computeSystem(const PuilProfile(), untyped);
+      final mdp = {for (final c in r.panels['MDP']!.circuits) c.circuitId: c};
+      final circuitById = {
+        for (final p in untyped.panels)
+          for (final c in p.circuits) c.id: c
+      };
+      for (final id in ['g', 'f']) {
+        expect(mdp[id]!.grounding.cableType,
+            resolvedCableFamily(circuitById[id]),
+            reason: 'way $id: BOM/label family must match the schedule');
+      }
+      expect(mdp['g']!.grounding.cableType, 'NYM');
+      expect(mdp['g']!.grounding.cableSpec, startsWith('NYM '));
+      expect(mdp['f']!.grounding.cableType, 'NYY');
+      expect(mdp['f']!.grounding.cableSpec, startsWith('NYY '));
+      // The schedule prints the same family for the same ways.
+      final text = _rowText(untyped, 'MDP');
+      expect(text, contains('NYM 5x${_csa(mdp['g']!.cable.csaMm2)} mm2'));
+      expect(text, contains('NYY 3x${_csa(mdp['f']!.cable.csaMm2)} mm2'));
+    });
+  });
 }
+
+String _csa(double v) =>
+    v == v.roundToDouble() ? v.toInt().toString() : v.toString();
