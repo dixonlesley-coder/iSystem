@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:crypto/crypto.dart' show sha256;
+
 import 'project_document.dart';
 import '../store/models/sheet.dart';
 
@@ -100,13 +102,18 @@ ProjectDocument rehydrateAssets(ProjectDocument doc) {
   if (doc.assets.isEmpty) return doc;
   final dir = projectAssetsDir();
 
-  // Extract each asset once to a stable, content-derived local path.
+  // Extract each asset once to a stable, CONTENT-derived local path: the name
+  // is a SHA-256 of the decoded bytes (+ length), so two different plans that
+  // were embedded under the same source path (rev A / rev B of
+  // C:\plans\denah.dxf, or two projects importing Downloads\denah.dxf) can
+  // never collide — and an equal name implies equal content, so the
+  // exists-skip below is safe.
   final localForKey = <String, String>{};
   doc.assets.forEach((key, b64) {
     try {
       final bytes = _decodeAsset(b64);
       final ext = key.toLowerCase().endsWith('.pdf') ? 'pdf' : 'dxf';
-      final id = '${key.hashCode.toUnsigned(32).toRadixString(16)}_${bytes.length}';
+      final id = '${sha256.convert(bytes)}_${bytes.length}';
       final file = File('$dir/$id.$ext');
       if (!file.existsSync()) file.writeAsBytesSync(bytes);
       localForKey[key] = file.path;

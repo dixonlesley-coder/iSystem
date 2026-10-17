@@ -74,6 +74,34 @@ void main() {
     expect(extracted.readAsBytesSync(), [5, 6, 7]); // passthrough, no gunzip
   });
 
+  test(
+      'two same-path, same-length, DIFFERENT plans extract to distinct files '
+      '(content-derived name, no stale reuse)', () {
+    // Rev A and rev B of one plan saved under the SAME source path, with
+    // byte payloads of identical length (20 bytes each) — a path+length name
+    // would collide and the second open would read rev A's bytes.
+    final revA = utf8.encode('LINE 0 0 10 10 REV-A');
+    final revB = utf8.encode('LINE 0 0 99 99 REV-B');
+    expect(revA.length, revB.length);
+    ProjectDocument docWith(List<int> bytes) => ProjectDocument(
+          projectName: 'P',
+          floors: const [Floor('G', Length(3.0))],
+          calibrations: const {},
+          sheets: const [
+            Sheet(id: 'a', name: 'p', dxfPath: '/plans/denah.dxf'),
+          ],
+          network: const Network(nodes: [], edges: []),
+          assets: {'/plans/denah.dxf': base64Encode(gzip.encode(bytes))},
+        );
+    final a = rehydrateAssets(docWith(revA)).sheets.single.dxfPath!;
+    final b = rehydrateAssets(docWith(revB)).sheets.single.dxfPath!;
+    expect(a, isNot(b));
+    expect(File(a).readAsBytesSync(), revA);
+    expect(File(b).readAsBytesSync(), revB);
+    // Re-opening rev A resolves to the same (content-equal) file.
+    expect(rehydrateAssets(docWith(revA)).sheets.single.dxfPath, a);
+  });
+
   test('a missing source file is skipped, not fatal', () {
     final sheets = [
       const Sheet(id: 'x', name: 'gone', pdfPath: '/no/such/plan.pdf'),
