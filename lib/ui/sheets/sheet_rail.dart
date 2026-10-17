@@ -39,11 +39,11 @@ class SheetRail extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(sheetsControllerProvider);
     final colors = context.colors;
-    // A6: an "Add sheets…" footer to append more plan files, shown only for a
-    // REAL project (any non-placeholder sheet). The golden/demo project seeds
-    // placeholder sheets only, so the footer stays hidden there and goldens are
-    // byte-identical; a production project (A1: always imported, never
-    // placeholder) always shows it.
+    // ONE add affordance: the trailing '+' tile. Its tap is Import plan (the
+    // add-or-replace flow); its right-click menu also offers the A6 multi-file
+    // "Add sheets from files…" append — offered only for a REAL project (any
+    // non-placeholder sheet), as the old footer was. The separate footer
+    // button (a second '+' beside the tile) is gone.
     final hasRealSheet = state.sheets.any((s) => !s.isPlaceholder);
 
     return SizedBox(
@@ -66,7 +66,12 @@ class SheetRail extends ConsumerWidget {
                 // import entry moved here off the top bar).
                 itemCount: state.sheets.length + 1,
                 itemBuilder: (context, i) => i == state.sheets.length
-                    ? _ImportPlanTile(onTap: () => importPlan(context, ref))
+                    ? _ImportPlanTile(
+                        onTap: () => importPlan(context, ref),
+                        onAddFiles: hasRealSheet
+                            ? () => addSheetsFromFiles(context, ref)
+                            : null,
+                      )
                     : _RailItem(
                         index: i,
                         sheet: state.sheets[i],
@@ -77,15 +82,6 @@ class SheetRail extends ConsumerWidget {
                       ),
               ),
             ),
-            if (hasRealSheet) ...[
-              Container(height: 1, color: colors.border),
-              Padding(
-                padding: const EdgeInsets.all(MechXSpacing.xs),
-                child: _AddSheetsButton(
-                  onTap: () => addSheetsFromFiles(context, ref),
-                ),
-              ),
-            ],
           ],
         ),
       ),
@@ -96,10 +92,16 @@ class SheetRail extends ConsumerWidget {
 /// The trailing '+' tile after the last sheet (work item 9): the rail's own
 /// door to Import plan (moved off the top bar). Same margin / padding / 34x42
 /// page geometry as a sheet tile, with a custom-painted plus (no icon font, so
-/// it can never tofu) — announced and tooltipped as "Import plan".
+/// it can never tofu) — announced and tooltipped as "Import plan". The rail's
+/// ONLY add affordance: right-click offers Import plan… plus, when
+/// [onAddFiles] is set (a real project), the multi-file "Add sheets from
+/// files…" append.
 class _ImportPlanTile extends StatefulWidget {
   final VoidCallback onTap;
-  const _ImportPlanTile({required this.onTap});
+
+  /// The multi-file append (A6). Null ⇒ the menu offers only Import plan….
+  final VoidCallback? onAddFiles;
+  const _ImportPlanTile({required this.onTap, this.onAddFiles});
 
   @override
   State<_ImportPlanTile> createState() => _ImportPlanTileState();
@@ -107,6 +109,66 @@ class _ImportPlanTile extends StatefulWidget {
 
 class _ImportPlanTileState extends State<_ImportPlanTile> {
   bool _hover = false;
+
+  /// The tile's right-click menu — the same root-overlay [MechXContextMenu] +
+  /// dismiss-barrier idiom as the per-sheet menu.
+  void _showMenu(Offset globalPosition) {
+    final overlay = Overlay.of(context, rootOverlay: true);
+    final theme = MechXTheme.of(context);
+    final strings = context.strings;
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) {
+        final size = MediaQuery.sizeOf(ctx);
+        const menuWidth = 220.0;
+        const menuHeight = 96.0;
+        final left = globalPosition.dx
+            .clamp(0.0, (size.width - menuWidth).clamp(0.0, size.width));
+        final top = globalPosition.dy
+            .clamp(0.0, (size.height - menuHeight).clamp(0.0, size.height));
+        return MechXTheme(
+          data: theme,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: entry.remove,
+                  onSecondaryTap: entry.remove,
+                  child: const SizedBox.expand(),
+                ),
+              ),
+              Positioned(
+                left: left,
+                top: top,
+                width: menuWidth,
+                child: MechXContextMenu(
+                  children: [
+                    MechXMenuRow(
+                      label: '${strings(StringKey.shellImportPdf)}…',
+                      onTap: () {
+                        entry.remove();
+                        widget.onTap();
+                      },
+                    ),
+                    if (widget.onAddFiles != null)
+                      MechXMenuRow(
+                        label: strings(StringKey.sheetRailAddFiles),
+                        onTap: () {
+                          entry.remove();
+                          widget.onAddFiles!();
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    overlay.insert(entry);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -126,6 +188,7 @@ class _ImportPlanTileState extends State<_ImportPlanTile> {
           onExit: (_) => setState(() => _hover = false),
           child: GestureDetector(
             onTap: widget.onTap,
+            onSecondaryTapDown: (d) => _showMenu(d.globalPosition),
             behavior: HitTestBehavior.opaque,
             child: AnimatedContainer(
               duration: MechXMotion.hover,
@@ -183,66 +246,6 @@ class _PlusGlyph extends CustomPainter {
 
   @override
   bool shouldRepaint(_PlusGlyph old) => old.color != color;
-}
-
-/// The slim "+ Add" footer affordance (A6) — appends more plan files via
-/// [addSheetsFromFiles]. A compact custom control (no Material) sized to the
-/// narrow rail; a "+" glyph over a terse label.
-class _AddSheetsButton extends StatefulWidget {
-  final VoidCallback onTap;
-  const _AddSheetsButton({required this.onTap});
-
-  @override
-  State<_AddSheetsButton> createState() => _AddSheetsButtonState();
-}
-
-class _AddSheetsButtonState extends State<_AddSheetsButton> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MechXFocusRing(
-      borderRadius: MechXRadii.control,
-      onActivated: widget.onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          behavior: HitTestBehavior.opaque,
-          child: AnimatedContainer(
-            duration: MechXMotion.hover,
-            curve: MechXMotion.standard,
-            padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xs),
-            decoration: BoxDecoration(
-              color: _hover ? colors.surfaceHover : const Color(0x00000000),
-              borderRadius: MechXRadii.control,
-              border: Border.all(color: colors.border),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '+',
-                  style: type.body.copyWith(
-                    color: colors.accent,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                Text(
-                  'Add',
-                  style: type.micro.copyWith(color: colors.textSecondary),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _RailItem extends ConsumerStatefulWidget {

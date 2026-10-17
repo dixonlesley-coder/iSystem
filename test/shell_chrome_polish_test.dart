@@ -174,4 +174,42 @@ void main() {
       expect(bodyTop, closeTo(panelTop, 1.0));
     });
   });
+
+  testWidgets('a % read-out with no reset callback is a plain label, not a '
+      'dead button', (tester) async {
+    Widget host(VoidCallback? reset) => MechXTheme(
+          data: MechXThemeData.dark,
+          child: Directionality(
+            textDirection: TextDirection.ltr,
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: ZoomControls(
+                onIn: () {},
+                onOut: () {},
+                onFit: () {},
+                percentLabel: '57%',
+                onResetZoom: reset,
+              ),
+            ),
+          ),
+        );
+    final pct = find.byKey(const ValueKey('zoom-percent'));
+
+    await tester.pumpWidget(host(null));
+    expect(pct, findsOneWidget);
+    expect(find.text('57%'), findsOneWidget);
+    // No gesture / focus / cursor surface under the read-out.
+    expect(find.descendant(of: pct, matching: find.byType(GestureDetector)),
+        findsNothing);
+    expect(find.descendant(of: pct, matching: find.byType(MouseRegion)),
+        findsNothing);
+
+    // With a callback it is the tappable reset.
+    var resets = 0;
+    await tester.pumpWidget(host(() => resets++));
+    expect(find.descendant(of: pct, matching: find.byType(GestureDetector)),
+        findsOneWidget);
+    await tester.tap(pct);
+    expect(resets, 1);
+  });
 }

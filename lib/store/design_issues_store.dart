@@ -416,15 +416,26 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // genuinely exists. An ADVISORY, not a warning: the diameter is still legal,
   // and the honest remedies are the design slope (a Building-page input) or
   // grouping more discharge onto the branch.
+  //
+  // Service-aware: a RAINWATER collector carries no DFU table and no grouped
+  // fixture discharge — it is auto-sized on the storm runoff alone — so the
+  // drainage copy ("group more discharge onto the branch", "larger than the
+  // DFU minimum") is false for it. It gets its own kind + copy whose only
+  // lever is the one it genuinely has: the laid slope.
   for (final id in selfCleansing) {
     final edge = edgeById[id];
     if (edge == null) continue;
     final sheetId = sheetForEdge(edge);
+    final rainwater = edge.service == ServiceType.rainwater;
     infos.add(DesignIssue(
       severity: IssueSeverity.info,
-      kind: 'drainage-self-cleansing',
-      title: str(StringKey.issueSelfCleansingTitle),
-      message: str(StringKey.issueSelfCleansingMessage),
+      kind: rainwater ? 'rainwater-self-cleansing' : 'drainage-self-cleansing',
+      title: str(rainwater
+          ? StringKey.issueRainwaterSelfCleansingTitle
+          : StringKey.issueSelfCleansingTitle),
+      message: str(rainwater
+          ? StringKey.issueRainwaterSelfCleansingMessage
+          : StringKey.issueSelfCleansingMessage),
       locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
     ));
   }

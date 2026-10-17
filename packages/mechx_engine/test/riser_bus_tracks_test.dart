@@ -4,8 +4,11 @@
 // Geometry used below (all from `electrical_sld_drawing.dart`):
 //   gutter 150, gap 24, board 168 x 46 ⇒ boards at x = 174, 366, 558 … (pitch
 //   192); band height 150, top band at y 0.
-//   Bus tracks sit 12 / 17 / 22 / 27 / 7 above a band's box tops, claimed
-//   right-to-left by jog x (the rightmost jog keeps the legacy 12).
+//   Bus tracks sit 12 / 17 / 22 / 27 above a band's box tops, claimed
+//   right-to-left by jog x (the rightmost jog keeps the legacy 12); a band with
+//   more than four jogs spreads its tracks MONOTONICALLY from 4 up to 29 above
+//   the box tops (the hairline of the band above sits at 31), growing the band
+//   once the spacing would drop under 3.
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/compute.dart';
@@ -103,7 +106,8 @@ bool _crossesInterior(SldLine l, SldRect r) {
 void main() {
   final p = _project();
   final r = computeSystem(const PuilProfile(), p);
-  final sheet = buildElectricalRiser(project: p, result: r, building: _building);
+  final sheet =
+      buildElectricalRiser(project: p, result: r, building: _building);
   final rects =
       sheet.prims.whereType<SldRect>().where((x) => x.w > 100).toList();
   final medium = sheet.prims
@@ -139,8 +143,7 @@ void main() {
       // its incoming and outgoing tie) — a truthful common connection.
       final hs = <(double, double, double)>{
         for (final l in medium)
-          if (l.y1 == l.y2)
-            (l.y1, math.min(l.x1, l.x2), math.max(l.x1, l.x2))
+          if (l.y1 == l.y2) (l.y1, math.min(l.x1, l.x2), math.max(l.x1, l.x2))
       }.toList();
       final hits = <String>[];
       for (var i = 0; i < hs.length; i++) {
@@ -230,10 +233,8 @@ void main() {
       };
       expect(l1Rows.length, greaterThanOrEqualTo(2));
       // Channel x = the shared vertical every feeder drops down.
-      final channelX = medium2
-          .where((l) => l.x1 == l.x2)
-          .map((l) => l.x1)
-          .reduce(math.max);
+      final channelX =
+          medium2.where((l) => l.x1 == l.x2).map((l) => l.x1).reduce(math.max);
       // L1's rightmost board edge: 3 boards ⇒ 174 + 2 x 192 + 168 = 726.
       const l1Right = 726.0;
       final tags = sheet2.prims
@@ -275,6 +276,141 @@ void main() {
       expect(hits, isEmpty);
     });
   });
+
+  // Geometric track order + the dense-band ceiling: for 3, 5, 6 and 12 boards
+  // on one band (2, 4, 5 and 11 jogs) no two different feeders cross, every
+  // track is distinct, and every track sits strictly between the band's box
+  // tops and the hairline of the band above — never in the upper band's
+  // fan-out column. Before the fix the FIFTH claim dropped to 7 above the boxes
+  // (below the four tracks to its right ⇒ four crossings) and the eleventh
+  // climbed past the hairline.
+  group('bus tracks: geometric order + dense bands stay under the hairline',
+      () {
+    for (final n in [3, 5, 6, 12]) {
+      test('$n boards on one band', () {
+        final pd = _denseBand(n);
+        final rd = computeSystem(const PuilProfile(), pd);
+        final sd =
+            buildElectricalRiser(project: pd, result: rd, building: _building);
+        final med = sd.prims
+            .whereType<SldLine>()
+            .where((l) => l.weight == SldWeight.medium)
+            .toList();
+        expect(_feederCrossings(med), isEmpty);
+
+        final boxes =
+            sd.prims.whereType<SldRect>().where((x) => x.w > 100).toList();
+        // L1 = the band holding the n fed boards (all on one y).
+        final l1Top = boxes
+            .where((b) => boxes.where((o) => o.y == b.y).length == n)
+            .first
+            .y;
+        // The hairline ABOVE L1: the nearest thin full-width grid line over it.
+        final hairline = sd.prims
+            .whereType<SldLine>()
+            .where((l) =>
+                l.weight == SldWeight.thin &&
+                l.y1 == l.y2 &&
+                l.x1 == 0 &&
+                l.y1 < l1Top)
+            .map((l) => l.y1)
+            .reduce(math.max);
+        // The bus tracks: medium horizontals in (hairline, box top).
+        final tracks = {
+          for (final l in med)
+            if (l.y1 == l.y2 && l.y1 < l1Top && l.y1 > hairline) l.y1
+        };
+        // n − 1 child-leg jogs ⇒ n − 1 distinct tracks, none on or past the
+        // hairline (the set above is bounded by it; check nothing escaped).
+        expect(tracks.length, n - 1);
+        // Nothing climbed onto/over the hairline into the upper band's fan-out
+        // column (61 tall, ending 12 above the hairline): no feeder horizontal
+        // in (hairline - 70, hairline].
+        expect(
+            med.where((l) =>
+                l.y1 == l.y2 && l.y1 <= hairline && l.y1 > hairline - 70),
+            isEmpty);
+        // Monotone geometry: the LEFTMOST jog owns the HIGHEST track.
+        if (n > 2) {
+          // (the shared channel vertical — the rightmost — is not a jog)
+          final channelX =
+              med.where((l) => l.x1 == l.x2).map((l) => l.x1).reduce(math.max);
+          final jogs = med
+              .where((l) =>
+                  l.x1 == l.x2 &&
+                  l.x1 < channelX &&
+                  math.max(l.y1, l.y2) == l1Top + 23 &&
+                  math.min(l.y1, l.y2) < l1Top)
+              .toList()
+            ..sort((a, b) => a.x1.compareTo(b.x1));
+          expect(jogs.length, n - 1);
+          for (var i = 0; i + 1 < jogs.length; i++) {
+            expect(math.min(jogs[i].y1, jogs[i].y2),
+                lessThan(math.min(jogs[i + 1].y1, jogs[i + 1].y2)));
+          }
+        }
+      });
+    }
+
+    test('a band of 12 grows instead of compressing past the minimum pitch',
+        () {
+      // 11 tracks at the 3-unit minimum pitch need 4 + 10 x 3 = 34 above the
+      // box tops; the gap under the hairline only offers 29 ⇒ the band grows by
+      // 5, pushing L1's box tops from 150 to 155 (the G band follows).
+      final pd = _denseBand(12);
+      final rd = computeSystem(const PuilProfile(), pd);
+      final sd =
+          buildElectricalRiser(project: pd, result: rd, building: _building);
+      final tops = {
+        for (final b in sd.prims.whereType<SldRect>().where((x) => x.w > 100))
+          b.y
+      };
+      expect(tops, containsAll(<double>[0, 155]));
+      // A band with <= 4 jogs keeps the fixed pitch (byte-identical).
+      expect(rects.map((b) => b.y).toSet(), {0.0, 150.0, 300.0});
+    });
+  });
+}
+
+/// R alone on L2 feeds [n] boards packed on L1 (and nothing else), so every L1
+/// board but the rightmost has boards between its right edge and the channel ⇒
+/// n − 1 child-leg jogs on ONE band.
+ElectricalProject _denseBand(int n) {
+  final ids = [for (var i = 0; i < n; i++) 'B$i'];
+  return ElectricalProject(id: 'pd$n', name: 'Dense', panels: [
+    ElectricalPanel(
+        id: 'R',
+        name: 'MDP',
+        layoutPos: const LayoutPos(sheetId: 's2', floorIndex: 2, x: 0, y: 0),
+        circuits: [for (final id in ids) _feeder('f$id', id, 12)]),
+    for (var i = 0; i < n; i++)
+      ElectricalPanel(
+          id: ids[i],
+          name: 'LP-${ids[i]}',
+          sourceType: PanelSource.feeder,
+          fedByCircuitId: 'f${ids[i]}',
+          layoutPos: LayoutPos(sheetId: 's1', floorIndex: 1, x: i * 4.0, y: 0),
+          circuits: [_light('l${ids[i]}')]),
+  ]);
+}
+
+/// Strict perpendicular crossings between medium (feeder) lines — a horizontal
+/// and a vertical meeting strictly inside BOTH (a shared endpoint / T-junction
+/// is a real connection, not a crossing).
+List<String> _feederCrossings(List<SldLine> medium) {
+  final hs = medium.where((l) => l.y1 == l.y2).toList();
+  final vs = medium.where((l) => l.x1 == l.x2).toList();
+  final hits = <String>[];
+  for (final h in hs) {
+    final hx0 = math.min(h.x1, h.x2), hx1 = math.max(h.x1, h.x2);
+    for (final v in vs) {
+      final vy0 = math.min(v.y1, v.y2), vy1 = math.max(v.y1, v.y2);
+      if (v.x1 > hx0 && v.x1 < hx1 && h.y1 > vy0 && h.y1 < vy1) {
+        hits.add('h y=${h.y1} [$hx0..$hx1] x v x=${v.x1} [$vy0..$vy1]');
+      }
+    }
+  }
+  return hits;
 }
 
 ElectricalProject _wideProject() {

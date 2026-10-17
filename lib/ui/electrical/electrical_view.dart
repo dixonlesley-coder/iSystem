@@ -1386,7 +1386,7 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                 section(kSupplyUtilitySectionKey,
                     StringKey.electricalSupplyUtility, true, [
                   ElectricalField(
-                    label: 'Source',
+                    label: context.strings(StringKey.electricalSupplySource),
                     child: ElectricalEnumPicker<SupplyKind>(
                       value: project.supplyKind,
                       options: SupplyKind.values,
@@ -1395,7 +1395,7 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                     ),
                   ),
                   ElectricalField(
-                    label: 'Connection capacity (VA)',
+                    label: context.strings(StringKey.electricalSupplyCapacityVa),
                     child: ElectricalNumInput(
                       value: project.supplyCapacityVa?.voltAmperes ?? 0,
                       onChanged: (v) => ctrl.setSupplyCapacityVa(
@@ -1403,11 +1403,7 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                       ),
                     ),
                   ),
-                  note('The declared connection (daya tersambung) in VA - '
-                      'e.g. 2200 / 33000 / 197000 - labels the supply node '
-                      'and rates the main board incomer + bus at the '
-                      'capacity\'s line current; 0 = not set (demand sizes '
-                      'the incomer).'),
+                  note(context.strings(StringKey.electricalSupplyCapacityNote)),
                   const SizedBox(height: MechXSpacing.md),
                   ElectricalField(
                     label: context.strings(StringKey.electricalTransformerKva),
@@ -1491,16 +1487,16 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                   ),
                   note(context.strings(StringKey.electricalCapacitorKvarNote)),
                   divider(),
-                  subhead('Solar PV'),
+                  subhead(context.strings(StringKey.electricalSolarPv)),
                   ElectricalToggleRow(
-                    label: 'Solar PV present',
+                    label: context.strings(StringKey.electricalSolarPresent),
                     value: solar != null,
                     onChanged: (on) => ctrl
                         .setSolar(on ? const SolarSource(panels: 20) : null),
                   ),
                   if (solar != null) ...[
                     ElectricalField(
-                      label: 'Panels',
+                      label: context.strings(StringKey.electricalSolarPanels),
                       child: ElectricalNumInput(
                         value: solar.panels.toDouble(),
                         min: 1,
@@ -1512,7 +1508,7 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                       ),
                     ),
                     ElectricalField(
-                      label: 'Panel rating (Wp)',
+                      label: context.strings(StringKey.electricalSolarPanelWp),
                       child: ElectricalNumInput(
                         value: solar.panelWp.toDouble(),
                         min: 1,
@@ -1525,16 +1521,16 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                     ),
                   ],
                   divider(),
-                  subhead('Battery'),
+                  subhead(context.strings(StringKey.electricalBattery)),
                   ElectricalToggleRow(
-                    label: 'Battery present',
+                    label: context.strings(StringKey.electricalBatteryPresent),
                     value: battery != null,
                     onChanged: (on) => ctrl.setBattery(
                         on ? const BatterySource(autonomyHours: 2) : null),
                   ),
                   if (battery != null) ...[
                     ElectricalField(
-                      label: 'Chemistry',
+                      label: context.strings(StringKey.electricalBatteryChemistry),
                       child: ElectricalEnumPicker<BatteryChemistry>(
                         value: battery.chemistry,
                         options: BatteryChemistry.values,
@@ -1546,7 +1542,7 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                       ),
                     ),
                     ElectricalField(
-                      label: 'Autonomy (h)',
+                      label: context.strings(StringKey.electricalBatteryAutonomy),
                       child: ElectricalNumInput(
                         value: battery.autonomyHours,
                         min: 0.1,
@@ -1585,22 +1581,18 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                       .strings(StringKey.electricalBusbarClearingTimeNote)),
                   divider(),
                   // ── MEP equipment feed (G1) ──────────────────────────
-                  subhead('MEP equipment feed'),
+                  subhead(context.strings(StringKey.electricalMepFeed)),
                   ElectricalToggleRow(
-                    label: 'Add solved MEP duties to panel',
+                    label: context.strings(StringKey.electricalMepFeedToggle),
                     value: dutyFeedOn,
                     onChanged: (on) =>
                         ref.read(mepDutyFeedEnabledProvider.notifier).set(on),
                   ),
                   note(duties.isEmpty
-                      ? 'No auto-sized pump / fan / fire-pump duty yet — '
-                          'draw and size the mechanical systems first. '
-                          'Equipment placed on the plan always feeds the '
-                          'MEP Equipment panel.'
-                      : 'Folds the app-sized ${duties.map((d) => d.name).join(', ')} '
-                          'into the MEP Equipment panel as sized circuits — '
-                          'no re-entry of the kW. Fire pumps carry life-safety '
-                          'treatment. Placed equipment always feeds the panel.'),
+                      ? context.strings(StringKey.electricalMepFeedNoteEmpty)
+                      : context.strings.format(StringKey.electricalMepFeedNote, {
+                          'names': duties.map((d) => d.name).join(', '),
+                        })),
                 ]),
               ],
             ),

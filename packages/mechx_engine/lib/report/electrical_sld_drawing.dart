@@ -248,6 +248,20 @@ String cableLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
   return '$family ${n}x${_num(csaMm2)}';
 }
 
+/// The full PENGHANTAR conductor label WITH its unit and parallel-run count:
+/// `NYY 5x16 mm2` for a single cable, `2x(NYY 5x185 mm2)` when the sizer
+/// paralleled [runs] cables per phase ([CableResult.runsPerPhase]). A paralleled
+/// way pulls N complete cables (and the containment issues N conduits), so a
+/// label naming ONE cable under-states the take-off by N. The ONE notation the
+/// board schedule, the overview/riser feeder labels, the live canvas feeder
+/// label and the inspector all print, so the formats can never disagree.
+/// Null / <= 1 [runs] ⇒ exactly `${cableLabel(...)} mm2` (byte-identical).
+String cableRunLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
+    {int? cores, int? runs}) {
+  final single = '${cableLabel(circuit, csaMm2, threePhase, cores: cores)} mm2';
+  return (runs != null && runs > 1) ? '${runs}x($single)' : single;
+}
+
 /// The cable family a circuit's label/legend should show: its explicit
 /// `cableType` when set, else the convention default for its load kind.
 String resolvedCableFamily(ElectricalCircuit? circuit) =>
@@ -591,8 +605,8 @@ SldSheet buildElectricalSld({
       // `mm` conduit token.
       final length = c.lengthM > 0 ? ' · ${_num(c.lengthM)} m' : '';
       final cable =
-          '${cableLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores)} '
-          'mm2$earth$conduit$length';
+          '${cableRunLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores, runs: c.cable.runsPerPhase)}'
+          '$earth$conduit$length';
       // DAYA in WATT (integer, dot thousands separator); a feeder (loadW 0) → '-'.
       final daya = c.loadW > 0 ? _wattsId(c.loadW) : '-';
       // DEVICE: breaker label + the motor-control / starter token (DOL / VSD /
@@ -1020,7 +1034,7 @@ String? _feederConnLabel(
   final poles = cr.threePhase ? 3 : 1;
   final length = cr.lengthM > 0 ? ' · ${_num(cr.lengthM)} m' : '';
   final twoPole = parentThreePhase && !cr.threePhase;
-  return '${cableLabel(circ, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores)} mm2 · '
+  return '${cableRunLabel(circ, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores, runs: cr.cable.runsPerPhase)} · '
       '${breakerScheduleLabel(cr.breaker, poles, twoPole: twoPole)}$length';
 }
 
@@ -2043,43 +2057,68 @@ const double _riserBusOffset = 12;
 /// Several legs can need a band's bus row at once (a parent leg AND a child leg
 /// of DIFFERENT feeders, say). Sharing one row would draw them collinear —
 /// reading as one connected bus, a false topology — so every leg gets its OWN
-/// TRACK in the 31-unit gap: the first claimant keeps the legacy row
-/// ([_riserBusOffset] above the boxes ⇒ a single-jog band is byte-identical),
-/// later ones step [_riserBusTrackPitch] apart in the order of
-/// [_riserBusTrackSteps] (12, 17, 22, 27, 7 above the box tops — all clear of
-/// the box tops and of the grid line 31 above them). Legs leaving ONE parent
-/// board share that board's track (one source bus — a truthful common
-/// connection). A drafting choice, not a standard.
+/// TRACK in the clear gap above the boxes. Legs leaving ONE parent board share
+/// that board's track (one source bus — a truthful common connection). A
+/// drafting choice, not a standard.
 ///
-/// Tracks are claimed RIGHT-TO-LEFT by jog x (the rightmost jog keeps the
-/// legacy row, each jog further left climbs one track), so a left board's
-/// track horizontal passes ABOVE every right board's jog vertical instead of
-/// crossing it — with the monotone first four steps, a band with up to four
-/// jogs draws no feeder crossing at all.
+/// Tracks are claimed in GEOMETRIC order — RIGHT-TO-LEFT by jog x — and the
+/// offsets rise MONOTONICALLY with the claim index, so a left board's track
+/// horizontal always passes ABOVE every right board's jog vertical (which
+/// rises from its centre-line to its own, lower track) instead of crossing it:
+/// a band draws no feeder crossing however many boards it carries.
+///
+/// Up to [_riserBusLegacyTracks] tracks keep the legacy rows (12 / 17 / 22 / 27
+/// above the box tops ⇒ a band with ≤ 4 jogs is byte-identical). A denser band
+/// spreads its n tracks evenly from [_riserBusGapBottom] up to
+/// [_riserBusGapTop] (never past the hairline [_riserBusGap] above the boxes,
+/// so never into the upper band's fan-out column); once that spacing would
+/// drop under [_riserBusMinPitch] the band GROWS ([_riserBusTrackExtra]).
 const double _riserBusTrackPitch = 5;
-const List<int> _riserBusTrackSteps = [0, 1, 2, 3, -1];
+const int _riserBusLegacyTracks = 4;
 
-/// Half-pitch interleaves offered once the five whole-pitch tracks are taken
-/// (14.5, 19.5, 24.5, 9.5, 29.5 above the box tops) — still distinct rows
-/// inside the clear gap, 2.5 units from their neighbours.
-const List<double> _riserBusTrackInterleaves = [14.5, 19.5, 24.5, 9.5, 29.5];
+/// The clear gap between a band's box tops and the floor-grid hairline of the
+/// band above (`_riserBandH − _ovH − _fanColH − _riserPanelGap/2` = 31).
+const double _riserBusGap = _riserBandH - _ovH - _fanColH - _riserPanelGap / 2;
 
-/// Offset above the box tops of a band's [k]-th bus track (k = 0 ⇒ the legacy
-/// [_riserBusOffset] row). The first TEN tracks stay inside the 31-unit gap
-/// below the grid line. NOTE (edge case): an eleventh+ jogging leg on ONE band
-/// has no room left there, so it climbs 32, 37, 42 … above the box tops —
-/// past the grid hairline and, from the 14th (47), into the upper band's
-/// fan-out column. Distinct (never collinear), but crowded; such a band is far
-/// denser than any realistic riser floor.
-double _riserBusTrackOffset(int k) {
-  if (k < _riserBusTrackSteps.length) {
-    return _riserBusOffset + _riserBusTrackSteps[k] * _riserBusTrackPitch;
+/// Lowest / highest track offsets above the box tops for a dense band — 4
+/// clear of the box edge, 2 clear of the hairline.
+const double _riserBusGapBottom = 4;
+const double _riserBusGapTop = _riserBusGap - 2;
+
+/// The tightest track spacing a dense band accepts before it grows.
+const double _riserBusMinPitch = 3;
+
+/// Offset above the box tops of a band's [k]-th of [n] bus tracks, given the
+/// [extra] height the band grew by. Strictly increasing in [k] for every [n].
+double _riserBusTrackOffset(int k, int n, double extra) {
+  if (n <= _riserBusLegacyTracks) {
+    return _riserBusOffset + k * _riserBusTrackPitch;
   }
-  final i = k - _riserBusTrackSteps.length;
-  if (i < _riserBusTrackInterleaves.length) return _riserBusTrackInterleaves[i];
-  final j = i - _riserBusTrackInterleaves.length;
-  return 32 + j * _riserBusTrackPitch;
+  final span = _riserBusGapTop + extra - _riserBusGapBottom;
+  final pitch = math.min(_riserBusTrackPitch, span / (n - 1));
+  return _riserBusGapBottom + k * pitch;
 }
+
+/// Extra height a band with [n] bus tracks needs above its boxes so its tracks
+/// keep at least [_riserBusMinPitch] apart under the hairline (0 ⇒ fits).
+double _riserBusTrackExtra(int n) {
+  if (n <= _riserBusLegacyTracks) return 0;
+  final need = _riserBusGapBottom + (n - 1) * _riserBusMinPitch;
+  return need > _riserBusGapTop ? (need - _riserBusGapTop).ceilToDouble() : 0;
+}
+
+/// One feeder's two legs on the riser (child + parent edges, centre lines, and
+/// whether each must jog to its band's bus track).
+typedef _RiserLeg = ({
+  String child,
+  String parent,
+  double cxx,
+  double pxx,
+  double pyy,
+  double cyy,
+  bool pJog,
+  bool cJog,
+});
 
 /// Per-floor branch fan-out: how many outgoing LOAD ways a riser panel shows as
 /// labelled stubs before collapsing the remainder to a `+N more` summary, the
@@ -2382,8 +2421,17 @@ SldSheet buildElectricalRiser({
   // Elevation→y: the highest floor maps to the smallest y. With a degenerate
   // (zero-span) building use a fixed band height so we never divide by zero.
   final topIndex = levelCount - 1;
-  double bandY(int floorIndex) =>
-      (topIndex - floorIndex) * _riserBandH;
+  // Extra height inserted ABOVE a band's boxes when its bus tracks outgrow the
+  // clear gap under the hairline (see [_riserBusTrackExtra]); it shifts that
+  // band and every band below it down. Empty ⇒ the fixed pitch, byte-identical.
+  final bandExtra = <int, double>{};
+  double bandY(int floorIndex) {
+    var y = (topIndex - floorIndex) * _riserBandH;
+    for (var j = floorIndex; j <= topIndex; j++) {
+      y += bandExtra[j] ?? 0;
+    }
+    return y;
+  }
 
   // ── Optional source spine above the top band ────────────────────────────────
   final prims = <SldPrim>[];
@@ -2407,16 +2455,20 @@ SldSheet buildElectricalRiser({
   final panelY = <String, double>{};
   const panelPitch = _ovW + _riserPanelGap;
   var sheetMaxX = _riserGutterW + _ovW;
-  for (final entry in byFloor.entries) {
-    final y = bandY(entry.key) + contentOffsetY;
-    var x = _riserGutterW + _riserPanelGap;
-    for (final id in entry.value) {
-      panelX[id] = x;
-      panelY[id] = y;
-      x += panelPitch;
+  void placePanels() {
+    for (final entry in byFloor.entries) {
+      final y = bandY(entry.key) + contentOffsetY;
+      var x = _riserGutterW + _riserPanelGap;
+      for (final id in entry.value) {
+        panelX[id] = x;
+        panelY[id] = y;
+        x += panelPitch;
+      }
+      sheetMaxX = math.max(sheetMaxX, x);
     }
-    sheetMaxX = math.max(sheetMaxX, x);
   }
+
+  placePanels();
 
   // ── Feeders: vertical riser in a right-hand channel + horizontal branches ───
   final channelX = sheetMaxX + 40;
@@ -2454,80 +2506,116 @@ SldSheet buildElectricalRiser({
     return false;
   }
 
-  // Per-band bus TRACKS (see [_riserBusTrackSteps]): each leg that must jog
-  // claims its own row in the band's clear gap, keyed so legs leaving ONE parent
-  // board share that board's track. The first claimant per band keeps the
-  // legacy row ⇒ a band with a single jog is byte-identical.
-  final busTrackCount = <int, int>{};
-  final busTrackOf = <String, double>{};
-  double busTrackY(int band, double boxTop, String key) =>
-      busTrackOf.putIfAbsent(key, () {
-        final k = busTrackCount[band] ?? 0;
-        busTrackCount[band] = k + 1;
-        return boxTop - _riserBusTrackOffset(k);
-      });
+  // Does a root's source drop need the dedicated left trunk? The root sits
+  // below other bands when the legacy three-leg drop at its centre column would
+  // run straight through a board in between (see the drawing pass below).
+  // Shared by the track pre-claim AND the drawing so the two always agree.
+  bool rootNeedsTrunk(String id) {
+    final sp = spine;
+    if (sp == null) return false;
+    final zx = panelX[id]! + _ovW / 2;
+    final zy = panelY[id]!;
+    final midY = (sp.feedY + zy) / 2;
+    return vBlocked(sp.feedX, sp.feedY, midY) ||
+        hBlocked(midY, sp.feedX, zx) ||
+        vBlocked(zx, midY, zy);
+  }
 
   // One record per drawn feeder, in the deterministic parent-map order. Which
   // legs must jog is decided first; their bus tracks are then claimed per band
-  // RIGHT-TO-LEFT by jog x (see [_riserBusTrackSteps]) so no track horizontal
-  // crosses another leg's jog vertical.
-  final legs = <({
-    String child,
-    String parent,
-    double cxx,
-    double pxx,
-    double pyy,
-    double cyy,
-    bool pJog,
-    bool cJog,
-  })>[];
-  for (final entry in parentOf.entries) {
-    final child = entry.key;
-    final parent = entry.value;
-    if (!panelX.containsKey(child) || !panelX.containsKey(parent)) continue;
-    final cxx = panelX[child]! + _ovW; // child right edge
-    final pxx = panelX[parent]! + _ovW; // parent right edge
-    final pyy = panelY[parent]! + _ovH / 2;
-    final cyy = panelY[child]! + _ovH / 2;
-    // A board between a leg's box and the channel ⇒ that leg jogs to its
-    // band's bus row (the clear gap above the boxes). One board per band ⇒
-    // nothing blocks ⇒ the straight legacy geometry, byte-identical.
-    legs.add((
-      child: child,
-      parent: parent,
-      cxx: cxx,
-      pxx: pxx,
-      pyy: pyy,
-      cyy: cyy,
-      pJog: hBlocked(pyy, pxx, channelX),
-      cJog: hBlocked(cyy, channelX, cxx),
-    ));
-  }
-  final claims =
-      <({String key, int band, double boxTop, double jx, int seq})>[];
-  final claimed = <String>{};
-  void claim(String key, String panel, double edgeX) {
-    if (!claimed.add(key)) return;
-    claims.add((
-      key: key,
-      band: floorOf(panel),
-      boxTop: panelY[panel]!,
-      jx: _RiserFeeder.jogX(edgeX),
-      seq: claims.length,
-    ));
+  // in GEOMETRIC order — RIGHT-TO-LEFT by jog x (see [_riserBusTrackOffset]) —
+  // so no track horizontal crosses another leg's jog vertical.
+  List<_RiserLeg> buildLegs() => [
+        for (final entry in parentOf.entries)
+          if (panelX.containsKey(entry.key) && panelX.containsKey(entry.value))
+            (
+              child: entry.key,
+              parent: entry.value,
+              cxx: panelX[entry.key]! + _ovW, // child right edge
+              pxx: panelX[entry.value]! + _ovW, // parent right edge
+              pyy: panelY[entry.value]! + _ovH / 2,
+              cyy: panelY[entry.key]! + _ovH / 2,
+              // A board between a leg's box and the channel ⇒ that leg jogs to
+              // its band's bus row (the clear gap above the boxes). One board
+              // per band ⇒ nothing blocks ⇒ the straight legacy geometry,
+              // byte-identical.
+              pJog: hBlocked(panelY[entry.value]! + _ovH / 2,
+                  panelX[entry.value]! + _ovW, channelX),
+              cJog: hBlocked(panelY[entry.key]! + _ovH / 2, channelX,
+                  panelX[entry.key]! + _ovW),
+            ),
+      ];
+
+  // Every bus-track claim, per band, in GEOMETRIC claim order: feeder legs
+  // right-to-left by jog x (legs leaving ONE parent board share its key ⇒ one
+  // track), then the source rows (`top` / `s:<root>`), which ride the LEFT
+  // trunk and so sort last (leftmost) — the root is the first board of its
+  // band, so its row crosses no jog.
+  List<({String key, int band})> buildClaims(List<_RiserLeg> legs) {
+    final claims = <({String key, int band, double jx, int seq})>[];
+    final claimed = <String>{};
+    void claim(String key, int band, double jx) {
+      if (!claimed.add(key)) return;
+      claims.add((key: key, band: band, jx: jx, seq: claims.length));
+    }
+
+    for (final l in legs) {
+      if (l.pJog) {
+        claim('p:${l.parent}', floorOf(l.parent), _RiserFeeder.jogX(l.pxx));
+      }
+      if (l.cJog) {
+        claim('c:${l.child}', floorOf(l.child), _RiserFeeder.jogX(l.cxx));
+      }
+    }
+    for (final id in result.order) {
+      if (parentOf.containsKey(id) || !panelX.containsKey(id)) continue;
+      if (!rootNeedsTrunk(id)) continue;
+      claim('top', topIndex, double.negativeInfinity);
+      if (floorOf(id) != topIndex) {
+        claim('s:$id', floorOf(id), double.negativeInfinity);
+      }
+    }
+    claims.sort((a, b) {
+      if (a.band != b.band) return a.band.compareTo(b.band);
+      final byX = b.jx.compareTo(a.jx); // rightmost first
+      return byX != 0 ? byX : a.seq.compareTo(b.seq);
+    });
+    return [for (final c in claims) (key: c.key, band: c.band)];
   }
 
-  for (final l in legs) {
-    if (l.pJog) claim('p:${l.parent}', l.parent, l.pxx);
-    if (l.cJog) claim('c:${l.child}', l.child, l.cxx);
+  Map<int, int> perBand(List<({String key, int band})> claims) {
+    final n = <int, int>{};
+    for (final c in claims) {
+      n[c.band] = (n[c.band] ?? 0) + 1;
+    }
+    return n;
   }
-  claims.sort((a, b) {
-    if (a.band != b.band) return a.band.compareTo(b.band);
-    final byX = b.jx.compareTo(a.jx); // rightmost first
-    return byX != 0 ? byX : a.seq.compareTo(b.seq);
-  });
+
+  // A band whose tracks would sit closer than [_riserBusMinPitch] in the clear
+  // gap GROWS (extra height above its boxes) rather than letting a track climb
+  // past the hairline into the upper band's fan-out column. Growth shifts the
+  // bands below, so the legs/claims are re-derived on the final positions.
+  var legs = buildLegs();
+  var claims = buildClaims(legs);
+  var trackCount = perBand(claims);
+  for (final e in trackCount.entries) {
+    final extra = _riserBusTrackExtra(e.value);
+    if (extra > 0) bandExtra[e.key] = extra;
+  }
+  if (bandExtra.isNotEmpty) {
+    placePanels();
+    legs = buildLegs();
+    claims = buildClaims(legs);
+    trackCount = perBand(claims);
+  }
+  final busTrackOf = <String, double>{};
+  final claimedSoFar = <int, int>{};
   for (final c in claims) {
-    busTrackY(c.band, c.boxTop, c.key);
+    final k = claimedSoFar[c.band] ?? 0;
+    claimedSoFar[c.band] = k + 1;
+    busTrackOf[c.key] = bandY(c.band) +
+        contentOffsetY -
+        _riserBusTrackOffset(k, trackCount[c.band]!, bandExtra[c.band] ?? 0);
   }
 
   final feeders = <_RiserFeeder>[];
@@ -2673,9 +2761,7 @@ SldSheet buildElectricalRiser({
       final zx = panelX[id]! + _ovW / 2;
       final zy = panelY[id]!;
       final midY = (spine.feedY + zy) / 2;
-      final straightBlocked = vBlocked(spine.feedX, spine.feedY, midY) ||
-          hBlocked(midY, spine.feedX, zx) ||
-          vBlocked(zx, midY, zy);
+      final straightBlocked = rootNeedsTrunk(id);
       if (!straightBlocked) {
         // The root sits on (or the drop clears) every band above it: the
         // legacy three-leg drop, byte-identical.
@@ -2694,11 +2780,10 @@ SldSheet buildElectricalRiser({
       // clear bus row above the top band, and enter the root from its own
       // band's bus row.
       const trunkX = _riserGutterW + _riserPanelGap / 2;
-      final topRowY = busTrackY(topIndex, contentOffsetY, 'top');
+      final topRowY = busTrackOf['top']!;
       // A root on the TOP band rides the same source row (one continuous path).
-      final rootRowY = floorOf(id) == topIndex
-          ? topRowY
-          : busTrackY(floorOf(id), zy, 's:$id');
+      final rootRowY =
+          floorOf(id) == topIndex ? topRowY : busTrackOf['s:$id']!;
       prims.add(SldLine(spine.feedX, spine.feedY, spine.feedX, topRowY,
           weight: SldWeight.medium, role: SldRole.source));
       prims.add(SldLine(spine.feedX, topRowY, trunkX, topRowY,
