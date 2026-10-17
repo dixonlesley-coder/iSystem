@@ -11,7 +11,9 @@ import '../../store/app_state.dart';
 /// moves when a literal is migrated.
 enum StringKey {
   // Left navigation rail.
+  navGroupSetup,
   navGroupDesign,
+  navGroupIssue,
   navLayout,
   navSchematic,
   navElectrical,
@@ -1043,7 +1045,9 @@ enum StringKey {
 /// English — the source language. These MUST match the inline literals being
 /// migrated character-for-character (see the per-key migration notes).
 const Map<StringKey, String> _en = {
+  StringKey.navGroupSetup: 'SETUP',
   StringKey.navGroupDesign: 'DESIGN',
+  StringKey.navGroupIssue: 'ISSUE',
   StringKey.navLayout: 'Layout',
   StringKey.navSchematic: 'Riser',
   StringKey.navElectrical: 'Electrical',
@@ -2163,7 +2167,9 @@ const Map<StringKey, String> _en = {
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
 /// app never shows a blank even before a translation lands.
 const Map<StringKey, String> _id = {
+  StringKey.navGroupSetup: 'PERSIAPAN',
   StringKey.navGroupDesign: 'DESAIN',
+  StringKey.navGroupIssue: 'TERBITKAN',
   StringKey.navLayout: 'Tata Letak',
   StringKey.navSchematic: 'Riser',
   StringKey.navElectrical: 'Listrik',

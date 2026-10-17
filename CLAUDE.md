@@ -234,9 +234,10 @@ can never diverge from its clicked equivalent). Bindings: **Ctrl/Cmd+N** new · 
 **S** / **Shift+S** save / save-as · **I** import plan · **P** export the annotated plan PDF
 (the app's "print", `runExportGuarded`) · **E** the ONE Export sheet · **Z** / **Y** / **Shift+Z** undo/redo on the ONE
 `historyProvider` timeline (now global, so undo works on the hub screens where nothing holds
-focus) · **K** / **Shift+P** command palette · **1..8** (+ numpad) the nav-rail destinations in
-rail order [Layout · Riser · Electrical · Building · Review · Commercial · Projects ·
-Preferences] · **,** Preferences · bare **F1** the shortcuts sheet. Two rules are part of the
+focus) · **K** / **Shift+P** command palette · **1..8** (+ numpad) the nav-rail destinations,
+DESTINATION-bound [1 Layout · 2 Riser · 3 Electrical · 4 Building · 5 Review · 6 Commercial ·
+7 Projects · 8 Preferences — kept when the rail was regrouped 2026-10-17; the F1 sheet lists the
+'Go to' rows in rail order, each with its own keycap] · **,** Preferences · bare **F1** the shortcuts sheet. Two rules are part of the
 table: **Alt NEVER matches** (Windows AltGr reports as Ctrl+Alt — swallowing it would eat real
 characters on an ID/EU layout) and `ShellCommand.deferToTextField` marks undo/redo as combos a
 focused field owns (the shell stands down via the shared `isTextEntryFocused()` so
@@ -770,9 +771,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   segment [`palettePhaseProvider`] picks the phase of the phase-variable kinds), outlet-drag-to-feeder, minimap, zoom controls,
   Single-line / Power one-line tabs + canvas toolbar; additive `ElectricalPanel.x/y`
   (no math change). The app shell is now PanelMaker's **248-px left navigation rail**
-  (`ui/shell/nav_rail.dart`): DESIGN (Plan/Schematic/Electrical, still driven by
-  `workspaceViewProvider`) · Review · Commercial · pinned Projects/Preferences,
-  replacing the top-bar view switch (`ShellSection`).
+  (`ui/shell/nav_rail.dart`), grouped in workflow order (2026-10-17): SETUP (Projects ·
+  Building) · DESIGN (Layout/Riser/Electrical, still driven by `workspaceViewProvider`) ·
+  ISSUE (Review w/ badge · Commercial) · pinned Preferences (collapsed rail = same order,
+  no labels), replacing the top-bar view switch (`ShellSection`).
   **iOS / Apple-HIG visual polish landed** (token refresh in `ui/theme/design_tokens.dart`
   — systemBlue accent, grouped backgrounds + label tiers + hairline separators, continuous
   radii, soft `MechXShadow`, SF-like Roboto scale; `MechXButton` = the iOS filled/tinted

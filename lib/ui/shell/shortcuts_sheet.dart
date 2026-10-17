@@ -142,7 +142,8 @@ class _ShortcutColumnsState extends State<_ShortcutColumns> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  for (final g in kShellShortcutGroups) _GroupBlock(group: g),
+                  for (final g in kShellShortcutGroups)
+                    _GroupBlock(group: inRailOrder(g)),
                 ],
               ),
             ),
@@ -160,6 +161,39 @@ class _ShortcutColumnsState extends State<_ShortcutColumns> {
       ),
     );
   }
+}
+
+/// The nav-rail order (SETUP · DESIGN · ISSUE, then the pinned Preferences).
+/// The accelerator TABLE stays destination-keyed (Ctrl 1 = Layout … Ctrl 8 =
+/// Preferences — shipped muscle memory), so the sheet only REORDERS the
+/// 'Go to' rows to read top-to-bottom like the rail, each keeping its keycap.
+const List<ShellCommand> kRailCommandOrder = [
+  ShellCommand.goProjects,
+  ShellCommand.goBuilding,
+  ShellCommand.goLayout,
+  ShellCommand.goRiser,
+  ShellCommand.goElectrical,
+  ShellCommand.goReview,
+  ShellCommand.goCommercial,
+  ShellCommand.goPreferences,
+];
+
+/// [group] with its navigation rows in rail order (stable: rows for the same
+/// destination — e.g. Ctrl 8 and Ctrl , for Preferences — keep their relative
+/// order). Groups with no navigation rows are returned unchanged.
+ShortcutGroup inRailOrder(ShortcutGroup group) {
+  int rank(ShortcutDoc d) =>
+      d.command == null ? -1 : kRailCommandOrder.indexOf(d.command!);
+
+  if (!group.shortcuts.any((d) => rank(d) >= 0)) return group;
+  final indexed = [
+    for (var i = 0; i < group.shortcuts.length; i++) (i, group.shortcuts[i]),
+  ]..sort((a, b) {
+      final ra = rank(a.$2), rb = rank(b.$2);
+      if (ra != rb) return ra.compareTo(rb);
+      return a.$1.compareTo(b.$1);
+    });
+  return ShortcutGroup(group.title, [for (final e in indexed) e.$2]);
 }
 
 class _GroupBlock extends StatelessWidget {

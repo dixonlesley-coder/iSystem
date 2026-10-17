@@ -54,8 +54,9 @@ enum _Glyph { plan, schematic, electrical, building, review, commercial, project
 
 /// PanelMaker's left navigation rail, mirrored for iSystem's M+E+P workspaces.
 ///
-/// A fixed-width vertical rail: a DESIGN group (Plan / Schematic / Electrical) →
-/// Review → Commercial, a spacer, then pinned Projects + Preferences. The active
+/// A fixed-width vertical rail in workflow order: SETUP (Projects / Building) →
+/// DESIGN (Layout / Riser / Electrical) → ISSUE (Review / Commercial), a spacer,
+/// then pinned Preferences. The active
 /// item is highlighted. Design items drive [workspaceViewProvider]; the rest set
 /// [shellSectionProvider].
 class NavRail extends ConsumerWidget {
@@ -106,6 +107,23 @@ class NavRail extends ConsumerWidget {
       sectionCtrl.set(ShellSection.design);
     }
 
+    // A group heading, hidden when collapsed (cross-fades out so the layout
+    // settles cleanly). F4: micro-scale — the `micro` token, not caption+9.
+    Widget group(String label) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            AnimatedSize(
+              duration: MechXMotion.appear,
+              curve: MechXMotion.standard,
+              child: collapsed
+                  ? const SizedBox(width: double.infinity)
+                  : _GroupLabel(label,
+                      style: type.micro.copyWith(color: colors.textMuted)),
+            ),
+            const SizedBox(height: MechXSpacing.xxs),
+          ],
+        );
+
     // The rail glides between EXPANDED (icon + caption) and COLLAPSED
     // (icon-only) — HIG: width changes ease, never pop. [appear]/[standard]
     // matches the selection-fill easing the items already use.
@@ -124,19 +142,28 @@ class NavRail extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // The DESIGN group label is hidden when collapsed (cross-fades out so
-          // the layout settles cleanly).
-          AnimatedSize(
-            duration: MechXMotion.appear,
-            curve: MechXMotion.standard,
-            child: collapsed
-                ? const SizedBox(width: double.infinity)
-                : _GroupLabel(strings(StringKey.navGroupDesign),
-                    // F4: the DESIGN group heading is micro-scale — route it
-                    // through the `micro` token instead of caption+`fontSize: 9`.
-                    style: type.micro.copyWith(color: colors.textMuted)),
+          // Workflow-ordered groups (2026-10-17): SETUP (Projects, Building) ->
+          // DESIGN (Layout, Riser, Electrical) -> ISSUE (Review, Commercial),
+          // with only Preferences pinned at the bottom. The Ctrl/Cmd+1..8
+          // accelerators stay DESTINATION-bound (shell_shortcuts.dart), so
+          // reordering the rail never moves a shipped binding.
+          group(strings(StringKey.navGroupSetup)),
+          _NavItem(
+            glyph: _Glyph.projects,
+            label: strings(StringKey.navProjects),
+            active: section == ShellSection.projects,
+            collapsed: collapsed,
+            onTap: () => sectionCtrl.set(ShellSection.projects),
           ),
-          const SizedBox(height: MechXSpacing.xxs),
+          _NavItem(
+            glyph: _Glyph.building,
+            label: strings(StringKey.navBuilding),
+            active: section == ShellSection.building,
+            collapsed: collapsed,
+            onTap: () => sectionCtrl.set(ShellSection.building),
+          ),
+          const SizedBox(height: MechXSpacing.xs),
+          group(strings(StringKey.navGroupDesign)),
           _NavItem(
             glyph: _Glyph.plan,
             // "Plan" relabelled to "Layout": this design view is now the unified
@@ -162,14 +189,8 @@ class NavRail extends ConsumerWidget {
             collapsed: collapsed,
             onTap: () => openDesign(WorkspaceView.electrical),
           ),
-          const SizedBox(height: MechXSpacing.sm),
-          _NavItem(
-            glyph: _Glyph.building,
-            label: strings(StringKey.navBuilding),
-            active: section == ShellSection.building,
-            collapsed: collapsed,
-            onTap: () => sectionCtrl.set(ShellSection.building),
-          ),
+          const SizedBox(height: MechXSpacing.xs),
+          group(strings(StringKey.navGroupIssue)),
           _NavItem(
             glyph: _Glyph.review,
             label: strings(StringKey.navReview),
@@ -195,13 +216,6 @@ class NavRail extends ConsumerWidget {
             onTap: () => sectionCtrl.set(ShellSection.commercial),
           ),
           const Spacer(),
-          _NavItem(
-            glyph: _Glyph.projects,
-            label: strings(StringKey.navProjects),
-            active: section == ShellSection.projects,
-            collapsed: collapsed,
-            onTap: () => sectionCtrl.set(ShellSection.projects),
-          ),
           _NavItem(
             glyph: _Glyph.preferences,
             label: strings(StringKey.navPreferences),
