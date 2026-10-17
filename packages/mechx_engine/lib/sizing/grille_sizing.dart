@@ -25,13 +25,21 @@
 /// commonly used as starting-point design limits before acoustic
 /// verification:
 ///
-/// | Application   | Max face velocity |
-/// |---------------|-------------------|
-/// | Bedroom       | 2.0 m/s           |
-/// | Living space  | 2.5 m/s           |
-/// | Office        | 3.0 m/s           |
-/// | Retail        | 3.5 m/s           |
-/// | Industrial    | 5.0 m/s           |
+/// | Application   | Max face velocity | Applied supply / return |
+/// |---------------|-------------------|-------------------------|
+/// | Bedroom       | 2.0 m/s           | 2.0 / 2.0 m/s           |
+/// | Living space  | 2.5 m/s           | 2.5 / 2.5 m/s           |
+/// | Office        | 3.0 m/s           | 3.0 / 3.0 m/s           |
+/// | Retail        | 3.5 m/s           | 3.0 / 3.5 m/s           |
+/// | Industrial    | 5.0 m/s           | 3.0 / 4.0 m/s           |
+///
+/// "Applied" is what room auto-sizing (`room_air.dart` `sizeRoomAir`)
+/// actually uses: the application limit CAPPED at the face-velocity band the
+/// air-velocity checker judges placed terminals against
+/// (`kSupplyFaceVelocityMax` 3.0 m/s, `kReturnFaceVelocityMax` 4.0 m/s in
+/// `air_velocity.dart`), so auto-placed terminals never fail the engine's own
+/// check. Calling [sizeGrille] directly with [recommendedFaceVelocity] applies
+/// the uncapped value.
 ///
 /// Pure Dart, zero Flutter imports.  All typed quantities come from
 /// [package:mechx_engine/units.dart].
@@ -81,6 +89,9 @@ enum GrilleApplication {
 /// | office              | 3.0 m/s           |
 /// | retail              | 3.5 m/s           |
 /// | industrial          | 5.0 m/s           |
+///
+/// Room auto-sizing caps this at the checker's face band (supply 3.0 m/s,
+/// return 4.0 m/s) — see the "Applied" column of the module table.
 Velocity recommendedFaceVelocity(GrilleApplication app) {
   switch (app) {
     case GrilleApplication.bedroom:

@@ -433,11 +433,14 @@ class _CutPlanCard extends ConsumerWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      // Ducts size by Ø + the BJLS/PU section; pipes by DN.
+                      // Ducts size by Ø + the BJLS/PU section; pipes by DN +
+                      // material (each material is its own bar pool, so PPR
+                      // DN50 and PVC DN50 are separate rows).
                       g.service.isAir
                           ? '${serviceLabel(g.service)}  Ø${g.diameterMm}  '
                               '${g.stockLengthM == 4.0 ? 'PU' : 'BJLS'}'
-                          : '${serviceLabel(g.service)}  DN${g.diameterMm}',
+                          : '${serviceLabel(g.service)}  DN${g.diameterMm}'
+                              '${g.material.isEmpty ? '' : '  ${g.material}'}',
                       style:
                           type.caption.copyWith(color: colors.textSecondary),
                     ),
