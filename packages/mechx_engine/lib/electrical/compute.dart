@@ -32,7 +32,7 @@ import 'earthing.dart';
 // anything that reaches it (puil/units/earthing/load_kind/model/panel_results
 // only), so taking `selectivityRatio` from it introduces no import cycle.
 import 'fault.dart' show Impedance, conductorImpedance, downstreamFaultA,
-    selectivityRatio, sourceImpedanceFromIsc;
+    selectivityRatio, solvedRunLengthM, sourceImpedanceFromIsc;
 import 'geo_length.dart';
 import 'harmonics.dart' show neutralOversizeFactor;
 import 'headroom.dart' show HeadroomSpec;
@@ -1635,9 +1635,12 @@ ElectricalSystemResult computeSystem(
           final runs = (feederResult?.cable.runsPerPhase ?? 1) > 1
               ? feederResult!.cable.runsPerPhase!
               : 1;
-          final lengthM = feederModel?.length.meters ?? 0;
+          // The run the feeder was SIZED on (geo when placed) and the PARENT's
+          // conductor material (the parent sized this feeder cable).
+          final lengthM = solvedRunLengthM(feederResult, feederModel);
+          final feederMaterial = byId[parentId]?.material ?? panel.material;
           final single =
-              conductorImpedance(profile, csa, lengthM, panel.material);
+              conductorImpedance(profile, csa, lengthM, feederMaterial);
           final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
           sourceZ = upstreamSourceZ + feederZ;
           faultA = downstreamFaultA(lineVoltageV, sourceZ, upstreamIscA);

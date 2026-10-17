@@ -1,7 +1,11 @@
 import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/fault.dart';
+import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/load_list.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -149,6 +153,161 @@ void main() {
       final c = equipmentToCircuit(e, panelVoltage: const Voltage(400));
       expect(c.flaOverrideA, isNotNull);
       expect(circuitConnectedW(c), closeTo(8333.33, 0.01));
+    });
+  });
+
+  group('elec-core-2 — Zs/ADS + fault decay use the SOLVED (geo) run', () {
+    const building = BuildingLevels([Floor('Ground', Length(4.0))]);
+    // 1 px = 1 cm on sheet s1.
+    const calib = {'s1': ScaleCalibration(0.01)};
+    const origin = LayoutPos(sheetId: 's1', floorIndex: 0, x: 0, y: 0);
+    // 5000 px × 0.01 = 50 m planar from the board.
+    const far = LayoutPos(sheetId: 's1', floorIndex: 0, x: 5000, y: 0);
+
+    // A 5.5 kW 3φ motor: Ib = 5500/0.88/(√3·400·0.85) = 6250/588.897
+    // = 10.61 A → 16 A curve D; the 2.5 mm² final minimum carries it.
+    ElectricalProject motorProject(
+            {required double manualM, LayoutPos? loadPos}) =>
+        ElectricalProject(
+          id: 'ads',
+          name: 'ADS',
+          panels: [
+            ElectricalPanel(
+              id: 'MDP',
+              name: 'Main',
+              layoutPos: loadPos == null ? null : origin,
+              circuits: [
+                ElectricalCircuit(
+                  id: 'm',
+                  name: 'Motor',
+                  loadKind: LoadKind.motor,
+                  motorKw: 5.5,
+                  cosPhi: 0.85,
+                  length: Length(manualM),
+                  loadPos: loadPos,
+                ),
+              ],
+            ),
+          ],
+        );
+
+    test('a placed 50 m motor run (manual left at 10 m) FAILS ADS', () {
+      final project = motorProject(manualM: 10, loadPos: far);
+      final sys = computeSystem(profile, project,
+          calibrationBySheet: calib, building: building);
+      final cr = sys.panels['MDP']!.circuits.single;
+      // Sizing already used the geo run.
+      final runM = cr.lengthM;
+      expect(runM, greaterThanOrEqualTo(50));
+      expect(cr.breaker.ratingA.amperes, 16);
+      expect(cr.cable.csaMm2, 2.5);
+
+      final f = faultStudy(sys, project, profile).circuits['m']!;
+      // Zs,max = 0.95 · U0 / (20 · In)  (curve D trips at 20 × In)
+      //        = 0.95 · 230 / (20 · 16) = 218.5 / 320 = 0.683 Ω.
+      expect(f.zsMaxOhm, closeTo(0.683, 0.001));
+      // The conductor loop ALONE on 50 m: phase + PE, both 2.5 mm²
+      // (8.87 Ω/km), at the 1.28 fault-temperature factor:
+      //   R = 2 · 8.87 · 0.050 · 1.28 = 1.135 Ω  > 0.683 Ω ⇒ must fail.
+      // (The defect computed it on 10 m: 2·8.87·0.010·1.28 = 0.227 Ω ⇒ pass.)
+      expect(f.zsOhm!, greaterThan(1.135));
+      expect(f.adsOk, isFalse);
+
+      // And it is EXACTLY the verdict of the same run typed as manual.
+      final manualProject = motorProject(manualM: runM);
+      final manualSys = computeSystem(profile, manualProject);
+      final fm = faultStudy(manualSys, manualProject, profile).circuits['m']!;
+      expect(f.zsOhm, fm.zsOhm);
+      expect(fm.adsOk, isFalse);
+    });
+
+    // Feeder decay: MDP → 50 mm-class feeder → SUB, SUB placed 80 m away
+    // while the feeder's manual length stays 10 m.
+    ElectricalProject feederProject({
+      required double manualM,
+      bool placed = false,
+      ConductorMaterial subMaterial = ConductorMaterial.copper,
+    }) =>
+        ElectricalProject(
+          id: 'fd',
+          name: 'Feeder decay',
+          panels: [
+            ElectricalPanel(
+              id: 'MDP',
+              name: 'Main',
+              layoutPos: placed ? origin : null,
+              circuits: [
+                ElectricalCircuit(
+                  id: 'f',
+                  name: 'Feeder SUB',
+                  loadKind: LoadKind.feeder,
+                  cosPhi: 0.85,
+                  length: Length(manualM),
+                  feedsPanelId: 'SUB',
+                ),
+              ],
+            ),
+            ElectricalPanel(
+              id: 'SUB',
+              name: 'Sub',
+              material: subMaterial,
+              sourceType: PanelSource.feeder,
+              fedByCircuitId: 'f',
+              layoutPos: placed
+                  ? const LayoutPos(
+                      sheetId: 's1', floorIndex: 0, x: 8000, y: 0)
+                  : null,
+              circuits: const [
+                ElectricalCircuit(
+                  id: 'h',
+                  name: 'Heater',
+                  loadKind: LoadKind.heating,
+                  loadW: 20000,
+                  cosPhi: 1.0,
+                  phases: 3,
+                  length: Length(10),
+                ),
+              ],
+            ),
+          ],
+        );
+
+    test('the sub-board fault decays over the SOLVED feeder run', () {
+      final placed = feederProject(manualM: 10, placed: true);
+      final sys = computeSystem(profile, placed,
+          calibrationBySheet: calib, building: building);
+      final runM = sys.panels['MDP']!.circuits.single.lengthM;
+      expect(runM, greaterThanOrEqualTo(80));
+      final fsPlaced = faultStudy(sys, placed, profile);
+
+      final manual = feederProject(manualM: runM);
+      final manualSys = computeSystem(profile, manual);
+      final fsManual = faultStudy(manualSys, manual, profile);
+      // Same feeder run ⇒ same downstream prospective fault (the defect decayed
+      // it over 10 m and overstated the SUB fault level).
+      expect(fsPlaced.panels['SUB']!.prospectiveFaultkA,
+          fsManual.panels['SUB']!.prospectiveFaultkA);
+      final stale = feederProject(manualM: 10);
+      final fsStale =
+          faultStudy(computeSystem(profile, stale), stale, profile);
+      expect(fsPlaced.panels['SUB']!.prospectiveFaultkA,
+          lessThan(fsStale.panels['SUB']!.prospectiveFaultkA));
+    });
+
+    test('the feeder impedance uses the PARENT material that sized it', () {
+      // The MDP (copper) sizes the feeder; an aluminium SUB must not re-rate
+      // that copper feeder as aluminium (×1.61 resistance). The SUB fault level
+      // therefore equals the all-copper case.
+      final cu = feederProject(manualM: 40);
+      final al = feederProject(
+          manualM: 40, subMaterial: ConductorMaterial.aluminum);
+      final cuSys = computeSystem(profile, cu);
+      final alSys = computeSystem(profile, al);
+      // Same feeder cable (sized by the copper parent) in both.
+      expect(alSys.panels['MDP']!.circuits.single.cable.csaMm2,
+          cuSys.panels['MDP']!.circuits.single.cable.csaMm2);
+      expect(faultStudy(alSys, al, profile).panels['SUB']!.prospectiveFaultkA,
+          faultStudy(cuSys, cu, profile).panels['SUB']!.prospectiveFaultkA);
     });
   });
 }
