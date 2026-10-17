@@ -77,7 +77,8 @@ const _project = ElectricalProject(id: 'pr', name: 'Parallel', panels: [
 void main() {
   group('cableRunLabel notation', () {
     test('a single cable is exactly the legacy label + mm2', () {
-      expect(cableRunLabel(null, 16, true), '${cableLabel(null, 16, true)} mm2');
+      expect(
+          cableRunLabel(null, 16, true), '${cableLabel(null, 16, true)} mm2');
       expect(cableRunLabel(null, 16, true, runs: 1),
           '${cableLabel(null, 16, true)} mm2');
     });
