@@ -16,6 +16,8 @@ import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/electrical_dxf_export.dart'
+    show electricalSldToDxf;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
@@ -581,6 +583,16 @@ void main() {
       expect(cells.where((t) => t.contains('NYY 4x$csa mm2 + ')), isEmpty);
       expect(cells.where((t) => t.startsWith('NYY 3x$csa mm2 + ')),
           isNotEmpty);
+    });
+
+    test('drafting-5: the schedule DXF is pure printable ASCII', () {
+      // The schedule cells carry the `·` separator (`... mm2 + NYA 6 mm2 ·
+      // PVC 32mm`); an R12 reader decodes raw UTF-8 C2 B7 as `Â·`.
+      expect(cells.where((t) => t.contains('\u00b7')), isNotEmpty);
+      final dxf = electricalSldToDxf(sheet: sheet);
+      expect(dxf.codeUnits.where((c) => c > 0x7e), isEmpty);
+      expect(dxf, contains(' mm2 - PVC '));
+      expect(dxf, startsWith('0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n'));
     });
 
     test('the overview feeder label reads exactly as its schedule row', () {

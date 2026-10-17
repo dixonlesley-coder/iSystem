@@ -111,7 +111,8 @@ String networkToDxf({
   final b = StringBuffer();
   void g(int code, Object value) {
     b.writeln(code);
-    b.writeln(value);
+    // drafting-5: every string value is code-page-safe ASCII (no raw `·`).
+    b.writeln(value is String ? dxfText(value) : value);
   }
 
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
@@ -342,7 +343,8 @@ String _professionalDxf({
   final b = StringBuffer();
   void g(int code, Object value) {
     b.writeln(code);
-    b.writeln(value);
+    // drafting-5: every string value is code-page-safe ASCII (no raw `·`).
+    b.writeln(value is String ? dxfText(value) : value);
   }
 
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
@@ -396,6 +398,9 @@ String _professionalDxf({
   // ── HEADER: millimetre drawing units, metric measurement ────────────────────
   g(0, 'SECTION');
   g(2, 'HEADER');
+  // drafting-5: declare the R12 format the file is written in.
+  g(9, r'$ACADVER');
+  g(1, 'AC1009');
   g(9, r'$INSUNITS');
   g(70, 4); // 4 = millimetres
   g(9, r'$MEASUREMENT');

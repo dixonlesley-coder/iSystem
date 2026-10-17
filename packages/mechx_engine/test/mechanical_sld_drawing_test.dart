@@ -388,8 +388,15 @@ void main() {
       expect(dxf, contains('LAYER\n2\nM-DETAIL\n'));
       expect(dxf, contains('8\nM-TEXT\n'));
       expect(dxf, contains('8\nM-FRAME\n'));
-      // Pipe runs keep their explicit per-service layer (e.g. cold water 'CW').
-      expect(dxf, contains('8\nCW\n'));
+      // drafting-5: pipe runs land on the SAME AIA per-service layer the plan
+      // DXF uses (cold water `P-DOM-CWS`, declared ACI 5), never the ad-hoc
+      // service code `CW` on colour 7.
+      expect(dxf, contains('8\nP-DOM-CWS\n'));
+      expect(dxf, contains('LAYER\n2\nP-DOM-CWS\n70\n0\n62\n5\n'));
+      expect(dxf, isNot(contains('8\nCW\n')));
+      // An R12 HEADER declares the format; every byte is printable ASCII.
+      expect(dxf, startsWith('0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n'));
+      expect(dxf.codeUnits.where((c) => c > 0x7e), isEmpty);
     });
 
     test('sldSheetsToPdf issues a numbered SET — page count matches the input',

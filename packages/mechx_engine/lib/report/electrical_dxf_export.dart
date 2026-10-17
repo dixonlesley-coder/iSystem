@@ -24,8 +24,17 @@ import 'dart:math' as math;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
-import 'drawing_chrome.dart' show DrawingChrome, dxfTablesSection;
+import '../network/network.dart' show ServiceType;
+import 'drawing_chrome.dart'
+    show
+        DrawingChrome,
+        dxfLayerNameFor,
+        dxfLinetypeFor,
+        dxfTablesSection,
+        dxfText,
+        serviceAciColorFor;
 import 'electrical_sld_drawing.dart';
+import 'riser_tags.dart' show riserServiceCode;
 
 /// Box footprint (DXF units) for an auto-laid panel / node.
 const double _boxW = 200;
@@ -182,7 +191,8 @@ class _Dxf {
 
   void g(int code, Object value) {
     b.writeln(code);
-    b.writeln(value);
+    // drafting-5: every string value is code-page-safe ASCII (no raw `·`).
+    b.writeln(value is String ? dxfText(value) : value);
   }
 
   void begin() {
@@ -309,6 +319,7 @@ String electricalSldToDxf({
   // device/way graphics → device. Under the mechanical namespace bus/feeder/
   // device all collapse to M-DETAIL, so a plumbing riser never emits E-*.
   String lineLayer(SldLine l) =>
+      _serviceLayerFor(l.layer)?.$1 ??
       l.layer ??
       (l.role == SldRole.essential
           ? layers.essential
@@ -409,15 +420,44 @@ String electricalSldToDxf({
   final classNames = {for (final (name, _) in classLayers) name};
   final explicit = <String>{
     for (final p in sheetResolved.prims)
-      if (p is SldLine && p.layer != null && !classNames.contains(p.layer))
+      if (p is SldLine &&
+          p.layer != null &&
+          _serviceLayerFor(p.layer) == null &&
+          !classNames.contains(p.layer))
         p.layer!,
   }.toList()
     ..sort();
+  // drafting-5: a per-service pipe layer (a riser service code `CW`/`D`/…)
+  // resolves to the SAME AIA layer + ACI colour + linetype the plan DXF uses
+  // (`P-DOM-CWS` ACI 5 …), so riser and plan DXFs share one layer vocabulary.
+  final serviceLayers = <(String, int, String)>{
+    for (final p in sheetResolved.prims)
+      if (p is SldLine && _serviceLayerFor(p.layer) != null)
+        _serviceLayerFor(p.layer)!,
+  }.toList()
+    ..sort((a, b) => a.$1.compareTo(b.$1));
   final tables = dxfTablesSection(layers: [
     for (final (name, aci) in classLayers) (name, aci, 'CONTINUOUS'),
+    ...serviceLayers,
     for (final name in explicit) (name, 7, 'CONTINUOUS'),
   ]);
-  return tables + d.toString();
+  // drafting-5: a minimal HEADER declaring the R12 format.
+  return '0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n0\nENDSEC\n' +
+      tables +
+      d.toString();
+}
+
+/// The plan DXF's AIA layer `(name, aci, linetype)` for an SLD line's explicit
+/// [layer] when it is a riser SERVICE CODE (`CW`, `HW`, `D`, `V`, …), else null
+/// (an ordinary explicit layer name, used as-is).
+(String, int, String)? _serviceLayerFor(String? layer) {
+  if (layer == null) return null;
+  for (final s in ServiceType.values) {
+    if (riserServiceCode(s) == layer) {
+      return (dxfLayerNameFor(s), serviceAciColorFor(s), dxfLinetypeFor(s));
+    }
+  }
+  return null;
 }
 
 /// The chrome's title-block rows for the DXF frame — CLIENT / DWG NO / REV /
