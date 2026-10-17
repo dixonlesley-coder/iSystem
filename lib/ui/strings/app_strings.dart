@@ -285,6 +285,8 @@ enum StringKey {
   // Inspector — Selection section.
   inspectorDeleteNode,
   inspectorFixtureType,
+  // water-drainage-7 — fixture-library toggle: this custom fixture is a WC.
+  fixtureLibraryWaterCloset,
   inspectorAirTerminalAirflow,
   inspectorClearSizeOverride,
   inspectorEdgeSizeHint,
@@ -1370,6 +1372,7 @@ const Map<StringKey, String> _en = {
   // Inspector — Selection section.
   StringKey.inspectorDeleteNode: 'Delete node',
   StringKey.inspectorFixtureType: 'Fixture type',
+  StringKey.fixtureLibraryWaterCloset: 'Water closet (DN75 drain)',
   StringKey.inspectorAirTerminalAirflow: 'Air terminal (diffuser) airflow',
   StringKey.inspectorClearSizeOverride: 'Clear size override',
   StringKey.inspectorEdgeSizeHint:
@@ -2511,6 +2514,7 @@ const Map<StringKey, String> _id = {
   // Inspector — Selection section.
   StringKey.inspectorDeleteNode: 'Hapus simpul',
   StringKey.inspectorFixtureType: 'Jenis fikstur',
+  StringKey.fixtureLibraryWaterCloset: 'Kloset (drain DN75)',
   StringKey.inspectorAirTerminalAirflow: 'Aliran udara terminal (difuser)',
   StringKey.inspectorClearSizeOverride: 'Hapus penimpaan ukuran',
   StringKey.inspectorEdgeSizeHint:

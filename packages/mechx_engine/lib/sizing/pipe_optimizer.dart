@@ -304,6 +304,9 @@ List<PipeChain> buildPipeChains({
   required Map<String, EdgeSizing> sizing,
   required Map<String, ScaleCalibration> calibrationBySheet,
   required BuildingLevels building,
+  // Threaded for parity with the solve (audit water-drainage-8); chains are
+  // run-only (calibration lengths), so this never moves a figure today.
+  MountingHeights mounting = const MountingHeights(),
 }) {
   // Group key per edge so a chain stays uniform (service, diameter, stock
   // length AND material, so a BJLS→PU, PVC→steel or PPR→PVC transition breaks
@@ -336,7 +339,10 @@ List<PipeChain> buildPipeChains({
     pFrom[e.id] = Offset2(a.x, a.y);
     pTo[e.id] = Offset2(b.x, b.y);
     lenM[e.id] =
-        edgeLength(e, net, calibrationBySheet: calibrationBySheet, building: building)
+        edgeLength(e, net,
+                calibrationBySheet: calibrationBySheet,
+                building: building,
+                mounting: mounting)
             .meters;
   }
 

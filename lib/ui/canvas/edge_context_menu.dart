@@ -774,7 +774,8 @@ class _EdgeMenuPanel extends ConsumerWidget {
         final project = ref.watch(projectControllerProvider);
         final len = edgeLength(edge, net,
                 calibrationBySheet: project.calibrations,
-                building: project.building)
+                building: project.building,
+                mounting: project.mounting)
             .meters;
         final t = ductSheetTakeoff(edge, sizing, len);
         if (t != null) {

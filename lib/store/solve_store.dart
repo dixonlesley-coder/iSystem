@@ -56,7 +56,8 @@ final solveProvider = Provider<PressureSolution?>((ref) {
   final project = ref.watch(projectControllerProvider);
   final edges = _supplyEdges(net);
   if (edges.isEmpty) return null;
-  final source = _pickSource(net, edges, project.building, preferHighest: false);
+  final source = _pickSource(net, edges, project.building,
+      preferHighest: false, mounting: project.mounting);
   if (source == null) return null;
 
   return solvePressurized(
@@ -83,7 +84,8 @@ final downfeedProvider = Provider<DownfeedSolution?>((ref) {
   final project = ref.watch(projectControllerProvider);
   final edges = _supplyEdges(net);
   if (edges.isEmpty) return null;
-  final tank = _pickSource(net, edges, project.building, preferHighest: true);
+  final tank = _pickSource(net, edges, project.building,
+      preferHighest: true, mounting: project.mounting);
   if (tank == null) return null;
 
   return solveDownfeed(
@@ -132,8 +134,10 @@ final residualByNodeProvider = Provider<Map<String, Pressure>>((ref) {
 ///    so the inspector verdict and the engine flag can never disagree.
 ///  • RAINWATER — 0. A vertical downpipe running ≈ 1/3 full is not a
 ///    self-cleansing gravity run; the engine deliberately declines to form that
-///    verdict (`selfCleansingOk` stays true for rainwater), so judging it
+///    verdict (`selfCleansingOk` stays true for a downpipe), so judging it
 ///    against 0.6 m/s here would fabricate a verdict the engine refused to make.
+///    A horizontal COLLECTOR does carry the engine's Manning verdict, surfaced
+///    via `selfCleansingDefectsProvider` (not duplicated here).
 ///
 /// Only edges with a positive solved velocity are included, so a vent (no flow
 /// velocity) is omitted. Read-only — it never resizes anything.
@@ -168,6 +172,7 @@ String? _pickSource(
   List<NetEdge> edges,
   BuildingLevels building, {
   required bool preferHighest,
+  MountingHeights mounting = const MountingHeights(),
 }) {
   final ids = <String>{
     for (final e in edges) ...[e.fromId, e.toId],
@@ -181,7 +186,7 @@ String? _pickSource(
   }
 
   final candidates = ids.map((id) => net.nodeById(id)).whereType<NetNode>();
-  double elev(NetNode n) => nodeElevation(n, building).meters;
+  double elev(NetNode n) => nodeElevation(n, building, mounting).meters;
   bool better(double a, double b) => preferHighest ? a > b : a < b;
 
   // 1. An explicit plant node wins (the extreme one for this strategy).
@@ -358,6 +363,7 @@ final bomProvider = Provider<List<BomLine>>((ref) {
     sizing: sizing,
     calibrationBySheet: project.calibrations,
     building: project.building,
+    mounting: project.mounting,
   );
 });
 
@@ -374,6 +380,7 @@ final pipeChainsProvider = Provider<List<PipeChain>>((ref) {
     sizing: sizing,
     calibrationBySheet: project.calibrations,
     building: project.building,
+    mounting: project.mounting,
   );
 });
 
@@ -404,6 +411,7 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
       net,
       calibrationBySheet: project.calibrations,
       building: project.building,
+      mounting: project.mounting,
     ).meters;
     final s = sizing[e.id];
     if (s != null) minDia = math.min(minDia, s.diameter.meters);
@@ -485,7 +493,9 @@ final consumablesProvider = Provider<ConsumablesEstimate>((ref) {
     final s = sizing[e.id];
     if (s == null) continue;
     final len = edgeLength(e, net,
-            calibrationBySheet: project.calibrations, building: project.building)
+            calibrationBySheet: project.calibrations,
+            building: project.building,
+            mounting: project.mounting)
         .meters;
     final acc = computeDuctAccessories(e, s, len);
     if (acc != null) sealM += acc.gasketM;
@@ -694,3 +704,23 @@ class ShowHeatmapController extends Notifier<bool> {
 
   void toggle() => state = !state;
 }
+
+/// Real §10 length of [e] with the PROJECT's calibrations, building AND mounting
+/// heights — the exact inputs `sizingProvider` hands `autoSizeNetwork`, so every
+/// printed / displayed length (plan PDF/DXF labels, inspector, BOM) equals the
+/// solved one (audit water-drainage-8: the display paths used the default
+/// MountingHeights while the solve used the project's, so a riser to a ceiling
+/// main printed a different length than it was sized on).
+Length projectEdgeLength(NetEdge e, Network net, ProjectState project) =>
+    edgeLength(
+      e,
+      net,
+      calibrationBySheet: project.calibrations,
+      building: project.building,
+      mounting: project.mounting,
+    );
+
+/// [projectEdgeLength] for every edge of [net], keyed by edge id.
+Map<String, Length> projectEdgeLengths(Network net, ProjectState project) => {
+      for (final e in net.edges) e.id: projectEdgeLength(e, net, project),
+    };

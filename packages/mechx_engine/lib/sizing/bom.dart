@@ -163,6 +163,10 @@ List<BomLine> buildBom({
   required Map<String, ScaleCalibration> calibrationBySheet,
   required BuildingLevels building,
   bool groupByFloor = false,
+  // The project's mounting heights — the SAME value the solve passes to
+  // `autoSizeNetwork`, so a riser's BOM length equals its solved length
+  // (audit water-drainage-8). Default = the engine default ⇒ byte-identical.
+  MountingHeights mounting = const MountingHeights(),
 }) {
   // Per-riser stack tags (`CW-R1` …), computed once so a riser BOM line can
   // carry the SAME identifier the plan / riser single-line draw (N13).
@@ -209,6 +213,7 @@ List<BomLine> buildBom({
       net,
       calibrationBySheet: calibrationBySheet,
       building: building,
+      mounting: mounting,
     );
 
     // N13: which riser stack tag(s) this group covers (risers only).

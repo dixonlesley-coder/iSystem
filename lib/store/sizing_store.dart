@@ -166,6 +166,12 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     // Audit 2026-10 water-drainage-8 — the project's mounting heights (F8)
     // set the riser lengths of the ring-split basis, as on the drawings.
     mounting: project.mounting,
+    // Audit water-drainage-7 residual — a custom fixture flagged as a water
+    // closet gets the same DN75 drain floor as a built-in WC type.
+    waterClosetNodeIds: {
+      for (final n in net.nodes)
+        if (customFor(n)?.isWaterCloset ?? false) n.id,
+    },
   );
 });
 
@@ -194,6 +200,7 @@ final drainageAdvisoryProvider = Provider<List<DrainageAdvisory>>((ref) {
       net,
       calibrationBySheet: project.calibrations,
       building: project.building,
+      mounting: project.mounting,
     ).meters;
     out.addAll(drainageAdvisories(
       edgeId: e.id,

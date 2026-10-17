@@ -146,7 +146,9 @@ class EdgeSizing {
   /// air edges, and VENTS (they carry no flow at all). Rainwater downpipes are
   /// also left `true` — a vertical downpipe running ≈ 1/3 full is not a
   /// self-cleansing gravity run and its tabulated capacity carries no Manning
-  /// velocity to judge; inventing one would be a fabricated verdict.
+  /// velocity to judge; inventing one would be a fabricated verdict. A sloped
+  /// HORIZONTAL rainwater collector, however, IS sized by Manning
+  /// (water-drainage-2), so it carries that sizer's own verdict.
   ///
   /// Default true ⇒ every edge that cannot fail this check is byte-identical.
   final bool selfCleansingOk;
@@ -491,9 +493,15 @@ EdgeSizing applySizeOverride(
   Diameter override, {
   SizingContext? ctx,
   Diameter? codeMinimum,
+  bool manningRun = false,
 }) {
   final isDrainage = sizing.service == ServiceType.drainage;
-  final bool manningBasis = isDrainage && ctx != null && override.meters > 0;
+  // [manningRun] — a non-drainage edge the auto-sizer ALSO sized by Manning (a
+  // horizontal rainwater collector, water-drainage-2): its override keeps the
+  // same full-bore Manning velocity basis and re-judges self-cleansing at the
+  // chosen diameter. Default false ⇒ byte-identical for every other caller.
+  final bool manningBasis =
+      (isDrainage || manningRun) && ctx != null && override.meters > 0;
 
   final Velocity velocity;
   if (override.meters <= 0) {
@@ -586,6 +594,13 @@ Map<String, EdgeSizing> sizeNetwork(
 /// the cap is given, every accumulated `fireSprinkler` edge flow is clamped to
 /// it, so a cross-main feeding 60 heads carries the design-area demand, not
 /// 60 × the per-head share. Null ⇒ byte-identical (flat accumulation).
+///
+/// WATER-CLOSET NODES ([waterClosetNodeIds]): node ids the caller knows carry a
+/// water closet beyond the built-in [PlumbingFixture] WC types — a user-defined
+/// custom fixture flagged `CustomFixture.isWaterCloset` (the app resolves the
+/// library; the engine never reads it). A drainage edge carrying one is floored
+/// at [drain.kMinWcDrainMm] exactly like a built-in WC (water-drainage-7).
+/// Default empty ⇒ byte-identical.
 Map<String, EdgeSizing> autoSizeNetwork(
   Network net,
   SizingContext ctx, {
@@ -600,6 +615,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   BuildingLevels? building,
   Map<String, ScaleCalibration> calibrationBySheet = const {},
   MountingHeights mounting = const MountingHeights(),
+  Set<String> waterClosetNodeIds = const {},
 }) {
   const profile = SniProfile();
   final allFlows = <String, FlowRate>{};
@@ -894,7 +910,10 @@ Map<String, EdgeSizing> autoSizeNetwork(
         // count of WC fixtures down the SAME tree (> 0 ⇒ the edge drains one).
         final wcTerminals = <String, double>{
           for (final n in component)
-            if (n != root && _isWaterClosetNode(net.nodeById(n))) n: 1.0,
+            if (n != root &&
+                (_isWaterClosetNode(net.nodeById(n)) ||
+                    waterClosetNodeIds.contains(n)))
+              n: 1.0,
         };
         final edgeWcCount = wcTerminals.isEmpty
             ? const <String, double>{}
@@ -971,6 +990,12 @@ Map<String, EdgeSizing> autoSizeNetwork(
               // above its usable part-full capacity ⇒ the table limit, flagged.
               overCapacity: g.usableCapacity.cubicMetersPerSecond <
                   entry.value.cubicMetersPerSecond,
+              // Audit water-drainage-2 residual — the collector is a Manning
+              // gravity run, so it carries the sizer's own self-cleansing
+              // verdict (full-bore v ≥ 0.6 m/s at the design slope), exactly
+              // as the gravity regime does for drainage (M5). A flat collector
+              // that silts up is flagged instead of silently passing.
+              selfCleansingOk: g.selfCleansing,
             );
           } else {
             final r = storm.sizeRainwaterDownpipe(entry.value);
@@ -1072,7 +1097,11 @@ Map<String, EdgeSizing> autoSizeNetwork(
     final override = sizeOverrides[entry.key];
     result[entry.key] = override == null
         ? entry.value
-        : applySizeOverride(entry.value, override, ctx: ctx);
+        // A horizontal collector was Manning-sized (water-drainage-2), so its
+        // override stays on that basis; a downpipe keeps continuity.
+        : applySizeOverride(entry.value, override,
+            ctx: ctx,
+            manningRun: net.edgeById(entry.key)?.kind != EdgeKind.riser);
   }
   // M17 — a ring/grid whose Hardy–Cross balance never settled: every edge of
   // that component carries a PROVISIONAL split, so mark them all (after the

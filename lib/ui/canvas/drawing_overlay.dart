@@ -281,7 +281,8 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
         final startNode = _nodeNear(drawing.network, widget.sheetId,
             widget.floorIndex, pending, snapWorld);
         if (startNode != null) {
-          final startElev = nodeElevation(startNode, building).meters;
+          final startElev =
+              nodeElevation(startNode, building, project.mounting).meters;
           final devLenM =
               calibration.lengthForPixels((endHover - pending).distance).meters;
           // H5 — the LAID design slope from `drainageSlopeProvider`, never the
