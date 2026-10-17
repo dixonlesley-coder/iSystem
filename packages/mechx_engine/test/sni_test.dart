@@ -89,11 +89,21 @@ void main() {
   });
 
   group('demand curve (Gambar 1, two branches)', () {
-    test('endpoints clamp to the curve ends', () {
+    test('low end clamps to 0; beyond 3000 UBAP the last segment extrapolates',
+        () {
       expect(profile.probableFlowForFixtureUnits(0).cubicMetersPerSecond, 0.0);
+      // At the last charted point: 3000 UBAP → 1634 L/min = 27.2333 L/s.
+      expect(
+        profile.probableFlowForFixtureUnits(3000).inLitersPerSecond,
+        closeTo(27.233, 1e-2),
+      );
+      // Audit 2026-10 water-drainage-6 — no longer a flat clamp. The last
+      // segment (2000 → 3000 UBAP) rises (27.23333 − 20.25)/1000 =
+      // 6.98333e-3 L/s per UBAP, so 100 000 UBAP →
+      // 27.23333 + 97 000 × 6.98333e-3 = 704.6167 L/s.
       expect(
         profile.probableFlowForFixtureUnits(100000).inLitersPerSecond,
-        closeTo(27.233, 1e-2), // clamps to 3000 UBAP → 1634 L/min
+        closeTo(27.23333 + 97000 * (27.23333 - 20.25) / 1000, 1e-2),
       );
     });
 

@@ -38,7 +38,8 @@ import 'package:test/test.dart';
 
 /// A two-node, one-edge network of [service] (the smallest thing that can be
 /// auto-sized): a source root `r` and a demand leaf `d`.
-Network _twoNode(ServiceType service) => Network(
+Network _twoNode(ServiceType service, {EdgeKind kind = EdgeKind.run}) =>
+    Network(
       nodes: const [
         NetNode(id: 'r', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
         NetNode(
@@ -50,7 +51,9 @@ Network _twoNode(ServiceType service) => Network(
           role: NodeRole.fixture,
         ),
       ],
-      edges: [NetEdge(id: 'e', fromId: 'r', toId: 'd', service: service)],
+      edges: [
+        NetEdge(id: 'e', fromId: 'r', toId: 'd', service: service, kind: kind),
+      ],
     );
 
 void main() {
@@ -272,13 +275,15 @@ void main() {
 
   // ── M3 — storm over-capacity reaches EdgeSizing ────────────────────────────
 
+  // A DOWNPIPE is a riser edge: since audit 2026-10 water-drainage-2 only
+  // risers take the vertical downpipe table (a horizontal run is Manning).
   group('M3 · storm downpipe over-capacity reaches the edge', () {
     test('75 L/s exceeds the DN200 table top ⇒ overCapacity', () {
       // The largest tabulated downpipe carries 65 L/s at DN200; 75 L/s cannot
       // be carried by ANY single downpipe in the table, so the DN200 returned
       // is the table limit and the catchment must be split.
       final sized = autoSizeNetwork(
-        _twoNode(ServiceType.rainwater),
+        _twoNode(ServiceType.rainwater, kind: EdgeKind.riser),
         const SizingContext(),
         leafDemand: const {ServiceType.rainwater: FlowRate(0.075)},
       );
@@ -289,7 +294,7 @@ void main() {
     test('a catchment inside the table is NOT flagged', () {
       // 30 L/s is exactly the DN150 rated capacity (30.0 L/s ≥ 30.0).
       final sized = autoSizeNetwork(
-        _twoNode(ServiceType.rainwater),
+        _twoNode(ServiceType.rainwater, kind: EdgeKind.riser),
         const SizingContext(),
         leafDemand: const {ServiceType.rainwater: FlowRate(0.030)},
       );
@@ -736,7 +741,7 @@ void main() {
       // 75 L/s is past the DN200 table top; hand-overriding the pipe to DN200
       // must NOT erase the finding that no single downpipe carries the flow.
       final sized = autoSizeNetwork(
-        _twoNode(ServiceType.rainwater),
+        _twoNode(ServiceType.rainwater, kind: EdgeKind.riser),
         const SizingContext(),
         leafDemand: const {ServiceType.rainwater: FlowRate(0.075)},
         sizeOverrides: {'e': Diameter.mm(200)},

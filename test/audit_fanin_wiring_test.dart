@@ -233,6 +233,10 @@ void main() {
         fromId: 'rd',
         toId: 'out',
         service: ServiceType.rainwater,
+        // A DOWNPIPE is a riser edge: since audit 2026-10 water-drainage-2
+        // only risers take the vertical downpipe table (a horizontal
+        // rainwater run is sized as a Manning gravity drain).
+        kind: EdgeKind.riser,
       );
       c.read(networkControllerProvider.notifier).loadNetwork(
           const Network(nodes: [drain, outlet], edges: [pipe]));

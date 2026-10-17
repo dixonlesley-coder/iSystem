@@ -158,6 +158,13 @@ class EdgeSizing {
   /// byte-identical.
   final bool loopUnbalanced;
 
+  /// Audit 2026-10 water-drainage-6 — true when this WATER-SUPPLY edge's
+  /// fixture-unit load lies beyond the last charted point of the demand curve
+  /// (`SniProfile.demandCurveExceeded`, > 3000 UBAP), so its [flow] is a LINEAR
+  /// EXTRAPOLATION of the curve, not a curve read-off — an engineer-review
+  /// flag. Default false ⇒ every in-range edge is byte-identical.
+  final bool demandCurveExtrapolated;
+
   const EdgeSizing({
     required this.edgeId,
     required this.service,
@@ -171,6 +178,7 @@ class EdgeSizing {
     this.flowFromId,
     this.selfCleansingOk = true,
     this.loopUnbalanced = false,
+    this.demandCurveExtrapolated = false,
   });
 
   /// True when this edge is a rectangular duct (carries W×H).
@@ -192,6 +200,7 @@ class EdgeSizing {
         flowFromId: fromId,
         selfCleansingOk: selfCleansingOk,
         loopUnbalanced: loopUnbalanced,
+        demandCurveExtrapolated: demandCurveExtrapolated,
       );
 
   /// A copy carrying the given [loopUnbalanced] verdict; all sizing fields and
@@ -209,6 +218,25 @@ class EdgeSizing {
         flowFromId: flowFromId,
         selfCleansingOk: selfCleansingOk,
         loopUnbalanced: value,
+        demandCurveExtrapolated: demandCurveExtrapolated,
+      );
+
+  /// A copy carrying the given [demandCurveExtrapolated] verdict; every other
+  /// field and flag is preserved unchanged (water-drainage-6 metadata only).
+  EdgeSizing withDemandCurveExtrapolated(bool value) => EdgeSizing(
+        edgeId: edgeId,
+        service: service,
+        flow: flow,
+        diameter: diameter,
+        velocity: velocity,
+        width: width,
+        height: height,
+        overCapacity: overCapacity,
+        stackRaisedForBranch: stackRaisedForBranch,
+        flowFromId: flowFromId,
+        selfCleansingOk: selfCleansingOk,
+        loopUnbalanced: loopUnbalanced,
+        demandCurveExtrapolated: value,
       );
 }
 
@@ -472,6 +500,7 @@ EdgeSizing applySizeOverride(
                 override.meters <= codeMinimum.meters + _kDiameterEpsM))
         : sizing.selfCleansingOk,
     loopUnbalanced: sizing.loopUnbalanced,
+    demandCurveExtrapolated: sizing.demandCurveExtrapolated,
   );
 }
 
@@ -535,6 +564,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   FlushSystem flushSystem = FlushSystem.flushTank,
   BuildingLevels? building,
   Map<String, ScaleCalibration> calibrationBySheet = const {},
+  MountingHeights mounting = const MountingHeights(),
 }) {
   const profile = SniProfile();
   final allFlows = <String, FlowRate>{};
@@ -543,6 +573,9 @@ Map<String, EdgeSizing> autoSizeNetwork(
   // M17 — edges of any looped component whose Hardy–Cross balance did NOT
   // converge; their flow split (and every size derived from it) is provisional.
   final loopUnbalancedEdges = <String>{};
+  // water-drainage-6 — water-supply edges whose UBAP load is beyond the charted
+  // demand curve (their flow is an extrapolation; flagged for review).
+  final demandExtrapolatedEdges = <String>{};
 
   // Read-only flow orientation per edge (edgeId → the endpoint flow comes FROM).
   // Populated below where direction is confidently known; attached to the final
@@ -567,13 +600,38 @@ Map<String, EdgeSizing> autoSizeNetwork(
     final nodes = <String>{};
     for (final e in net.edges) {
       if (e.service != service) continue;
-      nodes..add(e.fromId)..add(e.toId);
+      nodes
+        ..add(e.fromId)
+        ..add(e.toId);
       (adjacency[e.fromId] ??= []).add((edgeId: e.id, other: e.toId));
       (adjacency[e.toId] ??= []).add((edgeId: e.id, other: e.fromId));
     }
 
     int degree(String n) => adjacency[n]?.length ?? 0;
     NodeRole? roleOf(String n) => net.nodeById(n)?.role;
+
+    // A node that bears the flat per-terminal default when it has no explicit
+    // entry: any LEAF (a drawn run's open end), AND any demand TERMINAL wherever
+    // it sits — audit 2026-10 water-drainage-3 / fire-1. A roof/floor drain,
+    // water outlet, sprinkler head, hydrant box or diffuser drawn ALONG a run
+    // (degree 2 — what tee-in / drop-merge produce) used to contribute zero,
+    // so a collector through three roof drains carried one drain's runoff and
+    // a sprinkler branch line one head's flow. Fixture-role components that are
+    // NOT demand points — a cleanout (an access fitting), an air vent (an
+    // air-release valve), a fire extinguisher (not piped) — stay at zero, as do
+    // pure main/valve junctions.
+    bool bearsDefaultDemand(String n) {
+      if (degree(n) == 1) return true;
+      final node = net.nodeById(n);
+      if (node == null || node.role != NodeRole.fixture) return false;
+      return switch (node.component) {
+        NodeComponent.cleanout ||
+        NodeComponent.airVent ||
+        NodeComponent.fireExtinguisher =>
+          false,
+        _ => true,
+      };
+    }
 
     // The explicit per-node demand keys relevant to THIS service decide which
     // nodes "bear demand" (and so must not be chosen as the source root).
@@ -598,7 +656,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
         if (roleOf(id) == NodeRole.plant) return id;
       }
       for (final id in leaves) {
-        if (roleOf(id) != NodeRole.fixture && !explicitDemandKeys.contains(id)) {
+        if (roleOf(id) != NodeRole.fixture &&
+            !explicitDemandKeys.contains(id)) {
           return id;
         }
       }
@@ -619,8 +678,9 @@ Map<String, EdgeSizing> autoSizeNetwork(
 
     // Build the terminal-demand map over EVERY demand-bearing node except the
     // root: a node with an explicit entry contributes it (even mid-run — an
-    // inline fixture/diffuser is a degree-2 node), and a leaf with no entry
-    // contributes the flat default. Pure interior junctions contribute nothing.
+    // inline fixture/diffuser is a degree-2 node), and a leaf OR a demand
+    // terminal with no entry contributes the flat default
+    // ([bearsDefaultDemand]). Pure interior junctions contribute nothing.
     Map<String, V> terminalMap<V>(
       List<String> component,
       String root,
@@ -633,7 +693,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
         final e = explicit[n];
         if (e != null) {
           out[n] = e;
-        } else if (degree(n) == 1) {
+        } else if (bearsDefaultDemand(n)) {
           out[n] = defaultForLeaf;
         }
       }
@@ -700,10 +760,16 @@ Map<String, EdgeSizing> autoSizeNetwork(
           var totalUbap = 0.0;
           for (final n in component) {
             if (n == root) continue;
-            final ubap = nodeFixtureUnits[n] ?? (degree(n) == 1 ? fuPerLeaf : 0.0);
+            final ubap = nodeFixtureUnits[n] ??
+                (bearsDefaultDemand(n) ? fuPerLeaf : 0.0);
             if (ubap > 0) {
               nodeUbap[n] = ubap;
               totalUbap += ubap;
+            }
+          }
+          if (profile.demandCurveExceeded(totalUbap, system: flushSystem)) {
+            for (final e in componentEdges) {
+              demandExtrapolatedEdges.add(e.id);
             }
           }
           if (totalUbap > 0) {
@@ -720,7 +786,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
             final explicit = nodeFlowDemand[n];
             final f = explicit != null
                 ? explicit.cubicMetersPerSecond
-                : (degree(n) == 1 ? demand.cubicMetersPerSecond : 0.0);
+                : (bearsDefaultDemand(n) ? demand.cubicMetersPerSecond : 0.0);
             if (f != 0) demandFlow[n] = f;
           }
         }
@@ -734,6 +800,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
                   net,
                   calibrationBySheet: calibrationBySheet,
                   building: building,
+                  mounting: mounting,
                 ).meters;
                 if (l > 0) return l;
               }
@@ -788,9 +855,28 @@ Map<String, EdgeSizing> autoSizeNetwork(
           terminalUnits: terminalUnits,
           edgeParent: edgeParents,
         );
+        // water-drainage-7 — which edges carry a water closet: accumulate a
+        // count of WC fixtures down the SAME tree (> 0 ⇒ the edge drains one).
+        final wcTerminals = <String, double>{
+          for (final n in component)
+            if (n != root && _isWaterClosetNode(net.nodeById(n))) n: 1.0,
+        };
+        final edgeWcCount = wcTerminals.isEmpty
+            ? const <String, double>{}
+            : accumulateFixtureUnits(
+                net: net,
+                service: service,
+                rootId: root,
+                terminalUnits: wcTerminals,
+              );
         for (final entry in edgeUnits.entries) {
           final edge = net.edges.firstWhere((e) => e.id == entry.key);
-          sanitary[entry.key] = _sizeSanitaryEdge(edge, entry.value, ctx);
+          sanitary[entry.key] = _sizeSanitaryEdge(
+            edge,
+            entry.value,
+            ctx,
+            carriesWaterCloset: (edgeWcCount[entry.key] ?? 0) > 0,
+          );
           // Drainage flows DOWNHILL toward the collection root, so it comes FROM
           // the away-from-root (demand) endpoint. A vent carries no flow → skip.
           if (edge.service == ServiceType.drainage) {
@@ -827,18 +913,44 @@ Map<String, EdgeSizing> autoSizeNetwork(
           edgeParent: edgeParents,
         );
         for (final entry in flows.entries) {
-          final r = storm.sizeRainwaterDownpipe(entry.value);
-          stormSizing[entry.key] = EdgeSizing(
-            edgeId: entry.key,
-            service: service,
-            flow: entry.value,
-            diameter: r.diameter,
-            velocity: velocityFromFlow(entry.value, r.diameter),
-            // M3 — the catchment exceeds the largest tabulated downpipe: the
-            // DN200 shown is the table top, not a size that carries the flow.
-            // The runoff must be split across more downpipes.
-            overCapacity: r.overCapacity,
-          );
+          // water-drainage-2 — the capacity table is for VERTICAL downpipes
+          // running ≈ 1/3 full; a sloped HORIZONTAL collector carries far less
+          // than a stack of the same DN, so a run is sized as a gravity drain
+          // (Manning, part-full at the design slope / fill — the same sizer
+          // the gravity regime uses). Risers keep the downpipe table.
+          final edge = net.edgeById(entry.key)!;
+          if (edge.kind != EdgeKind.riser) {
+            final g = drain.sizeForFlow(
+              flow: entry.value,
+              slope: ctx.drainageSlope,
+              fillRatio: ctx.drainageFillRatio,
+              manningN: ctx.drainageManningN,
+            );
+            stormSizing[entry.key] = EdgeSizing(
+              edgeId: entry.key,
+              service: service,
+              flow: entry.value,
+              diameter: g.diameter,
+              velocity: g.fullBoreVelocity,
+              // Saturated at the largest standard drain with the flow still
+              // above its usable part-full capacity ⇒ the table limit, flagged.
+              overCapacity: g.usableCapacity.cubicMetersPerSecond <
+                  entry.value.cubicMetersPerSecond,
+            );
+          } else {
+            final r = storm.sizeRainwaterDownpipe(entry.value);
+            stormSizing[entry.key] = EdgeSizing(
+              edgeId: entry.key,
+              service: service,
+              flow: entry.value,
+              diameter: r.diameter,
+              velocity: velocityFromFlow(entry.value, r.diameter),
+              // M3 — the catchment exceeds the largest tabulated downpipe: the
+              // DN200 shown is the table top, not a size that carries the flow.
+              // The runoff must be split across more downpipes.
+              overCapacity: r.overCapacity,
+            );
+          }
           // Storm runoff drains TOWARD the outlet root, so it comes FROM the
           // away-from-root (roof-drain) endpoint.
           final parent = edgeParents[entry.key];
@@ -866,6 +978,9 @@ Map<String, EdgeSizing> autoSizeNetwork(
             entry.value,
             system: flushSystem,
           );
+          if (profile.demandCurveExceeded(entry.value, system: flushSystem)) {
+            demandExtrapolatedEdges.add(entry.key);
+          }
           // Supply flows AWAY from the source root, so it comes FROM the
           // root-side (parent) endpoint.
           final parent = edgeParents[entry.key];
@@ -919,6 +1034,10 @@ Map<String, EdgeSizing> autoSizeNetwork(
     final sized = result[id];
     if (sized != null) result[id] = sized.withLoopUnbalanced(true);
   }
+  for (final id in demandExtrapolatedEdges) {
+    final sized = result[id];
+    if (sized != null) result[id] = sized.withDemandCurveExtrapolated(true);
+  }
   // Attach the read-only flow orientation last (after overrides), so the arrow
   // record survives an override without touching any computed size/flow.
   for (final id in edgeFlowFrom.keys) {
@@ -931,15 +1050,40 @@ Map<String, EdgeSizing> autoSizeNetwork(
 /// Build an [EdgeSizing] for a drainage/vent edge from its accumulated [dfu]
 /// using the code capacity tables. Drainage edges report a reference full-bore
 /// Manning velocity (for self-cleansing); vents have no flow velocity.
-EdgeSizing _sizeSanitaryEdge(NetEdge edge, double dfu, SizingContext ctx) {
+///
+/// A DRAINAGE (not vent) edge that [carriesWaterCloset] is floored at
+/// [drain.kMinWcDrainMm] whatever its DFU (water-drainage-7), and an edge whose
+/// DFU exceeds the top row of its table is flagged [EdgeSizing.overCapacity]
+/// (water-drainage-4) — the printed size is then the table limit, not a size
+/// that carries the load.
+EdgeSizing _sizeSanitaryEdge(
+  NetEdge edge,
+  double dfu,
+  SizingContext ctx, {
+  bool carriesWaterCloset = false,
+}) {
   final isStack = edge.kind == EdgeKind.riser;
-  final Diameter d = edge.service == ServiceType.vent
+  final isVent = edge.service == ServiceType.vent;
+  var d = isVent
       ? drain.ventDiameterForDfu(dfu)
       : drain.drainDiameterForDfu(dfu, isStack: isStack);
-  // The table pick IS the code minimum for this load, so an auto-sized sanitary
-  // run is never flagged as not-self-cleansing (G1) — there is no smaller
-  // compliant pipe to move to.
-  return _sanitaryEdgeSizing(edge, d, ctx, codeMinimum: d);
+  if (!isVent && carriesWaterCloset && d.inMillimeters < drain.kMinWcDrainMm) {
+    d = Diameter.mm(drain.kMinWcDrainMm);
+  }
+  final overloaded = isVent
+      ? drain.ventDfuExceedsTable(dfu)
+      : drain.drainDfuExceedsTable(dfu, isStack: isStack);
+  // The table pick (or the WC floor above it) IS the code minimum for this
+  // load, so an auto-sized sanitary run is never flagged as not-self-cleansing
+  // (G1) — there is no smaller compliant pipe to move to.
+  return _sanitaryEdgeSizing(edge, d, ctx,
+      codeMinimum: d, overCapacity: overloaded);
+}
+
+/// True when [node] carries a water-closet fixture type (water-drainage-7).
+bool _isWaterClosetNode(NetNode? node) {
+  final f = node?.fixture;
+  return f != null && drain.isWaterCloset(f);
 }
 
 /// Build the [EdgeSizing] for a sanitary (drainage/vent) [edge] at an already-
@@ -953,6 +1097,7 @@ EdgeSizing _sanitaryEdgeSizing(
   SizingContext ctx, {
   bool stackRaisedForBranch = false,
   required Diameter codeMinimum,
+  bool overCapacity = false,
 }) {
   final isVent = edge.service == ServiceType.vent;
   final v = isVent
@@ -968,6 +1113,7 @@ EdgeSizing _sanitaryEdgeSizing(
     flow: const FlowRate(0),
     diameter: diameter,
     velocity: v,
+    overCapacity: overCapacity,
     stackRaisedForBranch: stackRaisedForBranch,
     // M5 — the DFU path picks its diameter from a code capacity table, so the
     // self-cleansing verdict (the reason the reference Manning velocity above
@@ -1068,6 +1214,8 @@ void _clampDrainageStacksToBranches({
         Diameter.mm(effective),
         ctx,
         stackRaisedForBranch: true,
+        // A DFU-table overload stays flagged through the raise (wd-4).
+        overCapacity: sanitary[edgeId]!.overCapacity,
         // The N17 raise is code-MANDATED, so the raised size IS this segment's
         // code minimum (G1): necking back down to its own DFU-table pick is
         // exactly the violation the clamp exists to prevent.

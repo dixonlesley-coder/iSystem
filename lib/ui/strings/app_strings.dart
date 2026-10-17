@@ -572,6 +572,13 @@ enum StringKey {
   issueStormOverCapacityMessage,
   issueWaterOverCapacityTitle,
   issueWaterOverCapacityMessage,
+  // Audit 2026-10 group A (plumbing sizing flags).
+  issueStormCollectorOverCapacityTitle,
+  issueStormCollectorOverCapacityMessage,
+  issueDrainageOverCapacityTitle,
+  issueDrainageOverCapacityMessage,
+  issueDemandCurveExtrapolatedTitle,
+  issueDemandCurveExtrapolatedMessage,
   issueWaterVelocityTitle, // message = the engine VelocityCheck.message
   issueSelfCleansingTitle,
   issueSelfCleansingMessage,
@@ -1614,6 +1621,24 @@ const Map<StringKey, String> _en = {
       'velocity at the accumulated flow — it was sized at the largest table '
       'entry and still ships over the cap. Split the flow across more risers / '
       'branches.',
+  StringKey.issueStormCollectorOverCapacityTitle:
+      'Rainwater collector over capacity',
+  StringKey.issueStormCollectorOverCapacityMessage:
+      'This horizontal rainwater collector carries more runoff than the largest '
+      'standard drain can carry part-full at the design slope — it was clamped '
+      'to the largest size. Split the roof outlets across more collectors or '
+      'steepen the slope.',
+  StringKey.issueDrainageOverCapacityTitle: 'Drainage load past the DFU table',
+  StringKey.issueDrainageOverCapacityMessage:
+      'The fixture-unit load on this run exceeds the top row of its DFU capacity '
+      'table — the size shown is the table limit, not a size that carries the '
+      'load. Split the load across more stacks / branches.',
+  StringKey.issueDemandCurveExtrapolatedTitle:
+      'Demand beyond the charted curve',
+  StringKey.issueDemandCurveExtrapolatedMessage:
+      'This run carries more than 3000 UBAP, past the last charted point of the '
+      'demand curve; its design flow is a linear extrapolation of the last '
+      'segment. Confirm the main and pump flow.',
   StringKey.issueWaterVelocityTitle: 'Pipe velocity out of band',
   StringKey.issueSelfCleansingTitle: 'Drainage branch below self-cleansing',
   StringKey.issueSelfCleansingMessage:
@@ -2681,6 +2706,26 @@ const Map<StringKey, String> _id = {
       'suplai maksimum SNI pada debit terakumulasi — jalur diukur pada entri '
       'tabel terbesar dan tetap melebihi batas. Bagi alirannya ke lebih banyak '
       'pipa tegak / cabang.',
+  StringKey.issueStormCollectorOverCapacityTitle:
+      'Pipa pengumpul air hujan melebihi kapasitas',
+  StringKey.issueStormCollectorOverCapacityMessage:
+      'Pipa pengumpul horizontal ini mengalirkan limpasan lebih besar daripada '
+      'kapasitas pipa drainase standar terbesar saat terisi sebagian pada '
+      'kemiringan desain — ukurannya dijepit ke ukuran terbesar. Bagi outlet '
+      'atap ke lebih banyak pipa pengumpul atau pertajam kemiringannya.',
+  StringKey.issueDrainageOverCapacityTitle:
+      'Beban drainase melampaui tabel DFU',
+  StringKey.issueDrainageOverCapacityMessage:
+      'Beban unit alat plambing pada jalur ini melampaui baris teratas tabel '
+      'kapasitas DFU — ukuran yang ditampilkan adalah batas tabel, bukan ukuran '
+      'yang mampu memikul beban. Bagi bebannya ke lebih banyak pipa tegak / '
+      'cabang.',
+  StringKey.issueDemandCurveExtrapolatedTitle:
+      'Kebutuhan di luar kurva yang tersedia',
+  StringKey.issueDemandCurveExtrapolatedMessage:
+      'Jalur ini memikul lebih dari 3000 UBAP, melewati titik terakhir kurva '
+      'perkiraan beban; debit desainnya adalah ekstrapolasi linear dari segmen '
+      'terakhir. Periksa kembali debit pipa utama dan pompa.',
   StringKey.issueWaterVelocityTitle: 'Kecepatan pipa di luar batas',
   StringKey.issueSelfCleansingTitle: 'Cabang drainase di bawah swa-bersih',
   StringKey.issueSelfCleansingMessage:
