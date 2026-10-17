@@ -1,10 +1,17 @@
 import 'dart:math' as math;
 
+import 'package:mechx_engine/electrical/bom.dart';
+import 'package:mechx_engine/electrical/catalog.dart' show PartCategory;
 import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/containment.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
+import 'package:mechx_engine/electrical/electrode.dart';
 import 'package:mechx_engine/electrical/fault.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/power_factor.dart';
+import 'package:mechx_engine/electrical/quotation.dart';
+import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -357,6 +364,296 @@ void main() {
       expect(fs.selectivity.single.icsAdequate, isFalse);
       expect(fs.warnings.map((w) => w.code),
           contains('service-capacity-inadequate'));
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // elec-advanced-3 — cable labour is per RUN, not per metre.
+  // ─────────────────────────────────────────────────────────────────────────
+  group('elec-advanced-3: cable labour per run', () {
+    const project = ElectricalProject(
+      id: 'pr',
+      name: 'B',
+      earthingSystem: EarthingSystem.tnS,
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'Main',
+          system: ElectricalSystem.threePhase,
+          voltage: Voltage(400),
+          circuits: [
+            ElectricalCircuit(
+                id: 'c1',
+                name: 'Heater',
+                loadKind: LoadKind.heating,
+                loadW: 3000,
+                cosPhi: 1,
+                length: Length(50)),
+          ],
+        ),
+      ],
+    );
+    final bom = buildBom(computeSystem(p, project));
+
+    test('one 50 m run books 0.2 h (one run), not 50 × 0.2 = 10 h', () {
+      final cable =
+          bom.lines.where((l) => l.category == PartCategory.cable).toList();
+      expect(cable, hasLength(1));
+      expect(cable.single.qty, 50); // metres — what is bought
+      expect(cable.single.runs, 1);
+      // assemblyHoursPerUnit[cable] = 0.2 h per run × 1 run = 0.2 h.
+      expect(labourHoursForBom(Bom(cable)), closeTo(0.2, 1e-9));
+    });
+
+    test('non-cable lines keep hours × qty; the total adds 0.2 h of cable', () {
+      // Σ over every non-cable line of hours(category)·qty, + 0.2 h of cable.
+      final nonCable = bom.lines
+          .where((l) => l.category != PartCategory.cable)
+          .fold<double>(
+              0, (s, l) => s + assemblyHoursForCategory(l.category) * l.qty);
+      expect(labourHoursForBom(bom), closeTo(nonCable + 0.2, 1e-9));
+      // The probe's old total was 17.6 h, 10 h of it cable ⇒ now 7.8 h.
+      expect(labourHoursForBom(bom), closeTo(7.8, 1e-9));
+    });
+
+    test('consolidated cable lines sum their runs', () {
+      const two = ElectricalProject(
+        id: 'pr',
+        name: 'B',
+        earthingSystem: EarthingSystem.tnS,
+        panels: [
+          ElectricalPanel(
+            id: 'MDP',
+            name: 'Main',
+            system: ElectricalSystem.threePhase,
+            voltage: Voltage(400),
+            circuits: [
+              ElectricalCircuit(
+                  id: 'c1',
+                  name: 'Heater A',
+                  loadKind: LoadKind.heating,
+                  loadW: 3000,
+                  cosPhi: 1,
+                  length: Length(50)),
+              ElectricalCircuit(
+                  id: 'c2',
+                  name: 'Heater B',
+                  loadKind: LoadKind.heating,
+                  loadW: 3000,
+                  cosPhi: 1,
+                  length: Length(30)),
+            ],
+          ),
+        ],
+      );
+      final cable = buildBom(computeSystem(p, two))
+          .lines
+          .where((l) => l.category == PartCategory.cable)
+          .toList();
+      // Same cable on both ways ⇒ one merged line: 50 + 30 = 80 m, 2 runs,
+      // 2 × 0.2 = 0.4 h.
+      expect(cable, hasLength(1));
+      expect(cable.single.qty, 80);
+      expect(cable.single.runs, 2);
+      expect(labourHoursForBom(Bom(cable)), closeTo(0.4, 1e-9));
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // elec-advanced-7 — parallel-run feeders are taken off at N × the length.
+  // ─────────────────────────────────────────────────────────────────────────
+  group('elec-advanced-7: parallel-run cable take-off + tray fill', () {
+    const project = ElectricalProject(
+      id: 'pr',
+      name: 'B',
+      earthingSystem: EarthingSystem.tnS,
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'Main',
+          system: ElectricalSystem.threePhase,
+          voltage: Voltage(400),
+          circuits: [
+            ElectricalCircuit(
+                id: 'f1',
+                name: 'Feeder',
+                loadKind: LoadKind.feeder,
+                cosPhi: 1,
+                length: Length(40),
+                feedsPanelId: 'SP'),
+          ],
+        ),
+        ElectricalPanel(
+          id: 'SP',
+          name: 'Sub',
+          system: ElectricalSystem.threePhase,
+          voltage: Voltage(400),
+          sourceType: PanelSource.feeder,
+          fedByCircuitId: 'f1',
+          circuits: [
+            ElectricalCircuit(
+                id: 's1',
+                name: 'Load',
+                loadKind: LoadKind.heating,
+                loadW: 400000,
+                cosPhi: 1,
+                length: Length(10)),
+          ],
+        ),
+      ],
+    );
+    final sys = computeSystem(p, project);
+    final mdp = sys.panels['MDP']!;
+    final feeder = mdp.circuits.single;
+
+    test('fixture: the 400 kW feeder sizes as 2 parallel runs of 185 mm²', () {
+      expect(feeder.cable.runsPerPhase, 2);
+      expect(feeder.cable.csaMm2, 185);
+      expect(feeder.grounding.cableSpec, startsWith('2× '));
+    });
+
+    test('BOM: 2 runs × 40 m = 80 m of the SINGLE cable; lugs on every run',
+        () {
+      final lines = buildPanelBom(mdp);
+      final cable =
+          lines.where((l) => l.category == PartCategory.cable).single;
+      // 40 m run × 2 parallel runs = 80 m to buy (was 40 m).
+      expect(cable.qty, 80);
+      expect(cable.runs, 2);
+      // The description names the single cable, so 80 m reads unambiguously.
+      expect(cable.description, isNot(contains('2×')));
+      expect(cable.description, contains('4×185'));
+      // Skun: 5 conductors (3L+N+PE) × 2 ends × 2 runs = 20 lugs.
+      final lugs = lines.where((l) => l.description.contains('skun')).single;
+      expect(lugs.qty, 20);
+    });
+
+    test('tray fill counts one cable per parallel run', () {
+      final tray = sizeCableTray(mdp);
+      expect(tray.cableCount, 2);
+      // Width = 2·OD × packing factor (one OD per run).
+      final od = cableOuterDiameterMm(
+          feeder.cable.csaMm2, feeder.grounding.cores);
+      final required = 2 * od * trayPackingFactor;
+      expect(tray.fillPct, closeTo(required / tray.widthMm * 100, 0.06));
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // elec-advanced-9 — the capacitor bank cancels the motor's INPUT kvar.
+  // ─────────────────────────────────────────────────────────────────────────
+  group('elec-advanced-9: PF correction on motor input power', () {
+    test('22 kW cos 0.8 motor ⇒ 25 kW input, 10.53 kvar ⇒ the 25 kVAR rung',
+        () {
+      const project = ElectricalProject(
+        id: 'pr',
+        name: 'B',
+        earthingSystem: EarthingSystem.tnS,
+        panels: [
+          ElectricalPanel(
+            id: 'MDP',
+            name: 'Main',
+            system: ElectricalSystem.threePhase,
+            voltage: Voltage(400),
+            circuits: [
+              ElectricalCircuit(
+                  id: 'm1',
+                  name: 'Motor',
+                  loadKind: LoadKind.motor,
+                  motorKw: 22,
+                  cosPhi: 0.8,
+                  length: Length(10)),
+            ],
+          ),
+        ],
+      );
+      final pf = powerFactorCorrection(computeSystem(p, project), project);
+      // Input = 22/0.88 = 25.0 kW (the same basis compute.dart's Ib uses).
+      expect(kAssumedMotorEfficiency, 0.88);
+      expect(pf.totalKw, closeTo(25.0, 0.05));
+      // kvar = 25·tan(acos 0.8) = 25·0.75 = 18.75.
+      // (reported to 1 dp: 18.7499… → 18.7)
+      expect(pf.totalKvar, closeTo(18.75, 0.06));
+      // required = 25·(0.75 − tan(acos 0.95)) = 25·(0.75 − 0.328684)
+      //          = 25·0.421316 = 10.533 kvar (30 °C ⇒ no ambient oversize).
+      expect(pf.requiredKvar, closeTo(10.5, 0.05));
+      // Ladder [10, 25, …]: 10.53 > 10 ⇒ 25 kVAR (the shaft basis picked 10).
+      expect(pf.bankKvar, 25);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // elec-advanced-5 — the electrode rod count is the true minimum.
+  // ─────────────────────────────────────────────────────────────────────────
+  group('elec-advanced-5: minimum rod count with each count\'s own η', () {
+    test('100 Ω·m ⇒ 10 rods at 4.785 Ω (meets 5 Ω)', () {
+      // R1 = 100/(2π·3)·(ln(24/0.016) − 1) = 5.30516·6.31322 = 33.4927 Ω.
+      // n = 9: 33.4927/(9·0.715) = 5.205 > 5; n = 10: 33.4927/7.0 = 4.785.
+      final d = designElectrode(soilResistivityOhmM: 100);
+      expect(d.rodCount, 10);
+      expect(d.achieved.ohms, closeTo(4.785, 0.005));
+      expect(d.meetsTarget, isTrue);
+    });
+
+    test('25 Ω·m ⇒ 2 rods (the fixed-η estimate over-counted to 3)', () {
+      // R1 = 25/(2π·3)·6.31322 = 1.32629·6.31322 = 8.3732 Ω.
+      // Fixed η: ceil(8.3732/(5·0.8)) = ceil(2.093) = 3.
+      // True minimum: n = 1: 8.37 > 5; n = 2: 8.3732/(2·0.86) = 4.868 ≤ 5.
+      final d = designElectrode(soilResistivityOhmM: 25);
+      expect(d.singleRod.ohms, closeTo(8.373, 0.001));
+      expect(d.rodCount, 2);
+      expect(d.achieved.ohms, closeTo(4.868, 0.001));
+      expect(d.meetsTarget, isTrue);
+    });
+
+    test('500 Ω·m ⇒ 48 rods meet it (was 42 rods at 5.69 Ω)', () {
+      // R1 = 5·33.4927 = 167.463 Ω; η = 0.70 for n ≥ 10:
+      //   n ≥ 167.463/(5·0.7) = 47.85 ⇒ 48 ⇒ 167.463/33.6 = 4.984 Ω.
+      final d = designElectrode(soilResistivityOhmM: 500);
+      expect(d.rodCount, 48);
+      expect(d.achieved.ohms, closeTo(4.984, 0.001));
+      expect(d.meetsTarget, isTrue);
+    });
+
+    test('beyond the search cap ⇒ the cap, flagged unmet', () {
+      // 2000 Ω·m: R1 = 669.85 Ω ⇒ needs n ≥ 669.85/3.5 = 191.4 > 100.
+      final d = designElectrode(soilResistivityOhmM: 2000);
+      expect(d.rodCount, maxElectrodeRods);
+      expect(d.meetsTarget, isFalse);
+      expect(d.note, contains('above 5 ohm target'));
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // elec-advanced-6 — PV modules are split evenly, never padded.
+  // ─────────────────────────────────────────────────────────────────────────
+  group('elec-advanced-6: physical PV string layout', () {
+    // maxByMppt = floor(850/41.7) = 20; maxByVoltage = floor(1000/56.925) = 17;
+    // minByMppt = ceil(200/41.7) = 5; max string length = min(20, 17) = 17.
+    test('18 × 550 Wp ⇒ 2 strings of 9 (375 V, inside 200–850 V)', () {
+      // strings = ceil(18/17) = 2; stringSize = ceil(18/2) = 9.
+      final s = sizeSolar(panelWp: 550, panels: 18);
+      expect(s.strings, 2);
+      expect(s.stringSize, 9);
+      expect(s.strings * s.stringSize, 18);
+      expect(s.note, contains('2 string(s) of 9;'));
+      expect(s.note, isNot(contains('MPPT window')));
+    });
+
+    test('19 modules ⇒ 2 strings of 9-10 (an honest uneven split)', () {
+      final s = sizeSolar(panelWp: 550, panels: 19);
+      expect(s.strings, 2);
+      expect(s.stringSize, 10);
+      expect(s.note, contains('2 string(s) of 9-10;'));
+    });
+
+    test('3 modules ⇒ 1 string of 3, flagged below the MPPT window', () {
+      // 3 × 41.7 = 125.1 V → 125 V < 200 V MPPT minimum.
+      final s = sizeSolar(panelWp: 550, panels: 3);
+      expect(s.strings, 1);
+      expect(s.stringSize, 3);
+      expect(s.note, contains('1 string(s) of 3;'));
+      expect(s.note, contains('~125 V Vmp, below the 200 V MPPT minimum'));
     });
   });
 }

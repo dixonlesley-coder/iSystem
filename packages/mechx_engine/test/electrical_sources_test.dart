@@ -107,14 +107,18 @@ void main() {
       // string size: maxByMppt = floor(850/41.7) = 20;
       //   maxByVoltage = floor(1000/(49.5·1.15)) = floor(1000/56.925) = 17;
       //   minByMppt = ceil(200/41.7) = ceil(4.796) = 5;
-      //   stringSize = max(5, min(20,17,20)) = 17.
-      //   strings = ceil(20/17) = 2.
+      // Re-derived 2026-10 (audit elec-advanced-6): the modules are split
+      // EVENLY over the fewest strings that respect the 17-module limit —
+      //   strings = ceil(20/17) = 2; stringSize = ceil(20/2) = 10 (2 × 10,
+      //   10·41.7 = 417 V inside the 200–850 V MPPT window). The old
+      //   '2 strings of 17' needed 34 module positions for 20 modules.
       // dailyKwh = 11·4.8·0.8 = 42.24 → 42.2 (1 dp).
       final s = sizeSolar(panelWp: 550, panels: 20);
       expect(s.arrayKwp.inKiloWatts, closeTo(11, 1e-9));
       expect(s.inverterKw.inKiloWatts, 10);
-      expect(s.stringSize, 17);
+      expect(s.stringSize, 10);
       expect(s.strings, 2);
+      expect(s.note, contains('2 string(s) of 10;'));
       expect(s.dailyKwh.inKilowattHours, closeTo(42.2, 1e-9));
       expect(s.panelCount, 20);
     });

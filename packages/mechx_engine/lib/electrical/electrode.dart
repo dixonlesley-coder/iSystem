@@ -132,6 +132,12 @@ double singleRodResistance(double rho, double lengthM, double diaMm) {
   return (rho / (2 * math.pi * l)) * (math.log((8 * l) / d) - 1);
 }
 
+/// Search cap on the parallel-rod count. Beyond ~100 rods an array is no longer
+/// a sensible remedy (the soil, not the rod count, is the problem), so the
+/// design stops there and reports the target as unmet.
+// VERIFY — notAnSniClause (a modelling/search cap, not a standard value).
+const int maxElectrodeRods = 100;
+
 /// Design an earth-electrode array: size a single rod, then find the minimum
 /// number of parallel rods needed to reach [targetOhm].
 ElectrodeDesign designElectrode({
@@ -146,10 +152,22 @@ ElectrodeDesign designElectrode({
 
   final singleRodOhm = singleRodResistance(rho, rodLengthM, rodDiameterMm);
 
-  // Minimum rod count to reach the target, using a representative η:
-  // n ≥ R_single / (target · η).
-  final rawCount = (singleRodOhm / (targetOhm * defaultRodUtilisation)).ceil();
-  final rodCount = math.max(1, rawCount.isFinite ? rawCount : 1);
+  // MINIMUM rod count that actually reaches the target with the count's OWN
+  // utilisation η(n): the smallest n with R_single / (n·η(n)) ≤ target. (A
+  // closed-form n ≥ R/(target·0.8) used one representative η, then judged the
+  // count with the real η(n) — η < 0.8 above 4 rods under-counted, η > 0.8
+  // below over-counted.) No count within [maxElectrodeRods] ⇒ the cap, flagged.
+  var rodCount = maxElectrodeRods;
+  if (singleRodOhm.isFinite) {
+    for (var n = 1; n <= maxElectrodeRods; n++) {
+      if (singleRodOhm / (n * utilisationFactor(n)) <= targetOhm) {
+        rodCount = n;
+        break;
+      }
+    }
+  } else {
+    rodCount = 1;
+  }
 
   final eta = utilisationFactor(rodCount);
   final achievedOhm = singleRodOhm / (rodCount * eta);

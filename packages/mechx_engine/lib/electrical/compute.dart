@@ -46,13 +46,9 @@ import 'sizing.dart';
 /// supply summary (matches PanelMaker `ASSUMED_BUILDING_PF`). Not a PUIL clause.
 const double assumedBuildingPf = 0.85;
 
-/// Assumed full-load efficiency of an induction motor when only the shaft
-/// (mechanical) kW is given: the electrical input (nameplate FLC) is the shaft
-/// kW divided by this efficiency. ~0.88 is a representative IE3-class value; the
-/// proper fix is a motor-kW → nameplate-FLC table (A8).
-// VERIFY — secondarySource (assumed IE3 induction-motor efficiency; no PUIL
-// clause, not in a standards profile — replace with a motorKw→FLC table).
-const double _assumedMotorEfficiency = 0.88;
+// The assumed motor efficiency (shaft kW → electrical input kW) lives in
+// `load_kind.dart` as [kAssumedMotorEfficiency] so the power-factor pass reads
+// the SAME figure as the Ib derivation below.
 
 // ── phase determination ─────────────────────────────────────────────────────
 
@@ -770,7 +766,7 @@ _CircuitComputation _computeCircuit(
   } else if (motorLike) {
     // Shaft kW → electrical input kW via the assumed efficiency (// VERIFY).
     ib = loadCurrent(
-      power: Power.kiloWatts(c.motorKw! / _assumedMotorEfficiency),
+      power: Power.kiloWatts(c.motorKw! / kAssumedMotorEfficiency),
       voltage: Voltage(useVoltageV),
       cosPhi: c.cosPhi,
       threePhase: threePhase,

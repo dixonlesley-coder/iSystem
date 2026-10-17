@@ -600,11 +600,16 @@ SolarResult sizeSolar({
   final maxByMppt = (kMpptVmax / kPvVmp).floor();
   final maxByVoltage = (kMaxSystemVoltage / (kPvVoc * kVocColdFactor)).floor();
   final minByMppt = math.max(1, (kMpptVmin / kPvVmp).ceil());
-  final stringSize = math.max(
-    minByMppt,
-    math.min(math.min(maxByMppt, maxByVoltage), panelCount),
-  );
-  final strings = (panelCount / stringSize).ceil();
+  // Fewest strings whose length stays inside the voltage limits, then split the
+  // modules as EVENLY as possible across them (lengths differ by at most one).
+  // The array is never padded up to the MPPT minimum — modules that do not
+  // exist cannot be strung; a too-short string is flagged in the note instead.
+  final maxLen = math.max(1, math.min(maxByMppt, maxByVoltage));
+  final strings = (panelCount / maxLen).ceil();
+  final stringSize = (panelCount / strings).ceil(); // the longest string
+  final shortest = panelCount ~/ strings; // the shortest string
+  final unevenSplit = shortest != stringSize;
+  final belowMppt = shortest < minByMppt;
 
   final dailyKwh = _round(arrayKwp * sunHours * kPvPerformanceRatio, 1);
 
@@ -617,8 +622,13 @@ SolarResult sizeSolar({
     strings: strings,
     dailyKwh: Energy.kilowattHours(dailyKwh),
     note: '$panelCount x $panelWp Wp ($arrayKwp kWp) as $strings string(s) of '
-        '$stringSize; ${_fmt(inverterKw.inKiloWatts)} kW inverter (DC/AC '
-        '$dcAcRatio); ~$dailyKwh kWh/day at $sunHours peak-sun-hours.',
+        '${unevenSplit ? '$shortest-$stringSize' : '$stringSize'}; '
+        '${_fmt(inverterKw.inKiloWatts)} kW inverter (DC/AC '
+        '$dcAcRatio); ~$dailyKwh kWh/day at $sunHours peak-sun-hours.'
+        '${belowMppt ? ' Array too small for the MPPT window: a $shortest-module '
+            'string gives ~${_fmt(_round(shortest * kPvVmp, 0))} V Vmp, below the '
+            '${_fmt(kMpptVmin)} V MPPT minimum - add modules or choose a '
+            'lower-voltage inverter.' : ''}',
     verifyItems: const <String>[
       'Panel Vmp/Voc + cold-Voc factor (1.15) + MPPT window — confirm against the module/inverter datasheets.',
       'Peak-sun-hours (4.8) + performance ratio (0.8) — confirm against site irradiance data.',
