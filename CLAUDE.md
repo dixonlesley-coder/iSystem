@@ -1455,6 +1455,32 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Plant elevation is role- AND component-aware (`network.dart` `nodeElevation`)**:
+  an explicit `elevation` / `mountHeight` wins; otherwise pump / groundTank /
+  boosterSet / AHU / supply+exhaust fan sit on their OWN floor surface, FCU and the
+  AC units at their floor's ceiling, and only a roofTank (or a component-less
+  plant) at `roofElevation`. Upfeed static lift therefore includes the building
+  height (audit 2026-10 wd-1 — it was ~70 % low). Plan `CL` labels render this
+  same elevation (`planSettingOutElevation`); only a roof-parked plant falls back
+  to its floor ceiling so no label exceeds the storey. Both pressure solves pick
+  the critical node from DELIVERY nodes (fixtures → open leaves → all) and every
+  length consumer threads the project `MountingHeights` (printed == solved).
+- **Terminals carry demand wherever they sit (`network_sizing.dart`)**: any
+  fixture-role component (except cleanout / airVent / fireExtinguisher) with no
+  explicit load takes the default terminal demand even when INLINE (degree 2);
+  rainwater RUNS size by gravity Manning (`drain.sizeForFlow`, flagged when it
+  saturates, self-cleansing judged) while rainwater RISERS keep the downpipe
+  table; DFU-table overload sets `overCapacity`; above 3000 UBAP the demand curve
+  extrapolates its last segment and flags `demandCurveExtrapolated`; a drain
+  carrying a WC (built-in or `CustomFixture.isWaterCloset`) floors at DN75
+  (`// VERIFY` UPC/IPC, `notAnSniClause`).
+- **Electrical fault/sizing share one length + one derating basis**: Zs/ADS and
+  the Fold-1 fault decay use the SOLVED run length (`solvedRunLengthM` — geo when
+  placed), the same the sizing/Vd used; parallel runs are group-derated
+  (`df·gf(g·n)/gf(g)`, grouping table to 20+ circuits — never saturate); a
+  1-phase board's bus fault is the L-N `U0/|Zph+Zn|`; Zs includes the upstream
+  feeders' PE return; single-phase A5 FLA uses U0 (230 V), never 400 V.
+
 - **Plumbing-rigour advisories + storm runoff C (additive, `// VERIFY`)**:
   `rainwaterDesignFlow` takes an optional `runoffCoefficient` (rational method
   `Q = C·i·A/3.6e6`, default **1.0** ⇒ byte-identical) threaded from the project
