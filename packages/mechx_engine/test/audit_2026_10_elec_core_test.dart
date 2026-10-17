@@ -4,6 +4,7 @@ import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/load_list.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/sizing.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/standards/puil.dart';
@@ -308,6 +309,106 @@ void main() {
           cuSys.panels['MDP']!.circuits.single.cable.csaMm2);
       expect(faultStudy(alSys, al, profile).panels['SUB']!.prospectiveFaultkA,
           faultStudy(cuSys, cu, profile).panels['SUB']!.prospectiveFaultkA);
+    });
+  });
+
+  group('elec-core-3 — parallel runs are derated as a group', () {
+    // 560 kW general load, 3φ 400 V, cosφ 0.85, PVC in conduit (B1), 30 °C,
+    // panel grouping 1 ⇒ df = 1.0:
+    //   Ib = 560 000 / (√3·400·0.85) = 560 000 / 588.897 = 950.93 A
+    //   In = first rung ≥ 950.93 = 1000 A
+    //   Iz required = max(1000, 1.25 · 950.93 = 1188.66) = 1188.66 A
+    // Parallel runs of ONE circuit in common containment are a group
+    // (IEC 60364-5-52 §523.5): n runs derate by groupingFactor(n).
+    //   n=1: largest KHA 500 (300 mm²) < 1188.66                         ✗
+    //   n=2: 0.8  ⇒ per run ≥ 1188.66/2/0.8  = 742.9 A > 500             ✗
+    //   n=3: 0.7  ⇒ per run ≥ 1188.66/3/0.7  = 566.0 A > 500             ✗
+    //        (the defect rated 3×240 at 3·435·1.0 = 1305 A — really
+    //         3·435·0.7 = 913.5 A, below even In = 1000 A)
+    //   n=4: 0.65 ⇒ per run ≥ 1188.66/4/0.65 = 457.2 A ⇒ 300 mm² (KHA 500)
+    //        Iz = 4 · 500 · 0.65 = 1300 A ≥ 1188.66 ✓
+    test('560 kW: 4×300 mm² at 0.65 (Iz 1300 A), never 3×240 at 1.0', () {
+      final cable = sizeCable(
+        profile,
+        designCurrent: const Current(950.93),
+        breakerRating: const Current(1000),
+        deratingFactor: 1.0,
+        minSectionMm2: 4,
+        threePhase: true,
+      );
+      expect(cable.runsPerPhase, 4);
+      expect(cable.csaMm2, 300);
+      expect(cable.deratingFactor, 0.65);
+      expect(cable.deratedIz.amperes, closeTo(1300, 0.05));
+      expect(cable.deratedIz.amperes, greaterThanOrEqualTo(1188.66));
+      expect(cable.ampacityReached, isTrue);
+    });
+
+    test('a grouped circuit swaps its g-factor for the g·n one', () {
+      // g = 2 ⇒ df = groupingFactor(2) = 0.8 already applied. Ib 400 A,
+      // In 400 A ⇒ Iz ≥ max(400, 500) = 500 A.
+      //   n=1: per run ≥ 500/0.8 = 625 A > 500 ✗
+      //   n=2: df_run = 0.8 · gf(4)/gf(2) = 0.8 · 0.65/0.8 = 0.65
+      //        per run ≥ 500/2/0.65 = 384.6 A: 185 mm² (KHA 370) ✗,
+      //        240 mm² (KHA 435) ✓ ⇒ Iz = 2 · 435 · 0.65 = 565.5 A
+      //        (ungrouped-parallel would have taken 2×185 at 0.8 = 592 A).
+      final cable = sizeCable(
+        profile,
+        designCurrent: const Current(400),
+        breakerRating: const Current(400),
+        deratingFactor: 0.8,
+        minSectionMm2: 4,
+        threePhase: true,
+        groupingCount: 2,
+      );
+      expect(cable.runsPerPhase, 2);
+      expect(cable.csaMm2, 240);
+      expect(cable.deratingFactor, 0.65);
+      expect(cable.deratedIz.amperes, closeTo(565.5, 0.05));
+    });
+
+    test('a single run is unchanged (byte-identical)', () {
+      // Ib 100 A, In 100 A ⇒ Iz ≥ 125 A ⇒ 35 mm² (KHA 130), df 1.0.
+      final cable = sizeCable(
+        profile,
+        designCurrent: const Current(100),
+        breakerRating: const Current(100),
+        deratingFactor: 1.0,
+        minSectionMm2: 4,
+        threePhase: true,
+        groupingCount: 3,
+      );
+      expect(cable.runsPerPhase, isNull);
+      expect(cable.csaMm2, 35);
+      expect(cable.deratedIz.amperes, 130);
+    });
+
+    test('computePanel threads it: the 560 kW way gets 4×300 mm²', () {
+      final r = computePanel(
+        profile,
+        const ElectricalPanel(
+          id: 'MDP',
+          name: 'MDP',
+          ambientTempC: 30,
+          circuits: [
+            ElectricalCircuit(
+              id: 'big',
+              name: 'Big load',
+              loadKind: LoadKind.general,
+              loadW: 560000,
+              cosPhi: 0.85,
+              phases: 3,
+              length: Length(5),
+            ),
+          ],
+        ),
+      );
+      final c = r.circuits.single;
+      expect(c.designCurrent.amperes, closeTo(950.9, 0.05));
+      expect(c.breaker.ratingA.amperes, 1000);
+      expect(c.cable.runsPerPhase, 4);
+      expect(c.cable.csaMm2, 300);
+      expect(c.cable.deratedIz.amperes, greaterThanOrEqualTo(1188.6));
     });
   });
 }

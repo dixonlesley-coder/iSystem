@@ -865,6 +865,9 @@ _CircuitComputation _computeCircuit(
     material: panel.material,
     method: installMethod,
     threePhase: threePhase,
+    // Parallel runs of this circuit group with its neighbours (the same count
+    // `dfFor` folded into `df`).
+    groupingCount: c.groupingCountOverride ?? panel.groupingCount,
     vd: CableVoltageDropConstraint(
       length: effectiveLength,
       cosPhi: c.cosPhi,
