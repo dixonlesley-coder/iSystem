@@ -185,7 +185,7 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
     _Command(
       id: 'project.docControl',
       title: context.strings(StringKey.paletteEditDocControl),
-      subtitle: 'Sign-off + revisions on Projects',
+      subtitle: context.strings(StringKey.paletteEditDocControlSub),
       run: () {
         ref
             .read(sectionVisibilityProvider.notifier)
@@ -196,7 +196,7 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
     _Command(
       id: 'project.equipmentSpecs',
       title: context.strings(StringKey.paletteEditEquipmentSpecs),
-      subtitle: 'Equipment model/spec on Projects',
+      subtitle: context.strings(StringKey.paletteEditEquipmentSpecsSub),
       run: () {
         ref
             .read(sectionVisibilityProvider.notifier)

@@ -323,7 +323,6 @@ enum StringKey {
   inspectorRevisionDescHint,
 
   // Inspector — Equipment schedule model/spec editor (N23).
-  inspectorEquipmentSchedule,
   inspectorEquipmentScheduleHint,
   inspectorModelSpecHint,
 
@@ -370,6 +369,28 @@ enum StringKey {
   electricalSupplyEarthing,
   electricalSupplyBackup,
   electricalSupplyAdvanced,
+  electricalSupplySource,
+  electricalSupplyCapacityVa,
+  electricalSupplyCapacityNote,
+  electricalSolarPv,
+  electricalSolarPresent,
+  electricalSolarPanels,
+  electricalSolarPanelWp,
+  electricalBattery,
+  electricalBatteryPresent,
+  electricalBatteryChemistry,
+  electricalBatteryAutonomy,
+  electricalMepFeed,
+  electricalMepFeedToggle,
+  electricalMepFeedNoteEmpty,
+  electricalMepFeedNote,
+  paletteEditDocControlSub,
+  paletteEditEquipmentSpecsSub,
+  exportIdentityTitle,
+  exportIdentityDrawingNo,
+  exportIdentityDrawingNoHint,
+  exportIdentityRevisionHint,
+  exportIdentityClientHint,
   paletteElectricalSupply,
   paletteElectricalSupplySubtitle,
   electricalAddPanel,
@@ -1413,7 +1434,6 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorRevisionDescHint: 'Description',
 
   // Inspector — Equipment schedule model/spec editor (N23).
-  StringKey.inspectorEquipmentSchedule: 'Equipment schedule',
   StringKey.inspectorEquipmentScheduleHint:
       'Model / spec for the issued equipment schedule. Blank prints as "—".',
   StringKey.inspectorModelSpecHint: 'Model / spec',
@@ -1466,6 +1486,41 @@ const Map<StringKey, String> _en = {
   StringKey.electricalSupplyEarthing: 'Earthing',
   StringKey.electricalSupplyBackup: 'Backup & on-site',
   StringKey.electricalSupplyAdvanced: 'Advanced',
+  StringKey.electricalSupplySource: 'Source',
+  StringKey.electricalSupplyCapacityVa: 'Connection capacity (VA)',
+  StringKey.electricalSupplyCapacityNote:
+      'The declared connection (daya tersambung) in VA - '
+      'e.g. 2200 / 33000 / 197000 - labels the supply node '
+      'and rates the main board incomer + bus at the '
+      'capacity\'s line current; 0 = not set (demand sizes '
+      'the incomer).',
+  StringKey.electricalSolarPv: 'Solar PV',
+  StringKey.electricalSolarPresent: 'Solar PV present',
+  StringKey.electricalSolarPanels: 'Panels',
+  StringKey.electricalSolarPanelWp: 'Panel rating (Wp)',
+  StringKey.electricalBattery: 'Battery',
+  StringKey.electricalBatteryPresent: 'Battery present',
+  StringKey.electricalBatteryChemistry: 'Chemistry',
+  StringKey.electricalBatteryAutonomy: 'Autonomy (h)',
+  StringKey.electricalMepFeed: 'MEP equipment feed',
+  StringKey.electricalMepFeedToggle: 'Add solved MEP duties to panel',
+  StringKey.electricalMepFeedNoteEmpty:
+      'No auto-sized pump / fan / fire-pump duty yet — '
+      'draw and size the mechanical systems first. '
+      'Equipment placed on the plan always feeds the '
+      'MEP Equipment panel.',
+  StringKey.electricalMepFeedNote:
+      'Folds the app-sized {names} '
+      'into the MEP Equipment panel as sized circuits — '
+      'no re-entry of the kW. Fire pumps carry life-safety '
+      'treatment. Placed equipment always feeds the panel.',
+  StringKey.paletteEditDocControlSub: 'Sign-off + revisions on Projects',
+  StringKey.paletteEditEquipmentSpecsSub: 'Equipment model/spec on Projects',
+  StringKey.exportIdentityTitle: 'Document control',
+  StringKey.exportIdentityDrawingNo: 'Drawing no.',
+  StringKey.exportIdentityDrawingNoHint: 'e.g. M-101',
+  StringKey.exportIdentityRevisionHint: 'e.g. A',
+  StringKey.exportIdentityClientHint: 'Client name',
   StringKey.paletteElectricalSupply: 'Edit electrical supply',
   StringKey.paletteElectricalSupplySubtitle: 'Utility, earthing, backup',
   StringKey.electricalAddPanel: '+ Panel',
@@ -2562,7 +2617,6 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorRevisionDescHint: 'Uraian',
 
   // Inspector — Equipment schedule model/spec editor (N23).
-  StringKey.inspectorEquipmentSchedule: 'Jadwal peralatan',
   StringKey.inspectorEquipmentScheduleHint:
       'Model / spesifikasi untuk jadwal peralatan yang diterbitkan. Kosong '
       'tercetak sebagai "—".',
@@ -2612,6 +2666,42 @@ const Map<StringKey, String> _id = {
   StringKey.electricalSupplyEarthing: 'Pembumian',
   StringKey.electricalSupplyBackup: 'Cadangan & setempat',
   StringKey.electricalSupplyAdvanced: 'Lanjutan',
+  StringKey.electricalSupplySource: 'Sumber',
+  StringKey.electricalSupplyCapacityVa: 'Daya tersambung (VA)',
+  StringKey.electricalSupplyCapacityNote:
+      'Daya tersambung yang dideklarasikan dalam VA - '
+      'mis. 2200 / 33000 / 197000 - memberi label simpul suplai '
+      'dan menetapkan rating incomer + busbar panel utama pada '
+      'arus saluran dari daya tersebut; 0 = tidak diisi (incomer '
+      'diukur dari beban).',
+  StringKey.electricalSolarPv: 'Panel surya (PV)',
+  StringKey.electricalSolarPresent: 'Ada panel surya (PV)',
+  StringKey.electricalSolarPanels: 'Jumlah panel',
+  StringKey.electricalSolarPanelWp: 'Rating panel (Wp)',
+  StringKey.electricalBattery: 'Baterai',
+  StringKey.electricalBatteryPresent: 'Ada baterai',
+  StringKey.electricalBatteryChemistry: 'Jenis kimia',
+  StringKey.electricalBatteryAutonomy: 'Otonomi (jam)',
+  StringKey.electricalMepFeed: 'Umpan peralatan MEP',
+  StringKey.electricalMepFeedToggle: 'Tambahkan beban MEP terhitung ke panel',
+  StringKey.electricalMepFeedNoteEmpty:
+      'Belum ada beban pompa / kipas / pompa kebakaran yang '
+      'diukur otomatis — gambar dan ukur sistem mekanikal dulu. '
+      'Peralatan yang ditempatkan di denah selalu masuk ke '
+      'panel Peralatan MEP.',
+  StringKey.electricalMepFeedNote:
+      'Memasukkan {names} yang diukur aplikasi '
+      'ke panel Peralatan MEP sebagai sirkit terukur — '
+      'tanpa mengetik ulang kW. Pompa kebakaran mendapat perlakuan '
+      'keselamatan jiwa. Peralatan yang ditempatkan selalu masuk ke panel.',
+  StringKey.paletteEditDocControlSub: 'Pengesahan + revisi di Proyek',
+  StringKey.paletteEditEquipmentSpecsSub:
+      'Model/spesifikasi peralatan di Proyek',
+  StringKey.exportIdentityTitle: 'Kontrol dokumen',
+  StringKey.exportIdentityDrawingNo: 'No. gambar',
+  StringKey.exportIdentityDrawingNoHint: 'mis. M-101',
+  StringKey.exportIdentityRevisionHint: 'mis. A',
+  StringKey.exportIdentityClientHint: 'Nama klien',
   StringKey.paletteElectricalSupply: 'Ubah suplai listrik',
   StringKey.paletteElectricalSupplySubtitle: 'Utilitas, pembumian, cadangan',
   StringKey.electricalAddPanel: '+ Panel',

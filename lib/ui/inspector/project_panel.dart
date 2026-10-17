@@ -1571,7 +1571,7 @@ class ExportIdentityBar extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Document control',
+          Text(context.strings(StringKey.exportIdentityTitle),
               style: type.subtitle.copyWith(color: colors.textPrimary)),
           const SizedBox(height: MechXSpacing.xxs),
           Text(
@@ -1583,11 +1583,21 @@ class ExportIdentityBar extends ConsumerWidget {
             spacing: MechXSpacing.md,
             runSpacing: MechXSpacing.sm,
             children: [
-              field('Drawing no.', doc.documentNumber, ctrl.setDocumentNumber,
-                  'e.g. M-101'),
-              field('Revision', doc.revisionTag, ctrl.setRevisionTag, 'e.g. A'),
-              field('Client', doc.clientName, ctrl.setClientName,
-                  'Client name'),
+              field(
+                  context.strings(StringKey.exportIdentityDrawingNo),
+                  doc.documentNumber,
+                  ctrl.setDocumentNumber,
+                  context.strings(StringKey.exportIdentityDrawingNoHint)),
+              field(
+                  context.strings(StringKey.inspectorRevisionTag),
+                  doc.revisionTag,
+                  ctrl.setRevisionTag,
+                  context.strings(StringKey.exportIdentityRevisionHint)),
+              field(
+                  context.strings(StringKey.inspectorClient),
+                  doc.clientName,
+                  ctrl.setClientName,
+                  context.strings(StringKey.exportIdentityClientHint)),
             ],
           ),
           ...footer,
