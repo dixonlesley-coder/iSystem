@@ -461,6 +461,53 @@ void main() {
       expect(drain.single.message, contains('group more discharge'));
     });
 
+    test('a real auto-sized rainwater collector flagged by the ENGINE reaches '
+        'Review under the rainwater kind', () {
+      final c = _container();
+      _calibrate(c);
+      c.read(sheetsControllerProvider.notifier).loadDemoSheets();
+      // A tiny (2 m2) roof catchment drained by a horizontal collector: the
+      // engine sizes the collector on Manning (water-drainage-2) and lands on
+      // the smallest standard drain, DN50. At the default 1:100 slope,
+      // n = 0.010, DN50 full-bore:
+      //   R = 0.050/4 = 0.0125 m -> R^(2/3) = 0.0539
+      //   v = (1/0.010) * 0.0539 * sqrt(0.01) = 0.54 m/s  < 0.6
+      // so the collector is genuinely below self-cleansing.
+      const nodes = [
+        NetNode(
+          id: 'rd',
+          sheetId: 's1',
+          x: 0,
+          y: 0,
+          floorIndex: 0,
+          component: NodeComponent.roofDrain,
+          roofAreaM2: 2,
+        ),
+        NetNode(id: 'out', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+      ];
+      const edges = [
+        NetEdge(
+            id: 'col',
+            fromId: 'rd',
+            toId: 'out',
+            service: ServiceType.rainwater),
+      ];
+      c
+          .read(networkControllerProvider.notifier)
+          .loadNetwork(const Network(nodes: nodes, edges: edges));
+      final sized = c.read(sizingProvider)['col'];
+      expect(sized, isNotNull);
+      expect(sized!.diameter.inMillimeters, closeTo(50, 1e-9));
+      expect(sized.velocity.metersPerSecond, closeTo(0.539, 0.001));
+      expect(sized.selfCleansingOk, isFalse);
+      final issues = c.read(designIssuesProvider);
+      expect(issues.where((i) => i.kind == 'drainage-self-cleansing'), isEmpty);
+      final rain =
+          issues.where((i) => i.kind == 'rainwater-self-cleansing').toList();
+      expect(rain, hasLength(1));
+      expect(rain.single.locate!.edgeId, 'col');
+    });
+
     test('an over-velocity pressurized run fans in as a water-velocity warning',
         () {
       final c = _container();
