@@ -631,10 +631,41 @@ double runPixelLength(NetEdge edge, Network net) {
   return math.sqrt(dx * dx + dy * dy);
 }
 
+/// The VERTICAL leg of a RUN (m): the absolute difference between its two
+/// endpoints' solved §10 elevations (role-aware — a pump on the floor surface,
+/// a main at the ceiling, a fixture at fixture height). A run drawn between a
+/// ceiling main and a WC, or a floor-mounted pump and the ceiling main, rises
+/// or drops by this much on site even though the plan only shows its
+/// horizontal span. Zero for a riser (its whole length IS the elevation delta),
+/// a broken edge, or a run whose endpoints sit at one level.
+Length runVerticalLeg(
+  NetEdge edge,
+  Network net, {
+  required BuildingLevels building,
+  MountingHeights mounting = const MountingHeights(),
+}) {
+  if (edge.kind == EdgeKind.riser) return const Length(0);
+  final a = net.nodeById(edge.fromId);
+  final b = net.nodeById(edge.toId);
+  if (a == null || b == null) return const Length(0);
+  final dz = (nodeElevation(b, building, mounting).meters -
+          nodeElevation(a, building, mounting).meters)
+      .abs();
+  // Sub-millimetre float noise between two nodes on one level is not a leg.
+  return Length(dz < 1e-6 ? 0 : dz);
+}
+
 /// Real length of [edge] from the §10 sources of truth: a run uses the
-/// from-node sheet's calibration; a riser/drop uses the true-elevation delta of
-/// its endpoints (role-aware — ceiling main, fixture, or plant). Returns zero
-/// length for an uncalibrated run or a broken edge.
+/// from-node sheet's calibration for its HORIZONTAL span PLUS its vertical leg
+/// ([runVerticalLeg]) when its endpoints sit at different solved elevations
+/// (pump → ceiling main, main → fixture drop); a riser/drop uses the
+/// true-elevation delta of its endpoints (role-aware — ceiling main, fixture,
+/// or plant). Neither part is ever measured from the PDF. The vertical leg is
+/// pipe the installer pulls and friction the water sees, so every quantity
+/// (BOM, run schedule, tags) and the friction term read it; the STATIC lift is
+/// a separate additive term in the pressure solve, so it is not double
+/// counted. Returns zero length for an uncalibrated run (its horizontal span
+/// is unknown — never a partial vertical-only figure) or a broken edge.
 Length edgeLength(
   NetEdge edge,
   Network net, {
@@ -652,5 +683,8 @@ Length edgeLength(
   }
   final cal = calibrationBySheet[a.sheetId];
   if (cal == null) return const Length(0);
-  return cal.lengthForPixels(runPixelLength(edge, net));
+  final horizontal = cal.lengthForPixels(runPixelLength(edge, net)).meters;
+  final vertical =
+      runVerticalLeg(edge, net, building: building, mounting: mounting).meters;
+  return Length(horizontal + vertical);
 }

@@ -12,10 +12,12 @@
 /// never hides provenance gaps (§8 / golden rule 6).
 library;
 
+import '../electrical/earthing.dart' show EarthingResult, EarthingSystem;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BusbarSizingReason;
+import '../standards/puil.dart' show BreakerClass;
 import '../standards/sni.dart' show Revision;
 import 'report_blocks.dart';
 import 'report_strings.dart';
@@ -89,6 +91,29 @@ String _n(double v) =>
 
 String _a(double amperes) => '${_n(amperes)} A';
 
+/// The localized system label (`3-phase` / `3 fasa`).
+String _systemLabel(ElectricalSystem s, ReportStrings strings) =>
+    s == ElectricalSystem.threePhase
+        ? strings(RptStringKey.sysThreePhase)
+        : strings(RptStringKey.sysSinglePhase);
+
+/// The earthing note in the report's language. EN prints the engine's own
+/// note verbatim (byte-identical); other locales compose the same two parts
+/// (`EarthingSystem.note` + the RCD/overcurrent tail of `computeEarthing`)
+/// from report keys.
+String _earthingNote(EarthingResult e, ReportStrings strings) {
+  if (strings.locale == ReportLocale.en) return e.note;
+  final head = switch (e.system) {
+    EarthingSystem.tnCs => strings(RptStringKey.earthNoteTnCs),
+    EarthingSystem.tnS => strings(RptStringKey.earthNoteTnS),
+    EarthingSystem.tt => strings(RptStringKey.earthNoteTt),
+  };
+  final tail = e.requiresRcd
+      ? strings(RptStringKey.earthTailRcd)
+      : strings(RptStringKey.earthTailOcpd);
+  return head + tail;
+}
+
 /// Escape a value for a Markdown table cell: a literal `|` would split the row
 /// into extra columns; a newline would break it.
 String _md(String v) => v.replaceAll('|', r'\|').replaceAll('\n', ' ');
@@ -109,7 +134,7 @@ RptKeyValue electricalDesignBasisBlock(ElectricalCalcReportData data,
   return RptKeyValue([
     (
       strings(RptStringKey.edbSupply),
-      '**${s.system.label}, ${_n(s.voltage.volts)} V**'
+      '**${_systemLabel(s.system, strings)}, ${_n(s.voltage.volts)} V**'
     ),
     (
       strings(RptStringKey.edbConnectedLoad),
@@ -201,7 +226,10 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
   blocks
     ..add(RptHeading(2, strings(RptStringKey.headingSupplySummary)))
     ..add(RptKeyValue([
-      (strings(RptStringKey.ssSystem), '${s.system.label}, ${_n(s.voltage.volts)} V'),
+      (
+        strings(RptStringKey.ssSystem),
+        '${_systemLabel(s.system, strings)}, ${_n(s.voltage.volts)} V'
+      ),
       (strings(RptStringKey.edbConnectedLoad), '${_n(s.connectedW)} W'),
       (
         strings(RptStringKey.ssDiversifiedDemand),
@@ -220,7 +248,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
     final tag = p.tag != null && p.tag!.isNotEmpty ? ' [${p.tag}]' : '';
     blocks.add(RptHeading(
         3,
-        '${p.name}$tag — ${p.system.label}'
+        '${p.name}$tag — ${_systemLabel(p.system, strings)}'
         '${model != null ? ', ${_n(model.voltage.volts)} V' : ''}'));
 
     // Panel summary bullets: conditional bullets with an indented withstand
@@ -286,6 +314,13 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
 
     // Circuits table.
     final branches = p.circuits;
+    // Feeder way ids — a feeder's cumulative drop is the sub-bus drop its
+    // downstream ways carry, so the verdict judges it on its own drop only
+    // (the shared `voltageDropOverLimit` gate, same as the board schedule).
+    final feederIds = {
+      for (final mc in model?.circuits ?? const <ElectricalCircuit>[])
+        if (mc.feedsPanelId != null) mc.id,
+    };
     if (branches.isNotEmpty) {
       blocks.add(RptTable(
         [
@@ -306,8 +341,11 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
               c.loadKind.name,
               _a(c.designCurrent.amperes),
               c.phase.label,
+              // An MCCB has no B/C/D trip characteristic — print the curve
+              // letter for MCBs only (as the board schedule + legend do, N12).
               '${_a(c.breaker.ratingA.amperes)} '
-                  '${c.breaker.deviceClass.name.toUpperCase()}/${c.breaker.curve.name.toUpperCase()}',
+                  '${c.breaker.deviceClass.name.toUpperCase()}'
+                  '${c.breaker.deviceClass == BreakerClass.mccb ? '' : '/${c.breaker.curve.name.toUpperCase()}'}',
               '${(c.cable.runsPerPhase ?? 1) > 1 ? '${c.cable.runsPerPhase}×' : ''}'
                   '${_n(c.cable.csaMm2)} mm²',
               // Run length (N8) — the figure that drove the printed Vdrop;
@@ -315,7 +353,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
               c.lengthM > 0 ? '${_n(c.lengthM)} m' : '—',
               '${_n(c.voltageDrop.dropPercent)}% '
                   '(${_n(c.cumulativeDropPercent)}%)'
-                  '${c.voltageDrop.withinLimit ? '' : ' ${strings(RptStringKey.verdictOver)}'}',
+                  '${voltageDropOverLimit(c, isFeeder: feederIds.contains(c.circuitId)) ? ' ${strings(RptStringKey.verdictOver)}' : ''}',
               c.rcd.required
                   ? '${c.rcd.ratingMa} mA${c.rcd.type != null ? ' ${c.rcd.type!.name.toUpperCase()}' : ''}'
                   : '—',
@@ -359,7 +397,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
         strings(RptStringKey.eElectrodeTarget),
         '${_n(e.electrodeResistanceTarget.ohms)} Ω'
       ),
-      if (e.note.isNotEmpty) ('', e.note),
+      if (e.note.isNotEmpty) ('', _earthingNote(e, strings)),
     ]));
 
   // ── Power one-line ─────────────────────────────────────────────────────────

@@ -18,14 +18,20 @@ import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/containment.dart' show ConduitSpec;
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/earthing.dart' show EarthingSystem;
-import 'package:mechx_engine/electrical/geo_length.dart' show LayoutPos;
+import 'package:mechx_engine/electrical/geo_length.dart'
+    show LayoutPos, electricalCableLength;
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
+import 'package:mechx_engine/electrical/load_list.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show ElectricalSystemResult;
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/network/duct_static.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/cover_sheet.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
@@ -44,6 +50,8 @@ import 'package:mechx_engine/report/sld_export.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart';
 import 'package:mechx_engine/sizing/fan.dart';
+import 'package:mechx_engine/sizing/fire_pump_rating.dart';
+import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/standards/puil.dart';
@@ -86,11 +94,10 @@ const referenceGrid = ReferenceGrid(
   ],
 );
 
-// N5: the per-run centreline-elevation labels — the SAME engine
-// `planEdgeElevationLabels` the app uses (plant without a datum at its floor's
-// ceiling, never a CL outside the storey); the exporters take the strings.
+// N5: the per-run centreline-elevation labels — the SAME engine function the
+// app calls (`runCentrelineLabels`), so the harness can't drift from the app.
 Map<String, String> elevationLabels(Network net) =>
-    planEdgeElevationLabels(net, building);
+    runCentrelineLabels(net, building);
 
 // ── The drawn network ────────────────────────────────────────────────────────
 Network buildNetwork() {
@@ -105,11 +112,15 @@ Network buildNetwork() {
   node(const NetNode(
       id: 'cw-gtank', sheetId: 's0', x: 90, y: 540, floorIndex: 0,
       role: NodeRole.plant, component: NodeComponent.groundTank,
-      tankCapacityLitres: 5000));
+      // Ground tank + booster stand on the ground slab (FFL 0.00), not the
+      // roof the bare plant role would assume.
+      elevation: Length(0), tankCapacityLitres: 5000));
   node(const NetNode(
       id: 'cw-pump', sheetId: 's0', x: 170, y: 540, floorIndex: 0,
       role: NodeRole.plant, component: NodeComponent.pump,
-      electricalLoadW: 2200));
+      // No hand-typed electrical load: the pump duty (and its electrical
+      // circuit) is DERIVED from the pressure solve — one source of truth.
+      elevation: Length(0)));
   node(const NetNode(
       id: 'cw-b0', sheetId: 's0', x: 170, y: 320, floorIndex: 0));
   node(const NetNode(
@@ -215,7 +226,8 @@ Network buildNetwork() {
   // ── HVAC (floor 1): AHU -> supply trunk -> 3 supply diffusers ───────────────
   node(const NetNode(
       id: 'ahu1', sheetId: 's1', x: 940, y: 520, floorIndex: 1,
-      role: NodeRole.plant, component: NodeComponent.ahu));
+      role: NodeRole.plant, component: NodeComponent.ahu,
+      elevation: Length(4.0))); // floor-standing on Lantai 1 (FFL +4.00)
   node(const NetNode(id: 'sa-h1', sheetId: 's1', x: 940, y: 320, floorIndex: 1));
   node(const NetNode(
       id: 'sd1', sheetId: 's1', x: 1040, y: 220, floorIndex: 1,
@@ -315,8 +327,113 @@ Map<String, double> buildEdgeFixtureUnits(Network net) {
   };
 }
 
+// ── Mechanical duties: DERIVED from the one solve (mirrors solve_store) ──────
+// R3 reports-7: the harness used to hand-type the pump / fan / fire-pump
+// duties (a 20 L/s booster against a ~1.6 L/s network), so its artifacts
+// contradicted each other and could not catch a real cross-artifact seam
+// regression. Every duty now comes from the solve exactly as the app derives
+// it (`pumpDutyProvider` / `ductFanProvider` / `standpipeDesignProvider`).
+class MechDuties {
+  final PumpDuty supplyPump;
+  final FanDuty ahuFan;
+  final FireStandpipeDesign standpipe;
+  final PumpDuty firePump;
+  final FirePumpRatingResult firePumpRating;
+  const MechDuties({
+    required this.supplyPump,
+    required this.ahuFan,
+    required this.standpipe,
+    required this.firePump,
+    required this.firePumpRating,
+  });
+}
+
+const targetResidual = Pressure(100000); // 100 kPa
+
+MechDuties deriveDuties(Network net, Map<String, EdgeSizing> sizing) {
+  Map<String, FlowRate> flowsOf(ServiceType svc) => {
+        for (final e in net.edges)
+          if (e.service == svc && sizing[e.id] != null) e.id: sizing[e.id]!.flow,
+      };
+  FlowRate peak(Map<String, FlowRate> flows) => flows.values.fold(
+      const FlowRate(0),
+      (a, f) => f.cubicMetersPerSecond > a.cubicMetersPerSecond ? f : a);
+
+  // Upfeed booster: peak supply flow at the solve's required pump head.
+  final cwFlows = flowsOf(ServiceType.coldWater);
+  final solution = solvePressurized(
+    net: net,
+    service: ServiceType.coldWater,
+    sourceId: 'cw-gtank',
+    edgeFlows: cwFlows,
+    sizing: sizing,
+    calibrationBySheet: calibrations,
+    building: building,
+    targetResidual: targetResidual,
+  );
+  final supplyPump =
+      sizePump(flow: peak(cwFlows), head: solution.requiredPumpHead);
+
+  // AHU supply fan: trunk airflow at the index-run total static.
+  final saFlows = flowsOf(ServiceType.duct);
+  final duct = solveDuctStatic(
+    net: net,
+    service: ServiceType.duct,
+    fanNodeId: 'ahu1',
+    edgeFlows: saFlows,
+    sizing: sizing,
+    calibrationBySheet: calibrations,
+    building: building,
+  );
+  final ahuFan = sizeFan(
+      airflow: peak(saFlows), totalStaticPressure: duct.totalStaticPressure);
+
+  // Standpipe fire pump, as the app designs it from the building height.
+  final standpipe =
+      designStandpipe(risers: 1, buildingHeight: building.totalHeight);
+  return MechDuties(
+    supplyPump: supplyPump,
+    ahuFan: ahuFan,
+    standpipe: standpipe,
+    firePump: sizePump(flow: standpipe.requiredFlow, head: standpipe.pumpHead),
+    firePumpRating: checkFirePumpRating(
+        ratedFlow: standpipe.requiredFlow, ratedHead: standpipe.pumpHead),
+  );
+}
+
+/// The sample electrical project built on the duties DERIVED from the sample
+/// network's own solve — the entry point tests share with the harness.
+ElectricalProject buildSampleElectrical() {
+  final net = buildNetwork();
+  return buildElectrical(deriveDuties(net, sizeNetwork(net)));
+}
+
 // ── Electrical model: MDP -> LP-1 / PP-1 / EMG ───────────────────────────────
-ElectricalProject buildElectrical() {
+// The motor ways for the booster pump, the AHU fan and the fire pump are the
+// SAME `buildEquipmentCircuits` projection of the solved duties the app's
+// MEP->E feed (`electrical_feed.dart`) uses — never hand-typed kW.
+ElectricalProject buildElectrical(MechDuties duties) {
+  final mepWays = buildEquipmentCircuits(
+    [
+      MepEquipmentLoad.fromPumpDuty(duties.supplyPump,
+          id: 'supply-pump', name: 'Booster pump'),
+      MepEquipmentLoad.fromFanDuty(duties.ahuFan,
+          id: 'supply-fan', name: 'AHU fan L.1'),
+    ],
+    panelVoltage: const Voltage(400),
+    lengthM: 14,
+  ).map((c) => c.copyWith(starterType: StarterType.dol, cableType: 'NYY'));
+  final firePumpWay = equipmentToCircuit(
+    MepEquipmentLoad(
+      id: 'fire-pump',
+      name: 'Fire pump',
+      source: MepLoadSource.firePump,
+      mechanicalPower: duties.standpipe.pumpShaftPower,
+    ),
+    panelVoltage: const Voltage(400),
+    lengthM: 30,
+  ).copyWith(starterType: StarterType.starDelta, cableType: 'FRC');
+
   const mdp = ElectricalPanel(
     id: 'MDP',
     name: 'MDP',
@@ -375,62 +492,52 @@ ElectricalProject buildElectrical() {
           isLighting: true, loadW: 600, cableType: 'NYM', length: Length(40)),
     ],
   );
-  const pp1 = ElectricalPanel(
+  final pp1 = ElectricalPanel(
     id: 'PP1',
     name: 'PP-1',
     tag: 'PP-1',
     sourceType: PanelSource.feeder,
     fedByCircuitId: 'mdp-f-pp1',
-    layoutPos: LayoutPos(sheetId: 's2', floorIndex: 2, x: 380, y: 540),
+    layoutPos: const LayoutPos(sheetId: 's2', floorIndex: 2, x: 380, y: 540),
     circuits: [
-      ElectricalCircuit(
-          id: 'pp1-dp', name: 'Domestic pump', loadKind: LoadKind.motor,
-          motorKw: 3.0, starterType: StarterType.dol, cableType: 'NYY',
-          length: Length(12)),
-      ElectricalCircuit(
-          id: 'pp1-bp', name: 'Booster pump', loadKind: LoadKind.motor,
-          motorKw: 2.2, starterType: StarterType.dol, cableType: 'NYY',
-          length: Length(14)),
-      ElectricalCircuit(
+      ...mepWays,
+      const ElectricalCircuit(
           id: 'pp1-ac1', name: 'AC unit L.1', loadKind: LoadKind.general,
           loadW: 2600, length: Length(20)),
-      ElectricalCircuit(
+      const ElectricalCircuit(
           id: 'pp1-ac2', name: 'AC unit L.2', loadKind: LoadKind.general,
           loadW: 2600, length: Length(24)),
-      ElectricalCircuit(
+      const ElectricalCircuit(
           id: 'pp1-ac3', name: 'AC unit L.3', loadKind: LoadKind.general,
           loadW: 2600, length: Length(28)),
-      ElectricalCircuit(
+      const ElectricalCircuit(
           id: 'pp1-wh', name: 'Central water heater',
           loadKind: LoadKind.general, loadW: 4400, length: Length(16)),
     ],
   );
-  const emg = ElectricalPanel(
+  final emg = ElectricalPanel(
     id: 'EMG',
     name: 'PP EMERGENCY',
     tag: 'EMG',
     essential: true,
     sourceType: PanelSource.feeder,
     fedByCircuitId: 'mdp-f-emg',
-    layoutPos: LayoutPos(sheetId: 's0', floorIndex: 0, x: 640, y: 540),
+    layoutPos: const LayoutPos(sheetId: 's0', floorIndex: 0, x: 640, y: 540),
     circuits: [
-      ElectricalCircuit(
-          id: 'emg-fp', name: 'Fire pump', loadKind: LoadKind.motor,
-          motorKw: 5.5, starterType: StarterType.starDelta, lifeSafety: true,
-          cableType: 'FRC', length: Length(30)),
-      ElectricalCircuit(
+      firePumpWay,
+      const ElectricalCircuit(
           id: 'emg-el', name: 'Emergency lighting', loadKind: LoadKind.lighting,
           isLighting: true, lifeSafety: true, loadW: 1000, cableType: 'FRC',
           length: Length(35)),
     ],
   );
-  return const ElectricalProject(
+  return ElectricalProject(
     id: 'menara-contoh',
     name: projectName,
     earthingSystem: EarthingSystem.tnCs,
-    transformerKva: ApparentPower(630000),
+    transformerKva: const ApparentPower(630000),
     capacitorBankKvar: 50,
-    sources: ElectricalSources(
+    sources: const ElectricalSources(
       generator: GeneratorSource(backupFraction: 0.6),
     ),
     panels: [mdp, lp1, pp1, emg],
@@ -469,6 +576,15 @@ void main(List<String> args) {
   Directory(outDir).createSync(recursive: true);
   final net = buildNetwork();
   final sizing = sizeNetwork(net);
+  // R3 reports-7: ONE solve feeds every duty (calc report, equipment schedule,
+  // riser notes, electrical motor ways).
+  final duties = deriveDuties(net, sizing);
+  final pumpKwToken =
+      '${duties.supplyPump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW';
+  final tankM3 = (net.nodeById('cw-gtank')!.tankCapacityLitres! / 1000)
+      .toStringAsFixed(1);
+  // Artifact texts the final cross-check compares (filled as they're built).
+  final checkTexts = <String, String>{};
   final edgeLengths = <String, Length>{
     for (final e in net.edges)
       e.id: edgeLength(e, net,
@@ -500,7 +616,7 @@ void main(List<String> args) {
   // 0 — front matter: cover + Daftar Gambar (drawing list) + general-notes &
   // MASTER legend (N21 / N24), rendered through the shared SLD multi-page path.
   attempt('cover-sheets.pdf', () {
-    final elec = buildElectrical();
+    final elec = buildElectrical(duties);
     final drawings = <DrawingListEntry>[
       DrawingListEntry(
           number:
@@ -700,20 +816,23 @@ void main(List<String> args) {
       // N6: the §10 length-per-edge map — every run/riser tag carries metres.
       edgeLengths: edgeLengths,
       supplyNote: 'Air bersih: tangki bawah -> pompa booster -> riser upfeed',
-      equipmentDetailByNodeId: const {
-        'cw-gtank': '5.0 m3',
-        'cw-pump': '2.2 kW',
+      // Derived from the model + the solved duty, never hand-typed.
+      equipmentDetailByNodeId: {
+        'cw-gtank': '$tankM3 m3',
+        'cw-pump': pumpKwToken,
       },
-      notes: const [
+      notes: [
         'Sistem upfeed booster',
-        'Tangki bawah 5.0 m3',
-        'Pompa booster 2.2 kW',
+        'Tangki bawah $tankM3 m3',
+        'Pompa booster $pumpKwToken',
       ],
       detailCallouts: true,
       // G2: the fixture carries a hot-water loop, so the riser draws the HWR
       // return leg + recirc pump (the app supplies this from the recirc solve).
       hotWaterRecirc: net.edges.any((e) => e.service == ServiceType.hotWater),
     );
+    checkTexts['riser-mech'] =
+        riserSheet.prims.whereType<SldLabel>().map((l) => l.text).join(' | ');
     writeBytes(
         'riser-mech.pdf',
         sldSheetToPdf(
@@ -737,11 +856,16 @@ void main(List<String> args) {
   });
 
   // ── Electrical ────────────────────────────────────────────────────────────
-  final project = buildElectrical();
+  final project = buildElectrical(duties);
   const puil = PuilProfile();
+  // Geo-aware, exactly as the app's electricalResultProvider: placed feeders
+  // size on their calibrated layout length, so the schedule / overview print
+  // the SAME length the electrical layout plan does.
   final result = computeSystem(
     puil,
     project,
+    calibrationBySheet: calibrations,
+    building: building,
     originFaultLevel: const Current(16000),
     busbarClearingTimeS: 0.1,
   );
@@ -903,13 +1027,8 @@ void main(List<String> args) {
 
   // ── Reports ───────────────────────────────────────────────────────────────
   const profile = SniProfile();
-  final pumpDuty = sizePump(flow: const FlowRate(0.020), head: const Head(45));
-  final firePumpDuty =
-      sizePump(flow: const FlowRate(0.030), head: const Head(70));
-  final exhaustFan = sizeFan(
-      airflow: const FlowRate(0.36), totalStaticPressure: const Pressure(250));
-  final ahuFan = sizeFan(
-      airflow: const FlowRate(0.50), totalStaticPressure: const Pressure(400));
+  final pumpDuty = duties.supplyPump;
+  final ahuFan = duties.ahuFan;
 
   // 9 — mechanical calc report.
   attempt('calc-report.md', () {
@@ -929,11 +1048,13 @@ void main(List<String> args) {
       verifyItems: profile.verifyChecklist,
       building: building,
       feedStrategy: 'Upfeed booster (ground tank -> booster pump)',
-      targetResidual: const Pressure(100000), // 100 kPa
+      targetResidual: targetResidual,
       pump: pumpDuty,
+      // The standpipe the app always designs reaches the report (fire section).
+      standpipe: duties.standpipe,
+      firePumpRating: duties.firePumpRating,
       fan: ahuFan,
-      supplyAirflowLps: 360,
-      returnAirflowLps: 320,
+      supplyAirflowLps: ahuFan.airflow.inLitersPerSecond,
       rainfallMmPerHr: 200,
       runoffCoefficient: 0.9,
       occupancy: Occupancy.public,
@@ -950,7 +1071,9 @@ void main(List<String> args) {
         Revision('2026-07-06', 'Issued for construction (Rev. 0)'),
       ],
     );
-    writeText('calc-report.md', buildCalcReportMarkdown(data));
+    final md = buildCalcReportMarkdown(data);
+    checkTexts['calc-report'] = md;
+    writeText('calc-report.md', md);
   });
 
   // 10 — electrical calc report.
@@ -976,21 +1099,30 @@ void main(List<String> args) {
     final data = EquipmentScheduleData(
       projectName: projectName,
       date: dateString,
+      // Tags + services as the app's exportEquipmentSchedule assigns them.
       pumps: [
-        PumpScheduleItem(duty: pumpDuty, service: 'Domestic water supply'),
-        PumpScheduleItem(duty: firePumpDuty, service: 'Fire pump'),
+        PumpScheduleItem(
+            duty: pumpDuty, service: 'Domestic water supply', tag: 'P-01'),
+        PumpScheduleItem(
+            duty: duties.firePump,
+            service: 'Fire standpipe pump',
+            tag: 'FP-01'),
       ],
       fans: [
-        FanScheduleItem(duty: exhaustFan, service: 'Toilet exhaust'),
         FanScheduleItem(
-            duty: ahuFan, service: 'Office AHU', airHandling: true),
+            duty: ahuFan,
+            service: 'Office AHU',
+            tag: 'AHU-01',
+            airHandling: true),
       ],
       electrical: result,
       // N22: the transformer / standby genset / capacitor bank the model
       // already carries reach the procurement schedule.
       electricalProject: project,
     );
-    writeText('equipment-schedule.md', buildEquipmentScheduleMarkdown(data));
+    final md = buildEquipmentScheduleMarkdown(data);
+    checkTexts['equipment-schedule'] = md;
+    writeText('equipment-schedule.md', md);
   });
   attempt('bom.csv', () {
     final bom = buildBom(
@@ -1003,6 +1135,24 @@ void main(List<String> args) {
     writeText('bom.csv', bomToCsv(bom));
   });
 
+  // ── Cross-artifact consistency (R3 reports-7) ─────────────────────────────
+  // The acceptance harness FAILS when two issued artifacts disagree on the
+  // same equipment or run — the seam regressions it used to be blind to.
+  attempt('cross-check', () {
+    final mismatches = crossCheckArtifacts(
+      duties: duties,
+      pumpKwToken: pumpKwToken,
+      texts: checkTexts,
+      project: project,
+      result: result,
+    );
+    if (mismatches.isNotEmpty) {
+      throw StateError('cross-artifact mismatches:\n  - '
+          '${mismatches.join('\n  - ')}');
+    }
+    print('cross-check: all artifacts agree');
+  });
+
   print('\n=== DONE ===');
   if (failures.isEmpty) {
     print('all artifacts generated');
@@ -1011,5 +1161,77 @@ void main(List<String> args) {
     for (final f in failures) {
       print('  - $f');
     }
+    exitCode = 1;
   }
 }
+
+/// Compare what the issued artifacts state about the SAME equipment / runs.
+/// Returns one message per disagreement (empty ⇒ consistent).
+List<String> crossCheckArtifacts({
+  required MechDuties duties,
+  required String pumpKwToken,
+  required Map<String, String> texts,
+  required ElectricalProject project,
+  required ElectricalSystemResult result,
+}) {
+  final out = <String>[];
+  String text(String key) {
+    final t = texts[key];
+    if (t == null) out.add('$key was not generated');
+    return t ?? '';
+  }
+
+  // 1. Booster pump motor: calc report = equipment schedule = riser notes.
+  for (final key in ['calc-report', 'equipment-schedule', 'riser-mech']) {
+    if (!text(key).contains(pumpKwToken)) {
+      out.add('$key does not state the solved booster motor $pumpKwToken');
+    }
+  }
+  // …and the electrical way carries the same rated motor.
+  final pumpWay = project.panels
+      .expand((p) => p.circuits)
+      .where((c) => c.sourceEquipmentId == 'supply-pump')
+      .firstOrNull;
+  final kw = duties.supplyPump.selectedMotor.inKiloWatts;
+  if (pumpWay == null || ((pumpWay.motorKw ?? -1) - kw).abs() > 1e-9) {
+    out.add('electrical booster way motorKw ${pumpWay?.motorKw} != $kw');
+  }
+
+  // 2. Fire pump presence: equipment schedule <=> calc-report fire section
+  //    <=> an electrical fire-pump way.
+  final schedFire = text('equipment-schedule').contains('FP-01');
+  final reportFire = !text('calc-report').contains('none modelled');
+  final elecFire = project.panels
+      .expand((p) => p.circuits)
+      .any((c) => c.sourceEquipmentId == 'fire-pump');
+  if (!(schedFire == reportFire && reportFire == elecFire)) {
+    out.add('fire pump presence disagrees: schedule=$schedFire '
+        'calc-report=$reportFire electrical=$elecFire');
+  }
+
+  // 3. Feeder lengths: a feeder whose two boards are both placed must size on
+  //    the geo route the electrical LAYOUT plan prints, so the board schedule /
+  //    overview and the layout can never state two lengths for one cable.
+  final byId = {for (final p in project.panels) p.id: p};
+  for (final p in project.panels) {
+    for (final c in p.circuits) {
+      final fed = c.feedsPanelId == null ? null : byId[c.feedsPanelId];
+      final a = p.layoutPos;
+      final b = fed?.layoutPos;
+      if (a == null || b == null) continue;
+      final geo = electricalCableLength(a, b,
+              calibrationBySheet: calibrations, building: building)
+          .meters;
+      final sized = result.panels[p.id]?.circuits
+          .where((r) => r.circuitId == c.id)
+          .firstOrNull
+          ?.lengthM;
+      if (geo <= 0 || sized == null || (sized - geo).abs() > 0.05) {
+        out.add('${c.name}: schedule length $sized m vs layout ${_m(geo)} m');
+      }
+    }
+  }
+  return out;
+}
+
+String _m(double v) => v.toStringAsFixed(1);

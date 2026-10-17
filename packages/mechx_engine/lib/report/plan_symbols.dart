@@ -782,14 +782,23 @@ Length planSettingOutElevation(
   return solved;
 }
 
-/// Per-RUN centreline-elevation labels (`CL +2.70`) keyed by edge id: the mean
-/// of the two endpoints' [planSettingOutElevation] less the run floor's FFL
-/// (the `from` node's floor). Risers get no entry (the riser sheet carries the
-/// FFL gutter). A centreline outside `[0, floor height]` of its storey cannot be
-/// a real setting-out height (e.g. an explicit plant datum on another level),
-/// so it is OMITTED rather than printed. Pure; the exporters receive the
-/// finished strings.
-Map<String, String> planEdgeElevationLabels(
+/// N5 — per-RUN centreline SETTING-OUT labels keyed by edge id. Only RUN edges
+/// get an entry (risers carry the FFL gutter on the riser sheet); the pure
+/// exporters receive the finished strings and never read the model.
+///
+/// A run whose endpoints sit at different elevations (a floor-standing pump up
+/// to the ceiling main, a ceiling main down to a WC) is not a straight sloped
+/// pipe: its HORIZONTAL leg hangs at the main's level (the `main`-role end, else
+/// the higher end) and the difference is a vertical leg. So the label states the
+/// hanging height a foreman sets out, plus `drop N.NN m` for that leg (the same
+/// figure the run's quantity includes via [runVerticalLeg]) — never the
+/// misleading mean of the two ends. A level run prints the bare `CL` token.
+/// Endpoint elevations come from [planSettingOutElevation] (so a roof-parked
+/// datum-less plant reads its own floor's ceiling); a hanging height outside
+/// `[0, floor height]` of its storey, or a leg taller than the storey, cannot be
+/// set out on this floor (e.g. an explicit plant datum on another level), so it
+/// is OMITTED rather than printed. Pure.
+Map<String, String> runCentrelineLabels(
   Network net,
   BuildingLevels building, {
   MountingHeights mounting = const MountingHeights(),
@@ -804,11 +813,36 @@ Map<String, String> planEdgeElevationLabels(
     if (a == null || b == null) continue;
     final ea = planSettingOutElevation(a, building, mounting).meters;
     final eb = planSettingOutElevation(b, building, mounting).meters;
-    final aboveFfl = (ea + eb) / 2 - building.elevationOf(a.floorIndex).meters;
-    final storey = building.floorHeightOf(a.floorIndex).meters;
-    if (aboveFfl < -eps || aboveFfl > storey + eps) continue;
+    final dz = (ea - eb).abs();
+    final leg = dz < 1e-6 ? 0.0 : dz;
+    final NetNode level;
+    if (leg <= 0) {
+      level = a;
+    } else if (a.role == NodeRole.main && b.role != NodeRole.main) {
+      level = a;
+    } else if (b.role == NodeRole.main && a.role != NodeRole.main) {
+      level = b;
+    } else {
+      level = ea >= eb ? a : b;
+    }
+    final levelElev = identical(level, a) ? ea : eb;
+    final aboveFfl = levelElev - building.elevationOf(level.floorIndex).meters;
+    final storey = building.floorHeightOf(level.floorIndex).meters;
+    if (aboveFfl < -eps || aboveFfl > storey + eps || leg > storey + eps) {
+      continue;
+    }
     final sign = aboveFfl >= 0 ? '+' : '-';
-    out[e.id] = 'CL $sign${aboveFfl.abs().toStringAsFixed(2)}';
+    final drop = leg > 0 ? ' drop ${leg.toStringAsFixed(2)} m' : '';
+    out[e.id] = 'CL $sign${aboveFfl.abs().toStringAsFixed(2)}$drop';
   }
   return out;
 }
+
+/// The plan exporters' name for [runCentrelineLabels] (kept so the app, the
+/// export harness and the tests share one function).
+Map<String, String> planEdgeElevationLabels(
+  Network net,
+  BuildingLevels building, {
+  MountingHeights mounting = const MountingHeights(),
+}) =>
+    runCentrelineLabels(net, building, mounting: mounting);

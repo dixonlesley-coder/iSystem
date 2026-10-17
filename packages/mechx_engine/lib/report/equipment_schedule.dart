@@ -18,7 +18,7 @@
 /// flag // VERIFY — a tag and a quantity are bookkeeping, not engineering claims.
 library;
 
-import '../electrical/model.dart' show ElectricalProject, ElectricalSystemInfo;
+import '../electrical/model.dart' show ElectricalProject, ElectricalSystem;
 import '../electrical/panel_results.dart';
 import '../electrical/sources.dart' show selectGeneratorKva;
 import '../sizing/fan.dart';
@@ -195,11 +195,19 @@ String _fmt(double v, {int dp = 1}) => v.toStringAsFixed(dp);
 String _seqTag(String prefix, int oneBasedIndex) =>
     '$prefix-${oneBasedIndex.toString().padLeft(2, '0')}';
 
+/// The localized system label (`3-phase` / `3 fasa`) for a schedule cell.
+String _systemLabel(ElectricalSystem s, ReportStrings strings) =>
+    s == ElectricalSystem.threePhase
+        ? strings(RptStringKey.sysThreePhase)
+        : strings(RptStringKey.sysSinglePhase);
+
 /// Build the ordered list of schedule rows from [data]. Pure — the same list
-/// backs both the Markdown renderer and any future PDF/CSV emitter.
+/// backs both the Markdown renderer and any future PDF/CSV emitter. The cell
+/// literals resolve through [strings] (default EN ⇒ byte-identical CSV/MD).
 List<EquipmentScheduleRow> buildEquipmentScheduleRows(
-  EquipmentScheduleData data,
-) {
+  EquipmentScheduleData data, [
+  ReportStrings strings = const ReportStrings.en(),
+]) {
   final rows = <EquipmentScheduleRow>[];
 
   // N23 (residual): the engineer-entered model/spec for a PANEL / apparatus row
@@ -218,7 +226,8 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       service: item.service,
       duty: '${_fmt(d.flow.inLitersPerSecond)} L/s @ '
           '${_fmt(d.head.meters)} m',
-      size: '${_fmt(d.selectedMotor.inKiloWatts, dp: 2)} kW motor',
+      size: strings.format(RptStringKey.esMotorSize,
+          {'kw': _fmt(d.selectedMotor.inKiloWatts, dp: 2)}),
       modelSpec: item.modelSpec ?? '—',
       qty: item.qty,
       category: EquipmentCategory.pump,
@@ -239,7 +248,8 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       service: item.service,
       duty: '${_fmt(d.airflow.inLitersPerSecond, dp: 0)} L/s @ '
           '${_fmt(d.totalStaticPressure.pascals, dp: 0)} Pa',
-      size: '${_fmt(d.selectedMotor.inKiloWatts, dp: 2)} kW motor',
+      size: strings.format(RptStringKey.esMotorSize,
+          {'kw': _fmt(d.selectedMotor.inKiloWatts, dp: 2)}),
       modelSpec: item.modelSpec ?? '—',
       qty: item.qty,
       category:
@@ -256,9 +266,12 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       final tag = (p.tag != null && p.tag!.isNotEmpty) ? p.tag! : p.name;
       rows.add(EquipmentScheduleRow(
         tag: tag,
-        service: '${p.system.label} distribution',
-        duty: '${_fmt(p.demandW / 1000.0, dp: 1)} kW demand',
-        size: '${_fmt(p.incomer.breaker.ratingA.amperes, dp: 0)} A incomer',
+        service: strings.format(RptStringKey.esPanelService,
+            {'system': _systemLabel(p.system, strings)}),
+        duty: strings.format(RptStringKey.esPanelDuty,
+            {'kw': _fmt(p.demandW / 1000.0, dp: 1)}),
+        size: strings.format(RptStringKey.esPanelSize,
+            {'a': _fmt(p.incomer.breaker.ratingA.amperes, dp: 0)}),
         modelSpec: specFor(tag),
         qty: 1,
         category: EquipmentCategory.panel,
@@ -276,7 +289,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
     if (tx != null && tx.inKilovoltAmperes > 0) {
       rows.add(EquipmentScheduleRow(
         tag: 'TX-01',
-        service: 'Distribution transformer',
+        service: strings(RptStringKey.esTransformerService),
         duty: '${_fmt(tx.inKilovoltAmperes, dp: 0)} kVA',
         size: '',
         modelSpec: specFor('TX-01'),
@@ -299,7 +312,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       if (genKva != null && genKva.inKilovoltAmperes > 0) {
         rows.add(EquipmentScheduleRow(
           tag: 'G-01',
-          service: 'Standby generator',
+          service: strings(RptStringKey.esGeneratorService),
           duty: '${_fmt(genKva.inKilovoltAmperes, dp: 0)} kVA',
           size: '',
           modelSpec: specFor('G-01'),
@@ -313,7 +326,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
     if (kvar != null && kvar > 0) {
       rows.add(EquipmentScheduleRow(
         tag: 'CB-01',
-        service: 'PF-correction bank',
+        service: strings(RptStringKey.esCapBankService),
         duty: '${_fmt(kvar, dp: 0)} kvar',
         size: '',
         modelSpec: specFor('CB-01'),
@@ -345,7 +358,7 @@ String _categoryHeading(EquipmentCategory cat, ReportStrings strings) =>
 
 List<RptBlock> buildEquipmentScheduleBlocks(EquipmentScheduleData data,
     [ReportStrings strings = const ReportStrings.en()]) {
-  final rows = buildEquipmentScheduleRows(data);
+  final rows = buildEquipmentScheduleRows(data, strings);
   final blocks = <RptBlock>[
     RptHeading(1, strings(RptStringKey.headingEquipmentSchedule)),
     // The project/date pair uses a Markdown two-space hard break between the

@@ -47,6 +47,20 @@ class ElectricalWarning {
   });
 }
 
+/// Whether a sized way's voltage drop is OVER its limit, on exactly the gate
+/// `computeSystem` warns on: the way's OWN drop over its limit
+/// (`voltageDrop.withinLimit == false`), OR — for a FINAL way only — the
+/// CUMULATIVE drop from the supply origin over the same limit (the
+/// `cumulative-voltage-drop-exceeded` warning; a feeder's cumulative is the
+/// sub-bus drop its downstream ways already carry, so it is never judged on
+/// it). Every issued surface (board-schedule `VD!`, calc-report verdict) reads
+/// this one gate so none can disagree with the warning list.
+bool voltageDropOverLimit(ElectricalCircuitResult c, {required bool isFeeder}) {
+  if (!c.voltageDrop.withinLimit) return true;
+  if (isFeeder) return false;
+  return c.cumulativeDropPercent > c.voltageDrop.limitPercent + 1e-9;
+}
+
 /// Per-circuit sizing result.
 class ElectricalCircuitResult {
   final String circuitId;

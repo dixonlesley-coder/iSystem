@@ -723,7 +723,8 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
     ..add(RptKeyValue([
       (
         strings(RptStringKey.stormRainfall),
-        '**${d.rainfallMmPerHr.toStringAsFixed(0)} mm/hr**'
+        strings.format(RptStringKey.stormRainfallValue,
+            {'mm': d.rainfallMmPerHr.toStringAsFixed(0)})
       ),
       (
         strings(RptStringKey.stormRunoffC),

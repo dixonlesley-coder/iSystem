@@ -279,20 +279,23 @@ void main() {
         () {
       final labels = planEdgeElevationLabels(net, _threeStoreys);
       // The solve puts a datum-less pump / ground tank on its floor surface
-      // (water-drainage-1): FFL 0.00. The label renders that same elevation.
-      // tank->pump: (0.00 + 0.00)/2 - 0 = +0.00 (was (12 + 12)/2 = +12.00).
+      // (water-drainage-1): FFL 0.00. The label renders those elevations.
+      // tank->pump: both ends at 0.00 ⇒ a level run, bare token (was +12.00).
       expect(labels['tp'], 'CL +0.00');
-      // pump->main: (0.00 + 3.70)/2 - 0 = +1.85 (was (12 + 3.7)/2 = +7.85).
-      expect(labels['pm'], 'CL +1.85');
+      // pump->main: the horizontal leg hangs at the MAIN (3.70 above FFL) and
+      // the 3.70 - 0.00 difference is a vertical drop to the pump (R3
+      // reports-4) — never the misleading mean (0 + 3.7)/2 = 1.85.
+      expect(labels['pm'], 'CL +3.70 drop 3.70 m');
       for (final v in labels.values) {
-        final h = double.parse(v.substring(4)); // 'CL +x.xx'
+        final h = double.parse(v.substring(4).split(' ').first); // 'CL +x.xx'
         expect(h, inInclusiveRange(0, 4.0), reason: v);
       }
     });
 
     test('a CL outside [0, storey] is omitted, never printed', () {
-      // The explicit-datum pump at 12.0 m on a 4 m storey: (12 + 3.7)/2 =
-      // 7.85 m > 4.0 m — no real setting-out height, so no token.
+      // The explicit-datum pump at 12.0 m on a 4 m storey: its leg to the 3.70
+      // main is 8.30 m > the 4.0 m storey — not settable on this floor, so no
+      // token.
       final labels = planEdgeElevationLabels(net, _threeStoreys);
       expect(labels.containsKey('hm'), isFalse);
     });

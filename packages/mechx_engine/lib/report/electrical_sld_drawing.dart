@@ -165,16 +165,6 @@ String breakerScheduleLabel(BreakerResult b, int poles,
       PhaseAssignment.threePhase => (ib, ib, ib),
     };
 
-/// The protective-earth conductor token in the BRI DIAGRAM PANEL convention
-/// (EL1004 DXF): an insulated single-core **NYA** for small earths, **BC** (bare
-/// copper) for large ones — the DXF uses `+ NYA <csa> mm2` up to ~10 mm2 and
-/// `+ BC <csa> mm2` from ~16 mm2 (so the protective conductor reads as a real
-/// cable, not a generic `+ E`). // VERIFY — drawing convention, not a clause.
-String _earthConductor(double peCsaMm2) {
-  final family = peCsaMm2 >= 16 ? 'BC' : 'NYA';
-  return ' + $family ${_num(peCsaMm2)} mm2';
-}
-
 /// A PVC conduit size (mm) derived from the conductor — a ~40 % fill general-
 /// practice estimate (// VERIFY, NOT an SNI clause; the model carries no conduit
 /// field). Returns null for large feeders (beyond the conduit range — they run
@@ -533,8 +523,8 @@ SldSheet buildElectricalSld({
     }
 
     // One ROW per way, in ALIGNED columns: GRUP (way no) | DEVICE (breaker,
-    // rating + phase first) | PENGHANTAR (cable family + cores x CSA + separate
-    // earth) | DAYA (connected W/kW) | KETERANGAN (load name / -> sub-panel) |
+    // rating + phase first) | PENGHANTAR (cable family + cores x CSA — the core
+    // count INCLUDES the PE core, so no separate earth conductor is added) | DAYA (connected W/kW) | KETERANGAN (load name / -> sub-panel) |
     // R/S/T (the line current on the way's phase(s) — the phase-loading band).
     const rowSize = 7.5;
     for (var i = 0; i < ways; i++) {
@@ -573,10 +563,12 @@ SldSheet buildElectricalSld({
                   circuit.loadKind == LoadKind.pump)
           ? ' · no-OL trip (fire)'
           : '';
-      final vd = c.voltageDrop.withinLimit ? '' : '  VD!';
-      final earth = c.grounding.peCsaMm2 > 0
-          ? _earthConductor(c.grounding.peCsaMm2)
-          : '';
+      // `VD!` on the SAME gate as compute.dart's warnings: the way's OWN drop
+      // over its limit, OR (a final way, never a feeder — a feeder's cumulative
+      // is the sub-bus drop its downstream ways already carry) the CUMULATIVE
+      // drop from the origin over the limit (`cumulative-voltage-drop-exceeded`).
+      // The schedule must never call a way fine that the calc report fails.
+      final vd = voltageDropOverLimit(c, isFeeder: feeds != null) ? '  VD!' : '';
       // E2: the containment STUDY's own result for this run wins when supplied
       // (one containment source for the schedule + the take-off); else the
       // fill-aware ladder. Both return null for a cable no standard conduit
@@ -606,7 +598,7 @@ SldSheet buildElectricalSld({
       final length = c.lengthM > 0 ? ' · ${_num(c.lengthM)} m' : '';
       final cable =
           '${cableRunLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores, runs: c.cable.runsPerPhase)}'
-          '$earth$conduit$length';
+          '$conduit$length';
       // DAYA in WATT (integer, dot thousands separator); a feeder (loadW 0) → '-'.
       final daya = c.loadW > 0 ? _wattsId(c.loadW) : '-';
       // DEVICE: breaker label + the motor-control / starter token (DOL / VSD /
