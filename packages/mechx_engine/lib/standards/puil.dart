@@ -377,14 +377,15 @@ class PuilProfile implements ElectricalStandardsProfile {
     1.5: 18, 2.5: 25, 4: 34, 6: 44, 10: 60, 16: 80, 25: 105, 35: 130,
     50: 160, 70: 200, 95: 245, 120: 285, 150: 325, 185: 370, 240: 435, 300: 500,
   };
-  // Base KHA, copper / XLPE (90 °C), method B1 (~IEC 60364-5-52 Table B.52.4).
+  // Base KHA, copper / XLPE (90 °C), method B1 (~IEC 60364-5-52 Table B.52.5
+  // column B1, three loaded conductors).
   static final Map<double, double> _khaCuXlpeB1 = {
     1.5: 20, 2.5: 28, 4: 37, 6: 48, 10: 66, 16: 88, 25: 117, 35: 144,
     50: 175, 70: 222, 95: 269, 120: 312, 150: 358, 185: 408, 240: 481, 300: 553,
   };
   // Copper/PVC by method C/E (== B1 "in air") and D (buried).
   //
-  // D is IEC 60364-5-52 Table B.52.2 column D1 (in duct in the ground,
+  // D is IEC 60364-5-52 Table B.52.4 column D1 (in duct in the ground,
   // 20 °C ground, 2.5 K·m/W soil), THREE loaded conductors — the SAME basis as
   // [_khaCuXlpeD] (Table B.52.5 D1, 3-loaded) and as the soil-thermal table
   // (2.5 K·m/W = 1.0). The previous direct-in-ground catalogue figures
@@ -494,8 +495,17 @@ class PuilProfile implements ElectricalStandardsProfile {
 
   // Double keys can't be const map keys in Dart (no primitive equality), so
   // these are static final (built once) rather than const.
+  //
+  // IEC 60364-5-52 Table B.52.17 row 1 (bunched in air, on a surface, embedded
+  // or enclosed): 1..9 circuits, then the 12 / 16 / 20 columns. The 12/16/20
+  // rungs matter for PARALLEL runs — a feeder's n runs group with its own g
+  // neighbours as g·n circuits (sizeCable), which can exceed 9 (6 × 2 = 12); a
+  // table clamped at 9 would read 0.50 there and OVER-rate the cable.
+  // Counts between rungs read the NEXT-HIGHER rung (conservative), see
+  // [groupingFactor]. // VERIFY — secondarySource (IEC table, not a PUIL clause).
   static final Map<double, double> _groupingFactors = {
     1: 1.0, 2: 0.8, 3: 0.7, 4: 0.65, 5: 0.6, 6: 0.57, 7: 0.54, 8: 0.52, 9: 0.5,
+    12: 0.45, 16: 0.41, 20: 0.38,
   };
   static final Map<double, double> _soilThermalFactors = {
     1: 1.18, 1.5: 1.1, 2: 1.05, 2.5: 1.0, 3: 0.96,
@@ -721,13 +731,18 @@ class PuilProfile implements ElectricalStandardsProfile {
               'PUIL ampacity table for the specific construction. 2026-10 '
               'audit: the buried (D) PVC column and the XLPE C/E columns were '
               'moved onto the IEC 60364-5-52 three-loaded-conductor basis '
-              '(B.52.2 D1, B.52.5 C, B.52.12 E) so every method compares like '
-              'with like (XLPE >= PVC; 3-loaded for 3-phase circuits).',
+              '(PVC Table B.52.4 D1; XLPE Table B.52.5 B1/C/D1 and Table '
+              'B.52.12 E). Like-for-like (same IEC 3-loaded basis, XLPE >= '
+              'PVC) therefore holds for method D and for the XLPE columns; '
+              'PVC methods B1, C and E all read ONE Supreme NYY "in air" '
+              'catalogue table (not separate IEC columns), so the PVC-vs-XLPE '
+              'comparison at B1/C/E is catalogue-vs-IEC, not one basis.',
         ),
         const StandardValue<Object?>(
           'ambient / grouping / soil-thermal derating factors',
           unit: 'table',
-          citation: 'IEC 60364-5-52 Tables B.52.14 / B.52.17 / B.52.16',
+          citation: 'IEC 60364-5-52 Tables B.52.14 / B.52.17 (row 1, 1-20 '
+              'circuits) / B.52.16',
           verified: false,
           note: '2026-07 research pass: spot-checked two Table B.52.14 '
               'ambient-correction points (XLPE @ 45 C = 0.87, PVC @ 50 C = '

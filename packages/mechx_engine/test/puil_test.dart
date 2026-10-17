@@ -63,7 +63,7 @@ void main() {
 
     test('Cu/PVC buried (method D) reads the IEC D1 3-loaded column', () {
       // Re-derived 2026-10 (audit elec-core-5): D is IEC 60364-5-52 Table
-      // B.52.2 column D1 (in duct in ground, 2.5 K·m/W, 3 loaded) — the SAME
+      // B.52.4 column D1 (in duct in ground, 2.5 K·m/W, 3 loaded) — the SAME
       // basis as the XLPE D column — not the direct-in-ground catalogue
       // figures (1.5 = 24, 300 = 465) that read above 90 °C XLPE.
       expect(

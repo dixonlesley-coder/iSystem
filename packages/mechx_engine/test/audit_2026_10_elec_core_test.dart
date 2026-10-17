@@ -428,7 +428,7 @@ void main() {
       }
     });
 
-    test('buried: IEC B.52.2/B.52.5 D1, 3-loaded, both insulations', () {
+    test('buried: IEC B.52.4/B.52.5 D1, 3-loaded, both insulations', () {
       // 16 mm²: PVC 64 A, XLPE 75 A; 300 mm²: PVC 316 A, XLPE 365 A.
       // (The defect read PVC 89 / 465 A — a direct-in-ground catalogue basis
       // — above XLPE.)
