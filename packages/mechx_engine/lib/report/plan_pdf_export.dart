@@ -34,9 +34,6 @@ import 'sld_sheet.dart';
 /// plain PDFs and the on-screen line read the same colour.
 (double, double, double) _serviceColor(ServiceType s) => serviceChromeColor(s);
 
-/// The size half of an edge label: `DN50` (pipe), `O200` (round duct, the
-/// ASCII stand-in for Ø since Roboto/Helvetica printable-ASCII has no Ø), or
-/// `W200x100` (rectangular duct).
 /// drafting-4: the perpendicular offset (pt) of a tie dimension's line from the
 /// axis-to-riser ordinate (~3.5 mm on paper), so it never lands on a pipe run.
 const double _kTieDimOffsetPt = 10.0;
@@ -44,12 +41,17 @@ const double _kTieDimOffsetPt = 10.0;
 /// drafting-4: half-length (pt) of a tie dimension's 45-degree oblique tick.
 const double _kTieTickHalfPt = 2.0;
 
+/// The size half of an edge label: `DN50` (pipe), `Ø200` (round duct — the
+/// WinAnsi O-stroke, R5), or `200x100` (rectangular duct).
 String _sizeLabel(NetEdge e, EdgeSizing s) {
   if (s.isRectangular) {
     return '${s.width!.inMillimeters.round()}x${s.height!.inMillimeters.round()}';
   }
   final mm = s.diameter.inMillimeters.round();
-  return e.service.isAir ? 'O$mm' : 'DN$mm';
+  // R5: the real diameter sign — WinAnsi 0xD8 in the PDF (pass-through in
+  // `_pdfText`), `%%c` in the DXF (via `dxfText`). The live canvas keeps its
+  // own ASCII `O` (Roboto lacks the glyph).
+  return e.service.isAir ? '\u00D8$mm' : 'DN$mm';
 }
 
 /// The A6 line-weight band for a sized edge — rectangular ducts band on their
@@ -93,12 +95,6 @@ String _n(double v) => v.toStringAsFixed(2);
 /// `2r + 2` = 20 pt out.
 const double _kGridBubbleR = 9.0;
 const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
-
-/// Axis-aligned overlap test for two [LabelBox]es (y-up output space) — the N3
-/// riser-base collision pass uses it to stagger the tie-dimension text and to
-/// seed the riser-label placer with the marker / UP-DN / tie boxes.
-bool _boxesOverlap(LabelBox a, LabelBox b) =>
-    a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
 
 /// Render the [sheetId]/[floorIndex] slice of [net] as a single-page ANNOTATED
 /// PDF and return its bytes. [edgeLengths] maps edge id → real §10 length (run
@@ -377,7 +373,7 @@ Uint8List planToPdf({
   // when pulled off the run). A tag whose first slot was already in-frame and
   // clear keeps it ⇒ in-frame labels are byte-identical.
   const far = 1e5;
-  final placedLabels = <LabelBox>[
+  final layout = PlanLabelLayout(boxes: <LabelBox>[
     (minX: -far, minY: -far, maxX: margin, maxY: far), // left of the frame
     (minX: pageW - margin, minY: -far, maxX: far, maxY: far), // right
     (minX: -far, minY: -far, maxX: far, maxY: margin), // below
@@ -389,29 +385,81 @@ Uint8List planToPdf({
         maxX: pageW - margin,
         maxY: margin + blockH,
       ),
-  ];
-  void edgeLabel(double ax, double ay, double bx, double by, String text) {
+  ]);
+
+  // R5: the placer also dodges the LINEWORK — every on-floor run (keyed by its
+  // edge id, so a tag skips only its own run) and every node glyph — so a tag
+  // never overprints another service or a fixture when a clear slot exists,
+  // and its leader avoids crossing other runs.
+  for (final e in net.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    final a = net.nodeById(e.fromId);
+    final c = net.nodeById(e.toId);
+    if (a == null || c == null || !onFloor(a) || !onFloor(c)) continue;
+    layout.addRun(e.id, tx(a.x), ty(a.y), tx(c.x), ty(c.y));
+  }
+  for (final n in net.nodes) {
+    if (!onFloor(n)) continue;
+    final px = tx(n.x), py = ty(n.y);
+    final r = (n.component != null || n.role == NodeRole.fixture) ? 7.0 : 2.5;
+    layout.addBox((minX: px - r, minY: py - r, maxX: px + r, maxY: py + r));
+  }
+  if (hasGrid) {
+    // The N4 grid bubbles (+ their labels) are occupied too.
+    const r = _kGridBubbleR;
+    for (final ax in grid.columns) {
+      final gx = tx(ax.position);
+      final topY = math.max(ty(minY), ty(maxY)) + r + 2;
+      layout.addBox(
+          (minX: gx - r, minY: topY - r, maxX: gx + r, maxY: topY + r));
+    }
+    for (final ay in grid.rows) {
+      final gy = ty(ay.position);
+      final leftX = math.min(tx(minX), tx(maxX)) - r - 2;
+      layout.addBox(
+          (minX: leftX - r, minY: gy - r, maxX: leftX + r, maxY: gy + r));
+    }
+  }
+
+  void edgeLabel(double ax, double ay, double bx, double by, String text,
+      {List<String>? split,
+      String? ownRunId,
+      ({double x, double y})? anchorPoint,
+      List<({double x, double y})> extraStations = const []}) {
     const size = 9.0;
-    final p = placeEdgeLabelLeadered(
+    final p = placePlanLabel(
         ax: ax,
         ay: ay,
         bx: bx,
         by: by,
         text: text,
         textSize: size,
-        placed: placedLabels);
+        layout: layout,
+        splitLines: split,
+        ownRunId: ownRunId,
+        anchorPoint: anchorPoint,
+        extraStations: extraStations);
     final lead = p.leaderAnchor;
-    if (lead != null) {
-      // A thin dark-grey leader from the run midpoint to the pulled-off label.
+    final end = p.leaderEnd;
+    if (lead != null && end != null) {
+      // A thin dark-grey leader from the run to the near edge of the label.
       cs.writeln('0.30 0.30 0.30 RG 0.5 w');
-      cs.writeln('${_n(lead.x)} ${_n(lead.y)} m ${_n(p.x)} ${_n(p.y)} l S');
+      cs.writeln('${_n(lead.x)} ${_n(lead.y)} m ${_n(end.x)} ${_n(end.y)} l S');
     }
     final rad = p.angleDeg * math.pi / 180;
     final pc = math.cos(rad), ps = math.sin(rad);
-    cs.writeln('BT /F1 9 Tf 0 0 0 rg '
-        '${_n(pc)} ${_n(ps)} ${_n(-ps)} ${_n(pc)} '
-        '${_n(p.x)} ${_n(p.y)} Tm (${_pdfText(text)}) Tj ET');
+    for (final line in p.lines) {
+      cs.writeln('BT /F1 9 Tf 0 0 0 rg '
+          '${_n(pc)} ${_n(ps)} ${_n(-ps)} ${_n(pc)} '
+          '${_n(line.x)} ${_n(line.y)} Tm (${_pdfText(line.text)}) Tj ET');
+    }
   }
+
+  // R5: a point feature's tag may also sit on its LEFT — the stations of the
+  // mirrored pseudo-run (same horizontal bearing), tried after the right side.
+  List<({double x, double y})> mirrorStations(
+          double px, double py, double gap, double w) =>
+      [for (final t in const [0.5, 0.75, 0.25]) (x: px - gap - w * t, y: py)];
 
   // N4: the reference setting-out grid — thin chain column/row lines with bubble
   // labels — is drawn BENEATH the network (the MEP strokes overprint it) when
@@ -447,7 +495,8 @@ Uint8List planToPdf({
   // each other + the run labels, but the riser marker, its UP/DN text, AND the
   // N4 tie-dimension text (all registered as occupied boxes below) — a crowded
   // base pushes the tag off with a leader instead of overprinting the cluster.
-  final riserLabelJobs = <({double px, double py, String text})>[];
+  final riserLabelJobs =
+      <({double px, double py, String text, List<String>? split})>[];
 
   // Edges: lines (runs) + riser markers, each labelled size · length · elev.
   for (final e in net.edges) {
@@ -481,6 +530,15 @@ Uint8List planToPdf({
       elevation: elev,
       slope: slopeText,
     );
+    // R5: the two-line form (`tag · size` over `length - CL - fall`) the placer
+    // uses before it ever escapes — the same composer the DXF uses.
+    final split = composePlanEdgeLabelLines(
+      tag: edgeTags?[e.id],
+      size: sizeText,
+      length: lenText,
+      elevation: elev,
+      slope: slopeText,
+    );
 
     if (e.kind == EdgeKind.run) {
       if (!onFloor(a) || !onFloor(c)) continue;
@@ -504,7 +562,8 @@ Uint8List planToPdf({
         }
       }
       if (label != null) {
-        edgeLabel(tx(a.x), ty(a.y), tx(c.x), ty(c.y), label);
+        edgeLabel(tx(a.x), ty(a.y), tx(c.x), ty(c.y), label,
+            split: split, ownRunId: e.id);
       }
     } else {
       strokeColor(e.service);
@@ -514,7 +573,7 @@ Uint8List planToPdf({
         final nx = tx(n.x), ny = ty(n.y);
         circle(nx, ny, 5);
         // N3: the marker circle is an occupied box so the base labels dodge it.
-        placedLabels.add((minX: nx - 5, minY: ny - 5, maxX: nx + 5, maxY: ny + 5));
+        layout.addBox((minX: nx - 5, minY: ny - 5, maxX: nx + 5, maxY: ny + 5));
         // A5 riser UP/DN sense from the endpoints' floor indices, above marker.
         final other = n.id == a.id ? c : a;
         final sense =
@@ -528,13 +587,13 @@ Uint8List planToPdf({
           // Two risers can share a node (one UP, one DN); step the second sense
           // clear of the first so the marks STACK instead of overprinting (N3).
           for (var step = 0; step < 4; step++) {
-            if (!placedLabels.any((p) => _boxesOverlap(p, upBox(uy)))) break;
+            if (!layout.hitsBox(upBox(uy))) break;
             uy -= 12;
           }
           cs.writeln('BT /F1 9 Tf 0 0 0 rg '
               '${_n(ux)} ${_n(uy)} Td (${_pdfText(sense)}) Tj ET');
           // Register the UP/DN box so the riser tag never lands on it (N3).
-          placedLabels.add(upBox(uy));
+          layout.addBox(upBox(uy));
         }
       }
       // Defer the riser length/tag label to the final pass (after the tie
@@ -542,7 +601,7 @@ Uint8List planToPdf({
       final marker = onFloor(a) ? a : (onFloor(c) ? c : null);
       if (marker != null && label != null) {
         riserLabelJobs
-            .add((px: tx(marker.x), py: ty(marker.y), text: label));
+            .add((px: tx(marker.x), py: ty(marker.y), text: label, split: split));
       }
     }
   }
@@ -570,7 +629,9 @@ Uint8List planToPdf({
     final eqTag = nodeTags?[n.id];
     if (eqTag != null && eqTag.isNotEmpty) {
       final w = eqTag.length * 9.0 * 0.55;
-      edgeLabel(px + 10, py, px + 10 + w, py, eqTag);
+      edgeLabel(px + 10, py, px + 10 + w, py, eqTag,
+          anchorPoint: (x: px, y: py),
+          extraStations: mirrorStations(px, py, 10, w));
     }
   }
 
@@ -616,6 +677,9 @@ Uint8List planToPdf({
           '${_n(lbx + perpX * extOver)} ${_n(lby + perpY * extOver)} l S');
       // The dimension line itself.
       cs.writeln('${_n(dax)} ${_n(day)} m ${_n(dbx)} ${_n(dby)} l S');
+      // R5: the dimension line is linework the deferred riser tags must not
+      // overprint (or leader across).
+      layout.addRun(null, dax, day, dbx, dby);
       // 45-degree oblique ticks (architectural terminators) at both ends.
       final tkx = (ux + perpX) * _kTieTickHalfPt / math.sqrt2;
       final tky = (uy + perpY) * _kTieTickHalfPt / math.sqrt2;
@@ -643,12 +707,12 @@ Uint8List planToPdf({
           );
       var cx = cx0 + perpX * 7, cy = cy0 + perpY * 7;
       for (var step = 0; step < 6; step++) {
-        if (!placedLabels.any((p) => _boxesOverlap(p, boxAt(cx, cy)))) break;
+        if (!layout.hitsBox(boxAt(cx, cy))) break;
         final off = 7 + (step + 1) * (h + 4);
         cx = cx0 + perpX * off;
         cy = cy0 + perpY * off;
       }
-      placedLabels.add(boxAt(cx, cy));
+      layout.addBox(boxAt(cx, cy));
       cs.writeln('BT /F1 7 Tf 0 0 0 rg '
           '${_n(cx - w / 2)} ${_n(cy - h / 2)} Td '
           '(${_pdfText(label)}) Tj ET');
@@ -676,7 +740,10 @@ Uint8List planToPdf({
   // leader rather than overprinting the cluster.
   for (final job in riserLabelJobs) {
     final w = job.text.length * 9.0 * 0.55;
-    edgeLabel(job.px + 8, job.py, job.px + 8 + w, job.py, job.text);
+    edgeLabel(job.px + 8, job.py, job.px + 8 + w, job.py, job.text,
+        split: job.split,
+        anchorPoint: (x: job.px, y: job.py),
+        extraStations: mirrorStations(job.px, job.py, 8, w));
   }
 
   // ── Issuable-document chrome (opt-in; byte-identical when null) ─────────────

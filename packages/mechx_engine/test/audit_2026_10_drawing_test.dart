@@ -555,7 +555,12 @@ void main() {
               r'([\d.-]+) ([\d.-]+) ([\d.-]+) ([\d.-]+) Tm \((.*?)\) Tj ET')
           .allMatches(pdf)
           .toList();
-      expect(tags.length, 5);
+      // R5: a tag may now print on TWO lines (`SA-F2 · Ø200` over
+      // `2.8 m - CL +2.40`) before it ever escapes, each line its own `Tm`;
+      // every one of the 5 tags is still present exactly once (its identity
+      // line), and EVERY printed line must sit inside the frame.
+      expect(tags.where((m) => m[7]!.startsWith('SA-F2')).length, 5);
+      expect(tags.length, inInclusiveRange(5, 10));
       for (final m in tags) {
         final c = double.parse(m[1]!), s = double.parse(m[2]!);
         final x = double.parse(m[5]!), y = double.parse(m[6]!);

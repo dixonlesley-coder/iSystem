@@ -652,7 +652,7 @@ String _pipeTag(EdgeSizing? s, NetEdge edge,
       // on site. Mirrors the plan exporters' `_sizeLabel` and the BOM.
       tag = s.isRectangular
           ? '${s.width!.inMillimeters.round()}x${s.height!.inMillimeters.round()}'
-          : 'O$mm';
+          : '\u00D8$mm'; // R5: real Ø (PDF WinAnsi 0xD8 / DXF %%c)
     } else {
       final base =
           '$mm-$code-${_pipeMaterialCode(edge.pipeProduct, edge.service)}';

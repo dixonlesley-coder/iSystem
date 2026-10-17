@@ -1091,7 +1091,7 @@ void main() {
           ],
         );
 
-    test('a rectangular duct prints WxH, never its equivalent O<d>', () {
+    test('a rectangular duct prints WxH, never its equivalent Ø<d>', () {
       final sheet = buildMechanicalRiserSld(
         network: airNet(),
         sizing: {
@@ -1111,9 +1111,11 @@ void main() {
           sheet.prims.whereType<SldLabel>().map((l) => l.text).toList();
       expect(texts.where((t) => t.startsWith('400x200')), isNotEmpty,
           reason: '$texts');
-      expect(texts.where((t) => t.contains('O305')), isEmpty);
-      // A ROUND duct keeps its O<mm> tag.
-      expect(texts.where((t) => t.startsWith('O200')), isNotEmpty);
+      expect(texts.where((t) => t.contains('305')), isEmpty);
+      // A ROUND duct keeps its diameter tag — R5: the real `Ø` sign (U+00D8,
+      // WinAnsi 0xD8 in the PDF, `%%c` in the DXF), no longer the ASCII `O`.
+      expect(texts.where((t) => t.startsWith('\u00D8200')), isNotEmpty);
+      expect(texts.where((t) => t.startsWith('O200')), isEmpty);
     });
   });
 }

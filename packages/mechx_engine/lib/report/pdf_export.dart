@@ -34,7 +34,10 @@ String _sizeLabel(NetEdge e, EdgeSizing s) {
     return '${s.width!.inMillimeters.round()}x${s.height!.inMillimeters.round()}';
   }
   final mm = s.diameter.inMillimeters.round();
-  return e.service.isAir ? 'O$mm' : 'DN$mm';
+  // R5: the real diameter sign — WinAnsi 0xD8 in the PDF (pass-through in
+  // `_pdfText`), `%%c` in the DXF (via `dxfText`). The live canvas keeps its
+  // own ASCII `O` (Roboto lacks the glyph).
+  return e.service.isAir ? '\u00D8$mm' : 'DN$mm';
 }
 
 /// The A6 line-weight band for a sized edge — rectangular ducts band on their
