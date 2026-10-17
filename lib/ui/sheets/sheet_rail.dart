@@ -62,14 +62,19 @@ class SheetRail extends ConsumerWidget {
             Expanded(
               child: ListView.builder(
                 padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xs),
-                itemCount: state.sheets.length,
-                itemBuilder: (context, i) => _RailItem(
-                  index: i,
-                  sheet: state.sheets[i],
-                  selected: i == state.currentIndex,
-                  onTap: () =>
-                      ref.read(sheetsControllerProvider.notifier).selectSheet(i),
-                ),
+                // Work item 9: +1 for the trailing '+' Import-plan tile (the
+                // import entry moved here off the top bar).
+                itemCount: state.sheets.length + 1,
+                itemBuilder: (context, i) => i == state.sheets.length
+                    ? _ImportPlanTile(onTap: () => importPlan(context, ref))
+                    : _RailItem(
+                        index: i,
+                        sheet: state.sheets[i],
+                        selected: i == state.currentIndex,
+                        onTap: () => ref
+                            .read(sheetsControllerProvider.notifier)
+                            .selectSheet(i),
+                      ),
               ),
             ),
             if (hasRealSheet) ...[
@@ -86,6 +91,98 @@ class SheetRail extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// The trailing '+' tile after the last sheet (work item 9): the rail's own
+/// door to Import plan (moved off the top bar). Same margin / padding / 34x42
+/// page geometry as a sheet tile, with a custom-painted plus (no icon font, so
+/// it can never tofu) — announced and tooltipped as "Import plan".
+class _ImportPlanTile extends StatefulWidget {
+  final VoidCallback onTap;
+  const _ImportPlanTile({required this.onTap});
+
+  @override
+  State<_ImportPlanTile> createState() => _ImportPlanTileState();
+}
+
+class _ImportPlanTileState extends State<_ImportPlanTile> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final label = context.strings(StringKey.shellImportPdf);
+    return MechXTooltip(
+      edge: MechXTooltipEdge.right,
+      message: label,
+      child: MechXFocusRing(
+        key: const ValueKey('sheet-rail-import'),
+        borderRadius: MechXRadii.control,
+        onActivated: widget.onTap,
+        semanticLabel: label,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: GestureDetector(
+            onTap: widget.onTap,
+            behavior: HitTestBehavior.opaque,
+            child: AnimatedContainer(
+              duration: MechXMotion.hover,
+              curve: MechXMotion.standard,
+              margin: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.xs,
+                vertical: MechXSpacing.xxs,
+              ),
+              padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.xxs,
+                vertical: MechXSpacing.xs,
+              ),
+              decoration: BoxDecoration(
+                color: _hover ? colors.surfaceHover : const Color(0x00000000),
+                borderRadius: MechXRadii.control,
+              ),
+              alignment: Alignment.center,
+              child: Container(
+                width: 34,
+                height: 42,
+                decoration: BoxDecoration(
+                  borderRadius: const BorderRadius.all(Radius.circular(3)),
+                  border: Border.all(color: colors.border),
+                ),
+                child: CustomPaint(
+                  painter: _PlusGlyph(
+                    color: _hover ? colors.accent : colors.textMuted,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A centred plus, stroked from primitives.
+class _PlusGlyph extends CustomPainter {
+  final Color color;
+  const _PlusGlyph({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    const arm = 6.0;
+    final p = Paint()
+      ..color = color
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(c - const Offset(arm, 0), c + const Offset(arm, 0), p);
+    canvas.drawLine(c - const Offset(0, arm), c + const Offset(0, arm), p);
+  }
+
+  @override
+  bool shouldRepaint(_PlusGlyph old) => old.color != color;
 }
 
 /// The slim "+ Add" footer affordance (A6) — appends more plan files via

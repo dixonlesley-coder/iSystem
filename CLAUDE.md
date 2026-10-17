@@ -250,6 +250,10 @@ byte-identical): the global bindings beside the CANVAS ones (tools V/R/E/M/K/B, 
 closes it pre-focus (it has no text field, so the bubble listener never sees the key on a hub
 screen) and opening either overlay closes the other. The palette carries matching keycaps + a
 'Keyboard shortcuts' command.
+**Trimmed top bar (2026-10-17)**: title/dirty dot/file name, `Ctrl K` hint, Open, Save, Export only —
+the zoom % lives in the Layout `ZoomControls` (tap = eased reset to 100% via `CanvasViewState.zoomTo`),
+Import plan is the sheet rail's trailing '+' tile (+ Ctrl+I / palette / empty state), and theme
+switching is Preferences + the palette `theme.toggle`.
 **ONE Export sheet (Ctrl/Cmd+E, 2026-10-17)** (`ui/shell/export_sheet.dart` over the transient
 `exportSheetProvider`, closed ⇒ renders nothing): identity bar + the primary submittal package +
 counted Drawings/Reports/Data/Electrical/Commercial groups, every row an existing guarded

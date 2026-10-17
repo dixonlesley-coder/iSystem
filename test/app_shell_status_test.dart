@@ -5,7 +5,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
-import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/calibration_store.dart';
 import 'package:mechx/store/design_issues_store.dart';
 import 'package:mechx/store/electrical_store.dart';
@@ -82,37 +81,17 @@ void main() {
     expect(find.byKey(const ValueKey('status-sheet-slot')), findsNothing);
   });
 
-  testWidgets('theme toggle labels the action, not the current mode',
+  testWidgets('the top bar no longer carries a theme toggle (work item 9)',
       (tester) async {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
-    final container = ProviderScope.containerOf(
-      tester.element(find.byType(MechXApp)),
-      listen: false,
-    );
-    final startedDark =
-        container.read(brightnessProvider) == Brightness.dark;
-
-    // F6: the theme toggle is a compact icon control that NAMES its action to a
-    // screen reader (a Semantics label — act toward the opposite mode) instead
-    // of a visible text label. In light mode it acts toward dark; in dark,
-    // toward light.
-    expect(
-        find.bySemanticsLabel(
-            startedDark ? 'Switch to light' : 'Switch to dark'),
-        findsOneWidget);
-
-    await tester.tap(find.bySemanticsLabel(
-        startedDark ? 'Switch to light' : 'Switch to dark'));
-    await tester.pump();
-
-    // After the flip the label names the NEW action (the opposite mode).
-    expect(
-        find.bySemanticsLabel(
-            startedDark ? 'Switch to dark' : 'Switch to light'),
-        findsOneWidget);
+    // Theme switching lives in Preferences + the palette 'theme.toggle'
+    // command; the top bar is trimmed to title / palette hint / Open / Save /
+    // Export.
+    expect(find.bySemanticsLabel(RegExp('Switch to (light|dark)')),
+        findsNothing);
   });
 
   testWidgets(

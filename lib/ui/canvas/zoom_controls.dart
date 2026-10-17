@@ -17,11 +17,21 @@ class ZoomControls extends StatelessWidget {
   final VoidCallback onOut;
   final VoidCallback onFit;
 
+  /// Optional live zoom read-out (e.g. '57%'), shown as a tappable mono label
+  /// between '-' and '+'. Omitted (null) on canvases that cannot read their
+  /// scale truthfully — absence is the honest state.
+  final String? percentLabel;
+
+  /// Called when the [percentLabel] is tapped — resets the view to 100%.
+  final VoidCallback? onResetZoom;
+
   const ZoomControls({
     super.key,
     required this.onIn,
     required this.onOut,
     required this.onFit,
+    this.percentLabel,
+    this.onResetZoom,
   });
 
   @override
@@ -60,6 +70,21 @@ class ZoomControls extends StatelessWidget {
               semanticLabel: strings(StringKey.tooltipZoomOut),
             ),
           ),
+          // Work item 9: the zoom read-out lives HERE (moved off the top bar),
+          // beside the controls that change it; tapping it resets to 100%.
+          if (percentLabel != null) ...[
+            _Sep(),
+            MechXTooltip(
+              message: strings(StringKey.tooltipZoomReset),
+              child: _IconBtn(
+                key: const ValueKey('zoom-percent'),
+                glyph: percentLabel!,
+                mono: true,
+                onTap: onResetZoom ?? () {},
+                semanticLabel: strings(StringKey.tooltipZoomReset),
+              ),
+            ),
+          ],
           _Sep(),
           MechXTooltip(
             message: strings(StringKey.tooltipZoomFit),
@@ -88,8 +113,13 @@ class _IconBtn extends StatefulWidget {
   /// L4 (a11y): the button's accessible name; the decorative glyph is hidden
   /// from semantics so only this reads out (mirrors `_StepperGlyphButton`).
   final String? semanticLabel;
+
+  /// Render the glyph in the tabular mono face (the zoom % read-out).
+  final bool mono;
   const _IconBtn({
+    super.key,
     required this.glyph,
+    this.mono = false,
     required this.onTap,
     this.semanticLabel,
   });
@@ -126,7 +156,12 @@ class _IconBtnState extends State<_IconBtn> {
             child: AnimatedContainer(
               duration: MechXMotion.hover,
               curve: MechXMotion.standard,
-              width: widget.glyph.length > 1 ? 34 : 28,
+              width: widget.mono
+                  ? null
+                  : (widget.glyph.length > 1 ? 34 : 28),
+              padding: widget.mono
+                  ? const EdgeInsets.symmetric(horizontal: MechXSpacing.sm)
+                  : null,
               height: 28,
               alignment: Alignment.center,
               color: _hover ? colors.surfaceHover : const Color(0x00000000),
@@ -135,8 +170,11 @@ class _IconBtnState extends State<_IconBtn> {
                 // a screen reader announces "Zoom in", not "plus".
                 child: Text(
                   widget.glyph,
-                  style:
-                      context.type.label.copyWith(color: colors.textSecondary),
+                  style: widget.mono
+                      ? MechXTypography.tabular(context.type.mono
+                          .copyWith(color: colors.textSecondary))
+                      : context.type.label
+                          .copyWith(color: colors.textSecondary),
                 ),
               ),
             ),

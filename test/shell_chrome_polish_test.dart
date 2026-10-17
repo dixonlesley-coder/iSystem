@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/ui/canvas/zoom_controls.dart';
 import 'package:mechx/ui/inspector/collapsible_inspector.dart';
 import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
@@ -54,35 +55,73 @@ void main() {
       // the em-dash fallback.
       expect(c.read(shellSectionProvider), ShellSection.design);
       expect(c.read(workspaceViewProvider), WorkspaceView.plan);
-      expect(find.byKey(const ValueKey('zoom-pill')), findsOneWidget);
+      expect(find.byKey(const ValueKey('zoom-percent')), findsOneWidget);
       expect(find.text('—'), findsNothing);
       expect(find.descendant(
-          of: find.byKey(const ValueKey('zoom-pill')),
+          of: find.byKey(const ValueKey('zoom-percent')),
           matching: find.textContaining('%')), findsOneWidget);
+      // Work item 9: the read-out lives in the canvas's ZoomControls, not the
+      // top bar.
+      expect(find.descendant(
+          of: find.byType(ZoomControls),
+          matching: find.byKey(const ValueKey('zoom-percent'))), findsOneWidget);
 
       // Riser (schematic) workspace — the pill must be gone, not '—'.
       c.read(workspaceViewProvider.notifier).set(WorkspaceView.schematic);
       await tester.pump();
-      expect(find.byKey(const ValueKey('zoom-pill')), findsNothing);
+      expect(find.byKey(const ValueKey('zoom-percent')), findsNothing);
       expect(find.text('—'), findsNothing);
 
       // Electrical workspace — same.
       c.read(workspaceViewProvider.notifier).set(WorkspaceView.electrical);
       await tester.pump();
-      expect(find.byKey(const ValueKey('zoom-pill')), findsNothing);
+      expect(find.byKey(const ValueKey('zoom-percent')), findsNothing);
       expect(find.text('—'), findsNothing);
 
       // A non-design hub screen — same.
       c.read(workspaceViewProvider.notifier).set(WorkspaceView.plan);
       c.read(shellSectionProvider.notifier).set(ShellSection.review);
       await tester.pump();
-      expect(find.byKey(const ValueKey('zoom-pill')), findsNothing);
+      expect(find.byKey(const ValueKey('zoom-percent')), findsNothing);
       expect(find.text('—'), findsNothing);
 
       // Back on Layout, the pill returns.
       c.read(shellSectionProvider.notifier).set(ShellSection.design);
       await tester.pump();
-      expect(find.byKey(const ValueKey('zoom-pill')), findsOneWidget);
+      expect(find.byKey(const ValueKey('zoom-percent')), findsOneWidget);
+    });
+  });
+
+  group('Work item 9 — zoom % read-out resets the view', () {
+    testWidgets('tapping the ZoomControls % eases the Layout canvas to 100%',
+        (tester) async {
+      setDesktopSurface(tester);
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          sheetsControllerProvider.overrideWith(_SeededSheetsController.new),
+        ],
+        child: const MechXApp(),
+      ));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      final c = ProviderScope.containerOf(
+        tester.element(find.byType(MechXApp)),
+        listen: false,
+      );
+      final id = c.read(sheetsControllerProvider).current!.id;
+      final before = c.read(sheetsControllerProvider).viewportFor(id)!.scale;
+      expect(before, isNot(closeTo(1.0, 1e-6)),
+          reason: 'the fitted demo sheet should not already sit at 100%');
+
+      await tester.tap(find.byKey(const ValueKey('zoom-percent')));
+      await tester.pumpAndSettle();
+
+      final after = c.read(sheetsControllerProvider).viewportFor(id)!.scale;
+      expect(after, closeTo(1.0, 1e-9));
+      expect(find.descendant(
+          of: find.byKey(const ValueKey('zoom-percent')),
+          matching: find.text('100%')), findsOneWidget);
     });
   });
 

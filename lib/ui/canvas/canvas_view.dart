@@ -268,6 +268,13 @@ class CanvasViewState extends ConsumerState<CanvasView>
     _animateTo(_current.zoomedBy(1 / 1.2, _viewportSize.center(Offset.zero)));
   }
 
+  /// Ease to an absolute [scale] about the viewport centre (the zoom-% read-out
+  /// tap resets to 1.0) — the same G4 programmatic-viewport path as zoomIn/Out.
+  void zoomTo(double scale) {
+    if (_viewportSize.isEmpty) return;
+    _animateTo(_current.zoomedTo(scale, _viewportSize.center(Offset.zero)));
+  }
+
   void fitView() {
     if (_viewportSize.isEmpty) return;
     _animateTo(ViewportTransform.fit(widget.contentSize, _viewportSize));

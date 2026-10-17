@@ -49,7 +49,6 @@ import 'theme/mechx_theme.dart';
 import 'widgets/glass_surface.dart';
 import 'widgets/mechx_button.dart';
 import 'widgets/mechx_focus_ring.dart';
-import 'widgets/mechx_tooltip.dart';
 import 'widgets/section_label.dart';
 import 'widgets/severity_glyph.dart';
 
@@ -740,29 +739,11 @@ class _TopBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final state = ref.watch(sheetsControllerProvider);
-    final brightness = ref.watch(brightnessProvider);
     final projectName = ref.watch(projectControllerProvider).name;
     final dirty = ref.watch(projectDirtyProvider);
     final currentPath = ref.watch(currentProjectPathProvider);
     final fileName =
         currentPath?.split(Platform.pathSeparator).last;
-
-    // J3 (revised): the zoom pill reflects the Layout sheet's viewport — the
-    // only zoom this bar can read truthfully. On the Riser/Electrical
-    // workspaces (whose real zoom lives in their own canvases, which already
-    // carry their own zoom readouts) and on non-design screens, the pill is
-    // OMITTED entirely rather than showing a literal '—': those canvases own
-    // their zoom, and an em-dash readout reads as broken chrome, not as
-    // "not applicable". Absence is the honest state.
-    final section = ref.watch(shellSectionProvider);
-    final view = ref.watch(workspaceViewProvider);
-    final onLayout =
-        section == ShellSection.design && view == WorkspaceView.plan;
-    final current = state.current;
-    final vt =
-        (onLayout && current != null) ? state.viewportFor(current.id) : null;
-    final zoom = vt == null ? '—' : '${(vt.scale * 100).round()}%';
 
     return GlassSurface(
       // The top bar floats over the workspace; its bottom edge faces content.
@@ -824,28 +805,9 @@ class _TopBar extends ConsumerWidget {
                   ref.read(commandPaletteOpenProvider.notifier).open(),
             ),
             const SizedBox(width: MechXSpacing.sm),
-            // Actions sit flush-right. The zoom read-out is a quiet pill: a
-            // soft tinted fill carries it, no hairline border — less visual
-            // mass than a fully-outlined chip (HIG). Only meaningful on
-            // Layout (see the J3 note above) — omitted entirely elsewhere.
-            if (onLayout) ...[
-              Container(
-                key: const ValueKey('zoom-pill'),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: MechXSpacing.sm,
-                  vertical: MechXSpacing.xxs,
-                ),
-                decoration: BoxDecoration(
-                  color: colors.background,
-                  borderRadius: MechXRadii.control,
-                ),
-                child: Text(
-                  zoom,
-                  style: type.mono.copyWith(color: colors.textSecondary),
-                ),
-              ),
-              const SizedBox(width: MechXSpacing.sm),
-            ],
+            // Work item 9: the zoom read-out moved into the Layout canvas's
+            // ZoomControls (tap to reset); Import plan is the sheet rail's '+'
+            // tile; the theme toggle lives in Preferences + the palette.
             MechXButton(
               label: context.strings(StringKey.shellOpen),
               onPressed: () => openProject(context, ref),
@@ -867,22 +829,6 @@ class _TopBar extends ConsumerWidget {
               label: context.strings(StringKey.exportSheetButton),
               onPressed: () =>
                   ref.read(exportSheetProvider.notifier).open(),
-            ),
-            const SizedBox(width: MechXSpacing.sm),
-            MechXButton(
-              label: context.strings(StringKey.shellImportPdf),
-              onPressed: () => importPlan(context, ref),
-            ),
-            const SizedBox(width: MechXSpacing.sm),
-            // F6: the theme toggle is DEMOTED from a full gray button (a visual
-            // peer of Save) to a compact, muted icon control so it stops
-            // competing with the primary action. Names the ACTION for a screen
-            // reader (act toward the opposite mode).
-            _ThemeToggleButton(
-              semanticLabel: brightness == Brightness.dark
-                  ? context.strings(StringKey.shellSwitchToLight)
-                  : context.strings(StringKey.shellSwitchToDark),
-              onTap: () => ref.read(brightnessProvider.notifier).toggle(),
             ),
           ],
         ),
@@ -954,110 +900,6 @@ class _PaletteHintButtonState extends State<_PaletteHintButton> {
       ),
     );
   }
-}
-
-/// The demoted theme toggle (F6): a compact, muted icon control — the sibling
-/// of [_PaletteHintButton]'s quiet idiom — so the "switch appearance" action no
-/// longer reads as a gray-button peer of the primary Save. Transparent at rest
-/// (an iconic glyph, not a filled chip), it brightens on hover, is
-/// keyboard-focusable + Enter/Space-activatable via the shared focus ring, and
-/// announces its ACTION (switch to light / dark) to a screen reader. The glyph
-/// is custom-painted (no icon font) so it can never render as tofu.
-class _ThemeToggleButton extends StatefulWidget {
-  final String semanticLabel;
-  final VoidCallback onTap;
-  const _ThemeToggleButton({required this.semanticLabel, required this.onTap});
-
-  @override
-  State<_ThemeToggleButton> createState() => _ThemeToggleButtonState();
-}
-
-class _ThemeToggleButtonState extends State<_ThemeToggleButton> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    // L5/M4: the demoted, icon-only toggle previously only named itself for a
-    // screen reader (semanticLabel); a hover tooltip now shows the same text
-    // to a sighted mouse user too.
-    return MechXTooltip(
-      message: widget.semanticLabel,
-      child: Semantics(
-        button: true,
-        label: widget.semanticLabel,
-        child: MechXFocusRing(
-          borderRadius: MechXRadii.control,
-          onActivated: widget.onTap,
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            onEnter: (_) => setState(() => _hover = true),
-            onExit: (_) => setState(() => _hover = false),
-            child: GestureDetector(
-              onTap: widget.onTap,
-              child: AnimatedContainer(
-                duration: MechXMotion.resolve(context, MechXMotion.hover),
-                curve: MechXMotion.standard,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: MechXSpacing.sm,
-                  vertical: MechXSpacing.xs,
-                ),
-                decoration: BoxDecoration(
-                  color: _hover ? colors.surfaceHover : const Color(0x00000000),
-                  borderRadius: MechXRadii.control,
-                ),
-                child: CustomPaint(
-                  size: const Size(16, 16),
-                  painter: _ThemeGlyphPainter(
-                    color: _hover ? colors.textSecondary : colors.textMuted,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The "appearance" (light/dark) mark: a ring with its left half filled — the
-/// conventional half-moon-in-a-circle theme glyph. Custom-painted from
-/// primitives (no icon font, no trig), so it never renders as tofu.
-class _ThemeGlyphPainter extends CustomPainter {
-  final Color color;
-  const _ThemeGlyphPainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-    final c = Offset(w * 0.5, h * 0.5);
-    final r = w * 0.30;
-    final stroke = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4
-      ..strokeCap = StrokeCap.round;
-    final fill = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(c, r, stroke);
-    // The left half: a semicircle (chord = 2·r, radius = r ⇒ exact half circle)
-    // closed back along the vertical diameter.
-    final leftHalf = Path()
-      ..moveTo(c.dx, c.dy - r)
-      ..arcToPoint(
-        Offset(c.dx, c.dy + r),
-        radius: Radius.circular(r),
-        clockwise: false,
-      )
-      ..close();
-    canvas.drawPath(leftHalf, fill);
-  }
-
-  @override
-  bool shouldRepaint(_ThemeGlyphPainter old) => old.color != color;
 }
 
 class _StatusBar extends ConsumerWidget {

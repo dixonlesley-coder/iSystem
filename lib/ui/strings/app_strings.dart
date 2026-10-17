@@ -716,6 +716,7 @@ enum StringKey {
   tooltipZoomIn,
   tooltipZoomOut,
   tooltipZoomFit,
+  tooltipZoomReset,
   tooltipCollapseInspector,
   tooltipExpandInspector,
 
@@ -1879,6 +1880,7 @@ const Map<StringKey, String> _en = {
   StringKey.tooltipZoomIn: 'Zoom in',
   StringKey.tooltipZoomOut: 'Zoom out',
   StringKey.tooltipZoomFit: 'Fit view',
+  StringKey.tooltipZoomReset: 'Reset zoom to 100%',
   StringKey.tooltipCollapseInspector: 'Collapse inspector',
   StringKey.tooltipExpandInspector: 'Expand inspector',
 
@@ -3005,6 +3007,7 @@ const Map<StringKey, String> _id = {
   StringKey.tooltipZoomIn: 'Perbesar',
   StringKey.tooltipZoomOut: 'Perkecil',
   StringKey.tooltipZoomFit: 'Sesuaikan tampilan',
+  StringKey.tooltipZoomReset: 'Atur ulang zoom ke 100%',
   StringKey.tooltipCollapseInspector: 'Ciutkan panel',
   StringKey.tooltipExpandInspector: 'Perluas panel',
 

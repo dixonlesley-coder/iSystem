@@ -1066,6 +1066,11 @@ String _floorLabel(
 // the electrical layer, all on the same `sheetsControllerProvider` viewport.
 // ════════════════════════════════════════════════════════════════════════════
 
+/// The Layout zoom read-out ('57%'), or null before the sheet's first viewport
+/// is known (the label is then omitted rather than guessed).
+String? _zoomPercent(ViewportTransform? vt) =>
+    vt == null ? null : '${(vt.scale * 100).round()}%';
+
 class _SharedSheet extends ConsumerWidget {
   final _LayoutCanvasState host;
   const _SharedSheet({required this.host});
@@ -1445,6 +1450,11 @@ class _SharedSheet extends ConsumerWidget {
             onIn: () => host.canvasKeyFor(sheet.id).currentState?.zoomIn(),
             onOut: () => host.canvasKeyFor(sheet.id).currentState?.zoomOut(),
             onFit: () => host.canvasKeyFor(sheet.id).currentState?.fitView(),
+            // Work item 9: the live zoom read-out (moved off the top bar);
+            // tapping it eases back to 100%.
+            percentLabel: _zoomPercent(sheetsState.viewportFor(sheet.id)),
+            onResetZoom: () =>
+                host.canvasKeyFor(sheet.id).currentState?.zoomTo(1.0),
           ),
         ),
         // Persistent "(?) Canvas guide" (top-left) — the same affordance the
