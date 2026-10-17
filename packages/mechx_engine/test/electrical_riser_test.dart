@@ -165,6 +165,44 @@ void main() {
     expect(roleIn(riser, 'MDP EMERGENCY'), SldRole.essential);
   });
 
+  test('drafting-3: the shared parent trunk is drawn once, never overpainted',
+      () {
+    // LVMDP feeds three normal boards + one essential board (EMG). Each feeder
+    // used to redraw the parent leg + channel on IDENTICAL coordinates in its
+    // own role, so whichever came last painted the trunk — the essential
+    // feeder made the whole LVMDP trunk red and the normal risers read as fed
+    // from the essential cable.
+    final riser = buildElectricalRiser(
+        project: project, result: result, building: building);
+    final feederLines = _feederLines(riser);
+    _expectNoRoleOverpaint(feederLines);
+    // The LVMDP's own outgoing leg (from its box's right edge, at its centre
+    // line) is shared by normal + essential feeders ⇒ the PARENT's role
+    // (normal), not the last-drawn essential feeder's.
+    final mdpRect = riser.prims.whereType<SldRect>().firstWhere((r) =>
+        riser.prims.whereType<SldLabel>().any((l) =>
+            l.bold && l.text.startsWith('LVMDP') && l.x == r.x + 7));
+    final leg = feederLines.firstWhere((l) =>
+        l.y1 == l.y2 &&
+        l.x1 == mdpRect.x + mdpRect.w &&
+        l.y1 == mdpRect.y + mdpRect.h / 2);
+    expect(leg.role, SldRole.normal);
+    // The EMG branch itself is still essential (red).
+    final emgRect = riser.prims.whereType<SldRect>().firstWhere(
+        (r) => r.role == SldRole.essential);
+    expect(
+        feederLines.where((l) =>
+            l.y1 == l.y2 &&
+            l.y1 == emgRect.y + emgRect.h / 2 &&
+            l.role == SldRole.essential),
+        isNotEmpty);
+  });
+
+  test('drafting-3: the overview merges its shared sibling bus too', () {
+    final overview = buildElectricalOverview(project: project, result: result);
+    _expectNoRoleOverpaint(_feederLines(overview));
+  });
+
   test('building: null degrades to feeder-depth tiers (no throw, still rects)',
       () {
     final sheet = buildElectricalRiser(project: project, result: result);
@@ -598,4 +636,34 @@ void main() {
       }
     });
   });
+}
+
+List<SldLine> _feederLines(SldSheet sheet) => sheet.prims
+    .whereType<SldLine>()
+    .where((l) => l.weight == SldWeight.medium)
+    .toList();
+
+/// No two feeder segments of DIFFERENT roles overlap along a positive length
+/// (collinear horizontals on one y, or collinear verticals on one x) — the
+/// overpaint that made a shared trunk's colour depend on draw order.
+void _expectNoRoleOverpaint(List<SldLine> feederLines) {
+  double overlap(double a1, double a2, double b1, double b2) =>
+      math.min(math.max(a1, a2), math.max(b1, b2)) -
+      math.max(math.min(a1, a2), math.min(b1, b2));
+  for (var i = 0; i < feederLines.length; i++) {
+    for (var j = i + 1; j < feederLines.length; j++) {
+      final a = feederLines[i], b = feederLines[j];
+      if (a.role == b.role) continue;
+      final aH = a.y1 == a.y2, bH = b.y1 == b.y2;
+      final aV = a.x1 == a.x2, bV = b.x1 == b.x2;
+      if (aH && bH && a.y1 == b.y1) {
+        expect(overlap(a.x1, a.x2, b.x1, b.x2), lessThanOrEqualTo(0),
+            reason: 'overlapping horizontals ${a.role}/${b.role} at y=${a.y1}');
+      }
+      if (aV && bV && a.x1 == b.x1 && !(aH || bH)) {
+        expect(overlap(a.y1, a.y2, b.y1, b.y2), lessThanOrEqualTo(0),
+            reason: 'overlapping verticals ${a.role}/${b.role} at x=${a.x1}');
+      }
+    }
+  }
 }

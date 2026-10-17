@@ -1893,9 +1893,13 @@ SldSheet buildElectricalOverview({
   var ovLabelMaxY = double.negativeInfinity;
 
   // Feeders parent→child: drop from parent bottom, orthogonal, into child top.
+  // Sibling feeders share the parent's drop + bus run; those shared pieces are
+  // drawn ONCE (via [_mergeFeederSegments]) instead of once per child on the
+  // same coordinates, where the last child's colour won (drafting-3).
   for (final entry in children.entries) {
     final ax = cx[entry.key]! + _ovW / 2;
     final ay = nodeY(entry.key) + _ovH;
+    final routes = <_FeederSeg>[];
     for (final child in entry.value) {
       if (!cx.containsKey(child)) continue;
       final zx = cx[child]! + _ovW / 2;
@@ -1903,9 +1907,21 @@ SldSheet buildElectricalOverview({
       final role =
           essential.contains(child) ? SldRole.essential : SldRole.normal;
       final midY = (ay + zy) / 2;
-      prims.add(SldLine(ax, ay, ax, midY, weight: SldWeight.medium, role: role));
-      prims.add(SldLine(ax, midY, zx, midY, weight: SldWeight.medium, role: role));
-      prims.add(SldLine(zx, midY, zx, zy, weight: SldWeight.medium, role: role));
+      routes
+        ..add(_FeederSeg(ax, ay, ax, midY, role))
+        ..add(_FeederSeg(ax, midY, zx, midY, role))
+        ..add(_FeederSeg(zx, midY, zx, zy, role));
+    }
+    prims.addAll(_mergeFeederSegments(routes,
+        parentRole:
+            essential.contains(entry.key) ? SldRole.essential : SldRole.normal));
+    for (final child in entry.value) {
+      if (!cx.containsKey(child)) continue;
+      final zx = cx[child]! + _ovW / 2;
+      final zy = nodeY(child);
+      final role =
+          essential.contains(child) ? SldRole.essential : SldRole.normal;
+      final midY = (ay + zy) / 2;
       // Feeder annotation (cable + breaker) on the mid horizontal segment, just
       // above the line; omitted when the parent feeding circuit can't resolve.
       final lbl = ovLabel[child];
@@ -2186,6 +2202,7 @@ class _RiserLabelPlacer {
 /// One drawn feeder run + the annotation slot chosen for it.
 class _RiserFeeder {
   final SldRole role;
+  final String parent; // the feeding board's id (groups the shared trunk)
   final double px, py; // parent box right edge / its centre-line
   final double cx, cy; // child box right edge / the branch line
   final double bandRight; // rightmost board edge on the CHILD's band
@@ -2194,6 +2211,7 @@ class _RiserFeeder {
   bool cleared = true; // false ⇒ nothing cleared; always leadered
   _RiserFeeder({
     required this.role,
+    required this.parent,
     required this.px,
     required this.py,
     required this.cx,
@@ -2228,6 +2246,129 @@ class _RiserFeeder {
         ),
     ];
   }
+}
+
+/// One axis-aligned feeder segment a single child's route asks for.
+class _FeederSeg {
+  final double x1, y1, x2, y2;
+  final SldRole role;
+  const _FeederSeg(this.x1, this.y1, this.x2, this.y2, this.role);
+}
+
+/// Merge ONE parent's per-child feeder routes into non-overlapping lines: every
+/// axis line (a vertical at one x / a horizontal at one y) is split at all the
+/// route endpoints on it, and each elementary piece is emitted once — in the
+/// single role of the routes covering it, or the PARENT's role where normal and
+/// essential routes share it (the parent's own outgoing bus). Adjacent pieces of
+/// equal role are re-joined, so a lone child's route comes back as its exact
+/// legacy three lines. Zero-length segments are dropped.
+List<SldLine> _mergeFeederSegments(List<_FeederSeg> segs,
+    {required SldRole parentRole}) {
+  // key: ('v', x) or ('h', y) → list of (lo, hi, role)
+  final lines = <(bool, double), List<(double, double, SldRole)>>{};
+  for (final g in segs) {
+    if (g.x1 == g.x2 && g.y1 != g.y2) {
+      (lines[(true, g.x1)] ??= [])
+          .add((math.min(g.y1, g.y2), math.max(g.y1, g.y2), g.role));
+    } else if (g.y1 == g.y2 && g.x1 != g.x2) {
+      (lines[(false, g.y1)] ??= [])
+          .add((math.min(g.x1, g.x2), math.max(g.x1, g.x2), g.role));
+    }
+  }
+  final out = <SldLine>[];
+  for (final entry in lines.entries) {
+    final (vertical, at) = entry.key;
+    final spans = entry.value;
+    final cuts = <double>{for (final sp in spans) ...[sp.$1, sp.$2]}.toList()
+      ..sort();
+    double? runLo;
+    double runHi = 0;
+    SldRole? runRole;
+    void flush() {
+      if (runLo == null || runRole == null) return;
+      out.add(vertical
+          ? SldLine(at, runLo!, at, runHi,
+              weight: SldWeight.medium, role: runRole!)
+          : SldLine(runLo!, at, runHi, at,
+              weight: SldWeight.medium, role: runRole!));
+      runLo = null;
+      runRole = null;
+    }
+
+    for (var i = 0; i + 1 < cuts.length; i++) {
+      final lo = cuts[i], hi = cuts[i + 1];
+      final roles = {
+        for (final sp in spans)
+          if (sp.$1 <= lo && sp.$2 >= hi) sp.$3
+      };
+      if (roles.isEmpty) {
+        flush();
+        continue;
+      }
+      final role = roles.length == 1 ? roles.first : parentRole;
+      if (runLo != null && runRole == role && runHi == lo) {
+        runHi = hi;
+      } else {
+        flush();
+        runLo = lo;
+        runHi = hi;
+        runRole = role;
+      }
+    }
+    flush();
+  }
+  return out;
+}
+
+/// The shared feeder TRUNK segments of the riser, one set per parent board: the
+/// parent leg (parent right edge -> channel at the parent's centre-line) and the
+/// channel vertical split at every branch height, walking OUT from the parent
+/// (up and down separately), so each piece of channel is emitted exactly once.
+///
+/// Role rule: a segment carried by feeders of ONE role takes that role (so a
+/// lone essential feeder stays red end-to-end, and a single-feeder parent is
+/// byte-identical to the legacy three-line run); a segment shared by normal AND
+/// essential feeders takes the PARENT board's own role ([parentRole]) — it is
+/// the parent's outgoing bus, and a normal board never reads as fed from the
+/// essential cable. Each child's distinct branch is drawn by the caller in the
+/// child's own role.
+List<SldLine> _riserTrunkSegments(
+  List<_RiserFeeder> feeders,
+  double channelX, {
+  required SldRole Function(String parentId) parentRole,
+}) {
+  final out = <SldLine>[];
+  final byParent = <String, List<_RiserFeeder>>{};
+  for (final f in feeders) {
+    (byParent[f.parent] ??= []).add(f);
+  }
+  SldRole roleOf(Iterable<_RiserFeeder> users, String parent) {
+    final roles = users.map((f) => f.role).toSet();
+    return roles.length == 1 ? roles.first : parentRole(parent);
+  }
+
+  for (final entry in byParent.entries) {
+    final group = entry.value;
+    final px = group.first.px, py = group.first.py;
+    out.add(SldLine(px, py, channelX, py,
+        weight: SldWeight.medium, role: roleOf(group, entry.key)));
+    // Walk outward from py in each direction; a segment [prev, y] is used by
+    // every feeder whose branch lies at or beyond y in that direction.
+    for (final dir in const [1.0, -1.0]) {
+      final side = group.where((f) => (f.cy - py) * dir > 0).toList()
+        ..sort((a, b) => ((a.cy - py) * dir).compareTo((b.cy - py) * dir));
+      var prev = py;
+      for (var i = 0; i < side.length; i++) {
+        final y = side[i].cy;
+        if (y == prev) continue;
+        out.add(SldLine(channelX, prev, channelX, y,
+            weight: SldWeight.medium,
+            role: roleOf(side.sublist(i), entry.key)));
+        prev = y;
+      }
+    }
+  }
+  return out;
 }
 
 /// Build the FLOOR-BY-FLOOR electrical riser: every panel placed on its building
@@ -2360,6 +2501,7 @@ SldSheet buildElectricalRiser({
     final cxx = panelX[child]! + _ovW; // child right edge
     feeders.add(_RiserFeeder(
       role: essential.contains(child) ? SldRole.essential : SldRole.normal,
+      parent: parent,
       px: panelX[parent]! + _ovW, // parent right edge
       py: panelY[parent]! + _ovH / 2,
       cx: cxx,
@@ -2398,13 +2540,20 @@ SldSheet buildElectricalRiser({
   // bounds below so an escaped tag is never clipped. Labels otherwise don't
   // drive the bounds, so a riser with no displacement keeps its exact extents.
   var displacedMaxX = double.negativeInfinity;
+  // The SHARED trunk of each parent (parent right -> channel, then the channel
+  // vertical out to each branch) is drawn ONCE per parent, never once per
+  // child on identical coordinates (where the last-drawn child's colour won —
+  // a normal board's trunk printed red when its essential feeder came last, so
+  // normal risers appeared to tap off the essential cable). See
+  // [_riserTrunkSegments] for the role rule.
+  prims.addAll(_riserTrunkSegments(
+    feeders,
+    channelX,
+    parentRole: (id) =>
+        essential.contains(id) ? SldRole.essential : SldRole.normal,
+  ));
   for (final f in feeders) {
-    // parent right -> channel; channel vertical riser (length ∝ elevation
-    // delta); channel -> child right.
-    prims.add(
-        SldLine(f.px, f.py, channelX, f.py, weight: SldWeight.medium, role: f.role));
-    prims.add(SldLine(channelX, f.py, channelX, f.cy,
-        weight: SldWeight.medium, role: f.role));
+    // channel -> child right (the child's own branch, in the child's role).
     prims.add(SldLine(channelX, f.cy, f.cx, f.cy,
         weight: SldWeight.medium, role: f.role));
     final lbl = f.label;
