@@ -23,6 +23,9 @@ class ZoomControls extends StatelessWidget {
   final String? percentLabel;
 
   /// Called when the [percentLabel] is tapped — resets the view to 100%.
+  /// Null ⇒ the read-out is rendered NON-interactive (a plain label: no
+  /// tooltip, focus stop, click cursor or hover lift) rather than a button that
+  /// does nothing when pressed.
   final VoidCallback? onResetZoom;
 
   const ZoomControls({
@@ -74,16 +77,22 @@ class ZoomControls extends StatelessWidget {
           // beside the controls that change it; tapping it resets to 100%.
           if (percentLabel != null) ...[
             _Sep(),
-            MechXTooltip(
-              message: strings(StringKey.tooltipZoomReset),
-              child: _IconBtn(
+            if (onResetZoom != null)
+              MechXTooltip(
+                message: strings(StringKey.tooltipZoomReset),
+                child: _IconBtn(
+                  key: const ValueKey('zoom-percent'),
+                  glyph: percentLabel!,
+                  mono: true,
+                  onTap: onResetZoom!,
+                  semanticLabel: strings(StringKey.tooltipZoomReset),
+                ),
+              )
+            else
+              _Readout(
                 key: const ValueKey('zoom-percent'),
-                glyph: percentLabel!,
-                mono: true,
-                onTap: onResetZoom ?? () {},
-                semanticLabel: strings(StringKey.tooltipZoomReset),
+                text: percentLabel!,
               ),
-            ),
           ],
           _Sep(),
           MechXTooltip(
@@ -98,6 +107,25 @@ class ZoomControls extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The zoom read-out when nothing resets the view: the same footprint and
+/// tabular mono face as the tappable read-out at rest, but a plain label.
+class _Readout extends StatelessWidget {
+  final String text;
+  const _Readout({super.key, required this.text});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        height: 28,
+        padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.sm),
+        alignment: Alignment.center,
+        child: Text(
+          text,
+          style: MechXTypography.tabular(
+              context.type.mono.copyWith(color: context.colors.textSecondary)),
+        ),
+      );
 }
 
 class _Sep extends StatelessWidget {

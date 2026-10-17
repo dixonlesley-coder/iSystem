@@ -1,6 +1,6 @@
 /// A5/A6 — the sheet-rail per-tile right-click context menu (Rename / Assign
-/// floor / Calibrate / Replace plan / Duplicate to / Remove) and the A6 "Add
-/// sheets…" footer gating. Verifies a secondary-tap opens the menu with the
+/// floor / Calibrate / Replace plan / Duplicate to / Remove) and the rail's ONE
+/// add affordance (the '+' tile, whose menu gates the A6 multi-file append). Verifies a secondary-tap opens the menu with the
 /// expected rows and that Remove drops the tile; the store effects
 /// (add/rename/remove) are exercised in `sheets_store_test`.
 library;
@@ -68,23 +68,42 @@ void main() {
     expect(find.text('Duplicate to…'), findsNothing);
   });
 
-  testWidgets('the "Add" footer is HIDDEN for placeholder sheets, SHOWN for a '
-      'real one (A6)', (tester) async {
+  testWidgets('ONE add affordance: the "+" tile; its menu offers the A6 '
+      'multi-file append only for a real project', (tester) async {
     setDesktopSurface(tester);
     await tester.pumpWidget(ProviderScope(child: _host(const SheetRail())));
     final c = ProviderScope.containerOf(tester.element(find.byType(SheetRail)));
+    final plus = find.byKey(const ValueKey('sheet-rail-import'));
 
-    // Demo sheets are placeholders → no footer (goldens stay byte-identical).
+    // Demo sheets are placeholders: the tile is the only add control, and its
+    // menu offers Import plan only (goldens stay byte-identical).
     seedDemoSheets(c);
     await tester.pumpAndSettle();
+    expect(plus, findsOneWidget);
     expect(_inRail(find.text('Add')), findsNothing);
+    await tester.tap(plus, buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    expect(find.text('Import plan…'), findsOneWidget);
+    expect(find.text('Add sheets from files…'), findsNothing);
+    await tester.tapAt(const Offset(600, 400));
+    await tester.pumpAndSettle();
 
-    // A real (DXF-backed) sheet flips the footer on.
+    // A real (DXF-backed) sheet: STILL one add control (no footer button), and
+    // the tile's menu now carries the multi-file append.
     c.read(sheetsControllerProvider.notifier).loadSheets(
       const [Sheet(id: 'r', name: 'RealPlan', dxfPath: '/nope.dxf')],
     );
     await tester.pumpAndSettle();
-    expect(_inRail(find.text('Add')), findsOneWidget);
+    expect(plus, findsOneWidget);
+    expect(_inRail(find.text('Add')), findsNothing);
+    expect(_inRail(find.text('+')), findsNothing);
+    await tester.tap(plus, buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    expect(find.text('Import plan…'), findsOneWidget);
+    expect(find.text('Add sheets from files…'), findsOneWidget);
+    await tester.tapAt(const Offset(600, 400));
+    await tester.pumpAndSettle();
+    expect(find.text('Add sheets from files…'), findsNothing);
   });
 
   testWidgets('the Remove row removes the sheet from the rail (A6)',
