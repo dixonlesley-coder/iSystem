@@ -10,9 +10,11 @@ import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_tooltip.dart';
 
-/// Whether the on-canvas service-colour legend chip (E5) is expanded. Default ON
-/// so a drafter always has the plumbing colour key while drawing; toggling it is
-/// transient canvas state (never persisted to `.mechx`).
+/// Whether the on-canvas service-colour legend chip (E5) is expanded. Default
+/// OFF — the chip rests as its compact 'LEGEND >' header pill (one click
+/// expands) so it never sits over the drawing; the canvas tool cluster's
+/// swatches carry the colour+dash key meanwhile. Toggling is transient canvas
+/// state (never persisted to `.mechx`).
 final serviceLegendExpandedProvider =
     NotifierProvider<ServiceLegendExpandedController, bool>(
   ServiceLegendExpandedController.new,
@@ -20,7 +22,7 @@ final serviceLegendExpandedProvider =
 
 class ServiceLegendExpandedController extends Notifier<bool> {
   @override
-  bool build() => true;
+  bool build() => false;
 
   void toggle() => state = !state;
 }
@@ -176,7 +178,7 @@ class ServiceLegendChip extends ConsumerWidget {
           children: [
             CustomPaint(
               size: const Size(18, 8),
-              painter: _SwatchPainter(r.color, r.dash),
+              painter: ServiceSwatchPainter(r.color, r.dash),
             ),
             const SizedBox(width: MechXSpacing.sm),
             // L-4: the swatch label carries the legend's whole informational
@@ -208,43 +210,6 @@ class ServiceLegendChip extends ConsumerWidget {
           style: context.type.caption.copyWith(color: context.colors.textMuted),
         ),
       );
-}
-
-/// A horizontal line swatch in the service colour, drawn solid or as the
-/// service's dash recipe so a dashed service (vent) reads dashed in the key too.
-class _SwatchPainter extends CustomPainter {
-  final Color color;
-  final List<double>? dash;
-  const _SwatchPainter(this.color, this.dash);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final y = size.height / 2;
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 2.4
-      ..strokeCap = StrokeCap.round;
-    final d = dash;
-    if (d == null || d.isEmpty) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-      return;
-    }
-    var x = 0.0;
-    var i = 0;
-    var on = true;
-    while (x < size.width) {
-      final seg = d[i % d.length];
-      final end = (x + seg).clamp(0.0, size.width);
-      if (on && end > x) canvas.drawLine(Offset(x, y), Offset(end, y), paint);
-      x = end;
-      i++;
-      on = !on;
-    }
-  }
-
-  @override
-  bool shouldRepaint(_SwatchPainter old) =>
-      old.color != color || old.dash != dash;
 }
 
 /// A tiny disclosure chevron — points DOWN when expanded, RIGHT when collapsed.

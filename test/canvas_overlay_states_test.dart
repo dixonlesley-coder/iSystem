@@ -145,10 +145,13 @@ void main() {
         (tester) async {
       await tester.pumpWidget(_host(const ServiceLegendChip()));
       await tester.pump();
+      // The chip rests collapsed — expand it to read the rows.
+      await tester.tap(find.text('LEGEND'));
+      await tester.pumpAndSettle();
 
       final labelFinder = find.text('Cold water');
       expect(labelFinder, findsOneWidget,
-          reason: 'the default active layer (plumbing) is expanded by default');
+          reason: 'the default active layer (plumbing) keys its services');
       final paragraph = tester.renderObject<RenderParagraph>(labelFinder);
       expect(paragraph.text.style!.fontSize, greaterThanOrEqualTo(9));
 

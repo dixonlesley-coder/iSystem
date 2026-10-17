@@ -781,7 +781,7 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   **Unified one-PDF layered Layout canvas landed — the convergence** (`lib/store/layer_store.dart`
   + `lib/ui/layout/{layout_canvas,layer_switcher,electrical_layer}.dart`): the mechanical Plan
   and the electrical Layout merged into ONE **Layout** workspace on one shared PDF/viewport with
-  a **Plumbing · Fire · HVAC · Electrical** layer switcher + visibility toggles (PLUMBING is ONE
+  a **Plumbing · Fire · HVAC · Electrical** layer switcher + visibility toggles (the eye/lock/funnel reveal on hover/focus or when non-default; the legend chip rests collapsed) (PLUMBING is ONE
   unified layer — cold/hot water + drainage/vent + rainwater drawn together on one canvas, the
   elements separated by their `ServiceType` for the riser/sizing/reports downstream;
   `disciplineOf` maps all five plumbing services → `DisciplineLayer.plumbing`). The active layer edits

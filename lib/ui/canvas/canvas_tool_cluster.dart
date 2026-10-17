@@ -183,7 +183,7 @@ class _ToolChipState extends State<_ToolChip> {
   }
 }
 
-/// One service swatch: a coloured square + the service name, using the same
+/// One service swatch: a colour+dash line swatch + the service name, using the same
 /// tinted selected idiom to show the ACTIVE draw service.
 class _ServiceSwatch extends StatefulWidget {
   final ServiceType service;
@@ -233,13 +233,13 @@ class _ServiceSwatchState extends State<_ServiceSwatch> {
             ),
             child: Row(
               children: [
-                Container(
-                  width: 9,
-                  height: 9,
-                  decoration: BoxDecoration(
-                    color: serviceColor(widget.service),
-                    borderRadius: MechXRadii.small,
-                  ),
+                // The same colour + dash recipe the legend chip keys (one
+                // `service_style` source), so the cluster is a complete colour
+                // key while the legend rests collapsed.
+                CustomPaint(
+                  size: const Size(14, 8),
+                  painter: ServiceSwatchPainter(serviceColor(widget.service),
+                      serviceDashPattern(widget.service)),
                 ),
                 const SizedBox(width: MechXSpacing.xs),
                 Expanded(
