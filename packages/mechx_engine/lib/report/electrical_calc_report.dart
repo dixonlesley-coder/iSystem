@@ -16,6 +16,7 @@ import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BusbarSizingReason;
+import '../standards/puil.dart' show BreakerClass;
 import '../standards/sni.dart' show Revision;
 import 'report_blocks.dart';
 import 'report_strings.dart';
@@ -286,6 +287,13 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
 
     // Circuits table.
     final branches = p.circuits;
+    // Feeder way ids — a feeder's cumulative drop is the sub-bus drop its
+    // downstream ways carry, so the verdict judges it on its own drop only
+    // (the shared `voltageDropOverLimit` gate, same as the board schedule).
+    final feederIds = {
+      for (final mc in model?.circuits ?? const <ElectricalCircuit>[])
+        if (mc.feedsPanelId != null) mc.id,
+    };
     if (branches.isNotEmpty) {
       blocks.add(RptTable(
         [
@@ -306,8 +314,11 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
               c.loadKind.name,
               _a(c.designCurrent.amperes),
               c.phase.label,
+              // An MCCB has no B/C/D trip characteristic — print the curve
+              // letter for MCBs only (as the board schedule + legend do, N12).
               '${_a(c.breaker.ratingA.amperes)} '
-                  '${c.breaker.deviceClass.name.toUpperCase()}/${c.breaker.curve.name.toUpperCase()}',
+                  '${c.breaker.deviceClass.name.toUpperCase()}'
+                  '${c.breaker.deviceClass == BreakerClass.mccb ? '' : '/${c.breaker.curve.name.toUpperCase()}'}',
               '${(c.cable.runsPerPhase ?? 1) > 1 ? '${c.cable.runsPerPhase}×' : ''}'
                   '${_n(c.cable.csaMm2)} mm²',
               // Run length (N8) — the figure that drove the printed Vdrop;
@@ -315,7 +326,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
               c.lengthM > 0 ? '${_n(c.lengthM)} m' : '—',
               '${_n(c.voltageDrop.dropPercent)}% '
                   '(${_n(c.cumulativeDropPercent)}%)'
-                  '${c.voltageDrop.withinLimit ? '' : ' ${strings(RptStringKey.verdictOver)}'}',
+                  '${voltageDropOverLimit(c, isFeeder: feederIds.contains(c.circuitId)) ? ' ${strings(RptStringKey.verdictOver)}' : ''}',
               c.rcd.required
                   ? '${c.rcd.ratingMa} mA${c.rcd.type != null ? ' ${c.rcd.type!.name.toUpperCase()}' : ''}'
                   : '—',
