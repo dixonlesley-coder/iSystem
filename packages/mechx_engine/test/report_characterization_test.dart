@@ -94,8 +94,15 @@ void main() {
       // range' (and the oversized branch now names the action). Verified as the
       // SOLE delta: replacing the new sentence with the old one in the rendered
       // document reproduces 0xccecab38 exactly. Line count unchanged.
+      // Re-baselined 2026-10-17 (audit fire-4): ONE line changed — the fire-pump
+      // verdict. The fixture's pump (2 risers, 50.47 L/s @ 96.34 m) now derates
+      // its efficiency at 150 % flow (0.70 × 0.85): overload shaft =
+      // 0.975 × 68.14 kW / 0.85 = 78.2 kW > the 75 kW top frame, so the motor
+      // ladder saturates ('Motor above standard frame range - …'); the printed
+      // 75.0 kW is unchanged. Verified as the SOLE delta: substituting the old
+      // verdict back reproduces 0x109a3516 exactly. Line count unchanged.
       expect(md.split('\n').length, 94);
-      expect(fnv1a32(md), 0x109a3516);
+      expect(fnv1a32(md), 0xa106eca3);
     });
   });
 
@@ -274,8 +281,12 @@ void main() {
       // Re-baselined 2026-07-30 (audit E7): the embedded electrical body gained
       // the same +9 lines as the standalone pin (the irreducible-imbalance INFO
       // notes on both boards + the restored '## Warnings' section): 219 -> 228.
+      // Re-baselined 2026-10-17 (audit fire-4): the embedded mechanical body's
+      // fire-pump verdict now reports the saturated motor ladder (see the
+      // mechanical pin above); substituting the old verdict back reproduces
+      // 0x47b44e65 exactly. Line count unchanged.
       expect(md.split('\n').length, 228);
-      expect(fnv1a32(md), 0x47b44e65);
+      expect(fnv1a32(md), 0xa37662b2);
     });
   });
 

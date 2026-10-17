@@ -27,9 +27,15 @@ final sprinklerDesignProvider = Provider<SprinklerDesign>(
 
 /// Standpipe + fire-pump design for the building height (single Class I riser
 /// default; SNI 03-1745-2000 flow + residual pressure).
+///
+/// The static lift is pump datum (lowest floor) → the TOPMOST HOSE OUTLET on
+/// the top floor ([standpipeStaticLift]), per `designStandpipe`'s contract —
+/// not the roof (`building.totalHeight`), which overstated it by the top
+/// floor's height less the outlet height.
 final standpipeDesignProvider = Provider<FireStandpipeDesign>((ref) {
   final building = ref.watch(projectControllerProvider).building;
-  return designStandpipe(risers: 1, buildingHeight: building.totalHeight);
+  return designStandpipe(
+      risers: 1, buildingHeight: standpipeStaticLift(building));
 });
 
 /// Nominal per-head K-factor for the sprinkler remote-area check (L/min/bar^0.5).

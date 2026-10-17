@@ -25,6 +25,9 @@ import '../standards/sni.dart';
 import '../units.dart';
 import 'drainage_sizing.dart' as drain;
 import 'duct_sizing.dart' as duct;
+import 'fire_sprinkler.dart' show kMinSprinklerPipeDiameterMm;
+import 'fire_standpipe.dart'
+    show kMinHydrantBranchDiameterMm, kMinRiserDiameterMm;
 import 'storm_sizing.dart' as storm;
 import 'water_supply_sizing.dart' as water;
 
@@ -336,6 +339,27 @@ Map<String, double> accumulateFixtureUnits({
   return edgeUnits;
 }
 
+/// Code-minimum pipe diameter for a FIRE edge, or null for any other service.
+///
+/// The fire services share the pressurized velocity sizer with domestic water,
+/// but their pipe is governed by code minimums the small per-outlet flows never
+/// reach on velocity alone (a sprinkler head at ~1 L/s sizes DN25 at best and
+/// DN20 at a 0.5 L/s share; a 5 L/s hose box sizes DN65):
+///  • sprinkler — every drawn pipe >= [kMinSprinklerPipeDiameterMm] (25 mm);
+///  • hydrant RISER — the standpipe >= [kMinRiserDiameterMm] (100 mm, SNI
+///    03-1745-2000 Class I/III, the same figure `designStandpipe` reports);
+///  • hydrant RUN — the pipe feeding a 65 mm Class I landing valve >=
+///    [kMinHydrantBranchDiameterMm] (65 mm).
+/// The velocity sizer still raises the size above the floor when the flow
+/// needs it. `// VERIFY` — see the constants' provenance.
+Diameter? fireMinimumDiameter(NetEdge edge) => switch (edge.service) {
+      ServiceType.fireSprinkler => Diameter.mm(kMinSprinklerPipeDiameterMm),
+      ServiceType.fireHydrant => Diameter.mm(edge.kind == EdgeKind.riser
+          ? kMinRiserDiameterMm
+          : kMinHydrantBranchDiameterMm),
+      _ => null,
+    };
+
 /// Size one [edge] carrying [flow] via the correct §7 path (selected by the
 /// edge's service regime — pressurized / air / gravity).
 EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
@@ -345,6 +369,8 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
         flow: flow,
         maxVelocity: ctx.maxSupplyVelocity,
         material: ctx.pipeMaterial,
+        // Fire services floor at their code-minimum DN (null for water).
+        minDiameter: fireMinimumDiameter(edge),
       );
       return EdgeSizing(
         edgeId: edge.id,
@@ -552,6 +578,14 @@ Map<String, EdgeSizing> sizeNetwork(
 /// an edge with an entry keeps its accumulated flow but is sized to the given
 /// diameter, with velocity recomputed from that flow ([applySizeOverride]).
 /// Default empty ⇒ byte-identical behaviour to before.
+///
+/// SPRINKLER REMOTE-AREA CAP ([sprinklerDemandCap]): a wet sprinkler system is
+/// designed for the heads of ONE remote design area operating at once (density
+/// × area, uplifted by the head minimum pressure — `remoteAreaDemand` in
+/// `fire_sprinkler_hydraulic.dart`), never for every drawn head together. When
+/// the cap is given, every accumulated `fireSprinkler` edge flow is clamped to
+/// it, so a cross-main feeding 60 heads carries the design-area demand, not
+/// 60 × the per-head share. Null ⇒ byte-identical (flat accumulation).
 Map<String, EdgeSizing> autoSizeNetwork(
   Network net,
   SizingContext ctx, {
@@ -561,6 +595,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   Map<String, double> nodeDrainageUnits = const {},
   Map<String, FlowRate> nodeFlowDemand = const {},
   Map<String, Diameter> sizeOverrides = const {},
+  FlowRate? sprinklerDemandCap,
   FlushSystem flushSystem = FlushSystem.flushTank,
   BuildingLevels? building,
   Map<String, ScaleCalibration> calibrationBySheet = const {},
@@ -1008,6 +1043,18 @@ Map<String, EdgeSizing> autoSizeNetwork(
     }
   }
 
+  // Sprinkler remote-area cap (see the doc above): no sprinkler pipe carries
+  // more than the one-design-area demand.
+  if (sprinklerDemandCap != null) {
+    final capM3s = sprinklerDemandCap.cubicMetersPerSecond;
+    for (final e in net.edges) {
+      if (e.service != ServiceType.fireSprinkler) continue;
+      final q = allFlows[e.id];
+      if (q != null && q.cubicMetersPerSecond > capM3s) {
+        allFlows[e.id] = sprinklerDemandCap;
+      }
+    }
+  }
   final result = sizeNetwork(net, allFlows, ctx, sizeOverrides: sizeOverrides);
   // DFU-sized drainage/vent and capacity-table rainwater downpipes are built
   // directly (not via sizeNetwork), so apply any override to them here too.
