@@ -1455,6 +1455,27 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **A run's length includes its vertical leg (`network.dart` `runVerticalLeg` /
+  `edgeLength`)**: a RUN between nodes at different solved elevations (pump →
+  ceiling main, main → WC) is its calibrated horizontal span PLUS the elevation
+  delta — pipe the installer buys and friction the water sees (the static lift
+  stays a separate solve term, never double counted). The plan `CL` label
+  (`runCentrelineLabels` = `planEdgeElevationLabels`) states the hanging height
+  of the horizontal leg at the MAIN plus `drop N.NN m`, never the mean of the
+  two ends; an uncalibrated run stays zero (never a vertical-only figure).
+- **The PE is stated ONCE, inside the cable (`electrical_sld_drawing.dart`
+  `cableRunLabel`)**: `grounding.cores` counts live + N + PE, the earthing model
+  sizes that cable and the BOM procures it, so every schedule / feeder label
+  prints that count with no separate `+ NYA/BC` earth token
+  (`NYY 3x4 mm2`); parallel runs print `Nx(...)`.
+- **Every DXF string goes through `dxfText`** (drawing_chrome.dart): R12/AC1009
+  with ASCII-only text (`·`→`-`, Ø→`%%c`, °→`%%d`), so AutoCAD never shows `Â·`.
+  Compare PDF==DXF label parity THROUGH the encoder.
+- **Fire pump: one governing duty**: `firePumpDutyProvider`'s `selectedMotor` is
+  the NFPA 20 pick (it carries the 150 % overload point) and its
+  `motorInputPower` is taken at that governing point; the electrical feed, the
+  FP-01 schedule row and the Fire inspector headline all read it.
+
 - **Plant elevation is role- AND component-aware (`network.dart` `nodeElevation`)**:
   an explicit `elevation` / `mountHeight` wins; otherwise pump / groundTank /
   boosterSet / AHU / supply+exhaust fan sit on their OWN floor surface, FCU and the
