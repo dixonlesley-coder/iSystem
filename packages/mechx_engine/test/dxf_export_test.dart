@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:mechx_engine/geometry/dxf_drawing.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
+import 'package:mechx_engine/report/plan_pdf_export.dart';
 import 'package:mechx_engine/report/plan_symbols.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/units.dart';
@@ -374,6 +377,67 @@ void main() {
       expect(dxf, contains('G-ANNO-DIMS'));
       expect('\n8\nG-ANNO-DIMS\n'.allMatches(dxf).length, 5 + 1,
           reason: '5 LINEs + 1 TEXT on the dimension layer');
+    });
+
+    test('R4: the tie dimension sits on the SAME side as the plan PDF', () {
+      // One tie only: column B == the riser x (offset 0, skipped), row 1 at
+      // y = 50 px → the tie runs from (100, 50) UP the sheet to the riser at
+      // (100, 0). Both spaces are y-up, so with direction (ux, uy) the
+      // perpendicular (uy, −ux) offsets the dimension toward LARGER pixel x in
+      // both formats (it used to flip to the other side in the DXF).
+      const grid = ReferenceGrid(
+        columns: [GridAxis('B', 100)],
+        rows: [GridAxis('1', 50)],
+      );
+      final dxf = networkToDxf(
+          net: net,
+          sizing: sizing,
+          sheetId: 's1',
+          floorIndex: 0,
+          metersPerPixel: 0.05,
+          grid: grid);
+      final line =
+          RegExp(r'0\nLINE\n8\nG-ANNO-DIMS\n10\n(-?[\d.]+)\n20\n(-?[\d.]+)\n'
+              r'11\n(-?[\d.]+)\n21\n(-?[\d.]+)\n');
+      final lines = line
+          .allMatches(dxf)
+          .map((m) => [for (var i = 1; i <= 4; i++) double.parse(m.group(i)!)])
+          .toList();
+      expect(lines, hasLength(5));
+      final dxfDim = lines[2]; // ext, ext, DIMENSION LINE, tick, tick
+      const riserXmm = 100 * 0.05 * 1000; // 5000 mm
+      final dxfSide = ((dxfDim[0] + dxfDim[2]) / 2 - riserXmm).sign;
+
+      final pdf = latin1.decode(planToPdf(
+        net: net,
+        sizing: sizing,
+        edgeLengths: const {},
+        sheetId: 's1',
+        floorIndex: 0,
+        projectName: 'P',
+        sheetName: 'S',
+        dateString: '2026-10-17',
+        metersPerPixel: 0.05,
+        grid: grid,
+      ));
+      final start = pdf.indexOf('0.45 0.45 0.45 RG');
+      expect(start, greaterThanOrEqualTo(0));
+      final seg = RegExp(r'^(-?[\d.]+) (-?[\d.]+) m (-?[\d.]+) (-?[\d.]+) l S$',
+          multiLine: true);
+      final strokes = seg
+          .allMatches(pdf.substring(start))
+          .take(3)
+          .map((m) => [for (var i = 1; i <= 4; i++) double.parse(m.group(i)!)])
+          .toList();
+      final ext1 = strokes[0], pdfDim = strokes[2];
+      // The axis extension line starts 2 pt off the ordinate along the perp:
+      // its start x minus that 2 pt step recovers the ordinate x.
+      final perpX = (ext1[2] - ext1[0]) / 10; // ext1 is 10 pt along the perp
+      final ordinateX = ext1[0] - perpX * 2;
+      final pdfSide = ((pdfDim[0] + pdfDim[2]) / 2 - ordinateX).sign;
+
+      expect(dxfSide, 1.0, reason: 'DXF offset toward larger pixel x');
+      expect(pdfSide, dxfSide, reason: 'PDF and DXF agree on the side');
     });
 
     test('N5/N4: null map + null grid keep the professional DXF byte-identical',

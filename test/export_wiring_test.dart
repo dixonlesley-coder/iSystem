@@ -230,6 +230,65 @@ void main() {
   );
 
   testWidgets(
+    'R4: an UNPIPED fire pump never steals the domestic row tag (both picks '
+    'need a positive service match)',
+    (tester) async {
+      final (ref, container) = await harness(tester);
+      NetNode pump(String id, double x) => NetNode(
+        id: id,
+        sheetId: 's1',
+        x: x,
+        y: 0,
+        floorIndex: 0,
+        role: NodeRole.plant,
+        component: NodeComponent.pump,
+      );
+      // The unconnected fire pump PRECEDES the piped booster in node order.
+      final net = Network(
+        nodes: [
+          pump('pf', 400),
+          pump('pw', 0),
+          const NetNode(
+            id: 'tw',
+            sheetId: 's1',
+            x: 0,
+            y: 100,
+            floorIndex: 0,
+            role: NodeRole.fixture,
+          ),
+        ],
+        edges: const [
+          NetEdge(
+            id: 'ew',
+            fromId: 'pw',
+            toId: 'tw',
+            service: ServiceType.coldWater,
+          ),
+        ],
+      );
+      // Upfeed + calibrated so the booster's run sizes and its duty solves.
+      container.read(feedStrategyProvider.notifier).set(FeedStrategy.upfeed);
+      container
+          .read(projectControllerProvider.notifier)
+          .setCalibration('s1', const ScaleCalibration(0.02));
+      container.read(networkControllerProvider.notifier).loadNetwork(net);
+      final tags = equipmentNodeTags(net);
+      final pumps = gatherEquipmentScheduleData(ref).pumps;
+      final domestic = pumps.singleWhere(
+        (p) => p.service == 'Domestic water supply',
+      );
+      final fire = pumps.singleWhere((p) => p.service == 'Fire standpipe pump');
+      // The domestic row prints the PIPED booster's plan tag, never the
+      // unpiped fire pump's.
+      expect(domestic.tag, tags['pw']);
+      expect(domestic.tag, isNot(tags['pf']));
+      // The unpiped pump matches neither pick ⇒ the fixed fallback tag.
+      expect(fire.tag, 'FP-01');
+      container.read(statusMessageProvider.notifier).clear();
+    },
+  );
+
+  testWidgets(
     'breakerIcuKaByPanel maps every solved panel to a positive Icu (kA) '
     'from the fault study',
     (tester) async {

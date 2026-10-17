@@ -273,4 +273,17 @@ void main() {
     expect(c.read(projectControllerProvider).name, isNot('Menara Satu'),
         reason: 'Ctrl+Z with nothing focused must reach the global timeline');
   });
+
+  testWidgets(
+      'R4: the palette offers "Add sheets from files…" (keyboard path to the '
+      'rail right-click row)', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    await _pressCtrl(tester, LogicalKeyboardKey.keyK);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(EditableText).last, 'add sheets');
+    await tester.pumpAndSettle();
+    expect(find.text('Add sheets from files…'), findsOneWidget);
+  });
 }

@@ -754,7 +754,9 @@ String _professionalDxf({
       final len = math.sqrt(dx * dx + dy * dy);
       final ux = len > 1e-9 ? dx / len : 1.0;
       final uy = len > 1e-9 ? dy / len : 0.0;
-      final px = -uy, py = ux; // perpendicular (y-up world)
+      // The PDF convention (both spaces are y-up): the direction rotated by
+      // -90 deg, so the dimension lands on the SAME side in both formats.
+      final px = uy, py = -ux;
       final off = textH * 1.2; // ~ the PDF's 10 pt offset at plot scale
       void line(double x1, double y1, double x2, double y2) {
         g(0, 'LINE');

@@ -631,13 +631,49 @@ double runPixelLength(NetEdge edge, Network net) {
   return math.sqrt(dx * dx + dy * dy);
 }
 
+/// The elevation a RUN connects to [node] at — the height the run's pipe/duct
+/// actually meets that element, used ONLY for a run's vertical leg
+/// ([runVerticalLeg]) and the plan setting-out label built on it. It is
+/// [nodeElevation] (an explicit `elevation` / `mountHeight` always wins),
+/// EXCEPT a datum-less ceiling-hung terminal: an air terminal
+/// (supply diffuser / linear diffuser / return or exhaust grille) or a
+/// sprinkler head is a [NodeRole.fixture] for DEMAND, but it hangs AT the
+/// ceiling, not at the plumbing fixture height — so a run from a ceiling main
+/// to it has no vertical leg. Plumbing fixtures, water outlets, hose reels and
+/// hydrant boxes keep the fixture height. Pure.
+Length runConnectionElevation(
+  NetNode node,
+  BuildingLevels building, [
+  MountingHeights mounting = const MountingHeights(),
+]) {
+  if (node.elevation == null && node.mountHeight == null) {
+    switch (node.component) {
+      case NodeComponent.supplyDiffuser:
+      case NodeComponent.linearDiffuser:
+      case NodeComponent.returnGrille:
+      case NodeComponent.exhaustGrille:
+      case NodeComponent.sprinklerHead:
+        return building.ceilingElevationOf(node.floorIndex, mounting);
+      default:
+        break;
+    }
+  }
+  return nodeElevation(node, building, mounting);
+}
+
 /// The VERTICAL leg of a RUN (m): the absolute difference between its two
-/// endpoints' solved §10 elevations (role-aware — a pump on the floor surface,
-/// a main at the ceiling, a fixture at fixture height). A run drawn between a
+/// endpoints' run-connection elevations ([runConnectionElevation] — a pump on
+/// the floor surface, a main and a ceiling-hung diffuser / sprinkler at the
+/// ceiling, a plumbing fixture at fixture height). A run drawn between a
 /// ceiling main and a WC, or a floor-mounted pump and the ceiling main, rises
 /// or drops by this much on site even though the plan only shows its
 /// horizontal span. Zero for a riser (its whole length IS the elevation delta),
-/// a broken edge, or a run whose endpoints sit at one level.
+/// a broken edge, a run whose endpoints sit at one level, and every
+/// GRAVITY-regime run (drainage / vent / rainwater): their `main` nodes carry
+/// no below-slab datum yet (they resolve to the same floor's ceiling), so a
+/// fixture-to-main leg there would be an upside-down fiction — the branch
+/// quantity stays its calibrated horizontal span until gravity mains get a
+/// real invert datum.
 Length runVerticalLeg(
   NetEdge edge,
   Network net, {
@@ -645,11 +681,12 @@ Length runVerticalLeg(
   MountingHeights mounting = const MountingHeights(),
 }) {
   if (edge.kind == EdgeKind.riser) return const Length(0);
+  if (edge.service.regime == FlowRegime.gravity) return const Length(0);
   final a = net.nodeById(edge.fromId);
   final b = net.nodeById(edge.toId);
   if (a == null || b == null) return const Length(0);
-  final dz = (nodeElevation(b, building, mounting).meters -
-          nodeElevation(a, building, mounting).meters)
+  final dz = (runConnectionElevation(b, building, mounting).meters -
+          runConnectionElevation(a, building, mounting).meters)
       .abs();
   // Sub-millimetre float noise between two nodes on one level is not a leg.
   return Length(dz < 1e-6 ? 0 : dz);

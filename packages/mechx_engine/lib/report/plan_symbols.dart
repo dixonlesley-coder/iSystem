@@ -763,17 +763,18 @@ String? composePlanEdgeLabel({
 // resolves that roof-parked plant to its own floor's ceiling main level instead
 // and never prints a CL outside the storey.
 
-/// The elevation a PLAN label uses for [node]: [nodeElevation], EXCEPT a
-/// datum-less [NodeRole.plant] node that [nodeElevation] parks at the roof
-/// (a roof tank or a component-less plant on a lower sheet) — that one sits at
-/// its own floor's ceiling main level ([BuildingLevels.ceilingElevationOf]).
-/// Pure.
+/// The elevation a PLAN label uses for [node]: its run-connection elevation
+/// ([runConnectionElevation] — [nodeElevation], with a ceiling-hung diffuser /
+/// grille / sprinkler at the ceiling), EXCEPT a datum-less [NodeRole.plant]
+/// node that [nodeElevation] parks at the roof (a roof tank or a
+/// component-less plant on a lower sheet) — that one sits at its own floor's
+/// ceiling main level ([BuildingLevels.ceilingElevationOf]). Pure.
 Length planSettingOutElevation(
   NetNode node,
   BuildingLevels building, [
   MountingHeights mounting = const MountingHeights(),
 ]) {
-  final solved = nodeElevation(node, building, mounting);
+  final solved = runConnectionElevation(node, building, mounting);
   if (node.role == NodeRole.plant &&
       node.elevation == null &&
       node.mountHeight == null &&
@@ -791,14 +792,17 @@ Length planSettingOutElevation(
 /// to the ceiling main, a ceiling main down to a WC) is not a straight sloped
 /// pipe: its HORIZONTAL leg hangs at the main's level (the `main`-role end, else
 /// the higher end) and the difference is a vertical leg. So the label states the
-/// hanging height a foreman sets out, plus `drop N.NN m` for that leg (the same
-/// figure the run's quantity includes via [runVerticalLeg]) — never the
-/// misleading mean of the two ends. A level run prints the bare `CL` token.
-/// Endpoint elevations come from [planSettingOutElevation] (so a roof-parked
-/// datum-less plant reads its own floor's ceiling); a hanging height outside
-/// `[0, floor height]` of its storey, or a leg taller than the storey, cannot be
-/// set out on this floor (e.g. an explicit plant datum on another level), so it
-/// is OMITTED rather than printed. Pure.
+/// hanging height a foreman sets out, plus `drop N.NN m` for that leg — the
+/// SAME figure the run's quantity includes: the leg is read from
+/// [runVerticalLeg] itself (the one source [edgeLength] uses), never
+/// re-derived here — never the misleading mean of the two ends. A level run
+/// (incl. every gravity run and a ceiling main to a ceiling diffuser) prints
+/// the bare `CL` token. Hanging heights come from [planSettingOutElevation] (so
+/// a roof-parked datum-less plant reads its own floor's ceiling); a hanging
+/// height outside `[0, floor height]` of its storey, or a leg taller than the
+/// storey, cannot be set out on this floor (e.g. a roof tank drawn on a lower
+/// sheet, an explicit plant datum on another level), so it is OMITTED rather
+/// than printed. Pure.
 Map<String, String> runCentrelineLabels(
   Network net,
   BuildingLevels building, {
@@ -814,12 +818,10 @@ Map<String, String> runCentrelineLabels(
     if (a == null || b == null) continue;
     final ea = planSettingOutElevation(a, building, mounting).meters;
     final eb = planSettingOutElevation(b, building, mounting).meters;
-    final dz = (ea - eb).abs();
-    final leg = dz < 1e-6 ? 0.0 : dz;
+    final leg =
+        runVerticalLeg(e, net, building: building, mounting: mounting).meters;
     final NetNode level;
-    if (leg <= 0) {
-      level = a;
-    } else if (a.role == NodeRole.main && b.role != NodeRole.main) {
+    if (a.role == NodeRole.main && b.role != NodeRole.main) {
       level = a;
     } else if (b.role == NodeRole.main && a.role != NodeRole.main) {
       level = b;

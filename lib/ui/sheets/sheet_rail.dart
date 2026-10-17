@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -174,7 +175,7 @@ class _ImportPlanTileState extends State<_ImportPlanTile> {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final label = context.strings(StringKey.shellImportPdf);
-    return MechXTooltip(
+    final Widget tile = MechXTooltip(
       edge: MechXTooltipEdge.right,
       message: label,
       child: MechXFocusRing(
@@ -223,6 +224,19 @@ class _ImportPlanTileState extends State<_ImportPlanTile> {
           ),
         ),
       ),
+    );
+    // Keyboard reach for the right-click rows: Shift+Enter on the focused tile
+    // runs the multi-file append directly (Enter/Space stays Import plan); the
+    // command palette offers the same 'Add sheets from files…' command.
+    final addFiles = widget.onAddFiles;
+    if (addFiles == null) return tile;
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.enter, shift: true): addFiles,
+        const SingleActivator(LogicalKeyboardKey.numpadEnter, shift: true):
+            addFiles,
+      },
+      child: tile,
     );
   }
 }
