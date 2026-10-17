@@ -401,29 +401,38 @@ void main() {
     final sys = computeSystem(p, project);
     final mdp = sys.panels['MDP'] ?? sys.panels['mdp']!;
 
-    test('PP-1: a board drawing 42.9 A no longer takes 150 mm2', () {
-      // PP-1's diversified demand is 25 245 W; the feeder converts it at the
-      // feeder default cosφ 0.85:
-      //   Ib = 25 245 / (√3·400·0.85) = 25 245 / 588.897 = 42.87 A → 42.9 A
-      //   ⇒ LOAD-SIZED device = first rung ≥ 42.87 = 50 A.
+    test('PP-1: a board drawing 46.1 A no longer takes 150 mm2', () {
+      // Re-derived 2026-10 (audit elec-core-4): PP-1's connected demand now
+      // counts each motor at its ELECTRICAL INPUT (shaft kW / η 0.88):
+      //   connected = 6000×0.7 + 4500 + 4500 + 11 000/0.88 + 5500/0.88
+      //             = 4200 + 9000 + 12 500 + 6250 = 31 950 W
+      //   demand    = 31 950 × 0.85 (board diversity) = 27 157.5 W
+      // (was 25 245 W on shaft kW). The feeder converts it at the feeder
+      // default cosφ 0.85:
+      //   Ib = 27 157.5 / (√3·400·0.85) = 27 157.5 / 588.897 = 46.12 A → 46.1 A
+      //   ⇒ LOAD-SIZED device = first rung ≥ 46.12 = 50 A.
       // CABLE: MDP is 35 °C / grouping 6 / conduit ⇒ derating
-      //   0.94 × 0.57 = 0.5358. Iz ≥ max(50, 1.25 × 42.87 = 53.59) = 53.59 A:
-      //   16 mm² → 80 × 0.5358 = 42.9 A ✗;  25 mm² → 105 × 0.5358 = 56.3 A ✓.
-      //   ⇒ 25 mm², Iz 56.3 A  (the old policy landed on 150 mm²).
+      //   0.94 × 0.57 = 0.5358. Iz ≥ max(50, 1.25 × 46.12 = 57.65) = 57.65 A:
+      //   25 mm² → 105 × 0.5358 = 56.3 A ✗;  35 mm² → 130 × 0.5358 = 69.7 A ✓.
+      //   ⇒ 35 mm², Iz 69.7 A  (the old policy landed on 150 mm²).
       final f = _way(mdp, 'mdp-f-pp1');
-      expect(f.designCurrent.amperes, 42.9);
-      expect(f.cable.csaMm2, 25.0);
-      expect(f.cable.deratedIz.amperes, closeTo(56.3, 0.05));
-      // The conductor is now proportionate: Iz/Ib was > 3.0, it is now < 1.5.
+      expect(f.designCurrent.amperes, 46.1);
+      expect(f.cable.csaMm2, 35.0);
+      expect(f.cable.deratedIz.amperes, closeTo(69.7, 0.05));
+      // The conductor is proportionate: Iz/Ib was > 3.0 under the old
+      // cable-inflating floor; it is now 69.7/46.1 = 1.51 — one rung above the
+      // 1.25 continuous margin, because the next-smaller 25 mm² misses the
+      // 57.65 A requirement by 1.3 A (so < 1.6, not the old < 1.5 bound that
+      // held only while the demand under-counted the motors' input).
       expect(f.cable.deratedIz.amperes / f.designCurrent.amperes,
-          lessThan(1.5));
+          lessThan(1.6));
 
       // DEVICE: PP-1's incomer is 80 A (58.0 A worst phase × 1.25 headroom ⇒
       // 72.5 ⇒ rung 80), so the floor target is 1.6 × 80 = 128 ⇒ rung 160 A.
-      // The cap is Iz 56.3 ⇒ the largest rung ≤ 56.3 is 50 A, i.e. the floor
-      // cannot move this device at all.
+      // The cap is Iz 69.7 ⇒ the largest rung ≤ 69.7 is 63 A, so the floor
+      // lifts the device 50 → 63 A and stops there (CAP-limited ⇒ not listed).
       expect(sys.panels['pp1']!.incomer.breaker.ratingA.amperes, 80);
-      expect(f.breaker.ratingA.amperes, 50);
+      expect(f.breaker.ratingA.amperes, 63);
       expect(sys.feederFloorsApplied, isNot(contains('mdp-f-pp1')));
     });
 

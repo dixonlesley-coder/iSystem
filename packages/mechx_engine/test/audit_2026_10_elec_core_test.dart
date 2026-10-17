@@ -1,4 +1,5 @@
 import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/load_list.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/standards/puil.dart';
@@ -74,6 +75,80 @@ void main() {
       expect(cr.threePhase, isFalse);
       expect(cr.designCurrent.amperes, closeTo(10.2, 0.05));
       expect(cr.breaker.ratingA.amperes, 16);
+    });
+  });
+
+  group('elec-core-4 — motor demand counts the ELECTRICAL INPUT', () {
+    // MDP (3φ 400 V) → feeder f1 → PP (3φ 400 V), PP carries one 22 kW pump.
+    const project = ElectricalProject(
+      id: 'p4',
+      name: 'Motor demand',
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'Main',
+          circuits: [
+            ElectricalCircuit(
+              id: 'f1',
+              name: 'Feeder PP',
+              loadKind: LoadKind.feeder,
+              cosPhi: 0.85,
+              length: Length(20),
+              feedsPanelId: 'PP',
+            ),
+          ],
+        ),
+        ElectricalPanel(
+          id: 'PP',
+          name: 'Pump panel',
+          sourceType: PanelSource.feeder,
+          fedByCircuitId: 'f1',
+          circuits: [
+            ElectricalCircuit(
+              id: 'pump',
+              name: 'Pump',
+              loadKind: LoadKind.pump,
+              motorKw: 22,
+              cosPhi: 0.85,
+              length: Length(15),
+            ),
+          ],
+        ),
+      ],
+    );
+    final sys = computeSystem(profile, project);
+
+    test('child demand = 22 000 / 0.88 = 25 000 W (not the 22 000 W shaft)',
+        () {
+      // Shaft 22 kW / assumed motor efficiency 0.88 = 25 000 W input.
+      expect(sys.panels['PP']!.demandW, 25000);
+      expect(sys.supply.demandW, 25000);
+    });
+
+    test('motor Ib and the feeder Ib agree at 42.5 A', () {
+      // Both convert 25 000 W at √3·400·0.85 = 588.897:
+      //   25 000 / 588.897 = 42.45 A → 42.5 A
+      // (the defect put the feeder on 22 000/588.897 = 37.36 → 37.4 A, 12 %
+      // below the current its own fed motor way draws).
+      final motor = sys.panels['PP']!.circuits.single;
+      final feeder = sys.panels['MDP']!.circuits.single;
+      expect(motor.designCurrent.amperes, 42.5);
+      expect(feeder.designCurrent.amperes, 42.5);
+    });
+
+    test('an A5 way counts its loadW (electrical input), not motorKw', () {
+      // 7.5 kW shaft, η 0.9 ⇒ A5 loadW = 7500/0.9 = 8333.33 W, flaOverrideA set.
+      const e = MepEquipmentLoad(
+        id: 'P',
+        name: 'Booster',
+        source: MepLoadSource.boosterPump,
+        mechanicalPower: Power(7500),
+        cosPhi: 0.85,
+        motorEfficiency: 0.9,
+      );
+      final c = equipmentToCircuit(e, panelVoltage: const Voltage(400));
+      expect(c.flaOverrideA, isNotNull);
+      expect(circuitConnectedW(c), closeTo(8333.33, 0.01));
     });
   });
 }

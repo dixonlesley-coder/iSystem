@@ -621,10 +621,18 @@ double effectiveDemandFactor(
   );
 }
 
-/// A leaf circuit's connected demand (W): motor kW ×1000 for motors, else
-/// connected W, times the demand factor. Ported from `computePanel.ts
-/// circuitConnectedW`. With no diversity library/id the factor is the circuit's
-/// own [ElectricalCircuit.demandFactor] ⇒ byte-identical to the original.
+/// A leaf circuit's connected demand (W) — the ELECTRICAL INPUT power the way
+/// draws from the bus — times the demand factor:
+///   * an A5 MEP-derived way (`flaOverrideA` set) → `loadW`, which A5 sets to the
+///     equipment's electrical input power (the same figure its FLA derives from);
+///   * a hand-entered motor/pump way → shaft `motorKw` ×1000 ÷ the assumed motor
+///     efficiency, the SAME electrical-input basis its Ib uses (`_computeCircuit`),
+///     so a feeder/panel/supply demand never under-counts the current the motor
+///     way itself draws;
+///   * anything else → connected `loadW`.
+/// Ported from `computePanel.ts circuitConnectedW` (which summed shaft kW). With
+/// no diversity library/id the factor is the circuit's own
+/// [ElectricalCircuit.demandFactor].
 double circuitConnectedW(
   ElectricalCircuit c, {
   DiversityLibrary? library,
@@ -633,7 +641,15 @@ double circuitConnectedW(
   final isMotor =
       (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
           c.motorKw != null;
-  final baseW = isMotor ? c.motorKw! * 1000 : c.loadW;
+  final double baseW;
+  if (c.flaOverrideA != null) {
+    baseW = c.loadW;
+  } else if (isMotor) {
+    // Shaft kW → electrical input W via the assumed efficiency (// VERIFY).
+    baseW = c.motorKw! * 1000 / _assumedMotorEfficiency;
+  } else {
+    baseW = c.loadW;
+  }
   return baseW *
       effectiveDemandFactor(c,
           library: library, diversityLibraryId: diversityLibraryId);
