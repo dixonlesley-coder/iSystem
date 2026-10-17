@@ -774,6 +774,15 @@ enum StringKey {
   designInputAcLoadBasis,
   designInputAcBasisArea,
   designInputAcBasisHeatGain,
+  // The undo-timeline labels of the remaining design inputs (each is now its
+  // own undoable settings step) + the template apply.
+  undoLabelOccupancy,
+  undoLabelFireHazard,
+  undoLabelRainfall,
+  undoLabelRunoff,
+  undoLabelDuctShape,
+  undoLabelDuctMethod,
+  undoLabelTemplate,
 
   // A1 — the Layout empty-state's 'Load sample project' action (mirrors the
   // electrical workspace's `electricalLoadSampleProject`, kept as its own key
@@ -1943,6 +1952,13 @@ const Map<StringKey, String> _en = {
   StringKey.designInputAcLoadBasis: 'AC load basis',
   StringKey.designInputAcBasisArea: 'Area density',
   StringKey.designInputAcBasisHeatGain: 'Heat gain',
+  StringKey.undoLabelOccupancy: 'Occupancy',
+  StringKey.undoLabelFireHazard: 'Fire hazard class',
+  StringKey.undoLabelRainfall: 'Rainfall (storm)',
+  StringKey.undoLabelRunoff: 'Runoff coefficient',
+  StringKey.undoLabelDuctShape: 'Duct shape',
+  StringKey.undoLabelDuctMethod: 'Duct sizing method',
+  StringKey.undoLabelTemplate: 'Building template',
 
   // A1 — Layout empty-state 'Load sample project'.
   StringKey.layoutLoadSampleProject: 'Load sample project',
@@ -3095,6 +3111,13 @@ const Map<StringKey, String> _id = {
   StringKey.designInputAcLoadBasis: 'Dasar beban AC',
   StringKey.designInputAcBasisArea: 'Kepadatan luas',
   StringKey.designInputAcBasisHeatGain: 'Perolehan kalor',
+  StringKey.undoLabelOccupancy: 'Hunian',
+  StringKey.undoLabelFireHazard: 'Kelas bahaya kebakaran',
+  StringKey.undoLabelRainfall: 'Curah hujan (badai)',
+  StringKey.undoLabelRunoff: 'Koefisien limpasan',
+  StringKey.undoLabelDuctShape: 'Bentuk ducting',
+  StringKey.undoLabelDuctMethod: 'Metode ukuran ducting',
+  StringKey.undoLabelTemplate: 'Templat bangunan',
 
   // A1 — Layout empty-state 'Load sample project'.
   StringKey.layoutLoadSampleProject: 'Muat proyek contoh',

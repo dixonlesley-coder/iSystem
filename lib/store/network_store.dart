@@ -16,6 +16,7 @@ import 'package:mechx_engine/units.dart';
 import '../ui/canvas/canvas_grid.dart' show nearestGridIntersection;
 import '../ui/canvas/snapping.dart' show orthoElbow;
 import 'annotation_store.dart' show RoomArea;
+import 'floor_remap.dart' show shiftFloorIndex;
 import 'history_store.dart';
 import 'route_geometry.dart';
 import 'schematic_layout_store.dart';
@@ -604,7 +605,6 @@ class NetworkController extends Notifier<DrawingState> {
     bool record = true,
   }) {
     if (levelCount < 1) return;
-    final maxIndex = levelCount - 1;
     var changed = false;
     // C2: a node ON the removed floor is deleted with it. It cannot keep its
     // index (the floor above slides down INTO that slot, silently FUSING two
@@ -622,21 +622,19 @@ class NetworkController extends Notifier<DrawingState> {
         changed = true;
         continue;
       }
-      var fi = n.floorIndex;
+      // The ONE floor-shift rule shared with every other floor-placed record
+      // (rooms, tanks, measurements, electrical placements — floor_remap.dart):
       // [insertedCount] floors inserted at [insertedIndex] push every node
-      // AT/ABOVE that slot up, so a node keeps its own physical floor (adding a
-      // basement at index 0 shifts the whole drawing up by that many levels).
-      if (insertedIndex != null && insertedCount > 0 && fi >= insertedIndex) {
-        fi += insertedCount;
-      }
-      // A node above a removed floor shifts down one index to keep its own
-      // physical floor; a node below it keeps its index (nodes ON it were
-      // already dropped above).
-      if (removedIndex != null && fi > removedIndex) fi -= 1;
-      // Clamp into the new range (nodes on/above a removed top, or a wholesale
-      // shrink).
-      if (fi < 0) fi = 0;
-      if (fi > maxIndex) fi = maxIndex;
+      // AT/ABOVE that slot up (so it keeps its own physical floor); a node
+      // above a removed floor shifts down one index (nodes ON it were already
+      // dropped above); the result is clamped into the new range.
+      final fi = shiftFloorIndex(
+        n.floorIndex,
+        levelCount: levelCount,
+        removedIndex: removedIndex,
+        insertedIndex: insertedIndex,
+        insertedCount: insertedCount,
+      )!;
       if (fi != n.floorIndex) {
         changed = true;
         nodes.add(n.copyWith(floorIndex: fi));

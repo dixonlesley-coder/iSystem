@@ -19,6 +19,7 @@ import '../store/history_store.dart';
 import '../store/network_store.dart';
 import '../store/project_store.dart';
 import '../store/reference_line_store.dart';
+import '../store/schematic_layout_store.dart';
 import '../store/sheets_store.dart';
 import '../ui/canvas/underlay_snap_service.dart';
 import 'project_document.dart';
@@ -323,6 +324,11 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   // from the previous project doesn't surface as a phantom selection in the new
   // one (mirrors clearing the network selection on load).
   read(selectedAnnotationProvider.notifier).clear();
+  // Drop the diagram-only riser x overrides: they are keyed by node id, and node
+  // ids (n0, n1, …) restart per project, so a previous project's dragged riser
+  // positions must not re-apply to the new project's colliding ids — reopening
+  // re-lays the elevation out from the plan geometry.
+  read(schematicLayoutProvider.notifier).clear();
 }
 
 /// Start the periodic autosave loop: every [interval], snapshot the current

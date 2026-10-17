@@ -19,7 +19,6 @@ import '../../data/recovery.dart';
 import '../../store/app_state.dart';
 import '../../store/electrical_store.dart';
 import '../../store/models/sheet.dart';
-import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../sheets/pdf_page_picker.dart';
@@ -311,13 +310,13 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
     }
 
     // Replace-all: an empty project, or the explicit Replace choice.
-    ref.read(sheetsControllerProvider.notifier).loadSheets(sheets);
-    // Prune nodes orphaned onto sheets that no longer exist (one undo step,
-    // byte-identical no-op when nothing is orphaned) so phantom pipes can't
-    // invisibly pad the BOM / pressures / reports.
-    ref
-        .read(networkControllerProvider.notifier)
-        .pruneNodesNotOnSheets({for (final s in sheets) s.id});
+    // Swap the sheet list AND prune everything orphaned onto sheets that no
+    // longer exist — nodes, rooms, tanks, measurements, reference lines,
+    // calibrations, electrical placements — in ONE structural undo step
+    // (a non-recording plain load when nothing is discarded), so phantom work
+    // can't invisibly pad the BOM / schedules / reports, and a same-named
+    // revised plan gets a STALE scale flag instead of silently inheriting it.
+    ref.read(sheetsControllerProvider.notifier).replaceAllSheets(sheets);
     ref.read(loadErrorProvider.notifier).clear();
     // A5: reveal the imported plan on DESIGN → Layout at the first sheet.
     _revealImportedSheet(ref, 0);
