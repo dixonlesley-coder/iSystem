@@ -365,11 +365,25 @@ class SolarResult {
   /// Selected inverter AC rating.
   final Power inverterKw;
 
-  /// Panels in series per string.
+  /// Panels in series in the LONGEST string. With an uneven split the strings
+  /// are NOT all this long — `strings × stringSize` can exceed [panelCount]
+  /// (19 modules → 10 + 9, not 2 × 10). Use [stringLengths] for the exact
+  /// layout; never multiply these two to get a module count.
   final int stringSize;
 
   /// Number of parallel strings.
   final int strings;
+
+  /// The exact string layout: one entry per string, the modules in series in
+  /// that string, longest first (lengths differ by at most one). Its sum is
+  /// always [panelCount] and its length is [strings].
+  final List<int> stringLengths;
+
+  /// Strings of the longest length ([stringSize]).
+  int get stringsLong => stringLengths.where((n) => n == stringSize).length;
+
+  /// Strings one module shorter than [stringSize] (0 for an even split).
+  int get stringsShort => strings - stringsLong;
 
   /// Estimated daily energy yield.
   final Energy dailyKwh;
@@ -384,6 +398,7 @@ class SolarResult {
     required this.inverterKw,
     required this.stringSize,
     required this.strings,
+    required this.stringLengths,
     required this.dailyKwh,
     required this.note,
     required this.verifyItems,
@@ -609,6 +624,12 @@ SolarResult sizeSolar({
   final stringSize = (panelCount / strings).ceil(); // the longest string
   final shortest = panelCount ~/ strings; // the shortest string
   final unevenSplit = shortest != stringSize;
+  // panelCount = shortest·strings + remainder ⇒ `remainder` strings carry one
+  // extra module (the longest, `stringSize`), the rest are `shortest` long.
+  final remainder = panelCount - shortest * strings;
+  final stringLengths = List<int>.unmodifiable(<int>[
+    for (var i = 0; i < strings; i++) i < remainder ? shortest + 1 : shortest,
+  ]);
   final belowMppt = shortest < minByMppt;
 
   final dailyKwh = _round(arrayKwp * sunHours * kPvPerformanceRatio, 1);
@@ -620,6 +641,7 @@ SolarResult sizeSolar({
     inverterKw: inverterKw,
     stringSize: stringSize,
     strings: strings,
+    stringLengths: stringLengths,
     dailyKwh: Energy.kilowattHours(dailyKwh),
     note: '$panelCount x $panelWp Wp ($arrayKwp kWp) as $strings string(s) of '
         '${unevenSplit ? '$shortest-$stringSize' : '$stringSize'}; '

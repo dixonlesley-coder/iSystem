@@ -71,15 +71,20 @@ double ambientFactor(
 }) =>
     interpolateTable(profile.ambientTempFactors(insulation), tempC);
 
-/// Grouping (bunching) correction factor for [count] grouped circuits — a direct
-/// lookup clamped at the table's last entry (NOT interpolated; matches PanelMaker).
+/// Grouping (bunching) correction factor for [count] grouped circuits — a step
+/// lookup (NOT interpolated): an exact rung reads its factor, a count BETWEEN
+/// rungs reads the NEXT-HIGHER rung's (smaller, conservative) factor — e.g. 10
+/// or 11 circuits read the 12-circuit column — and a count at/above the last
+/// rung reads the last rung (IEC 60364-5-52 Table B.52.17 gives no further
+/// reduction beyond 20 circuits).
 double groupingFactor(ElectricalStandardsProfile profile, int count) {
   final table = profile.groupingFactors;
   final n = math.max(1, count);
   final keys = table.keys.toList()..sort();
-  final last = keys.last;
-  if (n >= last) return table[last]!;
-  return table[n.toDouble()] ?? 1;
+  for (final k in keys) {
+    if (k >= n) return table[k]!;
+  }
+  return table[keys.last]!;
 }
 
 /// Soil thermal-resistivity correction — buried runs only.

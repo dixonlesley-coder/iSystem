@@ -576,7 +576,14 @@ SldSheet buildElectricalSld({
       // row states a route method (the code's own convention; never a silent
       // blank next to neighbours that show `· PVC NNmm`).
       // // VERIFY — a drawing convention (the model carries no containment field).
-      final conduit = conduitMm != null ? ' · PVC ${conduitMm}mm' : ' · tray';
+      // A way sized as N parallel runs lays N cables, each in its own conduit
+      // (the containment study's `CircuitConduit.count`) ⇒ `· 2x PVC 50mm`, so
+      // the token can never under-count the conduits to procure. A single run
+      // keeps the bare token (byte-identical).
+      final runs = (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
+      final conduitCount = runs > 1 ? '${runs}x ' : '';
+      final conduit =
+          conduitMm != null ? ' · ${conduitCount}PVC ${conduitMm}mm' : ' · tray';
       // The run LENGTH the solve already used for this way (geo-derived when
       // placed, else the manual circuit length) — the cable-takeoff figure that
       // also drove the printed Vdrop (N8). Printed ONLY when a real length

@@ -44,14 +44,16 @@ import 'fault.dart'
         defaultLvUtilityFaultKa,
         estimatedServiceFaultLevelA,
         faultStudy,
-        serviceFaultEstimateVerifyItems;
+        serviceFaultEstimateVerifyItems,
+        solvedRunLengthM;
 import 'harmonics.dart' show HarmonicsResult, ThdBand, estimateHarmonics;
 import 'lightning.dart' show LightningRisk, assessLightning, collectionArea;
 import 'load_kind.dart' show LoadKind;
 import 'metering.dart' show MeteringSpec, meterFor;
 import 'model.dart'
     show ElectricalCircuit, ElectricalPanel, ElectricalProject, ElectricalSystem;
-import 'panel_results.dart' show ElectricalPanelResult, ElectricalSystemResult;
+import 'panel_results.dart'
+    show ElectricalCircuitResult, ElectricalPanelResult, ElectricalSystemResult;
 import 'power_factor.dart' show PowerFactorResult, powerFactorCorrection;
 import 'power_oneline.dart' show PowerOneLine, buildPowerOneLine;
 import 'sources.dart' show GensetMotor;
@@ -419,18 +421,33 @@ String? _originPanelId(
 /// Cumulative feeder-cable run length (m) from the origin to each panel, walking
 /// the feeder tree (a child's distance = its parent's distance + the feeding
 /// circuit's run length). Origin panels are 0.
+///
+/// The feeder run length is the SOLVED one ([solvedRunLengthM] — geo-derived
+/// when the boards are placed, else the manual length), the same run the cable,
+/// Vd and the fault/Zs decay were computed on, so the SPD distance agrees with
+/// sizing instead of reading a stale manual default.
 Map<String, double> _feederDistances(
   ElectricalSystemResult sys,
   ElectricalProject project,
 ) {
-  // child panel id -> (parent panel id, feeding circuit length).
+  // child panel id -> (parent panel id, feeding circuit solved length).
   final parentOf = <String, String>{};
   final feederLenM = <String, double>{};
   for (final p in project.panels) {
+    final panelResult = sys.panels[p.id];
     for (final c in p.circuits) {
       if (c.feedsPanelId != null) {
+        ElectricalCircuitResult? result;
+        if (panelResult != null) {
+          for (final r in panelResult.circuits) {
+            if (r.circuitId == c.id) {
+              result = r;
+              break;
+            }
+          }
+        }
         parentOf[c.feedsPanelId!] = p.id;
-        feederLenM[c.feedsPanelId!] = c.length.meters;
+        feederLenM[c.feedsPanelId!] = solvedRunLengthM(result, c);
       }
     }
   }

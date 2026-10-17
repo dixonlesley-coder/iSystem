@@ -130,15 +130,26 @@ class CableTraySpec {
 }
 
 /// One circuit's conduit entry inside a [ContainmentResult].
+///
+/// [conduit] is sized for ONE cable ([sizeConduit], single-cable fill). A way
+/// sized as N parallel runs per phase lays N separate cables, so it takes
+/// [count] = N such conduits (one cable per conduit — the single-cable fill
+/// basis stays valid, no multi-cable fill rule is invented). Read [count]
+/// together with [conduit]; never assume one conduit per circuit.
 class CircuitConduit {
   final String circuitId;
   final String name;
   final ConduitSpec conduit;
 
+  /// Number of identical [conduit]s this way needs (= its parallel runs per
+  /// phase; 1 for an ordinary single-cable way).
+  final int count;
+
   const CircuitConduit({
     required this.circuitId,
     required this.name,
     required this.conduit,
+    this.count = 1,
   });
 }
 
@@ -146,7 +157,8 @@ class CircuitConduit {
 class ContainmentResult {
   final String panelId;
 
-  /// Per-circuit conduit sizing (one per outgoing circuit cable).
+  /// Per-circuit conduit sizing (one ENTRY per outgoing circuit; a parallel-run
+  /// way's entry carries `count` = its runs — see [totalConduitCount]).
   final List<CircuitConduit> conduits;
 
   /// Single-layer tray for the panel's outgoing cables.
@@ -161,6 +173,11 @@ class ContainmentResult {
     required this.tray,
     required this.verifyItems,
   });
+
+  /// Total conduits to procure for the panel — Σ [CircuitConduit.count], so a
+  /// 2-run feeder counts two conduits, not one.
+  int get totalConduitCount =>
+      conduits.fold<int>(0, (sum, c) => sum + c.count);
 }
 
 // ---------------------------------------------------------------------------
@@ -251,17 +268,20 @@ CableTraySpec sizeCableTray(ElectricalPanelResult panel) {
   );
 }
 
-/// Containment take-off for a panel: a conduit per outgoing circuit cable plus
-/// the single tray that carries them all.
+/// Containment take-off for a panel: a conduit per outgoing circuit CABLE (a
+/// way sized as N parallel runs gets N conduits, one cable each) plus the
+/// single tray that carries them all.
 ContainmentResult containmentFor(ElectricalPanelResult panel) {
   final conduits = <CircuitConduit>[];
   for (final c in panel.circuits) {
     // A spare way (no cable) gets no conduit entry.
     if (c.cable.csaMm2 <= 0) continue;
+    final runs = (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
     conduits.add(CircuitConduit(
       circuitId: c.circuitId,
       name: c.name,
       conduit: sizeConduit(c.cable.csaMm2, c.grounding.cores),
+      count: runs,
     ));
   }
   return ContainmentResult(
