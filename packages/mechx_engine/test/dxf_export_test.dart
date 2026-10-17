@@ -354,6 +354,12 @@ void main() {
       expect(dxf, contains('G-ANNO-GRID')); // the grid layer + entities
       expect(dxf, contains('\n1\n2500\n')); // the riser tie dimension (mm)
       expect(dxf, contains('\n1\nA\n')); // a column bubble label
+      // drafting-4: the tie is a real dimension on its OWN grey layer — two
+      // extension lines + the offset dimension line + two oblique ticks (five
+      // LINEs) and the figure — never a bare LINE on the riser's ordinate.
+      expect(dxf, contains('G-ANNO-DIMS'));
+      expect('\n8\nG-ANNO-DIMS\n'.allMatches(dxf).length, 5 + 1,
+          reason: '5 LINEs + 1 TEXT on the dimension layer');
     });
 
     test('N5/N4: null map + null grid keep the professional DXF byte-identical',

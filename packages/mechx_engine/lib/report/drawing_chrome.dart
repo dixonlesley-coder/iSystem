@@ -723,6 +723,10 @@ const kDxfLayerAnno = 'G-ANNO-TEXT';
 /// DXF sheet-frame / title-block layer.
 const kDxfLayerFrame = 'G-ANNO-TTLB';
 
+/// DXF dimension layer (setting-out tie dimensions — extension lines, the
+/// offset dimension line, its oblique ticks and the figure), ACI 8 grey.
+const kDxfLayerDims = 'G-ANNO-DIMS';
+
 /// Nearest-ACI colour index per service, in the SAME hue family as the canvas
 /// `serviceChromeColor` (the single truth, E2). ACI base palette: 1 red,
 /// 2 yellow, 3 green, 4 cyan, 5 blue, 6 magenta, 7 white, 8 grey; the extended

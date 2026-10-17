@@ -37,6 +37,13 @@ import 'sld_sheet.dart';
 /// The size half of an edge label: `DN50` (pipe), `O200` (round duct, the
 /// ASCII stand-in for Ø since Roboto/Helvetica printable-ASCII has no Ø), or
 /// `W200x100` (rectangular duct).
+/// drafting-4: the perpendicular offset (pt) of a tie dimension's line from the
+/// axis-to-riser ordinate (~3.5 mm on paper), so it never lands on a pipe run.
+const double _kTieDimOffsetPt = 10.0;
+
+/// drafting-4: half-length (pt) of a tie dimension's 45-degree oblique tick.
+const double _kTieTickHalfPt = 2.0;
+
 String _sizeLabel(NetEdge e, EdgeSizing s) {
   if (s.isRectangular) {
     return '${s.width!.inMillimeters.round()}x${s.height!.inMillimeters.round()}';
@@ -548,23 +555,50 @@ Uint8List planToPdf({
         String label) {
       final lax = tx(fromXpx), lay = ty(fromYpx); // axis end (page space)
       final lbx = tx(toXpx), lby = ty(toYpx); // node end (at the riser marker)
-      cs.writeln('0.20 0.20 0.20 RG 0.5 w');
-      cs.writeln('${_n(lax)} ${_n(lay)} m ${_n(lbx)} ${_n(lby)} l S');
-      // N3: stagger the dimension text AWAY from the marker (the node end) —
-      // back off along the line toward the axis, then step perpendicular until
-      // the box clears everything already placed (marker / UP-DN / labels).
-      // Register the cleared box so the riser tag (placed last) dodges it too.
-      const fs = 7.0;
-      final w = label.length * fs * 0.55;
-      const h = fs;
+      // drafting-4: a REAL dimension, not a bare line at the riser's own
+      // ordinate (which landed exactly on a pipe running toward the grid and
+      // read as a pipe / cross-connection). The dimension line is OFFSET
+      // perpendicular by [_kTieDimOffsetPt], joined to the axis and the riser
+      // by thin extension lines (gapped clear of the riser marker, overshooting
+      // the dimension line slightly), and terminated by 45-degree oblique
+      // ticks — all in a lighter grey so a coincident pipe keeps its colour.
       final dxp = lbx - lax, dyp = lby - lay;
       final len = math.sqrt(dxp * dxp + dyp * dyp);
       final ux = len > 1e-6 ? dxp / len : 1.0;
       final uy = len > 1e-6 ? dyp / len : 0.0;
       final perpX = uy, perpY = -ux; // the line direction rotated by -90 deg
+      const off = _kTieDimOffsetPt;
+      final dax = lax + perpX * off, day = lay + perpY * off;
+      final dbx = lbx + perpX * off, dby = lby + perpY * off;
+      cs.writeln('0.45 0.45 0.45 RG 0.35 w');
+      // Extension lines: axis end (small gap) / riser end (clear of the r=5
+      // marker), each overshooting the dimension line by 2 pt.
+      const extOver = off + 2.0;
+      cs.writeln('${_n(lax + perpX * 2)} ${_n(lay + perpY * 2)} m '
+          '${_n(lax + perpX * extOver)} ${_n(lay + perpY * extOver)} l S');
+      cs.writeln('${_n(lbx + perpX * 6)} ${_n(lby + perpY * 6)} m '
+          '${_n(lbx + perpX * extOver)} ${_n(lby + perpY * extOver)} l S');
+      // The dimension line itself.
+      cs.writeln('${_n(dax)} ${_n(day)} m ${_n(dbx)} ${_n(dby)} l S');
+      // 45-degree oblique ticks (architectural terminators) at both ends.
+      final tkx = (ux + perpX) * _kTieTickHalfPt / math.sqrt2;
+      final tky = (uy + perpY) * _kTieTickHalfPt / math.sqrt2;
+      cs.writeln('0.6 w');
+      for (final (ex, ey) in [(dax, day), (dbx, dby)]) {
+        cs.writeln('${_n(ex - tkx)} ${_n(ey - tky)} m '
+            '${_n(ex + tkx)} ${_n(ey + tky)} l S');
+      }
+      // N3: stagger the dimension text AWAY from the marker (the node end) —
+      // back off along the line toward the axis, then step perpendicular until
+      // the box clears everything already placed (marker / UP-DN / labels).
+      // Register the cleared box so the riser tag (placed last) dodges it too.
+      // The text starts just beyond the offset dimension line.
+      const fs = 7.0;
+      final w = label.length * fs * 0.55;
+      const h = fs;
       final along = math.min(22.0, len * 0.5); // back off from the node
-      final cx0 = lbx - ux * along;
-      final cy0 = lby - uy * along;
+      final cx0 = lbx - ux * along + perpX * off;
+      final cy0 = lby - uy * along + perpY * off;
       LabelBox boxAt(double bcx, double bcy) => (
             minX: bcx - w / 2,
             minY: bcy - h / 2,
