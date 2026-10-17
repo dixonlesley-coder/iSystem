@@ -756,7 +756,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   **IEC 60617-style schematic symbols** (`ui/electrical/load_symbols.dart` `LoadSymbol`,
   shared with the Loads palette + the layout markers — one symbol language; replaced the
   old text-tag glyph box),
-  Loads palette (`Draggable<LoadKind>`), outlet-drag-to-feeder, minimap, zoom controls,
+  Loads palette (`Draggable<LoadKind>`; one card per load kind, a sticky `1ph`|`3ph`
+  segment [`palettePhaseProvider`] picks the phase of the phase-variable kinds), outlet-drag-to-feeder, minimap, zoom controls,
   Single-line / Power one-line tabs + canvas toolbar; additive `ElectricalPanel.x/y`
   (no math change). The app shell is now PanelMaker's **248-px left navigation rail**
   (`ui/shell/nav_rail.dart`): DESIGN (Plan/Schematic/Electrical, still driven by

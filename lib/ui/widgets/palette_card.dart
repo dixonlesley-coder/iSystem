@@ -32,6 +32,10 @@ class PaletteCard<T extends Object> extends StatefulWidget {
   /// card stays drag-only).
   final VoidCallback? onActivate;
 
+  /// An optional small trailing tag after the label (e.g. a muted `3ph`
+  /// marker on a fixed three-phase load). Null ⇒ the chip is unchanged.
+  final Widget? trailing;
+
   const PaletteCard({
     super.key,
     required this.label,
@@ -42,6 +46,7 @@ class PaletteCard<T extends Object> extends StatefulWidget {
     this.fillWidth = false,
     this.leading,
     this.onActivate,
+    this.trailing,
   });
 
   @override
@@ -140,6 +145,10 @@ class _PaletteCardState<T extends Object> extends State<PaletteCard<T>> {
           // In a full-width list the label flexes (ellipsis on overflow); the
           // compact (feedback / Wrap) form hugs its content.
           if (fill) Expanded(child: label) else label,
+          if (widget.trailing != null) ...[
+            const SizedBox(width: MechXSpacing.xs),
+            widget.trailing!,
+          ],
         ],
       ),
     );
