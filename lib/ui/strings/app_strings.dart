@@ -600,6 +600,8 @@ enum StringKey {
   issueWaterVelocityTitle, // message = the engine VelocityCheck.message
   issueSelfCleansingTitle,
   issueSelfCleansingMessage,
+  issueRainwaterSelfCleansingTitle,
+  issueRainwaterSelfCleansingMessage,
   issueLoopUnbalancedTitle,
   issueLoopUnbalancedMessage,
   issueMotorOversizedTitle,
@@ -1720,6 +1722,12 @@ const Map<StringKey, String> _en = {
       'solids settle out and it silts up. It is already larger than the DFU '
       'minimum for its load — steepen the drainage slope (Building page) or '
       'group more discharge onto the branch.',
+  StringKey.issueRainwaterSelfCleansingTitle:
+      'Rainwater collector below self-cleansing velocity',
+  StringKey.issueRainwaterSelfCleansingMessage:
+      'This rainwater collector runs below 0.6 m/s self-cleansing at the '
+      'design slope, so grit and leaf debris settle out and it silts up. It is '
+      'auto-sized on the roof runoff — steepen the laid slope (Building page).',
   StringKey.issueLoopUnbalancedTitle: 'Ring flow split not settled',
   StringKey.issueLoopUnbalancedMessage:
       'The Hardy-Cross balance for this looped main did not converge within its '
@@ -2860,6 +2868,13 @@ const Map<StringKey, String> _id = {
       'Ukurannya sudah lebih besar dari minimum tabel DFU untuk bebannya — '
       'pertajam kemiringan drainase (halaman Bangunan) atau gabungkan lebih '
       'banyak buangan ke cabang ini.',
+  StringKey.issueRainwaterSelfCleansingTitle:
+      'Kolektor air hujan di bawah kecepatan swa-bersih',
+  StringKey.issueRainwaterSelfCleansingMessage:
+      'Pada kemiringan desain, kolektor air hujan ini mengalir di bawah '
+      'kecepatan swa-bersih 0,6 m/s sehingga pasir dan serasah daun mengendap '
+      'dan salurannya tersumbat. Ukurannya ditentukan otomatis dari limpasan '
+      'atap — pertajam kemiringan pemasangan (halaman Bangunan).',
   StringKey.issueLoopUnbalancedTitle: 'Pembagian aliran ring belum stabil',
   StringKey.issueLoopUnbalancedMessage:
       'Penyeimbangan Hardy-Cross untuk jaringan ring ini tidak konvergen dalam '
