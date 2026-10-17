@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/app_state.dart' show statusMessageProvider;
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/ui/schematic/schematic_view.dart';
@@ -113,6 +114,9 @@ void main() {
       find.byType(SchematicView),
       matchesGoldenFile('goldens/09_single_line_symbols.png'),
     );
+    // Loading a network with pumps runs the MEP->electrical sync, whose status
+    // pill self-clears on a 3 s Timer; cancel it before the tree is disposed.
+    container.read(statusMessageProvider.notifier).clear();
   });
 
   testWidgets('inferred risers connect floors that share a service unrouted',
@@ -166,6 +170,9 @@ void main() {
       find.byType(SchematicView),
       matchesGoldenFile('goldens/10_single_line_inferred.png'),
     );
+    // Loading a network with pumps runs the MEP->electrical sync, whose status
+    // pill self-clears on a 3 s Timer; cancel it before the tree is disposed.
+    container.read(statusMessageProvider.notifier).clear();
   });
 
   testWidgets('tapping an inferred riser commits a real sized riser edge',
