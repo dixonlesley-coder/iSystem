@@ -18,13 +18,15 @@ import '../inspector/project_panel.dart'
         exportEquipmentSchedulePdf,
         exportMepUnifiedReport,
         exportMepUnifiedReportPdf,
-        exportSubmittalPackage;
+        exportSubmittalPackage,
+        visibleEquipmentSpecTargetCount;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_text_field.dart';
+import 'document_control_card.dart';
 import 'project_io.dart';
 import 'templates_dialog.dart';
 
@@ -42,6 +44,9 @@ class ProjectsScreen extends ConsumerWidget {
     final project = ref.watch(projectControllerProvider);
     final ctrl = ref.read(projectControllerProvider.notifier);
     final recents = ref.watch(appSettingsProvider).mru;
+    // The equipment model/spec disclosure shows only once there is tagged
+    // mechanical equipment (the same gate the old inspector section used).
+    final specCount = visibleEquipmentSpecTargetCount(ref);
 
     return HubScaffold(
       title: 'Projects',
@@ -99,8 +104,32 @@ class ProjectsScreen extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // H5: the document-control identity right at the export surface.
-              const ExportIdentityBar(),
+              // H5: the document-control identity right at the export surface —
+              // the Drawing no. / Revision / Client row, then (moved here off
+              // the Layout inspector) the DRAWN/CHECKED/APPROVED + revision
+              // block and the equipment model/spec editor as disclosures.
+              ExportIdentityBar(
+                footer: [
+                  const SizedBox(height: MechXSpacing.md),
+                  DisclosureSection(
+                    name: kSignOffSectionKey,
+                    label: context.strings(StringKey.projectsSignOffSection),
+                    defaultExpanded: false,
+                    child: const DocumentControlCard(),
+                  ),
+                  if (specCount > 0) ...[
+                    const SizedBox(height: MechXSpacing.sm),
+                    DisclosureSection(
+                      name: kEquipmentSpecSectionKey,
+                      label: context.strings.format(
+                          StringKey.projectsEquipmentSpecSection,
+                          {'n': specCount}),
+                      defaultExpanded: false,
+                      child: const EquipmentSpecCard(),
+                    ),
+                  ],
+                ],
+              ),
               const SizedBox(height: MechXSpacing.md),
               // A5: a leading, visually-primary 'Export deliverables' group —
               // the cross-discipline submittal package + the unified MEP

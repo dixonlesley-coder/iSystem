@@ -323,6 +323,13 @@ enum StringKey {
   inspectorEquipmentScheduleHint,
   inspectorModelSpecHint,
 
+  // Projects page — document control card (sign-off + equipment specs).
+  projectsDocControlCaption,
+  projectsSignOffSection,
+  projectsEquipmentSpecSection,
+  paletteEditDocControl,
+  paletteEditEquipmentSpecs,
+
   // Export — OS save-dialog titles.
   exportTitleCalcReport,
   exportTitleMepReport,
@@ -1360,6 +1367,14 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorEquipmentScheduleHint:
       'Model / spec for the issued equipment schedule. Blank prints as "—".',
   StringKey.inspectorModelSpecHint: 'Model / spec',
+
+  // Projects page — document control card.
+  StringKey.projectsDocControlCaption:
+      'Stamped on every exported drawing and report title block.',
+  StringKey.projectsSignOffSection: 'Sign-off and revisions',
+  StringKey.projectsEquipmentSpecSection: 'Equipment model/spec ({n})',
+  StringKey.paletteEditDocControl: 'Edit document control',
+  StringKey.paletteEditEquipmentSpecs: 'Edit equipment specs',
 
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Export calc report',
@@ -2444,6 +2459,14 @@ const Map<StringKey, String> _id = {
       'Model / spesifikasi untuk jadwal peralatan yang diterbitkan. Kosong '
       'tercetak sebagai "—".',
   StringKey.inspectorModelSpecHint: 'Model / spesifikasi',
+
+  // Projects page — document control card.
+  StringKey.projectsDocControlCaption:
+      'Dicap pada setiap kepala gambar dan laporan yang diekspor.',
+  StringKey.projectsSignOffSection: 'Pengesahan dan revisi',
+  StringKey.projectsEquipmentSpecSection: 'Model/spesifikasi peralatan ({n})',
+  StringKey.paletteEditDocControl: 'Edit kontrol dokumen',
+  StringKey.paletteEditEquipmentSpecs: 'Edit spesifikasi peralatan',
 
   // Export — OS save-dialog titles.
   StringKey.exportTitleCalcReport: 'Ekspor laporan hitung',

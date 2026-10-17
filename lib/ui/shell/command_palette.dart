@@ -24,6 +24,7 @@ import '../../store/calibration_store.dart';
 import '../../store/command_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/history_store.dart';
+import '../../store/inspector_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -154,6 +155,30 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       subtitle: 'Project hub + exports',
       shortcut: 'Ctrl+7',
       run: () => shell.set(ShellSection.projects),
+    ),
+    // Document control + equipment specs live on the Projects page (moved off
+    // the Layout inspector): jump there with the section already open.
+    _Command(
+      id: 'project.docControl',
+      title: context.strings(StringKey.paletteEditDocControl),
+      subtitle: 'Sign-off + revisions on Projects',
+      run: () {
+        ref
+            .read(sectionVisibilityProvider.notifier)
+            .set(kSignOffSectionKey, true);
+        shell.set(ShellSection.projects);
+      },
+    ),
+    _Command(
+      id: 'project.equipmentSpecs',
+      title: context.strings(StringKey.paletteEditEquipmentSpecs),
+      subtitle: 'Equipment model/spec on Projects',
+      run: () {
+        ref
+            .read(sectionVisibilityProvider.notifier)
+            .set(kEquipmentSpecSectionKey, true);
+        shell.set(ShellSection.projects);
+      },
     ),
     _Command(
       id: 'view.preferences',

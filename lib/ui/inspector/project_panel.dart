@@ -655,11 +655,11 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
 /// on (a panel's tag/name, `TX-01` / `G-01` / `CB-01`) get an edit field too.
 ///
 /// The section's VISIBILITY is gated on mechanical equipment (pumps/fans/AHU)
-/// being present ([_hasMechanicalEquipmentTargets]) — so merely seeding an
+/// being present ([hasMechanicalEquipmentTargets]) — so merely seeding an
 /// electrical project's panels never SURFACES this mechanical-inspector section
 /// (a blank-mechanical launch stays byte-identical); the panel/apparatus rows
 /// ride along only once the section is already shown for real mechanical duty.
-List<({String tag, String service})> _equipmentSpecTargets(WidgetRef ref) {
+List<({String tag, String service})> equipmentSpecTargets(WidgetRef ref) {
   final data = gatherEquipmentScheduleData(ref);
   const apparatus = {
     EquipmentCategory.panel,
@@ -680,9 +680,34 @@ List<({String tag, String service})> _equipmentSpecTargets(WidgetRef ref) {
 /// electrical panel/apparatus rows are additive detail once shown; they never
 /// surface the section on their own (keeps the goldens' seeded-electrical launch
 /// byte-identical).
-bool _hasMechanicalEquipmentTargets(WidgetRef ref) {
+bool hasMechanicalEquipmentTargets(WidgetRef ref) {
   final data = gatherEquipmentScheduleData(ref);
   return data.pumps.isNotEmpty || data.fans.isNotEmpty;
+}
+
+/// Watch every provider [equipmentSpecTargets]'s tag/service derivation reads
+/// (it — like the export gather it shares — READS rather than watches), so a
+/// surface listing the spec targets shows/hides and stays live as the
+/// pump/fan/room duties and the electrical panels change.
+void watchEquipmentSpecInputs(WidgetRef ref) {
+  ref.watch(projectControllerProvider);
+  ref.watch(pumpDutyProvider);
+  ref.watch(standpipeDesignProvider);
+  ref.watch(ductFanProvider);
+  ref.watch(ductSettingsProvider);
+  ref.watch(roomAreasProvider);
+  ref.watch(electricalResultProvider);
+  ref.watch(electricalProjectProvider);
+}
+
+/// The number of equipment model/spec edit targets to SHOW — 0 unless the
+/// project carries sized mechanical equipment (the
+/// [hasMechanicalEquipmentTargets] gate), so seeding an electrical project's
+/// panels alone never surfaces the editor. Watches its inputs.
+int visibleEquipmentSpecTargetCount(WidgetRef ref) {
+  watchEquipmentSpecInputs(ref);
+  if (!hasMechanicalEquipmentTargets(ref)) return 0;
+  return equipmentSpecTargets(ref).length;
 }
 
 Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
@@ -1527,7 +1552,13 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
 /// this is the pre-flight surface. Additive: an unset field prints no title-block
 /// chrome, so leaving it blank is byte-identical to before.
 class ExportIdentityBar extends ConsumerWidget {
-  const ExportIdentityBar({super.key});
+  const ExportIdentityBar({super.key, this.footer = const []});
+
+  /// Extra content beneath the Drawing no. / Revision / Client row — the
+  /// Projects page hosts its sign-off + equipment model/spec disclosures here
+  /// so the whole document-control identity reads as ONE card. Empty (the
+  /// Review hub) ⇒ just the row.
+  final List<Widget> footer;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1574,9 +1605,7 @@ class ExportIdentityBar extends ConsumerWidget {
               style: type.subtitle.copyWith(color: colors.textPrimary)),
           const SizedBox(height: MechXSpacing.xxs),
           Text(
-            'Stamped on every exported drawing + report title block. Confirm it '
-            'before you export; the full DRAWN/CHECKED/APPROVED + revision block '
-            'lives in the Layout inspector.',
+            context.strings(StringKey.projectsDocControlCaption),
             style: type.caption.copyWith(color: colors.textMuted),
           ),
           const SizedBox(height: MechXSpacing.sm),
@@ -1591,6 +1620,7 @@ class ExportIdentityBar extends ConsumerWidget {
                   'Client name'),
             ],
           ),
+          ...footer,
         ],
       ),
     );
@@ -1634,6 +1664,7 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
   @override
   Widget build(BuildContext context) {
     final building = ref.watch(projectControllerProvider).building;
+    final layer = ref.watch(activeDisciplineProvider);
 
     // Context before document (the Keynote inspector rule): the selection
     // editor is pinned FIRST, and picking something on canvas snaps the panel
@@ -1701,34 +1732,33 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
               const _DrawSection(),
               const SizedBox(height: MechXSpacing.lg),
 
-              // ── Tanks (only shown when the sheet has designated areas) ─────
-              const _TanksSection(),
-
-              // ── Rooms (only shown when the sheet has designated rooms) ─────
-              const _RoomsSection(),
-
-              // ── Network results ───────────────────────────────────────────
-              // (Occupancy / rainfall / runoff design INPUTS moved to the
-              // Building setup page; the Show/Hide-sizes canvas toggle lives
-              // atop Results now.)
-              const _ResultsSection(),
-              const SizedBox(height: MechXSpacing.lg),
-
-              // ── Fire protection ───────────────────────────────────────────
-              const _FireSection(),
-              const SizedBox(height: MechXSpacing.lg),
-
-              // ── HVAC / ducting ────────────────────────────────────────────
-              const _HvacSection(),
-              const SizedBox(height: MechXSpacing.lg),
-
-              // ── Document control (issuable-sheet identity, D3) ────────────
-              const _DocumentControlSection(),
-              const SizedBox(height: MechXSpacing.lg),
-
-              // ── Equipment schedule model/spec (N23; only shown once there's
-              // at least one tagged pump/fan/AHU to fill in a spec for) ─────
-              const _EquipmentModelSpecSection(),
+              // ── The ACTIVE layer's sections only ──────────────────────────
+              // The inspector is scoped to the discipline being edited: the
+              // Plumbing layer shows its Tanks + network Results, Fire its
+              // fire-protection block, HVAC its Rooms + ducting. (Electrical
+              // swaps the whole column for the Loads palette in app_shell.)
+              // Document control + the equipment model/spec editor moved to
+              // the Projects page, beside the exports they stamp.
+              ...switch (layer) {
+                DisciplineLayer.plumbing => const <Widget>[
+                    // Tanks (only shown when the sheet has designated areas).
+                    _TanksSection(),
+                    // Network results (the Show/Hide-sizes toggle sits atop).
+                    _ResultsSection(),
+                    SizedBox(height: MechXSpacing.lg),
+                  ],
+                DisciplineLayer.fire => const <Widget>[
+                    _FireSection(),
+                    SizedBox(height: MechXSpacing.lg),
+                  ],
+                DisciplineLayer.hvac => const <Widget>[
+                    // Rooms (only shown when the sheet has designated rooms).
+                    _RoomsSection(),
+                    _HvacSection(),
+                    SizedBox(height: MechXSpacing.lg),
+                  ],
+                DisciplineLayer.electrical => const <Widget>[],
+              },
             ],
           ),
         ),
@@ -2145,16 +2175,16 @@ class _BuildingSummaryState extends State<_BuildingSummary> {
   }
 }
 
-class _GlyphButton extends StatefulWidget {
+class InspectorGlyphButton extends StatefulWidget {
   final String glyph;
   final VoidCallback? onTap;
-  const _GlyphButton({required this.glyph, required this.onTap});
+  const InspectorGlyphButton({super.key, required this.glyph, required this.onTap});
 
   @override
-  State<_GlyphButton> createState() => _GlyphButtonState();
+  State<InspectorGlyphButton> createState() => InspectorGlyphButtonState();
 }
 
-class _GlyphButtonState extends State<_GlyphButton> {
+class InspectorGlyphButtonState extends State<InspectorGlyphButton> {
   bool _hover = false;
   bool _down = false;
 
@@ -2205,224 +2235,6 @@ class _GlyphButtonState extends State<_GlyphButton> {
           onTapCancel: enabled ? () => setState(() => _down = false) : null,
           child: glyph,
         ),
-      ),
-    );
-  }
-}
-
-/// Document control — the issuable-sheet identity (D3): document/drawing
-/// number, revision tag, client, and the DRAWN/CHECKED/APPROVED names, plus a
-/// minimal revision-history editor. All fields commit straight into
-/// [documentControlProvider] (persisted with the project), from where they feed
-/// every report head ([buildMechanicalReportData]) and PDF/DXF title block
-/// ([issuableChrome], the riser/electrical export chromes). Collapsed by
-/// default so a blank launch stays canvas-focused.
-class _DocumentControlSection extends ConsumerStatefulWidget {
-  const _DocumentControlSection();
-
-  @override
-  ConsumerState<_DocumentControlSection> createState() =>
-      _DocumentControlSectionState();
-}
-
-class _DocumentControlSectionState
-    extends ConsumerState<_DocumentControlSection> {
-  // The pending add-revision row. The epoch keys the row's text fields so a
-  // successful Add remounts them EMPTY — an EditableText keeps its own text
-  // while focused, so clearing the state alone would not clear the field.
-  String _revDate = '';
-  String _revDesc = '';
-  int _addEpoch = 0;
-
-  void _addRevision() {
-    final date = _revDate.trim();
-    final desc = _revDesc.trim();
-    if (date.isEmpty && desc.isEmpty) return;
-    ref.read(documentControlProvider.notifier).addRevision(date, desc);
-    setState(() {
-      _revDate = '';
-      _revDesc = '';
-      _addEpoch++;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    final doc = ref.watch(documentControlProvider);
-    final ctrl = ref.read(documentControlProvider.notifier);
-
-    // A labelled single-line field. The store setter normalizes (trims; an
-    // emptied field clears back to null), so committing on every change is
-    // safe — the same idiom as the project-name field on the Projects page.
-    Widget field(
-      StringKey label,
-      String? value,
-      ValueChanged<String> onChanged,
-    ) =>
-        Padding(
-          padding: const EdgeInsets.only(bottom: MechXSpacing.sm),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(context.strings(label),
-                  style: type.caption.copyWith(color: colors.textMuted)),
-              const SizedBox(height: MechXSpacing.xs),
-              MechXTextField(value: value ?? '', onChanged: onChanged),
-            ],
-          ),
-        );
-
-    return DisclosureSection(
-      name: 'Document control',
-      defaultExpanded: false,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          field(StringKey.inspectorDocNumber, doc.documentNumber,
-              ctrl.setDocumentNumber),
-          field(StringKey.inspectorRevisionTag, doc.revisionTag,
-              ctrl.setRevisionTag),
-          field(StringKey.inspectorClient, doc.clientName, ctrl.setClientName),
-          field(StringKey.inspectorPreparedBy, doc.preparedBy,
-              ctrl.setPreparedBy),
-          field(StringKey.inspectorCheckedBy, doc.checkedBy, ctrl.setCheckedBy),
-          field(StringKey.inspectorApprovedBy, doc.approvedBy,
-              ctrl.setApprovedBy),
-
-          // ── Revision history (date + description rows) ───────────────────
-          Text(context.strings(StringKey.inspectorRevisionHistory),
-              style: type.caption.copyWith(color: colors.textMuted)),
-          const SizedBox(height: MechXSpacing.xs),
-          for (var i = 0; i < doc.revisions.length; i++)
-            Padding(
-              padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '${doc.revisions[i].date} · ${doc.revisions[i].description}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style:
-                          type.caption.copyWith(color: colors.textSecondary),
-                    ),
-                  ),
-                  _GlyphButton(
-                    glyph: '−',
-                    onTap: () => ctrl.removeRevisionAt(i),
-                  ),
-                ],
-              ),
-            ),
-          Row(
-            key: ValueKey('doc-rev-add-$_addEpoch'),
-            children: [
-              SizedBox(
-                width: 92,
-                child: MechXTextField(
-                  value: '',
-                  hint: context.strings(StringKey.inspectorRevisionDateHint),
-                  onChanged: (v) => _revDate = v,
-                ),
-              ),
-              const SizedBox(width: MechXSpacing.xs),
-              Expanded(
-                child: MechXTextField(
-                  value: '',
-                  hint: context.strings(StringKey.inspectorRevisionDescHint),
-                  onChanged: (v) => _revDesc = v,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: MechXSpacing.sm),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: MechXButton(
-              label: context.strings(StringKey.inspectorAddRevision),
-              onPressed: _addRevision,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// N23 — the compact "Model / spec" editor for the equipment schedule: one
-/// row per tagged pump / fan / AHU-FCU-AC (the same tags
-/// `gatherEquipmentScheduleData` assigns), each with a free-text field
-/// committing straight into [equipmentModelSpecProvider] (persisted with the
-/// project). Threaded into every equipment-schedule export (Markdown / CSV /
-/// PDF) by tag, so a spec entered here is what procurement sees. Renders
-/// nothing when there is no tagged equipment yet — an empty/blank project is
-/// byte-identical to before this feature.
-class _EquipmentModelSpecSection extends ConsumerWidget {
-  const _EquipmentModelSpecSection();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // [_equipmentSpecTargets] (like the export gather it shares) reads rather
-    // than watches, so explicitly watch every provider its tag/service
-    // derivation depends on — this section then shows/hides and its rows stay
-    // live as the pump/fan/room duties change, matching how `_ResultsSection`
-    // / `_RoomsSection` watch the same state.
-    ref.watch(projectControllerProvider);
-    ref.watch(pumpDutyProvider);
-    ref.watch(standpipeDesignProvider);
-    ref.watch(ductFanProvider);
-    ref.watch(ductSettingsProvider);
-    ref.watch(roomAreasProvider);
-    // N23 residual: the electrical panels + source apparatus are edit targets
-    // too, so react to their live state (a panel added / a source configured).
-    ref.watch(electricalResultProvider);
-    ref.watch(electricalProjectProvider);
-    final specs = ref.watch(equipmentModelSpecProvider);
-    // Gate visibility on mechanical equipment so seeding an electrical project's
-    // panels alone never surfaces this mechanical-inspector section (goldens).
-    if (!_hasMechanicalEquipmentTargets(ref)) return const SizedBox.shrink();
-    final targets = _equipmentSpecTargets(ref);
-    if (targets.isEmpty) return const SizedBox.shrink();
-
-    final colors = context.colors;
-    final type = context.type;
-    final ctrl = ref.read(equipmentModelSpecProvider.notifier);
-
-    return DisclosureSection(
-      name: context.strings(StringKey.inspectorEquipmentSchedule),
-      defaultExpanded: false,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            context.strings(StringKey.inspectorEquipmentScheduleHint),
-            style: type.caption.copyWith(color: colors.textMuted),
-          ),
-          const SizedBox(height: MechXSpacing.sm),
-          for (final t in targets)
-            Padding(
-              padding: const EdgeInsets.only(bottom: MechXSpacing.sm),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    '${t.tag} · ${t.service}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: type.caption.copyWith(color: colors.textSecondary),
-                  ),
-                  const SizedBox(height: MechXSpacing.xxs),
-                  MechXTextField(
-                    value: specs[t.tag] ?? '',
-                    hint: context.strings(StringKey.inspectorModelSpecHint),
-                    onCommitted: (v) => ctrl.setSpec(t.tag, v),
-                  ),
-                ],
-              ),
-            ),
-        ],
       ),
     );
   }
@@ -3932,7 +3744,7 @@ class _SelectionSection extends ConsumerWidget {
         Row(
           children: [
             Expanded(child: MechXSectionLabel('Selection')),
-            _GlyphButton(glyph: '×', onTap: selCtrl.clear),
+            InspectorGlyphButton(glyph: '×', onTap: selCtrl.clear),
           ],
         ),
         if (elsewhereId != null) ...[
@@ -4062,7 +3874,7 @@ class _SelectionSection extends ConsumerWidget {
         Row(
           children: [
             Expanded(child: MechXSectionLabel('Selection')),
-            _GlyphButton(glyph: '×', onTap: selCtrl.clear),
+            InspectorGlyphButton(glyph: '×', onTap: selCtrl.clear),
           ],
         ),
         const SizedBox(height: MechXSpacing.sm),

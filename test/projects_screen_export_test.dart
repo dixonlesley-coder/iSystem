@@ -4,9 +4,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/document_control_store.dart';
+import 'package:mechx/store/inspector_store.dart';
+import 'package:mechx/ui/shell/document_control_card.dart';
 import 'package:mechx/ui/shell/projects_screen.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
 import 'package:mechx/ui/widgets/mechx_button.dart';
+import 'package:mechx/ui/widgets/mechx_text_field.dart';
 
 import 'test_util.dart';
 
@@ -88,5 +92,66 @@ void main() {
         find.textContaining('Plain plan — no calibrated'), findsOneWidget);
     expect(find.textContaining('Annotated plan — includes real'),
         findsOneWidget);
+  });
+
+  testWidgets(
+      'Document control: the always-visible Drawing no. / Revision / Client '
+      'row, then a collapsed Sign-off and revisions disclosure that commits '
+      'DRAWN/CHECKED/APPROVED + revision rows to the store', (tester) async {
+    await _pump(tester);
+
+    expect(find.text('Document control'), findsOneWidget);
+    expect(
+        find.text('Stamped on every exported drawing and report title block.'),
+        findsOneWidget);
+    expect(find.textContaining('Layout inspector'), findsNothing);
+    expect(find.text('Drawing no.'), findsOneWidget);
+    // Collapsed by default: header only.
+    expect(find.text('SIGN-OFF AND REVISIONS'), findsOneWidget);
+    expect(find.text('Prepared by'), findsNothing);
+    // The default building's standpipe fire pump (FP-01) is tagged
+    // mechanical equipment, so the collapsed model/spec disclosure shows with
+    // its live count (the same gate the old inspector section used).
+    expect(find.textContaining('EQUIPMENT MODEL/SPEC ('), findsOneWidget);
+    expect(find.text('FP-01 · Fire standpipe pump'), findsNothing);
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(ProjectsScreen)),
+      listen: false,
+    );
+    container
+        .read(sectionVisibilityProvider.notifier)
+        .set(kSignOffSectionKey, true);
+    await tester.pumpAndSettle();
+    expect(find.text('Prepared by'), findsOneWidget);
+    expect(find.text('Checked by'), findsOneWidget);
+    expect(find.text('Approved by'), findsOneWidget);
+
+    final fields = find.descendant(
+        of: find.byType(DocumentControlCard),
+        matching: find.byType(MechXTextField));
+    // DRAWN / CHECKED / APPROVED, then the two add-revision fields.
+    expect(fields, findsNWidgets(5));
+    await tester.enterText(fields.at(0), 'AB');
+    await tester.enterText(fields.at(2), 'CD');
+    expect(container.read(documentControlProvider).preparedBy, 'AB');
+    expect(container.read(documentControlProvider).approvedBy, 'CD');
+
+    await tester.enterText(fields.at(3), '2026-10-17');
+    await tester.enterText(fields.at(4), 'Issued for review');
+    await tester.ensureVisible(find.text('Add revision'));
+    await tester.tap(find.text('Add revision'));
+    await tester.pumpAndSettle();
+    final revisions = container.read(documentControlProvider).revisions;
+    expect(revisions, hasLength(1));
+    expect(revisions.single.description, 'Issued for review');
+    expect(find.text('2026-10-17 · Issued for review'), findsOneWidget);
+
+    // Expanding the equipment disclosure lists the tagged rows.
+    container
+        .read(sectionVisibilityProvider.notifier)
+        .set(kEquipmentSpecSectionKey, true);
+    await tester.pumpAndSettle();
+    expect(find.text('FP-01 · Fire standpipe pump'), findsOneWidget);
   });
 }

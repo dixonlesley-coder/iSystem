@@ -23,11 +23,16 @@ class DisclosureSection extends ConsumerWidget {
   final bool defaultExpanded;
   final Widget child;
 
+  /// Optional display label for the header (e.g. a localized or counted
+  /// title); null shows [name]. [name] stays the stable expansion key.
+  final String? label;
+
   const DisclosureSection({
     super.key,
     required this.name,
     required this.child,
     this.defaultExpanded = true,
+    this.label,
   });
 
   @override
@@ -57,7 +62,7 @@ class DisclosureSection extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _DisclosureHeaderBar(
-          label: name,
+          label: label ?? name,
           expanded: expanded,
           onTap: () => ref
               .read(sectionVisibilityProvider.notifier)

@@ -257,4 +257,29 @@ void main() {
       issueGroupKey(failing),
     );
   });
+
+  testWidgets(
+      'the Review hub keeps the compact Document control row only — the '
+      'sign-off/revision block lives on the Projects page', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MechXTheme(
+          data: MechXThemeData.dark,
+          child: const Directionality(
+            textDirection: TextDirection.ltr,
+            child: ReviewHub(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Drawing no.'), findsOneWidget);
+    expect(
+        find.text('Stamped on every exported drawing and report title block.'),
+        findsOneWidget);
+    expect(find.textContaining('Layout inspector'), findsNothing);
+    expect(find.text('SIGN-OFF AND REVISIONS'), findsNothing);
+  });
 }

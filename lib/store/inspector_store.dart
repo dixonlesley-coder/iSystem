@@ -46,6 +46,14 @@ class SectionVisibilityController extends Notifier<Map<String, bool>> {
   }
 }
 
+/// Stable [sectionVisibilityProvider] key of the Projects page's
+/// "Sign-off and revisions" disclosure (the palette + Review Locate expand it).
+const String kSignOffSectionKey = 'Sign-off and revisions';
+
+/// Stable [sectionVisibilityProvider] key of the Projects page's equipment
+/// model/spec disclosure (its LABEL carries a live count, the key does not).
+const String kEquipmentSpecSectionKey = 'Equipment model/spec';
+
 /// Identity key for [sectionExpandedProvider]: the section [name] plus the
 /// [defaultExpanded] seed used when it has never been toggled. Two keys with the
 /// same name+default share one derived provider, so the lookup is memoized and a

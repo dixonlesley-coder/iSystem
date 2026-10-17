@@ -254,7 +254,7 @@ disclosure_header.dart` + `result_card.dart` + `store/inspector_store.dart`
 `sectionVisibilityProvider`): the dense `ProjectPanel`'s major sections (Draw / Tanks / Rooms /
 Results / Fire / HVAC — the sheet→floor control was dropped as redundant with the sheet rail, and
 the design INPUTS [occupancy/rainfall/runoff + the water FEED STRATEGY (2026-10-17; the Layout/Riser inspectors show only a read-only `FeedStrategyLine` with a Change link, palette: Switch feed strategy)] moved to the Building setup page, leaving only the
-Show/Hide-sizes canvas toggle atop Results) are wrapped in a reusable `DisclosureSection` — a tappable
+Show/Hide-sizes canvas toggle atop Results; since 2026-10-17 the panel is LAYER-SCOPED — after the fixed Selection/Building/Scale/Draw head only the active discipline's sections show [Plumbing: Tanks+Results · Fire: Fire · HVAC: Rooms+HVAC], and Document control sign-off/revisions + the equipment model/spec editor moved to the Projects page's Document control card [`ui/shell/document_control_card.dart`, palette: Edit document control / Edit equipment specs]) are wrapped in a reusable `DisclosureSection` — a tappable
 header (replacing the section's `MechXSectionLabel`) with a custom-painted chevron that discloses
 its body only when expanded. Expansion is TRANSIENT UI state in `sectionVisibilityProvider` (a
 `Map<String,bool>` keyed by section name, read via the memoized `sectionExpandedProvider` family) —
