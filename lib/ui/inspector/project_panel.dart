@@ -315,10 +315,12 @@ Future<String?> pickExportSave(
 /// `service,kind,tag,floor,nominal_size_mm,material,length_m,segments,`
 /// `stock_length_m,bars_purchased,waste_pct`
 String bomCsvWithCutPlan(List<BomLine> bom, List<PipeCutGroup> cutPlan) {
-  final planByKey = <({ServiceType service, int mm}), PipeCutGroup>{
-    for (final g in cutPlan) (service: g.service, mm: g.diameterMm): g,
+  // Joined per (service, DN, MATERIAL) — each material is its own bar pool.
+  final planByKey = <({ServiceType service, int mm, String mat}), PipeCutGroup>{
+    for (final g in cutPlan)
+      (service: g.service, mm: g.diameterMm, mat: g.material): g,
   };
-  final emitted = <({ServiceType service, int mm})>{};
+  final emitted = <({ServiceType service, int mm, String mat})>{};
   // The engine CSV: a header row + one row per BOM line, in the SAME order.
   final base = bomToCsv(bom).split('\n');
   final buffer = StringBuffer()
@@ -326,7 +328,10 @@ String bomCsvWithCutPlan(List<BomLine> bom, List<PipeCutGroup> cutPlan) {
     ..write(',stock_length_m,bars_purchased,waste_pct\n');
   for (var i = 0; i < bom.length; i++) {
     final line = bom[i];
-    final key = (service: line.service, mm: line.diameterMm);
+    var key = (service: line.service, mm: line.diameterMm, mat: line.material);
+    if (!planByKey.containsKey(key)) {
+      key = (service: line.service, mm: line.diameterMm, mat: ''); // legacy
+    }
     final g = planByKey[key];
     // The cut plan is a per-(service, DN) property (all runs of a size share
     // stock bars), so it is emitted ONCE per group — sum-safe — and left empty
