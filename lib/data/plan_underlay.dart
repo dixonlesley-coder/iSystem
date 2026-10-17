@@ -7,6 +7,7 @@ import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import '../store/models/sheet.dart';
+import 'dxf_text.dart';
 
 /// How far the raster underlay pixels are blended toward white (0 = verbatim,
 /// 1 = fully white). ~60 % keeps the plan legible but unmistakably background
@@ -27,7 +28,7 @@ DxfDrawing? _loadDxf(String path) {
   if (_dxfCache.containsKey(path)) return _dxfCache[path];
   DxfDrawing? drawing;
   try {
-    drawing = parseDxf(File(path).readAsStringSync());
+    drawing = parseDxf(readDxfTextSync(path));
   } catch (_) {
     drawing = null;
   }

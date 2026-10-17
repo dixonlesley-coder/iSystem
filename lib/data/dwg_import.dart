@@ -5,6 +5,7 @@ import 'package:mechx_engine/geometry/dxf_drawing.dart';
 import '../store/models/sheet.dart';
 import 'dwg_converter.dart';
 import 'dxf_import.dart' show dxfContentSize;
+import 'dxf_text.dart';
 
 /// Persistent directory the DWG→DXF conversions are cached in, so a converted
 /// plan survives across the session (and usually across restarts). Created on
@@ -48,7 +49,7 @@ Future<List<Sheet>> importDwg(
   }
 
   final dxfPath = result.dxfPath!;
-  final drawing = parseDxf(File(dxfPath).readAsStringSync());
+  final drawing = parseDxf(readDxfTextSync(dxfPath));
   if (drawing == null || drawing.isEmpty) {
     throw StateError('DWG "$basename" converted, but the DXF had no geometry.');
   }

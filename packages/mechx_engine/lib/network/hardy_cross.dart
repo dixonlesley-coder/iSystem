@@ -67,10 +67,28 @@ typedef HcLoop = List<HcStep>;
 /// `maxIterations`, indistinguishable from one that gave up. The two facts are
 /// reported separately so a caller can be honest about a best-effort split
 /// instead of guessing from `iterations < maxIterations`.
+///
+/// The convergence tolerance is RELATIVE to the loop flow scale — the largest
+/// |Q| over all loop pipes after the sweep — not an absolute m3/s figure: a
+/// balance has settled when `max|ΔQ| <= tolerance × max|Q|` (floored at
+/// [kHardyCrossAbsoluteFloor] so an all-zero loop still terminates). A fixed
+/// absolute 1e-12 m3/s on ~1 m3/s air flows asked for double-precision noise,
+/// so linearly-converging grids were reported unsettled (and every edge
+/// flagged provisional) even though the split was balanced to ~1e-10.
 typedef HcOutcome = ({int iterations, bool converged});
 
+/// Default RELATIVE convergence tolerance (see [HcOutcome]): the largest loop
+/// correction must fall to this fraction of the loop flow scale. 1e-9 is far
+/// below anything the standard-size ladder can resolve (sizes snap to discrete
+/// diameters), yet comfortably above double-precision round-off.
+const double kHardyCrossRelativeTolerance = 1e-9;
+
+/// Absolute floor (m3/s) under the relative test, so a loop whose flows are all
+/// ~0 still terminates.
+const double kHardyCrossAbsoluteFloor = 1e-15;
+
 /// Balance the [loops] in place (correcting their shared [HcPipe.q]s) until the
-/// largest loop correction is below [tolerance]. Returns the iterations used
+/// largest loop correction is below [tolerance] × the loop flow scale. Returns the iterations used
 /// (== [maxIterations] if it did not converge — caller may treat that as a
 /// best-effort result).
 ///
@@ -78,7 +96,7 @@ typedef HcOutcome = ({int iterations, bool converged});
 /// count; prefer [hardyCrossDetailed] when the convergence verdict matters.
 int hardyCross(
   List<HcLoop> loops, {
-  double tolerance = 1e-12,
+  double tolerance = kHardyCrossRelativeTolerance,
   int maxIterations = 500,
 }) =>
     hardyCrossDetailed(
@@ -92,7 +110,7 @@ int hardyCross(
 /// trivially in 0 iterations.
 HcOutcome hardyCrossDetailed(
   List<HcLoop> loops, {
-  double tolerance = 1e-12,
+  double tolerance = kHardyCrossRelativeTolerance,
   int maxIterations = 500,
 }) {
   if (loops.isEmpty) return (iterations: 0, converged: true);
@@ -112,7 +130,18 @@ HcOutcome hardyCrossDetailed(
       }
       maxCorrection = math.max(maxCorrection, dq.abs());
     }
-    if (maxCorrection < tolerance) return (iterations: iter, converged: true);
+    // Relative, scale-aware stopping test (see [HcOutcome]).
+    var maxAbsQ = 0.0;
+    for (final loop in loops) {
+      for (final step in loop) {
+        maxAbsQ = math.max(maxAbsQ, step.pipe.q.abs());
+      }
+    }
+    final threshold =
+        math.max(tolerance * maxAbsQ, kHardyCrossAbsoluteFloor);
+    if (maxCorrection <= threshold) {
+      return (iterations: iter, converged: true);
+    }
   }
   return (iterations: maxIterations, converged: false);
 }
@@ -159,14 +188,20 @@ typedef _Edge = ({String id, String from, String to});
 /// Builds a spanning tree (so chord edges define the fundamental loops), seeds
 /// continuity flows by routing demand through the tree, then runs [hardyCross].
 /// For a tree the result is exact in one pass (loopCount 0).
+///
+/// [tolerance] is RELATIVE to the loop flow scale (see [HcOutcome]).
+/// [maxIterations] defaults to `max(500, 50 × loopCount)`: Hardy–Cross
+/// converges linearly and a larger grid needs proportionately more sweeps, so a
+/// fixed cap would mis-report big grids as unsettled. An explicit value is
+/// honoured as given.
 LoopBalanceResult balanceFlows({
   required List<_Edge> edges,
   required String root,
   required Map<String, double> demand,
   required double Function(String edgeId) resistance,
   double exponent = 1.852,
-  double tolerance = 1e-12,
-  int maxIterations = 500,
+  double tolerance = kHardyCrossRelativeTolerance,
+  int? maxIterations,
 }) {
   final adjacency = <String, List<({String edgeId, String other})>>{};
   for (final e in edges) {
@@ -247,7 +282,7 @@ LoopBalanceResult balanceFlows({
   final outcome = hardyCrossDetailed(
     loops,
     tolerance: tolerance,
-    maxIterations: maxIterations,
+    maxIterations: maxIterations ?? math.max(500, 50 * loops.length),
   );
   return LoopBalanceResult(
     edgeFlow: {for (final e in edges) e.id: pipes[e.id]!.q},

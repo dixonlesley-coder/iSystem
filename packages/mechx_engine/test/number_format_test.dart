@@ -41,5 +41,26 @@ void main() {
     test('negative money keeps one leading sign', () {
       expect(money(-1234.5, dp: 2), '-1.234,50');
     });
+
+    test('a value that rounds to zero prints unsigned (no negative zero)', () {
+      // -0.004 -> toStringAsFixed(2) "-0.00": no non-zero digit, so unsigned,
+      // matching groupThousands(-0.4) which rounds to int 0 first.
+      expect(money(-0.004, dp: 2), '0,00');
+      expect(money(-0.4), '0');
+      expect(groupThousands(-0.4), '0');
+      expect(money(-12.5, dp: 2), '-12,50'); // a real negative keeps its sign
+      expect(money(-0.005, dp: 2), '-0,01'); // rounds AWAY from zero: non-zero
+    });
+  });
+
+  group('non-finite input degrades instead of throwing', () {
+    test('NaN / ±Infinity print the no-value mark', () {
+      for (final v in [double.nan, double.infinity, double.negativeInfinity]) {
+        expect(money(v), kNonFiniteNumber);
+        expect(money(v, dp: 2), kNonFiniteNumber);
+        expect(groupThousands(v), kNonFiniteNumber);
+      }
+      expect(kNonFiniteNumber, '-');
+    });
   });
 }

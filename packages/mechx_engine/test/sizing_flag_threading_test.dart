@@ -569,7 +569,7 @@ void main() {
     test('an asymmetric ring given ONE sweep reports converged == false', () {
       // Deliberately starving the solver proves the verdict is real: the seed
       // routes ALL demand down the tree (chord flow 0), so one correction on an
-      // asymmetric ring cannot drive |ΔQ| below the 1e-12 tolerance.
+      // asymmetric ring cannot drive |ΔQ| below the (relative) tolerance.
       final starved = balanceFlows(
         edges: ringEdges,
         root: 'A',
