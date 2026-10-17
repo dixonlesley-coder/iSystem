@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
@@ -23,7 +22,8 @@ import 'package:mechx_engine/report/mep_commercial.dart'
 import 'package:mechx_engine/report/mep_report.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
-import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
+import 'package:mechx_engine/report/plan_symbols.dart'
+    show equipmentNodeTags, planEdgeElevationLabels;
 import 'package:mechx_engine/report/report_blocks.dart';
 import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
@@ -799,29 +799,6 @@ DrawingChrome issuableChrome(
   );
 }
 
-/// N5: a per-run centreline-elevation label ('CL +2.70') keyed by edge id — the
-/// height of each horizontal run above its floor's FFL, from the §10 role-aware
-/// [nodeElevation] (mains at the ceiling, fixture branches at fixture height).
-/// Only RUN edges get an entry (risers carry the FFL gutter on the riser sheet);
-/// the pure exporters receive the finished strings and never read the model. The
-/// average of the two endpoint elevations is the run's representative centreline.
-Map<String, String> planEdgeElevationLabels(Network net, BuildingLevels building,
-    {MountingHeights mounting = const MountingHeights()}) {
-  final out = <String, String>{};
-  for (final e in net.edges) {
-    if (e.kind != EdgeKind.run) continue;
-    final a = net.nodeById(e.fromId);
-    final b = net.nodeById(e.toId);
-    if (a == null || b == null) continue;
-    final ea = nodeElevation(a, building, mounting).meters;
-    final eb = nodeElevation(b, building, mounting).meters;
-    final aboveFfl = (ea + eb) / 2 - building.elevationOf(a.floorIndex).meters;
-    final sign = aboveFfl >= 0 ? '+' : '-';
-    out[e.id] = 'CL $sign${aboveFfl.abs().toStringAsFixed(2)}';
-  }
-  return out;
-}
-
 /// Export the current sheet/floor's drawn network as a DXF drawing file.
 Future<void> exportDrawingDxf(WidgetRef ref) => runExportGuarded(
       ref,
@@ -848,6 +825,13 @@ Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
     sizing: ref.read(sizingProvider),
     sheetId: sheet.id,
     floorIndex: floorIndex,
+    // The same §10 lengths the plan PDF prints, so the DXF labels match it.
+    edgeLengths: {
+      for (final e in net.edges)
+        e.id: edgeLength(e, net,
+            calibrationBySheet: project.calibrations,
+            building: project.building),
+    },
     chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
     // A2: the sheet calibration lets the DXF emit true-scale mm world units
     // (HEADER/$INSUNITS + named layers); null keeps the legacy pixel DXF.
@@ -1384,6 +1368,7 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       await File(out('$suffix.dxf')).writeAsString(networkToDxf(
         net: net,
         sizing: sizing,
+        edgeLengths: edgeLengths,
         sheetId: sheet.id,
         floorIndex: floorIndex,
         chrome: planChrome,
