@@ -42,7 +42,12 @@ import '../standards/puil.dart'
 import '../units.dart';
 import 'earthing.dart' show EarthingSystem;
 import 'load_kind.dart' show LoadKind;
-import 'model.dart' show ElectricalCircuit, ElectricalPanel, ElectricalProject;
+import 'model.dart'
+    show
+        ElectricalCircuit,
+        ElectricalPanel,
+        ElectricalProject,
+        ElectricalSystemInfo;
 import 'panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, ElectricalSystemResult,
         ElectricalWarning, WarningSeverity;
@@ -368,6 +373,64 @@ double downstreamFaultA(double lineVoltageV, Impedance totalZ, double upstreamIs
   return math.min(isc, upstreamIscA);
 }
 
+/// Line-to-line basis voltage (V) a panel's SOURCE impedance is referred to.
+///
+/// A 3-phase board carries its line voltage in [ElectricalPanel.voltage]
+/// (400 V). A 1-phase board stores its PHASE-to-neutral voltage there (220 V,
+/// see `model.dart`), but it still hangs off the same 3-phase LV network whose
+/// origin fault is a 3-phase symmetrical figure — so its source impedance must
+/// be derived on the network's line basis ([serviceFaultLineVoltageV], 400 V),
+/// never on 220 V (that would give |Z| = 220/(√3·Isc), ~0.55× the real source
+/// impedance — an optimistic Zs and a fault mis-referred to the wrong voltage).
+double faultBasisLineVoltageV(ElectricalPanel panel) =>
+    panel.system.isThreePhase ? panel.voltage.volts : serviceFaultLineVoltageV;
+
+/// Prospective fault (A) at a SUB-panel bus fed through a feeder chain.
+///
+/// - **3-phase board**: the 3-phase symmetrical fault
+///   `V_LL / (√3·|Z_phase|)` ([downstreamFaultA]) — the neutral carries no
+///   current in a balanced 3-phase fault.
+/// - **1-phase board**: the only fault it can see is LINE-to-NEUTRAL, driven by
+///   U0 (the board's stored phase voltage) round the loop source + every
+///   feeder's phase leg + every feeder's neutral return:
+///   `U0 / |Z_phase + Z_neutral|`. (Feeding `220 V` into the 3-phase formula
+///   instead gave `127/|Z|` — ~40 % below the true L-N fault, which let an
+///   under-rated MCB pass the Icu check.)
+///
+/// Both are clamped to the upstream value (impedance only reduces the fault).
+/// [phasePathZ] = source Z + Σ feeder phase legs; [neutralPathZ] = Σ feeder
+/// neutral legs (the source neutral is not modelled — omitting it keeps the
+/// fault conservatively HIGH for the Icu check).
+double subPanelBusFaultA(
+  ElectricalPanel panel,
+  Impedance phasePathZ,
+  Impedance neutralPathZ,
+  double upstreamIscA,
+) {
+  if (panel.system.isThreePhase) {
+    return downstreamFaultA(panel.voltage.volts, phasePathZ, upstreamIscA);
+  }
+  final z = (phasePathZ + neutralPathZ).magnitude;
+  if (z <= 0) return upstreamIscA;
+  return math.min(panel.voltage.volts / z, upstreamIscA);
+}
+
+/// Neutral-leg impedance of a feeder run (Ω), per parallel run: the neutral
+/// conductor's section when the sizer recorded one, else the phase section
+/// (a full-size neutral — conservative-high fault for the Icu check).
+Impedance feederNeutralImpedance(
+  ElectricalStandardsProfile profile,
+  double phaseCsaMm2,
+  double neutralCsaMm2,
+  double lengthM,
+  ConductorMaterial material,
+  int runs,
+) {
+  final csa = neutralCsaMm2 > 0 ? neutralCsaMm2 : phaseCsaMm2;
+  final z = conductorImpedance(profile, csa, lengthM, material);
+  return Impedance(z.rOhm / runs, z.xOhm / runs);
+}
+
 /// Breaking capacity (kA) to specify for a device of [deviceClass] and [ratingA]:
 /// the smallest standard rating that covers [prospectiveKa], else the class
 /// maximum. Larger MCCB frames carry a rating-based floor.
@@ -381,6 +444,29 @@ double breakerKa(double ratingA, BreakerClass deviceClass, double prospectiveKa)
     if (k >= prospectiveKa) return k;
   }
   return maxKa;
+}
+
+/// Breaking capacity (kA) the study SPECIFIES for a device: the smallest
+/// standard Icu rung (honouring [breakerKa]'s large-frame floor) that covers the
+/// prospective fault for BOTH its ultimate capacity (Icu ≥ Isc) AND its service
+/// capacity (Ics = [serviceCapacityFraction]·Icu ≥ Isc, IEC 60947-2), else the
+/// class maximum.
+///
+/// Picking on Icu alone ([breakerKa]) and then judging Ics made the study
+/// condemn its own specification whenever the fault landed in
+/// (0.75·rung, rung] — e.g. every MCCB on an untouched 16 kA root bus (Icu 16,
+/// Ics 12 < 16). MCBs carry Ics = Icu, so their pick is unchanged.
+double specifiedBreakerKa(
+    double ratingA, BreakerClass deviceClass, double prospectiveKa) {
+  final options = breakingCapacityKa[deviceClass]!;
+  final floorKa = deviceClass == BreakerClass.mccb && ratingA >= 400 ? 36.0 : 0.0;
+  final pool = options.where((k) => k >= floorKa).toList();
+  final candidates = pool.isNotEmpty ? pool : options;
+  final ics = serviceCapacityFraction[deviceClass] ?? 1;
+  for (final k in candidates) {
+    if (k + 1e-9 >= prospectiveKa && k * ics + 1e-9 >= prospectiveKa) return k;
+  }
+  return candidates.last;
 }
 
 /// True when an upstream breaker likely does NOT discriminate with a downstream
@@ -665,10 +751,21 @@ FaultStudyResult faultStudy(
     }
   }
 
-  // Per-panel prospective fault (A) + the source impedance backing it (for Zs),
-  // filled root→leaf so a child reads its parent's value.
+  // Per-panel prospective fault (A) + the source impedance backing it, filled
+  // root→leaf so a child reads its parent's value. Four running impedances:
+  //   - panelSourceZ  — COLD phase path (source + Σ feeder phase legs) for the
+  //     prospective fault (the conservative-high Icu basis);
+  //   - panelNeutralZ — COLD Σ feeder neutral legs (the 1-phase L-N fault's
+  //     return path);
+  //   - panelSourceZHot — the phase path with each FEEDER leg's R at the
+  //     fault temperature (×[zsFaultTempFactor]) — the earth-fault loop basis;
+  //   - panelPeZ — HOT Σ feeder PE legs: an earth fault on a sub-board circuit
+  //     returns through every upstream feeder's PE, not just its own.
   final panelFaultA = <String, double>{};
   final panelSourceZ = <String, Impedance>{};
+  final panelNeutralZ = <String, Impedance>{};
+  final panelSourceZHot = <String, Impedance>{};
+  final panelPeZ = <String, Impedance>{};
 
   // The earthing system is installation-wide (TN vs TT) — drives the ADS check.
   // TT clears earth faults via the RCD (already modelled), so its loop is relaxed.
@@ -681,22 +778,30 @@ FaultStudyResult faultStudy(
     final panelModel = modelById[panelId];
     if (panelResult == null || panelModel == null) continue;
 
-    final lineVoltageV = panelModel.voltage.volts;
+    // Source impedance is referred to the LV network LINE voltage (a 1-phase
+    // board stores its 220 V phase voltage — see [faultBasisLineVoltageV]).
+    final basisV = faultBasisLineVoltageV(panelModel);
 
     // Prospective fault + source impedance at this bus.
     final double faultA;
     final Impedance sourceZ;
+    final Impedance neutralZ;
+    final Impedance sourceZHot;
+    final Impedance peReturnZ;
     final feederId = panelFeederCircuit[panelId];
     final parentId = panelParent[panelId];
     if (feederId == null || parentId == null) {
       // Root / utility-fed panel — origin fault level + its source impedance.
       faultA = originIscA;
-      sourceZ = sourceImpedanceFromIsc(originIscA, lineVoltageV);
+      sourceZ = sourceImpedanceFromIsc(originIscA, basisV);
+      neutralZ = const Impedance(0, 0);
+      sourceZHot = sourceZ;
+      peReturnZ = const Impedance(0, 0);
     } else {
       // Sub-panel — decay the parent fault through the feeder cable impedance.
       final upstreamIscA = panelFaultA[parentId] ?? originIscA;
       final upstreamSourceZ =
-          panelSourceZ[parentId] ?? sourceImpedanceFromIsc(originIscA, lineVoltageV);
+          panelSourceZ[parentId] ?? sourceImpedanceFromIsc(originIscA, basisV);
       final feederResult = _circuitById(sys.panels[parentId], feederId);
       final feederModel = _modelCircuitById(modelById[parentId], feederId);
       final csa = feederResult?.cable.csaMm2 ?? 0;
@@ -711,16 +816,30 @@ FaultStudyResult faultStudy(
       final single = conductorImpedance(profile, csa, lengthM, feederMaterial);
       final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
       sourceZ = upstreamSourceZ + feederZ;
-      faultA = downstreamFaultA(lineVoltageV, sourceZ, upstreamIscA);
+      neutralZ = (panelNeutralZ[parentId] ?? const Impedance(0, 0)) +
+          feederNeutralImpedance(profile, csa,
+              feederResult?.grounding.neutralCsaMm2 ?? 0, lengthM,
+              panelModel.material, runs);
+      faultA = subPanelBusFaultA(panelModel, sourceZ, neutralZ, upstreamIscA);
+      // Earth-fault loop legs at the fault temperature (cold decay above).
+      sourceZHot = (panelSourceZHot[parentId] ?? upstreamSourceZ) +
+          Impedance(feederZ.rOhm * zsFaultTempFactor, feederZ.xOhm);
+      final pe0 = conductorImpedance(profile,
+          feederResult?.grounding.peCsaMm2 ?? 0, lengthM, panelModel.material);
+      peReturnZ = (panelPeZ[parentId] ?? const Impedance(0, 0)) +
+          Impedance(pe0.rOhm * zsFaultTempFactor / runs, pe0.xOhm / runs);
     }
     panelFaultA[panelId] = faultA;
     panelSourceZ[panelId] = sourceZ;
+    panelNeutralZ[panelId] = neutralZ;
+    panelSourceZHot[panelId] = sourceZHot;
+    panelPeZ[panelId] = peReturnZ;
 
     final faultKaRounded = _round(faultA / 1000.0, 2);
 
     // ── Incomer breaking-capacity adequacy ─────────────────────────────────
     final incomer = panelResult.incomer.breaker;
-    final incomerKa = breakerKa(
+    final incomerKa = specifiedBreakerKa(
       incomer.ratingA.amperes,
       incomer.deviceClass,
       faultA / 1000.0,
@@ -747,7 +866,7 @@ FaultStudyResult faultStudy(
     // ── Per-circuit: kA adequacy + Zs/ADS (TN) ─────────────────────────────
     for (final c in panelResult.circuits) {
       final cModel = _modelCircuitById(panelModel, c.circuitId);
-      final ka = breakerKa(
+      final ka = specifiedBreakerKa(
         c.breaker.ratingA.amperes,
         c.breaker.deviceClass,
         faultA / 1000.0,
@@ -784,7 +903,9 @@ FaultStudyResult faultStudy(
             phaseZ0.rOhm * zsFaultTempFactor / runs, phaseZ0.xOhm / runs);
         final peZ =
             Impedance(peZ0.rOhm * zsFaultTempFactor / runs, peZ0.xOhm / runs);
-        final loop = sourceZ + phaseZ + peZ;
+        // Loop = hot source/feeder phase path + every upstream feeder's PE
+        // return + this circuit's own phase + PE (elec-advanced-2).
+        final loop = sourceZHot + peReturnZ + phaseZ + peZ;
         final zs = loop.magnitude;
         final ia = (curveTripMultiple[c.breaker.curve] ?? 10) *
             c.breaker.ratingA.amperes;
@@ -856,7 +977,7 @@ FaultStudyResult faultStudy(
     // the device is to remain usable. Icw: the upstream panel's busbar
     // short-time withstand must not be exceeded.
     final upstreamFaultKa = (panelFaultA[parentId] ?? originIscA) / 1000.0;
-    final icu = breakerKa(
+    final icu = specifiedBreakerKa(
       upstreamIn,
       feeder.breaker.deviceClass,
       upstreamFaultKa,

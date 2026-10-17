@@ -220,12 +220,18 @@ ConduitSpec sizeConduit(double csaMm2, int cores) {
 /// (over-) fill.
 ///
 /// Each circuit's cable OD comes from its sized CSA + protective-conductor core
-/// count. Spare ways carry no cable (csa 0) and are excluded.
+/// count; a circuit sized as N parallel runs contributes N cables. Spare ways
+/// carry no cable (csa 0) and are excluded.
 CableTraySpec sizeCableTray(ElectricalPanelResult panel) {
   final ods = <double>[];
   for (final c in panel.circuits) {
     final od = cableOuterDiameterMm(c.cable.csaMm2, c.grounding.cores);
-    if (od > 0) ods.add(od);
+    if (od <= 0) continue;
+    // A feeder sized as N parallel runs lays N cables on the tray, not one.
+    final runs = (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
+    for (var i = 0; i < runs; i++) {
+      ods.add(od);
+    }
   }
   final requiredWidth = ods.fold<double>(0, (s, d) => s + d) * trayPackingFactor;
   for (final w in cableTrayWidthsMm) {

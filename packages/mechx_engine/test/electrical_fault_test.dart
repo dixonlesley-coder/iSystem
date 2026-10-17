@@ -105,18 +105,31 @@ void main() {
     });
 
     test('TN-S earth-fault loop Zs + ADS disconnection (the SP motor)', () {
-      // Loop = SP source Z + phaseZ(temp ×1.28) + peZ(temp ×1.28) over 10 m.
-      // 16 mm²: R = 1.38·10/1000 = 0.0138, X = 0.0008. With ×1.28 on R:
-      //   phaseZ = peZ = (0.017664, 0.0008).
-      // loopR = 0.07104124 + 0.017664 + 0.017664 = 0.10636924
-      // loopX = 0.01828869 + 0.0008 + 0.0008 = 0.01988869
-      //   Zs = √(loopR² + loopX²) = 0.108213 Ω → 0.108 (3 dp).
+      // Re-derived 2026-10 (audit elec-advanced-2): an earth fault on the SP
+      // motor returns through the FEEDER's PE too, and every conductor in the
+      // loop (feeder phase + feeder PE + final phase + final PE) is taken at the
+      // fault temperature (R ×1.28); the source Z stays as derived (cold).
+      //   Source Z = (0.00204124, 0.01428869).
+      //   Feeder 16 mm², 50 m, hot: phase = PE = (0.069·1.28, 0.004)
+      //                                       = (0.08832, 0.004).
+      //   Final 16 mm², 10 m, hot: phase = PE = (0.0138·1.28, 0.0008)
+      //                                       = (0.017664, 0.0008).
+      // loopR = 0.00204124 + 0.08832 + 0.08832 + 0.017664 + 0.017664
+      //       = 0.21400924
+      // loopX = 0.01428869 + 0.004 + 0.004 + 0.0008 + 0.0008 = 0.02388869
+      //   Zs = √(0.21400924² + 0.02388869²) = √0.0463707 = 0.215339 Ω.
       final motor = fs.circuits['s1']!;
-      expect(motor.zsOhm, closeTo(0.108, 0.001));
+      expect(motor.zsOhm, closeTo(0.215, 0.001));
       // Ia (curve D) = 20·63 = 1260 A; Zs_max = 0.95·230/1260 = 0.17341 Ω.
       expect(motor.zsMaxOhm, closeTo(0.173, 0.001));
-      // 0.108 ≤ 0.173 ⇒ still disconnects in time.
-      expect(motor.adsOk, isTrue);
+      // 0.215 > 0.173 ⇒ the 63 A curve-D breaker does NOT disconnect in time
+      // (the old feeder-PE-less loop, 0.108 Ω, passed it optimistically).
+      expect(motor.adsOk, isFalse);
+      expect(
+        fs.warnings.where(
+            (w) => w.code == 'ads-disconnection' && w.circuitId == 's1'),
+        hasLength(1),
+      );
     });
 
     test('selectivity: the ampacity cap holds the feeder at 80 A over 63 A', () {

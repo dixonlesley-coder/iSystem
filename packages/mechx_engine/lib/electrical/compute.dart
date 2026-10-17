@@ -32,7 +32,8 @@ import 'earthing.dart';
 // anything that reaches it (puil/units/earthing/load_kind/model/panel_results
 // only), so taking `selectivityRatio` from it introduces no import cycle.
 import 'fault.dart' show Impedance, conductorImpedance, downstreamFaultA,
-    selectivityRatio, solvedRunLengthM, sourceImpedanceFromIsc;
+    faultBasisLineVoltageV, feederNeutralImpedance, selectivityRatio,
+    solvedRunLengthM, sourceImpedanceFromIsc, subPanelBusFaultA;
 import 'geo_length.dart';
 import 'harmonics.dart' show neutralOversizeFactor;
 import 'headroom.dart' show HeadroomSpec;
@@ -45,13 +46,9 @@ import 'sizing.dart';
 /// supply summary (matches PanelMaker `ASSUMED_BUILDING_PF`). Not a PUIL clause.
 const double assumedBuildingPf = 0.85;
 
-/// Assumed full-load efficiency of an induction motor when only the shaft
-/// (mechanical) kW is given: the electrical input (nameplate FLC) is the shaft
-/// kW divided by this efficiency. ~0.88 is a representative IE3-class value; the
-/// proper fix is a motor-kW → nameplate-FLC table (A8).
-// VERIFY — secondarySource (assumed IE3 induction-motor efficiency; no PUIL
-// clause, not in a standards profile — replace with a motorKw→FLC table).
-const double _assumedMotorEfficiency = 0.88;
+// The assumed motor efficiency (shaft kW → electrical input kW) lives in
+// `load_kind.dart` as [kAssumedMotorEfficiency] so the power-factor pass reads
+// the SAME figure as the Ib derivation below.
 
 // ── phase determination ─────────────────────────────────────────────────────
 
@@ -785,7 +782,7 @@ _CircuitComputation _computeCircuit(
   } else if (motorLike) {
     // Shaft kW → electrical input kW via the assumed efficiency (// VERIFY).
     ib = loadCurrent(
-      power: Power.kiloWatts(c.motorKw! / _assumedMotorEfficiency),
+      power: Power.kiloWatts(c.motorKw! / kAssumedMotorEfficiency),
       voltage: Voltage(useVoltageV),
       cosPhi: c.cosPhi,
       threePhase: threePhase,
@@ -1605,6 +1602,7 @@ ElectricalSystemResult computeSystem(
     final warnings = <ElectricalWarning>[...baseWarnings];
     final panelFaultA = <String, double>{};
     final panelSourceZ = <String, Impedance>{};
+    final panelNeutralZ = <String, Impedance>{};
 
     // Size every panel (root-first is fine for the core; demand is precomputed).
     final results = <String, ElectricalPanelResult>{};
@@ -1615,15 +1613,19 @@ ElectricalSystemResult computeSystem(
       // Prospective fault + source impedance at this bus (FOLD 1), when enabled.
       Current? faultLevelA;
       if (applyWithstand) {
-        final lineVoltageV = panel.voltage.volts;
+        // Source Z on the LV network LINE basis (a 1-phase board stores its
+        // 220 V phase voltage — same voltage basis as `faultStudy`).
+        final lineVoltageV = faultBasisLineVoltageV(panel);
         final parentId = parentOf[id];
         final feederId = feederCircuitOf[id];
         final double faultA;
         final Impedance sourceZ;
+        final Impedance neutralZ;
         if (parentId == null || feederId == null) {
           // Root / utility-fed panel — the full origin fault.
           faultA = originIscA;
           sourceZ = sourceImpedanceFromIsc(originIscA, lineVoltageV);
+          neutralZ = const Impedance(0, 0);
         } else {
           final upstreamIscA = panelFaultA[parentId] ?? originIscA;
           final upstreamSourceZ = panelSourceZ[parentId] ??
@@ -1646,10 +1648,17 @@ ElectricalSystemResult computeSystem(
               conductorImpedance(profile, csa, lengthM, feederMaterial);
           final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
           sourceZ = upstreamSourceZ + feederZ;
-          faultA = downstreamFaultA(lineVoltageV, sourceZ, upstreamIscA);
+          neutralZ = (panelNeutralZ[parentId] ?? const Impedance(0, 0)) +
+              feederNeutralImpedance(profile, csa,
+                  feederResult?.grounding.neutralCsaMm2 ?? 0, lengthM,
+                  feederMaterial, runs);
+          // 3-phase board: V_LL/(√3·|Z|); 1-phase board: the L-N fault
+          // U0/|Z_phase + Z_neutral| (never 220 V in the 3-phase formula).
+          faultA = subPanelBusFaultA(panel, sourceZ, neutralZ, upstreamIscA);
         }
         panelFaultA[id] = faultA;
         panelSourceZ[id] = sourceZ;
+        panelNeutralZ[id] = neutralZ;
         faultLevelA = Current(faultA);
       }
 

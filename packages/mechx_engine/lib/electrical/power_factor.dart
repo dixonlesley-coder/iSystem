@@ -19,7 +19,7 @@ library;
 
 import 'dart:math' as math;
 
-import 'load_kind.dart' show LoadKind;
+import 'load_kind.dart' show LoadKind, kAssumedMotorEfficiency;
 import 'model.dart'
     show CircuitRole, ElectricalCircuit, ElectricalProject;
 import 'panel_results.dart' show ElectricalSystemResult;
@@ -168,7 +168,14 @@ PowerFactorResult powerFactorCorrection(
     for (final c in panel.circuits) {
       if (!_isLeafLoad(c)) continue;
       // Motor shaft rating drives the connected kW when given; else the W field.
-      final baseKw = (c.motorKw != null) ? c.motorKw! : c.loadW / 1000.0;
+      // A motor/pump way's ELECTRICAL input is shaft ÷ efficiency — the same
+      // basis `compute.dart` derives its Ib from — so the reactive demand the
+      // bank must cancel is not understated by ~1/0.88.
+      final motorLike =
+          c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump;
+      final baseKw = (c.motorKw != null)
+          ? (motorLike ? c.motorKw! / kAssumedMotorEfficiency : c.motorKw!)
+          : c.loadW / 1000.0;
       final loadKw = baseKw * c.demandFactor;
       final pf = _clampPf(_isElectronic(c) ? electronicLoadPf : c.cosPhi);
       final phi = math.acos(pf);
@@ -250,6 +257,8 @@ PowerFactorResult powerFactorCorrection(
           'PLN reactive-energy tariff).',
       'Capacitor bank kVAR ladder + step rule + ambient derate — secondary '
           'source (verify vs the chosen manufacturer / IEC 60831).',
+      'Assumed motor efficiency 0.88 (shaft kW to electrical input kW) — '
+          'secondary source (verify vs the motor nameplate).',
     ],
   );
 }

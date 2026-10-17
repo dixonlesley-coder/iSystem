@@ -129,18 +129,25 @@ class BomLine {
   /// Matched catalogue order code, or null when no part fit.
   final String? sku;
 
+  /// Physical cable RUNS this line represents (a [PartCategory.cable] line's
+  /// [qty] is metres, so the run count cannot be recovered from it). Summed on
+  /// consolidation; per-run labour reads it. 1 for every non-cable line.
+  final int runs;
+
   const BomLine({
     required this.description,
     required this.qty,
     required this.category,
     this.sku,
+    this.runs = 1,
   });
 
-  BomLine copyWith({double? qty}) => BomLine(
+  BomLine copyWith({double? qty, int? runs}) => BomLine(
         description: description,
         qty: qty ?? this.qty,
         category: category,
         sku: sku,
+        runs: runs ?? this.runs,
       );
 }
 
@@ -201,12 +208,23 @@ List<BomLine> _panelLines(ElectricalPanelResult panel, List<Part> parts) {
     // from the geo/manual run length; a length-less run lists 1 m as a
     // placeholder. A spare way has no load and no cable to pull.
     if (c.loadKind != LoadKind.spare) {
-      final spec = c.grounding.cableSpec;
+      // A way sized as N parallel runs needs N cables of the run length: the
+      // line is the TOTAL metres of the SINGLE cable (the matched SKU is the
+      // single cable priced per metre), so the 'N× ' prefix of the spec is
+      // dropped from the description to keep the metres unambiguous.
+      final runs = (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
+      final rawSpec = c.grounding.cableSpec;
+      final runPrefix = '$runs× ';
+      final spec = runs > 1 && rawSpec.startsWith(runPrefix)
+          ? rawSpec.substring(runPrefix.length)
+          : rawSpec;
+      final runLengthM = c.lengthM > 0 ? c.lengthM.ceilToDouble() : 1.0;
       lines.add(BomLine(
         description: 'Cable $spec — ${c.name}',
-        qty: c.lengthM > 0 ? c.lengthM.ceilToDouble() : 1,
+        qty: runLengthM * runs,
         category: PartCategory.cable,
         sku: matchCableSku(c.cable.csaMm2, parts, cableType: c.grounding.cableType),
+        runs: runs,
       ));
 
       // ── Wiring accessories (estimate) ──────────────────────────────────────
@@ -242,7 +260,8 @@ List<BomLine> _panelLines(ElectricalPanelResult panel, List<Part> parts) {
         final conductors = c.threePhase ? 5 : 3; // 3L+N+PE or L+N+PE
         lines.add(BomLine(
           description: 'Cable lug (skun) ${_fmt(c.cable.csaMm2)} mm² — ${c.name}',
-          qty: (conductors * 2).toDouble(),
+          // Both ends of EVERY parallel run.
+          qty: (conductors * 2 * runs).toDouble(),
           category: PartCategory.accessory,
         ));
       }
@@ -322,10 +341,12 @@ List<BomLine> _consolidate(List<BomLine> lines) {
         qty: line.qty,
         category: line.category,
         sku: line.sku,
+        runs: line.runs,
       );
       order.add(key);
     } else {
-      byKey[key] = existing.copyWith(qty: existing.qty + line.qty);
+      byKey[key] = existing.copyWith(
+          qty: existing.qty + line.qty, runs: existing.runs + line.runs);
     }
   }
   return [for (final k in order) byKey[k]!];
