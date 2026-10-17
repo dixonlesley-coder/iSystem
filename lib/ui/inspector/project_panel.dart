@@ -3745,7 +3745,7 @@ class _FireSection extends ConsumerWidget {
               _Pill(
                 label: hazardLabel(h),
                 selected: ref.watch(fireHazardProvider) == h,
-                onTap: () => ref.read(fireHazardProvider.notifier).set(h),
+                onTap: () => setFireHazardUndoable(ref.read, h),
               ),
           ],
         ),
@@ -5055,7 +5055,6 @@ class _HvacSection extends ConsumerWidget {
     final colors = context.colors;
     final type = context.type;
     final settings = ref.watch(ductSettingsProvider);
-    final ctrl = ref.read(ductSettingsProvider.notifier);
     final fan = ref.watch(ductFanProvider);
     final balance = ref.watch(airBalanceProvider);
 
@@ -5079,12 +5078,12 @@ class _HvacSection extends ConsumerWidget {
             _Pill(
               label: 'Round',
               selected: settings.shape == DuctShape.round,
-              onTap: () => ctrl.setShape(DuctShape.round),
+              onTap: () => setDuctShapeUndoable(ref.read, DuctShape.round),
             ),
             _Pill(
               label: 'Rectangular',
               selected: settings.shape == DuctShape.rectangular,
-              onTap: () => ctrl.setShape(DuctShape.rectangular),
+              onTap: () => setDuctShapeUndoable(ref.read, DuctShape.rectangular),
             ),
           ],
         ),
@@ -5096,12 +5095,13 @@ class _HvacSection extends ConsumerWidget {
             _Pill(
               label: 'Velocity',
               selected: settings.method == DuctSizingMethod.velocity,
-              onTap: () => ctrl.setMethod(DuctSizingMethod.velocity),
+              onTap: () => setDuctMethodUndoable(ref.read, DuctSizingMethod.velocity),
             ),
             _Pill(
               label: 'Equal friction',
               selected: settings.method == DuctSizingMethod.equalFriction,
-              onTap: () => ctrl.setMethod(DuctSizingMethod.equalFriction),
+              onTap: () =>
+                  setDuctMethodUndoable(ref.read, DuctSizingMethod.equalFriction),
             ),
           ],
         ),

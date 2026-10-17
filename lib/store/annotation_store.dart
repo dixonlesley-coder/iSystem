@@ -52,6 +52,18 @@ class Measurement {
     return math.sqrt(dx * dx + dy * dy);
   }
 
+  /// This measurement moved to building floor [fi] (a floor-stack / sheet
+  /// re-mapping carries annotations with the drawn work — `floor_remap.dart`).
+  Measurement withFloorIndex(int fi) => Measurement(
+        id: id,
+        sheetId: sheetId,
+        floorIndex: fi,
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+      );
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'sheetId': sheetId,
@@ -219,6 +231,20 @@ class TankArea {
         depthM: depthM ?? this.depthM,
         material: material ?? this.material,
         name: name ?? this.name,
+      );
+
+  /// This tank moved to building floor [fi] (see [Measurement.withFloorIndex]).
+  TankArea withFloorIndex(int fi) => TankArea(
+        id: id,
+        sheetId: sheetId,
+        floorIndex: fi,
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+        depthM: depthM,
+        material: material,
+        name: name,
       );
 
   /// Whether sheet-pixel ([px], [py]) on [pSheetId]/[pFloor] falls inside this
@@ -580,6 +606,22 @@ class RoomArea {
             achOverride == _unset ? this.achOverride : achOverride as double?,
         equipmentKind: equipmentKind ?? this.equipmentKind,
         name: name ?? this.name,
+      );
+
+  /// This room moved to building floor [fi] (see [Measurement.withFloorIndex]).
+  RoomArea withFloorIndex(int fi) => RoomArea(
+        id: id,
+        sheetId: sheetId,
+        floorIndex: fi,
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+        roomType: roomType,
+        ceilingHeightM: ceilingHeightM,
+        achOverride: achOverride,
+        equipmentKind: equipmentKind,
+        name: name,
       );
 
   Map<String, dynamic> toJson() => {

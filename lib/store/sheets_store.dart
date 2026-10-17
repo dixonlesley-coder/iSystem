@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 
 import '../ui/canvas/viewport.dart';
+import 'floor_remap.dart';
 import 'history_store.dart';
 import 'models/sheet.dart';
 import 'network_store.dart';
@@ -139,6 +140,18 @@ class SheetsController extends Notifier<SheetsState> {
           levelCount: levelCount,
           record: false,
         );
+    // The sheet's rooms / tanks / measurements / electrical placements move by
+    // the same delta in the same structural step — a room left behind on the
+    // old floor stops containing the AC node inside it (its circuit load falls
+    // back to the component default) and vanishes from the canvas.
+    final delta = newFloor - oldFloor;
+    if (delta != 0) {
+      remapFloorPlacedWork(
+          ref.read,
+          (sid, fi) => sid == sheetId
+              ? shiftSheetFloorIndex(fi, delta, levelCount: levelCount)
+              : fi);
+    }
   }
 
   void selectSheet(int index) {
@@ -239,7 +252,13 @@ class SheetsController extends Notifier<SheetsState> {
   int addSheets(Iterable<Sheet> incoming) {
     final list = incoming.toList();
     if (list.isEmpty) return 0;
-    final used = state.sheets.map((s) => s.id).toSet();
+    // An id that still carries state (a calibration, drawn work, annotations,
+    // electrical placements — e.g. left by an older file) is 'used' too: a new
+    // sheet taking it would silently inherit that scale / work.
+    final used = {
+      ...state.sheets.map((s) => s.id),
+      ...sheetIdsWithState(ref.read),
+    };
     final added = <Sheet>[];
     for (final s in list) {
       var id = s.id;
@@ -315,9 +334,13 @@ class SheetsController extends Notifier<SheetsState> {
   /// BOM / pressures / reports (the active analogue of the Replace-all prune on
   /// [NetworkController.pruneNodesNotOnSheets]).
   ///
-  /// The sheet's CALIBRATION is deliberately left in the project's map: it is
-  /// keyed by id, so it is never queried once the sheet is gone, and it comes
-  /// back intact on undo (no project-domain capture needed). The current index is
+  /// Everything else keyed to the sheet goes with it in the same step: its
+  /// CALIBRATION (+ stale flag) — import ids are filename-derived (`stem#i`),
+  /// so a later re-import of a same-named revised plan would otherwise inherit
+  /// the old scale with no stale flag — its rooms / tanks / measurements /
+  /// reference lines (an orphan room still fed the equipment schedule), and
+  /// any electrical placement on it is un-placed. The structural snapshot
+  /// captures the project too, so one Ctrl+Z brings all of it back. The current index is
   /// shifted so the selection stays put when an earlier sheet is removed, and
   /// clamped into range. No-op when [sheetId] is unknown.
   ///
@@ -340,8 +363,11 @@ class SheetsController extends Notifier<SheetsState> {
       for (final s in state.sheets)
         if (s.id != sheetId) s.id: state.floorFor(s.id, levelCount),
     };
-    // Capture sheets + network as ONE structural snapshot BEFORE mutating.
-    ref.read(structuralHistoryProvider.notifier).recordSheetMappingChange();
+    // Capture project (calibrations) + sheets + network + annotations +
+    // electrical as ONE structural snapshot BEFORE mutating.
+    ref
+        .read(structuralHistoryProvider.notifier)
+        .recordSheetMappingChange(project: true);
     // Prune the removed sheet's nodes (+ their edges) WITHOUT a separate network
     // entry — the structural snapshot already holds the pre-removal network, so
     // undo/redo swap both halves atomically (mirrors [remapSheetFloor]'s
@@ -388,14 +414,81 @@ class SheetsController extends Notifier<SheetsState> {
     // above already holds the pre-removal network, so one Ctrl+Z reverts the
     // sheet removal, the node prune AND every sibling shift together).
     final netCtrl = ref.read(networkControllerProvider.notifier);
+    final deltas = <String, int>{};
     oldFloors.forEach((id, oldFloor) {
       final newFloor = state.floorFor(id, levelCount);
       if (newFloor != oldFloor) {
+        deltas[id] = newFloor - oldFloor;
         netCtrl.remapSheetFloor(id, newFloor - oldFloor,
             levelCount: levelCount, record: false);
       }
     });
+    // The removed sheet's leftovers go; the siblings' annotations / electrical
+    // placements shift with their nodes.
+    pruneWorkOnSheets(ref.read, (id) => id == sheetId);
+    if (deltas.isNotEmpty) {
+      remapFloorPlacedWork(ref.read, (sid, fi) {
+        final d = deltas[sid];
+        return d == null
+            ? fi
+            : shiftSheetFloorIndex(fi, d, levelCount: levelCount);
+      });
+    }
     return pruned;
+  }
+
+  /// The Replace-all import (an empty project, or the explicit Replace choice):
+  /// swap the WHOLE sheet list for [sheets] and drop everything orphaned onto a
+  /// sheet that no longer exists — drawn nodes (+ their edges), rooms, tanks,
+  /// measurements, reference lines, calibrations — and un-place electrical
+  /// placements there. A sheet whose id SURVIVES (a same-named file: import
+  /// ids are `stem#i`) keeps its calibration and drawn work but is a NEW plan,
+  /// so its calibration is flagged STALE exactly like
+  /// [SheetsController.replaceSheetSource] (J1) — never silently trusted.
+  ///
+  /// When anything is actually discarded the whole swap is ONE structural
+  /// undo step (project + sheets + network + annotations + electrical), so one
+  /// Ctrl+Z brings the old plan set back with its work. With nothing to
+  /// discard (the first import into an empty project) it is the plain,
+  /// non-recording [SheetsController.loadSheets] it always was.
+  void replaceAllSheets(List<Sheet> sheets) {
+    final live = {for (final s in sheets) s.id};
+    final orphaned = sheetIdsWithState(ref.read).difference(live);
+    final project = ref.read(projectControllerProvider);
+    final survivingCalibrated = [
+      for (final id in live)
+        if (project.calibrations.containsKey(id)) id,
+    ];
+    final discards = orphaned.isNotEmpty || survivingCalibrated.isNotEmpty;
+    if (discards) {
+      ref
+          .read(structuralHistoryProvider.notifier)
+          .recordSheetMappingChange(project: true);
+    }
+    loadSheets(sheets);
+    if (!discards) return;
+    final net = ref.read(networkControllerProvider).network;
+    final gone = <String>{
+      for (final n in net.nodes)
+        if (!live.contains(n.sheetId)) n.id,
+    };
+    if (gone.isNotEmpty) {
+      ref.read(networkControllerProvider.notifier).restoreNetwork(Network(
+            nodes: [
+              for (final n in net.nodes)
+                if (!gone.contains(n.id)) n,
+            ],
+            edges: [
+              for (final e in net.edges)
+                if (!gone.contains(e.fromId) && !gone.contains(e.toId)) e,
+            ],
+          ));
+    }
+    pruneWorkOnSheets(ref.read, (id) => !live.contains(id));
+    final projectCtrl = ref.read(projectControllerProvider.notifier);
+    for (final id in survivingCalibrated) {
+      projectCtrl.markCalibrationStale(id);
+    }
   }
 }
 

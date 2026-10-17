@@ -17,6 +17,7 @@ import '../../store/app_state.dart'
         rainfallIntensityProvider,
         runoffCoefficientProvider,
         statusMessageProvider;
+import '../../store/history_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -626,7 +627,7 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                   label: _occupancyLabel(o),
                   selected: occ == o,
                   onTap: () {
-                    ref.read(occupancyProvider.notifier).set(o);
+                    setOccupancyUndoable(ref.read, o);
                     _confirmSizingUpdated();
                   },
                 ),
@@ -726,16 +727,16 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 min: 50,
                 max: 600,
                 onDecrement: () {
-                  ref.read(rainfallIntensityProvider.notifier).nudge(-25);
+                  setRainfallUndoable(ref.read, ref.read(rainfallIntensityProvider) - 25);
                   _confirmSizingUpdated();
                 },
                 onIncrement: () {
-                  ref.read(rainfallIntensityProvider.notifier).nudge(25);
+                  setRainfallUndoable(ref.read, ref.read(rainfallIntensityProvider) + 25);
                   _confirmSizingUpdated();
                 },
                 onSubmit: (v) {
                   if (v != null) {
-                    ref.read(rainfallIntensityProvider.notifier).set(v);
+                    setRainfallUndoable(ref.read, v);
                     _confirmSizingUpdated();
                   }
                 },
@@ -758,16 +759,16 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 min: 0.5,
                 max: 1.0,
                 onDecrement: () {
-                  ref.read(runoffCoefficientProvider.notifier).nudge(-0.05);
+                  setRunoffCoefficientUndoable(ref.read, ref.read(runoffCoefficientProvider) - 0.05);
                   _confirmSizingUpdated();
                 },
                 onIncrement: () {
-                  ref.read(runoffCoefficientProvider.notifier).nudge(0.05);
+                  setRunoffCoefficientUndoable(ref.read, ref.read(runoffCoefficientProvider) + 0.05);
                   _confirmSizingUpdated();
                 },
                 onSubmit: (v) {
                   if (v != null) {
-                    ref.read(runoffCoefficientProvider.notifier).set(v);
+                    setRunoffCoefficientUndoable(ref.read, v);
                     _confirmSizingUpdated();
                   }
                 },
@@ -794,20 +795,16 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 max: 1000,
                 // A BIGGER N is a FLATTER fall, so "+" steepens (smaller N).
                 onDecrement: () {
-                  ref
-                      .read(drainageSlopeProvider.notifier)
-                      .set(_slopeFromN(_slopeN(slope) + 10));
+                  setDrainageSlopeUndoable(ref.read, _slopeFromN(_slopeN(slope) + 10));
                   _confirmSizingUpdated();
                 },
                 onIncrement: () {
-                  ref
-                      .read(drainageSlopeProvider.notifier)
-                      .set(_slopeFromN(_slopeN(slope) - 10));
+                  setDrainageSlopeUndoable(ref.read, _slopeFromN(_slopeN(slope) - 10));
                   _confirmSizingUpdated();
                 },
                 onSubmit: (v) {
                   if (v != null && v > 0) {
-                    ref.read(drainageSlopeProvider.notifier).set(_slopeFromN(v));
+                    setDrainageSlopeUndoable(ref.read, _slopeFromN(v));
                     _confirmSizingUpdated();
                   }
                 },
@@ -839,16 +836,16 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 min: 40,
                 max: 90,
                 onDecrement: () {
-                  ref.read(hotWaterFlowTempProvider.notifier).nudge(-1);
+                  setHotWaterFlowTempUndoable(ref.read, ref.read(hotWaterFlowTempProvider) - 1);
                   _confirmSizingUpdated();
                 },
                 onIncrement: () {
-                  ref.read(hotWaterFlowTempProvider.notifier).nudge(1);
+                  setHotWaterFlowTempUndoable(ref.read, ref.read(hotWaterFlowTempProvider) + 1);
                   _confirmSizingUpdated();
                 },
                 onSubmit: (v) {
                   if (v != null) {
-                    ref.read(hotWaterFlowTempProvider.notifier).set(v);
+                    setHotWaterFlowTempUndoable(ref.read, v);
                     _confirmSizingUpdated();
                   }
                 },
@@ -871,16 +868,16 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 min: 1,
                 max: 20,
                 onDecrement: () {
-                  ref.read(hotWaterDeltaTProvider.notifier).nudge(-1);
+                  setHotWaterDeltaTUndoable(ref.read, ref.read(hotWaterDeltaTProvider) - 1);
                   _confirmSizingUpdated();
                 },
                 onIncrement: () {
-                  ref.read(hotWaterDeltaTProvider.notifier).nudge(1);
+                  setHotWaterDeltaTUndoable(ref.read, ref.read(hotWaterDeltaTProvider) + 1);
                   _confirmSizingUpdated();
                 },
                 onSubmit: (v) {
                   if (v != null) {
-                    ref.read(hotWaterDeltaTProvider.notifier).set(v);
+                    setHotWaterDeltaTUndoable(ref.read, v);
                     _confirmSizingUpdated();
                   }
                 },
@@ -905,9 +902,7 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 label: context.strings(StringKey.designInputAcBasisArea),
                 selected: acBasis == CoolingLoadMethod.simple,
                 onTap: () {
-                  ref
-                      .read(coolingLoadMethodProvider.notifier)
-                      .set(CoolingLoadMethod.simple);
+                  setCoolingLoadMethodUndoable(ref.read, CoolingLoadMethod.simple);
                   _confirmSizingUpdated();
                 },
               ),
@@ -915,9 +910,7 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 label: context.strings(StringKey.designInputAcBasisHeatGain),
                 selected: acBasis == CoolingLoadMethod.detailed,
                 onTap: () {
-                  ref
-                      .read(coolingLoadMethodProvider.notifier)
-                      .set(CoolingLoadMethod.detailed);
+                  setCoolingLoadMethodUndoable(ref.read, CoolingLoadMethod.detailed);
                   _confirmSizingUpdated();
                 },
               ),

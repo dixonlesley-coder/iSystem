@@ -1,11 +1,17 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/model.dart' show ElectricalProject;
 import 'package:mechx_engine/network/network.dart' show Network;
+import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
+import 'package:mechx_engine/sizing/network_sizing.dart'
+    show DuctShape, DuctSizingMethod;
+import 'package:mechx_engine/standards/sni.dart' show Occupancy;
 
 import '../data/autosave.dart';
 import '../ui/strings/app_strings.dart';
 import 'annotation_store.dart';
 import 'app_state.dart';
 import 'electrical_store.dart';
+import 'fire_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
 import 'reference_line_store.dart';
@@ -215,15 +221,51 @@ final historyProvider =
 /// restore), exactly mirroring the old per-domain granularity — a floor-stack
 /// edit restored project+network, a mapping edit restored sheets+network — but
 /// now as ONE atomic entry instead of two separate ones.
+///
+/// The FLOOR-PLACED work that is not a network node — the three annotation
+/// lists (rooms / tanks / measurements), the traced reference lines and the
+/// electrical project (panel `layoutPos` / circuit `loadPos`) — is ALWAYS
+/// captured too: every compound floor/sheet edit re-maps (or, for a removed
+/// floor/sheet, prunes) it alongside the nodes (`floor_remap.dart`), so one
+/// Ctrl+Z must restore it in the same step.
+///
+/// [settings] are design-settings reverts folded into this SAME step (a
+/// template apply swaps the floor stack AND the occupancy / fire hazard /
+/// rainfall as ONE timeline entry): run in reverse on undo, forward on redo.
 class StructuralSnapshot {
   final ProjectState? project;
   final SheetsState? sheets;
   final Network network;
+  final List<Measurement> measurements;
+  final List<TankArea> tanks;
+  final List<RoomArea> rooms;
+  final List<ReferenceLine> referenceLines;
+  final ElectricalProject electrical;
+  final List<SettingsUndoEntry> settings;
   const StructuralSnapshot({
     this.project,
     this.sheets,
     required this.network,
+    required this.measurements,
+    required this.tanks,
+    required this.rooms,
+    required this.referenceLines,
+    required this.electrical,
+    this.settings = const [],
   });
+
+  StructuralSnapshot withSettings(List<SettingsUndoEntry> next) =>
+      StructuralSnapshot(
+        project: project,
+        sheets: sheets,
+        network: network,
+        measurements: measurements,
+        tanks: tanks,
+        rooms: rooms,
+        referenceLines: referenceLines,
+        electrical: electrical,
+        settings: next,
+      );
 }
 
 /// The shared undo coordinator for the compound floor-stack / sheet-mapping
@@ -262,17 +304,27 @@ class StructuralHistoryController extends Notifier<int> {
   StructuralSnapshot _capture({
     required bool project,
     required bool sheets,
+    List<SettingsUndoEntry> settings = const [],
   }) =>
       StructuralSnapshot(
         project: project ? ref.read(projectControllerProvider) : null,
         sheets: sheets ? ref.read(sheetsControllerProvider) : null,
         network: ref.read(networkControllerProvider).network,
+        measurements: ref.read(measurementsProvider),
+        tanks: ref.read(tankAreasProvider),
+        rooms: ref.read(roomAreasProvider),
+        referenceLines: ref.read(referenceLinesProvider),
+        electrical: ref.read(electricalProjectProvider),
+        settings: settings,
       );
 
   /// Re-capture the CURRENT live state for the SAME domains a stored snapshot
   /// holds, so undo/redo can swap forward/back symmetrically.
-  StructuralSnapshot _captureLike(StructuralSnapshot s) =>
-      _capture(project: s.project != null, sheets: s.sheets != null);
+  StructuralSnapshot _captureLike(StructuralSnapshot s) => _capture(
+        project: s.project != null,
+        sheets: s.sheets != null,
+        settings: s.settings,
+      );
 
   void _restore(StructuralSnapshot s) {
     // Restore through the controllers' NON-recording setters so restoring never
@@ -286,6 +338,13 @@ class StructuralHistoryController extends Notifier<int> {
       ref.read(sheetsControllerProvider.notifier).restoreState(s.sheets!);
     }
     ref.read(networkControllerProvider.notifier).restoreNetwork(s.network);
+    // The annotation `set`s never record (they are the load path), and the
+    // reference-line / electrical restores keep those controllers' own stacks.
+    ref.read(measurementsProvider.notifier).set(s.measurements);
+    ref.read(tankAreasProvider.notifier).set(s.tanks);
+    ref.read(roomAreasProvider.notifier).set(s.rooms);
+    ref.read(referenceLinesProvider.notifier).restoreState(s.referenceLines);
+    ref.read(electricalProjectProvider.notifier).restoreProject(s.electrical);
   }
 
   void _record({required bool project, required bool sheets}) {
@@ -304,7 +363,22 @@ class StructuralHistoryController extends Notifier<int> {
   /// Snapshot the CURRENT (pre-mutation) sheet mapping + network and record one
   /// [UndoDomain.structural] entry — called by a sheet→floor re-mapping BEFORE
   /// it changes the mapping and remaps the sheet's node floor indices.
-  void recordSheetMappingChange() => _record(project: false, sheets: true);
+  ///
+  /// [project] also captures the project state — for a sheet edit that drops
+  /// the removed sheet's calibration ([SheetsController.removeSheet] /
+  /// [SheetsController.replaceAllSheets]), so undo restores the scale.
+  void recordSheetMappingChange({bool project = false}) =>
+      _record(project: project, sheets: true);
+
+  /// Fold [entry] into the MOST RECENT structural step, so a compound edit
+  /// that also changes design settings (a template apply) is still ONE
+  /// timeline entry: undo reverts the settings after restoring the snapshot,
+  /// redo re-applies them. No-op when there is no structural step to join.
+  void attachSettingsToLast(SettingsUndoEntry entry) {
+    if (_undo.isEmpty) return;
+    final last = _undo.removeLast();
+    _undo.add(last.withSettings([...last.settings, entry]));
+  }
 
   /// Revert the most recent compound edit (floors/mapping AND node indices) in
   /// one step. Driven by the global [historyProvider], not widgets directly.
@@ -313,6 +387,9 @@ class StructuralHistoryController extends Notifier<int> {
     final snap = _undo.removeLast();
     _redo.add(_captureLike(snap));
     _restore(snap);
+    for (final e in snap.settings.reversed) {
+      e.undo();
+    }
     state++;
   }
 
@@ -322,6 +399,9 @@ class StructuralHistoryController extends Notifier<int> {
     final snap = _redo.removeLast();
     _undo.add(_captureLike(snap));
     _restore(snap);
+    for (final e in snap.settings) {
+      e.redo();
+    }
     state++;
   }
 
@@ -448,3 +528,115 @@ void setFeedStrategyUndoable(ProviderReader read, FeedStrategy next) {
   read(statusMessageProvider.notifier).showStatus(strings
       .format(StringKey.settingsFeedStrategyChanged, {'mode': mode}));
 }
+
+/// D3 generalised — change ANY single-scalar design setting as a first-class
+/// undoable step on the global timeline. [get] reads the live value, [apply]
+/// writes it through the owning controller's PLAIN (non-recording) setter, and
+/// [next] is the requested value. The value actually stored after [apply]
+/// (controllers clamp) is what redo re-applies. A no-op — recording nothing —
+/// when the stored value does not change (re-selecting the live option, or a
+/// stepper held at its clamp limit), so the timeline never gains an empty
+/// step that a later Ctrl+Z would silently burn.
+///
+/// Returns whether a step was recorded.
+bool setSettingUndoable<T>(
+  ProviderReader read, {
+  required T Function() get,
+  required void Function(T value) apply,
+  required T next,
+  required StringKey label,
+}) {
+  final previous = get();
+  if (previous == next) return false;
+  apply(next);
+  final applied = get();
+  if (applied == previous) return false;
+  read(settingsHistoryProvider.notifier).record(SettingsUndoEntry(
+    label: MechXStringsData(read(localeProvider))(label),
+    undo: () => apply(previous),
+    redo: () => apply(applied),
+  ));
+  return true;
+}
+
+/// Undoable occupancy change (drives the UBAP demand + the fire / ventilation
+/// defaults). See [setSettingUndoable].
+void setOccupancyUndoable(ProviderReader read, Occupancy next) =>
+    setSettingUndoable<Occupancy>(read,
+        get: () => read(occupancyProvider),
+        apply: (v) => read(occupancyProvider.notifier).set(v),
+        next: next,
+        label: StringKey.undoLabelOccupancy);
+
+/// Undoable sprinkler hazard class change.
+void setFireHazardUndoable(ProviderReader read, FireHazardClass next) =>
+    setSettingUndoable<FireHazardClass>(read,
+        get: () => read(fireHazardProvider),
+        apply: (v) => read(fireHazardProvider.notifier).set(v),
+        next: next,
+        label: StringKey.undoLabelFireHazard);
+
+/// Undoable design rainfall intensity change (mm/hr, clamped by the store).
+void setRainfallUndoable(ProviderReader read, double next) =>
+    setSettingUndoable<double>(read,
+        get: () => read(rainfallIntensityProvider),
+        apply: (v) => read(rainfallIntensityProvider.notifier).set(v),
+        next: next,
+        label: StringKey.undoLabelRainfall);
+
+/// Undoable storm runoff coefficient change (clamped by the store).
+void setRunoffCoefficientUndoable(ProviderReader read, double next) =>
+    setSettingUndoable<double>(read,
+        get: () => read(runoffCoefficientProvider),
+        apply: (v) => read(runoffCoefficientProvider.notifier).set(v),
+        next: next,
+        label: StringKey.undoLabelRunoff);
+
+/// Undoable laid drainage slope change (m/m, clamped by the store).
+void setDrainageSlopeUndoable(ProviderReader read, double next) =>
+    setSettingUndoable<double>(read,
+        get: () => read(drainageSlopeProvider),
+        apply: (v) => read(drainageSlopeProvider.notifier).set(v),
+        next: next,
+        label: StringKey.designInputDrainageSlope);
+
+/// Undoable hot-water flow temperature change (C, clamped by the store).
+void setHotWaterFlowTempUndoable(ProviderReader read, double next) =>
+    setSettingUndoable<double>(read,
+        get: () => read(hotWaterFlowTempProvider),
+        apply: (v) => read(hotWaterFlowTempProvider.notifier).set(v),
+        next: next,
+        label: StringKey.designInputHotWaterFlowTemp);
+
+/// Undoable hot-water loop temperature drop change (K, clamped by the store).
+void setHotWaterDeltaTUndoable(ProviderReader read, double next) =>
+    setSettingUndoable<double>(read,
+        get: () => read(hotWaterDeltaTProvider),
+        apply: (v) => read(hotWaterDeltaTProvider.notifier).set(v),
+        next: next,
+        label: StringKey.designInputHotWaterDeltaT);
+
+/// Undoable AC cooling-load basis change.
+void setCoolingLoadMethodUndoable(
+        ProviderReader read, CoolingLoadMethod next) =>
+    setSettingUndoable<CoolingLoadMethod>(read,
+        get: () => read(coolingLoadMethodProvider),
+        apply: (v) => read(coolingLoadMethodProvider.notifier).set(v),
+        next: next,
+        label: StringKey.designInputAcLoadBasis);
+
+/// Undoable duct shape change (round / rectangular).
+void setDuctShapeUndoable(ProviderReader read, DuctShape next) =>
+    setSettingUndoable<DuctShape>(read,
+        get: () => read(ductSettingsProvider).shape,
+        apply: (v) => read(ductSettingsProvider.notifier).setShape(v),
+        next: next,
+        label: StringKey.undoLabelDuctShape);
+
+/// Undoable duct sizing method change (velocity / equal friction).
+void setDuctMethodUndoable(ProviderReader read, DuctSizingMethod next) =>
+    setSettingUndoable<DuctSizingMethod>(read,
+        get: () => read(ductSettingsProvider).method,
+        apply: (v) => read(ductSettingsProvider.notifier).setMethod(v),
+        next: next,
+        label: StringKey.undoLabelDuctMethod);

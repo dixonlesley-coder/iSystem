@@ -4,6 +4,7 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'floor_remap.dart';
 import 'history_store.dart';
 import 'network_store.dart';
 
@@ -268,6 +269,13 @@ class ProjectController extends Notifier<ProjectState> {
           insertedCount: count,
           record: false,
         );
+    // Rooms / tanks / measurements / electrical placements shift with the
+    // drawn work, inside the same structural snapshot.
+    final levels = state.floors.length;
+    remapFloorPlacedWork(
+        ref.read,
+        (_, fi) => shiftFloorIndex(fi,
+            levelCount: levels, insertedIndex: 0, insertedCount: count));
   }
 
   /// Replace the whole floor stack in ONE undo step (used by project templates /
@@ -292,6 +300,9 @@ class ProjectController extends Notifier<ProjectState> {
           levelCount: state.floors.length,
           record: false,
         );
+    final levels = state.floors.length;
+    remapFloorPlacedWork(
+        ref.read, (_, fi) => shiftFloorIndex(fi, levelCount: levels));
   }
 
   /// Remove the floor at [index] in ONE undo step. The floor removal AND the
@@ -327,6 +338,13 @@ class ProjectController extends Notifier<ProjectState> {
           removedIndex: index,
           record: false,
         );
+    // Annotations ON the removed floor are deleted with it (and electrical
+    // placements there un-placed); everything above drops one index.
+    final levels = state.floors.length;
+    remapFloorPlacedWork(
+        ref.read,
+        (_, fi) =>
+            shiftFloorIndex(fi, levelCount: levels, removedIndex: index));
   }
 
   void renameFloor(int index, String name) {
@@ -377,6 +395,25 @@ class ProjectController extends Notifier<ProjectState> {
     if (state.staleCalibrations.contains(sheetId)) return;
     state = state.copyWith(
         staleCalibrations: {...state.staleCalibrations, sheetId});
+  }
+
+  /// Drop every calibration (and stale flag) whose sheet id satisfies
+  /// [isGone], WITHOUT recording undo — a removed / replaced sheet must not
+  /// leave its scale behind for a later sheet that reuses its id (import ids
+  /// are filename-derived `stem#i`, so a re-import of a same-named revised plan
+  /// would otherwise inherit the OLD scale with no stale flag). Called from
+  /// compound sheet edits whose structural snapshot already captured the
+  /// project, so undo restores the scale. No-op when nothing matches.
+  void dropCalibrationsWhere(bool Function(String sheetId) isGone) {
+    if (!state.calibrations.keys.any(isGone) &&
+        !state.staleCalibrations.any(isGone)) {
+      return;
+    }
+    final next = Map<String, ScaleCalibration>.from(state.calibrations)
+      ..removeWhere((id, _) => isGone(id));
+    final nextStale = Set<String>.from(state.staleCalibrations)
+      ..removeWhere(isGone);
+    state = state.copyWith(calibrations: next, staleCalibrations: nextStale);
   }
 
   /// J1 — clear [sheetId]'s stale-calibration flag WITHOUT changing its

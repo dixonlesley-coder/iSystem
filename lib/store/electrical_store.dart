@@ -552,6 +552,63 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     state = _redo.removeLast();
   }
 
+  /// Restore a captured project WITHOUT recording undo and WITHOUT clearing
+  /// the local stacks — the structural coordinator's restore path for a
+  /// compound floor-stack / sheet edit that moved electrical placements. Not
+  /// for widgets.
+  void restoreProject(ElectricalProject project) => state = project;
+
+  /// Re-map every PLACED panel ([ElectricalPanel.layoutPos]) and circuit load
+  /// ([ElectricalCircuit.loadPos]) through [map] WITHOUT recording undo — a
+  /// floor-stack / sheet re-mapping carries the electrical placements with the
+  /// drawn work (`floor_remap.dart`). [map] returns the new position, the SAME
+  /// instance to leave it, or null to UN-PLACE it (its floor / sheet is gone).
+  /// No-op — state untouched — when nothing changes.
+  void remapLayoutPositions(LayoutPos? Function(LayoutPos pos) map) {
+    var changed = false;
+    final panels = <ElectricalPanel>[];
+    for (final p in state.panels) {
+      var panel = p;
+      final lp = p.layoutPos;
+      if (lp != null) {
+        final next = map(lp);
+        if (next == null) {
+          panel = panel.copyWith(clearLayoutPos: true);
+          changed = true;
+        } else if (next != lp) {
+          panel = panel.copyWith(layoutPos: next);
+          changed = true;
+        }
+      }
+      var circuitsChanged = false;
+      final circuits = <ElectricalCircuit>[];
+      for (final c in panel.circuits) {
+        final pos = c.loadPos;
+        if (pos == null) {
+          circuits.add(c);
+          continue;
+        }
+        final next = map(pos);
+        if (next == null) {
+          circuits.add(c.copyWith(clearLoadPos: true));
+          circuitsChanged = true;
+        } else if (next != pos) {
+          circuits.add(c.copyWith(loadPos: next));
+          circuitsChanged = true;
+        } else {
+          circuits.add(c);
+        }
+      }
+      if (circuitsChanged) {
+        panel = panel.copyWith(circuits: circuits);
+        changed = true;
+      }
+      panels.add(panel);
+    }
+    if (!changed) return;
+    state = _withProject(panels: panels);
+  }
+
   /// Replace the whole project (A6 persistence load / crash recovery). A loaded
   /// document is a fresh baseline, so BOTH local stacks clear — the caller
   /// (`applyDocument`) resets the global timeline to match, like the other
