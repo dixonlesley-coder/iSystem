@@ -4,8 +4,8 @@
 // Geometry used below (all from `electrical_sld_drawing.dart`):
 //   gutter 150, gap 24, board 168 x 46 ⇒ boards at x = 174, 366, 558 … (pitch
 //   192); band height 150, top band at y 0.
-//   Bus tracks sit 12 / 17 / 22 / 7 / 27 above a band's box tops (first
-//   claimant keeps the legacy 12).
+//   Bus tracks sit 12 / 17 / 22 / 27 / 7 above a band's box tops, claimed
+//   right-to-left by jog x (the rightmost jog keeps the legacy 12).
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/compute.dart';
@@ -198,5 +198,137 @@ void main() {
       }
       expect(hits, isEmpty);
     });
+
+    test('no feeder tag glyph box is crossed by a feeder horizontal', () {
+      expect(_tagStrikes(sheet, verticals: false), isEmpty);
+    });
   });
+
+  // Review regression: R (L2, alone) feeds A, B, C on L1 and D..H on G. The
+  // five G boards push the channel far right, so L1's clear span (right of
+  // its rightmost board, up to the channel) FITS a tag — and L1 carries TWO
+  // child-leg jogs on tracks 5 units apart. A tag escaping to that span
+  // (bandRight + 8, track - 4) has its glyph box [track - 10.5, track - 4],
+  // which the NEIGHBOURING track 5 units above runs straight through unless
+  // the placer treats the jogged legs as obstacles.
+  group('review: escaped tags clear every jogged bus track', () {
+    final p2 = _wideProject();
+    final r2 = computeSystem(const PuilProfile(), p2);
+    final sheet2 =
+        buildElectricalRiser(project: p2, result: r2, building: _building);
+    final medium2 = sheet2.prims
+        .whereType<SldLine>()
+        .where((l) => l.weight == SldWeight.medium)
+        .toList();
+
+    test('the fixture has >= 2 jogs on L1 AND an L1 span that fits a tag', () {
+      // L1 box tops at y 150: its bus rows are the medium horizontals in the
+      // gap above them (150 - 31 .. 150).
+      final l1Rows = {
+        for (final l in medium2)
+          if (l.y1 == l.y2 && l.y1 < 150 && l.y1 > 150 - 31) l.y1
+      };
+      expect(l1Rows.length, greaterThanOrEqualTo(2));
+      // Channel x = the shared vertical every feeder drops down.
+      final channelX = medium2
+          .where((l) => l.x1 == l.x2)
+          .map((l) => l.x1)
+          .reduce(math.max);
+      // L1's rightmost board edge: 3 boards ⇒ 174 + 2 x 192 + 168 = 726.
+      const l1Right = 726.0;
+      final tags = sheet2.prims
+          .whereType<SldLabel>()
+          .where((t) => t.text.contains(' mm2 ') && t.text.contains('·'))
+          .toList();
+      final longest = tags
+          .map((t) => t.text.length * t.size * kElectricalRiserLabelCharW)
+          .reduce(math.max);
+      expect(l1Right + 8 + longest, lessThanOrEqualTo(channelX - 4),
+          reason: 'spanFits must be true for the clear-span escape slots');
+    });
+
+    test('no feeder tag glyph box is crossed by any feeder line', () {
+      final tags = sheet2.prims
+          .whereType<SldLabel>()
+          .where((t) => t.text.contains(' mm2 ') && t.text.contains('·'))
+          .toList();
+      expect(tags.length, 8, reason: 'one per fed board (A..H)');
+      expect(_tagStrikes(sheet2, verticals: true), isEmpty);
+      expect(_tagStrikes(sheet2, verticals: false), isEmpty);
+    });
+
+    test('tracks are claimed right-to-left: no feeder lines cross', () {
+      // A medium horizontal crossing a medium vertical strictly inside both
+      // (not at a shared endpoint / T-junction) is a feeder crossing.
+      final hs = medium2.where((l) => l.y1 == l.y2).toList();
+      final vs = medium2.where((l) => l.x1 == l.x2).toList();
+      final hits = <String>[];
+      for (final h in hs) {
+        final hx0 = math.min(h.x1, h.x2), hx1 = math.max(h.x1, h.x2);
+        for (final v in vs) {
+          final vy0 = math.min(v.y1, v.y2), vy1 = math.max(v.y1, v.y2);
+          if (v.x1 > hx0 && v.x1 < hx1 && h.y1 > vy0 && h.y1 < vy1) {
+            hits.add('h y=${h.y1} [$hx0..$hx1] x v x=${v.x1} [$vy0..$vy1]');
+          }
+        }
+      }
+      expect(hits, isEmpty);
+    });
+  });
+}
+
+ElectricalProject _wideProject() {
+  ElectricalPanel fed(String id, String via, int floor, double x) =>
+      ElectricalPanel(
+          id: id,
+          name: 'LP-$id',
+          sourceType: PanelSource.feeder,
+          fedByCircuitId: via,
+          layoutPos:
+              LayoutPos(sheetId: 's$floor', floorIndex: floor, x: x, y: 0),
+          circuits: [_light('l$id')]);
+  const l1 = ['A', 'B', 'C'];
+  const g = ['D', 'E', 'F', 'G', 'H'];
+  return ElectricalProject(id: 'p2', name: 'P2', panels: [
+    ElectricalPanel(
+        id: 'R',
+        name: 'MDP',
+        layoutPos: const LayoutPos(sheetId: 's2', floorIndex: 2, x: 0, y: 0),
+        circuits: [
+          for (final id in [...l1, ...g]) _feeder('f$id', id, 12),
+        ]),
+    for (var i = 0; i < l1.length; i++) fed(l1[i], 'f${l1[i]}', 1, i * 4.0),
+    for (var i = 0; i < g.length; i++) fed(g[i], 'f${g[i]}', 0, i * 4.0),
+  ]);
+}
+
+/// Every feeder-tag glyph box struck by a medium (feeder) line — verticals or
+/// horizontals. A tag is `<cable> mm2 · <breaker>`; its glyph box is
+/// [x, x + chars x size x 0.6] x [y - size, y].
+List<String> _tagStrikes(SldSheet sheet, {required bool verticals}) {
+  final tags = sheet.prims
+      .whereType<SldLabel>()
+      .where((t) => t.text.contains(' mm2 ') && t.text.contains('·'));
+  final lines = sheet.prims
+      .whereType<SldLine>()
+      .where((l) => l.weight == SldWeight.medium);
+  final hits = <String>[];
+  for (final t in tags) {
+    final w = t.text.length * t.size * kElectricalRiserLabelCharW;
+    for (final l in lines) {
+      if (verticals && l.x1 == l.x2) {
+        final lo = math.min(l.y1, l.y2), hi = math.max(l.y1, l.y2);
+        if (l.x1 > t.x && l.x1 < t.x + w && lo < t.y && hi > t.y - t.size) {
+          hits.add('"${t.text}" @(${t.x},${t.y}) struck by x=${l.x1}');
+        }
+      } else if (!verticals && l.y1 == l.y2) {
+        final lo = math.min(l.x1, l.x2), hi = math.max(l.x1, l.x2);
+        if (l.y1 > t.y - t.size && l.y1 < t.y && lo < t.x + w && hi > t.x) {
+          hits.add('"${t.text}" @(${t.x},${t.y}) struck by y=${l.y1} '
+              '[$lo..$hi]');
+        }
+      }
+    }
+  }
+  return hits;
 }
