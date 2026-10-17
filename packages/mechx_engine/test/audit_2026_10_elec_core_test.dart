@@ -411,4 +411,94 @@ void main() {
       expect(c.cable.deratedIz.amperes, greaterThanOrEqualTo(1188.6));
     });
   });
+
+  group('elec-core-5/6 — one ampacity basis across insulations + methods', () {
+    test('XLPE (90 °C) is never below PVC (70 °C), every method + section', () {
+      // On ONE installation basis a 90 °C conductor always carries at least
+      // what a 70 °C one does (higher permitted conductor temperature, same
+      // heat path).
+      for (final m in CableInstallMethod.values) {
+        for (final s in profile.standardSectionsMm2) {
+          final pvc = profile.ampacity(s, method: m).amperes;
+          final xlpe = profile
+              .ampacity(s, insulation: ConductorInsulation.xlpe, method: m)
+              .amperes;
+          expect(xlpe, greaterThanOrEqualTo(pvc), reason: '$m $s mm2');
+        }
+      }
+    });
+
+    test('buried: IEC B.52.2/B.52.5 D1, 3-loaded, both insulations', () {
+      // 16 mm²: PVC 64 A, XLPE 75 A; 300 mm²: PVC 316 A, XLPE 365 A.
+      // (The defect read PVC 89 / 465 A — a direct-in-ground catalogue basis
+      // — above XLPE.)
+      const m = CableInstallMethod.buried;
+      expect(profile.ampacity(16, method: m).amperes, 64);
+      expect(profile.ampacity(300, method: m).amperes, 316);
+      expect(
+          profile
+              .ampacity(300, insulation: ConductorInsulation.xlpe, method: m)
+              .amperes,
+          365);
+    });
+
+    test('a buried FRC (XLPE) run never takes MORE copper than NYY (PVC)', () {
+      // Ib 186.8 A, In 200 A ⇒ Iz ≥ max(200, 1.25·186.8 = 233.5) = 233.5 A,
+      // buried, df 1.0:
+      //   PVC D1: 95 → 169 ✗, 120 → 192 ✗, 150 → 217 ✗, 185 → 243 ✓ ⇒ 185 mm²
+      //   XLPE D1: 95 → 197 ✗, 120 → 223 ✗, 150 → 251 ✓ ⇒ 150 mm²
+      // (The defect: NYY 95 mm² at 245 A vs FRC 150 mm² — the 90 °C cable two
+      // sizes LARGER.)
+      CableResultLike size(ConductorInsulation ins) {
+        final c = sizeCable(
+          profile,
+          designCurrent: const Current(186.8),
+          breakerRating: const Current(200),
+          deratingFactor: 1.0,
+          minSectionMm2: 4,
+          insulation: ins,
+          method: CableInstallMethod.buried,
+          threePhase: true,
+        );
+        return (csa: c.csaMm2, iz: c.deratedIz.amperes);
+      }
+
+      final pvc = size(ConductorInsulation.pvc);
+      final xlpe = size(ConductorInsulation.xlpe);
+      expect(pvc.csa, 185);
+      expect(pvc.iz, 243);
+      expect(xlpe.csa, 150);
+      expect(xlpe.iz, 251);
+      expect(xlpe.csa, lessThanOrEqualTo(pvc.csa));
+    });
+
+    test('XLPE C/E are the 3-loaded columns (3φ is not overrated)', () {
+      // IEC 60364-5-52: B.52.5 column C 3-loaded 300 mm² = 576 A (2-loaded
+      // 693); B.52.12 method E 3-loaded 16 mm² = 100 A, 300 mm² = 621 A
+      // (2-loaded 115 / 741).
+      const x = ConductorInsulation.xlpe;
+      expect(profile.ampacity(300, insulation: x, method: CableInstallMethod.wall)
+          .amperes, 576);
+      expect(profile.ampacity(16, insulation: x, method: CableInstallMethod.tray)
+          .amperes, 100);
+      expect(profile.ampacity(300, insulation: x, method: CableInstallMethod.tray)
+          .amperes, 621);
+      // Like with like: every XLPE column now sits on the 3-loaded basis, so
+      // the open-air methods rank E ≥ C ≥ B1 at every section (free air
+      // dissipates best, a conduit worst).
+      for (final s in profile.standardSectionsMm2) {
+        final b1 = profile.ampacity(s, insulation: x).amperes;
+        final c = profile
+            .ampacity(s, insulation: x, method: CableInstallMethod.wall)
+            .amperes;
+        final e = profile
+            .ampacity(s, insulation: x, method: CableInstallMethod.tray)
+            .amperes;
+        expect(c, greaterThanOrEqualTo(b1), reason: 'C vs B1 at $s');
+        expect(e, greaterThanOrEqualTo(c), reason: 'E vs C at $s');
+      }
+    });
+  });
 }
+
+typedef CableResultLike = ({double csa, double iz});
