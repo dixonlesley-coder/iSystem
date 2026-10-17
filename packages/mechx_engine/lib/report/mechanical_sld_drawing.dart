@@ -113,6 +113,11 @@ const double _kInkHalfThickness = 2;
 /// (byte-identical); the return leg is never fabricated without the signal.
 /// Pure — no clock, no IO.
 ///
+/// [nodeTags] (drafting-7) is the stable equipment-tag map
+/// (`equipmentNodeTags`) the plan exporters + the equipment schedule key on;
+/// a tagged node's label leads with its tag before the role word
+/// (`P-08 Pump · 2.2 kW`). Empty (the default) ⇒ byte-identical.
+///
 /// [edgeLengths] (N6) is the SAME §10 length-per-edge map the plan export
 /// consumes — a riser carries its true elevation delta, a run its calibrated
 /// pixel length. When supplied, each pipe run/riser tag gains a ` - x.x m`
@@ -130,6 +135,7 @@ SldSheet buildMechanicalRiserSld({
   List<String> notes = const [],
   bool detailCallouts = false,
   bool hotWaterRecirc = false,
+  Map<String, String> nodeTags = const {},
 }) {
   final prims = <SldPrim>[];
 
@@ -164,8 +170,7 @@ SldSheet buildMechanicalRiserSld({
   final bandCount = (hiFloor - loFloor + 1).clamp(1, 999);
 
   // Band centre y for a floor index — highest floor at the TOP.
-  double bandTop(int floorIndex) =>
-      _topPad + (hiFloor - floorIndex) * _bandH;
+  double bandTop(int floorIndex) => _topPad + (hiFloor - floorIndex) * _bandH;
   double bandCentreY(int floorIndex) => bandTop(floorIndex) + _bandH / 2;
 
   // Map a node's x into the placement band via the SHARED layout helper (B7):
@@ -226,9 +231,8 @@ SldSheet buildMechanicalRiserSld({
     placer.reserve(SldLabel(8, top + 18, name, size: 10, bold: true));
     if (building != null && f < building.levelCount) {
       final ffl = building.elevationOf(f).meters;
-      placer.reserve(SldLabel(
-          8, top + 32, fflLabel(ffl),
-          size: 8, role: SldRole.source));
+      placer.reserve(
+          SldLabel(8, top + 32, fflLabel(ffl), size: 8, role: SldRole.source));
     }
   }
 
@@ -282,31 +286,43 @@ SldSheet buildMechanicalRiserSld({
       ? const <(String, List<(NodeComponent, String)>)>[]
       : <(String, List<(NodeComponent, String)>)>[
           if (waterFocus && hasComponent(NodeComponent.waterMeter))
-            ('DETAIL WATER METER', const [
-              (NodeComponent.gateValve, 'GV'),
-              (NodeComponent.waterMeter, 'WM'),
-              (NodeComponent.gateValve, 'GV'),
-              (NodeComponent.gateValve, 'U'),
-            ]),
+            (
+              'DETAIL WATER METER',
+              const [
+                (NodeComponent.gateValve, 'GV'),
+                (NodeComponent.waterMeter, 'WM'),
+                (NodeComponent.gateValve, 'GV'),
+                (NodeComponent.gateValve, 'U'),
+              ]
+            ),
           if (waterFocus && hasComponent(NodeComponent.prv))
-            ('DETAIL PRV SET', const [
-              (NodeComponent.gateValve, 'GV'),
-              (NodeComponent.strainer, 'STR'),
-              (NodeComponent.prv, 'PRV'),
-              (NodeComponent.gateValve, 'GV'),
-            ]),
+            (
+              'DETAIL PRV SET',
+              const [
+                (NodeComponent.gateValve, 'GV'),
+                (NodeComponent.strainer, 'STR'),
+                (NodeComponent.prv, 'PRV'),
+                (NodeComponent.gateValve, 'GV'),
+              ]
+            ),
           // G4: DETAIL FLOOR DRAIN (FD trap + CO) — only when one is drawn.
           if (drainageFocus && hasComponent(NodeComponent.floorDrain))
-            ('DETAIL FLOOR DRAIN', const [
-              (NodeComponent.floorDrain, 'FD'),
-              (NodeComponent.cleanout, 'CO'),
-            ]),
+            (
+              'DETAIL FLOOR DRAIN',
+              const [
+                (NodeComponent.floorDrain, 'FD'),
+                (NodeComponent.cleanout, 'CO'),
+              ]
+            ),
           // G4: DETAIL VTR — only when a vent riser actually reaches the roof.
           if (drainageFocus &&
               ventTopTerminalIds(network, topFloor: hiFloor).isNotEmpty)
-            ('DETAIL VTR', const [
-              (NodeComponent.airVent, 'VTR'),
-            ]),
+            (
+              'DETAIL VTR',
+              const [
+                (NodeComponent.airVent, 'VTR'),
+              ]
+            ),
         ];
   final notesH = notes.isEmpty ? 0.0 : 20 + notes.length * _notesLineH + 6;
 
@@ -348,8 +364,8 @@ SldSheet buildMechanicalRiserSld({
     }
   }
   if (notesH > 0) {
-    placer.reserveBox(contentMaxX - _notesW, extrasTop, contentMaxX,
-        extrasTop + notesH);
+    placer.reserveBox(
+        contentMaxX - _notesW, extrasTop, contentMaxX, extrasTop + notesH);
   }
 
   // ── B2 STACK DETAIL: cleanouts, the vent tee, VTR terminations ──────────────
@@ -369,9 +385,9 @@ SldSheet buildMechanicalRiserSld({
           dashed: true));
       // Roof-penetration cap tick.
       prims.add(SldLine(p.dx - 4, stubTop, p.dx + 4, stubTop,
-          weight: SldWeight.medium,
-          layer: riserServiceCode(ServiceType.vent)));
-      placer.reserve(SldLabel(p.dx + 6, stubTop + 6, 'VTR', size: 7, bold: true));
+          weight: SldWeight.medium, layer: riserServiceCode(ServiceType.vent)));
+      placer
+          .reserve(SldLabel(p.dx + 6, stubTop + 6, 'VTR', size: 7, bold: true));
     }
   }
   if (focus == null ||
@@ -506,15 +522,24 @@ SldSheet buildMechanicalRiserSld({
       labelInset = _symbolSize / 2;
     } else if (n.role == NodeRole.fixture) {
       // A fixture drop terminal — the down-triangle marker.
-      prims.addAll(
-          _withRole(planFixturePrims(cx: p.dx, cy: p.dy, size: _nodeBox), role));
+      prims.addAll(_withRole(
+          planFixturePrims(cx: p.dx, cy: p.dy, size: _nodeBox), role));
       labelInset = _nodeBox / 2;
     } else {
-      prims.add(SldRect(p.dx - _nodeBox / 2, p.dy - _nodeBox / 2, _nodeBox,
-          _nodeBox, weight: SldWeight.thin, role: role));
+      prims.add(SldRect(
+          p.dx - _nodeBox / 2, p.dy - _nodeBox / 2, _nodeBox, _nodeBox,
+          weight: SldWeight.thin, role: role));
       labelInset = _nodeBox / 2;
     }
-    final base = _nodeLabel(n);
+    // drafting-7: a scheduled unit LEADS with its stable equipment TAG (the
+    // same `equipmentNodeTags` number the plan + schedule carry) ahead of its
+    // descriptive word, so the riser cross-references them without losing
+    // what the unit is (`TK-01 Roof tank · 5 m3`, `P-02 Pump · 2.2 kW`).
+    final tagged = nodeTags[n.id];
+    final word = _nodeLabel(n);
+    final base = (tagged != null && tagged.isNotEmpty)
+        ? (word == null ? tagged : '$tagged $word')
+        : word;
     if (base != null) {
       // B1 equipment-detail suffix (capacity / duty) — only when the app
       // supplied a real datum for this node.
@@ -566,9 +591,10 @@ SldSheet buildMechanicalRiserSld({
     // The KETERANGAN system-notes block, bottom-RIGHT (the renderers stamp the
     // page-fixed title block below/beside it in page space).
     const left = contentMaxX - _notesW;
-    prims.add(SldRect(left, extrasTop, _notesW, notesH, weight: SldWeight.thin));
-    prims.add(SldLabel(left + 6, extrasTop + 12, 'KETERANGAN',
-        size: 7, bold: true));
+    prims
+        .add(SldRect(left, extrasTop, _notesW, notesH, weight: SldWeight.thin));
+    prims.add(
+        SldLabel(left + 6, extrasTop + 12, 'KETERANGAN', size: 7, bold: true));
     var y = extrasTop + 24.0;
     for (final line in notes) {
       prims.add(SldLabel(left + 6, y, line, size: 7));
@@ -628,7 +654,8 @@ String _pipeTag(EdgeSizing? s, NetEdge edge,
           ? '${s.width!.inMillimeters.round()}x${s.height!.inMillimeters.round()}'
           : 'O$mm';
     } else {
-      final base = '$mm-$code-${_pipeMaterialCode(edge.pipeProduct, edge.service)}';
+      final base =
+          '$mm-$code-${_pipeMaterialCode(edge.pipeProduct, edge.service)}';
       tag = function != null ? '$base-${function.code}' : base;
     }
   }
@@ -659,10 +686,7 @@ String _pipeMaterialCode(PipeProduct? p, ServiceType s) {
   }
   return switch (s) {
     ServiceType.coldWater || ServiceType.hotWater => 'PPR',
-    ServiceType.drainage ||
-    ServiceType.vent ||
-    ServiceType.rainwater =>
-      'PVC',
+    ServiceType.drainage || ServiceType.vent || ServiceType.rainwater => 'PVC',
     ServiceType.fireSprinkler || ServiceType.fireHydrant => 'BS',
     _ => 'GI',
   };
@@ -851,8 +875,9 @@ void _emitDetailBox(List<SldPrim> prims, double left, double top, String title,
     final cx = firstCx + i * gap;
     prims.addAll(
         planComponentPrims(component, cx: cx, cy: cy, size: _calloutGlyph));
-    prims.add(SldLabel(cx - _labelWidth(abbrev, 7) / 2,
-        cy + _calloutGlyph / 2 + 10, abbrev, size: 7));
+    prims.add(SldLabel(
+        cx - _labelWidth(abbrev, 7) / 2, cy + _calloutGlyph / 2 + 10, abbrev,
+        size: 7));
   }
 }
 
@@ -954,8 +979,8 @@ bool _emitPlantDetail(
           : _pumpTrainGlyphPrims(token, gx, trainCy, gl);
       prims.addAll(_withRole(gp, SldRole.source));
       if (abbrev.isNotEmpty) {
-        prims.add(SldLabel(gx - _labelWidth(abbrev, 7) / 2,
-            trainCy + gl / 2 + 10, abbrev,
+        prims.add(SldLabel(
+            gx - _labelWidth(abbrev, 7) / 2, trainCy + gl / 2 + 10, abbrev,
             size: 7, role: SldRole.source));
       }
     }
@@ -968,8 +993,8 @@ bool _emitPlantDetail(
     // (pump-up) on upfeed. Mirrors the canvas leg labels.
     final leg = hasGround ? 'TRANSFER' : (!downfeed ? 'BOOSTER' : null);
     if (leg != null) {
-      prims.add(SldLabel(cx - _labelWidth(leg, 7) / 2, trainCy + gl / 2 + 36,
-          leg,
+      prims.add(SldLabel(
+          cx - _labelWidth(leg, 7) / 2, trainCy + gl / 2 + 36, leg,
           size: 7, bold: true, role: SldRole.source));
     }
   }
@@ -987,8 +1012,8 @@ List<SldPrim> _pumpTrainGlyphPrims(
         planComponentPrims(NodeComponent.gateValve, cx: cx, cy: cy, size: size),
       'STR' =>
         planComponentPrims(NodeComponent.strainer, cx: cx, cy: cy, size: size),
-      'CV' =>
-        planComponentPrims(NodeComponent.checkValve, cx: cx, cy: cy, size: size),
+      'CV' => planComponentPrims(NodeComponent.checkValve,
+          cx: cx, cy: cy, size: size),
       'FJ' => planFlexibleJointPrims(cx: cx, cy: cy, size: size),
       _ => const [],
     };
@@ -1013,8 +1038,7 @@ String? _drainageExitNodeId(Network net) {
   if (nodes.isEmpty) return null;
   int drainDegree(String id) => net.edges
       .where((e) =>
-          e.service == ServiceType.drainage &&
-          (e.fromId == id || e.toId == id))
+          e.service == ServiceType.drainage && (e.fromId == id || e.toId == id))
       .length;
   bool poorExit(NetNode n) =>
       n.role == NodeRole.fixture || n.component == NodeComponent.cleanout;
@@ -1164,7 +1188,8 @@ class _LabelPlacer {
   /// through by the pipe / leg it sits on (X1). Only axis-aligned segments are
   /// seeded — every run/riser leg of the L-route is one.
   void reserveLine(double x1, double y1, double x2, double y2) {
-    reserveBox(math.min(x1, x2) - _kInkHalfThickness,
+    reserveBox(
+        math.min(x1, x2) - _kInkHalfThickness,
         math.min(y1, y2) - _kInkHalfThickness,
         math.max(x1, x2) + _kInkHalfThickness,
         math.max(y1, y2) + _kInkHalfThickness);
@@ -1214,7 +1239,8 @@ class _LabelPlacer {
       final baseDx = best.dx;
       for (var k = 1; k <= _kEscapeSteps && !cleared; k++) {
         for (final dy in [_kEscapeStep * k, -_kEscapeStep * k]) {
-          final total = _overlapAt(defaultX + baseDx, defaultY + dy, text, size);
+          final total =
+              _overlapAt(defaultX + baseDx, defaultY + dy, text, size);
           if (total < bestOverlap) {
             bestOverlap = total;
             best = Offset(baseDx, dy);

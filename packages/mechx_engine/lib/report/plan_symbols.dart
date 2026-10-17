@@ -379,13 +379,14 @@ String? riserUpDown({required int hereFloor, required int otherFloor}) {
 // AC-01). Only role-bearing equipment is tagged — inline valves / meters /
 // fittings / drains / air terminals get their symbol, not a tag.
 //
-// NOTE — this numbering is INDEPENDENT of the equipment schedule's, not a
-// guaranteed cross-reference. The schedule (`gatherEquipmentScheduleData`)
-// gathers from SOLVED providers (pump/fan/room duties), not network nodes, and
-// numbers differently: the fire pump takes an `FP` prefix, room AHUs number by
-// stable room identity (with gaps), and tanks appear in no schedule row at all.
-// The tags therefore coincide only for a single-unit-per-prefix, all-calibrated
-// project; a multi-unit / fire-pump / skipped-room project WILL diverge.
+// NOTE — the equipment schedule (`gatherEquipmentScheduleData`) keys its rows
+// by THIS map (drafting-7): the supply pump row takes the tag of the first
+// drawn pump/booster on a non-fire service, the fire pump row the first pump on
+// a fire service, the duct fan row the first drawn supply/exhaust fan, and each
+// room's AHU row the AHU node drawn inside that room — so plan, riser and
+// schedule print the same tag for the same unit. Only when no such unit is
+// DRAWN does the schedule fall back to its own fixed tag (`P-01` / `FP-01` /
+// `F-01`, or the room-identity `AHU-NN`); tanks appear in no schedule row.
 
 /// The equipment-tag prefix for [c] — `P` pumps/booster, `TK` tanks, `AHU`,
 /// `FCU`, `F` fans, `AC` indoor AC units — or null for a component that is not

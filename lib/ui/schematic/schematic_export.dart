@@ -18,6 +18,7 @@ import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_pdf_export.dart'
     show electricalSldSheetsToPdf;
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
+import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
 import 'package:mechx_engine/report/riser_tags.dart'
     show equipmentDetail, riserServiceCode;
 import 'package:mechx_engine/report/sld_export.dart';
@@ -179,6 +180,9 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
     edgeLengths: edgeLengths,
     notes: _systemNotes(ref, network),
     detailCallouts: true,
+    // drafting-7: the riser's equipment carries the SAME stable tag as the
+    // plan + the equipment schedule (P-08 · 2.2 kW).
+    nodeTags: equipmentNodeTags(network),
   );
 }
 
