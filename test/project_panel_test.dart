@@ -72,7 +72,14 @@ void main() {
 
   testWidgets('uncalibrated sheet shows a calibration prompt', (tester) async {
     await _pumpAppWithDemoSheets(tester);
-    expect(find.textContaining('Not calibrated'), findsOneWidget);
+    // Scoped to the inspector: the Layout breadcrumb tail
+    // ('breadcrumb-calibrate') also states the uncalibrated status.
+    expect(
+        find.descendant(
+            of: find.byType(ProjectPanel),
+            matching: find.textContaining('Not calibrated')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('breadcrumb-calibrate')), findsOneWidget);
   });
 
   testWidgets(
