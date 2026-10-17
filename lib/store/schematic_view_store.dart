@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart' show ServiceType;
 
 import '../ui/canvas/viewport.dart';
+import 'layer_store.dart' show DisciplineLayer, disciplineOf, servicesFor;
 
 /// Which mode the elevation surface is in — the read-only generated riser
 /// diagram (Auto) or the editable placement/sizing surface (Edit).
@@ -30,6 +31,11 @@ class SchematicViewState {
 
   /// The service a dropped riser carries in Edit mode.
   final ServiceType service;
+
+  /// The discipline whose services the Edit-mode service picker lists
+  /// (Plumbing / Fire / HVAC). Null until the user picks one ⇒ it follows the
+  /// discipline of [service] (see [effectiveEditDiscipline]).
+  final DisciplineLayer? editDiscipline;
 
   /// Auto-view system filter: null = the COMBINED single-line; a service = that
   /// system only.
@@ -57,6 +63,7 @@ class SchematicViewState {
   const SchematicViewState({
     this.mode = SchematicMode.auto,
     this.service = ServiceType.coldWater,
+    this.editDiscipline,
     this.autoFocus,
     this.inferRisers = false,
     this.showLegend = false,
@@ -68,9 +75,15 @@ class SchematicViewState {
     this.editTransform,
   });
 
+  /// The Edit-mode discipline actually shown — the picked one, else the
+  /// discipline the current riser [service] belongs to.
+  DisciplineLayer get effectiveEditDiscipline =>
+      editDiscipline ?? disciplineOf(service);
+
   SchematicViewState copyWith({
     SchematicMode? mode,
     ServiceType? service,
+    DisciplineLayer? editDiscipline,
     ServiceType? autoFocus,
     bool clearAutoFocus = false,
     bool? inferRisers,
@@ -85,6 +98,7 @@ class SchematicViewState {
       SchematicViewState(
         mode: mode ?? this.mode,
         service: service ?? this.service,
+        editDiscipline: editDiscipline ?? this.editDiscipline,
         autoFocus: clearAutoFocus ? null : (autoFocus ?? this.autoFocus),
         inferRisers: inferRisers ?? this.inferRisers,
         showLegend: showLegend ?? this.showLegend,
@@ -105,7 +119,25 @@ class SchematicViewController extends Notifier<SchematicViewState> {
     if (state.mode != m) state = state.copyWith(mode: m);
   }
 
-  void setService(ServiceType s) => state = state.copyWith(service: s);
+  /// Set the Edit-mode riser service. A service outside the shown discipline
+  /// (e.g. picked from elsewhere) moves the discipline picker with it, so the
+  /// selected chip is always visible.
+  void setService(ServiceType s) => state = state.copyWith(
+        service: s,
+        editDiscipline: disciplineOf(s),
+      );
+
+  /// Pick the Edit-mode discipline (Plumbing / Fire / HVAC). When the current
+  /// service isn't one of its services, that discipline's FIRST service is
+  /// selected, so the picker never shows a hidden selection.
+  void setEditDiscipline(DisciplineLayer d) {
+    final services = servicesFor(d);
+    if (services.isEmpty) return; // electrical has no riser services
+    state = state.copyWith(
+      editDiscipline: d,
+      service: services.contains(state.service) ? null : services.first,
+    );
+  }
 
   /// Set the Auto system filter — pass null for the combined "All" view.
   void setAutoFocus(ServiceType? s) => state =

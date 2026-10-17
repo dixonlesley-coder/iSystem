@@ -1217,7 +1217,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   builds the sheet from the live providers for the current Auto-view focus + an honest supply note, saved
   via the file picker, behind a new **Export** toolbar button + `_RiserExportMenu`. The legend + title
   block are now DRAWING CHROME that ride the EXPORT — the live-canvas `_showLegend`/`_showTitleBlock`
-  default OFF (the toolbar chips still preview them); Details/Notes stay ON. Goldens 04/09/10 shift only
+  default OFF (previewable from the toolbar's **Show** popover, which since 2026-10-17 holds
+  Details/Notes + an 'Export preview' Legend/Title block pair); Details/Notes stay ON. The Edit
+  toolbar's riser service picker is discipline-scoped (Plumbing/Fire/HVAC segment → that
+  discipline's service chips). Goldens 04/09/10 shift only
   by the decluttered working canvas + the Export button; electrical 05/06/08/11 BYTE-IDENTICAL. No
   `.mechx`/version change (export is build-time).
   **Mechanical ↔ electrical theme convergence landed (Apple-consistency pass):** the

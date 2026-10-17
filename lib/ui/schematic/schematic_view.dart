@@ -37,6 +37,8 @@ import 'package:mechx_engine/standards/sni.dart';
 import '../../store/app_state.dart';
 import '../../store/electrical_store.dart' show WorkspaceView, workspaceViewProvider;
 import '../../store/history_store.dart';
+import '../../store/layer_store.dart'
+    show DisciplineLayer, DisciplineLayerInfo, servicesFor;
 import '../../store/models/sheet.dart' show Sheet;
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -82,7 +84,7 @@ export 'riser_tags.dart' show equipmentDetail;
 ///
 /// F7: the mode / filter / toggles / viewports are held in the transient
 /// [schematicViewProvider] so they survive a hop to another workspace and back.
-/// Only the ephemeral Export-menu-open flag stays widget-local.
+/// Only the ephemeral Export / Show popover-open flags stay widget-local.
 class SchematicView extends ConsumerStatefulWidget {
   const SchematicView({super.key});
 
@@ -95,6 +97,23 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
   /// popover interaction state — deliberately NOT sticky (a fresh hop starts
   /// with it closed).
   bool _showExportMenu = false;
+
+  /// Whether the 'Show' display-toggles popover is open. Ephemeral, like the
+  /// Export menu (never sticky; a fresh hop starts closed).
+  bool _showDisplayMenu = false;
+
+  /// Anchors the 'Show' popover under its toolbar button.
+  final LayerLink _showLink = LayerLink();
+  final GlobalKey _showButtonKey = GlobalKey();
+
+  /// True when [global] lands on the 'Show' button — the scrim then leaves the
+  /// close to the button's own toggle (else the tap would close-then-reopen).
+  bool _onShowButton(Offset global) {
+    final box =
+        _showButtonKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return false;
+    return (box.localToGlobal(Offset.zero) & box.size).contains(global);
+  }
 
   /// Close the export menu and run the chosen export against the live providers
   /// (the file dialog + IO live in `schematic_export.dart`). Awaited so the
@@ -127,19 +146,22 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
               .map((e) => e.service)
               .toSet(),
           inferRisers: vs.inferRisers,
-          showLegend: vs.showLegend,
-          showTitleBlock: vs.showTitleBlock,
-          showDetails: vs.showDetails,
-          showNotes: vs.showNotes,
+          editDiscipline: vs.effectiveEditDiscipline,
           onMode: ctrl.setMode,
           onService: ctrl.setService,
+          onEditDiscipline: ctrl.setEditDiscipline,
           onAutoFocus: ctrl.setAutoFocus,
           onInferRisers: ctrl.setInferRisers,
-          onShowLegend: ctrl.setShowLegend,
-          onTitleBlock: ctrl.setShowTitleBlock,
-          onShowDetails: ctrl.setShowDetails,
-          onShowNotes: ctrl.setShowNotes,
-          onExport: () => setState(() => _showExportMenu = !_showExportMenu),
+          showLink: _showLink,
+          showButtonKey: _showButtonKey,
+          onShow: () => setState(() {
+            _showDisplayMenu = !_showDisplayMenu;
+            _showExportMenu = false;
+          }),
+          onExport: () => setState(() {
+            _showExportMenu = !_showExportMenu;
+            _showDisplayMenu = false;
+          }),
         ),
         Container(height: 1, color: colors.border),
         Expanded(
@@ -162,6 +184,7 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
         ),
       ],
     );
+    final displayMenuOpen = _showDisplayMenu && vs.mode == SchematicMode.auto;
 
     return Stack(
       children: [
@@ -196,6 +219,51 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
                 onDxf: () => _runExport(exportMechanicalRiserDxf),
                 onSetPdf: () => _runExport(exportMechanicalRiserSetPdf),
                 onSetDxf: () => _runExport(exportMechanicalRiserSetDxf),
+              ),
+            ),
+          ),
+        // Tap-away scrim behind the open 'Show' popover. A press on the Show
+        // button itself is left to the button's toggle.
+        if (displayMenuOpen)
+          Positioned.fill(
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (e) {
+                if (_onShowButton(e.position)) return;
+                setState(() => _showDisplayMenu = false);
+              },
+              child: const SizedBox.expand(),
+            ),
+          ),
+        if (displayMenuOpen)
+          Positioned(
+            left: 0,
+            top: 0,
+            child: CompositedTransformFollower(
+              link: _showLink,
+              showWhenUnlinked: false,
+              targetAnchor: Alignment.bottomLeft,
+              offset: const Offset(0, MechXSpacing.xs),
+              child: Focus(
+                autofocus: true,
+                onKeyEvent: (node, event) {
+                  if (event is KeyDownEvent &&
+                      event.logicalKey == LogicalKeyboardKey.escape) {
+                    setState(() => _showDisplayMenu = false);
+                    return KeyEventResult.handled;
+                  }
+                  return KeyEventResult.ignored;
+                },
+                child: _RiserDisplayMenu(
+                  showDetails: vs.showDetails,
+                  showNotes: vs.showNotes,
+                  showLegend: vs.showLegend,
+                  showTitleBlock: vs.showTitleBlock,
+                  onShowDetails: ctrl.setShowDetails,
+                  onShowNotes: ctrl.setShowNotes,
+                  onShowLegend: ctrl.setShowLegend,
+                  onTitleBlock: ctrl.setShowTitleBlock,
+                ),
               ),
             ),
           ),
@@ -277,6 +345,103 @@ class _RiserExportMenu extends StatelessWidget {
   }
 }
 
+/// The riser 'Show' popover — the four DISPLAY toggles that only change what
+/// the Auto diagram shows (never the design): Details + Notes (working-canvas
+/// annotations, default on), then under an 'Export preview' caption the Legend
+/// + Title block drawing chrome that rides the export (default off). Same
+/// anchored glass-card idiom as [_RiserExportMenu]; rows reuse the
+/// [_ToggleChip] checkbox visual.
+class _RiserDisplayMenu extends StatelessWidget {
+  final bool showDetails;
+  final bool showNotes;
+  final bool showLegend;
+  final bool showTitleBlock;
+  final ValueChanged<bool> onShowDetails;
+  final ValueChanged<bool> onShowNotes;
+  final ValueChanged<bool> onShowLegend;
+  final ValueChanged<bool> onTitleBlock;
+  const _RiserDisplayMenu({
+    required this.showDetails,
+    required this.showNotes,
+    required this.showLegend,
+    required this.showTitleBlock,
+    required this.onShowDetails,
+    required this.onShowNotes,
+    required this.onShowLegend,
+    required this.onTitleBlock,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
+      curve: MechXMotion.standard,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.scale(
+          scale: 0.95 + 0.05 * t,
+          alignment: Alignment.topLeft,
+          child: child,
+        ),
+      ),
+      // Opaque: a press in the card's padding must not reach the scrim.
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          width: 200,
+          child: GlassSurface(
+            borderRadius: MechXRadii.card,
+            blurSigma: MechXGlass.blurSigmaLight,
+            shadow: MechXShadow.popover,
+            child: Padding(
+              padding: const EdgeInsets.all(MechXSpacing.xs),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _ToggleChip(
+                    label: context.strings(StringKey.schematicDetails),
+                    value: showDetails,
+                    onTap: () => onShowDetails(!showDetails),
+                  ),
+                  _ToggleChip(
+                    label: context.strings(StringKey.schematicNotes),
+                    value: showNotes,
+                    onTap: () => onShowNotes(!showNotes),
+                  ),
+                  const SizedBox(height: MechXSpacing.xs),
+                  Container(height: 1, color: colors.border),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(MechXSpacing.sm,
+                        MechXSpacing.sm, MechXSpacing.sm, MechXSpacing.xs),
+                    child: Text(
+                      context.strings(StringKey.schematicExportPreview),
+                      style:
+                          context.type.caption.copyWith(color: colors.textMuted),
+                    ),
+                  ),
+                  _ToggleChip(
+                    label: context.strings(StringKey.schematicLegend),
+                    value: showLegend,
+                    onTap: () => onShowLegend(!showLegend),
+                  ),
+                  _ToggleChip(
+                    label: context.strings(StringKey.schematicTitleBlock),
+                    value: showTitleBlock,
+                    onTap: () => onTitleBlock(!showTitleBlock),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _RiserExportRow extends StatelessWidget {
   final String label;
   final String sub;
@@ -318,18 +483,18 @@ class _Toolbar extends StatelessWidget {
   final ServiceType? autoFocus;
   final Set<ServiceType> presentServices;
   final bool inferRisers;
-  final bool showLegend;
-  final bool showTitleBlock;
-  final bool showDetails;
-  final bool showNotes;
+  final DisciplineLayer editDiscipline;
   final ValueChanged<SchematicMode> onMode;
   final ValueChanged<ServiceType> onService;
+  final ValueChanged<DisciplineLayer> onEditDiscipline;
   final ValueChanged<ServiceType?> onAutoFocus;
   final ValueChanged<bool> onInferRisers;
-  final ValueChanged<bool> onShowLegend;
-  final ValueChanged<bool> onTitleBlock;
-  final ValueChanged<bool> onShowDetails;
-  final ValueChanged<bool> onShowNotes;
+
+  /// Anchor + hit key for the 'Show' display-toggles popover (owned by the
+  /// view state, which paints the popover above the canvas).
+  final LayerLink showLink;
+  final Key showButtonKey;
+  final VoidCallback onShow;
   final VoidCallback onExport;
 
   const _Toolbar({
@@ -338,18 +503,15 @@ class _Toolbar extends StatelessWidget {
     required this.autoFocus,
     required this.presentServices,
     required this.inferRisers,
-    required this.showLegend,
-    required this.showTitleBlock,
-    required this.showDetails,
-    required this.showNotes,
+    required this.editDiscipline,
     required this.onMode,
     required this.onService,
+    required this.onEditDiscipline,
     required this.onAutoFocus,
     required this.onInferRisers,
-    required this.onShowLegend,
-    required this.onTitleBlock,
-    required this.onShowDetails,
-    required this.onShowNotes,
+    required this.showLink,
+    required this.showButtonKey,
+    required this.onShow,
     required this.onExport,
   });
 
@@ -408,46 +570,35 @@ class _Toolbar extends StatelessWidget {
                       ],
                     Container(width: 1, height: 22, color: colors.border),
                     const SizedBox(width: MechXSpacing.xs),
-                    // C2: these are INDEPENDENT on/off toggles (each flips
-                    // alone) — a distinct checkbox idiom (never the accent
-                    // pill) so they can't be mistaken for the radio groups.
+                    // C2: an INDEPENDENT on/off toggle — the checkbox idiom
+                    // (never the accent pill). 'Infer risers' stays on the bar
+                    // because it adds committable connectors (a design action);
+                    // the pure DISPLAY toggles live behind 'Show'.
                     _ToggleChip(
                       label: context.strings(StringKey.schematicInferRisers),
                       value: inferRisers,
                       onTap: () => onInferRisers(!inferRisers),
                     ),
-                    const SizedBox(width: MechXSpacing.xs),
-                    _ToggleChip(
-                      label: context.strings(StringKey.schematicLegend),
-                      value: showLegend,
-                      onTap: () => onShowLegend(!showLegend),
-                    ),
-                    const SizedBox(width: MechXSpacing.xs),
-                    _ToggleChip(
-                      label: context.strings(StringKey.schematicTitleBlock),
-                      value: showTitleBlock,
-                      onTap: () => onTitleBlock(!showTitleBlock),
-                    ),
-                    const SizedBox(width: MechXSpacing.xs),
-                    _ToggleChip(
-                      label: context.strings(StringKey.schematicDetails),
-                      value: showDetails,
-                      onTap: () => onShowDetails(!showDetails),
-                    ),
-                    const SizedBox(width: MechXSpacing.xs),
-                    _ToggleChip(
-                      label: context.strings(StringKey.schematicNotes),
-                      value: showNotes,
-                      onTap: () => onShowNotes(!showNotes),
-                    ),
-                    // F5: Export is an ACTION, not a toggle — a MechXButton
-                    // (matching the electrical toolbar's Export grammar), no
-                    // longer a never-selected `_TabButton`. It rides the END of
-                    // the scroll strip so the strip keeps the full toolbar width
-                    // (the toggles + filter stay reachable on a narrow window).
                     const SizedBox(width: MechXSpacing.sm),
                     Container(width: 1, height: 22, color: colors.border),
                     const SizedBox(width: MechXSpacing.sm),
+                    // 2026-10-17: Details / Notes / Legend / Title block are
+                    // one 'Show' popover (anchored under this button).
+                    CompositedTransformTarget(
+                      link: showLink,
+                      child: KeyedSubtree(
+                        key: showButtonKey,
+                        child: MechXButton(
+                          label: context.strings(StringKey.schematicShow),
+                          onPressed: onShow,
+                        ),
+                      ),
+                    ),
+                    // F5: Export is an ACTION, not a toggle — a MechXButton
+                    // (matching the electrical toolbar's Export grammar). It
+                    // rides the END of the scroll strip so the strip keeps the
+                    // full toolbar width on a narrow window.
+                    const SizedBox(width: MechXSpacing.xs),
                     MechXButton(label: 'Export', onPressed: onExport),
                   ],
                 ),
@@ -458,22 +609,30 @@ class _Toolbar extends StatelessWidget {
             const SizedBox(width: MechXSpacing.md),
             Container(width: 1, height: 22, color: colors.border),
             const SizedBox(width: MechXSpacing.md),
+            // 2026-10-17: the riser service picker is DISCIPLINE-SCOPED — a
+            // Plumbing / Fire / HVAC radio row, then only that discipline's
+            // service chips (5 / 2 / 3), so the strip never clips at 1440.
+            for (final d in DisciplineLayer.values)
+              if (d.isMechanical) ...[
+                MechXSegment(
+                  label: d.label,
+                  selected: d == editDiscipline,
+                  onTap: () => onEditDiscipline(d),
+                ),
+                const SizedBox(width: MechXSpacing.xs),
+              ],
+            const SizedBox(width: MechXSpacing.sm),
+            Container(width: 1, height: 22, color: colors.border),
+            const SizedBox(width: MechXSpacing.sm),
             Flexible(
-              // R1: all ten services don't fit the toolbar at a 1440 window, so
-              // the chip strip scrolls horizontally with a soft edge fade — but
-              // ONLY on an edge that actually has content beyond it (see
-              // [_FadeEdgeScrollStrip]). A chip clipped at the viewport edge then
-              // reads as scrollable rather than a broken half-word ("Sprinkle"),
-              // and a strip that fits renders exactly as an unmasked Row.
+              // R1: kept as a safety net — on a very narrow window the chips
+              // scroll with a soft edge fade (only on an edge with content past
+              // it); when they fit it renders as a bare, unmasked Row.
               child: _FadeEdgeScrollStrip(
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(context.strings(StringKey.schematicRiserService),
-                        style: context.type.caption
-                            .copyWith(color: colors.textMuted)),
-                    const SizedBox(width: MechXSpacing.sm),
-                    for (final s in ServiceType.values) ...[
+                    for (final s in servicesFor(editDiscipline)) ...[
                       _ServiceChip(
                         service: s,
                         selected: s == service,

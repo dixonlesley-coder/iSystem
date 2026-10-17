@@ -7,6 +7,7 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/schematic_view_store.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -78,6 +79,36 @@ void main() {
       expect(s.editTransform, edit);
       // A viewport write must preserve the filter (copyWith field independence).
       expect(s.autoFocus, ServiceType.vent);
+    });
+
+    test('Edit discipline follows the service until picked; picking one '
+        'whose services exclude the current service selects its first', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final ctrl = c.read(schematicViewProvider.notifier);
+      expect(c.read(schematicViewProvider).editDiscipline, isNull);
+      expect(c.read(schematicViewProvider).effectiveEditDiscipline,
+          DisciplineLayer.plumbing);
+
+      ctrl.setEditDiscipline(DisciplineLayer.fire);
+      var s = c.read(schematicViewProvider);
+      expect(s.effectiveEditDiscipline, DisciplineLayer.fire);
+      expect(s.service, servicesFor(DisciplineLayer.fire).first);
+
+      // A service already inside the picked discipline is kept.
+      ctrl.setService(ServiceType.fireHydrant);
+      ctrl.setEditDiscipline(DisciplineLayer.fire);
+      expect(c.read(schematicViewProvider).service, ServiceType.fireHydrant);
+
+      // Setting a service from another discipline moves the picker with it.
+      ctrl.setService(ServiceType.exhaust);
+      s = c.read(schematicViewProvider);
+      expect(s.effectiveEditDiscipline, DisciplineLayer.hvac);
+
+      // Electrical has no riser services — ignored.
+      ctrl.setEditDiscipline(DisciplineLayer.electrical);
+      expect(c.read(schematicViewProvider).effectiveEditDiscipline,
+          DisciplineLayer.hvac);
     });
   });
 }
