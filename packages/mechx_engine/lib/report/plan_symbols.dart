@@ -15,6 +15,7 @@ library;
 
 import 'dart:math' as math;
 
+import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../network/network.dart';
 import 'drawing_chrome.dart' show LabelBox;
 import 'sld_sheet.dart';
@@ -693,4 +694,52 @@ String? formatTieOffsetMm(double offsetPx, double? metersPerPixel) {
   final mm = offsetPx * metersPerPixel * 1000;
   if (mm < 1) return null;
   return mm.round().toString();
+}
+
+/// N5 — the per-run centreline-elevation label (`CL +2.70`) keyed by edge id:
+/// the height of each RUN's HORIZONTAL leg above its floor's FFL, from the §10
+/// role-aware [nodeElevation]. Only RUN edges get an entry (risers carry the
+/// FFL gutter on the riser sheet); the pure exporters receive the finished
+/// strings and never read the model.
+///
+/// A run whose endpoints sit at different solved elevations (a floor-mounted
+/// pump up to the ceiling main, a ceiling main down to a WC) is NOT a straight
+/// sloped pipe: the horizontal leg hangs at the MAIN's level (the `main`-role
+/// endpoint, else the higher endpoint) and the difference is a vertical leg —
+/// so the label states the hanging height a foreman sets out, plus
+/// `drop N.NN m` for that leg ([runVerticalLeg], the same figure the run's
+/// quantity includes), never the misleading mean of the two ends. A level run
+/// prints the bare `CL` token (byte-identical to before).
+Map<String, String> runCentrelineLabels(
+  Network net,
+  BuildingLevels building, {
+  MountingHeights mounting = const MountingHeights(),
+}) {
+  final out = <String, String>{};
+  for (final e in net.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    final a = net.nodeById(e.fromId);
+    final b = net.nodeById(e.toId);
+    if (a == null || b == null) continue;
+    final ea = nodeElevation(a, building, mounting).meters;
+    final eb = nodeElevation(b, building, mounting).meters;
+    final leg =
+        runVerticalLeg(e, net, building: building, mounting: mounting).meters;
+    final NetNode level;
+    if (leg <= 0) {
+      level = a;
+    } else if (a.role == NodeRole.main && b.role != NodeRole.main) {
+      level = a;
+    } else if (b.role == NodeRole.main && a.role != NodeRole.main) {
+      level = b;
+    } else {
+      level = ea >= eb ? a : b;
+    }
+    final levelElev = identical(level, a) ? ea : eb;
+    final aboveFfl = levelElev - building.elevationOf(level.floorIndex).meters;
+    final sign = aboveFfl >= 0 ? '+' : '-';
+    final drop = leg > 0 ? ' drop ${leg.toStringAsFixed(2)} m' : '';
+    out[e.id] = 'CL $sign${aboveFfl.abs().toStringAsFixed(2)}$drop';
+  }
+  return out;
 }

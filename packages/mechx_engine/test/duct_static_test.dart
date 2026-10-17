@@ -55,7 +55,10 @@ void main() {
     // A supply (AC) duct with no explicit product now defaults to PU panel.
     final perM = ductFrictionPaPerMetre(flow, dia,
         roughness: ductRoughnessFor(DuctProduct.pu));
-    const length = 100.0; // 1000 px × 0.1
+    // §10 run length = horizontal + vertical leg: 1000 px × 0.1 = 100 m on
+    // plan, plus the fan (plant ⇒ roof, 4.0 m) dropping to the diffuser
+    // (fixture ⇒ 0 + 1.1 m fixture height): |4.0 − 1.1| = 2.9 m.
+    const length = 100.0 + (4.0 - 1.1);
     final expected = perM * length * 1.3 + 30.0; // defaults: fitting 1.3, term 30
     expect(sol.totalStaticPressure.pascals, closeTo(expected, 1e-6));
     expect(sol.criticalNodeId, 'd');
@@ -135,7 +138,9 @@ void main() {
           building: building,
         );
 
-    const length = 100.0; // 1000 px × 0.1
+    // 100 m on plan (1000 px × 0.1) + the roof fan (4.0 m) → diffuser
+    // (1.1 m) vertical leg of 2.9 m (§10 true-elevation delta).
+    const length = 100.0 + (4.0 - 1.1);
     double composed(DuctProduct p) =>
         ductFrictionPaPerMetre(flow, dia, roughness: ductRoughnessFor(p)) *
             length *

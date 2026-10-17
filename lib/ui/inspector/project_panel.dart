@@ -23,7 +23,8 @@ import 'package:mechx_engine/report/mep_commercial.dart'
 import 'package:mechx_engine/report/mep_report.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
-import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
+import 'package:mechx_engine/report/plan_symbols.dart'
+    show equipmentNodeTags, runCentrelineLabels;
 import 'package:mechx_engine/report/report_blocks.dart';
 import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
@@ -799,28 +800,13 @@ DrawingChrome issuableChrome(
   );
 }
 
-/// N5: a per-run centreline-elevation label ('CL +2.70') keyed by edge id — the
-/// height of each horizontal run above its floor's FFL, from the §10 role-aware
-/// [nodeElevation] (mains at the ceiling, fixture branches at fixture height).
-/// Only RUN edges get an entry (risers carry the FFL gutter on the riser sheet);
-/// the pure exporters receive the finished strings and never read the model. The
-/// average of the two endpoint elevations is the run's representative centreline.
+/// N5: a per-run centreline-elevation label ('CL +2.70') keyed by edge id —
+/// delegates to the engine's pure [runCentrelineLabels] (the horizontal leg's
+/// hanging height + a `drop N.NN m` vertical-leg note), so the app and the
+/// export harness can never print different setting-out heights.
 Map<String, String> planEdgeElevationLabels(Network net, BuildingLevels building,
-    {MountingHeights mounting = const MountingHeights()}) {
-  final out = <String, String>{};
-  for (final e in net.edges) {
-    if (e.kind != EdgeKind.run) continue;
-    final a = net.nodeById(e.fromId);
-    final b = net.nodeById(e.toId);
-    if (a == null || b == null) continue;
-    final ea = nodeElevation(a, building, mounting).meters;
-    final eb = nodeElevation(b, building, mounting).meters;
-    final aboveFfl = (ea + eb) / 2 - building.elevationOf(a.floorIndex).meters;
-    final sign = aboveFfl >= 0 ? '+' : '-';
-    out[e.id] = 'CL $sign${aboveFfl.abs().toStringAsFixed(2)}';
-  }
-  return out;
-}
+        {MountingHeights mounting = const MountingHeights()}) =>
+    runCentrelineLabels(net, building, mounting: mounting);
 
 /// Export the current sheet/floor's drawn network as a DXF drawing file.
 Future<void> exportDrawingDxf(WidgetRef ref) => runExportGuarded(

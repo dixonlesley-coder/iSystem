@@ -86,25 +86,10 @@ const referenceGrid = ReferenceGrid(
   ],
 );
 
-// N5: the per-run centreline-elevation labels the app builds from the §10 model
-// (`nodeElevation` above each run's floor FFL). Mirrors
-// `project_panel.planEdgeElevationLabels`; the engine takes the finished strings.
-Map<String, String> elevationLabels(Network net) {
-  const mounting = MountingHeights();
-  final out = <String, String>{};
-  for (final e in net.edges) {
-    if (e.kind != EdgeKind.run) continue;
-    final a = net.nodeById(e.fromId);
-    final b = net.nodeById(e.toId);
-    if (a == null || b == null) continue;
-    final ea = nodeElevation(a, building, mounting).meters;
-    final eb = nodeElevation(b, building, mounting).meters;
-    final aboveFfl = (ea + eb) / 2 - building.elevationOf(a.floorIndex).meters;
-    final sign = aboveFfl >= 0 ? '+' : '-';
-    out[e.id] = 'CL $sign${aboveFfl.abs().toStringAsFixed(2)}';
-  }
-  return out;
-}
+// N5: the per-run centreline-elevation labels — the SAME engine function the
+// app calls (`runCentrelineLabels`), so the harness can't drift from the app.
+Map<String, String> elevationLabels(Network net) =>
+    runCentrelineLabels(net, building);
 
 // ── The drawn network ────────────────────────────────────────────────────────
 Network buildNetwork() {
