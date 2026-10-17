@@ -25,6 +25,10 @@ void main() {
     test('jockey flow fraction is 1 %', () {
       expect(kJockeyFlowFraction, 0.01);
     });
+
+    test('overload efficiency derate is 0.85 (// VERIFY representative)', () {
+      expect(kOverloadEfficiencyFactor, 0.85);
+    });
   });
 
   // ── Primary worked example: rated 100 L/s @ 50 m, η = 0.70 ─────────────────
@@ -34,9 +38,15 @@ void main() {
   //   overload: Q = 1.50 × 0.100 = 0.150 m³/s, H = 0.65 × 50 = 32.5 m
   //
   //   rated  hydraulic = 9810 × 0.100 × 50   = 49 050 W ; shaft = /0.7 = 70 071.4 W
-  //   overld hydraulic = 9810 × 0.150 × 32.5 = 47 823.75 W ; shaft = /0.7 = 68 319.6 W
+  //   overld hydraulic = 9810 × 0.150 × 32.5 = 47 823.75 W ;
+  //          η_overload = 0.70 × 0.85 (kOverloadEfficiencyFactor) = 0.595
+  //          shaft = 47 823.75 / 0.595 = 80 376.05 W
   //   churn  hydraulic = 0 (no flow) ; shaft = 0
-  //   governing shaft = max = rated 70 071.4 W ≈ 70.07 kW → motor 75 kW
+  //   governing shaft = max = OVERLOAD 80 376.05 W ≈ 80.38 kW > the largest
+  //   standard 75 kW frame → the ladder saturates (oversized).
+  //   (Audit 2026-10 fire-4: with one constant η the overload shaft was
+  //   0.975 × rated = 68.32 kW and could never govern; the pump runs past its
+  //   best-efficiency point at 150 % flow, so its η is derated.)
   group('checkFirePumpRating — rated 100 L/s @ 50 m', () {
     late FirePumpRatingResult r;
     final ratedFlow = FlowRate.litersPerSecond(100); // 0.100 m³/s
@@ -68,21 +78,28 @@ void main() {
       expect(r.overload.head.meters, closeTo(32.5, 1e-9));
     });
 
-    // shaft = 9810 × 0.150 × 32.5 / 0.7
-    test('overload shaft power = ρ·g·Q·H / 0.70', () {
-      const expShaft = rhoG * 0.150 * 32.5 / 0.70;
+    // shaft = 9810 × 0.150 × 32.5 / (0.70 × 0.85)
+    test('overload shaft power = ρ·g·Q·H / (0.70 × 0.85)', () {
+      const expShaft = rhoG * 0.150 * 32.5 / (0.70 * 0.85);
+      expect(expShaft, closeTo(80376.0504, 1e-3));
       expect(r.overload.shaftPower.watts, closeTo(expShaft, 1e-3));
     });
 
-    // At exactly the limiting ratios the rated point (Q·H = 5.0) governs over
-    // the overload point (Q·H = 0.15 × 32.5 = 4.875), so the motor is sized on
-    // the rated shaft ≈ 70.07 kW → smallest standard frame ≥ that is 75 kW.
-    test('motor selected on governing (rated) shaft → 75 kW', () {
+    // Q·H/η: rated 0.1 × 50 / 0.70 = 7.143 vs overload 0.15 × 32.5 / 0.595
+    // = 8.193 ⇒ the OVERLOAD point governs at ≈ 80.38 kW, above the largest
+    // standard 75 kW frame ⇒ selectMotor saturates at 75 kW and flags it.
+    test('motor selected on governing (overload) shaft → 75 kW, saturated', () {
+      expect(r.overload.shaftPower.watts,
+          greaterThan(r.rated.shaftPower.watts));
       expect(r.selectedMotor.inKiloWatts, closeTo(75.0, 1e-9));
-      expect(r.oversized, isFalse);
+      expect(r.oversized, isTrue);
       // M19 — the verdict names the MOTOR FRAME (the condition the flag really
       // reads), not the pump curve, which is compliant by construction here.
-      expect(r.verdict, 'Motor within standard frame range');
+      expect(
+        r.verdict,
+        'Motor above standard frame range - specify a custom motor or '
+        'duty pairs',
+      );
     });
 
     // Jockey: 1 % of 100 L/s = 1 L/s; head = churn 70 m + 5 m margin = 75 m.
@@ -115,9 +132,10 @@ void main() {
   //
   // 1250 gpm ≈ 78.87 L/s rated @ 80 m head, η = 0.70.
   //   rated shaft = 9810 × 0.07887 × 80 / 0.7 ≈ 88 411 W ≈ 88.4 kW
-  //   overload shaft = 9810 × (1.5×0.07887) × (0.65×80) / 0.7
-  //                  = 9810 × 0.118305 × 52 / 0.7 ≈ 86 200 W ≈ 86.2 kW
-  //   governing = rated ≈ 88.4 kW > largest standard frame 75 kW → oversized.
+  //   overload shaft = 9810 × (1.5×0.07887) × (0.65×80) / (0.7 × 0.85)
+  //                  = 9810 × 0.118305 × 52 / 0.595 ≈ 101 428 W ≈ 101.4 kW
+  //   governing = overload ≈ 101.4 kW > largest standard frame 75 kW →
+  //   oversized.
   group('checkFirePumpRating — oversized (tall building, 1250 gpm @ 80 m)', () {
     late FirePumpRatingResult r;
 

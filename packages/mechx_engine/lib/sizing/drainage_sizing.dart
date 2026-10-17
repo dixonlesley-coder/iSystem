@@ -117,6 +117,29 @@ Diameter drainDiameterForDfu(double dfu, {required bool isStack}) =>
 Diameter ventDiameterForDfu(double dfu) =>
     Diameter.mm(_lookup(_ventDfuTable, dfu));
 
+/// True when [dfu] exceeds the TOP row of the stack / branch DFU table, i.e.
+/// [drainDiameterForDfu] is returning the table's largest diameter as a CLAMP,
+/// not a size that carries the load (audit 2026-10 water-drainage-4). The
+/// sizing layer raises `EdgeSizing.overCapacity` from this.
+bool drainDfuExceedsTable(double dfu, {required bool isStack}) =>
+    dfu > (isStack ? _stackDfuTable : _branchDfuTable).last.$1;
+
+/// Vent analogue of [drainDfuExceedsTable] (top row of the vent table).
+bool ventDfuExceedsTable(double dfu) => dfu > _ventDfuTable.last.$1;
+
+/// Minimum drain diameter (mm) for ANY drainage branch or stack that carries a
+/// water closet, whatever its DFU count (audit 2026-10 water-drainage-7). The
+/// DFU tables alone would give a single 4-DFU flush-tank WC a DN50 stack /
+/// DN65 branch; UPC/IPC — the practice these tables follow — require ≥ 3 in
+/// (DN75) for a closet drain. // VERIFY against SNI 8153 (Indonesian practice
+/// commonly lays DN100); listed in `SniProfile.verifyChecklist`.
+const double kMinWcDrainMm = 75.0;
+
+/// True for the fixtures that impose the [kMinWcDrainMm] floor.
+bool isWaterCloset(PlumbingFixture fixture) =>
+    fixture == PlumbingFixture.waterClosetFlushTank ||
+    fixture == PlumbingFixture.waterClosetFlushValve;
+
 // ── Partial-full hydraulics ───────────────────────────────────────────────────
 
 /// Ratio Q(r)/Q_full for a circular pipe flowing at depth ratio r = [fillRatio]
@@ -264,8 +287,7 @@ DrainageSizingResult sizeForFlow({
     hydraulicRadius: Length(selected.meters / 4.0),
     slope: slope,
   );
-  final bool selfCleansing =
-      vFull.metersPerSecond >= kSelfCleansingVelocityMps;
+  final bool selfCleansing = vFull.metersPerSecond >= kSelfCleansingVelocityMps;
 
   return DrainageSizingResult(
     diameter: selected,

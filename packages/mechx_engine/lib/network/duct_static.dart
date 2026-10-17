@@ -55,6 +55,7 @@ DuctStaticSolution solveDuctStatic({
   required BuildingLevels building,
   Pressure terminalLoss = const Pressure(30),
   double fittingFactor = 1.3,
+  MountingHeights mounting = const MountingHeights(),
 }) {
   // Adjacency over THIS service only.
   final adjacency = <String, List<({NetEdge edge, String other})>>{};
@@ -88,6 +89,7 @@ DuctStaticSolution solveDuctStatic({
           net,
           calibrationBySheet: calibrationBySheet,
           building: building,
+          mounting: mounting,
         );
         edgePa = ductFrictionPaPerMetre(
               flow,
@@ -104,11 +106,23 @@ DuctStaticSolution solveDuctStatic({
         // loss. C = 0 (no component / not a restrictor) ⇒ no change.
         final c = net.nodeById(link.other)?.component?.airLossC ?? 0;
         if (c > 0) {
-          edgePa += ductFittingLossPa(
-            c: c,
-            flow: flow,
-            diameter: edgeSizing.diameter,
-          );
+          final w = edgeSizing.width;
+          final h = edgeSizing.height;
+          if (w != null && h != null && w.meters > 0 && h.meters > 0) {
+            // Rectangular duct: the restrictor's velocity pressure uses the
+            // TRUE section velocity Q/(W·H). The Huebscher equivalent diameter
+            // in `edgeSizing.diameter` is an equal-FRICTION equivalent whose
+            // circle is smaller than W·H, so it overstated v (~+18 % ρv²/2).
+            edgePa += c *
+                airVelocityPressurePa(Velocity(
+                    flow.cubicMetersPerSecond / (w.meters * h.meters)));
+          } else {
+            edgePa += ductFittingLossPa(
+              c: c,
+              flow: flow,
+              diameter: edgeSizing.diameter,
+            );
+          }
         }
       }
       staticPa[link.other] = currentStatic + edgePa;

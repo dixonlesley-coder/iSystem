@@ -31,8 +31,16 @@ import 'earthing.dart';
 // `fault.dart` is a pure post-processing pass that imports neither this file nor
 // anything that reaches it (puil/units/earthing/load_kind/model/panel_results
 // only), so taking `selectivityRatio` from it introduces no import cycle.
-import 'fault.dart' show Impedance, conductorImpedance, downstreamFaultA,
-    selectivityRatio, sourceImpedanceFromIsc;
+import 'fault.dart'
+    show
+        Impedance,
+        conductorImpedance,
+        faultBasisLineVoltageV,
+        feederNeutralImpedance,
+        selectivityRatio,
+        solvedRunLengthM,
+        sourceImpedanceFromIsc,
+        subPanelBusFaultA;
 import 'geo_length.dart';
 import 'harmonics.dart' show neutralOversizeFactor;
 import 'headroom.dart' show HeadroomSpec;
@@ -45,13 +53,9 @@ import 'sizing.dart';
 /// supply summary (matches PanelMaker `ASSUMED_BUILDING_PF`). Not a PUIL clause.
 const double assumedBuildingPf = 0.85;
 
-/// Assumed full-load efficiency of an induction motor when only the shaft
-/// (mechanical) kW is given: the electrical input (nameplate FLC) is the shaft
-/// kW divided by this efficiency. ~0.88 is a representative IE3-class value; the
-/// proper fix is a motor-kW → nameplate-FLC table (A8).
-// VERIFY — secondarySource (assumed IE3 induction-motor efficiency; no PUIL
-// clause, not in a standards profile — replace with a motorKw→FLC table).
-const double _assumedMotorEfficiency = 0.88;
+// The assumed motor efficiency (shaft kW → electrical input kW) lives in
+// `load_kind.dart` as [kAssumedMotorEfficiency] so the power-factor pass reads
+// the SAME figure as the Ib derivation below.
 
 // ── phase determination ─────────────────────────────────────────────────────
 
@@ -229,7 +233,11 @@ PhaseBalance balancePhases(
       };
 
   double spread() {
-    final vals = [phases[PhaseLine.l1]!, phases[PhaseLine.l2]!, phases[PhaseLine.l3]!];
+    final vals = [
+      phases[PhaseLine.l1]!,
+      phases[PhaseLine.l2]!,
+      phases[PhaseLine.l3]!
+    ];
     return vals.reduce(math.max) - vals.reduce(math.min);
   }
 
@@ -272,8 +280,8 @@ PhaseBalance balancePhases(
         final before = spread();
         // A swap moves BOTH ways, so it must clear the larger of the two
         // re-assignment costs (0 for a pair with no prior lines).
-        final cost = math.max(
-            reassignCost(a.id, pa, pb), reassignCost(b.id, pb, pa));
+        final cost =
+            math.max(reassignCost(a.id, pa, pb), reassignCost(b.id, pb, pa));
         phases[pa] = phases[pa]! + b.currentA - a.currentA;
         phases[pb] = phases[pb]! + a.currentA - b.currentA;
         if (spread() < before - cost - 1e-9) {
@@ -289,7 +297,11 @@ PhaseBalance balancePhases(
     if (!improved) break;
   }
 
-  final vals = [phases[PhaseLine.l1]!, phases[PhaseLine.l2]!, phases[PhaseLine.l3]!];
+  final vals = [
+    phases[PhaseLine.l1]!,
+    phases[PhaseLine.l2]!,
+    phases[PhaseLine.l3]!
+  ];
   final maxV = vals.reduce(math.max);
   final minV = vals.reduce(math.min);
   final avg = (vals[0] + vals[1] + vals[2]) / 3;
@@ -462,8 +474,8 @@ List<BusbarSectionResult> splitBusbarSections(
     final manual = w.breakBefore;
     if (group.isNotEmpty) {
       final overWays = group.length + 1 > cap;
-      final overCurrent =
-          _sectionWorstPhaseA([...group, w], system) > maxSectionCurrentA.amperes;
+      final overCurrent = _sectionWorstPhaseA([...group, w], system) >
+          maxSectionCurrentA.amperes;
       if (manual || overWays || overCurrent) {
         flush();
         if (manual) groupManual = true;
@@ -621,10 +633,18 @@ double effectiveDemandFactor(
   );
 }
 
-/// A leaf circuit's connected demand (W): motor kW ×1000 for motors, else
-/// connected W, times the demand factor. Ported from `computePanel.ts
-/// circuitConnectedW`. With no diversity library/id the factor is the circuit's
-/// own [ElectricalCircuit.demandFactor] ⇒ byte-identical to the original.
+/// A leaf circuit's connected demand (W) — the ELECTRICAL INPUT power the way
+/// draws from the bus — times the demand factor:
+///   * an A5 MEP-derived way (`flaOverrideA` set) → `loadW`, which A5 sets to the
+///     equipment's electrical input power (the same figure its FLA derives from);
+///   * a hand-entered motor/pump way → shaft `motorKw` ×1000 ÷ the assumed motor
+///     efficiency, the SAME electrical-input basis its Ib uses (`_computeCircuit`),
+///     so a feeder/panel/supply demand never under-counts the current the motor
+///     way itself draws;
+///   * anything else → connected `loadW`.
+/// Ported from `computePanel.ts circuitConnectedW` (which summed shaft kW). With
+/// no diversity library/id the factor is the circuit's own
+/// [ElectricalCircuit.demandFactor].
 double circuitConnectedW(
   ElectricalCircuit c, {
   DiversityLibrary? library,
@@ -633,7 +653,15 @@ double circuitConnectedW(
   final isMotor =
       (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
           c.motorKw != null;
-  final baseW = isMotor ? c.motorKw! * 1000 : c.loadW;
+  final double baseW;
+  if (c.flaOverrideA != null) {
+    baseW = c.loadW;
+  } else if (isMotor) {
+    // Shaft kW → electrical input W via the assumed efficiency (// VERIFY).
+    baseW = c.motorKw! * 1000 / kAssumedMotorEfficiency;
+  } else {
+    baseW = c.loadW;
+  }
   return baseW *
       effectiveDemandFactor(c,
           library: library, diversityLibraryId: diversityLibraryId);
@@ -683,9 +711,8 @@ class _CircuitComputation {
   /// panel's triplen-neutral oversize (FOLD 2). Mirrors PanelMaker `isNonLinear`.
   final bool nonLinear;
 
-  const _CircuitComputation(
-      this.result, this.warnings, this.effectiveLoadW, this.threePhase,
-      this.nonLinear);
+  const _CircuitComputation(this.result, this.warnings, this.effectiveLoadW,
+      this.threePhase, this.nonLinear);
 }
 
 /// Whether a circuit draws non-linear current (harmonic-rich): a VFD or
@@ -769,7 +796,7 @@ _CircuitComputation _computeCircuit(
   } else if (motorLike) {
     // Shaft kW → electrical input kW via the assumed efficiency (// VERIFY).
     ib = loadCurrent(
-      power: Power.kiloWatts(c.motorKw! / _assumedMotorEfficiency),
+      power: Power.kiloWatts(c.motorKw! / kAssumedMotorEfficiency),
       voltage: Voltage(useVoltageV),
       cosPhi: c.cosPhi,
       threePhase: threePhase,
@@ -849,6 +876,9 @@ _CircuitComputation _computeCircuit(
     material: panel.material,
     method: installMethod,
     threePhase: threePhase,
+    // Parallel runs of this circuit group with its neighbours (the same count
+    // `dfFor` folded into `df`).
+    groupingCount: c.groupingCountOverride ?? panel.groupingCount,
     vd: CableVoltageDropConstraint(
       length: effectiveLength,
       cosPhi: c.cosPhi,
@@ -985,8 +1015,7 @@ _CircuitComputation _computeCircuit(
     warnings.add(ElectricalWarning(
       code: 'voltage-drop-exceeded',
       severity: WarningSeverity.warning,
-      message:
-          '${c.name}: voltage drop ${vd.dropPercent}% exceeds the '
+      message: '${c.name}: voltage drop ${vd.dropPercent}% exceeds the '
           '${vd.limitPercent}% limit even at the largest standard section — '
           'shorten the run or split the load.',
       panelId: panel.id,
@@ -1055,14 +1084,16 @@ ElectricalPanelResult computePanel(
         method: _effectiveInstallMethod(c, panel),
         // Match the sizing insulation: a family (e.g. FRC at 90 °C) derates on
         // its own ambient curve, not the panel default.
-        insulation: insulationForCableType(c.cableType, fallback: panel.insulation),
+        insulation:
+            insulationForCableType(c.cableType, fallback: panel.insulation),
         soilThermalResistivityKmW: opts.soilThermalResistivityKmW,
         groundTempC: panel.groundTempC,
         depthM: panel.depthM,
       );
 
-  final comps =
-      branches.map((c) => _computeCircuit(profile, c, panel, dfFor(c), opts)).toList();
+  final comps = branches
+      .map((c) => _computeCircuit(profile, c, panel, dfFor(c), opts))
+      .toList();
 
   // Balance single-phase circuits across L1/L2/L3; pinned phases are honoured.
   final balance = balancePhases(
@@ -1118,9 +1149,9 @@ ElectricalPanelResult computePanel(
     ]);
     bestImbalancePercent =
         avgA > 0 ? roundTo((bestSpreadA / avgA) * 100, 1) : 0.0;
-    imbalanceReducible = bestImbalancePercent +
-            kPhaseImbalanceReducibleMarginPercent <
-        balance.imbalancePercent;
+    imbalanceReducible =
+        bestImbalancePercent + kPhaseImbalanceReducibleMarginPercent <
+            balance.imbalancePercent;
   }
 
   if (overImbalanceLimit && imbalanceReducible) {
@@ -1136,8 +1167,7 @@ ElectricalPanelResult computePanel(
     warnings.add(ElectricalWarning(
       code: 'phase-imbalance',
       severity: WarningSeverity.warning,
-      message:
-          'Phase loading is unbalanced by ${balance.imbalancePercent}% '
+      message: 'Phase loading is unbalanced by ${balance.imbalancePercent}% '
           '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A). '
           '$action — $bestImbalancePercent% is achievable.',
       panelId: panel.id,
@@ -1156,8 +1186,7 @@ ElectricalPanelResult computePanel(
     warnings.add(ElectricalWarning(
       code: 'phase-imbalance-inherent',
       severity: WarningSeverity.info,
-      message:
-          'Phase loading is unbalanced by ${balance.imbalancePercent}% '
+      message: 'Phase loading is unbalanced by ${balance.imbalancePercent}% '
           '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A) - '
           'inherent to the single-phase load set ($bestImbalancePercent% is the '
           'best any assignment reaches), so no redistribution helps; consider a '
@@ -1214,8 +1243,7 @@ ElectricalPanelResult computePanel(
     warnings.add(ElectricalWarning(
       code: 'incomer-exceeds-range',
       severity: WarningSeverity.error,
-      message:
-          '${panel.name}: $basis '
+      message: '${panel.name}: $basis '
           '$incomerSizingCurrentA A exceeds the largest standard breaker frame '
           '(${incomerBreaker.ratingA.amperes} A) — split the board or feed it '
           'at MV.',
@@ -1331,8 +1359,7 @@ ElectricalPanelResult computePanel(
     warnings.add(ElectricalWarning(
       code: 'harmonics-neutral-oversize',
       severity: WarningSeverity.info,
-      message:
-          '${panel.name}: single-phase non-linear load '
+      message: '${panel.name}: single-phase non-linear load '
           '(${(triplenFraction * 100).round()}%) raises triplen-harmonic '
           'neutral current to ~${neutralPe.neutralOversizeFactor}x phase — '
           'neutral bar oversized to ${_num(neutralPe.neutralCsaMm2)} mm² '
@@ -1445,8 +1472,7 @@ ElectricalSystemResult computeSystem(
       baseWarnings.add(ElectricalWarning(
         code: 'feeder-phase-mismatch',
         severity: WarningSeverity.error,
-        message:
-            '${child!.name}: a three-phase panel cannot be fed from the '
+        message: '${child!.name}: a three-phase panel cannot be fed from the '
             'single-phase ${parent!.name} — change a panel system or re-parent '
             'the feeder.',
         panelId: child.id,
@@ -1550,7 +1576,8 @@ ElectricalSystemResult computeSystem(
     for (final c in p.circuits) {
       if (c.role == CircuitRole.branch && c.feedsPanelId == null) {
         connectedLoadW += circuitConnectedW(c,
-            library: diversityLibrary, diversityLibraryId: p.diversityLibraryId);
+            library: diversityLibrary,
+            diversityLibraryId: p.diversityLibraryId);
       }
     }
   }
@@ -1586,6 +1613,7 @@ ElectricalSystemResult computeSystem(
     final warnings = <ElectricalWarning>[...baseWarnings];
     final panelFaultA = <String, double>{};
     final panelSourceZ = <String, Impedance>{};
+    final panelNeutralZ = <String, Impedance>{};
 
     // Size every panel (root-first is fine for the core; demand is precomputed).
     final results = <String, ElectricalPanelResult>{};
@@ -1596,15 +1624,19 @@ ElectricalSystemResult computeSystem(
       // Prospective fault + source impedance at this bus (FOLD 1), when enabled.
       Current? faultLevelA;
       if (applyWithstand) {
-        final lineVoltageV = panel.voltage.volts;
+        // Source Z on the LV network LINE basis (a 1-phase board stores its
+        // 220 V phase voltage — same voltage basis as `faultStudy`).
+        final lineVoltageV = faultBasisLineVoltageV(panel);
         final parentId = parentOf[id];
         final feederId = feederCircuitOf[id];
         final double faultA;
         final Impedance sourceZ;
+        final Impedance neutralZ;
         if (parentId == null || feederId == null) {
           // Root / utility-fed panel — the full origin fault.
           faultA = originIscA;
           sourceZ = sourceImpedanceFromIsc(originIscA, lineVoltageV);
+          neutralZ = const Impedance(0, 0);
         } else {
           final upstreamIscA = panelFaultA[parentId] ?? originIscA;
           final upstreamSourceZ = panelSourceZ[parentId] ??
@@ -1613,21 +1645,37 @@ ElectricalSystemResult computeSystem(
               ?.circuits
               .where((c) => c.circuitId == feederId)
               .firstOrNull;
-          final feederModel =
-              byId[parentId]?.circuits.where((c) => c.id == feederId).firstOrNull;
+          final feederModel = byId[parentId]
+              ?.circuits
+              .where((c) => c.id == feederId)
+              .firstOrNull;
           final csa = feederResult?.cable.csaMm2 ?? 0;
           final runs = (feederResult?.cable.runsPerPhase ?? 1) > 1
               ? feederResult!.cable.runsPerPhase!
               : 1;
-          final lengthM = feederModel?.length.meters ?? 0;
+          // The run the feeder was SIZED on (geo when placed) and the PARENT's
+          // conductor material (the parent sized this feeder cable).
+          final lengthM = solvedRunLengthM(feederResult, feederModel);
+          final feederMaterial = byId[parentId]?.material ?? panel.material;
           final single =
-              conductorImpedance(profile, csa, lengthM, panel.material);
+              conductorImpedance(profile, csa, lengthM, feederMaterial);
           final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
           sourceZ = upstreamSourceZ + feederZ;
-          faultA = downstreamFaultA(lineVoltageV, sourceZ, upstreamIscA);
+          neutralZ = (panelNeutralZ[parentId] ?? const Impedance(0, 0)) +
+              feederNeutralImpedance(
+                  profile,
+                  csa,
+                  feederResult?.grounding.neutralCsaMm2 ?? 0,
+                  lengthM,
+                  feederMaterial,
+                  runs);
+          // 3-phase board: V_LL/(√3·|Z|); 1-phase board: the L-N fault
+          // U0/|Z_phase + Z_neutral| (never 220 V in the 3-phase formula).
+          faultA = subPanelBusFaultA(panel, sourceZ, neutralZ, upstreamIscA);
         }
         panelFaultA[id] = faultA;
         panelSourceZ[id] = sourceZ;
+        panelNeutralZ[id] = neutralZ;
         faultLevelA = Current(faultA);
       }
 
@@ -1647,8 +1695,9 @@ ElectricalSystemResult computeSystem(
           priorAssignment: priorAssignments[id] ?? const {},
           phaseReassignThresholdA: phaseReassignThresholdA,
           feederBreakerFloorA: feederBreakerFloorA,
-          serviceMinCurrentA:
-              roots.length == 1 && id == roots.first.id ? serviceMinCurrentA : null,
+          serviceMinCurrentA: roots.length == 1 && id == roots.first.id
+              ? serviceMinCurrentA
+              : null,
         ),
       );
     }
@@ -1782,8 +1831,7 @@ ElectricalSystemResult computeSystem(
         rootResult.warnings.add(ElectricalWarning(
           code: 'service-capacity-below-demand',
           severity: WarningSeverity.warning,
-          message:
-              '${rootResult.name}: demand '
+          message: '${rootResult.name}: demand '
               '${_num(rootResult.demandCurrent.amperes)} A on the worst-loaded '
               'phase exceeds the declared connection capacity '
               '${_num(serviceCapacityVa! / 1000)} kVA '
@@ -1809,7 +1857,8 @@ ElectricalSystemResult computeSystem(
     // Supply summary from the diversified demand presented by the root panel(s).
     final rootDemandW =
         roots.fold(0.0, (s, p) => s + (panelDemandW[p.id] ?? 0));
-    final supplySystem = roots.firstOrNull?.system ?? ElectricalSystem.threePhase;
+    final supplySystem =
+        roots.firstOrNull?.system ?? ElectricalSystem.threePhase;
     final supplyVoltage = roots.firstOrNull?.voltage ?? const Voltage(400);
     final supply = SupplySummary(
       connectedW: roundTo(connectedLoadW, 0),
@@ -1822,14 +1871,15 @@ ElectricalSystemResult computeSystem(
     // Earthing system designed from the main incomer's PE conductor. The
     // service-capacity floor rides along (when it governs), so the service PE
     // tracks the entrance device the same floor sized.
-    final mainResult = roots.firstOrNull != null ? results[roots.first.id] : null;
+    final mainResult =
+        roots.firstOrNull != null ? results[roots.first.id] : null;
     final mainDemandIb = mainResult?.demandCurrent ?? const Current(0);
     final mainIb =
         serviceMinCurrentA != null && serviceMinCurrentA > mainDemandIb.amperes
             ? Current(roundTo(serviceMinCurrentA, 1))
             : mainDemandIb;
-    final mainBreaker =
-        selectBreaker(profile, designCurrent: mainIb, loadKind: LoadKind.feeder);
+    final mainBreaker = selectBreaker(profile,
+        designCurrent: mainIb, loadKind: LoadKind.feeder);
     final mainCable = sizeCable(
       profile,
       designCurrent: mainIb,
@@ -1909,8 +1959,9 @@ ElectricalSystemResult computeSystem(
       final childId = c.feedsPanelId;
       if (childId == null || c.breakerOverrideA != null) continue;
       final childResult = pass1.panels[childId];
-      final feederResult =
-          pass1.panels[p.id]?.circuits.where((r) => r.circuitId == c.id).firstOrNull;
+      final feederResult = pass1.panels[p.id]?.circuits
+          .where((r) => r.circuitId == c.id)
+          .firstOrNull;
       if (childResult == null || feederResult == null) continue;
       // Whatever produced it (auto-sized, headroom-uplifted, or overridden) the
       // child's incomer rating is the device the feeder must discriminate with.

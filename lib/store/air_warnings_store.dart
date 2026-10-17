@@ -193,6 +193,22 @@ final selfCleansingDefectsProvider = Provider<Set<String>>((ref) {
   return out;
 });
 
+/// WATER-SUPPLY edges whose fixture-unit load lies beyond the charted demand
+/// curve (> 3000 UBAP, [EdgeSizing.demandCurveExtrapolated]) — their design
+/// flow is a linear EXTRAPOLATION of SNI 8153 Gambar 1, not a curve read-off
+/// (audit 2026-10 water-drainage-6). Empty for every in-range project ⇒
+/// byte-identical.
+final demandCurveExtrapolatedEdgesProvider = Provider<Set<String>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final sizing = ref.watch(sizingProvider);
+  final out = <String>{};
+  for (final e in net.edges) {
+    final s = sizing[e.id];
+    if (s != null && s.demandCurveExtrapolated) out.add(e.id);
+  }
+  return out;
+});
+
 /// Edges belonging to a LOOPED (ring/grid) component whose Hardy–Cross balance
 /// did NOT converge within its iteration budget ([EdgeSizing.loopUnbalanced]).
 /// The carried flow still satisfies continuity, but the loop head-loss balance

@@ -206,6 +206,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final waterVelocity = ref.watch(waterVelocityChecksProvider);
   final selfCleansing = ref.watch(selfCleansingDefectsProvider);
   final loopUnbalanced = ref.watch(loopUnbalancedEdgesProvider);
+  final demandExtrapolated = ref.watch(demandCurveExtrapolatedEdgesProvider);
   final drainAdvisories = ref.watch(drainageAdvisoryProvider);
   final legionellaReturnTempC = ref.watch(hotWaterLegionellaProvider);
   final docControl = ref.watch(documentControlProvider);
@@ -330,6 +331,19 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
           'duct-over-capacity',
           str(StringKey.issueDuctOverCapacityTitle),
           str(StringKey.issueDuctOverCapacityMessage),
+        ),
+      // Audit 2026-10 wd-2 — a horizontal rainwater COLLECTOR is Manning-sized;
+      // past the largest drain it needs splitting, not more downpipes.
+      ServiceType.rainwater when edge.kind != EdgeKind.riser => (
+          'storm-collector-over-capacity',
+          str(StringKey.issueStormCollectorOverCapacityTitle),
+          str(StringKey.issueStormCollectorOverCapacityMessage),
+        ),
+      // Audit 2026-10 wd-4 — the DFU load is past the top row of its table.
+      ServiceType.drainage || ServiceType.vent => (
+          'drainage-over-capacity',
+          str(StringKey.issueDrainageOverCapacityTitle),
+          str(StringKey.issueDrainageOverCapacityMessage),
         ),
       ServiceType.rainwater => (
           'storm-over-capacity',
@@ -459,6 +473,23 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
           ? str(StringKey.issueFixtureUntypedSupplyMessage)
           : str(StringKey.issueFixtureUntypedDrainageMessage),
       locate: IssueLocation(n.sheetId, nodeId: n.id),
+    ));
+  }
+
+  // ── 2b-iii-b. Demand past the charted curve (audit 2026-10 wd-6, info) ─────
+  // The UBAP → flow curve is continued linearly beyond its last charted point
+  // (3000 UBAP) instead of clamping flat; the extrapolated flow is surfaced as
+  // an advisory so the engineer confirms the main / pump flow.
+  for (final id in demandExtrapolated) {
+    final edge = edgeById[id];
+    if (edge == null) continue;
+    final sheetId = sheetForEdge(edge);
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'demand-curve-extrapolated',
+      title: str(StringKey.issueDemandCurveExtrapolatedTitle),
+      message: str(StringKey.issueDemandCurveExtrapolatedMessage),
+      locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
     ));
   }
 

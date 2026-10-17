@@ -355,21 +355,23 @@ void main() {
     });
 
     test('moist loam 100 Ω·m, target 5 Ω → multi-rod array', () {
-      // single rod ≈ 33.49 Ω. rawCount = ceil(33.49/(5·0.8)) = ceil(8.373) = 9.
-      // η(9): interpolate between (8,0.73) and (10,0.70): 0.73 + 0.5·(−0.03)
-      //      = 0.715. achieved = 33.49/(9·0.715) = 33.49/6.435 = 5.205 Ω.
-      // 5.205 > 5 → still just above target (honest result).
+      // Re-derived 2026-10 (audit elec-advanced-5): the count is the SMALLEST
+      // n with R1/(n·η(n)) ≤ 5, judged with each count's own η.
+      // single rod ≈ 33.4927 Ω.
+      //   n = 9: η(9) = 0.73 + 0.5·(−0.03) = 0.715 ⇒ 33.4927/6.435 = 5.205 > 5.
+      //   n = 10: η(10) = 0.70 ⇒ 33.4927/7.0 = 4.785 Ω ≤ 5 ⇒ 10 rods meet it.
+      // (The fixed-η estimate stopped at 9 and reported "above target".)
       final d = designElectrode(soilResistivityOhmM: 100);
       expect(d.singleRod.ohms, closeTo(33.49, 0.01));
-      expect(d.rodCount, 9);
-      expect(d.achieved.ohms, closeTo(5.205, 0.01));
-      expect(d.meetsTarget, isFalse);
+      expect(d.rodCount, 10);
+      expect(d.achieved.ohms, closeTo(4.785, 0.01));
+      expect(d.meetsTarget, isTrue);
       expect(d.targetOhm, 5);
     });
 
     test('marshy 30 Ω·m → 3 rods meet 5 Ω', () {
       // single rod = 30/(2π·3)·(ln1500 − 1) = 1.59155·6.31322 = 10.0478 Ω.
-      // rawCount = ceil(10.0478/4) = ceil(2.512) = 3. η(3)=0.82.
+      // n = 2: 10.0478/(2·0.86) = 5.842 > 5; n = 3: η(3)=0.82 ⇒ meets.
       // achieved = 10.0478/(3·0.82) = 10.0478/2.46 = 4.085 Ω ≤ 5 → meets.
       final d = designElectrode(soilResistivityOhmM: 30);
       expect(d.singleRod.ohms, closeTo(10.05, 0.01));
@@ -386,7 +388,8 @@ void main() {
     });
 
     test('custom target loosens the array', () {
-      // target 10 Ω in 100 Ω·m: rawCount = ceil(33.49/(10·0.8)) = ceil(4.186) = 5.
+      // target 10 Ω in 100 Ω·m: n = 4: 33.49/(4·0.80) = 10.47 > 10;
+      // n = 5: 33.49/(5·0.78) = 8.59 ≤ 10 ⇒ 5 rods.
       final d = designElectrode(soilResistivityOhmM: 100, targetOhm: 10);
       expect(d.rodCount, 5);
       expect(d.meetsTarget, isTrue);

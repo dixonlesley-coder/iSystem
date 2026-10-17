@@ -61,14 +61,18 @@ void main() {
       expect(p.ampacity(300).amperes, 500.0);
     });
 
-    test('Cu/PVC buried (method D) reads the "in ground" column', () {
+    test('Cu/PVC buried (method D) reads the IEC D1 3-loaded column', () {
+      // Re-derived 2026-10 (audit elec-core-5): D is IEC 60364-5-52 Table
+      // B.52.2 column D1 (in duct in ground, 2.5 K·m/W, 3 loaded) — the SAME
+      // basis as the XLPE D column — not the direct-in-ground catalogue
+      // figures (1.5 = 24, 300 = 465) that read above 90 °C XLPE.
       expect(
         p.ampacity(1.5, method: CableInstallMethod.buried).amperes,
-        24.0, // in-ground beats in-air at small sections (soil heat-sink)
+        18.0,
       );
       expect(
         p.ampacity(300, method: CableInstallMethod.buried).amperes,
-        465.0, // and crosses below in-air at large sections
+        316.0,
       );
     });
 

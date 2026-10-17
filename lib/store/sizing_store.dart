@@ -9,6 +9,7 @@ import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'app_state.dart';
+import 'fire_store.dart';
 import 'fixture_library_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
@@ -115,6 +116,12 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
 
   // Rainwater leaves drain a default roof area at the design storm intensity
   // (per-outlet roof areas, when set, override this via nodeFlowDemand above).
+  // Sprinkler heads take the hazard's OWN per-head design flow (the remote
+  // head's discharge, K-floor uplifted — `remoteAreaHydraulics`) instead of a
+  // flat 0.5 L/s that understated every hazard 1.3-3x, and the accumulated
+  // sprinkler flow is capped at the one-design-area demand (only the remote
+  // area operates at once — the cross-main is not sized for every drawn head).
+  final sprinklerRemote = ref.watch(sprinklerRemoteAreaProvider);
   final leafDemand = <ServiceType, FlowRate>{
     ...kDefaultLeafDemand,
     ServiceType.rainwater: rainwaterDesignFlow(
@@ -122,6 +129,7 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
       roofAreaM2: kDefaultRoofAreaPerOutlet,
       runoffCoefficient: runoffC,
     ),
+    ServiceType.fireSprinkler: sprinklerRemote.remoteHeadFlow,
   };
 
   // Manual per-segment nominal-size overrides (right-click "Set size"): the
@@ -148,12 +156,16 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     nodeDrainageUnits: nodeDrainageUnits,
     nodeFlowDemand: nodeFlowDemand,
     sizeOverrides: sizeOverrides,
+    sprinklerDemandCap: sprinklerRemote.remoteAreaDemand,
     flushSystem:
         anyFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank,
     // Geometry lets looped (ring) mains balance their flow split against REAL
     // edge lengths — runs via calibration, risers via the §10 elevation delta.
     building: project.building,
     calibrationBySheet: project.calibrations,
+    // Audit 2026-10 water-drainage-8 — the project's mounting heights (F8)
+    // set the riser lengths of the ring-split basis, as on the drawings.
+    mounting: project.mounting,
   );
 });
 

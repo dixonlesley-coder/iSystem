@@ -190,8 +190,18 @@ final class DetailedCoolingLoadInputs {
   });
 
   /// Number of occupants — explicit count, else density × floor area (rounded).
+  /// DISPLAY ONLY — the people gains use [resolvedOccupantsExact].
   int get resolvedOccupants =>
       occupantCount ?? (peopleDensityPerM2 * floorArea.squareMeters).round();
+
+  /// Occupant count used for the people GAINS — the explicit count, else the
+  /// FRACTIONAL density × floor area. Rounding a density-derived count to an
+  /// integer before multiplying biased small rooms low (a 4.9 m² room at
+  /// 0.1 p/m² rounded to 0 people and lost its whole 130 W people gain), the
+  /// unsafe direction for a coil duty, so the gain is taken on the exact value.
+  double get resolvedOccupantsExact =>
+      occupantCount?.toDouble() ??
+      peopleDensityPerM2 * floorArea.squareMeters;
 
   /// Ventilation airflow (m³/s) — explicit value, else ACH × volume / 3600.
   FlowRate get resolvedVentilationAirflow =>
@@ -360,8 +370,9 @@ DetailedCoolingLoad estimateDetailedCoolingLoad(
 
   // Internal gains.
   final occupants = inputs.resolvedOccupants;
-  final peopleSensible = occupants * inputs.personSensibleW;
-  final peopleLatent = occupants * inputs.personLatentW;
+  final occupantsExact = inputs.resolvedOccupantsExact;
+  final peopleSensible = occupantsExact * inputs.personSensibleW;
+  final peopleLatent = occupantsExact * inputs.personLatentW;
   final lighting = inputs.lightingWPerM2 * inputs.floorArea.squareMeters;
   final equipment = inputs.equipmentWPerM2 * inputs.floorArea.squareMeters;
 

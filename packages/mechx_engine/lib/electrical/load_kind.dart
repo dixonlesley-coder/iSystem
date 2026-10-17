@@ -8,6 +8,17 @@ library;
 
 import '../standards/puil.dart' show BreakerCurve;
 
+/// Assumed full-load efficiency of an induction motor when only the shaft
+/// (mechanical) kW is given: the electrical input (nameplate FLC) is the shaft
+/// kW divided by this efficiency. ~0.88 is a representative IE3-class value; the
+/// proper fix is a motor-kW → nameplate-FLC table (A8). Shared by the circuit
+/// Ib derivation (`compute.dart`) and the capacitor-bank sizing
+/// (`power_factor.dart`) so both see the same electrical input.
+// VERIFY — secondarySource (assumed IE3 induction-motor efficiency; no PUIL
+// clause, deliberately not in a standards profile — replace with a
+// motorKw→FLC table).
+const double kAssumedMotorEfficiency = 0.88;
+
 /// The kinds of electrical load the engine knows defaults for. Mirrors
 /// PanelMaker's `LoadKind` (ev_charger → [evCharger]).
 enum LoadKind {

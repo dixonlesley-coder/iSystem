@@ -113,9 +113,13 @@ void main() {
     });
 
     test('connected / demand W', () {
-      // Connected = 1800 + 3000 + (7.5·1000) = 12 300 W; diversity 1 ⇒ demand =.
-      expect(r.connectedW, 12300);
-      expect(r.demandW, 12300);
+      // Connected = the ELECTRICAL INPUT of each way (2026-10 audit
+      // elec-core-4: a motor counts shaft kW ÷ the assumed η 0.88, the same
+      // basis as its own Ib, not the shaft kW):
+      //   1800 + 3000 + 7500/0.88 = 1800 + 3000 + 8522.73 = 13 322.73
+      //   → 13 323 W (engine rounds to the watt); diversity 1 ⇒ demand =.
+      expect(r.connectedW, 13323);
+      expect(r.demandW, 13323);
     });
 
     test('balanced phases + worst-phase demand current', () {

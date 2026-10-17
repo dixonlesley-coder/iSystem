@@ -160,11 +160,12 @@ MechCostEstimate estimateMechanicalCost({
   List<PipeCutGroup> cutPlan = const [],
   String currency = 'IDR',
 }) {
-  // Aggregate the cut plan by (service, DN) — the plan packs all runs of a size
-  // into shared stock bars (multiple stock lengths for one DN are summed).
+  // Aggregate the cut plan by (service, DN, material) — the plan packs all runs
+  // of a size AND material into shared stock bars (multiple stock lengths for
+  // one key are summed). A PPR line must not show the PVC bars.
   final planByKey = <String, ({int bars, double purchased, double waste})>{};
   for (final g in cutPlan) {
-    final k = '${g.service.name}:${g.diameterMm}';
+    final k = '${g.service.name}:${g.diameterMm}:${g.material}';
     final prev = planByKey[k];
     planByKey[k] = prev == null
         ? (
@@ -229,8 +230,12 @@ MechCostEstimate estimateMechanicalCost({
   for (final p in pipes) {
     final noun = p.service.isAir ? 'duct' : 'pipe';
     final kindWord = p.kind == EdgeKind.riser ? '$noun riser' : noun;
-    final plan =
-        p.kind == EdgeKind.run ? planByKey['${p.service.name}:${p.diameterMm}'] : null;
+    // Join on the line's own material; a hand-built group without a material
+    // ('') still joins on (service, DN) as before.
+    final plan = p.kind == EdgeKind.run
+        ? (planByKey['${p.service.name}:${p.diameterMm}:${p.material}'] ??
+            planByKey['${p.service.name}:${p.diameterMm}:'])
+        : null;
     priceLine(
       key: mechPipeKey(p.service, p.kind, p.diameterMm),
       description: '${mechServiceLabel(p.service)} $kindWord DN${p.diameterMm}',

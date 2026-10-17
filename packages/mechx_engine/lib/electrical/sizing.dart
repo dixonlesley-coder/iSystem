@@ -263,6 +263,15 @@ class CableVoltageDropConstraint {
 /// Iz ≥ factor·Ib (PUIL 125 %), respecting the minimum section, optionally also
 /// holding voltage drop within limit. Tries 1 then 2–4 parallel runs.
 ///
+/// PARALLEL RUNS ARE A GROUP (IEC 60364-5-52 §523.5 / Table B.52.17): the n
+/// conductors-per-phase of one circuit lie in common containment, so each run
+/// is derated as one of `g·n` grouped circuits, where `g` is [groupingCount]
+/// (the circuit/panel grouping count already folded into [deratingFactor]).
+/// The per-run factor is therefore
+///   `df_run = df · groupingFactor(g·n) / groupingFactor(g)`
+/// (= `df · groupingFactor(n)` for g = 1), and it is what [CableResult.deratedIz]
+/// and [CableResult.deratingFactor] report. A single run (n = 1) is unchanged.
+///
 /// NOTE: this first slice uses the generic per-method ampacity
 /// ([ElectricalStandardsProfile.ampacity]); the manufacturer per-family (NYY/
 /// NYM/NYA) ampacity tables are a later refinement (they change the value, not
@@ -278,6 +287,7 @@ CableResult sizeCable(
   CableInstallMethod method = CableInstallMethod.conduit,
   bool threePhase = false,
   CableVoltageDropConstraint? vd,
+  int groupingCount = 1,
 }) {
   double kha(double section) =>
       profile.ampacity(section, insulation: insulation, material: material, method: method).amperes;
@@ -290,6 +300,13 @@ CableResult sizeCable(
   final df = deratingFactor > 0 ? deratingFactor : 1.0;
   const parallelMaxRuns = 4;
   const parallelMinSection = 50.0;
+  final g = math.max(1, groupingCount);
+  // Derating per run for [runs] parallel conductors grouped with the circuit's
+  // own `g` neighbours: swap the g-circuit grouping factor already inside `df`
+  // for the (g·runs)-circuit one.
+  double dfFor(int runs) => runs <= 1
+      ? df
+      : df * groupingFactor(profile, g * runs) / groupingFactor(profile, g);
 
   bool vdOk(double section, int runs) =>
       vd == null ||
@@ -314,11 +331,12 @@ CableResult sizeCable(
     final minSec =
         runs == 1 ? minByMaterial : math.max(minByMaterial, parallelMinSection);
     final izRequiredPerRun = izRequired / runs;
+    final dfRun = dfFor(runs);
     double? ampacityMinSection;
 
     for (final section in profile.standardSectionsMm2) {
       if (section < minSec) continue;
-      final deratedRun = kha(section) * df;
+      final deratedRun = kha(section) * dfRun;
       if (deratedRun < izRequiredPerRun) continue;
       ampacityMinSection ??= section;
       anyAmpacityReached = true;
@@ -331,7 +349,7 @@ CableResult sizeCable(
         csaMm2: section,
         baseKha: Current(kha(section)),
         deratedIz: Current(totalIz),
-        deratingFactor: roundTo(df, 3),
+        deratingFactor: roundTo(dfRun, 3),
         runsPerPhase: runs > 1 ? runs : null,
         vdDriven: vdDriven,
         appliedRule: (runs > 1 ? '$runs× parallel runs — ' : '') +
@@ -348,8 +366,9 @@ CableResult sizeCable(
   return CableResult(
     csaMm2: largest,
     baseKha: Current(kha(largest)),
-    deratedIz: Current(roundTo(kha(largest) * df * parallelMaxRuns, 1)),
-    deratingFactor: roundTo(df, 3),
+    deratedIz: Current(
+        roundTo(kha(largest) * dfFor(parallelMaxRuns) * parallelMaxRuns, 1)),
+    deratingFactor: roundTo(dfFor(parallelMaxRuns), 3),
     runsPerPhase: parallelMaxRuns,
     vdDriven: !ampacityImpossible,
     // ampacity-impossible ⇒ even 4× the largest section never met Iz, so the

@@ -450,8 +450,9 @@ class NetNode {
             clearMountHeight ? null : (mountHeight ?? this.mountHeight),
         fixture: fixture ?? this.fixture,
         airflow: airflow ?? this.airflow,
-        customFixtureId:
-            clearCustomFixtureId ? null : (customFixtureId ?? this.customFixtureId),
+        customFixtureId: clearCustomFixtureId
+            ? null
+            : (customFixtureId ?? this.customFixtureId),
         roofAreaM2: clearRoofAreaM2 ? null : (roofAreaM2 ?? this.roofAreaM2),
         component: clearComponent ? null : (component ?? this.component),
         tankCapacityLitres: clearTankCapacity
@@ -472,8 +473,21 @@ class NetNode {
 ///   • [NetNode.mountHeight] (above its floor) if set — the per-node wall height;
 ///   • [NodeRole.main]    → ceiling of its floor;
 ///   • [NodeRole.fixture] → fixture height above its floor;
-///   • [NodeRole.plant]   → roof level (override via [NetNode.elevation] for a
-///     basement pump or a tank on a stand).
+///   • [NodeRole.plant]   → depends on WHAT the plant is ([NetNode.component]):
+///       – [NodeComponent.roofTank] → roof level (it sits on the roof slab);
+///       – water plant that sits on its own floor — [NodeComponent.pump],
+///         [NodeComponent.groundTank], [NodeComponent.boosterSet] — and the
+///         floor-standing air plant ([NodeComponent.ahu],
+///         [NodeComponent.supplyFan], [NodeComponent.exhaustFan]) → the floor
+///         surface of the node's OWN floor (a ground-floor pump lifts water the
+///         whole building height; rooting it at the roof dropped that static
+///         lift out of the pump head — audit 2026-10 water-drainage-1);
+///       – ceiling-hung air plant ([NodeComponent.fcu], the AC indoor units)
+///         → the ceiling of its own floor (where the unit and its ducts hang);
+///       – no / any other component → roof level (legacy default, so an
+///         untyped `NodeRole.plant` node is unchanged).
+///     Override via [NetNode.elevation] for a tank on a stand, a basement pump
+///     on a plinth, or a rooftop fan.
 Length nodeElevation(
   NetNode node,
   BuildingLevels building, [
@@ -493,7 +507,23 @@ Length nodeElevation(
     case NodeRole.fixture:
       return building.fixtureElevationOf(node.floorIndex, mounting);
     case NodeRole.plant:
-      return building.roofElevation;
+      switch (node.component) {
+        case NodeComponent.pump:
+        case NodeComponent.groundTank:
+        case NodeComponent.boosterSet:
+        case NodeComponent.ahu:
+        case NodeComponent.supplyFan:
+        case NodeComponent.exhaustFan:
+          return building.elevationOf(node.floorIndex);
+        case NodeComponent.fcu:
+        case NodeComponent.acCassette:
+        case NodeComponent.acSplitWall:
+        case NodeComponent.acDucted:
+          return building.ceilingElevationOf(node.floorIndex, mounting);
+        default:
+          // roofTank, and a plant with no (or a non-plant) component.
+          return building.roofElevation;
+      }
   }
 }
 

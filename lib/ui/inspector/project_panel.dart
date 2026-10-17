@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
@@ -23,7 +22,8 @@ import 'package:mechx_engine/report/mep_commercial.dart'
 import 'package:mechx_engine/report/mep_report.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
-import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
+import 'package:mechx_engine/report/plan_symbols.dart'
+    show equipmentNodeTags, planEdgeElevationLabels;
 import 'package:mechx_engine/report/report_blocks.dart';
 import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
@@ -317,10 +317,12 @@ Future<String?> pickExportSave(
 /// `service,kind,tag,floor,nominal_size_mm,material,length_m,segments,`
 /// `stock_length_m,bars_purchased,waste_pct`
 String bomCsvWithCutPlan(List<BomLine> bom, List<PipeCutGroup> cutPlan) {
-  final planByKey = <({ServiceType service, int mm}), PipeCutGroup>{
-    for (final g in cutPlan) (service: g.service, mm: g.diameterMm): g,
+  // Joined per (service, DN, MATERIAL) — each material is its own bar pool.
+  final planByKey = <({ServiceType service, int mm, String mat}), PipeCutGroup>{
+    for (final g in cutPlan)
+      (service: g.service, mm: g.diameterMm, mat: g.material): g,
   };
-  final emitted = <({ServiceType service, int mm})>{};
+  final emitted = <({ServiceType service, int mm, String mat})>{};
   // The engine CSV: a header row + one row per BOM line, in the SAME order.
   final base = bomToCsv(bom).split('\n');
   final buffer = StringBuffer()
@@ -328,7 +330,10 @@ String bomCsvWithCutPlan(List<BomLine> bom, List<PipeCutGroup> cutPlan) {
     ..write(',stock_length_m,bars_purchased,waste_pct\n');
   for (var i = 0; i < bom.length; i++) {
     final line = bom[i];
-    final key = (service: line.service, mm: line.diameterMm);
+    var key = (service: line.service, mm: line.diameterMm, mat: line.material);
+    if (!planByKey.containsKey(key)) {
+      key = (service: line.service, mm: line.diameterMm, mat: ''); // legacy
+    }
     final g = planByKey[key];
     // The cut plan is a per-(service, DN) property (all runs of a size share
     // stock bars), so it is emitted ONCE per group — sum-safe — and left empty
@@ -826,29 +831,6 @@ DrawingChrome issuableChrome(
   );
 }
 
-/// N5: a per-run centreline-elevation label ('CL +2.70') keyed by edge id — the
-/// height of each horizontal run above its floor's FFL, from the §10 role-aware
-/// [nodeElevation] (mains at the ceiling, fixture branches at fixture height).
-/// Only RUN edges get an entry (risers carry the FFL gutter on the riser sheet);
-/// the pure exporters receive the finished strings and never read the model. The
-/// average of the two endpoint elevations is the run's representative centreline.
-Map<String, String> planEdgeElevationLabels(Network net, BuildingLevels building,
-    {MountingHeights mounting = const MountingHeights()}) {
-  final out = <String, String>{};
-  for (final e in net.edges) {
-    if (e.kind != EdgeKind.run) continue;
-    final a = net.nodeById(e.fromId);
-    final b = net.nodeById(e.toId);
-    if (a == null || b == null) continue;
-    final ea = nodeElevation(a, building, mounting).meters;
-    final eb = nodeElevation(b, building, mounting).meters;
-    final aboveFfl = (ea + eb) / 2 - building.elevationOf(a.floorIndex).meters;
-    final sign = aboveFfl >= 0 ? '+' : '-';
-    out[e.id] = 'CL $sign${aboveFfl.abs().toStringAsFixed(2)}';
-  }
-  return out;
-}
-
 /// Export the current sheet/floor's drawn network as a DXF drawing file.
 Future<void> exportDrawingDxf(WidgetRef ref) => runExportGuarded(
       ref,
@@ -875,6 +857,13 @@ Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
     sizing: ref.read(sizingProvider),
     sheetId: sheet.id,
     floorIndex: floorIndex,
+    // The same §10 lengths the plan PDF prints, so the DXF labels match it.
+    edgeLengths: {
+      for (final e in net.edges)
+        e.id: edgeLength(e, net,
+            calibrationBySheet: project.calibrations,
+            building: project.building),
+    },
     chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
     // A2: the sheet calibration lets the DXF emit true-scale mm world units
     // (HEADER/$INSUNITS + named layers); null keeps the legacy pixel DXF.
@@ -1411,6 +1400,7 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       await File(out('$suffix.dxf')).writeAsString(networkToDxf(
         net: net,
         sizing: sizing,
+        edgeLengths: edgeLengths,
         sheetId: sheet.id,
         floorIndex: floorIndex,
         chrome: planChrome,
@@ -3575,7 +3565,7 @@ class _FireSection extends ConsumerWidget {
         ),
         const SizedBox(height: MechXSpacing.xs),
         kv('Sprinkler flow',
-            '${sprinkler.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),
+            '${ref.watch(sprinklerRemoteAreaProvider).remoteAreaDemand.inLitersPerSecond.toStringAsFixed(1)} L/s'),
         kv('Sprinkler heads', '${sprinkler.sprinklerCount}'),
         kv('Standpipe flow',
             '${standpipe.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),

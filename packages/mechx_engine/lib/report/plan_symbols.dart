@@ -15,7 +15,9 @@ library;
 
 import 'dart:math' as math;
 
+import '../geometry/building.dart';
 import '../network/network.dart';
+import '../units.dart';
 import 'drawing_chrome.dart' show LabelBox;
 import 'sld_sheet.dart';
 
@@ -578,8 +580,18 @@ LeaderedLabelPlacement placeEdgeLabelLeadered({
   // Axis-aligned bounds of the rotated w × textSize text rect at that anchor.
   LabelBox boxAt(double cx, double cy, double d) {
     final (x0, y0) = anchorFor(cx, cy, d);
-    final xs = [x0, x0 + ca * w, x0 - sa * textSize, x0 + ca * w - sa * textSize];
-    final ys = [y0, y0 + sa * w, y0 + ca * textSize, y0 + sa * w + ca * textSize];
+    final xs = [
+      x0,
+      x0 + ca * w,
+      x0 - sa * textSize,
+      x0 + ca * w - sa * textSize
+    ];
+    final ys = [
+      y0,
+      y0 + sa * w,
+      y0 + ca * textSize,
+      y0 + sa * w + ca * textSize
+    ];
     return (
       minX: xs.reduce(math.min),
       minY: ys.reduce(math.min),
@@ -693,4 +705,110 @@ String? formatTieOffsetMm(double offsetPx, double? metersPerPixel) {
   final mm = offsetPx * metersPerPixel * 1000;
   if (mm < 1) return null;
   return mm.round().toString();
+}
+
+// ── Shared plan run/riser label composition (PDF == DXF) ────────────────────
+//
+// The annotated plan PDF and the professional plan DXF print the SAME label for
+// the same edge — `<tag> · <size> - <length> - <CL> - <fall>` — so a contractor
+// working from either format reads identical take-off data. Both exporters
+// compose through these two pure helpers (audit 2026-10 drawing-output-7/-8).
+
+/// A human metres string for a run/riser length label: `3.5 m`, or `4 m` for a
+/// whole number of metres. The value is ROUNDED to the printed 0.1 m before the
+/// whole-number test, so floating-point noise in a §10 elevation delta
+/// (11.7 − 7.7 = 3.999999999999999) prints the same `4 m` as an exact 4.0
+/// rather than `4.0 m` beside it on the same sheet. Pure.
+String planLengthLabel(Length l) {
+  final r = (l.meters * 10).round() / 10;
+  final txt =
+      r == r.truncateToDouble() ? r.toInt().toString() : r.toStringAsFixed(1);
+  return '$txt m';
+}
+
+/// Compose a plan edge label from its parts: the present tokens of [size],
+/// [length], [elevation] and [slope] joined with ` - `, prefixed by the stable
+/// element [tag] as `<tag> · <core>` (U+00B7, WinAnsi pass-through in the PDF).
+/// Null/empty parts are skipped; returns null when nothing is left. Pure.
+String? composePlanEdgeLabel({
+  String? tag,
+  String? size,
+  String? length,
+  String? elevation,
+  String? slope,
+}) {
+  final parts = <String>[
+    for (final p in [size, length, elevation, slope])
+      if (p != null && p.isNotEmpty) p,
+  ];
+  final core = parts.isEmpty ? null : parts.join(' - ');
+  if (tag != null && tag.isNotEmpty) {
+    return core == null ? tag : '$tag · $core';
+  }
+  return core;
+}
+
+// ── N5: per-run centreline SETTING-OUT elevation labels ─────────────────────
+//
+// The plan prints `CL +2.70` on each horizontal run — the height a foreman
+// hangs the pipe/duct at, above that run's floor FFL. The label is a RENDER of
+// the solve's §10 [nodeElevation] (golden rule 5): a floor-standing pump /
+// ground tank / AHU sits on its own floor surface there (audit 2026-10
+// water-drainage-1), so its runs print the same height the static lift uses.
+// The one plant the solve still parks at the ROOF datum when it carries no
+// explicit elevation / mount height is a roof tank (or a plant with no
+// component); a run from it averaged with a ground-floor node printed
+// `CL +12.00` on a 4 m storey (audit 2026-10 drawing-output-2), so the label
+// resolves that roof-parked plant to its own floor's ceiling main level instead
+// and never prints a CL outside the storey.
+
+/// The elevation a PLAN label uses for [node]: [nodeElevation], EXCEPT a
+/// datum-less [NodeRole.plant] node that [nodeElevation] parks at the roof
+/// (a roof tank or a component-less plant on a lower sheet) — that one sits at
+/// its own floor's ceiling main level ([BuildingLevels.ceilingElevationOf]).
+/// Pure.
+Length planSettingOutElevation(
+  NetNode node,
+  BuildingLevels building, [
+  MountingHeights mounting = const MountingHeights(),
+]) {
+  final solved = nodeElevation(node, building, mounting);
+  if (node.role == NodeRole.plant &&
+      node.elevation == null &&
+      node.mountHeight == null &&
+      solved.meters == building.roofElevation.meters) {
+    return building.ceilingElevationOf(node.floorIndex, mounting);
+  }
+  return solved;
+}
+
+/// Per-RUN centreline-elevation labels (`CL +2.70`) keyed by edge id: the mean
+/// of the two endpoints' [planSettingOutElevation] less the run floor's FFL
+/// (the `from` node's floor). Risers get no entry (the riser sheet carries the
+/// FFL gutter). A centreline outside `[0, floor height]` of its storey cannot be
+/// a real setting-out height (e.g. an explicit plant datum on another level),
+/// so it is OMITTED rather than printed. Pure; the exporters receive the
+/// finished strings.
+Map<String, String> planEdgeElevationLabels(
+  Network net,
+  BuildingLevels building, {
+  MountingHeights mounting = const MountingHeights(),
+}) {
+  final out = <String, String>{};
+  if (building.levelCount == 0) return out;
+  const eps = 0.005; // half the printed 0.01 m resolution
+  for (final e in net.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    final a = net.nodeById(e.fromId);
+    final b = net.nodeById(e.toId);
+    if (a == null || b == null) continue;
+    final ea = planSettingOutElevation(a, building, mounting).meters;
+    final eb = planSettingOutElevation(b, building, mounting).meters;
+    final aboveFfl = (ea + eb) / 2 - building.elevationOf(a.floorIndex).meters;
+    final storey = building.floorHeightOf(a.floorIndex).meters;
+    if (aboveFfl < -eps || aboveFfl > storey + eps) continue;
+    final sign = aboveFfl >= 0 ? '+' : '-';
+    out[e.id] = 'CL $sign${aboveFfl.abs().toStringAsFixed(2)}';
+  }
+  return out;
 }

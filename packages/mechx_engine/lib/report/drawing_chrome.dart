@@ -408,6 +408,10 @@ double fitTitleFontSize(String text, double cellW,
   return scaled < minSize ? minSize : scaled;
 }
 
+/// Width (points) of the [pdfTitleBlock] box, anchored at the bottom-right
+/// frame corner — public so an exporter can keep its labels off the block.
+const double kPdfTitleBlockWidth = 190.0;
+
 /// A boxed ISO-7200 title block in the bottom-RIGHT of the page. Rows are the
 /// filtered [_titleBlockRows]; each row is a small muted label cell + a value
 /// cell, hairline-ruled. Returns the content-stream `ops` PLUS the block
@@ -428,7 +432,7 @@ double fitTitleFontSize(String text, double cellW,
   if (rows.isEmpty) return (ops: '', height: 0.0);
 
   const rowH = 13.0;
-  const blockW = 190.0; // ~ ISO-7200 width in points
+  const blockW = kPdfTitleBlockWidth; // ~ ISO-7200 width in points
   const labelW = 52.0; // the muted label cell width
   final height = rows.length * rowH;
   final x0 = pageW - margin - blockW;
