@@ -143,6 +143,13 @@ bool _withinVelocity(Velocity v, Velocity? cap) =>
     v.metersPerSecond <=
         cap.metersPerSecond * (1.0 + _velocityCompareTolerance);
 
+/// True when a standard size [sizeMm] covers an ideal dimension [idealMm]
+/// within the same relative [_velocityCompareTolerance]. An exact-fit ideal
+/// computed through floating point (1.5 · 0.4 · 1000 = 600.0000000000001 for
+/// 1.2 m³/s at 5 m/s, aspect 1.5) must round to 600, not step up to 700.
+bool _sideCovers(double sizeMm, double idealMm) =>
+    sizeMm >= idealMm * (1.0 - _velocityCompareTolerance);
+
 /// Air velocity pressure (Pa) at mean [velocity]: ρv²/2 (ρ = standard air).
 double airVelocityPressurePa(Velocity velocity) =>
     _airDensity * velocity.metersPerSecond * velocity.metersPerSecond / 2.0;
@@ -189,10 +196,12 @@ DuctSizingResult sizeByVelocity({
   // velocity back above maxVelocity. If none is large enough, CLAMP to the
   // largest standard size and flag overCapacity (rather than throw and abort
   // the whole network solve).
-  final bool overCapacity = idealDiameterMm > standardDuctDiametersMm.last;
+  final bool overCapacity =
+      !_sideCovers(standardDuctDiametersMm.last, idealDiameterMm);
   final chosenMm = overCapacity
       ? standardDuctDiametersMm.last
-      : standardDuctDiametersMm.firstWhere((sizeMm) => sizeMm >= idealDiameterMm);
+      : standardDuctDiametersMm.firstWhere(
+          (sizeMm) => _sideCovers(sizeMm, idealDiameterMm));
 
   final chosen = Diameter.mm(chosenMm);
   final actualVelocity = velocityFromFlow(airflow, chosen);
@@ -337,12 +346,21 @@ RectangularDuctResult sizeRectangularByVelocity({
   final wIdealMm = aspectRatio * math.sqrt(reqArea / aspectRatio) * 1000.0;
 
   double roundUp(double mm) => standardDuctSidesMm.firstWhere(
-        (s) => s >= mm,
+        (s) => _sideCovers(s, mm),
         orElse: () => standardDuctSidesMm.last,
       );
 
   final w = Length(roundUp(wIdealMm) / 1000.0);
-  final h = Length(roundUp(hIdealMm) / 1000.0);
+  // When the ideal W runs past the top of the ladder, W clamps at the largest
+  // side — re-solve H for the required area against THAT W (H = A / W, rounded
+  // up, itself capped at the largest side). Keeping the aspect-derived H after
+  // the clamp under-delivered area and false-flagged ducts that a taller
+  // standard section satisfies (6 m³/s @ 5 m/s: 1200 × 900 = 5.56 m/s flagged,
+  // while 1200 × 1000 = 5.00 m/s complies).
+  final bool wClamped = !_sideCovers(standardDuctSidesMm.last, wIdealMm);
+  final h = Length(
+    roundUp(wClamped ? reqArea / w.meters * 1000.0 : hIdealMm) / 1000.0,
+  );
   final actualArea = w.meters * h.meters;
   final v = Velocity(airflow.cubicMetersPerSecond / actualArea);
   // M6 — flag from the ACHIEVED velocity, not the ideal sides: when an ideal
@@ -396,7 +414,7 @@ RectangularDuctResult sizeRectangularByEqualFriction({
       'maxVelocity must be positive when supplied');
 
   double roundUp(double mm) => standardDuctSidesMm.firstWhere(
-        (s) => s >= mm,
+        (s) => _sideCovers(s, mm),
         orElse: () => standardDuctSidesMm.last,
       );
 
