@@ -4,6 +4,7 @@ import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart';
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/sizing/pump.dart';
+import 'package:mechx_engine/units.dart' show Power;
 
 import 'project_store.dart';
 
@@ -86,12 +87,24 @@ final firePumpDutyProvider = Provider<PumpDuty?>((ref) {
   if (st.requiredFlow.cubicMetersPerSecond <= 0) return null;
   final rating = ref.watch(firePumpRatingProvider);
   final base = sizePump(flow: st.requiredFlow, head: st.pumpHead);
+  // The motor input at the GOVERNING curve point — the larger of the rated and
+  // NFPA 20 overload (150 % flow) shaft powers, the point [selectedMotor] was
+  // chosen to carry — so input power and motor frame describe one duty (the
+  // rated-point input alone sits below the overload draw). Same motor
+  // efficiency as the rated point (input / shaft).
+  final motorEff = base.shaftPower.watts > 0
+      ? base.motorInputPower.watts / base.shaftPower.watts
+      : 1.0;
+  final governingShaft =
+      rating.overload.shaftPower.watts > base.shaftPower.watts
+          ? rating.overload.shaftPower.watts
+          : base.shaftPower.watts;
   return PumpDuty(
     flow: base.flow,
     head: base.head,
     hydraulicPower: base.hydraulicPower,
     shaftPower: base.shaftPower,
-    motorInputPower: base.motorInputPower,
+    motorInputPower: Power(governingShaft * motorEff),
     selectedMotor: rating.selectedMotor,
     motorOversized: rating.oversized,
   );

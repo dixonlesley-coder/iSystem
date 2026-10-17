@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/fire_store.dart';
 import 'package:mechx_engine/sizing/fire_pump_rating.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
+import 'package:mechx_engine/sizing/pump.dart';
 
 void main() {
   test('sprinkler + standpipe designs derive sane values', () {
@@ -64,5 +65,26 @@ void main() {
     final pLow = c.read(sprinklerRemoteAreaProvider).remoteHeadPressure.inBar;
     // P ∝ 1/K²; halving K quadruples P.
     expect(pLow, closeTo(pHigh * 4.0, 1e-9));
+  });
+
+  test('the fire-pump duty describes ONE governing point: motor input == the '
+      'larger of the rated / overload shaft powers / eta', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final duty = c.read(firePumpDutyProvider)!;
+    final rating = c.read(firePumpRatingProvider);
+    // eta_motor = input / shaft at the rated point (the duty's own ratio).
+    final rated = sizePump(
+        flow: c.read(standpipeDesignProvider).requiredFlow,
+        head: c.read(standpipeDesignProvider).pumpHead);
+    final eta = rated.motorInputPower.watts / rated.shaftPower.watts;
+    final governing = rating.overload.shaftPower.watts > rated.shaftPower.watts
+        ? rating.overload.shaftPower.watts
+        : rated.shaftPower.watts;
+    expect(duty.motorInputPower.watts, closeTo(governing * eta, 1e-6));
+    // The motor frame the schedule + electrical feed use is the NFPA 20 pick,
+    // and it carries that governing shaft power.
+    expect(duty.selectedMotor.watts, rating.selectedMotor.watts);
+    expect(duty.selectedMotor.watts, greaterThanOrEqualTo(governing));
   });
 }

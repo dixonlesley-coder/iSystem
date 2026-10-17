@@ -3569,7 +3569,10 @@ class _FireSection extends ConsumerWidget {
         // overload shaft power. Demotes the pump figure from the kv rows (H8).
         ResultCard(
           headline:
-              '${standpipe.pumpHead.meters.toStringAsFixed(0)} m · ${standpipe.pumpShaftPower.inKiloWatts.toStringAsFixed(1)} kW',
+              // The SELECTED NFPA 20 motor frame (it carries the overload
+              // point) — the same kW the equipment schedule's FP-01 and the
+              // electrical feed use, never the raw rated-point shaft power.
+              '${standpipe.pumpHead.meters.toStringAsFixed(0)} m · ${_motorKw(rating.selectedMotor)} kW motor',
           label: 'Fire pump (standpipe)',
           // Neutral 'draft' (not a green 'rated') until sprinkler/hydrant runs
           // are drawn — the duty is a building-defaults preliminary, not a
@@ -5116,4 +5119,15 @@ class _Pill extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A motor-frame kW figure as a schedule prints it: whole frames bare (`75`),
+/// fractional frames trimmed (`0.55`, `5.5`).
+String _motorKw(Power p) {
+  final v = p.inKiloWatts;
+  if (v == v.roundToDouble()) return v.toStringAsFixed(0);
+  return v
+      .toStringAsFixed(2)
+      .replaceFirst(RegExp(r'0+$'), '')
+      .replaceFirst(RegExp(r'\.$'), '');
 }
